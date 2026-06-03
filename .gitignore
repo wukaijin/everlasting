@@ -1,0 +1,51 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+**/*.pdb
+
+# Tauri
+**/tauri/target
+**/tauri.conf.json.bak
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# 依赖 lock(允许提交 pnpm-lock.yaml / Cargo.lock,这两个是项目稳定性的关键,保留)
+# 但本地临时 lock 备份忽略
+*.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境 / 临时
+*.log
+*.tmp
+.env.local
+.env.*.local
+.envrc.local
+
+# 数据库 / 缓存(项目运行后会产生,不入库)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+.cache/
