@@ -17,30 +17,62 @@
 - 装 WSL 时**默认不带任何 IME 服务**(连 fcitx5 都没有)
 - Windows 端的微软拼音/搜狗对 WSLg 里的 Linux app 无效
 
-**修法**(一次性):
-```bash
-# 1. 装 fcitx5 + 拼音
-sudo apt install -y fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3
+**修法**(一次性,共 5 步,缺一不可):
 
-# 2. 预置 pinyin 为默认输入法(IM name 区分大小写都可以,但 profile 里写小写更稳)
+```bash
+# === 1. 装 fcitx5 + 拼音 + GTK 前端 ===
+sudo apt install -y fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4
+
+# === 2. 更新 GTK3 immodules 缓存(坑 9) ===
+# 装完 fcitx5 后,GTK3 的 immodules.cache 里可能没有 fcitx5 条目,
+# 导致 GTK3 找不到 fcitx5 的 IM 模块,WebView 输入框无法连接 fcitx5。
+sudo /usr/lib/x86_64-linux-gnu/libgtk-3-0/gtk-query-immodules-3.0 --update-cache
+# 验证:输出应包含 fcitx 条目
+/usr/lib/x86_64-linux-gnu/libgtk-3-0/gtk-query-immodules-3.0 | grep -c fcitx  # 期望 > 0
+
+# === 3. 配置 fcitx5 profile:必须同时有 keyboard-us + pinyin(坑 10) ===
 mkdir -p ~/.config/fcitx5
 cat > ~/.config/fcitx5/profile <<'EOF'
 [Groups/0]
+# Group Name
 Name=Default
+# Layout
 Default Layout=us
+# Default Input Method
 DefaultIM=pinyin
 
 [Groups/0/Items/0]
+# Name
+Name=keyboard-us
+# Layout
+Layout=
+
+[Groups/0/Items/1]
+# Name
 Name=pinyin
+# Layout=
 Layout=
 
 [GroupOrder]
 0=Default
 EOF
 
-# 3. shell rc 里加 env + autostart(注意:必须 --enable pinyin,因为 pinyin 是 on-demand addon,
-#    默认不会自动加载;profile 引用它,但加载时机在 profile 之后,鸡生蛋)
+# === 4. shell rc 里加 DBus + env + autostart ===
+# ---- fish (本机 ~/.config/fish/config.fish) ----
+# DBus session bus (WSL 默认没起,fcitx5 和 WebKitGTK 都需要)
+# 见下方 fish 配置片段
+# ---- bash/zsh ----
 cat >> ~/.zshrc <<'EOF'
+
+# DBus session bus (WSL 默认没起,fcitx5 和 WebKitGTK 都需要)
+if ! pgrep -f "dbus-daemon --session" >/dev/null 2>&1; then
+  rm -f /run/user/$(id -u)/bus
+  dbus-daemon --session --address=unix:path=/run/user/$(id -u)/bus --nofork >/dev/null 2>&1 &
+  for _ in $(seq 10); do [ -S /run/user/$(id -u)/bus ] && break; sleep 0.2; done
+fi
+[ -S /run/user/$(id -u)/bus ] && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
 # IME env (fcitx5) for WSLg / native Linux apps including Tauri WebKit
 export GTK_IM_MODULE=fcitx
 export QT_IM_MODULE=fcitx
@@ -48,35 +80,71 @@ export INPUT_METHOD=fcitx5
 export SDL_IM_MODULE=fcitx
 export XMODIFIERS=@im=fcitx
 
-# auto-start fcitx5
+# auto-start fcitx5 (--keep:WSLg 下不会自杀; --enable pinyin:on-demand addon; --disable wayland:WSLg 不稳)
 if [ -z "$FCITX5_AUTOSTARTED" ] && command -v fcitx5 >/dev/null 2>&1; then
   export FCITX5_AUTOSTARTED=1
-  fcitx5 -d --enable pinyin >/dev/null 2>&1
+  fcitx5 -d --keep --enable pinyin --disable wayland,waylandim >/dev/null 2>&1
 fi
 EOF
-# bashrc 同上(略)
 
-# 4. 启动 fcitx5
-fcitx5 -d --enable pinyin
+# === 5. 启动 fcitx5 ===
+fcitx5 -d --keep --enable pinyin --disable wayland,waylandim
+```
+
+**fish shell 配置片段**(加入 `~/.config/fish/config.fish`):
+```fish
+# DBus session bus (WSL 默认没起,fcitx5 和 WebKitGTK 都需要)
+if not test -S /run/user/(id -u)/bus; and command -v dbus-daemon >/dev/null 2>&1
+    mkdir -p /run/user/(id -u); chmod 700 /run/user/(id -u)
+    rm -f /run/user/(id -u)/bus
+    dbus-daemon --session --address=unix:path=/run/user/(id -u)/bus --nofork >/dev/null 2>&1 &
+    for i in (seq 10)
+        test -S /run/user/(id -u)/bus; and break
+        sleep 0.2
+    end
+end
+if test -S /run/user/(id -u)/bus
+    set -gx DBUS_SESSION_BUS_ADDRESS unix:path=/run/user/(id -u)/bus
+    set -gx XDG_RUNTIME_DIR /run/user/(id -u)
+end
+
+# IME env (fcitx5) for WSLg / native Linux apps including Tauri WebKit
+set -gx GTK_IM_MODULE fcitx
+set -gx QT_IM_MODULE fcitx
+set -gx INPUT_METHOD fcitx5
+set -gx SDL_IM_MODULE fcitx
+set -gx XMODIFIERS @im=fcitx
+
+# auto-start fcitx5 (--keep:WSLg 下不会自杀; --enable pinyin:on-demand addon; --disable wayland:WSLg 不稳)
+if not set -q FCITX5_AUTOSTARTED; and command -v fcitx5 >/dev/null 2>&1
+    set -gx FCITX5_AUTOSTARTED 1
+    fcitx5 -d --keep --enable pinyin --disable wayland,waylandim >/dev/null 2>&1
+end
 ```
 
 **注意**:
 - WSLg Wayland socket 是 `/mnt/wslg/runtime-dir/wayland-0`,owner 是 `carlos`,**root 看不到**
 - 任何用 `sudo` 跑 fcitx5 会立刻挂("All display connections are gone"),必须在你的 user 下启动
-- env 变量必须进**交互式** shell 的 rc(.zshrc / .bashrc),不能靠 systemd(WSLg 的 systemd 不一定在)
+- env 变量必须进**交互式** shell 的 rc(.zshrc / .bashrc / config.fish),不能靠 systemd(WSLg 的 systemd 不一定在)
 - **坑中坑**:`pinyin` 是 `OnDemand=True` 的 addon,默认不加载。光在 profile 写 `DefaultIM=pinyin` 不够,必须 `--enable pinyin` 显式启用,否则 fcitx5 启动时打:
   ```
   W inputmethodmanager.cpp:96] Group Item Pinyin in group Default is not valid. Removed.
   ```
   然后用 keyboard-us 替代。
-- 想看 fcitx5 现在有什么 IM:`fcitx5-diagnose` 跑一下,搜 "## Input Methods" 段
+- **坑中坑(2)**:fcitx5 在 WSLg 下必须加 `--keep` + `--disable wayland,waylandim`,否则启动后秒退("All display connections are gone")。WSLg 的 Wayland 协议实现不够完整,fcitx5 的 wayland addon 连不上。
+- **坑中坑(3)**:没有 DBus session bus 时 fcitx5 能启动但 `fcitx5-remote` 会 crash("Failed to create dbus connection"),GTK app 也连不上 fcitx5。必须先起 DBus(见上方第 4 步)。
+
+**中英文切换方式**:
+- **按 Shift**(单独按一下):pinyin 内置的中英文切换,推荐,最方便
+- **按 Super+Space (Win+Space)**:在 keyboard-us ↔ pinyin 之间切换(需配置 `~/.config/fcitx5/config`)
+- Ctrl+Space 被 Windows IME 拦截,无效
+- Ctrl+; 被 fcitx5 clipboard 插件占用,无效
 
 **验证**:
-- `fcitx5 -d --enable pinyin` 不退码
-- `fcitx5-diagnose` 的 "## Input Methods" 段显示 `DefaultIM=pinyin`(不是 keyboard-us)
-- `ps aux | grep fcitx5` 看到进程在
+- `fcitx5-remote` 不 crash,返回 0/1/2
+- `fcitx5-diagnose` 的 "## Input Methods" 段显示 `keyboard-us` + `pinyin`
 - Tauri app 打开,点 textarea,打 `n` 出候选窗
-- `fcitx5-config-qt` 也能跑(可在里面加/删输入法)
+- 按 Shift 能在中英文之间切换
 
 ---
 
@@ -157,40 +225,86 @@ fcitx5-diagnose | grep -A 5 "## Input Methods"
 
 ## 坑 8:WSLg 下 Ctrl+Space / Ctrl+Shift 不能切 fcitx5 状态
 
-**现象**:fcitx5 起了,候选窗出得来,但按 **Ctrl+Space** / **Ctrl+Shift** 都切不动,Windows 右下角的 IME 指示器倒是有响应(被 Windows 切走了)。Shift+Space 默认也不通(WSLg 透键盘事件不完整)。
+**现象**:fcitx5 起了,候选窗出得来,但按 **Ctrl+Space** / **Ctrl+Shift** 都切不动,Windows 右下角的 IME 指示器倒是有响应(被 Windows 切走了)。
 
 **根因**:
 - WSLg 把键盘事件从 Windows 转给 Linux app 时,Windows 的全局 IME 切换热键(Ctrl+Space)会先被 Windows 自己吃掉,fcitx5 收不到
 - Ctrl+Shift 在 Windows 上是"切换输入法",同样被吞
-- 默认 fcitx5 的 `TriggerKey = Ctrl+space`、`AltTriggerKey = Shift+space`,前者跟 Windows 冲突
+- Ctrl+; 被 fcitx5 clipboard 插件占用,触发剪贴板选择
 
-**修法**:改 fcitx5 的 hotkey 到不冲突的键。`~/.config/fcitx5/config` 写:
+**实际可用的切换方式**(无需额外配置):
+- **按 Shift(单独按一下)**:pinyin 内置的中英文切换,最方便,实测在 WebKitGTK 中可用
+- Super+Space(Win+Space):fcitx5 TriggerKey,可在 keyboard-us ↔ pinyin 之间切
+
+**修法**(可选,配 Super+Space 触发键):`~/.config/fcitx5/config` 写:
 
 ```ini
 [Hotkey]
-TriggerKeys[0]=Shift+space
-AltTriggerKeys[0]=Shift+Shift_L+grave
+TriggerKeys[0]=Super+space
 EnumerateForwardKeys[0]=Control+Shift+Right
 EnumerateBackwardKeys[0]=Control+Shift+Left
 ```
 
-解释:
-- `TriggerKeys[0]`:开/关 fcitx5(原 Ctrl+Space)— 改成 Shift+Space
-- `AltTriggerKeys[0]`:在 pinyin / keyboard-us 之间切(原 Shift+Space)— 改成 Shift+Shift_L+反引号,跟 Caps Lock 误触也错开
-- `EnumerateForward/Backward`:循环切所有 IM,改成 Ctrl+Shift+左右,跟 Windows 输入法切左右冲突
 - 改完 `fcitx5-remote -r` 重载,**不**用重启 fcitx5 daemon
+- 想要图形化配置:`fcitx5-config-qt`(在 WSLg 启个终端跑)
+
+---
+
+## 坑 9:装完 fcitx5 后 GTK3 immodules 缓存没更新,Tauri 连不上
+
+**现象**:`fcitx5` 装了,进程在跑,`GTK_IM_MODULE=fcitx` 也设了,但 Tauri 窗口里 fcitx5 完全不工作 — 不出候选窗,不响应任何 IME 切换。`fcitx5-remote` 返回 0(无客户端连接)。
+
+**根因**:GTK3 通过 `immodules.cache` 文件查找 IM 模块。这个缓存文件在安装系统时生成,装 `fcitx5-frontend-gtk3` 时如果没有触发 `postinst` 刷新缓存(Ubuntu 22.04 的 fcitx5 包有时不触发),缓存里就没有 fcitx5 条目。GTK3 启动时读缓存,找不到 fcitx5 模块,静默回退到默认 IM(什么都没有),**不报任何错误**。
+
+**修法**(一次性):
+```bash
+sudo /usr/lib/x86_64-linux-gnu/libgtk-3-0/gtk-query-immodules-3.0 --update-cache
+```
 
 **验证**:
-- fcitx5-remote 还能用 → reload 成功
-- 在 Tauri 窗口点 textarea
-- 按 Shift+Space → 候选窗消失,光标处直接出英文
-- 再按 Shift+Space → 候选窗回来,可以打拼音
-- 按 Shift+Shift_L+\` → 状态在 pinyin ↔ keyboard-us 之间切(可以看右下角指示器或者看 fcitx5-remote 输出)
+```bash
+# 缓存里应有 fcitx5 条目(期望 > 0)
+/usr/lib/x86_64-linux-gnu/libgtk-3-0/gtk-query-immodules-3.0 | grep -c fcitx
+# 或直接看缓存文件
+grep fcitx /usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache
+```
 
 **注意**:
-- 这个 config 是 per-user 的(`~/.config/fcitx5/config`),carlos 和 root 各自有
-- 我已经写好了 root 的(/root/.config/fcitx5/config),你 source 之后让 fcitx5 -r 重读就行
-- 想要图形化配置:`fcitx5-config-qt`(在 WSLg 启个终端跑)
+- 模块文件本身在 `/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules/im-fcitx5.so`,安装时就有,问题只是缓存没注册
+- Tauri 2 链接的是 GTK3(`libgtk-3.so.0`),不是 GTK4,所以只需更新 GTK3 的缓存
+- 这个坑特别隐蔽,因为没有任何报错 — GTK 只是静默忽略不认识的 IM 模块
+
+---
+
+## 坑 10:fcitx5 profile 只有 pinyin 一个输入法时,Shift 切换不生效
+
+**现象**:fcitx5 能打中文,但按 Shift / 任何触发键都切不到英文。profile 里只写了 `pinyin`,没有 `keyboard-us`。
+
+**根因**:fcitx5 的 profile Group 里只有一个输入法时,pinyin 内部的中英文切换逻辑异常 — 它不知道切换目标是什么。TriggerKey 是"在 Group 内的输入法之间轮流",只有一个输入法等于没得切。pinyin 内置的 Shift 切换也依赖 Group 里至少有两个输入法(或一个输入法 + keyboard 后备)。
+
+**修法**:profile 里同时写 `keyboard-us` + `pinyin`:
+```ini
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=pinyin
+Layout=
+
+[GroupOrder]
+0=Default
+```
+
+**注意**:
+- 必须在 fcitx5 **未运行**时写这个文件,否则 fcitx5 退出时会用自己的内部状态覆盖回去
+- 写完后再启动 fcitx5
+- 加了 `keyboard-us` 后,**按 Shift**(单独按一下)就能在中英文之间切换
 
 ---
 
@@ -313,7 +427,7 @@ fc-match "sans-serif:lang=zh-cn"  # 同上
 
 ---
 
-## 一次性环境脚本(把上面 5 个坑打包)
+## 一次性环境脚本(把上面 10 个坑打包)
 
 新 WSL 机器 / 重装时:
 
@@ -323,7 +437,8 @@ sudo apt update
 sudo apt install -y \
   libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
-  fonts-noto-cjk
+  fonts-noto-cjk \
+  fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4
 
 # PKG_CONFIG_PATH
 echo 'export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"' >> ~/.bashrc
@@ -345,13 +460,59 @@ sudo tee /etc/fonts/local.conf > /dev/null <<'EOF'
 EOF
 fc-cache -fv
 
+# GTK3 immodules 缓存(坑 9)
+sudo /usr/lib/x86_64-linux-gnu/libgtk-3-0/gtk-query-immodules-3.0 --update-cache
+
+# fcitx5 profile(坑 10:必须先停 fcitx5 再写)
+pkill fcitx5 2>/dev/null; sleep 1
+mkdir -p ~/.config/fcitx5
+cat > ~/.config/fcitx5/profile <<'EOF'
+[Groups/0]
+# Group Name
+Name=Default
+# Layout
+Default Layout=us
+# Default Input Method
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+# Name
+Name=keyboard-us
+# Layout
+Layout=
+
+[Groups/0/Items/1]
+# Name
+Name=pinyin
+# Layout=
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
+
+# fcitx5 触发键(Super+Space,避免 Ctrl+Space 被 Windows 拦截)
+cat > ~/.config/fcitx5/config <<'EOF'
+[Hotkey]
+TriggerKeys[0]=Super+space
+EnumerateForwardKeys[0]=Control+Shift+Right
+EnumerateBackwardKeys[0]=Control+Shift+Left
+EOF
+
+# GPU 渲染权限(消除 libEGL warning)
+sudo usermod -aG render $(whoami)
+
 # pnpm 死代理(如碰到)
 pnpm config delete proxy
 pnpm config delete https-proxy
 
 # Rust 升级(以 carlos 跑,因为 brew 不让 root)
 su carlos -c 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" && brew upgrade rust'
+
+# DBus + fcitx5 + IME env 加入 shell rc(见坑 6 的完整配置片段)
 ```
+
+> **fish shell 用户**:DBus + IME env 配置见坑 6 的 fish 配置片段,加入 `~/.config/fish/config.fish`。
 
 ---
 
@@ -370,6 +531,14 @@ pkg-config --modversion javascriptcoregtk-4.1  # 期望 2.50.x
 fc-match "sans-serif:lang=zh"   # 期望 Noto Sans CJK SC
 fc-list :lang=zh | wc -l         # 期望 > 0
 
+# GTK3 IM 模块缓存(坑 9)
+grep -c fcitx /usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache  # 期望 > 0
+
+# fcitx5
+ps aux | grep fcitx5 | grep -v grep  # 期望有进程
+fcitx5-remote                        # 期望返回 0/1/2,不 crash
+cat ~/.config/fcitx5/profile | grep Name  # 期望有 keyboard-us + pinyin
+
 # Node / pnpm
 node --version    # 期望 >= 18
 pnpm --version
@@ -378,6 +547,9 @@ pnpm --version
 ls /mnt/wslg      # 应存在
 echo $DISPLAY     # 应 :0
 echo $WAYLAND_DISPLAY  # 应 wayland-0
+echo $GTK_IM_MODULE   # 应 fcitx
+echo $XMODIFIERS      # 应 @im=fcitx
+echo $DBUS_SESSION_BUS_ADDRESS  # 应 unix:path=/run/user/UID/bus
 ```
 
 ---
