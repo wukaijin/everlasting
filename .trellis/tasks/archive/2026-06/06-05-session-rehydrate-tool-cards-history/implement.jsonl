@@ -1,0 +1,6 @@
+{"file": "docs/IMPLEMENTATION.md", "reason": "步骤 3a 的范围定义、DB schema 设计、turn 边界持久化策略"}
+{"file": "docs/ARCHITECTURE.md", "reason": "16 阶段请求生命周期，agent loop 与 frontend state 同步路径"}
+{"file": "docs/HACKING-llm.md", "reason": "Anthropic API tool_use/tool_result 序列化要求，role=user 包裹 tool_result 的原因"}
+{"file": "app/src/stores/chat.ts", "reason": "待修改：rehydrateMessages + send() history 构造（仅参考原结构）"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "MessageContent / ContentBlock / ChatMessage 的 Serialize/Deserialize 形态"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "chat command 入参 Vec<ChatMessage> 的处理方式"}

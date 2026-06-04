@@ -1,0 +1,2 @@
+{"file": "docs/HACKING-llm.md", "reason": "GLM 兼容层对 tool calling 的支持差异，确认 backend 序列化假设"}
+{"file": "app/src-tauri/src/db.rs", "reason": "DB 持久化时是否把 tool_use/tool_result 完整保留为 JSON content"}
