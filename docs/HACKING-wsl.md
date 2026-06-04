@@ -8,6 +8,78 @@
 
 ---
 
+## 坑 6:WSL 没装中文输入法,Tauri WebKit 输不了中文
+
+**现象**:Tauri 窗口里 textarea / input 点进去,按字母键出不来候选窗/选不到字,中文进不去。英文 OK。
+
+**根因**:
+- WSLg 把 Windows 键盘事件传进 Linux,但 Linux 原生 app(WebKitGTK 算一个)需要 WSL 侧有自己的 IME 服务(fcitx/ibus)与 `GTK_IM_MODULE` 串起来
+- 装 WSL 时**默认不带任何 IME 服务**(连 fcitx5 都没有)
+- Windows 端的微软拼音/搜狗对 WSLg 里的 Linux app 无效
+
+**修法**(一次性):
+```bash
+# 1. 装 fcitx5 + 拼音
+sudo apt install -y fcitx5 fcitx5-chinese-addons fcitxx5-frontend-gtk3
+
+# 2. 预置 pinyin 为默认输入法(IM name 区分大小写都可以,但 profile 里写小写更稳)
+mkdir -p ~/.config/fcitx5
+cat > ~/.config/fcitx5/profile <<'EOF'
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+Name=pinyin
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
+
+# 3. shell rc 里加 env + autostart(注意:必须 --enable pinyin,因为 pinyin 是 on-demand addon,
+#    默认不会自动加载;profile 引用它,但加载时机在 profile 之后,鸡生蛋)
+cat >> ~/.zshrc <<'EOF'
+# IME env (fcitx5) for WSLg / native Linux apps including Tauri WebKit
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export INPUT_METHOD=fcitx5
+export SDL_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+
+# auto-start fcitx5
+if [ -z "$FCITX5_AUTOSTARTED" ] && command -v fcitx5 >/dev/null 2>&1; then
+  export FCITX5_AUTOSTARTED=1
+  fcitx5 -d --enable pinyin >/dev/null 2>&1
+fi
+EOF
+# bashrc 同上(略)
+
+# 4. 启动 fcitx5
+fcitx5 -d --enable pinyin
+```
+
+**注意**:
+- WSLg Wayland socket 是 `/mnt/wslg/runtime-dir/wayland-0`,owner 是 `carlos`,**root 看不到**
+- 任何用 `sudo` 跑 fcitx5 会立刻挂("All display connections are gone"),必须在你的 user 下启动
+- env 变量必须进**交互式** shell 的 rc(.zshrc / .bashrc),不能靠 systemd(WSLg 的 systemd 不一定在)
+- **坑中坑**:`pinyin` 是 `OnDemand=True` 的 addon,默认不加载。光在 profile 写 `DefaultIM=pinyin` 不够,必须 `--enable pinyin` 显式启用,否则 fcitx5 启动时打:
+  ```
+  W inputmethodmanager.cpp:96] Group Item Pinyin in group Default is not valid. Removed.
+  ```
+  然后用 keyboard-us 替代。
+- 想看 fcitx5 现在有什么 IM:`fcitx5-diagnose` 跑一下,搜 "## Input Methods" 段
+
+**验证**:
+- `fcitx5 -d --enable pinyin` 不退码
+- `fcitx5-diagnose` 的 "## Input Methods" 段显示 `DefaultIM=pinyin`(不是 keyboard-us)
+- `ps aux | grep fcitx5` 看到进程在
+- Tauri app 打开,点 textarea,打 `n` 出候选窗
+- `fcitx5-config-qt` 也能跑(可在里面加/删输入法)
+
+---
+
 ## 坑 1:linuxbrew 的 pkg-config 不搜系统路径
 
 **现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。
