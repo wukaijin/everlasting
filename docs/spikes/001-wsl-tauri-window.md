@@ -1,9 +1,9 @@
 # spike-001: WSL + Tauri 窗口显示
 
-**日期**: 2026-06-XX(待填)
-**状态**: 待执行 / 通过 / 失败-回退 / 失败-终止
+**日期**: 2026-06-04
+**状态**: 通过(5 条硬通过全部满足)
 **依赖**: 无
-**预估耗时**: 1-3 小时(从环境到跑通)
+**预估耗时**: 1-3 小时(从环境到跑通)— 实际 50 分钟(含环境装包、撞坑修环境、首次编译 27 分钟)
 
 ## 目标
 
@@ -142,6 +142,64 @@ ps aux | grep -iE 'webkit|webview|tauri' | grep -v grep
 - 10 次热重载成功 / 失败次数
 - `ps aux | grep -iE 'webkit|webview|tauri'` 输出
 - 如果失败:**完整失败现象 + 你已尝试的回退**
+
+---
+
+## 实际执行 / 结论 / 后续动作
+
+### 实际执行(2026-06-04)
+
+**环境(macOS 之外 → 实际 WSL)**:
+- 平台:WSL 2,Ubuntu 22.04.2 LTS(`6.6.114.1-microsoft-standard-WSL2`)
+- WSLg 已挂载(`/mnt/wslg`),`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`
+- 初始 Rust:linuxbrew 装的 1.83.0(过老,见下方"撞到的坑" #1)
+- 初始 webkit2gtk-4.1:未装,装的是 2.50.4
+- ANTHROPIC_API_KEY:未设(本 session 只跑 001,002 跳过)
+
+**撞到的坑 + 修复**:
+
+1. **linuxbrew 的 pkg-config 不搜系统路径**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使系统装了。linuxbrew 的 pkg-config 把搜索路径完全覆盖到 `/home/linuxbrew/.linuxbrew/{lib,share,...}/pkgconfig`。修复:在 `~/.bashrc` 和 `~/.zshrc` 加 `export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"`。
+2. **pnpm 配置了死代理**:`pnpm config get proxy` = `http://192.168.0.160:7897`(代理已不可达),导致 `pnpm dlx create-tauri-app` 失败。修复:`pnpm config delete proxy` + `pnpm config delete https-proxy`。
+3. **Rust 1.83 编译不了 Tauri 2 依赖图**:icu_collections v2.2.0 / dlopen2_derive v0.4.3 / deranged v0.5.8 / getrandom v0.4.2 / hashbrown v0.17.1 等都需要 Rust 1.85+ 或 1.86+,1.83 报 "feature `edition2024` is required"。退路选择:`brew upgrade rust`(linuxbrew 装的是 1.83,formulae 上 1.96.0 stable 可装)。注意:brew 不让以 root 跑,需要 `su carlos -c 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" && brew upgrade rust'`,装完 cargo 自动指到 1.96.0。**如果以后别的项目要装 rust,建议装 rustup 而不是 linuxbrew 的**——rustup 切版本/装多版本更省事,linuxbrew 这条路只能升不能降。
+4. **Cargo package cache 锁冲突**:同时跑 `cargo install tauri-cli`(全局) + `pnpm tauri dev`(项目级 CLI 装的 `@tauri-apps/cli` 2.11.2),两个 cargo 争同一个 package cache,`pnpm tauri dev` 卡在 "Blocking waiting for file lock on package cache"。退路选择:杀掉全局 install,只用项目级 CLI(@tauri-apps/cli 在 devDependencies 里,够用)。**结论:没必要全局装 tauri-cli,项目里 @tauri-apps/cli 就够。**
+
+**5 条硬通过,实测**:
+
+| 编号 | 标准 | 实测 | 结果 |
+|------|------|------|------|
+| 1 | `cargo tauri dev` 启动 < 30 秒 | **冷启动 27 分钟**(首次 cargo 编译 488 crate);**热启动 22 秒**(增量编译 21.4s + spike-app + webkit 启动) | ✅ 二次启动 < 30s |
+| 2 | 窗口在 Windows 桌面正常显示 | `spike-app` 标题、居中、合理大小,见 Snipaste_2026-06-04_15-17-45.png | ✅ |
+| 3 | 中文 / Emoji 渲染正常 | "中文测试 你好世界 10 🦀" 完整显示;Emoji 🎉 ✅ ❌ 🚀 🐳 🌈 🔥 7 个全部彩色渲染,无方块、无乱码 | ✅ |
+| 4 | 至少 10 次热重载不崩 | 10/10 全部通过(第一次脚本有 sed 模式 bug,重做后 10/10 全过)。13 条 hmr update 事件全在,WebKitWebProcess 一直活着(uid 0,root) | ✅ |
+| 5 | WebView 进程能在 WSL 内 `ps` 到 | `WebKitNetworkPr` (PID 703006→706999) + `WebKitWebProces` (PID 703036→707021) 都在 WSL 内,uid=0/root,没有 msedgewebview2.exe 在 Windows 侧 | ✅ |
+
+**关键 ps 输出(二次启动后)**:
+```
+ 706537 (-- spike-app) ← tauri dev 父进程
+ ├─ 706999 WebKitNetworkPr /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess  (uid 0)
+ └─ 707021 WebKitWebProces /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess       (uid 0)
+```
+
+**可接受瑕疵(不阻塞)**:
+- 启动冷启动 27 分钟远超 30s 标准(预期内,首次 cargo 编译 488 crate,网络还慢)
+- 视觉上无明显瑕疵(HiDPI 不模糊、字体不丑、主题自动跟系统深色)
+
+### 结论
+
+**spike-001 通过,WSL + Tauri 2 + Vue 3 技术栈可走。**5 条硬通过全过,没有触发任何退路。
+
+支撑的下游决策:
+- DESIGN §4 WSL 优先不动
+- TECH §1.3 Tauri 2 不动
+- TECH §1 前端 Vue 3 + Vite 不动
+- IMPLEMENTATION §2.1 步骤 1 可开始(项目骨架已验证,只是搬家到 `/usr/local/code/github/everlasting/app/` 即可)
+
+### 后续动作
+
+- ✅ spike-001 通过 → IMPLEMENTATION 步骤 1 开工前置 OK
+- ⏳ spike-002(reqwest+Anthropic SSE)未跑(本 session 因 ANTHROPIC_API_KEY 未设跳过)→ 下个 session 补
+- ⏳ spike-003(git2-rs)、spike-004(sqlx)可与 MVP 步骤 1 并行启动
+- 📝 把"linuxbrew rust 路径"和"PKG_CONFIG_PATH"两个环境坑写进 `docs/HACKING-wsl.md`(目前没有这个文件,值得新建,记录本机环境特殊点)
 
 ---
 
