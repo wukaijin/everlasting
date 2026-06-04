@@ -16,6 +16,10 @@
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 实现讲解 | 路线图、决策记录、待办 | 动手时,看"下一步做什么" |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估 | 评估新功能时(优先级未定) |
+| [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |
+| [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 5 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链问题时 |
+| [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
+| [spikes/](./spikes/) | 技术验证记录 | 5 分钟上手每个 spike 的目标 / 标准 / 结果 | 评估"某项技术能不能用"时 |
 
 ## 推荐阅读顺序
 
@@ -32,6 +36,10 @@
 **评估新功能时**:
 - [BACKLOG.md §0](./BACKLOG.md#0-全局视角这-7-个功能落在-5-个不同的层) — 五层架构,看功能落在哪
 - 对应章节 — 看具体选型
+
+**撞到环境 / API 怪事时**:
+- WSL / 字体 / Rust 工具链 → [HACKING-wsl.md](./HACKING-wsl.md)
+- LLM 流式 / 错误分类 / 协议差异 → [HACKING-llm.md](./HACKING-llm.md)
 
 ---
 
