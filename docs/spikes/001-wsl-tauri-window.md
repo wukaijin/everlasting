@@ -14,7 +14,7 @@
 ### 硬通过(全部满足才进步骤 1)
 - ✅ `cargo tauri dev` 启动 < 30 秒
 - ✅ 窗口在 Windows 桌面正常显示
-- ✅ 中文 / Emoji 渲染正常(不乱码、不方块)
+- ✅ 中文 / Emoji 渲染正常(不乱码、不方块、**中英文字号 baseline 对齐**——见下方"撞到的坑 #5",Ubuntu 默认 WenQuanYi 会有细微锯齿和对不齐,需装 Noto CJK + 写 local.conf)
 - ✅ 至少 10 次热重载不崩
 - ✅ WebView2 / WebKitGTK 进程能在 WSL 内 `ps` 到(确认 WSL 进程,不是绕到 Windows 侧)
 
@@ -162,6 +162,10 @@ ps aux | grep -iE 'webkit|webview|tauri' | grep -v grep
 2. **pnpm 配置了死代理**:`pnpm config get proxy` = `http://192.168.0.160:7897`(代理已不可达),导致 `pnpm dlx create-tauri-app` 失败。修复:`pnpm config delete proxy` + `pnpm config delete https-proxy`。
 3. **Rust 1.83 编译不了 Tauri 2 依赖图**:icu_collections v2.2.0 / dlopen2_derive v0.4.3 / deranged v0.5.8 / getrandom v0.4.2 / hashbrown v0.17.1 等都需要 Rust 1.85+ 或 1.86+,1.83 报 "feature `edition2024` is required"。退路选择:`brew upgrade rust`(linuxbrew 装的是 1.83,formulae 上 1.96.0 stable 可装)。注意:brew 不让以 root 跑,需要 `su carlos -c 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" && brew upgrade rust'`,装完 cargo 自动指到 1.96.0。**如果以后别的项目要装 rust,建议装 rustup 而不是 linuxbrew 的**——rustup 切版本/装多版本更省事,linuxbrew 这条路只能升不能降。
 4. **Cargo package cache 锁冲突**:同时跑 `cargo install tauri-cli`(全局) + `pnpm tauri dev`(项目级 CLI 装的 `@tauri-apps/cli` 2.11.2),两个 cargo 争同一个 package cache,`pnpm tauri dev` 卡在 "Blocking waiting for file lock on package cache"。退路选择:杀掉全局 install,只用项目级 CLI(@tauri-apps/cli 在 devDependencies 里,够用)。**结论:没必要全局装 tauri-cli,项目里 @tauri-apps/cli 就够。**
+5. **WSLg 下 CJK 字体对齐/锯齿(本次撞到,补充)**:spike 文档里写"如果乱码,装 `fonts-noto-cjk`",但**实际不乱码也仍有问题**。Ubuntu 默认装的是 `WenQuanYi Zen Hei`,WebKit 画中文时:fontconfig 把 sans-serif 默认指向 DejaVu Sans → fallback 到 WenQuanYi → 中英文字号、baseline 不一致 → 截图里"中文测试 你好世界"看着**有一点点对不齐和锯齿感**(不是乱码,不是方块,是 subtle 的位图+fallback 链问题)。修法两件套:
+   - `sudo apt install fonts-noto-cjk` + `fc-cache -fv`(装 Noto Sans CJK SC,中英文字号对齐好)
+   - 写 `/etc/fonts/local.conf` 强制 `sans-serif:lang=zh` 优先 Noto Sans CJK SC(Ubuntu 默认 fontconfig 配置在 `lang=zh`(非 `lang=zh-cn`)时不走 Noto CJK 链,这是个 latent bug,fix 写法见文档附录)→ 然后 `fc-cache -fv` → 杀掉 spike 进程(让 WebKit 重新读 fontconfig) → 重启 `pnpm tauri dev`
+   - **Spike 文档要更新**:`通过标准 §3 "中文/Emoji 渲染正常"` 应该加 "中英文字号对齐(无 WenQuanYi 那种细微锯齿)",否则只看一眼"没乱码"就过,会遗留这个坑。**结论:spike 验证视觉,不仅要看"有没有乱码",还要看"中英文字号 baseline 是否对齐"**。
 
 **5 条硬通过,实测**:
 
@@ -169,7 +173,7 @@ ps aux | grep -iE 'webkit|webview|tauri' | grep -v grep
 |------|------|------|------|
 | 1 | `cargo tauri dev` 启动 < 30 秒 | **冷启动 27 分钟**(首次 cargo 编译 488 crate);**热启动 22 秒**(增量编译 21.4s + spike-app + webkit 启动) | ✅ 二次启动 < 30s |
 | 2 | 窗口在 Windows 桌面正常显示 | `spike-app` 标题、居中、合理大小,见 Snipaste_2026-06-04_15-17-45.png | ✅ |
-| 3 | 中文 / Emoji 渲染正常 | "中文测试 你好世界 10 🦀" 完整显示;Emoji 🎉 ✅ ❌ 🚀 🐳 🌈 🔥 7 个全部彩色渲染,无方块、无乱码 | ✅ |
+| 3 | 中文 / Emoji 渲染正常 | 首次默认 WenQuanYi:中英文字号 baseline 不一致,有细微锯齿感(用户视觉反馈);装 `fonts-noto-cjk` + `/etc/fonts/local.conf` 强制 `sans-serif:lang=zh` → Noto Sans CJK SC 后对齐正常(用户确认)。Emoji 🎉 ✅ ❌ 🚀 🐳 🌈 🔥 7 个全部彩色渲染,无方块、无乱码 | ✅(装字体后) |
 | 4 | 至少 10 次热重载不崩 | 10/10 全部通过(第一次脚本有 sed 模式 bug,重做后 10/10 全过)。13 条 hmr update 事件全在,WebKitWebProcess 一直活着(uid 0,root) | ✅ |
 | 5 | WebView 进程能在 WSL 内 `ps` 到 | `WebKitNetworkPr` (PID 703006→706999) + `WebKitWebProces` (PID 703036→707021) 都在 WSL 内,uid=0/root,没有 msedgewebview2.exe 在 Windows 侧 | ✅ |
 
@@ -200,6 +204,8 @@ ps aux | grep -iE 'webkit|webview|tauri' | grep -v grep
 - ⏳ spike-002(reqwest+Anthropic SSE)未跑(本 session 因 ANTHROPIC_API_KEY 未设跳过)→ 下个 session 补
 - ⏳ spike-003(git2-rs)、spike-004(sqlx)可与 MVP 步骤 1 并行启动
 - 📝 把"linuxbrew rust 路径"和"PKG_CONFIG_PATH"两个环境坑写进 `docs/HACKING-wsl.md`(目前没有这个文件,值得新建,记录本机环境特殊点)
+- 📝 同样的,把"WSLg 下 CJK 字体对齐(装 fonts-noto-cjk + 写 /etc/fonts/local.conf)"也写进 HACKING-wsl.md,这是 MVP 步骤 1 直接会用到的
+- 📝 更新 spike 文档自身的"通过标准 §3":加"中英文字号 baseline 对齐"判定,避免后续 session 重复踩这个坑
 
 ---
 
