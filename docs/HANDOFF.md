@@ -1,7 +1,8 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 实施**(骨架 + LLM 直连)。
+> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 实施完成,待 GUI 端到端验收**。
 > spike-001/002 已通过,前置硬依赖清零,工具链就位,环境坑已沉淀。
+> **本 session**(2026-06-04 第二轮):搬骨架、写 LLM 客户端、IPC 桥、ChatWindow,11 个 Rust 单元测试 + pnpm build + cargo build 通过,`pnpm tauri dev` 已能启动(WebKit 进程在 WSL 内)。详见 §"已完成"。
 
 ---
 
@@ -24,32 +25,40 @@
 
 ## 2. 当前进度
 
-**已完成**(2026-06-04 之前的累计):
+**已完成**(2026-06-04 累计):
 - ✅ 5 份设计文档(README + DESIGN + ARCHITECTURE + TECH + IMPLEMENTATION + BACKLOG)
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
 - ✅ HANDOFF + 2 个 spike 模板
-
-**2026-06-04 本 session 推进**:
-- ✅ **spike-001 通过**:WSL + Tauri 2 + Vue 3 + WebKit 在 WSL 内(uid 0) + 中文/Emoji 渲染 + HMR 10/10
-- ✅ **spike-002 通过**:reqwest + SSE 流式 + 错误分类(手写可走,GLM 兼容层 3 处差异已知)
 - ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 5 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
-- ✅ 7 个 commit 推到 origin(`93645f4` HEAD)
+- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(本 session 完成,见下)
 
-**当前任务**:**MVP 步骤 1**(本 session 之后由新 session 开干)
-- 拆 `~/tauri-spike/spike-app` 到 `/usr/local/code/github/everlasting/app/`
-- 扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui)
-- Rust 端 LLM 客户端(用 sse-spike 验证过的手写 reqwest + SSE 模式)
-- 最小 chat UI,流式显示
-- 详细说明见 §4
+**2026-06-04 本 session(MVP 步骤 1 实施)**:
+- ✅ 搬 `~/tauri-spike/spike-app/` 到 `everlasting/app/`,扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui + @tauri-apps/api)
+- ✅ Rust 端 LLM 客户端 `src-tauri/src/llm/{client,sse,error,types}.rs`,4 文件分模块,实施 HACKING-llm 11 项 checklist
+- ✅ Tauri IPC:`invoke("chat", { requestId, messages })` 前端调用,Rust `tauri::async_runtime::spawn` 推 `chat-event` 事件
+- ✅ 最小 chat UI:输入框 + 消息列表(用户右/助手左)+ 流式 append + 中文友好错误显示
+- ✅ 11 个 Rust 单元测试全过(SSE parser 4 个 + error classification 7 个,覆盖 GLM 3 处差异)
+- ✅ `pnpm build` 通过(72KB JS + 2.8KB CSS,vue-tsc 无错)
+- ✅ `pnpm tauri dev` 启动 ~10s + WebKit 进程在 WSL 内(已验)
+- ✅ sse-spike 实测 API 通(401 走 `new_api_error` 路径,200 走 47 个 delta 路径,跟我的 LLM 客户端结构对齐)
+
+**待 GUI 端到端验收**(用户跑一次):
+- [ ] 窗口在 Windows 桌面显示
+- [ ] 中文输入 + 中文响应 baseline 对齐
+- [ ] 输入"你好" → 流式看到响应
+- [ ] 故意输错 API key → 中文友好错误(分类器逻辑已测,UI 端没验)
+- [ ] 5 次连续提问不崩 / 不卡
+- [ ] 至少 1 次热重载改 chat UI 不崩
+
+**当前任务**(本 session 之后由新 session 接手):
+- 走 [IMPLEMENTATION §2.2 步骤 2 — Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
+- 定义 3 个 tool:`read_file` / `write_file` / `shell`
+- 解析 `tool_use` 块,执行,构造 `tool_result` 回填
+- agent loop 实现
 
 **最近 commit**:
 ```
 93645f4 docs: README 索引加 HANDOFF + HACKING-wsl + HACKING-llm + spikes
-4223ce0 docs: 沉淀 2 份 HACKING 笔记(WSL 环境坑 + LLM 兼容层差异)
-e7e90d7 docs(spike-002): 通过
-1146cc0 docs(spike-001): 补 WSLg 下 CJK 字体对齐坑
-842f379 docs: spike-001 通过
-ba4aec3 docs: 新 session 引导 + 2 个 spike 模板
 ```
 
 ---

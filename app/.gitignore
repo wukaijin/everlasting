@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vite/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# 临时
+*.log
+*.tmp
+.DS_Store
