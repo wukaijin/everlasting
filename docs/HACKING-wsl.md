@@ -20,7 +20,7 @@
 **修法**(一次性):
 ```bash
 # 1. 装 fcitx5 + 拼音
-sudo apt install -y fcitx5 fcitx5-chinese-addons fcitxx5-frontend-gtk3
+sudo apt install -y fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3
 
 # 2. 预置 pinyin 为默认输入法(IM name 区分大小写都可以,但 profile 里写小写更稳)
 mkdir -p ~/.config/fcitx5
@@ -77,6 +77,81 @@ fcitx5 -d --enable pinyin
 - `ps aux | grep fcitx5` 看到进程在
 - Tauri app 打开,点 textarea,打 `n` 出候选窗
 - `fcitx5-config-qt` 也能跑(可在里面加/删输入法)
+
+---
+
+## 坑 7:WSL 默认以 root 启动,root 没 DBus session 也没 Wayland 访问
+
+**现象**:WLS 默认登录就是 root(或 `sudo -i` 进 root shell);root 跑 fcitx5 起不来,报 "All display connections are gone, exit now";Tauri 倒能跑(它用 XWayland 走 DISPLAY=:0),但 fcitx5 找不到 DBus session 注册。
+
+**根因**(WSLg 的 per-user 隔离):
+- WSLg 的 Wayland socket `/mnt/wslg/runtime-dir/wayland-0` 绑了第一个登录的 user(carlos)
+- root 的 `/run/user/0/` 目录是空的,**没有自己的 DBus session bus**
+- fcitx5 走 DBus 跟客户端通信,root 没 bus → 客户端找不到 fcitx5
+- fcitx5 默认加载 wayland/waylandim addon 想接 Wayland,root 接不到 carlos 的 socket → fcitx5 自杀
+
+**修法**(root 专属,跟坑 6 配对):
+
+```bash
+# 1. /root/.zshrc(或 /root/.bashrc)加 DBus session bus 自启 + fcitx5 禁 wayland 前端
+cat >> /root/.zshrc <<'EOF'
+
+# root 用户 DBus session(WSL 下默认没起)
+# 用 pgrep 查 dbus-daemon 实际在不在(避免 /run/user/0/bus 留僵尸 socket 误导)
+if pgrep -f "dbus-daemon --session --address=unix:path=/run/user/0/bus" >/dev/null 2>&1; then
+  [ -S /run/user/0/bus ] && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+elif [ "$EUID" = "0" ] && command -v dbus-daemon >/dev/null 2>&1; then
+  mkdir -p /run/user/0
+  chmod 700 /run/user/0
+  rm -f /run/user/0/bus  # 清任何僵尸 socket
+  dbus-daemon --session --address=unix:path=/run/user/0/bus --nofork >/dev/null 2>&1 &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S /run/user/0/bus ] && break
+    sleep 0.2
+  done
+  [ -S /run/user/0/bus ] && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus
+fi
+export XDG_RUNTIME_DIR=/run/user/0
+
+# fcitx5 autostart(禁 wayland/waylandim,root 接不到 WSLg 的 wayland;
+# 用 X11/XIM + GTK_IM_MODULE 跟 Tauri WebKitGTK-4.1 对话)
+# pgrep -x 防多开
+if command -v fcitx5 >/dev/null 2>&1 && ! pgrep -x fcitx5 >/dev/null 2>&1; then
+  export FCITX5_AUTOSTARTED=1
+  fcitx5 -d --keep --enable pinyin --disable wayland,waylandim >/dev/null 2>&1
+fi
+EOF
+```
+
+**注意**:
+- `dbus-daemon` 起一个 root 专属的 session bus,写到 `/run/user/0/bus`(`XDG_RUNTIME_DIR` 标准位置)
+- **坑中坑(2)**:用 `pgrep -f "dbus-daemon --session --address=unix:path=/run/user/0/bus"` 判断 daemon 活不活,不要只看 `[ -S /run/user/0/bus ]` — daemon 死掉会留僵尸 socket,fcitx5-remote 撞上去会 abort("Failed to create dbus connection")
+- 必须在 `fcitx5` 之前启好(`for _ in ...; [ -S /run/user/0/bus ] && break; done` 等 socket)
+- fcitx5 必须加 `--keep`,否则父 shell 一关就退(`-d` 模式下 fcitx5 监听主 display,root 的 display "不在"会自杀)
+- fcitx5 必须 `--disable wayland,waylandim`,否则启动时试连 carlos 的 wayland socket 失败就 unload
+- fcitx5 也用 `pgrep -x fcitx5` 防多开(每个 shell source rc 都想启一次,fcitx5 多个实例会抢 bus)
+- env 全部从 rc 里 export,你的 Tauri 进程 fork 时会继承
+
+**验证**:
+```bash
+# 1. dbus 起来了
+ls -la /run/user/0/bus
+# srwxrwxrwx 1 root root ... /run/user/0/bus
+
+# 2. fcitx5 起来了 + pinyin 加载
+ps aux | grep fcitx5 | grep -v grep
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/bus fcitx5-remote
+# 应输出 0 (no client) 或 1/2,不能 abort
+
+# 3. Tauri 起来后 WebKitGTK 能 connect
+# 直接在 Tauri 窗口里打拼音测试
+
+# 4. fcitx5-diagnose 看 ## Input Methods 段
+fcitx5-diagnose | grep -A 5 "## Input Methods"
+# 应显示 DefaultIM=pinyin
+```
+
+**carlos 也想跑怎么办**:carlos 的 rc 同样要加 `--disable wayland,waylandim`(`--keep` 也建议加),原因同 root,只是 carlos 的 wayland socket 是自己的所以不会失败,但 fcitx5 wayland addon 在 WSLg 上不稳。配置跟 root 完全一样就行。
 
 ---
 
