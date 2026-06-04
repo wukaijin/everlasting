@@ -38,7 +38,7 @@ impl LlmConfig {
             .map_err(|_| LlmError::Auth("ANTHROPIC_API_KEY not set".into()))?;
         let base_url = std::env::var("ANTHROPIC_BASE_URL")
             .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "GLM-4.7".to_string());
+        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".to_string());
         let max_tokens = std::env::var("LLM_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok())

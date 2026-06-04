@@ -8,20 +8,14 @@ const config = useConfigStore();
 const input = ref("");
 const messagesEl = ref<HTMLElement | null>(null);
 
-onMounted(() => {
+onMounted(async () => {
   config.load();
+  await store.loadSessions();
 });
 
 const isComposing = ref(false);
 
 // IME-safe textarea binding.
-// v-model would update `input` on every `input` event, including the
-// intermediate pinyin state during composition. That re-renders the
-// textarea, clobbering the IME's candidate window and cursor. Instead:
-//   - During composition: ignore `input` events, let the browser/IME own
-//     the textarea's value.
-//   - On `compositionend`: sync the committed text into `input`.
-//   - Outside composition: behave like a normal v-model.
 function onTextareaInput(e: Event) {
   if (isComposing.value) return;
   input.value = (e.target as HTMLTextAreaElement).value;
@@ -31,9 +25,9 @@ function onCompositionStart() {
   isComposing.value = true;
 }
 
-function onCompositionEnd(e: CompositionEvent) {
+function onCompositionEnd(_e: CompositionEvent) {
   isComposing.value = false;
-  input.value = (e.target as HTMLTextAreaElement).value;
+  input.value = (_e.target as HTMLTextAreaElement).value;
 }
 
 async function scrollToBottom() {
@@ -72,116 +66,292 @@ function onKeydown(e: KeyboardEvent) {
 
 const hasMessages = computed(() => store.messages.length > 0);
 
-/** Find the tool result for a given tool call id. */
 function getToolResult(m: { toolResults?: ToolResultInfo[] }, callId: string): ToolResultInfo | undefined {
   return m.toolResults?.find((r) => r.toolUseId === callId);
 }
 
-/** Format tool input for display. */
 function formatToolInput(tc: ToolCallInfo): string {
   return JSON.stringify(tc.input, null, 2);
 }
 
-/** Truncate long tool output for display. */
 function truncateOutput(s: string, max = 500): string {
   if (s.length <= max) return s;
   return s.slice(0, max) + `… (${s.length - max} more chars)`;
+}
+
+async function onNewSession() {
+  if (store.sending) return;
+  await store.createNewSession();
+}
+
+async function onSwitchSession(id: string) {
+  if (id === store.currentSessionId) return;
+  await store.switchSession(id);
+}
+
+async function onDeleteSession(id: string, e: MouseEvent) {
+  e.stopPropagation();
+  if (store.sending && id === store.currentSessionId) return;
+  if (!confirm("删除此 session 及其所有消息？")) return;
+  await store.deleteSession(id);
 }
 </script>
 
 <template>
   <div class="app">
-    <header class="app__header">
-      <h1 class="app__title">Everlasting</h1>
-      <span class="app__subtitle">vibe coding workbench · step 2</span>
-    </header>
-
-    <main ref="messagesEl" class="app__main">
-      <div v-if="!hasMessages" class="empty">
-        <p>输入一句话,跟 LLM 聊聊看 👋</p>
-        <p class="empty__hint">中文输入测试 + 流式响应</p>
+    <aside class="sidebar">
+      <div class="sidebar__header">
+        <span class="sidebar__title">Sessions</span>
       </div>
-
-      <ul v-else class="messages">
+      <button class="sidebar__new" @click="onNewSession">+ 新对话</button>
+      <ul class="sidebar__list">
         <li
-          v-for="m in store.messages"
-          :key="m.id"
-          :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
+          v-for="s in store.sessions"
+          :key="s.id"
+          :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
+          @click="onSwitchSession(s.id)"
         >
-          <div class="msg__bubble">
-            <span class="msg__text">{{ m.content }}</span>
-            <span v-if="m.streaming" class="msg__cursor">▍</span>
+          <div class="session-item__main">
+            <div class="session-item__title">{{ s.title }}</div>
+            <div v-if="s.preview" class="session-item__preview">{{ s.preview }}</div>
           </div>
-
-          <!-- Tool call cards -->
-          <div v-if="m.toolCalls && m.toolCalls.length" class="msg__tools">
-            <div
-              v-for="tc in m.toolCalls"
-              :key="tc.id"
-              class="tool-card"
-              :class="{ 'tool-card--error': getToolResult(m, tc.id)?.isError }"
-            >
-              <div class="tool-card__header">
-                <span class="tool-card__name">{{ tc.name }}</span>
-                <span class="tool-card__status">
-                  {{ getToolResult(m, tc.id) ? '✓ done' : '⏳ running…' }}
-                </span>
-              </div>
-              <details class="tool-card__details">
-                <summary>input</summary>
-                <pre class="tool-card__pre">{{ formatToolInput(tc) }}</pre>
-              </details>
-              <details v-if="getToolResult(m, tc.id)" class="tool-card__details" open>
-                <summary>output</summary>
-                <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
-              </details>
-            </div>
-          </div>
-
-          <div v-if="m.error" class="msg__error">
-            ⚠ {{ m.error.message }}
-          </div>
+          <button class="session-item__delete" @click="(e) => onDeleteSession(s.id, e)" title="删除">×</button>
+        </li>
+        <li v-if="store.sessions.length === 0" class="session-empty">
+          还没有对话，点上方按钮开始
         </li>
       </ul>
-    </main>
+    </aside>
 
-    <footer class="app__footer">
-      <textarea
-        :value="input"
-        class="input"
-        rows="2"
-        placeholder="输入消息,Enter 发送,Shift+Enter 换行"
-        :disabled="store.sending"
-        @input="onTextareaInput"
-        @compositionstart="onCompositionStart"
-        @compositionend="onCompositionEnd"
-        @keydown="onKeydown"
-      />
-      <button
-        class="send"
-        :disabled="store.sending || !input.trim()"
-        @click="onSubmit"
-      >
-        {{ store.sending ? "生成中…" : "发送" }}
-      </button>
-    </footer>
+    <section class="content">
+      <header class="app__header">
+        <h1 class="app__title">Everlasting</h1>
+        <span class="app__subtitle">vibe coding workbench · step 3a</span>
+      </header>
 
-    <div v-if="config.loaded" class="statusbar" :class="{ 'statusbar--warn': !config.configured }">
-      <span class="statusbar__dot" />
-      <span class="statusbar__model">{{ config.model || "(no model)" }}</span>
-      <span class="statusbar__sep">·</span>
-      <span class="statusbar__url">{{ config.baseUrl || "(no base_url)" }}</span>
-      <span v-if="!config.configured" class="statusbar__hint">ANTHROPIC_API_KEY 未设置</span>
-    </div>
+      <main ref="messagesEl" class="app__main">
+        <div v-if="!hasMessages" class="empty">
+          <p>输入一句话,跟 LLM 聊聊看 👋</p>
+          <p class="empty__hint">中文输入测试 + 流式响应 + 工具调用</p>
+        </div>
+
+        <ul v-else class="messages">
+          <li
+            v-for="m in store.messages"
+            :key="m.id"
+            :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
+          >
+            <div class="msg__bubble">
+              <span class="msg__text">{{ m.content }}</span>
+              <span v-if="m.streaming" class="msg__cursor">▍</span>
+            </div>
+
+            <div v-if="m.toolCalls && m.toolCalls.length" class="msg__tools">
+              <div
+                v-for="tc in m.toolCalls"
+                :key="tc.id"
+                class="tool-card"
+                :class="{ 'tool-card--error': getToolResult(m, tc.id)?.isError }"
+              >
+                <div class="tool-card__header">
+                  <span class="tool-card__name">{{ tc.name }}</span>
+                  <span class="tool-card__status">
+                    {{ getToolResult(m, tc.id) ? '✓ done' : '⏳ running…' }}
+                  </span>
+                </div>
+                <details class="tool-card__details">
+                  <summary>input</summary>
+                  <pre class="tool-card__pre">{{ formatToolInput(tc) }}</pre>
+                </details>
+                <details v-if="getToolResult(m, tc.id)" class="tool-card__details" open>
+                  <summary>output</summary>
+                  <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
+                </details>
+              </div>
+            </div>
+
+            <div v-if="m.error" class="msg__error">
+              ⚠ {{ m.error.message }}
+            </div>
+          </li>
+        </ul>
+      </main>
+
+      <footer class="app__footer">
+        <textarea
+          :value="input"
+          class="input"
+          rows="2"
+          placeholder="输入消息,Enter 发送,Shift+Enter 换行"
+          :disabled="store.sending"
+          @input="onTextareaInput"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+          @keydown="onKeydown"
+        />
+        <button
+          class="send"
+          :disabled="store.sending || !input.trim()"
+          @click="onSubmit"
+        >
+          {{ store.sending ? "生成中…" : "发送" }}
+        </button>
+      </footer>
+
+      <div v-if="config.loaded" class="statusbar" :class="{ 'statusbar--warn': !config.configured }">
+        <span class="statusbar__dot" />
+        <span class="statusbar__model">{{ config.model || "(no model)" }}</span>
+        <span class="statusbar__sep">·</span>
+        <span class="statusbar__url">{{ config.baseUrl || "(no base_url)" }}</span>
+        <span v-if="!config.configured" class="statusbar__hint">ANTHROPIC_API_KEY 未设置</span>
+      </div>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .app {
   display: flex;
-  flex-direction: column;
   height: 100vh;
   background: #fafbfc;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #f3f4f6;
+  border-right: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.sidebar__header {
+  padding: 14px 16px 8px;
+}
+
+.sidebar__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sidebar__new {
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.sidebar__new:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.session-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.session-item:hover {
+  background: #e5e7eb;
+}
+
+.session-item--active {
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+}
+
+.session-item--active:hover {
+  background: #ffffff;
+}
+
+.session-item__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2328;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item__preview {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item__delete {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.1s;
+}
+
+.session-item:hover .session-item__delete {
+  opacity: 1;
+}
+
+.session-item__delete:hover {
+  background: #fca5a5;
+  color: #ffffff;
+}
+
+.session-empty {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: #9ca3af;
+  text-align: center;
+}
+
+/* --- Content (right side) --- */
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .app__header {
@@ -298,8 +468,6 @@ function truncateOutput(s: string, max = 500): string {
   font-size: 12px;
   color: #b91c1c;
 }
-
-/* --- Tool call cards --- */
 
 .msg__tools {
   display: flex;

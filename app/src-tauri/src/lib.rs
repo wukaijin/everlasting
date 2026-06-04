@@ -1,9 +1,10 @@
 //! Everlasting Tauri app entry point.
 //!
-//! Step 2: The `chat` command implements an agent loop — stream LLM response,
-//! if tool_use → execute tools → feed results back → repeat until text-only
-//! response or max turns.
+//! Step 3a adds SQLite persistence: every assistant/tool_result turn is
+//! written to disk at the turn boundary, sessions are listed/created/
+//! loaded/deleted via dedicated commands.
 
+mod db;
 mod llm;
 mod tools;
 
@@ -11,7 +12,8 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use sqlx::SqlitePool;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use llm::{
@@ -26,16 +28,15 @@ const MAX_TURNS: usize = 20;
 // AppState
 // ---------------------------------------------------------------------------
 
-/// Process-wide state. The LLM config is loaded from env at startup; if
-/// `ANTHROPIC_API_KEY` is missing, we still let the UI start and surface
-/// the error in the chat response (better UX than refusing to launch).
+/// Process-wide state.
 struct AppState {
     config: LlmConfig,
     tools: Vec<ToolDef>,
+    db: SqlitePool,
 }
 
 impl AppState {
-    fn load() -> Self {
+    async fn load(app: &AppHandle) -> Self {
         let config = LlmConfig::from_env().unwrap_or_else(|e| {
             tracing::warn!(
                 error = %e,
@@ -50,7 +51,22 @@ impl AppState {
             tools_count = tools.len(),
             "LLM config loaded"
         );
-        Self { config, tools }
+
+        // Resolve app_data_dir, then open SQLite there.
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .expect("failed to resolve app_data_dir");
+        let db_path = app_data_dir.join("everlasting.db");
+        let db = db::init_pool(&db_path)
+            .await
+            .expect("failed to open sqlite pool");
+        db::run_migrations(&db)
+            .await
+            .expect("failed to run migrations");
+        tracing::info!(db_path = %db_path.display(), "sqlite ready");
+
+        Self { config, tools, db }
     }
 }
 
@@ -94,7 +110,7 @@ struct PublicLlmConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Tauri commands
+// Tauri commands — config
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -107,15 +123,65 @@ fn get_llm_config(state: State<'_, Arc<AppState>>) -> PublicLlmConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tauri commands — session management
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_sessions(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::SessionSummary>, String> {
+    db::list_sessions(&state.db)
+        .await
+        .map_err(|e| format!("list_sessions failed: {}", e))
+}
+
+#[tauri::command]
+async fn create_session(
+    state: State<'_, Arc<AppState>>,
+    model: Option<String>,
+) -> Result<db::SessionRow, String> {
+    let model = model.unwrap_or_else(|| state.config.model.clone());
+    db::create_session(&state.db, &model)
+        .await
+        .map_err(|e| format!("create_session failed: {}", e))
+}
+
+#[tauri::command]
+async fn load_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Option<db::LoadedSession>, String> {
+    db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("load_session failed: {}", e))
+}
+
+#[tauri::command]
+async fn delete_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    db::delete_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("delete_session failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
+// Tauri command — chat (agent loop)
+// ---------------------------------------------------------------------------
+
 #[tauri::command]
 async fn chat(
     request_id: String,
+    session_id: String,
     messages: Vec<ChatMessage>,
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<(), String> {
     let config = state.config.clone();
     let tool_defs = state.tools.clone();
+    let db = state.db.clone();
     let rid = request_id;
     let app_handle = app.clone();
 
@@ -133,6 +199,35 @@ async fn chat(
 
     tauri::async_runtime::spawn(async move {
         let mut messages = messages;
+        // Start seq from the highest existing seq in this session + 1.
+        let next_seq = match db::load_session(&db, &session_id).await {
+            Ok(Some(loaded)) => loaded
+                .messages
+                .iter()
+                .map(|m| m.seq)
+                .max()
+                .map(|s| s + 1)
+                .unwrap_or(0),
+            Ok(None) => {
+                tracing::warn!(session_id = %session_id, "session not found");
+                let _ = app_handle.emit(
+                    "chat-event",
+                    ChatEventPayload {
+                        request_id: rid.clone(),
+                        event: ChatEvent::Error {
+                            message: format!("session {} not found", session_id),
+                            category: LlmErrorCategory::InvalidRequest,
+                        },
+                    },
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to load session");
+                return;
+            }
+        };
+        let mut seq = next_seq;
 
         for turn in 1..=MAX_TURNS {
             let mut stream = Box::pin(chat_stream_with_tools(
@@ -161,8 +256,6 @@ async fn chat(
 
                 match &event {
                     ChatEvent::Start => {
-                        // Only emit Start on the first turn — frontend shows
-                        // "thinking…" indicator once.
                         if turn == 1 {
                             emit_chat_event(&app_handle, &rid, &event);
                         }
@@ -173,7 +266,6 @@ async fn chat(
                     }
                     ChatEvent::ToolCall { id, name, input } => {
                         tool_calls.push((id.clone(), name.clone(), input.clone()));
-                        // Low-frequency: independent event channel.
                         let _ = app_handle.emit(
                             "tool:call",
                             ToolCallPayload {
@@ -218,11 +310,19 @@ async fn chat(
                     input: input.clone(),
                 });
             }
+
             if !assistant_blocks.is_empty() {
-                messages.push(ChatMessage {
+                let msg = ChatMessage {
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks),
-                });
+                };
+                if let Err(e) =
+                    db::persist_turn(&db, &session_id, msg.role, &msg.content, seq).await
+                {
+                    tracing::error!(error = %e, "failed to persist assistant turn");
+                }
+                messages.push(msg);
+                seq += 1;
             }
 
             // Decide whether to continue the agent loop.
@@ -230,7 +330,10 @@ async fn chat(
                 stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
 
             if !should_continue {
-                // All done — emit final Done event.
+                // Bump session's updated_at to reflect activity.
+                if let Err(e) = db::touch_session(&db, &session_id).await {
+                    tracing::warn!(error = %e, "failed to touch session");
+                }
                 emit_chat_event(
                     &app_handle,
                     &rid,
@@ -244,7 +347,6 @@ async fn chat(
             for (id, name, input) in &tool_calls {
                 let (content, is_error) = tools::execute_tool(name, input).await;
 
-                // Low-frequency: independent event channel.
                 let _ = app_handle.emit(
                     "tool:result",
                     ToolResultPayload {
@@ -262,17 +364,25 @@ async fn chat(
                 });
             }
 
-            messages.push(ChatMessage {
+            let tool_result_msg = ChatMessage {
                 role: Role::User,
                 content: MessageContent::Blocks(result_blocks),
-            });
+            };
+            if let Err(e) =
+                db::persist_turn(&db, &session_id, tool_result_msg.role, &tool_result_msg.content, seq)
+                    .await
+            {
+                tracing::error!(error = %e, "failed to persist tool_result turn");
+            }
+            messages.push(tool_result_msg);
+            seq += 1;
 
             tracing::info!(turn, tool_count = tool_calls.len(), "agent loop: executing tools, continuing");
-            // Loop back to LLM with tool results appended.
         }
 
         // Safety: max turns reached.
         tracing::warn!(max_turns = MAX_TURNS, "agent loop: max turns reached");
+        let _ = db::touch_session(&db, &session_id).await;
         emit_chat_event(
             &app_handle,
             &rid,
@@ -307,11 +417,23 @@ fn emit_chat_event(app: &AppHandle, rid: &str, event: &ChatEvent) {
 pub fn run() {
     init_tracing();
 
-    let state = Arc::new(AppState::load());
-
     tauri::Builder::default()
-        .manage(state)
-        .invoke_handler(tauri::generate_handler![chat, get_llm_config])
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            let state = tauri::async_runtime::block_on(async move {
+                Arc::new(AppState::load(&app_handle).await)
+            });
+            app.manage(state);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            chat,
+            get_llm_config,
+            list_sessions,
+            create_session,
+            load_session,
+            delete_session,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

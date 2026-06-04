@@ -36,6 +36,38 @@ export interface ChatMessage {
   toolResults?: ToolResultInfo[];
 }
 
+/** Session summary shown in the sidebar. */
+export interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+  preview: string;
+}
+
+/** Message loaded from DB on session switch. */
+interface LoadedMessage {
+  id: number;
+  sessionId: string;
+  role: Role;
+  content: unknown; // Vec<ContentBlock> as JSON
+  text: string;
+  hasToolCalls: boolean;
+  hasToolResults: boolean;
+  createdAt: string;
+  seq: number;
+}
+
+interface LoadedSession {
+  session: {
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+    model: string;
+  };
+  messages: LoadedMessage[];
+}
+
 /** Payload sent to Rust (always plain text — frontend doesn't send ContentBlock). */
 interface ChatMessagePayload {
   role: Role;
@@ -76,10 +108,18 @@ const genId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 export const useChatStore = defineStore("chat", () => {
+  // -----------------------------------------------------------------------
+  // State
+  // -----------------------------------------------------------------------
+
   const messages = ref<ChatMessage[]>([]);
   const sending = ref(false);
   const currentRequestId = ref<string | null>(null);
   const listenerReady = ref(false);
+
+  // Session state
+  const sessions = ref<SessionSummary[]>([]);
+  const currentSessionId = ref<string | null>(null);
 
   // -----------------------------------------------------------------------
   // Listeners
@@ -122,6 +162,8 @@ export const useChatStore = defineStore("chat", () => {
         last.streaming = false;
         sending.value = false;
         currentRequestId.value = null;
+        // Refresh sidebar so updated_at / title reflect the new turn.
+        void loadSessions();
         break;
       case "error":
         last.streaming = false;
@@ -162,6 +204,56 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
+  // Session management
+  // -----------------------------------------------------------------------
+
+  async function loadSessions() {
+    sessions.value = await invoke<SessionSummary[]>("list_sessions");
+  }
+
+  /** Convert DB-loaded messages into frontend ChatMessage objects. */
+  function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
+    return loaded.map((m) => ({
+      id: `${m.sessionId}-${m.seq}`,
+      role: m.role,
+      content: m.text, // already-extracted text (denormalized in DB)
+    }));
+  }
+
+  async function createNewSession(): Promise<string> {
+    const session = await invoke<{
+      id: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+      model: string;
+    }>("create_session", { model: null });
+    currentSessionId.value = session.id;
+    messages.value = [];
+    await loadSessions();
+    return session.id;
+  }
+
+  async function switchSession(sessionId: string) {
+    if (sending.value) return; // don't switch mid-stream
+    const loaded = await invoke<LoadedSession | null>("load_session", {
+      sessionId,
+    });
+    if (!loaded) return;
+    currentSessionId.value = sessionId;
+    messages.value = rehydrateMessages(loaded.messages);
+  }
+
+  async function deleteSession(sessionId: string) {
+    await invoke("delete_session", { sessionId });
+    if (currentSessionId.value === sessionId) {
+      currentSessionId.value = null;
+      messages.value = [];
+    }
+    await loadSessions();
+  }
+
+  // -----------------------------------------------------------------------
   // Send
   // -----------------------------------------------------------------------
 
@@ -169,6 +261,11 @@ export const useChatStore = defineStore("chat", () => {
     const trimmed = text.trim();
     if (!trimmed || sending.value) return;
     await ensureListener();
+
+    // Lazily create a session if there isn't one yet.
+    if (!currentSessionId.value) {
+      await createNewSession();
+    }
 
     const userMsg: ChatMessage = {
       id: genId(),
@@ -192,7 +289,11 @@ export const useChatStore = defineStore("chat", () => {
     sending.value = true;
 
     try {
-      await invoke("chat", { requestId, messages: history });
+      await invoke("chat", {
+        requestId,
+        sessionId: currentSessionId.value,
+        messages: history,
+      });
     } catch (e) {
       assistantMsg.error = {
         message: String(e),
@@ -214,5 +315,17 @@ export const useChatStore = defineStore("chat", () => {
     unlistenTR = null;
   }
 
-  return { messages, sending, listenerReady, send, cleanup };
+  return {
+    messages,
+    sending,
+    listenerReady,
+    sessions,
+    currentSessionId,
+    send,
+    loadSessions,
+    createNewSession,
+    switchSession,
+    deleteSession,
+    cleanup,
+  };
 });

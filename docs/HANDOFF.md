@@ -1,6 +1,6 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-05 更新**。当前阶段:**MVP 步骤 2 已完成，准备进入步骤 3a (SQLite + Session 持久化)**。
+> **2026-06-05 更新**。当前阶段:**MVP 步骤 3a 已完成，准备进入步骤 3b (多项目 + UI 三栏 + Rig 迁移)**。
 > spike-001/002 已通过，前置硬依赖清零，工具链就位，环境坑已沉淀。
 > **session 1** (2026-06-04):设计文档 + spike-001/002。
 > **session 2** (2026-06-04):MVP 步骤 1 实施（骨架 + LLM 直连）。
@@ -32,28 +32,31 @@
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
 - ✅ HANDOFF + 2 个 spike 模板
 - ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
-- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(session 2 完成)
+- ✅ **MVP 步骤 1 — 骨架 + LLM 直连**(session 2 完成)
 - ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(session 3 完成)
+- ✅ **MVP 步骤 3a — SQLite + Session 持久化**(session 4 完成)
 
-**session 3 (步骤 1 验收 + 文档审视 + 步骤 2 实施)**:
-- ✅ GUI 端到端验收通过（窗口/中文/流式/错误处理/热重载）
-- ✅ 全量设计文档审视：路线图 8 步→7 步，事件协议改为混合模式
-- ✅ Rust 类型体系扩展：ContentBlock + MessageContent（自定义 Serde 兼容 string/array）+ ToolDef
-- ✅ SSE 解析增强：BlockState 状态机处理 tool_use（content_block_start/delta/stop）+ stop_reason 提取
-- ✅ Tool 模块：read_file（>50KB 截断）+ write_file（自动建目录）+ shell（5min 超时）
-- ✅ Agent Loop：循环结构 max 20 turns，tool:call/tool:result 独立事件通道
-- ✅ 前端：ToolCallInfo/ToolResultInfo 状态 + 工具调用卡片 UI
-- ✅ 33 个 Rust 测试全过，pnpm build 通过，E2E 验收通过
+**session 4 (步骤 3a 实施)**:
+- ✅ Cargo.toml 加 sqlx / uuid / chrono 依赖
+- ✅ 新增 `src-tauri/src/db.rs`（init_pool / run_migrations / 8 个 CRUD 函数 + 9 个测试）
+- ✅ DB schema：sessions + messages 表，content 是 JSON (Vec<ContentBlock> round-trip 0 损失)
+- ✅ lib.rs：AppState 加 db、chat 入参加 session_id、turn 边界 persist_turn、注册 4 个新 command (list/create/load/delete)
+- ✅ 前端 session store：sessions / currentSessionId / loadSessions / createNewSession / switchSession / deleteSession
+- ✅ 前端侧边栏 UI：+ 新对话 / 列表 / 切换 / 删除按钮
+- ✅ 默认模型改为 MiniMax-M2.7
+- ✅ 42 个 Rust 测试全过，pnpm build 通过
+- ⚠️ **未 commit**（改动在工作区，待新 session 验证后 commit）
 
 **当前任务**(下一步):
-- → [IMPLEMENTATION §2.3 步骤 3a — SQLite + Session 持久化](./IMPLEMENTATION.md#23-步骤-3a--sqlite--session-持久化-mvp)
-- 引入 SQLite（sqlx），存 session / message
-- session 列表 + session 切换（单项目，无左侧项目栏）
-- 消息从 SQLite 加载，重启能恢复
+- → [IMPLEMENTATION §2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移](./IMPLEMENTATION.md#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)
+- LLM client 从 reqwest 切到 rig-core
+- 引入 Project 概念，左侧项目列表
+- UI 重构：左侧项目列表 + 中间 session 列表 + 右侧 chat
+- 记得先 commit session 4 的改动
 
 **最近 commit**:
 ```
-fefc41f feat(agent): 步骤 2 — Tool Calling + Agent Loop
+1bcc9e8 docs: 更新 HANDOFF + CLAUDE.md 反映步骤 2 完成
 ```
 
 ---
@@ -227,7 +230,7 @@ docs/
 - **项目根**:`/usr/local/code/github/everlasting/`
 - **当前 branch**:`main`
 - **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
-- **最近 commit hash**:`fefc41f`
+- **最近 commit hash**:`1bcc9e8` (session 4 改动未 commit)
 - **当前日期**:2026-06-04
 
 ---
