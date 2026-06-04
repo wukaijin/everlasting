@@ -57,6 +57,18 @@ interface LoadedMessage {
   seq: number;
 }
 
+/** One content block as serialized by Rust (snake_case tag + fields). */
+interface ContentBlockFromDb {
+  type: "text" | "tool_use" | "tool_result";
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  content?: string;
+  is_error?: boolean;
+}
+
 interface LoadedSession {
   session: {
     id: string;
@@ -68,10 +80,28 @@ interface LoadedSession {
   messages: LoadedMessage[];
 }
 
-/** Payload sent to Rust (always plain text — frontend doesn't send ContentBlock). */
+/** Wire-format content sent to the Rust `chat` command. Mirrors
+ *  Rust's `MessageContent`: a plain string for text-only messages,
+ *  or an array of `ContentBlock` (snake_case tag + fields) when
+ *  the message carries tool_use / tool_result blocks. */
+type ContentBlockPayload =
+  | { type: "text"; text: string }
+  | {
+      type: "tool_use";
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string;
+      is_error: boolean;
+    };
+
 interface ChatMessagePayload {
   role: Role;
-  content: string;
+  content: string | ContentBlockPayload[];
 }
 
 /** High-frequency event (chat-event channel). */
@@ -211,13 +241,71 @@ export const useChatStore = defineStore("chat", () => {
     sessions.value = await invoke<SessionSummary[]>("list_sessions");
   }
 
-  /** Convert DB-loaded messages into frontend ChatMessage objects. */
+  /** Convert DB-loaded messages into frontend ChatMessage objects.
+   *
+   *  Two passes:
+   *  1. Parse each row's `content` blocks into `toolCalls` / `toolResults`.
+   *  2. DB stores `tool_use` (in assistant) and the matching `tool_result`
+   *     (in the next user message — Anthropic API requirement) as separate
+   *     rows, but the in-memory model expects both on the same assistant
+   *     message so the UI's "done / running" status lookup works. Merge
+   *     the user message's tool_results into the previous assistant message. */
   function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
-    return loaded.map((m) => ({
-      id: `${m.sessionId}-${m.seq}`,
-      role: m.role,
-      content: m.text, // already-extracted text (denormalized in DB)
-    }));
+    const messages: ChatMessage[] = loaded.map((m) => {
+      const blocks: ContentBlockFromDb[] = Array.isArray(m.content)
+        ? (m.content as ContentBlockFromDb[])
+        : [];
+      const toolCalls: ToolCallInfo[] = [];
+      const toolResults: ToolResultInfo[] = [];
+      for (const b of blocks) {
+        if (
+          b?.type === "tool_use" &&
+          typeof b.id === "string" &&
+          typeof b.name === "string"
+        ) {
+          toolCalls.push({
+            id: b.id,
+            name: b.name,
+            input: b.input ?? {},
+          });
+        } else if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+          toolResults.push({
+            toolUseId: b.tool_use_id,
+            content: b.content ?? "",
+            isError: !!b.is_error,
+          });
+        }
+      }
+      const msg: ChatMessage = {
+        id: `${m.sessionId}-${m.seq}`,
+        role: m.role,
+        content: m.text,
+      };
+      if (toolCalls.length) msg.toolCalls = toolCalls;
+      if (toolResults.length) msg.toolResults = toolResults;
+      return msg;
+    });
+
+    // Attach user-message tool_results to the previous assistant message so
+    // the UI's per-message "done / running" lookup hits. The user message
+    // itself becomes a UI "ghost": it stays in the array (so its
+    // tool_results still flow to the LLM via toPayloadContent) but the
+    // visible-messages filter hides it because it has no text and no
+    // tool_calls.
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      const trs = m.toolResults;
+      if (m.role !== "user" || !trs?.length) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        if (messages[j].role === "assistant") {
+          if (!messages[j].toolResults) messages[j].toolResults = [];
+          messages[j].toolResults!.push(...trs);
+          break;
+        }
+      }
+    }
+
+    return messages;
   }
 
   async function createNewSession(): Promise<string> {
@@ -257,6 +345,37 @@ export const useChatStore = defineStore("chat", () => {
   // Send
   // -----------------------------------------------------------------------
 
+  /** Build the wire-format content for a history message: plain string
+   *  for text-only turns, or an array of blocks when the turn carries
+   *  tool_use / tool_result data. Backend's `MessageContent` deserializer
+   *  accepts both shapes. */
+  function toPayloadContent(m: ChatMessage): string | ContentBlockPayload[] {
+    if (!m.toolCalls?.length && !m.toolResults?.length) {
+      return m.content;
+    }
+    const blocks: ContentBlockPayload[] = [];
+    if (m.content) {
+      blocks.push({ type: "text", text: m.content });
+    }
+    for (const tc of m.toolCalls ?? []) {
+      blocks.push({
+        type: "tool_use",
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+      });
+    }
+    for (const tr of m.toolResults ?? []) {
+      blocks.push({
+        type: "tool_result",
+        tool_use_id: tr.toolUseId,
+        content: tr.content,
+        is_error: tr.isError,
+      });
+    }
+    return blocks;
+  }
+
   async function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || sending.value) return;
@@ -279,10 +398,11 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value.push(userMsg, assistantMsg);
 
-    // Build history — always plain text (backend handles MessageContent).
+    // Build history — keep tool_use/tool_result blocks intact so the LLM
+    // has full context across turns and across session switches.
     const history: ChatMessagePayload[] = messages.value
       .filter((m) => m.id !== assistantMsg.id)
-      .map((m) => ({ role: m.role, content: m.content }));
+      .map((m) => ({ role: m.role, content: toPayloadContent(m) }));
 
     const requestId = genId();
     currentRequestId.value = requestId;

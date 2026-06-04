@@ -66,6 +66,17 @@ function onKeydown(e: KeyboardEvent) {
 
 const hasMessages = computed(() => store.messages.length > 0);
 
+/** Filter out "ghost" messages that exist only to carry tool_result
+ *  blocks for the LLM. After rehydration, the user tool_result message
+ *  is empty (`text=""`) and has no tool_calls of its own — the actual
+ *  tool card lives on the previous assistant message. Hiding them keeps
+ *  the chat list clean. */
+const visibleMessages = computed(() =>
+  store.messages.filter(
+    (m) => m.content || m.toolCalls?.length || m.error,
+  ),
+);
+
 function getToolResult(m: { toolResults?: ToolResultInfo[] }, callId: string): ToolResultInfo | undefined {
   return m.toolResults?.find((r) => r.toolUseId === callId);
 }
@@ -137,16 +148,14 @@ async function onDeleteSession(id: string, e: MouseEvent) {
 
         <ul v-else class="messages">
           <li
-            v-for="m in store.messages"
+            v-for="m in visibleMessages"
             :key="m.id"
             :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
           >
-            <div class="msg__bubble">
-              <span class="msg__text">{{ m.content }}</span>
-              <span v-if="m.streaming" class="msg__cursor">▍</span>
-            </div>
-
-            <div v-if="m.toolCalls && m.toolCalls.length" class="msg__tools">
+            <div
+              v-if="m.toolCalls && m.toolCalls.length"
+              class="msg__tools"
+            >
               <div
                 v-for="tc in m.toolCalls"
                 :key="tc.id"
@@ -168,6 +177,14 @@ async function onDeleteSession(id: string, e: MouseEvent) {
                   <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
                 </details>
               </div>
+            </div>
+
+            <div
+              v-if="m.content || (!m.toolCalls?.length && !m.toolResults?.length)"
+              class="msg__bubble"
+            >
+              <span class="msg__text">{{ m.content }}</span>
+              <span v-if="m.streaming" class="msg__cursor">▍</span>
             </div>
 
             <div v-if="m.error" class="msg__error">

@@ -229,6 +229,25 @@ async fn chat(
         };
         let mut seq = next_seq;
 
+        // Persist the most recent user-typed message before the agent loop
+        // runs. Without this, the user message only lives in the frontend's
+        // `messages.value` and the history sent to the LLM — never in the
+        // DB — so it disappears the moment the user switches sessions.
+        // The last User-role message in the history is always the new
+        // typed one; earlier user turns (text or tool_result containers)
+        // are already in the DB from previous turns.
+        if let Some(last_user) =
+            messages.iter().rev().find(|m| m.role == Role::User)
+        {
+            let msg = last_user.clone();
+            if let Err(e) =
+                db::persist_turn(&db, &session_id, msg.role, &msg.content, seq).await
+            {
+                tracing::error!(error = %e, "failed to persist user turn");
+            }
+            seq += 1;
+        }
+
         for turn in 1..=MAX_TURNS {
             let mut stream = Box::pin(chat_stream_with_tools(
                 config.clone(),
