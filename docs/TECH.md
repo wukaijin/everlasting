@@ -12,7 +12,7 @@
 | 类别       | 选择                    | 版本 / 备注                              |
 |------------|-------------------------|------------------------------------------|
 | 桌面框架   | Tauri 2                 | WebView2 / WebKitGTK 共享                |
-| 前端       | React 18 + Vite         | Tailwind CSS,shadcn/ui 或自写组件         |
+| 前端       | **Vue 3.4+** + Vite     | `<script setup>` 组合式 API + Pinia + reka-ui / shadcn-vue |
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
 | LLM 框架   | **rig-core** 0.38.1     | 20+ provider,Agent 抽象,MCP 桥接        |
@@ -22,13 +22,14 @@
 | 序列化     | serde + serde_json      | 标准选择                                 |
 | 错误处理   | anyhow + thiserror      | 边界用 anyhow,领域用 thiserror           |
 | HTTP       | reqwest                 | rig 内部用,但我们可能直接用             |
-| 前端 diff  | react-diff-viewer       | 成熟的 diff 组件                         |
+| 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;或 `vue-diff-view`    |
 | 终端       | xterm.js + portable-pty | 跑 shell 命令的实时终端                 |
 
 ### 1.2 候选但暂不锁定
 
 - **Editor**:Monaco vs CodeMirror 6 — Monaco 体积大但功能强;CodeMirror 6 轻量可定制。先用 CodeMirror 6
-- **State management (frontend)**:Zustand vs Redux — Zustand 简单,Redux 工具链好。Zustand
+- **State management (frontend)**:Pinia(已锁定,跟随 Vue 官方)
+- **UI 组件库**:reka-ui vs shadcn-vue vs radix-vue — 三家都是 unstyled + accessible primitives。先 reka-ui
 - **Schema validation**:schemars 跟着 rmcp 走就行
 
 ### 1.3 明确不用
@@ -54,16 +55,17 @@
 | YAML 解析 | `serde_yml` | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role |
 | TOML 解析 | `toml` | role / config 解析 | BACKLOG §4 Role |
 | 飞书 SDK | 用现有 `feishu-integration` skill | 消息收发 | BACKLOG §6 飞书 |
-| 命令面板(前端) | shadcn `command` (基于 `cmdk`) | 输入触发器 | BACKLOG §1 输入层 |
-| 图表(前端) | `recharts` | 生成式 UI chart | BACKLOG §5 |
-| 表格(前端) | `@tanstack/react-table` | 生成式 UI table | BACKLOG §5 |
-| 表单(前端) | `react-hook-form` | 生成式 UI form | BACKLOG §5 |
-| 工作流可视化 | `@xyflow/react` | DAG 编辑器(留 v2) | BACKLOG §4 编排 |
+| 命令面板(前端) | reka-ui `command` (或自写 `<TriggerMenu>`) | 输入触发器 | BACKLOG §1 输入层 |
+| 图表(前端) | `ECharts` + `vue-echarts` | 生成式 UI chart | BACKLOG §5 |
+| 表格(前端) | `@tanstack/vue-table` | 生成式 UI table | BACKLOG §5 |
+| 表单(前端) | `vee-validate` | 生成式 UI form | BACKLOG §5 |
+| 工作流可视化 | `@vue-flow/core` | DAG 编辑器(留 Phase 2) | BACKLOG §4 编排 |
 | 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
 
 **说明**:
 - `image`、`libheif-rs`、`nucleo`、`ignore`、`notify`、`serde_yml` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif)
-- 前端不引入 UI 框架(MUI / Ant Design 太重),自己攒 + 用 shadcn primitives
+- 前端不引入 UI 框架(Element Plus / Vuetify 太重),自己攒 + 用 reka-ui / shadcn-vue primitives
+- **ECharts 替代 recharts 的理由**:recharts 纯 React,跨框架方案 ECharts + vue-echarts 更成熟,中文文档全
 
 ---
 

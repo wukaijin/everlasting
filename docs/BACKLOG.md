@@ -9,7 +9,7 @@
 
 ## 0. 全局视角:这 7 个功能落在 5 个不同的层
 
-> 💡 **关于"v1"**:本文内出现的 v1/v2 指各**功能自身**的第一版/第二版(例:UI primitives v1 必做 4 种、角色 v1 不做编排)。整体产品版本号定义在 [DESIGN.md §3](./DESIGN.md#3-scope明确什么做什么不做)(MVP / v1 / v2 / v3+)。两个 v1 含义不同,按上下文区分。
+> 💡 **关于版本号**:本文出现的 Phase 1 / Phase 2 指各**功能自身**的阶段(例:UI primitives Phase 1 必做 4 种、角色 Phase 1 不做编排)。整体产品版本号定义在 [DESIGN.md §3](./DESIGN.md#3-scope明确什么做什么不做)(MVP / v1 / v2 / v3+)。两套不重叠,按上下文区分。
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -154,7 +154,7 @@ argument-hint: [可选的 commit message 后缀]
   - `images(id, hash, path, mime, size, created_at)`
   - `attachments(message_id, type[image|file|command], ref_id, meta_json)`
 - **前端组件**:`<TriggerMenu>`、`<ImagePreview>`、`<FileChip>`
-- **库选型(前端)**:shadcn `command` 组件(基于 `cmdk`)
+- **库选型(前端)**:reka-ui `command` 组件(无依赖 popover,几十行代码)
 
 ---
 
@@ -358,13 +358,13 @@ struct WorkflowNode {
 - workflow 状态:SQLite,崩溃可恢复
 
 **可视化**:
-- `@xyflow/react`(原 React Flow,改名了)
+- `@vue-flow/core`(原 React Flow,Vue 版同名)
 - 节点拖拽、连线、配置
-- **不做到 v1**,v1 只做单 agent + role/mode 切换
+- **不做到 Phase 1**,Phase 1 只做单 agent + role/mode 切换
 
 **库/选型**:
 - 编排引擎:**自研**,DAG 调度 200-500 行 Rust 够用
-- 可视化:`@xyflow/react`(v2 再加)
+- 可视化:`@vue-flow/core`(Phase 2 再加)
 - 备选:`dagrs` 存在但不够主流
 
 **风险**:
@@ -372,9 +372,9 @@ struct WorkflowNode {
 - 跨 session 状态:崩溃恢复要细做
 - token 成本:多 agent 串行 = 多倍成本 → 预算上限硬卡
 
-**v1/v2 范围划分**:
-- v1:role + mode 切换,**无编排**
-- v2:可视化 DAG 编辑器 + workflow 执行
+**Phase 1 / Phase 2 范围划分**:
+- Phase 1:role + mode 切换,**无编排**
+- Phase 2:可视化 DAG 编辑器 + workflow 执行
 
 ---
 
@@ -383,23 +383,23 @@ struct WorkflowNode {
 **目标**:让 agent 的回复不只文本,可以是可交互的 UI。
 
 **两种范式**:
-- **约束式**(推荐,v1):LLM 通过 tool use 输出结构化 JSON,前端按 type 渲染
+- **约束式**(推荐,Phase 1):LLM 通过 tool use 输出结构化 JSON,前端按 type 渲染
 - **自由式**(v3+ 考虑):LLM 生成 HTML,前端沙箱渲染
 
-**约束式 UI primitives**(总览,v1 只做前 4 种):
+**约束式 UI primitives**(总览,Phase 1 只做前 4 种):
 
 | Type           | 渲染                  | Action 机制             | 范围       |
 |----------------|----------------------|-------------------------|------------|
-| `button`       | 按钮                 | 触发 Tauri command      | **v1**     |
-| `form`         | 表单                 | 提交收集输入            | v2+        |
-| `selector`     | 单/多选              | 选完返回                | **v1**     |
-| `chart`        | 图表(折/柱/饼)      | 只读                    | v2+        |
-| `table`        | 表格                 | 可排序                  | v2+        |
-| `diff`         | 代码 diff            | 可应用/拒绝             | **v1**     |
-| `code_block`   | 语法高亮             | 可复制                  | **v1**     |
-| `markdown`     | 富文本               | —                       | v1(基础,默认开) |
+| `button`       | 按钮                 | 触发 Tauri command      | **Phase 1** |
+| `form`         | 表单                 | 提交收集输入            | Phase 2+    |
+| `selector`     | 单/多选              | 选完返回                | **Phase 1** |
+| `chart`        | 图表(折/柱/饼)      | 只读                    | Phase 2+    |
+| `table`        | 表格                 | 可排序                  | Phase 2+    |
+| `diff`         | 代码 diff            | 可应用/拒绝             | **Phase 1** |
+| `code_block`   | 语法高亮             | 可复制                  | **Phase 1** |
+| `markdown`     | 富文本               | —                       | Phase 1(基础,默认开) |
 
-**v1 范围**:
+**Phase 1 范围**:
 - 必做:`button` / `selector` / `diff` / `code_block` 4 种
 - 够覆盖 80% 用例(agent 询问 / 申请确认 / 展示结果)
 - 4 种之外的需求降级为 text 描述
@@ -412,7 +412,7 @@ harness 收到
   ↓
 emit("ui:render", { primitives }) → 前端
   ↓
-前端 component registry: type → React 组件
+前端 component registry: type → Vue 组件
   ↓
 渲染
 ```
@@ -423,9 +423,9 @@ emit("ui:render", { primitives }) → 前端
 
 **库选型**:
 - 图表:`recharts`(轻量、声明式)
-- 表格:`@tanstack/react-table`
-- diff:已有 `react-diff-viewer`
-- 表单:`react-hook-form`
+- 表格:`@tanstack/vue-table`
+- diff:框架无关的 `diff` (jsdiff) + 自渲染 Vue 组件
+- 表单:`vee-validate`
 - **不引入 UI 框架**(MUI / Ant Design 太重,自己攒)
 
 **风险**:
@@ -549,7 +549,7 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 - **任何写操作(发消息)在本地确认弹窗**(可选关)
 - token 存 OS keychain,不进 DB
 
-**v1 范围**(克制):
+**Phase 1 范围**(克制):
 - 只读:session 列表 + 最新 1 条消息
 - 简单写:发一条文本(限 500 字符)
 - **不做**:文件 diff 推送、tool 调用跟踪(数据量太大)
@@ -607,3 +607,48 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 上层:
   §5 生成式 UI → §6 飞书 → §7 云端 → §4 可编排
 ```
+
+---
+
+## 9. 跨设备(v2 候选)
+
+**目标**:在多台设备上访问同一个 agent 工作环境。
+
+**定位**(重要):
+- **不是**多端协作(明确不做)
+- **是**个人多设备使用(家里电脑、公司电脑、手机)
+- 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像
+- 本节 = "在另一台机器接着干"
+
+**形态(暂定方向,留接口)**:
+- VPS 自托管 daemon(用户已有国内 VPS,直连,不走 Cloudflare Tunnel)
+- 集中式:VPS daemon 是唯一权威,本机 GUI 是 client
+- 跨机器接续:worktree 走 git push/pull(不依赖 VPS 中转)
+
+**前期已留的接口**(本决策已落地):
+- Channel Adapter 协议走明文 JSON,载体无关(详见 [ARCHITECTURE §5](./ARCHITECTURE.md#5-决策channel-adapter-抽象为多入口铺路))
+- worktree 路径用 XDG 标准 `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`(详见 [ARCHITECTURE §3](./ARCHITECTURE.md#3-决策每个-session-一个-git-worktree))
+- 接续前置条件(早期原则):
+  - 源机器必须 push 过(否则目标机器看不到最新)
+  - 目标机器不能在跑 LLM(否则状态会变)
+  - daemon 不自动 commit(避免过度设计),迁移时强制 commit + push
+
+**Phase 1(后期 v2 考虑)**:
+- [ ] VPS daemon 部署文档(系统级 systemd,配置文件)
+- [ ] 跨机器 session 列表同步(只读)
+- [ ] "工作树迁移"流程(GUI 按钮)
+- [ ] 多设备消息历史(只在源机器)
+- [ ] 配置文件跨设备同步
+
+**不做**:
+- ❌ 多端同时编辑同一 session(冲突解决不做)
+- ❌ VPS 持有 worktree 文件副本(隐私 + 存储)
+- ❌ Cloudflare Tunnel / 第三方中转(国内 VPS 直连足够)
+- ❌ 实时同步(只在显式触发时同步)
+
+**风险**(提前识别):
+- 数据过 VPS(虽然不持文件,元数据仍过 VPS)— 接受这个权衡
+- 跨机器 worktree 路径冲突(用 session_id 隔离)
+- 源机器断网时目标机器不能接续 — 设计选择,不是 bug
+
+> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION.md#4-决策日志)。本节是 v2 候选,前期不展开实现细节。

@@ -32,7 +32,7 @@
 
 **目标**:跑通"Tauri app + 跟 Claude 说一句话 + 流式显示"
 
-- 搭 Tauri 2 + React + Vite 项目
+- 搭 Tauri 2 + Vue 3 + Vite 项目
 - Rust 端:`reqwest` + `serde` + `eventsource-stream`,打 Anthropic Messages API
 - 前端:简单 chat UI
 - Tauri event 把 SSE chunk 推到前端
@@ -65,7 +65,7 @@
 - `git2-rs` 集成
 - session 创建时建 worktree(见 [ARCHITECTURE.md §3 worktree 决策](./ARCHITECTURE.md#3-决策每个-session-一个-git-worktree))
 - session 结束或定时自动 commit
-- 前端 diff 视图(用 `react-diff-viewer`)
+- 前端 diff 视图(用 `diff` (jsdiff) + 自渲染,或 `vue-diff-view`)
 - **可交付物**:每个 session 是独立分支,能看 diff
 
 ### 2.5 步骤 5 — WSL 体验 [MVP]
@@ -124,8 +124,8 @@
 - [ ] 在 WSL 里验证 Tauri 能编译并显示窗口
 
 **已经倾向但需要最终定**:
-- [ ] 前端框架:React(参见 [TECH.md §1.1](./TECH.md#11-锁定项经过调研验证))
-- [ ] 前端 UI 库:shadcn/ui primitives(参见 [TECH.md §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
+- [x] 前端框架:**Vue 3 + Vite + Pinia**(参见 [TECH.md §1.1](./TECH.md#11-锁定项经过调研验证))
+- [x] 前端 UI 库:reka-ui / shadcn-vue primitives(参见 [TECH.md §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
 - [ ] 包管理器:pnpm
 - [ ] Rust 编辑器:个人偏好
 
@@ -174,3 +174,20 @@
 - **决策**:候选功能方向锁定(7 个),但暂不排优先级
   - **原因**:先把方向沉淀下来,实施前再按"价值/成本/依赖"评估。详见 [BACKLOG.md](./BACKLOG.md) 全章
   - 方向:输入层(图/@ /command) / Skill / 多层 Memory / 多角色+多模式+编排 / 生成式 UI / 飞书 / 云端同步
+
+### 2026-06-04 — 方案 C:VPS 自托管 daemon(远期留接口)
+
+- **决策**:v2 之后考虑在 VPS 上跑自托管 daemon,做多设备同步;**前期不展开,只留接口**
+  - **原因**:个人用 + 学习目的,前期过度设计分布式拓扑是负担;但 Channel Adapter 协议要设计成 network-ready,worktree 路径要跨机器一致,否则后期改不动
+- **决策**:Channel Adapter 协议必须走明文 JSON,载体无关(Unix socket / HTTPS / WSS 都能承载)
+  - **原因**:不锁传输层,后期接 VPS 客户端不用改 agent core
+- **决策**:worktree 路径统一用 XDG 标准 `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`
+  - **原因**:跨机器接续时,worktree 路径必须可预测;XDG 标准是 Linux 共识
+- **前期动作**(本决策已落地):
+  - ARCHITECTURE §3 改 worktree 路径
+  - ARCHITECTURE §5 Channel trait 注明 network-ready 约束
+  - BACKLOG §9 列 v2 跨设备候选
+- **后期展开**(v2 再说):
+  - 多设备接续、配置/状态/session 列表同步、显式"工作树迁移"流程
+  - 接续前置条件:必须 push 过 + 目标机器不能在跑 LLM
+  - 详见 [BACKLOG §9 跨设备(候选)](./BACKLOG.md#9-跨设备v2-候选)

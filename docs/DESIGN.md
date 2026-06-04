@@ -29,7 +29,7 @@
 |----------|----------------------------------------------|---------------------------------------|
 | 目标用户 | **仅本人**                                   | 不考虑他人付费、不考虑多租户          |
 | 平台     | **WSL 优先**(Linux Ubuntu 22.04)             | Windows / macOS 都不主动支持          |
-| 技术栈   | Tauri + Rust 后端 + React/Vue 前端           | 不考虑 Electron、PyQt 等              |
+| 技术栈   | Tauri + Rust 后端 + Vue 3 前端             | 不考虑 Electron、PyQt 等              |
 | Agent    | **自己写 runtime**                           | 不包装 Claude Code / Codex SDK        |
 | 商业化   | 无                                           | 不会发出去、不考虑隐私多用户          |
 
@@ -69,7 +69,12 @@
 
 ### 3.3 v2 及后续(候选功能)
 
-> ⚠️ **v1 vs v2 的语义说明**:本文 §3.2 的 v1 指"整体产品的第一个发布版"(多 LLM / xterm / 权限 / MCP / session 恢复)。下文 §3.3 各功能内的 v1/v2 是该**功能自身**的第一版/第二版。两个 v1 含义不同,读时按上下文区分。
+> ⚠️ **版本号语义统一**:本文档用两套版本号,**不重叠**——
+>
+> - **产品版**:MVP / v1 / v2 / v3+(§3.2 的 v1 指"整体产品的第一个发布版",多 LLM / xterm / 权限 / MCP / session 恢复)
+> - **功能版**:Phase 1 / Phase 2(下文各功能内的"v1/v2"是该**功能自身**的阶段,例:UI primitives Phase 1 必做 4 种、角色 Phase 1 不做编排)
+>
+> 任何文档读到 v1/v2 时,先判定属于"产品版"还是"功能版",再读。
 
 具体技术评估见 [BACKLOG.md](./BACKLOG.md),本节列出全部候选功能(以 9 项为基础,补 3 项):
 
@@ -78,7 +83,7 @@
 - [ ] **多层 Memory**:user / project / session / runtime 四层指令
 - [ ] **多角色**:架构师 / 开发者 / reviewer / tester / 文档作者
 - [ ] **多模式**:chat / plan / review / background / yolo
-- [ ] **可编排**:多 agent DAG 串行/并行(留 v2)
+- [ ] **可编排**:多 agent DAG 串行/并行(留 Phase 2)
 - [ ] **生成式 UI**:LLM 输出渲染为可交互组件(约束式,默认关)
 - [ ] **IM 通道**:飞书接入(触发 agent daemon 化,重大架构变更)
 - [ ] **云端同步**:Cloudflare Workers + D1,只 push 摘要
@@ -107,11 +112,24 @@
 
 ### 3.5 明确不做
 
+**核心不做**(项目根基):
 - ❌ **不包装 Claude Code SDK / Codex SDK** — 违背学习目标(详见 [IMPLEMENTATION.md §1](./IMPLEMENTATION.md#1-决策自己写-agent-runtime不用-sdk-包装))
 - ❌ **不做通用 agent 框架** — Cline / OpenHands 已经在做
 - ❌ **不做 Windows 端优化** — WSL 跑得好就行(详见下文 §4 WSL 优先)
 - ❌ **不做云端部署** — 本地优先,agent 进程不出本机
 - ❌ **不做移动端 / Web 版** — 桌面应用
+
+**范围守护**(避免后期蔓延):
+- ❌ **不做 Yolo 模式默认开** — Yolo(无任何确认)必须显式开启,默认拒绝(详见 [BACKLOG §4.2](./BACKLOG.md#42-多模式mode))
+- ❌ **不做云端触发器** — 定时/事件触发源必须在本地(系统时间、fs 事件、本地 webhook);Cloudflare Cron Trigger 之类不接
+- ❌ **不做 in-app 自动升级** — 新版本走包管理器或手动下二进制,降低供应链攻击面和复杂度
+- ❌ **不做云端触发回写本机** — agent 不接受"从云端推下来"的任务,主动权必须在本地用户
+
+**关于"云端"语义**:
+> - **云端部署**:把 agent 跑在云服务器上 ❌ 不做
+> - **云端同步**:用云服务做"状态镜像 / 远程遥控通道" ✅ 远期考虑
+>
+> 这两项**不矛盾**,前者是"agent 跑哪",后者是"数据镜像到哪"。详见 [BACKLOG §7](./BACKLOG.md#7-云端状态同步) 和 [BACKLOG §9 跨设备](./BACKLOG.md#9-跨设备v2-候选)。
 
 ---
 

@@ -1,6 +1,6 @@
 # ARCHITECTURE — 架构设计
 
-> Everlasting 的"整体怎么搭、关键流程怎么走"。包括系统架构图、请求生命周期的 14 道关卡、以及核心架构决策。
+> Everlasting 的"整体怎么搭、关键流程怎么走"。包括系统架构图、请求生命周期的 16 道关卡、以及核心架构决策。
 > 需求见 [DESIGN.md](./DESIGN.md),技术选型见 [TECH.md](./TECH.md),实现路径见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
@@ -88,7 +88,7 @@
 ### 1.2 关键数据流:用户发一条消息
 
 ```
-[1] Frontend (React)
+[1] Frontend (Vue 3)
     用户输入消息 → tauri.invoke('send_message', { sessionId, content })
 
 [2] Tauri GUI Process
@@ -209,7 +209,7 @@
 
 ### 2.2 16 关详解
 
-#### ① 前端校验(React)
+#### ① 前端校验(Vue 3)
 
 ```
 输入框 → onSend(prompt)
@@ -445,8 +445,8 @@ match tool_call.name {
 ```
 
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
-- **为什么分流**:生成式 UI 的渲染机制跟 text 完全不同(react-diff-viewer / recharts 等),混在一起会很乱
-- **v1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
+- **为什么分流**:生成式 UI 的渲染机制跟 text 完全不同(diff + Vue 渲染 / ECharts 等),混在一起会很乱
+- **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
 
 #### ⑮ Channel 输出(daemon → client)
 
@@ -596,7 +596,7 @@ agent loop 结束(text-only response or max_turns reached):
 - 切换 session 几乎瞬时,不用 `git stash` / `git checkout` 来回跳
 
 **实现要点**:
-- session 创建时:`git worktree add ../project-session-{id} -b session/{id}`
+- session 创建时:`git worktree add ~/.local/share/everlasting/worktrees/<project_hash>/<session_id> -b session/<session_id>`(XDG 标准路径,跨机器一致,为后期 v2 跨设备接续做铺垫)
 - session 结束时:可选 merge 回主分支,或保留作历史
 - libgit2(`git2-rs`)的 worktree API 不完整,可能要 spawn `git worktree` 命令
 
@@ -644,6 +644,11 @@ trait Channel: Send + Sync {
 - 新增 channel 不用改 agent core,只实现 trait
 - 跨 channel 行为可统一(限速、消息合并、状态同步)
 - 测试友好(mock 一个 channel 就能跑 agent)
+
+**协议约束**(远期 v2 跨设备前置条件):
+- 所有 message 必须可序列化到 JSON(明文),不依赖 Rust 特定类型
+- Channel 传输层无关:Unix socket / HTTPS / WSS 都能承载同一份 JSON
+- 这条不要求 MVP 实现 network channel,只要求 trait 设计不锁传输
 
 **风险**:
 - 抽象过早:现在只有 1-2 个 channel,trait 可能 overdesign
