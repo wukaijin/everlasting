@@ -36,26 +36,31 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 ```
 app/
 ├── src/                    # Vue 3 前端
-│   ├── components/         # ChatWindow.vue（IME 安全输入框 + 消息列表 + 流式光标）
+│   ├── components/         # ChatWindow.vue（IME 输入框 + 消息列表 + 流式光标 + 工具卡片）
 │   └── stores/             # Pinia stores
-│       ├── chat.ts         # useChatStore: 消息列表、流式状态、listen("chat-event")
+│       ├── chat.ts         # useChatStore: 消息、流式、tool:call/tool:result 事件
 │       └── config.ts       # useConfigStore: LLM 配置（model/baseUrl/configured）
 ├── src-tauri/              # Rust 后端
 │   └── src/
-│       ├── lib.rs          # Tauri 入口: AppState、chat 命令、get_llm_config 命令
+│       ├── lib.rs          # Tauri 入口: Agent Loop（max 20 turns）+ 事件分发
 │       ├── main.rs         # Windows 子系统入口
-│       └── llm/            # LLM 客户端模块
-│           ├── client.rs   # LlmConfig::from_env()、chat_stream()
-│           ├── sse.rs      # SseParser — 状态机式 SSE 行解析（处理 GLM ping 心跳）
-│           ├── error.rs    # LlmError 5 类错误分类、中文用户消息
-│           └── types.rs    # Role、ChatMessage、ChatRequest、ChatEvent、LlmErrorCategory
+│       ├── llm/            # LLM 客户端模块
+│       │   ├── client.rs   # LlmConfig::from_env()、chat_stream_with_tools()、BlockState 状态机
+│       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析（处理 GLM ping 心跳）
+│       │   ├── error.rs    # LlmError 5 类错误分类、中文用户消息
+│       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
+│       └── tools/          # Tool 定义与执行
+│           ├── mod.rs      # builtin_tools()、execute_tool() 分发
+│           ├── read_file.rs  # 读文件（>50KB 截断 head+tail）
+│           ├── write_file.rs # 写文件（自动建父目录）
+│           └── shell.rs    # Shell 命令（5min 超时 + 截断）
 docs/                       # 设计文档（全中文）
 └── spikes/                 # 技术验证记录
 ```
 
 ### 核心数据流
 
-前端 `ChatWindow.vue` → Pinia `chat.ts send()` → Tauri IPC `invoke("chat", ...)` → Rust `chat` 命令 `spawn` 异步任务 → `chat_stream()` 用 reqwest 请求 LLM API → SSE 流式解析 → 每个事件通过 `emit("chat-event", payload)` 推回前端 → Pinia store 监听并增量更新消息。
+前端 `ChatWindow.vue` → Pinia `chat.ts send()` → Tauri IPC `invoke("chat", ...)` → Rust `chat` 命令 **Agent Loop**（max 20 turns）→ 每轮：`chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 如果 tool_use 则执行 tool → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。前端 Pinia store 多 listener 监听，增量更新消息 + 工具卡片。
 
 ### 关键架构决策
 

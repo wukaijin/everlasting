@@ -1,8 +1,9 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 已完成，准备进入步骤 2 (Tool Calling)**。
+> **2026-06-05 更新**。当前阶段:**MVP 步骤 2 已完成，准备进入步骤 3a (SQLite + Session 持久化)**。
 > spike-001/002 已通过，前置硬依赖清零，工具链就位，环境坑已沉淀。
 > **session 1** (2026-06-04):设计文档 + spike-001/002。
+> **session 2** (2026-06-04):MVP 步骤 1 实施（骨架 + LLM 直连）。
 > **session 2** (2026-06-04):搬骨架、写 LLM 客户端、IPC 桥、ChatWindow，11 个 Rust 单元测试 + pnpm build + cargo build 通过，`pnpm tauri dev` 已能启动(WebKit 进程在 WSL 内)。详见 §"已完成"。
 
 ---
@@ -26,41 +27,33 @@
 
 ## 2. 当前进度
 
-**已完成**(2026-06-04 累计):
+**已完成**(2026-06-05 累计):
 - ✅ 5 份设计文档(README + DESIGN + ARCHITECTURE + TECH + IMPLEMENTATION + BACKLOG)
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
 - ✅ HANDOFF + 2 个 spike 模板
 - ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
-- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(session 2 完成,已推 main)
-- ✅ **GUI 端到端验收通过**(session 3,窗口显示 / 中文 / 流式 / 错误处理均正常)
+- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(session 2 完成)
+- ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(session 3 完成)
 
-**session 2 (MVP 步骤 1 实施)**:
-- ✅ 搬 `~/tauri-spike/spike-app/` 到 `everlasting/app/`,扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui + @tauri-apps/api)
-- ✅ Rust 端 LLM 客户端 `src-tauri/src/llm/{client,sse,error,types}.rs`,4 文件分模块,实施 HACKING-llm 11 项 checklist
-- ✅ Tauri IPC:`invoke("chat", { requestId, messages })` 前端调用,Rust `tauri::async_runtime::spawn` 推 `chat-event` 事件
-- ✅ 最小 chat UI:输入框 + 消息列表(用户右/助手左)+ 流式 append + 中文友好错误显示
-- ✅ 11 个 Rust 单元测试全过(SSE parser 4 个 + error classification 7 个,覆盖 GLM 3 处差异)
-- ✅ `pnpm build` 通过(72KB JS + 2.8KB CSS,vue-tsc 无错)
-- ✅ `pnpm tauri dev` 启动 ~10s + WebKit 进程在 WSL 内(已验)
-- ✅ sse-spike 实测 API 通(401 走 `new_api_error` 路径,200 走 47 个 delta 路径,跟 LLM 客户端结构对齐)
-
-**session 3 (GUI 验收 + 文档审视)**:
-- ✅ 窗口在 Windows 桌面显示
-- ✅ 中文输入 + 中文响应 baseline 对齐
-- ✅ 输入"你好" → 流式看到响应
-- ✅ 故意输错 API key → 中文友好错误
-- ✅ 5 次连续提问不崩/不卡
-- ✅ 至少 1 次热重载改 chat UI 不崩
+**session 3 (步骤 1 验收 + 文档审视 + 步骤 2 实施)**:
+- ✅ GUI 端到端验收通过（窗口/中文/流式/错误处理/热重载）
+- ✅ 全量设计文档审视：路线图 8 步→7 步，事件协议改为混合模式
+- ✅ Rust 类型体系扩展：ContentBlock + MessageContent（自定义 Serde 兼容 string/array）+ ToolDef
+- ✅ SSE 解析增强：BlockState 状态机处理 tool_use（content_block_start/delta/stop）+ stop_reason 提取
+- ✅ Tool 模块：read_file（>50KB 截断）+ write_file（自动建目录）+ shell（5min 超时）
+- ✅ Agent Loop：循环结构 max 20 turns，tool:call/tool:result 独立事件通道
+- ✅ 前端：ToolCallInfo/ToolResultInfo 状态 + 工具调用卡片 UI
+- ✅ 33 个 Rust 测试全过，pnpm build 通过，E2E 验收通过
 
 **当前任务**(下一步):
-- → [IMPLEMENTATION §2.2 步骤 2 — Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
-- 定义 3 个 tool:`read_file` / `write_file` / `shell`
-- 解析 `tool_use` 块,执行,构造 `tool_result` 回填
-- agent loop 实现
+- → [IMPLEMENTATION §2.3 步骤 3a — SQLite + Session 持久化](./IMPLEMENTATION.md#23-步骤-3a--sqlite--session-持久化-mvp)
+- 引入 SQLite（sqlx），存 session / message
+- session 列表 + session 切换（单项目，无左侧项目栏）
+- 消息从 SQLite 加载，重启能恢复
 
 **最近 commit**:
 ```
-e08c9ba docs(HACKING-wsl): 加坑 9 GTK3 immodules 缓存 + 坑 10 profile 双输入法; 重写坑 6/8
+fefc41f feat(agent): 步骤 2 — Tool Calling + Agent Loop
 ```
 
 ---
@@ -234,7 +227,7 @@ docs/
 - **项目根**:`/usr/local/code/github/everlasting/`
 - **当前 branch**:`main`
 - **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
-- **最近 commit hash**:`e08c9ba`
+- **最近 commit hash**:`fefc41f`
 - **当前日期**:2026-06-04
 
 ---
