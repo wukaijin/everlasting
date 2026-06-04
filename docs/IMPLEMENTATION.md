@@ -30,13 +30,21 @@
 
 ### 2.1 步骤 1 — 骨架与 LLM 直连 [MVP]
 
-**目标**:跑通"Tauri app + 跟 Claude 说一句话 + 流式显示"
+**目标**:跑通"Tauri app + 跟 LLM 说一句话 + 流式显示"
 
-- 搭 Tauri 2 + Vue 3 + Vite 项目
-- Rust 端:`reqwest` + `serde` + `eventsource-stream`,打 Anthropic Messages API
-- 前端:简单 chat UI
-- Tauri event 把 SSE chunk 推到前端
+- 搭 Tauri 2 + Vue 3 + Vite + Pinia + reka-ui 项目(栈细节见 [TECH §1](./TECH.md#1-决策vue-3-全家桶替代-react))
+- Rust 端 LLM 客户端:`reqwest` + `futures-util` + `serde_json`,**手写 SSE 解析**(用 `futures-util::StreamExt`,**不**用 `eventsource-stream`——spike-002 验证手写解析器够用,见 [HACKING-llm.md](./HACKING-llm.md) 和 [spike-002 §"代码关键改动"](./spikes/002-reqwest-anthropic-sse.md#实际执行2026-06-04))
+- 4 个文件分模块(client / sse / error / types),实施 11 项 checklist 见 [HACKING-llm.md §"LLM 客户端实施 checklist"](./HACKING-llm.md#llm-客户端实施-checklist给步骤-1-2-写-rust-客户端时)
+- 前端:简单 chat UI(输入框 + 消息列表)
+- Tauri event 把 SSE chunk 推到前端(`emit("chat-chunk", ...)`)
 - **可交付物**:能聊天的最小 app
+
+**前置硬依赖**:
+- ✅ spike-001(WSL + Tauri 窗口 + 中文/Emoji)已于 2026-06-04 通过,见 [spikes/001](./spikes/001-wsl-tauri-window.md)
+- ✅ spike-002(reqwest + SSE + 错误分类)已于 2026-06-04 通过,见 [spikes/002](./spikes/002-reqwest-anthropic-sse.md)
+- 起点:搬 `~/tauri-spike/spike-app/` 到 `/usr/local/code/github/everlasting/app/`,扩成正式骨架。详细起点 + 验收标准见 [HANDOFF §4](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)
+
+**撞过的环境坑**:见 [HACKING-wsl.md](./HACKING-wsl.md)(linuxbrew pkg-config / pnpm 代理 / Rust 1.83 / cargo cache 锁 / WSLg CJK 字体)。**新机器或怀疑环境有问题时,先读 HACKING-wsl**。
 
 ### 2.2 步骤 2 — Tool Calling [MVP]
 
@@ -79,6 +87,8 @@
 
 > 💡 步骤 1-4 都在"假设 Tauri 跑得通"前提下推进,本步是首次验证。**强烈建议先把这一小步抽出来作为"步骤 0"跑一次 hello world**,确认底层 OK 再启动步骤 1。
 
+**状态更新(2026-06-04)**:**spike-001 已通过**,本步骤的"WSL + Tauri 跑得通"目标已实现,见 [spikes/001-wsl-tauri-window.md](./spikes/001-wsl-tauri-window.md)。**新 session 不必再单独跑这一步**,直接做步骤 1-4,有问题参考 spike-001 文档的 5 个环境坑即可。
+
 ### 2.6 步骤 6 — 嵌入式终端 + 权限系统 [v1]
 
 **目标**:能看 agent 在跑啥,能控制 agent 能干啥
@@ -116,23 +126,31 @@
 
 ## 3. 待办与下一步
 
-**现在就可以做**:
-- [ ] 读 Anthropic Agent SDK 的 `query.py` 和 message parser(理解原理,不用)
-- [ ] 读 OpenHands Local GUI 的前后端通信协议
-- [ ] clone rig 仓库,看 Agent 抽象源码
-- [ ] 搭 Tauri 2 项目骨架,跑通 hello world
-- [ ] 在 WSL 里验证 Tauri 能编译并显示窗口
+**最后更新**:2026-06-04(spike-001/002 + HACKING 文档沉淀完成,环境就位)
 
-**已经倾向但需要最终定**:
-- [x] 前端框架:**Vue 3 + Vite + Pinia**(参见 [TECH.md §1.1](./TECH.md#11-锁定项经过调研验证))
-- [x] 前端 UI 库:reka-ui / shadcn-vue primitives(参见 [TECH.md §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
-- [ ] 包管理器:pnpm
-- [ ] Rust 编辑器:个人偏好
+**下一步(本 session 之后,新 session 第一件事)**:
+- → **[MVP 步骤 1 — 骨架与 LLM 直连](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)**:搬 `~/tauri-spike/spike-app/` 到 `/usr/local/code/github/everlasting/app/`,扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui),Rust 端 LLM 客户端,最小 chat UI。详细起点 + 验收标准见 [HANDOFF §4](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)。
+- 步骤 1 完成后 → 步骤 2 [Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
 
-**等做完前两步再决定**:
-- [ ] rig vs 手写 LLM client 的边界在哪
+**已沉淀(spike 期间完成的)—— 不必再做,出问题查这里**:
+- ✅ Tauri 在 WSL 跑得通 + 中文对齐 → [spikes/001](./spikes/001-wsl-tauri-window.md)
+- ✅ Rust 端 LLM 客户端手写 reqwest + SSE 可走(GLM 3 处差异已知)→ [spikes/002](./spikes/002-reqwest-anthropic-sse.md)
+- ✅ WSL 环境坑 → [HACKING-wsl.md](./HACKING-wsl.md)
+- ✅ LLM 客户端实施 checklist + 切真 Claude 重测清单 → [HACKING-llm.md](./HACKING-llm.md)
+
+**已决定(不再讨论)**:
+- [x] 前端框架:**Vue 3 + Vite + Pinia**(见 [TECH §1.1](./TECH.md#11-锁定项经过调研验证))
+- [x] 前端 UI 库:**reka-ui** / shadcn-vue primitives(见 [TECH §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
+- [x] 包管理器:**pnpm**
+- [x] LLM 客户端:**手写 reqwest + SSE**(不切 rig-core 到步骤 3,见 [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
+- [x] LLM BASE_URL / model / key:**全部从 env 读**(便于切 wukaijin / 真 Claude / 其他)
+- [x] 工作目录:**WSL 内部**(`~/...` 或 `/usr/local/code/...`),不走 `/mnt/c`
+- [x] Agent Daemon 化:**v1 之后再说**,本项目 8 步不阻塞(见 §2.8 占位)
+
+**等做完步骤 1-2 再决定**:
 - [ ] SQLite schema 最终长什么样
 - [ ] Tool 注册的最佳实践
+- [ ] Frontend 状态管理边界(Pinia store 怎么分)
 
 **候选功能(来自 [BACKLOG.md](./BACKLOG.md))的待评估**:
 - [ ] 是否要做 Skill / Memory / Role(技术选型已就绪,详见 BACKLOG §2-4)

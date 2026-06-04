@@ -1,79 +1,89 @@
 # Handoff — 新 Session 引导
 
-> **你是新 session**。先读这份文档(5 分钟),再读 spike 001/002,再动手。
-> 当前阶段:**关键技术验证**,不是编码。
+> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 实施**(骨架 + LLM 直连)。
+> spike-001/002 已通过,前置硬依赖清零,工具链就位,环境坑已沉淀。
 
 ---
 
-## 1. 项目是什么
+## 1. 项目是什么(30 秒版)
 
-**Everlasting**:个人使用的 vibe coding 桌面工作台。基于 Tauri 2 + Vue 3 + Rust,WSL 优先。
+**Everlasting**:个人使用的 vibe coding 桌面工作台。Tauri 2 + Vue 3 + 自研 agent core,WSL 优先。
 
 **核心定位**:
-- 给"在 WSL 里写代码的 Windows 用户"用的桌面应用
-- 自研 agent core(学 harness engineering,不包装 SDK)
-- 多项目 / 多 session / 多 channel(后续扩展)
+- 给"在 WSL 里写代码的 Windows 用户"用
+- 自研 agent core(学习 harness engineering)
+- 多项目 / 多 session(后续扩展)
 
-**约束**(硬):
+**硬约束**([DESIGN §2.2](./DESIGN.md#22-关键约束)):
 - 仅本人使用
-- WSL 优先(Ubuntu 22.04+),Windows / macOS 不主动适配
-- 桌面应用,不做云端部署
-- 不包装 Claude Code / Codex SDK
+- WSL 优先,Windows / macOS 不主动适配
 - 数据本地(SQLite 单文件)
+- 不包装 Claude Code / Codex SDK
 
 ---
 
 ## 2. 当前进度
 
-**已完成**:
+**已完成**(2026-06-04 之前的累计):
 - ✅ 5 份设计文档(README + DESIGN + ARCHITECTURE + TECH + IMPLEMENTATION + BACKLOG)
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
-- ✅ 8 项设计修订 commit(语义统一、Vue 栈替换、方案 C 留接口 等)
-- ✅ 2 个 spike 模板(spike-001 / spike-002,本 session 要跑)
+- ✅ HANDOFF + 2 个 spike 模板
 
-**未开始**:
-- ❌ 步骤 0 spike 验证(**当前任务**)
-- ❌ MVP 步骤 1-5(等 spike 通过)
-- ❌ v1 步骤 6-8
+**2026-06-04 本 session 推进**:
+- ✅ **spike-001 通过**:WSL + Tauri 2 + Vue 3 + WebKit 在 WSL 内(uid 0) + 中文/Emoji 渲染 + HMR 10/10
+- ✅ **spike-002 通过**:reqwest + SSE 流式 + 错误分类(手写可走,GLM 兼容层 3 处差异已知)
+- ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 5 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
+- ✅ 7 个 commit 推到 origin(`93645f4` HEAD)
+
+**当前任务**:**MVP 步骤 1**(本 session 之后由新 session 开干)
+- 拆 `~/tauri-spike/spike-app` 到 `/usr/local/code/github/everlasting/app/`
+- 扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui)
+- Rust 端 LLM 客户端(用 sse-spike 验证过的手写 reqwest + SSE 模式)
+- 最小 chat UI,流式显示
+- 详细说明见 §4
 
 **最近 commit**:
 ```
-b6bdd62 docs: 语义统一 + Vue 栈替换 + 方案 C 留接口
-d40ab66 docs: add design review report by deepseek-v4-pro
-3562616 docs: add design review report by glm-5.1
-327fc1b docs: initial design docs (5 docs files + README, 1841 lines)
+93645f4 docs: README 索引加 HANDOFF + HACKING-wsl + HACKING-llm + spikes
+4223ce0 docs: 沉淀 2 份 HACKING 笔记(WSL 环境坑 + LLM 兼容层差异)
+e7e90d7 docs(spike-002): 通过
+1146cc0 docs(spike-001): 补 WSLg 下 CJK 字体对齐坑
+842f379 docs: spike-001 通过
+ba4aec3 docs: 新 session 引导 + 2 个 spike 模板
 ```
 
 ---
 
-## 3. 文档结构
-
-按"先读这个,再读那个"的顺序:
+## 3. 5 分钟上手(必读顺序)
 
 | 优先级 | 文档 | 什么时候读 |
 |--------|------|------------|
-| 1 | 本文件(`HANDOFF.md`) | 现在 |
-| 2 | `spikes/001-wsl-tauri-window.md` | 跑 spike 前 |
-| 3 | `spikes/002-reqwest-anthropic-sse.md` | 跑 spike 前 |
-| 4 | `DESIGN.md` | 想了解"为什么这么做"时 |
-| 5 | `ARCHITECTURE.md` | 想了解"系统怎么搭"时(尤其 §2 16 关卡) |
-| 6 | `TECH.md` | 选库 / 排查技术细节时 |
-| 7 | `IMPLEMENTATION.md` | 想知道"下一步做什么"时 |
-| 8 | `BACKLOG.md` | 评估新功能时 |
-| 9 | `REVIEW-glm-5.1.md` + `REVIEW-deepseek-v4-pro.md` | 想了解"评审怎么说"时(可选) |
+| 1 | 本文件(`HANDOFF.md`) | **现在** |
+| 2 | [IMPLEMENTATION.md §2.1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp) | 了解 MVP 1 范围 |
+| 3 | [DESIGN.md §2.2 关键约束](./DESIGN.md#22-关键约束) | 知道"什么不做" |
+| 4 | [ARCHITECTURE.md §1-2](./ARCHITECTURE.md) | 了解 16 关卡(写代码时反复查) |
+| 5 | [HACKING-wsl.md](./HACKING-wsl.md) | 撞 WSL / 字体 / Rust 工具链问题时 |
+| 6 | [HACKING-llm.md](./HACKING-llm.md) | 写 / 改 LLM 客户端时 |
+| 7 | [spike-001](./spikes/001-wsl-tauri-window.md) | 想了解"WSL+Tauri 怎么验证"的全过程 |
+| 8 | [spike-002](./spikes/002-reqwest-anthropic-sse.md) | 想了解"LLM 客户端 4 模式怎么测"的全过程 |
+| 9 | [BACKLOG.md](./BACKLOG.md) | 评估新功能时 |
+| 10 | [REVIEW-glm-5.1.md](./REVIEW-glm-5.1.md) + [REVIEW-deepseek-v4-pro.md](./REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
 
 **目录**:
 ```
 docs/
-├── README.md              # 文档索引
-├── DESIGN.md              # 需求 + 边界(明确不做什么)
-├── ARCHITECTURE.md        # 16 关卡 + Channel Adapter + 关键决策
-├── TECH.md                # 锁定的库(7 项 Vue 栈 + Rust 核心)
-├── IMPLEMENTATION.md      # 8 步路线图 + 决策日志
-├── BACKLOG.md             # 7 个候选功能 + §9 跨设备(v2)
-├── REVIEW-glm-5.1.md      # 外部评审 #1
-├── REVIEW-deepseek-v4-pro.md  # 外部评审 #2
-├── HANDOFF.md             # 本文件
+├── README.md                 # 索引
+├── HANDOFF.md                # 本文件
+├── DESIGN.md                 # 需求 + 边界
+├── ARCHITECTURE.md           # 16 关卡 + Channel Adapter
+├── TECH.md                   # 锁定的库
+├── IMPLEMENTATION.md         # 8 步路线图 + 决策日志
+├── BACKLOG.md                # 7 个候选功能
+├── HACKING-wsl.md            # 5 个 WSL 环境坑
+├── HACKING-llm.md            # LLM 兼容层差异
+├── HANDOFF.md                # 本文件
+├── REVIEW-glm-5.1.md         # 外部评审 #1
+├── REVIEW-deepseek-v4-pro.md # 外部评审 #2
 └── spikes/
     ├── 001-wsl-tauri-window.md
     └── 002-reqwest-anthropic-sse.md
@@ -81,105 +91,140 @@ docs/
 
 ---
 
-## 4. 关键决策摘要(8 条)
+## 4. MVP 步骤 1 是什么 + 起点 + 验收
 
-1. **WSL 优先** — Tauri 跑在 WSL 内,通过 WSLg 显示到 Windows 桌面,无 wslapi 调用
-2. **自研 agent core** — 不用 Claude Code / Codex SDK 包装(学习价值 + 控制粒度)
-3. **每个 session 一个 git worktree** — 路径统一 XDG 标准 `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`(为 v2 跨设备做铺垫)
-4. **Agent Daemon 化** — agent core 拆出独立进程(v1 之后,飞书或长跑任务痛就拆)
+### 4.1 目标(来自 [IMPLEMENTATION §2.1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp))
+
+**跑通"Tauri app + 跟 LLM 说一句话 + 流式显示"**。能聊天的最小 app,不做工具调用,不做 session 持久化。
+
+### 4.2 实施内容
+
+1. **搬 spike 项目到正经位置**
+   - 源:`~/tauri-spike/spike-app/`
+   - 目标:`/usr/local/code/github/everlasting/app/`
+   - 不是 copy,是建新项目然后**选择性搬**:
+     - ✅ 搬:`package.json` / `vite.config` / `tauri.conf.json` / Cargo.toml 依赖
+     - ✅ 搬:`src-tauri/` 整个骨架(icons / build.rs / capabilities 模板)
+     - ❌ 不搬:spike 改的 App.vue 中文测试 demo(重写)
+     - ❌ 不搬:spike 的 node_modules / target/(重建)
+
+2. **前端栈升级**([TECH §1](./TECH.md#1-决策vue-3-全家桶替代-react))
+   - Vue 3 + Vite + **Pinia**(状态管理) + **reka-ui**(组件库)
+   - 用 `pnpm create vite@latest` 创 Vue 模板,再加 `pinia` / `reka-ui` / `@tauri-apps/api` / `vue-router`(可选,步骤 1 可不上)
+
+3. **Rust 端 LLM 客户端**(参照 sse-spike 验证过的模式)
+   - 位置:`src-tauri/src/llm/`
+   - 4 个模式切分(参考 HACKING-llm.md checklist):
+     - `client.rs`(reqwest HTTP)
+     - `sse.rs`(SSE 解析,事件顺序记录)
+     - `error.rs`(错误归一化,4 类 + 网络)
+     - `types.rs`(request/response 数据结构)
+   - BASE_URL / model / key 全部从 env 读
+   - 实施 checklist 11 项见 [HACKING-llm.md §"LLM 客户端实施 checklist"](./HACKING-llm.md#llm-客户端实施-checklist给步骤-1-2-写-rust-客户端时)
+
+4. **Tauri IPC 桥**
+   - `invoke("chat", { message })` 前端调用
+   - Rust 端 spawn task 跑 stream,emit `chat-chunk` 事件到前端
+   - 前端 `listen("chat-chunk", ...)` 接收,append 到消息列表
+
+5. **最小 chat UI**
+   - 一个输入框 + 一个发送按钮
+   - 消息列表(用户右 / 助手左)
+   - 流式 append,不要等完整响应
+
+### 4.3 起点材料(本 session 留的)
+
+| 资源 | 路径 | 用途 |
+|------|------|------|
+| spike Tauri 项目 | `~/tauri-spike/spike-app/` | 搬骨架的源 |
+| sse-spike Rust 代码 | `~/sse-spike/src/main.rs` | LLM 客户端实现的参考 |
+| sse-spike 二进制 | `~/sse-spike/target/release/sse-spike` | 快速验证 LLM API 还通(可改 env 重跑) |
+| spike-001 文档 | `docs/spikes/001-wsl-tauri-window.md` | 已知坑 + 通过标准 |
+| spike-002 文档 | `docs/spikes/002-reqwest-anthropic-sse.md` | SSE 4 模式 + GLM 差异 |
+| HACKING-wsl | `docs/HACKING-wsl.md` | 5 个 WSL 坑 + 一次性脚本 |
+| HACKING-llm | `docs/HACKING-llm.md` | GLM 差异 + 实施 checklist |
+
+### 4.4 验收标准(本步骤完成判定)
+
+- [ ] `cd /usr/local/code/github/everlasting/app && pnpm tauri dev` 启动 < 30 秒
+- [ ] 窗口在 Windows 桌面正常显示(同 spike-001)
+- [ ] 中文输入 + 中文响应,中英文字号 baseline 对齐(同 spike-001)
+- [ ] 输入"你好" → 流式看到响应(token by token 出现)
+- [ ] 故意输错 API key → 友好错误提示(不是 panic,不是 500 页)
+- [ ] 5 次连续提问不崩 / 不卡
+- [ ] 至少 1 次热重载改 chat UI 不崩
+- [ ] WebView 进程在 WSL 内(同 spike-001)
+
+### 4.5 显式不做(避免 scope 扩散)
+
+- ❌ 不做工具调用(read_file / write_file / shell)—— 步骤 2
+- ❌ 不做 session 持久化(SQLite)—— 步骤 3
+- ❌ 不做多项目 / 多 session 切换—— 步骤 3
+- ❌ 不做 git worktree / 自动 commit—— 步骤 4
+- ❌ 不做权限系统 / xterm.js—— 步骤 6
+- ❌ 不做 MCP / 多 Provider—— 步骤 7
+- ❌ 不切 rig-core(spike-002 决定手写可走)—— 步骤 3 才切
+
+### 4.6 完成后
+
+走 [IMPLEMENTATION §2.2 步骤 2 Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp),更新 HANDOFF 顶部"已完成"段。
+
+---
+
+## 5. 工具链状态(已就位,不用重装)
+
+| 工具 | 版本 | 来源 | 备注 |
+|------|------|------|------|
+| Rust | 1.96.0 | linuxbrew(`/home/linuxbrew/.linuxbrew/bin/cargo`) | 1.83 太老,已升级;**用 brew 装不要用 rustup**(本机如此) |
+| Node | 22.21.0 | nvm | 满足 >= 18 |
+| pnpm | 9.4.0 | `/root/.local/share/pnpm` | 死代理已清 |
+| webkit2gtk-4.1 | 2.50.4 | apt | 装时需 sudo,见 HACKING-wsl |
+| Tauri CLI | 2.11.2(项目级) | `@tauri-apps/cli` 在 devDependencies | **不要全局装**(会跟项目级锁 cache) |
+| Noto Sans CJK SC | 已装 | apt | `/etc/fonts/local.conf` 已配 |
+| 系统字体默认 | `sans-serif:lang=zh` → Noto Sans CJK SC | fontconfig 修过 | fc-cache 已刷 |
+
+`pkg-config --modversion webkit2gtk-4.1` → `2.50.4`(`PKG_CONFIG_PATH` 已持久化到 bashrc/zshrc)
+
+---
+
+## 6. 关键决策摘要(8 条)
+
+1. **WSL 优先** — Tauri 跑在 WSL 内,WSLg 显示到 Windows 桌面,**无 wslapi 调用**
+2. **自研 agent core** — 不用 SDK 包装(学习价值 + 控制粒度)
+3. **每个 session 一个 git worktree** — `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`
+4. **Agent Daemon 化**(v1 之后) — 拆出独立进程
 5. **MCP 只外暴露,内部通信不绕** — agent 调自己的工具直接调 Rust 函数
-6. **SQLite 是唯一存储** — sqlx + SQLite,FTS5 用于历史搜索
-7. **前端栈锁定 Vue 3 + Vite + Pinia + reka-ui** — 不用 React(本 session 才改的)
-8. **方案 C:VPS 自托管 daemon(v2 再说)** — 前期只留接口(Channel 协议 network-ready + worktree 跨机器一致)
+6. **SQLite 是唯一存储** — sqlx + SQLite,FTS5
+7. **前端栈 Vue 3 + Vite + Pinia + reka-ui**(本 session 才定的)
+8. **方案 C:VPS 自托管 daemon(v2)** — 前期只留接口
 
-完整决策日志:[IMPLEMENTATION §4](./IMPLEMENTATION.md#4-决策日志)
-
----
-
-## 5. 当前任务清单(5 项,已建 TaskList)
-
-按依赖顺序:
-
-1. **[新 session] 跑 spike-001 WSL+Tauri 窗口** — 验证平台层
-2. **[新 session] 跑 spike-002 reqwest+Anthropic SSE** — 验证 LLM 链路(可与 #1 并行)
-3. **[新 session] 回填 spike 结果 + commit** — 把结果写回 spike 文档
-4. **[新 session] 决定后续路径(开始/回退/重评)** — spike 失败时按退路走
-5. **[新 session] 后续 spike-003 git2-rs / spike-004 sqlx** — spike-001/002 通过后,跟 MVP 并行
-
-详细执行见各 spike 文档。
+完整决策日志:[IMPLEMENTATION §4](./IMPLEMENTATION.md#4-决策日志)。
 
 ---
 
-## 6. spike 怎么跑(高层流程)
+## 7. 撞过的坑(沉淀在 HACKING 文档)
 
-**spike-001 / spike-002 可以并行跑**——互不依赖。
+- **WSL 环境**(5 个,见 [HACKING-wsl.md](./HACKING-wsl.md)):
+  - linuxbrew pkg-config 不搜系统路径
+  - pnpm 死代理
+  - linuxbrew Rust 1.83 太老
+  - cargo cache 锁冲突
+  - WSLg CJK 字体对齐(装 Noto CJK + 写 local.conf)
 
-### 6.1 spike-001(WSL + Tauri 窗口)
-- 在 WSL 终端跑(WSL 2,Ubuntu 22.04 / 24.04)
-- 涉及窗口观察,在 Windows 桌面看效果
-- **预估 1-3 小时**(含环境准备)
-- **硬标准**:窗口显示 + 中文/Emoji 正常 + 10 次热重载不崩 + WebView 进程在 WSL 内
-- **硬失败**:走退路 1(XWayland/字体)→ 退路 2(换平台)→ 退路 3(Tauri→Electron)
-
-### 6.2 spike-002(reqwest + Anthropic SSE)
-- 在 WSL 或任意 Linux/macOS 跑(纯 CLI,不涉及窗口)
-- 需要 `ANTHROPIC_API_KEY` 环境变量
-- **预估 30-60 分钟**
-- **通过标准**:能 stream + 4 个错误分类正确
-- **软退路**:换 rig-core 替手写 / 切 Anthropic 兼容服务
-
-### 6.3 跑完贴回
-
-**spike-001 贴**:
-- 启动时间数字
-- 中文 / Emoji 渲染现象(可文字描述)
-- 10 次热重载成功/失败次数
-- `ps aux | grep -iE 'webkit|webview|tauri'` 输出
-- 如果失败:完整失败现象 + 已尝试的回退
-
-**spike-002 贴**:
-- 成功用例的完整 stdout 输出
-- 4 个错误用例的 HTTP 状态码 + 错误响应 body
-- 如果失败:失败现象 + 错误信息
-
-### 6.4 回填文档(本 session)
-
-拿到结果后,把内容填到:
-- `spikes/001-wsl-tauri-window.md` 的"实际执行 / 结论 / 后续动作"部分
-- `spikes/002-reqwest-anthropic-sse.md` 同上
-- 改 `**状态**`:待执行 → 通过 / 失败-回退 / 失败-终止
-- 改 `**日期**`
-- commit 一次(把两个 spike 的结果合并 commit,或分两次)
-
-### 6.5 决定后续路径
-
-| spike 结果 | 后续动作 |
-|------------|----------|
-| spike-001 通过 + spike-002 通过 | 开始 MVP 步骤 1(搭 Tauri 2 + Vue 3 + Vite 骨架),继续 spike-003/004 并行 |
-| spike-001 失败-回退 1 | 试 1-2 天 XWayland / 字体方案,通了就进步骤 1,不通走回退 2 |
-| spike-001 失败-回退 2 | 评估换 macOS / Linux 原生,更新 DESIGN §4 |
-| spike-001 失败-回退 3 | 评估 Tauri → Electron,更新 TECH §1.3 |
-| spike-001 失败-终止 | 重新评估整个项目,WSL + Tauri 是基础平台,这一层不行所有上层设计都失去意义 |
-| spike-002 失败 | 软退路,直接用 rig-core 替手写,不阻塞 MVP |
-
----
-
-## 7. 重要提示(给新 session)
-
-- **不要扩散 scope** — spike 只是验证"能不能跑",不写应用代码
-- **不要省略失败回退** — 失败时贴完整现象,不要自己脑补"应该差不多通过"
-- **不要跳过"中文 + 热重载 + WebView 进程"** — 这三项是 spike-001 的核心,不是装饰
-- **不要在 spike 跑完前开始 MVP** — spike 失败回退可能要重选栈,提前开 MVP 浪费时间
-- **spike 文档要被未来读到** — 写"实际执行 / 结论"时按"3 个月后的我能看懂"的标准写
+- **LLM 兼容层**(3 处差异,见 [HACKING-llm.md](./HACKING-llm.md)):
+  - 401 `error.type` 是 `new_api_error` 不是 `authentication_error`
+  - 400 类错误可能返 5xx
+  - 不严格验证 max_tokens 上限
 
 ---
 
 ## 8. 关联上下文
 
 - **项目根**:`/usr/local/code/github/everlasting/`
-- **最近 commit hash**:`b6bdd62`
 - **当前 branch**:`main`
-- **未推送**:`origin/main` 落后 1 个 commit(本 commit 在本地,等 spike 跑完一起推)
+- **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
+- **最近 commit hash**:`93645f4`
+- **当前日期**:2026-06-04
 
 ---
 
