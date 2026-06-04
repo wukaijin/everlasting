@@ -1,9 +1,9 @@
 # spike-002: reqwest + Anthropic Messages API + SSE 流式
 
-**日期**: 2026-06-XX(待填)
-**状态**: 待执行 / 通过 / 失败-回退 / 失败-终止
+**日期**: 2026-06-04
+**状态**: 通过(手写 reqwest 路径可走,GLM 兼容层有 3 处差异,见下方)
 **依赖**: 无(可独立跑,跟 spike-001 并行)
-**预估耗时**: 30-60 分钟
+**预估耗时**: 30-60 分钟 — 实际 25 分钟(build 1min + 5 个用例各 1-2min)
 
 ## 目标
 
@@ -181,11 +181,69 @@ unset ANTHROPIC_API_KEY
 
 ---
 
-## 跑完后贴给 Claude
+## 实际执行 / 结论 / 后续动作
 
-- 成功用例的 stdout 完整输出
-- 4 个错误用例的 HTTP 状态码 + 错误响应 body
-- 如果失败:**失败现象 + 已尝试的回退**
+### 实际执行(2026-06-04)
+
+**环境**:
+- 平台:同 spike-001(WSL 2 + Ubuntu 22.04)
+- Rust:cargo 1.96.0(linuxbrew 装的,1.83 太老,已升级)
+- 项目:`~/sse-spike/`,release build 1m00s
+
+**重要前提**:本次跑的**不是真的 Anthropic Claude API**,而是 **智谱 GLM-4.7 通过 Anthropic 兼容协议**转发的服务(用户决定用 wukaijin.com 转发)。所以:
+- SSE 协议理论上等价(都走 Anthropic 协议)
+- model 写 `GLM-4.7`(不是 `claude-haiku-4-5`)
+- 错误响应 / HTTP 状态码可能跟真 Claude 不完全一致(GLM 兼容层有差异)
+- API key 是智谱风格 `sk-g4HcGHnrq...`,env 一次性注入,未落盘
+
+**代码关键改动**(vs spike 文档里的最小测试):
+- 支持 `argv[1]` 切模式:`success` / `401` / `400-too-big` / `400-empty`
+- BASE_URL 从 `ANTHROPIC_BASE_URL` env 读,空时 fallback `https://api.anthropic.com`
+- 事件顺序用 `Vec<String>` 记录,跑完打印,方便核对
+- 未知事件打印 `▶ <name> (unhandled)`,不崩
+
+**5 个用例实测**:
+
+| 用例 | 期望(spike 文档) | 实际 | 评价 |
+|------|------------------|------|------|
+| 成功 | HTTP 200 + 6 事件顺序 + 流式中文 | ✅ HTTP 200,`message_start → ping → content_block_start → 49×content_block_delta → content_block_stop → message_delta → message_stop`,输出完整中文"Rust 的所有权是...内存管理机制..." | **完美** |
+| A 401 错 key | HTTP 401 + `type: authentication_error` | HTTP 401,error=`{"code":"","message":"Invalid token (request id: 202606040746161667876668268d9d6oumb0OUc)","type":"new_api_error"}` | ⚠️ 状态码对,type 是 `new_api_error` 而非 `authentication_error`(GLM 差异) |
+| B 400 max_tokens=999999 | HTTP 400 + `type: invalid_request_error` | **HTTP 200,正常 stream 50 个 delta** | ❌ GLM 不验证 max_tokens 上限,**该用例不适用 wukaijin 转发** |
+| C 400 content 空串 | HTTP 400 或类似 | **HTTP 500**,error=`{"error":{"type":"invalid_request_error","message":"[1213][未正常接收到prompt参数。][20260604154619bcfec0cd2f094b81]"},"type":"error"}` | ⚠️ 状态码 500(不是 4xx),但内层 `type: invalid_request_error` 语义对 |
+| D 网络断开 | 连接错误,非 JSON | `error sending request for url (...)`,被 catch → `eprintln!("❌ 网络/连接错误: {}")` + `exit(3)` | ✅ 网络层独立识别,不走错误响应 JSON 解析路径 |
+
+**通过标准 3 项,逐条核对**:
+- ✅ 能 stream 收 token(49 个 delta 完整)
+- ✅ `content_block_delta` / `message_delta` / `message_stop` 顺序不乱(中间多一个 GLM 特有的 `ping` 心跳事件,无关顺序)
+- ⚠️ 错误分类正确(401 / 400 / 500 / 网络 4 类可区分),**但 GLM 兼容层有 3 处差异**:
+  1. 401 的 `error.type` 字段是 `new_api_error` 不是 `authentication_error`
+  2. 400 类错误有时返 5xx(空消息 → 500)
+  3. 不严格验证 `max_tokens` 上限(999999 通过)
+
+### 结论
+
+**spike-002 通过(手写 reqwest 路径可走),但需注意 GLM 兼容层 3 处差异**。
+
+支撑的下游决策:
+- 步骤 1-2 可以**手写 reqwest + SSE 解析**实施,不强制用 rig-core(避免一层抽象)
+- 错误处理要写一个 "error 归一化" 层,把 `new_api_error` / `invalid_request_error` / 5xx-but-语义-4xx 等 GLM 风格都映射到内部统一错误类型(不是只靠 HTTP status code)
+- 如果未来要切真 Claude API,需要重测错误分类(可能 rig-core 更省事,因为它内置 Anthropic 协议适配)
+
+**软退路(都没走)**:
+- ~~换 `eventsource-stream` crate~~:手写解析器够用,6 事件顺序 100% 对
+- ~~切 rig-core~~:多一层抽象换不来实际收益(已知 GLM 兼容层差异,rig-core 也要做适配)
+- ~~切 Anthropic 兼容服务~~:已经在用 wukaijin(GLM 兼容)
+
+### 后续动作
+
+- ✅ spike-002 通过 → 步骤 1-2 可用 reqwest 手写 SSE,不必上 rig-core
+- ⏳ 步骤 1 实施时,LLM 客户端模块要:
+  - 支持 BASE_URL env(便于切 wukaijin / 真 Claude / 其他)
+  - 支持 model env(便于切 GLM-4.7 / Claude / 其他)
+  - 错误归一化(把 GLM 兼容层差异吸收掉)
+  - 未知 SSE 事件不崩(unhandled 但继续)
+- ⏳ 真切到 Anthropic Claude 时,本 spike 文档要重测 4 错误用例(可能 GLM 差异是兼容层特有的,真 Claude 是 401/`authentication_error`、400/`invalid_request_error`、400 而非 500、严格 max_tokens 上限)
+- 📝 把"GLM 兼容层 3 处差异"写进 `docs/HACKING-llm.md`(新建,跟 HACKING-wsl.md 配对)
 
 ---
 
