@@ -26,9 +26,11 @@
 
 ## 2. 实施路线图
 
-8 个步骤,每步完成才能进下一步。**不写时间承诺**,只写目标、可交付物、关键产出。
+7 个步骤,每步完成才能进下一步。**不写时间承诺**,只写目标、可交付物、关键产出。
 
-### 2.1 步骤 1 — 骨架与 LLM 直连 [MVP]
+> **路线图变更记录**(2026-06-04):原 8 步合并为 7 步——删除原步骤 5(WSL 验证,spike-001 已通过),拆原步骤 3 为 3a/3b。
+
+### 2.1 步骤 1 — 骨架与 LLM 直连 [MVP] ✅ 已完成(2026-06-04)
 
 **目标**:跑通"Tauri app + 跟 LLM 说一句话 + 流式显示"
 
@@ -36,7 +38,7 @@
 - Rust 端 LLM 客户端:`reqwest` + `futures-util` + `serde_json`,**手写 SSE 解析**(用 `futures-util::StreamExt`,**不**用 `eventsource-stream`——spike-002 验证手写解析器够用,见 [HACKING-llm.md](./HACKING-llm.md) 和 [spike-002 §"代码关键改动"](./spikes/002-reqwest-anthropic-sse.md#实际执行2026-06-04))
 - 4 个文件分模块(client / sse / error / types),实施 11 项 checklist 见 [HACKING-llm.md §"LLM 客户端实施 checklist"](./HACKING-llm.md#llm-客户端实施-checklist给步骤-1-2-写-rust-客户端时)
 - 前端:简单 chat UI(输入框 + 消息列表)
-- Tauri event 把 SSE chunk 推到前端(`emit("chat-chunk", ...)`)
+- Tauri event 把 SSE chunk 推到前端(`emit("chat-event", ...)`)
 - **可交付物**:能聊天的最小 app
 
 **前置硬依赖**:
@@ -56,17 +58,26 @@
 - 前端显示 tool 调用过程(简化版)
 - **可交付物**:能帮我改代码的 agent
 
-### 2.3 步骤 3 — 切到 Rig + 项目模型 [MVP]
+### 2.3 步骤 3a — SQLite + Session 持久化 [MVP]
 
-**目标**:重构到 rig,引入 project / session 概念
+**目标**:消息存 DB,重启能恢复,session 切换看历史
 
-- LLM client 从 `reqwest` 切到 `rig-core`
-- 引入 SQLite (`sqlx`),存 project / session / message
-- UI:左侧项目列表、中间 session 列表、右侧 chat
-- session 切换能看到历史消息
-- **可交付物**:能管多个对话
+- 引入 SQLite (`sqlx`),存 session / message
+- session 列表 + session 切换(单项目,无左侧项目栏)
+- 消息从 SQLite 加载,不再全内存
+- LLM 客户端不动(继续用 reqwest + 手写 SSE)
+- **可交付物**:关掉 app 再打开,历史消息还在
 
-### 2.4 步骤 4 — Git 集成 [MVP]
+### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP]
+
+**目标**:引入 Project 概念,三栏 UI,切 rig-core
+
+- LLM client 从 `reqwest` 切到 `rig-core`(原理已通过步骤 2 手写掌握)
+- 引入 Project 概念,左侧项目列表
+- UI 重构:左侧项目列表 + 中间 session 列表 + 右侧 chat
+- **可交付物**:能管多个项目、多个对话
+
+### 2.5 步骤 4 — Git 集成 [MVP]
 
 **目标**:session 隔离 + 自动 commit
 
@@ -76,20 +87,7 @@
 - 前端 diff 视图(用 `diff` (jsdiff) + 自渲染,或 `vue-diff-view`)
 - **可交付物**:每个 session 是独立分支,能看 diff
 
-### 2.5 步骤 5 — WSL 体验 [MVP]
-
-**目标**:在 WSL 内原生跑起来
-
-- 验证 Tauri 在 WSLg / Wayland 跑得通(此步为整个 app 的**前置硬依赖**,失败则步骤 1-4 全部回滚重新评估)
-- 项目文件存放在 WSL 内部(默认 `~/projects/...`),不走 `/mnt/c`
-- 所有 git / shell / fs 操作都在 WSL 内完成,**无 wslapi 调用、无路径转换**
-- **可交付物**:Tauri GUI 在 Windows 桌面显示,背后跑在 WSL 内,无 Windows ↔ WSL 跨边界
-
-> 💡 步骤 1-4 都在"假设 Tauri 跑得通"前提下推进,本步是首次验证。**强烈建议先把这一小步抽出来作为"步骤 0"跑一次 hello world**,确认底层 OK 再启动步骤 1。
-
-**状态更新(2026-06-04)**:**spike-001 已通过**,本步骤的"WSL + Tauri 跑得通"目标已实现,见 [spikes/001-wsl-tauri-window.md](./spikes/001-wsl-tauri-window.md)。**新 session 不必再单独跑这一步**,直接做步骤 1-4,有问题参考 spike-001 文档的 5 个环境坑即可。
-
-### 2.6 步骤 6 — 嵌入式终端 + 权限系统 [v1]
+### 2.6 步骤 5 — 嵌入式终端 + 权限系统 [v1]
 
 **目标**:能看 agent 在跑啥,能控制 agent 能干啥
 
@@ -98,7 +96,7 @@
 - 权限系统雏形:每个 tool 可以 ask / allow / deny
 - **可交付物**:能看见、能拦住 agent
 
-### 2.7 步骤 7 — MCP 暴露 + 多 Provider [v1]
+### 2.7 步骤 6 — MCP 暴露 + 多 Provider [v1]
 
 **目标**:你的工具 Claude Code 也能用;切模型无痛
 
@@ -108,7 +106,7 @@
 - 加 Ollama provider 切换(纯本地,省钱)
 - **可交付物**:工具集对外开放;模型随便切
 
-### 2.8 步骤 8 — 打磨与文档 [跨阶段]
+### 2.8 步骤 7 — 打磨与文档 [跨阶段]
 
 - Token 用量统计
 - 错误处理完善
@@ -118,7 +116,7 @@
 
 > ⚠️ **Agent Daemon 化的占位**:16 关卡(见 [ARCHITECTURE §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))中有 ⑮ Channel 输出(daemon → client)这一关,需要 agent core 拆出独立进程才能落地。**触发条件**:
 > - **若** BACKLOG §6 飞书 channel 决定实施 → 在步骤 5 之后插入"步骤 5.5 — Agent Daemon 化",再做步骤 6
-> - **若** 飞书不做 → 推迟到 v2 之后,daemon 化不阻塞当前 8 步
+> - **若** 飞书不做 → 推迟到 v2 之后,daemon 化不阻塞当前 7 步
 > - **判断窗口**:在步骤 5 完成后、步骤 6 开始前问自己"长跑任务被打断是不是真痛?",痛就拆,不痛就跳
 > - 详见 [ARCHITECTURE.md §4 决策:Agent Daemon 化](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
 
@@ -126,11 +124,22 @@
 
 ## 3. 待办与下一步
 
-**最后更新**:2026-06-04(spike-001/002 + HACKING 文档沉淀完成,环境就位)
+**最后更新**:2026-06-04(步骤 1 完成,路线图从 8 步合并为 7 步)
 
-**下一步(本 session 之后,新 session 第一件事)**:
-- → **[MVP 步骤 1 — 骨架与 LLM 直连](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)**:搬 `~/tauri-spike/spike-app/` 到 `/usr/local/code/github/everlasting/app/`,扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui),Rust 端 LLM 客户端,最小 chat UI。详细起点 + 验收标准见 [HANDOFF §4](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)。
-- 步骤 1 完成后 → 步骤 2 [Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
+**下一步**:
+- → **[MVP 步骤 2 — Tool Calling](#22-步骤-2--tool-calling-mvp)**:定义 3 个 tool(`read_file` / `write_file` / `shell`),解析 `tool_use` 块,agent loop 实现
+
+**路线图全貌**:
+| 步骤 | 内容 | 阶段 |
+|------|------|------|
+| 1 | 骨架 + LLM 直连 | ✅ 已完成 |
+| 2 | Tool Calling(agent loop + 3 个 tool) | MVP ← **当前** |
+| 3a | SQLite + Session 持久化 | MVP |
+| 3b | 多项目 + UI 三栏 + rig-core | MVP |
+| 4 | Git 集成(worktree + auto commit) | MVP |
+| 5 | 嵌入式终端 + 权限系统 | v1 |
+| 6 | MCP 暴露 + 多 Provider | v1 |
+| 7 | 打磨与文档 | 跨阶段 |
 
 **已沉淀(spike 期间完成的)—— 不必再做,出问题查这里**:
 - ✅ Tauri 在 WSL 跑得通 + 中文对齐 → [spikes/001](./spikes/001-wsl-tauri-window.md)
@@ -142,10 +151,10 @@
 - [x] 前端框架:**Vue 3 + Vite + Pinia**(见 [TECH §1.1](./TECH.md#11-锁定项经过调研验证))
 - [x] 前端 UI 库:**reka-ui** / shadcn-vue primitives(见 [TECH §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
 - [x] 包管理器:**pnpm**
-- [x] LLM 客户端:**手写 reqwest + SSE**(不切 rig-core 到步骤 3,见 [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
+- [x] LLM 客户端:**手写 reqwest + SSE**(步骤 2 继续手写,步骤 3b 切 rig-core,见 [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
 - [x] LLM BASE_URL / model / key:**全部从 env 读**(便于切 wukaijin / 真 Claude / 其他)
 - [x] 工作目录:**WSL 内部**(`~/...` 或 `/usr/local/code/...`),不走 `/mnt/c`
-- [x] Agent Daemon 化:**v1 之后再说**,本项目 8 步不阻塞(见 §2.8 占位)
+- [x] Agent Daemon 化:**v1 之后再说**,本项目 7 步不阻塞(见 §2.8 占位)
 
 **等做完步骤 1-2 再决定**:
 - [ ] SQLite schema 最终长什么样
@@ -162,6 +171,19 @@
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。
+
+### 2026-06-04 — 路线图重构(步骤 1 完成后审视)
+
+- **决策**:删除原步骤 5(WSL 验证),8 步合并为 7 步
+  - **原因**:spike-001 已通过,步骤 1 也在 WSL 内完成,原步骤 5 是空壳
+- **决策**:拆原步骤 3 为 3a(SQLite + session 持久化)和 3b(多项目 + UI + rig-core)
+  - **原因**:原步骤 3 包含 4 件独立大事,任何一件卡住整个步骤都交付不了
+- **决策**:事件协议用混合模式(高频 payload 判别 + 低频独立事件名)
+  - **原因**:兼顾流式 token 性能和低频事件可 filter 性
+- **决策**:SQLite 不提前到步骤 2,保持步骤 3a
+  - **原因**:步骤 2 专注 agent loop 核心学习,加 SQLite 会膨胀范围
+- **决策**:步骤 2 继续手写 reqwest,步骤 3b 才切 rig-core
+  - **原因**:手写 agent loop 是核心学习价值,"先学再依赖"
 
 ### 2026-06-04 — 项目正式启动
 

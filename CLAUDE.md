@@ -61,7 +61,7 @@ docs/                       # 设计文档（全中文）
 
 - **自研 agent core**：不使用 Anthropic Agent SDK / Codex SDK，自己实现 Agent Loop、消息管理、tool 注册、权限检查（见 `docs/IMPLEMENTATION.md §1`）
 - **步骤 1 用手写 SSE 解析**：不用 eventsource-stream crate，`llm/sse.rs` 是自研状态机（已通过 spike-002 验证）
-- **步骤 3 切到 rig-core**：LLM 客户端从 reqwest 迁移到 rig-core（保留为后续步骤）
+- **步骤 3b 切到 rig-core**：LLM 客户端从 reqwest 迁移到 rig-core（保留为后续步骤）
 - **16 阶段请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`
 - **daemon 化**：后期 Tauri GUI 进程与 Agent Daemon 进程分离，通过 Unix socket / WebSocket IPC
 
@@ -85,7 +85,7 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 | 桌面框架 | Tauri 2 |
 | 前端 | Vue 3 (`<script setup>`) + Vite + Pinia + reka-ui |
 | 后端 | Rust (edition 2021) + tokio |
-| HTTP/LLM | reqwest + 手写 SSE（步骤 1）→ rig-core（步骤 3） |
+| HTTP/LLM | reqwest + 手写 SSE（步骤 1）→ rig-core（步骤 3b） |
 | 错误处理 | anyhow（边界）+ thiserror（领域） |
 | 日志 | tracing + tracing-subscriber |
 | 包管理 | pnpm（前端）、cargo（Rust） |

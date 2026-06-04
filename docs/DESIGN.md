@@ -196,14 +196,14 @@
 
 ```bash
 # 开发
-cargo tauri dev         # 启动 Tauri 开发模式
-cargo tauri build       # 打包生产版本
+cd app && pnpm tauri dev         # 启动 Tauri 开发模式
+cd app && pnpm tauri build       # 打包生产版本
 
 # 数据库
 sqlite3 ~/.local/share/everlasting/db.sqlite ".tables"
 
 # 调试
-RUST_LOG=debug cargo tauri dev
+RUST_LOG=debug pnpm tauri dev    # 在 app/ 目录下
 
 # WSL 内查看 Tauri 进程
 ps aux | grep everlasting

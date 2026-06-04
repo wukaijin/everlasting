@@ -1,8 +1,9 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 实施完成,待 GUI 端到端验收**。
-> spike-001/002 已通过,前置硬依赖清零,工具链就位,环境坑已沉淀。
-> **本 session**(2026-06-04 第二轮):搬骨架、写 LLM 客户端、IPC 桥、ChatWindow,11 个 Rust 单元测试 + pnpm build + cargo build 通过,`pnpm tauri dev` 已能启动(WebKit 进程在 WSL 内)。详见 §"已完成"。
+> **2026-06-04 更新**。当前阶段:**MVP 步骤 1 已完成，准备进入步骤 2 (Tool Calling)**。
+> spike-001/002 已通过，前置硬依赖清零，工具链就位，环境坑已沉淀。
+> **session 1** (2026-06-04):设计文档 + spike-001/002。
+> **session 2** (2026-06-04):搬骨架、写 LLM 客户端、IPC 桥、ChatWindow，11 个 Rust 单元测试 + pnpm build + cargo build 通过，`pnpm tauri dev` 已能启动(WebKit 进程在 WSL 内)。详见 §"已完成"。
 
 ---
 
@@ -29,10 +30,11 @@
 - ✅ 5 份设计文档(README + DESIGN + ARCHITECTURE + TECH + IMPLEMENTATION + BACKLOG)
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
 - ✅ HANDOFF + 2 个 spike 模板
-- ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 5 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
-- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(本 session 完成,见下)
+- ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
+- ✅ **MVP 步骤 1 — 骨架与 LLM 直连**(session 2 完成,已推 main)
+- ✅ **GUI 端到端验收通过**(session 3,窗口显示 / 中文 / 流式 / 错误处理均正常)
 
-**2026-06-04 本 session(MVP 步骤 1 实施)**:
+**session 2 (MVP 步骤 1 实施)**:
 - ✅ 搬 `~/tauri-spike/spike-app/` 到 `everlasting/app/`,扩成正式骨架(Vue 3 + Vite + Pinia + reka-ui + @tauri-apps/api)
 - ✅ Rust 端 LLM 客户端 `src-tauri/src/llm/{client,sse,error,types}.rs`,4 文件分模块,实施 HACKING-llm 11 项 checklist
 - ✅ Tauri IPC:`invoke("chat", { requestId, messages })` 前端调用,Rust `tauri::async_runtime::spawn` 推 `chat-event` 事件
@@ -40,25 +42,25 @@
 - ✅ 11 个 Rust 单元测试全过(SSE parser 4 个 + error classification 7 个,覆盖 GLM 3 处差异)
 - ✅ `pnpm build` 通过(72KB JS + 2.8KB CSS,vue-tsc 无错)
 - ✅ `pnpm tauri dev` 启动 ~10s + WebKit 进程在 WSL 内(已验)
-- ✅ sse-spike 实测 API 通(401 走 `new_api_error` 路径,200 走 47 个 delta 路径,跟我的 LLM 客户端结构对齐)
+- ✅ sse-spike 实测 API 通(401 走 `new_api_error` 路径,200 走 47 个 delta 路径,跟 LLM 客户端结构对齐)
 
-**待 GUI 端到端验收**(用户跑一次):
-- [ ] 窗口在 Windows 桌面显示
-- [ ] 中文输入 + 中文响应 baseline 对齐
-- [ ] 输入"你好" → 流式看到响应
-- [ ] 故意输错 API key → 中文友好错误(分类器逻辑已测,UI 端没验)
-- [ ] 5 次连续提问不崩 / 不卡
-- [ ] 至少 1 次热重载改 chat UI 不崩
+**session 3 (GUI 验收 + 文档审视)**:
+- ✅ 窗口在 Windows 桌面显示
+- ✅ 中文输入 + 中文响应 baseline 对齐
+- ✅ 输入"你好" → 流式看到响应
+- ✅ 故意输错 API key → 中文友好错误
+- ✅ 5 次连续提问不崩/不卡
+- ✅ 至少 1 次热重载改 chat UI 不崩
 
-**当前任务**(本 session 之后由新 session 接手):
-- 走 [IMPLEMENTATION §2.2 步骤 2 — Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
+**当前任务**(下一步):
+- → [IMPLEMENTATION §2.2 步骤 2 — Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)
 - 定义 3 个 tool:`read_file` / `write_file` / `shell`
 - 解析 `tool_use` 块,执行,构造 `tool_result` 回填
 - agent loop 实现
 
 **最近 commit**:
 ```
-93645f4 docs: README 索引加 HANDOFF + HACKING-wsl + HACKING-llm + spikes
+e08c9ba docs(HACKING-wsl): 加坑 9 GTK3 immodules 缓存 + 坑 10 profile 双输入法; 重写坑 6/8
 ```
 
 ---
@@ -155,28 +157,28 @@ docs/
 
 ### 4.4 验收标准(本步骤完成判定)
 
-- [ ] `cd /usr/local/code/github/everlasting/app && pnpm tauri dev` 启动 < 30 秒
-- [ ] 窗口在 Windows 桌面正常显示(同 spike-001)
-- [ ] 中文输入 + 中文响应,中英文字号 baseline 对齐(同 spike-001)
-- [ ] 输入"你好" → 流式看到响应(token by token 出现)
-- [ ] 故意输错 API key → 友好错误提示(不是 panic,不是 500 页)
-- [ ] 5 次连续提问不崩 / 不卡
-- [ ] 至少 1 次热重载改 chat UI 不崩
-- [ ] WebView 进程在 WSL 内(同 spike-001)
+- [x] `cd /usr/local/code/github/everlasting/app && pnpm tauri dev` 启动 < 30 秒
+- [x] 窗口在 Windows 桌面正常显示(同 spike-001)
+- [x] 中文输入 + 中文响应,中英文字号 baseline 对齐(同 spike-001)
+- [x] 输入"你好" → 流式看到响应(token by token 出现)
+- [x] 故意输错 API key → 友好错误提示(不是 panic,不是 500 页)
+- [x] 5 次连续提问不崩 / 不卡
+- [x] 至少 1 次热重载改 chat UI 不崩
+- [x] WebView 进程在 WSL 内(同 spike-001)
 
-### 4.5 显式不做(避免 scope 扩散)
+### 4.5 本步骤不碰(留到后续步骤)
 
-- ❌ 不做工具调用(read_file / write_file / shell)—— 步骤 2
-- ❌ 不做 session 持久化(SQLite)—— 步骤 3
-- ❌ 不做多项目 / 多 session 切换—— 步骤 3
-- ❌ 不做 git worktree / 自动 commit—— 步骤 4
-- ❌ 不做权限系统 / xterm.js—— 步骤 6
-- ❌ 不做 MCP / 多 Provider—— 步骤 7
-- ❌ 不切 rig-core(spike-002 决定手写可走)—— 步骤 3 才切
+- ⏭ 工具调用(read_file / write_file / shell)—— 留到步骤 2
+- ⏭ session 持久化(SQLite)—— 留到步骤 3a
+- ⏭ 多项目 / 多 session 切换—— 留到步骤 3b
+- ⏭ git worktree / 自动 commit—— 留到步骤 4
+- ⏭ 权限系统 / xterm.js—— 留到步骤 5
+- ⏭ MCP / 多 Provider—— 留到步骤 6
+- ⏭ rig-core 迁移—— 留到步骤 3b
 
 ### 4.6 完成后
 
-走 [IMPLEMENTATION §2.2 步骤 2 Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp),更新 HANDOFF 顶部"已完成"段。
+✅ 步骤 1 已完成(2026-06-04)。走 [IMPLEMENTATION §2.2 步骤 2 Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)。
 
 ---
 
@@ -232,7 +234,7 @@ docs/
 - **项目根**:`/usr/local/code/github/everlasting/`
 - **当前 branch**:`main`
 - **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
-- **最近 commit hash**:`93645f4`
+- **最近 commit hash**:`e08c9ba`
 - **当前日期**:2026-06-04
 
 ---

@@ -89,10 +89,10 @@
 
 ```
 [1] Frontend (Vue 3)
-    用户输入消息 → tauri.invoke('send_message', { sessionId, content })
+    用户输入消息 → tauri.invoke('chat', { requestId, messages })
 
 [2] Tauri GUI Process
-    收到 invoke → 转发到 daemon (IPC: Unix socket)
+    收到 invoke → Rust 端 spawn 异步任务处理
     invoke resolve 立即返回("已受理",非"已完成")
 
 [3] Agent Daemon
@@ -116,10 +116,11 @@
       TauriGuiChannel.send(ChatDone)
 
 [4] Frontend
-    listen("chat:token")  → 追加 token 到 UI
-    listen("tool:call")   → 渲染工具调用卡片
-    listen("ui:render")   → 渲染生成式 UI 组件
-    listen("chat:done")   → 解禁输入框
+    listen("chat-event") → payload.type 分发:
+      "delta"  → 追加 token 到 UI
+      "done"   → 解禁输入框
+      "error"  → 显示错误提示
+    (后续步骤 2+ 会加 "tool:call" / "tool:result" / "permission:ask")
 ```
 
 ### 1.3 关键数据流:session 切换
@@ -127,13 +128,7 @@
 ```
 [1] User clicks project A → session B
 [2] Frontend: tauri.invoke('load_session', { sessionId: B })
-[3] Tauri GUI: 转发 IPC 到 daemon
-[4] Agent Daemon:
-    Channel Router → SessionManager 接收
-    SessionManager 从 SQLite 读 messages → 包装为 SessionSnapshot
-    通过 TauriGuiChannel 返回到 GUI
-[5] Frontend: 渲染历史
-[6] Daemon: 清空当前 agent core 状态, 准备接收新输入
+[3] Tauri backend: 从 SQLite 读 messages → 返回 SessionSnapshot
 ```
 
 ---
@@ -224,14 +219,14 @@
 #### ② Tauri IPC 边界
 
 ```ts
-await invoke("send_message", { sessionId, content })
+await invoke("chat", { requestId, messages })
 ```
 
 ```
   ├─ 参数反序列化(JSON → Rust struct)
   ├─ 命令是否在白名单?(Tauri capability 限制)
   ├─ rate limit?(每 session 每分钟 N 条)
-  └─ 转发到 daemon (IPC: Unix socket)
+  └─ spawn 异步任务处理 LLM stream
        └─ invoke resolve 立即返回("已受理")
 ```
 
@@ -435,17 +430,25 @@ match tool_call.name {
 
 - **为什么需要**:LLM 偶尔陷入"反复试同一个错误"的死循环,白烧 token
 
-#### ⑭ 流式 token 输出(text / ui 分流)
+#### ⑭ 流式 token 输出(混合事件模式)
+
+**事件协议设计**:
+- **高频事件**(`chat-event`，payload 判别):`delta`(token)、`start`、`done`、`error`
+  - 流式 token 频率高,走单 listener + payload.type 分发,减少 listener 注册开销
+- **低频事件**(独立事件名):`tool:call`、`tool:result`、`permission:ask`、`ui:render`
+  - 需要精确 filter 的场景用独立事件名,前端好做 `listen("tool:call")` 过滤
 
 ```
 收到 SSE chunk,按内容类型分发:
-  ├─ TextDelta(t)        → channel.send(ChatToken(t)) → ⑮
-  ├─ UiRender(primitives)→ channel.send(UiCard(primitives)) → ⑮
-  └─ ToolUse / ToolResult→ 不走这一步(直接进 ⑨ / ⑫)
+  ├─ TextDelta(t)        → emit("chat-event", { type: "delta", text })  → ⑮
+  ├─ ToolUse(...)        → emit("tool:call", ...)                        → ⑨
+  ├─ ToolResult(...)     → emit("tool:result", ...)                      → ⑫
+  ├─ PermissionAsk(...)  → emit("permission:ask", ...)                   → ⑨
+  └─ UiRender(...)       → emit("ui:render", ...)                        → ⑮
 ```
 
 - **关键设计**:`ui_render` 不在 chat 流里走,单独的 UiCard 事件,前端用 component registry 渲染
-- **为什么分流**:生成式 UI 的渲染机制跟 text 完全不同(diff + Vue 渲染 / ECharts 等),混在一起会很乱
+- **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
 - **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
 
 #### ⑮ Channel 输出(daemon → client)
@@ -491,25 +494,25 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-| 关卡     | 最早实现(MVP)                | 打磨阶段                     |
-|----------|-------------------------------|------------------------------|
-| ① ②     | 步骤 1(基础)                  | 步骤 7 完善错误提示          |
-| ③       | 步骤 7(随 daemon 化)          | 步骤 7 完善                  |
-| ④       | 步骤 3(引入 Session)          | 步骤 5 状态机                |
-| ⑤       | 步骤 3(基础)                  | 后续阶段 压缩、摘要           |
-| 5a-5c   | 后续阶段(随 BACKLOG 实施)   | 实施对应功能时                |
-| ⑥       | 步骤 1(reqwest) / 步骤 3(rig) | 步骤 7 多 provider + 重试    |
-| ⑦       | 步骤 1                        | 步骤 6 重连、断点续传        |
-| ⑧       | 步骤 2                        | BACKLOG §4.2 实施后 ⑧a 启用 |
-| ⑧a      | BACKLOG §4.2 实施后           | 状态机细化                   |
-| ⑨       | 步骤 6(基础 allow/deny)       | 细粒度策略(后续)             |
-| ⑩       | 步骤 2                        | 步骤 6 PTY、xterm            |
-| ⑪       | 步骤 4                        | 步骤 8 自动 commit 策略      |
-| ⑫       | 步骤 2                        | —                            |
-| ⑬       | 后续阶段                   | 远期                          |
-| ⑭       | 步骤 1                        | 步骤 5 用量统计              |
-| ⑮       | 步骤 7(随 daemon 化)          | 限速、合并、调优              |
-| ⑯       | 步骤 1                        | 步骤 5 用量统计 + BACKLOG §7 钩子 |
+| 关卡     | 最早实现(MVP)                       | 打磨阶段                     |
+|----------|--------------------------------------|------------------------------|
+| ① ②     | 步骤 1(基础)                         | 步骤 6 完善错误提示          |
+| ③       | 步骤 6(随 daemon 化)                 | 步骤 6 完善                  |
+| ④       | 步骤 3a(引入 Session)                | 步骤 5 状态机                |
+| ⑤       | 步骤 3a(基础)                        | 后续阶段 压缩、摘要           |
+| 5a-5c   | 后续阶段(随 BACKLOG 实施)            | 实施对应功能时                |
+| ⑥       | 步骤 1(reqwest) / 步骤 3b(rig)       | 步骤 6 多 provider + 重试    |
+| ⑦       | 步骤 1                               | 步骤 5 重连、断点续传        |
+| ⑧       | 步骤 2                               | BACKLOG §4.2 实施后 ⑧a 启用 |
+| ⑧a      | BACKLOG §4.2 实施后                  | 状态机细化                   |
+| ⑨       | 步骤 5(基础 allow/deny)              | 细粒度策略(后续)             |
+| ⑩       | 步骤 2                               | 步骤 5 PTY、xterm            |
+| ⑪       | 步骤 4                               | 步骤 7 自动 commit 策略      |
+| ⑫       | 步骤 2                               | —                            |
+| ⑬       | 后续阶段                             | 远期                         |
+| ⑭       | 步骤 1                               | 步骤 7 用量统计              |
+| ⑮       | 步骤 6(随 daemon 化)                 | 限速、合并、调优              |
+| ⑯       | 步骤 1                               | 步骤 7 用量统计 + BACKLOG §7 钩子 |
 
 ### 2.5 横切关注点:16 关之外但必做的事
 

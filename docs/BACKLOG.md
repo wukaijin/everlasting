@@ -422,7 +422,7 @@ emit("ui:render", { primitives }) → 前端
 - tool 白名单:`use_ui` 必须在 enabled tools 中
 
 **库选型**:
-- 图表:`recharts`(轻量、声明式)
+- 图表:`ECharts` + `vue-echarts`(跨框架、中文文档全,替代 recharts)
 - 表格:`@tanstack/vue-table`
 - diff:框架无关的 `diff` (jsdiff) + 自渲染 Vue 组件
 - 表单:`vee-validate`
