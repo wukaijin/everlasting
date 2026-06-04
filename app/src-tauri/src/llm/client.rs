@@ -7,9 +7,9 @@
 //! 3. Normalize error responses per HACKING-llm.md "GLM 兼容层 3 处差异".
 //! 4. Stream the response body through the SSE parser, yield [`ChatEvent`]s.
 //!
-//! Retry / abort / cancel are intentionally out of scope for step 1 — see
-//! HACKING-llm.md checklist items 10-11. They get added in step 2 (tool
-//! calling) when the user actually needs a "stop generating" button.
+//! Step 2 adds: BlockState state machine for tool_use content blocks,
+//! `content_block_start` / `content_block_delta` / `content_block_stop`
+//! handling, and `message_delta` for stop_reason extraction.
 
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use super::error::{classify_error_response, LlmError};
 use super::sse::SseParser;
-use super::types::{ChatEvent, ChatMessage, ChatRequest};
+use super::types::{ChatEvent, ChatMessage, ChatRequest, ToolDef};
 
 /// Configuration read once at startup. Held in Tauri `State` and cloned
 /// per chat invocation.
@@ -72,14 +72,47 @@ impl LlmConfig {
     }
 }
 
-/// Stream chat completion deltas as [`ChatEvent`]s.
-///
-/// Always emits `ChatEvent::Start` first on success, then a series of
-/// `Delta`s, then `Done` at the end. On error (network, auth, server, etc.)
-/// emits exactly one `Err(LlmError)` and closes the stream.
+// ---------------------------------------------------------------------------
+// BlockState — tracks what content block is being streamed
+// ---------------------------------------------------------------------------
+
+/// State machine for the current content block being received from the SSE
+/// stream. Used to know how to interpret `content_block_delta` events.
+#[derive(Debug)]
+enum BlockState {
+    /// Not inside any content block.
+    Idle,
+    /// Inside a text block.
+    Text,
+    /// Inside a tool_use block — accumulate JSON fragments.
+    ToolUse {
+        id: String,
+        name: String,
+        json_buf: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// chat_stream — public API
+// ---------------------------------------------------------------------------
+
+/// Stream chat completion without tools (step 1 backward compat).
+#[allow(dead_code)]
 pub fn chat_stream(
     config: LlmConfig,
     messages: Vec<ChatMessage>,
+) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
+    chat_stream_with_tools(config, messages, vec![])
+}
+
+/// Stream chat completions, optionally with tool definitions.
+///
+/// Always emits `ChatEvent::Start` first on success, then a series of
+/// `Delta`s / `ToolCall`s, then `Done` at the end.
+pub fn chat_stream_with_tools(
+    config: LlmConfig,
+    messages: Vec<ChatMessage>,
+    tools: Vec<ToolDef>,
 ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
     let url = config.endpoint();
     let req = ChatRequest {
@@ -88,6 +121,7 @@ pub fn chat_stream(
         messages,
         system: None,
         stream: true,
+        tools,
     };
 
     stream! {
@@ -103,7 +137,7 @@ pub fn chat_stream(
             }
         };
 
-        tracing::info!(url = %url, model = %req.model, "→ LLM request");
+        tracing::info!(url = %url, model = %req.model, tools_count = %req.tools.len(), "→ LLM request");
 
         let resp = match client
             .post(&url)
@@ -135,7 +169,8 @@ pub fn chat_stream(
 
         let mut byte_stream = resp.bytes_stream();
         let mut parser = SseParser::new();
-        let mut saw_message_stop = false;
+        let mut block_state = BlockState::Idle;
+        let mut stop_reason: Option<String> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
             let bytes = match chunk_result {
@@ -155,22 +190,126 @@ pub fn chat_stream(
 
             for event in parser.feed(text) {
                 match event.event.as_str() {
-                    "content_block_delta" => {
+                    // --- content_block_start: begin a new block ---
+                    "content_block_start" => {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
-                            if let Some(s) = v
-                                .get("delta")
-                                .and_then(|d| d.get("text"))
-                                .and_then(|t| t.as_str())
-                            {
-                                yield Ok(ChatEvent::Delta { text: s.to_string() });
+                            if let Some(cb) = v.get("content_block") {
+                                match cb.get("type").and_then(|t| t.as_str()) {
+                                    Some("tool_use") => {
+                                        let id = cb
+                                            .get("id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("unknown")
+                                            .to_string();
+                                        let name = cb
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("unknown")
+                                            .to_string();
+                                        tracing::debug!(id = %id, name = %name, "▶ tool_use block start");
+                                        block_state = BlockState::ToolUse {
+                                            id,
+                                            name,
+                                            json_buf: String::new(),
+                                        };
+                                    }
+                                    Some("text") | _ => {
+                                        block_state = BlockState::Text;
+                                    }
+                                }
                             }
                         }
                     }
+
+                    // --- content_block_delta: incremental data ---
+                    "content_block_delta" => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                            if let Some(delta) = v.get("delta") {
+                                match delta.get("type").and_then(|t| t.as_str()) {
+                                    Some("text_delta") => {
+                                        if let Some(s) = delta.get("text").and_then(|t| t.as_str())
+                                        {
+                                            yield Ok(ChatEvent::Delta {
+                                                text: s.to_string(),
+                                            });
+                                        }
+                                    }
+                                    Some("input_json_delta") => {
+                                        if let Some(partial) =
+                                            delta.get("partial_json").and_then(|p| p.as_str())
+                                        {
+                                            if let BlockState::ToolUse { json_buf, .. } =
+                                                &mut block_state
+                                            {
+                                                json_buf.push_str(partial);
+                                            }
+                                        }
+                                    }
+                                    other => {
+                                        tracing::debug!(
+                                            "▶ content_block_delta with unknown delta type: {:?}",
+                                            other
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- content_block_stop: finish a block ---
+                    "content_block_stop" => {
+                        match std::mem::replace(&mut block_state, BlockState::Idle) {
+                            BlockState::ToolUse {
+                                id,
+                                name,
+                                json_buf,
+                            } => {
+                                // Parse accumulated JSON; default to {} if empty or broken.
+                                let input: serde_json::Value = if json_buf.trim().is_empty() {
+                                    serde_json::json!({})
+                                } else {
+                                    serde_json::from_str(&json_buf).unwrap_or_else(|e| {
+                                        tracing::warn!(
+                                            json_buf = %json_buf,
+                                            error = %e,
+                                            "failed to parse tool_use input JSON, using empty object"
+                                        );
+                                        serde_json::json!({})
+                                    })
+                                };
+                                tracing::debug!(id = %id, name = %name, "▶ tool_use block complete");
+                                yield Ok(ChatEvent::ToolCall {
+                                    id,
+                                    name,
+                                    input,
+                                });
+                            }
+                            BlockState::Text | BlockState::Idle => {}
+                        }
+                    }
+
+                    // --- message_delta: extract stop_reason ---
+                    "message_delta" => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                            if let Some(delta) = v.get("delta") {
+                                if let Some(sr) = delta.get("stop_reason").and_then(|r| r.as_str())
+                                {
+                                    tracing::debug!(stop_reason = %sr, "▶ message_delta");
+                                    stop_reason = Some(sr.to_string());
+                                }
+                            }
+                        }
+                    }
+
                     "message_stop" => {
-                        saw_message_stop = true;
+                        tracing::debug!("▶ message_stop");
                     }
                     "ping" => {
                         tracing::debug!("▶ ping (heartbeat, ignored)");
+                    }
+                    "message_start" => {
+                        // We already emitted Start; log for debugging.
+                        tracing::debug!("▶ message_start");
                     }
                     other => {
                         tracing::debug!("▶ {} (unhandled)", other);
@@ -179,9 +318,6 @@ pub fn chat_stream(
             }
         }
 
-        if !saw_message_stop {
-            tracing::warn!("stream ended without message_stop event");
-        }
-        yield Ok(ChatEvent::Done { stop_reason: None });
+        yield Ok(ChatEvent::Done { stop_reason });
     }
 }

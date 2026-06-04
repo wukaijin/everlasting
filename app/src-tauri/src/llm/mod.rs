@@ -14,7 +14,10 @@ pub mod error;
 pub mod sse;
 pub mod types;
 
-pub use client::{chat_stream, LlmConfig};
+#[allow(unused_imports)]
+pub use client::{chat_stream, chat_stream_with_tools, LlmConfig};
 #[allow(unused_imports)]
 pub use error::LlmError;
-pub use types::{ChatEvent, ChatMessage, LlmErrorCategory};
+pub use types::{
+    ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role, ToolDef,
+};

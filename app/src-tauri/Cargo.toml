@@ -20,7 +20,7 @@ serde_json = "1"
 # LLM client
 reqwest = { version = "0.13", features = ["stream", "json", "rustls"], default-features = false }
 futures-util = "0.3"
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "process", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 async-stream = "0.3"
 anyhow = "1"

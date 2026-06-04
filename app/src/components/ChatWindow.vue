@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onMounted } from "vue";
-import { useChatStore } from "../stores/chat";
+import { useChatStore, type ToolCallInfo, type ToolResultInfo } from "../stores/chat";
 import { useConfigStore } from "../stores/config";
 
 const store = useChatStore();
@@ -44,7 +44,10 @@ async function scrollToBottom() {
 }
 
 watch(
-  () => store.messages.map((m) => m.content).join("|"),
+  () =>
+    store.messages
+      .map((m) => m.content + (m.toolCalls?.length ?? 0) + (m.toolResults?.length ?? 0))
+      .join("|"),
   () => scrollToBottom(),
 );
 
@@ -68,13 +71,29 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 const hasMessages = computed(() => store.messages.length > 0);
+
+/** Find the tool result for a given tool call id. */
+function getToolResult(m: { toolResults?: ToolResultInfo[] }, callId: string): ToolResultInfo | undefined {
+  return m.toolResults?.find((r) => r.toolUseId === callId);
+}
+
+/** Format tool input for display. */
+function formatToolInput(tc: ToolCallInfo): string {
+  return JSON.stringify(tc.input, null, 2);
+}
+
+/** Truncate long tool output for display. */
+function truncateOutput(s: string, max = 500): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + `… (${s.length - max} more chars)`;
+}
 </script>
 
 <template>
   <div class="app">
     <header class="app__header">
       <h1 class="app__title">Everlasting</h1>
-      <span class="app__subtitle">vibe coding workbench · step 1</span>
+      <span class="app__subtitle">vibe coding workbench · step 2</span>
     </header>
 
     <main ref="messagesEl" class="app__main">
@@ -93,6 +112,32 @@ const hasMessages = computed(() => store.messages.length > 0);
             <span class="msg__text">{{ m.content }}</span>
             <span v-if="m.streaming" class="msg__cursor">▍</span>
           </div>
+
+          <!-- Tool call cards -->
+          <div v-if="m.toolCalls && m.toolCalls.length" class="msg__tools">
+            <div
+              v-for="tc in m.toolCalls"
+              :key="tc.id"
+              class="tool-card"
+              :class="{ 'tool-card--error': getToolResult(m, tc.id)?.isError }"
+            >
+              <div class="tool-card__header">
+                <span class="tool-card__name">{{ tc.name }}</span>
+                <span class="tool-card__status">
+                  {{ getToolResult(m, tc.id) ? '✓ done' : '⏳ running…' }}
+                </span>
+              </div>
+              <details class="tool-card__details">
+                <summary>input</summary>
+                <pre class="tool-card__pre">{{ formatToolInput(tc) }}</pre>
+              </details>
+              <details v-if="getToolResult(m, tc.id)" class="tool-card__details" open>
+                <summary>output</summary>
+                <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
+              </details>
+            </div>
+          </div>
+
           <div v-if="m.error" class="msg__error">
             ⚠ {{ m.error.message }}
           </div>
@@ -252,6 +297,77 @@ const hasMessages = computed(() => store.messages.length > 0);
   padding: 0 14px;
   font-size: 12px;
   color: #b91c1c;
+}
+
+/* --- Tool call cards --- */
+
+.msg__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 100%;
+}
+
+.tool-card {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+}
+
+.tool-card--error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.tool-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-card__name {
+  font-weight: 600;
+  color: #374151;
+}
+
+.tool-card--error .tool-card__name {
+  color: #b91c1c;
+}
+
+.tool-card__status {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.tool-card__details {
+  margin-top: 4px;
+}
+
+.tool-card__details summary {
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 11px;
+  user-select: none;
+}
+
+.tool-card__pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #1f2328;
 }
 
 .app__footer {
