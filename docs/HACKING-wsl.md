@@ -155,6 +155,45 @@ fcitx5-diagnose | grep -A 5 "## Input Methods"
 
 ---
 
+## 坑 8:WSLg 下 Ctrl+Space / Ctrl+Shift 不能切 fcitx5 状态
+
+**现象**:fcitx5 起了,候选窗出得来,但按 **Ctrl+Space** / **Ctrl+Shift** 都切不动,Windows 右下角的 IME 指示器倒是有响应(被 Windows 切走了)。Shift+Space 默认也不通(WSLg 透键盘事件不完整)。
+
+**根因**:
+- WSLg 把键盘事件从 Windows 转给 Linux app 时,Windows 的全局 IME 切换热键(Ctrl+Space)会先被 Windows 自己吃掉,fcitx5 收不到
+- Ctrl+Shift 在 Windows 上是"切换输入法",同样被吞
+- 默认 fcitx5 的 `TriggerKey = Ctrl+space`、`AltTriggerKey = Shift+space`,前者跟 Windows 冲突
+
+**修法**:改 fcitx5 的 hotkey 到不冲突的键。`~/.config/fcitx5/config` 写:
+
+```ini
+[Hotkey]
+TriggerKeys[0]=Shift+space
+AltTriggerKeys[0]=Shift+Shift_L+grave
+EnumerateForwardKeys[0]=Control+Shift+Right
+EnumerateBackwardKeys[0]=Control+Shift+Left
+```
+
+解释:
+- `TriggerKeys[0]`:开/关 fcitx5(原 Ctrl+Space)— 改成 Shift+Space
+- `AltTriggerKeys[0]`:在 pinyin / keyboard-us 之间切(原 Shift+Space)— 改成 Shift+Shift_L+反引号,跟 Caps Lock 误触也错开
+- `EnumerateForward/Backward`:循环切所有 IM,改成 Ctrl+Shift+左右,跟 Windows 输入法切左右冲突
+- 改完 `fcitx5-remote -r` 重载,**不**用重启 fcitx5 daemon
+
+**验证**:
+- fcitx5-remote 还能用 → reload 成功
+- 在 Tauri 窗口点 textarea
+- 按 Shift+Space → 候选窗消失,光标处直接出英文
+- 再按 Shift+Space → 候选窗回来,可以打拼音
+- 按 Shift+Shift_L+\` → 状态在 pinyin ↔ keyboard-us 之间切(可以看右下角指示器或者看 fcitx5-remote 输出)
+
+**注意**:
+- 这个 config 是 per-user 的(`~/.config/fcitx5/config`),carlos 和 root 各自有
+- 我已经写好了 root 的(/root/.config/fcitx5/config),你 source 之后让 fcitx5 -r 重读就行
+- 想要图形化配置:`fcitx5-config-qt`(在 WSLg 启个终端跑)
+
+---
+
 ## 坑 1:linuxbrew 的 pkg-config 不搜系统路径
 
 **现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。
