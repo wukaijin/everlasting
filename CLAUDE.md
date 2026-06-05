@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-当前状态：MVP 步骤 1 / 2 / 3a 已完成，加上路线图外完成的 Anthropic extended thinking 块展示 + 持久化。步骤 3b（多项目 + UI 三栏 + Rig 迁移）暂缓。详见 `docs/IMPLEMENTATION.md` 的 7 步路线图（原 8 步已合并为 7 步）。
+当前状态：MVP 步骤 1 / 2 / 3a / 3b（拆分后 3b-1）已完成，加上路线图外完成的 Anthropic extended thinking 块展示 + 持久化。3b-1 拆为两半：3b-1 = projects 数据模型 + 顶部 Tab + cwd 漂移（PR1 后端 + PR2 前端，均已落地 + post-fixes squash commit `18354a0`），3b-2 = 完整三栏 UI + rig-core 迁移（暂缓）。详见 `docs/IMPLEMENTATION.md` 的 7 步路线图（原 8 步已合并为 7 步）。
 
 ## Common Commands
 

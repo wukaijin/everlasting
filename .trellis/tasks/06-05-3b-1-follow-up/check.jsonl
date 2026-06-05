@@ -1,0 +1,7 @@
+{"file": "docs/FOLLOW-UP.md", "reason": "Verify file exists and lists 6 follow-up items with commit references + workload estimates + priority per AC #1."}
+{"file": "docs/HACKING-wsl.md", "reason": "Verify pitfall 11 added with clear description of Tauri 2 IPC arg naming (camelCase default) + fix pattern (use camelCase in JS invoke). Per AC #2."}
+{"file": "docs/HACKING-llm.md", "reason": "Verify 2 new pitfalls added: tool_result role contract (Anthropic 2013 fix) + Option<T> IPC null behavior. Per AC #3."}
+{"file": "docs/BACKLOG.md", "reason": "Verify §10 added matching §1-§9 style with the 3 implementation follow-ups (cwd simplification, TS field naming, frontend-rendered dialog). Per AC #4."}
+{"file": "CLAUDE.md", "reason": "Verify '当前状态' line updated to reflect 3b-1 completion (steps 1/2/3a + extended thinking + 3b) + new schema notes (is_legacy / cwd / projects table). Per AC #5."}
+{"file": "docs/HANDOFF.md", "reason": "Verify HANDOFF wasn't accidentally edited (HANDOFF was set up as self-service in commit ce1a893; should remain so)."}
+{"file": "docs/IMPLEMENTATION.md", "reason": "Verify IMPLEMENTATION wasn't accidentally edited (already calibrated in commit ce1a893; 3b-1 status already marked)."}

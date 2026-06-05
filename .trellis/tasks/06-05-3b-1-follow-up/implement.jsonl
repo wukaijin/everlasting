@@ -1,0 +1,9 @@
+{"file": "docs/FOLLOW-UP.md", "reason": "Will be created in this task. Centralized follow-up list per PRD AC #1."}
+{"file": "docs/HACKING-wsl.md", "reason": "Add pitfall 11 about Tauri 2 IPC arg naming (camelCase vs snake_case) — based on hotfix 1 experience. Sub-agent will know the exact insertion point."}
+{"file": "docs/HACKING-llm.md", "reason": "Add 2 pitfalls about Anthropic API: tool_result role contract (hotfix 3) and Option<T> IPC null quirk (hotfix 2). Existing style reference."}
+{"file": "docs/BACKLOG.md", "reason": "Add §10 for 3b-1 follow-up items, matching the style of §1-§9."}
+{"file": "CLAUDE.md", "reason": "Update '当前状态' line to reflect 3b-1 completion + new schema fields (is_legacy / cwd)."}
+{"file": "docs/REVIEW-deepseek-v4-pro-3b-1.md", "reason": "Reference: hotfix 1 + 2 + 3 were post-review fixes (Tauri IPC, Option null, Anthropic role) — all related to issues raised or could have been raised in review."}
+{"file": "docs/REVIEW-glm-5.1-3b-1.md", "reason": "Reference: same as deepseek review; hotfixes are downstream learnings."}
+{"file": "docs/PROPOSAL-project-binding-and-top-tabs.md", "reason": "Reference: design doc that was committed at PR1+PR2 stage. Hotfixes implement 3 additional items not in the proposal (camelCase arg, model omit, role-aware toPayloadContent)."}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "Reference: spec for boundary validation. cwd simplification follow-up (item 1) is partially addressed by get_home_dir command which would be a separate spec."}

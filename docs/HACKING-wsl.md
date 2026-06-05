@@ -308,6 +308,32 @@ Layout=
 
 ---
 
+## 坑 11:Tauri 2 IPC arg 默认 `rename_all = "camelCase"`
+
+**现象**:Rust 端 `async fn create_session(state: ..., project_id: String, initial_cwd: String, model: Option<String>)`,JS 端用 snake_case 调:
+```ts
+invoke("create_session", { project_id, initial_cwd, model: null })
+```
+报错:`Unhandled Promise Rejection: invalid args 'projectId' for command 'create_session': command create_session missing required key projectId`
+
+**根因**:Tauri 2 IPC 边界对 Rust command 函数参数默认 `rename_all = "camelCase"` —— Rust 的 `project_id: String` 暴露给 JS 时是 `projectId`,`initial_cwd` 暴露是 `initialCwd`。JS 端用 snake_case 调用,key 找不到。
+
+**修法**:JS 端 invoke 参数全用 camelCase:
+```ts
+invoke("create_session", { projectId, initialCwd })  // 正确
+// 错误: { project_id, initial_cwd }
+```
+
+**特例**:单字参数(`path` / `id` / `fallback`)两种命名都接受,因为 snake_case / camelCase 形式一样。
+
+**影响范围**:本项目所有 multi-word 参数的 Tauri command —— `list_sessions(project_id)` / `create_session(project_id, initial_cwd)` / `update_project_path(id, new_path)` / `update_project_name(id, new_name)` 等。详见 [docs/PROPOSAL-project-binding-and-top-tabs.md](./PROPOSAL-project-binding-and-top-tabs.md) §4.2 列表。
+
+**验证**:写 PR 时,在 `check.jsonl` 加"Tauri command arg 是否 camelCase"作为验收硬约束。Spec 详见 [Tauri 2 命令参数命名约定](https://v2.tauri.app/develop/calling-rust/#optional-arguments)。
+
+**经验沉淀**:这是 3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #1)。详见 [docs/FOLLOW-UP.md FU-4](./FOLLOW-UP.md#fu-4--tauri-2-ipc-arg-默认-rename_all--camelcase)。
+
+---
+
 ## 坑 1:linuxbrew 的 pkg-config 不搜系统路径
 
 **现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。

@@ -652,3 +652,39 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 - 源机器断网时目标机器不能接续 — 设计选择,不是 bug
 
 > 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION.md#4-决策日志)。本节是 v2 候选,前期不展开实现细节。
+
+---
+
+## 10. 步骤 3b-1 实施后续(implementation follow-up)
+
+> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/FOLLOW-UP.md](./FOLLOW-UP.md),本节只记每条的工作量 + 触发时机。
+
+### 10.1 cwd 简化为 `~/`
+
+- **现状**:chat header 显示 cwd 用完整绝对路径(`/home/carlos/code/foo/backend`)。PROPOSAL §5.4 / Q5 决议是简化为 `~/foo/backend`,但 PR1 backend 没暴露 `home_dir` 给前端。
+- **修法**:PR1 backend 加 `get_home_dir` Tauri command(读 `dirs::home_dir()`),PR2 frontend 缓存并替换前缀。
+- **工作量**:~30 行。**不紧急**(纯可读性增强,不是 bug)。
+- **关联**:PR2 commit `93a0753` "简化为 `~/` 留给 follow-up" 注释;FOLLOW-UP §FU-1。
+
+### 10.2 TS interface 字段 `snake_case` → `camelCase`
+
+- **现状**:`SessionSummary.project_id` / `current_cwd` / `created_at` 等字段是 snake_case 跟 Rust struct 序列化一致。TS interface 也跟着 snake_case,**非常规**。
+- **修法**:PR1 backend 在所有 IPC 序列化 struct 上加 `#[serde(rename_all = "camelCase")]`,PR2 frontend interface 字段全改 camelCase。
+- **决策点**:保留 snake_case 也行(Rust 风格 + 跟 backend 一致,少一层 rename)。**没定论**。
+- **工作量**:~50 行。**不紧急**(纯风格)。
+- **关联**:FOLLOW-UP §FU-2。
+
+### 10.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog
+
+- **现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
+- **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 树形目录 + 搜索框 + 文件图标。
+- **修法**:PR2 frontend 写一个 `<ProjectDirPicker>` 组件,新加 `list_dir(path)` Tauri command 读子目录,前端自渲染树形 + 键盘导航。`pick_project_dir` 废弃。
+- **工作量**:~150 行(frontend ~120 + backend `list_dir` ~30)。**中等优先**(UX 改善,不阻塞功能)。
+- **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3。
+
+### 10.4 trellis 流程 follow-up(非实施)
+
+- **FU-7**:PROPOSAL §9 给外部 LLM 的提问重写,改成"只读 PROPOSAL 就能答"形式。~30 行(下次发评审前一次性做)。
+- **FU-8**:`check.jsonl` 加 "Tauri command arg camelCase" + "TS interface 字段命名"作为 PR 验收硬约束。~10 行。
+
+> 💡 本节"实现"层面的 follow-up 跟 §1-§9"候选功能"性质不同 —— 那些是新功能,本节是已实施步骤的技术债。完整 follow-up 列表(含经验沉淀类的 4-6 条)见 [docs/FOLLOW-UP.md](./FOLLOW-UP.md)。

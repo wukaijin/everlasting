@@ -151,3 +151,63 @@ message_stop
 - `LLM_THINKING=off` kill switch
 - 折叠状态持久化
 - GLM 原生 OpenAI-compat 端点适配(待真机测试触发)
+
+---
+
+## 客户端陷阱 1:`Option<T>` 字段 Tauri 2 IPC null 行为
+
+**现象**:Rust 端 `model: Option<String>`,JS 端显式传 `null`:
+```ts
+invoke("create_session", { ..., model: null })
+```
+报错:`command create_session missing required key ` (key 名字段打印为空字符串)。Tauri 2 IPC 把 JS `null` 当 missing required 处理,**且错误打印的 key 名字段被吞掉**,所以看不到"missing model"这种明确信息。
+
+**根因**:Tauri 2 IPC 在处理 `Option<T>` 时,JS 端传 `null` 的语义是"显式 None",但当前版本把它解析为 missing required。配合上述"key 名字段打印为空"的 bug,排查非常隐蔽。
+
+**修法**:JS 端**省略**字段不传,让 Rust 端按 `Option::None` 走 default:
+```ts
+// 错误
+invoke("create_session", { projectId, initialCwd, model: null })
+// 正确
+invoke("create_session", { projectId, initialCwd })  // 省略 model
+// Rust 端兜底:
+let model = model.unwrap_or_else(|| state.config.model.clone());
+```
+
+**影响范围**:本项目所有 `Option<T>` 参数 + 任何未来 Rust 命令显式接 `Option<T>` 的字段。**避免在 JS 端用 `null` 显式置空 `Option` 字段**。
+
+**验证**:`pnpm tauri dev` 时 F12 console 看到 `missing required key` 立刻检查是否传了 `null` 给 `Option` 字段。
+
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/FOLLOW-UP.md FU-5](./FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
+
+---
+
+## 客户端陷阱 2:Anthropic tool_result 块只能在 user role
+
+**现象**:Anthropic Messages API 严格规定 `tool_result` 块只能出现在 user role message 里。assistant role message 含 `tool_result` 块 → 2013 错误:
+```
+请求无效: invalid params, tool result's tool id(call_xxx) not found (2013)
+```
+
+**根因链**(本项目实际撞过):
+1. UI 端需要 assistant message 1 上能查到"done / running"状态(对应 tool_result 跟没跟到)
+2. `rehydrateMessages` 把 user message 2(tool_result-only "ghost")的 `toolResults` push 到上一个 assistant message 1 上做 UI grouping
+3. 但**没清空** user message 2 自己的 `toolResults`
+4. `toPayloadContent` 之前对 assistant / user 走同一条代码路径,把 assistant message 1 上的 `toolResults` 也喂给 LLM
+5. 第二次发消息时 LLM 看到 assistant role message 含 tool_result 块,**违反协议** → 2013
+
+**修法**:`toPayloadContent` 按 role 分发:
+- assistant role: emit thinking / text / **tool_use** / redacted_thinking,**跳过 `m.toolResults`**(UI grouping 用,不上 wire)
+- user role: emit text / thinking / **tool_result** / redacted_thinking
+
+修完后 LLM 看到的 messages 顺序:`assistant(tool_use + text) → user(tool_result) → user(新消息)`,符合 Anthropic 协议。
+
+**影响范围**:任何把 tool_result 跨 role 边界做 UI 关联的框架(我们的 rehydrate 模式、或者别的 chat framework 的 tool use 状态管理)。
+
+**验证**:写 PR 时,在 `check.jsonl` 加"toPayloadContent / 对等函数按 role 分发 tool_result"作为硬约束。
+
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/FOLLOW-UP.md FU-6](./FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
+
+---
+
+## 关联文档
