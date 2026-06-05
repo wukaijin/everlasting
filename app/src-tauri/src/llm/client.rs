@@ -10,6 +10,16 @@
 //! Step 2 adds: BlockState state machine for tool_use content blocks,
 //! `content_block_start` / `content_block_delta` / `content_block_stop`
 //! handling, and `message_delta` for stop_reason extraction.
+//!
+//! Step 6 adds: extended-thinking support. `BlockState` tracks thinking
+//! and redacted_thinking blocks; the SSE parser handles `thinking_delta`
+//! and `signature_delta` events, emitting `ThinkingDelta` and
+//! `SignatureDelta` to the frontend. `redacted_thinking` content blocks
+//! emit a single `RedactedThinkingDelta` event when they close (their
+//! `data` payload is opaque and undisplayable). The `ChatRequest` always
+//! includes a `thinking: { type: "adaptive", display: "summarized",
+//! effort: <env> }` field so the model thinks before answering (see
+//! HACKING-llm.md "thinking 兼容层 note").
 
 use async_stream::stream;
 use futures_util::{Stream, StreamExt};
@@ -17,7 +27,13 @@ use std::time::Duration;
 
 use super::error::{classify_error_response, LlmError};
 use super::sse::SseParser;
-use super::types::{ChatEvent, ChatMessage, ChatRequest, ToolDef};
+use super::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, ToolDef};
+
+/// Default `max_tokens` for LLM requests. Bumped from 1024 → 16384 in
+/// step 6 because extended thinking tokens count against the same budget
+/// as the actual answer — 1024 was too low and would have caused
+/// `stop_reason: "max_tokens"` on most non-trivial turns.
+const DEFAULT_MAX_TOKENS: u32 = 16384;
 
 /// Configuration read once at startup. Held in Tauri `State` and cloned
 /// per chat invocation.
@@ -27,6 +43,9 @@ pub struct LlmConfig {
     pub model: String,
     pub api_key: String,
     pub max_tokens: u32,
+    /// `effort` value for adaptive thinking. `low` / `medium` / `high`
+    /// / `xhigh` / `max` (Anthropic schema). Defaults to `"high"`.
+    pub thinking_effort: String,
 }
 
 impl LlmConfig {
@@ -42,17 +61,32 @@ impl LlmConfig {
         let max_tokens = std::env::var("LLM_MAX_TOKENS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(1024);
+            .unwrap_or(DEFAULT_MAX_TOKENS);
+        let thinking_effort = std::env::var("LLM_THINKING_EFFORT")
+            .unwrap_or_else(|_| "high".to_string());
         Ok(Self {
             base_url,
             model,
             api_key,
             max_tokens,
+            thinking_effort,
         })
     }
 
     pub fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
+    }
+
+    /// Build the `thinking` field we always send with the request.
+    /// Adaptive mode (Opus 4.7 / 4.8) — `display: "summarized"` is
+    /// explicit so that `thinking_delta` SSE events actually flow
+    /// (otherwise the default `display: "omitted"` on those models would
+    /// drop the summary text).
+    fn thinking_config(&self) -> ThinkingConfig {
+        ThinkingConfig::Adaptive {
+            display: "summarized".to_string(),
+            effort: self.thinking_effort.clone(),
+        }
     }
 
     /// Sentinel for "ANTHROPIC_API_KEY wasn't set at startup". We construct
@@ -64,6 +98,7 @@ impl LlmConfig {
             model: String::new(),
             api_key: String::new(),
             max_tokens: 0,
+            thinking_effort: String::new(),
         }
     }
 
@@ -77,7 +112,8 @@ impl LlmConfig {
 // ---------------------------------------------------------------------------
 
 /// State machine for the current content block being received from the SSE
-/// stream. Used to know how to interpret `content_block_delta` events.
+/// stream. Used to know how to interpret `content_block_delta` events and
+/// to assemble the right payload on `content_block_stop`.
 #[derive(Debug)]
 enum BlockState {
     /// Not inside any content block.
@@ -89,6 +125,18 @@ enum BlockState {
         id: String,
         name: String,
         json_buf: String,
+    },
+    /// Inside a thinking block — accumulate thinking text and the opaque
+    /// signature blob (delivered via `signature_delta` just before stop).
+    Thinking {
+        thinking_buf: String,
+        signature_buf: String,
+    },
+    /// Inside a redacted_thinking block. The block carries only an opaque
+    /// `data` payload (no streaming deltas); we treat the buffer as the
+    /// fully-assembled payload once `content_block_stop` fires.
+    RedactedThinking {
+        data_buf: String,
     },
 }
 
@@ -108,20 +156,23 @@ pub fn chat_stream(
 /// Stream chat completions, optionally with tool definitions.
 ///
 /// Always emits `ChatEvent::Start` first on success, then a series of
-/// `Delta`s / `ToolCall`s, then `Done` at the end.
+/// `Delta`s / `ThinkingDelta`s / `SignatureDelta`s / `ToolCall`s, then
+/// `Done` at the end.
 pub fn chat_stream_with_tools(
     config: LlmConfig,
     messages: Vec<ChatMessage>,
     tools: Vec<ToolDef>,
 ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
     let url = config.endpoint();
+    let thinking = config.thinking_config();
     let req = ChatRequest {
-        model: config.model,
+        model: config.model.clone(),
         max_tokens: config.max_tokens,
         messages,
         system: None,
         stream: true,
         tools,
+        thinking: Some(thinking),
     };
 
     stream! {
@@ -213,6 +264,49 @@ pub fn chat_stream_with_tools(
                                             json_buf: String::new(),
                                         };
                                     }
+                                    Some("thinking") => {
+                                        // The initial signature is usually
+                                        // an empty string in the start
+                                        // event; it gets filled in by the
+                                        // `signature_delta` event just
+                                        // before stop. We don't need to
+                                        // seed the buf from `content_block.signature`
+                                        // — Anthropic guarantees the
+                                        // signature is fully delivered via
+                                        // the delta. (Defensive seed
+                                        // preserved in case the schema
+                                        // ever ships the whole thing up
+                                        // front.)
+                                        let initial_sig = cb
+                                            .get("signature")
+                                            .and_then(|s| s.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let initial_thinking = cb
+                                            .get("thinking")
+                                            .and_then(|s| s.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        tracing::debug!("▶ thinking block start");
+                                        block_state = BlockState::Thinking {
+                                            thinking_buf: initial_thinking,
+                                            signature_buf: initial_sig,
+                                        };
+                                    }
+                                    Some("redacted_thinking") => {
+                                        // The `data` field is the full
+                                        // opaque payload (no streaming
+                                        // deltas for this block type).
+                                        let data = cb
+                                            .get("data")
+                                            .and_then(|s| s.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        tracing::debug!("▶ redacted_thinking block start");
+                                        block_state = BlockState::RedactedThinking {
+                                            data_buf: data,
+                                        };
+                                    }
                                     Some("text") | _ => {
                                         block_state = BlockState::Text;
                                     }
@@ -242,6 +336,46 @@ pub fn chat_stream_with_tools(
                                                 &mut block_state
                                             {
                                                 json_buf.push_str(partial);
+                                            }
+                                        }
+                                    }
+                                    Some("thinking_delta") => {
+                                        if let Some(s) =
+                                            delta.get("thinking").and_then(|t| t.as_str())
+                                        {
+                                            if let BlockState::Thinking { thinking_buf, .. } =
+                                                &mut block_state
+                                            {
+                                                thinking_buf.push_str(s);
+                                            }
+                                            yield Ok(ChatEvent::ThinkingDelta {
+                                                text: s.to_string(),
+                                            });
+                                        }
+                                    }
+                                    Some("signature_delta") => {
+                                        // Buffer only — emit the
+                                        // assembled `SignatureDelta` once
+                                        // on `content_block_stop`. This
+                                        // protects the frontend's
+                                        // `currentThinkingBlock` invariant
+                                        // ("one signature per block")
+                                        // even if the server ever splits
+                                        // the signature across multiple
+                                        // events. (Today Anthropic sends
+                                        // exactly one `signature_delta`
+                                        // per thinking block — see
+                                        // research/anthropic-thinking-api.md
+                                        // §6 — but we don't want to depend
+                                        // on that.)
+                                        if let Some(s) = delta
+                                            .get("signature")
+                                            .and_then(|t| t.as_str())
+                                        {
+                                            if let BlockState::Thinking { signature_buf, .. } =
+                                                &mut block_state
+                                            {
+                                                signature_buf.push_str(s);
                                             }
                                         }
                                     }
@@ -284,6 +418,50 @@ pub fn chat_stream_with_tools(
                                     input,
                                 });
                             }
+                            BlockState::Thinking {
+                                signature_buf,
+                                ..
+                            } => {
+                                // Emit the fully-assembled signature as a
+                                // single `SignatureDelta` event — the
+                                // frontend's `currentThinkingBlock` and
+                                // the agent loop's `pending_thinking`
+                                // both rely on the invariant that there's
+                                // at most one `SignatureDelta` per
+                                // thinking block, otherwise the frontend
+                                // would open a fresh (corrupted) block on
+                                // each subsequent chunk and the agent
+                                // loop's `pending_thinking` would never
+                                // see the full signature in one event.
+                                //
+                                // `thinking_delta` events were already
+                                // streamed as they arrived; the frontend
+                                // appends them to the in-flight thinking
+                                // block's `text` directly.
+                                tracing::debug!(
+                                    signature_len = signature_buf.len(),
+                                    "▶ thinking block complete"
+                                );
+                                if !signature_buf.is_empty() {
+                                    yield Ok(ChatEvent::SignatureDelta {
+                                        signature: signature_buf,
+                                    });
+                                }
+                            }
+                            BlockState::RedactedThinking { data_buf } => {
+                                // Emit the full opaque payload as a single
+                                // event so the frontend (and persistence)
+                                // can record it. The data is not
+                                // displayable; the agent loop stores it
+                                // verbatim for round-trip back to the
+                                // LLM.
+                                tracing::debug!(data_len = data_buf.len(), "▶ redacted_thinking block complete");
+                                if !data_buf.is_empty() {
+                                    yield Ok(ChatEvent::RedactedThinkingDelta {
+                                        data: data_buf,
+                                    });
+                                }
+                            }
                             BlockState::Text | BlockState::Idle => {}
                         }
                     }
@@ -319,5 +497,47 @@ pub fn chat_stream_with_tools(
         }
 
         yield Ok(ChatEvent::Done { stop_reason });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — config defaults
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_max_tokens_is_16384_not_1024() {
+        // Extended thinking tokens count against max_tokens; 1024 was
+        // bumped to 16384 in step 6 to cover a typical thinking + reply
+        // turn without truncation.
+        assert_eq!(DEFAULT_MAX_TOKENS, 16384);
+    }
+
+    #[test]
+    fn thinking_config_is_adaptive_summarized_with_configured_effort() {
+        let config = LlmConfig {
+            base_url: "https://example.com".to_string(),
+            model: "claude-opus-4-7".to_string(),
+            api_key: "sk-test".to_string(),
+            max_tokens: 16384,
+            thinking_effort: "xhigh".to_string(),
+        };
+        let tc = config.thinking_config();
+        match tc {
+            ThinkingConfig::Adaptive { display, effort } => {
+                assert_eq!(display, "summarized");
+                assert_eq!(effort, "xhigh");
+            }
+        }
+    }
+
+    #[test]
+    fn unconfigured_has_empty_thinking_effort() {
+        let config = LlmConfig::unconfigured();
+        assert!(config.thinking_effort.is_empty());
+        assert!(config.is_unconfigured());
     }
 }

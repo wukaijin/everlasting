@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onMounted } from "vue";
-import { useChatStore, type ToolCallInfo, type ToolResultInfo } from "../stores/chat";
+import { useChatStore, type ToolCallInfo, type ToolResultInfo, type ThinkingBlockInfo } from "../stores/chat";
 import { useConfigStore } from "../stores/config";
 
 const store = useChatStore();
@@ -40,7 +40,16 @@ async function scrollToBottom() {
 watch(
   () =>
     store.messages
-      .map((m) => m.content + (m.toolCalls?.length ?? 0) + (m.toolResults?.length ?? 0))
+      .map(
+        (m) =>
+          m.content +
+          (m.toolCalls?.length ?? 0) +
+          (m.toolResults?.length ?? 0) +
+          // Track thinking stream length + redacted count so the chat
+          // auto-scrolls while a long thinking block streams in.
+          (m.thinkingBlocks?.reduce((n, b) => n + b.text.length, 0) ?? 0) +
+          (m.redactedThinkingData?.length ?? 0),
+      )
       .join("|"),
   () => scrollToBottom(),
 );
@@ -70,10 +79,23 @@ const hasMessages = computed(() => store.messages.length > 0);
  *  blocks for the LLM. After rehydration, the user tool_result message
  *  is empty (`text=""`) and has no tool_calls of its own — the actual
  *  tool card lives on the previous assistant message. Hiding them keeps
- *  the chat list clean. */
+ *  the chat list clean.
+ *
+ *  An assistant message with only thinking blocks (no text, no tool
+ *  calls, no error) is NOT a ghost — show it so the user can see the
+ *  thinking even if the model never produced a visible reply. */
 const visibleMessages = computed(() =>
   store.messages.filter(
-    (m) => m.content || m.toolCalls?.length || m.error,
+    (m) =>
+      m.content ||
+      m.toolCalls?.length ||
+      m.error ||
+      // Persisted redacted_thinking-only assistant messages (extremely
+      // rare but possible if a turn was pure redacted reasoning) should
+      // still be visible. Pure "thinking-only" messages are also useful
+      // to display when the model thought but didn't answer.
+      (m.thinkingBlocks && m.thinkingBlocks.length > 0) ||
+      (m.redactedThinkingData && m.redactedThinkingData.length > 0),
   ),
 );
 
@@ -88,6 +110,24 @@ function formatToolInput(tc: ToolCallInfo): string {
 function truncateOutput(s: string, max = 500): string {
   if (s.length <= max) return s;
   return s.slice(0, max) + `… (${s.length - max} more chars)`;
+}
+
+/** Concatenated thinking text for display. Multiple blocks (interleaved
+ *  thinking) are joined with a blank line so they read as separate
+ *  reasoning phases. */
+function thinkingDisplayText(blocks: ThinkingBlockInfo[] | undefined): string {
+  if (!blocks || blocks.length === 0) return "";
+  return blocks.map((b) => b.text).join("\n\n");
+}
+
+/** Rough token estimate for the thinking header. Claude counts tokens
+ *  closer to ~3.5 chars/token; we use length/4 as a conservative upper
+ *  bound so the label "Thought for N tokens" is at least an order of
+ *  magnitude right. */
+function estimateThinkingTokens(blocks: ThinkingBlockInfo[] | undefined): number {
+  if (!blocks || blocks.length === 0) return 0;
+  const totalChars = blocks.reduce((n, b) => n + b.text.length, 0);
+  return Math.max(1, Math.round(totalChars / 4));
 }
 
 async function onNewSession() {
@@ -152,6 +192,29 @@ async function onDeleteSession(id: string, e: MouseEvent) {
             :key="m.id"
             :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
           >
+            <details
+              v-if="m.role === 'assistant' && m.thinkingBlocks && m.thinkingBlocks.length"
+              class="msg__thinking"
+            >
+              <summary class="msg__thinking-summary">
+                <span class="msg__thinking-icon">💭</span>
+                <span>Thought for {{ estimateThinkingTokens(m.thinkingBlocks) }} tokens</span>
+                <span v-if="m.thinkingBlocks.length > 1" class="msg__thinking-count">
+                  · {{ m.thinkingBlocks.length }} blocks
+                </span>
+                <span v-if="m.streaming && !m.content" class="msg__thinking-streaming">streaming…</span>
+              </summary>
+              <pre class="msg__thinking-body">{{ thinkingDisplayText(m.thinkingBlocks) }}</pre>
+            </details>
+
+            <div
+              v-if="m.redactedThinkingData && m.redactedThinkingData.length"
+              class="msg__redacted"
+              :title="`${m.redactedThinkingData.length} redacted thinking block(s); preserved verbatim for the LLM but not displayable`"
+            >
+              🔒 {{ m.redactedThinkingData.length }} redacted thinking block{{ m.redactedThinkingData.length === 1 ? '' : 's' }} (preserved for LLM)
+            </div>
+
             <div
               v-if="m.toolCalls && m.toolCalls.length"
               class="msg__tools"
@@ -180,7 +243,7 @@ async function onDeleteSession(id: string, e: MouseEvent) {
             </div>
 
             <div
-              v-if="m.content || (!m.toolCalls?.length && !m.toolResults?.length)"
+              v-if="m.content || (!m.toolCalls?.length && !m.toolResults?.length && !m.thinkingBlocks?.length && !m.redactedThinkingData?.length)"
               class="msg__bubble"
             >
               <span class="msg__text">{{ m.content }}</span>
@@ -484,6 +547,87 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   padding: 0 14px;
   font-size: 12px;
   color: #b91c1c;
+}
+
+.msg__thinking {
+  margin-bottom: 6px;
+  max-width: 100%;
+}
+
+.msg__thinking-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.msg__thinking-summary::-webkit-details-marker {
+  display: none;
+}
+
+.msg__thinking-summary:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.msg__thinking[open] .msg__thinking-summary {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+
+.msg__thinking-icon {
+  font-size: 12px;
+}
+
+.msg__thinking-count {
+  color: #9ca3af;
+}
+
+.msg__thinking-streaming {
+  margin-left: 2px;
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.msg__thinking-body {
+  margin: 0;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #374151;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.msg__redacted {
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  background: #f3f4f6;
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
 }
 
 .msg__tools {

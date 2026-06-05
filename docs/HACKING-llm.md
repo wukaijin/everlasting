@@ -119,3 +119,35 @@ message_stop
 - [HACKING-wsl.md](./HACKING-wsl.md) — WSL 环境坑(配对文档)
 - [TECH §2 rig-core](./TECH.md#2-决策rig-core-作为-llm-抽象层) — 为什么 spike-002 决定手写 reqwest 不上 rig-core
 - [IMPLEMENTATION §2.1 步骤 1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp) — LLM 客户端实施位置
+
+---
+
+## 差异 4:extended thinking 兼容层(2026-06)
+
+**场景**:步骤 6 起 LLM 客户端总是发 `thinking: { type: "adaptive", display: "summarized", effort: <env> }`,并流式接收 `thinking_delta` / `signature_delta` / `redacted_thinking` 块。
+
+**结论**:
+
+- **GLM Claude-compat 端点对 thinking 字段的转译行为未官方文档化**——智谱 `docs.bigmodel.cn/cn/guide/develop/claude/*` 路径下完全没有 thinking / reasoning / extended-thinking 子页面。`reasoning_content` 是 GLM 原生 OpenAI-compat 端点 `/api/paas/v4/chat/completions` 上的字段,Anthropic 风格端点**理论上**会做转译,但**没人验证过**。
+- **真机测试路径**:发一条 `thinking: { type: "enabled", budget_tokens: 2048 }` 到 GLM Claude-compat,观察三种结局:
+  1. (a) 响应里有 `type: "thinking"` block + `signature` → 完美,继续走 Anthropic schema
+  2. (b) 静默忽略 `thinking` 字段,响应里没 thinking 块 → 项目照常工作(只是 UI 上看不到 thinking);client 端要防御性处理"没收到 thinking_delta 不算错"
+  3. (c) 4xx/5xx 拒绝 → 改用 GLM 原生 OpenAI-compat 端点 + 读 `reasoning_content`
+- **fallback 路径**:如果 Claude-compat 端点不通,改 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/paas/v4`,然后在 `llm/client.rs` 加一个 `reasoning_content` delta 的分支(类似 thinking_delta,只是不存 signature)。**这一步当前未实施,留作真机测试出问题时的备选方案**。
+- **redacted_thinking 大概率不支持**——GLM 没动机在转译层做安全过滤,只有原 Anthropic 会触发这个 block type。client 端照样发 `redacted_thinking_delta` 事件(空数据流),UI 端接到空数据就当没收到,不影响 LLM 协议(LLM 不发 redacted,自然就没 redacted)。
+
+**客户端对策**(已实施于步骤 6):
+- `LlmConfig::from_env` 读 `LLM_THINKING_EFFORT`,默认 `"high"`,可覆盖为 `low` / `medium` / `high` / `xhigh` / `max`
+- `max_tokens` 默认 16384(原 1024 撞上限),`LLM_MAX_TOKENS` env 可覆盖
+- `ChatRequest` 总是带 `thinking: { type: "adaptive", display: "summarized", effort: <env> }`(无 per-session 开关,见 PRD D1)
+- `display: "summarized"` 显式设,保证 `thinking_delta` SSE 流到 UI(Opus 4.7+ 默认 `omitted` 会吞掉摘要文字)
+- SSE parser 处理 `content_block_start` block type = `"thinking"` / `"redacted_thinking"`,`content_block_delta` delta type = `"thinking_delta"` / `"signature_delta"`,`content_block_stop` 关闭 thinking 时已经 delta 流式发完 + signature 累积
+- `signature` 必须原样回传,agent loop 在 turn 边界把 thinking text + signature 装进 `ContentBlock::Thinking` 写 DB,下次 LLM 调用通过 `toPayloadContent` 带回
+- `redacted_thinking.data` 同理,opaque 不解析,verbatim 回传
+- 折叠状态 in-memory,刷新重置(见 PRD D2)
+
+**out of scope**(MVP):
+- per-session thinking toggle
+- `LLM_THINKING=off` kill switch
+- 折叠状态持久化
+- GLM 原生 OpenAI-compat 端点适配(待真机测试触发)

@@ -25,7 +25,17 @@ export interface ToolResultInfo {
   isError: boolean;
 }
 
-/** Chat message with optional tool call/result metadata. */
+/** One thinking content block. The model can produce multiple blocks per
+ *  turn (interleaved thinking with tool calls); each must be preserved
+ *  in order and round-tripped back to the LLM verbatim, otherwise the
+ *  next turn 400s. `text` is the streamed summary (or empty under
+ *  `display: "omitted"`); `signature` is the opaque, encrypted blob. */
+export interface ThinkingBlockInfo {
+  text: string;
+  signature: string;
+}
+
+/** Chat message with optional tool call/result/thinking metadata. */
 export interface ChatMessage {
   id: string;
   role: Role;
@@ -34,6 +44,12 @@ export interface ChatMessage {
   error?: { message: string; category: ErrorCategory };
   toolCalls?: ToolCallInfo[];
   toolResults?: ToolResultInfo[];
+  /** All thinking blocks emitted by the model for this message, in
+   *  streaming order. Empty/missing for messages without thinking. */
+  thinkingBlocks?: ThinkingBlockInfo[];
+  /** Each entry is the opaque `data` payload of a `redacted_thinking`
+   *  block — preserved verbatim for round-trip, never displayed. */
+  redactedThinkingData?: string[];
 }
 
 /** Session summary shown in the sidebar. */
@@ -59,8 +75,14 @@ interface LoadedMessage {
 
 /** One content block as serialized by Rust (snake_case tag + fields). */
 interface ContentBlockFromDb {
-  type: "text" | "tool_use" | "tool_result";
+  type: "text" | "thinking" | "redacted_thinking" | "tool_use" | "tool_result";
   text?: string;
+  /** thinking block: summary text */
+  thinking?: string;
+  /** thinking block: opaque signature */
+  signature?: string;
+  /** redacted_thinking block: opaque data */
+  data?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -83,9 +105,12 @@ interface LoadedSession {
 /** Wire-format content sent to the Rust `chat` command. Mirrors
  *  Rust's `MessageContent`: a plain string for text-only messages,
  *  or an array of `ContentBlock` (snake_case tag + fields) when
- *  the message carries tool_use / tool_result blocks. */
+ *  the message carries tool_use / tool_result / thinking /
+ *  redacted_thinking blocks. */
 type ContentBlockPayload =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
   | {
       type: "tool_use";
       id: string;
@@ -107,8 +132,17 @@ interface ChatMessagePayload {
 /** High-frequency event (chat-event channel). */
 interface ChatEventPayload {
   request_id: string;
-  kind: "start" | "delta" | "done" | "error";
+  kind:
+    | "start"
+    | "delta"
+    | "thinking_delta"
+    | "signature_delta"
+    | "redacted_thinking_delta"
+    | "done"
+    | "error";
   text?: string;
+  signature?: string;
+  data?: string;
   stop_reason?: string;
   message?: string;
   category?: ErrorCategory;
@@ -136,6 +170,14 @@ let unlistenTR: UnlistenFn | null = null;
 
 const genId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+/** Concatenate the streamed summary text of all thinking blocks for
+ *  display in the UI's thinking section. Newlines separate blocks so
+ *  multiple blocks (interleaved thinking) read coherently. */
+export function thinkingBlocksToText(blocks: ThinkingBlockInfo[] | undefined): string {
+  if (!blocks || blocks.length === 0) return "";
+  return blocks.map((b) => b.text).join("\n\n");
+}
 
 export const useChatStore = defineStore("chat", () => {
   // -----------------------------------------------------------------------
@@ -175,6 +217,26 @@ export const useChatStore = defineStore("chat", () => {
   // Event handlers
   // -----------------------------------------------------------------------
 
+  /** Get-or-create the in-flight thinking block (the one currently being
+   *  streamed for this assistant message). There is at most one open
+   *  block at a time; signature_delta on a new event after a text /
+   *  tool_use boundary starts a fresh one. */
+  function currentThinkingBlock(
+    m: ChatMessage,
+  ): ThinkingBlockInfo {
+    if (!m.thinkingBlocks || m.thinkingBlocks.length === 0) {
+      m.thinkingBlocks = [{ text: "", signature: "" }];
+    } else {
+      const last = m.thinkingBlocks[m.thinkingBlocks.length - 1];
+      // If the last block already has a signature, the model has moved
+      // on to a new thinking block (interleaved thinking). Open one.
+      if (last.signature) {
+        m.thinkingBlocks.push({ text: "", signature: "" });
+      }
+    }
+    return m.thinkingBlocks[m.thinkingBlocks.length - 1];
+  }
+
   function handleChatEvent(event: ChatEventPayload) {
     if (event.request_id !== currentRequestId.value) return;
     const last = messages.value[messages.value.length - 1];
@@ -187,6 +249,24 @@ export const useChatStore = defineStore("chat", () => {
         break;
       case "delta":
         if (event.text) last.content += event.text;
+        break;
+      case "thinking_delta":
+        if (event.text) {
+          const blk = currentThinkingBlock(last);
+          blk.text += event.text;
+        }
+        break;
+      case "signature_delta":
+        if (event.signature) {
+          const blk = currentThinkingBlock(last);
+          blk.signature += event.signature;
+        }
+        break;
+      case "redacted_thinking_delta":
+        if (event.data) {
+          if (!last.redactedThinkingData) last.redactedThinkingData = [];
+          last.redactedThinkingData.push(event.data);
+        }
         break;
       case "done":
         last.streaming = false;
@@ -243,13 +323,14 @@ export const useChatStore = defineStore("chat", () => {
 
   /** Convert DB-loaded messages into frontend ChatMessage objects.
    *
-   *  Two passes:
-   *  1. Parse each row's `content` blocks into `toolCalls` / `toolResults`.
-   *  2. DB stores `tool_use` (in assistant) and the matching `tool_result`
-   *     (in the next user message — Anthropic API requirement) as separate
-   *     rows, but the in-memory model expects both on the same assistant
-   *     message so the UI's "done / running" status lookup works. Merge
-   *     the user message's tool_results into the previous assistant message. */
+   *  Pass 1: parse each row's `content` blocks into `toolCalls` /
+   *          `toolResults` / `thinkingBlocks` / `redactedThinkingData`.
+   *  Pass 2: DB stores `tool_use` (in assistant) and the matching
+   *          `tool_result` (in the next user message — Anthropic API
+   *          requirement) as separate rows, but the in-memory model
+   *          expects both on the same assistant message so the UI's
+   *          "done / running" status lookup works. Merge the user
+   *          message's tool_results into the previous assistant message. */
   function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     const messages: ChatMessage[] = loaded.map((m) => {
       const blocks: ContentBlockFromDb[] = Array.isArray(m.content)
@@ -257,9 +338,19 @@ export const useChatStore = defineStore("chat", () => {
         : [];
       const toolCalls: ToolCallInfo[] = [];
       const toolResults: ToolResultInfo[] = [];
+      const thinkingBlocks: ThinkingBlockInfo[] = [];
+      const redactedThinkingData: string[] = [];
       for (const b of blocks) {
-        if (
-          b?.type === "tool_use" &&
+        if (!b || typeof b.type !== "string") continue;
+        if (b.type === "thinking") {
+          thinkingBlocks.push({
+            text: b.thinking ?? "",
+            signature: b.signature ?? "",
+          });
+        } else if (b.type === "redacted_thinking") {
+          if (typeof b.data === "string") redactedThinkingData.push(b.data);
+        } else if (
+          b.type === "tool_use" &&
           typeof b.id === "string" &&
           typeof b.name === "string"
         ) {
@@ -268,7 +359,7 @@ export const useChatStore = defineStore("chat", () => {
             name: b.name,
             input: b.input ?? {},
           });
-        } else if (b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+        } else if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
           toolResults.push({
             toolUseId: b.tool_use_id,
             content: b.content ?? "",
@@ -283,6 +374,8 @@ export const useChatStore = defineStore("chat", () => {
       };
       if (toolCalls.length) msg.toolCalls = toolCalls;
       if (toolResults.length) msg.toolResults = toolResults;
+      if (thinkingBlocks.length) msg.thinkingBlocks = thinkingBlocks;
+      if (redactedThinkingData.length) msg.redactedThinkingData = redactedThinkingData;
       return msg;
     });
 
@@ -346,14 +439,31 @@ export const useChatStore = defineStore("chat", () => {
   // -----------------------------------------------------------------------
 
   /** Build the wire-format content for a history message: plain string
-   *  for text-only turns, or an array of blocks when the turn carries
-   *  tool_use / tool_result data. Backend's `MessageContent` deserializer
-   *  accepts both shapes. */
+   *  for text-only / thinking-only messages, or an array of blocks when
+   *  the turn carries tool_use / tool_result data. Backend's
+   *  `MessageContent` deserializer accepts both shapes.
+   *
+   *  CRITICAL: thinking blocks (incl. signatures) and redacted_thinking
+   *  data are emitted verbatim in their original streaming order. The
+   *  Anthropic API requires the exact signature blob on the next turn —
+   *  omitting or rewriting it produces 400. */
   function toPayloadContent(m: ChatMessage): string | ContentBlockPayload[] {
-    if (!m.toolCalls?.length && !m.toolResults?.length) {
+    const hasTools = !!m.toolCalls?.length || !!m.toolResults?.length;
+    const hasThinking =
+      !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
+    if (!hasTools && !hasThinking) {
       return m.content;
     }
     const blocks: ContentBlockPayload[] = [];
+    // Thinking blocks come first (Anthropic convention: reasoning before
+    // any visible text in the same turn).
+    for (const tb of m.thinkingBlocks ?? []) {
+      blocks.push({
+        type: "thinking",
+        thinking: tb.text,
+        signature: tb.signature,
+      });
+    }
     if (m.content) {
       blocks.push({ type: "text", text: m.content });
     }
@@ -372,6 +482,9 @@ export const useChatStore = defineStore("chat", () => {
         content: tr.content,
         is_error: tr.isError,
       });
+    }
+    for (const data of m.redactedThinkingData ?? []) {
+      blocks.push({ type: "redacted_thinking", data });
     }
     return blocks;
   }
@@ -398,8 +511,12 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value.push(userMsg, assistantMsg);
 
-    // Build history — keep tool_use/tool_result blocks intact so the LLM
-    // has full context across turns and across session switches.
+    // Build history — keep tool_use / tool_result / thinking /
+    // redacted_thinking blocks intact so the LLM has full context
+    // across turns and across session switches. The agent loop also
+    // constructs a matching assistant message from the streaming
+    // events and persists it before the next LLM call, so the
+    // history we send here will line up with what's in the DB.
     const history: ChatMessagePayload[] = messages.value
       .filter((m) => m.id !== assistantMsg.id)
       .map((m) => ({ role: m.role, content: toPayloadContent(m) }));

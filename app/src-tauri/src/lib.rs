@@ -3,6 +3,14 @@
 //! Step 3a adds SQLite persistence: every assistant/tool_result turn is
 //! written to disk at the turn boundary, sessions are listed/created/
 //! loaded/deleted via dedicated commands.
+//!
+//! Step 6 adds extended-thinking support: the agent loop forwards
+//! `ThinkingDelta` / `SignatureDelta` / `RedactedThinkingDelta` events to
+//! the frontend `chat-event` channel (so the UI can stream the thinking
+//! summary), and assembles `ContentBlock::Thinking` /
+//! `ContentBlock::RedactedThinking` blocks at the turn boundary so the
+//! signature blobs are persisted to the DB and echoed back to the LLM on
+//! the next turn.
 
 mod db;
 mod llm;
@@ -49,6 +57,7 @@ impl AppState {
             base_url = %config.base_url,
             model = %config.model,
             tools_count = tools.len(),
+            thinking_effort = %config.thinking_effort,
             "LLM config loaded"
         );
 
@@ -74,7 +83,9 @@ impl AppState {
 // Event payloads
 // ---------------------------------------------------------------------------
 
-/// Event payload for the high-frequency `chat-event` channel (start/delta/done/error).
+/// Event payload for the high-frequency `chat-event` channel
+/// (start / delta / thinking_delta / signature_delta /
+/// redacted_thinking_delta / done / error).
 #[derive(Serialize, Clone)]
 struct ChatEventPayload {
     request_id: String,
@@ -171,6 +182,29 @@ async fn delete_session(
 // Tauri command — chat (agent loop)
 // ---------------------------------------------------------------------------
 
+/// Per-turn accumulator for a single in-flight thinking block. We finalize
+/// into a `ContentBlock::Thinking` (or push into `finalized_thinking`) as
+/// soon as the model moves on to a text / tool_use block, and we always
+/// flush whatever's still pending at the end of the turn.
+#[derive(Default)]
+struct PendingThinking {
+    text: String,
+    signature: String,
+}
+
+fn flush_pending_thinking(
+    pending: &mut Option<PendingThinking>,
+    finalized: &mut Vec<(String, String)>,
+) {
+    if let Some(p) = pending.take() {
+        // We persist even if text is empty — what matters is that the
+        // signature is preserved verbatim, so the LLM can validate the
+        // round-trip. A thinking block whose text was streamed as empty
+        // (e.g. `display: "omitted"`) is still a valid block.
+        finalized.push((p.text, p.signature));
+    }
+}
+
 #[tauri::command]
 async fn chat(
     request_id: String,
@@ -255,9 +289,16 @@ async fn chat(
                 tool_defs.clone(),
             ));
 
-            // Accumulate text and tool_calls from this LLM turn.
+            // Accumulate text, tool_calls, thinking blocks, and
+            // redacted_thinking payloads from this LLM turn.
             let mut text_parts: Vec<String> = Vec::new();
             let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+            // Each finalized thinking block is `(thinking_text, signature)`.
+            // Order matches the order the model emitted them — required by
+            // the Anthropic API (see HACKING-llm.md "thinking note").
+            let mut finalized_thinking: Vec<(String, String)> = Vec::new();
+            let mut redacted_thinking_data: Vec<String> = Vec::new();
+            let mut pending_thinking: Option<PendingThinking> = None;
             let mut stop_reason: Option<String> = None;
             let mut had_error = false;
 
@@ -280,10 +321,46 @@ async fn chat(
                         }
                     }
                     ChatEvent::Delta { text } => {
+                        // A text delta means the model is done with
+                        // thinking blocks for now. Finalize any pending
+                        // thinking so it gets persisted in the right
+                        // position relative to the text.
+                        flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
                         text_parts.push(text.clone());
                         emit_chat_event(&app_handle, &rid, &event);
                     }
+                    ChatEvent::ThinkingDelta { text } => {
+                        // Append to the currently-open thinking block, or
+                        // open a new one if the model started fresh.
+                        let p = pending_thinking
+                            .get_or_insert_with(PendingThinking::default);
+                        p.text.push_str(text);
+                        emit_chat_event(&app_handle, &rid, &event);
+                    }
+                    ChatEvent::SignatureDelta { signature } => {
+                        // The SSE parser buffers signature fragments and
+                        // emits a single `SignatureDelta` on
+                        // `content_block_stop` for the thinking block, so
+                        // `signature` here is the full assembled blob.
+                        // We still don't finalize on this event because
+                        // the model can emit more thinking blocks
+                        // (interleaved thinking with tool_use), so we
+                        // wait for the first non-thinking event (Delta /
+                        // ToolCall) or the end of the turn to commit.
+                        let p = pending_thinking
+                            .get_or_insert_with(PendingThinking::default);
+                        p.signature.push_str(signature);
+                        emit_chat_event(&app_handle, &rid, &event);
+                    }
+                    ChatEvent::RedactedThinkingDelta { data } => {
+                        redacted_thinking_data.push(data.clone());
+                        emit_chat_event(&app_handle, &rid, &event);
+                    }
                     ChatEvent::ToolCall { id, name, input } => {
+                        // A tool_use block means the model is past its
+                        // thinking phase for this turn. Finalize pending
+                        // thinking so the order is correct.
+                        flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
                         tool_calls.push((id.clone(), name.clone(), input.clone()));
                         let _ = app_handle.emit(
                             "tool:call",
@@ -316,8 +393,24 @@ async fn chat(
                 return;
             }
 
-            // Build assistant message with collected content blocks.
+            // Make sure any still-open thinking block (signature received
+            // but no subsequent text/tool_use to flush it) is captured.
+            flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+
+            // Build assistant message with collected content blocks. The
+            // ordering follows the Anthropic "thinking → text → tool_use"
+            // convention per turn, with thinking blocks first, then the
+            // visible text, then tool_use, then any redacted_thinking
+            // blocks (they can appear at the end or interleaved; we keep
+            // them grouped at the tail to match the streaming order we
+            // saw when they arrived).
             let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+            for (thinking, signature) in &finalized_thinking {
+                assistant_blocks.push(ContentBlock::Thinking {
+                    thinking: thinking.clone(),
+                    signature: signature.clone(),
+                });
+            }
             let full_text = text_parts.join("");
             if !full_text.is_empty() {
                 assistant_blocks.push(ContentBlock::Text { text: full_text });
@@ -327,6 +420,11 @@ async fn chat(
                     id: id.clone(),
                     name: name.clone(),
                     input: input.clone(),
+                });
+            }
+            for data in &redacted_thinking_data {
+                assistant_blocks.push(ContentBlock::RedactedThinking {
+                    data: data.clone(),
                 });
             }
 
