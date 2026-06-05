@@ -189,7 +189,7 @@ export const useProjectsStore = defineStore("projects", () => {
     try {
       await invoke<ProjectInfo>("update_project_name", {
         id,
-        new_name: trimmed,
+        newName: trimmed,
       });
       await loadProjects();
     } catch (e) {

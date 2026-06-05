@@ -451,7 +451,7 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     sessions.value = await invoke<SessionSummary[]>("list_sessions", {
-      project_id: projectId,
+      projectId: projectId,
     });
   }
 
@@ -556,9 +556,8 @@ export const useChatStore = defineStore("chat", () => {
       project_id: string;
       current_cwd: string;
     }>("create_session", {
-      project_id: projectId,
-      initial_cwd: initialCwd,
-      model: null,
+      projectId: projectId,
+      initialCwd: initialCwd,
     });
     currentSessionId.value = session.id;
     currentCwd.value = session.current_cwd ?? "";
@@ -611,15 +610,62 @@ export const useChatStore = defineStore("chat", () => {
    *  Anthropic API requires the exact signature blob on the next turn —
    *  omitting or rewriting it produces 400. */
   function toPayloadContent(m: ChatMessage): string | ContentBlockPayload[] {
-    const hasTools = !!m.toolCalls?.length || !!m.toolResults?.length;
+    // CRITICAL: tool_result blocks belong ONLY on user-role messages
+    // (Anthropic Messages API contract). `rehydrateMessages` attaches
+    // the following user message's tool_results onto the assistant
+    // message *for UI grouping* (per-message "done / running" lookup);
+    // here we MUST NOT echo them onto the wire when role=assistant or
+    // Anthropic returns 2013 ("tool result's tool id ... not found")
+    // because the assistant message itself isn't allowed to contain
+    // tool_result blocks. Same for `content` text emitted onto a
+    // ghost user message: only the assistant's text counts.
+    if (m.role === "assistant") {
+      const hasTools = !!m.toolCalls?.length;
+      const hasThinking =
+        !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
+      if (!hasTools && !hasThinking) {
+        return m.content;
+      }
+      const blocks: ContentBlockPayload[] = [];
+      // Thinking blocks come first (Anthropic convention: reasoning before
+      // any visible text in the same turn).
+      for (const tb of m.thinkingBlocks ?? []) {
+        blocks.push({
+          type: "thinking",
+          thinking: tb.text,
+          signature: tb.signature,
+        });
+      }
+      if (m.content) {
+        blocks.push({ type: "text", text: m.content });
+      }
+      for (const tc of m.toolCalls ?? []) {
+        blocks.push({
+          type: "tool_use",
+          id: tc.id,
+          name: tc.name,
+          input: tc.input,
+        });
+      }
+      for (const data of m.redactedThinkingData ?? []) {
+        blocks.push({ type: "redacted_thinking", data });
+      }
+      // Intentionally omit `m.toolResults` — they're for the UI, not
+      // the wire. The matching user-role message in `messages.value`
+      // carries the canonical tool_result blocks.
+      return blocks;
+    }
+
+    // user role: emit tool_result blocks + any text/thinking/redacted.
+    // The rehydrated user message (formerly tool_result-only "ghost")
+    // and the live user-typed message both pass through here.
+    const hasTools = !!m.toolResults?.length;
     const hasThinking =
       !!m.thinkingBlocks?.length || !!m.redactedThinkingData?.length;
     if (!hasTools && !hasThinking) {
       return m.content;
     }
     const blocks: ContentBlockPayload[] = [];
-    // Thinking blocks come first (Anthropic convention: reasoning before
-    // any visible text in the same turn).
     for (const tb of m.thinkingBlocks ?? []) {
       blocks.push({
         type: "thinking",
@@ -629,14 +675,6 @@ export const useChatStore = defineStore("chat", () => {
     }
     if (m.content) {
       blocks.push({ type: "text", text: m.content });
-    }
-    for (const tc of m.toolCalls ?? []) {
-      blocks.push({
-        type: "tool_use",
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-      });
     }
     for (const tr of m.toolResults ?? []) {
       blocks.push({
