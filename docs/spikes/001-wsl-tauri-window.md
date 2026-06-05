@@ -213,5 +213,5 @@ ps aux | grep -iE 'webkit|webview|tauri' | grep -v grep
 
 - [DESIGN §4 WSL 优先](./../DESIGN.md#4-决策wsl-优先windows-次要)
 - [IMPLEMENTATION §2.5 步骤 5 WSL 体验](./../IMPLEMENTATION.md#25-步骤-5--wsl-体验-mvp)
-- [REVIEW-deepseek-v4-pro §4.1 WSLg 兼容性](./../REVIEW-deepseek-v4-pro.md)
-- [REVIEW-glm-5.1 §2.1 WSL 验证是最大定时炸弹](./../REVIEW-glm-5.1.md#21--wsl-验证是最大的定时炸弹)
+- [REVIEW-deepseek-v4-pro §4.1 WSLg 兼容性](./../_reviews/REVIEW-deepseek-v4-pro.md)
+- [REVIEW-glm-5.1 §2.1 WSL 验证是最大定时炸弹](./../_reviews/REVIEW-glm-5.1.md#21--wsl-验证是最大的定时炸弹)

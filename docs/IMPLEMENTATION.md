@@ -83,7 +83,7 @@
 - `lib.rs` `chat` 命令构造 `ToolContext`,turn 结束一次性写 `sessions.current_cwd`
 - 4 个现有 commands 改造(`create_session` / `list_sessions` / `load_session` / `delete_session`) + 7 个新 commands(`list_projects` / `create_project` / 等)
 - `ARCHITECTURE §3` worktree 路径术语 `project_hash` → `project_uuid`
-- 设计稿:`docs/PROPOSAL-project-binding-and-top-tabs.md` + spec `.trellis/spec/backend/project-cwd-boundary.md`
+- 设计稿:`docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md` + spec `.trellis/spec/backend/project-cwd-boundary.md`
 
 **PR2(前端,3b-1 之二,待 PR1 落地后启动)**:
 - `stores/projects.ts` 新增
@@ -132,7 +132,7 @@
 - **可交付物**:能给别人看的最小可用版本
 
 > ⚠️ **Agent Daemon 化的占位**:16 关卡(见 [ARCHITECTURE §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))中有 ⑮ Channel 输出(daemon → client)这一关,需要 agent core 拆出独立进程才能落地。**触发条件**:
-> - **若** BACKLOG §6 飞书 channel 决定实施 → 在步骤 5 之后插入"步骤 5.5 — Agent Daemon 化",再做步骤 6
+> - **若** BACKLOG 远期（v3+）段飞书 channel 决定实施 → 在步骤 5 之后插入"步骤 5.5 — Agent Daemon 化",再做步骤 6
 > - **若** 飞书不做 → 推迟到 v2 之后,daemon 化不阻塞当前 7 步
 > - **判断窗口**:在步骤 5 完成后、步骤 6 开始前问自己"长跑任务被打断是不是真痛?",痛就拆,不痛就跳
 > - 详见 [ARCHITECTURE.md §4 决策:Agent Daemon 化](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
@@ -183,9 +183,9 @@
 - [ ] Frontend 状态管理边界(Pinia store 怎么分)
 
 **候选功能(来自 [BACKLOG.md](./BACKLOG.md))的待评估**:
-- [ ] 是否要做 Skill / Memory / Role(技术选型已就绪,详见 BACKLOG §2-4)
-- [ ] 是否做生成式 UI(详见 BACKLOG §5)
-- [ ] 是否做飞书 channel(会触发架构变更,详见 BACKLOG §6)
+- [ ] 是否要做 Skill / Memory / Role(技术选型已就绪,详见 BACKLOG §2 + 远期（v3+）段)
+- [ ] 是否做生成式 UI(详见 BACKLOG 远期（v3+）段)
+- [ ] 是否做飞书 channel(会触发架构变更,详见 BACKLOG 远期（v3+）段)
 
 ---
 
@@ -239,7 +239,7 @@
 - **决策**:Agent Daemon 化(agent core 从 Tauri 进程拆出为独立 daemon)
   - **原因**:为多 channel 接入铺路(飞书不能依赖 GUI);GUI 重启不打断长跑任务;长跑任务稳定性。详见 [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
 - **决策**:生成式 UI 走约束式(LLM 输出 JSON,前端按 type 渲染),默认关闭
-  - **原因**:自由式(LLM 生成 HTML)沙箱难做、调试难;约束式够覆盖 80% 用例。详见 [BACKLOG.md §5](./BACKLOG.md#5-生成式-ui-开关)
+  - **原因**:自由式(LLM 生成 HTML)沙箱难做、调试难;约束式够覆盖 80% 用例。详见 [BACKLOG.md 远期（v3+）段](./BACKLOG.md#远期v3暂不评估)
 - **决策**:Channel Adapter 抽象(`Channel` trait,3 个实现:TauriGui / Feishu / Cli)
   - **原因**:多入口统一接口;新增 channel 不用改 agent core;测试友好。详见 [ARCHITECTURE.md §5](./ARCHITECTURE.md#5-决策channel-adapter-抽象为多入口铺路)
 - **决策**:候选功能方向锁定(7 个),但暂不排优先级
@@ -257,8 +257,14 @@
 - **前期动作**(本决策已落地):
   - ARCHITECTURE §3 改 worktree 路径
   - ARCHITECTURE §5 Channel trait 注明 network-ready 约束
-  - BACKLOG §9 列 v2 跨设备候选
+  - BACKLOG §4 列 v2 跨设备候选
 - **后期展开**(v2 再说):
   - 多设备接续、配置/状态/session 列表同步、显式"工作树迁移"流程
   - 接续前置条件:必须 push 过 + 目标机器不能在跑 LLM
-  - 详见 [BACKLOG §9 跨设备(候选)](./BACKLOG.md#9-跨设备v2-候选)
+  - 详见 [BACKLOG §4 跨设备（v2 候选）](./BACKLOG.md#4-跨设备v2-候选)
+
+### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
+
+- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-1`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-2`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-3`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。

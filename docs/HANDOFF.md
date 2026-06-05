@@ -60,7 +60,7 @@
 | 7 | [spike-001](./spikes/001-wsl-tauri-window.md) | 想了解"WSL+Tauri 怎么验证"的全过程 |
 | 8 | [spike-002](./spikes/002-reqwest-anthropic-sse.md) | 想了解"LLM 客户端 4 模式怎么测"的全过程 |
 | 9 | [BACKLOG.md](./BACKLOG.md) | 评估新功能时 |
-| 10 | [REVIEW-glm-5.1.md](./REVIEW-glm-5.1.md) + [REVIEW-deepseek-v4-pro.md](./REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
+| 10 | [_reviews/REVIEW-glm-5.1.md](./_reviews/REVIEW-glm-5.1.md) + [_reviews/REVIEW-deepseek-v4-pro.md](./_reviews/REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
 
 **目录**:
 ```
@@ -75,8 +75,9 @@ docs/
 ├── HACKING-wsl.md            # 10 个 WSL 环境坑 + fcitx5 输入法
 ├── HACKING-llm.md            # LLM 兼容层差异
 ├── HANDOFF.md                # 本文件
-├── REVIEW-glm-5.1.md         # 外部评审 #1
-├── REVIEW-deepseek-v4-pro.md # 外部评审 #2
+├── _reviews/
+│   ├── REVIEW-glm-5.1.md         # 外部评审 #1
+│   └── REVIEW-deepseek-v4-pro.md # 外部评审 #2
 └── spikes/
     ├── 001-wsl-tauri-window.md
     └── 002-reqwest-anthropic-sse.md
@@ -97,9 +98,7 @@ docs/
 
 ### 4.2 选下一步
 
-决定下一步前回答两个问题:
-- **主线在哪?** → 当前主线是 MVP 步骤 1-7(原 8 步合并为 7),跳过的步骤(如当前的 3b)可选回补也可选继续后面
-- **路线图外有没有想做的?** → 比如 extended thinking 就是路线图外加的;只要价值高、不阻断后续步骤,可以插
+> **详细待办清单见 [IMPLEMENTATION.md §3 待办与下一步](../IMPLEMENTATION.md#3-待办与下一步)**——本节不重复维护。
 
 ### 4.3 起手前确认环境
 
@@ -145,18 +144,9 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 
 ---
 
-## 6. 关键决策摘要(8 条)
+## 6. 关键决策摘要
 
-1. **WSL 优先** — Tauri 跑在 WSL 内,WSLg 显示到 Windows 桌面,**无 wslapi 调用**
-2. **自研 agent core** — 不用 SDK 包装(学习价值 + 控制粒度)
-3. **每个 session 一个 git worktree** — `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`
-4. **Agent Daemon 化**(v1 之后) — 拆出独立进程
-5. **MCP 只外暴露,内部通信不绕** — agent 调自己的工具直接调 Rust 函数
-6. **SQLite 是唯一存储** — sqlx + SQLite,FTS5
-7. **前端栈 Vue 3 + Vite + Pinia + reka-ui**(本 session 才定的)
-8. **方案 C:VPS 自托管 daemon(v2)** — 前期只留接口
-
-完整决策日志:[IMPLEMENTATION §4](./IMPLEMENTATION.md#4-决策日志)。
+> **完整决策日志见 [IMPLEMENTATION.md §4 决策日志](../IMPLEMENTATION.md#4-决策日志)**——本节不重复维护。最新关键决策会先出现在那里。
 
 ---
 

@@ -9,7 +9,7 @@ metadata:
 
 # Project CWD Boundary Spec
 
-> 来源:[PROPOSAL §4.4 / Q6 / 评审消化 §11](../../../../docs/PROPOSAL-project-binding-and-top-tabs.md#44-chat-command--toolcontext-改造评审一致提)
+> 来源:[PROPOSAL §4.4 / Q6 / 评审消化 §11](../../../../docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md#44-chat-command--toolcontext-改造评审一致提)
 > 实现位置:`src-tauri/src/projects/boundary.rs`
 > 调用方:`tools::execute_tool` 内 `shell` / `read_file` / `write_file`;`lib.rs::chat` 命令构造 `ToolContext`
 

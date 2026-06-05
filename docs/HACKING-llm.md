@@ -154,7 +154,9 @@ message_stop
 
 ---
 
-## 客户端陷阱 1:`Option<T>` 字段 Tauri 2 IPC null 行为
+## 客户端陷阱(FU-5/6 沉淀)
+
+### 陷阱 1:`Option<T>` 字段 Tauri 2 IPC null 行为
 
 **现象**:Rust 端 `model: Option<String>`,JS 端显式传 `null`:
 ```ts
@@ -178,11 +180,11 @@ let model = model.unwrap_or_else(|| state.config.model.clone());
 
 **验证**:`pnpm tauri dev` 时 F12 console 看到 `missing required key` 立刻检查是否传了 `null` 给 `Option` 字段。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/FOLLOW-UP.md FU-5](./FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #2)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-5](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-5--optiont-tauri-2-ipc-null-行为)。
 
 ---
 
-## 客户端陷阱 2:Anthropic tool_result 块只能在 user role
+### 陷阱 2:Anthropic tool_result 块只能在 user role
 
 **现象**:Anthropic Messages API 严格规定 `tool_result` 块只能出现在 user role message 里。assistant role message 含 `tool_result` 块 → 2013 错误:
 ```
@@ -206,8 +208,4 @@ let model = model.unwrap_or_else(|| state.config.model.clone());
 
 **验证**:写 PR 时,在 `check.jsonl` 加"toPayloadContent / 对等函数按 role 分发 tool_result"作为硬约束。
 
-**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/FOLLOW-UP.md FU-6](./FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
-
----
-
-## 关联文档
+**经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-6](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
