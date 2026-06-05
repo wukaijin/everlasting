@@ -17,7 +17,7 @@
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 实现讲解 | 路线图、决策记录、待办 | 动手时,看"下一步做什么" |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估 | 评估新功能时(优先级未定) |
 | [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |
-| [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 5 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链问题时 |
+| [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
 | [spikes/](./spikes/) | 技术验证记录 | 5 分钟上手每个 spike 的目标 / 标准 / 结果 | 评估"某项技术能不能用"时 |
 

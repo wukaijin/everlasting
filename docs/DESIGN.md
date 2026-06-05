@@ -52,7 +52,8 @@
 - [ ] 单项目 = 一个本地目录 + git 仓库
 - [ ] 一个项目下多个 session,每个 session 独立对话历史
 - [ ] 跟单个 agent 对话,流式输出 token
-- [ ] Agent 工具集最小集合:`read_file` / `write_file` / `edit_file` / `shell` / `grep` / `glob`
+- [x] Agent 工具基础集:`read_file` / `write_file` / `shell` 已实现(步骤 2)
+- [ ] Agent 工具扩展:`edit_file` / `grep` / `glob` 未实现
 - [ ] 文件变更实时显示(diff 视图)
 - [ ] Git 集成:每个 session 一个 worktree,自动 commit
 - [ ] WSL 项目管理:原生支持,文件操作走 WSL 内部路径
@@ -161,7 +162,7 @@
 | 风险                          | 严重度 | 缓解                                          |
 |-------------------------------|--------|-----------------------------------------------|
 | Rig 0.x breaking change       | 中     | 锁版本,major 升级专门花时间                  |
-| Tauri 2 在 WSLg 下的 bug       | 中     | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
+| Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#9-工具权限检查) 实施的前提 |
 | LLM 流式 token 断连            | 低     | 实现重连,断点续传用 message ID                |

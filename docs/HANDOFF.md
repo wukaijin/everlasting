@@ -1,10 +1,8 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-05 更新**。当前阶段:**MVP 步骤 3a 已完成，准备进入步骤 3b (多项目 + UI 三栏 + Rig 迁移)**。
-> spike-001/002 已通过，前置硬依赖清零，工具链就位，环境坑已沉淀。
-> **session 1** (2026-06-04):设计文档 + spike-001/002。
-> **session 2** (2026-06-04):MVP 步骤 1 实施（骨架 + LLM 直连）。
-> **session 2** (2026-06-04):搬骨架、写 LLM 客户端、IPC 桥、ChatWindow，11 个 Rust 单元测试 + pnpm build + cargo build 通过，`pnpm tauri dev` 已能启动(WebKit 进程在 WSL 内)。详见 §"已完成"。
+> **2026-06-05 更新**。当前阶段:**MVP 步骤 1 / 2 / 3a 已完成 + 路线图外完成 extended thinking,步骤 3b 暂缓**。
+> spike-001/002 已通过,工具链就位,环境坑沉淀(`HACKING-wsl.md` 10 个 WSL 坑 + `HACKING-llm.md` LLM 兼容层差异)。
+> ⚠️ 本文档"当前进度"段会滞后于实际 commit,**权威以 `git log --oneline -20` + [IMPLEMENTATION §3 路线图](./IMPLEMENTATION.md#3-待办与下一步)为准**。
 
 ---
 
@@ -27,37 +25,25 @@
 
 ## 2. 当前进度
 
+> 摘要可能滞后,权威看 `git log --oneline -20` + [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)。
+
 **已完成**(2026-06-05 累计):
-- ✅ 5 份设计文档(README + DESIGN + ARCHITECTURE + TECH + IMPLEMENTATION + BACKLOG)
+- ✅ 设计文档全套(`docs/` 下索引见 [README.md](./README.md))
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
-- ✅ HANDOFF + 2 个 spike 模板
-- ✅ 2 份 HACKING 文档(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` GLM 兼容层差异)
-- ✅ **MVP 步骤 1 — 骨架 + LLM 直连**(session 2 完成)
-- ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(session 3 完成)
-- ✅ **MVP 步骤 3a — SQLite + Session 持久化**(session 4 完成)
+- ✅ HACKING 系列(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` LLM 兼容层差异)
+- ✅ **MVP 步骤 1 — 骨架 + LLM 直连**(commit `08dc818`,2026-06-04)
+- ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(commit `fefc41f`,2026-06-04)
+- ✅ **MVP 步骤 3a — SQLite + Session 持久化**(commit `0ce44b5`,2026-06-05;rehydrate 补丁 `a89a6fd`)
+- ✅ **路线图外完成**:Anthropic extended thinking 块展示 + 持久化(commit `05671f5`,2026-06-05)
+- ✅ trellis 任务管理工作流引入(`.trellis/` 目录,commit `402afa5`)
 
-**session 4 (步骤 3a 实施)**:
-- ✅ Cargo.toml 加 sqlx / uuid / chrono 依赖
-- ✅ 新增 `src-tauri/src/db.rs`（init_pool / run_migrations / 8 个 CRUD 函数 + 9 个测试）
-- ✅ DB schema：sessions + messages 表，content 是 JSON (Vec<ContentBlock> round-trip 0 损失)
-- ✅ lib.rs：AppState 加 db、chat 入参加 session_id、turn 边界 persist_turn、注册 4 个新 command (list/create/load/delete)
-- ✅ 前端 session store：sessions / currentSessionId / loadSessions / createNewSession / switchSession / deleteSession
-- ✅ 前端侧边栏 UI：+ 新对话 / 列表 / 切换 / 删除按钮
-- ✅ 默认模型改为 MiniMax-M2.7
-- ✅ 42 个 Rust 测试全过，pnpm build 通过
-- ⚠️ **未 commit**（改动在工作区，待新 session 验证后 commit）
+**当前状态**:
+- ⏸ 步骤 3b(多项目 + UI 三栏 + Rig 迁移)暂缓
+- 下一步候选(详见 [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)):
+  - 跳过 3b 继续主线 → 步骤 4 Git 集成(worktree + auto commit)
+  - 或回头补完 3b(多项目 + Rig 迁移)
 
-**当前任务**(下一步):
-- → [IMPLEMENTATION §2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移](./IMPLEMENTATION.md#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)
-- LLM client 从 reqwest 切到 rig-core
-- 引入 Project 概念，左侧项目列表
-- UI 重构：左侧项目列表 + 中间 session 列表 + 右侧 chat
-- 记得先 commit session 4 的改动
-
-**最近 commit**:
-```
-1bcc9e8 docs: 更新 HANDOFF + CLAUDE.md 反映步骤 2 完成
-```
+**最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 
 ---
 
@@ -66,7 +52,7 @@
 | 优先级 | 文档 | 什么时候读 |
 |--------|------|------------|
 | 1 | 本文件(`HANDOFF.md`) | **现在** |
-| 2 | [IMPLEMENTATION.md §2.1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp) | 了解 MVP 1 范围 |
+| 2 | [IMPLEMENTATION.md §3 路线图全貌表](./IMPLEMENTATION.md#3-待办与下一步) | 看当前在哪一步 + 下一步选项 |
 | 3 | [DESIGN.md §2.2 关键约束](./DESIGN.md#22-关键约束) | 知道"什么不做" |
 | 4 | [ARCHITECTURE.md §1-2](./ARCHITECTURE.md) | 了解 16 关卡(写代码时反复查) |
 | 5 | [HACKING-wsl.md](./HACKING-wsl.md) | 撞 WSL / 字体 / Rust 工具链问题时 |
@@ -84,9 +70,9 @@ docs/
 ├── DESIGN.md                 # 需求 + 边界
 ├── ARCHITECTURE.md           # 16 关卡 + Channel Adapter
 ├── TECH.md                   # 锁定的库
-├── IMPLEMENTATION.md         # 8 步路线图 + 决策日志
+├── IMPLEMENTATION.md         # 7 步路线图 + 决策日志
 ├── BACKLOG.md                # 7 个候选功能
-├── HACKING-wsl.md            # 5 个 WSL 环境坑
+├── HACKING-wsl.md            # 10 个 WSL 环境坑 + fcitx5 输入法
 ├── HACKING-llm.md            # LLM 兼容层差异
 ├── HANDOFF.md                # 本文件
 ├── REVIEW-glm-5.1.md         # 外部评审 #1
@@ -98,83 +84,48 @@ docs/
 
 ---
 
-## 4. MVP 步骤 1 是什么 + 起点 + 验收
+## 4. 如何接续(自助式)
 
-### 4.1 目标(来自 [IMPLEMENTATION §2.1](./IMPLEMENTATION.md#21-步骤-1--骨架与-llm-直连-mvp))
+> 这个项目演进很快,具体"下一步"用 git log 校准比读本节安全。本节给"接续动作"的通用 checklist,避免每个步骤完成后都要重写本节。
 
-**跑通"Tauri app + 跟 LLM 说一句话 + 流式显示"**。能聊天的最小 app,不做工具调用,不做 session 持久化。
+### 4.1 看清现状(必做,顺序不能颠倒)
 
-### 4.2 实施内容
+1. `git log --oneline -20` — 看最近 commit,有"步骤 N"字样的就是路线图节点
+2. `git status` — 看工作区是否干净;不干净先弄清楚是什么(可能是其他机器没 commit / 没 push 的改动)
+3. 读 [IMPLEMENTATION §3 路线图全貌表](./IMPLEMENTATION.md#3-待办与下一步) — 看路线图当前完成度
+4. 读 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION.md#4-决策日志) 最近 1-2 条 — 看最近做了什么决策
 
-1. **搬 spike 项目到正经位置**
-   - 源:`~/tauri-spike/spike-app/`
-   - 目标:`/usr/local/code/github/everlasting/app/`
-   - 不是 copy,是建新项目然后**选择性搬**:
-     - ✅ 搬:`package.json` / `vite.config` / `tauri.conf.json` / Cargo.toml 依赖
-     - ✅ 搬:`src-tauri/` 整个骨架(icons / build.rs / capabilities 模板)
-     - ❌ 不搬:spike 改的 App.vue 中文测试 demo(重写)
-     - ❌ 不搬:spike 的 node_modules / target/(重建)
+### 4.2 选下一步
 
-2. **前端栈升级**([TECH §1](./TECH.md#1-决策vue-3-全家桶替代-react))
-   - Vue 3 + Vite + **Pinia**(状态管理) + **reka-ui**(组件库)
-   - 用 `pnpm create vite@latest` 创 Vue 模板,再加 `pinia` / `reka-ui` / `@tauri-apps/api` / `vue-router`(可选,步骤 1 可不上)
+决定下一步前回答两个问题:
+- **主线在哪?** → 当前主线是 MVP 步骤 1-7(原 8 步合并为 7),跳过的步骤(如当前的 3b)可选回补也可选继续后面
+- **路线图外有没有想做的?** → 比如 extended thinking 就是路线图外加的;只要价值高、不阻断后续步骤,可以插
 
-3. **Rust 端 LLM 客户端**(参照 sse-spike 验证过的模式)
-   - 位置:`src-tauri/src/llm/`
-   - 4 个模式切分(参考 HACKING-llm.md checklist):
-     - `client.rs`(reqwest HTTP)
-     - `sse.rs`(SSE 解析,事件顺序记录)
-     - `error.rs`(错误归一化,4 类 + 网络)
-     - `types.rs`(request/response 数据结构)
-   - BASE_URL / model / key 全部从 env 读
-   - 实施 checklist 11 项见 [HACKING-llm.md §"LLM 客户端实施 checklist"](./HACKING-llm.md#llm-客户端实施-checklist给步骤-1-2-写-rust-客户端时)
+### 4.3 起手前确认环境
 
-4. **Tauri IPC 桥**
-   - `invoke("chat", { message })` 前端调用
-   - Rust 端 spawn task 跑 stream,emit `chat-chunk` 事件到前端
-   - 前端 `listen("chat-chunk", ...)` 接收,append 到消息列表
+| 检查项 | 命令 | 期望 |
+|---|---|---|
+| Rust 版本 | `cargo --version` | 1.85+ |
+| Node 版本 | `node --version` | 18+ |
+| webkit2gtk | `pkg-config --modversion webkit2gtk-4.1` | 2.50.x |
+| 字体对齐 | `fc-match "sans-serif:lang=zh"` | Noto Sans CJK SC |
+| 中文输入 | `fcitx5-remote` | 不 crash,返回 0/1/2 |
+| Anthropic key | `echo $ANTHROPIC_API_KEY` | 非空 |
 
-5. **最小 chat UI**
-   - 一个输入框 + 一个发送按钮
-   - 消息列表(用户右 / 助手左)
-   - 流式 append,不要等完整响应
+不过关的项 → 查 [HACKING-wsl.md](./HACKING-wsl.md)(10 个坑覆盖全部环境配置)。
 
-### 4.3 起点材料(本 session 留的)
+### 4.4 上手 build / run
 
-| 资源 | 路径 | 用途 |
-|------|------|------|
-| spike Tauri 项目 | `~/tauri-spike/spike-app/` | 搬骨架的源 |
-| sse-spike Rust 代码 | `~/sse-spike/src/main.rs` | LLM 客户端实现的参考 |
-| sse-spike 二进制 | `~/sse-spike/target/release/sse-spike` | 快速验证 LLM API 还通(可改 env 重跑) |
-| spike-001 文档 | `docs/spikes/001-wsl-tauri-window.md` | 已知坑 + 通过标准 |
-| spike-002 文档 | `docs/spikes/002-reqwest-anthropic-sse.md` | SSE 4 模式 + GLM 差异 |
-| HACKING-wsl | `docs/HACKING-wsl.md` | 5 个 WSL 坑 + 一次性脚本 |
-| HACKING-llm | `docs/HACKING-llm.md` | GLM 差异 + 实施 checklist |
+```bash
+cd app && pnpm tauri dev          # 启动 Vite + Tauri 窗口
+cd app/src-tauri && cargo test    # 跑 Rust 单元测试
+```
 
-### 4.4 验收标准(本步骤完成判定)
+完整命令见 [CLAUDE.md "Common Commands" 段](../CLAUDE.md#common-commands)。
 
-- [x] `cd /usr/local/code/github/everlasting/app && pnpm tauri dev` 启动 < 30 秒
-- [x] 窗口在 Windows 桌面正常显示(同 spike-001)
-- [x] 中文输入 + 中文响应,中英文字号 baseline 对齐(同 spike-001)
-- [x] 输入"你好" → 流式看到响应(token by token 出现)
-- [x] 故意输错 API key → 友好错误提示(不是 panic,不是 500 页)
-- [x] 5 次连续提问不崩 / 不卡
-- [x] 至少 1 次热重载改 chat UI 不崩
-- [x] WebView 进程在 WSL 内(同 spike-001)
+### 4.5 新步骤起点指引应该在哪写?
 
-### 4.5 本步骤不碰(留到后续步骤)
-
-- ⏭ 工具调用(read_file / write_file / shell)—— 留到步骤 2
-- ⏭ session 持久化(SQLite)—— 留到步骤 3a
-- ⏭ 多项目 / 多 session 切换—— 留到步骤 3b
-- ⏭ git worktree / 自动 commit—— 留到步骤 4
-- ⏭ 权限系统 / xterm.js—— 留到步骤 5
-- ⏭ MCP / 多 Provider—— 留到步骤 6
-- ⏭ rig-core 迁移—— 留到步骤 3b
-
-### 4.6 完成后
-
-✅ 步骤 1 已完成(2026-06-04)。走 [IMPLEMENTATION §2.2 步骤 2 Tool Calling](./IMPLEMENTATION.md#22-步骤-2--tool-calling-mvp)。
+不在本文件。新步骤的"起点 + 验收 + 不碰范围"应写在对应 trellis 任务的 `.trellis/tasks/<task-dir>/prd.md`,本文件只留通用 checklist 避免反复过时。
 
 ---
 
@@ -230,8 +181,8 @@ docs/
 - **项目根**:`/usr/local/code/github/everlasting/`
 - **当前 branch**:`main`
 - **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
-- **最近 commit hash**:`1bcc9e8` (session 4 改动未 commit)
-- **当前日期**:2026-06-04
+- **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
+- **当前日期**:2026-06-05
 
 ---
 

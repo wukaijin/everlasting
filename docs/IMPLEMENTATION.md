@@ -48,7 +48,7 @@
 
 **撞过的环境坑**:见 [HACKING-wsl.md](./HACKING-wsl.md)(linuxbrew pkg-config / pnpm 代理 / Rust 1.83 / cargo cache 锁 / WSLg CJK 字体)。**新机器或怀疑环境有问题时,先读 HACKING-wsl**。
 
-### 2.2 步骤 2 — Tool Calling [MVP]
+### 2.2 步骤 2 — Tool Calling [MVP] ✅ 已完成(2026-06-04)
 
 **目标**:agent 能读写文件、跑 shell
 
@@ -58,7 +58,7 @@
 - 前端显示 tool 调用过程(简化版)
 - **可交付物**:能帮我改代码的 agent
 
-### 2.3 步骤 3a — SQLite + Session 持久化 [MVP]
+### 2.3 步骤 3a — SQLite + Session 持久化 [MVP] ✅ 已完成(2026-06-05)
 
 **目标**:消息存 DB,重启能恢复,session 切换看历史
 
@@ -68,7 +68,7 @@
 - LLM 客户端不动(继续用 reqwest + 手写 SSE)
 - **可交付物**:关掉 app 再打开,历史消息还在
 
-### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP]
+### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] ⏸ 暂缓
 
 **目标**:引入 Project 概念,三栏 UI,切 rig-core
 
@@ -124,22 +124,26 @@
 
 ## 3. 待办与下一步
 
-**最后更新**:2026-06-04(步骤 1 完成,路线图从 8 步合并为 7 步)
+**最后更新**:2026-06-05(步骤 1 / 2 / 3a 已完成 + 路线图外完成 extended thinking + 步骤 3b 暂缓)
 
-**下一步**:
-- → **[MVP 步骤 2 — Tool Calling](#22-步骤-2--tool-calling-mvp)**:定义 3 个 tool(`read_file` / `write_file` / `shell`),解析 `tool_use` 块,agent loop 实现
+**下一步**(候选,二选一):
+- 跳过 3b 继续主线 → **[MVP 步骤 4 — Git 集成](#25-步骤-4--git-集成-mvp)**(worktree + auto commit)
+- 回头补完 3b → **[步骤 3b 多项目 + UI 三栏 + Rig 迁移](#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)**
 
 **路线图全貌**:
-| 步骤 | 内容 | 阶段 |
-|------|------|------|
-| 1 | 骨架 + LLM 直连 | ✅ 已完成 |
-| 2 | Tool Calling(agent loop + 3 个 tool) | MVP ← **当前** |
-| 3a | SQLite + Session 持久化 | MVP |
-| 3b | 多项目 + UI 三栏 + rig-core | MVP |
-| 4 | Git 集成(worktree + auto commit) | MVP |
-| 5 | 嵌入式终端 + 权限系统 | v1 |
-| 6 | MCP 暴露 + 多 Provider | v1 |
-| 7 | 打磨与文档 | 跨阶段 |
+| 步骤 | 内容 | 阶段 | 状态 |
+|------|------|------|------|
+| 1 | 骨架 + LLM 直连 | MVP | ✅ 已完成(2026-06-04) |
+| 2 | Tool Calling(agent loop + 3 个 tool) | MVP | ✅ 已完成(2026-06-04) |
+| 3a | SQLite + Session 持久化 | MVP | ✅ 已完成(2026-06-05) |
+| 3b | 多项目 + UI 三栏 + rig-core | MVP | ⏸ 暂缓 |
+| — | **路线图外**:Anthropic extended thinking 块展示 + 持久化 | 额外 | ✅ 已完成(2026-06-05,commit `05671f5`) |
+| 4 | Git 集成(worktree + auto commit) | MVP | 未开始 |
+| 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |
+| 6 | MCP 暴露 + 多 Provider | v1 | 未开始 |
+| 7 | 打磨与文档 | 跨阶段 | 未开始 |
+
+> ⚠️ **编号语义注意**:commit `05671f5` 标题写"步骤 6 — Anthropic extended thinking",跟路线图 §2.7 "步骤 6 = MCP + 多 Provider" 不一致。extended thinking 实际是路线图外的额外功能(在表里单列"—"),并非提前实现 MCP 步骤 6。详见 [§4 决策日志 2026-06-05 条](#2026-06-05--路线图状态校对步骤-3a-完成步骤-3b-暂缓extended-thinking-路线图外完成)。
 
 **已沉淀(spike 期间完成的)—— 不必再做,出问题查这里**:
 - ✅ Tauri 在 WSL 跑得通 + 中文对齐 → [spikes/001](./spikes/001-wsl-tauri-window.md)
@@ -171,6 +175,16 @@
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。
+
+### 2026-06-05 — 路线图状态校对(步骤 3a 完成、步骤 3b 暂缓、extended thinking 路线图外完成)
+
+- **决策**:步骤 3b(多项目 + UI 三栏 + Rig 迁移)**暂缓**,优先做 Anthropic extended thinking 支持
+  - **原因**:thinking 功能跟正在落地的 LLM 工作流强相关,延后做返工成本高;3b 是 UI / 多项目重构,可以后做不影响其他步骤
+- **决策**:extended thinking 单列为"路线图外完成",不挤占现有步骤编号
+  - **原因**:保护 7 步路线图原结构,避免重新编号引发的级联引用更新
+- **已知 issue(不修)**:commit `05671f5` 标题误用"步骤 6 — ..."字样,实际不对应 §2.7 步骤 6(MCP + 多 Provider)。**不改 commit message**(git 历史不动);路线图 §3 表格、ARCHITECTURE §2.4 实施映射表里都加注释说明语义偏差
+- **决策**:HANDOFF / CLAUDE.md / IMPLEMENTATION / DESIGN / ARCHITECTURE / README 所有"当前进度"段落统一校准到本日 git log 真实状态
+  - **原因**:HANDOFF 停留在 2026-06-04 步骤 3a 前夕,跟实际偏差过大,新 session 读完会做错假设
 
 ### 2026-06-04 — 路线图重构(步骤 1 完成后审视)
 

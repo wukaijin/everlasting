@@ -494,6 +494,8 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
+> 📌 **编号语义注意**:本表里的"步骤 N"指 [IMPLEMENTATION.md §2 路线图](./IMPLEMENTATION.md#2-实施路线图)的步骤号。其中"步骤 6"在 IMPLEMENTATION 里是"MCP + 多 Provider",**不是** 路线图外完成的 Anthropic extended thinking(虽然 commit `05671f5` 标题误用了"步骤 6"字样,详见 [IMPLEMENTATION §4 决策日志 2026-06-05 条](./IMPLEMENTATION.md#2026-06-05--路线图状态校对步骤-3a-完成步骤-3b-暂缓extended-thinking-路线图外完成))。
+
 | 关卡     | 最早实现(MVP)                       | 打磨阶段                     |
 |----------|--------------------------------------|------------------------------|
 | ① ②     | 步骤 1(基础)                         | 步骤 6 完善错误提示          |
@@ -639,9 +641,9 @@ trait Channel: Send + Sync {
 ```
 
 **当前实现**:
-- `TauriGuiChannel` — 走 Tauri event
+- `TauriGuiChannel` — 走 Tauri event(✅ 已实现,步骤 1)
 - `FeishuChannel` — 走飞书 WebSocket(待 [BACKLOG.md §6](./BACKLOG.md#6-im-通道飞书) 实施)
-- `CliChannel` — 走 stdin/stdout
+- `CliChannel` — 走 stdin/stdout(待后期实施)
 
 **好处**:
 - 新增 channel 不用改 agent core,只实现 trait
