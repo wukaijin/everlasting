@@ -16,7 +16,9 @@
         "width": 960,
         "height": 720,
         "minWidth": 640,
-        "minHeight": 480
+        "minHeight": 480,
+        "titleBarStyle": "Transparent",
+        "decorations": false
       }
     ],
     "security": {
