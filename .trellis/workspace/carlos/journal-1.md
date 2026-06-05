@@ -73,3 +73,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: docs 整理 — 归档 3b-1 产物 + 拆出评审目录 + 去重 + 合并
+
+**Date**: 2026-06-05
+**Task**: docs 整理 — 归档 3b-1 产物 + 拆出评审目录 + 去重 + 合并
+**Branch**: `main`
+
+### Summary
+
+docs/ 目录彻底重整：6 个 3b-1 任务产物(4 个) + 项目级设计评审(2 个)从根目录拆出到 _archive/2026-06-3b-1/ 和 _reviews/；12 个失效引用全修(主目录文档 + spec + spikes)；IMPLEMENTATION.md 决策日志加 FU-1/2/3 摘要；HACKING-llm.md 去重吸收 FU-5/6；HACKING-wsl.md 5 处注释式标题规范化；HANDOFF.md §4.2/§6 轻合并指 IMPLEMENTATION；BACKLOG.md v3+ 段移末尾"远期"。单 commit 16 files changed。详见 .trellis/tasks/archive/2026-06/06-05-docs-3b-1/prd.md 6 个决策 D1-D6
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a2cb504` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

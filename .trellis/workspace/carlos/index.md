@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
+- **Total Sessions**: 3
 - **Last Active**: 2026-06-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~75 | Active |
+| `journal-1.md` | ~108 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-06-05 | docs 整理 — 归档 3b-1 产物 + 拆出评审目录 + 去重 + 合并 | `a2cb504` | `main` |
 | 2 | 2026-06-05 | Step 6 — thinking 块展示 + 持久化（含 spec + trellis scaffold） | `05671f5`, `281e51b`, `402afa5` | `main` |
 | 1 | 2026-06-05 | session 切换丢失 tool cards 修复 + user 消息持久化 | `a89a6fd` | `main` |
 <!-- @@@/auto:session-history -->
