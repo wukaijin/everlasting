@@ -1,0 +1,8 @@
+{"file": "research/anthropic-thinking-api.md", "reason": "Anthropic thinking API 2026 现状：adaptive vs manual, signature 行为, redacted_thinking, SSE 事件, max_tokens 约束, GLM 兼容层支持度"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "ContentBlock / ChatRequest / ChatEvent 当前形态，新增 Thinking 变体需参考现有 serde tag + 字段命名约定"}
+{"file": "app/src-tauri/src/llm/client.rs", "reason": "BlockState 状态机 + SSE parser 处理 content_block_start/stop/delta；新加 Thinking 分支需参考 tool_use 写法"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "agent loop 把 ChatEvent 转发到 chat-event channel；新加 ThinkingDelta / SignatureDelta 事件需在这里 emit"}
+{"file": "app/src-tauri/src/db.rs", "reason": "MessageContent::Blocks 的 JSON 持久化；Thinking / RedactedThinking 变体自动支持，但需确认 to_text() 不动"}
+{"file": "app/src/stores/chat.ts", "reason": "ChatMessage / ContentBlockFromDb / ContentBlockPayload 类型；rehydrateMessages + toPayloadContent 是关键路径"}
+{"file": "app/src/components/ChatWindow.vue", "reason": "assistant 消息渲染模板；thinking 区块位置（tool cards 上 / bubble 上）和折叠状态"}
+{"file": "docs/HACKING-llm.md", "reason": "GLM 兼容层 note 要追加"}

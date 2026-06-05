@@ -1,0 +1,6 @@
+{"file": "research/anthropic-thinking-api.md", "reason": "verify adaptive mode request/response schema; redacted_thinking 必须回传; signature 顺序不能改"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "verify ContentBlock Thinking/RedactedThinking 变体的 Serialize/Deserialize 形态与 Anthropic 一致"}
+{"file": "app/src-tauri/src/llm/client.rs", "reason": "verify SSE parser 正确处理 thinking_delta / signature_delta 事件序列"}
+{"file": "app/src-tauri/src/db.rs", "reason": "verify MessageContent::Blocks 含 Thinking 时 JSON round-trip 不丢 signature"}
+{"file": "app/src/stores/chat.ts", "reason": "verify rehydrateMessages 正确还原 thinking; toPayloadContent 把 signature 带回 LLM"}
+{"file": "docs/HACKING-llm.md", "reason": "GLM 兼容层 thinking 兼容性 note 写到位"}
