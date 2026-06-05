@@ -38,3 +38,38 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Step 6 — thinking 块展示 + 持久化（含 spec + trellis scaffold）
+
+**Date**: 2026-06-05
+**Task**: Step 6 — thinking 块展示 + 持久化（含 spec + trellis scaffold）
+**Branch**: `main`
+
+### Summary
+
+实施 Anthropic extended thinking: 后端 ContentBlock::Thinking/RedactedThinking + SSE parser + agent loop flush_pending_thinking; 前端 ChatMessage.thinkingBlocks + <details> 折叠 UI + rehydrate/toPayloadContent 顺序。57 cargo test + 15 新单测全过; pnpm build 通过。check 阶段修 1 个 major (signature_delta 改为 buffer-on-stop)。Spec: 新建 backend/llm-contract.md (强制 code-spec depth) + 4 文件更新 + cross-layer guide 加 'new content block type' checklist。Scaffold: trellis init 脚手架初提交 (93 files)。两个任务归档: 06-05-thinking + 00-bootstrap-guidelines。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `05671f5` | (see git log) |
+| `281e51b` | (see git log) |
+| `402afa5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

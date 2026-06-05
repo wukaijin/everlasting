@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
+- **Total Sessions**: 2
 - **Last Active**: 2026-06-05
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~40 | Active |
+| `journal-1.md` | ~75 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-06-05 | Step 6 — thinking 块展示 + 持久化（含 spec + trellis scaffold） | `05671f5`, `281e51b`, `402afa5` | `main` |
 | 1 | 2026-06-05 | session 切换丢失 tool cards 修复 + user 消息持久化 | `a89a6fd` | `main` |
 <!-- @@@/auto:session-history -->
 
