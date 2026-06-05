@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "check 阶段需校验所有跨文档引用（BACKLOG/HACKING-wsl/HACKING-llm/IMPLEMENTATION/CLAUDE.md 对被归档/移动文件的引用都修对）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 阶段的整体质量参照（虽然这是 docs 任务，但质量门槛标准一致）"}
