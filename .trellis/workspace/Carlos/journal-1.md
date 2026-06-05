@@ -38,3 +38,39 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 3b-1 + follow-up 整组落地（项目基础结构 + 顶部 Tabs UI）
+
+**Date**: 2026-06-05
+**Task**: 3b-1 + follow-up 整组落地（项目基础结构 + 顶部 Tabs UI）
+**Branch**: `main`
+
+### Summary
+
+步骤 3b-1 整组（项目基础结构 + 顶部 Tabs UI）落地收尾。PR1 后端（db schema migration / projects 模块 / ToolContext 注入 / tools 边界校验，86 测试）→ PR2 前端（projects store / ProjectTabs / SessionList / ChatWindow 重构，3 个 Q 决议）→ 3 个 post-PR2 hotfix squash（camelCase IPC arg / Option<T> null / Anthropic tool_result role 协议）→ follow-up 文档（6 条 FU-1~FU-8 + HACKING 3 个新坑 + BACKLOG §10 + CLAUDE.md 当前状态更新）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3ae87d2` | (see git log) |
+| `93a0753` | (see git log) |
+| `18354a0` | (see git log) |
+| `7e888c9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
