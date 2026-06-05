@@ -1,16 +1,37 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onMounted } from "vue";
-import { useChatStore, type ToolCallInfo, type ToolResultInfo, type ThinkingBlockInfo } from "../stores/chat";
+import {
+  useChatStore,
+  type ToolCallInfo,
+  type ToolResultInfo,
+  type ThinkingBlockInfo,
+} from "../stores/chat";
 import { useConfigStore } from "../stores/config";
+import { useProjectsStore } from "../stores/projects";
+import ProjectTabs from "./ProjectTabs.vue";
+import SessionList from "./SessionList.vue";
 
 const store = useChatStore();
 const config = useConfigStore();
+const projectsStore = useProjectsStore();
 const input = ref("");
 const messagesEl = ref<HTMLElement | null>(null);
 
 onMounted(async () => {
   config.load();
-  await store.loadSessions();
+  await projectsStore.loadProjects();
+  // Restore last active project (Q1 / PROPOSAL §5.5). The chat
+  // store's watcher in `chat.ts` will load sessions for the
+  // selected project; we just need to choose which one.
+  const lastId = config.lastActiveProjectId;
+  if (lastId && projectsStore.projects.find((p) => p.id === lastId)) {
+    projectsStore.currentProjectId = lastId;
+  } else if (projectsStore.projects.length > 0) {
+    projectsStore.currentProjectId = projectsStore.projects[0].id;
+  }
+  // If neither condition holds, the empty state will show. The
+  // chat store's watcher fires for `currentProjectId = null` and
+  // just clears sessions.
 });
 
 const isComposing = ref(false);
@@ -62,6 +83,14 @@ watch(
 async function onSubmit() {
   const text = input.value;
   if (!text.trim() || store.sending) return;
+  if (!projectsStore.currentProjectId) {
+    // Defensive: the empty state should make this unreachable,
+    // but if some race gets us here, surface a toast instead of
+    // silently failing. The PR1 backend's `create_session` would
+    // also reject an empty project_id.
+    projectsStore.showToast("请先添加项目", "warn");
+    return;
+  }
   input.value = "";
   await store.send(text);
 }
@@ -74,6 +103,14 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 const hasMessages = computed(() => store.messages.length > 0);
+
+const showEmptyState = computed<boolean>(
+  () => projectsStore.currentProjectId === null,
+);
+
+const showSidebar = computed<boolean>(
+  () => projectsStore.currentProjectId !== null,
+);
 
 /** Filter out "ghost" messages that exist only to carry tool_result
  *  blocks for the LLM. After rehydration, the user tool_result message
@@ -130,170 +167,267 @@ function estimateThinkingTokens(blocks: ThinkingBlockInfo[] | undefined): number
   return Math.max(1, Math.round(totalChars / 4));
 }
 
-async function onNewSession() {
-  if (store.sending) return;
-  await store.createNewSession();
+async function onEmptyAddProject() {
+  await projectsStore.addProject();
 }
 
-async function onSwitchSession(id: string) {
-  if (id === store.currentSessionId) return;
-  await store.switchSession(id);
+async function onUnhideFromEmpty(id: string) {
+  await projectsStore.unhideProject(id);
 }
 
-async function onDeleteSession(id: string, e: MouseEvent) {
-  e.stopPropagation();
-  if (store.sending && id === store.currentSessionId) return;
-  if (!confirm("删除此 session 及其所有消息？")) return;
-  await store.deleteSession(id);
+async function loadHiddenFromEmpty() {
+  await projectsStore.loadHiddenProjects();
 }
+
+// Q5: render the current cwd in the chat header. We display the
+// canonical path verbatim — the `~/` shortening referenced in Q5
+// requires a home-dir lookup that PR1's backend doesn't expose; the
+// deviation is documented in the implement report.
+const cwdDisplay = computed<string>(() => {
+  const cwd = store.currentCwd;
+  return cwd || "";
+});
+
+const currentProject = computed(() =>
+  projectsStore.projectById(projectsStore.currentProjectId),
+);
 </script>
 
 <template>
   <div class="app">
-    <aside class="sidebar">
-      <div class="sidebar__header">
-        <span class="sidebar__title">Sessions</span>
-      </div>
-      <button class="sidebar__new" @click="onNewSession">+ 新对话</button>
-      <ul class="sidebar__list">
-        <li
-          v-for="s in store.sessions"
-          :key="s.id"
-          :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
-          @click="onSwitchSession(s.id)"
-        >
-          <div class="session-item__main">
-            <div class="session-item__title">{{ s.title }}</div>
-            <div v-if="s.preview" class="session-item__preview">{{ s.preview }}</div>
-          </div>
-          <button class="session-item__delete" @click="(e) => onDeleteSession(s.id, e)" title="删除">×</button>
-        </li>
-        <li v-if="store.sessions.length === 0" class="session-empty">
-          还没有对话，点上方按钮开始
-        </li>
-      </ul>
-    </aside>
+    <header class="app__tabs">
+      <ProjectTabs :streaming-project-ids="store.streamingProjectIds" />
+    </header>
 
-    <section class="content">
-      <header class="app__header">
-        <h1 class="app__title">Everlasting</h1>
-        <span class="app__subtitle">vibe coding workbench · step 3a</span>
-      </header>
+    <div class="app__body">
+      <aside v-if="showSidebar" class="sidebar">
+        <SessionList />
+      </aside>
 
-      <main ref="messagesEl" class="app__main">
-        <div v-if="!hasMessages" class="empty">
-          <p>输入一句话,跟 LLM 聊聊看 👋</p>
-          <p class="empty__hint">中文输入测试 + 流式响应 + 工具调用</p>
-        </div>
+      <section class="content">
+        <!-- Empty state: no project active. Per Q-resolutions, the
+             session sidebar is not rendered in this branch; the
+             middle of the screen shows a centered "添加项目"
+             affordance plus, if any, the "最近隐藏的项目" list
+             (Q3 / PROPOSAL §5.3). -->
+        <template v-if="showEmptyState">
+          <main class="app__main app__main--center">
+            <div class="empty">
+              <p class="empty__title">还没有项目</p>
+              <p class="empty__hint">
+                点上方「+ 添加项目」,从文件系统选个目录开始
+              </p>
+              <button class="empty__add" @click="onEmptyAddProject">
+                + 添加项目
+              </button>
 
-        <ul v-else class="messages">
-          <li
-            v-for="m in visibleMessages"
-            :key="m.id"
-            :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
-          >
-            <details
-              v-if="m.role === 'assistant' && m.thinkingBlocks && m.thinkingBlocks.length"
-              class="msg__thinking"
-            >
-              <summary class="msg__thinking-summary">
-                <span class="msg__thinking-icon">💭</span>
-                <span>Thought for {{ estimateThinkingTokens(m.thinkingBlocks) }} tokens</span>
-                <span v-if="m.thinkingBlocks.length > 1" class="msg__thinking-count">
-                  · {{ m.thinkingBlocks.length }} blocks
-                </span>
-                <span v-if="m.streaming && !m.content" class="msg__thinking-streaming">streaming…</span>
-              </summary>
-              <pre class="msg__thinking-body">{{ thinkingDisplayText(m.thinkingBlocks) }}</pre>
-            </details>
-
-            <div
-              v-if="m.redactedThinkingData && m.redactedThinkingData.length"
-              class="msg__redacted"
-              :title="`${m.redactedThinkingData.length} redacted thinking block(s); preserved verbatim for the LLM but not displayable`"
-            >
-              🔒 {{ m.redactedThinkingData.length }} redacted thinking block{{ m.redactedThinkingData.length === 1 ? '' : 's' }} (preserved for LLM)
-            </div>
-
-            <div
-              v-if="m.toolCalls && m.toolCalls.length"
-              class="msg__tools"
-            >
               <div
-                v-for="tc in m.toolCalls"
-                :key="tc.id"
-                class="tool-card"
-                :class="{ 'tool-card--error': getToolResult(m, tc.id)?.isError }"
+                v-if="projectsStore.hiddenProjects.length > 0"
+                class="hidden-projects"
               >
-                <div class="tool-card__header">
-                  <span class="tool-card__name">{{ tc.name }}</span>
-                  <span class="tool-card__status">
-                    {{ getToolResult(m, tc.id) ? '✓ done' : '⏳ running…' }}
-                  </span>
-                </div>
-                <details class="tool-card__details">
-                  <summary>input</summary>
-                  <pre class="tool-card__pre">{{ formatToolInput(tc) }}</pre>
-                </details>
-                <details v-if="getToolResult(m, tc.id)" class="tool-card__details" open>
-                  <summary>output</summary>
-                  <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
-                </details>
+                <div class="hidden-projects__sep" />
+                <div class="hidden-projects__title">最近隐藏的项目</div>
+                <ul class="hidden-projects__list">
+                  <li
+                    v-for="p in projectsStore.hiddenProjects"
+                    :key="p.id"
+                    class="hidden-projects__item"
+                  >
+                    <span class="hidden-projects__name" :title="p.path">
+                      <span
+                        v-if="p.is_legacy"
+                        class="hidden-projects__icon"
+                        title="旧数据,自动归入"
+                      >📦</span>
+                      <span
+                        v-else-if="!p.is_git_repo"
+                        class="hidden-projects__icon hidden-projects__icon--warn"
+                        title="未启用 git 隔离"
+                      >⚠️</span>
+                      {{ p.name }}
+                    </span>
+                    <button
+                      class="hidden-projects__btn"
+                      @click="onUnhideFromEmpty(p.id)"
+                    >重新打开</button>
+                  </li>
+                </ul>
               </div>
-            </div>
 
+              <button
+                v-else
+                class="empty__load-hidden"
+                @click="loadHiddenFromEmpty"
+              >
+                查看最近隐藏的项目
+              </button>
+            </div>
+          </main>
+        </template>
+
+        <!-- Normal state: project + session + chat. -->
+        <template v-else>
+          <header class="app__header">
+            <h1 class="app__title">Everlasting</h1>
+            <span class="app__subtitle">vibe coding workbench</span>
             <div
-              v-if="m.content || (!m.toolCalls?.length && !m.toolResults?.length && !m.thinkingBlocks?.length && !m.redactedThinkingData?.length)"
-              class="msg__bubble"
+              v-if="cwdDisplay"
+              class="cwd"
+              :title="cwdDisplay"
+            >cwd: {{ cwdDisplay }}</div>
+          </header>
+
+          <main ref="messagesEl" class="app__main">
+            <div v-if="!hasMessages" class="empty">
+              <p>输入一句话,跟 LLM 聊聊看 👋</p>
+              <p class="empty__hint">
+                中文输入测试 + 流式响应 + 工具调用
+              </p>
+              <p v-if="currentProject" class="empty__project">
+                当前项目: <strong>{{ currentProject.name }}</strong>
+                <span v-if="!currentProject.is_git_repo" class="empty__warn">
+                  ⚠️ 未启用 git 隔离
+                </span>
+                <span v-else-if="currentProject.is_legacy" class="empty__warn">
+                  📦 旧数据,自动归入
+                </span>
+              </p>
+            </div>
+
+            <ul v-else class="messages">
+              <li
+                v-for="m in visibleMessages"
+                :key="m.id"
+                :class="['msg', `msg--${m.role}`, { 'msg--err': m.error }]"
+              >
+                <details
+                  v-if="m.role === 'assistant' && m.thinkingBlocks && m.thinkingBlocks.length"
+                  class="msg__thinking"
+                >
+                  <summary class="msg__thinking-summary">
+                    <span class="msg__thinking-icon">💭</span>
+                    <span>Thought for {{ estimateThinkingTokens(m.thinkingBlocks) }} tokens</span>
+                    <span v-if="m.thinkingBlocks.length > 1" class="msg__thinking-count">
+                      · {{ m.thinkingBlocks.length }} blocks
+                    </span>
+                    <span v-if="m.streaming && !m.content" class="msg__thinking-streaming">streaming…</span>
+                  </summary>
+                  <pre class="msg__thinking-body">{{ thinkingDisplayText(m.thinkingBlocks) }}</pre>
+                </details>
+
+                <div
+                  v-if="m.redactedThinkingData && m.redactedThinkingData.length"
+                  class="msg__redacted"
+                  :title="`${m.redactedThinkingData.length} redacted thinking block(s); preserved verbatim for the LLM but not displayable`"
+                >
+                  🔒 {{ m.redactedThinkingData.length }} redacted thinking block{{ m.redactedThinkingData.length === 1 ? '' : 's' }} (preserved for LLM)
+                </div>
+
+                <div
+                  v-if="m.toolCalls && m.toolCalls.length"
+                  class="msg__tools"
+                >
+                  <div
+                    v-for="tc in m.toolCalls"
+                    :key="tc.id"
+                    class="tool-card"
+                    :class="{ 'tool-card--error': getToolResult(m, tc.id)?.isError }"
+                  >
+                    <div class="tool-card__header">
+                      <span class="tool-card__name">{{ tc.name }}</span>
+                      <span class="tool-card__status">
+                        {{ getToolResult(m, tc.id) ? '✓ done' : '⏳ running…' }}
+                      </span>
+                    </div>
+                    <details class="tool-card__details">
+                      <summary>input</summary>
+                      <pre class="tool-card__pre">{{ formatToolInput(tc) }}</pre>
+                    </details>
+                    <details v-if="getToolResult(m, tc.id)" class="tool-card__details" open>
+                      <summary>output</summary>
+                      <pre class="tool-card__pre">{{ truncateOutput(getToolResult(m, tc.id)!.content) }}</pre>
+                    </details>
+                  </div>
+                </div>
+
+                <div
+                  v-if="m.content || (!m.toolCalls?.length && !m.toolResults?.length && !m.thinkingBlocks?.length && !m.redactedThinkingData?.length)"
+                  class="msg__bubble"
+                >
+                  <span class="msg__text">{{ m.content }}</span>
+                  <span v-if="m.streaming" class="msg__cursor">▍</span>
+                </div>
+
+                <div v-if="m.error" class="msg__error">
+                  ⚠ {{ m.error.message }}
+                </div>
+              </li>
+            </ul>
+          </main>
+
+          <footer class="app__footer">
+            <textarea
+              :value="input"
+              class="input"
+              rows="2"
+              placeholder="输入消息,Enter 发送,Shift+Enter 换行"
+              :disabled="store.sending"
+              @input="onTextareaInput"
+              @compositionstart="onCompositionStart"
+              @compositionend="onCompositionEnd"
+              @keydown="onKeydown"
+            />
+            <button
+              class="send"
+              :disabled="store.sending || !input.trim()"
+              @click="onSubmit"
             >
-              <span class="msg__text">{{ m.content }}</span>
-              <span v-if="m.streaming" class="msg__cursor">▍</span>
-            </div>
+              {{ store.sending ? "生成中…" : "发送" }}
+            </button>
+          </footer>
+        </template>
 
-            <div v-if="m.error" class="msg__error">
-              ⚠ {{ m.error.message }}
-            </div>
-          </li>
-        </ul>
-      </main>
+        <div v-if="config.loaded" class="statusbar" :class="{ 'statusbar--warn': !config.configured }">
+          <span class="statusbar__dot" />
+          <span class="statusbar__model">{{ config.model || "(no model)" }}</span>
+          <span class="statusbar__sep">·</span>
+          <span class="statusbar__url">{{ config.baseUrl || "(no base_url)" }}</span>
+          <span v-if="!config.configured" class="statusbar__hint">ANTHROPIC_API_KEY 未设置</span>
+        </div>
+      </section>
+    </div>
 
-      <footer class="app__footer">
-        <textarea
-          :value="input"
-          class="input"
-          rows="2"
-          placeholder="输入消息,Enter 发送,Shift+Enter 换行"
-          :disabled="store.sending"
-          @input="onTextareaInput"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd"
-          @keydown="onKeydown"
-        />
-        <button
-          class="send"
-          :disabled="store.sending || !input.trim()"
-          @click="onSubmit"
-        >
-          {{ store.sending ? "生成中…" : "发送" }}
-        </button>
-      </footer>
-
-      <div v-if="config.loaded" class="statusbar" :class="{ 'statusbar--warn': !config.configured }">
-        <span class="statusbar__dot" />
-        <span class="statusbar__model">{{ config.model || "(no model)" }}</span>
-        <span class="statusbar__sep">·</span>
-        <span class="statusbar__url">{{ config.baseUrl || "(no base_url)" }}</span>
-        <span v-if="!config.configured" class="statusbar__hint">ANTHROPIC_API_KEY 未设置</span>
+    <!-- Toast (Q8v2 / Q2) — minimal fixed bottom-center div. No
+         external toast library; the `projects` store owns the
+         message queue and timing. -->
+    <transition name="toast">
+      <div
+        v-if="projectsStore.toast"
+        :class="['toast', `toast--${projectsStore.toast.kind}`]"
+        @click="projectsStore.dismissToast"
+      >
+        {{ projectsStore.toast.message }}
       </div>
-    </section>
+    </transition>
   </div>
 </template>
 
 <style scoped>
 .app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: #fafbfc;
+}
+
+.app__tabs {
+  flex-shrink: 0;
+}
+
+.app__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
 }
 
 /* --- Sidebar --- */
@@ -306,123 +440,6 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   background: #f3f4f6;
   border-right: 1px solid #e5e7eb;
   overflow: hidden;
-}
-
-.sidebar__header {
-  padding: 14px 16px 8px;
-}
-
-.sidebar__title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6b7280;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.sidebar__new {
-  margin: 0 12px 8px;
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #1f2328;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-}
-
-.sidebar__new:hover {
-  background: #f9fafb;
-  border-color: #9ca3af;
-}
-
-.sidebar__list {
-  list-style: none;
-  margin: 0;
-  padding: 0 8px 8px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.session-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 8px 10px;
-  margin-bottom: 2px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.session-item:hover {
-  background: #e5e7eb;
-}
-
-.session-item--active {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
-}
-
-.session-item--active:hover {
-  background: #ffffff;
-}
-
-.session-item__main {
-  flex: 1;
-  min-width: 0;
-}
-
-.session-item__title {
-  font-size: 13px;
-  font-weight: 500;
-  color: #1f2328;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-item__preview {
-  font-size: 11px;
-  color: #6b7280;
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-item__delete {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: #9ca3af;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.1s;
-}
-
-.session-item:hover .session-item__delete {
-  opacity: 1;
-}
-
-.session-item__delete:hover {
-  background: #fca5a5;
-  color: #ffffff;
-}
-
-.session-empty {
-  padding: 16px 12px;
-  font-size: 12px;
-  color: #9ca3af;
-  text-align: center;
 }
 
 /* --- Content (right side) --- */
@@ -441,6 +458,7 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   padding: 14px 20px;
   border-bottom: 1px solid #e5e7eb;
   background: #ffffff;
+  flex-wrap: wrap;
 }
 
 .app__title {
@@ -455,10 +473,32 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   color: #6b7280;
 }
 
+.cwd {
+  font-size: 11px;
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the tail (path tail) visible when truncated */
+  text-align: left;
+}
+
 .app__main {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
+}
+
+.app__main--center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .empty {
@@ -466,18 +506,149 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
   color: #6b7280;
   text-align: center;
+  max-width: 480px;
+  padding: 32px 16px;
 }
 
 .empty p {
   margin: 4px 0;
 }
 
+.empty__title {
+  font-size: 18px;
+  font-weight: 500;
+  color: #1f2328;
+  margin: 0 0 8px;
+}
+
 .empty__hint {
   font-size: 12px;
   color: #9ca3af;
+}
+
+.empty__project {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 12px;
+}
+
+.empty__warn {
+  margin-left: 6px;
+  color: #d97706;
+  font-size: 11px;
+}
+
+.empty__add {
+  margin-top: 20px;
+  padding: 10px 22px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+.empty__add:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.empty__load-hidden {
+  margin-top: 20px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: inherit;
+}
+
+.empty__load-hidden:hover {
+  color: #2563eb;
+}
+
+.hidden-projects {
+  width: 100%;
+  margin-top: 24px;
+  text-align: left;
+}
+
+.hidden-projects__sep {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 0 0 16px;
+}
+
+.hidden-projects__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.hidden-projects__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hidden-projects__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.hidden-projects__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-projects__icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.hidden-projects__icon--warn {
+  color: #d97706;
+}
+
+.hidden-projects__btn {
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 4px 10px;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  color: #2563eb;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-family: inherit;
+}
+
+.hidden-projects__btn:hover {
+  background: #f3f4f6;
 }
 
 .messages {
@@ -739,6 +910,7 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s;
+  font-family: inherit;
 }
 
 .send:hover:not(:disabled) {
@@ -795,5 +967,49 @@ async function onDeleteSession(id: string, e: MouseEvent) {
   margin-left: auto;
   color: #b45309;
   font-weight: 500;
+}
+
+/* --- Toast (Q8v2) --- */
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: #1f2328;
+  color: #ffffff;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  max-width: 80vw;
+  z-index: 9999;
+}
+
+.toast--warn {
+  background: #f59e0b;
+  color: #1f2328;
+}
+
+.toast--error {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.toast--info {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 8px);
 }
 </style>

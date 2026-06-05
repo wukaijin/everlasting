@@ -34,12 +34,12 @@
 | Q5 | cwd 可在 project root 内自由漂移,不可越出 root | ✓ 不变 + **持久化时机改为 turn 结束一次性写** | 评审深 seek 论据更深:turn 是 agent 状态一致性边界,turn 内中间态 cwd 跨 turn 看见没意义 |
 | Q6 | path 可变,约束:新 path 存在 + 无 active session | ✓ 不变 | 守住 typo / 跑一半切边界两条致命底线 |
 | Q7 | 无项目时空状态:session 侧栏不渲染;中央居中显示"添加项目" | ✓ 不变 | 防止无项目时建出孤儿 session |
-| Q8 | Tab UI 完整设计稿:见 §5.2 | **增"最近隐藏项目"列表** + `pick_project_dir` 跨平台 fallback + `📁` → `⚠️` | 评审一致建议(空状态 UX 提升 + WSLg 适配) |
+| Q8 | Tab UI 完整设计稿:见 §5.2 | **增"最近隐藏项目"列表** + pick_project_dir dialog 错误处理 + `📁` → `⚠️` | 评审一致建议(空状态 UX 提升) |
 | Q9 | 每项目独立 session 集,切 Tab 换 sessions 列表 | ✓ 不变 | 避免"全局池 + 过滤" UI 复杂度 |
 
 **评审消化**(完整记录见 §11):
 
-- **采纳(11 条)**:ToolContext 注入式传递 / 受影响 commands 改造表 / PR 拆 2 个 / worktree 路径术语统一 `<project_uuid>` / `pick_project_dir` 手动输入 fallback / "最近隐藏项目"列表 / `⚠️` 替代 `📁` / PRD 补验收标准 / `PRAGMA foreign_keys = ON` / `send()` project 空值守卫 / LLM 指定的 `working_directory` 过 boundary 校验
+- **采纳(11 条)**:ToolContext 注入式传递 / 受影响 commands 改造表 / PR 拆 2 个 / worktree 路径术语统一 `<project_uuid>` / pick_project_dir dialog 错误处理(toast 不重弹) / "最近隐藏项目"列表 / `⚠️` 替代 `📁` / PRD 补验收标准 / `PRAGMA foreign_keys = ON` / `send()` project 空值守卫(Q2 drop 后只剩 UI v-if 隔离) / LLM 指定的 `working_directory` 过 boundary 校验
 - **未采纳(1 条)**:Q2 改 path-as-PK — 你 grill 时决策,评审建议不成立
 - **评审冲突我替你拍(1 处)**:cwd 写 DB 时机 — **turn 结束一次性写**(理由见 Q5)
 - **新增关注点**:SQLite `schema_version` 表(评审 §2.2 提) — 实际不需要,本期 migration 是一次性非破坏性 ALTER + INSERT,if-not-exists 模式继续用;真要版本号,PR1 第一步引入
@@ -150,7 +150,7 @@ src-tauri/src/
 | `update_project_name` | `id, new_name` | `Result<ProjectInfo>` | 改 name(自由,无约束) |
 | `hide_project` | `id` | `Result<()>` | × 关闭 Tab(hidden=1) |
 | `unhide_project` | `id` | `Result<()>` | 空状态"最近隐藏项目"列表的"重新打开"按钮 |
-| `pick_project_dir` | `fallback: bool` | `Option<String>` | 调 Tauri dialog;fallback=true 时前端弹出"手动输入 path"输入框 |
+| `pick_project_dir` | `()` | `Result<Option<String>>` | 调 Tauri dialog(tree-walk 选目录);`Ok(None)` = 用户取消,`Err(_)` = 弹 dialog 失败 / backend 校验目录不存在。前端 toast 提示,不重弹 dialog |
 
 ### 4.3 现有 commands 改造(评审 GLM §1.1 提)
 
@@ -347,27 +347,37 @@ async function send(text: string) {
 | 数量上限 | 无;`overflow-x: auto` 横向滚动 |
 | "+ 添加项目" | 紧贴最右 Tab,固定不随滚动消失 |
 
-### 5.4 `pick_project_dir` 跨平台 UX(评审 GLM §4.2)
+### 5.4 `pick_project_dir` 错误处理(Q8v2 决议)
+
+Tauri `pick_folder` dialog 本身是从根目录一级级展开的 tree-walk,**没有**"手动输入 path"这条 UX 路径。dialog 的三种结局对应三种 UX:
 
 ```ts
 // projects.ts addProject():
 async function addProject() {
-  let path: string | null = null
+  let result: { path: string | null; err: string | null } = { path: null, err: null }
   try {
-    path = await invoke('pick_project_dir', { fallback: false })
+    const path = await invoke<string | null>('pick_project_dir')   // null = 用户取消
+    result = { path, err: null }
   } catch (e) {
-    // WSLg dialog 不稳 / 用户取消 → 弹手动输入
-    path = await showManualPathDialog()
+    result = { path: null, err: String(e) }  // dialog 弹失败 / 目录不存在
   }
-  if (!path) return
-  // ...create_project + 切到新 Tab
-}
 
-// 手动输入 dialog(纯前端):用 reka-ui dialog 组件
-// 标题:"手动输入项目路径"
-// 输入框:absolute path,Enter 提交,Esc 取消
-// 提交时调 create_project(path),错误 toast 返回
+  if (result.path) {
+    // 选好了 → create_project + 切到新 Tab
+  } else if (result.err) {
+    // 失败 → toast 错误,不重弹 dialog(让用户主动重选)
+    showToast(`添加项目失败: ${result.err}`, 'error')
+  }
+  // result.path == null && result.err == null → 用户取消,静默啥也不做
+}
 ```
+
+**核心**:
+- **取消 ≠ 失败**:取消是用户主动意图(`Ok(None)`),静默
+- **失败要明确告知**:`Err(_)`(dialog 弹不出 / 目录不存在)→ toast 错误,让用户知道发生了什么
+- **不重弹 dialog**:失败后强加重弹是"反取消"语义 + 死循环风险(dialog 弹不出时)
+
+跟 Q8 决议结合:Q8 选 (a) 取消静默 / dialog 弹失败 toast / 目录不存在 toast。
 
 ### 5.5 启动流程
 
@@ -436,7 +446,7 @@ app onMounted:
 - cwd 漂移机制 + tools 边界校验
 - Tauri commands(7 新增 + 4 现有改造)
 - 前端 projects store + chat store 改造
-- `pick_project_dir` + 手动输入 fallback
+- `pick_project_dir` 错误处理(toast 不重弹)
 - PRD 验收标准补全 + PR 映射
 
 **明确不做**(留给后续):
@@ -488,7 +498,7 @@ app onMounted:
 | 前端 projects store | ~80 | |
 | `chat.ts` 改造 | ~50 | |
 | `ChatWindow.vue` Tab 栏 + 空状态 + 隐藏项目列表 | ~250 | UI 重头 |
-| `pick_project_dir` + 手动输入 fallback | ~50 | |
+| `pick_project_dir` 错误处理(toast 不重弹) | ~10 | 取消静默 / 失败 toast |
 | ARCHITECTURE 文档 + spec 文档 | ~150 | 评审要求 |
 | **合计** | **~1220** | 含测试 / spec / 文档 |
 
@@ -526,7 +536,7 @@ app onMounted:
 | GLM §3.1 | 拆 2 PR | ✅ | §9 |
 | GLM §3.2 | 隐藏项目列表 | ✅ | §5.3 |
 | GLM §4.1 | ⚠️ 替代 📁 | ✅ | §5.3 |
-| GLM §4.2 | pick_project_dir 跨平台 fallback | ✅ | §5.4 |
+| GLM §4.2 | pick_project_dir 跨平台 fallback(手动输入) | ❌ 撤回 | Tauri `pick_folder` dialog **本身就是** tree-walk,无"手动输入"路径。改为"错误处理 + toast 不重弹"。评审当时基于错前提提,撤回 |
 | GLM §5 | PRD 补验收标准 | ✅ | PRD 改 |
 
 **冲突拍板**:

@@ -2,7 +2,7 @@
 
 ## Goal
 
-把 IMPLEMENTATION §2.4 原 "步骤 3b" 拆成 3b-1（本任务）和 3b-2（暂缓）。3b-1 落地：projects 数据模型 + 顶部 Tab UI + cwd 漂移机制 + Auto-default 兜底 migration + `pick_project_dir` 跨平台 fallback。为步骤 4（Git worktree）解锁 `<project_uuid>` 字段。
+把 IMPLEMENTATION §2.4 原 "步骤 3b" 拆成 3b-1（本任务）和 3b-2（暂缓）。3b-1 落地：projects 数据模型 + 顶部 Tab UI + cwd 漂移机制 + Auto-default 兜底 migration + `pick_project_dir` 错误处理(Q8v2)。为步骤 4（Git worktree）解锁 `<project_uuid>` 字段。
 
 ## 权威设计稿
 
@@ -33,7 +33,7 @@
 - `stores/projects.ts` 新增
 - `stores/chat.ts` 改造
 - `ChatWindow.vue` Tab 栏 + 空状态 + "最近隐藏项目"列表
-- `pick_project_dir` + 手动输入 fallback
+- `pick_project_dir` 错误处理(toast 不重弹)
 - 端到端测试
 
 ## 验收标准(AC)
@@ -46,7 +46,7 @@
 - [ ] `boundary::assert_within_root` 7 个 edge case 单测全过
 - [ ] `create_session(project_id, initial_cwd, model)` 签名生效
 - [ ] `list_sessions(project_id)` 返回只含该 project 的 sessions
-- [ ] `pick_project_dir(fallback: bool)` 实现
+- [ ] `pick_project_dir` 实现 — `Result<Option<String>>` 语义:Ok(None) 取消,Err 失败
 - [ ] shell tool 接 `working_directory` 参数,**过 boundary**
 - [ ] read_file / write_file 相对路径按 `ctx.cwd` 解析,绝对路径过 boundary
 - [ ] turn 结束**一次性**写 `session.current_cwd`,不是每次 shell 写
@@ -55,7 +55,7 @@
 ### AC-PR2(前端,Tab 栏 + 空状态)
 - [ ] 顶部 Tab 栏渲染,selected Tab 底部 2px 蓝线
 - [ ] 无项目时整个 session 侧栏不渲染;中央居中显示"添加项目"按钮
-- [ ] "+ 添加项目" 弹 Tauri dialog;失败/manual 时显示手动输入 path
+- [ ] "+ 添加项目" 弹 Tauri dialog;取消静默;失败 toast 不重弹(Q8v2)
 - [ ] 选目录后探测 `is_git_repo`,存表,自动切到新 Tab
 - [ ] 同一目录加两次 → focus 已有 Tab,不重复添加
 - [ ] 关闭 Tab(×)→ `hide_project`,数据保留,Tab 消失
@@ -102,5 +102,5 @@
 - **boundary::assert_within_root** 7 edge case 单元测试覆盖率
 - **`PRAGMA foreign_keys = ON`** 连接池初始化时一次性设
 - **turn 结束一次性写 cwd** — agent loop 状态机要正确累积 `last_cwd`
-- **`pick_project_dir` fallback** 在 WSLg 下的 UX(评审 GLM §4.2 提)
+- **`pick_project_dir` 错误处理** — Tauri `pick_folder` dialog 本身就是 tree-walk,无"手动输入"路径。取消静默 / 失败 toast 不重弹(Q8v2)
 - **Q2 UUID vs Path-as-PK** — 保持 UUID,但评审认为 over-engineer;如果实施时发现 UUID 拖累,可改 path-as-PK 优化(成本小)

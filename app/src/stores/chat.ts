@@ -1,7 +1,10 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+import { useProjectsStore } from "./projects";
+import { useConfigStore } from "./config";
 
 type Role = "user" | "assistant";
 type ErrorCategory =
@@ -52,24 +55,28 @@ export interface ChatMessage {
   redactedThinkingData?: string[];
 }
 
-/** Session summary shown in the sidebar. */
+/** Session summary shown in the sidebar. Snake_case to match PR1's
+ *  Rust serialization (no `#[serde(rename_all = "camelCase")]`). */
 export interface SessionSummary {
   id: string;
   title: string;
-  updatedAt: string;
+  updated_at: string;
   preview: string;
+  project_id: string;
+  current_cwd: string;
 }
 
-/** Message loaded from DB on session switch. */
+/** Message loaded from DB on session switch. Snake_case fields
+ *  match PR1's Rust serialization. */
 interface LoadedMessage {
   id: number;
-  sessionId: string;
+  session_id: string;
   role: Role;
   content: unknown; // Vec<ContentBlock> as JSON
   text: string;
-  hasToolCalls: boolean;
-  hasToolResults: boolean;
-  createdAt: string;
+  has_tool_calls: boolean;
+  has_tool_results: boolean;
+  created_at: string;
   seq: number;
 }
 
@@ -95,9 +102,11 @@ interface LoadedSession {
   session: {
     id: string;
     title: string;
-    createdAt: string;
-    updatedAt: string;
+    created_at: string;
+    updated_at: string;
     model: string;
+    project_id: string;
+    current_cwd: string;
   };
   messages: LoadedMessage[];
 }
@@ -189,9 +198,87 @@ export const useChatStore = defineStore("chat", () => {
   const currentRequestId = ref<string | null>(null);
   const listenerReady = ref(false);
 
-  // Session state
+  // Session state — scoped to the current project (set by
+  // `projectsStore.currentProjectId` and reloaded by the watcher
+  // below). `currentCwd` mirrors the session's `current_cwd` for the
+  // header display (Q5).
   const sessions = ref<SessionSummary[]>([]);
   const currentSessionId = ref<string | null>(null);
+  const currentCwd = ref<string>("");
+
+  // Streaming tracking (Q3 / PROPOSAL §4.4 "turn 结束一次性写"). When
+  // a stream is in flight, `streamingSessionId` records which session
+  // owns it (used by `shouldApplyEvent` to drop events for
+  // non-current sessions), and `streamingProjectIds` is the set of
+  // project IDs the UI uses to draw a red dot on the tab. We track
+  // `lastStreamedProjectId` separately so `clearStreamingSession` can
+  // remove the right project from the Set even if the user has
+  // switched projects mid-stream (where `currentProjectId` no longer
+  // points at the streaming project).
+  const streamingSessionId = ref<string | null>(null);
+  const lastStreamedProjectId = ref<string | null>(null);
+  const streamingProjectIds = ref<Set<string>>(new Set());
+
+  // -----------------------------------------------------------------------
+  // Cross-store coordination: react to project changes
+  // -----------------------------------------------------------------------
+
+  // We grab the cross-store handles at the top of the setup function
+  // so the watcher is registered against stable references. The
+  // `useProjectsStore()` and `useConfigStore()` calls below are
+  // idempotent (Pinia dedupes), and the `watch` we register is the
+  // single source of truth for project-change side effects.
+  const projectsStore = useProjectsStore();
+  const configStore = useConfigStore();
+
+  watch(
+    () => projectsStore.currentProjectId,
+    async (newId) => {
+      // Persist last-active project to localStorage. The config
+      // store's own watcher writes to localStorage; we just update
+      // its ref. Done here (not in the projects store) so the
+      // persistence lives next to the read path (config.load) for
+      // cohesion.
+      configStore.lastActiveProjectId = newId;
+      await onProjectChange(newId);
+    },
+    { immediate: true },
+  );
+
+  async function onProjectChange(newId: string | null): Promise<void> {
+    if (newId === null) {
+      sessions.value = [];
+      currentSessionId.value = null;
+      currentCwd.value = "";
+      messages.value = [];
+      return;
+    }
+    await loadSessions(newId);
+    // Default to the most-recently-updated session if any exist;
+    // otherwise leave the chat area in its empty state.
+    if (sessions.value.length > 0) {
+      const first = sessions.value[0];
+      currentSessionId.value = first.id;
+      currentCwd.value = first.current_cwd ?? "";
+      // Load messages for that session. We do this inline (not via
+      // `switchSession`) so the initial-load path is a single
+      // `await` and avoids a redundant `sending` guard check.
+      try {
+        const loaded = await invoke<LoadedSession | null>("load_session", {
+          sessionId: first.id,
+        });
+        if (loaded) {
+          messages.value = rehydrateMessages(loaded.messages);
+        }
+      } catch (e) {
+        console.error("initial load_session failed:", e);
+      }
+    } else {
+      currentSessionId.value = null;
+      currentCwd.value = "";
+      messages.value = [];
+    }
+  }
 
   // -----------------------------------------------------------------------
   // Listeners
@@ -217,6 +304,28 @@ export const useChatStore = defineStore("chat", () => {
   // Event handlers
   // -----------------------------------------------------------------------
 
+  /** Drop events for a stream that no longer matches the session
+   *  currently shown in the UI. Returns true if the event should be
+   *  applied, false if it should be discarded. */
+  function shouldApplyEvent(requestId: string): boolean {
+    if (requestId !== currentRequestId.value) return false;
+    // If a stream is in flight and the user has navigated to a
+    // different session, drop the events. The user is no longer
+    // looking at the streaming session; the in-flight events would
+    // otherwise clobber the new session's `messages.value` last
+    // entry. When the user returns to the streaming session, the
+    // DB state is up-to-date up to the last persisted turn, and
+    // the stream's `done` event will reset `currentRequestId` to
+    // null on the next event tick.
+    if (
+      streamingSessionId.value !== null &&
+      streamingSessionId.value !== currentSessionId.value
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   /** Get-or-create the in-flight thinking block (the one currently being
    *  streamed for this assistant message). There is at most one open
    *  block at a time; signature_delta on a new event after a text /
@@ -238,7 +347,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function handleChatEvent(event: ChatEventPayload) {
-    if (event.request_id !== currentRequestId.value) return;
+    if (!shouldApplyEvent(event.request_id)) return;
     const last = messages.value[messages.value.length - 1];
     if (!last || last.role !== "assistant") return;
 
@@ -272,8 +381,11 @@ export const useChatStore = defineStore("chat", () => {
         last.streaming = false;
         sending.value = false;
         currentRequestId.value = null;
+        clearStreamingSession();
         // Refresh sidebar so updated_at / title reflect the new turn.
-        void loadSessions();
+        if (projectsStore.currentProjectId) {
+          void loadSessions(projectsStore.currentProjectId);
+        }
         break;
       case "error":
         last.streaming = false;
@@ -283,12 +395,13 @@ export const useChatStore = defineStore("chat", () => {
         };
         sending.value = false;
         currentRequestId.value = null;
+        clearStreamingSession();
         break;
     }
   }
 
   function handleToolCall(payload: ToolCallPayload) {
-    if (payload.request_id !== currentRequestId.value) return;
+    if (!shouldApplyEvent(payload.request_id)) return;
     const last = messages.value[messages.value.length - 1];
     if (!last || last.role !== "assistant") return;
 
@@ -301,7 +414,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function handleToolResult(payload: ToolResultPayload) {
-    if (payload.request_id !== currentRequestId.value) return;
+    if (!shouldApplyEvent(payload.request_id)) return;
     const last = messages.value[messages.value.length - 1];
     if (!last || last.role !== "assistant") return;
 
@@ -313,12 +426,33 @@ export const useChatStore = defineStore("chat", () => {
     });
   }
 
+  function clearStreamingSession(): void {
+    if (lastStreamedProjectId.value) {
+      streamingProjectIds.value.delete(lastStreamedProjectId.value);
+      // Runtime invariant (PR2 fix): after a stream ends, the
+      // project's red dot must be gone. Catches future regressions
+      // where the Set is keyed on session IDs again by mistake.
+      console.assert(
+        !streamingProjectIds.value.has(lastStreamedProjectId.value),
+        "streamingProjectIds should not contain the streamed project ID after clear",
+      );
+    }
+    lastStreamedProjectId.value = null;
+    streamingSessionId.value = null;
+  }
+
   // -----------------------------------------------------------------------
   // Session management
   // -----------------------------------------------------------------------
 
-  async function loadSessions() {
-    sessions.value = await invoke<SessionSummary[]>("list_sessions");
+  async function loadSessions(projectId: string | null): Promise<void> {
+    if (!projectId) {
+      sessions.value = [];
+      return;
+    }
+    sessions.value = await invoke<SessionSummary[]>("list_sessions", {
+      project_id: projectId,
+    });
   }
 
   /** Convert DB-loaded messages into frontend ChatMessage objects.
@@ -368,7 +502,7 @@ export const useChatStore = defineStore("chat", () => {
         }
       }
       const msg: ChatMessage = {
-        id: `${m.sessionId}-${m.seq}`,
+        id: `${m.session_id}-${m.seq}`,
         role: m.role,
         content: m.text,
       };
@@ -401,27 +535,53 @@ export const useChatStore = defineStore("chat", () => {
     return messages;
   }
 
+  /** Create a new session under the current project. Throws if no
+   *  project is active — the caller (the chat area) is expected to
+   *  be visible only when a project is selected (Q2 in dispatch
+   *  prompt: the empty state hides the input, so send/create is
+   *  unreachable from the UI). */
   async function createNewSession(): Promise<string> {
+    const projectId = projectsStore.currentProjectId;
+    if (!projectId) {
+      throw new Error("createNewSession: no current project");
+    }
+    const project = projectsStore.projectById(projectId);
+    const initialCwd = project?.path ?? "";
     const session = await invoke<{
       id: string;
       title: string;
-      createdAt: string;
-      updatedAt: string;
+      created_at: string;
+      updated_at: string;
       model: string;
-    }>("create_session", { model: null });
+      project_id: string;
+      current_cwd: string;
+    }>("create_session", {
+      project_id: projectId,
+      initial_cwd: initialCwd,
+      model: null,
+    });
     currentSessionId.value = session.id;
+    currentCwd.value = session.current_cwd ?? "";
     messages.value = [];
-    await loadSessions();
+    await loadSessions(projectId);
     return session.id;
   }
 
   async function switchSession(sessionId: string) {
-    if (sending.value) return; // don't switch mid-stream
+    // Q3: switching sessions mid-stream is allowed. The in-flight
+    // request keeps running on the backend; events for it are
+    // dropped for non-current sessions via `shouldApplyEvent`, so
+    // the new session's `messages.value` is not clobbered. When the
+    // user returns to the streaming session, the DB state is
+    // up-to-date up to the last persisted turn, and the stream's
+    // `done` / `error` event will reset `sending` and
+    // `currentRequestId` on the next event tick.
     const loaded = await invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
     if (!loaded) return;
     currentSessionId.value = sessionId;
+    currentCwd.value = loaded.session.current_cwd ?? "";
     messages.value = rehydrateMessages(loaded.messages);
   }
 
@@ -429,9 +589,12 @@ export const useChatStore = defineStore("chat", () => {
     await invoke("delete_session", { sessionId });
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null;
+      currentCwd.value = "";
       messages.value = [];
     }
-    await loadSessions();
+    if (projectsStore.currentProjectId) {
+      await loadSessions(projectsStore.currentProjectId);
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -494,7 +657,11 @@ export const useChatStore = defineStore("chat", () => {
     if (!trimmed || sending.value) return;
     await ensureListener();
 
-    // Lazily create a session if there isn't one yet.
+    // Lazily create a session if there isn't one yet. `createNewSession`
+    // throws if no project is active, so the chat area is expected
+    // to be visible only when a project is selected (Q2 in dispatch
+    // prompt: the empty state hides the input, so send/create is
+    // unreachable from the UI).
     if (!currentSessionId.value) {
       await createNewSession();
     }
@@ -524,6 +691,24 @@ export const useChatStore = defineStore("chat", () => {
     const requestId = genId();
     currentRequestId.value = requestId;
     sending.value = true;
+    // Mark the current session as streaming so a tab switch can
+    // (a) drop events for this stream (via `shouldApplyEvent`) and
+    // (b) show the red dot on the originating tab. The project ID
+    // is recorded in `lastStreamedProjectId` so we can clean the
+    // Set when the stream ends, even if the user has switched
+    // projects mid-stream.
+    if (currentSessionId.value && projectsStore.currentProjectId) {
+      streamingSessionId.value = currentSessionId.value;
+      lastStreamedProjectId.value = projectsStore.currentProjectId;
+      streamingProjectIds.value.add(projectsStore.currentProjectId);
+      // Runtime invariant (PR2 fix): when a stream starts, the
+      // originating project's ID must be in the Set so the tab
+      // can render the red dot.
+      console.assert(
+        streamingProjectIds.value.has(projectsStore.currentProjectId),
+        "streamingProjectIds should contain the current project ID after send()",
+      );
+    }
 
     try {
       await invoke("chat", {
@@ -539,6 +724,7 @@ export const useChatStore = defineStore("chat", () => {
       assistantMsg.streaming = false;
       sending.value = false;
       currentRequestId.value = null;
+      clearStreamingSession();
     }
   }
 
@@ -558,6 +744,8 @@ export const useChatStore = defineStore("chat", () => {
     listenerReady,
     sessions,
     currentSessionId,
+    currentCwd,
+    streamingProjectIds,
     send,
     loadSessions,
     createNewSession,

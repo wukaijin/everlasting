@@ -1,0 +1,242 @@
+<script setup lang="ts">
+// ProjectTabs — top tab bar for switching between registered projects.
+//
+// Per Q7 (PROPOSAL §5.3):
+//   - No tab count limit; horizontal overflow scroll.
+//   - Min 100px / max 240px per tab (ellipsis on overflow).
+//   - "+" button fixed at the right end.
+// Per Q3 (PROPOSAL §5.3):
+//   - Show a red "●" on a tab while its session is streaming.
+// Per Q-resolutions (Q3 dispatch):
+//   - "⚠️" 12px icon for non-git projects (tooltip: "未启用 git 隔离").
+//   - "📦" 12px icon for legacy/auto-default projects (tooltip: "旧数据,自动归入").
+//   - "×" close button calls `hide_project` (data preserved).
+//   - Selected tab gets a 2px blue underline + light bg.
+
+import { useProjectsStore } from "../stores/projects";
+
+const store = useProjectsStore();
+
+defineProps<{
+  /** Set of project ids that have a streaming session. The store
+   *  hands this in; the tab bar is purely presentational. */
+  streamingProjectIds: Set<string>;
+}>();
+
+function onTabClick(id: string) {
+  void store.switchProject(id);
+}
+
+function onHide(id: string, e: MouseEvent) {
+  e.stopPropagation();
+  void store.hideProject(id);
+}
+
+async function onAdd() {
+  await store.addProject();
+}
+
+function tabTooltip(p: {
+  path: string;
+  is_legacy: boolean;
+  is_git_repo: boolean;
+}): string {
+  if (p.is_legacy) return `${p.path} (旧数据,自动归入)`;
+  if (!p.is_git_repo) {
+    return `${p.path} (未启用 git 隔离 — 步骤 4 worktree 不生效)`;
+  }
+  return p.path;
+}
+</script>
+
+<template>
+  <div class="tabs">
+    <div class="tabs__scroll">
+      <button
+        v-for="p in store.projects"
+        :key="p.id"
+        :class="['tab', { 'tab--active': p.id === store.currentProjectId }]"
+        :title="tabTooltip(p)"
+        @click="onTabClick(p.id)"
+      >
+        <span class="tab__name">{{ p.name }}</span>
+        <span
+          v-if="!p.is_git_repo && !p.is_legacy"
+          class="tab__icon tab__icon--warn"
+          title="未启用 git 隔离"
+        >⚠️</span>
+        <span
+          v-else-if="p.is_legacy"
+          class="tab__icon tab__icon--legacy"
+          title="旧数据,自动归入"
+        >📦</span>
+        <span
+          v-if="streamingProjectIds.has(p.id)"
+          class="tab__streaming"
+          title="正在生成"
+        >●</span>
+        <button
+          class="tab__close"
+          :title="'关闭 Tab(数据保留)'"
+          @click="(e) => onHide(p.id, e)"
+        >×</button>
+      </button>
+    </div>
+    <button class="tabs__add" title="添加项目" @click="onAdd">+</button>
+  </div>
+</template>
+
+<style scoped>
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.tabs__scroll {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tabs__scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs__scroll::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 2px;
+}
+
+.tabs__scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 100px;
+  max-width: 240px;
+  flex-shrink: 0;
+  padding: 0 6px 0 10px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-right: 1px solid #f3f4f6;
+  cursor: pointer;
+  font-size: 13px;
+  color: #6b7280;
+  transition: background 0.1s, color 0.1s;
+  font-family: inherit;
+}
+
+.tab:hover {
+  background: #f9fafb;
+  color: #1f2328;
+}
+
+.tab--active {
+  background: #f3f4f6;
+  color: #1f2328;
+}
+
+.tab--active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: #2563eb;
+}
+
+.tab__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.tab__icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.tab__icon--warn {
+  color: #d97706;
+}
+
+.tab__icon--legacy {
+  filter: saturate(0.85);
+}
+
+.tab__streaming {
+  color: #ef4444;
+  font-size: 9px;
+  flex-shrink: 0;
+  line-height: 1;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.tab__close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+  padding: 0;
+  font-family: inherit;
+}
+
+.tab:hover .tab__close,
+.tab--active .tab__close {
+  opacity: 1;
+}
+
+.tab__close:hover {
+  background: #fca5a5;
+  color: #ffffff;
+}
+
+.tabs__add {
+  flex-shrink: 0;
+  width: 36px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-left: 1px solid #f3f4f6;
+  cursor: pointer;
+  font-size: 18px;
+  color: #6b7280;
+  transition: background 0.1s, color 0.1s;
+  font-family: inherit;
+  padding: 0;
+}
+
+.tabs__add:hover {
+  background: #f9fafb;
+  color: #2563eb;
+}
+</style>
