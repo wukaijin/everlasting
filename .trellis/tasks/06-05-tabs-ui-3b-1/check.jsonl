@@ -1,0 +1,21 @@
+{"file": "docs/PROPOSAL-project-binding-and-top-tabs.md", "reason": "PR1 verifier: confirm §3.4 Auto-default migration, §4.3 affected commands table, §4.4 ToolContext, §6 worktree term unification are all implemented as described."}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "PR1 verifier: confirm boundary::assert_within_root matches the 7 edge case contract; all 7 unit tests pass."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR1 verifier: confirm new db.rs code follows existing sqlx + migration conventions."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "PR1 verifier: confirm new projects/ module + tools/ refactor meet existing quality bar (tests, errors, naming)."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PR1 verifier: confirm boundary:: + project CRUD errors use anyhow at boundaries, thiserror in domain (if defined)."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "PR2 verifier: confirm projects.ts + chat.ts refactor follow Pinia store composition style."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR2 verifier: confirm ChatWindow.vue Tab bar + empty state + hidden-projects list follow reka-ui + script setup conventions."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "PR2 verifier: confirm pnpm build + vue-tsc --noEmit pass; manual smoke covers AC-end-to-end list."}
+{"file": "app/src-tauri/src/db.rs", "reason": "PR1 verifier: confirm PRAGMA foreign_keys = ON set in pool init; projects table created; Auto-default migration inserts __default__ row; sessions add project_id + current_cwd columns with index."}
+{"file": "app/src-tauri/src/lib.rs", "reason": "PR1 verifier: confirm chat command builds ToolContext from session.project_id; 4 existing Tauri commands (create_session / list_sessions / load_session / delete_session) match §4.3 signatures."}
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "PR1 verifier: confirm execute_tool signature is (name: &str, input: &Value, ctx: &ToolContext) -> (String, bool)."}
+{"file": "app/src-tauri/src/tools/shell.rs", "reason": "PR1 verifier: confirm working_directory parameter accepted, validated through assert_within_root, LLM-supplied value is NOT trusted."}
+{"file": "app/src-tauri/src/tools/read_file.rs", "reason": "PR1 verifier: confirm relative paths resolve via ctx.cwd, absolute paths validated through assert_within_root."}
+{"file": "app/src-tauri/src/tools/write_file.rs", "reason": "PR1 verifier: same as read_file."}
+{"file": "app/src/components/ChatWindow.vue", "reason": "PR2 verifier: confirm Tab bar renders, selected Tab has 2px blue underline, non-git has warning icon, legacy has package icon, close button triggers hide_project, empty state shows recent hidden list when applicable."}
+{"file": "app/src/stores/chat.ts", "reason": "PR2 verifier: confirm watcher on currentProjectId triggers loadSessions with projectId; send() returns early + toast when no project."}
+{"file": "app/src/stores/projects.ts", "reason": "PR2 verifier (new file): confirm listProjects / loadHiddenProjects / addProject (with pick_project_dir fallback) / hideProject / unhideProject / switchProject / renameProject all match §5.1."}
+{"file": "docs/ARCHITECTURE.md", "reason": "PR1 verifier: confirm §3 worktree path uses project_uuid (not project_hash); optional new §6 project model section."}
+{"file": "docs/IMPLEMENTATION.md", "reason": "PR1 verifier: confirm §2.4 shows 3b-1 (in progress) / 3b-2 (deferred); decision log entry if any."}
+{"file": "docs/REVIEW-deepseek-v4-pro-3b-1.md", "reason": "PR1 / PR2 verifier: cross-check that issues raised in §2 (3 compatibility gaps), §4.1 (LLM working_directory), §4.2 (send guard), §4.3 (PRAGMA) are addressed."}
+{"file": "docs/REVIEW-glm-5.1-3b-1.md", "reason": "PR1 / PR2 verifier: cross-check that §1.1 affected commands, §1.2 ToolContext mechanism, §3.1 PR split, §4.2 pick_project_dir fallback are addressed."}

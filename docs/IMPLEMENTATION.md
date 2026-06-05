@@ -68,14 +68,31 @@
 - LLM 客户端不动(继续用 reqwest + 手写 SSE)
 - **可交付物**:关掉 app 再打开,历史消息还在
 
-### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] ⏸ 暂缓
+### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] 🔄 进行中(3b-1 后端,3b-2 暂缓)
 
 **目标**:引入 Project 概念,三栏 UI,切 rig-core
 
-- LLM client 从 `reqwest` 切到 `rig-core`(原理已通过步骤 2 手写掌握)
-- 引入 Project 概念,左侧项目列表
-- UI 重构:左侧项目列表 + 中间 session 列表 + 右侧 chat
-- **可交付物**:能管多个项目、多个对话
+**拆解**:
+- **3b-1(本期)** — 项目基础结构 + 顶部 Tabs UI(后端 + 前端两 PR)。给 `projects` 表 + `project_uuid`,为步骤 4 worktree 路径解锁前置;同时把"agent 不能越出 project root"这条安全边界落到代码(spec + 7 个 edge case 单测)。
+- **3b-2(暂缓)** — 完整三栏 UI + rig-core 迁移,独立做。
+
+**当前 PR1(后端,3b-1 之一)**:
+- `db.rs` migration + `projects` 表 + Auto-default `__default__` 兜底 + `PRAGMA foreign_keys = ON`
+- `projects/` 新模块(types / store / detector / boundary)
+- `tools/` 全部改造 — `ToolContext` 注入 + `shell` 加 `working_directory` 校验 + `read_file`/`write_file` 相对/绝对路径过 boundary
+- `lib.rs` `chat` 命令构造 `ToolContext`,turn 结束一次性写 `sessions.current_cwd`
+- 4 个现有 commands 改造(`create_session` / `list_sessions` / `load_session` / `delete_session`) + 7 个新 commands(`list_projects` / `create_project` / 等)
+- `ARCHITECTURE §3` worktree 路径术语 `project_hash` → `project_uuid`
+- 设计稿:`docs/PROPOSAL-project-binding-and-top-tabs.md` + spec `.trellis/spec/backend/project-cwd-boundary.md`
+
+**PR2(前端,3b-1 之二,待 PR1 落地后启动)**:
+- `stores/projects.ts` 新增
+- `stores/chat.ts` 改造
+- `ChatWindow.vue` Tab 栏 + 空状态 + "最近隐藏项目"列表
+- `pick_project_dir` + 手动输入 fallback
+- 端到端测试
+
+**可交付物**:能管多个项目、多个对话,agent 工具调用不越出 project root,为步骤 4 准备好 `<project_uuid>` 字段
 
 ### 2.5 步骤 4 — Git 集成 [MVP]
 
@@ -136,7 +153,7 @@
 | 1 | 骨架 + LLM 直连 | MVP | ✅ 已完成(2026-06-04) |
 | 2 | Tool Calling(agent loop + 3 个 tool) | MVP | ✅ 已完成(2026-06-04) |
 | 3a | SQLite + Session 持久化 | MVP | ✅ 已完成(2026-06-05) |
-| 3b | 多项目 + UI 三栏 + rig-core | MVP | ⏸ 暂缓 |
+| 3b-1 | 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2) | MVP | 🔄 PR1 后端进行中(2026-06-05) |
 | — | **路线图外**:Anthropic extended thinking 块展示 + 持久化 | 额外 | ✅ 已完成(2026-06-05,commit `05671f5`) |
 | 4 | Git 集成(worktree + auto commit) | MVP | 未开始 |
 | 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |

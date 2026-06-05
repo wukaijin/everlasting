@@ -1,0 +1,24 @@
+{"file": "docs/PROPOSAL-project-binding-and-top-tabs.md", "reason": "Authoritative design doc for the entire 3b-1 task. Sub-agents must read §3 (data model), §4 (backend), §5 (frontend), §6 (step 4 handoff), §9 (PR split), §11 (review digest)."}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "Authoritative spec for boundary::assert_within_root. 7 edge case test cases defined; sub-agents implementing the function or its callers must follow this contract."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Existing conventions for sqlx queries, migration style, schema layout. Use as base for db.rs changes (PR1 step 1)."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Existing code quality bar (testing, error handling, naming) for all new Rust modules under src-tauri/src/projects/."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Existing error handling conventions (anyhow at boundaries, thiserror in domain). New boundary::assert_within_root + project CRUD error types must follow."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Existing src-tauri directory layout. New src-tauri/src/projects/ module must follow conventions."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Existing Pinia store conventions. New src/stores/projects.ts + chat.ts changes must follow store composition style."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Existing Vue 3 + reka-ui conventions. New ChatWindow.vue Tab bar + empty state components must follow."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Existing TypeScript type strictness. New ProjectInfo / ProjectContext types must follow."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Existing frontend quality bar (manual smoke test, vue-tsc, pnpm build). PR2 end-to-end checks must follow."}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Existing src/ layout. New stores/projects.ts placement must follow."}
+{"file": "app/src-tauri/src/db.rs", "reason": "Current schema (sessions / messages). PR1 will ALTER + add projects + Auto-default migration. Read this to know the starting point."}
+{"file": "app/src-tauri/src/lib.rs", "reason": "Current chat command + AppState. PR1 will refactor chat to inject ToolContext + 4 existing Tauri commands."}
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "Current execute_tool signature (name, input) -> (output, is_error). PR1 will add ctx parameter."}
+{"file": "app/src-tauri/src/tools/shell.rs", "reason": "Current shell tool. PR1 will add working_directory parameter + boundary check."}
+{"file": "app/src-tauri/src/tools/read_file.rs", "reason": "Current read_file tool. PR1 will resolve relative paths via ctx.cwd + boundary check."}
+{"file": "app/src-tauri/src/tools/write_file.rs", "reason": "Current write_file tool. PR1 same as read_file."}
+{"file": "app/src/components/ChatWindow.vue", "reason": "Current single-project UI. PR2 will add Tab bar + empty state + hidden-projects list."}
+{"file": "app/src/stores/chat.ts", "reason": "Current Pinia store. PR2 will add watcher on currentProjectId + send() guard."}
+{"file": "app/src/stores/config.ts", "reason": "Current Pinia config store. PR2 may extend with lastActiveProjectId localStorage persistence."}
+{"file": "docs/ARCHITECTURE.md", "reason": "PR1 will rename project_hash to project_uuid in §3 worktree path; possibly add new §6 project model."}
+{"file": "docs/IMPLEMENTATION.md", "reason": "PR1 will update §2.4 to show 3b-1 / 3b-2 split + add 3b-1 progress."}
+{"file": "docs/REVIEW-deepseek-v4-pro-3b-1.md", "reason": "External review. PR1 / PR2 implementers should be aware of issues raised (especially §2 compatibility gaps, §3 Q5/Q6 cwd boundary, §4.1-4.3 missing details)."}
+{"file": "docs/REVIEW-glm-5.1-3b-1.md", "reason": "External review. Especially §1.1 affected commands table, §1.2 ToolContext mechanism, §3.1 PR split rationale, §4.2 pick_project_dir fallback."}

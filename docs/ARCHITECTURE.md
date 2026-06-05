@@ -601,7 +601,7 @@ agent loop 结束(text-only response or max_turns reached):
 - 切换 session 几乎瞬时,不用 `git stash` / `git checkout` 来回跳
 
 **实现要点**:
-- session 创建时:`git worktree add ~/.local/share/everlasting/worktrees/<project_hash>/<session_id> -b session/<session_id>`(XDG 标准路径,跨机器一致,为后期 v2 跨设备接续做铺垫)
+- session 创建时:`git worktree add ~/.local/share/everlasting/worktrees/<project_uuid>/<session_id> -b session/<session_id>`(XDG 标准路径,跨机器一致,为后期 v2 跨设备接续做铺垫)
 - session 结束时:可选 merge 回主分支,或保留作历史
 - libgit2(`git2-rs`)的 worktree API 不完整,可能要 spawn `git worktree` 命令
 

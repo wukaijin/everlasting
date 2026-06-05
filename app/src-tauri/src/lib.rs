@@ -11,23 +11,33 @@
 //! `ContentBlock::RedactedThinking` blocks at the turn boundary so the
 //! signature blobs are persisted to the DB and echoed back to the LLM on
 //! the next turn.
+//!
+//! Step 3b-1 adds project binding + a `ToolContext` that is injected into
+//! every tool call, plus the 7-project Tauri command surface
+//! (`list_projects` / `create_project` / `update_project_path` / etc.).
+//! See `docs/PROPOSAL-project-binding-and-top-tabs.md` and
+//! `.trellis/spec/backend/project-cwd-boundary.md`.
 
 mod db;
 mod llm;
+mod projects;
 mod tools;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use llm::{
     chat_stream_with_tools, ChatEvent, ChatMessage, ContentBlock, LlmConfig, LlmErrorCategory,
     MessageContent, Role, ToolDef,
 };
+use tools::ToolContext;
 
 /// Maximum agent loop turns before forced stop (safety limit).
 const MAX_TURNS: usize = 20;
@@ -141,8 +151,9 @@ fn get_llm_config(state: State<'_, Arc<AppState>>) -> PublicLlmConfig {
 #[tauri::command]
 async fn list_sessions(
     state: State<'_, Arc<AppState>>,
+    project_id: String,
 ) -> Result<Vec<db::SessionSummary>, String> {
-    db::list_sessions(&state.db)
+    db::list_sessions(&state.db, &project_id)
         .await
         .map_err(|e| format!("list_sessions failed: {}", e))
 }
@@ -150,10 +161,21 @@ async fn list_sessions(
 #[tauri::command]
 async fn create_session(
     state: State<'_, Arc<AppState>>,
+    project_id: String,
+    initial_cwd: String,
     model: Option<String>,
 ) -> Result<db::SessionRow, String> {
     let model = model.unwrap_or_else(|| state.config.model.clone());
-    db::create_session(&state.db, &model)
+    // Defensive: every session is bound to a project. The frontend is
+    // expected to gate this with a "no project = no chat" check, but a
+    // stray IPC call should not silently create a legacy-bound session.
+    if project_id.trim().is_empty() {
+        return Err("create_session: project_id must not be empty".to_string());
+    }
+    // Sanity: the project must exist. We do NOT error out if it doesn't
+    // (the user could be racing a delete); instead we let `db::create_session`
+    // surface the foreign-key violation as a clear error.
+    db::create_session(&state.db, &project_id, &initial_cwd, &model)
         .await
         .map_err(|e| format!("create_session failed: {}", e))
 }
@@ -176,6 +198,116 @@ async fn delete_session(
     db::delete_session(&state.db, &session_id)
         .await
         .map_err(|e| format!("delete_session failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands — project management (PROPOSAL §4.2)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Clone, serde::Deserialize)]
+struct ListProjectsFilter {
+    #[serde(default)]
+    hidden: Option<bool>,
+}
+
+#[tauri::command]
+async fn list_projects(
+    state: State<'_, Arc<AppState>>,
+    filter: Option<ListProjectsFilter>,
+) -> Result<Vec<projects::ProjectRow>, String> {
+    // `filter = { hidden: true }` returns the "recently hidden" list used
+    // by the empty-state panel. The default (`hidden: false` or
+    // `filter = null`) is the main Tab bar.
+    let include_hidden = filter
+        .as_ref()
+        .and_then(|f| f.hidden)
+        .unwrap_or(false);
+    db::list_projects(&state.db, include_hidden)
+        .await
+        .map_err(|e| format!("list_projects failed: {}", e))
+}
+
+#[tauri::command]
+async fn list_hidden_projects(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<projects::ProjectRow>, String> {
+    db::list_hidden_projects(&state.db)
+        .await
+        .map_err(|e| format!("list_hidden_projects failed: {}", e))
+}
+
+#[tauri::command]
+async fn create_project(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<projects::ProjectRow, String> {
+    projects::store::create_project(&state.db, &path).await
+}
+
+#[tauri::command]
+async fn update_project_path(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    new_path: String,
+) -> Result<projects::ProjectRow, String> {
+    projects::store::update_project_path(&state.db, &id, &new_path).await
+}
+
+#[tauri::command]
+async fn update_project_name(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    new_name: String,
+) -> Result<projects::ProjectRow, String> {
+    projects::store::update_project_name(&state.db, &id, &new_name).await
+}
+
+#[tauri::command]
+async fn hide_project(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    projects::store::hide_project(&state.db, &id).await
+}
+
+#[tauri::command]
+async fn unhide_project(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    projects::store::unhide_project(&state.db, &id).await
+}
+
+/// Show a native directory picker. Returns `Some(path)` if the user
+/// picked a directory, `None` if they cancelled or the dialog is
+/// unavailable.
+///
+/// The `fallback` argument is reserved for a future "show manual input
+/// dialog" UX (review GLM §4.2) — for now the frontend uses it to
+/// decide whether to surface the fallback input. We do not
+/// short-circuit on it here, because the dialog itself either
+/// succeeds or the frontend reads `None` and shows the manual input.
+#[tauri::command]
+async fn pick_project_dir(
+    app: AppHandle,
+    #[allow(unused_variables)] fallback: bool,
+) -> Result<Option<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<PathBuf>>();
+    app.dialog()
+        .file()
+        .set_title("选择项目目录")
+        .pick_folder(move |folder| {
+            // The callback may fire on the UI thread depending on the
+            // platform; we just need to forward the value. `None` means
+            // "cancelled or dialog unavailable".
+            let path = folder.and_then(|fp| fp.into_path().ok());
+            let _ = tx.send(path);
+        });
+    match rx.await {
+        Ok(Some(p)) => Ok(Some(p.to_string_lossy().into_owned())),
+        Ok(None) => Ok(None),
+        Err(_) => Err("dialog channel closed".to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,14 +366,8 @@ async fn chat(
     tauri::async_runtime::spawn(async move {
         let mut messages = messages;
         // Start seq from the highest existing seq in this session + 1.
-        let next_seq = match db::load_session(&db, &session_id).await {
-            Ok(Some(loaded)) => loaded
-                .messages
-                .iter()
-                .map(|m| m.seq)
-                .max()
-                .map(|s| s + 1)
-                .unwrap_or(0),
+        let loaded_session = match db::load_session(&db, &session_id).await {
+            Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 tracing::warn!(session_id = %session_id, "session not found");
                 let _ = app_handle.emit(
@@ -261,7 +387,102 @@ async fn chat(
                 return;
             }
         };
+        let next_seq = loaded_session
+            .messages
+            .iter()
+            .map(|m| m.seq)
+            .max()
+            .map(|s| s + 1)
+            .unwrap_or(0);
         let mut seq = next_seq;
+
+        // --- Build the per-turn ToolContext ---
+        // The project's `path` is the root; the session's
+        // `current_cwd` is the agent's working directory inside it.
+        // Both go through `assert_within_root` so the values we hand
+        // to tools are canonical and provably inside the project.
+        let project = match db::get_project(&db, &loaded_session.session.project_id).await {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                tracing::error!(
+                    project_id = %loaded_session.session.project_id,
+                    "project not found for session"
+                );
+                let _ = app_handle.emit(
+                    "chat-event",
+                    ChatEventPayload {
+                        request_id: rid.clone(),
+                        event: ChatEvent::Error {
+                            message: format!(
+                                "project {} not found for this session",
+                                loaded_session.session.project_id
+                            ),
+                            category: LlmErrorCategory::InvalidRequest,
+                        },
+                    },
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to load project");
+                return;
+            }
+        };
+        let project_root = match projects::boundary::assert_within_root(
+            std::path::Path::new(&project.path),
+            std::path::Path::new(&project.path),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(project_id = %project.id, error = %e, "project path invalid");
+                let _ = app_handle.emit(
+                    "chat-event",
+                    ChatEventPayload {
+                        request_id: rid.clone(),
+                        event: ChatEvent::Error {
+                            message: format!("project path is invalid: {}", e),
+                            category: LlmErrorCategory::InvalidRequest,
+                        },
+                    },
+                );
+                return;
+            }
+        };
+
+        let session_cwd_raw = if loaded_session.session.current_cwd.is_empty() {
+            project.path.clone()
+        } else {
+            loaded_session.session.current_cwd.clone()
+        };
+        let session_cwd = match projects::boundary::assert_within_root(
+            &project_root,
+            std::path::Path::new(&session_cwd_raw),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                // Defensive: if the stored cwd is no longer reachable
+                // (e.g. user deleted a directory mid-session), fall
+                // back to the project root. The next shell tool call
+                // will move `turn_ctx.cwd` to wherever it goes.
+                tracing::warn!(
+                    session_cwd = %session_cwd_raw,
+                    project_root = %project_root.display(),
+                    error = %e,
+                    "session cwd outside project root — falling back to project root"
+                );
+                project_root.clone()
+            }
+        };
+        let turn_ctx = ToolContext {
+            project_root: project_root.clone(),
+            cwd: session_cwd,
+        };
+        // The mutable tool context is used as the "current" cwd
+        // within the turn — the shell tool reports updates through
+        // `ToolContextUpdate` and we apply them to this copy.
+        let mut current_ctx = turn_ctx;
+        // The final cwd value to persist at the end of the turn.
+        let mut last_cwd: Option<PathBuf> = None;
 
         // Persist the most recent user-typed message before the agent loop
         // runs. Without this, the user message only lives in the frontend's
@@ -447,6 +668,10 @@ async fn chat(
                 stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
 
             if !should_continue {
+                // Persist the agent's final cwd for this turn (one
+                // write per turn, not per shell call — see PROPOSAL
+                // §4.4 "turn 结束一次性写").
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                 // Bump session's updated_at to reflect activity.
                 if let Err(e) = db::touch_session(&db, &session_id).await {
                     tracing::warn!(error = %e, "failed to touch session");
@@ -462,7 +687,18 @@ async fn chat(
             // Execute tools and build tool_result message.
             let mut result_blocks: Vec<ContentBlock> = Vec::new();
             for (id, name, input) in &tool_calls {
-                let (content, is_error) = tools::execute_tool(name, input).await;
+                let (content, is_error, update) =
+                    tools::execute_tool(name, input, &current_ctx).await;
+                // The shell tool (and any future tool that wants to
+                // move the agent's working directory) reports its new
+                // cwd through `update.new_cwd`. We track the latest
+                // and persist it at the end of the turn — see
+                // `docs/PROPOSAL-project-binding-and-top-tabs.md` §4.4
+                // "turn 结束一次性写".
+                if let Some(new_cwd) = update.new_cwd.clone() {
+                    current_ctx.cwd = new_cwd.clone();
+                    last_cwd = Some(new_cwd);
+                }
 
                 let _ = app_handle.emit(
                     "tool:result",
@@ -499,6 +735,7 @@ async fn chat(
 
         // Safety: max turns reached.
         tracing::warn!(max_turns = MAX_TURNS, "agent loop: max turns reached");
+        persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
         let _ = db::touch_session(&db, &session_id).await;
         emit_chat_event(
             &app_handle,
@@ -515,6 +752,35 @@ async fn chat(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Persist the final cwd of a turn. Called once at turn end (not after
+/// every shell call). We compare against the DB-stored value to avoid
+/// a no-op write when the agent stayed put.
+///
+/// `last_cwd` is the latest validated canonical path reported by the
+/// shell tool's `ToolContextUpdate`. We store the path as a string —
+/// the next turn's `assert_within_root` call will canonicalize it
+/// again on read, so the DB stays canonical-encoding-agnostic.
+async fn persist_turn_cwd(
+    db: &SqlitePool,
+    session_id: &str,
+    last_cwd: Option<&std::path::Path>,
+) {
+    let Some(new_cwd) = last_cwd else {
+        return;
+    };
+    let new_cwd_str = new_cwd.to_string_lossy().into_owned();
+    // Cheap "did it change?" guard. We compare against the
+    // just-loaded session rather than re-querying.
+    if let Ok(Some(loaded)) = db::load_session(db, session_id).await {
+        if loaded.session.current_cwd == new_cwd_str {
+            return;
+        }
+    }
+    if let Err(e) = db::update_session_cwd(db, session_id, &new_cwd_str).await {
+        tracing::warn!(error = %e, "failed to persist turn cwd");
+    }
+}
 
 fn emit_chat_event(app: &AppHandle, rid: &str, event: &ChatEvent) {
     let payload = ChatEventPayload {
@@ -535,6 +801,7 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
             let state = tauri::async_runtime::block_on(async move {
@@ -550,6 +817,14 @@ pub fn run() {
             create_session,
             load_session,
             delete_session,
+            list_projects,
+            list_hidden_projects,
+            create_project,
+            update_project_path,
+            update_project_name,
+            hide_project,
+            unhide_project,
+            pick_project_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
