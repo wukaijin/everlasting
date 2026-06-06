@@ -2,13 +2,15 @@
 // ToolCallCard — a single tool invocation with its input / output
 // blocks. Per spike-003 the card has a 3px left bar that switches
 // color by tool name: read_file → cyan, write_file → emerald,
-// shell → amber. The error state (the matching tool_result
-// reports is_error) flips the bar to red and tints the card body.
+// shell → amber. The error state (the matching tool_result reports
+// is_error) flips the bar to red and tints the card body.
 //
-// Header shows the tool name + status. "Input" details are
-// collapsed by default (typical case is short); "Output" details
-// are open by default when a result is present so the user can
-// see the result immediately.
+// D5 restructure: the header is a single line — icon + tool name +
+// file path on the left, status on the right. Matches the spike-003
+// reference (ui-A.png). The input section stays collapsed by default;
+// the output is shown directly when present (not inside <details>)
+// so the user sees the result immediately. Long input / output is
+// capped at ~200px tall and overflows with scroll.
 
 import { computed } from "vue";
 import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat";
@@ -16,6 +18,7 @@ import {
   formatToolInput,
   truncateOutput,
   toolAccentVar,
+  toolIcon,
 } from "../../utils/messageFormat";
 
 const props = defineProps<{
@@ -31,30 +34,57 @@ const accent = computed(() => {
 const isError = computed(() => !!props.result?.isError);
 const hasResult = computed(() => !!props.result);
 
-const status = computed<string>(() => {
-  if (isError.value) return "✗ error";
-  if (hasResult.value) return "✓ done";
-  return "⏳ running…";
+/** Best-effort file path for display in the header. Most tools pass
+ *  `path` in their input; shell uses `command` which is too long to
+ *  fit, so we leave it out. Non-string values are guarded. */
+const filePath = computed<string | null>(() => {
+  const input = props.call.input;
+  if (!input) return null;
+  const p = input.path;
+  if (typeof p === "string" && p.length > 0) return p;
+  return null;
+});
+
+const statusText = computed<string>(() => {
+  if (isError.value) return "error";
+  if (hasResult.value) return "done";
+  return "running…";
+});
+
+const statusIcon = computed<string>(() => {
+  if (isError.value) return "✗";
+  if (hasResult.value) return "✓";
+  return "⏳";
 });
 </script>
 
 <template>
   <div
-    :class="['tool-card', { 'tool-card--error': isError }]"
+    :class="['tool-card', { 'tool-card--error': isError, 'tool-card--running': !hasResult && !isError }]"
     :style="{ borderLeftColor: accent }"
   >
     <div class="tool-card__header">
-      <span class="tool-card__name">{{ call.name }}</span>
-      <span class="tool-card__status">{{ status }}</span>
+      <div class="tool-card__title">
+        <span class="tool-card__icon">{{ toolIcon(call.name) }}</span>
+        <span class="tool-card__name">{{ call.name }}</span>
+        <span v-if="filePath" class="tool-card__path" :title="filePath">
+          · {{ filePath }}
+        </span>
+      </div>
+      <div class="tool-card__status">
+        <span class="tool-card__status-icon">{{ statusIcon }}</span>
+        <span>{{ statusText }}</span>
+      </div>
     </div>
-    <details class="tool-card__details">
+
+    <details v-if="call.input && Object.keys(call.input).length" class="tool-card__details">
       <summary>input</summary>
-      <pre class="tool-card__pre">{{ formatToolInput(call) }}</pre>
+      <pre class="tool-card__pre tool-card__pre--input">{{ formatToolInput(call) }}</pre>
     </details>
-    <details v-if="result" class="tool-card__details" open>
-      <summary>output</summary>
-      <pre class="tool-card__pre">{{ truncateOutput(result.content) }}</pre>
-    </details>
+
+    <div v-if="result" class="tool-card__output">
+      <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(result.content) }}</pre>
+    </div>
   </div>
 </template>
 
@@ -76,11 +106,32 @@ const status = computed<string>(() => {
   background: var(--color-bg-elevated);
 }
 
+.tool-card--running {
+  border-left-color: var(--color-tool-shell);
+}
+
 .tool-card__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+.tool-card__title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tool-card__icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-family: var(--font-sans);
 }
 
 .tool-card__name {
@@ -92,10 +143,27 @@ const status = computed<string>(() => {
   color: var(--color-tool-error);
 }
 
+.tool-card__path {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
 .tool-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--color-text-muted);
   flex-shrink: 0;
+}
+
+.tool-card__status-icon {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .tool-card--error .tool-card__status {
@@ -103,7 +171,7 @@ const status = computed<string>(() => {
 }
 
 .tool-card__details {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .tool-card__details summary {
@@ -131,8 +199,12 @@ const status = computed<string>(() => {
   color: var(--color-text-primary);
 }
 
+.tool-card__output {
+  margin-top: 6px;
+}
+
 .tool-card__pre {
-  margin: 4px 0 0;
+  margin: 0;
   padding: 6px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);

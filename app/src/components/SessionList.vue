@@ -1,20 +1,15 @@
 <script setup lang="ts">
 // SessionList — session list shown in the left sidebar when a project
-// is active. Extracted from ChatWindow.vue (PR2 scope) so the
-// project tab bar can sit above it cleanly.
+// is active. D5 restructure: the header and "+ 新对话" button are now
+// owned by Sidebar.vue; this component is just the <ul> of session
+// items. Each item is a single line: title (truncated) + status dot
+// + relative timestamp + hover-revealed delete button. Matches the
+// spike-003 reference (ui-A.png).
 //
 // Per Q4v2 (PROPOSAL §5.2): default to the 8 most-recently-updated
 // sessions; if there are more, render a "查看更早的 N 个" button at
 // the bottom that toggles to show the full list. This is purely
 // view-side folding — no schema change, no archive state.
-//
-// Per Q5: the session's `current_cwd` is shown in the chat header
-// (see ChatPanel.vue), NOT in the session list rows. The PR1
-// backend exposes it on `SessionSummary` so the data is available;
-// the row keeps `title` + `preview` only for visual simplicity.
-//
-// D3 restyle: dark theme tokens. Active session gets a Prussian
-// muted background + 2px Prussian left border (per spike-003).
 
 import { computed, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
@@ -49,114 +44,87 @@ function onDelete(id: string, e: MouseEvent) {
   void store.deleteSession(id);
 }
 
-function onNew() {
-  void store.createNewSession();
+/** Coarse relative-time formatter. Buckets by age to keep the label
+ *  short and glanceable (the right side of a single-line row).
+ *  Anything ≥ 7 days falls back to a localized date. */
+function formatTime(iso: string): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const min = 60 * 1000;
+  const hr = 60 * min;
+  const day = 24 * hr;
+  if (diff < min) return "刚刚";
+  if (diff < hr) return `${Math.floor(diff / min)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hr)} 小时前`;
+  if (diff < 2 * day) return "昨天";
+  if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
+  const d = new Date(t);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${dd}`;
 }
 </script>
 
 <template>
-  <div class="sidebar-list">
-    <div class="sidebar-list__header">
-      <span class="sidebar-list__title">Sessions</span>
-    </div>
-    <button class="sidebar-list__new" @click="onNew">+ 新对话</button>
-    <ul class="sidebar-list__items">
-      <li
-        v-for="s in visibleSessions"
-        :key="s.id"
-        :class="[
-          'session-item',
-          { 'session-item--active': s.id === store.currentSessionId },
-        ]"
-        @click="onClick(s.id)"
-      >
-        <div class="session-item__main">
-          <div class="session-item__title">{{ s.title }}</div>
-          <div v-if="s.preview" class="session-item__preview">{{ s.preview }}</div>
-        </div>
-        <button
-          class="session-item__delete"
-          title="删除"
-          @click="(e) => onDelete(s.id, e)"
-        >×</button>
-      </li>
-      <li v-if="store.sessions.length === 0" class="session-empty">
-        还没有对话，点上方按钮开始
-      </li>
-      <li v-else-if="hiddenCount > 0" class="session-more">
-        <button class="session-more__btn" @click="expanded = true">
-          查看更早的 {{ hiddenCount }} 个
-        </button>
-      </li>
-      <li v-else-if="expanded && store.sessions.length > DEFAULT_VISIBLE" class="session-more">
-        <button class="session-more__btn" @click="expanded = false">
-          收起
-        </button>
-      </li>
-    </ul>
-  </div>
+  <ul class="session-list">
+    <li
+      v-for="s in visibleSessions"
+      :key="s.id"
+      :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
+      @click="onClick(s.id)"
+    >
+      <span class="session-item__title">{{ s.title }}</span>
+      <span class="session-item__dot" aria-hidden="true" />
+      <span class="session-item__time">{{ formatTime(s.updated_at) }}</span>
+      <button
+        class="session-item__delete"
+        title="删除"
+        aria-label="删除会话"
+        @click="(e) => onDelete(s.id, e)"
+      >×</button>
+    </li>
+    <li v-if="store.sessions.length === 0" class="session-empty">
+      还没有对话,点上方 + 开始
+    </li>
+    <li v-else-if="hiddenCount > 0" class="session-more">
+      <button class="session-more__btn" @click="expanded = true">
+        查看更早的 {{ hiddenCount }} 个
+      </button>
+    </li>
+    <li v-else-if="expanded && store.sessions.length > DEFAULT_VISIBLE" class="session-more">
+      <button class="session-more__btn" @click="expanded = false">
+        收起
+      </button>
+    </li>
+  </ul>
 </template>
 
 <style scoped>
-.sidebar-list {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar-list__header {
-  padding: 14px 16px 8px;
-}
-
-.sidebar-list__title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.sidebar-list__new {
-  margin: 0 12px 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s, border-color 0.15s;
-  font-family: inherit;
-}
-
-.sidebar-list__new:hover {
-  background: var(--color-accent-muted);
-  border-color: var(--color-accent);
-  color: var(--color-text-primary);
-}
-
-.sidebar-list__items {
+.session-list {
   list-style: none;
   margin: 0;
   padding: 0 8px 8px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .session-item {
   display: flex;
-  align-items: flex-start;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   margin-bottom: 2px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
   border-left: 2px solid transparent;
+  min-width: 0;
 }
 
 .session-item:hover {
@@ -172,12 +140,9 @@ function onNew() {
   background: var(--color-accent-muted);
 }
 
-.session-item__main {
+.session-item__title {
   flex: 1;
   min-width: 0;
-}
-
-.session-item__title {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-text-primary);
@@ -186,13 +151,23 @@ function onNew() {
   white-space: nowrap;
 }
 
-.session-item__preview {
+.session-item__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-tool-write);
+}
+
+.session-item--active .session-item__dot {
+  background: var(--color-accent);
+}
+
+.session-item__time {
+  flex-shrink: 0;
   font-size: 11px;
   color: var(--color-text-muted);
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-item__delete {
@@ -212,7 +187,8 @@ function onNew() {
   font-family: inherit;
 }
 
-.session-item:hover .session-item__delete {
+.session-item:hover .session-item__delete,
+.session-item--active .session-item__delete {
   opacity: 1;
 }
 

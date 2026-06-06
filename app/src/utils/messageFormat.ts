@@ -70,3 +70,19 @@ export function toolAccentVar(toolName: string): string {
       return "var(--color-text-muted)";
   }
 }
+
+/** Map a tool name to a one-glyph icon shown in the card header.
+ *  Defaults to a generic wrench for unknown tools so the UI never
+ *  blanks out when a new tool lands before its icon is wired. */
+export function toolIcon(toolName: string): string {
+  switch (toolName) {
+    case "read_file":
+      return "📄";
+    case "write_file":
+      return "✏️";
+    case "shell":
+      return "💻";
+    default:
+      return "🔧";
+  }
+}
