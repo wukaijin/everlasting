@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance check #2 修法后视觉无首行空行,需要按项目 frontend quality 跑 pnpm build + tsc"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "acceptance check #2 视觉验证涉及 MessageItem.vue 的 template + CSS 改动,需遵循 component 规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "acceptance check #1 根因记录(LLM 行为 vs 渲染问题)的来源是 spike-005,与本 index 中描述的 message 渲染流对应"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance check #1 根因落地的位置:更新本文件第 5 条加 [RESOLVED 2026-06-XX: <root cause>] 标记"}
