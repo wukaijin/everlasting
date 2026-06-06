@@ -315,3 +315,36 @@ P2 实施。Tauri command get_home_dir (Tauri 2 PathResolver API 而非 dirs tra
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: spike-005 PR1: 紧凑 header + 圆点 8px + pwd chip 远端对齐
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR1: 紧凑 header + 圆点 8px + pwd chip 远端对齐
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P2 实施。ChatPanel header padding 14→6px + title font 15→13px + title-row 改 flex + 新 pwd chip (margin-left: auto + max-width 50% + ellipsis 消费 chatStore.simplifiedCwd from PR3)。SessionList 圆点 6→8px + order:-1。Icon registry 加 folder (heroicons)。24 vitest + 98 cargo + pnpm build 全过, 无回归 (PR2/3/5/6)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `801fb8a05b0498a6d70680433d89c90689e2fa0e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

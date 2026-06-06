@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~317 | Active |
+| `journal-1.md` | ~350 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-06-06 | spike-005 PR1: 紧凑 header + 圆点 8px + pwd chip 远端对齐 | `801fb8a05b0498a6d70680433d89c90689e2fa0e` | `refactor/ui-dark-theme-tailwind` |
 | 9 | 2026-06-06 | spike-005 PR3: 准备 pwd ~/ 简化数据通路 (Tauri command + simplifyPath) | `ef7cea834353b65e418eeff3e91646089e87bacf` | `refactor/ui-dark-theme-tailwind` |
 | 8 | 2026-06-06 | spike-005 PR2: 显示真实 git branch (DB migration + detector + chip) | `8f25b7f93df67ebe5cd17b70d4c708bc024615d1` | `refactor/ui-dark-theme-tailwind` |
 | 7 | 2026-06-06 | spike-005 PR5: LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮) | `11f01c6` | `refactor/ui-dark-theme-tailwind` |
