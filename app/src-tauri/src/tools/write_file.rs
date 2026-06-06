@@ -64,6 +64,17 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         }
     };
 
+    // Diagnostic: log the LLM-supplied inputs at the entry point so that
+    // intermittent write_file failures (see spike-005 #3) can be traced
+    // back to the exact arguments the model emitted. Off by default;
+    // visible under `RUST_LOG=debug pnpm tauri dev`.
+    tracing::debug!(
+        raw_path = %raw_path,
+        content_len = content.len(),
+        is_existing = requested.exists(),
+        "write_file called"
+    );
+
     // 2. Boundary check. Two cases:
     //    a) The full path (including any non-existing tail) does
     //       NOT exist — walk up to the first existing ancestor,
@@ -80,6 +91,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         match assert_within_root(&ctx.project_root, &requested) {
             Ok(p) => p,
             Err(e) => {
+                tracing::debug!(
+                    raw_path = %raw_path,
+                    project_root = %ctx.project_root.display(),
+                    error = %e,
+                    "write_file path rejected: outside project root (existing target)"
+                );
                 return (
                     format!("path '{}' rejected: {}", raw_path, e),
                     true,
@@ -110,6 +127,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         let validated_parent = match assert_within_root(&ctx.project_root, check) {
             Ok(p) => p,
             Err(e) => {
+                tracing::debug!(
+                    raw_path = %raw_path,
+                    project_root = %ctx.project_root.display(),
+                    error = %e,
+                    "write_file path rejected: outside project root (missing target)"
+                );
                 return (
                     format!("path '{}' rejected: {}", raw_path, e),
                     true,
@@ -132,6 +155,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     if let Some(grand) = validated.parent() {
         if !grand.as_os_str().is_empty() {
             if let Err(e) = tokio::fs::create_dir_all(grand).await {
+                tracing::debug!(
+                    raw_path = %raw_path,
+                    parent = %grand.display(),
+                    error = %e,
+                    "write_file failed to create parent directories"
+                );
                 return (
                     format!("Failed to create parent directories: {}", e),
                     true,
@@ -149,10 +178,19 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             ),
             false,
         ),
-        Err(e) => (
-            format!("Failed to write file '{}': {}", validated.display(), e),
-            true,
-        ),
+        Err(e) => {
+            tracing::debug!(
+                raw_path = %raw_path,
+                resolved_path = %validated.display(),
+                content_len = content.len(),
+                error = %e,
+                "write_file write failed"
+            );
+            (
+                format!("Failed to write file '{}': {}", validated.display(), e),
+                true,
+            )
+        }
     }
 }
 
