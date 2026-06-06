@@ -1,10 +1,11 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
+import { simplifyPath } from "../utils/path";
 
 type Role = "user" | "assistant";
 type ErrorCategory =
@@ -218,6 +219,20 @@ export const useChatStore = defineStore("chat", () => {
   const streamingSessionId = ref<string | null>(null);
   const lastStreamedProjectId = ref<string | null>(null);
   const streamingProjectIds = ref<Set<string>>(new Set());
+
+  // PR3 (BACKLOG §5.1): the chat panel header should display the
+  // cwd with the user's home prefix shortened to `~`. The
+  // `simplifyPath` helper is a pure function over
+  // `currentCwd` + `configStore.homeDir`; the computed is reactive
+  // so when the home-dir cache finishes loading after the chat
+  // store is first read, the UI re-renders without extra wiring.
+  // PR1 consumes this in `ChatPanel.vue`; PR3 (this) only prepares
+  // the data. Note: `configStore` is captured lazily — the
+  // `computed` callback only runs on first `.value` access, by
+  // which time the line below has been initialized.
+  const simplifiedCwd = computed<string>(() =>
+    simplifyPath(currentCwd.value, configStore.homeDir),
+  );
 
   // -----------------------------------------------------------------------
   // Cross-store coordination: react to project changes
@@ -807,6 +822,10 @@ export const useChatStore = defineStore("chat", () => {
     sessions,
     currentSessionId,
     currentCwd,
+    // PR3: reactive view of `currentCwd` with the home-dir prefix
+    // shortened to `~`. Exposed so `ChatPanel.vue` (PR1) can render
+    // the simplified form in the header chip.
+    simplifiedCwd,
     streamingProjectIds,
     send,
     cancel,

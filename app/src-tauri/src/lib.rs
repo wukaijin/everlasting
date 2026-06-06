@@ -159,6 +159,27 @@ fn get_llm_config(state: State<'_, Arc<AppState>>) -> PublicLlmConfig {
     }
 }
 
+/// Return the user's home directory (the path the frontend will
+/// shorten to `~` when rendering the cwd chip in the chat panel
+/// header). Resolves to `None` when the platform has no notion of a
+/// home directory (e.g. a sandboxed container without `$HOME`); the
+/// frontend falls back to rendering the full path in that case.
+///
+/// We use `AppHandle::path()` (Tauri 2's public `PathResolver`)
+/// rather than the `dirs` crate directly. The `dirs` crate is a
+/// transitive dependency of Tauri 2, but Rust 2018+ does not
+/// auto-expose transitive deps, so calling `dirs::home_dir()` would
+/// require adding it to `Cargo.toml`. `app.path().home_dir()` is
+/// the same call wrapped by Tauri's API and matches the existing
+/// `app_data_dir` pattern in `AppState::load`.
+#[tauri::command]
+fn get_home_dir(app: AppHandle) -> Option<String> {
+    app.path()
+        .home_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands — session management
 // ---------------------------------------------------------------------------
@@ -992,6 +1013,7 @@ pub fn run() {
             chat,
             cancel_chat,
             get_llm_config,
+            get_home_dir,
             list_sessions,
             create_session,
             load_session,
