@@ -282,3 +282,36 @@ P1 实施。Backend: db.rs projects 表加 is_git_repo + git_branch 列幂等 mi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: spike-005 PR3: 准备 pwd ~/ 简化数据通路 (Tauri command + simplifyPath)
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR3: 准备 pwd ~/ 简化数据通路 (Tauri command + simplifyPath)
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P2 实施。Tauri command get_home_dir (Tauri 2 PathResolver API 而非 dirs transitive dep) + configStore.homeDir 缓存 + utils/path.ts simplifyPath (边界安全 startsWith(homeDir+'/')) + chatStore.simplifiedCwd computed。10 个 vitest 测试覆盖 happy/exact/boundary/null。98 cargo + 24 vitest 全过。PR1 ChatPanel.vue header 接入时直接消费 simplifiedCwd。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef7cea834353b65e418eeff3e91646089e87bacf` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
