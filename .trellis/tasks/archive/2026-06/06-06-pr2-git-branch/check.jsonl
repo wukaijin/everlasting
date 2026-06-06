@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "acceptance: migration 幂等 (跑两次不报错), ProjectRow 字段类型正确"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "acceptance: cargo test 全过, 含 detector + store + migration 4 case"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "acceptance: tracing 字段完整 (path, is_git_repo, git_branch)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance: pnpm build + pnpm test (PR6 regression) 双过"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "acceptance: ChatPanel.vue chip conditional render + title attribute 符合规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "acceptance: Project interface 字段 snake_case 跟 Rust 序列化一致, 编译通过"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: 根因留痕, spike #2c 在 PR2 后可标 [RESOLVED]"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/research/git-detection-rust.md", "reason": "acceptance: 选型一致 (Command shell-out, 无 git2 crate)"}
