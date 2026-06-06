@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~185 | Active |
+| `journal-1.md` | ~218 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-06-06 | spike-005 PR6: markdown 渲染 (marked v18 + DOMPurify) + vitest 基础 | `cb41bcb` | `refactor/ui-dark-theme-tailwind` |
 | 5 | 2026-06-06 | spike-005 PR7: 首行空行排查 (displayContent strip) | `cfb7aac` | `refactor/ui-dark-theme-tailwind` |
 | 4 | 2026-06-06 | 前端 UI 重构: dark theme + Tailwind + 自定义顶栏 + 组件化 | `121056f`, `3e73a06`, `d27d438`, `5ed237e`, `4628049`, `7a908ce`, `d247903`, `4fe7eaf`, `56b17e3`, `4f03f6a`, `6bbd9a3`, `de74e75` | `refactor/ui-dark-theme-tailwind` |
 | 3 | 2026-06-05 | docs 整理 — 归档 3b-1 产物 + 拆出评审目录 + 去重 + 合并 | `a2cb504` | `main` |

@@ -183,3 +183,36 @@ spike-005 follow-up 7 个 sub-PR 中的 PR7 (P2 轻 UI)。根因: Anthropic SSE 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: spike-005 PR6: markdown 渲染 (marked v18 + DOMPurify) + vitest 基础
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR6: markdown 渲染 (marked v18 + DOMPurify) + vitest 基础
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P0 实施。marked@18.0.5 + dompurify@3.4.8 精确锁版, MessageItem.vue 改 v-html 渲染 markdown, createDebouncedRenderer 50ms debounce 合并 SSE delta + streaming=false flush, 删 white-space: pre-wrap 跟 <pre> 冲突, 加 :deep() markdown CSS。14/14 vitest fixture 全绿 (6 XSS + 5 基础 + 3 空白)。vitest 2.1.9 基础架构到位, 后续 PR 复用。docs/HACKING-markdown.md 留痕 marked v18 删 sanitize 陷阱。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb41bcb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
