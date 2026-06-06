@@ -216,3 +216,36 @@ P0 实施。marked@18.0.5 + dompurify@3.4.8 精确锁版, MessageItem.vue 改 v-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: spike-005 PR5: LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮)
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR5: LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮)
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P0 架构改动。Backend: AppState.cancellations + chat 命令 spawn 前注册 token + tokio::select! biased 包裹 stream.next() + 取消时 persist_turn 已收到内容 (text / thinking / tool_use) 不丢 + CANCELLED_MARKER 后缀标 [已停止] + 跳过 tool 执行避免 Stop 后还跑 5min shell + cancel_chat command 短暂持锁防死锁 + CancellationGuard RAII Drop 自动清理。Frontend: chat.ts cancel() 异步调 invoke 不同步重置 + ChatInput.vue Stop 按钮 conditional render + ChatPanel.vue onStop。91 cargo tests pass (5 新), 14 vitest pass, pnpm build pass。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `11f01c6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

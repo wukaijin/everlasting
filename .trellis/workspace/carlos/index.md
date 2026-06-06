@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~218 | Active |
+| `journal-1.md` | ~251 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-06-06 | spike-005 PR5: LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮) | `11f01c6` | `refactor/ui-dark-theme-tailwind` |
 | 6 | 2026-06-06 | spike-005 PR6: markdown 渲染 (marked v18 + DOMPurify) + vitest 基础 | `cb41bcb` | `refactor/ui-dark-theme-tailwind` |
 | 5 | 2026-06-06 | spike-005 PR7: 首行空行排查 (displayContent strip) | `cfb7aac` | `refactor/ui-dark-theme-tailwind` |
 | 4 | 2026-06-06 | 前端 UI 重构: dark theme + Tailwind + 自定义顶栏 + 组件化 | `121056f`, `3e73a06`, `d27d438`, `5ed237e`, `4628049`, `7a908ce`, `d247903`, `4fe7eaf`, `56b17e3`, `4f03f6a`, `6bbd9a3`, `de74e75` | `refactor/ui-dark-theme-tailwind` |
