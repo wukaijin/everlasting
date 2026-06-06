@@ -34,8 +34,10 @@ const props = withDefaults(
     name: string;
     /** Width and height in px. Defaults to 16. */
     size?: number | string;
-    /** Additional class names applied to the <svg>. */
-    class?: string;
+    /** Additional class names applied to the <svg>.
+     *  Named `iconClass` to avoid colliding with Vue 3's
+     *  automatic root-element `class` attribute merging. */
+    iconClass?: string;
   }>(),
   { size: 16 },
 );
@@ -70,9 +72,8 @@ const Component = computed(() => {
   <component
     :is="Component"
     v-if="Component"
-    :width="size"
-    :height="size"
-    :class="['icon', $props.class]"
+    :size="size"
+    :class="['icon', iconClass]"
     aria-hidden="true"
   />
 </template>

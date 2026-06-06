@@ -106,7 +106,7 @@ const disabled = (): boolean => props.sending || !input.value.trim();
         <Icon
           :name="sending ? 'ellipsis' : 'arrow-up'"
           :size="16"
-          :class="sending ? 'chat-input__spinner' : ''"
+          :icon-class="sending ? 'chat-input__spinner' : ''"
         />
       </button>
     </div>

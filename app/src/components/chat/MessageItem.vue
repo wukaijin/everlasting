@@ -68,7 +68,7 @@ const showStreamingHint = computed<boolean>(
       class="msg__redacted"
       :title="`${message.redactedThinkingData.length} redacted thinking block(s); preserved verbatim for the LLM but not displayable`"
     >
-      <Icon name="lock" :size="12" class="msg__redacted-icon" />
+      <Icon name="lock" :size="12" icon-class="msg__redacted-icon" />
       {{ message.redactedThinkingData.length }} redacted thinking
       block{{ message.redactedThinkingData.length === 1 ? "" : "s" }}
       (preserved for LLM)
@@ -91,7 +91,7 @@ const showStreamingHint = computed<boolean>(
     </div>
 
     <div v-if="message.error" class="msg__error">
-      <Icon name="warn" :size="12" class="msg__error-icon" />
+      <Icon name="warn" :size="12" icon-class="msg__error-icon" />
       {{ message.error.message }}
     </div>
   </li>

@@ -31,14 +31,14 @@ async function onLoadHidden() {
   <main class="empty-state">
     <div class="empty-state__inner">
       <div class="empty-state__icon" aria-hidden="true">
-        <Icon name="archive" :size="24" class="empty-state__icon-glyph" />
+        <Icon name="archive" :size="24" icon-class="empty-state__icon-glyph" />
       </div>
       <h1 class="empty-state__title">还没有项目</h1>
       <p class="empty-state__hint">
         添加一个项目目录,开始与 LLM 协作编码
       </p>
       <button class="empty-state__add" @click="onAdd">
-        <Icon name="plus" :size="16" class="empty-state__add-plus" />
+        <Icon name="plus" :size="16" icon-class="empty-state__add-plus" />
         添加项目
       </button>
 
