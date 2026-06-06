@@ -6,6 +6,12 @@
 //
 // To add a new icon, import the matching component from
 // "@heroicons/vue/24/outline" and add it to the `map` object below.
+//
+// NOTE: @heroicons/vue@2.x components are render functions that emit
+// an <svg> with NO width/height attributes. They cannot be sized via
+// props — they must be sized via CSS. We wrap them in a <span> sized
+// to the `size` prop, and force the inner svg to fill the span with
+// `:deep(svg)`.
 
 import { computed } from "vue";
 import {
@@ -34,7 +40,7 @@ const props = withDefaults(
     name: string;
     /** Width and height in px. Defaults to 16. */
     size?: number | string;
-    /** Additional class names applied to the <svg>.
+    /** Additional class names applied to the wrapper <span>.
      *  Named `iconClass` to avoid colliding with Vue 3's
      *  automatic root-element `class` attribute merging. */
     iconClass?: string;
@@ -66,22 +72,36 @@ const Component = computed(() => {
   const c = map[props.name as keyof typeof map];
   return c ?? null;
 });
+
+const sizeStyle = computed(() => {
+  const s = typeof props.size === "number" ? `${props.size}px` : String(props.size);
+  return {
+    width: s,
+    height: s,
+    "flex-shrink": 0,
+    display: "inline-flex",
+  };
+});
 </script>
 
 <template>
-  <component
-    :is="Component"
+  <span
     v-if="Component"
-    :size="size"
     :class="['icon', iconClass]"
+    :style="sizeStyle"
     aria-hidden="true"
-  />
+  >
+    <component :is="Component" />
+  </span>
 </template>
 
 <style scoped>
 .icon {
-  display: inline-block;
   vertical-align: middle;
-  flex-shrink: 0;
+}
+.icon :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 </style>
