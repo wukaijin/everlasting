@@ -249,3 +249,36 @@ P0 架构改动。Backend: AppState.cancellations + chat 命令 spawn 前注册 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: spike-005 PR2: 显示真实 git branch (DB migration + detector + chip)
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR2: 显示真实 git branch (DB migration + detector + chip)
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P1 实施。Backend: db.rs projects 表加 is_git_repo + git_branch 列幂等 migration; detector.rs 新增 current_branch_sync + async (镜像 is_git_repo 模式, 1s timeout + spawn_blocking); store.rs create/update_project_path 探测写入; types.rs ProjectRow +git_branch; 所有 SELECT 加新列。Frontend: ChatPanel.vue 静态 'git' → gitBranchLabel computed; ProjectInfo interface 加 2 字段 (snake_case)。Detached HEAD 存 'HEAD' 字面量区分。98 cargo tests pass (5 新), 14 vitest pass, pnpm build pass。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8f25b7f93df67ebe5cd17b70d4c708bc024615d1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

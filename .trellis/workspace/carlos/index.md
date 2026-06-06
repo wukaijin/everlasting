@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~251 | Active |
+| `journal-1.md` | ~284 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-06-06 | spike-005 PR2: 显示真实 git branch (DB migration + detector + chip) | `8f25b7f93df67ebe5cd17b70d4c708bc024615d1` | `refactor/ui-dark-theme-tailwind` |
 | 7 | 2026-06-06 | spike-005 PR5: LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮) | `11f01c6` | `refactor/ui-dark-theme-tailwind` |
 | 6 | 2026-06-06 | spike-005 PR6: markdown 渲染 (marked v18 + DOMPurify) + vitest 基础 | `cb41bcb` | `refactor/ui-dark-theme-tailwind` |
 | 5 | 2026-06-06 | spike-005 PR7: 首行空行排查 (displayContent strip) | `cfb7aac` | `refactor/ui-dark-theme-tailwind` |
