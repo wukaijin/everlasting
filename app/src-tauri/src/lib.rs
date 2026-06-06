@@ -23,6 +23,7 @@ mod llm;
 mod projects;
 mod tools;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -31,6 +32,8 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use llm::{
@@ -51,6 +54,13 @@ struct AppState {
     config: LlmConfig,
     tools: Vec<ToolDef>,
     db: SqlitePool,
+    /// Active chat request cancellation tokens, keyed by `request_id`.
+    /// PR5 (cancel mechanism): the frontend's Stop button calls
+    /// `cancel_chat(request_id)` which looks up the token and calls
+    /// `.cancel()`. The agent loop is wrapped in `tokio::select!` and
+    /// listens for cancellation between events. The entry is removed
+    /// by the spawn task on every exit path (normal / error / cancel).
+    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl AppState {
@@ -85,7 +95,12 @@ impl AppState {
             .expect("failed to run migrations");
         tracing::info!(db_path = %db_path.display(), "sqlite ready");
 
-        Self { config, tools, db }
+        Self {
+            config,
+            tools,
+            db,
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -337,6 +352,35 @@ fn flush_pending_thinking(
     }
 }
 
+/// Sentinel string appended to the assistant message's text on cancel.
+/// The UI (rehydrate path) leaves the marker in place; the bubble just
+/// renders it inline. A literal "🛑" was considered but it would be
+/// inlined as part of markdown; the bracketed text survives DOMPurify
+/// unchanged and is locale-friendly.
+const CANCELLED_MARKER: &str = "[已停止]";
+
+/// RAII guard that removes a request_id from the cancellations map
+/// on Drop. We use a guard (not a bare `remove` call at every `return`
+/// point) so a future refactor that adds a new early-return path
+/// can't accidentally leak the entry. The guard is `Send` because
+/// it only holds an `Arc<Mutex<HashMap<...>>>` clone, which itself
+/// is `Send + Sync`.
+struct CancellationGuard {
+    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    request_id: String,
+}
+
+impl Drop for CancellationGuard {
+    fn drop(&mut self) {
+        let cancellations = self.cancellations.clone();
+        let request_id = self.request_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut map = cancellations.lock().await;
+            map.remove(&request_id);
+        });
+    }
+}
+
 #[tauri::command]
 async fn chat(
     request_id: String,
@@ -348,6 +392,7 @@ async fn chat(
     let config = state.config.clone();
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
+    let cancellations = state.cancellations.clone();
     let rid = request_id;
     let app_handle = app.clone();
 
@@ -363,7 +408,29 @@ async fn chat(
         return Ok(());
     }
 
+    // Register a cancellation token for this request. The frontend's
+    // Stop button calls `cancel_chat(rid)` which fetches this token
+    // and triggers it; the agent loop's `tokio::select!` notices and
+    // bails out. The entry is removed by the spawn task on every
+    // exit path (normal / error / cancel / max_turns) — see the
+    // guard at the end of the spawn closure.
+    let token = CancellationToken::new();
+    {
+        let mut map = cancellations.lock().await;
+        map.insert(rid.clone(), token.clone());
+    }
+
     tauri::async_runtime::spawn(async move {
+        // The token's clone moves into this task; cancellation in
+        // `cancel_chat` is observed via the original we just put in
+        // the map. Both must outlive any `select!` arm that awaits
+        // the token.
+        let token = token;
+        // RAII: removes the (rid → token) entry on every exit path.
+        let _cancel_guard = CancellationGuard {
+            cancellations: cancellations.clone(),
+            request_id: rid.clone(),
+        };
         let mut messages = messages;
         // Start seq from the highest existing seq in this session + 1.
         let loaded_session = match db::load_session(&db, &session_id).await {
@@ -522,96 +589,136 @@ async fn chat(
             let mut pending_thinking: Option<PendingThinking> = None;
             let mut stop_reason: Option<String> = None;
             let mut had_error = false;
+            // PR5: set when the user hits Stop mid-stream. We bail out
+            // of both the per-event select! loop AND the agent loop,
+            // but still persist whatever's been collected so far.
+            let mut cancelled = false;
 
-            while let Some(event_result) = stream.next().await {
-                let event = match event_result {
-                    Ok(e) => e,
-                    Err(err) => {
-                        had_error = true;
-                        ChatEvent::Error {
-                            message: err.user_message(),
-                            category: err.category(),
+            // PR5 cancellation: `tokio::select!` interleaves the
+            // stream's `next()` with the cancellation token's
+            // `cancelled()` future. `biased;` means the cancel arm
+            // is polled first when both are ready — the user expects
+            // Stop to take effect immediately, not "next time the
+            // stream happens to yield".
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        tracing::info!(request_id = %rid, "chat: cancellation requested by client");
+                        cancelled = true;
+                        break;
+                    }
+                    event_result = stream.next() => {
+                        let Some(event_result) = event_result else {
+                            break;
+                        };
+                        let event = match event_result {
+                            Ok(e) => e,
+                            Err(err) => {
+                                had_error = true;
+                                ChatEvent::Error {
+                                    message: err.user_message(),
+                                    category: err.category(),
+                                }
+                            }
+                        };
+
+                        match &event {
+                            ChatEvent::Start => {
+                                if turn == 1 {
+                                    emit_chat_event(&app_handle, &rid, &event);
+                                }
+                            }
+                            ChatEvent::Delta { text } => {
+                                // A text delta means the model is done with
+                                // thinking blocks for now. Finalize any pending
+                                // thinking so it gets persisted in the right
+                                // position relative to the text.
+                                flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                                text_parts.push(text.clone());
+                                emit_chat_event(&app_handle, &rid, &event);
+                            }
+                            ChatEvent::ThinkingDelta { text } => {
+                                // Append to the currently-open thinking block, or
+                                // open a new one if the model started fresh.
+                                let p = pending_thinking
+                                    .get_or_insert_with(PendingThinking::default);
+                                p.text.push_str(text);
+                                emit_chat_event(&app_handle, &rid, &event);
+                            }
+                            ChatEvent::SignatureDelta { signature } => {
+                                // The SSE parser buffers signature fragments and
+                                // emits a single `SignatureDelta` on
+                                // `content_block_stop` for the thinking block, so
+                                // `signature` here is the full assembled blob.
+                                // We still don't finalize on this event because
+                                // the model can emit more thinking blocks
+                                // (interleaved thinking with tool_use), so we
+                                // wait for the first non-thinking event (Delta /
+                                // ToolCall) or the end of the turn to commit.
+                                let p = pending_thinking
+                                    .get_or_insert_with(PendingThinking::default);
+                                p.signature.push_str(signature);
+                                emit_chat_event(&app_handle, &rid, &event);
+                            }
+                            ChatEvent::RedactedThinkingDelta { data } => {
+                                redacted_thinking_data.push(data.clone());
+                                emit_chat_event(&app_handle, &rid, &event);
+                            }
+                            ChatEvent::ToolCall { id, name, input } => {
+                                // A tool_use block means the model is past its
+                                // thinking phase for this turn. Finalize pending
+                                // thinking so the order is correct.
+                                flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                                tool_calls.push((id.clone(), name.clone(), input.clone()));
+                                let _ = app_handle.emit(
+                                    "tool:call",
+                                    ToolCallPayload {
+                                        request_id: rid.clone(),
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input: input.clone(),
+                                    },
+                                );
+                            }
+                            ChatEvent::Done { stop_reason: sr } => {
+                                stop_reason = sr.clone();
+                            }
+                            ChatEvent::Error { .. } => {
+                                emit_chat_event(&app_handle, &rid, &event);
+                                had_error = true;
+                            }
+                            ChatEvent::ToolResult { .. } => {
+                                // Not expected from LLM stream; only used internally.
+                            }
+                        }
+
+                        if matches!(event, ChatEvent::Done { .. } | ChatEvent::Error { .. }) {
+                            break;
                         }
                     }
-                };
-
-                match &event {
-                    ChatEvent::Start => {
-                        if turn == 1 {
-                            emit_chat_event(&app_handle, &rid, &event);
-                        }
-                    }
-                    ChatEvent::Delta { text } => {
-                        // A text delta means the model is done with
-                        // thinking blocks for now. Finalize any pending
-                        // thinking so it gets persisted in the right
-                        // position relative to the text.
-                        flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
-                        text_parts.push(text.clone());
-                        emit_chat_event(&app_handle, &rid, &event);
-                    }
-                    ChatEvent::ThinkingDelta { text } => {
-                        // Append to the currently-open thinking block, or
-                        // open a new one if the model started fresh.
-                        let p = pending_thinking
-                            .get_or_insert_with(PendingThinking::default);
-                        p.text.push_str(text);
-                        emit_chat_event(&app_handle, &rid, &event);
-                    }
-                    ChatEvent::SignatureDelta { signature } => {
-                        // The SSE parser buffers signature fragments and
-                        // emits a single `SignatureDelta` on
-                        // `content_block_stop` for the thinking block, so
-                        // `signature` here is the full assembled blob.
-                        // We still don't finalize on this event because
-                        // the model can emit more thinking blocks
-                        // (interleaved thinking with tool_use), so we
-                        // wait for the first non-thinking event (Delta /
-                        // ToolCall) or the end of the turn to commit.
-                        let p = pending_thinking
-                            .get_or_insert_with(PendingThinking::default);
-                        p.signature.push_str(signature);
-                        emit_chat_event(&app_handle, &rid, &event);
-                    }
-                    ChatEvent::RedactedThinkingDelta { data } => {
-                        redacted_thinking_data.push(data.clone());
-                        emit_chat_event(&app_handle, &rid, &event);
-                    }
-                    ChatEvent::ToolCall { id, name, input } => {
-                        // A tool_use block means the model is past its
-                        // thinking phase for this turn. Finalize pending
-                        // thinking so the order is correct.
-                        flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
-                        tool_calls.push((id.clone(), name.clone(), input.clone()));
-                        let _ = app_handle.emit(
-                            "tool:call",
-                            ToolCallPayload {
-                                request_id: rid.clone(),
-                                id: id.clone(),
-                                name: name.clone(),
-                                input: input.clone(),
-                            },
-                        );
-                    }
-                    ChatEvent::Done { stop_reason: sr } => {
-                        stop_reason = sr.clone();
-                    }
-                    ChatEvent::Error { .. } => {
-                        emit_chat_event(&app_handle, &rid, &event);
-                        had_error = true;
-                    }
-                    ChatEvent::ToolResult { .. } => {
-                        // Not expected from LLM stream; only used internally.
-                    }
-                }
-
-                if matches!(event, ChatEvent::Done { .. } | ChatEvent::Error { .. }) {
-                    break;
                 }
             }
 
             if had_error {
                 return;
+            }
+
+            // PR5: cancel hits here. We must still persist whatever was
+            // collected in this turn (text / tool calls / thinking /
+            // redacted), then break out of the agent loop without
+            // executing tools. The frontend's `handleChatEvent` for
+            // `done` will reset `sending` and `currentRequestId`, so
+            // the user can immediately send a new message.
+            if cancelled {
+                flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                tracing::info!(
+                    request_id = %rid,
+                    text_len = text_parts.iter().map(|s| s.len()).sum::<usize>(),
+                    tool_calls = tool_calls.len(),
+                    thinking_blocks = finalized_thinking.len(),
+                    "chat: cancelled — persisting partial turn"
+                );
             }
 
             // Make sure any still-open thinking block (signature received
@@ -632,7 +739,21 @@ async fn chat(
                     signature: signature.clone(),
                 });
             }
-            let full_text = text_parts.join("");
+            // PR5: on cancel, the partial text is still useful — but
+            // mark it so the user (and the rehydrate path) can tell
+            // the message was cut short. The marker is appended only
+            // to the visible Text block; thinking blocks and
+            // tool_use calls are persisted as-is so the next LLM
+            // request gets full context.
+            let mut full_text = text_parts.join("");
+            if cancelled {
+                if full_text.is_empty() {
+                    full_text = CANCELLED_MARKER.to_string();
+                } else {
+                    full_text.push_str("\n\n");
+                    full_text.push_str(CANCELLED_MARKER);
+                }
+            }
             if !full_text.is_empty() {
                 assistant_blocks.push(ContentBlock::Text { text: full_text });
             }
@@ -661,6 +782,27 @@ async fn chat(
                 }
                 messages.push(msg);
                 seq += 1;
+            }
+
+            // PR5: on cancel we are done — don't run tools (the user
+            // asked to stop; don't make them watch a 5-min shell
+            // command after they hit Stop). Emit a `done` with
+            // `stop_reason: "cancelled"` so the frontend's
+            // `handleChatEvent` for `done` resets `sending` /
+            // `currentRequestId` exactly like a normal completion.
+            if cancelled {
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                if let Err(e) = db::touch_session(&db, &session_id).await {
+                    tracing::warn!(error = %e, "failed to touch session");
+                }
+                emit_chat_event(
+                    &app_handle,
+                    &rid,
+                    &ChatEvent::Done {
+                        stop_reason: Some("cancelled".to_string()),
+                    },
+                );
+                return;
             }
 
             // Decide whether to continue the agent loop.
@@ -793,6 +935,41 @@ fn emit_chat_event(app: &AppHandle, rid: &str, event: &ChatEvent) {
 }
 
 // ---------------------------------------------------------------------------
+// Tauri command — cancel chat (PR5)
+// ---------------------------------------------------------------------------
+
+/// Cancel an in-flight chat request. The frontend's Stop button
+/// invokes this with the current `request_id`. Looks up the
+/// matching `CancellationToken` and calls `.cancel()` on it; the
+/// agent loop's `tokio::select!` notices on the next event boundary
+/// and bails out cleanly (partial turn is persisted; a `done` event
+/// with `stop_reason: "cancelled"` is emitted).
+///
+/// Idempotent: a missing `request_id` is a silent no-op (the user
+/// may have clicked Stop after the stream already finished).
+/// Re-cancelling an already-cancelled token is also a no-op.
+#[tauri::command]
+async fn cancel_chat(
+    request_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let token = {
+        let map = state.cancellations.lock().await;
+        map.get(&request_id).cloned()
+    };
+    if let Some(t) = token {
+        t.cancel();
+        tracing::info!(request_id = %request_id, "cancel_chat: token cancelled");
+    } else {
+        tracing::debug!(
+            request_id = %request_id,
+            "cancel_chat: no active request (likely already finished)"
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // App bootstrap
 // ---------------------------------------------------------------------------
 
@@ -813,6 +990,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             chat,
+            cancel_chat,
             get_llm_config,
             list_sessions,
             create_session,
@@ -834,4 +1012,156 @@ pub fn run() {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).init();
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Race a slow fake stream against a cancellation token. Mirrors
+    /// the per-event select! loop in `chat` (minus the SSE plumbing).
+    /// Asserts cancel wins when fired mid-stream.
+    #[tokio::test]
+    async fn select_loop_breaks_on_cancellation() {
+        let token = CancellationToken::new();
+        let cancelled_flag = Arc::new(std::sync::Mutex::new(false));
+        let cancelled_flag_clone = cancelled_flag.clone();
+        let token_clone = token.clone();
+
+        // Simulate the per-event select! pattern. Each "event" is
+        // tokio::time::sleep; the cancel arm races them.
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = token_clone.cancelled() => {
+                        *cancelled_flag_clone.lock().unwrap() = true;
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                        // Stream "produced an event" — loop again.
+                    }
+                }
+            }
+        });
+
+        // Give the loop a tick to start, then cancel.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        token.cancel();
+
+        // The select! arm should win within a few ms.
+        let joined = tokio::time::timeout(Duration::from_millis(500), handle)
+            .await
+            .expect("select loop should have broken within 500ms")
+            .expect("task should not have panicked");
+        assert!(
+            *cancelled_flag.lock().unwrap(),
+            "cancelled flag should be set when select! breaks on cancel"
+        );
+        // Silence the "joined result unused" warning — the function
+        // already returns ().
+        let _ = joined;
+    }
+
+    #[tokio::test]
+    async fn cancellation_token_idempotent() {
+        let token = CancellationToken::new();
+        token.cancel();
+        token.cancel();
+        // Second cancel is a no-op; is_cancelled stays true; no panic.
+        assert!(token.is_cancelled());
+    }
+
+    /// Mirrors the `cancel_chat` command's lookup logic, isolated
+    /// from the Tauri State wrapper. Tests that a missing
+    /// `request_id` is a silent Ok (idempotent) and a present one
+    /// actually flips the token.
+    #[tokio::test]
+    async fn cancel_chat_idempotent_for_missing_and_present() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Missing request_id → no-op, returns Ok.
+        let missing = {
+            let map = cancellations.lock().await;
+            map.get("does-not-exist").cloned()
+        };
+        assert!(missing.is_none(), "unknown id should not be in map");
+
+        // Present request_id → token fetched, is_cancelled flips.
+        let token = CancellationToken::new();
+        {
+            let mut map = cancellations.lock().await;
+            map.insert("rid-1".to_string(), token.clone());
+        }
+        let fetched = {
+            let map = cancellations.lock().await;
+            map.get("rid-1").cloned()
+        };
+        assert!(fetched.is_some());
+        let t = fetched.unwrap();
+        assert!(!t.is_cancelled());
+        t.cancel();
+        assert!(t.is_cancelled());
+    }
+
+    /// Concurrent requests: two `request_id`s are independent. Cancel
+    /// one; the other should not be affected.
+    #[tokio::test]
+    async fn two_concurrent_requests_are_independent() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        {
+            let mut map = cancellations.lock().await;
+            map.insert("a".to_string(), a.clone());
+            map.insert("b".to_string(), b.clone());
+        }
+        // Cancel A.
+        {
+            let map = cancellations.lock().await;
+            let t = map.get("a").cloned();
+            if let Some(t) = t {
+                t.cancel();
+            }
+        }
+        assert!(a.is_cancelled());
+        assert!(!b.is_cancelled(), "B should not be affected by A's cancel");
+    }
+
+    /// CancellationGuard removes the entry on Drop. We construct a
+    /// guard, drop it, and verify the map is empty. The Drop runs
+    /// `tauri::async_runtime::spawn`, so the test is wrapped in
+    /// `#[tokio::test]` to provide a runtime (the guard's spawn
+    /// borrows the current Tokio runtime via the Tauri shim; in
+    /// unit tests we route through the global runtime).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_guard_removes_entry_on_drop() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut map = cancellations.lock().await;
+            map.insert("rid-g".to_string(), CancellationToken::new());
+        }
+        assert_eq!(cancellations.lock().await.len(), 1);
+        {
+            let _guard = CancellationGuard {
+                cancellations: cancellations.clone(),
+                request_id: "rid-g".to_string(),
+            };
+            // _guard drops at end of block.
+        }
+        // Give the spawned cleanup task a moment to run.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            cancellations.lock().await.is_empty(),
+            "guard's Drop should have removed the entry"
+        );
+    }
 }

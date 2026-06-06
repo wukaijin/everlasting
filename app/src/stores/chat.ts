@@ -766,6 +766,30 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** PR5: cancel an in-flight chat request. The backend's agent
+   *  loop notices on the next event boundary, bails out, persists
+   *  whatever it has, and emits a `done` event with
+   *  `stop_reason: "cancelled"`. The existing `handleChatEvent` for
+   *  `done` then resets `sending` / `currentRequestId` and clears
+   *  the streaming session — so this call only needs to fire the
+   *  IPC; it should NOT clear local state synchronously, or the
+   *  follow-up `done` event would be ignored as "stale" (see
+   *  `shouldApplyEvent`). */
+  async function cancel() {
+    const rid = currentRequestId.value;
+    if (!rid) return;
+    try {
+      await invoke("cancel_chat", { requestId: rid });
+    } catch (e) {
+      // A failed cancel is logged but not user-facing — the user
+      // already saw the Stop button and clicked it. The natural
+      // fallback is: the stream finishes on its own (or the next
+      // event errors out), and the existing `done` / `error` path
+      // resets state.
+      console.error("cancel_chat failed:", e);
+    }
+  }
+
   /** Cleanup all listeners (for future teardown). */
   function cleanup() {
     unlistenChat?.();
@@ -785,6 +809,7 @@ export const useChatStore = defineStore("chat", () => {
     currentCwd,
     streamingProjectIds,
     send,
+    cancel,
     loadSessions,
     createNewSession,
     switchSession,

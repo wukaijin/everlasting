@@ -31,6 +31,12 @@ const emit = defineEmits<{
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
 
+/** PR5: forwarded to `chatStore.cancel()` so the parent can keep
+ *  the ChatInput → ChatPanel → store flow symmetric with `send`. */
+function onStop() {
+  void chatStore.cancel();
+}
+
 /** The currently active session, if any. Looked up by id against
  *  the sessions list (the chat store only tracks the id; the full
  *  record lives in the list). */
@@ -95,7 +101,7 @@ const showGitChip = computed<boolean>(
       <MessageList v-else />
     </main>
 
-    <ChatInput :sending="chatStore.sending" @send="emit('send', $event)" />
+    <ChatInput :sending="chatStore.sending" @send="emit('send', $event)" @stop="onStop" />
   </section>
 </template>
 
