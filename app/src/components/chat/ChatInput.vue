@@ -15,6 +15,7 @@
 // project, etc.).
 
 import { ref } from "vue";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -102,8 +103,11 @@ const disabled = (): boolean => props.sending || !input.value.trim();
         :aria-label="sending ? '生成中' : '发送'"
         @click="onSubmit"
       >
-        <span v-if="sending" class="chat-input__spinner" aria-hidden="true">·</span>
-        <span v-else aria-hidden="true">↑</span>
+        <Icon
+          :name="sending ? 'ellipsis' : 'arrow-up'"
+          :size="16"
+          :class="sending ? 'chat-input__spinner' : ''"
+        />
       </button>
     </div>
     <div class="chat-input__hint">
@@ -172,7 +176,6 @@ const disabled = (): boolean => props.sending || !input.value.trim();
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 16px;
   font-family: inherit;
   padding: 0;
   transition: background 0.15s, opacity 0.15s;
@@ -190,10 +193,7 @@ const disabled = (): boolean => props.sending || !input.value.trim();
 }
 
 .chat-input__spinner {
-  display: inline-block;
   animation: chat-input-spin 1s linear infinite;
-  font-size: 20px;
-  line-height: 1;
 }
 
 @keyframes chat-input-spin {

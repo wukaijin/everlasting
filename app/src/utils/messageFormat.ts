@@ -71,18 +71,19 @@ export function toolAccentVar(toolName: string): string {
   }
 }
 
-/** Map a tool name to a one-glyph icon shown in the card header.
- *  Defaults to a generic wrench for unknown tools so the UI never
- *  blanks out when a new tool lands before its icon is wired. */
+/** Map a tool name to an icon name (key in the Icon component's
+ *  registry) shown in the card header. Defaults to a generic wrench
+ *  for unknown tools so the UI never blanks out when a new tool lands
+ *  before its icon is wired. */
 export function toolIcon(toolName: string): string {
   switch (toolName) {
     case "read_file":
-      return "📄";
+      return "document";
     case "write_file":
-      return "✏️";
+      return "pencil";
     case "shell":
-      return "💻";
+      return "command-line";
     default:
-      return "🔧";
+      return "wrench";
   }
 }

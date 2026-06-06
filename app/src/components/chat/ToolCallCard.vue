@@ -20,6 +20,7 @@ import {
   toolAccentVar,
   toolIcon,
 } from "../../utils/messageFormat";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   call: ToolCallInfo;
@@ -51,10 +52,13 @@ const statusText = computed<string>(() => {
   return "running…";
 });
 
-const statusIcon = computed<string>(() => {
-  if (isError.value) return "✗";
-  if (hasResult.value) return "✓";
-  return "⏳";
+/** Map the run state to a heroicon name for the status indicator.
+ *  "running" uses an animated ellipsis (handled by CSS); the other
+ *  two are static check / X marks. */
+const statusIconName = computed<string>(() => {
+  if (isError.value) return "x";
+  if (hasResult.value) return "check";
+  return "ellipsis";
 });
 </script>
 
@@ -65,14 +69,20 @@ const statusIcon = computed<string>(() => {
   >
     <div class="tool-card__header">
       <div class="tool-card__title">
-        <span class="tool-card__icon">{{ toolIcon(call.name) }}</span>
+        <span class="tool-card__icon">
+          <Icon :name="toolIcon(call.name)" :size="14" />
+        </span>
         <span class="tool-card__name">{{ call.name }}</span>
         <span v-if="filePath" class="tool-card__path" :title="filePath">
           · {{ filePath }}
         </span>
       </div>
       <div class="tool-card__status">
-        <span class="tool-card__status-icon">{{ statusIcon }}</span>
+        <span
+          :class="['tool-card__status-icon', { 'tool-card__status-icon--running': !hasResult && !isError }]"
+        >
+          <Icon :name="statusIconName" :size="14" />
+        </span>
         <span>{{ statusText }}</span>
       </div>
     </div>
@@ -130,8 +140,13 @@ const statusIcon = computed<string>(() => {
 
 .tool-card__icon {
   flex-shrink: 0;
-  font-size: 13px;
-  font-family: var(--font-sans);
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary);
+}
+
+.tool-card--error .tool-card__icon {
+  color: var(--color-tool-error);
 }
 
 .tool-card__name {
@@ -162,8 +177,18 @@ const statusIcon = computed<string>(() => {
 }
 
 .tool-card__status-icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
   line-height: 1;
+}
+
+.tool-card__status-icon--running {
+  animation: tool-card-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tool-card-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .tool-card--error .tool-card__status {

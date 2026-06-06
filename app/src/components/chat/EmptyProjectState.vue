@@ -10,6 +10,7 @@
 // two-column list (name + path) with subtle dividers.
 
 import { useProjectsStore } from "../../stores/projects";
+import Icon from "../Icon.vue";
 
 const projectsStore = useProjectsStore();
 
@@ -30,14 +31,14 @@ async function onLoadHidden() {
   <main class="empty-state">
     <div class="empty-state__inner">
       <div class="empty-state__icon" aria-hidden="true">
-        <span class="empty-state__icon-glyph">📁</span>
+        <Icon name="archive" :size="24" class="empty-state__icon-glyph" />
       </div>
       <h1 class="empty-state__title">还没有项目</h1>
       <p class="empty-state__hint">
         添加一个项目目录,开始与 LLM 协作编码
       </p>
       <button class="empty-state__add" @click="onAdd">
-        <span class="empty-state__add-plus" aria-hidden="true">+</span>
+        <Icon name="plus" :size="16" class="empty-state__add-plus" />
         添加项目
       </button>
 
@@ -62,16 +63,22 @@ async function onLoadHidden() {
                   v-if="p.is_legacy"
                   class="hidden-projects__icon"
                   title="旧数据,自动归入"
-                >📦</span>
+                >
+                  <Icon name="archive" :size="13" />
+                </span>
                 <span
                   v-else-if="!p.is_git_repo"
                   class="hidden-projects__icon hidden-projects__icon--warn"
                   title="未启用 git 隔离"
-                >⚠️</span>
+                >
+                  <Icon name="warn" :size="13" />
+                </span>
                 <span
                   v-else
                   class="hidden-projects__icon"
-                >📁</span>
+                >
+                  <Icon name="archive" :size="13" />
+                </span>
                 <span class="hidden-projects__name" :title="p.name">{{ p.name }}</span>
               </div>
               <div class="hidden-projects__path" :title="p.path">{{ p.path }}</div>
@@ -128,8 +135,7 @@ async function onLoadHidden() {
 }
 
 .empty-state__icon-glyph {
-  font-size: 24px;
-  font-family: var(--font-sans);
+  color: var(--color-accent);
 }
 
 .empty-state__title {
@@ -174,7 +180,6 @@ async function onLoadHidden() {
 }
 
 .empty-state__add-plus {
-  font-size: 16px;
   line-height: 1;
   font-weight: 400;
 }
@@ -273,8 +278,9 @@ async function onLoadHidden() {
 
 .hidden-projects__icon {
   flex-shrink: 0;
-  font-size: 13px;
-  font-family: var(--font-sans);
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary);
 }
 
 .hidden-projects__icon--warn {

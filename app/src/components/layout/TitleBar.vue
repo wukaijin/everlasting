@@ -10,9 +10,10 @@
 //     right (3 × 46px = 138px wide).
 //
 // Drag region:
-//   - Root <div> is a drag region. The 80px macOS spacer and the right-
-//     hand empty area are part of it (so the user can grab the title
-//     bar there).
+//   - Root <div> is a drag region. The 80px macOS spacer, the AppLogo
+//     (with `data-tauri-drag-region="false"` to opt out of drag), and
+//     the right-hand empty area are part of it (so the user can grab
+//     the title bar there).
 //   - The <slot/> is wrapped in `data-tauri-drag-region="false"` so
 //     project tabs (interactive children) don't get hijacked by drag.
 //   - Window control buttons explicitly opt out too, defensively.
@@ -26,10 +27,17 @@
 // window's outer size changes. We hook into it to keep the maximize
 // button icon in sync (□ vs ❐) when the user uses Win+Up / double-click
 // the title bar / etc.
+//
+// D6 polish: the AppLogo SVG monogram is rendered at the FAR LEFT of
+// the bar (before the macOS spacer, before the slot). It opts out of
+// the drag region so it's clickable in the future. Window control
+// buttons now use heroicons instead of the old ー/□/❐/✕ typography.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { platform, type Platform } from "@tauri-apps/plugin-os";
+import AppLogo from "./AppLogo.vue";
+import Icon from "../Icon.vue";
 
 const os = ref<Platform | null>(null);
 const isMaximized = ref(false);
@@ -95,13 +103,27 @@ async function onClose() {
 
 <template>
   <!--
-    Root drag region. The slot content (ProjectTabs) and the window
-    controls opt out below, so only the empty padding areas are draggable.
+    Root drag region. The slot content (ProjectTabs), the AppLogo,
+    and the window controls opt out below, so only the empty
+    padding areas are draggable.
   -->
   <div
     :class="['titlebar', { 'titlebar--mac': isMac }]"
     data-tauri-drag-region
   >
+    <!--
+      App logo (D6): a small monogram at the far left. It opts
+      out of the drag region so future click handlers don't have
+      to fight the parent. Wrapped in a fixed-width cell so the
+      slot content never shifts when this element changes size.
+    -->
+    <div
+      class="titlebar__logo"
+      data-tauri-drag-region="false"
+    >
+      <AppLogo :size="20" class="titlebar__logo-svg" />
+    </div>
+
     <!--
       macOS: reserve 80px for the native traffic lights at (14, 14).
       This empty padded area is part of the drag region so the user can
@@ -149,7 +171,7 @@ async function onClose() {
         data-tauri-drag-region="false"
         @click="onMinimize"
       >
-        ー
+        <Icon name="ellipsis" :size="14" />
       </button>
       <button
         class="titlebar__btn"
@@ -159,7 +181,7 @@ async function onClose() {
         data-tauri-drag-region="false"
         @click="onToggleMaximize"
       >
-        {{ isMaximized ? '❐' : '□' }}
+        <Icon :name="isMaximized ? 'restore' : 'maximize'" :size="14" />
       </button>
       <button
         class="titlebar__btn titlebar__btn--close"
@@ -169,7 +191,7 @@ async function onClose() {
         data-tauri-drag-region="false"
         @click="onClose"
       >
-        ✕
+        <Icon name="x" :size="14" />
       </button>
     </div>
   </div>
@@ -194,6 +216,24 @@ async function onClose() {
    and the traffic lights; the rest of the bar is normal surface. */
 .titlebar--mac {
   padding-left: 0; /* the 80px spacer below handles traffic-light clearance */
+}
+
+/* AppLogo wrapper: fixed-width cell at the far left, with a small
+   left padding so the monogram doesn't touch the window edge. The
+   SVG itself uses `currentColor` so we paint it in the accent hue
+   here. */
+.titlebar__logo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  padding-left: 8px;
+  box-sizing: border-box;
+}
+
+.titlebar__logo-svg {
+  color: var(--color-accent);
 }
 
 .titlebar__mac-spacer {
@@ -235,7 +275,6 @@ async function onClose() {
   background: transparent;
   border: none;
   color: var(--color-text-secondary);
-  font-size: 13px;
   line-height: 1;
   cursor: default;
   font-family: inherit;

@@ -1,10 +1,14 @@
 <script setup lang="ts">
 // SessionList — session list shown in the left sidebar when a project
-// is active. D5 restructure: the header and "+ 新对话" button are now
-// owned by Sidebar.vue; this component is just the <ul> of session
-// items. Each item is a single line: title (truncated) + status dot
-// + relative timestamp + hover-revealed delete button. Matches the
-// spike-003 reference (ui-A.png).
+// is active. The header and "+ 新对话" button are owned by
+// Sidebar.vue; this component is just the <ul> of session items.
+//
+// D6 restructure: each item is now a TWO-LINE card instead of the
+// single-line row we had in D5. Line 1 is the session title (CJK +
+// English mix), line 2 is muted secondary info — the project name +
+// a relative timestamp joined with a · separator. This gives the
+// user visual context for which project each session belongs to,
+// which is especially useful when multiple projects are loaded.
 //
 // Per Q4v2 (PROPOSAL §5.2): default to the 8 most-recently-updated
 // sessions; if there are more, render a "查看更早的 N 个" button at
@@ -13,8 +17,11 @@
 
 import { computed, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
+import { useProjectsStore } from "../stores/projects";
+import Icon from "./Icon.vue";
 
 const store = useChatStore();
+const projectsStore = useProjectsStore();
 
 const DEFAULT_VISIBLE = 8;
 const expanded = ref(false);
@@ -33,6 +40,15 @@ const hiddenCount = computed<number>(() => {
   return total - DEFAULT_VISIBLE;
 });
 
+/** Look up a session's project name via the projects store. The
+ *  projects store is the source of truth for project metadata; the
+ *  session record itself only carries `project_id`. Falls back to
+ *  "—" if the project is hidden, missing, or the id is unknown. */
+function projectNameFor(s: SessionSummary): string {
+  const p = projectsStore.projectById(s.project_id);
+  return p?.name ?? "—";
+}
+
 function onClick(id: string) {
   void store.switchSession(id);
 }
@@ -45,8 +61,8 @@ function onDelete(id: string, e: MouseEvent) {
 }
 
 /** Coarse relative-time formatter. Buckets by age to keep the label
- *  short and glanceable (the right side of a single-line row).
- *  Anything ≥ 7 days falls back to a localized date. */
+ *  short and glanceable (line 2 of a two-line card). Anything
+ *  ≥ 7 days falls back to a localized date. */
 function formatTime(iso: string): string {
   if (!iso) return "";
   const t = Date.parse(iso);
@@ -76,15 +92,27 @@ function formatTime(iso: string): string {
       :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
       @click="onClick(s.id)"
     >
-      <span class="session-item__title">{{ s.title }}</span>
+      <div class="session-item__main">
+        <div class="session-item__title-row">
+          <span class="session-item__title">{{ s.title }}</span>
+        </div>
+        <div class="session-item__meta">
+          <span class="session-item__project">{{ projectNameFor(s) }}</span>
+          <span v-if="formatTime(s.updated_at)" class="session-item__sep">·</span>
+          <span v-if="formatTime(s.updated_at)" class="session-item__time">
+            {{ formatTime(s.updated_at) }}
+          </span>
+        </div>
+      </div>
       <span class="session-item__dot" aria-hidden="true" />
-      <span class="session-item__time">{{ formatTime(s.updated_at) }}</span>
       <button
         class="session-item__delete"
         title="删除"
         aria-label="删除会话"
         @click="(e) => onDelete(s.id, e)"
-      >×</button>
+      >
+        <Icon name="x" :size="12" />
+      </button>
     </li>
     <li v-if="store.sessions.length === 0" class="session-empty">
       还没有对话,点上方 + 开始
@@ -112,14 +140,14 @@ function formatTime(iso: string): string {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .session-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 8px 10px;
-  margin-bottom: 2px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
@@ -140,15 +168,56 @@ function formatTime(iso: string): string {
   background: var(--color-accent-muted);
 }
 
-.session-item__title {
+.session-item__main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-item__title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.session-item__title {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-item__project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.session-item__sep {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.session-item__time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-item__dot {
@@ -157,17 +226,11 @@ function formatTime(iso: string): string {
   height: 6px;
   border-radius: 50%;
   background: var(--color-tool-write);
+  margin-top: 6px;
 }
 
 .session-item--active .session-item__dot {
   background: var(--color-accent);
-}
-
-.session-item__time {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .session-item__delete {
@@ -178,8 +241,9 @@ function formatTime(iso: string): string {
   border-radius: 4px;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 16px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: all 0.1s;

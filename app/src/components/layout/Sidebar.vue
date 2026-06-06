@@ -9,6 +9,7 @@
 
 import { useChatStore } from "../../stores/chat";
 import SessionList from "../SessionList.vue";
+import Icon from "../Icon.vue";
 
 const chat = useChatStore();
 
@@ -26,7 +27,9 @@ function onNew() {
         title="新建会话"
         aria-label="新建会话"
         @click="onNew"
-      >+</button>
+      >
+        <Icon name="plus" :size="16" />
+      </button>
     </div>
     <SessionList />
   </aside>
@@ -66,8 +69,6 @@ function onNew() {
   border: none;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 18px;
-  line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;

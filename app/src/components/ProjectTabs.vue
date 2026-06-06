@@ -17,6 +17,7 @@
 // background and accent underline per spike-003.
 
 import { useProjectsStore } from "../stores/projects";
+import Icon from "./Icon.vue";
 
 const store = useProjectsStore();
 
@@ -67,12 +68,16 @@ function tabTooltip(p: {
           v-if="!p.is_git_repo && !p.is_legacy"
           class="tab__icon tab__icon--warn"
           title="未启用 git 隔离"
-        >⚠️</span>
+        >
+          <Icon name="warn" :size="12" />
+        </span>
         <span
           v-else-if="p.is_legacy"
           class="tab__icon tab__icon--legacy"
           title="旧数据,自动归入"
-        >📦</span>
+        >
+          <Icon name="archive" :size="12" />
+        </span>
         <span
           v-if="streamingProjectIds.has(p.id)"
           class="tab__streaming"
@@ -81,11 +86,21 @@ function tabTooltip(p: {
         <button
           class="tab__close"
           :title="'关闭 Tab(数据保留)'"
+          :aria-label="`关闭 ${p.name}`"
           @click="(e) => onHide(p.id, e)"
-        >×</button>
+        >
+          <Icon name="x" :size="12" />
+        </button>
       </button>
     </div>
-    <button class="tabs__add" title="添加项目" @click="onAdd">+</button>
+    <button
+      class="tabs__add"
+      title="添加项目"
+      :aria-label="'添加项目'"
+      @click="onAdd"
+    >
+      <Icon name="plus" :size="16" />
+    </button>
   </div>
 </template>
 
@@ -169,7 +184,8 @@ function tabTooltip(p: {
 }
 
 .tab__icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
   line-height: 1;
 }
@@ -179,7 +195,7 @@ function tabTooltip(p: {
 }
 
 .tab__icon--legacy {
-  filter: saturate(0.85);
+  color: var(--color-text-muted);
 }
 
 .tab__streaming {
@@ -203,7 +219,9 @@ function tabTooltip(p: {
   border-radius: 3px;
   background: transparent;
   color: var(--color-text-muted);
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
@@ -230,7 +248,9 @@ function tabTooltip(p: {
   border: none;
   border-left: 1px solid var(--color-bg-border);
   cursor: pointer;
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-secondary);
   transition: background 0.1s, color 0.1s;
   font-family: inherit;

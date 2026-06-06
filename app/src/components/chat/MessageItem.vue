@@ -17,6 +17,7 @@ import type { ChatMessage } from "../../stores/chat";
 import { getToolResult } from "../../utils/messageFormat";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -67,7 +68,7 @@ const showStreamingHint = computed<boolean>(
       class="msg__redacted"
       :title="`${message.redactedThinkingData.length} redacted thinking block(s); preserved verbatim for the LLM but not displayable`"
     >
-      🔒
+      <Icon name="lock" :size="12" class="msg__redacted-icon" />
       {{ message.redactedThinkingData.length }} redacted thinking
       block{{ message.redactedThinkingData.length === 1 ? "" : "s" }}
       (preserved for LLM)
@@ -90,7 +91,8 @@ const showStreamingHint = computed<boolean>(
     </div>
 
     <div v-if="message.error" class="msg__error">
-      ⚠ {{ message.error.message }}
+      <Icon name="warn" :size="12" class="msg__error-icon" />
+      {{ message.error.message }}
     </div>
   </li>
 </template>
@@ -111,6 +113,9 @@ const showStreamingHint = computed<boolean>(
 }
 
 .msg__redacted {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 6px;
   padding: 4px 10px;
   background: var(--color-bg-elevated);
@@ -119,6 +124,11 @@ const showStreamingHint = computed<boolean>(
   font-size: 11px;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
+}
+
+.msg__redacted-icon {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
 }
 
 .msg__tools {
@@ -170,9 +180,16 @@ const showStreamingHint = computed<boolean>(
 }
 
 .msg__error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 4px;
   padding: 0 14px;
   font-size: 12px;
   color: var(--color-tool-error);
+}
+
+.msg__error-icon {
+  flex-shrink: 0;
 }
 </style>

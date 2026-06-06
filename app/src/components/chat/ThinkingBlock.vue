@@ -7,6 +7,15 @@
 //
 // The block is collapsed by default — the header shows the
 // estimated token count so the user can decide whether to expand.
+//
+// D6 polish (expanded body):
+//   - Monospace body via `var(--font-mono)`, 12.5px, line-height 1.6
+//   - Background nests one level deeper (`var(--color-bg-app)`) so
+//     the body visually "drops in" from the summary chip
+//   - Padding 12px 14px (matches the card-content grid)
+//   - 1px border on sides + bottom (no top — connects to summary)
+//   - max-height 360px, overflow-y: auto, custom thin scrollbar
+//   - D6 also replaces the 💭 emoji summary icon with a heroicon.
 
 import { computed } from "vue";
 import type { ThinkingBlockInfo } from "../../stores/chat";
@@ -14,6 +23,7 @@ import {
   thinkingDisplayText,
   estimateThinkingTokens,
 } from "../../utils/messageFormat";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   blocks: ThinkingBlockInfo[];
@@ -33,7 +43,9 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 <template>
   <details class="thinking">
     <summary class="thinking__summary">
-      <span class="thinking__icon" aria-hidden="true">💭</span>
+      <span class="thinking__icon" aria-hidden="true">
+        <Icon name="thinking" :size="12" />
+      </span>
       <span>Thought for {{ tokens }} tokens</span>
       <span v-if="blocks.length > 1" class="thinking__count">
         · {{ blocks.length }} blocks
@@ -89,7 +101,9 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 }
 
 .thinking__icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-tool-thinking);
 }
 
 .thinking__count {
@@ -102,21 +116,41 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
   font-weight: 500;
 }
 
+/* Expanded body: monospace, padded, capped height with thin
+   dark scrollbar. Background nests one level deeper so the body
+   reads as "inside" the summary chip. */
 .thinking__body {
   margin: 0;
-  padding: 10px 12px;
-  background: var(--color-bg-elevated);
+  padding: 12px 14px;
+  background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   border-top: none;
   border-radius: 0 0 6px 6px;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.6;
   color: var(--color-text-secondary);
   font-family: var(--font-mono);
   max-height: 360px;
   overflow-y: auto;
   margin-left: 4px;
+  /* Match the rounded corner on the right edge of the bar so the
+     body sits flush with the violet accent. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-bg-border) transparent;
+}
+
+.thinking__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.thinking__body::-webkit-scrollbar-thumb {
+  background: var(--color-bg-border);
+  border-radius: 3px;
+}
+
+.thinking__body::-webkit-scrollbar-track {
+  background: transparent;
 }
 </style>
