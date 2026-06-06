@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "acceptance: cargo test 并发用例覆盖 cancel token + persist_turn 不丢 + idempotent + 多 request 隔离"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "acceptance: stream select 包裹后, ChatEvent 流时序不变 (Done/Error 仍正确发出)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "acceptance: cancelled 不走 LlmErrorCategory, 前端可区分 'user stopped' vs 'real error'"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "acceptance: tracing 字段完整, 调试时能 grep request_id 看到 cancel 时间点"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance: pnpm build + (如适用) vitest 通过"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "acceptance: Stop 按钮 conditional render 符合组件规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "acceptance: Pinia store cancelled 状态不污染 error, send/cancel state machine 完整"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: 根因留痕, spike #4 在 PR5 后可标 [RESOLVED]"}

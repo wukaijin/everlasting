@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Agent Loop 状态机 + ChatEvent 流是 PR5 select 包裹和 cancel 后缀写入的依据, 实施必读"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "cancel_chat command + AppState 改造的位置约定 (commands 集中 vs 模块化)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "cancel 后错误处理策略: cancelled 跟 error 区分, 不应走 LlmErrorCategory 分类"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing 字段: request_id, session_id, cancelled bool, tool_count, text_parts.len()"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "cargo test 并发用例的写法 + 共享状态测试模式 (Arc<Mutex<HashMap>> 测试 fixture)"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Stop 按钮位置 + conditional render 规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat.ts 状态机扩展: cancelled 状态不混入 error, Pinia store mutation 模式"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #4 (tool call 死循环只能强退) 原始根因与 PR5 目标对应"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 task prd 锁定方案 A (cancel_chat + CancellationToken), 实施直接套决策, 不再 brainstorm"}
