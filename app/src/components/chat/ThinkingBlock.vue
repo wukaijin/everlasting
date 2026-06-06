@@ -1,21 +1,24 @@
 <script setup lang="ts">
 // ThinkingBlock — collapsible <details> element for the model's
 // extended thinking text. Per spike-003 the left bar is a 3px
-// violet accent (--color-tool-thinking) and the block uses the
-// elevated surface for the body so it visually separates from
-// the chat bubble.
+// violet accent (--color-tool-thinking). The block is collapsed by
+// default — the header shows the estimated token count so the user
+// can decide whether to expand.
 //
-// The block is collapsed by default — the header shows the
-// estimated token count so the user can decide whether to expand.
-//
-// D6 polish (expanded body):
-//   - Monospace body via `var(--font-mono)`, 12.5px, line-height 1.6
-//   - Background nests one level deeper (`var(--color-bg-app)`) so
-//     the body visually "drops in" from the summary chip
-//   - Padding 12px 14px (matches the card-content grid)
-//   - 1px border on sides + bottom (no top — connects to summary)
-//   - max-height 360px, overflow-y: auto, custom thin scrollbar
-//   - D6 also replaces the 💭 emoji summary icon with a heroicon.
+// Bug-fix v3 layout (the previous "pill summary + detached body"
+// combo left a visible seam and made the violet 3px bar look like it
+// wasn't connected to anything). We now render a single unified card:
+//   - Root <details> is the card, with the 3px violet left bar and
+//     rounded right corners; `overflow: hidden` clips children to
+//     the card so the body never sticks out past the radius.
+//   - The summary is a full-width header band, not a pill, so its
+//     left edge sits flush against the violet bar (no more 4px
+//     inset gap). When expanded, a 1px hairline divider separates
+//     the header from the body.
+//   - The body still nests one level deeper (`--color-bg-app`) so
+//     the expanded block reads as "inside" the header — a
+//     Linear-meets-Cursor style inline disclosure, not two separate
+//     elements stuck together.
 
 import { computed } from "vue";
 import type { ThinkingBlockInfo } from "../../stores/chat";
@@ -60,29 +63,28 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 
 <style scoped>
 .thinking {
+  position: relative;
   margin-bottom: 6px;
   max-width: 100%;
   border-left: 3px solid var(--color-tool-thinking);
   border-radius: 0 6px 6px 0;
-  padding-left: 0;
+  overflow: hidden;
+  background: var(--color-bg-app);
 }
 
 .thinking__summary {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 999px;
   font-size: 11px;
   color: var(--color-text-secondary);
   cursor: pointer;
   user-select: none;
   list-style: none;
   font-family: var(--font-mono);
-  transition: background 0.1s, border-color 0.1s;
-  margin-left: 4px;
+  transition: background 0.1s;
 }
 
 .thinking__summary::-webkit-details-marker {
@@ -91,13 +93,12 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 
 .thinking__summary:hover {
   background: var(--color-bg-surface);
-  border-color: var(--color-tool-thinking);
 }
 
+/* When expanded, a 1px hairline separates the header from the body
+   so the two backgrounds don't blur into each other. */
 .thinking[open] .thinking__summary {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  border-bottom-color: transparent;
+  border-bottom: 1px solid var(--color-bg-border);
 }
 
 .thinking__icon {
@@ -118,14 +119,11 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 
 /* Expanded body: monospace, padded, capped height with thin
    dark scrollbar. Background nests one level deeper so the body
-   reads as "inside" the summary chip. */
+   reads as "inside" the summary header. */
 .thinking__body {
   margin: 0;
   padding: 12px 14px;
   background: var(--color-bg-app);
-  border: 1px solid var(--color-bg-border);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12.5px;
@@ -134,9 +132,6 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
   font-family: var(--font-mono);
   max-height: 360px;
   overflow-y: auto;
-  margin-left: 4px;
-  /* Match the rounded corner on the right edge of the bar so the
-     body sits flush with the violet accent. */
   scrollbar-width: thin;
   scrollbar-color: var(--color-bg-border) transparent;
 }

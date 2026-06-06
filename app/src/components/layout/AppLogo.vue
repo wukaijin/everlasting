@@ -11,8 +11,6 @@
 // the look of an abstract terminal/code window). Size 20×20 by default
 // to match the rest of the chrome.
 
-import { withDefaults } from "vue";
-
 withDefaults(
   defineProps<{
     size?: number | string;

@@ -56,12 +56,16 @@ function tabTooltip(p: {
 <template>
   <div class="tabs">
     <div class="tabs__scroll">
-      <button
+      <div
         v-for="p in store.projects"
         :key="p.id"
         :class="['tab', { 'tab--active': p.id === store.currentProjectId }]"
+        role="button"
+        tabindex="0"
         :title="tabTooltip(p)"
         @click="onTabClick(p.id)"
+        @keydown.enter="onTabClick(p.id)"
+        @keydown.space.prevent="onTabClick(p.id)"
       >
         <span class="tab__name">{{ p.name }}</span>
         <span
@@ -91,7 +95,7 @@ function tabTooltip(p: {
         >
           <Icon name="x" :size="12" />
         </button>
-      </button>
+      </div>
     </div>
     <button
       class="tabs__add"

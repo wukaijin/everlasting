@@ -23,18 +23,33 @@
 // traffic lights via the `titleBarStyle: "Overlay"` config field (which
 // takes precedence on macOS).
 //
-// isMaximized tracking: Tauri's WebView fires `onResized` whenever the
-// window's outer size changes. We hook into it to keep the maximize
-// button icon in sync (□ vs ❐) when the user uses Win+Up / double-click
-// the title bar / etc.
-//
 // D6 polish: the AppLogo SVG monogram is rendered at the FAR LEFT of
 // the bar (before the macOS spacer, before the slot). It opts out of
 // the drag region so it's clickable in the future. Window control
 // buttons now use heroicons instead of the old ー/□/❐/✕ typography.
+//
+// Maximize behavior (bug-fix v3): on Windows / Linux / WSLg the native
+// `toggleMaximize()` is capped at the OS work area, which on a 4K
+// display is often ~1290×1080 — too small to be useful. We replace
+// it with `setSize` + `setPosition` using the current monitor's full
+// physical dimensions, so the window fills the entire monitor
+// (including the taskbar strip). macOS keeps `toggleMaximize()` so
+// the red lights + native fullscreen semantics still work.
+//
+// isMaximized tracking: Tauri's WebView fires `onResized` whenever
+// the window's outer size changes. On macOS we follow Tauri's
+// `isMaximized()` (matches the OS's fullscreen state). On Win/Linux
+// we recompute it from the actual window size vs. the monitor size,
+// so the icon stays in sync even after the user manually resizes
+// the window to fill the screen.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  currentMonitor,
+  LogicalSize,
+  LogicalPosition,
+} from "@tauri-apps/api/window";
 import { platform, type Platform } from "@tauri-apps/plugin-os";
 import AppLogo from "./AppLogo.vue";
 import Icon from "../Icon.vue";
@@ -45,6 +60,39 @@ const isMac = ref(false);
 
 let unlistenResize: (() => void) | null = null;
 const win = getCurrentWindow();
+
+/** Default "restored" size — matches `tauri.conf.json` window defaults. */
+const DEFAULT_W = 1440;
+const DEFAULT_H = 900;
+
+/** Re-sync `isMaximized` with reality. Called on mount + on every
+ *  resize. Behaviour differs per platform — see comment block above. */
+async function syncMaximizedState() {
+  try {
+    if (isMac.value) {
+      isMaximized.value = await win.isMaximized();
+      return;
+    }
+    // Win / Linux: a window is "maximized" (in our sense) iff its
+    // outer size matches the current monitor's full size, within
+    // a 4px tolerance for AA / DPI rounding.
+    const monitor = await currentMonitor();
+    if (!monitor) {
+      isMaximized.value = await win.isMaximized();
+      return;
+    }
+    const winSize = await win.outerSize();
+    const factor = monitor.scaleFactor;
+    const mW = monitor.size.width / factor;
+    const mH = monitor.size.height / factor;
+    const wW = winSize.width / factor;
+    const wH = winSize.height / factor;
+    isMaximized.value =
+      Math.abs(wW - mW) < 4 && Math.abs(wH - mH) < 4;
+  } catch (e) {
+    console.error("[TitleBar] syncMaximizedState failed", e);
+  }
+}
 
 onMounted(async () => {
   try {
@@ -59,13 +107,13 @@ onMounted(async () => {
     console.error("[TitleBar] platform() failed; assuming non-macOS", e);
     isMac.value = false;
   }
+  await syncMaximizedState();
   try {
-    isMaximized.value = await win.isMaximized();
-    unlistenResize = await win.onResized(async () => {
-      isMaximized.value = await win.isMaximized();
+    unlistenResize = await win.onResized(() => {
+      void syncMaximizedState();
     });
   } catch (e) {
-    console.error("[TitleBar] isMaximized wiring failed", e);
+    console.error("[TitleBar] onResized wiring failed", e);
   }
 });
 
@@ -86,7 +134,51 @@ async function onMinimize() {
 
 async function onToggleMaximize() {
   try {
-    await win.toggleMaximize();
+    if (isMac.value) {
+      // macOS: defer to the OS so the native fullscreen / maximize
+      // animation + red-light semantics are preserved.
+      await win.toggleMaximize();
+      return;
+    }
+    // Win / Linux / WSLg: toggle between "fill entire monitor" and
+    // the default 1440×900 (centered on the current monitor). This
+    // is what users actually expect from a "maximize" button when
+    // the OS work area is unacceptably small.
+    if (isMaximized.value) {
+      await win.setSize(new LogicalSize(DEFAULT_W, DEFAULT_H));
+      const monitor = await currentMonitor();
+      if (monitor) {
+        const factor = monitor.scaleFactor;
+        const mW = monitor.size.width / factor;
+        const mH = monitor.size.height / factor;
+        const x = (mW - DEFAULT_W) / 2;
+        const y = (mH - DEFAULT_H) / 2;
+        const pos = monitor.position;
+        await win.setPosition(
+          new LogicalPosition(
+            pos.x / factor + Math.max(0, x),
+            pos.y / factor + Math.max(0, y),
+          ),
+        );
+      }
+      isMaximized.value = false;
+    } else {
+      const monitor = await currentMonitor();
+      if (!monitor) {
+        // No monitor info (very unusual) — fall back to OS maximize.
+        await win.toggleMaximize();
+        return;
+      }
+      const factor = monitor.scaleFactor;
+      await win.setSize(
+        new LogicalSize(monitor.size.width / factor, monitor.size.height / factor),
+      );
+      const pos = monitor.position;
+      await win.setPosition(
+        new LogicalPosition(pos.x / factor, pos.y / factor),
+      );
+      isMaximized.value = true;
+    }
   } catch (e) {
     console.error("[TitleBar] toggleMaximize failed", e);
   }
