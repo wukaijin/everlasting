@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
+- **Total Sessions**: 14
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~463 | Active |
+| `journal-1.md` | ~506 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-06-06 | 06-06 字体: HarmonyOS Sans SC 子集打包 (CSS 杠杆救不了雅黑, 换字体是唯一解) | `aabb9fa` | `main` |
 | 13 | 2026-06-06 | PR2 follow-up: 启动时 batch backfill 老项目的 git_branch | `7ce320918c80889cc4b24241f2c507c43ad61620` | `main` |
 | 12 | 2026-06-06 | spike-005 follow-up 完成: 7 sub-PR 全合并到 main, 最终测试全过 | `401396b` | `main` |
 | 11 | 2026-06-06 | spike-005 PR4: write_file 加 tracing::debug 诊断偶发失败 | `ae1a71179f85b1c25c03580339bac208b48a7893` | `refactor/ui-dark-theme-tailwind` |

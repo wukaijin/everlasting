@@ -461,3 +461,46 @@ main 领先 origin/main 37 commits, working tree clean
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 06-06 字体: HarmonyOS Sans SC 子集打包 (CSS 杠杆救不了雅黑, 换字体是唯一解)
+
+**Date**: 2026-06-06
+**Task**: 06-06 字体: HarmonyOS Sans SC 子集打包 (CSS 杠杆救不了雅黑, 换字体是唯一解)
+**Branch**: `main`
+
+### Summary
+
+WSL2 + Tauri WebView2 在 Dark theme 14-15px 下渲染 CJK 糊, 调 font-size/line-height/letter-spacing 改不动 (Microsoft YaHei UI 在 Win 10/11 默认不装, 回退到 Microsoft YaHei 跟原栈一样)。根因是字体本身 (2006 Vista 设计的雅黑在 Dark theme 小字号下是糊的天花板)。
+
+打包 HarmonyOS Sans SC Regular 子集 (3500 常用字 + ASCII + 标点 = 3639 chars), HarfBuzz WASM 子集化 + brotli 压缩 → 472 KB woff2。@font-face 接入 --font-sans 首位, font-display: swap。Microsoft YaHei UI / YaHei / PingFang SC 等系统字体降为 woff2 加载失败 + 子集外罕见字的两层兜底。
+
+Vite 处理 @font-face src 相对路径, dev/prod 都正确, 产物带 content hash, Tauri 2 frontendDist 自动 ship woff2。
+
+工具链: 跨平台字体子集化在没 pip 的 WSL 上改用 Node.js subset-font (HarfBuzz WASM) + wawoff2, 零原生依赖, 项目 devDependencies 声明。脚本 app/scripts/subset-font.mjs 接受 env 覆盖, 任何 cwd 都能跑, 缺依赖时打印清晰错误。
+
+License: HarmonyOS Sans Fonts License Agreement 允许打包, 三处声明 (THIRD_PARTY_LICENSES.md + 字体目录 LICENSE.txt + style.css 顶部注释) 满足 prominent notice 要求。
+
+经验沉淀: .trellis/spec/frontend/cjk-fonts.md (system font 兜底局限、3500 字覆盖率、Vite+Tauri 资源链路、license 合规三处声明 pattern)。未来再遇到 CJK 字体问题先读这份 spec。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aabb9fa` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
