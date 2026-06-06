@@ -33,6 +33,7 @@ import {
   Squares2X2Icon,
   ArrowsPointingOutIcon,
   FolderIcon,
+  MinusIcon,
 } from "@heroicons/vue/24/outline";
 
 const props = withDefaults(
@@ -68,6 +69,7 @@ const map = {
   "maximize": Squares2X2Icon,
   "restore": ArrowsPointingOutIcon,
   "folder": FolderIcon,
+  "minus": MinusIcon,
 } as const;
 
 const Component = computed(() => {

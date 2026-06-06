@@ -25,6 +25,11 @@
   --color-bg-surface: #131822;
   --color-bg-elevated: #1A2030;
   --color-bg-border: #1E2530;
+  /* Stronger border for elements that need clear delineation against the
+     elevated surface (e.g. markdown table cell borders in chat bubbles —
+     the regular --color-bg-border is only 4 luminance units brighter than
+     --color-bg-elevated and reads as invisible). */
+  --color-bg-border-strong: #3B475A;
 
   /* Text colors */
   --color-text-primary: #E5E7EB;

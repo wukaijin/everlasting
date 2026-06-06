@@ -353,7 +353,10 @@ onUnmounted(() => {
 
 .msg__markdown :deep(th),
 .msg__markdown :deep(td) {
-  border: 1px solid var(--color-bg-border);
+  /* Stronger border color than --color-bg-border because table cells
+     sit on --color-bg-elevated (the bubble) and the regular border
+     reads as invisible (only 4 luminance units of separation). */
+  border: 1px solid var(--color-bg-border-strong);
   padding: 4px 8px;
   text-align: left;
 }
