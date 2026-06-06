@@ -8,10 +8,10 @@
 // D6 header: replaced the static "Everlasting / vibe coding
 // workbench / cwd" trio with a per-session header that shows the
 // session title (or "新对话" when none) plus two small chips: the
-// model name and a git placeholder. The git chip is intentionally
-// a static "git" tag today — the backend doesn't yet expose a real
-// branch name on the project; the chip will swap to a real branch
-// string once the Rust side grows a `git_branch` column.
+// model name and the project's current git branch. The git chip
+// is hidden when the project is not a git repo; otherwise it
+// shows the branch name (e.g. `main`, `feature/foo`, or the
+// literal `HEAD` for a detached-HEAD repo).
 
 import { computed } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
@@ -57,13 +57,21 @@ const currentProject = computed(() =>
 );
 
 /** Git branch chip is rendered when the project is a git repo. The
- *  label is a static "git" — the backend doesn't yet expose the
- *  real branch name, so we don't fabricate one. Once the Rust
- *  project schema grows `git_branch`, replace this string with
- *  `currentProject.value.git_branch` (or similar). */
+ *  label is the project's `git_branch` (e.g. `main`, `feature/foo`).
+ *  For detached-HEAD repos `git_branch` is the literal string
+ *  `"HEAD"` — we render that as-is so the user can distinguish
+ *  detached state from a real branch named "HEAD". v1 does not
+ *  decorate detached HEAD with a short SHA. Falls back to the
+ *  legacy static "git" tag if the project row hasn't been
+ *  re-probed yet (older rows pre-PR2). */
 const showGitChip = computed<boolean>(
   () => !!currentProject.value?.is_git_repo,
 );
+
+const gitBranchLabel = computed<string>(() => {
+  const branch = currentProject.value?.git_branch;
+  return branch && branch.length > 0 ? branch : "git";
+});
 </script>
 
 <template>
@@ -75,9 +83,13 @@ const showGitChip = computed<boolean>(
           <Icon name="command-line" :size="12" />
           {{ configStore.model }}
         </span>
-        <span v-if="showGitChip" class="chat-panel__chip chat-panel__chip--git">
+        <span
+          v-if="showGitChip"
+          class="chat-panel__chip chat-panel__chip--git"
+          :title="`Current branch: ${gitBranchLabel}`"
+        >
           <Icon name="refresh" :size="12" />
-          git
+          {{ gitBranchLabel }}
         </span>
       </div>
     </header>

@@ -5,23 +5,25 @@
 //!
 //! This module is intentionally tiny — it is a façade, not a new
 //! persistence layer. The `db` module owns sqlx; this module owns
-//! the orchestration (e.g. "re-probe is_git_repo on path change",
-//! "default name = basename(path)").
+//! the orchestration (e.g. "re-probe is_git_repo + git_branch on
+//! path change", "default name = basename(path)").
 
 use std::path::Path;
 
 use crate::db;
 use crate::projects::types::ProjectRow;
 
-use super::detector::is_git_repo_sync;
+use super::detector::{current_branch_sync, is_git_repo_sync};
 
-/// Create a new project, probing for `is_git_repo` in the background.
+/// Create a new project, probing for `is_git_repo` and `git_branch`
+/// (the latter is only meaningful when the directory is a git repo).
 ///
 /// Steps:
 /// 1. Verify `path` exists and is a directory.
 /// 2. Probe `is_git_repo` synchronously (cheap, <1s).
-/// 3. Probe is rejected if a project with the same path already
-///    exists (unique index also enforces this at the DB layer).
+/// 3. If the directory is a git repo, probe `git_branch` (also
+///    cheap; the `current_branch_sync` helper short-circuits to
+///    `None` when `is_git_repo` is `false`).
 /// 4. Insert the row, defaulting `name` to `basename(path)`.
 pub async fn create_project(pool: &sqlx::SqlitePool, path: &str) -> Result<ProjectRow, String> {
     let p = Path::new(path);
@@ -33,15 +35,23 @@ pub async fn create_project(pool: &sqlx::SqlitePool, path: &str) -> Result<Proje
     }
 
     let is_git = is_git_repo_sync(p);
+    // `current_branch_sync` already short-circuits on non-git repos,
+    // but doing the explicit guard keeps the intent clear and saves a
+    // redundant `git -C <path> rev-parse --show-toplevel` invocation.
+    let git_branch = if is_git {
+        current_branch_sync(p)
+    } else {
+        None
+    };
     let name = ProjectRow::default_name_from_path(path);
-    db::create_project(pool, &name, path, is_git)
+    db::create_project(pool, &name, path, is_git, git_branch)
         .await
         .map_err(|e| format!("create_project failed: {}", e))
 }
 
 /// Change a project's `path`. The new path must exist, must be a
-/// directory, and no project may be using it already. `is_git_repo` is
-/// re-probed.
+/// directory, and no project may be using it already. `is_git_repo`
+/// and `git_branch` are re-probed.
 pub async fn update_project_path(
     pool: &sqlx::SqlitePool,
     project_id: &str,
@@ -55,7 +65,12 @@ pub async fn update_project_path(
         return Err(format!("path '{}' is not a directory", new_path));
     }
     let is_git = is_git_repo_sync(p);
-    db::update_project_path(pool, project_id, new_path, is_git)
+    let git_branch = if is_git {
+        current_branch_sync(p)
+    } else {
+        None
+    };
+    db::update_project_path(pool, project_id, new_path, is_git, git_branch)
         .await
         .map_err(|e| format!("update_project_path failed: {}", e))
 }
