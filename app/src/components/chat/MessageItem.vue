@@ -46,6 +46,21 @@ const showBubble = computed<boolean>(
 const showStreamingHint = computed<boolean>(
   () => !!props.message.streaming && !props.message.content,
 );
+
+// Strip leading whitespace from the rendered text. Anthropic's SSE
+// stream commonly emits a leading "\n" right after the role marker
+// (the model's first content_block_start is the text block, and the
+// delta often begins with "\n\n"). Combined with `white-space:
+// pre-wrap` in `.msg__bubble` that would render as a visible blank
+// first line. We trim at the display layer so the DB / rehydration
+// / wire format all keep the raw LLM text untouched (markdown tools
+// in a future PR can decide their own leading-whitespace policy).
+// Idempotent on already-trimmed strings, so streaming deltas are
+// safe (the first delta gets trimmed, subsequent append-only deltas
+// are no-ops).
+const displayContent = computed<string>(() =>
+  props.message.content.replace(/^\s+/, ""),
+);
 </script>
 
 <template>
@@ -85,7 +100,7 @@ const showStreamingHint = computed<boolean>(
 
     <div v-if="showBubble" class="msg__bubble">
       <span v-if="hasVisibleBubble || message.content" class="msg__text">
-        {{ message.content }}
+        {{ displayContent }}
       </span>
       <span v-if="message.streaming" class="msg__cursor" aria-hidden="true">▍</span>
     </div>
