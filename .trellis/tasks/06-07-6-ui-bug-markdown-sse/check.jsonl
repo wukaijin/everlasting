@@ -1,0 +1,14 @@
+{"file": "app/src/stores/streamController.ts", "reason": "PR2-4 核心新增，check 要验：LRU 驱逐（21st 访问触发）、streaming session 永驻、activeRequests 注册/清理、listener 全局唯一、done 事件跨 session 也能清状态"}
+{"file": "app/src/utils/lru.ts", "reason": "PR2 新增的 LRU 工具，check 要验：put/get/touch/evict/pin 行为正确"}
+{"file": "app/src/utils/lru.test.ts", "reason": "PR2 新增的单元测试文件，check 要跑：测试用例覆盖 LRU 上限、pin 行为、access 更新 recency"}
+{"file": "app/src/stores/chat.ts", "reason": "PR3 大改后，check 要验：外部 API 兼容（send/cancel/switchSession/createNewSession/loadSessions/deleteSession）、sending 改为 isCurrentSessionStreaming 后所有引用方类型一致"}
+{"file": "app/src/components/chat/ChatPanel.vue", "reason": "PR3 修改点，check 要验：sending 改 isCurrentSessionStreaming 后渲染正常"}
+{"file": "app/src/components/chat/ChatInput.vue", "reason": "PR3 修改点，check 要验：打断按钮 enable/disable 逻辑按当前 session 流状态而非全局"}
+{"file": "app/src/components/layout/SessionList.vue", "reason": "PR4 修改点，check 要验：streamController.streamingSessionIds 订阅、card 指示器渲染"}
+{"file": "app/src/components/layout/ProjectTabs.vue", "reason": "PR3 修改点，check 要验：红点改读 streamController.streamingProjectIds"}
+{"file": "app/src/components/layout/TitleBar.vue", "reason": "PR1 bug 1-4 修复点，check 要验：PhysicalSize/Position 用法、最小化 minus 图标、logo padding-right"}
+{"file": "app/src/components/Icon.vue", "reason": "PR1 bug 3 修复点，check 要验：MinusIcon 正确 import + 注册"}
+{"file": "app/src/components/chat/MessageItem.vue", "reason": "PR1 bug 5 修复点，check 要验：表格 td/th border 颜色用新变量、light/dark 都生效"}
+{"file": "app/src/style.css", "reason": "PR1 bug 5 修复点，check 要验：--color-bg-border-strong 变量定义位置和值（中间灰度，不影响其他组件）"}
+{"file": "app/src/App.vue", "reason": "PR2 修改点，check 要验：onMounted 调 streamController.start()，onUnmounted 调 cleanup（防 listener 泄漏）"}
+{"file": ".trellis/tasks/06-07-6-ui-bug-markdown-sse/prd.md", "reason": "check 阶段对照 AC1-5 + AC6.1-6.6 逐条验证"}

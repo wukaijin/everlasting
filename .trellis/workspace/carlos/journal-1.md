@@ -504,3 +504,57 @@ License: HarmonyOS Sans Fonts License Agreement 允许打包, 三处声明 (THIR
 ### Next Steps
 
 - None - task complete
+
+---
+
+**Date**: 2026-06-07
+**Task**: 06-07 6 个 UI/状态 bug（顶栏 + Markdown + SSE 架构）
+**Branch**: `main`
+
+### Summary
+
+Partway through the task. PR1 (UI 修) bug 3/4/5 + 部分 bug 1+2 done; PR2 (streamController 脚手架) done; PR3/4 not started; bug 1+2 的 position 还没修好。
+
+Bug 1+2 卡在 RDP 双显示器场景：`setSize` + `setPosition` 顺序倒过来都试了，cursorPosition 也不行（光标在窗口内 = 在 RDP 虚拟桌面）。下一步候选 `setFullscreen(true)`，但会丢 maximize 语义（title bar 隐藏），需要 user 决定 trade-off。
+
+关键发现：
+- 用户原报告的 "4K 2880×1920" 是误记，实际 RDP + host 1920×1080
+- `currentMonitor().size` 之前一直是 1920×1080，最大化尺寸看着对是因为 OS toggleMaximize 兜底（work area）
+- 真正的根因是 Tauri 2 capabilities 缺 `core:window:allow-set-size` / `set-position` 等多个权限，setSize 静默失败
+
+### Main Changes
+
+- `app/src/components/Icon.vue`: import `MinusIcon`, register `"minus": MinusIcon`
+- `app/src/components/layout/TitleBar.vue`: minimize → minus icon; logo padding-right 12px; `onToggleMaximize` 重写用 PhysicalSize/Position + `currentMonitor()`; 加诊断 console.log
+- `app/src/components/chat/MessageItem.vue`: 表格 td/th border 改 `--color-bg-border-strong`
+- `app/src/style.css`: 新增 `--color-bg-border-strong: #3B475A`
+- `app/src/stores/streamController.ts`: 新 Pinia store（per-session message buffer LRU + activeRequests + global SSE listener）
+- `app/src/utils/lru.ts` + `lru.test.ts`: LRU<K,V> 工具 + 12 个单元测试
+- `app/src/App.vue`: onMounted/onUnmounted 钩 streamController.start()/stop()
+- `app/src-tauri/capabilities/default.json`: 补 set-size / set-position / outer-size / available-monitors 等 11 个 window 权限
+
+### Git Commits
+
+未 commit。working tree 有 9 文件改动（见 prd.md "Progress so far"）。
+
+### Testing
+
+- [OK] `pnpm build` 通过
+- [OK] `pnpm vitest run` 36/36 通过（含 12 新 LRU）
+- [OK] `cargo check` 通过
+- [WIP] 用户手测：maximize size 修好 (1920×1080 on host primary)，position 仍错（向右扩大不贴左上）
+- [TODO] PR3 chat store 迁移后跑全量 AC6.1-6.6
+- [TODO] PR4 session card 指示器
+
+### Status
+
+[In Progress] **Blocked on bug 1+2 position fix**
+
+### Next Steps
+
+1. 等 user 测试 `setPosition`-then-`setSize` 顺序版的 log 输出，确认 setSize 是否又把位置推回去
+2. 若 setSize 真的覆盖了 setPosition：换 `setFullscreen(true)` 兜底（接受失去 title bar 的 trade-off）
+3. 清诊断 console.log，commit PR1
+4. PR3 chat store 切到 streamController
+5. PR4 SessionList 订阅 streamingSessionIds
+6. 更新 docs/prompt.md 移除 "4K" 描述

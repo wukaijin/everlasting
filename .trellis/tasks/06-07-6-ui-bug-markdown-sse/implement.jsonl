@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 约定、in-memory vs persisted state 划分 — streamController 作为新 Pinia store 需要遵循；ChatMessage 三类字段（visible / thinking / collapse）的语义在新 controller 里要保留"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新文件 streamController.ts / lru.ts 放哪个目录、命名约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "SessionList 上叠加流状态指示器要符合组件写法；Composition API / <script setup> 风格"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "新增的 LRU 单元测试放哪、用什么断言库（项目目前没装 vitest）"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "streamController 暴露的 API 类型、activeRequests Map 的 RequestState 类型、避免 any"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "SSE 事件 schema（chat-event / tool:call / tool:result）、request_id 路由规则、cancel_chat 契约 — controller 必须严格按 wire format 处理"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前端 controller 跟后端 agent loop 的事件流边界、错误处理归属"}
+{"file": "app/src/stores/chat.ts", "reason": "现有 store 是要被部分替换的源头，controller 设计需要完全兼容现有外部 API（send/cancel/switchSession/createNewSession/loadSessions 等）"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "chat 命令和 cancel_chat 命令的 IPC 契约、事件 channel 名称 — controller 要 listen 的 channel 必须跟后端 emit 的一致"}
+{"file": "app/src/components/layout/TitleBar.vue", "reason": "bug 1-2 修复目标文件，最大化逻辑重写参考；现有 PhysicalSize/LogicalSize 用法和 syncMaximizedState 模式"}
+{"file": "app/src/components/Icon.vue", "reason": "bug 3 修复点：注册表新增 minus；了解 heroicons 24/outline 用法"}
+{"file": "app/src/components/chat/MessageItem.vue", "reason": "bug 5 修复点：表格 td/th border CSS 改色；样式 scoped + :deep() 用法参考"}
+{"file": "app/src/style.css", "reason": "bug 5 修复点：新增 --color-bg-border-strong 变量；了解现有 color 调色板结构"}
+{"file": "app/src-tauri/tauri.conf.json", "reason": "window 配置（1440x900, minWidth 1280, decorations false, titleBarStyle Overlay）— 决定最大化逻辑允许的目标尺寸"}
+{"file": "docs/prompt.md", "reason": "bug 清单原始来源，所有 6 个 bug 的描述都在这里"}

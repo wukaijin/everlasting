@@ -1,0 +1,583 @@
+// streamController — single source of truth for in-flight chat
+// streams and per-session message buffers.
+//
+// Why this exists:
+//   The previous `chat.ts` store held `messages.value` for the
+//   *current* session only. Switching sessions reloaded from DB
+//   and overwrote the in-memory array — which lost the in-flight
+//   streaming message and stranded state (sending flag, red dot,
+//   cancel button). This controller fixes that by owning the
+//   message buffer for all visited sessions (with an LRU bound
+//   so memory doesn't grow unbounded) and by keeping the SSE
+//   listener logic out of the per-session event filter that was
+//   dropping `done` events for non-current sessions.
+//
+// Architecture (per the PRD for 06-07-6-ui-bug-markdown-sse):
+//   - `messagesBySession`: Map<sessionId, ChatMessage[]>, the
+//     unique source of truth for the messages the UI renders.
+//   - `activeRequests`: Map<requestId, RequestState>, tracks
+//     which streams are in flight. Per-session independent —
+//     multiple sessions can stream concurrently.
+//   - `streamingSessionIds` / `streamingProjectIds`: reactive
+//     Sets derived from `activeRequests`, for UI subscription
+//     (project tab red dots, session card streaming indicators).
+//   - One global SSE listener; events route by `request_id` to
+//     the matching active request, NOT by current session.
+//   - Pinned LRU: a session with an active stream is pinned and
+//     cannot be evicted by the LRU. The streaming message would
+//     otherwise be lost mid-request.
+//
+// Public API (consumed by `useChatStore` in chat.ts):
+//   - `getMessages(sessionId)` — reactive read, touches LRU
+//   - `ensureLoaded(sessionId)` — DB read if not cached
+//   - `evict(sessionId)` — explicit removal (e.g. on delete)
+//   - `startRequest({ sessionId, projectId, text, history })`
+//   - `cancel(requestId)`
+//   - `start()` / `stop()` — listener lifecycle
+//
+// This file is the PR2 scaffold. The wiring into chat.ts and the
+// UI consumers (SessionList, ProjectTabs) lands in PR3 + PR4.
+
+import { defineStore } from "pinia";
+import { computed, reactive, ref, type ComputedRef } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+import type { ChatMessage, ErrorCategory } from "./chat";
+
+/** Upper bound on number of sessions whose messages are kept
+ *  in memory. Pinned (in-flight streaming) sessions are not
+ *  counted against this limit — they can keep the cache
+ *  temporarily over budget. 20 is a guess based on the typical
+ *  developer usage: a couple of active projects × ~5 recent
+ *  sessions per project. Tweak as needed. */
+const CACHE_SIZE = 20;
+
+interface RequestState {
+  requestId: string;
+  sessionId: string;
+  projectId: string;
+  userMsgId: string;
+  assistantMsgId: string;
+  // Captured at send time so the wire-format history matches
+  // what `chat.ts` constructed (preserves thinking blocks,
+  // tool_use blocks, and tool_result blocks verbatim — the
+  // Anthropic API 400s if any of those are missing or rewritten).
+  history: unknown[];
+}
+
+interface ChatEventPayload {
+  request_id: string;
+  kind:
+    | "start"
+    | "delta"
+    | "thinking_delta"
+    | "signature_delta"
+    | "redacted_thinking_delta"
+    | "done"
+    | "error";
+  text?: string;
+  signature?: string;
+  data?: string;
+  stop_reason?: string;
+  message?: string;
+  category?: ErrorCategory;
+}
+
+interface ToolCallPayload {
+  request_id: string;
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface ToolResultPayload {
+  request_id: string;
+  tool_use_id: string;
+  content: string;
+  is_error: boolean;
+}
+
+interface LoadedMessage {
+  id: number;
+  session_id: string;
+  role: "user" | "assistant";
+  content: unknown;
+  text: string;
+  has_tool_calls: boolean;
+  has_tool_results: boolean;
+  created_at: string;
+  seq: number;
+}
+
+interface LoadedSession {
+  session: {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+    model: string;
+    project_id: string;
+    current_cwd: string;
+  };
+  messages: LoadedMessage[];
+}
+
+const genId = () =>
+  Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+// --- Module-level listener state ---------------------------------------
+// One global listener for the whole app, owned by the controller.
+// Lifted out of the store setup so it persists across HMR
+// re-instantiations of the Pinia store (otherwise the listener
+// is registered twice after a hot reload and events double-fire).
+let unlistenChat: UnlistenFn | null = null;
+let unlistenTC: UnlistenFn | null = null;
+let unlistenTR: UnlistenFn | null = null;
+let listenerWired = false;
+
+// --- Wire-format rehydration ------------------------------------------
+// Lifted from chat.ts so the controller can own message shape
+// without depending on chat.ts (which will in turn import the
+// controller). Identical logic — kept here to break the cycle.
+function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = loaded.map((m) => {
+    const blocks = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
+    const toolCalls: ChatMessage["toolCalls"] = [];
+    const toolResults: ChatMessage["toolResults"] = [];
+    const thinkingBlocks: ChatMessage["thinkingBlocks"] = [];
+    const redactedThinkingData: string[] = [];
+    for (const b of blocks) {
+      if (!b || typeof b.type !== "string") continue;
+      if (b.type === "thinking") {
+        thinkingBlocks.push({
+          text: (b.thinking as string) ?? "",
+          signature: (b.signature as string) ?? "",
+        });
+      } else if (b.type === "redacted_thinking" && typeof b.data === "string") {
+        redactedThinkingData.push(b.data);
+      } else if (
+        b.type === "tool_use" &&
+        typeof b.id === "string" &&
+        typeof b.name === "string"
+      ) {
+        toolCalls.push({ id: b.id, name: b.name, input: (b.input as Record<string, unknown>) ?? {} });
+      } else if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+        toolResults.push({
+          toolUseId: b.tool_use_id,
+          content: (b.content as string) ?? "",
+          isError: !!b.is_error,
+        });
+      }
+    }
+    const msg: ChatMessage = { id: `${m.session_id}-${m.seq}`, role: m.role, content: m.text };
+    if (toolCalls.length) msg.toolCalls = toolCalls;
+    if (toolResults.length) msg.toolResults = toolResults;
+    if (thinkingBlocks.length) msg.thinkingBlocks = thinkingBlocks;
+    if (redactedThinkingData.length) msg.redactedThinkingData = redactedThinkingData;
+    return msg;
+  });
+  // Merge user-message tool_results into the previous assistant
+  // message for the UI's "done / running" lookup (see chat.ts for
+  // the long version of this comment).
+  for (let i = 0; i < out.length; i++) {
+    const m = out[i];
+    if (m.role !== "user" || !m.toolResults?.length) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (out[j].role === "assistant") {
+        if (!out[j].toolResults) out[j].toolResults = [];
+        out[j].toolResults!.push(...m.toolResults!);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+export const useStreamControllerStore = defineStore("streamController", () => {
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+
+  // The unique source of truth for in-memory messages. Outer Map
+  // is a Vue `reactive` proxy so `set` / `delete` trigger UI
+  // updates. Inner arrays and ChatMessage objects are also
+  // reactive (Vue's reactive is deep), so `last.content += text`
+  // in a delta handler triggers the bubble re-render.
+  const messagesBySession = reactive(new Map<string, ChatMessage[]>());
+  // Set of session IDs that have an active in-flight request.
+  // Pinned in the LRU sense — cannot be evicted while streaming.
+  const pinnedSessions = new Set<string>();
+  // Tracks whether each session has been loaded from DB at least
+  // once this app session. Used by `ensureLoaded` to skip the
+  // IPC round-trip on subsequent accesses.
+  const loadedFromDb = new Set<string>();
+
+  // Active in-flight requests, keyed by request_id (so events
+  // can route to the right session without scanning). Each
+  // request is for exactly one session.
+  const activeRequests = reactive(new Map<string, RequestState>());
+
+  const listenerReady = ref(false);
+
+  // ---------------------------------------------------------------------
+  // Derived reactive state for UI subscribers
+  // ---------------------------------------------------------------------
+
+  /** Sessions that currently have an in-flight stream. The
+   *  `SessionList` component subscribes to this Set and renders
+   *  a streaming indicator on the matching cards. */
+  const streamingSessionIds = computed<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const r of activeRequests.values()) {
+      s.add(r.sessionId);
+    }
+    return s;
+  });
+
+  /** Projects that currently have at least one in-flight stream.
+   *  Used by the project tab to render the red dot. Per-session
+   *  independence means a single project can have multiple
+   *  simultaneous streams (e.g. two sessions both active in the
+   *  same project) — the dot stays on until all of them end. */
+  const streamingProjectIds = computed<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const r of activeRequests.values()) {
+      s.add(r.projectId);
+    }
+    return s;
+  });
+
+  // ---------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------
+
+  /** Append an entry to the LRU, evicting the LRU non-pinned
+   *  entry if over capacity. `reactive(Map)` tracks `set` /
+   *  `delete` for us, so we just mutate it directly. */
+  function putMessages(
+    sessionId: string,
+    messages: ChatMessage[],
+    pinned: boolean,
+  ): void {
+    const had = messagesBySession.has(sessionId);
+    if (had) {
+      // Touch: move to MRU by delete + set so the Map's iteration
+      // order (and thus the eviction order in `evictIfNeeded`)
+      // reflects the new recency.
+      messagesBySession.delete(sessionId);
+    }
+    messagesBySession.set(sessionId, messages);
+    if (pinned) pinnedSessions.add(sessionId);
+    evictIfNeeded();
+  }
+
+  /** Drop the LRU non-pinned entry if the cache is over budget.
+   *  Walks insertion order from the oldest; pinned entries are
+   *  skipped (so an over-budget cache that is fully pinned is
+   *  tolerated — streaming sessions are sacred). */
+  function evictIfNeeded(): void {
+    if (messagesBySession.size <= CACHE_SIZE) return;
+    for (const [key] of messagesBySession) {
+      if (pinnedSessions.has(key)) continue;
+      messagesBySession.delete(key);
+      return;
+    }
+  }
+
+  /** Get the in-flight thinking block of an assistant message,
+   *  opening a new one if the previous is already sealed with a
+   *  signature (interleaved thinking). Mirrors the helper in
+   *  chat.ts so the controller can handle `thinking_delta` /
+   *  `signature_delta` events for streams that didn't originate
+   *  from the current session. */
+  function currentThinkingBlock(m: ChatMessage) {
+    if (!m.thinkingBlocks || m.thinkingBlocks.length === 0) {
+      m.thinkingBlocks = [{ text: "", signature: "" }];
+    } else {
+      const last = m.thinkingBlocks[m.thinkingBlocks.length - 1];
+      if (last.signature) {
+        m.thinkingBlocks.push({ text: "", signature: "" });
+      }
+    }
+    return m.thinkingBlocks[m.thinkingBlocks.length - 1];
+  }
+
+  // ---------------------------------------------------------------------
+  // Event handlers (one global listener; routes by request_id)
+  // ---------------------------------------------------------------------
+
+  function handleChatEvent(event: ChatEventPayload): void {
+    const req = activeRequests.get(event.request_id);
+    if (!req) return; // event for unknown / already-finished request — drop
+    const msgs = messagesBySession.get(req.sessionId);
+    if (!msgs) return; // session was evicted mid-stream — shouldn't happen because pinned, but guard
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== "assistant") return;
+
+    switch (event.kind) {
+      case "start":
+        last.streaming = true;
+        last.error = undefined;
+        break;
+      case "delta":
+        if (event.text) last.content += event.text;
+        break;
+      case "thinking_delta":
+        if (event.text) currentThinkingBlock(last).text += event.text;
+        break;
+      case "signature_delta":
+        if (event.signature) currentThinkingBlock(last).signature += event.signature;
+        break;
+      case "redacted_thinking_delta":
+        if (event.data) {
+          if (!last.redactedThinkingData) last.redactedThinkingData = [];
+          last.redactedThinkingData.push(event.data);
+        }
+        break;
+      case "done":
+        // CRITICAL (PR3 self-check fix): the old chat.ts handler
+        // set `last.streaming = false` here, which extinguishes the
+        // blinking ▍ cursor in MessageItem.vue (rendered under
+        // `v-if="message.streaming"`) and lets the markdown
+        // pipeline `flush()` the final frame (watch on streaming
+        // in MessageItem.vue). Forgetting it leaves the cursor
+        // blinking forever after the stream completes — a
+        // regression that violates AC6.3 ("streaming=false,光标消失").
+        last.streaming = false;
+        finalizeRequest(req.requestId, req.sessionId, false);
+        break;
+      case "error":
+        last.streaming = false;
+        last.error = {
+          message: event.message ?? "未知错误",
+          category: event.category ?? "server",
+        };
+        finalizeRequest(req.requestId, req.sessionId, true);
+        break;
+    }
+  }
+
+  function handleToolCall(payload: ToolCallPayload): void {
+    const req = activeRequests.get(payload.request_id);
+    if (!req) return;
+    const msgs = messagesBySession.get(req.sessionId);
+    if (!msgs) return;
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== "assistant") return;
+    if (!last.toolCalls) last.toolCalls = [];
+    last.toolCalls.push({ id: payload.id, name: payload.name, input: payload.input });
+  }
+
+  function handleToolResult(payload: ToolResultPayload): void {
+    const req = activeRequests.get(payload.request_id);
+    if (!req) return;
+    const msgs = messagesBySession.get(req.sessionId);
+    if (!msgs) return;
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== "assistant") return;
+    if (!last.toolResults) last.toolResults = [];
+    last.toolResults.push({
+      toolUseId: payload.tool_use_id,
+      content: payload.content,
+      isError: payload.is_error,
+    });
+  }
+
+  /** Mark a request as finished: drop from activeRequests, unpin
+   *  its session, and let the LRU reclaim it on the next put. The
+   *  messages are NOT touched here — they stay in the cache so
+   *  the user can keep viewing the session after it ends. */
+  function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
+    activeRequests.delete(requestId);
+    pinnedSessions.delete(sessionId);
+  }
+
+  // ---------------------------------------------------------------------
+  // Public API — listener lifecycle
+  // ---------------------------------------------------------------------
+
+  /** Idempotent: registering a second time is a no-op. */
+  async function start(): Promise<void> {
+    if (listenerWired) return;
+    unlistenChat = await listen<ChatEventPayload>("chat-event", (e) => {
+      handleChatEvent(e.payload);
+    });
+    unlistenTC = await listen<ToolCallPayload>("tool:call", (e) => {
+      handleToolCall(e.payload);
+    });
+    unlistenTR = await listen<ToolResultPayload>("tool:result", (e) => {
+      handleToolResult(e.payload);
+    });
+    listenerWired = true;
+    listenerReady.value = true;
+  }
+
+  /** Unregister listeners. Called from `onUnmounted` of the
+   *  app-root component. After `stop`, `start` may be called
+   *  again to re-arm. */
+  function stop(): void {
+    unlistenChat?.();
+    unlistenTC?.();
+    unlistenTR?.();
+    unlistenChat = null;
+    unlistenTC = null;
+    unlistenTR = null;
+    listenerWired = false;
+    listenerReady.value = false;
+  }
+
+  // ---------------------------------------------------------------------
+  // Public API — message buffer access
+  // ---------------------------------------------------------------------
+
+  /** Read the messages for a session, touching the LRU so the
+   *  session is marked recently-used. Returns `undefined` if
+   *  the session isn't in the cache (caller should then call
+   *  `ensureLoaded` to populate it). */
+  function getMessages(sessionId: string): ChatMessage[] | undefined {
+    const v = messagesBySession.get(sessionId);
+    if (v) {
+      // Touch: delete + re-set to move to MRU end of the
+      // reactive Map's iteration order.
+      messagesBySession.delete(sessionId);
+      messagesBySession.set(sessionId, v);
+    }
+    return v;
+  }
+
+  /** Make sure `sessionId` is in the cache. If it's already
+   *  there (either from a prior load or from a prior send in
+   *  this app session), returns immediately. Otherwise fetches
+   *  from the DB and seeds the cache. */
+  async function ensureLoaded(sessionId: string): Promise<ChatMessage[]> {
+    const existing = getMessages(sessionId);
+    if (existing) return existing;
+    const loaded = await invoke<LoadedSession | null>("load_session", {
+      sessionId,
+    });
+    const messages = loaded ? rehydrateMessages(loaded.messages) : [];
+    putMessages(sessionId, messages, pinnedSessions.has(sessionId));
+    loadedFromDb.add(sessionId);
+    return messages;
+  }
+
+  /** Explicit eviction. Used on session delete so the cache
+   *  doesn't keep a stale entry. Also unpins, just in case. */
+  function evict(sessionId: string): void {
+    pinnedSessions.delete(sessionId);
+    loadedFromDb.delete(sessionId);
+    messagesBySession.delete(sessionId);
+  }
+
+  // ---------------------------------------------------------------------
+  // Public API — request lifecycle
+  // ---------------------------------------------------------------------
+
+  interface StartRequestArgs {
+    sessionId: string;
+    projectId: string;
+    userMsg: ChatMessage;
+    assistantMsg: ChatMessage;
+    /** Wire-format history (the `messages` array the backend's
+     *  `chat` command expects). The caller (chat.ts) builds this
+     *  so it can reuse the existing `toPayloadContent` logic. */
+    history: unknown[];
+  }
+
+  /** Kick off a new stream. The caller is responsible for
+   *  pushing `userMsg` and `assistantMsg` into the session's
+   *  message buffer (or having them already there) before
+   *  calling — otherwise the delta events will not find a
+   *  `last` assistant message to mutate. Returns the
+   *  `requestId` so the caller can later call `cancel`. */
+  async function startRequest(args: StartRequestArgs): Promise<string> {
+    await start();
+    const requestId = genId();
+    activeRequests.set(requestId, {
+      requestId,
+      sessionId: args.sessionId,
+      projectId: args.projectId,
+      userMsgId: args.userMsg.id,
+      assistantMsgId: args.assistantMsg.id,
+      history: args.history,
+    });
+    // Pin the session while streaming — it cannot be evicted
+    // even if the user visits 20+ other sessions.
+    pinnedSessions.add(args.sessionId);
+    // Touch the session's messages (in case it was just loaded)
+    // so it sits at MRU.
+    const msgs = messagesBySession.get(args.sessionId);
+    if (msgs) {
+      messagesBySession.delete(args.sessionId);
+      messagesBySession.set(args.sessionId, msgs);
+    }
+    try {
+      await invoke("chat", {
+        requestId,
+        sessionId: args.sessionId,
+        messages: args.history,
+      });
+    } catch (e) {
+      const msgs = messagesBySession.get(args.sessionId);
+      if (msgs) {
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          last.streaming = false;
+          last.error = { message: String(e), category: "server" };
+        }
+      }
+      finalizeRequest(requestId, args.sessionId, true);
+    }
+    return requestId;
+  }
+
+  /** Cancel an in-flight request by requestId. The backend's
+   *  agent loop notices on the next event boundary, bails out,
+   *  and emits a `done` event with `stop_reason: "cancelled"`.
+   *  That `done` flows through `handleChatEvent` →
+   *  `finalizeRequest`, which clears state. So this call is a
+   *  fire-and-forget IPC; the actual state reset happens via
+   *  the `done` event. */
+  async function cancel(requestId: string): Promise<void> {
+    try {
+      await invoke("cancel_chat", { requestId });
+    } catch (e) {
+      // A failed cancel is logged but not user-facing — the
+      // user already saw the Stop button and clicked it. The
+      // stream finishes on its own (or the next event errors
+      // out), and the existing `done` / `error` path resets
+      // state.
+      console.error("[streamController] cancel failed:", e);
+    }
+  }
+
+  /** The requestId of the current session's active stream, or
+   *  null if the current session is not streaming. Convenience
+   *  for the chat input's "is the stop button enabled?" check. */
+  function currentRequestId(sessionId: string): string | null {
+    for (const r of activeRequests.values()) {
+      if (r.sessionId === sessionId) return r.requestId;
+    }
+    return null;
+  }
+
+  return {
+    // State (exposed as refs / reactive proxies)
+    messagesBySession,
+    activeRequests,
+    listenerReady,
+    // Derived
+    streamingSessionIds: streamingSessionIds as ComputedRef<Set<string>>,
+    streamingProjectIds: streamingProjectIds as ComputedRef<Set<string>>,
+    // Methods
+    start,
+    stop,
+    getMessages,
+    ensureLoaded,
+    evict,
+    startRequest,
+    cancel,
+    currentRequestId,
+  };
+});

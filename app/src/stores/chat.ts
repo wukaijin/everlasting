@@ -1,14 +1,43 @@
+// chat.ts — UI-facing chat store.
+//
+// PR3 of `06-07-6-ui-bug-markdown-sse`: this file is now a thin
+// facade over `streamController.ts`. The controller is the single
+// source of truth for in-flight streams and per-session message
+// buffers (see that file's top-of-file comment for the rationale).
+// What remains here is:
+//
+//   - Type definitions re-exported for the rest of the app
+//     (`ChatMessage`, `ErrorCategory`, `ThinkingBlockInfo`, ...).
+//   - UI-side session metadata: the sessions list (sidebar
+//     summaries), the active session id / cwd / simplified cwd.
+//   - The project-change watcher (cascades `loadSessions` and
+//     `ensureLoaded` on tab switch).
+//   - Session CRUD delegations: `loadSessions`, `createNewSession`,
+//     `switchSession`, `deleteSession`.
+//   - `send` / `cancel` thin wrappers that build the wire-format
+//     history and forward to the controller's request lifecycle.
+//   - Reactive projections over controller state: `messages`,
+//     `isCurrentSessionStreaming`, `currentRequestId` — the UI
+//     only reads these, never the controller's raw state.
+//
+// External API surface (consumed by components) is unchanged for
+// `sessions`, `currentSessionId`, `currentCwd`, `simplifiedCwd`,
+// `send`, `cancel`, `switchSession`, `createNewSession`,
+// `loadSessions`, `deleteSession`. The old global `sending` is
+// replaced by `isCurrentSessionStreaming` (per-session); callers
+// were updated in the same PR.
+
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
+import { useStreamControllerStore } from "./streamController";
 import { simplifyPath } from "../utils/path";
 
 type Role = "user" | "assistant";
-type ErrorCategory =
+export type ErrorCategory =
   | "auth"
   | "rate_limit"
   | "invalid_request"
@@ -67,51 +96,6 @@ export interface SessionSummary {
   current_cwd: string;
 }
 
-/** Message loaded from DB on session switch. Snake_case fields
- *  match PR1's Rust serialization. */
-interface LoadedMessage {
-  id: number;
-  session_id: string;
-  role: Role;
-  content: unknown; // Vec<ContentBlock> as JSON
-  text: string;
-  has_tool_calls: boolean;
-  has_tool_results: boolean;
-  created_at: string;
-  seq: number;
-}
-
-/** One content block as serialized by Rust (snake_case tag + fields). */
-interface ContentBlockFromDb {
-  type: "text" | "thinking" | "redacted_thinking" | "tool_use" | "tool_result";
-  text?: string;
-  /** thinking block: summary text */
-  thinking?: string;
-  /** thinking block: opaque signature */
-  signature?: string;
-  /** redacted_thinking block: opaque data */
-  data?: string;
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  tool_use_id?: string;
-  content?: string;
-  is_error?: boolean;
-}
-
-interface LoadedSession {
-  session: {
-    id: string;
-    title: string;
-    created_at: string;
-    updated_at: string;
-    model: string;
-    project_id: string;
-    current_cwd: string;
-  };
-  messages: LoadedMessage[];
-}
-
 /** Wire-format content sent to the Rust `chat` command. Mirrors
  *  Rust's `MessageContent`: a plain string for text-only messages,
  *  or an array of `ContentBlock` (snake_case tag + fields) when
@@ -139,45 +123,6 @@ interface ChatMessagePayload {
   content: string | ContentBlockPayload[];
 }
 
-/** High-frequency event (chat-event channel). */
-interface ChatEventPayload {
-  request_id: string;
-  kind:
-    | "start"
-    | "delta"
-    | "thinking_delta"
-    | "signature_delta"
-    | "redacted_thinking_delta"
-    | "done"
-    | "error";
-  text?: string;
-  signature?: string;
-  data?: string;
-  stop_reason?: string;
-  message?: string;
-  category?: ErrorCategory;
-}
-
-/** Low-frequency event (tool:call channel). */
-interface ToolCallPayload {
-  request_id: string;
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-/** Low-frequency event (tool:result channel). */
-interface ToolResultPayload {
-  request_id: string;
-  tool_use_id: string;
-  content: string;
-  is_error: boolean;
-}
-
-let unlistenChat: UnlistenFn | null = null;
-let unlistenTC: UnlistenFn | null = null;
-let unlistenTR: UnlistenFn | null = null;
-
 const genId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -191,45 +136,71 @@ export function thinkingBlocksToText(blocks: ThinkingBlockInfo[] | undefined): s
 
 export const useChatStore = defineStore("chat", () => {
   // -----------------------------------------------------------------------
-  // State
+  // UI-side state (sessions list + active session metadata)
   // -----------------------------------------------------------------------
 
-  const messages = ref<ChatMessage[]>([]);
-  const sending = ref(false);
-  const currentRequestId = ref<string | null>(null);
-  const listenerReady = ref(false);
-
-  // Session state — scoped to the current project (set by
-  // `projectsStore.currentProjectId` and reloaded by the watcher
-  // below). `currentCwd` mirrors the session's `current_cwd` for the
-  // header display (Q5).
   const sessions = ref<SessionSummary[]>([]);
   const currentSessionId = ref<string | null>(null);
   const currentCwd = ref<string>("");
 
-  // Streaming tracking (Q3 / PROPOSAL §4.4 "turn 结束一次性写"). When
-  // a stream is in flight, `streamingSessionId` records which session
-  // owns it (used by `shouldApplyEvent` to drop events for
-  // non-current sessions), and `streamingProjectIds` is the set of
-  // project IDs the UI uses to draw a red dot on the tab. We track
-  // `lastStreamedProjectId` separately so `clearStreamingSession` can
-  // remove the right project from the Set even if the user has
-  // switched projects mid-stream (where `currentProjectId` no longer
-  // points at the streaming project).
-  const streamingSessionId = ref<string | null>(null);
-  const lastStreamedProjectId = ref<string | null>(null);
-  const streamingProjectIds = ref<Set<string>>(new Set());
+  // -----------------------------------------------------------------------
+  // Stream controller — single source of truth for messages + active
+  // requests. Owned by a separate Pinia store; this file only projects
+  // the controller's state into the shape the components expect.
+  // -----------------------------------------------------------------------
+  const controller = useStreamControllerStore();
 
-  // PR3 (BACKLOG §5.1): the chat panel header should display the
-  // cwd with the user's home prefix shortened to `~`. The
-  // `simplifyPath` helper is a pure function over
-  // `currentCwd` + `configStore.homeDir`; the computed is reactive
-  // so when the home-dir cache finishes loading after the chat
-  // store is first read, the UI re-renders without extra wiring.
-  // PR1 consumes this in `ChatPanel.vue`; PR3 (this) only prepares
-  // the data. Note: `configStore` is captured lazily — the
-  // `computed` callback only runs on first `.value` access, by
-  // which time the line below has been initialized.
+  // -----------------------------------------------------------------------
+  // Reactive projections over the controller's state. Components read
+  // these and never touch the controller directly.
+  // -----------------------------------------------------------------------
+
+  /** Messages for the currently active session. Touches the
+   *  controller's LRU on every read so the active session stays MRU
+   *  (and therefore won't be evicted mid-view). Returns `[]` when
+   *  no session is active. The LRU side effect is the intended
+   *  behavior — see `streamController.getMessages`. */
+  const messages = computed<ChatMessage[]>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return [];
+    return controller.getMessages(sid) ?? [];
+  });
+
+  /** True if the CURRENT session has an in-flight stream.
+   *  Per-session independence (PR3 / bug 6): a stream in session A
+   *  does not make this true while the user is looking at session
+   *  B. Use the controller's `streamingSessionIds` directly for
+   *  the full picture (e.g. session card streaming indicators in
+   *  PR4).
+   *
+   *  Note: Pinia auto-unwraps refs/computeds when you read them
+   *  off a store proxy, so `controller.streamingSessionIds` is
+   *  the `Set<string>` itself (no `.value`). The reactive Set
+   *  triggers our computed to re-run when the controller's
+   *  `activeRequests` map changes. */
+  const isCurrentSessionStreaming = computed<boolean>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return false;
+    return controller.streamingSessionIds.has(sid);
+  });
+
+  /** The request id of the current session's active stream, or
+   *  `null` if it isn't streaming. Replaces the old chat-store
+   *  `currentRequestId` writable ref — the controller owns the
+   *  actual request state, this is just a per-session lookup. */
+  const currentRequestId = computed<string | null>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return null;
+    return controller.currentRequestId(sid);
+  });
+
+  // PR3 (BACKLOG §5.1): the chat panel header displays the cwd with
+  // the user's home prefix shortened to `~`. The computed is reactive
+  // so when the home-dir cache finishes loading after the chat store
+  // is first read, the UI re-renders without extra wiring. The
+  // `configStore` reference is captured lazily — the computed body
+  // only runs on first `.value` access, by which time the line
+  // below has been initialized.
   const simplifiedCwd = computed<string>(() =>
     simplifyPath(currentCwd.value, configStore.homeDir),
   );
@@ -238,11 +209,6 @@ export const useChatStore = defineStore("chat", () => {
   // Cross-store coordination: react to project changes
   // -----------------------------------------------------------------------
 
-  // We grab the cross-store handles at the top of the setup function
-  // so the watcher is registered against stable references. The
-  // `useProjectsStore()` and `useConfigStore()` calls below are
-  // idempotent (Pinia dedupes), and the `watch` we register is the
-  // single source of truth for project-change side effects.
   const projectsStore = useProjectsStore();
   const configStore = useConfigStore();
 
@@ -260,12 +226,30 @@ export const useChatStore = defineStore("chat", () => {
     { immediate: true },
   );
 
+  // PR3 self-check fix: the old `done` handler in chat.ts ran
+  // `loadSessions(currentProjectId)` after each turn so the sidebar
+  // would reflect the new `updated_at` / auto-generated title. With
+  // the listener owned by the controller, that side effect moved
+  // out of the event handler — but we still need it. Watch the
+  // controller's `activeRequests.size` for any shrink (a request
+  // ended via done or error) and refresh sessions for the project
+  // the user is currently viewing. Cross-project case (stream
+  // finishes in project A while user views B) is naturally covered
+  // by `onProjectChange` reloading on next switch.
+  watch(
+    () => controller.activeRequests.size,
+    (newSize, oldSize) => {
+      if (newSize < oldSize && projectsStore.currentProjectId) {
+        void loadSessions(projectsStore.currentProjectId);
+      }
+    },
+  );
+
   async function onProjectChange(newId: string | null): Promise<void> {
     if (newId === null) {
       sessions.value = [];
       currentSessionId.value = null;
       currentCwd.value = "";
-      messages.value = [];
       return;
     }
     await loadSessions(newId);
@@ -275,185 +259,14 @@ export const useChatStore = defineStore("chat", () => {
       const first = sessions.value[0];
       currentSessionId.value = first.id;
       currentCwd.value = first.current_cwd ?? "";
-      // Load messages for that session. We do this inline (not via
-      // `switchSession`) so the initial-load path is a single
-      // `await` and avoids a redundant `sending` guard check.
-      try {
-        const loaded = await invoke<LoadedSession | null>("load_session", {
-          sessionId: first.id,
-        });
-        if (loaded) {
-          messages.value = rehydrateMessages(loaded.messages);
-        }
-      } catch (e) {
-        console.error("initial load_session failed:", e);
-      }
+      // Seed the controller's cache for the new active session so
+      // the `messages` computed and the controller's per-session
+      // event routing have something to look at on first render.
+      await controller.ensureLoaded(first.id);
     } else {
       currentSessionId.value = null;
       currentCwd.value = "";
-      messages.value = [];
     }
-  }
-
-  // -----------------------------------------------------------------------
-  // Listeners
-  // -----------------------------------------------------------------------
-
-  async function ensureListener() {
-    if (unlistenChat) return;
-
-    unlistenChat = await listen<ChatEventPayload>("chat-event", (e) => {
-      handleChatEvent(e.payload);
-    });
-    unlistenTC = await listen<ToolCallPayload>("tool:call", (e) => {
-      handleToolCall(e.payload);
-    });
-    unlistenTR = await listen<ToolResultPayload>("tool:result", (e) => {
-      handleToolResult(e.payload);
-    });
-
-    listenerReady.value = true;
-  }
-
-  // -----------------------------------------------------------------------
-  // Event handlers
-  // -----------------------------------------------------------------------
-
-  /** Drop events for a stream that no longer matches the session
-   *  currently shown in the UI. Returns true if the event should be
-   *  applied, false if it should be discarded. */
-  function shouldApplyEvent(requestId: string): boolean {
-    if (requestId !== currentRequestId.value) return false;
-    // If a stream is in flight and the user has navigated to a
-    // different session, drop the events. The user is no longer
-    // looking at the streaming session; the in-flight events would
-    // otherwise clobber the new session's `messages.value` last
-    // entry. When the user returns to the streaming session, the
-    // DB state is up-to-date up to the last persisted turn, and
-    // the stream's `done` event will reset `currentRequestId` to
-    // null on the next event tick.
-    if (
-      streamingSessionId.value !== null &&
-      streamingSessionId.value !== currentSessionId.value
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  /** Get-or-create the in-flight thinking block (the one currently being
-   *  streamed for this assistant message). There is at most one open
-   *  block at a time; signature_delta on a new event after a text /
-   *  tool_use boundary starts a fresh one. */
-  function currentThinkingBlock(
-    m: ChatMessage,
-  ): ThinkingBlockInfo {
-    if (!m.thinkingBlocks || m.thinkingBlocks.length === 0) {
-      m.thinkingBlocks = [{ text: "", signature: "" }];
-    } else {
-      const last = m.thinkingBlocks[m.thinkingBlocks.length - 1];
-      // If the last block already has a signature, the model has moved
-      // on to a new thinking block (interleaved thinking). Open one.
-      if (last.signature) {
-        m.thinkingBlocks.push({ text: "", signature: "" });
-      }
-    }
-    return m.thinkingBlocks[m.thinkingBlocks.length - 1];
-  }
-
-  function handleChatEvent(event: ChatEventPayload) {
-    if (!shouldApplyEvent(event.request_id)) return;
-    const last = messages.value[messages.value.length - 1];
-    if (!last || last.role !== "assistant") return;
-
-    switch (event.kind) {
-      case "start":
-        last.streaming = true;
-        last.error = undefined;
-        break;
-      case "delta":
-        if (event.text) last.content += event.text;
-        break;
-      case "thinking_delta":
-        if (event.text) {
-          const blk = currentThinkingBlock(last);
-          blk.text += event.text;
-        }
-        break;
-      case "signature_delta":
-        if (event.signature) {
-          const blk = currentThinkingBlock(last);
-          blk.signature += event.signature;
-        }
-        break;
-      case "redacted_thinking_delta":
-        if (event.data) {
-          if (!last.redactedThinkingData) last.redactedThinkingData = [];
-          last.redactedThinkingData.push(event.data);
-        }
-        break;
-      case "done":
-        last.streaming = false;
-        sending.value = false;
-        currentRequestId.value = null;
-        clearStreamingSession();
-        // Refresh sidebar so updated_at / title reflect the new turn.
-        if (projectsStore.currentProjectId) {
-          void loadSessions(projectsStore.currentProjectId);
-        }
-        break;
-      case "error":
-        last.streaming = false;
-        last.error = {
-          message: event.message ?? "未知错误",
-          category: event.category ?? "server",
-        };
-        sending.value = false;
-        currentRequestId.value = null;
-        clearStreamingSession();
-        break;
-    }
-  }
-
-  function handleToolCall(payload: ToolCallPayload) {
-    if (!shouldApplyEvent(payload.request_id)) return;
-    const last = messages.value[messages.value.length - 1];
-    if (!last || last.role !== "assistant") return;
-
-    if (!last.toolCalls) last.toolCalls = [];
-    last.toolCalls.push({
-      id: payload.id,
-      name: payload.name,
-      input: payload.input,
-    });
-  }
-
-  function handleToolResult(payload: ToolResultPayload) {
-    if (!shouldApplyEvent(payload.request_id)) return;
-    const last = messages.value[messages.value.length - 1];
-    if (!last || last.role !== "assistant") return;
-
-    if (!last.toolResults) last.toolResults = [];
-    last.toolResults.push({
-      toolUseId: payload.tool_use_id,
-      content: payload.content,
-      isError: payload.is_error,
-    });
-  }
-
-  function clearStreamingSession(): void {
-    if (lastStreamedProjectId.value) {
-      streamingProjectIds.value.delete(lastStreamedProjectId.value);
-      // Runtime invariant (PR2 fix): after a stream ends, the
-      // project's red dot must be gone. Catches future regressions
-      // where the Set is keyed on session IDs again by mistake.
-      console.assert(
-        !streamingProjectIds.value.has(lastStreamedProjectId.value),
-        "streamingProjectIds should not contain the streamed project ID after clear",
-      );
-    }
-    lastStreamedProjectId.value = null;
-    streamingSessionId.value = null;
   }
 
   // -----------------------------------------------------------------------
@@ -468,86 +281,6 @@ export const useChatStore = defineStore("chat", () => {
     sessions.value = await invoke<SessionSummary[]>("list_sessions", {
       projectId: projectId,
     });
-  }
-
-  /** Convert DB-loaded messages into frontend ChatMessage objects.
-   *
-   *  Pass 1: parse each row's `content` blocks into `toolCalls` /
-   *          `toolResults` / `thinkingBlocks` / `redactedThinkingData`.
-   *  Pass 2: DB stores `tool_use` (in assistant) and the matching
-   *          `tool_result` (in the next user message — Anthropic API
-   *          requirement) as separate rows, but the in-memory model
-   *          expects both on the same assistant message so the UI's
-   *          "done / running" status lookup works. Merge the user
-   *          message's tool_results into the previous assistant message. */
-  function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
-    const messages: ChatMessage[] = loaded.map((m) => {
-      const blocks: ContentBlockFromDb[] = Array.isArray(m.content)
-        ? (m.content as ContentBlockFromDb[])
-        : [];
-      const toolCalls: ToolCallInfo[] = [];
-      const toolResults: ToolResultInfo[] = [];
-      const thinkingBlocks: ThinkingBlockInfo[] = [];
-      const redactedThinkingData: string[] = [];
-      for (const b of blocks) {
-        if (!b || typeof b.type !== "string") continue;
-        if (b.type === "thinking") {
-          thinkingBlocks.push({
-            text: b.thinking ?? "",
-            signature: b.signature ?? "",
-          });
-        } else if (b.type === "redacted_thinking") {
-          if (typeof b.data === "string") redactedThinkingData.push(b.data);
-        } else if (
-          b.type === "tool_use" &&
-          typeof b.id === "string" &&
-          typeof b.name === "string"
-        ) {
-          toolCalls.push({
-            id: b.id,
-            name: b.name,
-            input: b.input ?? {},
-          });
-        } else if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
-          toolResults.push({
-            toolUseId: b.tool_use_id,
-            content: b.content ?? "",
-            isError: !!b.is_error,
-          });
-        }
-      }
-      const msg: ChatMessage = {
-        id: `${m.session_id}-${m.seq}`,
-        role: m.role,
-        content: m.text,
-      };
-      if (toolCalls.length) msg.toolCalls = toolCalls;
-      if (toolResults.length) msg.toolResults = toolResults;
-      if (thinkingBlocks.length) msg.thinkingBlocks = thinkingBlocks;
-      if (redactedThinkingData.length) msg.redactedThinkingData = redactedThinkingData;
-      return msg;
-    });
-
-    // Attach user-message tool_results to the previous assistant message so
-    // the UI's per-message "done / running" lookup hits. The user message
-    // itself becomes a UI "ghost": it stays in the array (so its
-    // tool_results still flow to the LLM via toPayloadContent) but the
-    // visible-messages filter hides it because it has no text and no
-    // tool_calls.
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      const trs = m.toolResults;
-      if (m.role !== "user" || !trs?.length) continue;
-      for (let j = i - 1; j >= 0; j--) {
-        if (messages[j].role === "assistant") {
-          if (!messages[j].toolResults) messages[j].toolResults = [];
-          messages[j].toolResults!.push(...trs);
-          break;
-        }
-      }
-    }
-
-    return messages;
   }
 
   /** Create a new session under the current project. Throws if no
@@ -576,35 +309,43 @@ export const useChatStore = defineStore("chat", () => {
     });
     currentSessionId.value = session.id;
     currentCwd.value = session.current_cwd ?? "";
-    messages.value = [];
+    // Seed the controller's cache with an empty buffer for the new
+    // session. `ensureLoaded` will do an IPC `load_session` call
+    // (returning an empty message list for a fresh session) — the
+    // only public way to put a value into the controller's LRU.
+    await controller.ensureLoaded(session.id);
     await loadSessions(projectId);
     return session.id;
   }
 
   async function switchSession(sessionId: string) {
-    // Q3: switching sessions mid-stream is allowed. The in-flight
-    // request keeps running on the backend; events for it are
-    // dropped for non-current sessions via `shouldApplyEvent`, so
-    // the new session's `messages.value` is not clobbered. When the
-    // user returns to the streaming session, the DB state is
-    // up-to-date up to the last persisted turn, and the stream's
-    // `done` / `error` event will reset `sending` and
-    // `currentRequestId` on the next event tick.
-    const loaded = await invoke<LoadedSession | null>("load_session", {
-      sessionId,
-    });
-    if (!loaded) return;
+    // Per-session independence (PR3 / bug 6 fix): switching
+    // sessions mid-stream is now a first-class operation. The
+    // in-flight request keeps running on the backend; the
+    // controller's listener routes events to the matching
+    // `request_id` regardless of the user's current view. When
+    // the user returns to the streaming session, the
+    // `messages` computed re-evaluates and the in-flight
+    // message is right there — no DB reload, no `done`-event
+    // loss.
+    await controller.ensureLoaded(sessionId);
     currentSessionId.value = sessionId;
-    currentCwd.value = loaded.session.current_cwd ?? "";
-    messages.value = rehydrateMessages(loaded.messages);
+    // Pull cwd from the session summary (the controller doesn't
+    // expose session metadata; `list_sessions` already has the
+    // value in memory). Avoids a redundant `load_session` IPC.
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    currentCwd.value = summary?.current_cwd ?? "";
   }
 
   async function deleteSession(sessionId: string) {
     await invoke("delete_session", { sessionId });
+    // Evict from the controller's cache (and unpin, just in case)
+    // so the in-memory buffer doesn't keep a stale entry alive
+    // past the DB row's deletion.
+    controller.evict(sessionId);
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null;
       currentCwd.value = "";
-      messages.value = [];
     }
     if (projectsStore.currentProjectId) {
       await loadSessions(projectsStore.currentProjectId);
@@ -612,7 +353,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
-  // Send
+  // Send / Cancel
   // -----------------------------------------------------------------------
 
   /** Build the wire-format content for a history message: plain string
@@ -626,14 +367,15 @@ export const useChatStore = defineStore("chat", () => {
    *  omitting or rewriting it produces 400. */
   function toPayloadContent(m: ChatMessage): string | ContentBlockPayload[] {
     // CRITICAL: tool_result blocks belong ONLY on user-role messages
-    // (Anthropic Messages API contract). `rehydrateMessages` attaches
-    // the following user message's tool_results onto the assistant
-    // message *for UI grouping* (per-message "done / running" lookup);
-    // here we MUST NOT echo them onto the wire when role=assistant or
-    // Anthropic returns 2013 ("tool result's tool id ... not found")
-    // because the assistant message itself isn't allowed to contain
-    // tool_result blocks. Same for `content` text emitted onto a
-    // ghost user message: only the assistant's text counts.
+    // (Anthropic Messages API contract). `rehydrateMessages` (in the
+    // controller) attaches the following user message's tool_results
+    // onto the assistant message *for UI grouping* (per-message "done /
+    // running" lookup); here we MUST NOT echo them onto the wire when
+    // role=assistant or Anthropic returns 2013 ("tool result's tool id
+    // ... not found") because the assistant message itself isn't
+    // allowed to contain tool_result blocks. Same for `content` text
+    // emitted onto a ghost user message: only the assistant's text
+    // counts.
     if (m.role === "assistant") {
       const hasTools = !!m.toolCalls?.length;
       const hasThinking =
@@ -642,8 +384,8 @@ export const useChatStore = defineStore("chat", () => {
         return m.content;
       }
       const blocks: ContentBlockPayload[] = [];
-      // Thinking blocks come first (Anthropic convention: reasoning before
-      // any visible text in the same turn).
+      // Thinking blocks come first (Anthropic convention: reasoning
+      // before any visible text in the same turn).
       for (const tb of m.thinkingBlocks ?? []) {
         blocks.push({
           type: "thinking",
@@ -666,7 +408,7 @@ export const useChatStore = defineStore("chat", () => {
         blocks.push({ type: "redacted_thinking", data });
       }
       // Intentionally omit `m.toolResults` — they're for the UI, not
-      // the wire. The matching user-role message in `messages.value`
+      // the wire. The matching user-role message in the array
       // carries the canonical tool_result blocks.
       return blocks;
     }
@@ -707,8 +449,15 @@ export const useChatStore = defineStore("chat", () => {
 
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || sending.value) return;
-    await ensureListener();
+    // Bug 6 fix (PR3): the old guard was a single global `sending`
+    // ref. The new guard is per-session: the user can have multiple
+    // sessions streaming concurrently, but they can't fire a second
+    // message into the SAME session while it's still streaming.
+    if (!trimmed || isCurrentSessionStreaming.value) return;
+    const projectId = projectsStore.currentProjectId;
+    if (!projectId) {
+      throw new Error("send: no current project");
+    }
 
     // Lazily create a session if there isn't one yet. `createNewSession`
     // throws if no project is active, so the chat area is expected
@@ -718,6 +467,17 @@ export const useChatStore = defineStore("chat", () => {
     if (!currentSessionId.value) {
       await createNewSession();
     }
+    // After createNewSession, `currentSessionId` is set; we
+    // re-read in case the project's `last_cwd` is different from
+    // the previous session's, etc.
+    const sessionId = currentSessionId.value!;
+
+    // Make sure the controller's cache has an entry for this
+    // session (in case the user hits send immediately after a
+    // project switch before `ensureLoaded` has run, or after a
+    // long-idle eviction). `ensureLoaded` is a no-op for cached
+    // sessions and an IPC call for evicted ones.
+    const msgs = await controller.ensureLoaded(sessionId);
 
     const userMsg: ChatMessage = {
       id: genId(),
@@ -729,110 +489,70 @@ export const useChatStore = defineStore("chat", () => {
       role: "assistant",
       content: "",
     };
-    messages.value.push(userMsg, assistantMsg);
+    // The controller's event handlers look up `last` on this
+    // array, so the assistant placeholder MUST be the final
+    // entry before the stream starts. Pushing in this order also
+    // matches the order the UI renders (user message first,
+    // assistant placeholder right after).
+    msgs.push(userMsg, assistantMsg);
 
     // Build history — keep tool_use / tool_result / thinking /
     // redacted_thinking blocks intact so the LLM has full context
-    // across turns and across session switches. The agent loop also
-    // constructs a matching assistant message from the streaming
-    // events and persists it before the next LLM call, so the
-    // history we send here will line up with what's in the DB.
-    const history: ChatMessagePayload[] = messages.value
+    // across turns and across session switches. The agent loop
+    // also constructs a matching assistant message from the
+    // streaming events and persists it before the next LLM call,
+    // so the history we send here will line up with what's in the
+    // DB.
+    const history: ChatMessagePayload[] = msgs
       .filter((m) => m.id !== assistantMsg.id)
       .map((m) => ({ role: m.role, content: toPayloadContent(m) }));
 
-    const requestId = genId();
-    currentRequestId.value = requestId;
-    sending.value = true;
-    // Mark the current session as streaming so a tab switch can
-    // (a) drop events for this stream (via `shouldApplyEvent`) and
-    // (b) show the red dot on the originating tab. The project ID
-    // is recorded in `lastStreamedProjectId` so we can clean the
-    // Set when the stream ends, even if the user has switched
-    // projects mid-stream.
-    if (currentSessionId.value && projectsStore.currentProjectId) {
-      streamingSessionId.value = currentSessionId.value;
-      lastStreamedProjectId.value = projectsStore.currentProjectId;
-      streamingProjectIds.value.add(projectsStore.currentProjectId);
-      // Runtime invariant (PR2 fix): when a stream starts, the
-      // originating project's ID must be in the Set so the tab
-      // can render the red dot.
-      console.assert(
-        streamingProjectIds.value.has(projectsStore.currentProjectId),
-        "streamingProjectIds should contain the current project ID after send()",
-      );
-    }
-
-    try {
-      await invoke("chat", {
-        requestId,
-        sessionId: currentSessionId.value,
-        messages: history,
-      });
-    } catch (e) {
-      assistantMsg.error = {
-        message: String(e),
-        category: "server",
-      };
-      assistantMsg.streaming = false;
-      sending.value = false;
-      currentRequestId.value = null;
-      clearStreamingSession();
-    }
+    // `startRequest` registers the active request, pins the session
+    // in the LRU, and invokes the backend `chat` IPC. The
+    // controller owns the listener, the request state, the
+    // message routing, and the cleanup on `done` / `error` /
+    // cancel. This call returns once the IPC completes (the
+    // backend stream continues independently; events route back
+    // via the global listener).
+    await controller.startRequest({
+      sessionId,
+      projectId,
+      userMsg,
+      assistantMsg,
+      history,
+    });
   }
 
   /** PR5: cancel an in-flight chat request. The backend's agent
    *  loop notices on the next event boundary, bails out, persists
    *  whatever it has, and emits a `done` event with
-   *  `stop_reason: "cancelled"`. The existing `handleChatEvent` for
-   *  `done` then resets `sending` / `currentRequestId` and clears
-   *  the streaming session — so this call only needs to fire the
-   *  IPC; it should NOT clear local state synchronously, or the
-   *  follow-up `done` event would be ignored as "stale" (see
-   *  `shouldApplyEvent`). */
+   *  `stop_reason: "cancelled"`. That `done` flows through the
+   *  controller's `handleChatEvent` → `finalizeRequest`, which
+   *  clears the active request and unpins the session — so this
+   *  call is fire-and-forget IPC; the actual state reset happens
+   *  via the `done` event. */
   async function cancel() {
     const rid = currentRequestId.value;
     if (!rid) return;
-    try {
-      await invoke("cancel_chat", { requestId: rid });
-    } catch (e) {
-      // A failed cancel is logged but not user-facing — the user
-      // already saw the Stop button and clicked it. The natural
-      // fallback is: the stream finishes on its own (or the next
-      // event errors out), and the existing `done` / `error` path
-      // resets state.
-      console.error("cancel_chat failed:", e);
-    }
-  }
-
-  /** Cleanup all listeners (for future teardown). */
-  function cleanup() {
-    unlistenChat?.();
-    unlistenTC?.();
-    unlistenTR?.();
-    unlistenChat = null;
-    unlistenTC = null;
-    unlistenTR = null;
+    await controller.cancel(rid);
   }
 
   return {
+    // Reactive state (computed projections)
     messages,
-    sending,
-    listenerReady,
+    isCurrentSessionStreaming,
+    currentRequestId,
+    // UI-side state (refs)
     sessions,
     currentSessionId,
     currentCwd,
-    // PR3: reactive view of `currentCwd` with the home-dir prefix
-    // shortened to `~`. Exposed so `ChatPanel.vue` (PR1) can render
-    // the simplified form in the header chip.
     simplifiedCwd,
-    streamingProjectIds,
+    // Methods
     send,
     cancel,
     loadSessions,
     createNewSession,
     switchSession,
     deleteSession,
-    cleanup,
   };
 });

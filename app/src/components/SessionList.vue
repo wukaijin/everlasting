@@ -18,10 +18,22 @@
 import { computed, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
 import { useProjectsStore } from "../stores/projects";
+import { useStreamControllerStore } from "../stores/streamController";
 import Icon from "./Icon.vue";
 
 const store = useChatStore();
 const projectsStore = useProjectsStore();
+// PR4 (06-07-6-ui-bug-markdown-sse): the per-session streaming
+// indicator subscribes to the controller's reactive
+// `streamingSessionIds` Set. Pinia auto-unwraps the computed, so
+// reading `streamingSessionIds` on the store proxy yields the
+// `Set<string>` itself — when a session's `request_id` enters or
+// leaves `activeRequests` (via `startRequest` / `finalizeRequest`),
+// the recomputed Set re-runs and the matching `v-if` flips. This
+// means the indicator updates whether the user is currently
+// looking at the streaming session or some other session in the
+// same project (AC6.2 / AC6.3 / AC6.4 — per-session independence).
+const streamController = useStreamControllerStore();
 
 const DEFAULT_VISIBLE = 8;
 const expanded = ref(false);
@@ -55,7 +67,12 @@ function onClick(id: string) {
 
 function onDelete(id: string, e: MouseEvent) {
   e.stopPropagation();
-  if (store.sending && id === store.currentSessionId) return;
+  // PR3: replaced the old global `sending` with
+  // `isCurrentSessionStreaming` — per-session guard. Other
+  // sessions in the same project can still be streaming
+  // concurrently; the guard is specifically about "is THIS
+  // session streaming right now?".
+  if (store.isCurrentSessionStreaming && id === store.currentSessionId) return;
   if (!confirm("删除此 session 及其所有消息？")) return;
   void store.deleteSession(id);
 }
@@ -95,6 +112,36 @@ function formatTime(iso: string): string {
       <div class="session-item__main">
         <div class="session-item__title-row">
           <span class="session-item__title">{{ s.title }}</span>
+          <!--
+            PR4: per-session streaming indicator. A small pulsing dot
+            next to the title, matching the project-tab pattern in
+            `ProjectTabs.vue::.tab__streaming`. Uses
+            `--color-accent` (Prussian blue) instead of the project
+            tab's red so the two indicators are visually distinct
+            when the user is looking at a sidebar while the
+            project tab also shows a red dot (the project tab means
+            "this project has any streaming session", the session
+            card means "this specific session is streaming").
+
+            The dot is purely visual — no click handler, no
+            aria-label beyond `aria-hidden` (the title is already
+            present in the DOM; the dot is a redundant signal for
+            sighted users at a glance, not a new information
+            channel that needs announcing).
+
+            `streamingSessionIds` is a reactive Set on the
+            controller; `Set#has` is a method call, which Vue
+            tracks through the Set's iteration protocol in
+            reactive() proxies. So adding/removing a session
+            id from the Set (via `startRequest` / `finalizeRequest`)
+            flips the `v-if` automatically.
+          -->
+          <span
+            v-if="streamController.streamingSessionIds.has(s.id)"
+            class="session-item__streaming"
+            aria-hidden="true"
+            title="正在生成"
+          />
         </div>
         <div class="session-item__meta">
           <span class="session-item__project">{{ projectNameFor(s) }}</span>
@@ -232,6 +279,48 @@ function formatTime(iso: string): string {
 
 .session-item--active .session-item__dot {
   background: var(--color-accent);
+}
+
+/* PR4: per-session streaming indicator. Mirrors the
+   `ProjectTabs.vue::.tab__streaming` pattern (a small dot with
+   pulse animation) so the visual language is consistent between
+   the top tab bar and the sidebar. Differences:
+   - Color: `--color-accent` (Prussian blue) rather than the
+     project tab's `--color-tool-error` (red). Two reasons:
+     (1) visual separation when both indicators are visible at
+         once (project tab = "project has any streaming session",
+         session card = "this specific session is streaming");
+     (2) the session card already has a permanent blue dot in
+         `__dot` when the session is active, so blue reads as
+         "this session, which is already special" rather than
+         "something is wrong".
+   - Animation: `pulseDot` (1.5s loop, opacity 0.4→1.0). Slightly
+     longer than the project tab's 1.4s so the two animations
+     don't visually sync up when both are on screen at once.
+   - Sizing: 7px circle (between 6 and 8px per the dispatch
+     instructions; 7 is asymmetric in a way that's not
+     meaningful — but matches the project tab's 9px font glyph
+     well at the card's 13px title size).
+   - The dot is a CSS-only circle (no glyph), so its color and
+     alpha are independent — a future theme swap can recolor
+     without touching the markup. */
+.session-item__streaming {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: pulseDot 1.5s ease-in-out infinite;
+  /* Aligns the dot with the title's optical center. The title
+     uses font-size 13px with default line-height, so a tiny
+     top nudge lines up the indicator with the middle of the
+     x-height rather than the baseline. */
+  margin-top: 1px;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .session-item__delete {

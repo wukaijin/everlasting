@@ -126,7 +126,11 @@ const gitBranchLabel = computed<string>(() => {
       <MessageList v-else />
     </main>
 
-    <ChatInput :sending="chatStore.sending" @send="emit('send', $event)" @stop="onStop" />
+    <ChatInput
+      :sending="chatStore.isCurrentSessionStreaming"
+      @send="emit('send', $event)"
+      @stop="onStop"
+    />
   </section>
 </template>
 
