@@ -11,7 +11,10 @@
 //   - "⚠️" 12px icon for non-git projects (tooltip: "未启用 git 隔离").
 //   - "📦" 12px icon for legacy/auto-default projects (tooltip: "旧数据,自动归入").
 //   - "×" close button calls `hide_project` (data preserved).
-//   - Selected tab gets a 2px blue underline + light bg.
+//   - Selected tab gets a 2px Prussian blue underline + muted bg.
+//
+// D3 restyle: dark theme tokens. Active tab uses the Prussian-muted
+// background and accent underline per spike-003.
 
 import { useProjectsStore } from "../stores/projects";
 
@@ -90,9 +93,8 @@ function tabTooltip(p: {
 .tabs {
   display: flex;
   align-items: stretch;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
-  height: 36px;
+  background: var(--color-bg-surface);
+  height: 40px;
   flex-shrink: 0;
 }
 
@@ -109,7 +111,7 @@ function tabTooltip(p: {
 }
 
 .tabs__scroll::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--color-bg-border);
   border-radius: 2px;
 }
 
@@ -129,22 +131,22 @@ function tabTooltip(p: {
   height: 100%;
   background: transparent;
   border: none;
-  border-right: 1px solid #f3f4f6;
+  border-right: 1px solid var(--color-bg-border);
   cursor: pointer;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   transition: background 0.1s, color 0.1s;
   font-family: inherit;
 }
 
 .tab:hover {
-  background: #f9fafb;
-  color: #1f2328;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
 }
 
 .tab--active {
-  background: #f3f4f6;
-  color: #1f2328;
+  background: var(--color-accent-muted);
+  color: var(--color-text-primary);
 }
 
 .tab--active::after {
@@ -154,7 +156,7 @@ function tabTooltip(p: {
   right: 0;
   bottom: 0;
   height: 2px;
-  background: #2563eb;
+  background: var(--color-accent);
 }
 
 .tab__name {
@@ -173,7 +175,7 @@ function tabTooltip(p: {
 }
 
 .tab__icon--warn {
-  color: #d97706;
+  color: var(--color-tool-shell);
 }
 
 .tab__icon--legacy {
@@ -181,7 +183,7 @@ function tabTooltip(p: {
 }
 
 .tab__streaming {
-  color: #ef4444;
+  color: var(--color-tool-error);
   font-size: 9px;
   flex-shrink: 0;
   line-height: 1;
@@ -200,7 +202,7 @@ function tabTooltip(p: {
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: #9ca3af;
+  color: var(--color-text-muted);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
@@ -216,27 +218,27 @@ function tabTooltip(p: {
 }
 
 .tab__close:hover {
-  background: #fca5a5;
+  background: var(--color-tool-error);
   color: #ffffff;
 }
 
 .tabs__add {
   flex-shrink: 0;
-  width: 36px;
+  width: 40px;
   height: 100%;
   background: transparent;
   border: none;
-  border-left: 1px solid #f3f4f6;
+  border-left: 1px solid var(--color-bg-border);
   cursor: pointer;
   font-size: 18px;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   transition: background 0.1s, color 0.1s;
   font-family: inherit;
   padding: 0;
 }
 
 .tabs__add:hover {
-  background: #f9fafb;
-  color: #2563eb;
+  background: var(--color-accent-muted);
+  color: var(--color-accent);
 }
 </style>

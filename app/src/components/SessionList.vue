@@ -9,9 +9,12 @@
 // view-side folding — no schema change, no archive state.
 //
 // Per Q5: the session's `current_cwd` is shown in the chat header
-// (see ChatWindow.vue), NOT in the session list rows. The PR1
+// (see ChatPanel.vue), NOT in the session list rows. The PR1
 // backend exposes it on `SessionSummary` so the data is available;
 // the row keeps `title` + `preview` only for visual simplicity.
+//
+// D3 restyle: dark theme tokens. Active session gets a Prussian
+// muted background + 2px Prussian left border (per spike-003).
 
 import { computed, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
@@ -108,31 +111,32 @@ function onNew() {
 }
 
 .sidebar-list__title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--color-text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .sidebar-list__new {
   margin: 0 12px 8px;
   padding: 8px 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-bg-border);
   border-radius: 6px;
-  background: #ffffff;
-  color: #1f2328;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   font-family: inherit;
 }
 
 .sidebar-list__new:hover {
-  background: #f9fafb;
-  border-color: #9ca3af;
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
 }
 
 .sidebar-list__items {
@@ -152,19 +156,20 @@ function onNew() {
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
+  border-left: 2px solid transparent;
 }
 
 .session-item:hover {
-  background: #e5e7eb;
+  background: var(--color-bg-elevated);
 }
 
 .session-item--active {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
+  background: var(--color-accent-muted);
+  border-left-color: var(--color-accent);
 }
 
 .session-item--active:hover {
-  background: #ffffff;
+  background: var(--color-accent-muted);
 }
 
 .session-item__main {
@@ -175,7 +180,7 @@ function onNew() {
 .session-item__title {
   font-size: 13px;
   font-weight: 500;
-  color: #1f2328;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -183,7 +188,7 @@ function onNew() {
 
 .session-item__preview {
   font-size: 11px;
-  color: #6b7280;
+  color: var(--color-text-muted);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -197,7 +202,7 @@ function onNew() {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #9ca3af;
+  color: var(--color-text-muted);
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
@@ -212,14 +217,14 @@ function onNew() {
 }
 
 .session-item__delete:hover {
-  background: #fca5a5;
+  background: var(--color-tool-error);
   color: #ffffff;
 }
 
 .session-empty {
   padding: 16px 12px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--color-text-muted);
   text-align: center;
 }
 
@@ -231,10 +236,10 @@ function onNew() {
 .session-more__btn {
   width: 100%;
   background: transparent;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--color-bg-border);
   border-radius: 6px;
   padding: 6px 8px;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s, border-color 0.1s;
@@ -242,8 +247,8 @@ function onNew() {
 }
 
 .session-more__btn:hover {
-  background: #f3f4f6;
-  color: #1f2328;
-  border-color: #d1d5db;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
 }
 </style>
