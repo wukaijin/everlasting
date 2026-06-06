@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "acceptance: tracing 字段完整 (path / content_len / is_existing), debug 级别 (生产默认 info 不输出)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "acceptance: 业务逻辑零变化 (4 个现有 write_file test + 5 PR2 + 5 PR5 = 98 cargo tests 仍 pass)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "acceptance: 失败点 is_error=true 仍正常返回, tracing 不影响 control flow"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: spike #3 埋点完成, 标 [TRACING-ADDED 2026-06-XX] 等复现"}

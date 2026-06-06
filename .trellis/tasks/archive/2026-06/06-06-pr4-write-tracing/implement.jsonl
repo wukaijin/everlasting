@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing 字段命名约定 (%raw_path Display, content_len, is_existing) + debug vs warn 区分"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "diagnostic-only 改动需保持业务逻辑零变化, 原 cargo test 仍 pass"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "失败点 is_error=true 时 tracing 区分 (业务预期 vs IO error) 决策"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #3 偶发失败原文, 根因待复现后定, 本 PR 只埋点"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 prd 锁定 PR4 范围 (5 行, 不改业务), 实施直接套"}
