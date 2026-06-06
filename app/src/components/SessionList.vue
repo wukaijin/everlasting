@@ -222,11 +222,12 @@ function formatTime(iso: string): string {
 
 .session-item__dot {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--color-tool-write);
   margin-top: 6px;
+  order: -1;
 }
 
 .session-item--active .session-item__dot {

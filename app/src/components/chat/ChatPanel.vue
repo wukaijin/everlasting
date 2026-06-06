@@ -12,6 +12,11 @@
 // is hidden when the project is not a git repo; otherwise it
 // shows the branch name (e.g. `main`, `feature/foo`, or the
 // literal `HEAD` for a detached-HEAD repo).
+//
+// PR1 spike-005 follow-up: header is now a 28px-tall compact row
+// (padding 6px + content), the session title is 13px, and a new
+// `.chat-panel__chip--cwd` chip is pushed to the right showing
+// `chatStore.simplifiedCwd` (prepared by PR3; e.g. `~/code/foo`).
 
 import { computed } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
@@ -91,6 +96,14 @@ const gitBranchLabel = computed<string>(() => {
           <Icon name="refresh" :size="12" />
           {{ gitBranchLabel }}
         </span>
+        <span
+          v-if="chatStore.simplifiedCwd"
+          class="chat-panel__chip chat-panel__chip--cwd"
+          :title="chatStore.simplifiedCwd"
+        >
+          <Icon name="folder" :size="12" />
+          {{ chatStore.simplifiedCwd }}
+        </span>
       </div>
     </header>
 
@@ -130,7 +143,7 @@ const gitBranchLabel = computed<string>(() => {
 .chat-panel__header {
   display: flex;
   align-items: center;
-  padding: 14px 20px;
+  padding: 6px 20px;
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   flex-shrink: 0;
@@ -138,16 +151,17 @@ const gitBranchLabel = computed<string>(() => {
 }
 
 .chat-panel__title-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1;
   flex-wrap: wrap;
 }
 
 .chat-panel__title {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
   overflow: hidden;
@@ -173,6 +187,13 @@ const gitBranchLabel = computed<string>(() => {
 .chat-panel__chip--git {
   color: var(--color-accent);
   border-color: var(--color-accent-muted);
+}
+
+.chat-panel__chip--cwd {
+  margin-left: auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-panel__main {

@@ -32,6 +32,7 @@ import {
   LockClosedIcon,
   Squares2X2Icon,
   ArrowsPointingOutIcon,
+  FolderIcon,
 } from "@heroicons/vue/24/outline";
 
 const props = withDefaults(
@@ -66,6 +67,7 @@ const map = {
   "lock": LockClosedIcon,
   "maximize": Squares2X2Icon,
   "restore": ArrowsPointingOutIcon,
+  "folder": FolderIcon,
 } as const;
 
 const Component = computed(() => {
