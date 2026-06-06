@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "ChatPanel.vue 改 header padding + title font-size + 新 pwd chip, component 规范必读"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "utils + stores + components 分层, chatStore.simplifiedCwd (PR3) 接入 ChatPanel.vue 的渲染流"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chatStore.simplifiedCwd 是 reactive computed, header 接入只需绑定 template, 不用手动 watch"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "CSS 改动需符合项目 CSS 变量 + scoped 规范, 不能引入新色"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "新 chip 元素 type 严格 (string), 无 optional chain 漏"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #1 (sessions 状态圆点) + #2a/2b (header 高度/字号) 原始根因"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 prd 锁定所有 PR1 决策 (target 28px / order 改 -1 / margin-left auto pwd)"}
