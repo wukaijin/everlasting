@@ -428,3 +428,36 @@ main 领先 origin/main 37 commits, working tree clean
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: PR2 follow-up: 启动时 batch backfill 老项目的 git_branch
+
+**Date**: 2026-06-06
+**Task**: PR2 follow-up: 启动时 batch backfill 老项目的 git_branch
+**Branch**: `main`
+
+### Summary
+
+修 PR2 lazy backfill 锁定导致的 bug: 老项目 (PR2 之前创建) 永远显示 'git' fallback。修法: AppState::load 完成后 tokio::spawn 异步 batch re-probe 所有 is_git_repo=0 老项目, 复用现有 detector 函数 (无新依赖), 幂等守卫 + 失败 warn 不中断, 完成后 emit 'projects:refreshed' event 触发前端 loadProjects() refresh。5 个新 cargo test 覆盖 happy / non-git skip / idempotency / SQL filter / UPDATE round-trip。103 cargo + 24 vitest + pnpm build 全过。git 实时性 (fsnotify / 切项目 lazy) 留 v2 候选方案 A/C/D, 见 prd §Future Work。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7ce320918c80889cc4b24241f2c507c43ad61620` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
