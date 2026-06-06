@@ -381,3 +381,50 @@ P2 实施。write_file.rs 加 5 个 tracing::debug! 调用 (1 入口 raw_path/co
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: spike-005 follow-up 完成: 7 sub-PR 全合并到 main, 最终测试全过
+
+**Date**: 2026-06-06
+**Task**: spike-005 follow-up 完成: 7 sub-PR 全合并到 main, 最终测试全过
+**Branch**: `main`
+
+### Summary
+
+完成 spike-005 7 个 sub-PR 全部合并到 main。
+
+7 个 PR 实施 + check + commit + archive + journal 全部走完 Trellis 流程:
+- PR7  fix(ui): 首行空行 (displayContent strip)
+- PR6  feat(ui): markdown 渲染 (marked v18 + DOMPurify) + vitest 基础 (14 fixture)
+- PR5  feat(chat): LLM 取消机制 (cancel_chat + CancellationToken + Stop 按钮, 5 cargo test)
+- PR2  feat(ui): git branch 真显示 (DB migration + detector + chip, 5 cargo test)
+- PR3  feat(ui): pwd ~/ 简化数据通路 (Tauri command + simplifyPath + 10 vitest)
+- PR1  feat(ui): 紧凑 header + 圆点 8px + pwd chip 远端对齐
+- PR4  chore(tool): write_file tracing::debug 诊断埋点 (5 debug calls)
+
+最终测试: pnpm build pass / vitest 24/24 / cargo test --lib 98/98
+合并: refactor/ui-dark-theme-tailwind --no-ff -> main (commit 401396b)
+main 领先 origin/main 37 commits, working tree clean
+切到 main branch 完成
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `401396b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

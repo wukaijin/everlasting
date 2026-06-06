@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-06-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~383 | Active |
+| `journal-1.md` | ~430 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-06-06 | spike-005 follow-up 完成: 7 sub-PR 全合并到 main, 最终测试全过 | `401396b` | `main` |
 | 11 | 2026-06-06 | spike-005 PR4: write_file 加 tracing::debug 诊断偶发失败 | `ae1a71179f85b1c25c03580339bac208b48a7893` | `refactor/ui-dark-theme-tailwind` |
 | 10 | 2026-06-06 | spike-005 PR1: 紧凑 header + 圆点 8px + pwd chip 远端对齐 | `801fb8a05b0498a6d70680433d89c90689e2fa0e` | `refactor/ui-dark-theme-tailwind` |
 | 9 | 2026-06-06 | spike-005 PR3: 准备 pwd ~/ 简化数据通路 (Tauri command + simplifyPath) | `ef7cea834353b65e418eeff3e91646089e87bacf` | `refactor/ui-dark-theme-tailwind` |
