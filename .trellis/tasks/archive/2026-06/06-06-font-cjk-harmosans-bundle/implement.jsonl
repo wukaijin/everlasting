@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端代码质量（含资源打包 / 字体加载规范若有）"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "组件层不直接管 font-family，全局生效（与方案 1 一致）"}
