@@ -1,10 +1,22 @@
 <script setup lang="ts">
-// AppHeader — wraps the top project tab bar. Per D4 the TitleBar will
-// be merged into this same row (single-line fusion: TitleBar 28px +
-// ProjectTabs 16-20px). For D3 the header is a thin pass-through so
-// the D4 step can edit a single file.
+// AppHeader — top of the application, single-row fusion of TitleBar
+// (drag region + window controls) and ProjectTabs (per PRD decision #4
+// & research/tauri-titlebar-patterns.md).
+//
+// Layout (left → right, all on one 40px-tall row):
+//   - macOS: 80px traffic-light spacer (drag) | ProjectTabs (interactive)
+//     | flexible drag-region spacer | (no self-drawn controls — macOS
+//     uses the native red lights)
+//   - Windows / Linux / WSLg: 0 left pad | ProjectTabs (interactive)
+//     | flexible drag-region spacer | 3 self-drawn min/max/close buttons
+//
+// The drag region is owned by TitleBar. ProjectTabs' root is wrapped
+// in a div with `data-tauri-drag-region="false"` (TitleBar's slot
+// wrapper does this) so the tabs stay clickable and the horizontal
+// scroll inside `.tabs__scroll` continues to work.
 
 import { useChatStore } from "../../stores/chat";
+import TitleBar from "./TitleBar.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 
 const chatStore = useChatStore();
@@ -12,7 +24,9 @@ const chatStore = useChatStore();
 
 <template>
   <header class="app-header">
-    <ProjectTabs :streaming-project-ids="chatStore.streamingProjectIds" />
+    <TitleBar>
+      <ProjectTabs :streaming-project-ids="chatStore.streamingProjectIds" />
+    </TitleBar>
   </header>
 </template>
 
@@ -20,7 +34,6 @@ const chatStore = useChatStore();
 .app-header {
   flex-shrink: 0;
   background: var(--color-bg-surface);
-  border-bottom: 1px solid var(--color-bg-border);
   z-index: 10;
 }
 </style>

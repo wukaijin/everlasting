@@ -11,6 +11,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.0
+      '@tauri-apps/plugin-os':
+        specifier: ^2.3.2
+        version: 2.3.2
       pinia:
         specifier: ^2.3.0
         version: 2.3.1(typescript@5.6.3)(vue@3.5.35(typescript@5.6.3))
@@ -573,6 +576,9 @@ packages:
     resolution: {integrity: sha512-bk3HemqvGRoy+5D/dVMUQHKMYLglD0jVnMm/0iGMH6ufZ+p8r14m6BpIixwij3PBvZdvORUp1YifTD8QxVZ1Nw==}
     engines: {node: '>= 10'}
     hasBin: true
+
+  '@tauri-apps/plugin-os@2.3.2':
+    resolution: {integrity: sha512-n+nXWeuSeF9wcEsSPmRnBEGrRgOy6jjkSU+UVCOV8YUGKb2erhDOxis7IqRXiRVHhY8XMKks00BJ0OAdkpf6+A==}
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
@@ -1273,6 +1279,10 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.11.2
       '@tauri-apps/cli-win32-ia32-msvc': 2.11.2
       '@tauri-apps/cli-win32-x64-msvc': 2.11.2
+
+  '@tauri-apps/plugin-os@2.3.2':
+    dependencies:
+      '@tauri-apps/api': 2.11.0
 
   '@types/estree@1.0.9': {}
 
