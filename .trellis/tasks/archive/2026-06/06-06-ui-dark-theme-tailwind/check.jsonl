@@ -1,0 +1,5 @@
+{"file": "prd.md", "reason": "check 阶段对照 9 个决策 + 5 个 deliverable + 总 acceptance criteria，验证每条是否落地"}
+{"file": "research/tailwind-v3-vs-v4.md", "reason": "check 阶段对照 v4 关键约束：Safari 16.4+、@theme 语法、@tailwindcss/vite 插件配置正确性"}
+{"file": "research/tauri-titlebar-patterns.md", "reason": "check 阶段对照跨平台 title bar 行为矩阵：macOS 红绿灯位置、Win/Linux 自绘按钮、capabilities 权限、WSLg drag 验证"}
+{"file": "docs/spikes/003-ui-reference-prompts.md", "reason": "check 阶段对照 14 个色板 token hex 值（用 DevTools 取色器验证）"}
+{"file": "docs/spikes/ui-A.png", "reason": "check 阶段 D3 5 个场景截图视觉对照参考图（90% 匹配）"}

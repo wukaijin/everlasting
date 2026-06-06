@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB 加 is_git_repo + git_branch 列的 migration 写法 (pragma_table_info + ALTER TABLE 幂等 pattern 复用)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "detector.rs / store.rs / db.rs 模块边界, current_branch 应该跟 is_git_repo 在同模块 (detector.rs) 还是 store.rs"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "不动 LLM 合同, 但 db::ProjectRow 字段加 is_git_repo / git_branch 是前端 IPC 序列化的一部分"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing: detector / store 探测的字段 (path, is_git_repo, git_branch) + 失败时 error"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "cargo test fixture (git init in tempdir) + db migration 幂等测试 + 多 case 覆盖"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "ChatPanel.vue chip 替换字符串 + title attribute 必读"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Project interface 字段加 is_git_repo + git_branch 类型必须跟 Rust 序列化一致 (snake_case)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 Project 展示约定, chat header chip 的渲染流"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #2c (git branch 没有正确展示) 原始根因, ChatPanel.vue:55-60 注释明确说 backend 还没暴露"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/research/git-detection-rust.md", "reason": "父 task research 已对比三方案, 锁定 std::process::Command 复用 detector.rs pattern, 实施直接套"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 prd 锁定所有决策 (detached HEAD 存 \"HEAD\" / 不批量 backfill / snake_case 维持), 不再 brainstorm"}

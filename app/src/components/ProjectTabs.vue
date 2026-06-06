@@ -11,9 +11,13 @@
 //   - "⚠️" 12px icon for non-git projects (tooltip: "未启用 git 隔离").
 //   - "📦" 12px icon for legacy/auto-default projects (tooltip: "旧数据,自动归入").
 //   - "×" close button calls `hide_project` (data preserved).
-//   - Selected tab gets a 2px blue underline + light bg.
+//   - Selected tab gets a 2px Prussian blue underline + muted bg.
+//
+// D3 restyle: dark theme tokens. Active tab uses the Prussian-muted
+// background and accent underline per spike-003.
 
 import { useProjectsStore } from "../stores/projects";
+import Icon from "./Icon.vue";
 
 const store = useProjectsStore();
 
@@ -52,24 +56,32 @@ function tabTooltip(p: {
 <template>
   <div class="tabs">
     <div class="tabs__scroll">
-      <button
+      <div
         v-for="p in store.projects"
         :key="p.id"
         :class="['tab', { 'tab--active': p.id === store.currentProjectId }]"
+        role="button"
+        tabindex="0"
         :title="tabTooltip(p)"
         @click="onTabClick(p.id)"
+        @keydown.enter="onTabClick(p.id)"
+        @keydown.space.prevent="onTabClick(p.id)"
       >
         <span class="tab__name">{{ p.name }}</span>
         <span
           v-if="!p.is_git_repo && !p.is_legacy"
           class="tab__icon tab__icon--warn"
           title="未启用 git 隔离"
-        >⚠️</span>
+        >
+          <Icon name="warn" :size="12" />
+        </span>
         <span
           v-else-if="p.is_legacy"
           class="tab__icon tab__icon--legacy"
           title="旧数据,自动归入"
-        >📦</span>
+        >
+          <Icon name="archive" :size="12" />
+        </span>
         <span
           v-if="streamingProjectIds.has(p.id)"
           class="tab__streaming"
@@ -78,11 +90,21 @@ function tabTooltip(p: {
         <button
           class="tab__close"
           :title="'关闭 Tab(数据保留)'"
+          :aria-label="`关闭 ${p.name}`"
           @click="(e) => onHide(p.id, e)"
-        >×</button>
-      </button>
+        >
+          <Icon name="x" :size="12" />
+        </button>
+      </div>
     </div>
-    <button class="tabs__add" title="添加项目" @click="onAdd">+</button>
+    <button
+      class="tabs__add"
+      title="添加项目"
+      :aria-label="'添加项目'"
+      @click="onAdd"
+    >
+      <Icon name="plus" :size="16" />
+    </button>
   </div>
 </template>
 
@@ -90,9 +112,8 @@ function tabTooltip(p: {
 .tabs {
   display: flex;
   align-items: stretch;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
-  height: 36px;
+  background: var(--color-bg-surface);
+  height: 40px;
   flex-shrink: 0;
 }
 
@@ -109,7 +130,7 @@ function tabTooltip(p: {
 }
 
 .tabs__scroll::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--color-bg-border);
   border-radius: 2px;
 }
 
@@ -129,22 +150,22 @@ function tabTooltip(p: {
   height: 100%;
   background: transparent;
   border: none;
-  border-right: 1px solid #f3f4f6;
+  border-right: 1px solid var(--color-bg-border);
   cursor: pointer;
   font-size: 13px;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   transition: background 0.1s, color 0.1s;
   font-family: inherit;
 }
 
 .tab:hover {
-  background: #f9fafb;
-  color: #1f2328;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
 }
 
 .tab--active {
-  background: #f3f4f6;
-  color: #1f2328;
+  background: var(--color-accent-muted);
+  color: var(--color-text-primary);
 }
 
 .tab--active::after {
@@ -154,7 +175,7 @@ function tabTooltip(p: {
   right: 0;
   bottom: 0;
   height: 2px;
-  background: #2563eb;
+  background: var(--color-accent);
 }
 
 .tab__name {
@@ -167,21 +188,22 @@ function tabTooltip(p: {
 }
 
 .tab__icon {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
   line-height: 1;
 }
 
 .tab__icon--warn {
-  color: #d97706;
+  color: var(--color-tool-shell);
 }
 
 .tab__icon--legacy {
-  filter: saturate(0.85);
+  color: var(--color-text-muted);
 }
 
 .tab__streaming {
-  color: #ef4444;
+  color: var(--color-tool-error);
   font-size: 9px;
   flex-shrink: 0;
   line-height: 1;
@@ -200,8 +222,10 @@ function tabTooltip(p: {
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: #9ca3af;
-  font-size: 14px;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
@@ -216,27 +240,29 @@ function tabTooltip(p: {
 }
 
 .tab__close:hover {
-  background: #fca5a5;
+  background: var(--color-tool-error);
   color: #ffffff;
 }
 
 .tabs__add {
   flex-shrink: 0;
-  width: 36px;
+  width: 40px;
   height: 100%;
   background: transparent;
   border: none;
-  border-left: 1px solid #f3f4f6;
+  border-left: 1px solid var(--color-bg-border);
   cursor: pointer;
-  font-size: 18px;
-  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
   transition: background 0.1s, color 0.1s;
   font-family: inherit;
   padding: 0;
 }
 
 .tabs__add:hover {
-  background: #f9fafb;
-  color: #2563eb;
+  background: var(--color-accent-muted);
+  color: var(--color-accent);
 }
 </style>

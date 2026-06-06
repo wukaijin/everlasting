@@ -16,6 +16,10 @@ pub struct ProjectRow {
     pub name: String,
     pub path: String,
     pub is_git_repo: bool,
+    /// Current branch name, or `None` for non-git projects. The literal
+    /// string `"HEAD"` is stored for detached-HEAD repos so the UI can
+    /// distinguish detached state from a real branch.
+    pub git_branch: Option<String>,
     pub is_legacy: bool,
     pub created_at: String,
     pub updated_at: String,

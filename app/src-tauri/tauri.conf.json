@@ -13,10 +13,17 @@
     "windows": [
       {
         "title": "Everlasting",
-        "width": 960,
-        "height": 720,
-        "minWidth": 640,
-        "minHeight": 480
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 800,
+        "titleBarStyle": "Overlay",
+        "decorations": false,
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 14
+        }
       }
     ],
     "security": {

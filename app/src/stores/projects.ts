@@ -23,6 +23,12 @@ export interface ProjectInfo {
   name: string;
   path: string;
   is_git_repo: boolean;
+  /** Current branch name, or `null` for non-git projects. The literal
+   *  string `"HEAD"` is stored for detached-HEAD repos so the UI can
+   *  distinguish detached state from a real branch. PR2 added this
+   *  field; legacy projects created before PR2 may return `null` and
+   *  will be re-probed on the next `update_project_path` call. */
+  git_branch: string | null;
   is_legacy: boolean;
   created_at: string;
   updated_at: string;

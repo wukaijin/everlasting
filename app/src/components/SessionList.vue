@@ -1,22 +1,27 @@
 <script setup lang="ts">
 // SessionList — session list shown in the left sidebar when a project
-// is active. Extracted from ChatWindow.vue (PR2 scope) so the
-// project tab bar can sit above it cleanly.
+// is active. The header and "+ 新对话" button are owned by
+// Sidebar.vue; this component is just the <ul> of session items.
+//
+// D6 restructure: each item is now a TWO-LINE card instead of the
+// single-line row we had in D5. Line 1 is the session title (CJK +
+// English mix), line 2 is muted secondary info — the project name +
+// a relative timestamp joined with a · separator. This gives the
+// user visual context for which project each session belongs to,
+// which is especially useful when multiple projects are loaded.
 //
 // Per Q4v2 (PROPOSAL §5.2): default to the 8 most-recently-updated
 // sessions; if there are more, render a "查看更早的 N 个" button at
 // the bottom that toggles to show the full list. This is purely
 // view-side folding — no schema change, no archive state.
-//
-// Per Q5: the session's `current_cwd` is shown in the chat header
-// (see ChatWindow.vue), NOT in the session list rows. The PR1
-// backend exposes it on `SessionSummary` so the data is available;
-// the row keeps `title` + `preview` only for visual simplicity.
 
 import { computed, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
+import { useProjectsStore } from "../stores/projects";
+import Icon from "./Icon.vue";
 
 const store = useChatStore();
+const projectsStore = useProjectsStore();
 
 const DEFAULT_VISIBLE = 8;
 const expanded = ref(false);
@@ -35,6 +40,15 @@ const hiddenCount = computed<number>(() => {
   return total - DEFAULT_VISIBLE;
 });
 
+/** Look up a session's project name via the projects store. The
+ *  projects store is the source of truth for project metadata; the
+ *  session record itself only carries `project_id`. Falls back to
+ *  "—" if the project is hidden, missing, or the id is unknown. */
+function projectNameFor(s: SessionSummary): string {
+  const p = projectsStore.projectById(s.project_id);
+  return p?.name ?? "—";
+}
+
 function onClick(id: string) {
   void store.switchSession(id);
 }
@@ -46,148 +60,178 @@ function onDelete(id: string, e: MouseEvent) {
   void store.deleteSession(id);
 }
 
-function onNew() {
-  void store.createNewSession();
+/** Coarse relative-time formatter. Buckets by age to keep the label
+ *  short and glanceable (line 2 of a two-line card). Anything
+ *  ≥ 7 days falls back to a localized date. */
+function formatTime(iso: string): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const diff = Date.now() - t;
+  const min = 60 * 1000;
+  const hr = 60 * min;
+  const day = 24 * hr;
+  if (diff < min) return "刚刚";
+  if (diff < hr) return `${Math.floor(diff / min)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hr)} 小时前`;
+  if (diff < 2 * day) return "昨天";
+  if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
+  const d = new Date(t);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${dd}`;
 }
 </script>
 
 <template>
-  <div class="sidebar-list">
-    <div class="sidebar-list__header">
-      <span class="sidebar-list__title">Sessions</span>
-    </div>
-    <button class="sidebar-list__new" @click="onNew">+ 新对话</button>
-    <ul class="sidebar-list__items">
-      <li
-        v-for="s in visibleSessions"
-        :key="s.id"
-        :class="[
-          'session-item',
-          { 'session-item--active': s.id === store.currentSessionId },
-        ]"
-        @click="onClick(s.id)"
-      >
-        <div class="session-item__main">
-          <div class="session-item__title">{{ s.title }}</div>
-          <div v-if="s.preview" class="session-item__preview">{{ s.preview }}</div>
+  <ul class="session-list">
+    <li
+      v-for="s in visibleSessions"
+      :key="s.id"
+      :class="['session-item', { 'session-item--active': s.id === store.currentSessionId }]"
+      @click="onClick(s.id)"
+    >
+      <div class="session-item__main">
+        <div class="session-item__title-row">
+          <span class="session-item__title">{{ s.title }}</span>
         </div>
-        <button
-          class="session-item__delete"
-          title="删除"
-          @click="(e) => onDelete(s.id, e)"
-        >×</button>
-      </li>
-      <li v-if="store.sessions.length === 0" class="session-empty">
-        还没有对话，点上方按钮开始
-      </li>
-      <li v-else-if="hiddenCount > 0" class="session-more">
-        <button class="session-more__btn" @click="expanded = true">
-          查看更早的 {{ hiddenCount }} 个
-        </button>
-      </li>
-      <li v-else-if="expanded && store.sessions.length > DEFAULT_VISIBLE" class="session-more">
-        <button class="session-more__btn" @click="expanded = false">
-          收起
-        </button>
-      </li>
-    </ul>
-  </div>
+        <div class="session-item__meta">
+          <span class="session-item__project">{{ projectNameFor(s) }}</span>
+          <span v-if="formatTime(s.updated_at)" class="session-item__sep">·</span>
+          <span v-if="formatTime(s.updated_at)" class="session-item__time">
+            {{ formatTime(s.updated_at) }}
+          </span>
+        </div>
+      </div>
+      <span class="session-item__dot" aria-hidden="true" />
+      <button
+        class="session-item__delete"
+        title="删除"
+        aria-label="删除会话"
+        @click="(e) => onDelete(s.id, e)"
+      >
+        <Icon name="x" :size="12" />
+      </button>
+    </li>
+    <li v-if="store.sessions.length === 0" class="session-empty">
+      还没有对话,点上方 + 开始
+    </li>
+    <li v-else-if="hiddenCount > 0" class="session-more">
+      <button class="session-more__btn" @click="expanded = true">
+        查看更早的 {{ hiddenCount }} 个
+      </button>
+    </li>
+    <li v-else-if="expanded && store.sessions.length > DEFAULT_VISIBLE" class="session-more">
+      <button class="session-more__btn" @click="expanded = false">
+        收起
+      </button>
+    </li>
+  </ul>
 </template>
 
 <style scoped>
-.sidebar-list {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.sidebar-list__header {
-  padding: 14px 16px 8px;
-}
-
-.sidebar-list__title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6b7280;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.sidebar-list__new {
-  margin: 0 12px 8px;
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #1f2328;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s;
-  font-family: inherit;
-}
-
-.sidebar-list__new:hover {
-  background: #f9fafb;
-  border-color: #9ca3af;
-}
-
-.sidebar-list__items {
+.session-list {
   list-style: none;
   margin: 0;
   padding: 0 8px 8px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .session-item {
   display: flex;
   align-items: flex-start;
-  gap: 4px;
+  gap: 8px;
   padding: 8px 10px;
-  margin-bottom: 2px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.1s;
+  border-left: 2px solid transparent;
+  min-width: 0;
 }
 
 .session-item:hover {
-  background: #e5e7eb;
+  background: var(--color-bg-elevated);
 }
 
 .session-item--active {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
+  background: var(--color-accent-muted);
+  border-left-color: var(--color-accent);
 }
 
 .session-item--active:hover {
-  background: #ffffff;
+  background: var(--color-accent-muted);
 }
 
 .session-item__main {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-item__title-row {
+  display: flex;
+  align-items: center;
   min-width: 0;
 }
 
 .session-item__title {
   font-size: 13px;
   font-weight: 500;
-  color: #1f2328;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
-.session-item__preview {
+.session-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
-  color: #6b7280;
-  margin-top: 2px;
+  color: var(--color-text-muted);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-item__project {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
+}
+
+.session-item__sep {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.session-item__time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-item__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-tool-write);
+  margin-top: 6px;
+  order: -1;
+}
+
+.session-item--active .session-item__dot {
+  background: var(--color-accent);
 }
 
 .session-item__delete {
@@ -197,9 +241,10 @@ function onNew() {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #9ca3af;
-  font-size: 16px;
-  line-height: 1;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   opacity: 0;
   transition: all 0.1s;
@@ -207,19 +252,20 @@ function onNew() {
   font-family: inherit;
 }
 
-.session-item:hover .session-item__delete {
+.session-item:hover .session-item__delete,
+.session-item--active .session-item__delete {
   opacity: 1;
 }
 
 .session-item__delete:hover {
-  background: #fca5a5;
+  background: var(--color-tool-error);
   color: #ffffff;
 }
 
 .session-empty {
   padding: 16px 12px;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--color-text-muted);
   text-align: center;
 }
 
@@ -231,10 +277,10 @@ function onNew() {
 .session-more__btn {
   width: 100%;
   background: transparent;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--color-bg-border);
   border-radius: 6px;
   padding: 6px 8px;
-  color: #6b7280;
+  color: var(--color-text-secondary);
   font-size: 12px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s, border-color 0.1s;
@@ -242,8 +288,8 @@ function onNew() {
 }
 
 .session-more__btn:hover {
-  background: #f3f4f6;
-  color: #1f2328;
-  border-color: #d1d5db;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
 }
 </style>

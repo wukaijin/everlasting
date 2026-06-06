@@ -1,10 +1,11 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
+import { simplifyPath } from "../utils/path";
 
 type Role = "user" | "assistant";
 type ErrorCategory =
@@ -218,6 +219,20 @@ export const useChatStore = defineStore("chat", () => {
   const streamingSessionId = ref<string | null>(null);
   const lastStreamedProjectId = ref<string | null>(null);
   const streamingProjectIds = ref<Set<string>>(new Set());
+
+  // PR3 (BACKLOG §5.1): the chat panel header should display the
+  // cwd with the user's home prefix shortened to `~`. The
+  // `simplifyPath` helper is a pure function over
+  // `currentCwd` + `configStore.homeDir`; the computed is reactive
+  // so when the home-dir cache finishes loading after the chat
+  // store is first read, the UI re-renders without extra wiring.
+  // PR1 consumes this in `ChatPanel.vue`; PR3 (this) only prepares
+  // the data. Note: `configStore` is captured lazily — the
+  // `computed` callback only runs on first `.value` access, by
+  // which time the line below has been initialized.
+  const simplifiedCwd = computed<string>(() =>
+    simplifyPath(currentCwd.value, configStore.homeDir),
+  );
 
   // -----------------------------------------------------------------------
   // Cross-store coordination: react to project changes
@@ -766,6 +781,30 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** PR5: cancel an in-flight chat request. The backend's agent
+   *  loop notices on the next event boundary, bails out, persists
+   *  whatever it has, and emits a `done` event with
+   *  `stop_reason: "cancelled"`. The existing `handleChatEvent` for
+   *  `done` then resets `sending` / `currentRequestId` and clears
+   *  the streaming session — so this call only needs to fire the
+   *  IPC; it should NOT clear local state synchronously, or the
+   *  follow-up `done` event would be ignored as "stale" (see
+   *  `shouldApplyEvent`). */
+  async function cancel() {
+    const rid = currentRequestId.value;
+    if (!rid) return;
+    try {
+      await invoke("cancel_chat", { requestId: rid });
+    } catch (e) {
+      // A failed cancel is logged but not user-facing — the user
+      // already saw the Stop button and clicked it. The natural
+      // fallback is: the stream finishes on its own (or the next
+      // event errors out), and the existing `done` / `error` path
+      // resets state.
+      console.error("cancel_chat failed:", e);
+    }
+  }
+
   /** Cleanup all listeners (for future teardown). */
   function cleanup() {
     unlistenChat?.();
@@ -783,8 +822,13 @@ export const useChatStore = defineStore("chat", () => {
     sessions,
     currentSessionId,
     currentCwd,
+    // PR3: reactive view of `currentCwd` with the home-dir prefix
+    // shortened to `~`. Exposed so `ChatPanel.vue` (PR1) can render
+    // the simplified form in the header chip.
+    simplifiedCwd,
     streamingProjectIds,
     send,
+    cancel,
     loadSessions,
     createNewSession,
     switchSession,

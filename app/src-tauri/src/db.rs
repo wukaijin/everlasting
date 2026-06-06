@@ -210,6 +210,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- PR2 ALTERs: add is_git_repo + git_branch to projects.
+    //  `is_git_repo` already exists on freshly created tables (see
+    //  CREATE TABLE above) so the idempotent probe is a no-op for
+    //  greenfield DBs. Older pre-3b-1 databases may have a
+    //  `projects` table without these columns; the probe + ALTER
+    //  brings them up to date. ---
+    add_project_column_if_missing(pool, "is_git_repo", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_project_column_if_missing(pool, "git_branch", "TEXT").await?;
+
     // --- messages ---
     sqlx::query(
         r#"
@@ -247,8 +256,8 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO projects
-            (id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata)
-        VALUES (?, ?, ?, 0, 1, ?, ?, 0, NULL)
+            (id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata)
+        VALUES (?, ?, ?, 0, NULL, 1, ?, ?, 0, NULL)
         "#,
     )
     .bind(DEFAULT_PROJECT_ID)
@@ -302,6 +311,26 @@ async fn add_session_column_if_missing(
     Ok(())
 }
 
+/// Add a column to `projects` if it doesn't already exist. Mirrors
+/// [`add_session_column_if_missing`].
+async fn add_project_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!("ALTER TABLE projects ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
 /// `std::env::home_dir` was removed; this is the cross-platform
 /// fallback. If the env vars are unset we fall back to "." so the
 /// legacy row has *some* path (it'll be wrong, but the row will
@@ -323,6 +352,7 @@ pub async fn create_project(
     name: &str,
     path: &str,
     is_git_repo: bool,
+    git_branch: Option<String>,
 ) -> Result<ProjectRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
@@ -330,14 +360,15 @@ pub async fn create_project(
     let res = sqlx::query(
         r#"
         INSERT INTO projects
-            (id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata)
-        VALUES (?, ?, ?, ?, 0, ?, ?, 0, NULL)
+            (id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata)
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?, 0, NULL)
         "#,
     )
     .bind(&id)
     .bind(name)
     .bind(path)
     .bind(is_git_repo as i64)
+    .bind(git_branch.as_deref())
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -349,6 +380,7 @@ pub async fn create_project(
             name: name.to_string(),
             path: path.to_string(),
             is_git_repo,
+            git_branch,
             is_legacy: false,
             created_at: now.clone(),
             updated_at: now,
@@ -373,7 +405,7 @@ pub async fn list_projects(
     let rows = if include_hidden {
         sqlx::query(
             r#"
-            SELECT id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata
+            SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
             FROM projects
             ORDER BY created_at ASC
             "#,
@@ -383,7 +415,7 @@ pub async fn list_projects(
     } else {
         sqlx::query(
             r#"
-            SELECT id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata
+            SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
             FROM projects
             WHERE hidden = 0
             ORDER BY created_at ASC
@@ -401,7 +433,7 @@ pub async fn list_projects(
 pub async fn list_hidden_projects(pool: &SqlitePool) -> Result<Vec<ProjectRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
-        SELECT id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata
+        SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
         FROM projects
         WHERE hidden = 1
         ORDER BY updated_at DESC
@@ -419,7 +451,7 @@ pub async fn get_project(
 ) -> Result<Option<ProjectRow>, sqlx::Error> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, path, is_git_repo, is_legacy, created_at, updated_at, hidden, metadata
+        SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
         FROM projects
         WHERE id = ?
         "#,
@@ -430,24 +462,27 @@ pub async fn get_project(
     row.map(row_to_project).transpose()
 }
 
-/// Change a project's `path` (re-probing is_git_repo is the caller's
-/// responsibility — see `projects::store::update_project_path`).
+/// Change a project's `path` (re-probing `is_git_repo` and
+/// `git_branch` is the caller's responsibility — see
+/// `projects::store::update_project_path`).
 pub async fn update_project_path(
     pool: &SqlitePool,
     project_id: &str,
     new_path: &str,
     is_git_repo: bool,
+    git_branch: Option<String>,
 ) -> Result<ProjectRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let res = sqlx::query(
         r#"
         UPDATE projects
-        SET path = ?, is_git_repo = ?, updated_at = ?
+        SET path = ?, is_git_repo = ?, git_branch = ?, updated_at = ?
         WHERE id = ?
         "#,
     )
     .bind(new_path)
     .bind(is_git_repo as i64)
+    .bind(git_branch.as_deref())
     .bind(&now)
     .bind(project_id)
     .execute(pool)
@@ -522,6 +557,7 @@ fn row_to_project(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow, sqlx::Error>
         name: r.try_get("name")?,
         path: r.try_get("path")?,
         is_git_repo: r.try_get::<i64, _>("is_git_repo")? != 0,
+        git_branch: r.try_get("git_branch")?,
         is_legacy: r.try_get::<i64, _>("is_legacy")? != 0,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
@@ -853,12 +889,12 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path_str = dir.to_str().unwrap();
 
-        let p1 = create_project(&pool, "a", path_str, false).await.unwrap();
+        let p1 = create_project(&pool, "a", path_str, false, None).await.unwrap();
         // Duplicate path → unique violation → Err.
-        let dup = create_project(&pool, "b", path_str, false).await;
+        let dup = create_project(&pool, "b", path_str, false, None).await;
         assert!(dup.is_err(), "duplicate path should fail");
 
-        let p2 = create_project(&pool, "c", "/tmp/everlasting_test_other", true)
+        let p2 = create_project(&pool, "c", "/tmp/everlasting_test_other", true, None)
             .await
             .unwrap();
         let list = list_projects(&pool, false).await.unwrap();
@@ -873,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn hide_and_unhide_project() {
         let pool = test_pool().await;
-        let p = create_project(&pool, "x", "/tmp/everlasting_test_hide", false)
+        let p = create_project(&pool, "x", "/tmp/everlasting_test_hide", false, None)
             .await
             .unwrap();
 
@@ -891,7 +927,7 @@ mod tests {
     #[tokio::test]
     async fn update_project_name_works() {
         let pool = test_pool().await;
-        let p = create_project(&pool, "old", "/tmp/everlasting_test_rename", false)
+        let p = create_project(&pool, "old", "/tmp/everlasting_test_rename", false, None)
             .await
             .unwrap();
         let p2 = update_project_name(&pool, &p.id, "new").await.unwrap();
@@ -903,22 +939,95 @@ mod tests {
     #[tokio::test]
     async fn update_project_path_reprobes_git_flag() {
         let pool = test_pool().await;
-        let p = create_project(&pool, "p", "/tmp/everlasting_test_repath", false)
+        let p = create_project(&pool, "p", "/tmp/everlasting_test_repath", false, None)
             .await
             .unwrap();
         assert!(!p.is_git_repo);
+        assert!(p.git_branch.is_none());
 
-        let p2 = update_project_path(&pool, &p.id, "/tmp/everlasting_test_repath2", true)
-            .await
-            .unwrap();
+        let p2 =
+            update_project_path(&pool, &p.id, "/tmp/everlasting_test_repath2", true, None)
+                .await
+                .unwrap();
         assert!(p2.is_git_repo);
         assert_eq!(p2.path, "/tmp/everlasting_test_repath2");
     }
 
     #[tokio::test]
+    async fn create_project_persists_git_branch() {
+        let pool = test_pool().await;
+        // Branch string survives a round-trip through the DB; the
+        // detached-HEAD literal "HEAD" is also accepted.
+        let p = create_project(
+            &pool,
+            "branchy",
+            "/tmp/everlasting_test_branch",
+            true,
+            Some("feature/pr2".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.git_branch.as_deref(), Some("feature/pr2"));
+
+        let reloaded = get_project(&pool, &p.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.git_branch.as_deref(), Some("feature/pr2"));
+
+        let detached = create_project(
+            &pool,
+            "detached",
+            "/tmp/everlasting_test_detached",
+            true,
+            Some("HEAD".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detached.git_branch.as_deref(), Some("HEAD"));
+    }
+
+    #[tokio::test]
+    async fn update_project_path_reprobes_git_branch() {
+        let pool = test_pool().await;
+        let p = create_project(
+            &pool,
+            "rebranch",
+            "/tmp/everlasting_test_rebranch",
+            true,
+            Some("main".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.git_branch.as_deref(), Some("main"));
+
+        // Re-probe with a different branch.
+        let p2 = update_project_path(
+            &pool,
+            &p.id,
+            "/tmp/everlasting_test_rebranch2",
+            true,
+            Some("develop".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(p2.git_branch.as_deref(), Some("develop"));
+
+        // Re-probe to a non-git path → branch cleared.
+        let p3 = update_project_path(
+            &pool,
+            &p.id,
+            "/tmp/everlasting_test_rebranch3",
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!p3.is_git_repo);
+        assert!(p3.git_branch.is_none());
+    }
+
+    #[tokio::test]
     async fn create_session_scopes_to_project() {
         let pool = test_pool().await;
-        let p = create_project(&pool, "p", "/tmp/everlasting_test_session_proj", false)
+        let p = create_project(&pool, "p", "/tmp/everlasting_test_session_proj", false, None)
             .await
             .unwrap();
 

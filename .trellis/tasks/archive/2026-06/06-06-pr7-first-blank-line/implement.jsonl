@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "总览;确认 MessageItem.vue 在 chat 组件分层中的位置,以及与 MessageList.vue 的渲染契约"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR7 唯一动到的 Vue 文件是 MessageItem.vue;改 template (text vs v-html) + scoped CSS 前必读该指南"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "纯文本→trim 或 CSS padding 调整的取舍边界;style 改动需符合项目的 CSS 变量/可访问性约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "如果根因落在 chat.ts (LLM 文本含 \\n 前缀) 而非 CSS,改 store 时 type 必须收紧"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "PR7 对应的 spike 第 5 条原文;根因排查结果要回填到本文件或 commit message"}

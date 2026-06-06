@@ -1,15 +1,43 @@
-:root {
-  font-family: "Noto Sans CJK SC", "Noto Sans CJK", "PingFang SC",
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------------- *
+ * Dark theme tokens (Prussian blue palette per spike-003 + research/...)    *
+ * ------------------------------------------------------------------------- */
+@theme {
+  /* Background layers */
+  --color-bg-app: #0A0E14;
+  --color-bg-surface: #131822;
+  --color-bg-elevated: #1A2030;
+  --color-bg-border: #1E2530;
+
+  /* Text colors */
+  --color-text-primary: #E5E7EB;
+  --color-text-secondary: #8B95A7;
+  --color-text-muted: #64748B;
+
+  /* Accent (modern Prussian blue) */
+  --color-accent: #3B5BDB;
+  --color-accent-hover: #4263EB;
+  --color-accent-muted: #1E2A5E;
+
+  /* Tool type colors (left bar on tool cards) */
+  --color-tool-read: #06B6D4;     /* cyan - read_file */
+  --color-tool-write: #10B981;    /* emerald - write_file */
+  --color-tool-shell: #F59E0B;    /* amber - shell */
+  --color-tool-error: #EF4444;    /* red - errors */
+  --color-tool-thinking: #A78BFA; /* violet - extended thinking blocks */
+
+  /* Font stacks */
+  --font-sans: "Noto Sans CJK SC", "Noto Sans CJK", "PingFang SC",
     "Microsoft YaHei", "WenQuanYi Zen Hei", system-ui, -apple-system,
     "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.55;
-  color: #1f2328;
-  background: #ffffff;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
+    Consolas, "Liberation Mono", monospace;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Global resets (preserve from original style.css)                          *
+ * ------------------------------------------------------------------------- */
 html,
 body,
 #app {
@@ -26,4 +54,15 @@ button {
 input,
 textarea {
   font: inherit;
+}
+
+/* Dark theme baseline (applies everywhere; per PRD: dark only, reserve light extension) */
+:root {
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

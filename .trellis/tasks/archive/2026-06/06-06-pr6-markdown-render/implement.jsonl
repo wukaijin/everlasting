@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "MessageItem.vue 改 template (text vs v-html) + scoped CSS 必读, 重点确认 :deep() selector 跟 v-html 配合的规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "v-html 必须配 sanitization (XSS 防护) 的硬性要求; 测试要求 (本 PR 顺手开 vitest 基础)"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "renderMarkdown 工具函数 + 50ms debounce ref 状态机, 类型必须严格 (string 进出)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "总览 utils/ 目录约定; markdown.ts 落 utils/ 而非 components/chat/ 是因为跨项目复用可能性 + 单元测试便利"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/research/markdown-library.md", "reason": "父 task 的 research 已实测三库 + DOMPurify 防护能力, PR6 实施时直接套用结论"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #5 剩余部分 (markdown 渲染 + margin-top) 的根因与 PR6 改动的来源"}
+{"file": "docs/BACKLOG.md", "reason": "§5 generative UI 的 code_block 高亮本 v1 不集成; Phase 1 必做 4 种 (button/selector/diff/code_block) 暂未做, 避免 scope creep"}

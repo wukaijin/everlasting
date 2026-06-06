@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance: pnpm build + pnpm test (PR6/3 regression) 双过"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "acceptance: ChatPanel.vue header 改动符合组件规范 (scoped CSS / 变量)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "acceptance: simplifiedCwd reactive 行为正确, homeDir 后加载自动重算"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: spike #1 + #2a/2b 标 [RESOLVED]"}

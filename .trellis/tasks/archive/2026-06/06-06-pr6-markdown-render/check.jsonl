@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance check: pnpm test 全过, XSS fixture 留痕, type-check pass"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "acceptance check: MessageItem.vue template + CSS 改动符合组件规范 (v-html + :deep() 正确用法)"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "acceptance check: renderMarkdown 函数类型严格, debounce ref 不漏类型"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/research/markdown-library.md", "reason": "acceptance check: marked v18 + DOMPurify 选型一致, lockfile 锁版本"}
+{"file": "docs/HACKING-markdown.md", "reason": "acceptance check: 本 PR 新建的 HACKING 文档记录 marked v18 sanitize 陷阱 + XSS fixture 列表"}

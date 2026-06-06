@@ -1,0 +1,14 @@
+{"file": "research/tailwind-v3-vs-v4.md", "reason": "D2 阶段实施 Tailwind v4 + @tailwindcss/vite 插件时需要查阅：v4 CSS-first @theme 语法、@tailwindcss/vite 配置、与 Vue 3 scoped <style> 共存策略"}
+{"file": "research/tauri-titlebar-patterns.md", "reason": "D1 + D4 阶段实施自定义顶栏时需要查阅：tauri.conf.json 关键字段（titleBarStyle / decorations / trafficLightPosition）、capabilities 权限、跨平台 drag region 实现细节、WSLg 风险"}
+{"file": "spec/frontend/component-guidelines.md", "reason": "D3 阶段拆分组件时需要遵守的组件模式约束（虽然模板空，但 SPEC 索引）"}
+{"file": "spec/frontend/state-management.md", "reason": "D3 阶段拆分组件时不能破坏 ChatMessage 数据模型；tool_calls / thinkingBlocks / redactedThinkingData 字段必须正确传递"}
+{"file": "spec/frontend/directory-structure.md", "reason": "D3 阶段新增 8-10 个子组件，需要决定目录结构（建议 layout/ 和 chat/ 子目录）"}
+{"file": "spec/frontend/quality-guidelines.md", "reason": "D3 阶段组件代码质量约束（forbidden patterns、code review checklist）"}
+{"file": "spec/frontend/type-safety.md", "reason": "D3 阶段组件 props 类型 + D4 阶段 TitleBar 与 getCurrentWindow() 交互的类型约束"}
+{"file": "spec/backend/llm-contract.md", "reason": "D3 阶段 MessageItem 渲染时需要正确处理 wire format blocks；不能破坏 thinking → text → tool_use 顺序"}
+{"file": "docs/spikes/003-ui-reference-prompts.md", "reason": "D2 + D3 阶段视觉对照的 spec：10 个设计决策 + 14 个色板 token + 3 段提示词"}
+{"file": "docs/spikes/ui-A.png", "reason": "D3 阶段 ChatPanel / MessageList / MessageItem / ToolCallCard 视觉对照的主参考图"}
+{"file": "docs/spikes/ui-B-1.png", "reason": "本次 out of scope（ProjectPickerDialog 留 3b-2），但 D3 阶段 Sidebar 视觉风格可借鉴"}
+{"file": "docs/spikes/ui-B-2.png", "reason": "本次 out of scope（PermissionDialog 留 step 5），但 ToolCallCard 风险等级标签的视觉语言可借鉴"}
+{"file": "docs/HACKING-wsl.md", "reason": "D0 + D1 + D4 阶段 WSL 环境下 Tauri / Cargo / pnpm 已知坑"}
+{"file": "docs/HACKING-llm.md", "reason": "D1 阶段 cargo check / 编译环境注意事项（与 LLM 客户端兼容性，非本次改动但需保证不破坏）"}
