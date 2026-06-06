@@ -348,3 +348,36 @@ P2 实施。ChatPanel header padding 14→6px + title font 15→13px + title-row
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: spike-005 PR4: write_file 加 tracing::debug 诊断偶发失败
+
+**Date**: 2026-06-06
+**Task**: spike-005 PR4: write_file 加 tracing::debug 诊断偶发失败
+**Branch**: `refactor/ui-dark-theme-tailwind`
+
+### Summary
+
+P2 实施。write_file.rs 加 5 个 tracing::debug! 调用 (1 入口 raw_path/content_len/is_existing + 4 失败点 path-rejected x2 / create_dir_all / tokio::fs::write), 业务逻辑零变化, 6 个 write_file test 仍 pass, 默认 info 级别不输出需 RUST_LOG=debug 启用。98 cargo + 24 vitest 全过, 无 Cargo.toml 变更。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ae1a71179f85b1c25c03580339bac208b48a7893` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
