@@ -14,6 +14,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Project as returned over Tauri IPC. Mirrors `projects::ProjectRow`
  *  in Rust. Field names are snake_case to match the Rust serialization
@@ -44,6 +45,13 @@ export interface ToastMessage {
 }
 
 let toastTimer: number | null = null;
+
+// Module-level handle for the `projects:refreshed` listener. Set
+// once on the first `loadProjects()` call and never re-registered
+// (the Pinia store is a singleton for the app's lifetime, so we
+// don't need to unregister on store disposal). Mirrors the
+// `unlistenChat` pattern in `chat.ts`.
+let unlistenRefresh: UnlistenFn | null = null;
 
 export const useProjectsStore = defineStore("projects", () => {
   // -----------------------------------------------------------------------
@@ -87,9 +95,43 @@ export const useProjectsStore = defineStore("projects", () => {
   // -----------------------------------------------------------------------
 
   async function loadProjects(): Promise<void> {
+    // Idempotent: register the `projects:refreshed` listener on the
+    // first load so the startup backfill (PR2 follow-up) can poke
+    // us once it has written the re-probed git metadata into the
+    // DB. The Rust side only emits this event when at least one
+    // project was updated, so users with no stale projects see no
+    // extra IPC traffic. See
+    // `.trellis/tasks/06-06-pr2-backfill-fix/prd.md`.
+    await ensureRefreshListener();
     projects.value = await invoke<ProjectInfo[]>("list_projects", {
       filter: { hidden: false },
     });
+  }
+
+  /** Register the `projects:refreshed` listener exactly once. The
+   *  backend (lib.rs::AppState::load) spawns a backfill task on
+   *  startup that re-probes git metadata for pre-PR2 project
+   *  rows; when it finishes it emits this event with the number
+   *  of updated rows as the payload. We respond by reloading the
+   *  visible project list so the chat panel's git chip picks up
+   *  the real branch name without the user having to switch
+   *  tabs. */
+  async function ensureRefreshListener(): Promise<void> {
+    if (unlistenRefresh !== null) return;
+    try {
+      unlistenRefresh = await listen<number>("projects:refreshed", () => {
+        // The payload is the number of updated rows, which the UI
+        // does not need to display; the only useful side effect is
+        // a fresh load so the chip renders the new branch.
+        void loadProjects();
+      });
+    } catch (e) {
+      // `listen` failing at startup would be a Tauri runtime
+      // problem, not a data problem — log so it's visible in
+      // devtools but don't crash the store.
+      // eslint-disable-next-line no-console
+      console.error("ensureRefreshListener failed:", e);
+    }
   }
 
   async function loadHiddenProjects(): Promise<void> {

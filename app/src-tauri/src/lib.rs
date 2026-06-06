@@ -95,6 +95,46 @@ impl AppState {
             .expect("failed to run migrations");
         tracing::info!(db_path = %db_path.display(), "sqlite ready");
 
+        // Startup batch backfill of pre-PR2 project rows. PR2
+        // (commit 8f25b7f) added `is_git_repo` / `git_branch` to the
+        // `projects` table; projects created before that migration
+        // have `is_git_repo=0, git_branch=NULL` and the UI's chip
+        // falls back to the literal string "git", defeating the
+        // spike #2c requirement of "display the real branch".
+        //
+        // The fix: spawn a fire-and-forget task that re-probes the
+        // git status of every stale project, writes the result, and
+        // emits a Tauri event so the frontend can refresh its
+        // in-memory list. The spawn happens AFTER migrations run
+        // and is `tauri::async_runtime::spawn`-based (matches the
+        // pattern used by the `chat` command at lib.rs:366), so
+        // `AppState::load` returns immediately and chat panel
+        // loading is not blocked. On error we `tracing::warn!` and
+        // let the next startup retry. See
+        // `.trellis/tasks/06-06-pr2-backfill-fix/prd.md` for the
+        // locked decision and the deferred "real-time git refresh"
+        // v2 candidates.
+        let backfill_pool = db.clone();
+        let backfill_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            match projects::store::batch_reprobe_git_metadata(&backfill_pool).await {
+                Ok(updated) => {
+                    if updated > 0 {
+                        if let Err(e) = backfill_app.emit("projects:refreshed", updated) {
+                            tracing::warn!(
+                                error = %e,
+                                updated,
+                                "emit projects:refreshed failed"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "git metadata backfill failed");
+                }
+            }
+        });
+
         Self {
             config,
             tools,

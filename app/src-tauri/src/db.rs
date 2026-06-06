@@ -499,6 +499,67 @@ pub async fn update_project_path(
     }
 }
 
+/// List projects whose `is_git_repo` is `0` — i.e. projects that
+/// were created before the PR2 migration (which adds
+/// `is_git_repo` / `git_branch`) and have never been re-probed, or
+/// projects whose original probe failed. Sorted by `created_at ASC`
+/// for stable test ordering.
+///
+/// Hidden projects are excluded from the backfill: they're not shown
+/// in the Tab bar (which is the surface that would expose the bug),
+/// and a user who explicitly hid a project is signaling that they
+/// don't want proactive work on it. If they unhide later, the chip
+/// will still show "git" until the next `update_project_path` call,
+/// but that case is rare and acceptable.
+///
+/// Used by the startup backfill task — see
+/// `projects::store::batch_reprobe_git_metadata` and the spawn in
+/// `lib.rs::AppState::load`.
+pub async fn list_projects_with_stale_git_probe(
+    pool: &SqlitePool,
+) -> Result<Vec<ProjectRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, name, path, is_git_repo, git_branch, is_legacy, created_at, updated_at, hidden, metadata
+        FROM projects
+        WHERE is_git_repo = 0 AND hidden = 0
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter().map(row_to_project).collect()
+}
+
+/// Update a project's `is_git_repo` and `git_branch`. Used by the
+/// startup batch backfill to write re-probed git metadata without
+/// touching the other columns (name / path / hidden / etc.).
+///
+/// `git_branch` is `None` for non-git repos; the literal string
+/// `"HEAD"` is allowed through for detached-HEAD repos.
+pub async fn update_project_git_metadata(
+    pool: &SqlitePool,
+    project_id: &str,
+    is_git_repo: bool,
+    git_branch: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE projects
+        SET is_git_repo = ?, git_branch = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(is_git_repo as i64)
+    .bind(git_branch)
+    .bind(&now)
+    .bind(project_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Change a project's `name`.
 pub async fn update_project_name(
     pool: &SqlitePool,
@@ -951,6 +1012,67 @@ mod tests {
                 .unwrap();
         assert!(p2.is_git_repo);
         assert_eq!(p2.path, "/tmp/everlasting_test_repath2");
+    }
+
+    #[tokio::test]
+    async fn list_projects_with_stale_git_probe_filters_correctly() {
+        // Pre-PR2 row: should appear.
+        let pool = test_pool().await;
+        let p_stale =
+            create_project(&pool, "stale", "/tmp/everlasting_test_stale", false, None)
+                .await
+                .unwrap();
+        assert!(!p_stale.is_git_repo);
+
+        // Already-probed row: should NOT appear.
+        let p_fresh = create_project(
+            &pool,
+            "fresh",
+            "/tmp/everlasting_test_fresh",
+            true,
+            Some("main".to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(p_fresh.is_git_repo);
+
+        // Hidden stale row: should NOT appear (we skip hidden
+        // projects — see the function's docstring).
+        let p_hidden =
+            create_project(&pool, "hidden", "/tmp/everlasting_test_hidden", false, None)
+                .await
+                .unwrap();
+        hide_project(&pool, &p_hidden.id).await.unwrap();
+
+        let stale = list_projects_with_stale_git_probe(&pool).await.unwrap();
+        let ids: Vec<&str> = stale.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&p_stale.id.as_str()));
+        assert!(!ids.contains(&p_fresh.id.as_str()));
+        assert!(!ids.contains(&p_hidden.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn update_project_git_metadata_round_trip() {
+        let pool = test_pool().await;
+        // Start from a non-git row, write git metadata, reload, verify.
+        let p = create_project(&pool, "p", "/tmp/everlasting_test_metaupd", false, None)
+            .await
+            .unwrap();
+        assert!(!p.is_git_repo);
+
+        update_project_git_metadata(&pool, &p.id, true, Some("feature/x"))
+            .await
+            .unwrap();
+        let reloaded = get_project(&pool, &p.id).await.unwrap().unwrap();
+        assert!(reloaded.is_git_repo);
+        assert_eq!(reloaded.git_branch.as_deref(), Some("feature/x"));
+
+        // Setting `git_branch = None` (e.g. for a non-git repo) is
+        // distinct from "empty string".
+        update_project_git_metadata(&pool, &p.id, false, None).await.unwrap();
+        let reloaded = get_project(&pool, &p.id).await.unwrap().unwrap();
+        assert!(!reloaded.is_git_repo);
+        assert!(reloaded.git_branch.is_none());
     }
 
     #[tokio::test]
