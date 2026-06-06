@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "list_projects_with_stale_git_probe 新查询复用现有 list_projects 模式, 必读 db 规范"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "batch_reprobe_git_metadata 放 projects/store.rs (跟 create/update_project_path 同一 orchestration 风格) 还是放独立 backfill module (决策点)"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing: 启动时 backfill 探测 N 个, 更新 M 个, 失败 warn 不 panic"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "cargo test fixture: 模拟老 row (is_git_repo=0) + 调 backfill + 验证变 is_git_repo=1 + git_branch=Some(...)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Tauri event 'projects:refreshed' 触发 loadProjects() 的 listener 写法, 跟 chat.ts:287 ensureListener 风格一致"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #2c 原始根因 (git branch 没显示) + 本 PR 修老项目 bug"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 prd PR2 段锁定的 lazy backfill 决策 (Decision 2) 在本 PR 推翻, 实施时需参照原锁定原因"}
+{"file": ".trellis/tasks/06-06-pr2-backfill-fix/prd.md", "reason": "本 PR 自己的 prd, 含 Future Work 段 (git 实时性 v2 候选 A/C/D), 实施时关注 out-of-scope 边界"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "acceptance: cargo test --lib 99+ passed (原 98 + 1 新 backfill test), 启动阻塞 < 1s"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "acceptance: tracing::info! 记录 backfill 进度, 失败 tracing::warn! 不 panic"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "acceptance: list_projects_with_stale_git_probe SQL 正确, 不影响其他查询"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance: pnpm build + pnpm test (PR6/3 regression) 双过, 24 vitest 仍全绿"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "acceptance: Tauri event listener 写法合规, cleanup on unmount"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: spike #2c 实测可标 [RESOLVED] (老项目重启后 chip 显示 branch)"}
+{"file": ".trellis/tasks/06-06-pr2-backfill-fix/prd.md", "reason": "acceptance: 父 prd 'Decision 2' 锁定推翻理由写入 commit message"}
