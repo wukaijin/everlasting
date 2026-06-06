@@ -106,3 +106,59 @@ future change to the DB schema must keep this invariant.
 The outbound payload order is: `thinking → redacted_thinking → text → tool_use → tool_result`.
 Anthropic validates this order strictly. See
 `backend/llm-contract.md` §4 / §7 for the constraint and a Wrong/Correct pair.
+
+---
+
+## Stream Controller Pattern (added 2026-06-07, PR 06-07-6-ui-bug-markdown-sse)
+
+For anything related to **in-flight SSE streams from the Rust agent loop**, the
+single source of truth is `useStreamControllerStore()` in
+`app/src/stores/streamController.ts` — NOT `useChatStore()`. The chat store
+is a thin facade that projects controller state for the UI to read.
+
+### Why a separate store
+
+The old design put messages, `streamingSessionId`, `currentRequestId`, and
+the SSE listener all inside `useChatStore()`. That broke the moment a user
+switched sessions mid-stream: the listener filtered events by
+`currentSessionId`, so `done` events for the now-non-current stream were
+dropped, leaving the red dot, the "stop" button, and `sending` all stuck.
+The streaming message itself was also lost when `switchSession` rehydrated
+the new session's messages and overwrote `messages.value`.
+
+### The split
+
+| Concern | Owns | API |
+|---|---|---|
+| Per-session message buffer | **streamController** | `messagesBySession: Map<sessionId, ChatMessage[]>` (LRU 20) |
+| Active in-flight requests | **streamController** | `activeRequests: Map<requestId, RequestState>` |
+| SSE listener registration | **streamController** (singleton) | `start()` / `stop()` in `App.vue` lifecycle |
+| `streamingSessionIds` / `streamingProjectIds` | **streamController** | `ComputedRef<Set<string>>` — UI subscribes |
+| Sessions list, currentSessionId, currentCwd | **chatStore** (UI state) | `sessions`, `currentSessionId`, `currentCwd`, `simplifiedCwd` |
+| Session CRUD (`createNewSession`, `switchSession`, `deleteSession`) | **chatStore** (delegates to controller) | wires UI → controller's `ensureLoaded` / `evict` |
+| Wire-format history construction (`toPayloadContent`) | **chatStore** (the only place that needs `ChatMessage` for outbound) | passed to `controller.startRequest` |
+
+### Rules of thumb for new code
+
+- **Never** register an SSE listener outside `streamController.start()`. One
+  global listener routes by `request_id` (not by current session) — that's
+  the whole point.
+- **Never** mutate `messagesBySession` directly from a component. Use
+  `chatStore.send()` (which calls `controller.startRequest` and pushes
+  user/assistant placeholders into the correct session's array) or
+  `controller.ensureLoaded(id)` for the DB-backed load path.
+- **Pin streaming sessions in the LRU.** `controller.startRequest` calls
+  `pinnedSessions.add(sessionId)`; `finalizeRequest` removes it. Don't
+  hand-evict a session whose `activeRequests` map has an entry for it.
+- **`isCurrentSessionStreaming` is per-session.** Use it for the chat
+  input's stop button. Use `streamController.streamingSessionIds` directly
+  for the sidebar (PR4) so non-current sessions can show their own
+  streaming indicator.
+
+### Reactive bridge caveat
+
+`streamController.streamingSessionIds` is a `ComputedRef<Set<string>>`.
+Pinia auto-unwraps refs on store-proxy access, so components read it as a
+plain `Set<string>` (no `.value`). The `Set` itself is recomputed on every
+`activeRequests` mutation; the `v-if` binding on the session card flips
+automatically. No manual triggers needed.
