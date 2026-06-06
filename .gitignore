@@ -41,6 +41,13 @@ desktop.ini
 .env.*.local
 .envrc.local
 
+# 本地开发临时目录(早期 pip install fonttools 测试残留,现改用 Node 工具链)
+.venv/
+scripts-tmp-node_modules/
+
+# 字体源文件(可从上游仓库重新下载,不需要纳入版本控制;subset 产物 woff2 已提交)
+app/src/assets/fonts/source/
+
 # 数据库 / 缓存(项目运行后会产生,不入库)
 *.db
 *.db-journal

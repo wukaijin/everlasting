@@ -20,6 +20,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [State Management](./state-management.md) | Local state, global state, server state | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [CJK Font Bundling](./cjk-fonts.md) | 跨平台中文字体打包规范 (HarmonyOS Sans SC 子集, 工具链, license 合规) | Filled (2026-06) |
 
 ---
 

@@ -1,3 +1,19 @@
+/* ------------------------------------------------------------------------- *
+ * HarmonyOS Sans SC — bundled Chinese UI font                                *
+ * 原始字体版权 © 2021 Huawei Device Co., Ltd.                                  *
+ * 详见 app/src/assets/fonts/HarmonyOSSansSC-Regular.subset.woff2 同目录的    *
+ * LICENSE.txt (HarmonyOS Sans Fonts License Agreement)                       *
+ * 3500 常用字子集 + ASCII + 标点, woff2 472 KB                                 *
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: "HarmonyOS Sans SC";
+  src: url("./assets/fonts/HarmonyOSSansSC-Regular.subset.woff2")
+    format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------------- *
@@ -28,9 +44,10 @@
   --color-tool-thinking: #A78BFA; /* violet - extended thinking blocks */
 
   /* Font stacks */
-  --font-sans: "Noto Sans CJK SC", "Noto Sans CJK", "PingFang SC",
-    "Microsoft YaHei", "WenQuanYi Zen Hei", system-ui, -apple-system,
-    "Segoe UI", Roboto, sans-serif;
+  --font-sans: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Noto Sans CJK",
+    "WenQuanYi Zen Hei", system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
     Consolas, "Liberation Mono", monospace;
 }
@@ -61,8 +78,10 @@ textarea {
   background: var(--color-bg-app);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
