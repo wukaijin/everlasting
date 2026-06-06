@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "get_home_dir Tauri command 放在 lib.rs 还是单独 module (一般 Tauri 2 简单 command 放 lib.rs 顶部即可)"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Tauri command 写法约定 (#[tauri::command] + 注册 invoke_handler!); 简短 helper 是否需要 unit test"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "dirs::home_dir() 返回 Option<PathBuf>, 静默 None (sandbox 场景) 退化策略"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "utils/path.ts 新文件位置, stores/config.ts 已有 homeDir 类似字段约定 (lastActiveProjectId 等)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "homeDir 缓存到 configStore 的合理性 + simplifiedCwd computed reactive 行为"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "simplifyPath 函数签名 (string | null 输入) 类型必须严格"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "spike #2d 原始需求 (header 右远端显示 pwd)"}
+{"file": "docs/BACKLOG.md", "reason": "§5.1 已知 follow-up, 决策路径 (30 行工作量) 已锁定, 实施直接套"}
+{"file": ".trellis/tasks/06-06-spike-005-follow-up/prd.md", "reason": "父 prd 锁定所有决策 (dirs crate / 暂不 Windows), 不再 brainstorm"}

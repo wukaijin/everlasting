@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "acceptance: cargo check pass, get_home_dir 注册到 invoke_handler!"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "acceptance: dirs::home_dir() None 场景下前端不报错, 退化为原 cwd"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "acceptance: pnpm build + pnpm test (PR6 regression) 双过"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "acceptance: simplifyPath 函数类型严格, null 输入安全"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "acceptance: simplifiedCwd computed reactive 行为正确 (homeDir 后加载自动重算)"}
+{"file": "docs/BACKLOG.md", "reason": "acceptance: BACKLOG §5.1 标 [DONE 2026-06-XX]"}
+{"file": "docs/spikes/2026-06-06-feature-requests.md", "reason": "acceptance: spike #2d 标 [RESOLVED] (注: PR1 实施后 chip 接入才完整 visible)"}
