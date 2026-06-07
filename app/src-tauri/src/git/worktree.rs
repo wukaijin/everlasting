@@ -130,6 +130,33 @@ pub fn create(
     //    not checkout an existing reference.
     let repo = Repository::open(project_path)?;
     let branch = branch_name(session_id);
+
+    // 4a. The CLI's `git worktree add <path> -b session/<id>`
+    //     creates the new branch on a per-prefix namespace under
+    //     `<commondir>/worktrees/session/<id>/`. The CLI version
+    //     implicitly creates the `session/` intermediate dir; the
+    //     libgit2 C API does NOT — calling `Repository::worktree`
+    //     with a slash-bearing name like `session/<id>` will fail
+    //     with "failed to make directory .../worktrees/session/...".
+    //     We mirror the CLI's behavior by creating the
+    //     intermediate dir ourselves.
+    let worktree_name = std::path::Path::new(&branch);
+    if let Some(intermediate_rel) = worktree_name.parent() {
+        if !intermediate_rel.as_os_str().is_empty() {
+            // `Repository::commondir` is infallible in git2 0.20
+            // and returns a `&Path` borrowed from the repo; copy
+            // it to an owned `PathBuf` so the borrow doesn't
+            // outlive the function (the `repo.worktree` call
+            // below would otherwise conflict).
+            let commondir: std::path::PathBuf = repo.commondir().to_path_buf();
+            let intermediate = commondir.join("worktrees").join(intermediate_rel);
+            std::fs::create_dir_all(&intermediate).map_err(|e| GitError::Io {
+                path: intermediate.display().to_string(),
+                source: e,
+            })?;
+        }
+    }
+
     repo.worktree(&branch, worktree_path, None)?;
 
     tracing::info!(
