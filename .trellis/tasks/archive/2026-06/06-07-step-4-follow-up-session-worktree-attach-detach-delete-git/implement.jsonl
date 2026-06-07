@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "db.rs 加 worktree_state / last_worktree_path 列 + 启动 migration,需对齐 SQLite / sqlx 模式 + idempotent ALTER + 测试惯例"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "7 个工具返回 JSON 加 cwd 字段(LLM 透明度);切 worktree 注入 system event 到 messages,需对齐 LLM contract 的 tool_result 格式与 message role 约定"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "新增 attach / detach 的边界检查(检 uncommitted),需对齐物理路径 canonicalize + component-wise prefix 比对;不破坏现有契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "三个新 Tauri command 的错误返回 + 边界检查的错误消息格式,需对齐 thiserror / anyhow 边界模式"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 / 修改 lib.rs / db.rs / git/* / tools/* 文件位置约定"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "destructive 路径 in-flight cancel + system event 注入 + check_clean 需要 tracing 写法一致"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat store 加 attachWorktree / detachWorktree / deleteWorktree actions + diffCache 失效 + isStreaming disable 逻辑,需对齐 streamController 模式"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "ChatPanel 头部三态 chip + 下拉重构 + 新增 DeleteWorktreeConfirm modal 组件"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "SessionRow / SessionSummary 加 worktree_state / last_worktree_path 字段类型 + DiffResult 等共享类型"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "复制按钮的 navigator.clipboard 封装可能用 composable"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新增 DeleteWorktreeConfirm.vue 位置"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "system event 注入到 messages 涉及前端 store / 后端 db / LLM context 三层数据流对齐"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 cancel_chat / load_session / read_guard 等 helper,避免重写"}

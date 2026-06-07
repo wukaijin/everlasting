@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust 端 cargo test / cargo check / 单元测试覆盖率 / warning 0 标准"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 vue-tsc --noEmit 0 errors / pnpm build / 类型严格 / a11y 标准"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "检查 ToolResult 加 cwd 后 LLM 能正确解析;system event role/content 符合 contract;切 worktree 后 messages 数组顺序正确"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "回归检查边界契约(attach / detach / delete 路径 + 7 工具不被破坏)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "检查 store 状态机在 4 种状态 × 3 个动作下的转换正确;isStreaming disable 行为;diffCache 失效"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查 system event 从后端 → db → store → LLM context 全链路一致性"}
