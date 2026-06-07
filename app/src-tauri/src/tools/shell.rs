@@ -4,7 +4,7 @@
 //! - The LLM may optionally pass a `working_directory` field. The
 //!   LLM-supplied value is **never trusted**: it is validated through
 //!   `projects::boundary::assert_within_root` against
-//!   `ctx.project_root` before being applied (评审 deepseek §4.1).
+//!   `ctx.worktree_path` before being applied (评审 deepseek §4.1).
 //! - If the LLM did not supply `working_directory`, the command runs
 //!   with `ctx.cwd` as its cwd.
 //! - The resolved cwd is **emitted** to the caller via a
@@ -116,7 +116,7 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .map(Path::new)
         .unwrap_or(&ctx.cwd);
-    let validated_cwd = match assert_within_root(&ctx.project_root, requested) {
+    let validated_cwd = match assert_within_root(&ctx.worktree_path, requested) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -313,7 +313,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }
@@ -376,7 +376,7 @@ mod tests {
         let (content, is_error, update) = execute(
             &serde_json::json!({
                 "command": "pwd",
-                "working_directory": ctx.project_root.join("sub").to_string_lossy(),
+                "working_directory": ctx.worktree_path.join("sub").to_string_lossy(),
             }),
             &ctx,
             None,
@@ -386,7 +386,7 @@ mod tests {
         let update_cwd = update.new_cwd.expect("update carries new cwd");
         assert_eq!(
             update_cwd,
-            ctx.project_root.join("sub").canonicalize().unwrap()
+            ctx.worktree_path.join("sub").canonicalize().unwrap()
         );
     }
 
@@ -422,7 +422,7 @@ mod tests {
             &serde_json::json!({
                 "command": "ls",
                 "working_directory": ctx
-                    .project_root
+                    .worktree_path
                     .join("nope")
                     .to_string_lossy()
                     .into_owned(),
@@ -443,7 +443,7 @@ mod tests {
     async fn execute_rejects_when_ctx_cwd_outside_root() {
         let tmp = tempdir().unwrap();
         let ctx = ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: PathBuf::from("/etc"),
         };
         let (msg, is_error, _) = execute(&serde_json::json!({"command": "pwd"}), &ctx, None).await;

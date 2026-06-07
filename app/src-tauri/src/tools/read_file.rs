@@ -4,7 +4,7 @@
 //! - The `path` parameter is resolved relative to `ctx.cwd` if it is
 //!   not absolute.
 //! - Once resolved to an absolute path, it must be inside
-//!   `ctx.project_root` — enforced by
+//!   `ctx.worktree_path` — enforced by
 //!   `projects::boundary::assert_within_root`.
 //! - Both the "is the path inside the project?" check and the
 //!   "does the file exist?" failure mode are returned to the LLM as
@@ -96,7 +96,7 @@ pub async fn execute(
     //    located inside the project root. This handles both
     //    "absolute path is outside" and "relative path resolves to
     //    outside (e.g. via ../../)" uniformly.
-    let validated = match assert_within_root(&ctx.project_root, &requested) {
+    let validated = match assert_within_root(&ctx.worktree_path, &requested) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -174,7 +174,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }

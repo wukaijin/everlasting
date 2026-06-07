@@ -73,7 +73,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             ctx.cwd.join(p)
         }
     };
-    let validated = match assert_within_root(&ctx.project_root, &requested) {
+    let validated = match assert_within_root(&ctx.worktree_path, &requested) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -160,7 +160,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }

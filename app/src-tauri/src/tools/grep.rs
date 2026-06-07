@@ -147,7 +147,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             ctx.cwd.join(p)
         }
     };
-    let validated_root = match assert_within_root(&ctx.project_root, &requested) {
+    let validated_root = match assert_within_root(&ctx.worktree_path, &requested) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -266,7 +266,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     //    human-friendly, we rewrite it back to a relative path
     //    against the project root.
     let formatted = if output_mode == OutputMode::Content {
-        rewrite_paths_to_relative(&capped, &validated_root, &ctx.project_root)
+        rewrite_paths_to_relative(&capped, &validated_root, &ctx.worktree_path)
     } else {
         capped
     };
@@ -312,18 +312,18 @@ fn cap_line_lengths(s: &str, cap: usize) -> String {
     out
 }
 
-/// Rewrite absolute paths in `text` to be relative to `project_root`,
+/// Rewrite absolute paths in `text` to be relative to `worktree_path`,
 /// so the LLM sees clean `src/foo.rs:42:...` style results.
-fn rewrite_paths_to_relative(text: &str, search_root: &Path, project_root: &Path) -> String {
+fn rewrite_paths_to_relative(text: &str, search_root: &Path, worktree_path: &Path) -> String {
     let search_str = search_root.to_string_lossy();
-    let project_str = project_root.to_string_lossy();
+    let project_str = worktree_path.to_string_lossy();
     let mut out = String::with_capacity(text.len());
     for (i, line) in text.lines().enumerate() {
         if i > 0 {
             out.push('\n');
         }
         if let Some(stripped) = line.strip_prefix(search_str.as_ref()) {
-            // search_root is typically a subdir of project_root;
+            // search_root is typically a subdir of worktree_path;
             // keep the relative-from-search form.
             out.push_str(stripped.trim_start_matches('/'));
         } else if let Some(stripped) = line.strip_prefix(project_str.as_ref()) {
@@ -345,7 +345,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }

@@ -47,16 +47,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
 /// agent turn (in `lib.rs::chat`) from the active project / session
 /// state, then handed (immutably) to each tool call.
 ///
-/// - `project_root`: canonical absolute path of the active project
+/// - `worktree_path`: canonical absolute path of the active project
 ///   (resolved via `boundary::assert_within_root` at turn start).
 /// - `cwd`: canonical absolute path of the session's current working
 ///   directory. This is the cwd the agent "lives in" between shell
 ///   tool calls; LLM-supplied `working_directory` overrides are
-///   validated against `project_root` and, if accepted, returned
+///   validated against `worktree_path` and, if accepted, returned
 ///   through the [`ToolContextUpdate`] the shell tool can emit.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
-    pub project_root: PathBuf,
+    pub worktree_path: PathBuf,
     pub cwd: PathBuf,
 }
 

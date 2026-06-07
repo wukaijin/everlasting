@@ -81,7 +81,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             ctx.cwd.join(p)
         }
     };
-    let validated_root = match assert_within_root(&ctx.project_root, &requested) {
+    let validated_root = match assert_within_root(&ctx.worktree_path, &requested) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -146,7 +146,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             .and_then(|m| m.modified().ok());
         // Display path relative to the project root for the LLM.
         let rel = abs
-            .strip_prefix(&ctx.project_root)
+            .strip_prefix(&ctx.worktree_path)
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| abs.to_path_buf());
         if matches.len() >= MAX_RESULTS {
@@ -232,7 +232,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }

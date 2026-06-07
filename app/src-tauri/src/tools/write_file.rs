@@ -3,7 +3,7 @@
 //! Step 3b-1 changes:
 //! - Like `read_file`, the `path` is resolved relative to `ctx.cwd`
 //!   if it is not absolute, and the resolved absolute path must be
-//!   inside `ctx.project_root`.
+//!   inside `ctx.worktree_path`.
 //! - Parent directories are created on demand (preserved from step 2).
 //! - The boundary check happens **before** any directory creation so
 //!   the LLM cannot trick the tool into mkdir'ing outside the
@@ -88,12 +88,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     // prevent the user from ever creating a new file under a new
     // directory.
     let validated = if requested.exists() {
-        match assert_within_root(&ctx.project_root, &requested) {
+        match assert_within_root(&ctx.worktree_path, &requested) {
             Ok(p) => p,
             Err(e) => {
                 tracing::debug!(
                     raw_path = %raw_path,
-                    project_root = %ctx.project_root.display(),
+                    worktree_path = %ctx.worktree_path.display(),
                     error = %e,
                     "write_file path rejected: outside project root (existing target)"
                 );
@@ -124,12 +124,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
             tail.push(name.to_os_string());
             check = parent;
         }
-        let validated_parent = match assert_within_root(&ctx.project_root, check) {
+        let validated_parent = match assert_within_root(&ctx.worktree_path, check) {
             Ok(p) => p,
             Err(e) => {
                 tracing::debug!(
                     raw_path = %raw_path,
-                    project_root = %ctx.project_root.display(),
+                    worktree_path = %ctx.worktree_path.display(),
                     error = %e,
                     "write_file path rejected: outside project root (missing target)"
                 );
@@ -200,7 +200,7 @@ mod tests {
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
-            project_root: tmp.path().canonicalize().unwrap(),
+            worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
     }

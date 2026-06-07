@@ -697,19 +697,34 @@ async fn chat(
                 return;
             }
         };
-        let project_root = match projects::boundary::assert_within_root(
-            std::path::Path::new(&project.path),
-            std::path::Path::new(&project.path),
+        // The agent's sandbox root: this is the directory the
+        // boundary check is enforced against. For step 4 sessions
+        // (every new session) it is the per-session worktree path
+        // recorded in `sessions.worktree_path`. For pre-step-4
+        // sessions (the column is NULL because they were created
+        // before the migration ran) we fall back to the project
+        // path, which is the legacy sandbox. Either way, this is a
+        // canonical absolute path that has been validated by
+        // `assert_within_root` (a self-check on the project path
+        // itself, to surface bad project paths early).
+        let session_root_raw = loaded_session
+            .session
+            .worktree_path
+            .clone()
+            .unwrap_or_else(|| project.path.clone());
+        let worktree_path = match projects::boundary::assert_within_root(
+            std::path::Path::new(&session_root_raw),
+            std::path::Path::new(&session_root_raw),
         ) {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!(project_id = %project.id, error = %e, "project path invalid");
+                tracing::error!(session_id = %session_id, error = %e, "session root invalid");
                 let _ = app_handle.emit(
                     "chat-event",
                     ChatEventPayload {
                         request_id: rid.clone(),
                         event: ChatEvent::Error {
-                            message: format!("project path is invalid: {}", e),
+                            message: format!("session root is invalid: {}", e),
                             category: LlmErrorCategory::InvalidRequest,
                         },
                     },
@@ -719,31 +734,32 @@ async fn chat(
         };
 
         let session_cwd_raw = if loaded_session.session.current_cwd.is_empty() {
-            project.path.clone()
+            worktree_path.to_string_lossy().to_string()
         } else {
             loaded_session.session.current_cwd.clone()
         };
         let session_cwd = match projects::boundary::assert_within_root(
-            &project_root,
+            &worktree_path,
             std::path::Path::new(&session_cwd_raw),
         ) {
             Ok(p) => p,
             Err(e) => {
                 // Defensive: if the stored cwd is no longer reachable
                 // (e.g. user deleted a directory mid-session), fall
-                // back to the project root. The next shell tool call
-                // will move `turn_ctx.cwd` to wherever it goes.
+                // back to the worktree / project root. The next
+                // shell tool call will move `turn_ctx.cwd` to
+                // wherever it goes.
                 tracing::warn!(
                     session_cwd = %session_cwd_raw,
-                    project_root = %project_root.display(),
+                    worktree_path = %worktree_path.display(),
                     error = %e,
-                    "session cwd outside project root — falling back to project root"
+                    "session cwd outside worktree path — falling back to worktree path"
                 );
-                project_root.clone()
+                worktree_path.clone()
             }
         };
         let turn_ctx = ToolContext {
-            project_root: project_root.clone(),
+            worktree_path: worktree_path.clone(),
             cwd: session_cwd,
         };
         // The mutable tool context is used as the "current" cwd
