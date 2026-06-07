@@ -162,3 +162,32 @@ Pinia auto-unwraps refs on store-proxy access, so components read it as a
 plain `Set<string>` (no `.value`). The `Set` itself is recomputed on every
 `activeRequests` mutation; the `v-if` binding on the session card flips
 automatically. No manual triggers needed.
+
+### Worktree transition invalidation (added 2026-06-08, step 4 follow-up)
+
+After any worktree state change (`attachWorktree` / `detachWorktree` /
+`deleteWorktree`), the chat store calls `controller.refresh(sessionId)` to
+evict the cached messages and reload from DB. This is the only way the LLM's
+next `send()` payload can include the freshly-injected `[worktree event]`
+system event.
+
+```typescript
+// app/src/stores/chat.ts (excerpt)
+async function attachWorktree(sessionId: string) {
+  // ... Tauri invoke ...
+  controller.refresh(sessionId);  // ← mandatory, do not skip
+}
+```
+
+`controller.refresh` is a thin wrapper around `ensureLoaded` that first
+evicts the LRU entry and then re-loads from DB. Without it:
+
+- The cached `messagesBySession.get(sessionId)` is stale.
+- The next `send()` builds `toPayloadContent` from the cache.
+- The LLM's payload omits the system event, and the model reasons on
+  the old worktree state.
+
+Backend stores the system event in the same `messages` table; the
+frontend does not need a special branch in the wire event handler.
+The system event renders as a regular user-role message with the
+`[worktree event]` prefix.

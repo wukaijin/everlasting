@@ -220,3 +220,50 @@ from the upstream API.
 The full step-6 implementation in this repo followed this checklist for
 `thinking` and `redacted_thinking`. See `backend/llm-contract.md` for the
 wire-level details and `backend/error-handling.md` for the failure modes.
+
+---
+
+## Worktree State Transitions Affect LLM Context (2026-06-08)
+
+A worktree state change is not a pure UI event — it changes the LLM's
+view of the world. Before implementing anything that mutates the
+`worktree_state` column or moves a session between worktree and project
+root:
+
+- [ ] **Cancel in-flight chat BEFORE the destructive work.** The agent
+      loop is writing messages / tool results on every turn. If the
+      destructive path races an in-flight `INSERT` against a deleted
+      `sessions` row, the message is lost (FK violation). Use a
+      `session_active_request: HashMap<session_id, request_id>` map to
+      find the active token; call `token.cancel()` first, then proceed.
+      The agent loop's `tokio::select!` exits, and the
+      `CancellationGuard` Drop clears the map entry.
+- [ ] **Inject the system event AFTER the destructive succeeds, BEFORE
+      the next LLM turn.** A `[worktree event] <description>` row in the
+      `messages` table is the only way the LLM learns the worktree
+      changed. Insert with `role='user'`, content prefixed with
+      `[worktree event]`, metadata `{kind: "worktree_event", event: ...}`.
+- [ ] **Refresh the frontend message cache.** The store's
+      `messagesBySession` is a read-through cache. After the backend
+      inserts the event, the chat store must call
+      `controller.refresh(sessionId)` to evict + reload. Otherwise the
+      next `send()` builds the LLM payload from the stale cache and
+      omits the event.
+- [ ] **Order matters across the three layers.** The full sequence for
+      `attach_worktree` is:
+      1. `cancel_inflight_for_session(sid)` (backend)
+      2. `git::worktree::create(...)` (backend)
+      3. `db::set_worktree_state(sid, Active, None)` (backend)
+      4. `db::insert_system_event(sid, "[worktree event] attached: ...")` (backend)
+      5. Return the new `SessionRow` to the frontend
+      6. `controller.refresh(sid)` (frontend store)
+      7. Re-render the chat panel header chip
+- [ ] **Test the race.** Manual smoke test: trigger a long-running
+      stream, then click the destructive button. The frontend
+      `:disabled="isStreaming"` is a UX guard, not a safety net; the
+      backend cancel hook must close the race window.
+
+See `backend/llm-contract.md` "Scenario: Worktree State Transparency +
+LLM Cancel" for the full signatures, contracts, and validation matrix
+of the 3 new Tauri commands (`attach_worktree` / `detach_worktree` /
+`delete_worktree`).

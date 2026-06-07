@@ -631,6 +631,383 @@ change in R7) to inspect any range.
 
 ---
 
+## Scenario: Worktree State Transparency + LLM Cancel (Step 4 Follow-up, 2026-06-08)
+
+### 1. Scope / Trigger
+
+- Trigger: Decoupling worktree from session lifecycle. After this change the
+  user can `attach_worktree` / `detach_worktree` / `delete_worktree` mid-session
+  (previously worktree was auto-created at session create and never changed).
+  Three risks emerged that need code-spec depth:
+  1. **LLM confusion across worktree views** — the same session's tool results
+     can come from two different on-disk roots (worktree vs project root) within
+     one chat. Without explicit signalling the LLM will see "I read S1" then
+     "I read S2" with no reason for the change.
+  2. **Stale conversation history** — if the frontend keeps its cached messages
+     after a worktree transition, the LLM's next turn won't see the new
+     `[worktree event]` system event and will reason on outdated context.
+  3. **Destructive path racing an in-flight chat** — `delete_session` /
+     `detach_worktree` / `delete_worktree` can run while the agent loop is
+     still streaming. Without a cancel hook the in-flight turn's `INSERT`
+     fails on a deleted row, or a tool call writes to a worktree that no
+     longer exists.
+- Why code-spec depth: mandatory — new Tauri command surface, new message
+  shape on the wire (envelope), new row kind in the `messages` table
+  (system event), and a new cross-layer ordering constraint
+  (cancel → destructive → system event → next LLM turn).
+
+### 2. Signatures
+
+#### New Tauri commands (`app/src-tauri/src/lib.rs`)
+
+```rust
+#[tauri::command]
+async fn attach_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String>;
+
+#[tauri::command]
+async fn detach_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String>;
+
+#[tauri::command]
+async fn delete_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String>;
+```
+
+Each is registered in `invoke_handler!` and exposed to the frontend.
+
+#### New DB schema (`app/src-tauri/src/db.rs`)
+
+```sql
+ALTER TABLE sessions ADD COLUMN worktree_state TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE sessions ADD COLUMN last_worktree_path TEXT;
+-- One-shot backfill on startup (idempotent, see migration helper):
+UPDATE sessions
+SET worktree_state = 'active'
+WHERE worktree_path IS NOT NULL
+  AND worktree_state = 'none';
+```
+
+Valid `worktree_state` values (snake_case strings; serialized as
+`#[serde(rename_all = "snake_case")]`):
+
+| Value | Meaning | `worktree_path` | `last_worktree_path` |
+|-------|---------|-----------------|----------------------|
+| `"none"` | Never had a worktree, or worktree was deleted. | `NULL` | `NULL` (never used) or last value preserved |
+| `"active"` | A worktree is currently bound to this session. | `Some(<path>)` | `NULL` (or previous value preserved) |
+| `"detached"` | Had a worktree, now unbound. Directory may still exist on disk. | `NULL` | `Some(<previous path>)` |
+
+#### New helpers
+
+```rust
+// app/src-tauri/src/git/worktree.rs
+pub fn check_clean(repo_path: &Path) -> Result<(), GitError>;
+//   Uses libgit2 `Repository::open(repo_path)?.status()?` to detect modified
+//   tracked files + untracked files. Ignores .gitignore'd files.
+//   Rejects when status is non-empty.
+
+// app/src-tauri/src/db.rs
+pub async fn set_worktree_state(
+    pool: &SqlitePool, session_id: &str, state: WorktreeState,
+    last_worktree_path: Option<&str>,
+) -> Result<(), sqlx::Error>;
+
+pub async fn insert_system_event(
+    pool: &SqlitePool, session_id: &str, text: &str,
+) -> Result<(), sqlx::Error>;
+//   Inserts a row into `messages` with role='user' and content=text.
+//   seq = max(seq)+1 for the session.
+
+// app/src-tauri/src/lib.rs
+pub fn tool_result_envelope(content: String, worktree_path: &Path) -> String;
+//   Returns: {"result": "<content>", "cwd": "<worktree_path>"}
+//   Lives in lib.rs (NOT in the tool modules) so the existing 60+ tool
+//   unit tests are unchanged.
+
+pub async fn cancel_inflight_for_session(
+    cancellations: &Arc<Mutex<HashMap<String, CancellationToken>>>,
+    session_active_request: &Arc<Mutex<HashMap<String, String>>>,
+    session_id: &str,
+) -> Option<String>;
+//   Returns the cancelled request_id, or None if no in-flight request.
+```
+
+#### New AppState field
+
+```rust
+struct AppState {
+    // ... existing fields ...
+    session_active_request: Arc<Mutex<HashMap<String, String>>>,
+    //   Maps session_id -> currently active request_id.
+    //   Inserted by `chat` on spawn; cleared by CancellationGuard on Drop.
+    //   Read by the 3 destructive paths to find the request_id to cancel.
+}
+```
+
+### 3. Contracts
+
+#### Tool result envelope (LLM boundary)
+
+- The tool internals (`app/src-tauri/src/tools/*.rs`) return `String`
+  unchanged. None of the existing 60+ tool unit tests are modified.
+- At the LLM-facing boundary in `lib.rs::chat`, the `ToolResult` event
+  payload AND the `ContentBlock::ToolResult.content` stored in the DB
+  are wrapped via `tool_result_envelope(content, ctx.worktree_path)`.
+- Wire / DB shape: `{"result": "<original content>", "cwd": "<worktree_path>"}`.
+- `cwd` is the canonical on-disk path the tool actually ran against
+  (`ctx.worktree_path` if the session has a worktree, else
+  `project.path`).
+- Frontend display: `extractToolResultDisplay(content)` leniently parses
+  the envelope and returns the unwrapped `result` field. Falls back to
+  the raw string for pre-follow-up data, non-JSON, missing `result`
+  key, or parse errors. The wire format to the LLM is preserved.
+
+#### System event injection
+
+- After successful attach/detach/delete, the backend calls
+  `db::insert_system_event` with the text format:
+  - attach: `[worktree event] attached: <path> on branch session/<id>`
+  - detach: `[worktree event] detached from <path> (changes preserved on branch session/<id>)`
+  - delete: `[worktree event] deleted: branch session/<id> and dir <path> removed`
+- The row is stored with `role='user'` and a structured `metadata`
+  marker (`{kind: "worktree_event", event: "attached" | "detached" | "deleted"}`).
+- The LLM's next chat loads messages and sees the event in history.
+- Frontend `controller.refresh(sessionId)` evicts the cached messages
+  and re-loads from DB so the UI bubble list also shows the event
+  (rendered as a regular user-role message with the `[worktree event]`
+  prefix). A future PR may add a dedicated info-badge rendering.
+
+#### In-flight cancel hook
+
+- `chat` spawn fills `session_active_request: session_id -> request_id`.
+- `CancellationGuard` (Drop on every agent-loop exit path) removes the entry.
+- The 3 destructive paths (`delete_session` / `detach_worktree` /
+  `delete_worktree`) call `cancel_inflight_for_session` at entry:
+  1. Look up the active `request_id` for `session_id`.
+  2. If found, fetch the matching `CancellationToken` from
+     `cancellations` and `.cancel()`.
+  3. Return; the agent loop's `tokio::select!` notices and exits
+     cleanly, which clears the map entry via the `CancellationGuard`.
+- **Ordering invariant**: cancel → destructive execute → system event
+  injection (if any). The system event must land AFTER the cancel
+  completes (so the event reflects the post-cancel state) and BEFORE
+  the LLM's next turn (so the LLM sees it).
+- Frontend guard: `detach` / `delete worktree` menu items are
+  `:disabled="chatStore.isStreaming"`. This is a UX guard, not the
+  safety net — the backend cancel hook covers the in-flight IPC case.
+
+#### Rehydrate + outbound payload
+
+- The system event is a `role='user'` message, so `toPayloadContent`
+  passes it through as a text block. No new block type needed.
+- Order: system events appear at the position of their original
+  insertion (typically after the latest assistant turn). Anthropic
+  accepts interleaved user messages without re-ordering.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|-----------|--------|
+| `attach_worktree` on non-git project | Reject: `"project <name> is not a git repository"` |
+| `attach_worktree` while project root has uncommitted changes | Reject: `"project root has uncommitted changes; commit or stash before attaching"` |
+| `attach_worktree` while worktree_path already exists | Reject: libgit2 error (mirrors PR1 behavior) |
+| `detach_worktree` while `worktree_state != 'active'` | Reject: `"no active worktree to detach"` |
+| `detach_worktree` while worktree has uncommitted changes | Reject: `"worktree <path> has uncommitted changes; commit/stash before detach"` |
+| `delete_worktree` while `worktree_state != 'active'` | Reject: same as detach |
+| Destructive path with active in-flight chat | Cancel in-flight first, then proceed |
+| `extractToolResultDisplay` receives non-JSON string | Fallback: return raw string |
+| `extractToolResultDisplay` receives JSON without `result` key | Fallback: return raw string |
+| `insert_system_event` fails (e.g. DB locked) | `tracing::warn!`; the destructive operation has already succeeded — the system event is best-effort |
+| `cancel_inflight_for_session` finds no active request | Returns `None`; destructive proceeds |
+| `cancel_inflight_for_session` finds request_id but no token (rare race) | `tracing::warn!`; destructive proceeds |
+
+### 5. Good / Base / Bad Cases
+
+#### Good: attach → LLM sees event + envelope
+
+1. User clicks "attach worktree" in the chat panel.
+2. Backend `attach_worktree` runs:
+   - `cancel_inflight_for_session` (no-op, not streaming).
+   - `check_clean(project_root)` passes.
+   - `git::worktree::create` builds the worktree.
+   - `set_worktree_state(sid, Active, None)` updates the row.
+   - `insert_system_event` writes the `[worktree event] attached: ...` row.
+   - Returns the new `SessionRow`.
+3. Frontend `attachWorktree` action calls `controller.refresh(sid)` to
+   evict + reload the cached messages (so the bubble list shows the event).
+4. User sends a new message.
+5. LLM loads messages, sees the event in history, then calls `read_file`.
+6. Backend emits `ToolResult` with envelope `{"result": "...", "cwd": "<worktree_path>"}`.
+7. LLM sees `cwd` and knows which root it just operated on.
+
+#### Base: detach clean
+
+1. `worktree_state = 'active'`, worktree is clean.
+2. User clicks "detach worktree".
+3. `detach_worktree` runs: `check_clean(worktree_path)` passes, then
+   `set_worktree_state(sid, Detached, Some(previous_path))`.
+4. `insert_system_event` writes the detach event.
+5. Next tool call: `ctx.worktree_path` is now `project.path` (the
+   fallback), so the envelope's `cwd` reflects project root.
+6. LLM sees the event, knows the worktree is gone, and continues
+   operating in project root.
+
+#### Bad: ToolCallCard displays the envelope literally
+
+1. Backend correctly emits envelope `{"result": "hello", "cwd": "/worktree"}`.
+2. Frontend `ToolCallCard.vue` does `{{ result.content }}` directly.
+3. User sees a JSON blob in the tool card instead of `hello`.
+4. Fix: `ToolCallCard.vue` uses `extractToolResultDisplay(result.content)`
+   for both `outputSize` and the rendered `<pre>`.
+
+#### Bad: missing controller.refresh
+
+1. `attachWorktree` action mutates the row but does NOT evict the
+   cached messages.
+2. User clicks send. `controller.startRequest` reads from
+   `messagesBySession.get(sid)` (the cache, not the DB).
+3. LLM's payload does not include the new system event.
+4. LLM reasons on stale context, may try to `cd` into a worktree path
+   it doesn't know exists, etc.
+5. Fix: `controller.refresh(sid)` at the end of `attachWorktree` /
+   `detachWorktree` / `deleteWorktree` actions in `chat.ts`.
+
+#### Bad: missing cancel hook in delete_session
+
+1. User clicks delete session.
+2. `lib.rs::delete_session` immediately starts cleanup of
+   shell outputs dir + worktree + DB row.
+3. LLM is mid-stream; the agent loop is about to `INSERT` a
+   `ContentBlock::Text` row referencing the about-to-be-deleted
+   session_id.
+4. INSERT fails with FK violation; the message is lost.
+5. Fix: `cancel_inflight_for_session(sid)` at the top of
+   `delete_session` (and the other two destructive paths).
+
+### 6. Tests Required
+
+| Test | Asserts |
+|------|---------|
+| `tool_result_envelope_round_trip` | Output has exactly 2 keys: `result` + `cwd` |
+| `tool_result_envelope_handles_special_chars` | Newline / quote / backslash correctly JSON-escaped |
+| `git::worktree::check_clean::rejects_modified` | Modified tracked file → `Err(GitError::Dirty)` |
+| `git::worktree::check_clean::rejects_untracked` | Untracked file → `Err` |
+| `git::worktree::check_clean::ignores_gitignore` | `.gitignore`d file does not change verdict |
+| `db::set_worktree_state::active` | Row updated; `last_worktree_path` cleared or preserved per call |
+| `db::set_worktree_state::detached` | Row updated; `last_worktree_path` set |
+| `db::insert_system_event::role_user` | New row in `messages`; `role='user'`; content contains `[worktree event]` |
+| `attach_worktree::uncommitted_project_root` | Returns `Err` with "uncommitted changes" message |
+| `detach_worktree::uncommitted_worktree` | Returns `Err` with same shape |
+| `lib::cancel_inflight_for_session::finds_active` | In-flight token cancelled; entry removed after `CancellationGuard` drop |
+| `lib::cancel_inflight_for_session::no_active` | Returns `None`; proceeds silently |
+| `vitest extractToolResultDisplay::unwraps_envelope` | `{"result":"X","cwd":"Y"}` → `X` |
+| `vitest extractToolResultDisplay::falls_back_raw` | Plain string → same string |
+| `vitest extractToolResultDisplay::handles_empty` | `""` → `""` |
+| `vitest extractToolResultDisplay::handles_non_json` | `"not json"` → `"not json"` |
+| `db::migration::backfill_legacy_active` | Pre-follow-up sessions with `worktree_path IS NOT NULL` get `state='active'` |
+
+Total: ~17 new tests added in this round; backend suite now 180+ tests,
+frontend vitest 44+. As of step 4 follow-up: **182 backend tests + 44 frontend
+vitest = 226 tests pass**.
+
+#### Frontend
+
+- `pnpm build` (vue-tsc strict) must pass. The 4 worktree actions
+  (`attachWorktree` / `detachWorktree` / `deleteWorktree` /
+  `controller.refresh`) live in `app/src/stores/chat.ts` and
+  `app/src/stores/streamController.ts`; any new field on `SessionSummary`
+  must round-trip end-to-end.
+- Manual smoke test (acceptance A29):
+  1. `cd app && pnpm tauri dev`.
+  2. Open a session, attach worktree, observe the chip flips to
+     "diff (0) ▼" and the dropdown shows copy + detach + delete.
+  3. Send a chat, observe the LLM's next response references the
+     worktree path (the `cwd` it sees in the tool result envelope).
+  4. Detach, send another chat, observe the response references the
+     project root and the bubble list shows the
+     `[worktree event] detached from ...` message.
+  5. While streaming, click "detach worktree" — observe the disabled
+     state, and verify that a quick race (IPC mid-flight) still
+     results in a clean cancel via the backend hook.
+
+### 7. Wrong vs Correct
+
+#### Wrong: envelope added to a tool's return type
+
+```rust
+// BAD — modifies the tool's signature, breaks 60+ tests
+pub async fn execute(...) -> Result<serde_json::Value, GitError> {
+    Ok(json!({ "result": output, "cwd": ctx.worktree_path }))
+}
+```
+
+LLM transparency logic is now baked into the business logic of every
+tool. Future tools must remember to do the same. The 60+ existing
+unit tests have to be rewritten.
+
+#### Correct: envelope applied at the LLM-facing boundary only
+
+```rust
+// GOOD — tool internals unchanged
+pub async fn execute(...) -> Result<String, GitError> { ... }
+
+// lib.rs::chat at the agent-loop boundary
+let wire = tool_result_envelope(output, &ctx.worktree_path);
+emit(ChatEvent::ToolResult { content: wire, ... });
+persist(ContentBlock::ToolResult { content: wire, ... });
+```
+
+The `tool_result_envelope` function lives in `lib.rs` and is the
+single place that knows about the envelope shape. Tools remain pure
+data producers; the agent loop is the formatter.
+
+#### Wrong: destructive path without cancel
+
+```rust
+// BAD — race against an in-flight chat
+async fn delete_session(state, sid) -> Result<()> {
+    cleanup_outputs_dir(...).await;     // shells out
+    destroy_worktree(...).await;        // libgit2
+    db::delete_session(...).await;      // FK cascades
+}
+```
+
+If the agent loop is mid-turn, its `db::insert_message(...)` or
+`db::update_session(...)` may fire after the row is gone, hitting FK
+violations or silently dropping the message. The LLM's next-turn
+history is also missing the messages that didn't land.
+
+#### Correct: cancel, then proceed
+
+```rust
+// GOOD — cancel hook at the top
+async fn delete_session(state, sid) -> Result<()> {
+    cancel_inflight_for_session(
+        &state.cancellations,
+        &state.session_active_request,
+        sid,
+    ).await;
+    // CancellationGuard's Drop will remove the map entry once the
+    // agent loop exits; we don't wait for it explicitly — the next
+    // operation in this function does not need the entry removed.
+    cleanup_outputs_dir(...).await;
+    destroy_worktree(...).await;
+    db::delete_session(...).await;
+}
+```
+
+The destructive path is bounded by the cancel; the agent loop's
+`tokio::select!` will exit on the next event boundary, and the guard
+cleans the map.
+
+---
+
 
 
 ### Decision: Always send `thinking`, no per-session / per-request toggle
