@@ -663,3 +663,39 @@ Migrated the agent runtime onto per-session git worktrees (libgit2 vendored; XDG
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: step 4 follow-up: worktree attach/detach/delete opt-in + LLM transparency
+
+**Date**: 2026-06-08
+**Task**: step 4 follow-up: worktree attach/detach/delete opt-in + LLM transparency
+**Branch**: `main`
+
+### Summary
+
+解耦 session 与 worktree(create_session 不再要求 git,不再自动建 worktree;git 项目可手动 attach/detach/delete)。新 3 个 Tauri command + check_clean(uncommitted 拒绝)+ in-flight cancel hook + system event 注入(LLM 感知 worktree 切换)+ 7 工具 ToolResult 加 cwd 字段(LLM 边界 envelope,内部不动)。前端 ChatPanel 头部三态 chip + 下拉(复制 path / 复制 branch / 解绑 / 删除)+ DeleteWorktreeConfirm modal(active+有 diff 才弹)。trellis-check 修了 2 个 critical regression:envelope 在前端 unwrap(extractToolResultDisplay);worktree action 后 controller.refresh 强制 evict+reload 缓存。cargo test 182 / vitest 44 全过,0 warning。spec 记录 3 个新 pattern 到 llm-contract.md(新 Scenario 7-section)+ state-management.md(refresh 规则)+ cross-layer-thinking-guide.md(cancel→destructive→event→refresh 5 步时序)。merge worktree 流程 OOS 另开 task。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c21c069` | (see git log) |
+| `1e4c02b` | (see git log) |
+| `dc6e829` | (see git log) |
+| `d083536` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-06-07
+- **Total Sessions**: 18
+- **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~665 | Active |
+| `journal-1.md` | ~701 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-06-08 | step 4 follow-up: worktree attach/detach/delete opt-in + LLM transparency | `c21c069`, `1e4c02b`, `dc6e829`, `d083536` | `main` |
 | 17 | 2026-06-07 | step 4: git worktree + diff view + 2 worktree fix | `10d7403`, `6a4fe13`, `a11e4c9`, `4930408`, `da8e91d` | `main` |
 | 16 | 2026-06-07 | 工具集扩展批次:edit_file / grep / glob / list_dir + ReadGuard + Bash 落盘 + cat -n | `21cc9e3` | `main` |
 | 15 | 2026-06-07 | 修 6 个 UI/状态 bug：顶栏/Markdown/SSE 架构（bug 1+2 position 留 TODO） | `bd5ea7b`, `abde429`, `bf9b35b` | `main` |
