@@ -39,7 +39,7 @@
 // UI consumers (SessionList, ProjectTabs) lands in PR3 + PR4.
 
 import { defineStore } from "pinia";
-import { computed, reactive, ref, type ComputedRef } from "vue";
+import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -190,6 +190,27 @@ function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
         break;
       }
     }
+  }
+  // After the merge step, the four "deep payload" arrays on every
+  // message (toolCalls / toolResults / thinkingBlocks /
+  // redactedThinkingData) are immutable for the lifetime of this
+  // message — they were built from the DB once, and nothing in
+  // this store will ever push into them again. Mark them raw so
+  // the reactive Map's deep-proxy does not wrap them (and the
+  // ToolCallInfo / ThinkingBlockInfo items inside them) on every
+  // access. For a 5000-message session this is the difference
+  // between ~10k proxy operations at first render and zero.
+  //
+  // We do NOT markRaw the message itself, the `content` string, or
+  // the `streaming` / `error` fields — those are the per-message
+  // mutables that still need reactive updates (see the streaming
+  // path below for the parallel markRaw that fires when a fresh
+  // message's stream ends).
+  for (const m of out) {
+    if (m.toolCalls) markRaw(m.toolCalls);
+    if (m.toolResults) markRaw(m.toolResults);
+    if (m.thinkingBlocks) markRaw(m.thinkingBlocks);
+    if (m.redactedThinkingData) markRaw(m.redactedThinkingData);
   }
   return out;
 }
@@ -345,6 +366,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // blinking forever after the stream completes — a
         // regression that violates AC6.3 ("streaming=false,光标消失").
         last.streaming = false;
+        // Stream is over — the four deep-payload arrays stop
+        // mutating. markRaw them now so future reads (and the
+        // rehydrate path on session reload) skip the reactive
+        // proxy. This pairs with the markRaw in rehydrateMessages;
+        // together they cover both "loaded from DB" and
+        // "just-finished streaming" code paths.
+        if (last.toolCalls) markRaw(last.toolCalls);
+        if (last.toolResults) markRaw(last.toolResults);
+        if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
+        if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
         finalizeRequest(req.requestId, req.sessionId, false);
         break;
       case "error":
@@ -353,6 +384,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           message: event.message ?? "未知错误",
           category: event.category ?? "server",
         };
+        // Same post-stream markRaw — the error case is terminal
+        // just like `done`, the arrays won't grow further.
+        if (last.toolCalls) markRaw(last.toolCalls);
+        if (last.toolResults) markRaw(last.toolResults);
+        if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
+        if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
         finalizeRequest(req.requestId, req.sessionId, true);
         break;
     }
