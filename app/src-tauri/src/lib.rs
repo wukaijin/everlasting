@@ -40,6 +40,7 @@ use llm::{
     chat_stream_with_tools, ChatEvent, ChatMessage, ContentBlock, LlmConfig, LlmErrorCategory,
     MessageContent, Role, ToolDef,
 };
+use tools::read_guard::ReadGuard;
 use tools::ToolContext;
 
 /// Maximum agent loop turns before forced stop (safety limit).
@@ -61,6 +62,14 @@ struct AppState {
     /// listens for cancellation between events. The entry is removed
     /// by the spawn task on every exit path (normal / error / cancel).
     cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Per-session read fingerprints. The `edit_file` tool consults
+    /// this guard to ensure the LLM (a) read the file in the current
+    /// session and (b) the file hasn't been modified on disk since.
+    /// Lives in process state, not persisted: the first edit on a
+    /// fresh restart will fail with "must read first" and the LLM
+    /// re-reads. The guard is session-isolated so switching back to
+    /// an old session restores its fingerprints.
+    read_guard: ReadGuard,
 }
 
 impl AppState {
@@ -140,6 +149,7 @@ impl AppState {
             tools,
             db,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
+            read_guard: ReadGuard::new(),
         }
     }
 }
@@ -271,6 +281,27 @@ async fn delete_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
+    // Clear the in-memory ReadGuard for this session so we don't leak
+    // fingerprints for a session the user just deleted. The DB delete
+    // is the source of truth; the guard is just a cache.
+    state.read_guard.clear_session(&session_id).await;
+
+    // Best-effort cleanup of disk-spilled shell outputs (PRD §R8).
+    // We do this BEFORE the DB delete so we can still read the
+    // session's `current_cwd`; `db::load_session` is cheap (one
+    // indexed row + an `IN (...)` over messages) and a missing
+    // session short-circuits cleanly. Failures here are logged by
+    // `cleanup_outputs_dir` and do NOT cascade — the user's
+    // primary intent is "delete the session", not "clean my disk";
+    // surfacing a delete error because some leftover .txt file
+    // was unlinked elsewhere would be a worse UX.
+    if let Ok(Some(loaded)) = db::load_session(&state.db, &session_id).await {
+        let cwd = loaded.session.current_cwd;
+        if !cwd.trim().is_empty() {
+            tools::shell::cleanup_outputs_dir(std::path::Path::new(&cwd)).await;
+        }
+    }
+
     db::delete_session(&state.db, &session_id)
         .await
         .map_err(|e| format!("delete_session failed: {}", e))
@@ -454,6 +485,7 @@ async fn chat(
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
     let cancellations = state.cancellations.clone();
+    let read_guard = state.read_guard.clone();
     let rid = request_id;
     let app_handle = app.clone();
 
@@ -890,8 +922,14 @@ async fn chat(
             // Execute tools and build tool_result message.
             let mut result_blocks: Vec<ContentBlock> = Vec::new();
             for (id, name, input) in &tool_calls {
-                let (content, is_error, update) =
-                    tools::execute_tool(name, input, &current_ctx).await;
+                let (content, is_error, update) = tools::execute_tool(
+                    name,
+                    input,
+                    &current_ctx,
+                    Some(&read_guard),
+                    Some(&session_id),
+                )
+                .await;
                 // The shell tool (and any future tool that wants to
                 // move the agent's working directory) reports its new
                 // cwd through `update.new_cwd`. We track the latest

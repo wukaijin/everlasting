@@ -382,10 +382,17 @@ for event in stream {
 
 ```rust
 match tool_call.name {
-    "read_file"   => tokio::fs::read_to_string(path).await,
-    "write_file"  => tokio::fs::write(path, content).await,
-    "shell"       => spawn_pty(cmd).await,
-    "edit_file"   => apply_diff(path, old, new),
+    "read_file"   => read_file (with cat -n line numbers + ReadGuard.record_read),
+    "write_file"  => tokio::fs::write (autoparse parent dir, boundary check),
+    "edit_file"   => ReadGuard 3 道 check (read → fresh → match + uniqueness)
+                     + 0 匹配报 hint + N>1 报行号 + 写后自动 invalidate,
+    "shell"       => spawn_command (5min timeout, > 30KB spill to
+                     <cwd>/.everlasting/outputs/<uuid>.txt + 1KB preview),
+    "grep"        => tokio::process::Command::new("rg") spawn, 3 output_modes
+                     (files_with_matches | content | count), 500-char line cap,
+    "glob"        => globset walk, cap 100, mtime desc,
+    "list_dir"    => tokio::fs::read_dir, alphabetical + `/` suffix on dirs,
+                     non-recursive,
     "use_skill"   => 加载 skill 内容 → 注入 system prompt(详见 [BACKLOG §2](./BACKLOG.md#2-agent-skill-系统))
     "use_memory"  => 读 / 写 runtime memory(详见 [BACKLOG §3](./BACKLOG.md#3-多层-memory-与约束))
     "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关))
@@ -393,10 +400,19 @@ match tool_call.name {
 }
 ```
 
+- **ReadGuard 防护层**(2026-06-07 工具集扩展批次加):
+  - Tauri State `Mutex<HashMap<SessionId, HashMap<PathBuf, Fingerprint>>>`
+  - `Fingerprint = { mtime, size, content_hash_head(xxh64 of 8KB) }`
+  - `edit_file` 写前 3 道强制 check;`read_file` 成功自动 `record_read`;`edit_file` 写成功自动 `invalidate`
+  - Session 隔离,切回不重读;`delete_session` 调 `clear_session` 清表
+- **Bash 落盘**(2026-06-07 工具集扩展批次加):
+  - > 30KB 输出 spill 到 `<session_cwd>/.everlasting/outputs/<uuid>.txt`
+  - Tool result 返回 path + 1KB head+tail preview(让 LLM 拿 path 跟 `read_file` 配合)
+  - `delete_session` best-effort 清理 outputs 目录(失败不 cascade)
 - **关卡点**:
   - 真实文件系统操作(IO 错误、权限、磁盘满)
   - shell 命令:走 PTY(支持交互式),不是普通 exec
-  - 大输出截断(超过 50KB 的 shell 输出要裁剪,避免 context 爆炸)
+  - 大输出截断(spill + 1KB preview,避免 context 爆炸)
   - 超时(单个 tool 不能跑超过 N 分钟)
 
 #### ⑪ Git 集成(隐式关卡)

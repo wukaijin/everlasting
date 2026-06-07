@@ -10,21 +10,36 @@
 //! (`projects::boundary::assert_within_root`) is the single source of
 //! truth for "is this path inside the project?" — see
 //! `.trellis/spec/backend/project-cwd-boundary.md` for the contract.
+//!
+//! Step toolset-extension adds 4 more tools: `edit_file`, `grep`,
+//! `glob`, `list_dir`. `edit_file` requires a `ReadGuard` (Tauri
+//! State) and a session id; the other 3 are pure functions like the
+//! step 2 tools.
 
+pub mod edit_file;
+pub mod glob;
+pub mod grep;
+pub mod list_dir;
 pub mod read_file;
+pub mod read_guard;
 pub mod shell;
 pub mod write_file;
 
 use std::path::PathBuf;
 
 use crate::llm::types::ToolDef;
+use crate::tools::read_guard::ReadGuard;
 
-/// All built-in tools available in step 2.
+/// All built-in tools available as of step 2 + the toolset extension.
 pub fn builtin_tools() -> Vec<ToolDef> {
     vec![
         read_file::definition(),
         write_file::definition(),
+        edit_file::definition(),
         shell::definition(),
+        grep::definition(),
+        glob::definition(),
+        list_dir::definition(),
     ]
 }
 
@@ -60,21 +75,56 @@ pub struct ToolContextUpdate {
 ///
 /// `ctx` is injected (not held) — see `PROPOSAL §4.4` / GLM review
 /// §1.2. Tools are pure functions, testable in isolation.
+///
+/// The `edit_file` and `read_file` tools additionally take a
+/// `ReadGuard` and `session_id`; the dispatch here routes the right
+/// combination of arguments. The guard is a Tauri-managed `State`
+/// cloned in by `lib.rs::chat` so the dispatch signature stays
+/// uniform for tools that don't need it.
 pub async fn execute_tool(
     name: &str,
     input: &serde_json::Value,
     ctx: &ToolContext,
+    guard: Option<&ReadGuard>,
+    session_id: Option<&str>,
 ) -> (String, bool, ToolContextUpdate) {
     match name {
         "read_file" => {
-            let (out, is_err) = read_file::execute(input, ctx).await;
+            let (out, is_err) = read_file::execute(input, ctx, guard, session_id).await;
             (out, is_err, ToolContextUpdate::default())
         }
         "write_file" => {
             let (out, is_err) = write_file::execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default())
         }
-        "shell" => shell::execute(input, ctx).await,
+        "edit_file" => match (guard, session_id) {
+            (Some(g), Some(sid)) => {
+                let (out, is_err) = edit_file::execute(input, ctx, g, sid).await;
+                (out, is_err, ToolContextUpdate::default())
+            }
+            _ => (
+                "edit_file called without a ReadGuard / session_id; this is a bug."
+                    .to_string(),
+                true,
+                ToolContextUpdate::default(),
+            ),
+        },
+        "shell" => {
+            let (out, is_err, update) = shell::execute(input, ctx, session_id).await;
+            (out, is_err, update)
+        }
+        "grep" => {
+            let (out, is_err) = grep::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default())
+        }
+        "glob" => {
+            let (out, is_err) = glob::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default())
+        }
+        "list_dir" => {
+            let (out, is_err) = list_dir::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default())
+        }
         _ => (
             format!("Unknown tool: {}", name),
             true,

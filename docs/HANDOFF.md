@@ -39,6 +39,7 @@
 - ✅ **spike-005 follow-up — 7 PR 合并**(commit `401396b`,2026-06-06):UI 紧凑 header (`801fb8a`) + git_branch 显示 (`8f25b7f`) + 启动 batch backfill (`7ce3209`) + pwd `~/` 简化数据通路 (`ef7cea8`) + write_file tracing (`ae1a711`) + LLM cancel 机制 (`11f01c6`) + markdown 渲染 (`cb41bcb`) + 首行空白修复 (`cfb7aac`)
 - ✅ **字体栈调整**(commit `aabb9fa`,2026-06-06):HarmonyOS Sans SC 子集打包 + Dark theme 下中文渲染改善,沉淀到 `.trellis/spec/frontend/cjk-fonts.md`
 - ✅ **6 UI/状态 bug 修复**(commits `bd5ea7b` + `abde429` + `bf9b35b`,2026-06-07):顶栏窗口控制 (bug 1+2 size / bug 3 minimize icon / bug 4 logo padding) + Markdown 表格 border (bug 5) + Tauri 2 权限补全 + streamController 状态架构重构 (bug 6)
+- ✅ **工具集扩展批次**(1 个 `feat(tools):` commit,2026-06-07):`edit_file` (claude-code str_replace_editor 风格 + ReadGuard 3 道 check) + `grep` (spawn ripgrep 3 种 output_mode) + `glob` (cap 100) + `list_dir` (非递归) + ReadGuard (Tauri State, session 隔离) + 顺手 2 件 (read_file `cat -n` 行号 prefix + shell 30K 落盘)
 - ✅ trellis 任务管理工作流引入(`.trellis/` 目录,commit `402afa5`)
 
 **当前状态**:

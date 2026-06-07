@@ -164,6 +164,7 @@
 | — | **路线图外**:spike-005 follow-up 7 PR(UI/UX + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/`) | 额外 | ✅ 已完成(2026-06-06,merge `401396b`) |
 | — | **路线图外**:字体栈调整(HarmonyOS Sans SC 子集) | 额外 | ✅ 已完成(2026-06-06,commit `aabb9fa`) |
 | — | **路线图外**:6 UI/状态 bug 修复(顶栏 + Markdown 表格 + Tauri 2 权限 + streamController 架构) | 额外 | ✅ 已完成(2026-06-07,commits `bd5ea7b` + `abde429` + `bf9b35b`) |
+| — | **路线图外**:工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard 3 道 check + Bash 30K 落盘 + read_file `cat -n` 行号) | 额外 | ✅ 已完成(2026-06-07,1 个 `feat(tools):` commit) |
 | 3b-2 | 完整三栏 UI + rig-core 迁移 | MVP | ⏸ 暂缓 |
 | 4 | Git 集成(worktree + auto commit) | MVP | 未开始 |
 | 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |
@@ -202,6 +203,27 @@
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。
+
+### 2026-06-07 — 工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard + Bash 落盘 + cat -n)
+
+- **决策**:`edit_file` 用 claude-code 风格 str_replace_editor + 3 道强制 check(read-before-edit / on-disk freshness / match + uniqueness),失败文案是 plain English(LLM 能自纠)
+  - **原因**:`write_file` 整文件覆盖 token 浪费大 + 改错位置不报;claude-code Edit 是 token 经济 + 防护成熟的方案
+  - **关键设计**:`ReadGuard` Tauri State,`Mutex<HashMap<SessionId, HashMap<PathBuf, Fingerprint>>>`,session 隔离(切回不重读),edit 写成功后自动 invalidate(逼 LLM 重读)
+  - **0 匹配处理**:claude-code 风格直接报错 + 0-3 个最相似行 hint(Jaccard 相似度排序)——**不**自动 strip 空白重试(OpenHands 风格)
+- **决策**:`grep` / `glob` / `list_dir` 三个浏览工具跟 edit_file 一起合
+  - **grep**:`tokio::process::Command::new("rg")` spawn,3 种 output_mode(files_with_matches / content / count),line cap 500 字符(抄 pi_agent_rust),默认遵守 .gitignore
+  - **glob**:`globset` crate,cap 100,按 mtime 倒序,**不**强制 .gitignore(跟 claude-code 一致)
+  - **list_dir**:`tokio::fs::read_dir` 字母排序 + 目录加 `/` 后缀,hidden 默认 false(避免 `.git/` 灌爆),非递归(递归归 glob)
+- **决策**:`offset/limit` 包含 `old_string` 出现位置就算 read 过(不要求覆盖全文)
+  - **原因**:LLM 智能只读相关区段是合法操作,不必要求 LLM 重调 read_file 读全文浪费 token
+- **决策**:顺手 2 件在同批次合(read_file 加 `cat -n` 行号 prefix + shell 30K 落盘)
+  - **cat -n**:`read_file` 返回每行加 `\t<line_num>\t` 前缀(1-based),截断保留行号;跟 edit_file 报错带行号协同,LLM 拿到内容就能定位"第 42 行"
+  - **Bash 落盘**:> 30K 字符写到 `<session_cwd>/.everlasting/outputs/<uuid>.txt`,tool_result 返回 path + 1KB head+tail preview;`delete_session` 调 `cleanup_outputs_dir` best-effort 清理(失败不 cascade)
+- **决策**:1 个 `feat(tools):` commit 一次性合(用户拍板)
+  - **原因**:4 tool + ReadGuard + Bash 落盘 + cat -n 互相依赖(ReadGuard 跨 edit_file/read_file),分开 commit 反而中间状态编译过不了
+- **测试**:77 新 tool test + 3 cleanup_outputs_dir test = 80 新;cargo test 163→166 全过;pnpm build 干净
+- **沉淀**:`.trellis/spec/backend/llm-contract.md` 新增 §"Scenario: Tool Set Extension" 段(7 sections code-spec depth,含错误矩阵 + Good/Base/Bad + 24 个必测项 + Wrong/Correct 对照)
+- **Out of Scope 守住** (13 条):`hashline_edit` / `MultiEdit` / `LSP` / `WebFetch` / `WebSearch` / damage-control 路径规则 / Bash `cat|head|sed` 等价 read / `replace_all` preview / 前端 tool card 改造 / `read_file` PDF / binary 检测 / `read_many_files` / grep `output_mode=json` —— 全部 0 命中
 
 ### 2026-06-07 — 6 UI/状态 bug 修复 + streamController 状态架构重构
 
