@@ -94,6 +94,17 @@ export interface SessionSummary {
   preview: string;
   project_id: string;
   current_cwd: string;
+  /** Worktree path (or `null` for sessions in `none` / `detached`
+   *  state). Step 4 follow-up: the worktree is now opt-in. */
+  worktree_path: string | null;
+  /** Tri-state worktree state: `none` (never attached), `active`
+   *  (currently bound), or `detached` (was active, now unbound,
+   *  but the branch + directory are still on disk for re-attach).
+   *  See `db::WorktreeState` in the Rust source. */
+  worktree_state: "none" | "active" | "detached";
+  /** Path of the most recently detached worktree. Used to
+   *  re-attach or just for display in the "上次 worktree" chip. */
+  last_worktree_path: string | null;
 }
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the
@@ -375,6 +386,77 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
+  // Step 4 follow-up: opt-in worktree actions
+  //
+  // Three Tauri commands, three Pinia actions. Each one (a) calls
+  // the backend, (b) invalidates the local diff cache for the
+  // session (the on-disk state has changed), and (c) refreshes the
+  // sessions list so the sidebar chip updates. Errors are surfaced
+  // via `projectsStore.showToast` so the user sees a single
+  // consistent error path.
+  // -----------------------------------------------------------------------
+
+  async function attachWorktree(sessionId: string): Promise<void> {
+    try {
+      await invoke("attach_worktree", { sessionId });
+    } catch (e) {
+      projectsStore.showToast(`attach worktree 失败: ${String(e)}`, "error");
+      throw e;
+    }
+    // Invalidate cached diff (the on-disk worktree is now
+    // different from the session baseline) and refresh the list.
+    diffCache.value.delete(sessionId);
+    if (currentSessionId.value === sessionId) {
+      // Re-load messages from the DB so the system event the
+      // backend just inserted (REQ-17) is in the cache. The
+      // next `send()` builds history from the cache; without
+      // this refresh the LLM would not see the worktree
+      // transition event.
+      await controller.refresh(sessionId);
+    }
+    if (projectsStore.currentProjectId) {
+      await loadSessions(projectsStore.currentProjectId);
+    }
+  }
+
+  async function detachWorktree(sessionId: string): Promise<void> {
+    try {
+      await invoke("detach_worktree", { sessionId });
+    } catch (e) {
+      projectsStore.showToast(`detach worktree 失败: ${String(e)}`, "error");
+      throw e;
+    }
+    diffCache.value.delete(sessionId);
+    if (currentSessionId.value === sessionId) {
+      // Re-fetch the session metadata + messages so currentCwd,
+      // the session's new state, and the system event the
+      // backend just injected are all visible immediately. Use
+      // `refresh` (not `ensureLoaded`) so the cache picks up
+      // the new system event row.
+      await controller.refresh(sessionId);
+    }
+    if (projectsStore.currentProjectId) {
+      await loadSessions(projectsStore.currentProjectId);
+    }
+  }
+
+  async function deleteWorktree(sessionId: string): Promise<void> {
+    try {
+      await invoke("delete_worktree", { sessionId });
+    } catch (e) {
+      projectsStore.showToast(`delete worktree 失败: ${String(e)}`, "error");
+      throw e;
+    }
+    diffCache.value.delete(sessionId);
+    if (currentSessionId.value === sessionId) {
+      await controller.refresh(sessionId);
+    }
+    if (projectsStore.currentProjectId) {
+      await loadSessions(projectsStore.currentProjectId);
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Diff (step 4 / PR3) — fetch and cache the session's worktree
   // diff. The IPC call is read-only and cheap (libgit2 walks the
   // tree, no remote I/O), but we still cache to avoid recomputing
@@ -622,6 +704,9 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     switchSession,
     deleteSession,
+    attachWorktree,
+    detachWorktree,
+    deleteWorktree,
     fetchDiff,
     getDiff,
     getFileDiff,

@@ -69,7 +69,7 @@ async function onLoadHidden() {
                 <span
                   v-else-if="!p.is_git_repo"
                   class="hidden-projects__icon hidden-projects__icon--warn"
-                  title="未启用 git 隔离"
+                  title="非 git 项目,无法附加 worktree"
                 >
                   <Icon name="warn" :size="13" />
                 </span>

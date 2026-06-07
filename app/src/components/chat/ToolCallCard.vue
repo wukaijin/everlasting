@@ -19,6 +19,7 @@ import {
   type ToolResultInfo,
 } from "../../stores/chat";
 import {
+  extractToolResultDisplay,
   formatToolInput,
   truncateOutput,
   toolAccentVar,
@@ -71,13 +72,28 @@ const statusIconName = computed<string>(() => {
  *  results in this app are always text and chars read more honestly
  *  for that case. The label "chars" is omitted when the number is
  *  under 1024 (just a bare count reads fine for a few hundred
- *  characters); the suffix reappears for K/M to disambiguate. */
+ *  characters); the suffix reappears for K/M to disambiguate.
+ *
+ *  Step 4 follow-up: the LLM-facing content is the cwd envelope
+ *  (`{result, cwd}`), but the UI display is the unwrapped
+ *  `result` string. The size hint must reflect what the user
+ *  sees, so we run the content through `extractToolResultDisplay`
+ *  before counting chars. */
 const outputSize = computed<string>(() => {
   if (!props.result) return "";
-  const n = props.result.content.length;
+  const display = extractToolResultDisplay(props.result.content);
+  const n = display.length;
   if (n < 1024) return `${n} chars`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K chars`;
   return `${(n / 1024 / 1024).toFixed(1)}M chars`;
+});
+
+/** Display-only view of the tool result content. Strips the cwd
+ *  envelope (see REQ-16 in prd.md) so the card shows the actual
+ *  tool output, not the raw JSON. */
+const displayContent = computed<string | null>(() => {
+  if (!props.result) return null;
+  return extractToolResultDisplay(props.result.content);
 });
 
 // -----------------------------------------------------------------------
@@ -107,8 +123,18 @@ const fileDiff = computed<import("../../stores/chat").FileDiff | null>(() => {
   return chatStore.getFileDiff(sid, filePath.value);
 });
 
+/** Step 4 follow-up: only render the diff button when the session
+ *  has an active worktree. Pre-follow-up the diff was always
+ *  there; now sessions can be in `none` (no worktree) or
+ *  `detached` (worktree not bound to this session), in which
+ *  case the per-file diff is meaningless (the agent's tools
+ *  ran against the project root, not a per-session worktree). */
 const showDiffButton = computed<boolean>(
-  () => props.call.name === "edit_file" && !!filePath.value,
+  () =>
+    props.call.name === "edit_file" &&
+    !!filePath.value &&
+    chatStore.sessions.find((s) => s.id === chatStore.currentSessionId)
+      ?.worktree_state === "active",
 );
 
 async function toggleFileDiff() {
@@ -207,7 +233,7 @@ async function toggleFileDiff() {
 
     <details v-if="result" class="tool-card__details tool-card__details--output">
       <summary>output · {{ outputSize }}</summary>
-      <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(result.content) }}</pre>
+      <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(displayContent ?? result.content) }}</pre>
     </details>
   </div>
 </template>

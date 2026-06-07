@@ -119,6 +119,13 @@ interface LoadedSession {
     model: string;
     project_id: string;
     current_cwd: string;
+    /** Step 4 follow-up: tri-state worktree state. The `none`
+     *  default lets pre-follow-up + post-follow-up sessions
+     *  load identically; the UI uses this to render the
+     *  three-state worktree chip in ChatPanel. */
+    worktree_state: "none" | "active" | "detached";
+    worktree_path: string | null;
+    last_worktree_path: string | null;
   };
   messages: LoadedMessage[];
 }
@@ -507,6 +514,30 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     messagesBySession.delete(sessionId);
   }
 
+  /** Step 4 follow-up: force a re-load of `sessionId` from the DB.
+   *  `ensureLoaded` is a no-op for cached sessions; worktree
+   *  transitions (attach / detach / delete) inject a system
+   *  event into the messages table, and the LLM's NEXT chat
+   *  must see it (REQ-17 / REQ-18 in prd.md). The frontend's
+   *  cache holds the pre-transition messages; without an
+   *  explicit re-load, the next `send()` would build a history
+   *  missing the event. `refresh` evicts + re-loads in one
+   *  step. Safe to call mid-stream? No — `evict` drops
+   *  `pinnedSessions`, so the LRU could reclaim the session
+   *  if the user navigates away. We pin it via `ensureLoaded`
+   *  (`putMessages` re-pins when the second arg is true and
+   *  the session was in `pinnedSessions`, which we just
+   *  removed). The caller should not call `refresh` while the
+   *  session is in-flight (the chat cancel hook ensures
+   *  this for detach / delete; for attach, the frontend
+   *  UI never disables attach, but in practice a user
+   *  won't click "attach" mid-stream anyway — the dropdown
+   *  is the only path). */
+  async function refresh(sessionId: string): Promise<ChatMessage[]> {
+    evict(sessionId);
+    return ensureLoaded(sessionId);
+  }
+
   // ---------------------------------------------------------------------
   // Public API — request lifecycle
   // ---------------------------------------------------------------------
@@ -613,6 +644,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     getMessages,
     ensureLoaded,
     evict,
+    refresh,
     startRequest,
     cancel,
     currentRequestId,

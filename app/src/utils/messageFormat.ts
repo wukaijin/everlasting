@@ -21,6 +21,41 @@ export function truncateOutput(s: string, max = 500): string {
   return s.slice(0, max) + `… (${s.length - max} more chars)`;
 }
 
+/** Step 4 follow-up: the agent loop wraps every tool result in a
+ *  JSON envelope `{ "result": "<legacy string>", "cwd": "<path>" }`
+ *  so the LLM can see which on-disk cwd the tool ran against (REQ-16).
+ *  The envelope is the LLM-facing contract — it round-trips through
+ *  the DB and the outbound `toPayloadContent` so the model has cwd
+ *  context on the next turn. The UI, however, doesn't want to
+ *  render the raw envelope; it wants the original tool output
+ *  string.
+ *
+ *  This helper is the bridge. It tries to parse `content` as the
+ *  envelope shape and returns `result` if it matches; otherwise it
+ *  returns the raw content unchanged (forward- and backward-compat
+ *  with pre-follow-up sessions whose tool_result blocks are plain
+ *  strings). The DB payload is left untouched — only the rendered
+ *  string changes. */
+export function extractToolResultDisplay(content: string): string {
+  if (!content) return content;
+  // Fast path: not even JSON-looking, skip the parse.
+  if (content[0] !== "{") return content;
+  try {
+    const parsed = JSON.parse(content);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.result === "string" &&
+      typeof parsed.cwd === "string"
+    ) {
+      return parsed.result;
+    }
+  } catch {
+    // not JSON, fall through
+  }
+  return content;
+}
+
 /** Concatenated thinking text for display. Multiple blocks
  *  (interleaved thinking) are joined with a blank line so they read
  *  as separate reasoning phases. */
