@@ -124,45 +124,46 @@ pub fn create(
         })?;
     }
 
-    // 4. The actual worktree add. `WorktreeAddOptions::new()` is
-    //    the default (`None`-equivalent for our needs): new branch
-    //    off the repo's HEAD, lock against concurrent prune, do
-    //    not checkout an existing reference.
+    // 4. The actual worktree add.
+    //
+    //    Design note: libgit2's `Repository::worktree(name, path, opts)`
+    //    takes `name` as BOTH the worktree metadata name (the
+    //    directory under `<commondir>/worktrees/`) AND the new
+    //    branch name when no `reference` is set. The CLI's
+    //    `git worktree add -b <branch> <path>` does NOT have this
+    //    coupling — it derives the metadata name from `<path>`'s
+    //    basename and only uses `<branch>` for the branch side.
+    //
+    //    When the branch has slashes (e.g. `session/<uuid>`), the
+    //    libgit2-coupled name tries to mkdir
+    //    `<commondir>/worktrees/session/<uuid>/`. The first fix
+    //    (commit 4930408) pre-created the `session/` intermediate
+    //    dir, which made `git worktree list` treat `session/` as a
+    //    stale worktree and `git worktree prune` would remove it,
+    //    orphaning the real worktree metadata. The fix is to
+    //    separate the two names: pass `name = session_id` (no
+    //    slashes, the metadata dir under `.git/worktrees/`) and
+    //    pass the new branch through `WorktreeAddOptions::reference`.
+    //
+    //    The branch is pre-created on the main repo via
+    //    `Repository::branch` so the Reference object we hand to
+    //    libgit2 is real. This means the branch shows up in the
+    //    main repo's `git branch` listing too — that's fine; the
+    //    branch is shared between the main repo and the worktree.
     let repo = Repository::open(project_path)?;
-    let branch = branch_name(session_id);
+    let branch_full = branch_name(session_id);
+    let head_commit = repo.head()?.peel_to_commit()?;
+    let branch_obj = repo.branch(&branch_full, &head_commit, false)?;
+    let branch_ref = branch_obj.into_reference();
 
-    // 4a. The CLI's `git worktree add <path> -b session/<id>`
-    //     creates the new branch on a per-prefix namespace under
-    //     `<commondir>/worktrees/session/<id>/`. The CLI version
-    //     implicitly creates the `session/` intermediate dir; the
-    //     libgit2 C API does NOT — calling `Repository::worktree`
-    //     with a slash-bearing name like `session/<id>` will fail
-    //     with "failed to make directory .../worktrees/session/...".
-    //     We mirror the CLI's behavior by creating the
-    //     intermediate dir ourselves.
-    let worktree_name = std::path::Path::new(&branch);
-    if let Some(intermediate_rel) = worktree_name.parent() {
-        if !intermediate_rel.as_os_str().is_empty() {
-            // `Repository::commondir` is infallible in git2 0.20
-            // and returns a `&Path` borrowed from the repo; copy
-            // it to an owned `PathBuf` so the borrow doesn't
-            // outlive the function (the `repo.worktree` call
-            // below would otherwise conflict).
-            let commondir: std::path::PathBuf = repo.commondir().to_path_buf();
-            let intermediate = commondir.join("worktrees").join(intermediate_rel);
-            std::fs::create_dir_all(&intermediate).map_err(|e| GitError::Io {
-                path: intermediate.display().to_string(),
-                source: e,
-            })?;
-        }
-    }
-
-    repo.worktree(&branch, worktree_path, None)?;
+    let mut opts = git2::WorktreeAddOptions::new();
+    opts.reference(Some(&branch_ref));
+    repo.worktree(session_id, &worktree_path, Some(&opts))?;
 
     tracing::info!(
         project = %project_path.display(),
         worktree = %worktree_path.display(),
-        branch = %branch,
+        branch = %branch_full,
         "created session worktree"
     );
     Ok(())
@@ -214,12 +215,18 @@ pub fn destroy(
     //    previous crash may have already removed the .git/worktrees
     //    entry but left the working dir (which we just cleaned up
     //    in step 1). Both prune and branch-delete are best-effort.
+    //
+    //    NB: since PR1's fix, the worktree's metadata name is the
+    //    session_id (no `session/` prefix); the branch name keeps
+    //    the prefix. We need to look up by session_id for the
+    //    worktree and by `session/<id>` for the branch.
+    let worktree_lookup = session_id;
     match Repository::open(project_path) {
         Ok(repo) => {
-            if let Ok(wt) = repo.find_worktree(&branch) {
+            if let Ok(wt) = repo.find_worktree(worktree_lookup) {
                 if let Err(e) = wt.prune(None) {
                     tracing::warn!(
-                        branch = %branch,
+                        worktree = %worktree_lookup,
                         error = %e,
                         "worktree metadata prune failed (non-fatal)"
                     );
