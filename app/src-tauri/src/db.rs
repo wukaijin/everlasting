@@ -23,7 +23,7 @@
 //! `docs/PROPOSAL-project-binding-and-top-tabs.md` §3.4.
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use uuid::Uuid;
@@ -32,9 +32,63 @@ use crate::llm::types::{MessageContent, Role};
 use crate::projects::ProjectRow;
 use crate::projects::DEFAULT_PROJECT_ID;
 
+impl Serialize for WorktreeState {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Row types (Serialize for Tauri IPC payload)
 // ---------------------------------------------------------------------------
+
+/// Possible worktree states for a session. The state machine is
+/// tri-valued:
+///
+/// - `None` (DB value `"none"`): the session was never attached
+///   to a worktree. `worktree_path` is NULL.
+/// - `Active` (DB value `"active"`): a worktree is currently
+///   bound to this session. `worktree_path` is non-NULL.
+/// - `Detached` (DB value `"detached"`): a worktree WAS attached
+///   at some point, but the user has since unbound it. The
+///   directory + branch are preserved on disk and
+///   `last_worktree_path` records the path that was unbound (for
+///   the "上次 worktree" UI affordance — a detached session still
+///   has a branch on disk, and the user may want to re-attach to
+///   it).
+///
+/// Migration: a session that was created under step 4 (auto-create
+/// flow, before the opt-in refactor) has `worktree_path IS NOT
+/// NULL` but `worktree_state IS NULL`. `run_migrations` backfills
+/// these to `"active"` so the UI behaves the same as a freshly
+/// attached session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeState {
+    None,
+    Active,
+    Detached,
+}
+
+impl WorktreeState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorktreeState::None => "none",
+            WorktreeState::Active => "active",
+            WorktreeState::Detached => "detached",
+        }
+    }
+
+    /// Lenient parse for DB values. Unknown values are treated as
+    /// `None` so a future schema migration that adds a new state
+    /// doesn't crash an older binary reading a newer DB.
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "active" => WorktreeState::Active,
+            "detached" => WorktreeState::Detached,
+            _ => WorktreeState::None,
+        }
+    }
+}
 
 /// A session as stored in the DB.
 #[derive(Debug, Clone, Serialize)]
@@ -47,13 +101,18 @@ pub struct SessionRow {
     pub project_id: String,
     pub current_cwd: String,
     /// On-disk path to the session's git worktree. `None` for
-    /// pre-step-4 sessions (the column is NULL for any row that
-    /// existed before the step 4 migration); tools fall back to
-    /// `current_cwd` when this is `None`. Step 4 sessions always
-    /// have a `Some` value (or the create call failed — there is
-    /// no "step 4 + non-git" state because step 4 rejects non-git
-    /// projects at create time).
+    /// sessions that have never been attached (state `none`) or
+    /// have been detached (state `detached` — see
+    /// `last_worktree_path` for the historical path). Tools fall
+    /// back to `current_cwd` when this is `None`.
     pub worktree_path: Option<String>,
+    /// Current worktree state (see [`WorktreeState`]).
+    pub worktree_state: WorktreeState,
+    /// Path of the most recently detached worktree. `None` unless
+    /// the session has been in `active` state at some point.
+    /// Preserved across detach so the UI can show a "上次 worktree"
+    /// chip that lets the user re-attach or inspect the branch.
+    pub last_worktree_path: Option<String>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -66,9 +125,13 @@ pub struct SessionSummary {
     pub preview: String,
     pub project_id: String,
     pub current_cwd: String,
-    /// Mirror of [`SessionRow::worktree_path`]. `None` for pre-step-4
-    /// rows; the UI shows no "diff" affordance when this is empty.
+    /// Mirror of [`SessionRow::worktree_path`]. `None` for sessions
+    /// in `none` or `detached` state.
     pub worktree_path: Option<String>,
+    /// Mirror of [`SessionRow::worktree_state`].
+    pub worktree_state: WorktreeState,
+    /// Mirror of [`SessionRow::last_worktree_path`].
+    pub last_worktree_path: Option<String>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
@@ -83,6 +146,10 @@ pub struct MessageRow {
     pub has_tool_results: bool,
     pub created_at: String,
     pub seq: i64,
+    /// Optional structured metadata. `None` for chat history rows;
+    /// `Some(json)` for system events injected by the worktree
+    /// commands. Used by rehydrate to filter or specially render.
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.
@@ -228,6 +295,36 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     //  an error before the INSERT if worktree creation fails). ---
     add_session_column_if_missing(pool, "worktree_path", "TEXT").await?;
 
+    // --- Step 4 follow-up: opt-in worktree (auto-create → manual
+    //  attach/detach/delete). Adds the tri-state `worktree_state`
+    //  column (default 'none') and `last_worktree_path` for
+    //  detached sessions.
+    //
+    //  Backfill: sessions that have `worktree_path IS NOT NULL`
+    //  AND `worktree_state IS NULL` are pre-follow-up rows that
+    //  were created under the old auto-create flow. They were
+    //  effectively "active" at the time of creation, so we mark
+    //  them as 'active' here. This matches the PR1 / PR2 spirit
+    //  of the git-metadata backfill: idempotent, fire-and-forget,
+    //  and run after the column add. ---
+    add_session_column_if_missing(
+        pool,
+        "worktree_state",
+        "TEXT NOT NULL DEFAULT 'none'",
+    )
+    .await?;
+    add_session_column_if_missing(pool, "last_worktree_path", "TEXT").await?;
+    sqlx::query(
+        r#"
+        UPDATE sessions
+        SET worktree_state = 'active'
+        WHERE worktree_path IS NOT NULL
+          AND (worktree_state IS NULL OR worktree_state = '')
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     // --- PR2 ALTERs: add is_git_repo + git_branch to projects.
     //  `is_git_repo` already exists on freshly created tables (see
     //  CREATE TABLE above) so the idempotent probe is a no-op for
@@ -250,12 +347,18 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             has_tool_results INTEGER NOT NULL DEFAULT 0,
             created_at       TEXT NOT NULL,
             seq              INTEGER NOT NULL,
+            metadata         TEXT,
             UNIQUE(session_id, seq)
         )
         "#,
     )
     .execute(pool)
     .await?;
+    // Step 4 follow-up: add `metadata` column for system events.
+    // The CREATE TABLE above has the column for greenfield DBs;
+    // the probe + ALTER backfills older databases. Nullable so
+    // pre-existing rows keep NULL.
+    add_messages_column_if_missing(pool, "metadata", "TEXT").await?;
     sqlx::query(
         r#"
         CREATE INDEX IF NOT EXISTS idx_messages_session_seq
@@ -344,6 +447,26 @@ async fn add_project_column_if_missing(
             .try_get(0)?;
     if exists == 0 {
         let stmt = format!("ALTER TABLE projects ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Add a column to `messages` if it doesn't already exist. Mirrors
+/// [`add_session_column_if_missing`].
+async fn add_messages_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!("ALTER TABLE messages ADD COLUMN {} {}", column, decl);
         sqlx::query(&stmt).execute(pool).await?;
     }
     Ok(())
@@ -652,23 +775,20 @@ fn row_to_project(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow, sqlx::Error>
 /// Create a new empty session under `project_id` with the given
 /// initial working directory. Returns the new session's row.
 ///
-/// `session_id` is supplied by the caller so it can be shared with
-/// the git worktree branch (the worktree branch name and the DB
-/// row's primary key must agree — see `lib.rs::create_session`).
-/// The caller is responsible for UUID uniqueness.
+/// `session_id` is supplied by the caller; the caller is responsible
+/// for UUID uniqueness.
 ///
-/// `worktree_path` is the absolute on-disk path of the session's
-/// git worktree, computed by the caller (see
-/// `git::session_worktree_path`). It is `None` for pre-step-4
-/// callers; step 4 always passes `Some(path)` because non-git
-/// projects are rejected upstream of this function.
+/// `worktree_path` is `None` for sessions in `WorktreeState::None`
+/// (the new opt-in default — sessions no longer auto-create a
+/// worktree; the user must call `attach_worktree` explicitly).
+/// Sessions that have been migrated from the pre-follow-up auto-
+/// create flow get the path on attach instead.
 pub async fn create_session(
     pool: &SqlitePool,
     session_id: &str,
     project_id: &str,
     initial_cwd: &str,
     model: &str,
-    worktree_path: Option<&str>,
 ) -> Result<SessionRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let title = "新对话".to_string();
@@ -676,8 +796,9 @@ pub async fn create_session(
     sqlx::query(
         r#"
         INSERT INTO sessions
-            (id, title, created_at, updated_at, model, metadata, project_id, current_cwd, worktree_path)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
+             worktree_path, worktree_state, last_worktree_path)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL)
         "#,
     )
     .bind(session_id)
@@ -687,7 +808,6 @@ pub async fn create_session(
     .bind(model)
     .bind(project_id)
     .bind(initial_cwd)
-    .bind(worktree_path)
     .execute(pool)
     .await?;
 
@@ -699,7 +819,9 @@ pub async fn create_session(
         model: model.to_string(),
         project_id: project_id.to_string(),
         current_cwd: initial_cwd.to_string(),
-        worktree_path: worktree_path.map(str::to_string),
+        worktree_path: None,
+        worktree_state: WorktreeState::None,
+        last_worktree_path: None,
     })
 }
 
@@ -711,7 +833,8 @@ pub async fn list_sessions(
 ) -> Result<Vec<SessionSummary>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
-        SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd, s.worktree_path,
+        SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd,
+               s.worktree_path, s.worktree_state, s.last_worktree_path,
                COALESCE(
                    (SELECT text FROM messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
@@ -736,6 +859,7 @@ pub async fn list_sessions(
             } else {
                 preview
             };
+            let state_str: String = r.try_get("worktree_state")?;
             Ok(SessionSummary {
                 id: r.try_get("id")?,
                 title: r.try_get("title")?,
@@ -744,6 +868,8 @@ pub async fn list_sessions(
                 project_id: r.try_get("project_id")?,
                 current_cwd: r.try_get("current_cwd")?,
                 worktree_path: r.try_get("worktree_path")?,
+                worktree_state: WorktreeState::from_str_opt(&state_str),
+                last_worktree_path: r.try_get("last_worktree_path")?,
             })
         })
         .collect()
@@ -757,7 +883,8 @@ pub async fn load_session(
 ) -> Result<Option<LoadedSession>, sqlx::Error> {
     let session_row = sqlx::query(
         r#"
-        SELECT id, title, created_at, updated_at, model, project_id, current_cwd, worktree_path
+        SELECT id, title, created_at, updated_at, model, project_id, current_cwd,
+               worktree_path, worktree_state, last_worktree_path
         FROM sessions
         WHERE id = ?
         "#,
@@ -767,22 +894,28 @@ pub async fn load_session(
     .await?;
 
     let session = match session_row {
-        Some(r) => SessionRow {
-            id: r.try_get("id")?,
-            title: r.try_get("title")?,
-            created_at: r.try_get("created_at")?,
-            updated_at: r.try_get("updated_at")?,
-            model: r.try_get("model")?,
-            project_id: r.try_get("project_id")?,
-            current_cwd: r.try_get("current_cwd")?,
-            worktree_path: r.try_get("worktree_path")?,
-        },
+        Some(r) => {
+            let state_str: String = r.try_get("worktree_state")?;
+            SessionRow {
+                id: r.try_get("id")?,
+                title: r.try_get("title")?,
+                created_at: r.try_get("created_at")?,
+                updated_at: r.try_get("updated_at")?,
+                model: r.try_get("model")?,
+                project_id: r.try_get("project_id")?,
+                current_cwd: r.try_get("current_cwd")?,
+                worktree_path: r.try_get("worktree_path")?,
+                worktree_state: WorktreeState::from_str_opt(&state_str),
+                last_worktree_path: r.try_get("last_worktree_path")?,
+            }
+        }
         None => return Ok(None),
     };
 
     let msg_rows = sqlx::query(
         r#"
-        SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq
+        SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results,
+               created_at, seq, metadata
         FROM messages
         WHERE session_id = ?
         ORDER BY seq ASC
@@ -799,6 +932,10 @@ pub async fn load_session(
             let content: serde_json::Value = serde_json::from_str(&content_str).map_err(|e| {
                 sqlx::Error::Decode(format!("bad message content JSON: {}", e).into())
             })?;
+            // metadata column is JSON or NULL. Parse if present.
+            let metadata: Option<serde_json::Value> = r
+                .try_get::<Option<String>, _>("metadata")?
+                .and_then(|s| serde_json::from_str(&s).ok());
             Ok(MessageRow {
                 id: r.try_get("id")?,
                 session_id: r.try_get("session_id")?,
@@ -809,6 +946,7 @@ pub async fn load_session(
                 has_tool_results: r.try_get::<i64, _>("has_tool_results")? != 0,
                 created_at: r.try_get("created_at")?,
                 seq: r.try_get("seq")?,
+                metadata,
             })
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -863,6 +1001,106 @@ pub async fn update_session_cwd(
     .bind(new_cwd)
     .bind(&now)
     .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Worktree state transitions (step 4 follow-up)
+// ---------------------------------------------------------------------------
+
+/// Set the session's `worktree_path`, `worktree_state`, and
+/// (optionally) `last_worktree_path` in a single statement. Used
+/// by the `attach_worktree` / `detach_worktree` / `delete_worktree`
+/// Tauri commands to keep the three columns consistent. The
+/// `last_worktree_path` is preserved across detach by passing the
+/// old value through; the caller computes it from the row before
+/// the transition.
+pub async fn set_worktree_state(
+    pool: &SqlitePool,
+    session_id: &str,
+    state: WorktreeState,
+    worktree_path: Option<&str>,
+    last_worktree_path: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE sessions
+        SET worktree_state = ?,
+            worktree_path = ?,
+            last_worktree_path = ?,
+            updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(state.as_str())
+    .bind(worktree_path)
+    .bind(last_worktree_path)
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// System event injection (step 4 follow-up)
+// ---------------------------------------------------------------------------
+
+/// Append a synthetic user-role message to the session's history,
+/// recording a worktree state change (attach / detach / delete).
+/// The next LLM turn will see the message in its history, so the
+/// model is aware of the worktree state transition before any
+/// tool call goes out.
+///
+/// The stored `content` is a JSON array of one `text` block so the
+/// rehydrate path picks it up correctly. The `text` column gets a
+/// short plain-text summary for the sidebar preview. The
+/// `metadata` column carries the structured event marker so future
+/// migrations can filter these from the chat history.
+pub async fn insert_system_event(
+    pool: &SqlitePool,
+    session_id: &str,
+    text: &str,
+    event_kind: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    // Compute the next seq for this session. We do a separate
+    // SELECT MAX to keep the query portable across SQLite versions
+    // (no RETURNING in 3.35, no UPSERT-with-RETURNING before that).
+    let next_seq: i64 = sqlx::query("SELECT COALESCE(MAX(seq), -1) + 1 FROM messages WHERE session_id = ?")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await?
+        .try_get(0)?;
+    let content_json = serde_json::json!([
+        {
+            "type": "text",
+            "text": format!("[worktree event] {}", text),
+        }
+    ])
+    .to_string();
+    let metadata = serde_json::json!({
+        "kind": "worktree_event",
+        "event": event_kind,
+    })
+    .to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO messages
+           (session_id, role, content, text, has_tool_calls, has_tool_results,
+            created_at, seq, metadata)
+        VALUES (?, 'user', ?, ?, 0, 0, ?, ?, ?)
+        "#,
+    )
+    .bind(session_id)
+    .bind(&content_json)
+    .bind(text)
+    .bind(&now)
+    .bind(next_seq)
+    .bind(&metadata)
     .execute(pool)
     .await?;
     Ok(())
@@ -1187,10 +1425,10 @@ mod tests {
             .await
             .unwrap();
 
-        let s1 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/foo", "GLM-4.7", None)
+        let s1 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/foo", "GLM-4.7")
             .await
             .unwrap();
-        let s2 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/bar", "GLM-4.7", None)
+        let s2 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/bar", "GLM-4.7")
             .await
             .unwrap();
         assert_eq!(s1.project_id, p.id);
@@ -1215,7 +1453,7 @@ mod tests {
     #[tokio::test]
     async fn persist_and_load_messages() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
 
@@ -1256,7 +1494,7 @@ mod tests {
     #[tokio::test]
     async fn first_user_message_auto_titles_session() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
 
@@ -1272,7 +1510,7 @@ mod tests {
     #[tokio::test]
     async fn second_user_message_does_not_overwrite_title() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
 
@@ -1290,7 +1528,7 @@ mod tests {
     #[tokio::test]
     async fn delete_session_cascades_messages() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
         persist_turn(
@@ -1310,7 +1548,7 @@ mod tests {
     #[tokio::test]
     async fn list_sessions_preview_truncates_at_80_chars() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
         let long = "a".repeat(120);
@@ -1326,7 +1564,7 @@ mod tests {
     #[tokio::test]
     async fn touch_session_updates_timestamp() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
             .await
             .unwrap();
         let original = session.updated_at.clone();
@@ -1339,7 +1577,7 @@ mod tests {
     #[tokio::test]
     async fn update_session_cwd_persists() {
         let pool = test_pool().await;
-        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7", None)
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7")
             .await
             .unwrap();
         assert_eq!(session.current_cwd, "/tmp/start");
@@ -1347,5 +1585,159 @@ mod tests {
         update_session_cwd(&pool, &session.id, "/tmp/end").await.unwrap();
         let reloaded = load_session(&pool, &session.id).await.unwrap().unwrap();
         assert_eq!(reloaded.session.current_cwd, "/tmp/end");
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 4 follow-up: worktree state transition + system event tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn new_session_defaults_to_none_state() {
+        let pool = test_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        assert_eq!(s.worktree_state, WorktreeState::None);
+        assert!(s.worktree_path.is_none());
+        assert!(s.last_worktree_path.is_none());
+
+        let reloaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.session.worktree_state, WorktreeState::None);
+        assert!(reloaded.session.worktree_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn worktree_state_setter_round_trip() {
+        let pool = test_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        // Attach.
+        set_worktree_state(&pool, &s.id, WorktreeState::Active, Some("/data/wt"), None)
+            .await
+            .unwrap();
+        let r = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(r.session.worktree_state, WorktreeState::Active);
+        assert_eq!(r.session.worktree_path.as_deref(), Some("/data/wt"));
+        // Detach: clear worktree_path, preserve via last_worktree_path.
+        set_worktree_state(
+            &pool,
+            &s.id,
+            WorktreeState::Detached,
+            None,
+            Some("/data/wt"),
+        )
+        .await
+        .unwrap();
+        let r = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(r.session.worktree_state, WorktreeState::Detached);
+        assert!(r.session.worktree_path.is_none());
+        assert_eq!(r.session.last_worktree_path.as_deref(), Some("/data/wt"));
+        // Delete: both clear.
+        set_worktree_state(&pool, &s.id, WorktreeState::None, None, None)
+            .await
+            .unwrap();
+        let r = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(r.session.worktree_state, WorktreeState::None);
+        assert!(r.session.worktree_path.is_none());
+        assert!(r.session.last_worktree_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn worktree_state_unknown_string_defaults_to_none() {
+        // Defensive: a future schema migration may add a new state;
+        // older binaries must not crash reading unknown values.
+        assert_eq!(WorktreeState::from_str_opt(""), WorktreeState::None);
+        assert_eq!(WorktreeState::from_str_opt("nope"), WorktreeState::None);
+        assert_eq!(WorktreeState::from_str_opt("active"), WorktreeState::Active);
+        assert_eq!(WorktreeState::from_str_opt("detached"), WorktreeState::Detached);
+    }
+
+    #[tokio::test]
+    async fn worktree_state_backfill_legacy_active() {
+        // Simulate a row that existed before the follow-up migration:
+        // worktree_path set, worktree_state '' (the column exists
+        // with DEFAULT 'none' but the row was inserted before the
+        // backfill ran).
+        let pool = test_pool().await;
+        let sid = Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"
+            INSERT INTO sessions
+                (id, title, created_at, updated_at, model, project_id, current_cwd,
+                 worktree_path, worktree_state)
+            VALUES (?, 'legacy', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+                    'GLM-4.7', ?, '/tmp', '/data/legacy_wt', '')
+            "#,
+        )
+        .bind(&sid)
+        .bind(DEFAULT_PROJECT_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE sessions SET worktree_state = 'active' WHERE worktree_path IS NOT NULL AND (worktree_state IS NULL OR worktree_state = '')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let reloaded = load_session(&pool, &sid).await.unwrap().unwrap();
+        assert_eq!(reloaded.session.worktree_state, WorktreeState::Active);
+        assert_eq!(reloaded.session.worktree_path.as_deref(), Some("/data/legacy_wt"));
+    }
+
+    #[tokio::test]
+    async fn insert_system_event_appends_to_history() {
+        let pool = test_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        persist_turn(
+            &pool,
+            &s.id,
+            Role::User,
+            &MessageContent::Text("hi".into()),
+            0,
+        )
+        .await
+        .unwrap();
+        insert_system_event(
+            &pool,
+            &s.id,
+            "worktree attached: /data/wt on branch session/abc",
+            "attached",
+        )
+        .await
+        .unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+        let evt = &loaded.messages[1];
+        assert_eq!(evt.role, "user");
+        assert_eq!(evt.seq, 1);
+        let meta = evt.metadata.as_ref().expect("metadata present");
+        assert_eq!(meta["kind"], "worktree_event");
+        assert_eq!(meta["event"], "attached");
+        let blocks: Vec<ContentBlock> = serde_json::from_value(evt.content.clone()).unwrap();
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Text { text } = &blocks[0] {
+            assert!(text.contains("[worktree event]"));
+            assert!(text.contains("/data/wt"));
+        } else {
+            panic!("expected text block");
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_system_event_seq_increments() {
+        let pool = test_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        insert_system_event(&pool, &s.id, "first", "attached").await.unwrap();
+        insert_system_event(&pool, &s.id, "second", "detached").await.unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].seq, 0);
+        assert_eq!(loaded.messages[1].seq, 1);
     }
 }

@@ -4,6 +4,10 @@
 //!   `session/<id>` branch off the project's HEAD.
 //! - [`destroy_worktree`]: remove the worktree directory + delete
 //!   the session branch.
+//! - [`check_clean`]: assert a git working dir has no uncommitted
+//!   changes (used by `attach_worktree` and `detach_worktree` to
+//!   refuse the destructive operation when there are uncommitted
+//!   edits).
 //! - [`data_dir`]: XDG-compliant app data dir for worktree storage.
 //! - [`session_worktree_path`]: canonical on-disk path for a
 //!   session worktree.
@@ -21,4 +25,7 @@ pub mod diff;
 pub mod error;
 pub mod worktree;
 
-pub use worktree::{create as create_worktree, data_dir, destroy as destroy_worktree, worktree_path as session_worktree_path};
+pub use worktree::{
+    check_clean, create as create_worktree, data_dir, destroy as destroy_worktree,
+    worktree_path as session_worktree_path,
+};

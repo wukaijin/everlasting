@@ -275,3 +275,189 @@ pub fn destroy(
     );
     Ok(())
 }
+
+/// Check that a git working directory (project root, worktree, or
+/// any other tree) has **no uncommitted or untracked changes**.
+/// Returns `Ok(())` for a clean tree, `Err(message)` for a dirty
+/// one. The error message lists offending paths so the user knows
+/// what to commit/stash.
+///
+/// Used by:
+/// - `lib.rs::attach_worktree` — refuses to attach if the
+///   project's main working directory has uncommitted changes
+///   (the new worktree would diverge from a dirty base).
+/// - `lib.rs::detach_worktree` — refuses to detach if the
+///   worktree itself has uncommitted changes (detaching would
+///   strand the user's WIP — the LLM's next tool call would
+///   silently lose them).
+///
+/// Implementation: open the repo at `repo_path` and call
+/// `repo.statuses(None)`. We classify any non-ignored entry with
+/// a non-zero status bits (INDEX_NEW, WT_MODIFIED, etc.) as
+/// "uncommitted". Ignored files (`include_ignored: false`) are
+/// skipped — `.everlasting/outputs/` doesn't count.
+pub fn check_clean(repo_path: &Path) -> Result<(), String> {
+    if !repo_path.exists() {
+        return Err(format!(
+            "worktree path '{}' does not exist (it may have been deleted on disk)",
+            repo_path.display()
+        ));
+    }
+    let repo = Repository::open(repo_path).map_err(|e| {
+        format!(
+            "failed to open git repo at '{}': {}",
+            repo_path.display(),
+            e
+        )
+    })?;
+    let mut opts = git2::StatusOptions::new();
+    opts.include_ignored(false)
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_unmodified(false);
+    let statuses = match repo.statuses(Some(&mut opts)) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("failed to read git status: {}", e)),
+    };
+    if statuses.is_empty() {
+        return Ok(());
+    }
+    // Collect up to 10 offending paths for a friendly error. The
+    // libgit2 StatusEntry's `path()` is the worktree-relative
+    // path (e.g. `src/main.rs`); good enough for the message.
+    let mut paths: Vec<String> = Vec::new();
+    for entry in statuses.iter() {
+        if let Some(p) = entry.path() {
+            paths.push(p.to_string());
+            if paths.len() >= 10 {
+                break;
+            }
+        }
+    }
+    Err(format!(
+        "{} has uncommitted changes{}",
+        repo_path.display(),
+        if paths.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", paths.join(", "))
+        }
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command as StdCommand;
+    use tempfile::tempdir;
+
+    /// Helper: init a git repo at `path`, configure the user (so
+    /// `commit` works in tests), and return the repo path. Tests
+    /// using this can layer worktrees on top.
+    fn init_repo(path: &Path) {
+        fs::create_dir_all(path).unwrap();
+        let init = StdCommand::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed: {:?}", init);
+        let cfg_user = StdCommand::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(cfg_user.status.success());
+        let cfg_name = StdCommand::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(cfg_name.status.success());
+    }
+
+    /// Helper: stage + commit everything in `path` with the
+    /// message "init".
+    fn commit_all(path: &Path) {
+        let add = StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+        let commit = StdCommand::new("git")
+            .args(["commit", "-m", "init", "--no-gpg-sign"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed: {:?}", commit);
+    }
+
+    #[test]
+    fn check_clean_passes_on_clean_tree() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path();
+        init_repo(p);
+        std::fs::write(p.join("a.txt"), "hello").unwrap();
+        commit_all(p);
+        // No changes after the commit.
+        check_clean(p).expect("clean tree should pass");
+    }
+
+    #[test]
+    fn check_clean_detects_untracked_file() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path();
+        init_repo(p);
+        std::fs::write(p.join("a.txt"), "hello").unwrap();
+        commit_all(p);
+        // Add an untracked file.
+        std::fs::write(p.join("b.txt"), "world").unwrap();
+        let err = check_clean(p).expect_err("dirty tree should fail");
+        assert!(err.contains("uncommitted"));
+        assert!(err.contains("b.txt"));
+    }
+
+    #[test]
+    fn check_clean_detects_modified_tracked_file() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path();
+        init_repo(p);
+        std::fs::write(p.join("a.txt"), "v1").unwrap();
+        commit_all(p);
+        // Modify the tracked file.
+        std::fs::write(p.join("a.txt"), "v2").unwrap();
+        let err = check_clean(p).expect_err("modified tree should fail");
+        assert!(err.contains("uncommitted"));
+        assert!(err.contains("a.txt"));
+    }
+
+    #[test]
+    fn check_clean_ignores_gitignored_files() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path();
+        init_repo(p);
+        std::fs::write(p.join("a.txt"), "hello").unwrap();
+        commit_all(p);
+        // Add a .gitignore that ignores `output/`, then write into
+        // that dir. The tool should NOT flag the ignored file.
+        std::fs::write(p.join(".gitignore"), "output/\n").unwrap();
+        std::fs::create_dir_all(p.join("output")).unwrap();
+        std::fs::write(p.join("output/b.txt"), "ignored").unwrap();
+        commit_all(p);
+        // Now write a NEW ignored file post-commit. check_clean
+        // should still pass because gitignored files are
+        // excluded by `include_ignored(false)`.
+        std::fs::write(p.join("output/c.txt"), "ignored").unwrap();
+        check_clean(p).expect("ignored files should be excluded");
+    }
+
+    #[test]
+    fn check_clean_rejects_missing_path() {
+        let tmp = tempdir().unwrap();
+        let bogus = tmp.path().join("does-not-exist");
+        let err = check_clean(&bogus).expect_err("missing path should fail");
+        assert!(err.contains("does not exist"));
+    }
+}

@@ -63,6 +63,13 @@ struct AppState {
     /// listens for cancellation between events. The entry is removed
     /// by the spawn task on every exit path (normal / error / cancel).
     cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Step 4 follow-up: per-session → active request id, for the
+    /// destructive in-flight cancel hook (`delete_session`,
+    /// `detach_worktree`, `delete_worktree`). When the user invokes
+    /// any of these, we look up the session's active `request_id`
+    /// and cancel it BEFORE the destructive work runs, so the LLM
+    /// can't write to a half-deleted worktree.
+    session_active_request: Arc<Mutex<HashMap<String, String>>>,
     /// Per-session read fingerprints. The `edit_file` tool consults
     /// this guard to ensure the LLM (a) read the file in the current
     /// session and (b) the file hasn't been modified on disk since.
@@ -150,6 +157,7 @@ impl AppState {
             tools,
             db,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
+            session_active_request: Arc::new(Mutex::new(HashMap::new())),
             read_guard: ReadGuard::new(),
         }
     }
@@ -259,81 +267,31 @@ async fn create_session(
     if project_id.trim().is_empty() {
         return Err("create_session: project_id must not be empty".to_string());
     }
-    // Sanity: the project must exist. We do NOT error out if it doesn't
-    // (the user could be racing a delete); instead we let `db::create_session`
-    // surface the foreign-key violation as a clear error.
 
-    // Step 4: worktree isolation requires a git repo. Look up the
-    // project to (a) confirm it exists, (b) read `is_git_repo` /
-    // `path`. We do this BEFORE the DB insert so a non-git project
-    // error doesn't leave an orphan `sessions` row.
-    let project = match db::get_project(&state.db, &project_id).await {
+    // Step 4 follow-up: worktree is now opt-in. We no longer require
+    // the project to be a git repo (that was the step 4 v1 hard
+    // guard) and we no longer auto-create a worktree. The session is
+    // created in `WorktreeState::None`; the user calls
+    // `attach_worktree` separately if they want isolation. Non-git
+    // projects can now create sessions and send messages — the
+    // pre-follow-up "step 4 requires all session-bearing projects
+    // to be git repos" constraint is gone.
+    //
+    // We still load the project so we (a) verify it exists and
+    // (b) record the current cwd against the project's path. The
+    // project-not-found case is surfaced as a clear error.
+    let _project = match db::get_project(&state.db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            // Project was deleted between the user's click and this
-            // call (rare race). Surface as a clear error so the
-            // frontend can refetch the project list.
             return Err(format!("create_session: project '{}' not found", project_id));
         }
         Err(e) => return Err(format!("create_session: failed to load project: {}", e)),
     };
-    if !project.is_git_repo {
-        return Err(format!(
-            "create_session: project '{}' is not a git repository; step 4 requires all session-bearing projects to be git repos (run `git init` inside the project to enable)",
-            project.name
-        ));
-    }
 
-    // Create the worktree on disk FIRST, then write the DB row. If
-    // the worktree creation fails we never insert a half-initialized
-    // session row, so the user can retry without cleaning up.
     let session_id = uuid::Uuid::new_v4().to_string();
-    let data_dir = git::data_dir();
-    let wt_path = git::session_worktree_path(&data_dir, &project_id, &session_id);
-    if let Err(e) = git::create_worktree(
-        std::path::Path::new(&project.path),
-        &wt_path,
-        &session_id,
-    ) {
-        return Err(format!("create_session: worktree creation failed: {}", e));
-    }
-
-    // Now the DB row, with the canonical worktree path stored. The
-    // session id is fixed to the one we used for the worktree
-    // (otherwise the worktree branch name and the DB row would
-    // disagree).
-    let result = db::create_session(
-        &state.db,
-        &session_id,
-        &project_id,
-        &initial_cwd,
-        &model,
-        wt_path.to_str(),
-    )
-    .await;
-
-    if let Err(e) = result {
-        // If the DB insert fails after the worktree was created,
-        // we have a leaked worktree. Best-effort cleanup so we
-        // don't leave the user with a phantom branch.
-        let _ = git::destroy_worktree(
-            std::path::Path::new(&project.path),
-            &wt_path,
-            &session_id,
-        );
-        return Err(format!("create_session: db insert failed: {}", e));
-    }
-
-    Ok(db::SessionRow {
-        id: session_id,
-        title: "新对话".to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        updated_at: chrono::Utc::now().to_rfc3339(),
-        model,
-        project_id,
-        current_cwd: initial_cwd,
-        worktree_path: wt_path.to_str().map(str::to_string),
-    })
+    db::create_session(&state.db, &session_id, &project_id, &initial_cwd, &model)
+        .await
+        .map_err(|e| format!("create_session: db insert failed: {}", e))
 }
 
 #[tauri::command]
@@ -384,6 +342,15 @@ async fn delete_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
+    // Step 4 follow-up: in-flight cancel hook. If a chat stream is
+    // running for this session, cancel it BEFORE the destructive
+    // work. The frontend is expected to disable the delete button
+    // while streaming (REQ-13) and to call `cancel_chat` first, but
+    // the backend is the last line of defense — a race between
+    // the IPC arrival and the agent loop's next event must not
+    // leave a stream writing to a half-deleted session.
+    cancel_inflight_for_session(&state.cancellations, &state.session_active_request, &session_id).await;
+
     // Clear the in-memory ReadGuard for this session so we don't leak
     // fingerprints for a session the user just deleted. The DB delete
     // is the source of truth; the guard is just a cache.
@@ -410,35 +377,35 @@ async fn delete_session(
         }
     }
 
-    // Step 4: best-effort worktree + branch cleanup. Per the
-    // brainstorm decision (prd.md §"两者都删"), session delete
-    // removes both the worktree directory AND the `session/<id>`
-    // branch. We do this BEFORE the DB delete because we need
-    // `worktree_path` and `project_id` from the loaded row; after
-    // the DB delete they're gone (until next load).
+    // Step 4 follow-up: best-effort worktree + branch cleanup.
+    // Triggered when the session's `worktree_state` is `active`
+    // (NOT `detached` — a detached session's worktree was
+    // already removed; deleting a detached session should NOT
+    // touch the on-disk artifacts, the user can re-attach to
+    // the branch via a new session).
     //
     // Failure modes are tolerated: a stuck worktree dir is logged
     // and the DB delete still proceeds, mirroring the spirit of the
     // shell-outputs cleanup above. A user can `rm -rf` the path by
     // hand if it gets stuck.
     if let Some(ref loaded) = session_for_cleanup {
-        if let Some(wt_path) = loaded.session.worktree_path.as_deref() {
-            // Look up the project to get the .git root. For
-            // pre-step-4 sessions (worktree_path is NULL) this
-            // branch is skipped; for step 4 sessions it's always
-            // present.
-            if let Ok(Some(project)) = db::get_project(&state.db, &loaded.session.project_id).await {
-                if let Err(e) = git::destroy_worktree(
-                    std::path::Path::new(&project.path),
-                    std::path::Path::new(wt_path),
-                    &session_id,
-                ) {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        worktree = %wt_path,
-                        error = %e,
-                        "worktree cleanup failed during session delete (non-fatal)"
-                    );
+        if loaded.session.worktree_state == db::WorktreeState::Active {
+            if let Some(wt_path) = loaded.session.worktree_path.as_deref() {
+                if let Ok(Some(project)) =
+                    db::get_project(&state.db, &loaded.session.project_id).await
+                {
+                    if let Err(e) = git::destroy_worktree(
+                        std::path::Path::new(&project.path),
+                        std::path::Path::new(wt_path),
+                        &session_id,
+                    ) {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            worktree = %wt_path,
+                            error = %e,
+                            "worktree cleanup failed during session delete (non-fatal)"
+                        );
+                    }
                 }
             }
         }
@@ -447,6 +414,369 @@ async fn delete_session(
     db::delete_session(&state.db, &session_id)
         .await
         .map_err(|e| format!("delete_session failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
+// Step 4 follow-up: opt-in worktree commands
+// ---------------------------------------------------------------------------
+
+/// Cancel an in-flight chat request for `session_id`, if any. Called
+/// at the entry of `delete_session` / `detach_worktree` /
+/// `delete_worktree` so a streaming LLM can't write into a
+/// half-destroyed session/worktree. No-op when the session isn't
+/// streaming. The cancellation is best-effort: the agent loop
+/// notices on its next event boundary and bails out cleanly,
+/// emitting a `done` event with `stop_reason: "cancelled"`.
+async fn cancel_inflight_for_session(
+    cancellations: &Arc<Mutex<HashMap<String, CancellationToken>>>,
+    session_active_request: &Arc<Mutex<HashMap<String, String>>>,
+    session_id: &str,
+) {
+    let request_id = {
+        let map = session_active_request.lock().await;
+        map.get(session_id).cloned()
+    };
+    let Some(rid) = request_id else {
+        return;
+    };
+    let token = {
+        let map = cancellations.lock().await;
+        map.get(&rid).cloned()
+    };
+    if let Some(t) = token {
+        t.cancel();
+        tracing::info!(
+            session_id = %session_id,
+            request_id = %rid,
+            "destructive op: cancelled in-flight chat"
+        );
+    }
+    // The `session_active_request` entry is removed by the
+    // `CancellationGuard` on Drop, after the agent loop exits.
+    // We don't remove it here — the in-flight loop still uses it
+    // during cleanup.
+}
+
+#[tauri::command]
+async fn attach_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String> {
+    // Step 4 follow-up: opt-in worktree attach. Loads the session +
+    // project, validates the project is a git repo (the only
+    // attach-time requirement), refuses if the project root has
+    // uncommitted changes (REQ-8), creates the worktree + branch
+    // (disk-first), and writes the new state to the DB. Injects a
+    // system event into the session's history so the next LLM
+    // turn sees the worktree transition.
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("attach_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| format!("attach_worktree: session '{}' not found", session_id))?;
+    let project = db::get_project(&state.db, &loaded.session.project_id)
+        .await
+        .map_err(|e| format!("attach_worktree: failed to load project: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "attach_worktree: project '{}' not found",
+                loaded.session.project_id
+            )
+        })?;
+    if !project.is_git_repo {
+        return Err(format!(
+            "attach_worktree: project '{}' is not a git repository",
+            project.name
+        ));
+    }
+
+    // State machine guard: attach only valid from `none` or
+    // `detached`. A session in `active` state already has a
+    // worktree — attaching again is a user error.
+    match loaded.session.worktree_state {
+        db::WorktreeState::None | db::WorktreeState::Detached => {}
+        db::WorktreeState::Active => {
+            return Err(format!(
+                "attach_worktree: session '{}' already has an active worktree",
+                session_id
+            ));
+        }
+    }
+
+    // Reject if the project root is dirty (REQ-8). The new worktree
+    // would diverge from a dirty base, which silently loses the
+    // user's WIP.
+    let project_path = std::path::Path::new(&project.path);
+    if let Err(msg) = git::check_clean(project_path) {
+        return Err(format!("attach_worktree: {}", msg));
+    }
+
+    // Disk first, then DB. If the worktree creation fails we
+    // don't touch the DB; the user can retry.
+    let data_dir = git::data_dir();
+    let wt_path = git::session_worktree_path(&data_dir, &project.id, &session_id);
+    git::create_worktree(project_path, &wt_path, &session_id)
+        .map_err(|e| format!("attach_worktree: worktree creation failed: {}", e))?;
+
+    // Now write the new state to the DB.
+    let wt_str = wt_path.to_str().map(str::to_string);
+    db::set_worktree_state(
+        &state.db,
+        &session_id,
+        db::WorktreeState::Active,
+        wt_str.as_deref(),
+        // Preserve last_worktree_path on a re-attach (detach
+        // already populated it; attaching from `none` keeps NULL).
+        loaded.session.last_worktree_path.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("attach_worktree: db update failed: {}", e))?;
+
+    // Inject system event so the next LLM turn sees the transition.
+    let branch = git::worktree::branch_name(&session_id);
+    let wt_display = wt_path.display().to_string();
+    let event_text = format!(
+        "worktree attached: {} on branch {}",
+        wt_display, branch
+    );
+    if let Err(e) =
+        db::insert_system_event(&state.db, &session_id, &event_text, "attached").await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "attach_worktree: insert_system_event failed (non-fatal)"
+        );
+    }
+
+    // Reload and return the canonical row.
+    let updated = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("attach_worktree: reload failed: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "attach_worktree: session '{}' disappeared after attach",
+                session_id
+            )
+        })?;
+    Ok(updated.session)
+}
+
+#[tauri::command]
+async fn detach_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String> {
+    // Step 4 follow-up: opt-in worktree detach. Refuses if the
+    // session isn't `active` (detach is only valid FROM active),
+    // refuses if the worktree is dirty (REQ-9: don't strand
+    // WIP), preserves the path in `last_worktree_path`, and
+    // clears `worktree_path` so the next tool call falls back
+    // to `project.path` via the `WorktreeState::Detached`
+    // fallback in the agent loop.
+    cancel_inflight_for_session(
+        &state.cancellations,
+        &state.session_active_request,
+        &session_id,
+    )
+    .await;
+
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("detach_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| format!("detach_worktree: session '{}' not found", session_id))?;
+
+    if loaded.session.worktree_state != db::WorktreeState::Active {
+        return Err(format!(
+            "detach_worktree: session '{}' is not in 'active' state (current: {:?})",
+            session_id, loaded.session.worktree_state
+        ));
+    }
+    let wt_path_str = loaded
+        .session
+        .worktree_path
+        .clone()
+        .ok_or_else(|| "detach_worktree: active session has no worktree_path".to_string())?;
+    let wt_path = std::path::PathBuf::from(&wt_path_str);
+
+    // REQ-9: refuse if the worktree has uncommitted changes.
+    if let Err(msg) = git::check_clean(&wt_path) {
+        return Err(format!("detach_worktree: {}", msg));
+    }
+
+    // Write the new state FIRST. If the DB update fails, we
+    // haven't touched the disk; user can retry. The `git::
+    // destroy_worktree` is intentionally NOT called here —
+    // detach is "unbind from the session" not "delete the
+    // artifacts". The branch + directory stay on disk; the
+    // user can re-attach or inspect the branch via a new
+    // session.
+    db::set_worktree_state(
+        &state.db,
+        &session_id,
+        db::WorktreeState::Detached,
+        None,
+        Some(&wt_path_str),
+    )
+    .await
+    .map_err(|e| format!("detach_worktree: db update failed: {}", e))?;
+
+    let branch = git::worktree::branch_name(&session_id);
+    let event_text = format!(
+        "worktree detached from {} (changes preserved on branch {})",
+        wt_path.display(),
+        branch
+    );
+    if let Err(e) =
+        db::insert_system_event(&state.db, &session_id, &event_text, "detached").await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "detach_worktree: insert_system_event failed (non-fatal)"
+        );
+    }
+
+    let updated = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("detach_worktree: reload failed: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "detach_worktree: session '{}' disappeared after detach",
+                session_id
+            )
+        })?;
+    Ok(updated.session)
+}
+
+#[tauri::command]
+async fn delete_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, String> {
+    // Step 4 follow-up: opt-in worktree delete (independent of
+    // detach). Physically removes the worktree directory +
+    // branch from disk and clears the worktree state columns.
+    // Distinct from `detach_worktree` (which only unbinds):
+    // a deleted worktree's branch is GONE; an LLM cannot
+    // later re-attach to it.
+    cancel_inflight_for_session(
+        &state.cancellations,
+        &state.session_active_request,
+        &session_id,
+    )
+    .await;
+
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("delete_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| format!("delete_worktree: session '{}' not found", session_id))?;
+
+    // Delete is valid from `active` OR `detached`. A detached
+    // session's worktree_path is NULL (the directory is still
+    // on disk if the path was preserved as `last_worktree_path`,
+    // but the branch is what we need to remove).
+    if loaded.session.worktree_state != db::WorktreeState::Active
+        && loaded.session.worktree_state != db::WorktreeState::Detached
+    {
+        return Err(format!(
+            "delete_worktree: session '{}' has no worktree to delete (state: {:?})",
+            session_id, loaded.session.worktree_state
+        ));
+    }
+
+    let project = db::get_project(&state.db, &loaded.session.project_id)
+        .await
+        .map_err(|e| format!("delete_worktree: failed to load project: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "delete_worktree: project '{}' not found",
+                loaded.session.project_id
+            )
+        })?;
+
+    // For `active` we have a worktree_path; for `detached` we
+    // may only have last_worktree_path. The actual on-disk
+    // directory path that `git::destroy_worktree` needs is
+    // the worktree_path (active) or last_worktree_path
+    // (detached). The branch is always `session/<id>` and
+    // gets deleted regardless of state.
+    let worktree_path_for_destroy: Option<std::path::PathBuf> = loaded
+        .session
+        .worktree_path
+        .as_deref()
+        .or(loaded.session.last_worktree_path.as_deref())
+        .map(std::path::PathBuf::from);
+    let branch = git::worktree::branch_name(&session_id);
+
+    if let Some(wtp) = &worktree_path_for_destroy {
+        if let Err(e) =
+            git::destroy_worktree(std::path::Path::new(&project.path), wtp, &session_id)
+        {
+            tracing::warn!(
+                session_id = %session_id,
+                worktree = %wtp.display(),
+                error = %e,
+                "delete_worktree: destroy_worktree failed (non-fatal)"
+            );
+        }
+    } else {
+        // No worktree path stored but the state is active or
+        // detached. Best-effort: still try to remove the
+        // branch, since the on-disk directory may have been
+        // manually removed.
+        let worktree_lookup = &session_id;
+        if let Ok(repo) = git2::Repository::open(std::path::Path::new(&project.path)) {
+            if let Ok(mut b) =
+                repo.find_branch(&branch, git2::BranchType::Local)
+            {
+                let _ = b.delete();
+            }
+            if let Ok(wt) = repo.find_worktree(worktree_lookup) {
+                let _ = wt.prune(None);
+            }
+        }
+    }
+
+    // DB state: clear worktree_path AND last_worktree_path; the
+    // branch is gone so re-attach is no longer meaningful.
+    db::set_worktree_state(
+        &state.db,
+        &session_id,
+        db::WorktreeState::None,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| format!("delete_worktree: db update failed: {}", e))?;
+
+    let event_text = format!(
+        "worktree deleted: branch {} and dir {} removed",
+        branch,
+        worktree_path_for_destroy
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string())
+    );
+    if let Err(e) =
+        db::insert_system_event(&state.db, &session_id, &event_text, "deleted").await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "delete_worktree: insert_system_event failed (non-fatal)"
+        );
+    }
+
+    let updated = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("delete_worktree: reload failed: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "delete_worktree: session '{}' disappeared after delete",
+                session_id
+            )
+        })?;
+    Ok(updated.session)
 }
 
 // ---------------------------------------------------------------------------
@@ -597,20 +927,32 @@ const CANCELLED_MARKER: &str = "[已停止]";
 /// on Drop. We use a guard (not a bare `remove` call at every `return`
 /// point) so a future refactor that adds a new early-return path
 /// can't accidentally leak the entry. The guard is `Send` because
-/// it only holds an `Arc<Mutex<HashMap<...>>>` clone, which itself
-/// is `Send + Sync`.
+/// it only holds an `Arc<Mutex<HashMap<...>>>` clones, which
+/// themselves are `Send + Sync`.
 struct CancellationGuard {
     cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Step 4 follow-up: also clears the `session_active_request`
+    /// entry for `session_id`, so a destructive command that
+    /// looks up "is this session in-flight?" after the guard
+    /// drops sees an empty answer (matches the agent loop's own
+    /// exit semantics).
+    session_active_request: Arc<Mutex<HashMap<String, String>>>,
     request_id: String,
+    session_id: String,
 }
 
 impl Drop for CancellationGuard {
     fn drop(&mut self) {
         let cancellations = self.cancellations.clone();
+        let session_active_request = self.session_active_request.clone();
         let request_id = self.request_id.clone();
+        let session_id = self.session_id.clone();
         tauri::async_runtime::spawn(async move {
             let mut map = cancellations.lock().await;
             map.remove(&request_id);
+            drop(map);
+            let mut s2p = session_active_request.lock().await;
+            s2p.remove(&session_id);
         });
     }
 }
@@ -627,6 +969,7 @@ async fn chat(
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
     let cancellations = state.cancellations.clone();
+    let session_active_request = state.session_active_request.clone();
     let read_guard = state.read_guard.clone();
     let rid = request_id;
     let app_handle = app.clone();
@@ -654,6 +997,15 @@ async fn chat(
         let mut map = cancellations.lock().await;
         map.insert(rid.clone(), token.clone());
     }
+    // Step 4 follow-up: also register this session → request_id
+    // mapping so destructive operations (delete_session,
+    // detach_worktree, delete_worktree) can find and cancel the
+    // in-flight stream. The entry is removed by the
+    // CancellationGuard on Drop.
+    {
+        let mut map = session_active_request.lock().await;
+        map.insert(session_id.clone(), rid.clone());
+    }
 
     tauri::async_runtime::spawn(async move {
         // The token's clone moves into this task; cancellation in
@@ -661,10 +1013,13 @@ async fn chat(
         // the map. Both must outlive any `select!` arm that awaits
         // the token.
         let token = token;
-        // RAII: removes the (rid → token) entry on every exit path.
+        // RAII: removes the (rid → token) AND (session_id → rid)
+        // entries on every exit path.
         let _cancel_guard = CancellationGuard {
             cancellations: cancellations.clone(),
+            session_active_request: session_active_request.clone(),
             request_id: rid.clone(),
+            session_id: session_id.clone(),
         };
         let mut messages = messages;
         // Start seq from the highest existing seq in this session + 1.
@@ -1099,19 +1454,32 @@ async fn chat(
                     last_cwd = Some(new_cwd);
                 }
 
+                // Step 4 follow-up (REQ-16): wrap the tool result in
+                // a JSON envelope that includes the worktree's
+                // current cwd. The LLM uses the `cwd` field to
+                // understand "this file was at this path on disk
+                // when the tool ran" — important after worktree
+                // transitions (attach/detach), when the agent's
+                // mental model of the worktree can drift from the
+                // actual on-disk state. The legacy `result` field
+                // is the same string the LLM would have seen
+                // pre-follow-up, so downstream tool-specific
+                // prompts continue to work.
+                let envelope_str = tool_result_envelope(&content, &current_ctx.worktree_path);
+
                 let _ = app_handle.emit(
                     "tool:result",
                     ToolResultPayload {
                         request_id: rid.clone(),
                         tool_use_id: id.clone(),
-                        content: content.clone(),
+                        content: envelope_str.clone(),
                         is_error,
                     },
                 );
 
                 result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: id.clone(),
-                    content,
+                    content: envelope_str,
                     is_error,
                 });
             }
@@ -1151,6 +1519,30 @@ async fn chat(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Step 4 follow-up (REQ-16): wrap a tool result `content` string
+/// in a JSON envelope that also carries the worktree's current
+/// `cwd`. The LLM uses the `cwd` field to understand "this file
+/// was at this path on disk when the tool ran" — important after
+/// worktree transitions (attach/detach), when the agent's mental
+/// model of the worktree can drift from the actual on-disk state.
+/// The `result` field holds the legacy content string so
+/// downstream tool-specific prompts continue to work without
+/// re-parsing.
+///
+/// Extracted as a free function (not inlined in the chat loop)
+/// so it can be unit-tested for the round-trip shape — see
+/// `tests::tool_result_envelope_round_trip` below. The frontend
+/// has a matching lenient parser in `extractToolResultDisplay`
+/// (`app/src/utils/messageFormat.ts`).
+fn tool_result_envelope(content: &str, worktree_path: &std::path::Path) -> String {
+    let cwd_str = worktree_path.to_string_lossy().to_string();
+    serde_json::json!({
+        "result": content,
+        "cwd": cwd_str,
+    })
+    .to_string()
+}
 
 /// Persist the final cwd of a turn. Called once at turn end (not after
 /// every shell call). We compare against the DB-stored value to avoid
@@ -1254,6 +1646,9 @@ pub fn run() {
             create_session,
             load_session,
             delete_session,
+            attach_worktree,
+            detach_worktree,
+            delete_worktree,
             diff_worktree,
             list_projects,
             list_hidden_projects,
@@ -1404,15 +1799,23 @@ mod tests {
     async fn cancellation_guard_removes_entry_on_drop() {
         let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let session_active_request: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         {
             let mut map = cancellations.lock().await;
             map.insert("rid-g".to_string(), CancellationToken::new());
+        }
+        {
+            let mut s2p = session_active_request.lock().await;
+            s2p.insert("sid-g".to_string(), "rid-g".to_string());
         }
         assert_eq!(cancellations.lock().await.len(), 1);
         {
             let _guard = CancellationGuard {
                 cancellations: cancellations.clone(),
+                session_active_request: session_active_request.clone(),
                 request_id: "rid-g".to_string(),
+                session_id: "sid-g".to_string(),
             };
             // _guard drops at end of block.
         }
@@ -1420,7 +1823,115 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(
             cancellations.lock().await.is_empty(),
-            "guard's Drop should have removed the entry"
+            "guard's Drop should have removed the cancellations entry"
         );
+        assert!(
+            session_active_request.lock().await.is_empty(),
+            "guard's Drop should have removed the session_active_request entry"
+        );
+    }
+
+    /// Step 4 follow-up: `cancel_inflight_for_session` cancels the
+    /// matching request token when the session has an in-flight
+    /// request, and is a silent no-op otherwise.
+    #[tokio::test]
+    async fn cancel_inflight_for_session_cancels_token() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let session_active_request: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Register a fake request for session "s1".
+        let token = CancellationToken::new();
+        {
+            let mut map = cancellations.lock().await;
+            map.insert("rid-1".to_string(), token.clone());
+        }
+        {
+            let mut s2p = session_active_request.lock().await;
+            s2p.insert("s1".to_string(), "rid-1".to_string());
+        }
+        assert!(!token.is_cancelled());
+        cancel_inflight_for_session(&cancellations, &session_active_request, "s1").await;
+        assert!(
+            token.is_cancelled(),
+            "matching request's token should be cancelled"
+        );
+    }
+
+    /// Step 4 follow-up: `cancel_inflight_for_session` is a no-op
+    /// when the session has no in-flight request.
+    #[tokio::test]
+    async fn cancel_inflight_for_session_missing_session_is_noop() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let session_active_request: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Nothing registered.
+        cancel_inflight_for_session(&cancellations, &session_active_request, "s-missing")
+            .await;
+        // No panic, no state change. (Asserts on the maps being
+        // empty would be a tautology given the setup, but the
+        // function returning is the actual contract.)
+        assert!(cancellations.lock().await.is_empty());
+        assert!(session_active_request.lock().await.is_empty());
+    }
+
+    /// Step 4 follow-up: `cancel_inflight_for_session` is a no-op
+    /// when the session has a request_id but the matching
+    /// cancellation token is already gone (rare race: the
+    /// request finished between the map reads).
+    #[tokio::test]
+    async fn cancel_inflight_for_session_token_gone_is_noop() {
+        let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let session_active_request: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // session_active_request has the entry, but the
+        // cancellations map doesn't (the request already
+        // finished and the CancellationGuard cleaned up).
+        {
+            let mut s2p = session_active_request.lock().await;
+            s2p.insert("s1".to_string(), "rid-gone".to_string());
+        }
+        cancel_inflight_for_session(&cancellations, &session_active_request, "s1").await;
+        // No panic; the function is best-effort.
+    }
+
+    /// Step 4 follow-up (REQ-16): the tool result envelope has
+    /// exactly the shape `{"result": <content>, "cwd": <path>}`.
+    /// This is the LLM-facing contract — the LLM gets the cwd so
+    /// it can correlate tool results with the worktree state.
+    /// The frontend's `extractToolResultDisplay` parses this same
+    /// shape; a regression here would leak the raw JSON into the
+    /// UI.
+    #[test]
+    fn tool_result_envelope_round_trip() {
+        let path = std::path::Path::new("/data/worktrees/p1/s1");
+        let env = tool_result_envelope("hello world", path);
+        let parsed: serde_json::Value = serde_json::from_str(&env).expect("envelope must be JSON");
+        assert_eq!(parsed["result"], "hello world");
+        assert_eq!(parsed["cwd"], "/data/worktrees/p1/s1");
+        // No extra top-level keys — schema discipline matters
+        // because the LLM is reading this.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            2,
+            "envelope must have exactly 2 keys: result, cwd"
+        );
+    }
+
+    /// Step 4 follow-up: empty / unicode / special-char content
+    /// all round-trip cleanly through the envelope. (Sanity — the
+    /// envelope is built with `serde_json::json!` which handles
+    /// escaping, but a hand-written string would not.)
+    #[test]
+    fn tool_result_envelope_handles_special_chars() {
+        let path = std::path::Path::new("/data/wt");
+        // Newline, quote, and backslash in the content.
+        let content = "line 1\nline 2 with \"quote\" and \\ slash";
+        let env = tool_result_envelope(content, path);
+        let parsed: serde_json::Value = serde_json::from_str(&env).expect("envelope must be JSON");
+        assert_eq!(parsed["result"], content);
+        assert_eq!(parsed["cwd"], "/data/wt");
     }
 }
