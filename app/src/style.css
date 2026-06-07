@@ -6,12 +6,12 @@
  * 3500 常用字子集 + ASCII + 标点, woff2 472 KB                                 *
  * ------------------------------------------------------------------------- */
 @font-face {
-  font-family: "HarmonyOS Sans SC";
-  src: url("./assets/fonts/HarmonyOSSansSC-Regular.subset.woff2")
-    format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+    font-family: "HarmonyOS Sans SC";
+    src: url("./assets/fonts/HarmonyOSSansSC-Regular.subset.woff2")
+        format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
 }
 
 @import "tailwindcss";
@@ -20,41 +20,43 @@
  * Dark theme tokens (Prussian blue palette per spike-003 + research/...)    *
  * ------------------------------------------------------------------------- */
 @theme {
-  /* Background layers */
-  --color-bg-app: #0A0E14;
-  --color-bg-surface: #131822;
-  --color-bg-elevated: #1A2030;
-  --color-bg-border: #1E2530;
-  /* Stronger border for elements that need clear delineation against the
+    /* Background layers */
+    --color-bg-app: #0a0e14;
+    --color-bg-surface: #131822;
+    --color-bg-elevated: #1a2030;
+    --color-bg-border: #1e2530;
+    /* Stronger border for elements that need clear delineation against the
      elevated surface (e.g. markdown table cell borders in chat bubbles —
      the regular --color-bg-border is only 4 luminance units brighter than
      --color-bg-elevated and reads as invisible). */
-  --color-bg-border-strong: #3B475A;
+    --color-bg-border-strong: #3b475a;
 
-  /* Text colors */
-  --color-text-primary: #E5E7EB;
-  --color-text-secondary: #8B95A7;
-  --color-text-muted: #64748B;
+    /* Text colors */
+    --color-text-primary: #cbd5e1;
+    --color-text-secondary: #8b95a7;
+    --color-text-muted: #64748b;
 
-  /* Accent (modern Prussian blue) */
-  --color-accent: #3B5BDB;
-  --color-accent-hover: #4263EB;
-  --color-accent-muted: #1E2A5E;
+    /* Accent (modern Prussian blue) */
+    --color-accent: #3b5bdb;
+    --color-accent-hover: #4263eb;
+    --color-accent-muted: #1e2a5e;
 
-  /* Tool type colors (left bar on tool cards) */
-  --color-tool-read: #06B6D4;     /* cyan - read_file */
-  --color-tool-write: #10B981;    /* emerald - write_file */
-  --color-tool-shell: #F59E0B;    /* amber - shell */
-  --color-tool-error: #EF4444;    /* red - errors */
-  --color-tool-thinking: #A78BFA; /* violet - extended thinking blocks */
+    /* Tool type colors (left bar on tool cards) */
+    --color-tool-read: #06b6d4; /* cyan - read_file */
+    --color-tool-write: #10b981; /* emerald - write_file */
+    --color-tool-shell: #f59e0b; /* amber - shell */
+    --color-tool-error: #ef4444; /* red - errors */
+    --color-tool-thinking: #a78bfa; /* violet - extended thinking blocks */
 
-  /* Font stacks */
-  --font-sans: "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei",
-    "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Noto Sans CJK",
-    "WenQuanYi Zen Hei", system-ui, -apple-system, "Segoe UI", Roboto,
-    sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
-    Consolas, "Liberation Mono", monospace;
+    /* Font stacks */
+    --font-sans:
+        "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei",
+        "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC",
+        "Noto Sans CJK", "WenQuanYi Zen Hei", system-ui, -apple-system,
+        "Segoe UI", Roboto, sans-serif;
+    --font-mono:
+        "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+        "Liberation Mono", monospace;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -63,30 +65,30 @@
 html,
 body,
 #app {
-  height: 100%;
-  margin: 0;
-  padding: 0;
+    height: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 button {
-  font: inherit;
-  color: inherit;
+    font: inherit;
+    color: inherit;
 }
 
 input,
 textarea {
-  font: inherit;
+    font: inherit;
 }
 
 /* Dark theme baseline (applies everywhere; per PRD: dark only, reserve light extension) */
 :root {
-  background: var(--color-bg-app);
-  color: var(--color-text-primary);
-  font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.7;
-  letter-spacing: 0.01em;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    background: var(--color-bg-app);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.55;
+    letter-spacing: 0.01em;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }

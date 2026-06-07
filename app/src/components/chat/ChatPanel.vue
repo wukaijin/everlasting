@@ -31,7 +31,7 @@ const projectsStore = useProjectsStore();
 const configStore = useConfigStore();
 
 const emit = defineEmits<{
-  send: [text: string];
+    send: [text: string];
 }>();
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
@@ -39,26 +39,26 @@ const hasMessages = computed(() => chatStore.messages.length > 0);
 /** PR5: forwarded to `chatStore.cancel()` so the parent can keep
  *  the ChatInput → ChatPanel → store flow symmetric with `send`. */
 function onStop() {
-  void chatStore.cancel();
+    void chatStore.cancel();
 }
 
 /** The currently active session, if any. Looked up by id against
  *  the sessions list (the chat store only tracks the id; the full
  *  record lives in the list). */
 const currentSession = computed<SessionSummary | null>(() => {
-  const id = chatStore.currentSessionId;
-  if (!id) return null;
-  return chatStore.sessions.find((s) => s.id === id) ?? null;
+    const id = chatStore.currentSessionId;
+    if (!id) return null;
+    return chatStore.sessions.find((s) => s.id === id) ?? null;
 });
 
 /** Display title for the header: the session's stored title, or a
  *  "新对话" placeholder for the no-session-yet state. */
 const currentSessionTitle = computed<string>(
-  () => currentSession.value?.title || "新对话",
+    () => currentSession.value?.title || "新对话",
 );
 
 const currentProject = computed(() =>
-  projectsStore.projectById(projectsStore.currentProjectId),
+    projectsStore.projectById(projectsStore.currentProjectId),
 );
 
 /** Git branch chip is rendered when the project is a git repo. The
@@ -70,179 +70,188 @@ const currentProject = computed(() =>
  *  legacy static "git" tag if the project row hasn't been
  *  re-probed yet (older rows pre-PR2). */
 const showGitChip = computed<boolean>(
-  () => !!currentProject.value?.is_git_repo,
+    () => !!currentProject.value?.is_git_repo,
 );
 
 const gitBranchLabel = computed<string>(() => {
-  const branch = currentProject.value?.git_branch;
-  return branch && branch.length > 0 ? branch : "git";
+    const branch = currentProject.value?.git_branch;
+    return branch && branch.length > 0 ? branch : "git";
 });
 </script>
 
 <template>
-  <section class="chat-panel">
-    <header class="chat-panel__header">
-      <div class="chat-panel__title-row">
-        <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>
-        <span v-if="configStore.model" class="chat-panel__chip">
-          <Icon name="command-line" :size="12" />
-          {{ configStore.model }}
-        </span>
-        <span
-          v-if="showGitChip"
-          class="chat-panel__chip chat-panel__chip--git"
-          :title="`Current branch: ${gitBranchLabel}`"
-        >
-          <Icon name="refresh" :size="12" />
-          {{ gitBranchLabel }}
-        </span>
-        <span
-          v-if="chatStore.simplifiedCwd"
-          class="chat-panel__chip chat-panel__chip--cwd"
-          :title="chatStore.simplifiedCwd"
-        >
-          <Icon name="folder" :size="12" />
-          {{ chatStore.simplifiedCwd }}
-        </span>
-      </div>
-    </header>
+    <section class="chat-panel">
+        <header class="chat-panel__header">
+            <div class="chat-panel__title-row">
+                <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>
+                <span v-if="configStore.model" class="chat-panel__chip">
+                    <Icon name="command-line" :size="12" />
+                    {{ configStore.model }}
+                </span>
+                <span
+                    v-if="showGitChip"
+                    class="chat-panel__chip chat-panel__chip--git"
+                    :title="`Current branch: ${gitBranchLabel}`"
+                >
+                    <Icon name="refresh" :size="12" />
+                    {{ gitBranchLabel }}
+                </span>
+                <span
+                    v-if="chatStore.simplifiedCwd"
+                    class="chat-panel__chip chat-panel__chip--cwd"
+                    :title="chatStore.simplifiedCwd"
+                >
+                    <Icon name="folder" :size="12" />
+                    {{ chatStore.simplifiedCwd }}
+                </span>
+            </div>
+        </header>
 
-    <main class="chat-panel__main">
-      <div v-if="!hasMessages" class="chat-panel__empty">
-        <p>输入一句话,跟 LLM 聊聊看</p>
-        <p class="chat-panel__empty-hint">中文输入测试 + 流式响应 + 工具调用</p>
-        <p v-if="currentProject" class="chat-panel__empty-project">
-          当前项目: <strong>{{ currentProject.name }}</strong>
-          <span v-if="!currentProject.is_git_repo" class="chat-panel__empty-warn">
-            <Icon name="warn" :size="11" />
-            未启用 git 隔离
-          </span>
-          <span v-else-if="currentProject.is_legacy" class="chat-panel__empty-warn">
-            <Icon name="archive" :size="11" />
-            旧数据,自动归入
-          </span>
-        </p>
-      </div>
-      <MessageList v-else />
-    </main>
+        <main class="chat-panel__main">
+            <div v-if="!hasMessages" class="chat-panel__empty">
+                <p>输入一句话,跟 LLM 聊聊看</p>
+                <p class="chat-panel__empty-hint">
+                    中文输入测试 + 流式响应 + 工具调用
+                </p>
+                <p v-if="currentProject" class="chat-panel__empty-project">
+                    当前项目: <strong>{{ currentProject.name }}</strong>
+                    <span
+                        v-if="!currentProject.is_git_repo"
+                        class="chat-panel__empty-warn"
+                    >
+                        <Icon name="warn" :size="11" />
+                        未启用 git 隔离
+                    </span>
+                    <span
+                        v-else-if="currentProject.is_legacy"
+                        class="chat-panel__empty-warn"
+                    >
+                        <Icon name="archive" :size="11" />
+                        旧数据,自动归入
+                    </span>
+                </p>
+            </div>
+            <MessageList v-else />
+        </main>
 
-    <ChatInput
-      :sending="chatStore.isCurrentSessionStreaming"
-      @send="emit('send', $event)"
-      @stop="onStop"
-    />
-  </section>
+        <ChatInput
+            :sending="chatStore.isCurrentSessionStreaming"
+            @send="emit('send', $event)"
+            @stop="onStop"
+        />
+    </section>
 </template>
 
 <style scoped>
 .chat-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  background: var(--color-bg-app);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--color-bg-app);
 }
 
 .chat-panel__header {
-  display: flex;
-  align-items: center;
-  padding: 6px 20px;
-  border-bottom: 1px solid var(--color-bg-border);
-  background: var(--color-bg-surface);
-  flex-shrink: 0;
-  min-width: 0;
+    display: flex;
+    align-items: center;
+    padding: 6px 20px;
+    border-bottom: 1px solid var(--color-bg-border);
+    background: var(--color-bg-surface);
+    flex-shrink: 0;
+    min-width: 0;
 }
 
 .chat-panel__title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+    flex-wrap: wrap;
 }
 
 .chat-panel__title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 50vw;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 50vw;
 }
 
 .chat-panel__chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-bg-border);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    white-space: nowrap;
 }
 
 .chat-panel__chip--git {
-  color: var(--color-accent);
-  border-color: var(--color-accent-muted);
+    color: var(--color-accent);
+    border-color: var(--color-accent-muted);
 }
 
 .chat-panel__chip--cwd {
-  margin-left: auto;
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    margin-left: auto;
+    max-width: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .chat-panel__main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 20px;
-  overflow: hidden;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 20px;
+    padding-right: 4px;
+    overflow: hidden;
 }
 
 .chat-panel__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
-  text-align: center;
-  max-width: 480px;
-  margin: auto;
-  padding: 32px 16px;
-  gap: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
+    text-align: center;
+    max-width: 480px;
+    margin: auto;
+    padding: 32px 16px;
+    gap: 4px;
 }
 
 .chat-panel__empty-hint {
-  font-size: 12px;
-  color: var(--color-text-muted);
+    font-size: 12px;
+    color: var(--color-text-muted);
 }
 
 .chat-panel__empty-project {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-top: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    margin-top: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
 }
 
 .chat-panel__empty-warn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--color-tool-shell);
-  font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-tool-shell);
+    font-size: 11px;
 }
 </style>
