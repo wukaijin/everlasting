@@ -630,6 +630,15 @@ agent loop 结束(text-only response or max_turns reached):
 - session 结束时:可选 merge 回主分支,或保留作历史
 - libgit2(`git2-rs`)的 worktree API 不完整,可能要 spawn `git worktree` 命令
 
+**Step 4 follow-up(2026-06-08)**:worktree 不再随 session 自动创建,改为 opt-in 三态操作:
+
+- `none`(默认):session 创建不建 worktree,非 git 项目也能用 session
+- `active`:用户主动 `attach_worktree(sessionId)`,建 worktree + branch,工具 cwd 落到 worktree
+- `detached`:用户 `detach_worktree(sessionId)`,worktree + branch 留盘但 session 不再绑定,工具 cwd 回退到 project.path
+- 物理销毁走 `delete_worktree(sessionId)`,跟 detach 分离(后悔药可分两步走)
+
+具体契约 + LLM 透明度(7 工具 cwd 字段 + system event 注入)见 `.trellis/tasks/06-07-step-4-follow-up-session-worktree-attach-detach-delete-git/prd.md`。
+
 ---
 
 ## 4. 决策:Agent Daemon 化(为多 channel 接入铺路)

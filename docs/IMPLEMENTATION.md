@@ -165,8 +165,9 @@
 | — | **路线图外**:字体栈调整(HarmonyOS Sans SC 子集) | 额外 | ✅ 已完成(2026-06-06,commit `aabb9fa`) |
 | — | **路线图外**:6 UI/状态 bug 修复(顶栏 + Markdown 表格 + Tauri 2 权限 + streamController 架构) | 额外 | ✅ 已完成(2026-06-07,commits `bd5ea7b` + `abde429` + `bf9b35b`) |
 | — | **路线图外**:工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard 3 道 check + Bash 30K 落盘 + read_file `cat -n` 行号) | 额外 | ✅ 已完成(2026-06-07,1 个 `feat(tools):` commit) |
+| — | **路线图外**:step 4 follow-up — worktree 解耦(opt-in attach / detach / delete + 三态状态机 + LLM 透明度 + 安全网) | 额外 | ✅ 已完成(2026-06-08) |
 | 3b-2 | 完整三栏 UI + rig-core 迁移 | MVP | ⏸ 暂缓 |
-| 4 | Git 集成(worktree + auto commit) | MVP | 未开始 |
+| 4 | Git 集成(worktree + auto commit,改为 opt-in 手动 attach) | MVP | ⏸ 部分完成(worktree 解耦已落地,auto commit 仍 OOS) |
 | 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |
 | 6 | MCP 暴露 + 多 Provider | v1 | 未开始 |
 | 7 | 打磨与文档 | 跨阶段 | 未开始 |
