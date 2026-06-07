@@ -1,0 +1,17 @@
+{"file": ".trellis/tasks/06-07-06-07-extend-toolset/research/01-pi-agent-claude-code.md", "reason": "implement sub-agent 必须看: claude-code Edit 3 道 check 顺序 + Bash cat|head|sed 等价 read 路径 + Grep 3 种 output_mode + cap 100 截断 + line cap 500"}
+{"file": ".trellis/tasks/06-07-06-07-extend-toolset/research/02-openhands-aider-cline-opencode.md", "reason": "implement sub-agent 必须看: OpenHands str_replace_editor 0 匹配自动 strip 重试细节 + 8 个测试用例清单 + ReadGuard 3 层防护结构"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "tool schema 必须符合 Anthropic JSON Schema 必填字段约束;description 措辞风格参考"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "edit_file 写入路径必须过 assert_within_root;新加 glob/list_dir/edit_file 跟现有 read_file 边界策略一致"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新文件加在 app/src-tauri/src/tools/ 下,跟 read_file.rs / write_file.rs / shell.rs 同级;pub mod 顺序"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing::debug / tracing::warn 模式,跟 write_file.rs 现有诊断日志风格一致"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "tool 错误返回 (String, bool) 跟现有完全一致;不引入新 Result 类型"}
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "builtin_tools() 列 + execute_tool() 分发器;新加 4 个 case 必须保持命名一致"}
+{"file": "app/src-tauri/src/tools/read_file.rs", "reason": "现有 (String, bool) 返回风格 + tempfile 测试模式 + truncate_output 截断;edit_file 失败 hint + 行号格式参考"}
+{"file": "app/src-tauri/src/tools/write_file.rs", "reason": "boundary 双重处理(existing/missing target)+ tracing::debug 模式;edit_file 写后自动 invalidate ReadGuard 参考"}
+{"file": "app/src-tauri/src/tools/shell.rs", "reason": "5min 超时 + 现有 head+tail 50KB 截断;落盘 30K 逻辑基于现有截断代码扩展"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "ToolDef 形态;新 tool 的 input_schema 用 serde_json::json!{} 风格"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "agent loop 构造 ToolContext 位置 (line 604);ReadGuard Tauri State 在同一处 manage;tool_result 构造路径"}
+{"file": "app/src-tauri/Cargo.toml", "reason": "加 globset + xxhash-rust 依赖;版本号跟现有 serde / tokio 一致"}
+{"file": "docs/ARCHITECTURE.md", "reason": "§2.2 ⑩ Tool 执行段要加 4 tool 引用 + ReadGuard 段 + Bash 落盘段;实施完要改"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "§3 路线图全貌表要加 1 行 '工具集扩展 (4 tool + ReadGuard + Bash 落盘 + cat -n)' ✅;§4 决策日志加 2026-06-07 条"}
+{"file": "docs/HANDOFF.md", "reason": "§2 已完成列表追加工具集扩展批次"}
