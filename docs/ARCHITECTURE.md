@@ -7,7 +7,12 @@
 
 ## 1. 系统架构
 
-### 1.1 进程拓扑(daemon 化后)
+> ⚠️ **当前状态 vs 目标态**:
+> - **当前 MVP(2026-06-07)**:agent core 跑在 Tauri 进程**内**(`app/src-tauri/src/lib.rs` 的 `chat` 命令 spawn tokio 任务,直接 `reqwest` + 手写 SSE)。**未做**进程拆分,无独立 daemon。
+> - **目标态**(本节图示,见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化-为多-channel-接入铺路)):agent core 拆出独立 daemon 进程,Tauri 降级为 GUI client,跟飞书 client 并列。触发条件:BACKLOG §6 飞书 channel 决定实施时(详见 §2.8 占位)。
+> - 后续小节(§2 16 关卡 / 通道抽象)用"目标态"语言描述;当前 MVP 实际是 in-process,channel = Tauri event emit 走单进程。
+
+### 1.1 进程拓扑(daemon 化后,目标态)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -85,7 +90,9 @@
 - **远程接口**:WebSocket(为 [BACKLOG.md §7 云端同步](./BACKLOG.md#7-云端状态同步) 预留)
 - **daemon 化动机**:多 client 共用(桌面 + 飞书 + CLI),GUI 重启不打断长跑任务。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化为多-channel-接入铺路)
 
-### 1.2 关键数据流:用户发一条消息
+### 1.2 关键数据流:用户发一条消息(目标态;当前 MVP 走 in-process 简化版)
+
+> 📌 **当前 MVP 实测路径**:Frontend → `invoke('chat', ...)` → Tauri Rust `chat` 命令(同进程 tokio task)→ `chat_stream_with_tools()` (reqwest + 手写 SSE)→ emit `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(在 `streamController.ts`,按 `request_id` 路由)→ Pinia store 增量更新。**没** Channel Router / **没** 独立 daemon,功能等价于目标态的 TauriGuiChannel 单通道路径。
 
 ```
 [1] Frontend (Vue 3)
@@ -123,7 +130,9 @@
     (后续步骤 2+ 会加 "tool:call" / "tool:result" / "permission:ask")
 ```
 
-### 1.3 关键数据流:session 切换
+### 1.3 关键数据流:session 切换(当前 MVP)
+
+> 📌 **当前 MVP 实测路径**:`switchSession(id)` → `chatStore` 委托 `streamController.ensureLoaded(id)` → LRU 命中则从 `messagesBySession` Map 拿;未命中则 `invoke('load_session', { sessionId })` 从 SQLite 读 → 写入 Map → `currentSessionId.value = id` → `currentCwd` 更新 → UI 重新渲染。**前 session 的 in-flight SSE 流不受影响**(流指示器在 SessionList 蓝点继续 pulse 直到 `done` 到达)。详细架构见 `.trellis/spec/frontend/state-management.md` §"Stream Controller Pattern"。
 
 ```
 [1] User clicks project A → session B

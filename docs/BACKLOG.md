@@ -308,30 +308,33 @@ allowed-tools: [read_file, search_code, git_diff]
 
 ## 5. 步骤 3b-1 实施后续(implementation follow-up)
 
-> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](../_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机。
+> 这一节是步骤 3b-1(项目基础结构 + 顶部 Tabs UI)落地后留的"实施层面"小尾巴,不是新功能候选。技术债性质。完整列表 + 优先级见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md](../_archive/2026-06-3b-1/FOLLOW-UP.md),本节只记每条的工作量 + 触发时机 + 实际落地状态。
 
-### 5.1 cwd 简化为 `~/`
+### 5.1 cwd 简化为 `~/` ✅ 已落地(2026-06-06,commit `ef7cea8`)
 
-- **现状**:chat header 显示 cwd 用完整绝对路径(`/home/carlos/code/foo/backend`)。PROPOSAL §5.4 / Q5 决议是简化为 `~/foo/backend`,但 PR1 backend 没暴露 `home_dir` 给前端。
-- **修法**:PR1 backend 加 `get_home_dir` Tauri command(读 `dirs::home_dir()`),PR2 frontend 缓存并替换前缀。
-- **工作量**:~30 行。**不紧急**(纯可读性增强,不是 bug)。
-- **关联**:PR2 commit `93a0753` "简化为 `~/` 留给 follow-up" 注释;FOLLOW-UP §FU-1。
+- **原现状**:chat header 显示 cwd 用完整绝对路径(`/home/carlos/code/foo/backend`)。PROPOSAL §5.4 / Q5 决议是简化为 `~/foo/backend`,但 PR1 backend 没暴露 `home_dir` 给前端。
+- **修法**:`configStore` 加 `homeDir` 字段(后端 `dirs::home_dir()` 经 Tauri command 暴露),frontend 写 `simplifyPath(cwd, homeDir)` 工具做前缀替换,`chatStore.simplifiedCwd` computed 派生给 ChatHeader 用。
+- **落地状态**:`app/src/utils/path.ts` + `app/src/stores/config.ts` + `app/src/stores/chat.ts` `simplifiedCwd` computed 都已存在并使用。
+- **关联**:PR3 commit `ef7cea8` "准备 pwd `~/` 简化数据通路" + FOLLOW-UP §FU-1(已 done,2026-06-06)。
+- **状态**:✅ 已完成。
 
-### 5.2 TS interface 字段 `snake_case` → `camelCase`
+### 5.2 TS interface 字段 `snake_case` → `camelCase` ⏸ 保持现状(2026-06-07 决策)
 
 - **现状**:`SessionSummary.project_id` / `current_cwd` / `created_at` 等字段是 snake_case 跟 Rust struct 序列化一致。TS interface 也跟着 snake_case,**非常规**。
-- **修法**:PR1 backend 在所有 IPC 序列化 struct 上加 `#[serde(rename_all = "camelCase")]`,PR2 frontend interface 字段全改 camelCase。
-- **决策点**:保留 snake_case 也行(Rust 风格 + 跟 backend 一致,少一层 rename)。**没定论**。
-- **工作量**:~50 行。**不紧急**(纯风格)。
-- **关联**:FOLLOW-UP §FU-2。
+- **决策(2026-06-07)**:**保持 snake_case,不引入 `#[serde(rename_all = "camelCase")]`**。
+  - **理由**:(1) Rust 风格统一,少一层 rename;(2) 后端 8+ struct 都得加注解 + 前端 6+ interface 字段全改,工作量 ~50 行但**无功能收益**;(3) Tauri 2 IPC arg(不是返回值)有 camelCase 需求,这个**已修**(JS 端调 `invoke('create_session', { projectId })` 即可,FU-4 沉淀在 HACKING-wsl),跟 struct 字段命名是**两件事**。
+  - **新写代码提醒**:Rust struct → TS interface 时直接复制字段名(snake_case);Tauri command 调用时,multi-word 参数用 camelCase。
+- **关联**:FOLLOW-UP §FU-2(已决策,2026-06-07)。
+- **状态**:⏸ 保持现状,显式决策已记录。
 
-### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog
+### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态)
 
 - **现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
 - **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 树形目录 + 搜索框 + 文件图标。
 - **修法**:PR2 frontend 写一个 `<ProjectDirPicker>` 组件,新加 `list_dir(path)` Tauri command 读子目录,前端自渲染树形 + 键盘导航。`pick_project_dir` 废弃。
 - **工作量**:~150 行(frontend ~120 + backend `list_dir` ~30)。**中等优先**(UX 改善,不阻塞功能)。
 - **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3。
+- **状态**:⏸ 未实施,下次碰 project 创建流程时评估。
 
 ### 5.4 trellis 流程 follow-up(非实施)
 

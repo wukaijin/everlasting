@@ -68,15 +68,15 @@
 - LLM 客户端不动(继续用 reqwest + 手写 SSE)
 - **可交付物**:关掉 app 再打开,历史消息还在
 
-### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] 🔄 进行中(3b-1 后端,3b-2 暂缓)
+### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] 🔄 3b-1 已完成,3b-2 暂缓(2026-06-05/06)
 
 **目标**:引入 Project 概念,三栏 UI,切 rig-core
 
 **拆解**:
-- **3b-1(本期)** — 项目基础结构 + 顶部 Tabs UI(后端 + 前端两 PR)。给 `projects` 表 + `project_uuid`,为步骤 4 worktree 路径解锁前置;同时把"agent 不能越出 project root"这条安全边界落到代码(spec + 7 个 edge case 单测)。
-- **3b-2(暂缓)** — 完整三栏 UI + rig-core 迁移,独立做。
+- **3b-1 ✅ 已完成** — 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2 + post-fixes squash + docs follow-up)。`projects` 表 + `project_uuid`,`ToolContext.cwd` 默认 `~/`,`pick_project_dir` 走 Tauri native dialog,agent 工具不越出 project root。
+- **3b-2 ⏸ 暂缓** — 完整三栏 UI + rig-core 迁移,独立做。
 
-**当前 PR1(后端,3b-1 之一)**:
+**PR1(后端,3b-1 之一,2026-06-05 落地) ✅**:
 - `db.rs` migration + `projects` 表 + Auto-default `__default__` 兜底 + `PRAGMA foreign_keys = ON`
 - `projects/` 新模块(types / store / detector / boundary)
 - `tools/` 全部改造 — `ToolContext` 注入 + `shell` 加 `working_directory` 校验 + `read_file`/`write_file` 相对/绝对路径过 boundary
@@ -85,14 +85,19 @@
 - `ARCHITECTURE §3` worktree 路径术语 `project_hash` → `project_uuid`
 - 设计稿:`docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md` + spec `.trellis/spec/backend/project-cwd-boundary.md`
 
-**PR2(前端,3b-1 之二,待 PR1 落地后启动)**:
+**PR2(前端,3b-1 之二,commit `93a0753`,2026-06-05 落地) ✅**:
 - `stores/projects.ts` 新增
 - `stores/chat.ts` 改造
 - `ChatWindow.vue` Tab 栏 + 空状态 + "最近隐藏项目"列表
 - `pick_project_dir` + 手动输入 fallback
 - 端到端测试
 
-**可交付物**:能管多个项目、多个对话,agent 工具调用不越出 project root,为步骤 4 准备好 `<project_uuid>` 字段
+**Post-fixes(commit `18354a0` squash,2026-06-06 落地) ✅**:
+- 3 个 hotfix 修 PR1/PR2 wire format 偏差(Tauri 2 IPC arg camelCase + `Option<T>` null 行为 + tool_result 块只能出现在 user role)
+- FU-1 cwd `~/` 数据通路准备(backend `get_home_dir` + frontend `simplifyPath` 工具)
+- 完整 follow-up 列表 6 条沉淀到 `docs/_archive/2026-06-3b-1/FOLLOW-UP.md`(commit `7e888c9`)
+
+**可交付物**:能管多个项目、多个对话,agent 工具调用不越出 project root,为步骤 4 准备好 `<project_uuid>` 字段 ✅
 
 ### 2.5 步骤 4 — Git 集成 [MVP]
 
@@ -141,11 +146,12 @@
 
 ## 3. 待办与下一步
 
-**最后更新**:2026-06-05(步骤 1 / 2 / 3a 已完成 + 路线图外完成 extended thinking + 步骤 3b 暂缓)
+**最后更新**:2026-06-07(步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI bug 修复)
 
-**下一步**(候选,二选一):
-- 跳过 3b 继续主线 → **[MVP 步骤 4 — Git 集成](#25-步骤-4--git-集成-mvp)**(worktree + auto commit)
-- 回头补完 3b → **[步骤 3b 多项目 + UI 三栏 + Rig 迁移](#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)**
+**下一步**(候选,三选一):
+- 跳过 3b-2 继续主线 → **[MVP 步骤 4 — Git 集成](#25-步骤-4--git-集成-mvp)**(worktree + auto commit)
+- 回头补完 3b-2 → **[步骤 3b 多项目 + UI 三栏 + Rig 迁移](#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)**
+- 收尾已知 issue → **bug 1+2 position 修复**(RDP 双显示器场景,候选 `setFullscreen(true)` 兜底 — 详见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md`)
 
 **路线图全貌**:
 | 步骤 | 内容 | 阶段 | 状态 |
@@ -153,8 +159,12 @@
 | 1 | 骨架 + LLM 直连 | MVP | ✅ 已完成(2026-06-04) |
 | 2 | Tool Calling(agent loop + 3 个 tool) | MVP | ✅ 已完成(2026-06-04) |
 | 3a | SQLite + Session 持久化 | MVP | ✅ 已完成(2026-06-05) |
-| 3b-1 | 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2) | MVP | 🔄 PR1 后端进行中(2026-06-05) |
+| 3b-1 | 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2 + post-fixes) | MVP | ✅ 已完成(2026-06-05/06) |
 | — | **路线图外**:Anthropic extended thinking 块展示 + 持久化 | 额外 | ✅ 已完成(2026-06-05,commit `05671f5`) |
+| — | **路线图外**:spike-005 follow-up 7 PR(UI/UX + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/`) | 额外 | ✅ 已完成(2026-06-06,merge `401396b`) |
+| — | **路线图外**:字体栈调整(HarmonyOS Sans SC 子集) | 额外 | ✅ 已完成(2026-06-06,commit `aabb9fa`) |
+| — | **路线图外**:6 UI/状态 bug 修复(顶栏 + Markdown 表格 + Tauri 2 权限 + streamController 架构) | 额外 | ✅ 已完成(2026-06-07,commits `bd5ea7b` + `abde429` + `bf9b35b`) |
+| 3b-2 | 完整三栏 UI + rig-core 迁移 | MVP | ⏸ 暂缓 |
 | 4 | Git 集成(worktree + auto commit) | MVP | 未开始 |
 | 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |
 | 6 | MCP 暴露 + 多 Provider | v1 | 未开始 |
@@ -192,6 +202,41 @@
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。
+
+### 2026-06-07 — 6 UI/状态 bug 修复 + streamController 状态架构重构
+
+- **决策**:抽 `useStreamControllerStore()` 独立 Pinia store 作为 in-flight SSE 流的**单一来源**,`useChatStore()` 改 thin facade
+  - **原因**:旧设计把 messages / `streamingSessionId` / `currentRequestId` / SSE listener 全放 `useChatStore()`,session 切换时会丢 streaming message + 漏 `done` event 处理(red dot + stop button + `sending` 卡死)
+  - **新边界**:`streamController` 拥有 per-session message buffer (LRU 20) + activeRequests + 单全局 SSE listener(按 `request_id` 路由,不再按 `currentSessionId` 过滤);`chatStore` 拥有 sessions 列表 + currentSessionId + currentCwd + session CRUD 委托
+  - **流指示器分层**:`streamingProjectIds` → AppHeader 红点;`streamingSessionIds` → SessionList 蓝点 1.5s pulse
+  - **沉淀**:`.trellis/spec/frontend/state-management.md` 新增 §"Stream Controller Pattern"
+  - **测试**:12 个 LRU 单测 + 36 vitest + 103 cargo 全过
+  - **commit**:`abde429` + spec `bf9b35b`
+- **决策**:顶栏窗口控制 bug 1+2(尺寸 + 位置)的 size 部分通过 Tauri 2 capabilities 补全权限修好
+  - **原因**:`setSize` 之前静默失败是 Tauri 2 默认 deny(没在 `capabilities/default.json` 声明);补 `set-size` / `set-position` / `outer-size` / `outer-position` / `current-monitor` 等 11 个权限
+  - **已知 issue**:position 部分在 RDP 双显示器场景下未完全修好(窗口 grow rightward 而非贴 host 主屏左上角),TODO 跟踪,候选 `setFullscreen(true)` 兜底
+  - **commit**:`bd5ea7b`
+- **决策**:Markdown 表格 td/th border 改用 `--color-bg-border-strong: #3B475A`
+  - **原因**:dark mode 下原 `--color-bg-border: #1E2530` 跟气泡底色 `#1A2030` 只差 4 亮度单位,看不清
+  - **commit**:`bd5ea7b`
+- **决策**:顶栏 minimize 按钮改用 `MinusIcon`(替换原 ✕ 图标)
+  - **原因**:icon 跟功能不对应(bug 3);补 `Icon.vue` heroicons 注册
+  - **commit**:`bd5ea7b`
+- **决策**:顶栏 logo 加 `padding-right: 12px`,跟 tab 区拉开间距(bug 4)
+  - **commit**:`bd5ea7b`
+
+### 2026-06-06 — 字体栈调整 + spike-005 follow-up 7 PR 合并
+
+- **决策**:Dark theme 下中文字体栈首位改 HarmonyOS Sans SC,子集打包嵌入(3500 常用字 + ASCII + 标点,woff2 + brotli → 472 KB)
+  - **原因**:Noto Sans CJK SC 在 dark theme 下笔画粗细不均,影响阅读
+  - **沉淀**:`.trellis/spec/frontend/cjk-fonts.md`(系统字体兜底局限、3500 字覆盖率、Vite+Tauri 资源链路、license 合规三处声明 pattern)
+  - **commit**:`aabb9fa` + docs follow-up `d1d51cf` / `adf4ed6`
+- **决策**:spike-005 后续 7 PR 合并为单个 commit,代表"MVP 基础体验可上桌"的状态点
+  - **覆盖范围**:UI 紧凑 header (`801fb8a`) + git_branch 显示 + 启动 batch backfill(`7ce3209` 推翻 PR2 懒探测决策) + pwd `~/` 简化数据通路 (`ef7cea8`) + write_file tracing + LLM cancel 机制 + markdown 渲染 (marked v18 + DOMPurify + vitest 基础架构) + 首行空白修复
+  - **commit**:`401396b`
+- **决策**:`projects.git_branch` 用启动时 batch backfill,不再用 PR2 的"打开 project tab 时懒探测"
+  - **原因**:老项目(无 git_branch 字段)开了 tab 才能看到分支,首屏体验差;启动 batch 一次扫所有项目,DB 落库
+  - **commit**:`7ce3209`
 
 ### 2026-06-05 — 路线图状态校对(步骤 3a 完成、步骤 3b 暂缓、extended thinking 路线图外完成)
 

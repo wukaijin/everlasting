@@ -1,7 +1,7 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-05 更新**。当前阶段:**MVP 步骤 1 / 2 / 3a 已完成 + 路线图外完成 extended thinking,步骤 3b 暂缓**。
-> spike-001/002 已通过,工具链就位,环境坑沉淀(`HACKING-wsl.md` 10 个 WSL 坑 + `HACKING-llm.md` LLM 兼容层差异)。
+> **2026-06-07 更新**。当前阶段:**MVP 步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR(UI/UX 修复 + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/` 简化) + 字体栈调整 + 6 个 UI/状态 bug 修复**。步骤 3b-2(完整三栏 UI + rig-core 迁移)仍暂缓。
+> spike-001/002/003/004/005 均已通过,工具链就位,环境坑沉淀(`HACKING-wsl.md` WSL 坑 + `HACKING-llm.md` LLM 兼容层差异 + `HACKING-markdown.md` 前端 markdown 渲染陷阱)。
 > ⚠️ 本文档"当前进度"段会滞后于实际 commit,**权威以 `git log --oneline -20` + [IMPLEMENTATION §3 路线图](./IMPLEMENTATION.md#3-待办与下一步)为准**。
 
 ---
@@ -27,21 +27,28 @@
 
 > 摘要可能滞后,权威看 `git log --oneline -20` + [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)。
 
-**已完成**(2026-06-05 累计):
+**已完成**(2026-06-07 累计):
 - ✅ 设计文档全套(`docs/` 下索引见 [README.md](./README.md))
-- ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)
-- ✅ HACKING 系列(`HACKING-wsl.md` 10 个 WSL 坑 / `HACKING-llm.md` LLM 兼容层差异)
+- ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)+ 3b-1 阶段 2 份专项评审(`docs/_archive/2026-06-3b-1/`)
+- ✅ HACKING 系列(`HACKING-wsl.md` WSL 坑 / `HACKING-llm.md` LLM 兼容层差异 / `HACKING-markdown.md` 前端 markdown 渲染陷阱)
 - ✅ **MVP 步骤 1 — 骨架 + LLM 直连**(commit `08dc818`,2026-06-04)
 - ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(commit `fefc41f`,2026-06-04)
 - ✅ **MVP 步骤 3a — SQLite + Session 持久化**(commit `0ce44b5`,2026-06-05;rehydrate 补丁 `a89a6fd`)
 - ✅ **路线图外完成**:Anthropic extended thinking 块展示 + 持久化(commit `05671f5`,2026-06-05)
+- ✅ **MVP 步骤 3b-1 — 项目基础结构 + 顶部 Tabs UI**(后端 PR1 `fefc41f` 之前的前置 + 前端 PR2 `93a0753` + post-fixes squash `18354a0` + docs follow-up `7e888c9`,2026-06-05/06)
+- ✅ **spike-005 follow-up — 7 PR 合并**(commit `401396b`,2026-06-06):UI 紧凑 header (`801fb8a`) + git_branch 显示 (`8f25b7f`) + 启动 batch backfill (`7ce3209`) + pwd `~/` 简化数据通路 (`ef7cea8`) + write_file tracing (`ae1a711`) + LLM cancel 机制 (`11f01c6`) + markdown 渲染 (`cb41bcb`) + 首行空白修复 (`cfb7aac`)
+- ✅ **字体栈调整**(commit `aabb9fa`,2026-06-06):HarmonyOS Sans SC 子集打包 + Dark theme 下中文渲染改善,沉淀到 `.trellis/spec/frontend/cjk-fonts.md`
+- ✅ **6 UI/状态 bug 修复**(commits `bd5ea7b` + `abde429` + `bf9b35b`,2026-06-07):顶栏窗口控制 (bug 1+2 size / bug 3 minimize icon / bug 4 logo padding) + Markdown 表格 border (bug 5) + Tauri 2 权限补全 + streamController 状态架构重构 (bug 6)
 - ✅ trellis 任务管理工作流引入(`.trellis/` 目录,commit `402afa5`)
 
 **当前状态**:
-- ⏸ 步骤 3b(多项目 + UI 三栏 + Rig 迁移)暂缓
+- ⏸ 步骤 3b-2(完整三栏 UI + rig-core 迁移)仍暂缓
+- ⏸ 步骤 4(Git 集成 — worktree + auto commit)未开始
+- 🐛 已知 issue:**bug 1+2 position 在 RDP 双显示器下未完全修好**(窗口 grow rightward 而非贴 host 主屏左上角,候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
 - 下一步候选(详见 [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)):
-  - 跳过 3b 继续主线 → 步骤 4 Git 集成(worktree + auto commit)
-  - 或回头补完 3b(多项目 + Rig 迁移)
+  - 跳过 3b-2 继续主线 → 步骤 4 Git 集成(worktree + auto commit)
+  - 或回头补完 3b-2(完整三栏 UI + Rig 迁移)
+  - 或先收尾 bug 1+2 position(setFullscreen 兜底 vs 继续找正确 fix)
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 
@@ -57,10 +64,12 @@
 | 4 | [ARCHITECTURE.md §1-2](./ARCHITECTURE.md) | 了解 16 关卡(写代码时反复查) |
 | 5 | [HACKING-wsl.md](./HACKING-wsl.md) | 撞 WSL / 字体 / Rust 工具链问题时 |
 | 6 | [HACKING-llm.md](./HACKING-llm.md) | 写 / 改 LLM 客户端时 |
-| 7 | [spike-001](./spikes/001-wsl-tauri-window.md) | 想了解"WSL+Tauri 怎么验证"的全过程 |
-| 8 | [spike-002](./spikes/002-reqwest-anthropic-sse.md) | 想了解"LLM 客户端 4 模式怎么测"的全过程 |
-| 9 | [BACKLOG.md](./BACKLOG.md) | 评估新功能时 |
-| 10 | [_reviews/REVIEW-glm-5.1.md](./_reviews/REVIEW-glm-5.1.md) + [_reviews/REVIEW-deepseek-v4-pro.md](./_reviews/REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
+| 7 | [HACKING-markdown.md](./HACKING-markdown.md) | 改 / 调试前端 markdown 渲染 (marked + DOMPurify) 时 |
+| 8 | [spike-001](./spikes/001-wsl-tauri-window.md) | 想了解"WSL+Tauri 怎么验证"的全过程 |
+| 9 | [spike-002](./spikes/002-reqwest-anthropic-sse.md) | 想了解"LLM 客户端 4 模式怎么测"的全过程 |
+| 10 | [BACKLOG.md](./BACKLOG.md) | 评估新功能时 |
+| 11 | [_reviews/REVIEW-glm-5.1.md](./_reviews/REVIEW-glm-5.1.md) + [_reviews/REVIEW-deepseek-v4-pro.md](./_reviews/REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
+| 12 | [.trellis/spec/frontend/state-management.md](../.trellis/spec/frontend/state-management.md) | 改前端 store / 流式逻辑前先读(单源 streamController + chat facade 模式) |
 
 **目录**:
 ```
@@ -74,6 +83,7 @@ docs/
 ├── BACKLOG.md                # 7 个候选功能
 ├── HACKING-wsl.md            # 10 个 WSL 环境坑 + fcitx5 输入法
 ├── HACKING-llm.md            # LLM 兼容层差异
+├── HACKING-markdown.md       # 前端 markdown 渲染陷阱 (marked + DOMPurify)
 ├── HANDOFF.md                # 本文件
 ├── _reviews/
 │   ├── REVIEW-glm-5.1.md         # 外部评审 #1
@@ -172,7 +182,7 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 - **当前 branch**:`main`
 - **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
 - **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
-- **当前日期**:2026-06-05
+- **当前日期**:2026-06-07
 
 ---
 

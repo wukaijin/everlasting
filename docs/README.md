@@ -19,6 +19,7 @@
 | [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
+| [HACKING-markdown.md](./HACKING-markdown.md) | 前端 markdown 渲染陷阱 | marked v18 + DOMPurify 的 XSS / 协议白名单 / 测试 fixture | 改前端 markdown 渲染 / 加 vitest fixture 时 |
 | [spikes/](./spikes/) | 技术验证记录 | 5 分钟上手每个 spike 的目标 / 标准 / 结果 | 评估"某项技术能不能用"时 |
 | [`_archive/`](./_archive/) | 一次性任务归档（PROPOSAL / 评审 / 收尾） | 历史任务产物，已沉淀到主目录文档 | 查阅历史决策时 |
 | [`_reviews/`](./_reviews/) | 项目级设计评审快照 | 外部 LLM 评审（只读不改） | 了解项目被评审过什么 |
@@ -42,6 +43,8 @@
 **撞到环境 / API 怪事时**:
 - WSL / 字体 / Rust 工具链 → [HACKING-wsl.md](./HACKING-wsl.md)
 - LLM 流式 / 错误分类 / 协议差异 → [HACKING-llm.md](./HACKING-llm.md)
+- 前端 markdown 渲染 / DOMPurify / 协议白名单 → [HACKING-markdown.md](./HACKING-markdown.md)
+- 前端状态管理 / streamController / Pinia 模式 → [`.trellis/spec/frontend/state-management.md`](../.trellis/spec/frontend/state-management.md)(注:此文件在 `.trellis/spec/`,不在 `docs/`)
 
 **查阅历史决策 / 评审快照**:
 - [docs/_archive/](./_archive/README.md) — 一次性任务归档（PROPOSAL / 评审 / 收尾 follow-up）
