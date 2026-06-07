@@ -60,6 +60,20 @@ const statusIconName = computed<string>(() => {
   if (hasResult.value) return "check";
   return "ellipsis";
 });
+
+/** Human-readable size of the tool result content for the <summary>
+ *  hint. We use character count (not UTF-8 bytes) because tool
+ *  results in this app are always text and chars read more honestly
+ *  for that case. The label "chars" is omitted when the number is
+ *  under 1024 (just a bare count reads fine for a few hundred
+ *  characters); the suffix reappears for K/M to disambiguate. */
+const outputSize = computed<string>(() => {
+  if (!props.result) return "";
+  const n = props.result.content.length;
+  if (n < 1024) return `${n} chars`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K chars`;
+  return `${(n / 1024 / 1024).toFixed(1)}M chars`;
+});
 </script>
 
 <template>
@@ -92,9 +106,10 @@ const statusIconName = computed<string>(() => {
       <pre class="tool-card__pre tool-card__pre--input">{{ formatToolInput(call) }}</pre>
     </details>
 
-    <div v-if="result" class="tool-card__output">
+    <details v-if="result" class="tool-card__details tool-card__details--output">
+      <summary>output · {{ outputSize }}</summary>
       <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(result.content) }}</pre>
-    </div>
+    </details>
   </div>
 </template>
 
@@ -224,7 +239,7 @@ const statusIconName = computed<string>(() => {
   color: var(--color-text-primary);
 }
 
-.tool-card__output {
+.tool-card__details--output {
   margin-top: 6px;
 }
 
