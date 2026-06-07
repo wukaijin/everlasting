@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-06-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~595 | Active |
+| `journal-1.md` | ~628 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-06-07 | 工具集扩展批次:edit_file / grep / glob / list_dir + ReadGuard + Bash 落盘 + cat -n | `21cc9e3` | `main` |
 | 15 | 2026-06-07 | 修 6 个 UI/状态 bug：顶栏/Markdown/SSE 架构（bug 1+2 position 留 TODO） | `bd5ea7b`, `abde429`, `bf9b35b` | `main` |
 | 14 | 2026-06-06 | 06-06 字体: HarmonyOS Sans SC 子集打包 (CSS 杠杆救不了雅黑, 换字体是唯一解) | `aabb9fa` | `main` |
 | 13 | 2026-06-06 | PR2 follow-up: 启动时 batch backfill 老项目的 git_branch | `7ce320918c80889cc4b24241f2c507c43ad61620` | `main` |
