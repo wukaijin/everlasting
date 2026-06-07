@@ -19,6 +19,7 @@
 //! `.trellis/spec/backend/project-cwd-boundary.md`.
 
 mod db;
+mod git;
 mod llm;
 mod projects;
 mod tools;
@@ -261,9 +262,78 @@ async fn create_session(
     // Sanity: the project must exist. We do NOT error out if it doesn't
     // (the user could be racing a delete); instead we let `db::create_session`
     // surface the foreign-key violation as a clear error.
-    db::create_session(&state.db, &project_id, &initial_cwd, &model)
-        .await
-        .map_err(|e| format!("create_session failed: {}", e))
+
+    // Step 4: worktree isolation requires a git repo. Look up the
+    // project to (a) confirm it exists, (b) read `is_git_repo` /
+    // `path`. We do this BEFORE the DB insert so a non-git project
+    // error doesn't leave an orphan `sessions` row.
+    let project = match db::get_project(&state.db, &project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            // Project was deleted between the user's click and this
+            // call (rare race). Surface as a clear error so the
+            // frontend can refetch the project list.
+            return Err(format!("create_session: project '{}' not found", project_id));
+        }
+        Err(e) => return Err(format!("create_session: failed to load project: {}", e)),
+    };
+    if !project.is_git_repo {
+        return Err(format!(
+            "create_session: project '{}' is not a git repository; step 4 requires all session-bearing projects to be git repos (run `git init` inside the project to enable)",
+            project.name
+        ));
+    }
+
+    // Create the worktree on disk FIRST, then write the DB row. If
+    // the worktree creation fails we never insert a half-initialized
+    // session row, so the user can retry without cleaning up.
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let data_dir = git::data_dir();
+    let wt_path = git::session_worktree_path(&data_dir, &project_id, &session_id);
+    if let Err(e) = git::create_worktree(
+        std::path::Path::new(&project.path),
+        &wt_path,
+        &session_id,
+    ) {
+        return Err(format!("create_session: worktree creation failed: {}", e));
+    }
+
+    // Now the DB row, with the canonical worktree path stored. The
+    // session id is fixed to the one we used for the worktree
+    // (otherwise the worktree branch name and the DB row would
+    // disagree).
+    let result = db::create_session(
+        &state.db,
+        &session_id,
+        &project_id,
+        &initial_cwd,
+        &model,
+        wt_path.to_str(),
+    )
+    .await;
+
+    if let Err(e) = result {
+        // If the DB insert fails after the worktree was created,
+        // we have a leaked worktree. Best-effort cleanup so we
+        // don't leave the user with a phantom branch.
+        let _ = git::destroy_worktree(
+            std::path::Path::new(&project.path),
+            &wt_path,
+            &session_id,
+        );
+        return Err(format!("create_session: db insert failed: {}", e));
+    }
+
+    Ok(db::SessionRow {
+        id: session_id,
+        title: "新对话".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        model,
+        project_id,
+        current_cwd: initial_cwd,
+        worktree_path: wt_path.to_str().map(str::to_string),
+    })
 }
 
 #[tauri::command]
@@ -295,10 +365,49 @@ async fn delete_session(
     // primary intent is "delete the session", not "clean my disk";
     // surfacing a delete error because some leftover .txt file
     // was unlinked elsewhere would be a worse UX.
-    if let Ok(Some(loaded)) = db::load_session(&state.db, &session_id).await {
-        let cwd = loaded.session.current_cwd;
+    let session_for_cleanup = db::load_session(&state.db, &session_id)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(ref loaded) = session_for_cleanup {
+        let cwd = &loaded.session.current_cwd;
         if !cwd.trim().is_empty() {
-            tools::shell::cleanup_outputs_dir(std::path::Path::new(&cwd)).await;
+            tools::shell::cleanup_outputs_dir(std::path::Path::new(cwd)).await;
+        }
+    }
+
+    // Step 4: best-effort worktree + branch cleanup. Per the
+    // brainstorm decision (prd.md §"两者都删"), session delete
+    // removes both the worktree directory AND the `session/<id>`
+    // branch. We do this BEFORE the DB delete because we need
+    // `worktree_path` and `project_id` from the loaded row; after
+    // the DB delete they're gone (until next load).
+    //
+    // Failure modes are tolerated: a stuck worktree dir is logged
+    // and the DB delete still proceeds, mirroring the spirit of the
+    // shell-outputs cleanup above. A user can `rm -rf` the path by
+    // hand if it gets stuck.
+    if let Some(ref loaded) = session_for_cleanup {
+        if let Some(wt_path) = loaded.session.worktree_path.as_deref() {
+            // Look up the project to get the .git root. For
+            // pre-step-4 sessions (worktree_path is NULL) this
+            // branch is skipped; for step 4 sessions it's always
+            // present.
+            if let Ok(Some(project)) = db::get_project(&state.db, &loaded.session.project_id).await {
+                if let Err(e) = git::destroy_worktree(
+                    std::path::Path::new(&project.path),
+                    std::path::Path::new(wt_path),
+                    &session_id,
+                ) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        worktree = %wt_path,
+                        error = %e,
+                        "worktree cleanup failed during session delete (non-fatal)"
+                    );
+                }
+            }
         }
     }
 

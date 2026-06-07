@@ -39,6 +39,13 @@ tauri-plugin-os = "2.3.2"
 globset = "0.4"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
+# Step 4: Git worktree isolation
+# `vendored-libgit2` pulls a C libgit2 build into the binary, so the
+# runtime doesn't depend on a system-installed `libgit2`. First build
+# pays ~30-90s compiling the C source; subsequent builds use cargo's
+# incremental cache and sccache if configured.
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+
 [dev-dependencies]
 tempfile = "3"
 

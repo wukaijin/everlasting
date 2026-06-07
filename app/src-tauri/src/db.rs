@@ -46,6 +46,14 @@ pub struct SessionRow {
     pub model: String,
     pub project_id: String,
     pub current_cwd: String,
+    /// On-disk path to the session's git worktree. `None` for
+    /// pre-step-4 sessions (the column is NULL for any row that
+    /// existed before the step 4 migration); tools fall back to
+    /// `current_cwd` when this is `None`. Step 4 sessions always
+    /// have a `Some` value (or the create call failed — there is
+    /// no "step 4 + non-git" state because step 4 rejects non-git
+    /// projects at create time).
+    pub worktree_path: Option<String>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -58,6 +66,9 @@ pub struct SessionSummary {
     pub preview: String,
     pub project_id: String,
     pub current_cwd: String,
+    /// Mirror of [`SessionRow::worktree_path`]. `None` for pre-step-4
+    /// rows; the UI shows no "diff" affordance when this is empty.
+    pub worktree_path: Option<String>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
@@ -209,6 +220,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // --- Step 4 ALTER: add worktree_path to sessions.
+    //  Nullable (no DEFAULT) so pre-step-4 rows keep NULL and the
+    //  Rust side falls back to `current_cwd` for them. New step 4
+    //  rows always have a value (the create_session call returns
+    //  an error before the INSERT if worktree creation fails). ---
+    add_session_column_if_missing(pool, "worktree_path", "TEXT").await?;
 
     // --- PR2 ALTERs: add is_git_repo + git_branch to projects.
     //  `is_git_repo` already exists on freshly created tables (see
@@ -633,41 +651,55 @@ fn row_to_project(r: sqlx::sqlite::SqliteRow) -> Result<ProjectRow, sqlx::Error>
 
 /// Create a new empty session under `project_id` with the given
 /// initial working directory. Returns the new session's row.
+///
+/// `session_id` is supplied by the caller so it can be shared with
+/// the git worktree branch (the worktree branch name and the DB
+/// row's primary key must agree — see `lib.rs::create_session`).
+/// The caller is responsible for UUID uniqueness.
+///
+/// `worktree_path` is the absolute on-disk path of the session's
+/// git worktree, computed by the caller (see
+/// `git::session_worktree_path`). It is `None` for pre-step-4
+/// callers; step 4 always passes `Some(path)` because non-git
+/// projects are rejected upstream of this function.
 pub async fn create_session(
     pool: &SqlitePool,
+    session_id: &str,
     project_id: &str,
     initial_cwd: &str,
     model: &str,
+    worktree_path: Option<&str>,
 ) -> Result<SessionRow, sqlx::Error> {
     let now = Utc::now().to_rfc3339();
-    let id = Uuid::new_v4().to_string();
     let title = "新对话".to_string();
 
     sqlx::query(
         r#"
         INSERT INTO sessions
-            (id, title, created_at, updated_at, model, metadata, project_id, current_cwd)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+            (id, title, created_at, updated_at, model, metadata, project_id, current_cwd, worktree_path)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
         "#,
     )
-    .bind(&id)
+    .bind(session_id)
     .bind(&title)
     .bind(&now)
     .bind(&now)
     .bind(model)
     .bind(project_id)
     .bind(initial_cwd)
+    .bind(worktree_path)
     .execute(pool)
     .await?;
 
     Ok(SessionRow {
-        id,
+        id: session_id.to_string(),
         title,
         created_at: now.clone(),
         updated_at: now,
         model: model.to_string(),
         project_id: project_id.to_string(),
         current_cwd: initial_cwd.to_string(),
+        worktree_path: worktree_path.map(str::to_string),
     })
 }
 
@@ -679,7 +711,7 @@ pub async fn list_sessions(
 ) -> Result<Vec<SessionSummary>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
-        SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd,
+        SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd, s.worktree_path,
                COALESCE(
                    (SELECT text FROM messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
@@ -711,6 +743,7 @@ pub async fn list_sessions(
                 preview,
                 project_id: r.try_get("project_id")?,
                 current_cwd: r.try_get("current_cwd")?,
+                worktree_path: r.try_get("worktree_path")?,
             })
         })
         .collect()
@@ -724,7 +757,7 @@ pub async fn load_session(
 ) -> Result<Option<LoadedSession>, sqlx::Error> {
     let session_row = sqlx::query(
         r#"
-        SELECT id, title, created_at, updated_at, model, project_id, current_cwd
+        SELECT id, title, created_at, updated_at, model, project_id, current_cwd, worktree_path
         FROM sessions
         WHERE id = ?
         "#,
@@ -742,6 +775,7 @@ pub async fn load_session(
             model: r.try_get("model")?,
             project_id: r.try_get("project_id")?,
             current_cwd: r.try_get("current_cwd")?,
+            worktree_path: r.try_get("worktree_path")?,
         },
         None => return Ok(None),
     };
@@ -1153,10 +1187,10 @@ mod tests {
             .await
             .unwrap();
 
-        let s1 = create_session(&pool, &p.id, "/tmp/foo", "GLM-4.7")
+        let s1 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/foo", "GLM-4.7", None)
             .await
             .unwrap();
-        let s2 = create_session(&pool, &p.id, "/tmp/bar", "GLM-4.7")
+        let s2 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/bar", "GLM-4.7", None)
             .await
             .unwrap();
         assert_eq!(s1.project_id, p.id);
@@ -1181,7 +1215,7 @@ mod tests {
     #[tokio::test]
     async fn persist_and_load_messages() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
 
@@ -1222,7 +1256,7 @@ mod tests {
     #[tokio::test]
     async fn first_user_message_auto_titles_session() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
 
@@ -1238,7 +1272,7 @@ mod tests {
     #[tokio::test]
     async fn second_user_message_does_not_overwrite_title() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
 
@@ -1256,7 +1290,7 @@ mod tests {
     #[tokio::test]
     async fn delete_session_cascades_messages() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
         persist_turn(
@@ -1276,7 +1310,7 @@ mod tests {
     #[tokio::test]
     async fn list_sessions_preview_truncates_at_80_chars() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
         let long = "a".repeat(120);
@@ -1292,7 +1326,7 @@ mod tests {
     #[tokio::test]
     async fn touch_session_updates_timestamp() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
             .await
             .unwrap();
         let original = session.updated_at.clone();
@@ -1305,7 +1339,7 @@ mod tests {
     #[tokio::test]
     async fn update_session_cwd_persists() {
         let pool = test_pool().await;
-        let session = create_session(&pool, DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7")
+        let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7", None)
             .await
             .unwrap();
         assert_eq!(session.current_cwd, "/tmp/start");
