@@ -12,14 +12,19 @@
 // so the user sees the result immediately. Long input / output is
 // capped at ~200px tall and overflows with scroll.
 
-import { computed } from "vue";
-import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat";
+import { computed, ref } from "vue";
+import {
+  useChatStore,
+  type ToolCallInfo,
+  type ToolResultInfo,
+} from "../../stores/chat";
 import {
   formatToolInput,
   truncateOutput,
   toolAccentVar,
   toolIcon,
 } from "../../utils/messageFormat";
+import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -74,6 +79,61 @@ const outputSize = computed<string>(() => {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K chars`;
   return `${(n / 1024 / 1024).toFixed(1)}M chars`;
 });
+
+// -----------------------------------------------------------------------
+// Step 4 / PR3: per-edit_file diff popover. The card's "diff" button
+// is only rendered for the `edit_file` tool and only when the tool
+// has a `path` AND a session is active (so we know which session's
+// diff to query). Clicking toggles a small popover below the card
+// header that shows that file's portion of the session diff.
+//
+// We use the session-level diff (worktree vs project main) rather
+// than capturing a pre-edit snapshot per call: the LLM's
+// `read_file` tool result is in the message history, and showing
+// the cumulative session diff per file is usually more useful than
+// isolating a single edit_file's contribution. The popover falls
+// back to "no changes in this session" when the file isn't in the
+// cached diff (e.g. the edit failed or was on a file the LLM
+// didn't actually change).
+// -----------------------------------------------------------------------
+const chatStore = useChatStore();
+const fileDiffOpen = ref(false);
+const fileDiffLoading = ref(false);
+const fileDiffError = ref<string | null>(null);
+
+const fileDiff = computed<import("../../stores/chat").FileDiff | null>(() => {
+  const sid = chatStore.currentSessionId;
+  if (!sid || !filePath.value) return null;
+  return chatStore.getFileDiff(sid, filePath.value);
+});
+
+const showDiffButton = computed<boolean>(
+  () => props.call.name === "edit_file" && !!filePath.value,
+);
+
+async function toggleFileDiff() {
+  if (fileDiffOpen.value) {
+    fileDiffOpen.value = false;
+    return;
+  }
+  fileDiffOpen.value = true;
+  if (fileDiff.value) {
+    // Already cached.
+    return;
+  }
+  // Fetch the session diff so getFileDiff has something to read.
+  const sid = chatStore.currentSessionId;
+  if (!sid) return;
+  fileDiffLoading.value = true;
+  fileDiffError.value = null;
+  try {
+    await chatStore.fetchDiff(sid);
+  } catch (e) {
+    fileDiffError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    fileDiffLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -98,6 +158,45 @@ const outputSize = computed<string>(() => {
           <Icon :name="statusIconName" :size="14" />
         </span>
         <span>{{ statusText }}</span>
+        <button
+          v-if="showDiffButton"
+          type="button"
+          class="tool-card__diff-btn"
+          :title="
+            fileDiffOpen
+              ? 'Hide diff for this file'
+              : 'Show diff for this file in this session'
+          "
+          @click="toggleFileDiff"
+        >
+            <Icon :name="fileDiffOpen ? 'chevron-down' : 'chevron-right'" :size="12" />
+            diff
+        </button>
+      </div>
+    </div>
+
+    <!--
+      Per-file diff popover. Rendered only for edit_file cards
+      when the user clicks the diff button. The popover is inline
+      (not floating) so it scrolls with the message list; for long
+      diffs the inner DiffView scrolls its own body.
+    -->
+    <div v-if="fileDiffOpen && showDiffButton" class="tool-card__diff">
+      <div v-if="fileDiffLoading" class="tool-card__diff-loading">
+        Loading diff…
+      </div>
+      <div v-else-if="fileDiffError" class="tool-card__diff-error">
+        {{ fileDiffError }}
+      </div>
+      <DiffView
+        v-else-if="fileDiff"
+        :files="[fileDiff]"
+      />
+      <div
+        v-else
+        class="tool-card__diff-empty"
+      >
+        <em>No changes to this file in this session (the edit may have failed or was a no-op).</em>
       </div>
     </div>
 
@@ -257,5 +356,52 @@ const outputSize = computed<string>(() => {
   line-height: 1.4;
   color: var(--color-text-primary);
   font-family: var(--font-mono);
+}
+
+/* Step 4 / PR3: per-file diff button + popover inside the
+ * tool card. The button sits in the header status row; the
+ * popover replaces the regular card body when open. */
+.tool-card__diff-btn {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  background: var(--color-accent-muted);
+  color: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tool-card__diff-btn:hover {
+  background: var(--color-accent);
+  color: var(--color-bg-app);
+}
+
+.tool-card__diff {
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.tool-card__diff-loading,
+.tool-card__diff-error,
+.tool-card__diff-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: var(--font-sans);
+}
+
+.tool-card__diff-error {
+  color: var(--color-tool-error);
 }
 </style>

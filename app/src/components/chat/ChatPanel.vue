@@ -18,12 +18,13 @@
 // `.chat-panel__chip--cwd` chip is pushed to the right showing
 // `chatStore.simplifiedCwd` (prepared by PR3; e.g. `~/code/foo`).
 
-import { computed } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
 import { useConfigStore } from "../../stores/config";
 import { useProjectsStore } from "../../stores/projects";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
+import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
@@ -77,6 +78,77 @@ const gitBranchLabel = computed<string>(() => {
     const branch = currentProject.value?.git_branch;
     return branch && branch.length > 0 ? branch : "git";
 });
+
+// -----------------------------------------------------------------------
+// Step 4 / PR3: session-level diff modal
+// -----------------------------------------------------------------------
+
+const diffModalOpen = ref(false);
+const diffLoading = ref(false);
+const diffError = ref<string | null>(null);
+const diffResult = ref<{ files: import("./DiffView.vue").FileDiff[] } | null>(null);
+
+async function openDiffModal() {
+    const sid = chatStore.currentSessionId;
+    if (!sid) return;
+    diffModalOpen.value = true;
+    diffError.value = null;
+    diffResult.value = null;
+    diffLoading.value = true;
+    try {
+        diffResult.value = await chatStore.fetchDiff(sid);
+    } catch (e) {
+        diffError.value = e instanceof Error ? e.message : String(e);
+    } finally {
+        diffLoading.value = false;
+    }
+}
+
+function closeDiffModal() {
+    diffModalOpen.value = false;
+}
+
+function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && diffModalOpen.value) {
+        closeDiffModal();
+    }
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener("keydown", onKeyDown);
+    onUnmounted(() => window.removeEventListener("keydown", onKeyDown));
+}
+
+/** Reactive count of files in the current session's diff. Reads
+ *  the cache (no IPC) so the chip can show "diff (3 files)"
+ *  before the user clicks to open the modal. Falls back to "diff"
+ *  when nothing is cached yet OR for pre-step-4 sessions. */
+const diffFileCount = computed<number | null>(() => {
+    const sid = chatStore.currentSessionId;
+    if (!sid) return null;
+    const cached = chatStore.getDiff(sid);
+    if (!cached) return null;
+    return cached.files.length;
+});
+
+const diffButtonLabel = computed<string>(() => {
+    const n = diffFileCount.value;
+    if (n === null) return "diff";
+    if (n === 0) return "diff (clean)";
+    return `diff (${n})`;
+});
+
+const diffButtonTitle = computed<string>(() => {
+    const sid = chatStore.currentSessionId;
+    if (!sid) return "Switch to a session to view its diff";
+    if (!currentProject.value?.is_git_repo) {
+        return "This project isn't a git repo";
+    }
+    const n = diffFileCount.value;
+    if (n === null) return "View the diff for this session";
+    if (n === 0) return "No changes in this session yet";
+    return `View ${n} ${n === 1 ? "file" : "files"} changed in this session`;
+});
 </script>
 
 <template>
@@ -104,6 +176,16 @@ const gitBranchLabel = computed<string>(() => {
                     <Icon name="folder" :size="12" />
                     {{ chatStore.simplifiedCwd }}
                 </span>
+                <button
+                    v-if="chatStore.currentSessionId"
+                    type="button"
+                    class="chat-panel__chip chat-panel__chip--diff"
+                    :title="diffButtonTitle"
+                    @click="openDiffModal"
+                >
+                    <Icon name="document" :size="12" />
+                    {{ diffButtonLabel }}
+                </button>
             </div>
         </header>
 
@@ -139,6 +221,52 @@ const gitBranchLabel = computed<string>(() => {
             @send="emit('send', $event)"
             @stop="onStop"
         />
+
+        <!--
+          Step 4 / PR3: session-level diff modal. Triggered by the
+          "diff" chip in the header. Closes on backdrop click, on
+          the close button, or on Esc. Renders the DiffView
+          component with the session's cached diff.
+        -->
+        <div
+            v-if="diffModalOpen"
+            class="diff-modal-backdrop"
+            @click.self="closeDiffModal"
+        >
+            <div
+                class="diff-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Session diff"
+            >
+                <header class="diff-modal__header">
+                    <h2 class="diff-modal__title">
+                        Session diff
+                        <span v-if="diffResult" class="diff-modal__count">
+                            ({{ diffResult.files.length }}
+                            {{ diffResult.files.length === 1 ? "file" : "files" }})
+                        </span>
+                    </h2>
+                    <button
+                        type="button"
+                        class="diff-modal__close"
+                        @click="closeDiffModal"
+                        aria-label="Close"
+                    >
+                        <Icon name="x" :size="14" />
+                    </button>
+                </header>
+                <div class="diff-modal__body">
+                    <div v-if="diffLoading" class="diff-modal__loading">
+                        Loading diff…
+                    </div>
+                    <div v-else-if="diffError" class="diff-modal__error">
+                        {{ diffError }}
+                    </div>
+                    <DiffView v-else-if="diffResult" :files="diffResult.files" />
+                </div>
+            </div>
+        </div>
     </section>
 </template>
 
@@ -253,5 +381,113 @@ const gitBranchLabel = computed<string>(() => {
     gap: 4px;
     color: var(--color-tool-shell);
     font-size: 11px;
+}
+
+.chat-panel__chip--diff {
+    background: var(--color-accent-muted);
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    border-width: 1px;
+    border-style: solid;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+}
+
+.chat-panel__chip--diff:hover {
+    background: var(--color-accent);
+    color: var(--color-bg-app);
+}
+
+/* -----------------------------------------------------------------------
+ * Diff modal (step 4 / PR3). Full-viewport overlay; the inner
+ * .diff-modal is centered and sized to leave 40px margin on each
+ * side. Scrolling happens inside .diff-modal__body so the
+ * header + close button stay pinned.
+ * --------------------------------------------------------------------- */
+.diff-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 40px;
+}
+
+.diff-modal {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-bg-border);
+    border-radius: 8px;
+    width: 100%;
+    max-width: 1100px;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.diff-modal__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--color-bg-border);
+    background: var(--color-bg-elevated);
+    flex-shrink: 0;
+}
+
+.diff-modal__title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.diff-modal__count {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    font-weight: 400;
+}
+
+.diff-modal__close {
+    background: transparent;
+    border: 0;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.diff-modal__close:hover {
+    background: var(--color-bg-border);
+    color: var(--color-text-primary);
+}
+
+.diff-modal__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    background: var(--color-bg-app);
+}
+
+.diff-modal__loading,
+.diff-modal__error {
+    padding: 24px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.diff-modal__error {
+    color: var(--color-tool-error);
 }
 </style>

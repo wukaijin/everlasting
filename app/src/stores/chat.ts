@@ -96,6 +96,25 @@ export interface SessionSummary {
   current_cwd: string;
 }
 
+/** One file in the worktree diff (step 4 / PR3). Mirror of the
+ *  Rust `git::diff::FileDiff` struct. Field names are
+ *  intentionally snake_case to match the IPC payload. */
+export interface FileDiff {
+  path: string;
+  status: string;
+  added: number;
+  removed: number;
+  diff_text: string;
+}
+
+/** The full diff for a session: the file list plus a structured
+ *  per-file payload. `files` is empty when the worktree matches
+ *  the base (no edits yet, OR pre-step-4 session with no
+ *  worktree). */
+export interface DiffResult {
+  files: FileDiff[];
+}
+
 /** Wire-format content sent to the Rust `chat` command. Mirrors
  *  Rust's `MessageContent`: a plain string for text-only messages,
  *  or an array of `ContentBlock` (snake_case tag + fields) when
@@ -343,6 +362,9 @@ export const useChatStore = defineStore("chat", () => {
     // so the in-memory buffer doesn't keep a stale entry alive
     // past the DB row's deletion.
     controller.evict(sessionId);
+    // Drop any cached diff for this session — the worktree it
+    // referenced is now gone, so the diff is meaningless.
+    diffCache.value.delete(sessionId);
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null;
       currentCwd.value = "";
@@ -350,6 +372,51 @@ export const useChatStore = defineStore("chat", () => {
     if (projectsStore.currentProjectId) {
       await loadSessions(projectsStore.currentProjectId);
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Diff (step 4 / PR3) — fetch and cache the session's worktree
+  // diff. The IPC call is read-only and cheap (libgit2 walks the
+  // tree, no remote I/O), but we still cache to avoid recomputing
+  // for repeated clicks on the same session. The cache is keyed by
+  // session id and is invalidated on session switch (so a stale
+  // "diff from a different session" can't bleed through) and on
+  // session delete.
+  // -----------------------------------------------------------------------
+
+  const diffCache = ref<Map<string, DiffResult>>(new Map());
+
+  /** Reactive getter: cached diff for a session, or `null` if
+   *  not yet fetched. Vue consumers should call `fetchDiff`
+   *  first; this is just the read-side of the cache. */
+  function getDiff(sessionId: string): DiffResult | null {
+    return diffCache.value.get(sessionId) ?? null;
+  }
+
+  /** Fetch the session's worktree diff. Cached after the first
+   *  call until the session is deleted. Errors propagate to the
+   *  caller (the UI surfaces them in the popover). */
+  async function fetchDiff(sessionId: string): Promise<DiffResult> {
+    const cached = diffCache.value.get(sessionId);
+    if (cached) {
+      return cached;
+    }
+    const result = await invoke<DiffResult>("diff_worktree", { sessionId });
+    diffCache.value.set(sessionId, result);
+    // Force reactivity for the new Map reference (Pinia tracks
+    // Map.set on the proxy but consumers reading `.get` want a
+    // fresh snapshot).
+    diffCache.value = new Map(diffCache.value);
+    return result;
+  }
+
+  /** Filter a session's diff down to a single file path. Returns
+   *  `null` if the file isn't in the diff (either not changed in
+   *  this session, OR the session diff hasn't been fetched yet). */
+  function getFileDiff(sessionId: string, filePath: string): FileDiff | null {
+    const result = diffCache.value.get(sessionId);
+    if (!result) return null;
+    return result.files.find((f) => f.path === filePath) ?? null;
   }
 
   // -----------------------------------------------------------------------
@@ -547,6 +614,7 @@ export const useChatStore = defineStore("chat", () => {
     currentSessionId,
     currentCwd,
     simplifiedCwd,
+    diffCache,
     // Methods
     send,
     cancel,
@@ -554,5 +622,8 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     switchSession,
     deleteSession,
+    fetchDiff,
+    getDiff,
+    getFileDiff,
   };
 });

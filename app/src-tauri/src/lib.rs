@@ -347,6 +347,39 @@ async fn load_session(
 }
 
 #[tauri::command]
+async fn diff_worktree(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<git::diff::DiffResult, String> {
+    // Look up the session to find its worktree. Pre-step-4 sessions
+    // (worktree_path NULL) have no diff to show — return an empty
+    // result rather than an error so the UI can render "no changes
+    // yet" gracefully.
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("diff_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| format!("diff_worktree: session '{}' not found", session_id))?;
+
+    let worktree_path = match loaded.session.worktree_path.as_deref() {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => {
+            // Pre-step-4 session: no worktree, no diff. Returning an
+            // empty DiffResult (vs. an error) lets the frontend
+            // render the same "no changes" state for old + new
+            // sessions without branching on the cause.
+            tracing::debug!(
+                session_id = %session_id,
+                "diff_worktree: pre-step-4 session, no worktree, returning empty"
+            );
+            return Ok(git::diff::DiffResult { files: vec![] });
+        }
+    };
+
+    git::diff::diff_worktree(std::path::Path::new(worktree_path), &session_id)
+        .map_err(|e| format!("diff_worktree: {}", e))
+}
+
+#[tauri::command]
 async fn delete_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1221,6 +1254,7 @@ pub fn run() {
             create_session,
             load_session,
             delete_session,
+            diff_worktree,
             list_projects,
             list_hidden_projects,
             create_project,
