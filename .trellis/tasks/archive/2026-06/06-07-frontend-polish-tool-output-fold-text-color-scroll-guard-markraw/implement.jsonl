@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "ToolCallCard/MessageList/MessageItem all vue 3 <script setup> components; output fold + scroll watcher edits must follow the component patterns the spec defines (props/emits/computed/watcher conventions)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "The markRaw changes in streamController.ts touch Pinia store + reactive(Map) patterns; spec covers reactive/shallowRef/markRaw when-to-use"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "ChatMessage / ToolCallInfo / ToolResultInfo / ThinkingBlockInfo interface changes must keep type safety; spec covers how new optional fields and markRaw'd payloads type through"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "vue-tsc must pass; commits are 3 atomic units; spec defines quality bar (type-check, lint, manual smoke)"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "Not directly edited but the user did density tweaks (font-size 15→14px, line-height 1.7→1.55) — verify the body-text size doesn't break the CJK font stack's line metrics"}
