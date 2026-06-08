@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "验收时按质量基线检查:type-check / 不引入 dead code / 不破坏现有 token 复用"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "边框 / 阴影是纯 CSS,字体规范不直接相关,但本任务唯一可能的 CSS 副作用是 font 渲染,核对一下无影响"}
