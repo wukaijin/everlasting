@@ -64,7 +64,7 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
 <style scoped>
 .thinking {
   position: relative;
-  margin-bottom: 6px;
+  margin-bottom: 0px;
   max-width: 100%;
   border-left: 3px solid var(--color-tool-thinking);
   border-radius: 0 6px 6px 0;
