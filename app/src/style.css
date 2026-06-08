@@ -68,6 +68,12 @@ body,
     height: 100%;
     margin: 0;
     padding: 0;
+    box-sizing: border-box;
+    border-radius: 6px;
+    border: 1px solid var(--color-bg-border);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+    background: var(--color-bg-app);
 }
 
 button {
