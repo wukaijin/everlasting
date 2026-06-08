@@ -1157,6 +1157,38 @@ async fn chat(
         // The final cwd value to persist at the end of the turn.
         let mut last_cwd: Option<PathBuf> = None;
 
+        // Step 4 follow-up Bug 3: build the LLM system prompt **once**
+        // per chat invocation. The prompt describes the session's
+        // working directory, worktree state, branch + HEAD SHA so the
+        // model is explicitly grounded on every request. Pre-fix, the
+        // `system` field was hard-coded to `None` and the only
+        // worktree-state signal the model had was the post-hoc
+        // `[worktree event]` user-role message in history — which the
+        // model honestly described as "the user told me" rather than
+        // "I'm running in a worktree".
+        //
+        // We compute the HEAD SHA from the on-disk session root
+        // (which is either the worktree or the project root,
+        // depending on `worktree_state`). The lookup is best-effort:
+        // a non-git project or an empty repo gives a placeholder
+        // string, never an error — the prompt is a hint, not a
+        // contract field.
+        //
+        // Building once (before the `for turn in 1..=MAX_TURNS`
+        // loop) instead of per-turn is intentional: the worktree
+        // state and HEAD SHA cannot change between turns of the
+        // same agent loop (the LLM only runs tools and the
+        // `attach_worktree` / `detach_worktree` commands have a
+        // cancel hook that aborts in-flight chats). Re-reading
+        // `.git/HEAD` on every turn would be cheap but wasteful.
+        let head_sha = lookup_head_sha(&worktree_path);
+        let system_prompt = build_system_prompt(
+            &loaded_session.session,
+            &project,
+            &worktree_path,
+            &head_sha,
+        );
+
         // Persist the most recent user-typed message before the agent loop
         // runs. Without this, the user message only lives in the frontend's
         // `messages.value` and the history sent to the LLM — never in the
@@ -1179,6 +1211,7 @@ async fn chat(
         for turn in 1..=MAX_TURNS {
             let mut stream = Box::pin(chat_stream_with_tools(
                 config.clone(),
+                Some(system_prompt.clone()),
                 messages.clone(),
                 tool_defs.clone(),
             ));
@@ -1542,6 +1575,109 @@ fn tool_result_envelope(content: &str, worktree_path: &std::path::Path) -> Strin
         "cwd": cwd_str,
     })
     .to_string()
+}
+
+/// Step 4 follow-up Bug 3: read the HEAD commit SHA of a git
+/// working directory and return the first 7 characters (the
+/// classic git short-SHA). Returns a placeholder string when the
+/// path is not a git repo, libgit2 fails to open it, or the repo
+/// has no commits yet (e.g. a freshly-`git init`'d empty repo).
+///
+/// Best-effort by design: this is consumed only by
+/// `build_system_prompt` as a hint to the LLM about the current
+/// HEAD; we never want a transient git error to surface as a
+/// chat failure.
+fn lookup_head_sha(path: &std::path::Path) -> String {
+    if !path.join(".git").exists() {
+        return "not a git repo".to_string();
+    }
+    let repo = match git2::Repository::open(path) {
+        Ok(r) => r,
+        Err(_) => return "not a git repo".to_string(),
+    };
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return "no commits yet".to_string(),
+    };
+    let commit = match head.peel_to_commit() {
+        Ok(c) => c,
+        Err(_) => return "no commits yet".to_string(),
+    };
+    let full = commit.id().to_string();
+    // Classic git short-SHA: first 7 chars.
+    full.chars().take(7).collect()
+}
+
+/// Step 4 follow-up Bug 3: construct the per-session system prompt
+/// the LLM sees at the top of every chat request. The prompt
+/// describes the session's project, working directory, and
+/// worktree state so the model is grounded on every turn.
+///
+/// Pre-fix, the request body's `system` field was hard-coded to
+/// `None` and the only worktree signal the model had was a
+/// `[worktree event]` user-role message injected after a
+/// successful `attach_worktree` / `detach_worktree` /
+/// `delete_worktree`. The user-role injection works for "what
+/// just happened" but the model honestly answered "no" when
+/// asked "does your system prompt mention you're in a worktree"
+/// — because the system prompt field was empty. This function
+/// is the single source of truth for the prompt; any future
+/// addition (e.g. "the project's main branch is `main`") goes
+/// here.
+///
+/// Three worktree-state phrasings:
+/// - `Active` → "ACTIVE on branch 'session/<id>' (HEAD <short_sha>)"
+/// - `Detached` → "DETACHED — was on branch 'session/<id>'
+///   (HEAD <short_sha>), currently in project root"
+/// - `None` → "NONE — running in project root"
+///
+/// Non-git projects get an "N/A — non-git project" suffix on the
+/// worktree line (and HEAD line shows whatever `lookup_head_sha`
+/// returned).
+///
+/// **Privacy**: only the `session_id`, `project.name`, `project.path`,
+/// `ctx_root`, and short HEAD SHA are emitted. No user messages or
+/// tool inputs are echoed.
+fn build_system_prompt(
+    session: &db::SessionRow,
+    project: &projects::ProjectRow,
+    ctx_root: &std::path::Path,
+    head_sha: &str,
+) -> String {
+    let branch = git::worktree::branch_name(&session.id);
+    let worktree_line = if !project.is_git_repo {
+        "N/A — non-git project".to_string()
+    } else {
+        match session.worktree_state {
+            db::WorktreeState::Active => {
+                format!("ACTIVE on branch '{}' (HEAD {})", branch, head_sha)
+            }
+            db::WorktreeState::Detached => format!(
+                "DETACHED — was on branch '{}' (HEAD {}), currently in project root",
+                branch, head_sha
+            ),
+            db::WorktreeState::None => "NONE — running in project root".to_string(),
+        }
+    };
+
+    format!(
+        "You are a coding agent. You have access to tools (read_file, write_file, \
+edit_file, shell, grep, glob, list_dir). All file paths in tool inputs are \
+relative to the session's working directory.\n\
+\n\
+Session context:\n\
+- Session ID: {session_id}\n\
+- Project: {project_name} ({project_path})\n\
+- Working directory: {cwd}\n\
+- Worktree: {worktree_line}\n\
+- Available tool result envelope: {{\"result\": \"<content>\", \"cwd\": \"<worktree_path>\"}} \
+— `cwd` tells you which root the tool ran against when worktree transitions happen mid-session.",
+        session_id = session.id,
+        project_name = project.name,
+        project_path = project.path,
+        cwd = ctx_root.display(),
+        worktree_line = worktree_line,
+    )
 }
 
 /// Persist the final cwd of a turn. Called once at turn end (not after
@@ -1933,5 +2069,183 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&env).expect("envelope must be JSON");
         assert_eq!(parsed["result"], content);
         assert_eq!(parsed["cwd"], "/data/wt");
+    }
+
+    // -----------------------------------------------------------------------
+    // build_system_prompt (Step 4 follow-up Bug 3)
+    // -----------------------------------------------------------------------
+
+    /// Helper to construct a [`db::SessionRow`] with overridable
+    /// worktree fields. The other fields are hard-coded test
+    /// fixtures; the production schema is exercised by the DB
+    /// integration tests in `db.rs`, this helper only needs a
+    /// well-formed value for the prompt tests below.
+    fn make_session_row(
+        id: &str,
+        worktree_state: db::WorktreeState,
+        worktree_path: Option<&str>,
+    ) -> db::SessionRow {
+        db::SessionRow {
+            id: id.to_string(),
+            title: "Test Session".to_string(),
+            created_at: "2026-06-08T00:00:00Z".to_string(),
+            updated_at: "2026-06-08T00:00:00Z".to_string(),
+            model: "MiniMax-M2.7".to_string(),
+            project_id: "proj-1".to_string(),
+            current_cwd: "/test/cwd".to_string(),
+            worktree_path: worktree_path.map(str::to_string),
+            worktree_state,
+            last_worktree_path: None,
+        }
+    }
+
+    /// Helper to construct a [`projects::ProjectRow`] with overridable
+    /// `is_git_repo` flag.
+    fn make_project_row(is_git_repo: bool) -> projects::ProjectRow {
+        projects::ProjectRow {
+            id: "proj-1".to_string(),
+            name: "everlasting".to_string(),
+            path: "/home/carlos/code/everlasting".to_string(),
+            is_git_repo,
+            git_branch: if is_git_repo {
+                Some("main".to_string())
+            } else {
+                None
+            },
+            is_legacy: false,
+            created_at: "2026-06-01T00:00:00Z".to_string(),
+            updated_at: "2026-06-08T00:00:00Z".to_string(),
+            hidden: false,
+            metadata: None,
+        }
+    }
+
+    /// Step 4 follow-up Bug 3: with an active worktree the prompt
+    /// names the branch (`session/<id>`), the short HEAD SHA, and
+    /// the working directory (the worktree path).
+    #[test]
+    fn build_system_prompt_active_worktree() {
+        let session = make_session_row(
+            "test-id",
+            db::WorktreeState::Active,
+            Some("/data/worktrees/p1/test-id"),
+        );
+        let project = make_project_row(true);
+        let prompt = build_system_prompt(
+            &session,
+            &project,
+            std::path::Path::new("/data/worktrees/p1/test-id"),
+            "abc1234",
+        );
+        assert!(
+            prompt.contains("Session ID: test-id"),
+            "prompt must name the session"
+        );
+        assert!(
+            prompt.contains("ACTIVE on branch 'session/test-id'"),
+            "prompt must label state ACTIVE and include branch name"
+        );
+        assert!(
+            prompt.contains("HEAD abc1234"),
+            "prompt must include the short HEAD SHA"
+        );
+        assert!(
+            prompt.contains("Working directory: /data/worktrees/p1/test-id"),
+            "prompt must list the worktree path as the working directory"
+        );
+        assert!(
+            prompt.contains("Available tool result envelope"),
+            "prompt must describe the tool result envelope"
+        );
+    }
+
+    /// Step 4 follow-up Bug 3: with no worktree the prompt labels
+    /// the state as NONE and uses the project root as the
+    /// working directory. Does NOT mention "session/<id>" since
+    /// no branch is active.
+    #[test]
+    fn build_system_prompt_no_worktree() {
+        let session = make_session_row("test-id", db::WorktreeState::None, None);
+        let project = make_project_row(true);
+        let prompt = build_system_prompt(
+            &session,
+            &project,
+            std::path::Path::new("/home/carlos/code/everlasting"),
+            "abc1234",
+        );
+        assert!(
+            prompt.contains("NONE — running in project root"),
+            "prompt must label state NONE"
+        );
+        assert!(
+            prompt.contains("Working directory: /home/carlos/code/everlasting"),
+            "working directory must be project root"
+        );
+        assert!(
+            !prompt.contains("ACTIVE"),
+            "prompt must not say ACTIVE when state is None"
+        );
+        assert!(
+            !prompt.contains("DETACHED"),
+            "prompt must not say DETACHED when state is None"
+        );
+    }
+
+    /// Step 4 follow-up Bug 3: a detached worktree retains the
+    /// branch name + HEAD SHA so the LLM can reason about the
+    /// previous worktree, but the working directory is the project
+    /// root since the worktree is unbound.
+    #[test]
+    fn build_system_prompt_detached_worktree() {
+        let session = make_session_row("det-id", db::WorktreeState::Detached, None);
+        let project = make_project_row(true);
+        let prompt = build_system_prompt(
+            &session,
+            &project,
+            std::path::Path::new("/home/carlos/code/everlasting"),
+            "deadbee",
+        );
+        assert!(
+            prompt.contains("DETACHED — was on branch 'session/det-id'"),
+            "prompt must label state DETACHED and reference the old branch"
+        );
+        assert!(
+            prompt.contains("HEAD deadbee"),
+            "prompt must include the HEAD short SHA"
+        );
+        assert!(
+            prompt.contains("currently in project root"),
+            "prompt must clarify the detached fallback"
+        );
+        assert!(
+            prompt.contains("Working directory: /home/carlos/code/everlasting"),
+            "detached's working directory is the project root"
+        );
+    }
+
+    /// Step 4 follow-up Bug 3: a non-git project never gets a
+    /// branch / SHA — the worktree line should say "N/A — non-git
+    /// project" regardless of the session's `worktree_state`
+    /// column. (Non-git projects can never have a worktree, but
+    /// the column is a fact-of-record; we don't trust the column
+    /// over the project flag.)
+    #[test]
+    fn build_system_prompt_non_git_project() {
+        let session = make_session_row("ng-id", db::WorktreeState::None, None);
+        let project = make_project_row(false);
+        let prompt = build_system_prompt(
+            &session,
+            &project,
+            std::path::Path::new("/some/non/git/dir"),
+            "not a git repo",
+        );
+        assert!(
+            prompt.contains("Worktree: N/A — non-git project"),
+            "non-git project must show the N/A worktree line"
+        );
+        assert!(
+            !prompt.contains("session/ng-id"),
+            "non-git project must not reference a session branch"
+        );
     }
 }

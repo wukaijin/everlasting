@@ -783,6 +783,63 @@ struct AppState {
   (rendered as a regular user-role message with the `[worktree event]`
   prefix). A future PR may add a dedicated info-badge rendering.
 
+#### System prompt (Step 4 follow-up Bug 3)
+
+- The agent loop builds a **session-grounding system prompt** in
+  `lib.rs::build_system_prompt(session, project, ctx_root, head_sha)`
+  and passes it via `chat_stream_with_tools(config, Some(prompt), ...)`.
+  Pre-fix, the request body's `system` field was hard-coded to `None`;
+  the LLM honestly answered "no" when asked "does your system prompt
+  mention you're in a worktree" because the field was empty. The
+  `[worktree event]` user-role messages live in the conversation
+  history (see "System event injection" above) and describe
+  *transitions*, but the system prompt is what tells the LLM the
+  *current* state.
+- The prompt is constructed **once per `chat` invocation**, before
+  the `for turn in 1..=MAX_TURNS` loop. The worktree state can't
+  change between turns of the same agent loop (destructive worktree
+  commands have a cancel hook that aborts in-flight chats), so
+  rebuilding per-turn would be wasteful.
+- The prompt shape (always exactly these lines):
+
+  ```
+  You are a coding agent. You have access to tools (read_file, write_file,
+  edit_file, shell, grep, glob, list_dir). All file paths in tool inputs
+  are relative to the session's working directory.
+
+  Session context:
+  - Session ID: <session.id>
+  - Project: <project.name> (<project.path>)
+  - Working directory: <ctx_root>
+  - Worktree: <state phrase>
+  - Available tool result envelope: {"result": "<content>", "cwd": "<worktree_path>"}
+    — `cwd` tells you which root the tool ran against when worktree transitions
+    happen mid-session.
+  ```
+
+- `<state phrase>` is one of:
+  - `Active`: `ACTIVE on branch 'session/<session.id>' (HEAD <short_sha>)`
+  - `Detached`: `DETACHED — was on branch 'session/<session.id>' (HEAD <short_sha>), currently in project root`
+  - `None`: `NONE — running in project root`
+  - Non-git project (regardless of `worktree_state`): `N/A — non-git project`
+- `<short_sha>` = first 7 chars of HEAD commit SHA, looked up via
+  `lookup_head_sha(ctx_root)`. Best-effort: a non-git path or empty
+  repo returns a placeholder (`"not a git repo"` / `"no commits yet"`).
+- **Tool result envelope vs system prompt — division of labor**:
+  - System prompt is the **persistent declaration** of the session's
+    grounding (built once per chat invocation, repeated each request).
+  - Tool result envelope's `cwd` field (see "Tool result envelope"
+    above) is the **runtime data point** confirming what cwd a
+    specific tool actually used. Both are needed: the prompt sets
+    the model's mental model; the per-tool `cwd` confirms it after
+    each call so the model can detect drift.
+- **Privacy / surface area**: only `session.id`, `project.name`,
+  `project.path`, `ctx_root`, and the short HEAD SHA are emitted. No
+  user messages, tool inputs, or DB rows are echoed into the prompt.
+  Future additions (e.g. "the project's main branch is `main`") go in
+  `build_system_prompt`; do not scatter prompt-building across the
+  agent loop.
+
 #### In-flight cancel hook
 
 - `chat` spawn fills `session_active_request: session_id -> request_id`.
@@ -826,6 +883,10 @@ struct AppState {
 | `insert_system_event` fails (e.g. DB locked) | `tracing::warn!`; the destructive operation has already succeeded — the system event is best-effort |
 | `cancel_inflight_for_session` finds no active request | Returns `None`; destructive proceeds |
 | `cancel_inflight_for_session` finds request_id but no token (rare race) | `tracing::warn!`; destructive proceeds |
+| `lookup_head_sha` on a non-git `ctx_root` | Returns `"not a git repo"`; prompt embeds the placeholder |
+| `lookup_head_sha` on an empty (no-commits) repo | Returns `"no commits yet"`; prompt embeds the placeholder |
+| `build_system_prompt` for a non-git project | Worktree line is `N/A — non-git project` regardless of `worktree_state` |
+| `chat_stream_with_tools` called with `system: None` | Request omits the `system` field (skip_serializing_if=None); backward compat with the pre-fix call sites |
 
 ### 5. Good / Base / Bad Cases
 
@@ -845,6 +906,31 @@ struct AppState {
 5. LLM loads messages, sees the event in history, then calls `read_file`.
 6. Backend emits `ToolResult` with envelope `{"result": "...", "cwd": "<worktree_path>"}`.
 7. LLM sees `cwd` and knows which root it just operated on.
+
+#### Good: LLM aware of worktree (Step 4 follow-up Bug 3)
+
+1. User has an active worktree on session `abc-123`. User sends:
+   "where am I right now? am I in a worktree?".
+2. Frontend `send()` posts the message; backend `chat` spawns the
+   agent loop. Before the `for turn in 1..=MAX_TURNS`:
+   - `lookup_head_sha(worktree_path)` returns `"e3f4567"`.
+   - `build_system_prompt(session, project, worktree_path, "e3f4567")`
+     produces a prompt that includes:
+     ```
+     - Working directory: /home/carlos/.local/share/everlasting/worktrees/<pid>/abc-123
+     - Worktree: ACTIVE on branch 'session/abc-123' (HEAD e3f4567)
+     ```
+3. `chat_stream_with_tools(config, Some(prompt), messages, tools)`
+   sends the request body with the `system` field populated.
+4. The LLM's reply correctly states "you are in a worktree at
+   `/home/carlos/.local/share/everlasting/worktrees/.../abc-123`
+   on branch `session/abc-123` (HEAD `e3f4567`)" — quoting the
+   prompt verbatim if asked.
+5. Pre-fix counterpart: with `system: None`, the LLM would answer
+   "I don't see any worktree in my system prompt" — which is
+   honest but useless. The `[worktree event]` row in history says
+   "user told me X happened", which the LLM treats as user speech,
+   not authoritative grounding.
 
 #### Base: detach clean
 
@@ -911,10 +997,17 @@ struct AppState {
 | `vitest extractToolResultDisplay::handles_empty` | `""` → `""` |
 | `vitest extractToolResultDisplay::handles_non_json` | `"not json"` → `"not json"` |
 | `db::migration::backfill_legacy_active` | Pre-follow-up sessions with `worktree_path IS NOT NULL` get `state='active'` |
+| `lib::build_system_prompt_active_worktree` | Active state → prompt contains `ACTIVE on branch 'session/<id>'`, HEAD SHA, and worktree path as cwd |
+| `lib::build_system_prompt_detached_worktree` | Detached → `DETACHED — was on branch ... currently in project root`; cwd = project root |
+| `lib::build_system_prompt_no_worktree` | None → `NONE — running in project root`; no branch / SHA leakage |
+| `lib::build_system_prompt_non_git_project` | Non-git project → `Worktree: N/A — non-git project`; no `session/<id>` reference |
+| `llm::client::chat_request_system_field_serializes_when_some` | `ChatRequest { system: Some(s), .. }` serializes with the `system` field present at the top level |
 
 Total: ~17 new tests added in this round; backend suite now 180+ tests,
 frontend vitest 44+. As of step 4 follow-up: **182 backend tests + 44 frontend
-vitest = 226 tests pass**.
+vitest = 226 tests pass**. Bug 3 (system prompt) adds **+5 backend tests**
+(`193 total` with the Bug 1/2 self-heal counts not included here — see
+the round-2 task PRD for those).
 
 #### Frontend
 
@@ -1005,6 +1098,61 @@ async fn delete_session(state, sid) -> Result<()> {
 The destructive path is bounded by the cancel; the agent loop's
 `tokio::select!` will exit on the next event boundary, and the guard
 cleans the map.
+
+#### Wrong: signal worktree state only via user-role event messages
+
+```rust
+// BAD — system field hard-coded to None; rely on [worktree event]
+// rows in history as the only signal
+chat_stream_with_tools(config.clone(), messages.clone(), tools.clone());
+// (system: None inside the function)
+```
+
+The model honestly answers "no" when asked "does your system prompt
+mention you're in a worktree" — because the `system` field IS empty.
+The `[worktree event]` user-role messages tell the model "the user
+told me X happened", but the model treats them as user assertions,
+not authoritative grounding. Worse, the events describe
+*transitions*; if the user attaches a worktree and then sends 5
+unrelated messages, the relevant `[worktree event]` is buried in
+history and the model has no compact, always-present statement of
+its current state.
+
+#### Correct: build system prompt once per chat, pass via `system:`
+
+```rust
+// GOOD — build_system_prompt fills the Anthropic `system` field
+let head_sha = lookup_head_sha(&worktree_path);
+let system_prompt = build_system_prompt(
+    &loaded_session.session,
+    &project,
+    &worktree_path,
+    &head_sha,
+);
+for turn in 1..=MAX_TURNS {
+    let stream = chat_stream_with_tools(
+        config.clone(),
+        Some(system_prompt.clone()),
+        messages.clone(),
+        tool_defs.clone(),
+    );
+    // ...
+}
+```
+
+The system prompt is the model's *current state*; the `[worktree
+event]` messages remain in history so the model can recall the
+*transition* (useful if the model wants to explain "I just attached
+the worktree"). Both work together:
+
+- **System prompt** = persistent declaration. Built once per chat
+  invocation. Lives in `lib.rs::build_system_prompt`, single source
+  of truth.
+- **`[worktree event]`** = transition log. Injected at attach /
+  detach / delete time as a user-role message, persisted in the
+  `messages` table.
+- **Tool result envelope `cwd`** = runtime data point per tool
+  call. Confirms what cwd the specific tool actually ran against.
 
 ---
 

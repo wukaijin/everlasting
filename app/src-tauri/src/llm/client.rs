@@ -150,16 +150,24 @@ pub fn chat_stream(
     config: LlmConfig,
     messages: Vec<ChatMessage>,
 ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
-    chat_stream_with_tools(config, messages, vec![])
+    chat_stream_with_tools(config, None, messages, vec![])
 }
 
-/// Stream chat completions, optionally with tool definitions.
+/// Stream chat completions, optionally with tool definitions and a system prompt.
+///
+/// `system` is the Anthropic Messages API `system` field. The agent loop
+/// (step 4 follow-up Bug 3) constructs a per-turn-1 prompt describing the
+/// session's project, working directory, and worktree state so the LLM
+/// is grounded on every chat request. Subsequent turns within the same
+/// agent loop iteration may reuse the same prompt — it's the caller's
+/// choice whether to re-build or carry it forward.
 ///
 /// Always emits `ChatEvent::Start` first on success, then a series of
 /// `Delta`s / `ThinkingDelta`s / `SignatureDelta`s / `ToolCall`s, then
 /// `Done` at the end.
 pub fn chat_stream_with_tools(
     config: LlmConfig,
+    system: Option<String>,
     messages: Vec<ChatMessage>,
     tools: Vec<ToolDef>,
 ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
@@ -169,7 +177,7 @@ pub fn chat_stream_with_tools(
         model: config.model.clone(),
         max_tokens: config.max_tokens,
         messages,
-        system: None,
+        system,
         stream: true,
         tools,
         thinking: Some(thinking),
@@ -188,7 +196,13 @@ pub fn chat_stream_with_tools(
             }
         };
 
-        tracing::info!(url = %url, model = %req.model, tools_count = %req.tools.len(), "→ LLM request");
+        tracing::info!(
+            url = %url,
+            model = %req.model,
+            tools_count = %req.tools.len(),
+            has_system = %req.system.is_some(),
+            "→ LLM request"
+        );
 
         let resp = match client
             .post(&url)
@@ -539,5 +553,30 @@ mod tests {
         let config = LlmConfig::unconfigured();
         assert!(config.thinking_effort.is_empty());
         assert!(config.is_unconfigured());
+    }
+
+    /// Step 4 follow-up Bug 3: when the agent loop builds a system
+    /// prompt for the current session, that string must make it into
+    /// the request body's top-level `system` field (Anthropic's
+    /// schema). Verified by serializing a `ChatRequest` with the
+    /// `system` field populated and checking the wire shape.
+    #[test]
+    fn chat_request_system_field_serializes_when_some() {
+        use super::super::types::ChatRequest;
+        let req = ChatRequest {
+            model: "test".to_string(),
+            max_tokens: 100,
+            messages: vec![],
+            system: Some("You are a coding agent in worktree /foo".to_string()),
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v.get("system").and_then(|s| s.as_str()),
+            Some("You are a coding agent in worktree /foo")
+        );
     }
 }

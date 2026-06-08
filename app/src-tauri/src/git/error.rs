@@ -14,13 +14,6 @@ pub enum GitError {
     #[error("project is not a git repository: {path}")]
     NotARepo { path: String },
 
-    /// A worktree already exists at the target path. This is a
-    /// session-id collision (UUIDs are 128-bit, so this should
-    /// never happen in practice) OR a stale leftover from a crashed
-    /// previous run.
-    #[error("worktree already exists at {path}")]
-    WorktreeExists { path: String },
-
     /// The worktree path's parent directory could not be created or
     /// the worktree itself could not be removed during destroy.
     /// Usually a permission problem; the user can fix it by
