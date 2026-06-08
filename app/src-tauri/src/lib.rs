@@ -240,6 +240,154 @@ fn get_home_dir(app: AppHandle) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Tauri commands — providers / models / default model (PR1 of multi-model)
+// ---------------------------------------------------------------------------
+//
+// Wire shape (camelCase on the JS side per Tauri's default):
+//   - ProviderRow:    { id, protocol, displayName, baseUrl, apiKey, ... }
+//   - ModelRow:       { id, providerId, modelName, displayName, maxTokens,
+//                       thinkingEffort, supportsThinking, contextWindow, ... }
+//   - ModelWithProvider: ModelRow + { providerDisplayName, providerProtocol }
+//
+// Args follow the same convention: snake_case in Rust, camelCase from JS.
+
+#[tauri::command]
+async fn list_providers(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::ProviderRow>, String> {
+    db::list_providers(&state.db)
+        .await
+        .map_err(|e| format!("list_providers failed: {}", e))
+}
+
+#[tauri::command]
+async fn add_provider(
+    state: State<'_, Arc<AppState>>,
+    protocol: String,
+    display_name: String,
+    base_url: String,
+    api_key: String,
+) -> Result<db::ProviderRow, String> {
+    db::create_provider(&state.db, &protocol, &display_name, &base_url, &api_key)
+        .await
+        .map_err(|e| format!("add_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn update_provider(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    protocol: String,
+    display_name: String,
+    base_url: String,
+    api_key: String,
+) -> Result<Option<db::ProviderRow>, String> {
+    db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, &api_key)
+        .await
+        .map_err(|e| format!("update_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+    db::delete_provider(&state.db, &id)
+        .await
+        .map_err(|e| format!("delete_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn list_models(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::ModelWithProvider>, String> {
+    db::list_models(&state.db)
+        .await
+        .map_err(|e| format!("list_models failed: {}", e))
+}
+
+#[tauri::command]
+async fn add_model(
+    state: State<'_, Arc<AppState>>,
+    provider_id: String,
+    model_name: String,
+    display_name: String,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<String>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<db::ModelRow, String> {
+    db::create_model(
+        &state.db,
+        &provider_id,
+        &model_name,
+        &display_name,
+        max_tokens,
+        thinking_effort.as_deref(),
+        supports_thinking,
+        context_window,
+    )
+    .await
+    .map_err(|e| format!("add_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn update_model(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    provider_id: String,
+    model_name: String,
+    display_name: String,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<String>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<Option<db::ModelRow>, String> {
+    db::update_model(
+        &state.db,
+        &id,
+        &provider_id,
+        &model_name,
+        &display_name,
+        max_tokens,
+        thinking_effort.as_deref(),
+        supports_thinking,
+        context_window,
+    )
+    .await
+    .map_err(|e| format!("update_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn delete_model(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+    db::delete_model(&state.db, &id)
+        .await
+        .map_err(|e| format!("delete_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn get_default_model(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<db::ModelWithProvider>, String> {
+    let id = match db::get_config_value(&state.db, "default_model_id").await {
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(format!("get_default_model failed: {}", e)),
+    };
+    let models = db::list_models(&state.db)
+        .await
+        .map_err(|e| format!("get_default_model failed: {}", e))?;
+    Ok(models.into_iter().find(|m| m.model.id == id))
+}
+
+#[tauri::command]
+async fn set_default_model(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+) -> Result<(), String> {
+    db::set_config_value(&state.db, "default_model_id", &model_id)
+        .await
+        .map_err(|e| format!("set_default_model failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands — session management
 // ---------------------------------------------------------------------------
 
@@ -1875,6 +2023,16 @@ pub fn run() {
             cancel_chat,
             get_llm_config,
             get_home_dir,
+            list_providers,
+            add_provider,
+            update_provider,
+            delete_provider,
+            list_models,
+            add_model,
+            update_model,
+            delete_model,
+            get_default_model,
+            set_default_model,
             list_sessions,
             create_session,
             load_session,
