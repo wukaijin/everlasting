@@ -147,7 +147,12 @@ let listenerWired = false;
 // Lifted from chat.ts so the controller can own message shape
 // without depending on chat.ts (which will in turn import the
 // controller). Identical logic — kept here to break the cycle.
-function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
+//
+// Exported (re-exported as a named binding below) so the
+// `streamController.test.ts` file can call it directly. The
+// public Pinia store API does not re-export this function;
+// callers should go through `ensureLoaded`.
+export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
   const out: ChatMessage[] = loaded.map((m) => {
     const blocks = Array.isArray(m.content) ? (m.content as Array<Record<string, unknown>>) : [];
     const toolCalls: ChatMessage["toolCalls"] = [];
@@ -197,6 +202,90 @@ function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
         break;
       }
     }
+  }
+  // BUG FIX (2013 tool_use orphan, frontend rehydrate side): the
+  // backend's `chat` command used to (pre-fix) return on cancel
+  // *after* persisting the assistant turn with `tool_use` blocks
+  // but *before* persisting the corresponding `user(tool_result)`
+  // turn. The DB ended up with an orphan `tool_use` and the next
+  // `send()` built a history where `tool_use` had no follow-up
+  // `tool_result` — Anthropic API 2013 ("tool call result does
+  // not follow tool call"). The backend now persists a synthetic
+  // `tool_result` on cancel (see `build_synthetic_tool_result_message`
+  // in `app/src-tauri/src/lib.rs`), so *new* orphans stop
+  // appearing. This step repairs **historical** orphans sitting
+  // in the DB from before that fix.
+  //
+  // We splice in a synthetic user-role message with one
+  // `tool_result` block per orphan `tool_use` id, immediately
+  // after the orphan assistant. The merge step above does NOT
+  // cover this case: it only moves `tool_result` data from a
+  // user message that already has it onto the *preceding*
+  // assistant. An orphan `tool_use` is the inverse — an
+  // assistant `tool_use` with no following user `tool_result`
+  // at all.
+  //
+  // Reverse scan so the splice-in's index shift doesn't
+  // affect the next iteration (splicing at `i + 1` shifts
+  // `i + 1` to `i + 2`, but the loop is going down so we
+  // won't visit `i + 2` again).
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i];
+    if (m.role !== "assistant" || !m.toolCalls?.length) continue;
+    // Set of `tool_use_id`s already paired with a `tool_result`,
+    // either by the merge step (results copied onto this
+    // assistant from a later user message) or by the *next*
+    // message in the post-merge array carrying its own
+    // `toolResults`. Both sources are checked because the
+    // merge step *copies* (does not move) toolResults, so
+    // a user message that the merge step drained for a
+    // *different* preceding assistant can still have its
+    // own (now-empty after merge) toolResults field — but
+    // for our purposes the post-merge view of the assistant
+    // plus the immediate next message's toolResults covers
+    // every "did the wire get a result" question.
+    const coveredIds = new Set<string>();
+    for (const tr of m.toolResults ?? []) coveredIds.add(tr.toolUseId);
+    const next = i + 1 < out.length ? out[i + 1] : null;
+    if (next && next.role === "user") {
+      for (const tr of next.toolResults ?? []) coveredIds.add(tr.toolUseId);
+    }
+    const orphanCalls = m.toolCalls.filter((tc) => !coveredIds.has(tc.id));
+    if (orphanCalls.length === 0) continue;
+    const syntheticMsg: ChatMessage = {
+      // Distinct id so subsequent `send()`s that build a fresh
+      // `userMsg` / `assistantMsg` placeholder don't collide
+      // with this synthetic. The `id` is internal to the
+      // store / `controller` filter logic — it never reaches
+      // the LLM wire.
+      id: `${m.id}-orphan-repair`,
+      role: "user",
+      content: "",
+      toolResults: orphanCalls.map((tc) => ({
+        toolUseId: tc.id,
+        // Same wording as `build_synthetic_tool_result_message`
+        // in `lib.rs` so the LLM sees a consistent shape on
+        // the live-cancel and the historical-repair paths.
+        // English + tool name (per PRD ADR-lite decision).
+        content: `Tool execution was interrupted: the user stopped the request or the session was cancelled before the tool could run. The tool ${tc.name} did not run.`,
+        isError: true,
+      })),
+    };
+    out.splice(i + 1, 0, syntheticMsg);
+    // Mirror the merge step's UI-grouping behavior: push the
+    // synthetic toolResults onto the assistant message so the
+    // UI's "tool just finished" lookup on the assistant
+    // message surface the synthetic results too. Mirrors
+    // `out[j].toolResults!.push(...m.toolResults!)` in the
+    // merge loop above.
+    if (!m.toolResults) m.toolResults = [];
+    m.toolResults.push(
+      ...syntheticMsg.toolResults!.map((tr) => ({
+        toolUseId: tr.toolUseId,
+        content: tr.content,
+        isError: tr.isError,
+      })),
+    );
   }
   // After the merge step, the four "deep payload" arrays on every
   // message (toolCalls / toolResults / thinkingBlocks /

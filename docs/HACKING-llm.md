@@ -209,3 +209,47 @@ let model = model.unwrap_or_else(|| state.config.model.clone());
 **验证**:写 PR 时,在 `check.jsonl` 加"toPayloadContent / 对等函数按 role 分发 tool_result"作为硬约束。
 
 **经验沉淀**:3b-1 PR2 实施的 3 个 hotfix 之一(post-fixes commit `18354a0` 修法 #3)。详见 [docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-6](../_archive/2026-06-3b-1/FOLLOW-UP.md#fu-6--anthropic-tool_result-块只能出现在-user-role)。
+
+---
+
+### 陷阱 3:cancel / 网络断留下 orphan `tool_use` → 2013 "tool call result does not follow tool call"
+
+**现象**:Anthropic Messages API 严格要求 `tool_result` 块必须跟在对应的 `tool_use` 之后。如果 `assistant` 消息含 `tool_use` 但下一条 `user` 消息不含匹配的 `tool_result` → 2013:
+
+```
+status=400 Bad Request
+body={"error":{"type":"<nil>","message":"invalid params, tool call result does not follow tool call (2013) (request id: 202606080518519376687798268d9dPCqSxy8i)"},"type":"error"}
+```
+
+**注意**:这条错误信息和陷阱 2 的"tool result's tool id not found"长得像,但**根因不一样**:
+- 陷阱 2:`tool_result` 出现在 `assistant` role(协议错位)
+- 陷阱 3:`tool_use` 后面**根本没有** `tool_result`(协议缺失)
+
+**根因链**(本项目实际撞过):
+1. LLM 流式输出 `tool_use(read_file)`(SSE → `ChatEvent::ToolCall`),累积到后端 `tool_calls: Vec<(id, name, input)>`
+2. **在这个时点之前** cancel 触发:`Stop` 按钮 / `attach_worktree` 的 in-flight cancel / 网络断 / agent error
+3. PR5 取消路径在 `lib.rs` 把 `assistant_blocks`(含 `ToolUse`)`persist_turn` 写进 DB,然后 `return`
+4. **没有**走到执行 tool + 构造 `tool_result` + `persist_turn` 的步骤 — DB 里**孤儿 `tool_use`**
+5. 下次 send 时,前端 `controller.refresh` 从 DB 重新 load,rehydrate 出**孤儿 `tool_use`** 推到 history
+6. LLM 看到 `assistant: [tool_use(id=X)]` 后面是 `user: "新消息"`,缺 `tool_result(id=X)` → API 2013
+
+**修法**:**B + C 双层防护** — 后端修新产生的孤儿,前端治历史孤儿。
+
+- **B (后端)**:在 `app/src-tauri/src/lib.rs` 的 cancel 分支里,如果 `tool_calls` 非空,先构造一个 synthetic `user(tool_result)` user message,跟原 assistant 一起 `persist_turn`。synthetic 块:`role=User, is_error=true, content="Tool execution was interrupted: ... The tool <name> did not run."`。抽成 helper `build_synthetic_tool_result_message` 方便单测。详见 `tests::synthetic_tool_result_message_*` 4 个单测。
+- **C (前端)**:在 `app/src/stores/streamController.ts` 的 `rehydrateMessages` 里,merge step 之后加一段"orphan tool_use repair" — 反向扫 `out` 数组,找 `assistant(toolCalls)` 但紧邻的下一条 user 消息没匹配 `tool_results` 的情况,splice 一条 synthetic user message 进去。**反向扫**避免 splice 索引错位。详见 `src/stores/streamController.test.ts` 8 个 vitest。
+
+**为什么 B + C 都做**:
+- B 单做:新 cancel 不再产生孤儿,但**用户本地 DB 里已有历史孤儿**(cancel 路径下,合成 tool_result 之前留下的旧 session 行) 仍然会让下次 send 报 2013
+- C 单做:治历史孤儿,但**不防新孤儿**(如果 C 漏了某条边角 case,新产生的孤儿会再次触发 bug)
+- 双做:C 治本(历史),B 治标(新);C 是兜底,C 失败 B 也能挡住,B 失败 C 也能挡住
+
+**synthetic tool_result content 措辞**:英文 + tool name。理由:synthetic content 直接进 Anthropic 协议流,跟 LLM-compatible 提示符风格一致;带 name 让 LLM 知道是哪个工具没跑(避免 LLM 误以为 read_file 跑了但只是 result 是"interrupted")。
+
+**为什么是 `is_error: true`**:Anthropic 协议把 `is_error` 视为 tool 失败的强信号。LLM 看到 `is_error=true` 的 tool_result 会**重发**该 tool_use 而**不是**用空 result 继续推理(参考 Anthropic tool use 文档 "Tool results and error handling" 节)。配合英文提示 "did not run",LLM 通常会决定重发 tool_use,行为符合预期。
+
+**影响范围**:任何有"cancel / 异步中断 / 长时间工具"的 agent 框架。这是 Anthropic 协议强约束,绕不过去;只能让 message 序列自洽。
+
+**验证**:写 PR 时,在 `check.jsonl` 加"cancel 分支必须 persist synthetic tool_result / rehydrate 必须 splice 孤儿"作为硬约束。
+
+**经验沉淀**:Step 4 follow-up (06-08) 修法。`app/src-tauri/src/lib.rs` `build_synthetic_tool_result_message` + `app/src/stores/streamController.ts` orphan repair step。commit hash 见 `git log --oneline | head -5`。
+

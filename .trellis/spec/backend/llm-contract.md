@@ -867,6 +867,90 @@ struct AppState {
   insertion (typically after the latest assistant turn). Anthropic
   accepts interleaved user messages without re-ordering.
 
+#### Synthetic `tool_result` on cancel (BUG FIX 2013 tool_use orphan)
+
+- **Trigger**: the agent loop's cancel branch fires after one or more
+  `tool_use` blocks have been streamed and accumulated but before any
+  tool has executed (PR5 `Stop`, `attach_worktree`'s in-flight cancel
+  hook, network drop, or any path that returns from the agent loop
+  with `cancelled = true` and `tool_calls` non-empty).
+- **Required behavior**: the cancel branch must persist a synthetic
+  `user`-role `ChatMessage` carrying one `ContentBlock::ToolResult`
+  per `(id, name, _input)` triple, then emit `done { stop_reason:
+  "cancelled" }` and return. Pre-fix, the cancel branch returned
+  immediately after persisting the assistant turn, leaving the DB
+  with an orphan `tool_use` and no matching `tool_result` — the
+  next `send()` then built a malformed history and the Anthropic API
+  returned 2013 ("tool call result does not follow tool call").
+- **Synthetic block shape** (must match the wire contract):
+  - `type: "tool_result"`
+  - `tool_use_id: <id>` (mirrors the corresponding `tool_use` block's id)
+  - `content: "Tool execution was interrupted: the user stopped the
+    request or the session was cancelled before the tool could run.
+    The tool <name> did not run."` (English + tool name per the
+    `HACKING-llm.md` "陷阱 3" decision)
+  - `is_error: true` (the Anthropic schema's strong signal that the
+    tool failed; combined with the content wording this usually
+    causes the model to retry the tool_use on the next turn rather
+    than reason on the empty result)
+- **Helper**: `build_synthetic_tool_result_message(tool_calls: &[(String, String, serde_json::Value)]) -> ChatMessage` in `app/src-tauri/src/lib.rs`. Pure function over `tool_calls`; no DB / Tauri deps. Extracted as a free function (not inlined in the cancel branch) so the invariants are unit-testable in isolation.
+- **Order invariants** (must hold after this fix lands):
+  1. `assistant(tool_use)` is persisted FIRST, then the synthetic
+     `user(tool_result)` is persisted. Persisting in the other order
+     would still be malformed (Anthropic rejects `tool_result` blocks
+     not preceded by a matching `tool_use` in the immediately-prior
+     assistant message).
+  2. `seq` is strictly increasing across the two rows.
+  3. The synthetic message is NOT emitted as a `tool:result` Tauri
+     event (the event is for UX feedback on actually-executed tools;
+     no tool ran here, and emitting it would confuse the frontend's
+     streaming pipeline).
+  4. `stop_reason: "cancelled"` is still emitted on `done` — the
+     frontend's cancel path doesn't change.
+
+#### Orphan tool_use repair on rehydrate (BUG FIX 2013, frontend side)
+
+- **Trigger**: any historical session row in the `messages` table
+  where an `assistant` turn contains `tool_use` blocks with no
+  matching `tool_result` in the immediately-following `user` turn.
+  These can predate the synthetic-tool_result fix above (cancel /
+  network drop in the old code) and can also come from a future
+  bug that re-introduces the gap.
+- **Required behavior**: the frontend's `rehydrateMessages` in
+  `app/src/stores/streamController.ts` must splice in a synthetic
+  `user`-role `ChatMessage` with one `tool_result` block per orphan
+  `tool_use` id, immediately after the orphan assistant message.
+  Without this, the next `send()` pushes a malformed history and
+  the API returns 2013.
+- **Detection rules** (applied to the post-merge-step message array):
+  - An `assistant` message is considered to have an orphan `tool_use`
+    when `toolCalls[i].id` is not in the union of:
+    1. The assistant's own `toolResults[*].toolUseId` (set by the
+       merge step from a later user message).
+    2. The immediately-following `user` message's
+       `toolResults[*].toolUseId`.
+  - Loop direction: **reverse scan** (i = out.length-1 down to 0)
+    so that `splice(i+1, 0, syntheticMsg)`'s index shift doesn't
+    affect the next iteration.
+- **Synthetic block shape on rehydrate** must match the backend's
+  cancel-path synthetic exactly (same wording, same `is_error: true`,
+  same tool name in content). The two repair paths must stay in lockstep;
+  if they ever diverge, the LLM will see inconsistent recovery
+  behavior depending on whether a session was repaired by the
+  backend or the frontend.
+- **Wire-effect**: the spliced synthetic message participates in
+  `toPayloadContent` exactly like a real user-role `tool_result`
+  message — `assistant(tool_use)` and `user(tool_result)` are
+  emitted as two adjacent messages, satisfying the Anthropic
+  contract.
+- **Tests required** (locked in `app/src/stores/streamController.test.ts`):
+  - Orphan `tool_use` with no following user → spliced synthetic
+  - Multiple orphan `tool_use` in the same assistant → all repaired
+  - Paired `tool_use` + `tool_result` (normal case) → NOT touched
+  - Orphan at end-of-array (no following user at all) → spliced
+  - Existing merge step (user.toolResults → preceding assistant) is
+    preserved by the refactor
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
@@ -887,6 +971,11 @@ struct AppState {
 | `lookup_head_sha` on an empty (no-commits) repo | Returns `"no commits yet"`; prompt embeds the placeholder |
 | `build_system_prompt` for a non-git project | Worktree line is `N/A — non-git project` regardless of `worktree_state` |
 | `chat_stream_with_tools` called with `system: None` | Request omits the `system` field (skip_serializing_if=None); backward compat with the pre-fix call sites |
+| `chat` cancel branch with empty `tool_calls` | Returns immediately (no synthetic message persisted; `seq` not incremented) |
+| `chat` cancel branch with non-empty `tool_calls` | Persists `assistant(Blocks{tool_use...})` THEN synthetic `user(Blocks{tool_result...})`; both rows must have strictly-increasing `seq` |
+| Synthetic `tool_result` content / `is_error` field | `serde_json::Value` round-trip preserves `type: "tool_result"`, `tool_use_id`, `content` (with tool name), `is_error: true` (the `is_false` skip filter only drops `false`) |
+| Rehydrate orphan `tool_use` (frontend) | Spliced synthetic message has `role: "user"`, `content: ""` (no text), `toolResults: [{toolUseId, content, isError: true}]`; message's `id` is `<assistant.id>-orphan-repair` |
+| Rehydrate paired `tool_use` (frontend) | Output array length unchanged (no synthetic inserted) |
 
 ### 5. Good / Base / Bad Cases
 
@@ -1002,6 +1091,17 @@ struct AppState {
 | `lib::build_system_prompt_no_worktree` | None → `NONE — running in project root`; no branch / SHA leakage |
 | `lib::build_system_prompt_non_git_project` | Non-git project → `Worktree: N/A — non-git project`; no `session/<id>` reference |
 | `llm::client::chat_request_system_field_serializes_when_some` | `ChatRequest { system: Some(s), .. }` serializes with the `system` field present at the top level |
+| `lib::synthetic_tool_result_message_mirrors_tool_calls` | One `tool_call` → one `ToolResult` block with matching `tool_use_id`, `is_error: true`, tool name in content |
+| `lib::synthetic_tool_result_message_preserves_order_for_multi_call` | 3 `tool_call`s → 3 `ToolResult` blocks in the same order, all `is_error: true` |
+| `lib::synthetic_tool_result_message_empty_when_no_tool_calls` | Empty input → empty `Blocks` (no stray user message) |
+| `lib::synthetic_tool_result_message_serializes_to_anthropic_wire_shape` | `serde_json::to_string(msg)` round-trip produces `{"role":"user","content":[{"type":"tool_result","tool_use_id":"X","content":"...","is_error":true}]}` |
+| `vitest rehydrateMessages::splices_synthetic_user_tool_result_after_orphan_assistant` | Orphan `tool_use` → synthetic `user(tool_result)` spliced in at `i+1` |
+| `vitest rehydrateMessages::does_not_splice_when_paired` | Normal `assistant(tool_use)` + `user(tool_result)` pair → no extra synthetic |
+| `vitest rehydrateMessages::repairs_every_orphan_in_same_assistant` | Multi-call orphan → all `tool_use` ids covered by the spliced synthetic |
+| `vitest rehydrateMessages::synthetic_id_is_unique` | Synthetic message's `id` ≠ the orphan assistant's `id` (won't collide with `send()` placeholder) |
+| `vitest rehydrateMessages::orphan_at_end_of_array_repaired` | Last-message orphan → synthetic still spliced in (loop must not underflow) |
+| `vitest rehydrateMessages::empty_messages_array_does_not_crash` | Defensive: `load_session` returning `[]` rehydrates to `[]` |
+| `vitest rehydrateMessages::merge_step_preserved` | Pre-existing merge step (`user.toolResults` → preceding `assistant.toolResults`) is not regressed by the orphan-repair refactor |
 
 Total: ~17 new tests added in this round; backend suite now 180+ tests,
 frontend vitest 44+. As of step 4 follow-up: **182 backend tests + 44 frontend

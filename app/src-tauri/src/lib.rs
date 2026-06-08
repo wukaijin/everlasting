@@ -1430,6 +1430,58 @@ async fn chat(
             // `handleChatEvent` for `done` resets `sending` /
             // `currentRequestId` exactly like a normal completion.
             if cancelled {
+                // BUG FIX (2013 tool_use orphan): if cancel hit
+                // after the LLM emitted one or more `tool_use`
+                // blocks, persist a synthetic `tool_result` user
+                // message mirroring them. Pre-fix we `return`d
+                // here without executing tools, so the DB ended
+                // up with `assistant(tool_use)` but no matching
+                // `user(tool_result)` — the next `send` built a
+                // history where `tool_use` had no follow-up
+                // `tool_result`, and the Anthropic API returned
+                // 2013 ("tool call result does not follow tool
+                // call"). Synthesizing the result with
+                // `is_error: true` keeps the wire format
+                // self-consistent and lets the model know the
+                // tool did not actually run.
+                //
+                // The shape itself (one ToolResult block per
+                // tool_use, role=User, is_error=true) is verified
+                // by `tests::synthetic_tool_result_message_*`
+                // below — we keep the persistence step here
+                // because it depends on the live `db`, `seq`,
+                // and `messages` locals.
+                if !tool_calls.is_empty() {
+                    let tool_result_msg = build_synthetic_tool_result_message(&tool_calls);
+                    if let Err(e) = db::persist_turn(
+                        &db,
+                        &session_id,
+                        tool_result_msg.role,
+                        &tool_result_msg.content,
+                        seq,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            error = %e,
+                            "failed to persist synthetic tool_result turn after cancel"
+                        );
+                    }
+                    messages.push(tool_result_msg);
+                    // No `seq += 1` here — the cancel branch
+                    // returns immediately, so the incremented
+                    // seq would never be read. (The normal
+                    // tool_result path at line ~1602 keeps the
+                    // `+= 1` because the agent loop continues
+                    // and uses the new seq for the next
+                    // assistant turn.)
+                    tracing::warn!(
+                        request_id = %rid,
+                        tool_count = tool_calls.len(),
+                        "chat: cancelled — persisted synthetic tool_result blocks to keep history self-consistent (prevent 2013 on next send)"
+                    );
+                }
+
                 persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                 if let Err(e) = db::touch_session(&db, &session_id).await {
                     tracing::warn!(error = %e, "failed to touch session");
@@ -1575,6 +1627,51 @@ fn tool_result_envelope(content: &str, worktree_path: &std::path::Path) -> Strin
         "cwd": cwd_str,
     })
     .to_string()
+}
+
+/// BUG FIX (2013 tool_use orphan): build a synthetic
+/// `user`-role [`ChatMessage`] carrying one
+/// `ContentBlock::ToolResult` per `(id, name, _input)` triple
+/// the LLM emitted before the user cancelled. The block's
+/// `content` tells the LLM the tool never ran; `is_error: true`
+/// makes the failure explicit on the wire.
+///
+/// Why a helper: the inline shape is verbose, and the
+/// invariant we care about (one ToolResult block per tool_use,
+/// with matching `tool_use_id`, is_error=true, role=User) is
+/// what unblocks the Anthropic 2013 error on the next
+/// `send()`. Extracting it lets a unit test assert the
+/// invariant end-to-end without spinning up an LLM stream,
+/// Tauri AppHandle, or real DB. See
+/// `tests::synthetic_tool_result_message_mirrors_tool_calls`
+/// and `tests::synthetic_tool_result_message_empty_when_no_tool_calls`
+/// below.
+///
+/// The `Role` is `User` (not `Tool`) per the Anthropic
+/// Messages API contract: `tool_result` blocks only ever
+/// appear inside `role: "user"` messages.
+fn build_synthetic_tool_result_message(
+    tool_calls: &[(String, String, serde_json::Value)],
+) -> ChatMessage {
+    let blocks: Vec<ContentBlock> = tool_calls
+        .iter()
+        .map(|(id, name, _input)| {
+            let content = format!(
+                "Tool execution was interrupted: the user stopped the request or the \
+session was cancelled before the tool could run. The tool {} did not run.",
+                name
+            );
+            ContentBlock::ToolResult {
+                tool_use_id: id.clone(),
+                content,
+                is_error: true,
+            }
+        })
+        .collect();
+    ChatMessage {
+        role: Role::User,
+        content: MessageContent::Blocks(blocks),
+    }
 }
 
 /// Step 4 follow-up Bug 3: read the HEAD commit SHA of a git
@@ -2246,6 +2343,156 @@ mod tests {
         assert!(
             !prompt.contains("session/ng-id"),
             "non-git project must not reference a session branch"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_synthetic_tool_result_message (BUG FIX: 2013 tool_use orphan)
+    //
+    // When the LLM emits one or more tool_use blocks and the user
+    // cancels the request before the agent loop runs the tools, the
+    // DB ends up with `assistant(tool_use)` but no matching
+    // `user(tool_result)` — the next `send` builds a malformed
+    // history and the Anthropic API returns 2013 ("tool call result
+    // does not follow tool call"). The cancel path persists a
+    // synthetic `user(tool_result)` block per tool_use with
+    // `is_error: true` to keep the history self-consistent. The
+    // shape itself is verified by these three tests.
+    // -----------------------------------------------------------------------
+
+    /// One `tool_call` → exactly one matching `ToolResult` block,
+    /// with the same `id`, `name` echoed in the content, and
+    /// `is_error: true`. The role is `User` (Anthropic contract:
+    /// `tool_result` blocks only appear in user-role messages).
+    #[test]
+    fn synthetic_tool_result_message_mirrors_tool_calls() {
+        let tool_calls = vec![(
+            "toolu_abc".to_string(),
+            "read_file".to_string(),
+            serde_json::json!({"path": "/etc/hosts"}),
+        )];
+        let msg = build_synthetic_tool_result_message(&tool_calls);
+        assert_eq!(msg.role, Role::User, "synthetic message must be User role");
+        let blocks = match &msg.content {
+            MessageContent::Blocks(b) => b,
+            MessageContent::Text(_) => panic!("synthetic message must be Blocks, not Text"),
+        };
+        assert_eq!(blocks.len(), 1, "one tool_call must produce one ToolResult block");
+        match &blocks[0] {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
+                assert_eq!(tool_use_id, "toolu_abc", "tool_use_id must match");
+                assert!(is_error, "synthetic tool_result must be flagged is_error=true");
+                assert!(
+                    content.contains("read_file"),
+                    "content must name the tool that did not run: {:?}",
+                    content
+                );
+                assert!(
+                    content.contains("interrupted"),
+                    "content must say the tool was interrupted: {:?}",
+                    content
+                );
+            }
+            other => panic!("expected ToolResult, got {:?}", other),
+        }
+    }
+
+    /// Three `tool_call`s in one turn → three matching `ToolResult`
+    /// blocks in order, all flagged is_error=true, all in the
+    /// same user-role message. Order matters because the LLM
+    /// correlates results to calls by `tool_use_id`, but
+    /// positional ordering must also match (Anthropic convention).
+    #[test]
+    fn synthetic_tool_result_message_preserves_order_for_multi_call() {
+        let tool_calls = vec![
+            ("id_1".to_string(), "read_file".to_string(), serde_json::json!({})),
+            ("id_2".to_string(), "edit_file".to_string(), serde_json::json!({})),
+            ("id_3".to_string(), "shell".to_string(), serde_json::json!({})),
+        ];
+        let msg = build_synthetic_tool_result_message(&tool_calls);
+        let blocks = match &msg.content {
+            MessageContent::Blocks(b) => b,
+            _ => panic!("expected Blocks"),
+        };
+        assert_eq!(blocks.len(), 3);
+        let names: Vec<&str> = blocks
+            .iter()
+            .map(|b| match b {
+                ContentBlock::ToolResult { content, .. } => content.as_str(),
+                _ => panic!("expected ToolResult"),
+            })
+            .collect();
+        // Each block names the tool it represents, in the same
+        // order as the tool_calls vec. We don't assert the full
+        // sentence (the LLM-friendly phrase is locked, see the
+        // BUG FIX doc on `build_synthetic_tool_result_message`)
+        // — only that the tool name is the one we passed in.
+        assert!(names[0].contains("read_file"));
+        assert!(names[1].contains("edit_file"));
+        assert!(names[2].contains("shell"));
+    }
+
+    /// Empty `tool_calls` → empty `Blocks` array (and still a User
+    /// message, so the cancel branch's `if !tool_calls.is_empty()`
+    /// guard is the only thing that needs to skip the
+    /// `persist_turn` call). This documents the no-op behavior so
+    /// a future refactor doesn't accidentally produce a stray
+    /// user message with no blocks (which would also violate
+    /// Anthropic's contract).
+    #[test]
+    fn synthetic_tool_result_message_empty_when_no_tool_calls() {
+        let msg = build_synthetic_tool_result_message(&[]);
+        assert_eq!(msg.role, Role::User);
+        let blocks = match &msg.content {
+            MessageContent::Blocks(b) => b,
+            _ => panic!("expected Blocks even when empty"),
+        };
+        assert!(blocks.is_empty());
+    }
+
+    /// Wire shape: the synthetic block must round-trip through
+    /// serde as a `tool_result` block with `is_error: true` and
+    /// the expected `tool_use_id`. This is the property the
+    /// Anthropic API actually validates — if we accidentally
+    /// rename the field or drop `is_error`, the 2013 regression
+    /// reappears.
+    #[test]
+    fn synthetic_tool_result_message_serializes_to_anthropic_wire_shape() {
+        let tool_calls = vec![(
+            "toolu_xyz".to_string(),
+            "shell".to_string(),
+            serde_json::json!({"command": "ls"}),
+        )];
+        let msg = build_synthetic_tool_result_message(&tool_calls);
+        let json = serde_json::to_string(&msg).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.get("role").and_then(|s| s.as_str()), Some("user"));
+        let content = v.get("content").and_then(|c| c.as_array()).expect(
+            "synthetic message content must be an array of blocks (Anthropic tool_result contract)",
+        );
+        assert_eq!(content.len(), 1);
+        let block = &content[0];
+        assert_eq!(
+            block.get("type").and_then(|s| s.as_str()),
+            Some("tool_result"),
+            "wire type must be exactly `tool_result`"
+        );
+        assert_eq!(
+            block.get("tool_use_id").and_then(|s| s.as_str()),
+            Some("toolu_xyz")
+        );
+        assert_eq!(
+            block.get("is_error").and_then(|b| b.as_bool()),
+            Some(true),
+            "is_error: true must serialize (the is_false skip filter only drops false)"
+        );
+        assert!(
+            block.get("content").and_then(|s| s.as_str()).unwrap().contains("shell"),
+            "wire content must mention the tool name"
         );
     }
 }
