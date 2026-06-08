@@ -737,3 +737,36 @@ Migrated the agent runtime onto per-session git worktrees (libgit2 vendored; XDG
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Multi-model PR1: data layer (3 tables + 10 IPC + seed)
+
+**Date**: 2026-06-09
+**Task**: Multi-model PR1: data layer (3 tables + 10 IPC + seed)
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR1 of 06-08-multi-model-llm-provider-planning — data layer only (no UI / no LLM client). 3 new SQLite tables (providers / models / app_config), 8 CRUD functions, 10 IPC commands, idempotent seed (2 providers + 4 models + default_model_id, backfills sessions.model_id for legacy rows). 11 new unit tests, 208 total green. trellis-check PASS verdict. Spec updates: database-guidelines.md filled (sqlx patterns, soft-FK, denormalized-list, new-catalog checklist) + llm-contract.md 'Scenario: Multi-Provider Abstraction' (7 sections + 4 design decisions). Bypass note: trellis-implement sub-agent dispatch skipped (path A recovery via in-session code + trellis-check verification). Followups: PR2 Anthropic adapter / PR3 OpenAI adapter / PR4 Settings modal UI.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f9c5648` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
