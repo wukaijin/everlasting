@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "1397 行的 LLM 协议契约,PR2 拆 Anthropic adapter / PR3 加 OpenAI adapter 都要重写这个文件(协议层是新的 schema)"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "PR2 引入 llm/provider/ 子模块,需对齐项目既有的目录组织规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR1 新增 3 张表 + 迁移 + 外键约束,需对齐项目 SQLx / 迁移约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PR2/3 引入新 LlmError 变体(PreFlightError) + 跨协议转换错误,需对齐项目 thiserror + anyhow 边界规则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "PR1-3 的 Rust 代码要符合项目质量基线(禁用 unwrap / 错误归一化等)"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "PR1 seed 启动日志 + PR2/3 adapter 调试日志要符合项目 tracing 约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "PR4 重构 useConfigStore + 新增 useProvidersStore / useModelsStore,要读 state-management 的 Pinia 约定(Send completion invalidation 章节相关)"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR4 新增 SettingsModal + StatusBar 改造,要符合 reka-ui 组件使用规范"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "PR4 新增 SettingsModal 放哪 / 改 StatusBar 时的目录约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "PR4 新增 TS interface(Provider / Model / DefaultModel)要符合 type-safety 约定,参 HACKING-wsl FU-2 的 snake_case 决议"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "PR4 vitest 写法 + vue-tsc 约束"}
+{"file": "docs/HACKING-llm.md", "reason": "4 个 HACKING-llm 坑(GLM 兼容 / thinking / extended thinking / redacted_thinking / orphan tool_use)+ 切换到 Anthropic 真实环境时重测清单,PR2 adapter 内部必须保留这些处理"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "PR 收尾时更新路线图:把多 provider 从 §2.7 'MCP 暴露 + 多 Provider' 拆出来,新加独立步骤(本任务的 4 PR 切片)"}
+{"file": "docs/BACKLOG.md", "reason": "PR 收尾时更新 BACKLOG:§4 v3+ 多角色 bind default model 改成引用本任务(本任务先把 catalog 做出来,角色层绑定下一轮接)"}
+{"file": "docs/TECH.md", "reason": "PR 收尾时更新 TECH.md 标注'多 provider 抽象本任务先自研,rig-core 迁移待定'(避免跟锁定项表面冲突)"}
+{"file": "docs/ARCHITECTURE.md", "reason": "PR2/3 完成后 §2.5.7 LLM Provider 限流(占位)+ §2 Channel Adapter 的多入口预留要更新"}
