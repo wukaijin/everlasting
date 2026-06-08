@@ -1,0 +1,8 @@
+{"file": "app/src/stores/streamController.ts", "reason": "verify: finalizeRequest 包含 controller.evict(sessionId) + useChatStore().invalidateDiff(sessionId)；位置 line 524-527 区块；不破坏 activeRequests.delete + pinnedSessions.delete 现有逻辑；evict 后不影响 error case（finalizeRequest 三个 caller：done/error/catch error path）"}
+{"file": "app/src/stores/chat.ts", "reason": "verify: 新增 invalidateDiff(sessionId: string) action；实现 diffCache.value.delete(sessionId)；force reactivity：diffCache.value = new Map(diffCache.value)（跟 fetchDiff 现有模式一致，避免 Vue 跳过更新）"}
+{"file": "app/src/stores/streamController.test.ts", "reason": "verify: 至少 2 个新 vitest case — (a) finalizeRequest 后 messagesBySession.has(sessionId) === false + loadedFromDb.has(sessionId) === false；(b) finalizeRequest 后 chatStore.invalidateDiff 被调用（用 spy 或 mock）"}
+{"file": "docs/HACKING-llm.md", "reason": "verify: '陷阱 4' 章节存在，措辞跟陷阱 1/2/3 一致（现象 + 根因链 + 修法 + 验证）；明确写'陷阱 3 是 cancel 路径下 tool_result 缺失，本陷阱是正常完成路径下 in-memory 形态不一致'以区分"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "verify: 'in-memory 跟 DB 同步' invariant 章节存在；明确触发条件（send done/error）和保证（evict + invalidateDiff 同时调用）"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "verify: Scenario 7 'in-memory must mirror DB on send completion' sub-section 存在；附 2-3 个 test row（after_done_evict、after_error_evict、invalidateDiff_called）"}
+{"file": ".trellis/workspace/Carlos/journal-1.md", "reason": "verify: 追加本次修复 session 记录到 journal（commit hash + summary + AC 通过情况）；格式跟 session 3 之前的 '06-08-6px' session 一致"}
+{"file": "app/src/components/chat/ChatPanel.vue", "reason": "verify: diffFileCount computed 不变（依然读 chatStore.getDiff），不引入新逻辑；chip label 行为保持（worktree_state=active + diffFileCount>0 → 'diff (N)'）"}
