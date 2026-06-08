@@ -123,3 +123,38 @@ B + C 双层修：B 后端 `lib.rs` cancel 分支补 synthetic `user(tool_result
 
 - 手工 e2e 跑一次 AC-4 流程（`pnpm tauri dev` → attach → 中断 → 再 send），验证 wire-format 真的不再 2013
 - 后续如要继续修 2013 类问题，参考 HACKING-llm 陷阱 1/2/3（3 个不同根因 3 种修法已沉淀）
+
+
+## Session 3: 06-08-6px: 窗口加 6px 圆角 + 1px 边框 + 微阴影 (no blur)
+
+**Date**: 2026-06-08
+**Task**: 06-08-6px: 窗口加 6px 圆角 + 1px 边框 + 微阴影 (no blur)
+**Branch**: `main`
+
+### Summary
+
+Tauri 2 window config 加 transparent:true 让 OS 渲染 6px 圆角;style.css 在 html/body/#app 套 frame 样式(1px border 复用 --color-bg-border,box-shadow 0 4px 16px rgba(0,0,0,0.3),overflow hidden 裁 4 角)。无背景模糊(macOS vibrancy / Windows Mica 显式不开)。同步清理两条 pre-existing 改动:ThinkingBlock 思考块 margin-bottom 6→0(用户 CSS 调整),MessageItem.vue 4→2-space re-indent(chore format)。验收:pnpm build + cargo check 全过,grep 无 backdrop-filter/vibrancy/effects,Vue/Toast/内部布局 0 改动。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a3f2cfe` | (see git log) |
+| `8203fd5` | (see git log) |
+| `1c64cc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
