@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality bar: cargo test, cargo clippy, no warnings, error classification."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check error message wording for user-facing toast strings; assert self-heal paths use tracing::warn! not silent."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality bar: vue-tsc strict, no new console warnings, no type leaks."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Verify system prompt shape is documented in Scenario 7 update; test the wire format."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check that Bug 3 system prompt round-trips correctly through rehydrate (no double-render)."}
+{"file": ".trellis/tasks/06-08-step-4-followup-bugfix-attach-diff-systemprompt/prd.md", "reason": "PRD as the source of truth for acceptance criteria."}
