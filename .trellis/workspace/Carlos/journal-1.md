@@ -125,6 +125,65 @@ B + C 双层修：B 后端 `lib.rs` cancel 分支补 synthetic `user(tool_result
 - 后续如要继续修 2013 类问题，参考 HACKING-llm 陷阱 1/2/3（3 个不同根因 3 种修法已沉淀）
 
 
+## Session N: 06-08 step-4 follow-up — 2013 reappears in normal-completion path (in-memory placeholder fix)
+
+**Date**: 2026-06-08
+**Task**: fix: 2013 reappears in normal-completion path
+**Branch**: `main`
+**Commit**: `8509bff`
+
+### Summary
+
+c35c384 修的 cancel 路径"tool_use 孤儿 → 2013"**没**覆盖正常完成路径。06-08 09:00-09:14 复现的 2013 触发场景：attach worktree → user 发 "确认一下当前worktree" → LLM 调 shell pwd/git rev-parse → LLM 第二次 LLM call 返回 text "当前 worktree 信息确认如下..." → user 紧接着发 "帮我随便改下 README.md" → 2013。两步发送**都正常完成**，没 cancel，没网络断。
+
+DB 序列 7 条全部 tool_use ↔ tool_result 配对正确（session `9e8a78fe-...` 7 messages 完整 dump 验证）。但 wire 上**第二次** send 走 in-memory 缓存路径，`ensureLoaded` 命中 `messagesBySession` 缓存（不 rehydrate from DB），缓存里是 streaming 累积形态（一个 `assistantMsg` placeholder 含 `toolCalls` + `toolResults` + turn 1 + turn 2 text），DB 实际是 per-turn 拆分的 2 条独立 assistant message。`toPayloadContent` for `assistant` role 按 Anthropic 协议不发 `m.toolResults`（陷阱 2 决策）→ wire 上 `tool_use` 后面没 `tool_result` → 2013。
+
+修法：在 `streamController.finalizeRequest`（done/error/catch 三个路径都路由到）配对调两个 action：
+- `evict(sessionId)` — 清 in-memory `messagesBySession` + `loadedFromDb` + `pinnedSessions`，下次 `ensureLoaded` 走 re-load from DB 拿 per-turn 拆分形态
+- `useChatStore().invalidateDiff(sessionId)` — 清 diffCache，worktree chip 的 `diff (N)` 计数器重新 fetch（**顺手修另一个 bug**：`git commit` 完成后 chip 不消失）
+
+两个 action 必须配对，拆开任何一个会退化一个 bug。`streamController.test.ts` `finalizeRequest` describe block 锁住 3 个 invariant（evict 单独、invalidateDiff 单独、配对 invariant）。
+
+跟 c35c384 关系：两者修**不同** 2013 路径。c35c384 防 DB 出现孤儿（cancel 路径），本任务防 wire 看似孤儿（即使 DB 自洽）。两者都需保留，删一个会在另一个 repro 路径再触发 2013。
+
+### Main Changes
+
+- **`app/src/stores/streamController.ts`** +56 行：
+  - 顶部 import `useChatStore`（跨 store 引用，配合 chat.ts 已有的 `useStreamControllerStore` import 形成模块级循环，Pinia 兼容）
+  - `finalizeRequest` 加 `evict(sessionId) + useChatStore().invalidateDiff(sessionId)`
+  - 把 `pinnedSessions` + `loadedFromDb` + `finalizeRequest` 暴露到 return（仅给测试访问，production 不变）
+  - 大段 doc comment 说明根因 + 跟 c35c384 关系
+- **`app/src/stores/chat.ts`** +25 行：新增 `invalidateDiff(sessionId)` action，`diffCache.value.delete + force reactivity`（跟 `fetchDiff` 模式一致），加到 return
+- **`app/src/stores/streamController.test.ts`** +129 行：3 个新 vitest 锁住 invariant
+- **`docs/HACKING-llm.md`** +53 行：陷阱 4，跟陷阱 1/2/3 同风格，强调跟陷阱 3 区分
+- **`.trellis/spec/frontend/state-management.md`** +55 行：新增 "Send completion invalidation" 章节，跟现有 "Worktree transition invalidation" 风格一致
+- **`.trellis/spec/backend/llm-contract.md`** +56 行：Scenario 7 新增 "In-memory must mirror DB on send completion" sub-section，模仿 cancel-path synthetic sub-section 风格
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8509bff` | fix: 2013 reappears in normal-completion path (in-memory placeholder breaks wire-format history) |
+
+### Testing
+
+- [OK] cargo test --lib: **197 passed** (旧全过，无 Rust 改动)
+- [OK] pnpm test (vitest): **55 passed** (52 旧 + 3 新 finalizeRequest invariant)
+- [OK] pnpm build (vue-tsc --noEmit + vite build): 0 errors, dist/ 写出
+- [ ] E2E 手工验证（AC-4/AC-5）：未在本次 session 执行，按 PRD AC-4 描述，commit 后 1 秒内 diff chip 数字更新；按 AC-5 描述，attach + cancel mid-tool_use 仍不 2013
+
+### Status
+
+[OK] **Completed** — 代码 + 文档 + 测试 + commit + archive + journal 全部就位
+
+### Next Steps
+
+- 手工 e2e 跑一次 AC-4（commit 后 diff chip 数字更新）+ AC-5（attach + cancel 仍不 2013）流程
+- bug 2 (+3/-3 数字) 拆 follow-up task：先看 `tools/edit_file.rs` 是 read + write 整文件重写（如果是，那 libgit2 `line_stats` 是正确的，需要改 edit_file 实现 / DiffView 文案）
+- bug 4 (diff chip 缓存) 跟 bug 1 同一处修了，不需要单独 follow-up
+- bug 3 (diff 按钮 vs worktree 按钮解耦) 维持现状（不引入 "project root diff" 新概念）
+
+
 ## Session 3: 06-08-6px: 窗口加 6px 圆角 + 1px 边框 + 微阴影 (no blur)
 
 **Date**: 2026-06-08
