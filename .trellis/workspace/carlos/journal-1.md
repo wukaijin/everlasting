@@ -796,6 +796,56 @@ PR2 of 06-08-multi-model-llm-provider-planning — Anthropic adapter only (OpenA
 
 - PR3: OpenAI adapter + 跨协议 capability-aware 降级 (Chat Completions 协议 + reasoning_content 映射 + WireMessage 中间层)
 - PR4: UI Settings modal (Providers / Models / Default tabs) + StatusBar model dropdown + 删 ChatPanel model chip + 修 create_session 写 sessions.model_id
+[End of Session 20]
+- None - task complete
+
+[Append new session:]
+
+## Session 21: step 4: multi-model PR3 — OpenAI adapter + 跨协议 WireMessage
+
+**Date**: 2026-06-09
+**Task**: step 4: multi-model PR3 — OpenAI adapter + 跨协议
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR3 of 06-08-multi-model-llm-provider-planning — OpenAI Chat Completions streaming adapter + 跨协议 WireMessage 中间层 + 能力降级。新建 `app/src-tauri/src/llm/provider/wire.rs` (950 行,16 测试) + `app/src-tauri/src/llm/provider/openai.rs` (1049 行,22 测试);改 `anthropic.rs` 走 wire 对称(签名 1:1 保留);`error.rs` 扩展读 `error.code`;改 `build_provider` openai 分支返真 provider。check 找到 1 L1 (Anthropic signature 在 wire round-trip 丢)并自修 + 加 2 regression tests。最终 258 cargo test pass / pnpm build clean / 0 warning。commit 9395418 (9 files +3039/-50)。trellis-implement + trellis-check 双 sub-agent dispatch 路径(check 找的 L1 是 sub-agent 自修的)。补 docs 4 处(IMPLEMENTATION / HACKING-llm / BACKLOG / spec llm-contract.md)。
+
+### Main Changes
+
+- **WireMessage 中间层** (`app/src-tauri/src/llm/provider/wire.rs` 新建 950 行): `WireRequest` / `WireMessage` / `WireBlock` (Text / Reasoning / Signature / RedactedThinking / ToolUse / ToolResult) / `WireTool` / `WireCapabilities` + 4 个纯函数 (`chat_request_to_wire` / `strip_unsupported` / `wire_messages_to_chat_messages` / `wire_block_to_chat_event` / `wire_tools_to_tool_defs`) + 16 单元测试
+- **OpenAIProvider** (`app/src-tauri/src/llm/provider/openai.rs` 新建 1049 行): `OpenAIConfig` (含 reasoning_effort) + `OpenAIProvider` impl `Provider` trait;Chat Completions streaming (`POST /v1/chat/completions` + `Bearer` auth);`ToolCallBuf` HashMap per `tool_call_index` 处理并行多 tool call;`[DONE]` 哨兵防御;OpenAI-shape HTTP body builder;5 类 LlmError 错误分类(扩展读 `error.code`);22 单元测试
+- **Anthropic 对称走 wire** (`app/src-tauri/src/llm/provider/anthropic.rs` +102 行): `impl Provider for AnthropicProvider::send` 改为 `ChatRequest → WireRequest → strip(no-op) → inverse → ChatRequest → legacy chat_stream_with_tools`;新增 2 个 round-trip regression tests 锁 1:1 不变;PR2 4 个继承测试 0 改全过
+- **错误分类扩展** (`app/src-tauri/src/llm/error.rs` +83 行): `classify_error_response` 读 `error.type` (Anthropic/GLM) + `error.code` (OpenAI) 双字段;新 `invalid_api_key` 关键词加 Auth 分支;7 个原测试不动
+- **build_provider 工厂** (`app/src-tauri/src/llm/provider/mod.rs` +56 行): openai 分支从 `NotImplemented` 替换为 `Ok(Box::new(OpenAIProvider::new(OpenAIConfig {...})))`;`WireCapabilities` 从 `model_row` 派生;NotImplemented 分支保留作 forward-compat reserved (标 `#[allow(dead_code)]`)
+- **降级规则** (in-memory,DB 不动):
+  - `Reasoning` block → target `supports_thinking || supports_reasoning_effort` 保留,否则丢
+  - `Signature` / `RedactedThinking` → 仅 Anthropic + `supports_thinking` 保留,OpenAI 丢
+  - `ToolUse` / `ToolResult` / `Text` → 全部保留
+  - 切回原 model 时 thinking 块从 DB 完整读回(无持久化降级)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9395418` | feat(llm): PR3 OpenAI adapter + 跨协议 WireMessage |
+
+### Testing
+
+- [OK] cargo test --lib: 258/258 pass (218 baseline + 38 wire/openai + 2 round-trip regression)
+- [OK] cargo check (lib + tests): 0 warning
+- [OK] pnpm build (vue-tsc + vite): clean
+- [OK] trellis-check PASS verdict: 1 L1 (Anthropic signature round-trip 丢 — sub-agent 自修 + 2 regression tests) / 0 L2 / 3 L3 留 OOS
+- [SKIP] cargo clippy: blocked by homebrew/rustup toolchain mismatch (pre-existing 环境问题)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- PR4: UI Settings modal (Providers / Models / Default tabs) + StatusBar model dropdown + 删 ChatPanel model chip + 修 create_session 写 sessions.model_id + SessionRow 加 `model_id: Option<String>` 字段
+- 远期 follow-up: max_completion_tokens 字段 (o1+ 模型) / parallel_tool_calls 显式 / api_key redaction
 
 ### Main Changes
 
