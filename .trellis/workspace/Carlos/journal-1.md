@@ -74,3 +74,52 @@
 ### Next Steps
 
 - None - task complete
+
+
+
+## Session N: 2013 tool_use orphan from cancel path (Step 4 follow-up, 06-08)
+
+**Date**: 2026-06-08
+**Task**: fix: 2013 tool_use orphan from cancel path
+**Branch**: `main`
+
+### Summary
+
+attach worktree 之后让 LLM 改文件报 MiniMax 错误码 2013 `"invalid params, tool call result does not follow tool call"`。根因：PR5 cancel 路径下，`chat` 的 agent loop 在 `tool_use` 块已 accumulate 但 tool 还没跑时被 cancel 打断，DB 留下 `assistant(tool_use)` 孤儿，下次 `send()` 推到 LLM 报 2013。
+
+跟 `docs/HACKING-llm.md` "陷阱 2" 区分：陷阱 2 是 `tool_result` 错位（在 assistant role），本 bug 是 `tool_result` 缺失（tool_use 后面根本没跟 tool_result）。
+
+B + C 双层修：B 后端 `lib.rs` cancel 分支补 synthetic `user(tool_result)` 消息并 persist（抽 `build_synthetic_tool_result_message` helper，4 个 cargo test）；C 前端 `streamController.ts` `rehydrateMessages` 在 merge step 之后反向扫 + splice 合成 user message 治历史孤儿（8 个 vitest）。
+
+文案：英文 + tool name，跟后端 B 完全一致。`is_error: true` 让 LLM 知道工具没跑。
+
+### Main Changes
+
+- **`app/src-tauri/src/lib.rs`** +247 行：cancel 分支 inline 合成逻辑 + helper `build_synthetic_tool_result_message` + 4 个 cargo test 覆盖单 call / 多 call / 空 / wire shape round-trip
+- **`app/src/stores/streamController.ts`** +91 行：merge step 之后加 orphan repair reverse scan，splice 合成 user message；也 push 到 assistant.toolResults 跟 merge step UI 行为对齐
+- **`app/src/stores/streamController.test.ts`**（新文件，~240 行）：6 个 rehydrate test + 2 个 merge-preserved test
+- **`docs/HACKING-llm.md`** +44 行：陷阱 3 节，跟陷阱 1/2 风格一致
+- **`.trellis/spec/backend/llm-contract.md`** +100 行：Scenario 7 加 "Synthetic tool_result on cancel" + "Orphan tool_use repair on rehydrate" 两个 contract sub-section + 9 个新 test rows + 3 个新 validation rows
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c35c384` | fix: 2013 tool_use orphan from cancel path (B + C double layer) |
+| `f5ed364` | chore(task): archive 06-08-06-08-step-4-followup-bugfix-2013-tool-use-orphan |
+
+### Testing
+
+- [OK] cargo test: **197 passed** (193 旧 + 4 新), 0 failed, 0 warnings
+- [OK] pnpm test (vitest): **52 passed** (44 旧 + 8 新), 0 failed
+- [OK] pnpm build (vue-tsc --noEmit + vite build): 0 errors, dist/ 写出
+- [ ] E2E 手工验证（AC-4）：未在本次 session 执行，按 PRD AC-4 描述，attach → cancel mid-tool_use → 再 send 应当不再 2013
+
+### Status
+
+[OK] **Completed** — 代码 + 文档 + 测试 + commit + archive + journal 全部就位
+
+### Next Steps
+
+- 手工 e2e 跑一次 AC-4 流程（`pnpm tauri dev` → attach → 中断 → 再 send），验证 wire-format 真的不再 2013
+- 后续如要继续修 2013 类问题，参考 HACKING-llm 陷阱 1/2/3（3 个不同根因 3 种修法已沉淀）
