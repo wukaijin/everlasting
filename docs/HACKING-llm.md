@@ -253,3 +253,56 @@ body={"error":{"type":"<nil>","message":"invalid params, tool call result does n
 
 **经验沉淀**:Step 4 follow-up (06-08) 修法。`app/src-tauri/src/lib.rs` `build_synthetic_tool_result_message` + `app/src/stores/streamController.ts` orphan repair step。commit hash 见 `git log --oneline | head -5`。
 
+### 陷阱 4:正常完成路径下 in-memory 累积形态 vs DB 拆分形态不一致 → 2013 "tool call result does not follow tool call" (2026-06-08 step 4 follow-up)
+
+**现象**:跟陷阱 3 是**同一个错误码** ("tool call result does not follow tool call", 2013),但**完全不同的复现路径**。陷阱 3 修完后,**正常完成**的 multi-turn session(用户不发 `Stop`、LLM 也成功返回) 在第二次 `send()` 时仍可能 2013。复现路径:
+
+1. 在已 attach worktree 的 session,第一次 send:用户说"确认一下当前 worktree" → LLM 调 `shell` 跑 `pwd && git rev-parse ...` → LLM 看到结果后第二次 LLM call 返回 text "当前 worktree 信息确认如下:..."
+2. **正常完成**,没 cancel、没网络断。DB 序列: 2 条独立 `assistant` message(一条含 `tool_use` + `tool_result`, 一条是 text only)。
+3. 第二次 send:用户说"帮我随便改下 README.md" → 前端 `ensureLoaded` 走 in-memory 缓存(不 rehydrate from DB)→ 拿到的不是 DB 的 2 条独立 assistant, 而是 1 条**累积**的 `assistantMsg` placeholder(含 `toolCalls` + `toolResults` + turn 1 + turn 2 text)
+4. `toPayloadContent` for `assistant` role 按 Anthropic 协议**不**发 `m.toolResults` → wire 上 `tool_use` 后面没 `tool_result` → 2013
+
+**注意**:这条错误信息和陷阱 3 的 `tool_use 后面没 tool_result` 长得**几乎一模一样**,但**根因完全不一样**:
+- 陷阱 3:`tool_use` 后面**根本没**`tool_result`(DB 缺)
+- 陷阱 4:`tool_result` 在 DB 里有,但**前端 in-memory 没正确反映 DB 拆分**;`toPayloadContent` 按协议只发 `tool_use` 不发 `tool_result`,所以 wire 上看似孤儿
+
+**根因链**:
+1. `streamController.handleToolCall` / `handleToolResult` 累积到 `last = msgs[msgs.length-1] = assistantMsg placeholder`(`app/src/stores/streamController.ts:494-518`)
+2. `handleChatEvent` for `delta` 累积 text 到**同一个** placeholder(`app/src/stores/streamController.ts:440-442`)
+3. 后端 agent loop 每个 turn **单独** persist 一个 assistant message 到 DB(`app/src-tauri/src/lib.rs:1413-1424`)
+4. **结果**:in-memory placeholder 累积了所有 turn 的 `toolCalls` + `toolResults` + text;DB 实际是 N 条独立 assistant message
+5. `toPayloadContent` for `assistant` role 按协议只发 `thinking` / `text` / **`tool_use`** / `redacted_thinking`,**跳过** `m.toolResults`(`app/src/stores/chat.ts:519-528`,陷阱 2 的设计)
+6. 第二次 `send()` 时 `ensureLoaded` 走 in-memory 缓存路径(不 rehydrate from DB),placeholder 累积形态进 history
+7. wire 序列: `assistant(text + tool_use)` → `user(text 新消息)`,**没有** `user(tool_result)` → 2013
+
+**修法**:`streamController.finalizeRequest` (the function `done` / `error` / catch-error paths all route through) 配对调两个 action:
+1. `evict(sessionId)` — 清空 `messagesBySession` / `loadedFromDb` / `pinnedSessions`, 下次 `ensureLoaded` 走 `invoke("load_session", ...)` + `rehydrateMessages` 拿 DB 拆分形态
+2. `useChatStore().invalidateDiff(sessionId)` — 清空 diff cache, worktree chip 的 `diff (N)` 计数器重新 fetch(顺手修另一个 bug: commit 之后 chip 不消失)
+
+```ts
+// app/src/stores/streamController.ts (excerpt)
+function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
+  activeRequests.delete(requestId);
+  pinnedSessions.delete(sessionId);
+  evict(sessionId);
+  useChatStore().invalidateDiff(sessionId);
+}
+```
+
+**为什么是 finalizeRequest**: 三个 caller (`handleChatEvent.done` / `handleChatEvent.error` / `startRequest` 的 catch 块) 都调它, 改一个地方三个路径都覆盖。不能再"碰巧"靠 attach_worktree 的 `controller.refresh` 同步(陷阱 3 修完后**第一次** send 之后用户通常会 attach worktree,这条路径**碰巧**工作; 但用户也可能不 attach, 第二次 send 直接 2013)。
+
+**为什么两个 action 必须配对**:
+- `evict` 单做: 修 2013, 但 commit 之后 chip 仍显示陈旧 `diff (N)`(pre-existing 缓存 bug, 在 06-08-6px 那个 spike 没复现是因为用户没在 worktree 里 commit)
+- `invalidateDiff` 单做: 修 chip 缓存, 但 2013 仍出
+- 配对做: 两个 bug 一起修, 拆开任何一个都会退化一个
+
+**性能 cost**: 每次 send 完成多 1 次 `load_session` IPC round-trip + 1 次 DB read。实测 IPC < 5ms、SQLite 7 messages < 1ms。LRU cache 已经在 `loadedFromDb` 上, evict 不影响其他 session。
+
+**为什么不是重构 in-memory 累积形态**: 把 placeholder 拆成"每 turn 独立 ChatMessage"是更大的架构改动(需要 streamController 维护一个 `currentAssistantTurn` 状态机, `handleChatEvent.done` 之前要先 `msgs.push` 累积的 placeholder 转成 DB 形态)。本任务**不**做这个, **更小**的修法是"send 完就清", 状态机只活在当次 send 期间, 简单可验证。
+
+**影响范围**: 任何"in-memory 累积 streaming 状态 + DB 拆分持久化"组合的 chat framework。我们项目里两个 store(`streamController` / `chat`)的状态必须配对管理。
+
+**验证**: 写 PR 时, 在 `check.jsonl` 加 "finalizeRequest 必须配对 evict + invalidateDiff / in-memory 跟 DB 必须 evict 后 re-load 才一致"作为硬约束。`streamController.test.ts` 的 `finalizeRequest` describe block 锁住 3 个 invariant(evict 单独、invalidateDiff 单独、配对 invariant)。
+
+**经验沉淀**: Step 4 follow-up (06-08) 修法。`app/src/stores/streamController.ts` `finalizeRequest` 改 + `app/src/stores/chat.ts` 新增 `invalidateDiff` action + `app/src/stores/streamController.test.ts` 加 3 个 vitest + `.trellis/spec/frontend/state-management.md` "Send completion invalidation" 章节 + `.trellis/spec/backend/llm-contract.md` Scenario 7 "In-memory must mirror DB on send completion" sub-section。
+

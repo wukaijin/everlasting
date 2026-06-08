@@ -951,6 +951,62 @@ struct AppState {
   - Existing merge step (user.toolResults → preceding assistant) is
     preserved by the refactor
 
+#### In-memory must mirror DB on send completion (BUG FIX 2026-06-08, 2013 reappears in normal-completion path)
+
+- **Trigger**: any `chat` IPC that **completes** (not just cancels)
+  while the agent loop ran at least one tool. The pre-fix behavior
+  kept the in-memory `streamController.messagesBySession` cache
+  alive after `done` so the user could keep viewing the session;
+  the in-memory shape is the *streaming-accumulation* shape
+  (single `assistantMsg` placeholder that absorbed every `delta`
+  / `tool_call` / `tool_result` / `thinking_delta` event across
+  all turns), while the DB shape is one assistant message per
+  agent-loop turn (per `lib.rs:chat`).
+- **Failure mode**: a subsequent `send()` for the same session
+  hits `ensureLoaded`'s in-memory fast path, the cache is the
+  accumulation shape, `toPayloadContent` for `assistant` role
+  emits `tool_use` (per the Anthropic contract: `tool_result`
+  blocks only go on user-role messages), and the next wire
+  message after the assistant turn is a user-text prompt with
+  no `tool_result` in between. Anthropic Messages API returns
+  2013 ("tool call result does not follow tool call").
+- **Required behavior**: `streamController.finalizeRequest` (the
+  function the `done` / `error` / catch-error paths all route
+  through) must:
+  1. `evict(sessionId)` — clears `messagesBySession`,
+     `loadedFromDb`, and `pinnedSessions` for the session, so
+     the next `ensureLoaded` takes the re-load-from-DB path and
+     gets the per-turn split shape.
+  2. `useChatStore().invalidateDiff(sessionId)` — clears the
+     worktree diff cache for the same session, so the worktree
+     chip's "diff (N)" counter re-fetches on the next read
+     (after a `git commit` ran inside the worktree, etc.).
+- **Why both, paired**: the in-memory shape and the diff cache
+  are owned by different stores (`streamController` vs `chat`),
+  but they're both stale on send completion for the same root
+  reason. A refactor that only calls one of the two would
+  silently re-introduce one of the two bugs above. The
+  `streamController.test.ts` `finalizeRequest` describe block
+  has a `both actions fire on the same finalizeRequest call
+  (paired invariant)` test that locks this.
+- **Relation to the cancel-path fix** (`Synthetic tool_result
+  on cancel` above, c35c384): the two fixes address
+  *different* 2013 paths. The cancel-path fix prevents the DB
+  from developing an orphan `tool_use` when the user stops
+  mid-stream. The in-memory-mirror fix prevents the wire-format
+  history from having an apparent orphan `tool_use` even when
+  the DB is fully self-consistent. Both must stay in place —
+  removing either re-opens 2013 under a different repro path.
+- **Tests required** (locked in
+  `app/src/stores/streamController.test.ts`,
+  `finalizeRequest` describe block):
+  - `evicts the in-memory message buffer and unloads from DB
+    cache` (after `done` / after `error`)
+  - `invalidates the chat store's diff cache for the same
+    session` (after `done` / after `error`)
+  - `both actions fire on the same finalizeRequest call (paired
+    invariant)` — paired test, not two independent tests
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |

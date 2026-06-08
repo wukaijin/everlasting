@@ -19,8 +19,10 @@
 //
 // The tests below lock both invariants.
 
-import { describe, it, expect } from "vitest";
-import { rehydrateMessages } from "./streamController";
+import { describe, it, expect, beforeEach } from "vitest";
+import { setActivePinia, createPinia, storeToRefs } from "pinia";
+import { rehydrateMessages, useStreamControllerStore } from "./streamController";
+import { useChatStore } from "./chat";
 
 // `rehydrateMessages` consumes the shape `LoadedMessage[]` from
 // `db::load_session`'s `messages` field. The interface is private
@@ -251,5 +253,128 @@ describe("rehydrateMessages — existing merge step is preserved", () => {
     // shape as a normal merged turn.
     expect(out[1].toolResults?.[0].toolUseId).toBe("toolu_orphan");
     expect(out[2].toolResults?.[0].toolUseId).toBe("toolu_orphan");
+  });
+});
+
+// =====================================================================
+// BUG FIX (06-08-06-08 step-4 follow-up): finalizeRequest must evict
+// the in-memory message buffer AND invalidate the diff cache so the
+// next `send()` for the same session can't build a wire history
+// where an assistant `tool_use` is followed by a user-text message
+// with no `tool_result` in between (Anthropic API 2013). The
+// orphan-repair tests above cover the *DB* path; these cover the
+// *in-memory* path that fires on the *normal completion* branch
+// (no cancel, no network drop, just a clean send that happened to
+// use tools). Two store actions are paired inside finalizeRequest
+// — `streamController.evict` clears the in-memory `ChatMessage[]`
+// + `loadedFromDb`; `chatStore.invalidateDiff` clears the
+// `diffCache` so the worktree chip's "diff (N)" counter
+// re-fetches on next read.
+// =====================================================================
+
+describe("finalizeRequest (06-08-06-08 step-4 follow-up — 2013 wire invariant)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("evicts the in-memory message buffer and unloads from DB cache", () => {
+    // The in-memory shape that the bug-fix is protecting against:
+    // a single assistantMsg placeholder that has absorbed the
+    // tool_call + tool_result + multi-turn text from a previous
+    // `send()`. The DB has the per-turn split shape, but the
+    // cache doesn't. finalizeRequest must drop the cache so the
+    // next ensureLoaded re-reads from DB.
+    const stream = useStreamControllerStore();
+    const sid = "finalize-evict-sid";
+    // Seed: an in-memory buffer with a tool_use block but no
+    // tool_result in the same shape as a streaming placeholder
+    // accumulation.
+    const placeholderAccumulation = [
+      {
+        id: `${sid}-1`,
+        role: "assistant" as const,
+        content: "current worktree info text",
+        toolCalls: [
+          {
+            id: "call_function_abc_1",
+            name: "shell",
+            input: { command: "pwd" },
+          },
+        ],
+        toolResults: [
+          {
+            toolUseId: "call_function_abc_1",
+            content: "ok",
+            isError: false,
+          },
+        ],
+        streaming: false,
+      },
+    ];
+    // Inject into the store's internal state. Both
+    // `messagesBySession` and `loadedFromDb` are exposed on
+    // the store instance (production adds them to the return
+    // for this test contract — see the comment in
+    // `streamController.ts` return).
+    stream.messagesBySession.set(sid, placeholderAccumulation);
+    stream.loadedFromDb.add(sid);
+
+    expect(stream.messagesBySession.has(sid)).toBe(true);
+    expect(stream.loadedFromDb.has(sid)).toBe(true);
+
+    stream.finalizeRequest("rid-doesnt-matter", sid, false);
+
+    // The fix: both Maps/Sets are cleared so the next
+    // `ensureLoaded` for this sessionId takes the re-load-from-DB
+    // path and gets the per-turn split shape.
+    expect(stream.messagesBySession.has(sid)).toBe(false);
+    expect(stream.loadedFromDb.has(sid)).toBe(false);
+  });
+
+  it("invalidates the chat store's diff cache for the same session", () => {
+    // The worktree-diff cache is owned by `useChatStore`, not
+    // `useStreamControllerStore`. The fix is to call into
+    // `useChatStore().invalidateDiff(sessionId)` from
+    // `finalizeRequest` so the worktree chip's "diff (N)"
+    // counter re-fetches on the next read (e.g. after a
+    // `git commit` ran inside the worktree).
+    const stream = useStreamControllerStore();
+    const chat = useChatStore();
+    // `storeToRefs` is Pinia's recommended way to keep a setup
+    // store's refs reactive across the test boundary (the
+    // store's `state` proxies setup return values, but a direct
+    // `chat.diffCache` access from the test sometimes hits the
+    // proxy inconsistently depending on Pinia version — the
+    // helper standardizes it).
+    const { diffCache } = storeToRefs(chat);
+    const sid = "finalize-invalidate-sid";
+    diffCache.value.set(sid, { files: [] });
+    expect(diffCache.value.has(sid)).toBe(true);
+
+    stream.finalizeRequest("rid-doesnt-matter", sid, false);
+
+    expect(diffCache.value.has(sid)).toBe(false);
+  });
+
+  it("both actions fire on the same finalizeRequest call (paired invariant)", () => {
+    // The two actions are paired inside finalizeRequest. A
+    // refactor that drops one without the other would leave
+    // either the 2013 bug or the stale-diff-chip bug. Lock
+    // the pairing so a future change to `finalizeRequest`
+    // can't silently break one side.
+    const stream = useStreamControllerStore();
+    const chat = useChatStore();
+    const { diffCache } = storeToRefs(chat);
+    const sid = "finalize-paired-sid";
+    stream.messagesBySession.set(sid, []);
+    stream.loadedFromDb.add(sid);
+    diffCache.value.set(sid, { files: [] });
+
+    stream.finalizeRequest("rid-paired", sid, false);
+
+    // Both sides cleared by ONE finalizeRequest call.
+    expect(stream.messagesBySession.has(sid)).toBe(false);
+    expect(stream.loadedFromDb.has(sid)).toBe(false);
+    expect(diffCache.value.has(sid)).toBe(false);
   });
 });

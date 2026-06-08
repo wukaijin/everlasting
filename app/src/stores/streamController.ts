@@ -43,7 +43,7 @@ import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { ChatMessage, ErrorCategory } from "./chat";
+import { useChatStore, type ChatMessage, type ErrorCategory } from "./chat";
 
 /** Upper bound on number of sessions whose messages are kept
  *  in memory. Pinned (in-flight streaming) sessions are not
@@ -518,12 +518,44 @@ export const useStreamControllerStore = defineStore("streamController", () => {
   }
 
   /** Mark a request as finished: drop from activeRequests, unpin
-   *  its session, and let the LRU reclaim it on the next put. The
-   *  messages are NOT touched here — they stay in the cache so
-   *  the user can keep viewing the session after it ends. */
+   *  its session, and let the LRU reclaim it on the next put.
+   *
+   *  BUG FIX (06-08-06-08 step-4 follow-up — 2013 wire invariant):
+   *  also evict the in-memory message cache and invalidate the
+   *  worktree-diff cache for this session. The in-memory
+   *  ChatMessage[] in `messagesBySession` is the *streaming
+   *  accumulation* shape — a single assistantMsg placeholder that
+   *  has absorbed every `delta` / `tool_call` / `tool_result` /
+   *  `thinking_delta` event the agent loop emitted across all
+   *  turns of this `chat` invocation. The DB, in contrast, stores
+   *  one assistant message per agent-loop turn (lib.rs:1413-1424).
+   *  If we leave the cache, the *next* `send()` for this session
+   *  hits `ensureLoaded`'s fast path (in-memory hit, no rehydrate
+   *  from DB) and builds a wire-format history where the assistant
+   *  turn's `tool_use` block is followed by a *user text* message
+   *  (the next typed prompt) with no `tool_result` in between —
+   *  Anthropic Messages API returns 2013 ("tool call result does
+   *  not follow tool call"). Evicting forces the next `ensureLoaded`
+   *  to re-load from DB, which returns the per-turn split shape
+   *  with the `tool_result` properly placed in the following
+   *  user-role message. We also invalidate the diff cache so the
+   *  worktree chip reflects post-send state (a `git commit` run
+   *  inside the worktree should drop the "diff (N)" counter
+   *  immediately, not on the next attach/detach).
+   *
+   *  Trade-off: every send() now incurs one extra `load_session`
+   *  IPC round-trip on the *following* send. In practice the
+   *  cached-vs-evicted window is small (the user types the next
+   *  message within a few seconds) and the IPC is cheap. The
+   *  previous c35c384 fix (cancel-path synthetic tool_result) is
+   *  untouched — this addresses a *different* 2013 path (normal
+   *  completion, not cancel). See `docs/HACKING-llm.md` "陷阱 4"
+   *  for the full chain. */
   function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
     activeRequests.delete(requestId);
     pinnedSessions.delete(sessionId);
+    evict(sessionId);
+    useChatStore().invalidateDiff(sessionId);
   }
 
   // ---------------------------------------------------------------------
@@ -724,6 +756,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     messagesBySession,
     activeRequests,
     listenerReady,
+    // BUG FIX (06-08-06-08): expose `pinnedSessions` + `loadedFromDb`
+    // so the wire-invariant test can assert the post-`finalizeRequest`
+    // state without spinning up an IPC + agent loop. Both are
+    // internal Sets that the production code never reads via the
+    // public API — they're accessed only by the same-file
+    // `ensureLoaded` / `evict` helpers. Adding them to the return
+    // makes them reactive-readable from the outside, which is
+    // harmless (nothing subscribes to them in production code).
+    pinnedSessions,
+    loadedFromDb,
     // Derived
     streamingSessionIds: streamingSessionIds as ComputedRef<Set<string>>,
     streamingProjectIds: streamingProjectIds as ComputedRef<Set<string>>,
@@ -737,5 +779,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     startRequest,
     cancel,
     currentRequestId,
+    // BUG FIX (06-08-06-08): exposed for tests so the 2013-wire-invariant
+    // test can drive the full send-completion path without spinning up
+    // a Tauri IPC + a real agent loop. Not part of the public API that
+    // UI components call — production callers go through `startRequest`
+    // which routes the `done` / `error` events through this function.
+    finalizeRequest,
   };
 });

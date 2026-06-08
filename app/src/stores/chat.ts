@@ -492,6 +492,30 @@ export const useChatStore = defineStore("chat", () => {
     return result;
   }
 
+  /** BUG FIX (06-08-06-08 step-4 follow-up — 2013 wire invariant):
+   *  drop a single session's entry from the diff cache so the next
+   *  reader (the worktree chip in `ChatPanel.vue` or a
+   *  `diffWorktree` modal open) takes the cache-miss path and
+   *  re-invokes the backend `diff_worktree` IPC. Called from
+   *  `streamController.finalizeRequest` right after a `chat`
+   *  request ends, so the worktree chip reflects post-send state
+   *  (e.g. a `git commit` run inside the worktree drops the
+   *  "diff (N)" counter immediately) instead of staying on the
+   *  pre-send snapshot. The map replacement (`new Map(...)`) is
+   *  the same reactivity trick `fetchDiff` uses — Vue tracks
+   *  Map.set on the proxy but downstream `computed` consumers
+   *  want a fresh reference. No-op if the session isn't cached.
+   *
+   *  Note: this does NOT touch `loadedFromDb` or the in-memory
+   *  message buffer — that's `streamController.evict`, called in
+   *  the same `finalizeRequest` so the two stay paired. */
+  function invalidateDiff(sessionId: string): void {
+    if (diffCache.value.has(sessionId)) {
+      diffCache.value.delete(sessionId);
+      diffCache.value = new Map(diffCache.value);
+    }
+  }
+
   /** Filter a session's diff down to a single file path. Returns
    *  `null` if the file isn't in the diff (either not changed in
    *  this session, OR the session diff hasn't been fetched yet). */
@@ -710,5 +734,6 @@ export const useChatStore = defineStore("chat", () => {
     fetchDiff,
     getDiff,
     getFileDiff,
+    invalidateDiff,
   };
 });

@@ -191,3 +191,58 @@ Backend stores the system event in the same `messages` table; the
 frontend does not need a special branch in the wire event handler.
 The system event renders as a regular user-role message with the
 `[worktree event]` prefix.
+
+### Send completion invalidation (added 2026-06-08, step 4 follow-up — 2013 wire invariant)
+
+Every `send()` must end with `controller.finalizeRequest` clearing the
+in-memory `messagesBySession` entry **and** the chat store's
+`diffCache` entry for the same session. The cleanest place to do
+both is the controller's own `finalizeRequest` (the function the
+`done` / `error` / catch-error paths all route through) — pairing
+`evict(sessionId)` with `useChatStore().invalidateDiff(sessionId)`
+in one call.
+
+```typescript
+// app/src/stores/streamController.ts (excerpt)
+function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
+  activeRequests.delete(requestId);
+  pinnedSessions.delete(sessionId);
+  evict(sessionId);
+  useChatStore().invalidateDiff(sessionId);  // ← paired, mandatory
+}
+```
+
+Why both:
+
+- **In-memory `messagesBySession`** is the *streaming-accumulation*
+  shape — a single `assistantMsg` placeholder that absorbed every
+  `delta` / `tool_call` / `tool_result` / `thinking_delta` event
+  across all turns of the `chat` invocation. The DB stores one
+  assistant message per agent-loop turn (per turn the Rust side
+  persists in `lib.rs:chat`). If we leave the cache after a
+  successful send, the next `ensureLoaded` for that session takes
+  the in-memory fast path and the wire-format history sent to the
+  LLM has an assistant turn whose `tool_use` block is followed by
+  a user-text message (the next typed prompt) with no `tool_result`
+  in between — Anthropic Messages API returns 2013 ("tool call
+  result does not follow tool call"). Evicting forces the next
+  `ensureLoaded` to re-read from DB, where the per-turn split
+  shape puts the `tool_result` in the correct following
+  user-role message.
+- **Chat store `diffCache`** holds the worktree diff result so the
+  chip's "diff (N)" counter doesn't re-fetch on every render. A
+  `git commit` run inside the worktree during the just-finished
+  send should drop the counter immediately; without invalidation
+  the chip keeps showing the pre-send snapshot until the next
+  `attachWorktree` / `detachWorktree` / `deleteWorktree` happens to
+  trigger an `invalidateDiff` (coincidentally — that's why the
+  earlier 2026-06-07 step-4 follow-up worked for the first send
+  but regressed on the second).
+
+A failure mode that this invariant prevents: a refactor that splits
+`finalizeRequest` into "evict" and "invalidate" helpers but only
+calls one of them would silently break one of the two bugs above.
+The two actions are paired, not independent — the
+`streamController.test.ts` `finalizeRequest` describe block has a
+`both actions fire on the same finalizeRequest call (paired
+invariant)` test that locks this.
