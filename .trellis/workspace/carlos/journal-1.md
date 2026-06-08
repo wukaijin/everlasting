@@ -699,3 +699,41 @@ Migrated the agent runtime onto per-session git worktrees (libgit2 vendored; XDG
 ### Next Steps
 
 - None - task complete
+
+## Session 19: step 4 follow-up 修复: diff 空 / attach 冲突 / system prompt 未注入
+
+**Date**: 2026-06-08
+**Task**: step 4 follow-up 修复: diff 空 / attach 冲突 / system prompt 未注入
+**Branch**: `main`
+
+### Summary
+
+修了 step 4 follow-up 上线后发现的 3 个 bug。Bug 1: libgit2 `diff_tree_to_workdir_with_index` 不含 untracked 文件,LLM `write_file` 新建文件时 UI diff 空 — 补 `repo.statuses()` 扫描 + 合成 added entry。Bug 2: `attach_worktree` 失败 "worktree already exists" — `git::worktree::create` 加 3 步 self-heal (stale metadata / stale branch / orphan dir),每步 tracing::warn!。Bug 3: LLM 没 system prompt 知道自己在 worktree — `chat_stream_with_tools` 新增 `system: Option<String>`,`lib.rs::chat` 构造 `build_system_prompt` (3 个 worktree_state 措辞 + 非 git 项目覆盖),前端不动。spec `llm-contract.md` Scenario 7 新增 system prompt 契约段。3 个 sub-agent 串行派(Bug 2 含越界做了 Bug 1,被接受),最终 193 cargo + 44 vitest pass,0 warning。trellis-check 标 2 个 trade-off (untracked diff 非标准 unified / UTF-8 边界回退) 为 out-of-scope。
+
+### Main Changes
+
+- **Bug 1** (`app/src-tauri/src/git/diff.rs` +372): untracked 扫描 + 3 tests; 修了子代理写错的 line_stats 断言(libgit2 对 `v1\n→v2\n` 返回 `(added=0, removed=1)` 但 diff_text 正确,改为断言 diff_text 内容)
+- **Bug 2** (`app/src-tauri/src/git/worktree.rs` +298 / `error.rs` -7): self-heal 3 步 + 3 tests; 删 `WorktreeExists` 变体
+- **Bug 3** (`app/src-tauri/src/lib.rs` +314 / `llm/client.rs` +47 / `.trellis/spec/backend/llm-contract.md` +150): `build_system_prompt` + `lookup_head_sha` + 4 tests + 1 client test; Scenario 7 加 system prompt 契约
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6f3d557` | fix: 3 worktree follow-up bugs (diff untracked / attach self-heal / system prompt) |
+
+### Testing
+
+- [OK] cargo test --lib: 193/193 pass (188 baseline + 5 new)
+- [OK] cargo check (lib + tests): 0 warning
+- [OK] pnpm build (vue-tsc + vite): clean
+- [OK] pnpm vitest: 44/44 pass (unchanged)
+- [SKIP] cargo clippy: blocked by homebrew/rustup toolchain mismatch (pre-existing 环境问题)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
