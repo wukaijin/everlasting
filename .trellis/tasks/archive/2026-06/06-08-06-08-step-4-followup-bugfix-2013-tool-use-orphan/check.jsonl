@@ -1,0 +1,9 @@
+{"file": "app/src-tauri/src/lib.rs", "reason": "B 修复：cancel 分支（line 1342-1444）补 synthetic tool_result user message 并 persist；不能破坏 PR5 已有 stop_reason='cancelled' emit 路径"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "ContentBlock::ToolResult 序列化（is_error 字段）确认；不需要新枚举"}
+{"file": "app/src-tauri/src/llm/client.rs", "reason": "B 修完后 LLM stream 端无改动；只需确认 LLM error 分支不进 2013 二次循环"}
+{"file": "app/src-tauri/src/db.rs", "reason": "persist_turn 复用确认；seq 单调递增 + role 字段无约束"}
+{"file": "app/src/stores/streamController.ts", "reason": "C 修复：rehydrateMessages 在 merge step 后扫孤立 tool_use 并 splice 合成 user message；从后往前扫避免索引错位；synthetic message 也需要 markRaw toolResults"}
+{"file": "app/src/stores/chat.ts", "reason": "C 修完后 toPayloadContent 无需改（synthetic toolResult 走 user 分支，wire 格式正确）"}
+{"file": "docs/HACKING-llm.md", "reason": "加 '陷阱 3' 节：tool_use 孤儿 cancel 路径 → 2013 'tool call result does not follow tool call'；记录 B+C 修法 + 验收标准"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Scenario 7 加 cancel-path tool_result 契约：B 在 cancel 路径必须 persist synthetic tool_result，C 在 rehydrate 治历史孤儿"}
+{"file": ".trellis/workspace/Carlos/journal-1.md", "reason": "记录本次修复 + 关联到 6f3d557 (上一次 worktree bugfix)"}

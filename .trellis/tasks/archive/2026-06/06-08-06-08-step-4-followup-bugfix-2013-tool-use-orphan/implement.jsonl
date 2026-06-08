@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Scenario 7 covers system prompt contract; extend with cancel-path tool_result 契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Read 2013 错误分类映射，决定 synthetic tool_result 的 LlmErrorCategory 选型"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "cancel 分支补 tool_result 需要 tracing::warn! 日志，跟现有 PR5 cancel 日志风格一致"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "persist_turn 在 cancel 分支被复用，确认 seq 递增约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "streamController rehydrate 修改涉及 reactive state 不可变模式（markRaw 等）"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "synthetic ChatMessage 插入需要类型对齐 ChatMessage / toolResults 字段"}
+{"file": "docs/HACKING-llm.md", "reason": "加 '陷阱 3: tool_use 孤儿' 节，跟现有陷阱 1/2 措辞一致；引用本次 B + C 修法"}
