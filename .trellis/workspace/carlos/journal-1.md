@@ -748,6 +748,54 @@ Migrated the agent runtime onto per-session git worktrees (libgit2 vendored; XDG
 ### Summary
 
 PR1 of 06-08-multi-model-llm-provider-planning — data layer only (no UI / no LLM client). 3 new SQLite tables (providers / models / app_config), 8 CRUD functions, 10 IPC commands, idempotent seed (2 providers + 4 models + default_model_id, backfills sessions.model_id for legacy rows). 11 new unit tests, 208 total green. trellis-check PASS verdict. Spec updates: database-guidelines.md filled (sqlx patterns, soft-FK, denormalized-list, new-catalog checklist) + llm-contract.md 'Scenario: Multi-Provider Abstraction' (7 sections + 4 design decisions). Bypass note: trellis-implement sub-agent dispatch skipped (path A recovery via in-session code + trellis-check verification). Followups: PR2 Anthropic adapter / PR3 OpenAI adapter / PR4 Settings modal UI.
+[End of Session 19]
+- None - task complete
+
+[Append new session:]
+
+## Session 20: step 4: multi-model PR2 — Anthropic adapter (Provider trait + catalog dispatch)
+
+**Date**: 2026-06-09
+**Task**: step 4: multi-model PR2 — Anthropic adapter
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR2 of 06-08-multi-model-llm-provider-planning — Anthropic adapter only (OpenAI 留 PR3,UI 留 PR4)。行为完全不变,前端零改动,纯后端内部架构重排。删 `app/src-tauri/src/llm/client.rs` (582 行) + 新建 `app/src-tauri/src/llm/provider/{mod.rs,anthropic.rs}` (1042 行) + 改 `lib.rs` catalog 解析 + 3 种 pre-flight 文案 + `get_llm_config` 走 catalog 返 display_name。10 个新测试(7 provider + 3 anthropic),218 cargo test / pnpm build 全过 0 warning。trellis-implement + trellis-check 双 sub-agent dispatch 路径(没走 PR1 的 path A bypass)。check 给 PASS verdict 0 L1 / 1 L2 (docs/IMPLEMENTATION.md 状态更新,已修) / 3 L3 (留 PR4:create_session 写 model_id / SessionRow 字段 / spec 措辞微调 1 处已修)。commit 0a787ef (7 files +1810/-630)。
+
+### Main Changes
+
+- **Provider 抽象** (`app/src-tauri/src/llm/provider/mod.rs` 新建 328 行): `Provider` trait (`send` + `capabilities` + `protocol`) + `ProviderCapabilities` + `ProviderProtocol` re-export + `build_provider` 工厂 (anthropic / openai NotImplemented / UnknownProtocol) + `ProviderBuildError` + 7 测试
+- **Anthropic adapter** (`app/src-tauri/src/llm/provider/anthropic.rs` 新建 714 行): `AnthropicProvider::new(LlmConfig)` + `impl Provider`;私有 `LlmConfig`(经 `llm` mod re-export);BlockState 状态机 + SSE 解析 + thinking 4 块(GLM 兼容 / thinking 签名 / display summarized / orphan tool_use) 全保留;4 个 client.rs 单元测试 1:1 搬过来;3 个新测试(Send+Sync / protocol() 报 Anthropic / factory 端到端)
+- **删** `app/src-tauri/src/llm/client.rs` (582 行,全搬)
+- **模块导出** (`app/src-tauri/src/llm/mod.rs` 改): 删 `pub mod client;` → `pub mod provider;`;re-export 调整为 `AnthropicProvider` / `Provider` / `ProviderCapabilities` / `ProviderProtocol` / `ChatEvent` / `ChatMessage` 等
+- **chat 命令 catalog 解析** (`app/src-tauri/src/lib.rs` +283 行): `resolve_chat_provider()` 函数在 spawn 闭包外 (pre-flight 失败不注册 cancellation token) → 查 `app_config.default_model_id` → `db::list_models` join providers → 构造 `Box<dyn Provider>` → 3 种 pre-flight 文案 (api_key 空 → Auth / model 找不到 → InvalidRequest / provider 找不到 → InvalidRequest) → 删 `is_unconfigured` 旧 check → `chat_stream_with_tools` 调用改 `provider.send`;agent loop 20 turn 复用同一 provider 实例
+- **`get_llm_config` IPC** (`app/src-tauri/src/lib.rs:212`): 从 `state.config` (env) 切到 catalog 读 (`default_model_id` → `ModelRow.display_name` + `ProviderRow.base_url` + `configured = !api_key.is_empty()`);前端契约 shape `{model, baseUrl, configured}` 保持
+- **spec section** (`.trellis/spec/backend/llm-contract.md` +459 行): "Scenario: Provider trait + Anthropic dispatch (PR2)" 段 — wire shape / signatures / 4 设计决策 (LlmConfig 私有 / Pin<Box<dyn Stream>> / Send+Sync / factory 唯一 chat 路径 builder) / catalog dispatch 流程图 / 3 种 pre-flight 文案
+- **docs 状态** (`docs/IMPLEMENTATION.md`): §2.7 步骤 6 加 "路线图外进度 2026-06-09" 段;§3 最后更新日期刷到 2026-06-09;表格加 PR1/PR2 条目
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a787ef` | feat(llm): PR2 Anthropic adapter (Provider trait + catalog dispatch) |
+
+### Testing
+
+- [OK] cargo test --lib: 218/218 pass (208 baseline + 10 new PR2)
+- [OK] cargo check (lib + tests): 0 warning
+- [OK] pnpm build (vue-tsc + vite): clean
+- [OK] trellis-check PASS verdict: 0 L1 / 1 L2 (已修 docs/IMPLEMENTATION.md 状态) / 3 L3 (1 已修 spec 措辞, 2 留 PR4)
+- [SKIP] cargo clippy: blocked by homebrew/rustup toolchain mismatch (pre-existing 环境问题)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- PR3: OpenAI adapter + 跨协议 capability-aware 降级 (Chat Completions 协议 + reasoning_content 映射 + WireMessage 中间层)
+- PR4: UI Settings modal (Providers / Models / Default tabs) + StatusBar model dropdown + 删 ChatPanel model chip + 修 create_session 写 sessions.model_id
 
 ### Main Changes
 
