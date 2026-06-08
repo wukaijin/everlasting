@@ -44,6 +44,8 @@ use crate::db::{ModelRow, ProviderRow};
 
 #[allow(unused_imports)]
 pub use anthropic::AnthropicProvider;
+#[allow(unused_imports)]
+pub use openai::OpenAIProvider;
 pub use crate::db::ProviderProtocol;
 
 // ---------------------------------------------------------------------------
@@ -161,7 +163,31 @@ pub fn build_provider(
             };
             Ok(Box::new(AnthropicProvider::new(config)))
         }
-        "openai" => Err(ProviderBuildError::NotImplemented("openai")),
+        "openai" => {
+            // PR3 OpenAI adapter. Defaults: `max_tokens = 16384`
+            // (matches the Anthropic default for symmetry; future
+            // PRs may lower this for o1 models where max_tokens
+            // is the budget for `reasoning_content` + visible
+            // answer combined).
+            //
+            // OpenAI's `reasoning_effort` is sourced from
+            // `ModelRow.thinking_effort` (the same column the
+            // Anthropic adapter reads for `adaptive.effort`).
+            // The value is emitted as a top-level
+            // `reasoning_effort` field on Chat Completions
+            // requests; `None` means "omit the field" so
+            // non-o1/o3 models are unaffected.
+            let max_tokens = model_row.max_tokens.unwrap_or(16384);
+            let reasoning_effort = model_row.thinking_effort.clone();
+            let config = openai::OpenAIConfig {
+                base_url: provider_row.base_url.clone(),
+                model: model_row.model_name.clone(),
+                api_key: provider_row.api_key.clone(),
+                max_tokens,
+                reasoning_effort,
+            };
+            Ok(Box::new(OpenAIProvider::new(config)))
+        }
         other => Err(ProviderBuildError::UnknownProtocol(other.to_string())),
     }
 }
@@ -170,9 +196,11 @@ pub fn build_provider(
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderBuildError {
     /// The protocol string was recognized but the adapter is not
-    /// implemented yet (e.g. `openai` in PR2). The `&'static str`
-    /// names the protocol so the UI / log line can point at the
-    /// missing adapter.
+    /// implemented yet (reserved for future protocols like
+    /// `gemini` or `ollama` — PR3 ships both `anthropic` and
+    /// `openai`). The `&'static str` names the protocol so the
+    /// UI / log line can point at the missing adapter.
+    #[allow(dead_code)]
     #[error("provider protocol '{0}' is not implemented yet")]
     NotImplemented(&'static str),
 
@@ -241,20 +269,22 @@ mod tests {
         assert!(caps.supports_streaming);
     }
 
-    /// OpenAI protocol returns the "not implemented" error so the
-    /// dispatch surface is in place ahead of PR3.
+    /// OpenAI protocol returns an `OpenAIProvider` (a
+    /// `Box<dyn Provider>`) with the protocol/capabilities expected
+    /// for Chat Completions. PR3 wires this up.
     #[test]
-    fn build_provider_openai_returns_not_implemented() {
+    fn build_provider_openai_returns_openai_provider() {
         let mut p = anthropic_provider_row("sk-test");
         p.protocol = "openai".to_string();
         p.display_name = "OpenAI 官方".to_string();
         p.base_url = "https://api.openai.com/v1".to_string();
         let m = model_row_with("gpt-4o", None, None);
-        match build_provider(&p, &m) {
-            Err(ProviderBuildError::NotImplemented(s)) => assert_eq!(s, "openai"),
-            Err(other) => panic!("expected NotImplemented, got a different error: {}", other),
-            Ok(_) => panic!("expected NotImplemented, got Ok(provider)"),
-        }
+        let provider = build_provider(&p, &m).expect("openai is implemented in PR3");
+        assert_eq!(provider.protocol(), ProviderProtocol::Openai);
+        let caps = provider.capabilities();
+        assert!(caps.supports_system_prompt);
+        assert!(caps.supports_tools);
+        assert!(caps.supports_streaming);
     }
 
     /// Unknown protocol strings return a typed error rather than
@@ -326,3 +356,5 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 pub mod anthropic;
+pub mod openai;
+pub mod wire;

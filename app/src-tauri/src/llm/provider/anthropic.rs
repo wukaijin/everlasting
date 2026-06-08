@@ -34,6 +34,9 @@ use futures_util::{Stream, StreamExt};
 use std::pin::Pin;
 use std::time::Duration;
 
+use super::wire::{
+    chat_request_to_wire, strip_unsupported, wire_messages_to_chat_messages, WireCapabilities,
+};
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::{classify_error_response, LlmError};
 use crate::llm::sse::SseParser;
@@ -186,33 +189,21 @@ impl AnthropicProvider {
 
     /// Stream chat completions, optionally with tool definitions and a system prompt.
     ///
-    /// `system` is the Anthropic Messages API `system` field. The agent loop
-    /// (step 4 follow-up Bug 3) constructs a per-turn-1 prompt describing the
-    /// session's project, working directory, and worktree state so the LLM
-    /// is grounded on every chat request. Subsequent turns within the same
-    /// agent loop iteration may reuse the same prompt — it's the caller's
-    /// choice whether to re-build or carry it forward.
+    /// `req` is the fully-built Anthropic Messages API request body
+    /// (the caller — `AnthropicProvider::send` — has already run it
+    /// through the wire layer, set `thinking`, and reconstructed
+    /// the Anthropic-shaped messages). The body is logged verbatim
+    /// with the model / tool count / system-prompt presence so
+    /// observability is preserved 1:1 with pre-PR3.
     ///
     /// Always emits `ChatEvent::Start` first on success, then a series of
     /// `Delta`s / `ThinkingDelta`s / `SignatureDelta`s / `ToolCall`s, then
     /// `Done` at the end.
     fn chat_stream_with_tools(
         config: LlmConfig,
-        system: Option<String>,
-        messages: Vec<ChatMessage>,
-        tools: Vec<ToolDef>,
+        req: ChatRequest,
     ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
         let url = config.endpoint();
-        let thinking = config.thinking_config();
-        let req = ChatRequest {
-            model: config.model.clone(),
-            max_tokens: config.max_tokens,
-            messages,
-            system,
-            stream: true,
-            tools,
-            thinking: Some(thinking),
-        };
 
         stream! {
             let client = match reqwest::Client::builder()
@@ -559,9 +550,76 @@ impl Provider for AnthropicProvider {
         // clone is cheap (5 String fields) and the inner `async_stream`
         // owns the config for the lifetime of the stream.
         let config = self.config.clone();
-        Box::pin(Self::chat_stream_with_tools(
-            config, system, messages, tools,
-        ))
+
+        // PR3 cross-protocol symmetry: the wire layer
+        // (`provider::wire`) is the single place that knows how to
+        // map the Anthropic-shaped `ChatRequest` to /
+        // from a provider-agnostic representation. We run the
+        // request through the wire layer first so:
+        //
+        // 1. The Anthropic provider is architecturally symmetric
+        //    with the OpenAI provider (decision D1 of the PR3
+        //    spec). Future protocols (Gemini, Ollama) plug in
+        //    identically.
+        // 2. Cross-protocol strip runs once and is observable in
+        //    the Anthropic path's request payload too — if a
+        //    future caller hands the Anthropic provider a request
+        //    that includes non-Anthropic blocks, they'd be
+        //    dropped at the wire layer rather than reaching the
+        //    legacy `chat_stream_with_tools` parser and crashing.
+        //
+        // The wire layer's inverse path (`wire_messages_to_chat_messages`)
+        // reconstitutes the Anthropic-shaped `ChatRequest` that
+        // the legacy SSE parser understands, so the rest of the
+        // call chain is byte-for-byte the same as pre-PR3.
+        let req = ChatRequest {
+            model: config.model.clone(),
+            max_tokens: config.max_tokens,
+            messages,
+            system: system.clone(),
+            stream: true,
+            tools,
+            thinking: None,
+        };
+        let mut wire = chat_request_to_wire(req, system);
+        // Anthropic target: supports everything. We pass
+        // permissive capabilities so `strip_unsupported` is a
+        // no-op for the Anthropic→Anthropic path; the function
+        // is the **single place** that encodes the strip rules,
+        // and running it costs nothing.
+        let caps = WireCapabilities {
+            supports_thinking: true,
+            supports_reasoning_effort: true,
+            supports_thinking_signatures: true,
+        };
+        wire.messages = strip_unsupported(wire.messages, &caps);
+        // Reconstruct the Anthropic-shaped ChatRequest that
+        // `chat_stream_with_tools` consumes. The wire
+        // round-trip preserves the same field set; the only
+        // structural change is that `tool_result` blocks
+        // lifted into `WireMessage::Tool` come back as
+        // separate `role: "user"` messages with one
+        // `tool_result` block each (the inverse of
+        // `chat_message_to_wire_messages`).
+        let req = ChatRequest {
+            model: wire.model,
+            max_tokens: wire.max_tokens.unwrap_or(config.max_tokens),
+            messages: wire_messages_to_chat_messages(wire.messages),
+            system: wire.system,
+            stream: true,
+            tools: wire
+                .tools
+                .into_iter()
+                .map(|t| ToolDef {
+                    name: t.name,
+                    description: t.description,
+                    input_schema: t.input_schema,
+                })
+                .collect(),
+            thinking: Some(config.thinking_config()),
+        };
+
+        Box::pin(Self::chat_stream_with_tools(config, req))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {

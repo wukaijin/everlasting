@@ -154,6 +154,65 @@ message_stop
 
 ---
 
+## 差异 5:OpenAI Chat Completions 协议差异(2026-06,06-08-multi-model PR3)
+
+**场景**:PR3 起支持 OpenAI 官方 `https://api.openai.com/v1/chat/completions` 端点,以及所有 OpenAI-兼容(DeepSeek / GLM 原生 / OpenRouter 等)。协议与 Anthropic Messages API 差异较大,**单独实现 `OpenAIProvider` + WireMessage 中间层**做互转。详细 spec 见 `.trellis/spec/backend/llm-contract.md` "Scenario: OpenAI Chat Completions adapter + cross-protocol WireMessage (PR3)",本节只记实测坑点。
+
+**关键差异速查**(Anthropic → OpenAI):
+
+| 维度 | Anthropic | OpenAI |
+|---|---|---|
+| endpoint | `POST {base}/v1/messages` | `POST {base}/v1/chat/completions` |
+| 鉴权 | `x-api-key: <key>` + `anthropic-version` | `Authorization: Bearer <key>` |
+| system prompt | 顶层 `system` 字段 | 第一条 `role: "system"` message |
+| tools 字段名 | `input_schema` | `parameters`(在 `function` 包裹里) |
+| tool call 入参 | `input` 是 JSON object | `arguments` 是 JSON **string** |
+| tool result | `user` message 里 `tool_result` block | 独立 `role: "tool"` message |
+| 流式 event | `event: foo\ndata: {...}\n\n` 多 event | `data: {...}\n\n` 单一格式 |
+| text delta | `content_block_delta.text_delta` | `choices[0].delta.content` |
+| reasoning | `thinking_delta` 块 | `choices[0].delta.reasoning_content` (o1/o3) |
+| finish | `message_delta.stop_reason` + `message_stop` | `choices[0].finish_reason` + `data: [DONE]` |
+| thinking 顶层字段 | `thinking: {type, display, effort}` | `reasoning_effort: "low\|medium\|high"` |
+
+**坑点 1:OpenAI tool_calls 增量 JSON 解析**
+
+OpenAI 流式 `tool_calls[]` 每元素可能只含 `id`(第一个 chunk)或只含 `function.arguments` 增量(后续 chunk),需要按 `index` 维护 state machine(`ToolCallBuf` HashMap per `tool_call_index`)。**不能假设一个 chunk 包含完整 `tool_call`**。
+
+**坑点 2:并行多 tool call**
+
+OpenAI `tool_calls[0].index=0` 和 `tool_calls[1].index=1` 可在同一 chunk 里同时增量。Anthropic 协议是单 tool_use per block,无此情形。`ToolCallBuf` 必须按 `index` 独立累积。
+
+**坑点 3:`data: [DONE]` 哨兵**
+
+OpenAI 流末尾发 `data: [DONE]\n\n`,**不**是 JSON。`SseParser` 解析出 `data: "[DONE]"`,`OpenAIProvider` 必须识别并 emit `Done` event 后退出循环。**不能**用 serde_json 解析 `[DONE]`,会失败。
+
+**坑点 4:错误响应 body 格式**
+
+Anthropic / GLM:`{"type": "error", "error": {"type": "invalid_request_error", "message": "..."}}`
+OpenAI:`{"error": {"message": "...", "type": "...", "code": "invalid_api_key" | "rate_limit_exceeded" | ...}}`
+
+`classify_error_response` 扩展读 `error.code` + `error.type` 双字段(PR3 改动,见 `llm/error.rs`)。
+
+**坑点 5:`reasoning_effort` vs `thinking` 字段互转**
+
+OpenAI 用顶层 `reasoning_effort: "low|medium|high"`(o1/o3 系列),Anthropic 用嵌套 `thinking: {type: "adaptive", display, effort}`。`ModelRow.thinking_effort` 一个字段同时承担两侧(PR3 决议 D3):
+- Anthropic 路径 → `thinking.adaptive.effort = <model.thinking_effort>`
+- OpenAI 路径 → 顶层 `reasoning_effort = <model.thinking_effort>`
+
+**坑点 6:跨协议降级(in-memory,不持久化)**
+
+切 model 时,`provider.send()` 内部 `strip_unsupported(target_caps)` 一次,DB 不动。规则(`wire.rs::strip_unsupported`):
+- `Reasoning` block → `target.supports_thinking || target.supports_reasoning_effort` 时保留,否则丢
+- `Signature` / `RedactedThinking` → 只 Anthropic + supports_thinking 保留,OpenAI 丢(opaque 不可转)
+- `ToolUse` / `ToolResult` / `Text` → 全部保留
+
+**留待真机测试**(out of scope):
+- `max_completion_tokens` 字段(o1+ 模型需要,`max_tokens` 不接受)— 留未来 PR
+- `parallel_tool_calls: true` 显式声明(目前默认 true)— 验证
+- `tracing` 显式 redact api_key — 留 future
+
+---
+
 ## 客户端陷阱(FU-5/6 沉淀)
 
 ### 陷阱 1:`Option<T>` 字段 Tauri 2 IPC null 行为
