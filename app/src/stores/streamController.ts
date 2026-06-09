@@ -523,44 +523,46 @@ export const useStreamControllerStore = defineStore("streamController", () => {
   }
 
   /** Mark a request as finished: drop from activeRequests, unpin
-   *  its session, and let the LRU reclaim it on the next put.
+   *  its session, and reload from DB to replace the streaming buffer
+   *  with the per-turn persisted shape.
    *
-   *  BUG FIX (06-08-06-08 step-4 follow-up — 2013 wire invariant):
-   *  also evict the in-memory message cache and invalidate the
-   *  worktree-diff cache for this session. The in-memory
-   *  ChatMessage[] in `messagesBySession` is the *streaming
-   *  accumulation* shape — a single assistantMsg placeholder that
-   *  has absorbed every `delta` / `tool_call` / `tool_result` /
-   *  `thinking_delta` event the agent loop emitted across all
-   *  turns of this `chat` invocation. The DB, in contrast, stores
-   *  one assistant message per agent-loop turn (lib.rs:1413-1424).
-   *  If we leave the cache, the *next* `send()` for this session
-   *  hits `ensureLoaded`'s fast path (in-memory hit, no rehydrate
-   *  from DB) and builds a wire-format history where the assistant
-   *  turn's `tool_use` block is followed by a *user text* message
-   *  (the next typed prompt) with no `tool_result` in between —
-   *  Anthropic Messages API returns 2013 ("tool call result does
-   *  not follow tool call"). Evicting forces the next `ensureLoaded`
-   *  to re-load from DB, which returns the per-turn split shape
-   *  with the `tool_result` properly placed in the following
-   *  user-role message. We also invalidate the diff cache so the
-   *  worktree chip reflects post-send state (a `git commit` run
-   *  inside the worktree should drop the "diff (N)" counter
-   *  immediately, not on the next attach/detach).
+   *  BUG FIX (06-09-fix-stream-finalize-flash-blank): the old
+   *  `evict(sessionId)` removed the in-memory cache entirely,
+   *  causing `messages` computed to return `[]` → blank page flash.
+   *  The evict was needed to prevent the 2013 wire invariant
+   *  (streaming buffer is a single merged assistant message, DB is
+   *  per-turn split). The fix: instead of bare evict, reload from
+   *  DB and *replace* the buffer atomically. The old streaming
+   *  buffer stays visible during the async DB load, so the user
+   *  never sees a blank page. When the load completes, `putMessages`
+   *  does delete+set in the same synchronous tick (LRU touch), so
+   *  Vue batches the update without a visible gap.
    *
-   *  Trade-off: every send() now incurs one extra `load_session`
-   *  IPC round-trip on the *following* send. In practice the
-   *  cached-vs-evicted window is small (the user types the next
-   *  message within a few seconds) and the IPC is cheap. The
-   *  previous c35c384 fix (cancel-path synthetic tool_result) is
-   *  untouched — this addresses a *different* 2013 path (normal
-   *  completion, not cancel). See `docs/HACKING-llm.md` "陷阱 4"
-   *  for the full chain. */
+   *  The 2013 invariant is preserved because the reload fetches the
+   *  per-turn split shape from DB. The diff cache is still
+   *  invalidated so the worktree chip reflects post-send state. */
   function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
     activeRequests.delete(requestId);
     pinnedSessions.delete(sessionId);
-    evict(sessionId);
     useChatStore().invalidateDiff(sessionId);
+    // Fire-and-forget: replace streaming buffer with DB version.
+    // Old buffer stays visible until DB load completes.
+    void reloadAfterFinalize(sessionId);
+  }
+
+  /** Reload a session's messages from DB after a stream finishes.
+   *  Replaces the in-memory streaming buffer with the per-turn
+   *  persisted shape, preventing the 2013 wire invariant without
+   *  causing a blank-page flash. */
+  async function reloadAfterFinalize(sessionId: string): Promise<void> {
+    const loaded = await invoke<LoadedSession | null>("load_session", {
+      sessionId,
+    });
+    const messages = loaded ? rehydrateMessages(loaded.messages) : [];
+    // putMessages does delete+set in same tick (LRU touch) — Vue
+    // batches the update so there's no visible blank gap.
+    putMessages(sessionId, messages, false);
+    loadedFromDb.add(sessionId);
   }
 
   // ---------------------------------------------------------------------
