@@ -22,6 +22,7 @@
 //! on top and synthesize a `Delta::Added` entry per untracked file.
 
 use std::path::Path;
+use std::process::Command as StdCommand;
 
 use git2::{Delta, Repository};
 use serde::Serialize;
@@ -121,10 +122,30 @@ pub fn diff_worktree(worktree_path: &Path, session_id: &str) -> Result<DiffResul
         // with empty diff_text and 0/0 stats.
         let (added, removed, diff_text) = match git2::Patch::from_diff(&diff, idx) {
             Ok(Some(mut patch)) => {
-                // `Patch::line_stats` returns (additions, deletions,
-                // context_lines). We only need the first two for
-                // the +/- count summary.
-                let (a, d, _) = patch.line_stats().unwrap_or((0, 0, 0));
+                // Bug 2 (step 4 follow-up): libgit2's `Patch::line_stats()`
+                // is known to under-count / mis-report additions for
+                // `diff_tree_to_workdir_with_index` — the canonical
+                // `"v1\n" → "v2\n"` case returns `(0, 1, 0)` (no
+                // addition, one deletion) even though the diff text
+                // clearly shows both `-v1` and `+v2`. For an
+                // `edit_file` "insert N lines" edit this manifests
+                // as a spurious `-N` on the UI's diff card. We
+                // delegate the +/- counts to `git diff --numstat`
+                // (authoritative) and only fall back to
+                // `patch.line_stats()` when the subprocess fails
+                // (git missing, weird worktree state, etc).
+                let (a, d) = match git_numstat(worktree_path, &path) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path,
+                            error = %e,
+                            "diff_worktree: git --numstat failed, falling back to libgit2 line_stats"
+                        );
+                        let (a, d, _) = patch.line_stats().unwrap_or((0, 0, 0));
+                        (a, d)
+                    }
+                };
                 let text = patch
                     .to_buf()
                     .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -321,11 +342,57 @@ fn build_untracked_diff(
     (text, line_count, truncated)
 }
 
+/// Run `git diff --no-color --numstat HEAD -- <path>` in `worktree`
+/// and parse the (added, removed) line counts for that path. This
+/// is the authoritative source for the +/- stat on each diff card
+/// in the UI; libgit2's `Patch::line_stats()` is known to
+/// under-count additions for `diff_tree_to_workdir_with_index` (see
+/// the call site for the canonical failure case).
+///
+/// `HEAD` is used explicitly so the result is the workdir + index
+/// against the session branch tip (= the base commit the
+/// `session/<id>` branch was created from), matching the libgit2
+/// call we run side-by-side. With an empty index (the step 4
+/// no-staging model) this is equivalent to plain `git diff -- <path>`,
+/// but the explicit `HEAD` is robust to a future Skill that adds
+/// staging.
+///
+/// Returns an error on subprocess failure (git missing, non-zero
+/// exit, etc.) so the caller can fall back to `patch.line_stats()`.
+/// A non-existent path (no diff) yields `(0, 0)` with `Ok`.
+fn git_numstat(worktree: &Path, path: &str) -> Result<(usize, usize), std::io::Error> {
+    let output = StdCommand::new("git")
+        .args(["diff", "--no-color", "--numstat", "HEAD", "--", path])
+        .current_dir(worktree)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("git --numstat exited with {:?}", output.status),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Each output line: "<added>\t<removed>\t<path>". For binary
+    // files both counts are "-". We only ever query one path so
+    // the first non-empty line (if any) is the answer; an empty
+    // stdout means the file has no workdir-vs-HEAD diff (which
+    // shouldn't happen for files in the libgit2 delta list, but
+    // is a safe no-op if it does).
+    for line in stdout.lines() {
+        let mut cols = line.split('\t');
+        let a_raw = cols.next().unwrap_or("0");
+        let r_raw = cols.next().unwrap_or("0");
+        let added = if a_raw == "-" { 0 } else { a_raw.parse::<usize>().unwrap_or(0) };
+        let removed = if r_raw == "-" { 0 } else { r_raw.parse::<usize>().unwrap_or(0) };
+        return Ok((added, removed));
+    }
+    Ok((0, 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use std::process::Command as StdCommand;
     use tempfile::tempdir;
 
     /// Helper: init a git repo at `path`, configure the user, make
@@ -428,15 +495,12 @@ mod tests {
     /// still included (this is the pre-existing behavior; the
     /// untracked patch above must NOT regress it).
     ///
-    /// NB: libgit2's `line_stats()` for
-    /// `diff_tree_to_workdir_with_index` is known to under-count
-    /// additions (returns `(0, removed, 0)` for some single-line
-    /// replacements — see the actual output below for the canonical
-    /// case of "v1\n" → "v2\n": it shows `added: 0, removed: 1`
-    /// even though the diff text clearly has both `-v1` and
-    /// `+v2`). We assert on the diff text content (which IS
-    /// correct and what the UI renders), not on the brittle
-    /// line_stats numbers.
+    /// Bug 2 (step 4 follow-up): after switching the +/- stat
+    /// source from libgit2's `Patch::line_stats()` (known to
+    /// under-count — returned `(0, 1, 0)` for the canonical
+    /// "v1\n" → "v2\n" case) to `git diff --numstat`, the
+    /// per-file counts must agree with git for a simple
+    /// single-line replacement: 1 added, 1 removed.
     #[test]
     fn diff_worktree_modified_tracked_file_unchanged() {
         let tmp = tempdir().unwrap();
@@ -459,6 +523,19 @@ mod tests {
             .find(|f| f.path == "a.txt")
             .expect("a.txt should appear in diff");
         assert_eq!(file.status, "modified");
+        // Bug 2 fix: +/- counts now come from `git diff --numstat`
+        // and must match git's view of the diff (1 line in, 1
+        // line out for a one-for-one replacement).
+        assert_eq!(
+            file.added, 1,
+            "single-line replacement should report 1 added (got: added={}, removed={}, diff_text={:?})",
+            file.added, file.removed, file.diff_text
+        );
+        assert_eq!(
+            file.removed, 1,
+            "single-line replacement should report 1 removed (got: added={}, removed={}, diff_text={:?})",
+            file.added, file.removed, file.diff_text
+        );
         // The unified diff text must show both the old and new
         // content. This is what the UI's diff popup renders.
         assert!(
@@ -471,6 +548,64 @@ mod tests {
             "diff text should contain the new line: {:?}",
             file.diff_text
         );
+    }
+
+    /// Bug 2 regression test: a pure insertion (no replacement)
+    /// of N lines via `edit_file` style in-place write must
+    /// report `added=N, removed=0` on the diff card. Before the
+    /// `git --numstat` switch, libgit2's `line_stats()` would
+    /// report a spurious non-zero `removed` for some insertions,
+    /// causing the UI to show a confusing red "-N" alongside
+    /// the correct "+N".
+    #[test]
+    fn diff_worktree_insert_lines_purely_added() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("project");
+        init_repo(&project);
+        fs::write(
+            project.join("a.txt"),
+            "line1\nline2\nline3\n",
+        )
+        .unwrap();
+        commit_all(&project);
+
+        let session_id = "insert-1";
+        let wt = tmp.path().join("wt");
+        make_worktree(&project, session_id, &wt);
+
+        // In-place append at end of file (the canonical
+        // "edit_file insert N lines" case): original 3 lines
+        // + 2 new lines, nothing deleted.
+        fs::write(
+            wt.join("a.txt"),
+            "line1\nline2\nline3\ninserted1\ninserted2\n",
+        )
+        .unwrap();
+
+        let result = diff_worktree(&wt, session_id).expect("diff should succeed");
+        let file = result
+            .files
+            .iter()
+            .find(|f| f.path == "a.txt")
+            .expect("a.txt should appear in diff");
+        assert_eq!(file.status, "modified");
+        assert_eq!(
+            file.added, 2,
+            "appending 2 new lines should report added=2 (got: added={}, removed={}, diff_text={:?})",
+            file.added, file.removed, file.diff_text
+        );
+        assert_eq!(
+            file.removed, 0,
+            "pure insertion should report removed=0 (got: added={}, removed={}, diff_text={:?})",
+            file.added, file.removed, file.diff_text
+        );
+        // The diff text body should still render both the
+        // pre-existing context and the new lines (this part was
+        // always correct via libgit2's Patch::to_buf, but pin
+        // it to catch any future regression on the numstat
+        // path).
+        assert!(file.diff_text.contains("+inserted1"));
+        assert!(file.diff_text.contains("+inserted2"));
     }
 
     /// Step 4 follow-up (Bug 1): untracked dirs and untracked
