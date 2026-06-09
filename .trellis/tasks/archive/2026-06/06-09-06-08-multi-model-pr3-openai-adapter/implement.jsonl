@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "LLM API 契约主 spec — PR1 multi-provider section + PR2 Provider trait section 已写,PR3 要加 OpenAI adapter + 跨协议 WireMessage section"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Rust 模块目录 — 新建 provider/wire.rs + provider/openai.rs 的命名/导出模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "5 类 LlmError 归一化 + 中文 user_message() 文案模式 — PR3 OpenAI 错误分类按此模式扩展"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing field 模式 — OpenAIProvider info! 日志跟 AnthropicProvider 对称 (url/model/tools_count)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层决策模式 — provider.send 内 strip 时机 + 降级不持久化模式"}

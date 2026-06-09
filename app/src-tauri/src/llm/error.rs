@@ -54,11 +54,14 @@ impl LlmError {
     }
 }
 
-/// Intermediate parsed shape for the Anthropic / GLM error JSON.
+/// Intermediate parsed shape for the Anthropic / GLM / OpenAI error JSON.
 ///
 /// The GLM compatibility layer wraps things inconsistently — sometimes
 /// `{"error": {"type": "...", "message": "..."}}`, sometimes
-/// `{"type": "error", "error": {"type": "...", "message": "..."}}`. This
+/// `{"type": "error", "error": {"type": "...", "message": "..."}}`. OpenAI
+/// uses the same outer shape but its discriminator field is `code`
+/// (e.g. `"invalid_api_key"`, `"rate_limit_exceeded"`) rather than
+/// `type` (`"authentication_error"`, `"rate_limit_error"`). This
 /// struct tolerates both with `Option` fields and we try multiple lookup
 /// paths in [`classify_error_response`].
 #[derive(Debug, Default, serde::Deserialize)]
@@ -76,18 +79,81 @@ struct RawErrorInner {
     #[serde(default)]
     r#type: Option<String>,
     #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
     message: Option<String>,
 }
 
 /// Normalize an HTTP error response into an [`LlmError`]. Body is the raw
 /// response text (may be non-JSON — we fall back gracefully).
+///
+/// The keyword match looks at both `error.type` (Anthropic / GLM
+/// convention) and `error.code` (OpenAI convention). The PR3 OpenAI
+/// adapter's error bodies look like
+/// `{"error": {"code": "invalid_api_key", "message": "..."}}` and
+/// should classify as [`LlmError::Auth`]. PR1/PR2's Anthropic / GLM
+/// tests use `error.type` and continue to pass.
 pub fn classify_error_response(status: u16, body: &str) -> LlmError {
     let parsed: RawErrorBody = serde_json::from_str(body).unwrap_or_default();
-    let inner_type = parsed
+
+    // The two upstream conventions are:
+    // - Anthropic / GLM:  `error.type` carries the discriminator
+    //   (e.g. "authentication_error", "rate_limit_error").
+    // - OpenAI: `error.code` carries the discriminator
+    //   (e.g. "invalid_api_key", "rate_limit_exceeded"), and
+    //   `error.type` is a literal "error" that is NOT a
+    //   discriminator.
+    //
+    // We pull both fields and use the first one whose value
+    // matches a classification keyword. The fallback chain is:
+    //   1. `error.type` if it contains a keyword
+    //   2. `error.code` if it contains a keyword
+    //   3. top-level `type` (Anthropic sometimes wraps here)
+    //   4. `error.type` verbatim (no keyword match — final fallback
+    //      so the caller still sees a useful string in `message`)
+    let err_type = parsed
         .error
         .as_ref()
-        .and_then(|e| e.r#type.clone())
-        .or(parsed.r#type.clone());
+        .and_then(|e| e.r#type.clone());
+    let err_code = parsed
+        .error
+        .as_ref()
+        .and_then(|e| e.code.clone());
+    let top_type = parsed.r#type.clone();
+
+    let keyword_in = |s: &Option<String>| {
+        s.as_deref()
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    let has_keyword = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        s.contains("authentication")
+            || s.contains("new_api_error")
+            || s.contains("invalid_api_key")
+            || s.contains("rate_limit")
+            || s.contains("invalid_request")
+    };
+
+    let mut chosen: Option<String> = None;
+    for cand in [&err_type, &err_code, &top_type] {
+        let s = keyword_in(cand);
+        if has_keyword(&s) {
+            chosen = Some(s);
+            break;
+        }
+    }
+    // Final fallback: take any of the three verbatim so the
+    // error message carries SOMETHING (e.g. OpenAI's literal
+    // "error" string still surfaces).
+    let keyword = chosen.unwrap_or_else(|| {
+        err_type
+            .or(err_code)
+            .or(top_type)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    });
+
     let inner_message = parsed
         .error
         .as_ref()
@@ -95,9 +161,10 @@ pub fn classify_error_response(status: u16, body: &str) -> LlmError {
         .or(parsed.message.clone())
         .unwrap_or_else(|| body.chars().take(200).collect());
 
-    let keyword = inner_type.as_deref().unwrap_or("").to_ascii_lowercase();
-
-    let classified = if keyword.contains("authentication") || keyword.contains("new_api_error") {
+    let classified = if keyword.contains("authentication")
+        || keyword.contains("new_api_error")
+        || keyword.contains("invalid_api_key")
+    {
         LlmError::Auth(inner_message)
     } else if keyword.contains("rate_limit") {
         LlmError::RateLimit(inner_message)

@@ -737,3 +737,167 @@ Migrated the agent runtime onto per-session git worktrees (libgit2 vendored; XDG
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Multi-model PR1: data layer (3 tables + 10 IPC + seed)
+
+**Date**: 2026-06-09
+**Task**: Multi-model PR1: data layer (3 tables + 10 IPC + seed)
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR1 of 06-08-multi-model-llm-provider-planning — data layer only (no UI / no LLM client). 3 new SQLite tables (providers / models / app_config), 8 CRUD functions, 10 IPC commands, idempotent seed (2 providers + 4 models + default_model_id, backfills sessions.model_id for legacy rows). 11 new unit tests, 208 total green. trellis-check PASS verdict. Spec updates: database-guidelines.md filled (sqlx patterns, soft-FK, denormalized-list, new-catalog checklist) + llm-contract.md 'Scenario: Multi-Provider Abstraction' (7 sections + 4 design decisions). Bypass note: trellis-implement sub-agent dispatch skipped (path A recovery via in-session code + trellis-check verification). Followups: PR2 Anthropic adapter / PR3 OpenAI adapter / PR4 Settings modal UI.
+[End of Session 19]
+- None - task complete
+
+[Append new session:]
+
+## Session 20: step 4: multi-model PR2 — Anthropic adapter (Provider trait + catalog dispatch)
+
+**Date**: 2026-06-09
+**Task**: step 4: multi-model PR2 — Anthropic adapter
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR2 of 06-08-multi-model-llm-provider-planning — Anthropic adapter only (OpenAI 留 PR3,UI 留 PR4)。行为完全不变,前端零改动,纯后端内部架构重排。删 `app/src-tauri/src/llm/client.rs` (582 行) + 新建 `app/src-tauri/src/llm/provider/{mod.rs,anthropic.rs}` (1042 行) + 改 `lib.rs` catalog 解析 + 3 种 pre-flight 文案 + `get_llm_config` 走 catalog 返 display_name。10 个新测试(7 provider + 3 anthropic),218 cargo test / pnpm build 全过 0 warning。trellis-implement + trellis-check 双 sub-agent dispatch 路径(没走 PR1 的 path A bypass)。check 给 PASS verdict 0 L1 / 1 L2 (docs/IMPLEMENTATION.md 状态更新,已修) / 3 L3 (留 PR4:create_session 写 model_id / SessionRow 字段 / spec 措辞微调 1 处已修)。commit 0a787ef (7 files +1810/-630)。
+
+### Main Changes
+
+- **Provider 抽象** (`app/src-tauri/src/llm/provider/mod.rs` 新建 328 行): `Provider` trait (`send` + `capabilities` + `protocol`) + `ProviderCapabilities` + `ProviderProtocol` re-export + `build_provider` 工厂 (anthropic / openai NotImplemented / UnknownProtocol) + `ProviderBuildError` + 7 测试
+- **Anthropic adapter** (`app/src-tauri/src/llm/provider/anthropic.rs` 新建 714 行): `AnthropicProvider::new(LlmConfig)` + `impl Provider`;私有 `LlmConfig`(经 `llm` mod re-export);BlockState 状态机 + SSE 解析 + thinking 4 块(GLM 兼容 / thinking 签名 / display summarized / orphan tool_use) 全保留;4 个 client.rs 单元测试 1:1 搬过来;3 个新测试(Send+Sync / protocol() 报 Anthropic / factory 端到端)
+- **删** `app/src-tauri/src/llm/client.rs` (582 行,全搬)
+- **模块导出** (`app/src-tauri/src/llm/mod.rs` 改): 删 `pub mod client;` → `pub mod provider;`;re-export 调整为 `AnthropicProvider` / `Provider` / `ProviderCapabilities` / `ProviderProtocol` / `ChatEvent` / `ChatMessage` 等
+- **chat 命令 catalog 解析** (`app/src-tauri/src/lib.rs` +283 行): `resolve_chat_provider()` 函数在 spawn 闭包外 (pre-flight 失败不注册 cancellation token) → 查 `app_config.default_model_id` → `db::list_models` join providers → 构造 `Box<dyn Provider>` → 3 种 pre-flight 文案 (api_key 空 → Auth / model 找不到 → InvalidRequest / provider 找不到 → InvalidRequest) → 删 `is_unconfigured` 旧 check → `chat_stream_with_tools` 调用改 `provider.send`;agent loop 20 turn 复用同一 provider 实例
+- **`get_llm_config` IPC** (`app/src-tauri/src/lib.rs:212`): 从 `state.config` (env) 切到 catalog 读 (`default_model_id` → `ModelRow.display_name` + `ProviderRow.base_url` + `configured = !api_key.is_empty()`);前端契约 shape `{model, baseUrl, configured}` 保持
+- **spec section** (`.trellis/spec/backend/llm-contract.md` +459 行): "Scenario: Provider trait + Anthropic dispatch (PR2)" 段 — wire shape / signatures / 4 设计决策 (LlmConfig 私有 / Pin<Box<dyn Stream>> / Send+Sync / factory 唯一 chat 路径 builder) / catalog dispatch 流程图 / 3 种 pre-flight 文案
+- **docs 状态** (`docs/IMPLEMENTATION.md`): §2.7 步骤 6 加 "路线图外进度 2026-06-09" 段;§3 最后更新日期刷到 2026-06-09;表格加 PR1/PR2 条目
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a787ef` | feat(llm): PR2 Anthropic adapter (Provider trait + catalog dispatch) |
+
+### Testing
+
+- [OK] cargo test --lib: 218/218 pass (208 baseline + 10 new PR2)
+- [OK] cargo check (lib + tests): 0 warning
+- [OK] pnpm build (vue-tsc + vite): clean
+- [OK] trellis-check PASS verdict: 0 L1 / 1 L2 (已修 docs/IMPLEMENTATION.md 状态) / 3 L3 (1 已修 spec 措辞, 2 留 PR4)
+- [SKIP] cargo clippy: blocked by homebrew/rustup toolchain mismatch (pre-existing 环境问题)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- PR3: OpenAI adapter + 跨协议 capability-aware 降级 (Chat Completions 协议 + reasoning_content 映射 + WireMessage 中间层)
+- PR4: UI Settings modal (Providers / Models / Default tabs) + StatusBar model dropdown + 删 ChatPanel model chip + 修 create_session 写 sessions.model_id
+[End of Session 20]
+- None - task complete
+
+[Append new session:]
+
+## Session 21: step 4: multi-model PR3 — OpenAI adapter + 跨协议 WireMessage
+
+**Date**: 2026-06-09
+**Task**: step 4: multi-model PR3 — OpenAI adapter + 跨协议
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR3 of 06-08-multi-model-llm-provider-planning — OpenAI Chat Completions streaming adapter + 跨协议 WireMessage 中间层 + 能力降级。新建 `app/src-tauri/src/llm/provider/wire.rs` (950 行,16 测试) + `app/src-tauri/src/llm/provider/openai.rs` (1049 行,22 测试);改 `anthropic.rs` 走 wire 对称(签名 1:1 保留);`error.rs` 扩展读 `error.code`;改 `build_provider` openai 分支返真 provider。check 找到 1 L1 (Anthropic signature 在 wire round-trip 丢)并自修 + 加 2 regression tests。最终 258 cargo test pass / pnpm build clean / 0 warning。commit 9395418 (9 files +3039/-50)。trellis-implement + trellis-check 双 sub-agent dispatch 路径(check 找的 L1 是 sub-agent 自修的)。补 docs 4 处(IMPLEMENTATION / HACKING-llm / BACKLOG / spec llm-contract.md)。
+
+### Main Changes
+
+- **WireMessage 中间层** (`app/src-tauri/src/llm/provider/wire.rs` 新建 950 行): `WireRequest` / `WireMessage` / `WireBlock` (Text / Reasoning / Signature / RedactedThinking / ToolUse / ToolResult) / `WireTool` / `WireCapabilities` + 4 个纯函数 (`chat_request_to_wire` / `strip_unsupported` / `wire_messages_to_chat_messages` / `wire_block_to_chat_event` / `wire_tools_to_tool_defs`) + 16 单元测试
+- **OpenAIProvider** (`app/src-tauri/src/llm/provider/openai.rs` 新建 1049 行): `OpenAIConfig` (含 reasoning_effort) + `OpenAIProvider` impl `Provider` trait;Chat Completions streaming (`POST /v1/chat/completions` + `Bearer` auth);`ToolCallBuf` HashMap per `tool_call_index` 处理并行多 tool call;`[DONE]` 哨兵防御;OpenAI-shape HTTP body builder;5 类 LlmError 错误分类(扩展读 `error.code`);22 单元测试
+- **Anthropic 对称走 wire** (`app/src-tauri/src/llm/provider/anthropic.rs` +102 行): `impl Provider for AnthropicProvider::send` 改为 `ChatRequest → WireRequest → strip(no-op) → inverse → ChatRequest → legacy chat_stream_with_tools`;新增 2 个 round-trip regression tests 锁 1:1 不变;PR2 4 个继承测试 0 改全过
+- **错误分类扩展** (`app/src-tauri/src/llm/error.rs` +83 行): `classify_error_response` 读 `error.type` (Anthropic/GLM) + `error.code` (OpenAI) 双字段;新 `invalid_api_key` 关键词加 Auth 分支;7 个原测试不动
+- **build_provider 工厂** (`app/src-tauri/src/llm/provider/mod.rs` +56 行): openai 分支从 `NotImplemented` 替换为 `Ok(Box::new(OpenAIProvider::new(OpenAIConfig {...})))`;`WireCapabilities` 从 `model_row` 派生;NotImplemented 分支保留作 forward-compat reserved (标 `#[allow(dead_code)]`)
+- **降级规则** (in-memory,DB 不动):
+  - `Reasoning` block → target `supports_thinking || supports_reasoning_effort` 保留,否则丢
+  - `Signature` / `RedactedThinking` → 仅 Anthropic + `supports_thinking` 保留,OpenAI 丢
+  - `ToolUse` / `ToolResult` / `Text` → 全部保留
+  - 切回原 model 时 thinking 块从 DB 完整读回(无持久化降级)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9395418` | feat(llm): PR3 OpenAI adapter + 跨协议 WireMessage |
+
+### Testing
+
+- [OK] cargo test --lib: 258/258 pass (218 baseline + 38 wire/openai + 2 round-trip regression)
+- [OK] cargo check (lib + tests): 0 warning
+- [OK] pnpm build (vue-tsc + vite): clean
+- [OK] trellis-check PASS verdict: 1 L1 (Anthropic signature round-trip 丢 — sub-agent 自修 + 2 regression tests) / 0 L2 / 3 L3 留 OOS
+- [SKIP] cargo clippy: blocked by homebrew/rustup toolchain mismatch (pre-existing 环境问题)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- PR4: UI Settings modal (Providers / Models / Default tabs) + StatusBar model dropdown + 删 ChatPanel model chip + 修 create_session 写 sessions.model_id + SessionRow 加 `model_id: Option<String>` 字段
+- 远期 follow-up: max_completion_tokens 字段 (o1+ 模型) / parallel_tool_calls 显式 / api_key redaction
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f9c5648` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 20: PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构
+
+**Date**: 2026-06-09
+**Task**: PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR4 是 multi-model 多 LLM provider 切换的最后一个 PR。完成 reka-ui 升级 1.0.0-alpha → 2.9.9；后端新增 update_session_model_id + test_provider 两个 IPC；前端新建 useProvidersStore / useModelsStore，重构 useConfigStore（model/baseUrl/configured 改为 catalog 派生 computed）；新建 SettingsModal（4 组件：shell + ProvidersTab + ModelsTab + DefaultTab，含 Test 按钮 + API Key 掩码）；StatusBar 改造为左下齿轮 + 右下 provider 分组 model dropdown；ChatPanel 删除 model chip。trellis-check 修 4 个 bug（latencyMs 字段名、cog 图标、test_provider 超时、doc comment）。261 cargo tests + vue-tsc strict + vite build 全部通过。归档 PR2+PR3+PR4 三个任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb00812` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

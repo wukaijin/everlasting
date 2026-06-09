@@ -38,8 +38,8 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use llm::{
-    chat_stream_with_tools, ChatEvent, ChatMessage, ContentBlock, LlmConfig, LlmErrorCategory,
-    MessageContent, Role, ToolDef,
+    ChatEvent, ChatMessage, ContentBlock, LlmConfig, LlmErrorCategory, MessageContent, Role,
+    ToolDef,
 };
 use tools::read_guard::ReadGuard;
 use tools::ToolContext;
@@ -208,14 +208,72 @@ struct PublicLlmConfig {
 // Tauri commands — config
 // ---------------------------------------------------------------------------
 
+/// Tauri command: return the user's effective LLM config for the
+/// frontend's `useConfigStore`.
+///
+/// PR2 (multi-model): the source of truth is the catalog
+/// (`app_config.default_model_id` → `models` → `providers`), not
+/// the env path. Env (`LlmConfig::from_env`) is now only the
+/// cold-start fallback (kept around in `AppState::config`); this
+/// IPC reads the catalog so the frontend's `model` field always
+/// reflects the user's actively-selected model. The `model` field
+/// is the catalog `display_name` (see D1 in the PR2 PRD) so the
+/// StatusBar dropdown and the store agree.
+///
+/// Fallback: if the catalog is empty / `default_model_id` is unset
+/// / the model row was deleted / the provider was deleted, the
+/// response shape is preserved with `model = ""`,
+/// `base_url = ""`, `configured = false` — the frontend's existing
+/// "no model configured" warning renders as before.
 #[tauri::command]
-fn get_llm_config(state: State<'_, Arc<AppState>>) -> PublicLlmConfig {
-    let c = &state.config;
-    PublicLlmConfig {
-        model: c.model.clone(),
-        base_url: c.base_url.clone(),
-        configured: !c.is_unconfigured(),
-    }
+async fn get_llm_config(state: State<'_, Arc<AppState>>) -> Result<PublicLlmConfig, String> {
+    // Resolve the default model id from app_config. The
+    // `get_default_model` Tauri command duplicates this logic
+    // and returns the full `ModelWithProvider` row; we re-read
+    // here so this IPC stays a thin read of the catalog without
+    // a second helper function.
+    let default_id = db::get_config_value(&state.db, "default_model_id")
+        .await
+        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+    let Some(model_id) = default_id else {
+        return Ok(PublicLlmConfig {
+            model: String::new(),
+            base_url: String::new(),
+            configured: false,
+        });
+    };
+    let models = db::list_models(&state.db)
+        .await
+        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+    let Some(mwp) = models.into_iter().find(|m| m.model.id == model_id) else {
+        return Ok(PublicLlmConfig {
+            model: String::new(),
+            base_url: String::new(),
+            configured: false,
+        });
+    };
+    // Look up the parent provider to get its base_url + api_key.
+    // `list_models` denormalizes `provider_display_name` +
+    // `provider_protocol` but NOT `provider.api_key` (api_key
+    // should never leave the backend except via a dedicated
+    // command, and we don't want a frontend-readable field
+    // accidentally containing the secret). We re-read the
+    // provider row here.
+    let providers = db::list_providers(&state.db)
+        .await
+        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+    let provider = providers
+        .into_iter()
+        .find(|p| p.id == mwp.model.provider_id);
+    let (base_url, configured) = match provider {
+        Some(p) => (p.base_url, !p.api_key.is_empty()),
+        None => (String::new(), false),
+    };
+    Ok(PublicLlmConfig {
+        model: mwp.model.display_name,
+        base_url,
+        configured,
+    })
 }
 
 /// Return the user's home directory (the path the frontend will
@@ -237,6 +295,255 @@ fn get_home_dir(app: AppHandle) -> Option<String> {
         .home_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands — providers / models / default model (PR1 of multi-model)
+// ---------------------------------------------------------------------------
+//
+// Wire shape (camelCase on the JS side per Tauri's default):
+//   - ProviderRow:    { id, protocol, displayName, baseUrl, apiKey, ... }
+//   - ModelRow:       { id, providerId, modelName, displayName, maxTokens,
+//                       thinkingEffort, supportsThinking, contextWindow, ... }
+//   - ModelWithProvider: ModelRow + { providerDisplayName, providerProtocol }
+//
+// Args follow the same convention: snake_case in Rust, camelCase from JS.
+
+#[tauri::command]
+async fn list_providers(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::ProviderRow>, String> {
+    db::list_providers(&state.db)
+        .await
+        .map_err(|e| format!("list_providers failed: {}", e))
+}
+
+#[tauri::command]
+async fn add_provider(
+    state: State<'_, Arc<AppState>>,
+    protocol: String,
+    display_name: String,
+    base_url: String,
+    api_key: String,
+) -> Result<db::ProviderRow, String> {
+    db::create_provider(&state.db, &protocol, &display_name, &base_url, &api_key)
+        .await
+        .map_err(|e| format!("add_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn update_provider(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    protocol: String,
+    display_name: String,
+    base_url: String,
+    api_key: String,
+) -> Result<Option<db::ProviderRow>, String> {
+    db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, &api_key)
+        .await
+        .map_err(|e| format!("update_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+    db::delete_provider(&state.db, &id)
+        .await
+        .map_err(|e| format!("delete_provider failed: {}", e))
+}
+
+#[tauri::command]
+async fn list_models(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::ModelWithProvider>, String> {
+    db::list_models(&state.db)
+        .await
+        .map_err(|e| format!("list_models failed: {}", e))
+}
+
+#[tauri::command]
+async fn add_model(
+    state: State<'_, Arc<AppState>>,
+    provider_id: String,
+    model_name: String,
+    display_name: String,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<String>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<db::ModelRow, String> {
+    db::create_model(
+        &state.db,
+        &provider_id,
+        &model_name,
+        &display_name,
+        max_tokens,
+        thinking_effort.as_deref(),
+        supports_thinking,
+        context_window,
+    )
+    .await
+    .map_err(|e| format!("add_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn update_model(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    provider_id: String,
+    model_name: String,
+    display_name: String,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<String>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<Option<db::ModelRow>, String> {
+    db::update_model(
+        &state.db,
+        &id,
+        &provider_id,
+        &model_name,
+        &display_name,
+        max_tokens,
+        thinking_effort.as_deref(),
+        supports_thinking,
+        context_window,
+    )
+    .await
+    .map_err(|e| format!("update_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn delete_model(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+    db::delete_model(&state.db, &id)
+        .await
+        .map_err(|e| format!("delete_model failed: {}", e))
+}
+
+#[tauri::command]
+async fn get_default_model(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<db::ModelWithProvider>, String> {
+    let id = match db::get_config_value(&state.db, "default_model_id").await {
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(format!("get_default_model failed: {}", e)),
+    };
+    let models = db::list_models(&state.db)
+        .await
+        .map_err(|e| format!("get_default_model failed: {}", e))?;
+    Ok(models.into_iter().find(|m| m.model.id == id))
+}
+
+#[tauri::command]
+async fn set_default_model(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+) -> Result<(), String> {
+    db::set_config_value(&state.db, "default_model_id", &model_id)
+        .await
+        .map_err(|e| format!("set_default_model failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
+// PR4 of multi-model task: per-session model override + test_provider
+// ---------------------------------------------------------------------------
+
+/// Update the per-session model override. The frontend's StatusBar
+/// dropdown calls this when the user selects a different model for a
+/// specific session. The value is stored as `sessions.model_id`
+/// (soft FK to `models.id`). The chat command's `resolve_chat_provider`
+/// reads this column and falls back to the global default when NULL.
+#[tauri::command]
+async fn update_session_model_id(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    model_id: String,
+) -> Result<(), String> {
+    db::update_session_model_id(&state.db, &session_id, &model_id)
+        .await
+        .map_err(|e| format!("update_session_model_id failed: {}", e))
+}
+
+/// Test a provider's connectivity by sending a lightweight request
+/// with the given `base_url`, `api_key`, and `protocol`. Returns
+/// a JSON object with `success`, `latencyMs`, and optional `error`.
+///
+/// - Anthropic: `POST {base_url}/v1/messages` with `max_tokens=1`
+///   and a minimal user message. A 200 means success; 401/403 means
+///   auth failure.
+/// - OpenAI: `GET {base_url}/models` with `Authorization: Bearer`.
+///   A 200 means success; 401 means auth failure.
+///
+/// The function does NOT access `AppState` — it only makes an HTTP
+/// request to validate the credentials, keeping the test isolated
+/// from the app's DB and LLM dispatch.
+#[tauri::command]
+async fn test_provider(
+    base_url: String,
+    api_key: String,
+    protocol: String,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {}", e))?;
+    let start = std::time::Instant::now();
+
+    let (success, error) = match protocol.as_str() {
+        "anthropic" => {
+            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            let resp = client
+                .post(&url)
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {}", e))?;
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (false, Some(format!("HTTP {}: {}", status, body_text.chars().take(200).collect::<String>())))
+            }
+        }
+        "openai" => {
+            let url = format!("{}/models", base_url.trim_end_matches('/'));
+            let resp = client
+                .get(&url)
+                .header("authorization", format!("Bearer {}", api_key))
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {}", e))?;
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (false, Some(format!("HTTP {}: {}", status, body_text.chars().take(200).collect::<String>())))
+            }
+        }
+        _ => {
+            (false, Some(format!("unsupported protocol: {}", protocol)))
+        }
+    };
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    Ok(serde_json::json!({
+        "success": success,
+        "latencyMs": latency_ms,
+        "error": error,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -965,7 +1272,13 @@ async fn chat(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let config = state.config.clone();
+    // PR2 (multi-model): the chat command no longer reads
+    // `state.config` for LLM dispatch. Instead we resolve a
+    // `Box<dyn Provider>` from the catalog (default model →
+    // provider) at the start of every chat invocation. The
+    // `state.config` field is preserved on `AppState` for
+    // cold-start fallback / `get_llm_config` (which itself
+    // was switched to catalog in PR2 — see its impl).
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
     let cancellations = state.cancellations.clone();
@@ -974,17 +1287,44 @@ async fn chat(
     let rid = request_id;
     let app_handle = app.clone();
 
-    if config.is_unconfigured() {
-        let payload = ChatEventPayload {
-            request_id: rid,
-            event: ChatEvent::Error {
-                message: "ANTHROPIC_API_KEY 未设置,请在启动应用前配置环境变量".to_string(),
-                category: LlmErrorCategory::Auth,
-            },
-        };
-        app.emit("chat-event", payload).map_err(|e| e.to_string())?;
-        return Ok(());
-    }
+    // PR2 pre-flight: resolve the catalog → provider. The
+    // failure modes map 1:1 to PRD §Q2's locked-in user-facing
+    // messages, surfaced as `ChatEvent::Error` so the frontend
+    // can render the same toast path it uses for other LLM
+    // errors. We do this BEFORE registering the cancellation
+    // token + session_active_request entry because a pre-flight
+    // failure is synchronous (no LLM call has started), so
+    // there is nothing to cancel.
+    let resolved = match resolve_chat_provider(&db).await {
+        Ok(r) => r,
+        Err(err) => {
+            let (msg, category) = err.user_message_and_category();
+            tracing::warn!(
+                request_id = %rid,
+                session_id = %session_id,
+                error = %msg,
+                "chat: pre-flight failed (catalog)"
+            );
+            let payload = ChatEventPayload {
+                request_id: rid,
+                event: ChatEvent::Error {
+                    message: msg,
+                    category,
+                },
+            };
+            app.emit("chat-event", payload).map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    };
+    let provider: Box<dyn llm::Provider> = resolved.provider;
+    tracing::info!(
+        request_id = %rid,
+        session_id = %session_id,
+        model = %resolved.model_display_name,
+        provider = %resolved.provider_display_name,
+        protocol = ?provider.protocol(),
+        "chat: provider resolved"
+    );
 
     // Register a cancellation token for this request. The frontend's
     // Stop button calls `cancel_chat(rid)` which fetches this token
@@ -1209,12 +1549,18 @@ async fn chat(
         }
 
         for turn in 1..=MAX_TURNS {
-            let mut stream = Box::pin(chat_stream_with_tools(
-                config.clone(),
+            // PR2: dispatch through the catalog-resolved provider
+            // rather than the legacy `chat_stream_with_tools`
+            // free function. The provider was constructed once
+            // before the spawn (above), so every turn of the
+            // 20-turn agent loop uses the same `Box<dyn Provider>`
+            // — no per-turn protocol re-resolution, and the
+            // user's protocol choice is stable across turns.
+            let mut stream = provider.send(
                 Some(system_prompt.clone()),
                 messages.clone(),
                 tool_defs.clone(),
-            ));
+            );
 
             // Accumulate text, tool_calls, thinking blocks, and
             // redacted_thinking payloads from this LLM turn.
@@ -1777,6 +2123,144 @@ Session context:\n\
     )
 }
 
+/// PR2 (multi-model) catalog resolution result. The chat command
+/// calls [`resolve_chat_provider`] at the start of every chat
+/// invocation to obtain the `Box<dyn Provider>` to use for the
+/// 20-turn agent loop. The three error variants map 1:1 to the
+/// pre-flight error messages the PR2 PRD §Q2 locked in (see
+/// `PreFlightError::auth_message` / `invalid_request_message`).
+struct ResolvedChatProvider {
+    provider: Box<dyn llm::Provider>,
+    model_display_name: String,
+    provider_display_name: String,
+}
+
+#[derive(Debug)]
+enum PreFlightError {
+    /// The chosen default model is missing (no `default_model_id`
+    /// in `app_config`, or the catalog has no matching `models` row).
+    /// PRD Q2 #2: "没有可用 model,请到 Settings 选 default model".
+    NoModel,
+    /// The chosen default model points at a provider row that was
+    /// deleted. PRD Q2 #3: "default model 指向的 provider 已被删除,
+    /// 请到 Settings 重选".
+    ProviderMissing,
+    /// The chosen provider's `api_key` is empty. PRD Q2 #1:
+    /// "请到 Settings 填 {provider_display_name} 的 api_key".
+    EmptyApiKey { provider_display_name: String },
+    /// The dispatch in `build_provider` refused the protocol
+    /// (e.g. `openai` not implemented yet, or an unknown protocol
+    /// string from a forward-compat DB write).
+    BuildFailed(llm::ProviderBuildError),
+}
+
+impl PreFlightError {
+    /// Return `(user_message, category)`. The user-facing message
+    /// follows the locked-in PRD §Q2 copy.
+    fn user_message_and_category(&self) -> (String, LlmErrorCategory) {
+        match self {
+            PreFlightError::NoModel => (
+                "没有可用 model,请到 Settings 选 default model".to_string(),
+                LlmErrorCategory::InvalidRequest,
+            ),
+            PreFlightError::ProviderMissing => (
+                "default model 指向的 provider 已被删除,请到 Settings 重选".to_string(),
+                LlmErrorCategory::InvalidRequest,
+            ),
+            PreFlightError::EmptyApiKey {
+                provider_display_name,
+            } => (
+                format!(
+                    "请到 Settings 填 {} 的 api_key",
+                    provider_display_name
+                ),
+                LlmErrorCategory::Auth,
+            ),
+            PreFlightError::BuildFailed(e) => (
+                format!("无法构造 LLM provider: {}", e),
+                LlmErrorCategory::InvalidRequest,
+            ),
+        }
+    }
+}
+
+/// PR2 catalog resolution. Reads the default model id from
+/// `app_config`, finds the corresponding `ModelWithProvider` row,
+/// looks up the parent provider's `api_key` (for the pre-flight
+/// check), and constructs a `Box<dyn Provider>` via
+/// [`llm::build_provider`].
+///
+/// Returns one of the four [`PreFlightError`] variants on
+/// failure. The `chat` command turns the first three into the
+/// locked-in PRD §Q2 user-facing messages; the fourth is a
+/// generic dispatcher error (e.g. OpenAI not implemented yet)
+/// wrapped as `InvalidRequest`.
+///
+/// Resolved once per `chat` invocation. All 20 turns of the
+/// agent loop use the same provider instance so the wire
+/// protocol is consistent within a single chat (the user
+/// can't change protocol mid-loop — they have to start a new
+/// chat for that).
+async fn resolve_chat_provider(
+    db: &SqlitePool,
+) -> Result<ResolvedChatProvider, PreFlightError> {
+    // 1. Find the default model id.
+    let default_id = db::get_config_value(db, "default_model_id")
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "resolve_chat_provider: get_config_value failed");
+            PreFlightError::NoModel
+        })?
+        .ok_or(PreFlightError::NoModel)?;
+
+    // 2. Find the matching model row.
+    let models = db::list_models(db).await.map_err(|e| {
+        tracing::error!(error = %e, "resolve_chat_provider: list_models failed");
+        PreFlightError::NoModel
+    })?;
+    let mwp = models
+        .into_iter()
+        .find(|m| m.model.id == default_id)
+        .ok_or(PreFlightError::NoModel)?;
+
+    // 3. Find the parent provider row. The denormalized
+    //    `ModelWithProvider` carries `provider_display_name` +
+    //    `provider_protocol` but NOT `api_key` (the secret stays
+    //    server-side). We re-read via `list_providers` to get
+    //    `api_key` for the pre-flight check.
+    let providers = db::list_providers(db).await.map_err(|e| {
+        tracing::error!(error = %e, "resolve_chat_provider: list_providers failed");
+        PreFlightError::ProviderMissing
+    })?;
+    let provider_row = providers
+        .into_iter()
+        .find(|p| p.id == mwp.model.provider_id)
+        .ok_or(PreFlightError::ProviderMissing)?;
+
+    // 4. Pre-flight: empty api_key. The factory would still
+    //    succeed (it doesn't check), but the resulting
+    //    `LlmConfig` would 401 on the first request. Better to
+    //    reject here with a clear message.
+    if provider_row.api_key.is_empty() {
+        return Err(PreFlightError::EmptyApiKey {
+            provider_display_name: provider_row.display_name.clone(),
+        });
+    }
+
+    // 5. Build the provider. `build_provider` itself can fail
+    //    (OpenAI / unknown protocol), in which case we surface
+    //    the typed `ProviderBuildError` for the chat command to
+    //    wrap as an `InvalidRequest` IPC error.
+    let provider = llm::build_provider(&provider_row, &mwp.model)
+        .map_err(PreFlightError::BuildFailed)?;
+
+    Ok(ResolvedChatProvider {
+        provider,
+        model_display_name: mwp.model.display_name.clone(),
+        provider_display_name: provider_row.display_name.clone(),
+    })
+}
+
 /// Persist the final cwd of a turn. Called once at turn end (not after
 /// every shell call). We compare against the DB-stored value to avoid
 /// a no-op write when the agent stayed put.
@@ -1875,6 +2359,18 @@ pub fn run() {
             cancel_chat,
             get_llm_config,
             get_home_dir,
+            list_providers,
+            add_provider,
+            update_provider,
+            delete_provider,
+            list_models,
+            add_model,
+            update_model,
+            delete_model,
+            get_default_model,
+            set_default_model,
+            update_session_model_id,
+            test_provider,
             list_sessions,
             create_session,
             load_session,
@@ -2193,6 +2689,7 @@ mod tests {
             worktree_path: worktree_path.map(str::to_string),
             worktree_state,
             last_worktree_path: None,
+            model_id: None,
         }
     }
 

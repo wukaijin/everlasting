@@ -105,6 +105,9 @@ export interface SessionSummary {
   /** Path of the most recently detached worktree. Used to
    *  re-attach or just for display in the "上次 worktree" chip. */
   last_worktree_path: string | null;
+  /** PR4 of multi-model: per-session model override. `null` when the
+   *  session uses the global default model. Soft FK to `models.id`. */
+  model_id: string | null;
 }
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the

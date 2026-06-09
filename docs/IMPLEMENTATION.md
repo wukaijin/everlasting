@@ -128,6 +128,12 @@
 - 加 Ollama provider 切换(纯本地,省钱)
 - **可交付物**:工具集对外开放;模型随便切
 
+**路线图外进度(2026-06-09 更新)**:多 Provider 部分已切到独立 `06-08-multi-model-llm-provider-planning` 任务(详见 `.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md`)。已完成:
+- **PR1** — data layer:3 表 `providers` / `models` / `app_config` + 8 CRUD + 10 IPC + seed(2026-06-09,commit `f9c5648`)
+- **PR2** — Anthropic adapter:`Provider` trait + `AnthropicProvider` impl + catalog dispatch(2026-06-09,commit `0a787ef`)
+- **PR3** — OpenAI adapter + 跨协议:`OpenAIProvider` + `provider::wire` WireMessage 中间层 + `strip_unsupported` 静默降级;Anthropic 路径 1:1 保留(本 commit)
+- 步骤 6 路线图状态未变(MCP 仍 v1 未开始,多 Provider 部分继续在独立任务推进)
+
 ### 2.8 步骤 7 — 打磨与文档 [跨阶段]
 
 - Token 用量统计
@@ -146,7 +152,7 @@
 
 ## 3. 待办与下一步
 
-**最后更新**:2026-06-07(步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI bug 修复)
+**最后更新**:2026-06-09(步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI bug 修复 + 工具集扩展批次 + step 4 follow-up worktree 解耦 + **多 Provider 计划 PR1 data layer(`f9c5648`)+ PR2 Anthropic adapter(`0a787ef`)+ PR3 OpenAI adapter + 跨协议 WireMessage(本 commit)**)
 
 **下一步**(候选,三选一):
 - 跳过 3b-2 继续主线 → **[MVP 步骤 4 — Git 集成](#25-步骤-4--git-集成-mvp)**(worktree + auto commit)
@@ -166,6 +172,9 @@
 | — | **路线图外**:6 UI/状态 bug 修复(顶栏 + Markdown 表格 + Tauri 2 权限 + streamController 架构) | 额外 | ✅ 已完成(2026-06-07,commits `bd5ea7b` + `abde429` + `bf9b35b`) |
 | — | **路线图外**:工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard 3 道 check + Bash 30K 落盘 + read_file `cat -n` 行号) | 额外 | ✅ 已完成(2026-06-07,1 个 `feat(tools):` commit) |
 | — | **路线图外**:step 4 follow-up — worktree 解耦(opt-in attach / detach / delete + 三态状态机 + LLM 透明度 + 安全网) | 额外 | ✅ 已完成(2026-06-08) |
+| — | **路线图外**:多 Provider 计划 PR1 data layer(3 表 + 8 CRUD + 10 IPC + seed) | 额外 | ✅ 已完成(2026-06-09,commit `f9c5648`) |
+| — | **路线图外**:多 Provider 计划 PR2 Anthropic adapter(`Provider` trait + `AnthropicProvider` impl + catalog dispatch,行为完全不变) | 额外 | ✅ 已完成(2026-06-09,commit `0a787ef`) |
+| — | **路线图外**:多 Provider 计划 PR3 OpenAI adapter + 跨协议 WireMessage(`OpenAIProvider` + `provider::wire` + `strip_unsupported` 静默降级;Anthropic 1:1 保留) | 额外 | ✅ 已完成(2026-06-09) |
 | 3b-2 | 完整三栏 UI + rig-core 迁移 | MVP | ⏸ 暂缓 |
 | 4 | Git 集成(worktree + auto commit,改为 opt-in 手动 attach) | MVP | ⏸ 部分完成(worktree 解耦已落地,auto commit 仍 OOS) |
 | 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |

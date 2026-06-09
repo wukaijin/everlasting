@@ -444,6 +444,8 @@ preferred = "claude-sonnet-4"
 fallback = "claude-haiku-3.5"
 ```
 
+> 💡 **`role.model.preferred` / `fallback` 实施时引用 `.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/` 落地的 `providers` / `models` / `app_config.default_model_id` catalog**(PR1 `f9c5648` + PR2 `0a787ef` + PR3 即将 commit)。`role.model.preferred` 解析为 `ModelRow.model_name` 字符串,`fallback` 同理;若 model 行被删,fallback 走 `app_config.default_model_id` 兜底(catalog-first 跟 PR2 决议一致)。**本节不重复定义 catalog schema,详细 wire shape 见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction (PR1)" section**。
+
 **存储**:
 - 预定义:`.everlasting/roles/*.toml`(随 app 装)
 - 用户自定义:`~/.config/everlasting/roles/*.toml`

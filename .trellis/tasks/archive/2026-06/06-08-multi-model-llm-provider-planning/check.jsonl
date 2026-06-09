@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "实施完 PR2/PR3 后,check sub-agent 验证新 LLM 契约(Anthropic + OpenAI 双协议)是否符合 spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "验证 PR1-4 落点目录符合规范(llm/provider/anthropic.rs / llm/provider/openai.rs 等)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 PR1 的 providers/models/app_config 3 张表 + 迁移 + 外键符合 SQLx 约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 PR2/3 的 LlmError 变体 + PreFlightError 处理符合项目错误归一化规则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "PR1-3 完成后,check 跑 cargo clippy / cargo test,符合质量基线"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "PR4 验证 useConfigStore / useProvidersStore / useModelsStore 符合 state-management 规范,Send completion invalidation 不退化"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "PR4 验证 SettingsModal / StatusBar dropdown 符合 reka-ui 使用规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "PR4 验证 TS interface(Provider / Model)字段命名符合 snake_case 决议 + IPC arg camelCase 约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "PR4 验证 vitest + vue-tsc --noEmit 全绿"}
+{"file": "docs/HACKING-llm.md", "reason": "PR3 加 OpenAI 差异章节后,check 验证 4 个原坑 + 新增 OpenAI 坑(HACKING-llm 是否需要扩 '差异 5/6')"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "PR 收尾时验证路线图拆分(多 provider 独立步骤)+ 状态标记(未开始→进行中→完成)"}
+{"file": "docs/BACKLOG.md", "reason": "PR 收尾时验证 BACKLOG §4 多角色 引用更新正确"}
+{"file": "docs/TECH.md", "reason": "PR 收尾时验证 TECH.md 标注的 '多 provider 抽象本任务自研' 跟实际代码一致"}
+{"file": ".trellis/tasks/06-08-multi-model-llm-provider-planning/prd.md", "reason": "check sub-agent 拿最终 prd 当 spec 来对账,确认实现符合 5 条 ADR-lite + Acceptance Criteria"}

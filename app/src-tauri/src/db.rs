@@ -9,12 +9,23 @@
 //! - `messages`: one row per message, `content` is JSON-serialized
 //!   `Vec<ContentBlock>` so tool_use/tool_result/thinking round-trips
 //!   losslessly.
+//! - `providers` / `models` / `app_config` (PR1 of multi-model task):
+//!   user-managed LLM provider catalog. `providers` holds the
+//!   connection details (base_url + api_key per protocol); `models`
+//!   binds a model name to a provider with capability hints
+//!   (`supports_thinking`, `context_window`); `app_config` is a small
+//!   key/value store for global settings (currently only
+//!   `default_model_id`). `sessions.model_id` is a soft FK to
+//!   `models.id` — kept nullable so legacy rows from the pre-PR1 era
+//!   (`model TEXT` only) still load; the seed function backfills
+//!   `model_id` from `default_model_id` on first run.
 //!
 //! Schema is created idempotently by [`run_migrations`], so re-running
 //! the app or upgrading doesn't error out on existing tables. New
-//! columns for `sessions` (step 3b-1: `project_id`, `current_cwd`) are
-//! added via non-destructive `ALTER TABLE ... ADD COLUMN` so the
-//! upgrade from step 3a preserves every existing row.
+//! columns for `sessions` (step 3b-1: `project_id`, `current_cwd`; step 4:
+//! `worktree_path`; PR1 of multi-model: `model_id`) are added via
+//! non-destructive `ALTER TABLE ... ADD COLUMN` so the upgrade from
+//! any prior step preserves every existing row.
 //!
 //! The Auto-default project (id = `__default__`) backstops legacy
 //! sessions: any pre-3b-1 row gets `project_id = '__default__'`
@@ -23,7 +34,7 @@
 //! `docs/PROPOSAL-project-binding-and-top-tabs.md` §3.4.
 
 use chrono::Utc;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use uuid::Uuid;
@@ -36,6 +47,97 @@ impl Serialize for WorktreeState {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.as_str())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Provider / Model row types (PR1 of multi-model task)
+// ---------------------------------------------------------------------------
+
+/// LLM provider protocol. Maps to the wire format the LLM client
+/// speaks. PR1 ships `Anthropic` (Messages API) and `Openai` (Chat
+/// Completions); future protocols (Ollama, Gemini, …) extend this
+/// enum in step with `Provider` impls added under
+/// `app/src-tauri/src/llm/provider/`.
+///
+/// The enum + methods are intentionally unused in PR1 (PR1 only
+/// persists `protocol` as a TEXT column); the dispatch in PR2's
+/// `Provider` impls will pick them up. `#[allow(dead_code)]` keeps
+/// the lib build clean in the meantime.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderProtocol {
+    Anthropic,
+    Openai,
+}
+
+#[allow(dead_code)]
+impl ProviderProtocol {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+        }
+    }
+
+    /// Lenient parse for DB values. Unknown values fall back to
+    /// `Anthropic` so a future schema migration that adds a new
+    /// protocol doesn't crash an older binary reading a newer DB.
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "openai" => Self::Openai,
+            _ => Self::Anthropic,
+        }
+    }
+}
+
+/// A user-managed LLM provider entry. Multiple rows may share the
+/// same `protocol` (e.g. "Anthropic 官方" + "wukaijin 转发" both
+/// `protocol=anthropic`); the `display_name` is the user-facing
+/// label that disambiguates them in the UI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRow {
+    pub id: String,
+    pub protocol: String,
+    pub display_name: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A user-managed LLM model entry. Always bound to one
+/// `ProviderRow` via `provider_id` (FK with `ON DELETE CASCADE`).
+/// Optional fields (`max_tokens`, `thinking_effort`) override the
+/// global env defaults; `None` means "fall back to global".
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRow {
+    pub id: String,
+    pub provider_id: String,
+    pub model_name: String,
+    pub display_name: String,
+    pub max_tokens: Option<u32>,
+    pub thinking_effort: Option<String>,
+    pub supports_thinking: bool,
+    pub context_window: u32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// `ModelRow` denormalized with the parent provider's `display_name`
+/// + `protocol`. The UI renders this view directly (model picker
+/// groups models under their provider's display name) so the
+/// frontend does not need a second IPC roundtrip to render the
+/// dropdown.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelWithProvider {
+    #[serde(flatten)]
+    pub model: ModelRow,
+    pub provider_display_name: String,
+    pub provider_protocol: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +215,13 @@ pub struct SessionRow {
     /// Preserved across detach so the UI can show a "上次 worktree"
     /// chip that lets the user re-attach or inspect the branch.
     pub last_worktree_path: Option<String>,
+    /// PR4 of multi-model: per-session model override. `None` when
+    /// the session uses the global default model (the chat command's
+    /// `resolve_chat_provider` falls back to `app_config.default_model_id`
+    /// when this is NULL or the referenced model was deleted). This is a
+    /// soft FK to `models.id` — no `REFERENCES` constraint so legacy rows
+    /// and dangling references don't break INSERTs.
+    pub model_id: Option<String>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -132,6 +241,9 @@ pub struct SessionSummary {
     pub worktree_state: WorktreeState,
     /// Mirror of [`SessionRow::last_worktree_path`].
     pub last_worktree_path: Option<String>,
+    /// PR4 of multi-model: per-session model override. `None` when the
+    /// session uses the global default model. Soft FK to `models.id`.
+    pub model_id: Option<String>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
@@ -367,6 +479,89 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // --- PR1 of multi-model task: providers / models / app_config.
+    //
+    //  The `providers` table is the user-managed catalog of LLM
+    //  endpoints (Anthropic 官方, wukaijin 转发, OpenAI 官方, ...);
+    //  multiple rows may share the same `protocol`. `models` binds
+    //  model names to a provider with capability hints and per-row
+    //  overrides for `max_tokens` / `thinking_effort`. `app_config`
+    //  is a small key/value store; the only key written today is
+    //  `default_model_id`, but the table is generic so future global
+    //  settings don't need a new migration. ---
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS providers (
+            id           TEXT PRIMARY KEY,
+            protocol     TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            base_url     TEXT NOT NULL,
+            api_key      TEXT NOT NULL DEFAULT '',
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS models (
+            id                TEXT PRIMARY KEY,
+            provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+            model_name        TEXT NOT NULL,
+            display_name      TEXT NOT NULL,
+            max_tokens        INTEGER,
+            thinking_effort   TEXT,
+            supports_thinking INTEGER NOT NULL DEFAULT 0,
+            context_window    INTEGER NOT NULL,
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_models_provider_id
+        ON models(provider_id)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS app_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // --- PR1 of multi-model task: add `model_id` to sessions.
+    //  Nullable FK to `models.id`. Pre-PR1 sessions have NULL; the
+    //  seed function below backfills them with the default model.
+    //  Kept as a soft FK (no FK constraint) so a future row with a
+    //  dangling `model_id` (e.g. legacy dump) doesn't break INSERTs. ---
+    add_session_column_if_missing(pool, "model_id", "TEXT").await?;
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_sessions_model_id
+        ON sessions(model_id)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // --- PR1 of multi-model task: seed default providers + models
+    //  if the catalog is empty. Idempotent: 0-row check skips the
+    //  insert on subsequent boots. Backfills `sessions.model_id`
+    //  for any row still NULL after the ALTER. ---
+    seed_default_providers_and_models(pool).await?;
 
     // --- Auto-default project (backstop for legacy sessions) ---
     // Insert the backstop row *after* the ALTERs so any sessions
@@ -822,6 +1017,7 @@ pub async fn create_session(
         worktree_path: None,
         worktree_state: WorktreeState::None,
         last_worktree_path: None,
+        model_id: None,
     })
 }
 
@@ -835,6 +1031,7 @@ pub async fn list_sessions(
         r#"
         SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd,
                s.worktree_path, s.worktree_state, s.last_worktree_path,
+               s.model_id,
                COALESCE(
                    (SELECT text FROM messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
@@ -870,6 +1067,7 @@ pub async fn list_sessions(
                 worktree_path: r.try_get("worktree_path")?,
                 worktree_state: WorktreeState::from_str_opt(&state_str),
                 last_worktree_path: r.try_get("last_worktree_path")?,
+                model_id: r.try_get("model_id")?,
             })
         })
         .collect()
@@ -884,7 +1082,7 @@ pub async fn load_session(
     let session_row = sqlx::query(
         r#"
         SELECT id, title, created_at, updated_at, model, project_id, current_cwd,
-               worktree_path, worktree_state, last_worktree_path
+               worktree_path, worktree_state, last_worktree_path, model_id
         FROM sessions
         WHERE id = ?
         "#,
@@ -907,6 +1105,7 @@ pub async fn load_session(
                 worktree_path: r.try_get("worktree_path")?,
                 worktree_state: WorktreeState::from_str_opt(&state_str),
                 last_worktree_path: r.try_get("last_worktree_path")?,
+                model_id: r.try_get("model_id")?,
             }
         }
         None => return Ok(None),
@@ -999,6 +1198,47 @@ pub async fn update_session_cwd(
         "#,
     )
     .bind(new_cwd)
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Session model assignment (PR4 of multi-model task)
+// ---------------------------------------------------------------------------
+
+/// Update the `model_id` soft FK on a session row. Used by the
+/// frontend's per-session model dropdown (StatusBar) so the user can
+/// switch models without changing the global default. The value is a
+/// UUID string referencing `models.id`, or can be set to NULL by
+/// passing an empty string (the resolve-default fallback in the chat
+/// command's `resolve_chat_provider` handles NULL by using the global
+/// default).
+///
+/// `updated_at` is bumped to the current time on every successful
+/// write so the session list re-sorts correctly.
+pub async fn update_session_model_id(
+    pool: &SqlitePool,
+    session_id: &str,
+    model_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    // Empty string → store NULL (session falls back to global default).
+    let model_id_value: Option<&str> = if model_id.is_empty() {
+        None
+    } else {
+        Some(model_id)
+    };
+    sqlx::query(
+        r#"
+        UPDATE sessions
+           SET model_id = ?, updated_at = ?
+         WHERE id = ?
+        "#,
+    )
+    .bind(model_id_value)
     .bind(&now)
     .bind(session_id)
     .execute(pool)
@@ -1176,8 +1416,454 @@ pub async fn persist_turn(
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// PR1 of multi-model task: providers / models / app_config CRUD
 // ---------------------------------------------------------------------------
+
+/// Insert a new provider. Returns the inserted row with server-set
+/// fields (`id`, `created_at`, `updated_at`) populated. `protocol`
+/// is taken as a `String` (not `ProviderProtocol`) so an unknown
+/// future value from a newer DB can still be stored without
+/// crashing the writer; the read path will fall back to
+/// `ProviderProtocol::from_str_opt` for lenient parsing.
+pub async fn create_provider(
+    pool: &SqlitePool,
+    protocol: &str,
+    display_name: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<ProviderRow, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO providers
+            (id, protocol, display_name, base_url, api_key, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(protocol)
+    .bind(display_name)
+    .bind(base_url)
+    .bind(api_key)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(ProviderRow {
+        id,
+        protocol: protocol.to_string(),
+        display_name: display_name.to_string(),
+        base_url: base_url.to_string(),
+        api_key: api_key.to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// List all providers, newest updated first.
+pub async fn list_providers(pool: &SqlitePool) -> Result<Vec<ProviderRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, protocol, display_name, base_url, api_key, created_at, updated_at
+        FROM providers
+        ORDER BY updated_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(ProviderRow {
+                id: r.try_get("id")?,
+                protocol: r.try_get("protocol")?,
+                display_name: r.try_get("display_name")?,
+                base_url: r.try_get("base_url")?,
+                api_key: r.try_get("api_key")?,
+                created_at: r.try_get("created_at")?,
+                updated_at: r.try_get("updated_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Patch a provider by `id`. Returns `None` if the row doesn't
+/// exist; otherwise returns the updated row. `updated_at` is bumped
+/// to the current time on every successful update.
+pub async fn update_provider(
+    pool: &SqlitePool,
+    id: &str,
+    protocol: &str,
+    display_name: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Option<ProviderRow>, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        r#"
+        UPDATE providers
+           SET protocol = ?, display_name = ?, base_url = ?,
+               api_key = ?, updated_at = ?
+         WHERE id = ?
+        "#,
+    )
+    .bind(protocol)
+    .bind(display_name)
+    .bind(base_url)
+    .bind(api_key)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Ok(None);
+    }
+    Ok(Some(ProviderRow {
+        id: id.to_string(),
+        protocol: protocol.to_string(),
+        display_name: display_name.to_string(),
+        base_url: base_url.to_string(),
+        api_key: api_key.to_string(),
+        created_at: String::new(), // not reloaded; callers that need it should re-fetch
+        updated_at: now,
+    }))
+}
+
+/// Delete a provider by `id`. Cascades to its models (FK is
+/// `ON DELETE CASCADE`). Returns whether a row was actually
+/// removed.
+pub async fn delete_provider(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM providers WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Insert a new model. Returns the inserted row.
+pub async fn create_model(
+    pool: &SqlitePool,
+    provider_id: &str,
+    model_name: &str,
+    display_name: &str,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<&str>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<ModelRow, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO models
+            (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
+             supports_thinking, context_window, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(provider_id)
+    .bind(model_name)
+    .bind(display_name)
+    .bind(max_tokens)
+    .bind(thinking_effort)
+    .bind(supports_thinking as i32)
+    .bind(context_window)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(ModelRow {
+        id,
+        provider_id: provider_id.to_string(),
+        model_name: model_name.to_string(),
+        display_name: display_name.to_string(),
+        max_tokens,
+        thinking_effort: thinking_effort.map(str::to_string),
+        supports_thinking,
+        context_window,
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// List all models joined with their parent provider's
+/// `display_name` + `protocol` for UI rendering. Newest updated
+/// first; within a model, sort is by `display_name` ascending.
+pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT m.id, m.provider_id, m.model_name, m.display_name,
+               m.max_tokens, m.thinking_effort, m.supports_thinking,
+               m.context_window, m.created_at, m.updated_at,
+               p.display_name AS provider_display_name,
+               p.protocol      AS provider_protocol
+        FROM models m
+        JOIN providers p ON p.id = m.provider_id
+        ORDER BY m.updated_at DESC, m.display_name ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
+            Ok(ModelWithProvider {
+                model: ModelRow {
+                    id: r.try_get("id")?,
+                    provider_id: r.try_get("provider_id")?,
+                    model_name: r.try_get("model_name")?,
+                    display_name: r.try_get("display_name")?,
+                    max_tokens: r.try_get("max_tokens")?,
+                    thinking_effort: r.try_get("thinking_effort")?,
+                    supports_thinking: supports_thinking_i != 0,
+                    context_window: r.try_get("context_window")?,
+                    created_at: r.try_get("created_at")?,
+                    updated_at: r.try_get("updated_at")?,
+                },
+                provider_display_name: r.try_get("provider_display_name")?,
+                provider_protocol: r.try_get("provider_protocol")?,
+            })
+        })
+        .collect()
+}
+
+/// Patch a model by `id`. Returns `None` if the row doesn't exist.
+pub async fn update_model(
+    pool: &SqlitePool,
+    id: &str,
+    provider_id: &str,
+    model_name: &str,
+    display_name: &str,
+    max_tokens: Option<u32>,
+    thinking_effort: Option<&str>,
+    supports_thinking: bool,
+    context_window: u32,
+) -> Result<Option<ModelRow>, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        r#"
+        UPDATE models
+           SET provider_id = ?, model_name = ?, display_name = ?,
+               max_tokens = ?, thinking_effort = ?,
+               supports_thinking = ?, context_window = ?, updated_at = ?
+         WHERE id = ?
+        "#,
+    )
+    .bind(provider_id)
+    .bind(model_name)
+    .bind(display_name)
+    .bind(max_tokens)
+    .bind(thinking_effort)
+    .bind(supports_thinking as i32)
+    .bind(context_window)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Ok(None);
+    }
+    Ok(Some(ModelRow {
+        id: id.to_string(),
+        provider_id: provider_id.to_string(),
+        model_name: model_name.to_string(),
+        display_name: display_name.to_string(),
+        max_tokens,
+        thinking_effort: thinking_effort.map(str::to_string),
+        supports_thinking,
+        context_window,
+        created_at: String::new(),
+        updated_at: now,
+    }))
+}
+
+/// Delete a model by `id`. Returns whether a row was actually
+/// removed. Sessions that referenced this model keep the dangling
+/// `model_id` (it's a soft FK with no `ON DELETE` clause); the
+/// reader path is responsible for the fallback (PR2 wires the
+/// resolve-default fallback in the agent loop).
+pub async fn delete_model(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM models WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+// ---------------------------------------------------------------------------
+// PR1 of multi-model task: app_config key/value helpers
+// ---------------------------------------------------------------------------
+
+/// Read a value from `app_config` by key. Returns `None` if the key
+/// is not present. Kept as a generic key/value getter so future
+/// global settings don't need a new IPC.
+pub async fn get_config_value(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query("SELECT value FROM app_config WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|r| r.try_get("value")).transpose()
+}
+
+/// Write a value to `app_config`, inserting or replacing the row.
+pub async fn set_config_value(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO app_config (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// PR1 of multi-model task: seed
+// ---------------------------------------------------------------------------
+
+/// Seed the default `providers` + `models` + `default_model_id` if
+/// the `providers` table is empty. Idempotent: when at least one
+/// provider already exists, the function is a no-op (preserves any
+/// user edits). When run, it inserts:
+///
+/// - `Anthropic 官方` provider, base URL `https://api.anthropic.com`,
+///   empty api_key
+/// - `OpenAI 官方` provider, base URL `https://api.openai.com/v1`,
+///   empty api_key
+/// - `claude-sonnet-4-5` model bound to Anthropic, `supports_thinking=true`,
+///   `context_window=200_000`
+/// - `claude-opus-4-7` model bound to Anthropic, `supports_thinking=true`,
+///   `context_window=200_000`
+/// - `gpt-4o` model bound to OpenAI, `supports_thinking=false`,
+///   `context_window=128_000`
+/// - `gpt-4.1` model bound to OpenAI, `supports_thinking=false`,
+///   `context_window=1_000_000`
+/// - `default_model_id` -> `claude-sonnet-4-5`
+///
+/// After the catalog is in place, backfills `sessions.model_id` for
+/// any row still NULL or empty (legacy sessions from the pre-PR1
+/// era) with the default model id.
+pub async fn seed_default_providers_and_models(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let count: i64 = sqlx::query("SELECT COUNT(*) FROM providers")
+        .fetch_one(pool)
+        .await?
+        .try_get(0)?;
+    if count > 0 {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339();
+
+    // --- providers ---
+    let anthropic_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO providers
+            (id, protocol, display_name, base_url, api_key, created_at, updated_at)
+        VALUES (?, 'anthropic', 'Anthropic 官方', 'https://api.anthropic.com', '', ?, ?)
+        "#,
+    )
+    .bind(&anthropic_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    let openai_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO providers
+            (id, protocol, display_name, base_url, api_key, created_at, updated_at)
+        VALUES (?, 'openai', 'OpenAI 官方', 'https://api.openai.com/v1', '', ?, ?)
+        "#,
+    )
+    .bind(&openai_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    // --- models ---
+    let sonnet_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO models
+            (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
+             supports_thinking, context_window, created_at, updated_at)
+        VALUES (?, ?, 'claude-sonnet-4-5', 'Claude Sonnet 4.5',
+                NULL, NULL, 1, 200000, ?, ?)
+        "#,
+    )
+    .bind(&sonnet_id)
+    .bind(&anthropic_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    let opus_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO models
+            (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
+             supports_thinking, context_window, created_at, updated_at)
+        VALUES (?, ?, 'claude-opus-4-7', 'Claude Opus 4.7',
+                NULL, NULL, 1, 200000, ?, ?)
+        "#,
+    )
+    .bind(&opus_id)
+    .bind(&anthropic_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    let gpt4o_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO models
+            (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
+             supports_thinking, context_window, created_at, updated_at)
+        VALUES (?, ?, 'gpt-4o', 'GPT-4o',
+                NULL, NULL, 0, 128000, ?, ?)
+        "#,
+    )
+    .bind(&gpt4o_id)
+    .bind(&openai_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    let gpt41_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO models
+            (id, provider_id, model_name, display_name, max_tokens, thinking_effort,
+             supports_thinking, context_window, created_at, updated_at)
+        VALUES (?, ?, 'gpt-4.1', 'GPT-4.1',
+                NULL, NULL, 0, 1000000, ?, ?)
+        "#,
+    )
+    .bind(&gpt41_id)
+    .bind(&openai_id)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    // --- default model ---
+    set_config_value(pool, "default_model_id", &sonnet_id).await?;
+
+    // --- backfill sessions.model_id with the default ---
+    sqlx::query("UPDATE sessions SET model_id = ? WHERE model_id IS NULL OR model_id = ''")
+        .bind(&sonnet_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -1739,5 +2425,368 @@ mod tests {
         assert_eq!(loaded.messages.len(), 2);
         assert_eq!(loaded.messages[0].seq, 0);
         assert_eq!(loaded.messages[1].seq, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // PR1 of multi-model task: providers / models / app_config tests
+    //
+    // Each CRUD function gets a happy path + a forced-error / edge-case
+    // test. The "create_session" / "sessions.model_id" interactions are
+    // covered separately in the seed test.
+    // -----------------------------------------------------------------------
+
+    async fn make_pool() -> SqlitePool {
+        test_pool().await // alias for readability inside this section
+    }
+
+    #[tokio::test]
+    async fn create_provider_then_list_returns_it() {
+        let pool = make_pool().await;
+        // `test_pool` already ran `run_migrations`, which seeded
+        // 2 providers. Add one more and assert it appears in the list
+        // (without asserting total count, since the seed counts
+        // aren't the test's concern).
+        let before = list_providers(&pool).await.unwrap().len();
+        let p = create_provider(&pool, "anthropic", "Test provider", "https://api.anthropic.com", "sk-test")
+            .await
+            .unwrap();
+        assert_eq!(p.protocol, "anthropic");
+        assert_eq!(p.display_name, "Test provider");
+        assert!(!p.id.is_empty());
+        let list = list_providers(&pool).await.unwrap();
+        assert_eq!(list.len(), before + 1);
+        assert!(list.iter().any(|row| row.id == p.id));
+    }
+
+    #[tokio::test]
+    async fn update_provider_on_missing_id_returns_none() {
+        let pool = make_pool().await;
+        let res = update_provider(
+            &pool,
+            "00000000-0000-0000-0000-000000000000",
+            "openai",
+            "ghost",
+            "https://example.com",
+            "sk-ghost",
+        )
+        .await
+        .unwrap();
+        assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_provider_cascades_to_models() {
+        let pool = make_pool().await;
+        let p = create_provider(&pool, "openai", "OpenAI 官方 (test)", "https://api.openai.com/v1", "")
+            .await
+            .unwrap();
+        let m = create_model(
+            &pool,
+            &p.id,
+            "gpt-4o-test",
+            "GPT-4o (test)",
+            None,
+            None,
+            false,
+            128_000,
+        )
+        .await
+        .unwrap();
+        assert!(list_models(&pool).await.unwrap().iter().any(|mwp| mwp.model.id == m.id));
+        assert!(delete_provider(&pool, &p.id).await.unwrap());
+        // Cascade FK should have removed the model.
+        assert!(!list_models(&pool).await.unwrap().iter().any(|mwp| mwp.model.id == m.id));
+        assert!(!delete_model(&pool, &m.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn create_model_then_list_joins_provider_fields() {
+        let pool = make_pool().await;
+        let p = create_provider(&pool, "anthropic", "Anthropic 官方 (test)", "https://api.anthropic.com", "")
+            .await
+            .unwrap();
+        let m = create_model(
+            &pool,
+            &p.id,
+            "claude-sonnet-4-5-test",
+            "Claude Sonnet 4.5 (test)",
+            Some(8192),
+            Some("high"),
+            true,
+            200_000,
+        )
+        .await
+        .unwrap();
+        let list = list_models(&pool).await.unwrap();
+        let mwp = list
+            .iter()
+            .find(|x| x.model.id == m.id)
+            .expect("test model in list");
+        assert_eq!(mwp.model.model_name, "claude-sonnet-4-5-test");
+        assert_eq!(mwp.model.max_tokens, Some(8192));
+        assert_eq!(mwp.model.thinking_effort.as_deref(), Some("high"));
+        assert!(mwp.model.supports_thinking);
+        assert_eq!(mwp.model.context_window, 200_000);
+        assert_eq!(mwp.provider_display_name, "Anthropic 官方 (test)");
+        assert_eq!(mwp.provider_protocol, "anthropic");
+    }
+
+    #[tokio::test]
+    async fn update_model_on_missing_id_returns_none() {
+        let pool = make_pool().await;
+        let res = update_model(
+            &pool,
+            "00000000-0000-0000-0000-000000000000",
+            "p",
+            "gpt-4o",
+            "GPT-4o",
+            None,
+            None,
+            false,
+            128_000,
+        )
+        .await
+        .unwrap();
+        assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_model_on_missing_id_returns_false() {
+        let pool = make_pool().await;
+        let res = delete_model(&pool, "00000000-0000-0000-0000-000000000000")
+            .await
+            .unwrap();
+        assert!(!res);
+    }
+
+    #[tokio::test]
+    async fn default_model_is_set_by_seed() {
+        // The seed function runs as part of run_migrations; we
+        // assert the contract that `default_model_id` is set AND
+        // points at a real model row.
+        let pool = make_pool().await;
+        let id = get_config_value(&pool, "default_model_id").await.unwrap();
+        let id = id.expect("default_model_id set by seed");
+        let list = list_models(&pool).await.unwrap();
+        assert!(list.iter().any(|mwp| mwp.model.id == id));
+    }
+
+    #[tokio::test]
+    async fn set_then_get_config_value_round_trips() {
+        let pool = make_pool().await;
+        // `default_model_id` is already set by the seed; we use
+        // a custom key to avoid clobbering.
+        set_config_value(&pool, "test_key", "abc-123").await.unwrap();
+        let res = get_config_value(&pool, "test_key").await.unwrap();
+        assert_eq!(res.as_deref(), Some("abc-123"));
+        // Overwrite.
+        set_config_value(&pool, "test_key", "xyz-789").await.unwrap();
+        let res = get_config_value(&pool, "test_key").await.unwrap();
+        assert_eq!(res.as_deref(), Some("xyz-789"));
+    }
+
+    #[tokio::test]
+    async fn seed_is_idempotent_and_inserts_defaults() {
+        let pool = make_pool().await;
+        // First call is a no-op because run_migrations already invoked
+        // the seed; call again to prove idempotency (no duplicate
+        // rows).
+        let before_p = list_providers(&pool).await.unwrap().len();
+        let before_m = list_models(&pool).await.unwrap().len();
+        seed_default_providers_and_models(&pool).await.unwrap();
+        assert_eq!(list_providers(&pool).await.unwrap().len(), before_p);
+        assert_eq!(list_models(&pool).await.unwrap().len(), before_m);
+    }
+
+    #[tokio::test]
+    async fn seed_backfills_sessions_model_id() {
+        // Build a fresh DB that mirrors a pre-PR1 state: only the
+        // pre-PR1 tables exist (projects / sessions / messages),
+        // no providers/models/app_config yet. Insert a legacy
+        // sessions row with `model_id IS NULL`, then call
+        // `seed_default_providers_and_models` and assert the
+        // backfill query sets `model_id` on the legacy row.
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
+                is_git_repo INTEGER NOT NULL DEFAULT 0, is_legacy INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                hidden INTEGER NOT NULL DEFAULT 0, metadata TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                model TEXT NOT NULL, metadata TEXT,
+                project_id TEXT NOT NULL DEFAULT '__default__',
+                current_cwd TEXT NOT NULL DEFAULT '',
+                worktree_path TEXT,
+                worktree_state TEXT NOT NULL DEFAULT 'none',
+                last_worktree_path TEXT,
+                model_id TEXT
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE providers (
+                id TEXT PRIMARY KEY, protocol TEXT NOT NULL,
+                display_name TEXT NOT NULL, base_url TEXT NOT NULL,
+                api_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE models (
+                id TEXT PRIMARY KEY, provider_id TEXT NOT NULL,
+                model_name TEXT NOT NULL, display_name TEXT NOT NULL,
+                max_tokens INTEGER, thinking_effort TEXT,
+                supports_thinking INTEGER NOT NULL DEFAULT 0,
+                context_window INTEGER NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE app_config (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sessions (id, title, created_at, updated_at, model) \
+             VALUES ('s1', 't', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'claude-sonnet-4-5')"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Now call the seed directly; it inserts providers/models
+        // + sets default_model_id, then backfills sessions.model_id.
+        seed_default_providers_and_models(&pool).await.unwrap();
+        let row: String = sqlx::query("SELECT model_id FROM sessions WHERE id = 's1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get("model_id")
+            .unwrap();
+        assert!(!row.is_empty(), "model_id should be backfilled");
+        // The default model id should match the backfilled value.
+        let default_id = get_config_value(&pool, "default_model_id").await.unwrap();
+        assert_eq!(row, default_id.expect("default set"));
+    }
+
+    #[tokio::test]
+    async fn delete_provider_cascade_does_not_touch_unrelated_models() {
+        let pool = make_pool().await;
+        let p1 = create_provider(&pool, "anthropic", "P1 (cascade test)", "https://a.example.com", "")
+            .await
+            .unwrap();
+        let p2 = create_provider(&pool, "openai", "P2 (cascade test)", "https://b.example.com", "")
+            .await
+            .unwrap();
+        let m1 = create_model(&pool, &p1.id, "m1-cascade-test", "M1", None, None, false, 100_000)
+            .await
+            .unwrap();
+        let m2 = create_model(&pool, &p2.id, "m2-cascade-test", "M2", None, None, false, 100_000)
+            .await
+            .unwrap();
+        let list = list_models(&pool).await.unwrap();
+        assert!(list.iter().any(|mwp| mwp.model.id == m1.id));
+        assert!(list.iter().any(|mwp| mwp.model.id == m2.id));
+        delete_provider(&pool, &p1.id).await.unwrap();
+        let remaining = list_models(&pool).await.unwrap();
+        assert!(!remaining.iter().any(|mwp| mwp.model.id == m1.id));
+        assert!(remaining.iter().any(|mwp| mwp.model.id == m2.id));
+    }
+
+    // -----------------------------------------------------------------------
+    // PR4 of multi-model task: update_session_model_id + load_session
+    // model_id field tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_session_model_id_sets_and_clears() {
+        let pool = make_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        // New session: model_id is NULL (falls back to global default).
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert!(loaded.session.model_id.is_none());
+
+        // Set to a specific model.
+        let p = create_provider(&pool, "anthropic", "Test (model_id)", "https://api.anthropic.com", "sk-test")
+            .await
+            .unwrap();
+        let m = create_model(&pool, &p.id, "test-model", "Test Model", None, None, false, 100_000)
+            .await
+            .unwrap();
+        update_session_model_id(&pool, &s.id, &m.id).await.unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.session.model_id.as_deref(), Some(m.id.as_str()));
+
+        // Clear by passing empty string.
+        update_session_model_id(&pool, &s.id, "").await.unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert!(loaded.session.model_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_session_model_id_on_missing_session_is_noop() {
+        let pool = make_pool().await;
+        // Should not error — the UPDATE simply matches 0 rows.
+        update_session_model_id(&pool, "nonexistent-session-id", "some-model-id")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_session_includes_model_id() {
+        let pool = make_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        // Directly set model_id in the DB to verify the SELECT picks it up.
+        let p = create_provider(&pool, "anthropic", "Test (model_id select)", "https://api.anthropic.com", "sk-test")
+            .await
+            .unwrap();
+        let m = create_model(&pool, &p.id, "select-test-model", "Select Test Model", None, None, false, 100_000)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET model_id = ? WHERE id = ?")
+            .bind(&m.id)
+            .bind(&s.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.session.model_id.as_deref(), Some(m.id.as_str()));
     }
 }
