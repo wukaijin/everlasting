@@ -29,6 +29,17 @@
 
 ---
 
+## 0.5 已落地的方向(从 BACKLOG 移除,记录在 [IMPLEMENTATION §3.1](./IMPLEMENTATION.md#31-已收尾milestone-表权威以-git-log---oneline--20-为准))
+
+> 这些方向已在独立任务中落地,不再作为 BACKLOG 候选。原 BACKLOG 段保留作为历史参考。
+
+- ✅ **多 Provider (Anthropic + OpenAI)** — 2026-06-08/09 落地,4 PR + 1 follow-up(`f9c5648` / `0a787ef` / `96e1f98` + 1 跨协议 PR)
+- ✅ **Project 基础结构 + 顶部 Tabs UI** — 2026-06-05/06 落地,3b-1(原步骤 3b-1,后端 PR1 + 前端 PR2 + post-fixes)
+- ✅ **Git worktree + diff** — 2026-06-07/08 落地,原步骤 4(worktree 解耦 + opt-in attach / detach / delete)
+- ✅ **工具集扩展(edit_file / grep / glob / list_dir + ReadGuard)** — 2026-06-07 落地(原属 BACKLOG §1 输入层扩展的下游)
+
+---
+
 ## 1. 输入层扩展:图片 / @文件 / /command
 
 **目标**:丰富用户向 agent 表达意图的方式,不止打字。
@@ -345,9 +356,11 @@ allowed-tools: [read_file, search_code, git_diff]
 
 ---
 
-## 远期（v3+，暂不评估）
+## 附录 A: 远期候选 (v3+, 暂不评估)
 
-> 本节集中放 v3+ 远期项(已评估但不计划近期实施),原 §3-§7 已迁移至此。每节内容保留原样,只调整标题层级 + 加 [v3+] 标识。
+> 本节集中放 v3+ 远期项(已评估但不计划近期实施),原 BACKLOG §3-§7 候选功能按"已落地 / 远期"重新分组。每节内容保留原样,只调整标题层级 + 加 [v3+] 标识。
+>
+> **重要**:本节编号"3-7"是历史原编号,内容跟 BACKLOG §3"跨 7 个功能的共同关注点"**完全无关**——后者是横向关注点,本附录是按功能归档的远期候选。
 
 > [v3+ 远期 — 暂不评估]
 
