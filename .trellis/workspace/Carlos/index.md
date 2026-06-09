@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~318 | Active |
+| `journal-1.md` | ~352 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-06-09 | fix SettingsModal reka-ui Select 层级 + 宽度 + 背景 (Vue 3 scoped + portal :deep()) | `c5e02d4`, `c1454e6` | `main` |
 | 6 | 2026-06-09 | UI polish: reka-ui form primitives + cog-6-tooth + worktree chip + popup animations + text-muted | `b85d5d9` | `main` |
 | 5 | 2026-06-09 | PR5 multi-model UX follow-up: 重布线 Settings/Model UI + test_model IPC | `b919d9e` | `main` |
 | 4 | 2026-06-09 | fix-diff-numstat: libgit2 line_stats under-count → git --numstat + spec | `30a5c43` | `main` |
