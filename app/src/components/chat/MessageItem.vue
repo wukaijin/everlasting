@@ -319,15 +319,15 @@ onUnmounted(() => {
   font-size: 0.9em;
   padding: 1px 5px;
   border-radius: 3px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-bg-border);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--color-bg-border-strong);
 }
 
 .msg__markdown :deep(pre) {
   margin: 8px 0;
   padding: 10px 12px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-bg-border);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--color-bg-border-strong);
   border-radius: 6px;
   overflow-x: auto;
   line-height: 1.45;
