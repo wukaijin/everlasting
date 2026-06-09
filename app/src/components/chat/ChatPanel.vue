@@ -403,7 +403,14 @@ if (typeof window !== "undefined") {
                 >
                     <button
                         type="button"
-                        class="chat-panel__chip chat-panel__chip--worktree"
+                        :class="[
+                            'chat-panel__chip',
+                            'chat-panel__chip--worktree',
+                            {
+                                'chat-panel__chip--worktree--alone':
+                                    worktreeState === 'none',
+                            },
+                        ]"
                         :title="worktreeChipTitle"
                         @click="onChipClick"
                     >
@@ -423,52 +430,54 @@ if (typeof window !== "undefined") {
                             :size="12"
                         />
                     </button>
-                    <div
-                        v-if="worktreeMenuOpen && worktreeState !== 'none'"
-                        class="chat-panel__menu"
-                        role="menu"
-                    >
-                        <button
-                            v-if="worktreePathForDisplay"
-                            type="button"
-                            class="chat-panel__menu-item"
-                            role="menuitem"
-                            @click="onCopyWorktreePath"
+                    <Transition name="chat-panel-popover">
+                        <div
+                            v-if="worktreeMenuOpen && worktreeState !== 'none'"
+                            class="chat-panel__menu"
+                            role="menu"
                         >
-                            <Icon name="document" :size="12" />
-                            复制 worktree path
-                        </button>
-                        <button
-                            type="button"
-                            class="chat-panel__menu-item"
-                            role="menuitem"
-                            @click="onCopyBranchName"
-                        >
-                            <Icon name="refresh" :size="12" />
-                            复制 branch name
-                        </button>
-                        <div class="chat-panel__menu-sep" />
-                        <button
-                            type="button"
-                            class="chat-panel__menu-item"
-                            role="menuitem"
-                            :disabled="detachDisabled"
-                            @click="onDetach"
-                        >
-                            <Icon name="minus" :size="12" />
-                            解绑 (detach)
-                        </button>
-                        <button
-                            type="button"
-                            class="chat-panel__menu-item chat-panel__menu-item--danger"
-                            role="menuitem"
-                            :disabled="deleteDisabled"
-                            @click="onDeleteClick"
-                        >
-                            <Icon name="warn" :size="12" />
-                            删除 worktree
-                        </button>
-                    </div>
+                            <button
+                                v-if="worktreePathForDisplay"
+                                type="button"
+                                class="chat-panel__menu-item"
+                                role="menuitem"
+                                @click="onCopyWorktreePath"
+                            >
+                                <Icon name="document" :size="12" />
+                                复制 worktree path
+                            </button>
+                            <button
+                                type="button"
+                                class="chat-panel__menu-item"
+                                role="menuitem"
+                                @click="onCopyBranchName"
+                            >
+                                <Icon name="refresh" :size="12" />
+                                复制 branch name
+                            </button>
+                            <div class="chat-panel__menu-sep" />
+                            <button
+                                type="button"
+                                class="chat-panel__menu-item"
+                                role="menuitem"
+                                :disabled="detachDisabled"
+                                @click="onDetach"
+                            >
+                                <Icon name="minus" :size="12" />
+                                解绑 (detach)
+                            </button>
+                            <button
+                                type="button"
+                                class="chat-panel__menu-item chat-panel__menu-item--danger"
+                                role="menuitem"
+                                :disabled="deleteDisabled"
+                                @click="onDeleteClick"
+                            >
+                                <Icon name="warn" :size="12" />
+                                删除 worktree
+                            </button>
+                        </div>
+                    </Transition>
                 </div>
                 <!--
                   The legacy diff button is gone — replaced by the
@@ -518,45 +527,47 @@ if (typeof window !== "undefined") {
           the close button, or on Esc. Renders the DiffView
           component with the session's cached diff.
         -->
-        <div
-            v-if="diffModalOpen"
-            class="diff-modal-backdrop"
-            @click.self="closeDiffModal"
-        >
+        <Transition name="chat-panel-modal">
             <div
-                class="diff-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-label="Session diff"
+                v-if="diffModalOpen"
+                class="diff-modal-backdrop"
+                @click.self="closeDiffModal"
             >
-                <header class="diff-modal__header">
-                    <h2 class="diff-modal__title">
-                        Session diff
-                        <span v-if="diffResult" class="diff-modal__count">
-                            ({{ diffResult.files.length }}
-                            {{ diffResult.files.length === 1 ? "file" : "files" }})
-                        </span>
-                    </h2>
-                    <button
-                        type="button"
-                        class="diff-modal__close"
-                        @click="closeDiffModal"
-                        aria-label="Close"
-                    >
-                        <Icon name="x" :size="14" />
-                    </button>
-                </header>
-                <div class="diff-modal__body">
-                    <div v-if="diffLoading" class="diff-modal__loading">
-                        Loading diff…
+                <div
+                    class="diff-modal"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Session diff"
+                >
+                    <header class="diff-modal__header">
+                        <h2 class="diff-modal__title">
+                            Session diff
+                            <span v-if="diffResult" class="diff-modal__count">
+                                ({{ diffResult.files.length }}
+                                {{ diffResult.files.length === 1 ? "file" : "files" }})
+                            </span>
+                        </h2>
+                        <button
+                            type="button"
+                            class="diff-modal__close"
+                            @click="closeDiffModal"
+                            aria-label="Close"
+                        >
+                            <Icon name="x" :size="14" />
+                        </button>
+                    </header>
+                    <div class="diff-modal__body">
+                        <div v-if="diffLoading" class="diff-modal__loading">
+                            Loading diff…
+                        </div>
+                        <div v-else-if="diffError" class="diff-modal__error">
+                            {{ diffError }}
+                        </div>
+                        <DiffView v-else-if="diffResult" :files="diffResult.files" />
                     </div>
-                    <div v-else-if="diffError" class="diff-modal__error">
-                        {{ diffError }}
-                    </div>
-                    <DiffView v-else-if="diffResult" :files="diffResult.files" />
                 </div>
             </div>
-        </div>
+        </Transition>
 
         <!--
           Step 4 follow-up: confirmation modal for delete_worktree.
@@ -710,6 +721,15 @@ if (typeof window !== "undefined") {
     border-right: 0;
 }
 
+/* When the chevron toggle is absent (worktreeState === 'none'),
+ * the main chip is the only button in the group — restore its
+ * right border and right radius to make it a complete pill. */
+.chat-panel__chip--worktree--alone {
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    border-right: 1px solid var(--color-accent);
+}
+
 .chat-panel__chip--worktree:hover {
     background: var(--color-accent);
     color: var(--color-bg-app);
@@ -721,6 +741,8 @@ if (typeof window !== "undefined") {
     border: 1px solid var(--color-accent);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
     cursor: pointer;
     font: inherit;
     font-size: 11px;
@@ -879,5 +901,57 @@ if (typeof window !== "undefined") {
 
 .diff-modal__error {
     color: var(--color-tool-error);
+}
+
+/* -----------------------------------------------------------------------
+ * R4 popup animations. Two separate transitions:
+ *   - chat-panel-popover: fade + slide-down 4px (worktree dropdown,
+ *     opens downward).
+ *   - chat-panel-modal:    fade + scale 0.96→1 from center (diff modal).
+ * Enter is 150ms ease-out, leave is 100ms ease-in (faster exit, per
+ * the PR5 popover pattern).
+ * ------------------------------------------------------------------- */
+.chat-panel-popover-enter-active,
+.chat-panel-popover-leave-active {
+    transition: opacity 150ms ease-out, transform 150ms ease-out;
+    transform-origin: top right;
+}
+
+.chat-panel-popover-enter-from,
+.chat-panel-popover-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+.chat-panel-popover-leave-active {
+    transition-duration: 100ms;
+    transition-timing-function: ease-in;
+}
+
+.chat-panel-modal-enter-active,
+.chat-panel-modal-leave-active {
+    transition: opacity 150ms ease-out;
+}
+
+.chat-panel-modal-enter-active .diff-modal,
+.chat-panel-modal-leave-active .diff-modal {
+    transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+
+.chat-panel-modal-enter-from,
+.chat-panel-modal-leave-to {
+    opacity: 0;
+}
+
+.chat-panel-modal-enter-from .diff-modal,
+.chat-panel-modal-leave-to .diff-modal {
+    opacity: 0;
+    transform: scale(0.96);
+}
+
+.chat-panel-modal-leave-active,
+.chat-panel-modal-leave-active .diff-modal {
+    transition-duration: 100ms;
+    transition-timing-function: ease-in;
 }
 </style>

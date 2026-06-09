@@ -13,8 +13,29 @@
 // where some were 404. `test_provider` is still in the Rust
 // registry (`#[allow(dead_code)]`) for future catalog-resolution
 // use, but the frontend never calls it.
+//
+// R1 polish: form controls now use reka-ui `SelectRoot` /
+// `SelectTrigger` / `SelectItem` for the protocol dropdown, and
+// native `<input>` wrapped in reka-ui `Label` (with project CSS
+// vars) for the text fields. Reka-ui 2.x does not ship a generic
+// `TextFieldRoot` (that arrived in 3.x), so for text/password
+// inputs we keep the native element and theme it via the shared
+// `reka-input` class to match the rest of the form. The v-model
+// contract is unchanged.
 
 import { ref, reactive, computed } from "vue";
+import {
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+  Label,
+} from "reka-ui";
 import { useProvidersStore, type ProviderRow } from "../../stores/providers";
 import { useModelsStore } from "../../stores/models";
 import Icon from "../Icon.vue";
@@ -208,15 +229,31 @@ function protocolBadgeClass(protocol: string): string {
         {{ mode === "add" ? "Add Provider" : "Edit Provider" }}
       </h4>
 
-      <label class="providers-tab__field">
+      <Label class="providers-tab__field">
         <span class="providers-tab__label">Protocol</span>
-        <select v-model="form.protocol" class="providers-tab__input providers-tab__select">
-          <option value="anthropic">Anthropic (Messages API)</option>
-          <option value="openai">OpenAI (Chat Completions)</option>
-        </select>
-      </label>
+        <SelectRoot v-model="form.protocol">
+          <SelectTrigger class="providers-tab__trigger" aria-label="Protocol">
+            <SelectValue placeholder="Select protocol" />
+            <SelectIcon class="providers-tab__trigger-icon">
+              <Icon name="chevron-down" :size="12" />
+            </SelectIcon>
+          </SelectTrigger>
+          <SelectPortal>
+            <SelectContent class="providers-tab__content" position="popper" :side-offset="4">
+              <SelectViewport class="providers-tab__viewport">
+                <SelectItem value="anthropic" class="providers-tab__option">
+                  <SelectItemText>Anthropic (Messages API)</SelectItemText>
+                </SelectItem>
+                <SelectItem value="openai" class="providers-tab__option">
+                  <SelectItemText>OpenAI (Chat Completions)</SelectItemText>
+                </SelectItem>
+              </SelectViewport>
+            </SelectContent>
+          </SelectPortal>
+        </SelectRoot>
+      </Label>
 
-      <label class="providers-tab__field">
+      <Label class="providers-tab__field">
         <span class="providers-tab__label">Display Name</span>
         <input
           v-model="form.displayName"
@@ -224,9 +261,9 @@ function protocolBadgeClass(protocol: string): string {
           class="providers-tab__input"
           placeholder="My Provider"
         />
-      </label>
+      </Label>
 
-      <label class="providers-tab__field">
+      <Label class="providers-tab__field">
         <span class="providers-tab__label">Base URL</span>
         <input
           v-model="form.baseUrl"
@@ -234,9 +271,9 @@ function protocolBadgeClass(protocol: string): string {
           class="providers-tab__input"
           placeholder="https://api.anthropic.com"
         />
-      </label>
+      </Label>
 
-      <label class="providers-tab__field">
+      <Label class="providers-tab__field">
         <span class="providers-tab__label">API Key</span>
         <div class="providers-tab__key-input">
           <input
@@ -254,7 +291,7 @@ function protocolBadgeClass(protocol: string): string {
             <Icon :name="showApiKey ? 'eye-slash' : 'eye'" :size="14" />
           </button>
         </div>
-      </label>
+      </Label>
 
       <!-- Form actions -->
       <div class="providers-tab__form-actions">
@@ -453,6 +490,76 @@ function protocolBadgeClass(protocol: string): string {
 
 .providers-tab__select {
   appearance: auto;
+}
+
+/* --- R1: reka-ui Select trigger / content / option theming --- */
+
+.providers-tab__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.providers-tab__trigger:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.providers-tab__trigger[data-state="open"] {
+  border-color: var(--color-accent);
+}
+
+.providers-tab__trigger-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+}
+
+.providers-tab__content {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 240px;
+  z-index: 3000;
+  overflow: hidden;
+}
+
+.providers-tab__viewport {
+  padding: 4px;
+}
+
+.providers-tab__option {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.providers-tab__option[data-highlighted] {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.providers-tab__option[data-state="checked"] {
+  color: var(--color-accent);
 }
 
 .providers-tab__key-input {

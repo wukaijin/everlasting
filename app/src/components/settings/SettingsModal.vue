@@ -62,6 +62,11 @@ const open = defineModel<boolean>("open", { required: true });
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
   z-index: 2000;
+  animation: settings-modal-fade 150ms ease-out;
+}
+
+.settings-modal__overlay[data-state="closed"] {
+  animation: settings-modal-fade-out 100ms ease-in forwards;
 }
 
 .settings-modal {
@@ -82,6 +87,31 @@ const open = defineModel<boolean>("open", { required: true });
   z-index: 2001;
   /* reka-ui DialogContent sets outline on focus; suppress for our design */
   outline: none;
+  animation: settings-modal-zoom 150ms ease-out;
+}
+
+.settings-modal[data-state="closed"] {
+  animation: settings-modal-zoom-out 100ms ease-in forwards;
+}
+
+@keyframes settings-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes settings-modal-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes settings-modal-zoom {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes settings-modal-zoom-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
 }
 
 .settings-modal__header {

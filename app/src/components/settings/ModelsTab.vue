@@ -13,9 +13,32 @@
 // providers or editing the model fields intentionally does NOT clear
 // the result — the test is for the model as a whole, not for the
 // form draft.
+//
+// R1 polish: form controls now use reka-ui `SelectRoot` for the
+// provider dropdown, reka-ui `CheckboxRoot` for supportsThinking,
+// and themed native inputs (wrapped in reka-ui `Label`) for the
+// text fields. Reka-ui 2.x doesn't ship a generic `TextFieldRoot`,
+// so for text inputs we keep `<input>` and theme it via the shared
+// `.models-tab__input` class to match the rest of the form. The
+// contextWindow number input keeps `type="number"` and the v-model
+// contract is unchanged.
 
 import { ref, reactive, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+  CheckboxRoot,
+  CheckboxIndicator,
+  Label,
+} from "reka-ui";
 import { useModelsStore, type ModelWithProvider } from "../../stores/models";
 import { useProvidersStore } from "../../stores/providers";
 import Icon from "../Icon.vue";
@@ -37,7 +60,7 @@ const form = reactive({
   modelName: "",
   displayName: "",
   maxTokens: "" as string, // empty string = omit (None)
-  thinkingEffort: "" as string, // empty string = omit (None)
+  thinkingEffort: "none" as string, // "none" sentinel = omit (None)
   supportsThinking: false,
   contextWindow: 8192,
 });
@@ -73,7 +96,7 @@ function resetForm() {
   form.modelName = "";
   form.displayName = "";
   form.maxTokens = "";
-  form.thinkingEffort = "";
+  form.thinkingEffort = "none";
   form.supportsThinking = false;
   form.contextWindow = 8192;
   editId.value = null;
@@ -91,7 +114,7 @@ function startEdit(m: ModelWithProvider) {
   form.modelName = m.modelName;
   form.displayName = m.displayName;
   form.maxTokens = m.maxTokens != null ? String(m.maxTokens) : "";
-  form.thinkingEffort = m.thinkingEffort ?? "";
+  form.thinkingEffort = m.thinkingEffort ?? "none";
   form.supportsThinking = m.supportsThinking;
   form.contextWindow = m.contextWindow;
 }
@@ -120,8 +143,8 @@ async function save() {
       const parsed = parseInt(form.maxTokens, 10);
       if (!isNaN(parsed) && parsed > 0) opts.maxTokens = parsed;
     }
-    if (form.thinkingEffort.trim() !== "") {
-      opts.thinkingEffort = form.thinkingEffort.trim();
+    if (form.thinkingEffort !== "none") {
+      opts.thinkingEffort = form.thinkingEffort;
     }
 
     if (mode.value === "add") {
@@ -208,7 +231,6 @@ function okLatency(t: TestState | undefined): number {
 function failError(t: TestState | undefined): string {
   return t?.kind === "fail" ? t.error : "";
 }
-
 </script>
 
 <template>
@@ -236,16 +258,14 @@ function failError(t: TestState | undefined): string {
       >
         <div class="models-tab__group-header">
           <Icon name="server" :size="12" />
-          <span class="models-tab__group-name">{{ group.provider.displayName }}</span>
+          <span class="models-tab__group-name">{{
+            group.provider.displayName
+          }}</span>
           <span class="models-tab__group-count">
             {{ group.models.length }}
           </span>
         </div>
-        <div
-          v-for="m in group.models"
-          :key="m.id"
-          class="models-tab__row"
-        >
+        <div v-for="m in group.models" :key="m.id" class="models-tab__row">
           <div class="models-tab__row-info">
             <span class="models-tab__name">{{ m.displayName }}</span>
             <span class="models-tab__model-id">{{ m.modelName }}</span>
@@ -253,7 +273,11 @@ function failError(t: TestState | undefined): string {
               thinking
             </span>
             <span class="models-tab__tag models-tab__tag--muted">
-              {{ m.contextWindow >= 1000 ? `${m.contextWindow / 1000}k` : m.contextWindow }}
+              {{
+                m.contextWindow >= 1000
+                  ? `${m.contextWindow / 1000}k`
+                  : m.contextWindow
+              }}
             </span>
             <!-- PR5: per-row Test result, inline. The label
                  appears under the model_id so the row's vertical
@@ -282,7 +306,11 @@ function failError(t: TestState | undefined): string {
               type="button"
               class="models-tab__btn models-tab__btn--ghost"
               :disabled="tests[m.id]?.kind === 'running'"
-              :title="tests[m.id]?.kind === 'running' ? '测试中…' : '测试此 model 连通性'"
+              :title="
+                tests[m.id]?.kind === 'running'
+                  ? '测试中…'
+                  : '测试此 model 连通性'
+              "
               @click="runTest(m.id)"
             >
               <Icon name="signal" :size="12" />
@@ -305,10 +333,7 @@ function failError(t: TestState | undefined): string {
         </div>
       </div>
 
-      <div
-        v-if="modelsStore.models.length === 0"
-        class="models-tab__empty"
-      >
+      <div v-if="modelsStore.models.length === 0" class="models-tab__empty">
         No models configured. Click "Add Model" to get started.
       </div>
     </div>
@@ -319,21 +344,40 @@ function failError(t: TestState | undefined): string {
         {{ mode === "add" ? "Add Model" : "Edit Model" }}
       </h4>
 
-      <label class="models-tab__field">
+      <Label class="models-tab__field">
         <span class="models-tab__label">Provider</span>
-        <select v-model="form.providerId" class="models-tab__input models-tab__select">
-          <option
-            v-for="p in providersStore.providers"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.displayName }} ({{ p.protocol }})
-          </option>
-        </select>
-      </label>
+        <SelectRoot v-model="form.providerId">
+          <SelectTrigger class="models-tab__trigger" aria-label="Provider">
+            <SelectValue placeholder="Select provider" />
+            <SelectIcon class="models-tab__trigger-icon">
+              <Icon name="chevron-down" :size="12" />
+            </SelectIcon>
+          </SelectTrigger>
+          <SelectPortal>
+            <SelectContent
+              class="models-tab__content"
+              position="popper"
+              :side-offset="4"
+            >
+              <SelectViewport class="models-tab__viewport">
+                <SelectItem
+                  v-for="p in providersStore.providers"
+                  :key="p.id"
+                  :value="p.id"
+                  class="models-tab__option"
+                >
+                  <SelectItemText
+                    >{{ p.displayName }} ({{ p.protocol }})</SelectItemText
+                  >
+                </SelectItem>
+              </SelectViewport>
+            </SelectContent>
+          </SelectPortal>
+        </SelectRoot>
+      </Label>
 
       <div class="models-tab__row-pair">
-        <label class="models-tab__field">
+        <Label class="models-tab__field">
           <span class="models-tab__label">Model Name</span>
           <input
             v-model="form.modelName"
@@ -341,8 +385,8 @@ function failError(t: TestState | undefined): string {
             class="models-tab__input"
             placeholder="claude-sonnet-4-5"
           />
-        </label>
-        <label class="models-tab__field">
+        </Label>
+        <Label class="models-tab__field">
           <span class="models-tab__label">Display Name</span>
           <input
             v-model="form.displayName"
@@ -350,11 +394,11 @@ function failError(t: TestState | undefined): string {
             class="models-tab__input"
             placeholder="Claude Sonnet 4.5"
           />
-        </label>
+        </Label>
       </div>
 
       <div class="models-tab__row-pair">
-        <label class="models-tab__field">
+        <Label class="models-tab__field">
           <span class="models-tab__label">Max Tokens (optional)</span>
           <input
             v-model="form.maxTokens"
@@ -362,8 +406,8 @@ function failError(t: TestState | undefined): string {
             class="models-tab__input"
             placeholder="16384"
           />
-        </label>
-        <label class="models-tab__field">
+        </Label>
+        <Label class="models-tab__field">
           <span class="models-tab__label">Context Window</span>
           <input
             v-model.number="form.contextWindow"
@@ -371,25 +415,63 @@ function failError(t: TestState | undefined): string {
             class="models-tab__input"
             min="1"
           />
-        </label>
+        </Label>
       </div>
 
       <div class="models-tab__row-pair">
-        <label class="models-tab__field">
+        <Label class="models-tab__field">
           <span class="models-tab__label">Thinking Effort (optional)</span>
-          <select v-model="form.thinkingEffort" class="models-tab__input models-tab__select">
-            <option value="">(default: high)</option>
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max</option>
-          </select>
-        </label>
-        <label class="models-tab__field models-tab__field--check">
+          <SelectRoot v-model="form.thinkingEffort">
+            <SelectTrigger
+              class="models-tab__trigger"
+              aria-label="Thinking effort"
+            >
+              <SelectValue placeholder="(default: high)" />
+              <SelectIcon class="models-tab__trigger-icon">
+                <Icon name="chevron-down" :size="12" />
+              </SelectIcon>
+            </SelectTrigger>
+            <SelectPortal>
+              <SelectContent
+                class="models-tab__content z-3001"
+                position="popper"
+                :side-offset="4"
+              >
+                <SelectViewport class="models-tab__viewport">
+                  <SelectItem value="none" class="models-tab__option">
+                    <SelectItemText>(default: high)</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="low" class="models-tab__option">
+                    <SelectItemText>low</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="medium" class="models-tab__option">
+                    <SelectItemText>medium</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="high" class="models-tab__option">
+                    <SelectItemText>high</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="xhigh" class="models-tab__option">
+                    <SelectItemText>xhigh</SelectItemText>
+                  </SelectItem>
+                  <SelectItem value="max" class="models-tab__option">
+                    <SelectItemText>max</SelectItemText>
+                  </SelectItem>
+                </SelectViewport>
+              </SelectContent>
+            </SelectPortal>
+          </SelectRoot>
+        </Label>
+        <div class="models-tab__field models-tab__field--check">
           <span class="models-tab__label">Supports Thinking</span>
-          <input v-model="form.supportsThinking" type="checkbox" class="models-tab__checkbox" />
-        </label>
+          <CheckboxRoot
+            v-model="form.supportsThinking"
+            class="models-tab__checkbox"
+          >
+            <CheckboxIndicator class="models-tab__checkbox-indicator">
+              <Icon name="check" :size="11" />
+            </CheckboxIndicator>
+          </CheckboxRoot>
+        </div>
       </div>
 
       <!-- Form actions -->
@@ -413,7 +495,11 @@ function failError(t: TestState | undefined): string {
     </div>
 
     <!-- Delete confirmation -->
-    <div v-if="deleteConfirmId" class="models-tab__confirm-overlay" @click.self="deleteConfirmId = null">
+    <div
+      v-if="deleteConfirmId"
+      class="models-tab__confirm-overlay"
+      @click.self="deleteConfirmId = null"
+    >
       <div class="models-tab__confirm">
         <p class="models-tab__confirm-text">
           Delete this model? Sessions referencing this model will fall back to
@@ -660,7 +746,103 @@ function failError(t: TestState | undefined): string {
 .models-tab__checkbox {
   width: 16px;
   height: 16px;
-  accent-color: var(--color-accent);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.models-tab__checkbox:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.models-tab__checkbox[data-state="checked"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.models-tab__checkbox-indicator {
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+/* --- R1: reka-ui Select trigger / content / option theming --- */
+
+.models-tab__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.models-tab__trigger:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.models-tab__trigger[data-state="open"] {
+  border-color: var(--color-accent);
+}
+
+.models-tab__trigger-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+}
+
+.models-tab__content {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 240px;
+  z-index: 3000;
+  overflow: hidden;
+}
+
+.models-tab__viewport {
+  padding: 4px;
+}
+
+.models-tab__option {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.models-tab__option[data-highlighted] {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.models-tab__option[data-state="checked"] {
+  color: var(--color-accent);
 }
 
 .models-tab__form-actions {
@@ -683,7 +865,9 @@ function failError(t: TestState | undefined): string {
   cursor: pointer;
   background: transparent;
   color: var(--color-text-secondary);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .models-tab__btn:disabled {

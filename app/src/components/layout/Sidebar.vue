@@ -54,7 +54,7 @@ function onSettingsClick() {
         aria-label="设置"
         @click="onSettingsClick"
       >
-        <Icon name="cog" :size="12" />
+        <Icon name="cog-6-tooth" :size="18" />
         <span class="sidebar__settings-label">设置</span>
       </button>
     </div>

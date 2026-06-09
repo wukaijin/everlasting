@@ -406,6 +406,102 @@ positioning until a real clipping bug is reported.
 
 ---
 
+## Animation
+
+> Added 2026-06-09 in the UI polish PR. All modal / popover
+> instances in the project now have enter/leave transitions.
+> Conventions captured here so future dropdowns / modals
+> follow the same pattern.
+
+### Convention: 150ms / 100ms with `ease-out` / `ease-in`
+
+| Trigger | Enter | Leave |
+|---|---|---|
+| Modal (centered overlay) | 150ms `ease-out` | 100ms `ease-in` |
+| Popover (anchored) | 150ms `ease-out` | 100ms `ease-in` |
+| Toast (AppShell, pre-existing) | 200ms | 200ms (stays the outlier) |
+
+The 150ms / 100ms split is intentional — enter feels responsive,
+leave feels snappy enough that the user doesn't wait on a closing
+animation. The toast uses 200ms in both directions because it's
+attention-grabbing by nature; not a precedent for other popups.
+
+### Modal: fade + scale
+
+Modal instances use **fade + scale 0.96 → 1**:
+
+```css
+@keyframes modal-enter {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes modal-leave {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.96); }
+}
+```
+
+**Trigger mechanism differs by component**:
+
+- **reka-ui DialogContent** (SettingsModal): reka-ui auto-sets
+  the `data-state="open|closed"` attribute on the content. Use
+  that as the CSS selector:
+  ```css
+  [data-state="open"] { animation: modal-enter 150ms ease-out; }
+  [data-state="closed"] { animation: modal-leave 100ms ease-in; }
+  ```
+  No Vue `<Transition>` wrapper needed — reka-ui handles the
+  mount/unmount internally.
+
+- **Hand-rolled modals** (DeleteWorktreeConfirm, diff modal
+  in ChatPanel): wrap in Vue `<Transition name="confirm-modal">`
+  and define `.confirm-modal-enter-active` / `-leave-active`
+  scoped CSS. See DeleteWorktreeConfirm.vue for the
+  reference implementation.
+
+### Popover: fade + slide (direction matches position)
+
+Popover instances use **fade + slide**, where the slide direction
+**MUST match the popover's open position**:
+
+| Popover open direction | Slide keyframe |
+|---|---|
+| Upward (e.g. `ModelSelect` — `bottom: calc(100% + 4px)`) | `translateY(4px → 0)` (slides up from below) |
+| Downward (e.g. worktree dropdown — `top: calc(100% + 4px)`) | `translateY(-4px → 0)` (slides down from above) |
+
+This makes the popover feel like it's "emerging from" the trigger
+button. Sliding the wrong direction (e.g. upward popover slides
+*upward* from `translateY(0 → -4px)`) reads as the popover
+"running away" from the trigger.
+
+**Implementation**: wrap the popover in Vue `<Transition>` and
+define scoped CSS. Reference ModelSelect.vue (upward) and
+ChatPanel.vue worktree popover (downward).
+
+### Don't: Animate the popover's parent container
+
+Animate the popover element itself, not its parent. If the
+parent (e.g. `.chat-panel__worktree`) has `transition` set on
+itself, the trigger button next to the popover may shimmer or
+shift during the animation. This is subtle but breaks the
+illusion of a "floating" popover.
+
+### Don't: Use `transition-delay` on popover
+
+The popover should appear in sync with the user's click. A
+delay (even 50ms) feels sluggish. The 150ms enter is the full
+duration, not "150ms after a 100ms delay".
+
+### Don't: Animate `width` / `height` of the popover
+
+Size animations look broken at small sizes (4-8px change is
+invisible) and create reflow on the rest of the page. The
+popover should snap to its final size and only animate
+`opacity` + `transform`.
+
+---
+
 ## Related
 
 - `app/src/components/chat/ChatPanel.vue:127-149, 401-471` —

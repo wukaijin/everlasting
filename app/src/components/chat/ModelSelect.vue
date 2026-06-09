@@ -15,8 +15,8 @@
 // - `useChatStore().isCurrentSessionStreaming` → disable + tooltip
 //
 // Per the PR5 spec, the result of selecting a model fires
-// `update_session_model_id` IPC, mirroring the PR4 StatusBar
-// behavior — but the dropdown UX is the worktree-style popover.
+// `update_session_model_id` IPC to persist the per-session override
+// — the dropdown UX is the worktree-style popover.
 
 import { computed, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -40,8 +40,7 @@ const menuRoot = ref<HTMLElement | null>(null);
 const hasModels = computed<boolean>(() => modelsStore.models.length > 0);
 
 /** Per-session model override, falling back to the global
- *  default. Matches the logic that used to live in
- *  `StatusBar.vue`. */
+ *  default. */
 const currentModelId = computed<string | null>(() => {
   const sid = chatStore.currentSessionId;
   if (sid) {
@@ -117,8 +116,7 @@ onUnmounted(() => {
 });
 
 /** Click a model in the popover: persist the per-session override
- *  via IPC, update the local session summary, close. Mirrors the
- *  PR4 StatusBar `onModelChange` handler. */
+ *  via IPC, update the local session summary, close. */
 async function onModelPick(modelId: string) {
   const sid = chatStore.currentSessionId;
   if (!sid) return;
@@ -171,40 +169,42 @@ async function onModelPick(modelId: string) {
         class="model-select__chevron"
       />
     </button>
-    <div
-      v-if="menuOpen"
-      class="model-select__menu"
-      role="menu"
-    >
+    <Transition name="model-select-popover">
       <div
-        v-for="group in modelsStore.modelsGroupedByProvider"
-        :key="group.provider.id"
-        class="model-select__group"
+        v-if="menuOpen"
+        class="model-select__menu"
+        role="menu"
       >
-        <div class="model-select__group-header">
-          <Icon name="server" :size="11" />
-          {{ group.provider.displayName }}
-        </div>
-        <button
-          v-for="m in group.models"
-          :key="m.id"
-          type="button"
-          class="model-select__item"
-          :class="{
-            'model-select__item--active': m.id === currentModelId,
-          }"
-          role="menuitem"
-          @click="onModelPick(m.id)"
+        <div
+          v-for="group in modelsStore.modelsGroupedByProvider"
+          :key="group.provider.id"
+          class="model-select__group"
         >
-          <span class="model-select__item-name">{{ m.displayName }}</span>
-          <span
-            v-if="m.id === currentModelId"
-            class="model-select__item-check"
-            aria-hidden="true"
-          >●</span>
-        </button>
+          <div class="model-select__group-header">
+            <Icon name="server" :size="11" />
+            {{ group.provider.displayName }}
+          </div>
+          <button
+            v-for="m in group.models"
+            :key="m.id"
+            type="button"
+            class="model-select__item"
+            :class="{
+              'model-select__item--active': m.id === currentModelId,
+            }"
+            role="menuitem"
+            @click="onModelPick(m.id)"
+          >
+            <span class="model-select__item-name">{{ m.displayName }}</span>
+            <span
+              v-if="m.id === currentModelId"
+              class="model-select__item-check"
+              aria-hidden="true"
+            >●</span>
+          </button>
+        </div>
       </div>
-    </div>
+    </Transition>
   </div>
 </template>
 
@@ -350,5 +350,25 @@ async function onModelPick(modelId: string) {
   color: var(--color-accent);
   font-size: 10px;
   flex-shrink: 0;
+}
+
+/* R4 popup animation: model-select opens UPWARD, so the slide
+   origin is slightly below the final position (translateY(4px))
+   and rises into place. Exit reverses the same distance. */
+.model-select-popover-enter-active,
+.model-select-popover-leave-active {
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transform-origin: bottom right;
+}
+
+.model-select-popover-enter-from,
+.model-select-popover-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.model-select-popover-leave-active {
+  transition-duration: 100ms;
+  transition-timing-function: ease-in;
 }
 </style>

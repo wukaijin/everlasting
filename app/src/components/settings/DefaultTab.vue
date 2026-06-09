@@ -2,7 +2,15 @@
 // DefaultTab — radio group to select the default model. Models are
 // displayed grouped by provider. Selecting a model immediately calls
 // `modelsStore.setDefault(modelId)` (PRD D2: "选中立即生效").
+//
+// R1 polish: replaced the hand-rolled `.default-tab__radio` div with
+// reka-ui `RadioGroupRoot` / `RadioGroupItem` / `RadioGroupIndicator`.
+// The selectable row layout (group-header / name / model-name / tag)
+// stays the same — the radio is the click target. The custom div was
+// functional but it wasn't keyboard-navigable or screen-reader
+// labelled; reka-ui's RadioGroup gives us all of that for free.
 
+import { RadioGroupRoot, RadioGroupItem, RadioGroupIndicator } from "reka-ui";
 import { useModelsStore } from "../../stores/models";
 import Icon from "../Icon.vue";
 
@@ -37,27 +45,29 @@ function selectDefault(modelId: string) {
           {{ group.provider.displayName }}
         </div>
 
-        <div
-          v-for="m in group.models"
-          :key="m.id"
-          :class="[
-            'default-tab__option',
-            { 'default-tab__option--selected': m.id === modelsStore.defaultModelId },
-          ]"
-          @click="selectDefault(m.id)"
+        <RadioGroupRoot
+          :model-value="modelsStore.defaultModelId ?? ''"
+          class="default-tab__radiogroup"
+          @update:model-value="(v) => v && selectDefault(String(v))"
         >
-          <span
-            :class="[
-              'default-tab__radio',
-              { 'default-tab__radio--checked': m.id === modelsStore.defaultModelId },
-            ]"
-          />
-          <div class="default-tab__option-info">
-            <span class="default-tab__option-name">{{ m.displayName }}</span>
-            <span class="default-tab__option-id">{{ m.modelName }}</span>
-            <span v-if="m.supportsThinking" class="default-tab__tag">thinking</span>
-          </div>
-        </div>
+          <label
+            v-for="m in group.models"
+            :key="m.id"
+            class="default-tab__option"
+            :class="{
+              'default-tab__option--selected': m.id === modelsStore.defaultModelId,
+            }"
+          >
+            <RadioGroupItem :value="m.id" class="default-tab__radio">
+              <RadioGroupIndicator class="default-tab__radio-indicator" />
+            </RadioGroupItem>
+            <div class="default-tab__option-info">
+              <span class="default-tab__option-name">{{ m.displayName }}</span>
+              <span class="default-tab__option-id">{{ m.modelName }}</span>
+              <span v-if="m.supportsThinking" class="default-tab__tag">thinking</span>
+            </div>
+          </label>
+        </RadioGroupRoot>
       </div>
     </div>
   </div>
@@ -123,6 +133,12 @@ function selectDefault(modelId: string) {
   letter-spacing: 0.04em;
 }
 
+.default-tab__radiogroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .default-tab__option {
   display: flex;
   align-items: center;
@@ -145,28 +161,38 @@ function selectDefault(modelId: string) {
   background: var(--color-accent-muted);
 }
 
+/* reka-ui RadioGroupItem renders a <button> by default; we style
+   the button to match the previous hand-rolled 14px circle. The
+   inner `RadioGroupIndicator` is the filled dot. */
 .default-tab__radio {
   width: 14px;
   height: 14px;
   border-radius: 50%;
   border: 2px solid var(--color-bg-border-strong);
+  background: transparent;
   flex-shrink: 0;
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 0.15s;
 }
 
-.default-tab__radio--checked {
+.default-tab__radio:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.default-tab__radio[data-state="checked"] {
   border-color: var(--color-accent);
 }
 
-.default-tab__radio--checked::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
+.default-tab__radio-indicator {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--color-accent);
+  display: block;
 }
 
 .default-tab__option-info {

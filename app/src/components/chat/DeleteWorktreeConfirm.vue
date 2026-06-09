@@ -55,60 +55,62 @@ watch(
 </script>
 
 <template>
-  <div
-    v-if="open"
-    class="confirm-backdrop"
-    @click.self="emit('cancel')"
-  >
+  <Transition name="confirm-modal">
     <div
-      class="confirm-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Delete worktree confirmation"
+      v-if="open"
+      class="confirm-backdrop"
+      @click.self="emit('cancel')"
     >
-      <header class="confirm-modal__header">
-        <h2 class="confirm-modal__title">
-          <Icon name="warn" :size="14" icon-class="confirm-modal__icon" />
-          确认删除 worktree?
-        </h2>
-        <button
-          type="button"
-          class="confirm-modal__close"
-          aria-label="Close"
-          @click="emit('cancel')"
-        >
-          <Icon name="x" :size="14" />
-        </button>
-      </header>
-      <div class="confirm-modal__body">
-        <p>
-          {{ fileCount }} 个文件
-          会被销毁,worktree 目录和 <code>session/&lt;id&gt;</code>
-          分支也会被永久删除。
-        </p>
-        <p class="confirm-modal__hint">
-          无法撤销。如需保留工作内容,请先 commit 或 detach。
-        </p>
+      <div
+        class="confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete worktree confirmation"
+      >
+        <header class="confirm-modal__header">
+          <h2 class="confirm-modal__title">
+            <Icon name="warn" :size="14" icon-class="confirm-modal__icon" />
+            确认删除 worktree?
+          </h2>
+          <button
+            type="button"
+            class="confirm-modal__close"
+            aria-label="Close"
+            @click="emit('cancel')"
+          >
+            <Icon name="x" :size="14" />
+          </button>
+        </header>
+        <div class="confirm-modal__body">
+          <p>
+            {{ fileCount }} 个文件
+            会被销毁,worktree 目录和 <code>session/&lt;id&gt;</code>
+            分支也会被永久删除。
+          </p>
+          <p class="confirm-modal__hint">
+            无法撤销。如需保留工作内容,请先 commit 或 detach。
+          </p>
+        </div>
+        <footer class="confirm-modal__actions">
+          <button
+            type="button"
+            class="confirm-modal__btn confirm-modal__btn--cancel"
+            @click="emit('cancel')"
+          >
+            取消
+          </button>
+          <button
+            ref="confirmButton"
+            type="button"
+            class="confirm-modal__btn confirm-modal__btn--danger"
+            @click="emit('confirm')"
+          >
+            确认删除
+          </button>
+        </footer>
       </div>
-      <footer class="confirm-modal__actions">
-        <button
-          type="button"
-          class="confirm-modal__btn confirm-modal__btn--cancel"
-          @click="emit('cancel')"
-        >
-          取消
-        </button>
-        <button
-          ref="confirmButton"
-          type="button"
-          class="confirm-modal__btn confirm-modal__btn--danger"
-          @click="emit('confirm')"
-        >
-          确认删除
-        </button>
-      </footer>
     </div>
-  </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -230,5 +232,35 @@ watch(
 
 .confirm-modal__btn--danger:hover {
   filter: brightness(1.1);
+}
+
+/* R4 modal animation: fade + scale 0.96→1 from center. 150ms
+   ease-out on enter, 100ms ease-in on leave. Matches the
+   SettingsModal treatment for visual consistency. */
+.confirm-modal-enter-active,
+.confirm-modal-leave-active {
+  transition: opacity 150ms ease-out;
+}
+
+.confirm-modal-enter-active .confirm-modal,
+.confirm-modal-leave-active .confirm-modal {
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+
+.confirm-modal-enter-from,
+.confirm-modal-leave-to {
+  opacity: 0;
+}
+
+.confirm-modal-enter-from .confirm-modal,
+.confirm-modal-leave-to .confirm-modal {
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+.confirm-modal-leave-active,
+.confirm-modal-leave-active .confirm-modal {
+  transition-duration: 100ms;
+  transition-timing-function: ease-in;
 }
 </style>
