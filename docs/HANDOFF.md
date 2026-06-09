@@ -1,7 +1,7 @@
 # Handoff — 新 Session 引导
 
-> **2026-06-07 更新**。当前阶段:**MVP 步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR(UI/UX 修复 + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/` 简化) + 字体栈调整 + 6 个 UI/状态 bug 修复**。步骤 3b-2(完整三栏 UI + rig-core 迁移)仍暂缓。
-> spike-001/002/003/004/005 均已通过,工具链就位,环境坑沉淀(`HACKING-wsl.md` WSL 坑 + `HACKING-llm.md` LLM 兼容层差异 + `HACKING-markdown.md` 前端 markdown 渲染陷阱)。
+> **Step 8 (代码重构) 进行中 (2026-06-10)**。8-PR1 lib.rs 拆分 / 8-PR2 db.rs 拆分 / 8-PR3 前端拆 sub-components 已落地;8-PR4 文档更新 + 9 个空 spec 文件清理本 commit;8-PR5 STRUCTURE.md 待办。
+> **最近 commit hash**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 > ⚠️ 本文档"当前进度"段会滞后于实际 commit,**权威以 `git log --oneline -20` + [IMPLEMENTATION §3 路线图](./IMPLEMENTATION.md#3-待办与下一步)为准**。
 
 ---
@@ -27,29 +27,23 @@
 
 > 摘要可能滞后,权威看 `git log --oneline -20` + [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)。
 
-**已完成**(2026-06-07 累计):
+**已完成项以 `git log --oneline` 为准;本节仅列结构性 milestone**(完整 commit 列表见 `.trellis/tasks/archive/2026-06/`):
 - ✅ 设计文档全套(`docs/` 下索引见 [README.md](./README.md))
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)+ 3b-1 阶段 2 份专项评审(`docs/_archive/2026-06-3b-1/`)
 - ✅ HACKING 系列(`HACKING-wsl.md` WSL 坑 / `HACKING-llm.md` LLM 兼容层差异 / `HACKING-markdown.md` 前端 markdown 渲染陷阱)
-- ✅ **MVP 步骤 1 — 骨架 + LLM 直连**(commit `08dc818`,2026-06-04)
-- ✅ **MVP 步骤 2 — Tool Calling + Agent Loop**(commit `fefc41f`,2026-06-04)
-- ✅ **MVP 步骤 3a — SQLite + Session 持久化**(commit `0ce44b5`,2026-06-05;rehydrate 补丁 `a89a6fd`)
-- ✅ **路线图外完成**:Anthropic extended thinking 块展示 + 持久化(commit `05671f5`,2026-06-05)
-- ✅ **MVP 步骤 3b-1 — 项目基础结构 + 顶部 Tabs UI**(后端 PR1 `fefc41f` 之前的前置 + 前端 PR2 `93a0753` + post-fixes squash `18354a0` + docs follow-up `7e888c9`,2026-06-05/06)
-- ✅ **spike-005 follow-up — 7 PR 合并**(commit `401396b`,2026-06-06):UI 紧凑 header (`801fb8a`) + git_branch 显示 (`8f25b7f`) + 启动 batch backfill (`7ce3209`) + pwd `~/` 简化数据通路 (`ef7cea8`) + write_file tracing (`ae1a711`) + LLM cancel 机制 (`11f01c6`) + markdown 渲染 (`cb41bcb`) + 首行空白修复 (`cfb7aac`)
-- ✅ **字体栈调整**(commit `aabb9fa`,2026-06-06):HarmonyOS Sans SC 子集打包 + Dark theme 下中文渲染改善,沉淀到 `.trellis/spec/frontend/cjk-fonts.md`
-- ✅ **6 UI/状态 bug 修复**(commits `bd5ea7b` + `abde429` + `bf9b35b`,2026-06-07):顶栏窗口控制 (bug 1+2 size / bug 3 minimize icon / bug 4 logo padding) + Markdown 表格 border (bug 5) + Tauri 2 权限补全 + streamController 状态架构重构 (bug 6)
-- ✅ **工具集扩展批次**(1 个 `feat(tools):` commit,2026-06-07):`edit_file` (claude-code str_replace_editor 风格 + ReadGuard 3 道 check) + `grep` (spawn ripgrep 3 种 output_mode) + `glob` (cap 100) + `list_dir` (非递归) + ReadGuard (Tauri State, session 隔离) + 顺手 2 件 (read_file `cat -n` 行号 prefix + shell 30K 落盘)
-- ✅ trellis 任务管理工作流引入(`.trellis/` 目录,commit `402afa5`)
+- ✅ MVP 步骤 1 (骨架+LLM) → 2 (Tool) → 3a (SQLite) → 3b-1 (Projects) → 4 (Git worktree 解耦) → 6a (多 Provider) 已完成
+- ✅ 路线图外完成:extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI/状态 bug 修复 + 工具集扩展(edit_file / grep / glob)
+- ✅ **Step 8 (代码重构) 进行中**:8-PR1/2/3 已落地,8-PR4 本 commit,8-PR5 待办
 
 **当前状态**:
-- ⏸ 步骤 3b-2(完整三栏 UI + rig-core 迁移)仍暂缓
-- ⏸ 步骤 4(Git 集成 — worktree + auto commit)未开始
-- 🐛 已知 issue:**bug 1+2 position 在 RDP 双显示器下未完全修好**(窗口 grow rightward 而非贴 host 主屏左上角,候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
+- 🔄 **Step 8 (代码重构与文档清理)** 进行中(5 PR:8-PR1 lib.rs 拆分 ✅ / 8-PR2 db.rs 拆分 ✅ / 8-PR3 前端拆 sub-components ✅ / 8-PR4 本次 / 8-PR5 STRUCTURE.md)
+- ⏸ **步骤 6b (MCP 暴露)** 未开始
+- ⏸ **步骤 5 (嵌入式终端 + 权限系统)** 未开始
+- 🐛 已知 issue:**bug 1+2 position 在 RDP 双显示器下未完全修好**(候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
 - 下一步候选(详见 [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)):
-  - 跳过 3b-2 继续主线 → 步骤 4 Git 集成(worktree + auto commit)
-  - 或回头补完 3b-2(完整三栏 UI + Rig 迁移)
-  - 或先收尾 bug 1+2 position(setFullscreen 兜底 vs 继续找正确 fix)
+  - 完成 Step 8 → **8-PR5 STRUCTURE.md** (收尾)
+  - 或主线推进 → **步骤 5 (嵌入式终端 + 权限系统)** / **步骤 6b (MCP 暴露)**
+  - 或收尾 bug 1+2 position(setFullscreen 兜底 vs 继续找正确 fix)
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 

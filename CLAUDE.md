@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-当前状态：MVP 步骤 1 / 2 / 3a / 3b-1 已完成；路线图外完成 Anthropic extended thinking 块展示 + 持久化 + spike-005 follow-up 7 PR(UI/UX 修复 + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/` 简化) + 字体栈调整 + 6 个 UI/状态 bug 修复(streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限)。3b-1 = projects 数据模型 + 顶部 Tab + cwd `~/` 简化(PR1 后端 + PR2 前端，均已落地 + post-fixes squash commit `18354a0`)，3b-2 = 完整三栏 UI + rig-core 迁移(暂缓)。已知 issue: bug 1+2 position 在 RDP 双显示器下未完全修好，TODO 跟踪。详见 `docs/IMPLEMENTATION.md` 的 7 步路线图（原 8 步已合并为 7 步）。
+当前状态：**MVP 步骤 1 / 2 / 3a / 3b-1 / 4 / 6a-多 Provider 已完成**；路线图外完成 Anthropic extended thinking 块展示 + 持久化 + spike-005 follow-up 7 PR(UI/UX 修复 + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/` 简化) + 字体栈调整 + 6 个 UI/状态 bug 修复(streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限) + 工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard)。**当前进行：Step 8 代码重构(5 PR: 8-PR1 lib.rs 拆分 ✅ / 8-PR2 db.rs 拆分 ✅ / 8-PR3 前端拆 sub-components ✅ / 8-PR4 本次文档更新 + spec 清理 / 8-PR5 STRUCTURE.md)**。3b-2(完整三栏 UI + rig-core 迁移)**已废弃**(2026-06-09 决策:rig-core 弃用,自研 Provider trait 已完整支持多 Provider,详见 IMPLEMENTATION §4 决策日志)。已知 issue: bug 1+2 position 在 RDP 双显示器下未完全修好，TODO 跟踪。详见 `docs/IMPLEMENTATION.md` 的路线图。
 
 ## Common Commands
 
@@ -41,29 +41,50 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 
 ## Architecture
 
+> 完整结构见 [STRUCTURE.md](./STRUCTURE.md)(8-PR5 创建)。
+
 ```
 app/
-├── src/                    # Vue 3 前端
-│   ├── components/         # ChatWindow.vue（侧边栏 + IME 输入框 + 消息列表 + 流式光标 + 工具卡片）
-│   └── stores/             # Pinia stores
-│       ├── chat.ts         # useChatStore: 消息/流式/tool call/result 事件 + sessions/currentSessionId
-│       └── config.ts       # useConfigStore: LLM 配置（model/baseUrl/configured）
-├── src-tauri/              # Rust 后端
+├── src/                    # Vue 3 前端 (8-PR3 拆分后)
+│   ├── components/
+│   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo
+│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / ToolCallCard / DiffView 等子组件
+│   │   ├── settings/       # ModelRow 等
+│   │   ├── ChatWindow.vue  # 顶层容器(69 行,纯组合)
+│   │   ├── SessionList.vue
+│   │   ├── ProjectTabs.vue
+│   │   └── Icon.vue
+│   ├── stores/             # Pinia stores
+│   │   ├── chat.ts         # facade: sessions 列表 + currentSessionId + currentCwd + CRUD 委托
+│   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests (8-PR3 拆分)
+│   │   ├── config.ts       # useConfigStore: LLM 配置
+│   │   ├── models.ts       # models catalog
+│   │   ├── providers.ts    # providers 配置
+│   │   └── projects.ts     # projects 列表
+│   └── utils/              # path / markdown / messageFormat / lru
+├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后)
 │   └── src/
-│       ├── lib.rs          # Tauri 入口: Agent Loop（max 20 turns）+ session CRUD + 事件分发
+│       ├── lib.rs          # Tauri 入口(94 行,纯 init + 命令注册)
+│       ├── state.rs        # AppState 共享状态
 │       ├── main.rs         # Windows 子系统入口
-│       ├── db.rs           # SQLite 持久化（sqlx）+ 8 个 CRUD 函数
-│       ├── llm/            # LLM 客户端模块
+│       ├── db/             # SQLite 持久化(8-PR2 拆分, 8 个 CRUD 函数分散到子模块)
+│       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
+│       │   ├── providers.rs / projects.rs / sessions.rs / tests.rs
+│       ├── llm/            # LLM 客户端模块 + 自研 Provider trait
 │       │   ├── client.rs   # LlmConfig::from_env()、chat_stream_with_tools()、BlockState 状态机
-│       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析（处理 GLM ping 心跳）
+│       │   ├── provider.rs # Provider trait + AnthropicProvider + OpenAIProvider
+│       │   ├── wire.rs     # WireMessage 跨协议中间层
+│       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析
 │       │   ├── error.rs    # LlmError 5 类错误分类、中文用户消息
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
+│       ├── agent/          # Agent Loop(8-PR1 拆分)
+│       ├── commands/       # Tauri commands(8-PR1 拆分,sessions/projects/config/cancel/providers/worktree)
+│       ├── projects/       # Project 数据模型 + boundary 校验
+│       ├── git/            # git2-rs worktree + diff
 │       └── tools/          # Tool 定义与执行
 │           ├── mod.rs      # builtin_tools()、execute_tool() 分发
-│           ├── read_file.rs  # 读文件（>50KB 截断 head+tail）
-│           ├── write_file.rs # 写文件（自动建父目录）
-│           └── shell.rs    # Shell 命令（5min 超时 + 截断）
-docs/                       # 设计文档（全中文）
+│           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs / shell.rs
+docs/                       # 设计文档(全中文)
 └── spikes/                 # 技术验证记录
 ```
 
@@ -75,18 +96,22 @@ docs/                       # 设计文档（全中文）
 
 - **自研 agent core**：不使用 Anthropic Agent SDK / Codex SDK，自己实现 Agent Loop、消息管理、tool 注册、权限检查（见 `docs/IMPLEMENTATION.md §1`）
 - **步骤 1 用手写 SSE 解析**：不用 eventsource-stream crate，`llm/sse.rs` 是自研状态机（已通过 spike-002 验证）
-- **步骤 3b 切到 rig-core**：LLM 客户端从 reqwest 迁移到 rig-core（保留为后续步骤）
+- **自研 Provider trait（多 Provider 抽象）**：`llm/provider.rs` 定义 `Provider` trait，`AnthropicProvider` / `OpenAIProvider` 两个实现 + `llm/wire.rs` WireMessage 跨协议中间层（2026-06-08/09 落地，取代早期 rig-core 计划）
 - **16 阶段请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`
 - **daemon 化**：后期 Tauri GUI 进程与 Agent Daemon 进程分离，通过 Unix socket / WebSocket IPC
 
 ## Environment Variables
 
 ```bash
-ANTHROPIC_API_KEY=xxx        # 或 ANTHROPIC_AUTH_TOKEN（必需，用于真实 LLM）
+ANTHROPIC_API_KEY=xxx        # 或 ANTHROPIC_AUTH_TOKEN(必需,用于真实 LLM)
 ANTHROPIC_BASE_URL=xxx       # 默认 https://api.anthropic.com
-LLM_MODEL=xxx                # 默认 MiniMax-M2.7
+OPENAI_API_KEY=xxx           # 多 Provider 模式下使用(可选)
+OPENAI_BASE_URL=xxx          # 默认 https://api.openai.com/v1
+LLM_MODEL=xxx                # 默认 GLM-4.7 (与 HACKING-llm.md 一致)
 LLM_MAX_TOKENS=1024          # 默认 1024
 ```
+
+**多 Provider 提示**:Anthropic / OpenAI 双 Provider 已落地(2026-06-08/09,4 PR + 1 follow-up),完整设计、wire shape、catalog schema 详见 `.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md` + `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction" section。
 
 ## WSL 环境注意
 
@@ -99,7 +124,7 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 | 桌面框架 | Tauri 2 |
 | 前端 | Vue 3 (`<script setup>`) + Vite + Pinia + reka-ui |
 | 后端 | Rust (edition 2021) + tokio |
-| HTTP/LLM | reqwest + 手写 SSE（步骤 1）→ rig-core（步骤 3b） |
+| HTTP/LLM | reqwest + 手写 SSE + 自研 Provider trait (Anthropic / OpenAI) | rig-core 0.38.1 **未采用**(2026-06-09 决策弃用,见 IMPLEMENTATION §4) |
 | 错误处理 | anyhow（边界）+ thiserror（领域） |
 | 日志 | tracing + tracing-subscriber |
 | 包管理 | pnpm（前端）、cargo（Rust） |

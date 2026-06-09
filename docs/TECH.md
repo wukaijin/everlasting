@@ -15,14 +15,14 @@
 | 前端       | **Vue 3.4+** + Vite     | `<script setup>` 组合式 API + Pinia + reka-ui / shadcn-vue |
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
-| LLM 框架   | **rig-core** 0.38.1     | 20+ provider,Agent 抽象,MCP 桥接        |
+| LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志) |
 | MCP        | **rmcp** 0.16.0         | 官方 Rust SDK,server + client            |
 | Git 操作   | **git2-rs**             | libgit2 绑定,worktree / diff / commit   |
 | 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好               |
 | 序列化     | serde + serde_json      | 标准选择                                 |
 | 错误处理   | anyhow + thiserror      | 边界用 anyhow,领域用 thiserror           |
-| HTTP       | reqwest                 | rig 内部用,但我们可能直接用             |
-| 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;或 `vue-diff-view`    |
+| HTTP       | reqwest                 | 直接用,自研 Provider trait 内部也走 reqwest |
+| 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;`app/src/components/chat/DiffView.vue` 用 `parsePatch` |
 | 终端       | xterm.js + portable-pty | 跑 shell 命令的实时终端                 |
 
 ### 1.2 候选但暂不锁定
@@ -69,19 +69,27 @@
 
 ---
 
-## 2. 决策:rig-core 作为 LLM 抽象层
+## 2. 决策:rig-core 弃用(2026-06-09),改自研 Provider trait
 
-**为什么选 rig**:
-- 已经被多个 production coding agent 验证(VT Code、Con、Neon app.build)
-- 支持 20+ provider,后期切 OpenAI / 本地模型无痛
+**历史背景**:原计划步骤 3b-2 切到 rig-core 0.38.1,作为 LLM 抽象层(2026-06-04 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-04 段](./IMPLEMENTATION.md#4-决策日志))。理由:
+- 20+ provider 支持,后期切 OpenAI / 本地模型无痛
 - 自带 `Agent<M>` 抽象,省掉"消息 → tool call → 循环"样板
 - 自带 `MessageStore` trait,接 SQLite 顺
 
-**风险**:
-- 预 1.0,有 breaking change
-- 缓解:锁版本,每次升级读 changelog
+**弃用原因**(2026-06-09 决策,见 [IMPLEMENTATION §4 决策日志 2026-06-09 段](./IMPLEMENTATION.md#4-决策日志)):
+- 学习价值:自研 Provider trait 比用 rig 学到更多 harness 细节
+- 控制粒度:rig 帮你做了"消息流 → tool call → 循环",自研可以插自定义逻辑(权限、审计、统计)
+- 风险:rig 预 1.0,breaking change 风险,锁版本治标不治本
+- 已自实现等价能力:`Provider` trait + `AnthropicProvider` / `OpenAIProvider` + `provider::wire` WireMessage 跨协议中间层,2026-06-08/09 4 PR 落地
 
-**备选**:用 `reqwest` 直接打 API。理由:极致学习价值。**但只在早期用**,后续切 rig(详见 [IMPLEMENTATION.md §2 步骤 1-3](./IMPLEMENTATION.md#2-实施路线图))。
+**当前架构**(2026-06-09 起):
+- `llm/provider.rs` 定义 `Provider` trait:`async fn chat_stream(&self, req: ChatRequest) -> Stream<Item = ChatEvent>`
+- `AnthropicProvider`:1:1 保留原 reqwest + 手写 SSE 路径(行为完全不变)
+- `OpenAIProvider`:`provider::wire` WireMessage 中间层抽象协议差异,`strip_unsupported` 静默降级
+- `llm/client.rs` 通过 `catalog` 调度到具体 provider(已存 DB),不直接绑 URL/model
+- 详见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction (PR1)" section
+
+**未来考虑**:rig-core 仍可作为"快速接新 provider"的工具引入,但不在当前路线图。
 
 ---
 

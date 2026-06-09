@@ -68,13 +68,13 @@
 - LLM 客户端不动(继续用 reqwest + 手写 SSE)
 - **可交付物**:关掉 app 再打开,历史消息还在
 
-### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] 🔄 3b-1 已完成,3b-2 暂缓(2026-06-05/06)
+### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] ⚠️ 3b-1 ✅ 已完成(2026-06-05/06),3b-2 ⛔ 废弃(2026-06-09)
 
 **目标**:引入 Project 概念,三栏 UI,切 rig-core
 
 **拆解**:
 - **3b-1 ✅ 已完成** — 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2 + post-fixes squash + docs follow-up)。`projects` 表 + `project_uuid`,`ToolContext.cwd` 默认 `~/`,`pick_project_dir` 走 Tauri native dialog,agent 工具不越出 project root。
-- **3b-2 ⏸ 暂缓** — 完整三栏 UI + rig-core 迁移,独立做。
+- **3b-2 ⛔ 废弃 (2026-06-09 决策)** — rig-core 0.38.1 弃用;完整三栏 UI 暂搁置(功能上不阻塞主线,后续若有需求再做)。多 Provider 抽象已通过自研 `Provider` trait 在 06-08 独立任务中完成,详见 §2.7 步骤 6a。
 
 **PR1(后端,3b-1 之一,2026-06-05 落地) ✅**:
 - `db.rs` migration + `projects` 表 + Auto-default `__default__` 兜底 + `PRAGMA foreign_keys = ON`
@@ -99,17 +99,22 @@
 
 **可交付物**:能管多个项目、多个对话,agent 工具调用不越出 project root,为步骤 4 准备好 `<project_uuid>` 字段 ✅
 
-### 2.5 步骤 4 — Git 集成 [MVP]
+### 2.5 步骤 4 — Git 集成 [MVP] ✅ 已完成(2026-06-07/08,auto-commit 延后)
 
 **目标**:session 隔离 + 自动 commit
 
 - `git2-rs` 集成
 - session 创建时建 worktree(见 [ARCHITECTURE.md §3 worktree 决策](./ARCHITECTURE.md#3-决策每个-session-一个-git-worktree))
 - session 结束或定时自动 commit
-- 前端 diff 视图(用 `diff` (jsdiff) + 自渲染,或 `vue-diff-view`)
+- 前端 diff 视图(用 `diff` (jsdiff) + 自渲染,见 `app/src/components/chat/DiffView.vue`)
 - **可交付物**:每个 session 是独立分支,能看 diff
 
-### 2.6 步骤 5 — 嵌入式终端 + 权限系统 [v1]
+**落地状态**:
+- ✅ worktree 解耦(opt-in attach / detach / delete + 三态状态机 + LLM 透明度 + 安全网,2026-06-08)
+- ⏸ auto commit 仍 OOS(2026-06-09 决策延后,后续 v1 阶段再评估)
+- ✅ `git-diff-contract.md` 沉淀(Workdir-vs-branch-tip FileDiff source of truth)
+
+### 2.6 步骤 5 — 嵌入式终端 + 权限系统 [v1] 🔽 降为可选(v1 之后)
 
 **目标**:能看 agent 在跑啥,能控制 agent 能干啥
 
@@ -118,21 +123,33 @@
 - 权限系统雏形:每个 tool 可以 ask / allow / deny
 - **可交付物**:能看见、能拦住 agent
 
+**状态 (2026-06-09 决策)**:v1 阶段工具集已通过 `shell` tool + 30K 落盘部分覆盖"看 agent 在跑啥"的需求,嵌入式 xterm 完整 UI 降为可选(留作 v1 之后);权限系统基础架构在 `provider` 抽象里预留 hook,完整 per-tool/ per-session/ per-project 权限留 v1。
+
 ### 2.7 步骤 6 — MCP 暴露 + 多 Provider [v1]
 
 **目标**:你的工具 Claude Code 也能用;切模型无痛
 
-- `rmcp` 起一个 stdio MCP server
-- 验证:Claude Desktop 能调用你的 read_file / shell
-- 加 OpenAI provider 切换
-- 加 Ollama provider 切换(纯本地,省钱)
-- **可交付物**:工具集对外开放;模型随便切
+#### 2.7.1 步骤 6a — 多 Provider [v1] ✅ 已完成(2026-06-08/09,4 PR + 1 follow-up)
 
-**路线图外进度(2026-06-09 更新)**:多 Provider 部分已切到独立 `06-08-multi-model-llm-provider-planning` 任务(详见 `.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md`)。已完成:
-- **PR1** — data layer:3 表 `providers` / `models` / `app_config` + 8 CRUD + 10 IPC + seed(2026-06-09,commit `f9c5648`)
-- **PR2** — Anthropic adapter:`Provider` trait + `AnthropicProvider` impl + catalog dispatch(2026-06-09,commit `0a787ef`)
-- **PR3** — OpenAI adapter + 跨协议:`OpenAIProvider` + `provider::wire` WireMessage 中间层 + `strip_unsupported` 静默降级;Anthropic 路径 1:1 保留(本 commit)
-- 步骤 6 路线图状态未变(MCP 仍 v1 未开始,多 Provider 部分继续在独立任务推进)
+- `rmcp` 起一个 stdio MCP server(待 v1.5 实施,当前未开始)
+- 加 OpenAI provider 切换
+- 加 Ollama provider 切换(纯本地,省钱,可选)
+- **可交付物**:模型随便切 ✅
+
+**实际落地**(2026-06-08/09 独立任务 `06-08-multi-model-llm-provider-planning`):
+- **PR1** — data layer:3 表 `providers` / `models` / `app_config` + 8 CRUD + 10 IPC + seed(commit `f9c5648`)
+- **PR2** — Anthropic adapter:`Provider` trait + `AnthropicProvider` impl + catalog dispatch(commit `0a787ef`)
+- **PR3** — OpenAI adapter + 跨协议:`OpenAIProvider` + `provider::wire` WireMessage 中间层 + `strip_unsupported` 静默降级
+- **PR4 follow-up** — `fix(llm): OpenAI adapter endpoint() double-prefixes /v1/` (commit `96e1f98`)
+- 完整设计:`.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md`
+- 契约沉淀:`.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction (PR1)" section
+
+#### 2.7.2 步骤 6b — MCP 暴露 [v1] ⏸ 未开始
+
+- `rmcp` 0.16.0 起一个 stdio MCP server
+- 验证:Claude Desktop 能调用你的 read_file / shell / edit_file 等
+- **可交付物**:工具集对外开放;模型随便切(已完成)
+- **状态**:6a 已完成(多 Provider),6b MCP 未开始。
 
 ### 2.8 步骤 7 — 打磨与文档 [跨阶段]
 
@@ -148,40 +165,63 @@
 > - **判断窗口**:在步骤 5 完成后、步骤 6 开始前问自己"长跑任务被打断是不是真痛?",痛就拆,不痛就跳
 > - 详见 [ARCHITECTURE.md §4 决策:Agent Daemon 化](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
 
+### 2.9 步骤 8 — 代码重构与文档清理 [跨阶段] 🔄 当前进行中
+
+**目标**:对积累下来的大型文件做物理拆分,让后续维护成本下降;同步清理过时的文档/spec
+
+**拆分动机**(详见 [`docs/_reviews/REVIEW-claude-opus-2026-06-09.md` §2](./_reviews/REVIEW-claude-opus-2026-06-09.md)):
+- `app/src-tauri/src/lib.rs` 3195L → 单文件过大,改一个命令要 scroll 几百行
+- `app/src-tauri/src/db.rs` 2862L → SQLite CRUD 全部塞一个文件,8 个函数相互纠缠
+- `app/src/components/ChatWindow.vue` 单文件 + `app/src/stores/chat.ts` 700+ L 流式逻辑混杂
+- 文档/HANDOFF 多处滞后,需要统一校准到 2026-06-09 git log 真实状态
+
+**5 PR 序列**:
+- **8-PR1 ✅ 已落地 (commit `5171ecf`)** — lib.rs 拆分为 `state/` + `commands/` + `agent/` 子目录
+- **8-PR2 ✅ 已落地 (commit `c151c77`)** — db.rs 拆分为 `db/` 子模块(mod/migrations/types/models/config/providers/projects/sessions/tests)
+- **8-PR3 ✅ 已落地 (commit `2f8a677`)** — ChatWindow / ModelsTab 拆为 `chat/` `settings/` `layout/` sub-components;`chat.ts` 拆出 `streamController.ts` 独立 Pinia store
+- **8-PR4 🔄 本 commit** — 文档统一更新到 2026-06-09 真实状态 + 9 个空 spec 文件清理(directory-structure / quality-guidelines / logging-guidelines / component-guidelines / hook-guidelines / type-safety)
+- **8-PR5 ⏳ 待办** — 创建 `STRUCTURE.md` 详细记录最终目录结构 + 模块职责
+
+**完成定义**:
+- ✅ `pnpm tauri build` 干净通过
+- ✅ `cargo test --lib` 全部 pass
+- ✅ 7 个文档(CLAUDE.md / README.md / TECH.md / DESIGN.md / HANDOFF.md / IMPLEMENTATION.md / BACKLOG.md)同步校准到 2026-06-09 状态
+- ⏳ `STRUCTURE.md` 创建(8-PR5)
+
 ---
 
 ## 3. 待办与下一步
 
-**最后更新**:2026-06-09(步骤 1 / 2 / 3a / 3b-1 已完成 + 路线图外完成 extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI bug 修复 + 工具集扩展批次 + step 4 follow-up worktree 解耦 + **多 Provider 计划 PR1 data layer(`f9c5648`)+ PR2 Anthropic adapter(`0a787ef`)+ PR3 OpenAI adapter + 跨协议 WireMessage(本 commit)**)
+**最后更新**:2026-06-10
 
-**下一步**(候选,三选一):
-- 跳过 3b-2 继续主线 → **[MVP 步骤 4 — Git 集成](#25-步骤-4--git-集成-mvp)**(worktree + auto commit)
-- 回头补完 3b-2 → **[步骤 3b 多项目 + UI 三栏 + Rig 迁移](#24-步骤-3b--多项目--ui-三栏--rig-迁移-mvp)**
-- 收尾已知 issue → **bug 1+2 position 修复**(RDP 双显示器场景,候选 `setFullscreen(true)` 兜底 — 详见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md`)
+### 3.1 已收尾(milestone 表,权威以 `git log --oneline -20` 为准)
 
-**路线图全貌**:
 | 步骤 | 内容 | 阶段 | 状态 |
 |------|------|------|------|
 | 1 | 骨架 + LLM 直连 | MVP | ✅ 已完成(2026-06-04) |
 | 2 | Tool Calling(agent loop + 3 个 tool) | MVP | ✅ 已完成(2026-06-04) |
 | 3a | SQLite + Session 持久化 | MVP | ✅ 已完成(2026-06-05) |
-| 3b-1 | 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2 + post-fixes) | MVP | ✅ 已完成(2026-06-05/06) |
-| — | **路线图外**:Anthropic extended thinking 块展示 + 持久化 | 额外 | ✅ 已完成(2026-06-05,commit `05671f5`) |
-| — | **路线图外**:spike-005 follow-up 7 PR(UI/UX + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/`) | 额外 | ✅ 已完成(2026-06-06,merge `401396b`) |
-| — | **路线图外**:字体栈调整(HarmonyOS Sans SC 子集) | 额外 | ✅ 已完成(2026-06-06,commit `aabb9fa`) |
-| — | **路线图外**:6 UI/状态 bug 修复(顶栏 + Markdown 表格 + Tauri 2 权限 + streamController 架构) | 额外 | ✅ 已完成(2026-06-07,commits `bd5ea7b` + `abde429` + `bf9b35b`) |
-| — | **路线图外**:工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard 3 道 check + Bash 30K 落盘 + read_file `cat -n` 行号) | 额外 | ✅ 已完成(2026-06-07,1 个 `feat(tools):` commit) |
-| — | **路线图外**:step 4 follow-up — worktree 解耦(opt-in attach / detach / delete + 三态状态机 + LLM 透明度 + 安全网) | 额外 | ✅ 已完成(2026-06-08) |
-| — | **路线图外**:多 Provider 计划 PR1 data layer(3 表 + 8 CRUD + 10 IPC + seed) | 额外 | ✅ 已完成(2026-06-09,commit `f9c5648`) |
-| — | **路线图外**:多 Provider 计划 PR2 Anthropic adapter(`Provider` trait + `AnthropicProvider` impl + catalog dispatch,行为完全不变) | 额外 | ✅ 已完成(2026-06-09,commit `0a787ef`) |
-| — | **路线图外**:多 Provider 计划 PR3 OpenAI adapter + 跨协议 WireMessage(`OpenAIProvider` + `provider::wire` + `strip_unsupported` 静默降级;Anthropic 1:1 保留) | 额外 | ✅ 已完成(2026-06-09) |
-| 3b-2 | 完整三栏 UI + rig-core 迁移 | MVP | ⏸ 暂缓 |
-| 4 | Git 集成(worktree + auto commit,改为 opt-in 手动 attach) | MVP | ⏸ 部分完成(worktree 解耦已落地,auto commit 仍 OOS) |
-| 5 | 嵌入式终端 + 权限系统 | v1 | 未开始 |
-| 6 | MCP 暴露 + 多 Provider | v1 | 未开始 |
-| 7 | 打磨与文档 | 跨阶段 | 未开始 |
+| 3b-1 | 项目基础结构 + 顶部 Tabs UI | MVP | ✅ 已完成(2026-06-05/06) |
+| 4 | Git 集成(worktree + opt-in attach / detach / delete) | MVP | ✅ 已完成(2026-06-07/08);auto commit 延后 |
+| 5 | WSL 体验 | MVP | ✅ spike-001 通过(2026-06-04) |
+| 6a | 多 Provider(Anthropic / OpenAI) | v1 | ✅ 已完成(2026-06-08/09) |
+| 8-PR1/2/3 | 代码重构(8-PR1 lib.rs / 8-PR2 db.rs / 8-PR3 前端) | 跨 | ✅ 已完成(2026-06-09) |
+| — | 路线图外:extended thinking / spike-005 follow-up 7 PR / 字体栈 / 6 UI bug 修复 / 工具集扩展 / step 4 follow-up / 多 Provider 4 PR | 额外 | ✅ 已完成 |
+| 3b-2 | ~~完整三栏 UI + rig-core 迁移~~ | — | ⛔ 废弃 (2026-06-09) |
+| 6b | MCP 暴露 | v1 | ⏸ 未开始 |
+| 5(原) | 嵌入式终端 + 权限系统 | v1 | 🔽 降为可选 |
 
 > ⚠️ **编号语义注意**:commit `05671f5` 标题写"步骤 6 — Anthropic extended thinking",跟路线图 §2.7 "步骤 6 = MCP + 多 Provider" 不一致。extended thinking 实际是路线图外的额外功能(在表里单列"—"),并非提前实现 MCP 步骤 6。详见 [§4 决策日志 2026-06-05 条](#2026-06-05--路线图状态校对步骤-3a-完成步骤-3b-暂缓extended-thinking-路线图外完成)。
+
+### 3.2 当前进行
+
+- 🔄 **Step 8 (代码重构与文档清理)** — 8-PR4 本 commit(文档更新 + 9 个空 spec 文件清理);接下来 8-PR5 STRUCTURE.md
+
+### 3.3 下一步候选(三选一,详见 [HANDOFF §2 当前状态](./HANDOFF.md#2-当前进度))
+
+- 完成 Step 8 → **8-PR5 STRUCTURE.md** (收尾,优先级最高)
+- 主线推进 → **步骤 6b (MCP 暴露)** 或 **步骤 5 (嵌入式终端 + 权限系统)**
+- 收尾已知 issue → **bug 1+2 position 修复**(RDP 双显示器场景,候选 `setFullscreen(true)` 兜底 — 详见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md`)
 
 **已沉淀(spike 期间完成的)—— 不必再做,出问题查这里**:
 - ✅ Tauri 在 WSL 跑得通 + 中文对齐 → [spikes/001](./spikes/001-wsl-tauri-window.md)
@@ -193,7 +233,7 @@
 - [x] 前端框架:**Vue 3 + Vite + Pinia**(见 [TECH §1.1](./TECH.md#11-锁定项经过调研验证))
 - [x] 前端 UI 库:**reka-ui** / shadcn-vue primitives(见 [TECH §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
 - [x] 包管理器:**pnpm**
-- [x] LLM 客户端:**手写 reqwest + SSE**(步骤 2 继续手写,步骤 3b 切 rig-core,见 [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
+- [x] LLM 客户端:**手写 reqwest + SSE + 自研 Provider trait**(步骤 2 继续手写,2026-06-09 决策放弃 rig-core 改自研 `Provider` trait,见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
 - [x] LLM BASE_URL / model / key:**全部从 env 读**(便于切 wukaijin / 真 Claude / 其他)
 - [x] 工作目录:**WSL 内部**(`~/...` 或 `/usr/local/code/...`),不走 `/mnt/c`
 - [x] Agent Daemon 化:**v1 之后再说**,本项目 7 步不阻塞(见 §2.8 占位)

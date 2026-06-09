@@ -53,7 +53,7 @@
 - [ ] 一个项目下多个 session,每个 session 独立对话历史
 - [ ] 跟单个 agent 对话,流式输出 token
 - [x] Agent 工具基础集:`read_file` / `write_file` / `shell` 已实现(步骤 2)
-- [ ] Agent 工具扩展:`edit_file` / `grep` / `glob` 未实现
+- [x] Agent 工具扩展:`edit_file` / `grep` / `glob` 已实现(2026-06-07,1 个 `feat(tools):` commit)
 - [ ] 文件变更实时显示(diff 视图)
 - [ ] Git 集成:每个 session 一个 worktree,自动 commit
 - [ ] WSL 项目管理:原生支持,文件操作走 WSL 内部路径
@@ -190,6 +190,15 @@
 - **Anthropic / OpenAI 协议变化** — 只能靠 adapter 层隔离
 - **Tauri 2 生态成熟度** — 还在快速演进,有些库还在追
 - **WSL 跨版本差异** — WSL2 行为稳定,但偶尔有 kernel upgrade 引起的边角问题
+
+**Step 8 (代码重构与文档清理) 进度 (2026-06-10)**:
+- 8-PR1 ✅ lib.rs (3195L) 拆为 state/commands/agent 子目录
+- 8-PR2 ✅ db.rs (2862L) 拆为 db/ 子模块
+- 8-PR3 ✅ ChatWindow/ModelsTab 拆为 sub-components
+- 8-PR4 🔄 文档更新 + 9 个空 spec 文件清理(本次)
+- 8-PR5 ⏳ STRUCTURE.md 创建
+
+详见 [IMPLEMENTATION §2.9](./IMPLEMENTATION.md#29-步骤-8--代码重构与文档清理)。
 
 ---
 
