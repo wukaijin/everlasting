@@ -868,3 +868,36 @@ PR3 of 06-08-multi-model-llm-provider-planning — OpenAI Chat Completions strea
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构
+
+**Date**: 2026-06-09
+**Task**: PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构
+**Branch**: `06-08-multi-model-llm-provider-planning-pr1-data-layer`
+
+### Summary
+
+PR4 是 multi-model 多 LLM provider 切换的最后一个 PR。完成 reka-ui 升级 1.0.0-alpha → 2.9.9；后端新增 update_session_model_id + test_provider 两个 IPC；前端新建 useProvidersStore / useModelsStore，重构 useConfigStore（model/baseUrl/configured 改为 catalog 派生 computed）；新建 SettingsModal（4 组件：shell + ProvidersTab + ModelsTab + DefaultTab，含 Test 按钮 + API Key 掩码）；StatusBar 改造为左下齿轮 + 右下 provider 分组 model dropdown；ChatPanel 删除 model chip。trellis-check 修 4 个 bug（latencyMs 字段名、cog 图标、test_provider 超时、doc comment）。261 cargo tests + vue-tsc strict + vite build 全部通过。归档 PR2+PR3+PR4 三个任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb00812` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

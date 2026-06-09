@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~772 | Active |
+| `journal-1.md` | ~903 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-06-09 | PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构 | `cb00812` | `06-08-multi-model-llm-provider-planning-pr1-data-layer` |
 | 19 | 2026-06-09 | Multi-model PR1: data layer (3 tables + 10 IPC + seed) | `f9c5648` | `06-08-multi-model-llm-provider-planning-pr1-data-layer` |
 | 18 | 2026-06-08 | step 4 follow-up: worktree attach/detach/delete opt-in + LLM transparency | `c21c069`, `1e4c02b`, `dc6e829`, `d083536` | `main` |
 | 17 | 2026-06-07 | step 4: git worktree + diff view + 2 worktree fix | `10d7403`, `6a4fe13`, `a11e4c9`, `4930408`, `da8e91d` | `main` |
