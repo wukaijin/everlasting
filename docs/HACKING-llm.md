@@ -365,3 +365,38 @@ function finalizeRequest(requestId: string, sessionId: string, _errored: boolean
 
 **经验沉淀**: Step 4 follow-up (06-08) 修法。`app/src/stores/streamController.ts` `finalizeRequest` 改 + `app/src/stores/chat.ts` 新增 `invalidateDiff` action + `app/src/stores/streamController.test.ts` 加 3 个 vitest + `.trellis/spec/frontend/state-management.md` "Send completion invalidation" 章节 + `.trellis/spec/backend/llm-contract.md` Scenario 7 "In-memory must mirror DB on send completion" sub-section。
 
+
+### 陷阱 5:OpenAI adapter `endpoint()` 重复拼 `/v1/` → 404 "path not found: /v1/v1/chat/completions" (2026-06-09 fix-session)
+
+**现象**:用户点"新 session" → 输入消息发送 → 页面上: 用户消息 + 红色 Stop 按钮闪一下 → 立即变空 session 状态。切换 session 回来: 只有用户消息, **无任何 assistant 回复**。`test_model` 按钮显示 OK(对同一个 model 测连通性也是 OK 的)。
+
+**根因**:`OpenAIConfig::endpoint()` 返回 `base_url + "/v1/chat/completions"`,但**真实 OpenAI 兼容 provider 的 `base_url` 已经包含 `/v1`**(PR1 seed `https://api.openai.com/v1`、用户 `https://hub.wukaijin.com/v1`、所有 OpenAI 兼容代理都是这格式),所以拼出来是 `/v1/v1/chat/completions`,upstream 404。
+
+**为什么 `test_model` 不出问题**:`lib.rs::test_model` 走的是**另一段代码**(`format!("{}/chat/completions", provider.base_url.trim_end_matches('/'))`,**没有** `/v1/`)。chat 走 `OpenAIProvider::endpoint()`(有 `/v1/`)。**两个地方对 OpenAI URL 的拼接方式不一致**,test 路径正确、production 路径错误。
+
+**为什么 Anthropic 没出问题**:`AnthropicConfig::endpoint()` 也是 `base_url + "/v1/messages"`,但 Anthropic 的 PR1 seed 是 `https://api.anthropic.com`(**无** `/v1`),所以 `base_url + "/v1/messages"` 拼出来是 `https://api.anthropic.com/v1/messages` ✓。**两种 protocol 的 `base_url` 约定不对称**:Anthropic 用裸 host、OpenAI 用 `host/v1`,**恰好**让 Anthropic 那边 endpoint 重复加 `/v1/` 也能 work,OpenAI 那边就破。
+
+**为什么是 "空 session 状态" 不是 "红色 error message"**:SSE 流从来没被打开(stream parse 阶段就 404 走了 `classify_error_response` 的 `InvalidRequest` 分支),`ChatEvent::Start` 都没 yield,前端 `handleChatEvent.done` / `.error` 都没进。**但** 8509bff 的 2013 wire invariant fix 在 `finalizeRequest` 里调了 `evict(sessionId)`,**就算** stream parser 正常跑,成功完成后也会 evict 让 cache 失效。这个 evict 在 error path 上也一样跑(三个 caller:`done` / `error` / catch),所以 SSE 404 → `ChatEvent::Error` → `finalizeRequest(_, _, true)` → `evict` → cache 清空 → 页面立刻变空状态 → 切换 session 回来 `ensureLoaded` 走 DB 只看到用户消息(assistant turn 没 persist,因为 LLM 都没成功返回)。**两个独立的 fix(evict + endpoint 修)叠在一起**才让症状是"空状态"而不是"红色 error message"。
+
+**复现命令**:
+```bash
+# 直接跑 openai.rs::tests::live_send_against_hub_wukaijin(默认 skip,设环境变量打开)
+EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
+  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo test --lib live_send_against_hub_wukaijin -- --nocapture
+# 修前: Err(InvalidRequest("path not found: /v1/v1/chat/completions"))
+# 修后: [Start, Delta("还没"), Delta("吃呢..."), Done { stop_reason: "end_turn" }]
+```
+
+**修法**:`OpenAIConfig::endpoint()` 改成 `base_url + "/chat/completions"`(不重复加 `/v1/`),跟 `test_model` / `test_provider` 拼接方式对齐。同时更新 `.trellis/spec/backend/llm-contract.md` Protocol differences table 把 OpenAI URL 那行从 `"+ "/v1/chat/completions"` 改成 `"+ "/chat/completions"` + 新加一段 "`base_url` convention is per-protocol, NOT symmetric" 说明两种 protocol 的 seed base_url 形状。
+
+**回归测试**:`openai::tests::endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` 锁住 `base_url = "https://api.openai.com/v1"` 和 `"https://hub.wukaijin.com/v1"` 两种真实 base_url shape 都只拼一次 `/v1/`。同时把老的 `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 测试用例的 base_url 从 `https://x.com/` / `https://x.com/openai`(无 /v1,触发旧 bug 行为)更新到 `https://x.com/v1/` / `https://x.com/openai/v1`(有 /v1,真实场景)。
+
+**经验沉淀**:**"base_url 约定" 必须 explicit,不要从 seed 形状或单条 test 里 infer**。这次 bug 之所以 264 个 cargo test + 55 个 vitest 都没抓到,是因为:
+1. `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 用的是无 `/v1` 的 base_url,只测了"加 /v1 之后能 trim 尾斜杠" / "自定义 host 工作"——**没**测"base_url 已经有 /v1 时不要重复加"这个最关键的 invariance。
+2. 跨模块 lint 没有: `OpenAIConfig::endpoint()` 和 `test_model` 里 `format!("{}/chat/completions", ...)` 是两段独立代码, 共享一个隐式约定但没共享一个 helper / 一个常量。
+3. live test 默认 skip,本地开发时不会跑真 endpoint。
+
+**未来防护**:
+- OpenAI / Anthropic 各抽一个 `pub fn chat_completions_url(base_url: &str) -> String` / `pub fn anthropic_messages_url(base_url: &str) -> String` helper,在 `lib.rs::test_model` / `test_provider` 和 `provider::*` adapter 里都调它,保证单一来源。
+- `openai::tests::live_send_against_hub_wukaijin` 在 CI 上默认开(只对 staging 仓库,对 prod 关,避免泄露真 api_key)。

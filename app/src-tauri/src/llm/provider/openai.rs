@@ -97,11 +97,27 @@ pub struct OpenAIConfig {
 
 impl OpenAIConfig {
     /// Trim trailing `/` from `base_url` and append the Chat
-    /// Completions endpoint. Mirrors the Anthropic adapter's
-    /// `endpoint()` helper.
+    /// Completions endpoint. **The base_url MUST include the API
+    /// version prefix** (e.g. `https://api.openai.com/v1`,
+    /// `https://hub.example.com/v1`); this function only appends
+    /// `/chat/completions` (no leading `/v1/`). This matches the
+    /// convention used by `test_model` / `test_provider` in
+    /// `lib.rs` and the OpenAI seed row (`https://api.openai.com/v1`).
+    ///
+    /// **BUG FIX (06-09-fix-session):** prior to this fix the
+    /// helper appended `/v1/chat/completions`, producing
+    /// `/v1/v1/chat/completions` against any base_url that already
+    /// included the version — which is every real OpenAI-compatible
+    /// provider (the `https://api.openai.com/v1` seed and any
+    /// user-added proxy like `https://hub.wukaijin.com/v1`).
+    /// The upstream returns 404 "path not found: /v1/v1/chat/completions",
+    /// the SSE parser never sees a stream, and `finalizeRequest`
+    /// evicts the in-memory cache so the UI lands on the empty
+    /// state (with the user message only in DB — exactly the
+    /// symptom the user reported as "新 session 发送消息，闪一下变空").
     pub fn endpoint(&self) -> String {
         format!(
-            "{}/v1/chat/completions",
+            "{}/chat/completions",
             self.base_url.trim_end_matches('/')
         )
     }
@@ -657,22 +673,52 @@ mod tests {
     #[test]
     fn endpoint_trims_trailing_slash() {
         let c = OpenAIConfig {
-            base_url: "https://api.openai.com/".to_string(),
+            base_url: "https://api.openai.com/v1/".to_string(),
             ..cfg()
         };
+        // The base_url already includes `/v1`; the helper only
+        // appends `/chat/completions` (no leading `/v1/`).
         assert_eq!(c.endpoint(), "https://api.openai.com/v1/chat/completions");
     }
 
     #[test]
     fn endpoint_uses_provided_base_url() {
         let c = OpenAIConfig {
-            base_url: "https://proxy.example.com/openai".to_string(),
+            base_url: "https://proxy.example.com/openai/v1".to_string(),
             ..cfg()
         };
         assert_eq!(
             c.endpoint(),
             "https://proxy.example.com/openai/v1/chat/completions"
         );
+    }
+
+    // BUG FIX (06-09-fix-session): real OpenAI-compatible
+    // providers (the seed's `https://api.openai.com/v1` and any
+    // user-added proxy like `https://hub.wukaijin.com/v1`)
+    // already include the `/v1` version in `base_url`. The
+    // endpoint helper must NOT add another `/v1/`, otherwise
+    // the upstream 404s with `path not found: /v1/v1/chat/completions`
+    // and the SSE parser never sees a stream — which is the
+    // root cause of the "新 session 发送消息，闪一下变空"
+    // regression. The pre-fix tests above would have caught this
+    // if the seed base_url had been passed in (they hard-coded
+    // `https://api.openai.com/...` without the version suffix);
+    // the regression test below covers the realistic base_url
+    // shape.
+    #[test]
+    fn endpoint_does_not_double_prefix_v1_when_base_url_includes_v1() {
+        let c = OpenAIConfig {
+            base_url: "https://api.openai.com/v1".to_string(),
+            ..cfg()
+        };
+        assert_eq!(c.endpoint(), "https://api.openai.com/v1/chat/completions");
+
+        let c = OpenAIConfig {
+            base_url: "https://hub.wukaijin.com/v1".to_string(),
+            ..cfg()
+        };
+        assert_eq!(c.endpoint(), "https://hub.wukaijin.com/v1/chat/completions");
     }
 
     // ---- protocol() and capabilities() ----
@@ -1045,5 +1091,60 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(ev, ChatEvent::ThinkingDelta { text } if text == "thinking..."));
+    }
+
+    // ---- live integration test (requires hub.wukaijin.com reachable) ----
+
+    /// Live integration test against the real MiniMax OpenAI-compatible
+    /// endpoint, mirroring the user's default-model configuration.
+    /// Set `EVERLASTING_RUN_LIVE_OPENAI_TEST=1` to opt in (skipped by
+    /// default to keep CI fast and offline-safe).
+    #[tokio::test]
+    async fn live_send_against_hub_wukaijin() {
+        if std::env::var("EVERLASTING_RUN_LIVE_OPENAI_TEST").is_err() {
+            eprintln!("skipping live test (set EVERLASTING_RUN_LIVE_OPENAI_TEST=1 to run)");
+            return;
+        }
+        use futures_util::StreamExt;
+        let c = OpenAIConfig {
+            base_url: "https://hub.wukaijin.com/v1".to_string(),
+            model: "MiniMax-M3".to_string(),
+            api_key: "ah-22ae6bdaec4403cfe1a10fd5f56dbe0f6eeafd71661c46ad7b43a267c2922f86".to_string(),
+            max_tokens: 65536,
+            reasoning_effort: None,
+        };
+        let p = OpenAIProvider::new(c);
+        let mut s = p.send(
+            Some("You are a coding agent.".to_string()),
+            vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("吃了吗".to_string()),
+            }],
+            vec![],
+        );
+        let mut events = Vec::new();
+        while let Some(ev) = s.next().await {
+            events.push(ev);
+        }
+        eprintln!("=== events from live send: {} total ===", events.len());
+        for (i, e) in events.iter().enumerate() {
+            eprintln!("  [{}] {:?}", i, e);
+        }
+        // Assertions
+        let mut saw_start = false;
+        let mut accumulated = String::new();
+        let mut saw_done = false;
+        for e in &events {
+            match e {
+                Ok(ChatEvent::Start) => saw_start = true,
+                Ok(ChatEvent::Delta { text }) => accumulated.push_str(text),
+                Ok(ChatEvent::Done { .. }) => saw_done = true,
+                Err(e) => panic!("got error event: {:?}", e),
+                _ => {}
+            }
+        }
+        assert!(saw_start, "expected Start event");
+        assert!(saw_done, "expected Done event");
+        assert!(!accumulated.is_empty(), "expected non-empty text, got: {:?}", accumulated);
     }
 }
