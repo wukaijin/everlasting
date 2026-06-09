@@ -61,6 +61,7 @@ PR4 (`cb00812`) 落地了 multi-model 的 UI 层,引入了一个全新组件 `ap
   - 调 `invoke("test_model", { modelId: m.id })`
   - 显示测试中 / 成功(绿色 + 延迟 ms) / 失败(红色 + error)
   - 与 ProvidersTab 旧 Test 按钮的 UX 一致(loading / result state)
+  - **结果保留条件 (用户 2026-06-09 决策)**: 行内 inline 展示, 保留到 (a) 用户再次点该行 Test 按钮 或 (b) 该 model 行被删除。切换 provider / 编辑 model 字段不清结果(测试的就是 model 整体连通性,不是某个字段)
 - 后端新增 IPC `test_model(model_id: String) -> { success, latencyMs, error }`:
   - 路径:`app/src-tauri/src/lib.rs` (在 `test_provider` 旁边,约 line 482 后)
   - 实现:

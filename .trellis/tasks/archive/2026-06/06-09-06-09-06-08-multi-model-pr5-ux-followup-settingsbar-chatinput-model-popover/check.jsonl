@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "verify <script setup> + scoped styles + cog icon 用法 + 11px mono 字体在 Sidebar/ModelSelect/ChatInput 都符合规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "verify ModelSelect 状态接入: per-session model_id 优先 → global default, isStreaming 来自 useChatStore, models 来自 useModelsStore.modelsGroupedByProvider"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "verify vue-tsc --noEmit 0 error: invoke<{success,latencyMs,error}>('test_model', {modelId}) 泛型, ref<HTMLElement|null> 类型, onModelChange event 类型"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "verify test_model handler 用 catalog 的 model.model_name (不是 hardcoded claude-sonnet-4-5); 跟 test_provider 平行 (anthropic/openai 分支) 不动 chat 流程"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "verify test_model 注册到 tauri::generate_handler! (line 2373 附近), handler 跟 test_provider 紧邻"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "verify ModelSelect.vue 在 app/src/components/chat/ (跟 ChatInput 同目录), StatusBar.vue 整体删除, 4 个 stores 关于 StatusBar 的注释清理"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "verify ModelSelect 抄 worktree popover (onDocumentClick + !root.contains + Esc 关闭) 行为/视觉一致; 没引入 reka-ui DropdownMenu (D3 决议)"}
+{"file": ".trellis/tasks/06-09-06-09-06-08-multi-model-pr5-ux-followup-settingsbar-chatinput-model-popover/prd.md", "reason": "R1-R4 全部 acceptance criteria 都对: Settings 入口在 sidebar footer / Test 测 Model / Model 选择在 chat-input__hint 右侧 / popover 向上弹抄 worktree"}

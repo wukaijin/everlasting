@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue 3 <script setup> + Composition API + scoped styles; 改 Sidebar.vue / 新建 ModelSelect.vue / 改 ChatInput.vue 都要遵守。11px mono + cog icon 跟 StatusBar/Sidebar header 一致"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "ModelSelect 读 useModelsStore.modelsGroupedByProvider + useChatStore.currentSessionId/isCurrentSessionStreaming + useConfigStore.configured; Sidebar 引入 useChatStore。Pinia store 边界 + getter/computed 模式"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "TS strict; invoke<{success, latencyMs, error}>('test_model', {modelId}) 泛型; onModelChange 事件类型; ref<HTMLElement | null>(null) worktreeMenuRoot 同款"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新文件 ModelSelect.vue 放 app/src/components/chat/ (跟 ChatInput.vue 同目录, 跟工作树组件并列); StatusBar.vue 整体删除路径在 app/src/components/layout/"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "后端 test_model IPC handler 走 anthropic/openai 分支 (跟 test_provider 平行), 不动 chat 主流程; 用 provider_row.base_url + api_key + protocol + 真实 model.model_name 构造请求"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "lib.rs 新增 test_model handler + 注册到 tauri::generate_handler!; 紧邻 test_provider (line 482 附近)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "worktree popover 已在 ChatPanel.vue 实现, ModelSelect 抄相同结构不引入新依赖 (reka-ui DropdownMenu) — 符合 code-reuse 思维 (D3 决议); Sidebar footer 简化原 StatusBar 齿轮 → 符合 reuse 原则"}
