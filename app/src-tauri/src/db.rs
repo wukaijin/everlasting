@@ -1487,6 +1487,37 @@ pub async fn list_providers(pool: &SqlitePool) -> Result<Vec<ProviderRow>, sqlx:
         .collect()
 }
 
+/// Get a single provider by `id`. Returns `None` when the row
+/// doesn't exist. Used by the `test_model` IPC to look up the
+/// parent provider given a model id.
+pub async fn get_provider(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ProviderRow>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, protocol, display_name, base_url, api_key, created_at, updated_at
+        FROM providers
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        None => Ok(None),
+        Some(r) => Ok(Some(ProviderRow {
+            id: r.try_get("id")?,
+            protocol: r.try_get("protocol")?,
+            display_name: r.try_get("display_name")?,
+            base_url: r.try_get("base_url")?,
+            api_key: r.try_get("api_key")?,
+            created_at: r.try_get("created_at")?,
+            updated_at: r.try_get("updated_at")?,
+        })),
+    }
+}
+
 /// Patch a provider by `id`. Returns `None` if the row doesn't
 /// exist; otherwise returns the updated row. `updated_at` is bumped
 /// to the current time on every successful update.
@@ -1626,6 +1657,45 @@ pub async fn list_models(pool: &SqlitePool) -> Result<Vec<ModelWithProvider>, sq
             })
         })
         .collect()
+}
+
+/// Get a single model row by `id` (no provider join). Returns
+/// `None` when the row doesn't exist. Used by the `test_model`
+/// IPC, which then looks up the parent provider separately.
+pub async fn get_model(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ModelRow>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, provider_id, model_name, display_name,
+               max_tokens, thinking_effort, supports_thinking,
+               context_window, created_at, updated_at
+        FROM models
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        None => Ok(None),
+        Some(r) => {
+            let supports_thinking_i: i32 = r.try_get("supports_thinking")?;
+            Ok(Some(ModelRow {
+                id: r.try_get("id")?,
+                provider_id: r.try_get("provider_id")?,
+                model_name: r.try_get("model_name")?,
+                display_name: r.try_get("display_name")?,
+                max_tokens: r.try_get("max_tokens")?,
+                thinking_effort: r.try_get("thinking_effort")?,
+                supports_thinking: supports_thinking_i != 0,
+                context_window: r.try_get("context_window")?,
+                created_at: r.try_get("created_at")?,
+                updated_at: r.try_get("updated_at")?,
+            }))
+        }
+    }
 }
 
 /// Patch a model by `id`. Returns `None` if the row doesn't exist.

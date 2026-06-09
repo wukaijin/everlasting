@@ -4,8 +4,18 @@
 // Add/Edit form includes: provider select, model name, display name,
 // max tokens (optional), thinking effort (optional), supports thinking,
 // context window.
+//
+// PR5 follow-up: each row now has a "测试" button (right side, in
+// `.models-tab__row-actions`) that invokes the new `test_model` IPC
+// (catalog-resolved, real `model.model_name` payload). The result is
+// rendered inline in the row and persists until either (a) the user
+// clicks Test again, or (b) the model row is deleted. Switching
+// providers or editing the model fields intentionally does NOT clear
+// the result — the test is for the model as a whole, not for the
+// form draft.
 
 import { ref, reactive, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useModelsStore, type ModelWithProvider } from "../../stores/models";
 import { useProvidersStore } from "../../stores/providers";
 import Icon from "../Icon.vue";
@@ -31,6 +41,17 @@ const form = reactive({
   supportsThinking: false,
   contextWindow: 8192,
 });
+
+// --- Test state ----------------------------------------------------------
+// Map<modelId, TestState> — one slot per model row. Cleared on
+// re-test (entry overwritten) or on model deletion (entry removed
+// by `confirmDelete` below).
+type TestState =
+  | { kind: "running" }
+  | { kind: "ok"; latencyMs: number }
+  | { kind: "fail"; error: string };
+
+const tests = reactive<Record<string, TestState>>({});
 
 // --- Computed ------------------------------------------------------------
 
@@ -134,9 +155,58 @@ async function confirmDelete() {
   deleteConfirmId.value = null;
   try {
     await modelsStore.remove(id);
+    // PR5: drop any cached Test result for the deleted model so
+    // a future row with a colliding id doesn't render a stale
+    // result.
+    delete tests[id];
   } catch (e) {
     console.error("delete model failed:", e);
   }
+}
+
+/** PR5: invoke the `test_model` IPC for a specific catalog row.
+ *  Renders the result inline in the row (`.models-tab__row-test`).
+ *  Per the PR5 spec, the result persists until the user re-clicks
+ *  Test on the same row OR the row is deleted. */
+async function runTest(modelId: string) {
+  tests[modelId] = { kind: "running" };
+  try {
+    const result = await invoke<{
+      success: boolean;
+      latencyMs: number;
+      error: string | null;
+    }>("test_model", { modelId });
+    if (result.success) {
+      tests[modelId] = { kind: "ok", latencyMs: result.latencyMs };
+    } else {
+      tests[modelId] = {
+        kind: "fail",
+        error: result.error ?? "Connection failed",
+      };
+    }
+  } catch (e) {
+    tests[modelId] = { kind: "fail", error: String(e) };
+  }
+}
+
+/** PR5: per-row Test result rendering helpers. Extracted from
+ *  the template so the runtime narrowing happens in TypeScript
+ *  (the template language doesn't allow `as` casts). */
+function testClass(t: TestState | undefined): Record<string, boolean> {
+  if (!t) return {};
+  return {
+    "models-tab__row-test--ok": t.kind === "ok",
+    "models-tab__row-test--fail": t.kind === "fail",
+    "models-tab__row-test--running": t.kind === "running",
+  };
+}
+
+function okLatency(t: TestState | undefined): number {
+  return t?.kind === "ok" ? t.latencyMs : 0;
+}
+
+function failError(t: TestState | undefined): string {
+  return t?.kind === "fail" ? t.error : "";
 }
 
 </script>
@@ -185,8 +255,38 @@ async function confirmDelete() {
             <span class="models-tab__tag models-tab__tag--muted">
               {{ m.contextWindow >= 1000 ? `${m.contextWindow / 1000}k` : m.contextWindow }}
             </span>
+            <!-- PR5: per-row Test result, inline. The label
+                 appears under the model_id so the row's vertical
+                 rhythm is unchanged on the success / never-tested
+                 path. -->
+            <span
+              v-if="tests[m.id]"
+              class="models-tab__row-test"
+              :class="testClass(tests[m.id])"
+            >
+              <template v-if="tests[m.id]?.kind === 'running'">
+                测试中…
+              </template>
+              <template v-else-if="tests[m.id]?.kind === 'ok'">
+                <Icon name="check" :size="11" />
+                通过 ({{ okLatency(tests[m.id]) }}ms)
+              </template>
+              <template v-else>
+                <Icon name="warn" :size="11" />
+                {{ failError(tests[m.id]) }}
+              </template>
+            </span>
           </div>
           <div class="models-tab__row-actions">
+            <button
+              type="button"
+              class="models-tab__btn models-tab__btn--ghost"
+              :disabled="tests[m.id]?.kind === 'running'"
+              :title="tests[m.id]?.kind === 'running' ? '测试中…' : '测试此 model 连通性'"
+              @click="runTest(m.id)"
+            >
+              <Icon name="signal" :size="12" />
+            </button>
             <button
               type="button"
               class="models-tab__btn models-tab__btn--ghost"
@@ -442,6 +542,37 @@ async function confirmDelete() {
 
 .models-tab__tag--muted {
   background: var(--color-bg-border);
+  color: var(--color-text-muted);
+}
+
+/* PR5: per-row Test result badge. Inline with the model_id so
+   the row's vertical rhythm matches the pre-PR5 layout. The
+   running state uses the muted text color (it'll resolve to ok
+   or fail shortly); the success / fail states use the same
+   tool-color tokens as the rest of the settings tabs. */
+.models-tab__row-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.models-tab__row-test--ok {
+  color: var(--color-tool-write);
+}
+
+.models-tab__row-test--fail {
+  color: var(--color-tool-error);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.models-tab__row-test--running {
   color: var(--color-text-muted);
 }
 

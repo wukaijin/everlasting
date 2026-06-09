@@ -29,7 +29,7 @@ export const useConfigStore = defineStore("config", () => {
 
   // -----------------------------------------------------------------------
   // Backward-compatible computed properties (derived from the catalog).
-  // Existing components (StatusBar, ChatPanel) still read these.
+  // Existing components (Settings status badges, etc.) still read these.
   // Step 5 will clean up all call sites and remove these fields.
   // -----------------------------------------------------------------------
 
@@ -52,8 +52,8 @@ export const useConfigStore = defineStore("config", () => {
   });
 
   /** True when a default model exists AND its provider has a non-empty
-   *  api_key. Drives the StatusBar's "ANTHROPIC_API_KEY 未设置" hint
-   *  and the warn styling. */
+   *  api_key. Drives the Settings tab's "(api key 未设置)" hint and
+   *  the warn styling. */
   const configured = computed<boolean>(() => {
     const modelsStore = useModelsStore();
     const dm = modelsStore.defaultModel;

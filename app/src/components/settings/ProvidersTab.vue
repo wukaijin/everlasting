@@ -1,11 +1,20 @@
 <script setup lang="ts">
 // ProvidersTab — CRUD for LLM providers. Each provider has a protocol
-// (anthropic/openai), display name, base URL, and API key. The Test
-// button validates the api_key against the provider's endpoint. Save
-// is disabled until Test passes (PRD D8 / Q8).
+// (anthropic/openai), display name, base URL, and API key.
+//
+// PR5 follow-up: the Test button that previously lived here has
+// been removed. The user-perceived "Test" flow now lives on the
+// Models tab (per-row "测试" button) and runs `test_model` —
+// validating that a specific model_name can be reached end-to-end
+// is the user-meaningful connectivity check. A provider-level
+// protocol-reachability probe (the old `test_provider` IPC) was
+// only a subset of that and surfaced confusing results when a
+// provider routed to a GLM-style proxy with multiple model names
+// where some were 404. `test_provider` is still in the Rust
+// registry (`#[allow(dead_code)]`) for future catalog-resolution
+// use, but the frontend never calls it.
 
 import { ref, reactive, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { useProvidersStore, type ProviderRow } from "../../stores/providers";
 import { useModelsStore } from "../../stores/models";
 import Icon from "../Icon.vue";
@@ -27,27 +36,19 @@ const form = reactive({
   apiKey: "",
 });
 
-const testResult = ref<{
-  success: boolean;
-  latencyMs: number;
-  error: string | null;
-} | null>(null);
-
-const testing = ref(false);
 const saving = ref(false);
 const showApiKey = ref(false);
 const deleteConfirmId = ref<string | null>(null);
 
-/** True when the form has been tested and the test passed. Resets on
- *  any form field change. */
-const testPassed = computed(() => testResult.value?.success === true);
-
-/** Save is enabled only when test passed and required fields are filled. */
+/** PR5: Save is enabled when required fields are filled and the
+ *  form isn't mid-save. The pre-PR5 gate also required
+ *  `testPassed` — that gate is gone now that the Test button
+ *  moved to ModelsTab. */
 const canSave = computed(
   () =>
-    testPassed.value &&
     form.displayName.trim() !== "" &&
     form.baseUrl.trim() !== "" &&
+    form.apiKey.trim() !== "" &&
     !saving.value,
 );
 
@@ -58,7 +59,6 @@ function resetForm() {
   form.displayName = "";
   form.baseUrl = "";
   form.apiKey = "";
-  testResult.value = null;
   showApiKey.value = false;
   editId.value = null;
 }
@@ -75,47 +75,12 @@ function startEdit(p: ProviderRow) {
   form.displayName = p.displayName;
   form.baseUrl = p.baseUrl;
   form.apiKey = p.apiKey;
-  testResult.value = null;
   showApiKey.value = false;
 }
 
 function cancelEdit() {
   mode.value = "idle";
   resetForm();
-}
-
-/** Track form changes to invalidate the test result. */
-function onFormChange() {
-  testResult.value = null;
-}
-
-async function runTest() {
-  testing.value = true;
-  testResult.value = null;
-  try {
-    const result = await invoke<{
-      success: boolean;
-      latencyMs: number;
-      error: string | null;
-    }>("test_provider", {
-      baseUrl: form.baseUrl,
-      apiKey: form.apiKey,
-      protocol: form.protocol,
-    });
-    testResult.value = {
-      success: result.success,
-      latencyMs: result.latencyMs,
-      error: result.error,
-    };
-  } catch (e) {
-    testResult.value = {
-      success: false,
-      latencyMs: 0,
-      error: String(e),
-    };
-  } finally {
-    testing.value = false;
-  }
 }
 
 async function save() {
@@ -245,7 +210,7 @@ function protocolBadgeClass(protocol: string): string {
 
       <label class="providers-tab__field">
         <span class="providers-tab__label">Protocol</span>
-        <select v-model="form.protocol" class="providers-tab__input providers-tab__select" @change="onFormChange">
+        <select v-model="form.protocol" class="providers-tab__input providers-tab__select">
           <option value="anthropic">Anthropic (Messages API)</option>
           <option value="openai">OpenAI (Chat Completions)</option>
         </select>
@@ -258,7 +223,6 @@ function protocolBadgeClass(protocol: string): string {
           type="text"
           class="providers-tab__input"
           placeholder="My Provider"
-          @input="onFormChange"
         />
       </label>
 
@@ -269,7 +233,6 @@ function protocolBadgeClass(protocol: string): string {
           type="text"
           class="providers-tab__input"
           placeholder="https://api.anthropic.com"
-          @input="onFormChange"
         />
       </label>
 
@@ -281,7 +244,6 @@ function protocolBadgeClass(protocol: string): string {
             :type="showApiKey ? 'text' : 'password'"
             class="providers-tab__input"
             placeholder="sk-..."
-            @input="onFormChange"
           />
           <button
             type="button"
@@ -294,29 +256,8 @@ function protocolBadgeClass(protocol: string): string {
         </div>
       </label>
 
-      <!-- Test result -->
-      <div v-if="testResult" class="providers-tab__test-result">
-        <span v-if="testResult.success" class="providers-tab__test-ok">
-          <Icon name="check" :size="12" />
-          Connected ({{ testResult.latencyMs }}ms)
-        </span>
-        <span v-else class="providers-tab__test-fail">
-          <Icon name="warn" :size="12" />
-          {{ testResult.error || "Connection failed" }}
-        </span>
-      </div>
-
       <!-- Form actions -->
       <div class="providers-tab__form-actions">
-        <button
-          type="button"
-          class="providers-tab__btn providers-tab__btn--secondary"
-          @click="runTest"
-          :disabled="testing || !form.baseUrl || !form.apiKey"
-        >
-          <Icon name="signal" :size="12" />
-          {{ testing ? "Testing..." : "Test" }}
-        </button>
         <button
           type="button"
           class="providers-tab__btn providers-tab__btn--primary"

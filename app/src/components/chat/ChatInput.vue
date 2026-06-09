@@ -23,6 +23,7 @@
 
 import { ref } from "vue";
 import Icon from "../Icon.vue";
+import ModelSelect from "./ModelSelect.vue";
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -135,7 +136,11 @@ const sendDisabled = (): boolean => props.sending || !input.value.trim();
       </button>
     </div>
     <div class="chat-input__hint">
-      ⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令
+      <span class="chat-input__hint-text">⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令</span>
+      <!-- PR5: model picker popover (upward-opening) attached to
+           the right edge of the hint row. Replaces the
+           bottom-of-content `StatusBar` from PR4. -->
+      <ModelSelect />
     </div>
   </footer>
 </template>
@@ -260,5 +265,14 @@ const sendDisabled = (): boolean => props.sending || !input.value.trim();
   font-size: 11px;
   color: var(--color-text-muted);
   user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-input__hint-text {
+  flex: 1;
+  min-width: 0;
 }
 </style>

@@ -2,7 +2,7 @@
 // SettingsModal — full-viewport overlay with 3 tabs (Providers, Models,
 // Default). Uses reka-ui DialogRoot/DialogContent for overlay + focus trap
 // and TabsRoot/TabsList/TabsTrigger/TabsContent for the tab switcher.
-// Receives v-model:open from the parent (StatusBar gear icon).
+// Receives v-model:open from the parent (Sidebar footer button).
 
 import { DialogRoot, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogClose } from "reka-ui";
 import { TabsRoot, TabsList, TabsTrigger, TabsContent } from "reka-ui";

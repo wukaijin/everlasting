@@ -128,8 +128,8 @@ interface LoadedSession {
     last_worktree_path: string | null;
     /** PR4 of multi-model: per-session model override. `null`
      *  means the session uses the global default model. The
-     *  StatusBar dropdown reads/writes this via the
-     *  `update_session_model_id` IPC. */
+     *  ModelSelect popover in the chat input reads/writes this
+     *  via the `update_session_model_id` IPC. */
     model_id: string | null;
   };
   messages: LoadedMessage[];

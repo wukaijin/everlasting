@@ -21,6 +21,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 | [CJK Font Bundling](./cjk-fonts.md) | 跨平台中文字体打包规范 (HarmonyOS Sans SC 子集, 工具链, license 合规) | Filled (2026-06) |
+| [Popover Pattern](./popover-pattern.md) | Hand-rolled popover pattern (onDocumentClick + Esc close), position direction rule (top/bottom of viewport), worktree + ModelSelect references, anti reka-ui DropdownMenu rationale | Filled (2026-06-09, PR5 follow-up) |
 
 ---
 

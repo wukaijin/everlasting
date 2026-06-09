@@ -17,7 +17,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | sqlx patterns, idempotent migrations, naming conventions, enum / soft-FK / cascade / denormalized-list patterns, `app_config` key/value, test pool setup | Filled (PR1 of 06-08) |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [LLM API Contract](./llm-contract.md) | Anthropic Messages API request/response contract, extended thinking, SSE event lifecycle, env keys, validation matrix | Filled (step 6) |
+| [LLM API Contract](./llm-contract.md) | Anthropic Messages API + extended thinking + SSE lifecycle + multi-provider dispatch (Anthropic/OpenAI) + test_model per-model connectivity probe + worktree/cancel + tool set | Filled (step 6, PR2-3, PR5 follow-up) |
 | [Git Diff Contract](./git-diff.md) | Workdir-vs-branch-tip FileDiff source of truth, `git --numstat` over `Patch::line_stats()`, fallback policy, numstat subprocess contract | Filled (2026-06-08, step 4 follow-up Bug 2) |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |

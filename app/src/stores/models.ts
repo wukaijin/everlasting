@@ -36,9 +36,10 @@ export const useModelsStore = defineStore("models", () => {
     return models.value.find((m) => m.id === defaultModelId.value) ?? null;
   });
 
-  /** Models grouped by provider — for the StatusBar dropdown and the
-   *  Models tab grouped list. Each group carries the provider's display
-   *  name and protocol alongside its models. */
+  /** Models grouped by provider — for the ModelSelect dropdown in
+   *  the chat input and the Models tab grouped list. Each group
+   *  carries the provider's display name and protocol alongside
+   *  its models. */
   const modelsGroupedByProvider = computed(() => {
     const groups = new Map<
       string,

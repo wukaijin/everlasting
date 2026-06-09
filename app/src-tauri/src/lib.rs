@@ -478,7 +478,17 @@ async fn update_session_model_id(
 /// The function does NOT access `AppState` — it only makes an HTTP
 /// request to validate the credentials, keeping the test isolated
 /// from the app's DB and LLM dispatch.
+///
+/// DEPRECATED (PR5 follow-up): the frontend no longer calls this
+/// IPC. The user-perceived Test flow is now `test_model`, which
+/// validates end-to-end that a specific catalog `model.model_name`
+/// can be reached (this function used a hardcoded
+/// `claude-sonnet-4-5` body and was therefore unable to surface
+/// model-name 404s on a GLM-style proxy). Kept in the registry
+/// for future catalog-resolution use cases that need a
+/// protocol-only reachability probe.
 #[tauri::command]
+#[allow(dead_code)]
 async fn test_provider(
     base_url: String,
     api_key: String,
@@ -535,6 +545,195 @@ async fn test_provider(
         }
         _ => {
             (false, Some(format!("unsupported protocol: {}", protocol)))
+        }
+    };
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    Ok(serde_json::json!({
+        "success": success,
+        "latencyMs": latency_ms,
+        "error": error,
+    }))
+}
+
+/// Test a specific model (looked up in the catalog) by sending a
+/// lightweight request to its provider using the real `model_name`
+/// the user configured. Returns a JSON object with `success`,
+/// `latencyMs`, and optional `error` — same shape as `test_provider`
+/// so the frontend can use a single result renderer.
+///
+/// Differences from `test_provider`:
+/// - Reads `model` and `provider` rows from the catalog by id
+///   (the user already configured them in Settings).
+/// - `body["model"]` uses the real `model.model_name` (e.g. a GLM
+///   proxy's `MiniMax-M2.7`), not a hardcoded `claude-sonnet-4-5`.
+/// - Errors when the model id is unknown or the parent provider
+///   is missing surface as `{ success: false, error: "..." }`.
+///
+/// Replaces the user-perceived "Test" flow from `test_provider` —
+/// the per-model test is what the user actually cares about (can
+/// this model name be reached end-to-end?). `test_provider`
+/// remains in the registry for catalog-resolution future use.
+#[tauri::command]
+async fn test_model(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+) -> Result<serde_json::Value, String> {
+    // Look up the model + its parent provider. The provider row
+    // carries the credentials (api_key) and base URL.
+    let model = match db::get_model(&state.db, &model_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "latencyMs": 0,
+                "error": format!("model '{}' not found", model_id),
+            }));
+        }
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "latencyMs": 0,
+                "error": format!("failed to load model: {}", e),
+            }));
+        }
+    };
+
+    let provider = match db::get_provider(&state.db, &model.provider_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "latencyMs": 0,
+                "error": format!(
+                    "provider for model '{}' is missing",
+                    model.display_name
+                ),
+            }));
+        }
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "latencyMs": 0,
+                "error": format!("failed to load provider: {}", e),
+            }));
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {}", e))?;
+    let start = std::time::Instant::now();
+
+    // Mirror the protocol branches in `test_provider`, but with
+    // `body["model"]` set to the real catalog model_name.
+    let (success, error) = match provider.protocol.as_str() {
+        "anthropic" => {
+            let url = format!(
+                "{}/v1/messages",
+                provider.base_url.trim_end_matches('/')
+            );
+            let body = serde_json::json!({
+                "model": model.model_name,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            let resp = match client
+                .post(&url)
+                .header("x-api-key", &provider.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "latencyMs": latency_ms,
+                        "error": format!("request failed: {}", e),
+                    }));
+                }
+            };
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (
+                    false,
+                    Some(format!(
+                        "HTTP {}: {}",
+                        status,
+                        body_text.chars().take(200).collect::<String>()
+                    )),
+                )
+            }
+        }
+        "openai" => {
+            // Round-trip a real `chat/completions` request with
+            // the catalog's `model.model_name` on the wire. This
+            // is what the user actually wants to verify: not just
+            // "the provider's base URL is reachable" (which the
+            // cheaper `GET /models` probe also gives you) but
+            // "this specific model name is supported by the
+            // provider". An unknown or deprecated model_name
+            // surfaces here as a 400 with `code: "model_not_found"`
+            // (or similar) so the user gets the real failure
+            // reason — not a confusing success followed by a 404
+            // on the next actual `chat` call.
+            let url = format!(
+                "{}/chat/completions",
+                provider.base_url.trim_end_matches('/')
+            );
+            let body = serde_json::json!({
+                "model": model.model_name,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1
+            });
+            let resp = match client
+                .post(&url)
+                .header(
+                    "authorization",
+                    format!("Bearer {}", provider.api_key),
+                )
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "latencyMs": latency_ms,
+                        "error": format!("request failed: {}", e),
+                    }));
+                }
+            };
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (
+                    false,
+                    Some(format!(
+                        "HTTP {}: {}",
+                        status,
+                        body_text.chars().take(200).collect::<String>()
+                    )),
+                )
+            }
+        }
+        _ => {
+            (false, Some(format!("unsupported protocol: {}", provider.protocol)))
         }
     };
 
@@ -2371,6 +2570,7 @@ pub fn run() {
             set_default_model,
             update_session_model_id,
             test_provider,
+            test_model,
             list_sessions,
             create_session,
             load_session,
