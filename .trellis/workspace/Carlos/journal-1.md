@@ -283,3 +283,36 @@ PR5 follow-up (commit b919d9e) 修复 PR4 整体 UX 错位. R1 Settings 入口�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: UI polish: reka-ui form primitives + cog-6-tooth + worktree chip + popup animations + text-muted
+
+**Date**: 2026-06-09
+**Task**: UI polish: reka-ui form primitives + cog-6-tooth + worktree chip + popup animations + text-muted
+**Branch**: `main`
+
+### Summary
+
+5 项 UI 优化 + 3 bug fix (commit b85d5d9). R1 Settings 3 tab 表单控件 → reka-ui primitives (ProvidersTab SelectRoot, ModelsTab SelectRoot+CheckboxRoot, DefaultTab RadioGroupRoot) + 主题色 (reka-ui 2.9.9 不含 TextFieldRoot, 用 native <input> 包装). R2 Sidebar footer 图标换 heroicons Cog6ToothIcon (0 依赖) + 18px. R3 worktree chip 右接缝 (后续 bug fix: 主 chip 永远 strip 右边, worktreeState === 'none' 时 toggle 缺席导致缺右边框/圆角 — 加 conditional class --alone 修复). R4 动画混合 (modal fade+scale 0.96→1, popover fade+slide 方向匹配). R5 --color-text-muted #64748b → #7c8aa0. Bug fix #2 SelectItem value="" → "none" sentinel (5 处). Bug fix #3 SelectContent position: static → fixed 让 z-index: 3000 生效 (之前 dropdown 被 modal mask 盖住). Spec: popover-pattern.md +Animation section, 新建 reka-ui-usage.md (2.9.9 version pin + TextFieldRoot gotcha) + design-tokens.md (color/font tokens + text-muted ADR). 验证: vue-tsc/pnpm build/cargo test 262/vitest 55 全 pass.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b85d5d9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
