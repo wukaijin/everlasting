@@ -1,0 +1,23 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "PR-1 拆 commands/sessions.rs 涉及 diff_worktree; PR-5 拆 llm-contract.md 5 子文件的目标"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR-2 拆 db.rs 时 sqlx 模式 + app_config + 索引约定的参考"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "PR-1 拆 commands/sessions.rs 涉及 diff_worktree 的工作目录 vs branch tip FileDiff 契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PR-1 拆 commands/ + agent/ 时错误类型分层参考"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "PR-1 拆 agent/ 时 tracing 注入点参考"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "PR-1 拆 commands/ + agent/ 时 forbidden patterns 参考"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "PR-1 拆 agent/chat.rs 时 ToolContext 边界校验参考"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "PR-3 拆 ChatPanel.vue 时 streamController 单源模式参考"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "PR-3 拆 WorktreeChip.vue 时手写 popover 模式参考"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "PR-3 拆 ModelsTab.vue 时 reka-ui primitives 模式参考"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "PR-3 拆前端组件时字体加载参考"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "PR-3 拆前端组件时设计令牌参考"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "PR-1 拆 lib.rs 时跨层思考 (IPC ↔ agent ↔ db) 参考"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "PR-1/2/3 拆解时避免重复模式参考"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/00-INDEX.md", "reason": "审计包索引 - 6 + 1 文档结构 + 6 个决策点摘要"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/01-source-file-audit.md", "reason": "6 个 >800 行文件结构 + 拆分序列 + 5 关键决策点 (lib.rs 拆, db.rs 拆, openai 拆, wire 暂不拆, streamController 暂不拆)"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/02-markdown-audit.md", "reason": "35 个 markdown 评估 + 高优 6 项 / 中优 4 项 / 低优 2 项 + 路线图重写建议"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/03-roadmap-rethink.md", "reason": "7 步路线图与实际落地对比 (2 处偏差: 步骤 4 + 6a 已落地) + 路线图重写提案 + BACKLOG 顺序"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md", "reason": "项目结构全景图 13 节 - IPC 表面 / DB schema / 设计模式 / 依赖版本 / STRUCTURE.md 草案"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/05-CLAUDE-README-injection-proposal.md", "reason": "PR-4 改 CLAUDE.md / README.md 的具体 diff 提案"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/06-synthesis-vs-opus.md", "reason": "本地 audit 与 Opus 评审融合 - 7 个采纳点 + 4 个本地独有 + 4 个本地漏看 + 路线图重排"}
+{"file": "docs/_reviews/REVIEW-claude-opus-2026-06-09.md", "reason": "Opus 独立评审 - Step 8 提议 + lib.rs commands/+agent/ 拆 + wire.rs/streamController 不拆 + 9 个空 spec 删除 + STRUCTURE.md 根目录"}

@@ -1,0 +1,12 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "check 阶段: 验证 PR-1 commands/ + agent/ 拆解后 IPC 表面是否仍符合 llm-contract (Provider trait, ChatEvent payload, worktree cancel)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "check 阶段: 验证 PR-2 db.rs 拆解后 5 域 CRUD 仍符合 sqlx 模式 + app_config 键值 + 索引约定"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "check 阶段: 验证 PR-1 commands/sessions.rs 中 diff_worktree 仍走 git --numstat 而非 libgit2 line_stats"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "check 阶段: 验证 PR-1 agent/chat.rs 中 ToolContext 构造仍过 boundary 校验"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "check 阶段: 验证 PR-3 拆 ChatPanel.vue 后 streamController 单源模式未被破坏"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "check 阶段: 验证 PR-3 WorktreeChip.vue 仍用手写 popover 模式 (onDocumentClick + Esc close + top/bottom 规则)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "check 阶段: 验证 PR-3 ModelsTab.vue 拆 ModelForm + ModelRow + DeleteModelConfirm 仍用 reka-ui primitives (SelectContent :deep() gotcha)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "check 阶段: 验证 PR-3 拆出的子组件仍用设计令牌 (无硬编码 hex / 字体 / 间距)"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/01-source-file-audit.md", "reason": "check 阶段: 验证 5 PR 落地后 src-tauri/src/{lib.rs, db.rs} + app/src/{components/chat/ChatPanel.vue, components/settings/ModelsTab.vue} 行数符合审计阈值 (<800)"}
+{"file": ".trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md", "reason": "check 阶段: 验证 5 PR 落地后 codebase-map 中描述的 31 tauri command / 9 表 / IPC 表面 / 设计模式与实际一致"}
+{"file": "docs/_reviews/REVIEW-claude-opus-2026-06-09.md", "reason": "check 阶段: 交叉验证 5 PR 落地符合 Opus 评审的结论决断 (Step 8 优先级 / commands+agent 分离 / wire+streamController 不拆 / 9 个空 spec 删除 / STRUCTURE.md 根目录)"}
