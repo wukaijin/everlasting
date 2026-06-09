@@ -217,3 +217,36 @@ Tauri 2 window config 加 transparent:true 让 OS 渲染 6px 圆角;style.css �
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: fix-diff-numstat: libgit2 line_stats under-count → git --numstat + spec
+
+**Date**: 2026-06-09
+**Task**: fix-diff-numstat: libgit2 line_stats under-count → git --numstat + spec
+**Branch**: `main`
+
+### Summary
+
+Bug 2 of step 4 follow-up. libgit2 Patch::line_stats under-reports additions for diff_tree_to_workdir_with_index (canonical v1\n→v2\n returns (0,1,0)). Replaced +/- count source with git --numstat subprocess (git_numstat helper, libgit2 fallback on subprocess error). 4 git::diff tests pin behavior incl. new insert_lines_purely_added regression. Spec: .trellis/spec/backend/git-diff.md records the executable contract. Side-trail: user reported PR4 StatusBar UX错位, brainstormed PR5 follow-up task (StatusBar → sidebar footer, Test→测 Model, ModelSelect→chat-input__hint, popover 抄 worktree); task created + prd.md drafted. Per user '先收尾 numstat', PR5 留 planning 状态等下 session.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `30a5c43` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

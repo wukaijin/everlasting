@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
-- **Last Active**: 2026-06-08
+- **Total Sessions**: 4
+- **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~160 | Active |
+| `journal-1.md` | ~252 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-06-09 | fix-diff-numstat: libgit2 line_stats under-count → git --numstat + spec | `30a5c43` | `main` |
 | 3 | 2026-06-08 | 06-08-6px: 窗口加 6px 圆角 + 1px 边框 + 微阴影 (no blur) | `a3f2cfe`, `8203fd5`, `1c64cc9` | `main` |
 | 2 | 2026-06-05 | 3b-1 + follow-up 整组落地（项目基础结构 + 顶部 Tabs UI） | `3ae87d2`, `93a0753`, `18354a0`, `7e888c9` | `main` |
 | 1 | 2026-06-05 | 校准 6 份项目文档到 2026-06-05 实际进度 | `ce1a893` | `main` |
