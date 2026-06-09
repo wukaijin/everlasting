@@ -124,6 +124,172 @@ impact.
 
 ---
 
+## Gotcha: `<style scoped>` does NOT apply to portal children
+
+**Symptom**: a `SelectContent` (or any other reka-ui primitive
+that portals to body — `DialogContent` inside another
+`DialogContent`, `PopoverContent`, `TooltipContent`,
+`DropdownMenuContent`, etc.) renders with **no styling at all**:
+transparent background, no border, no padding, no width,
+no z-index. The CSS rule block "exists" in the file but
+visually has zero effect. Items appear as naked text in
+the document flow, often below or behind the dialog.
+
+**Cause**: Vue 3 `<style scoped>` compiles each selector with
+a `data-v-xxx` attribute suffix (e.g. `.models-tab__content`
+becomes `.models-tab__content[data-v-models-tab-xxx]`).
+The compiled selector therefore only matches elements
+**inside the component's own template**. Elements rendered
+through `<Teleport to="body">` — which is what every
+reka-ui `*Portal` primitive uses internally — do not
+receive the component's `data-v-xxx` attribute (they were
+not in the component's template at compile time). The
+selector silently fails to match, and the rule is dead.
+
+**Why this bites reka-ui users specifically**: reka-ui's
+architecture *requires* a portal for any overlay primitive
+(`SelectContent`, `DialogContent`, `PopoverContent`,
+`TooltipContent`, `DropdownMenuContent`, `HoverCardContent`,
+`ContextMenuContent`, `MenubarContent`, `Toast`,
+`AlertDialogContent`, etc.). Almost every interactive
+reka-ui component will hit this. The same is true of
+Radix UI, Headless UI, Ark UI, and any other Floating-UI-
+based library.
+
+**Fix**: use `:deep()` to escape the scoped boundary.
+Wrap the class name (and any data-attribute selectors) in
+`:deep(...)`:
+
+```css
+/* In SettingsModal/ProvidersTab.vue <style scoped> */
+/* WRONG — dead rule, content is rendered to <body> via
+   <SelectPortal>, so the compiled selector never matches */
+.models-tab__content { ... }
+
+/* CORRECT — :deep() strips the data-v-xxx suffix from
+   the inner selector, so it matches portal children */
+:deep(.models-tab__content) { ... }
+```
+
+**Rule of thumb** — which rules need `:deep()`:
+
+| Element | Where rendered | Needs `:deep()`? |
+|---|---|---|
+| `SelectTrigger` / `DialogContent` (when this is the OUTER dialog) | inside the component's own template | **No** — keep scoped |
+| `SelectContent` / `SelectViewport` / `SelectItem` | rendered to `<body>` via `<SelectPortal>` | **Yes** — wrap in `:deep()` |
+| `DialogContent` (when nested inside another dialog) | rendered to `<body>` via `<DialogPortal>` | **Yes** — wrap in `:deep()` |
+| `DialogOverlay` (sibling of `DialogContent` inside `DialogPortal`) | rendered to `<body>` | **Yes** — wrap in `:deep()` |
+| Trigger icon / label / form field wrapper | inside the component's own template | **No** — keep scoped |
+
+**Example** (the project's working pattern in
+`app/src/components/settings/ProvidersTab.vue`, 2026-06-09):
+
+```css
+/* Trigger — stays scoped (in-component) */
+.providers-tab__trigger { ... }
+.providers-tab__trigger:hover { ... }
+.providers-tab__trigger[data-state="open"] { ... }
+
+/* Content / viewport / option — :deep() (rendered via SelectPortal) */
+:deep(.providers-tab__content) {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 3000 !important; /* see also: width strategy below */
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+  overflow: hidden;
+}
+:deep(.providers-tab__viewport) { padding: 4px; }
+:deep(.providers-tab__option) { ... }
+:deep(.providers-tab__option[data-highlighted]) { ... }
+:deep(.providers-tab__option[data-state="checked"]) { ... }
+```
+
+**Diagnosis tip — how to confirm this is the bug you're
+hitting, not a z-index / specificity issue**:
+
+1. Open DevTools, find the `SelectContent` element in the
+   Elements panel. It's a direct child of `<body>`, not of
+   `#app` or your component.
+2. Check the **Attributes** panel. If the element does
+   **not** have a `data-v-xxx` attribute, you are hitting
+   this gotcha.
+3. Check the **Styles** panel for the class you wrote.
+   If the rule is **not listed at all** (or only listed
+   as "not matching"), the compiled scoped selector
+   silently dropped it. Switch to `:deep()` and the
+   rule will appear.
+
+**Don't** try to fix this with:
+- `!important` on the z-index — the rule isn't being
+  applied at all, specificity is moot.
+- Higher-specificity selectors (`body .xxx__content`) —
+  works in some cases but fights the rest of the design
+  system and is brittle.
+- Inline `style=""` — spec forbids it; bypasses the
+  design system tokens.
+- Removing `<SelectPortal>` — changes reka-ui behavior
+  in ways that break positioning.
+
+**Cross-reference**: same gotcha applies to
+`.trellis/spec/frontend/popover-pattern.md` hand-rolled
+popovers (ModelSelect, worktree dropdown) — but those
+don't portal, so they don't hit it. The lesson is
+specific to portal-based primitives.
+
+**When to revisit**: if the project ever migrates to a
+CSS-in-JS solution (e.g. CSS Modules, Vanilla Extract,
+Pinceau) that doesn't use Vue's `data-v-xxx` scope
+attribute, this gotcha goes away. Until then, every new
+reka-ui portal primitive needs the `:deep()` check.
+
+---
+
+## Tip: Use `--reka-select-trigger-width` to size SelectContent to its trigger
+
+reka-ui 2.9.9's `SelectContent` does not size itself to
+the trigger button by default — it uses content-based
+natural width. Hardcoding `min-width: 240px` (or any
+fixed value) in the class means a wider trigger (typical
+for a form field) renders a narrower dropdown that looks
+detached.
+
+**Fix**: use the `--reka-select-trigger-width` CSS
+variable that reka-ui sets on `SelectContent` to match
+the trigger's measured width:
+
+```css
+:deep(.providers-tab__content) {
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+}
+```
+
+- The `240px` fallback in `min-width` covers edge cases
+  where the variable is undefined (e.g. the popper is
+  mounted before the trigger has measured).
+- The `width` line intentionally has **no** fallback — if
+  the variable is missing, the popover falls back to
+  content-based natural width, which is more graceful
+  than locking to 240px.
+- **Note**: the prefix is `--reka-` (reka-ui 2.9.9),
+  **not** `--radix-`. Older Reka / Radix docs may use
+  `--radix-`; that's wrong for this project.
+
+**When to use**: any `SelectContent` (or other popper-
+based reka-ui primitive that supports a similar variable)
+that should visually align with its trigger — typical
+for form controls in a `Dialog` (SettingsModal) or any
+constrained-width container. For chip-attached popovers
+(hand-rolled `ModelSelect` / worktree dropdown), this is
+moot — those don't use reka-ui `Select` per
+`popover-pattern.md`.
+
+---
+
 ## Convention: Wrap reka-ui primitives in project-scoped CSS classes
 
 Reka-ui primitives are unstyled by default. The project styles

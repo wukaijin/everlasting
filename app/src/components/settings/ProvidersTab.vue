@@ -526,22 +526,23 @@ function protocolBadgeClass(protocol: string): string {
   align-items: center;
 }
 
-.providers-tab__content {
+:deep(.providers-tab__content) {
   position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  min-width: 240px;
-  z-index: 3000;
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+  z-index: 3000 !important;
   overflow: hidden;
 }
 
-.providers-tab__viewport {
+:deep(.providers-tab__viewport) {
   padding: 4px;
 }
 
-.providers-tab__option {
+:deep(.providers-tab__option) {
   display: flex;
   align-items: center;
   padding: 6px 10px;
@@ -553,12 +554,12 @@ function protocolBadgeClass(protocol: string): string {
   outline: none;
 }
 
-.providers-tab__option[data-highlighted] {
+:deep(.providers-tab__option[data-highlighted]) {
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
 }
 
-.providers-tab__option[data-state="checked"] {
+:deep(.providers-tab__option[data-state="checked"]) {
   color: var(--color-accent);
 }
 

@@ -433,7 +433,7 @@ function failError(t: TestState | undefined): string {
             </SelectTrigger>
             <SelectPortal>
               <SelectContent
-                class="models-tab__content z-3001"
+                class="models-tab__content"
                 position="popper"
                 :side-offset="4"
               >
@@ -809,22 +809,23 @@ function failError(t: TestState | undefined): string {
   align-items: center;
 }
 
-.models-tab__content {
+:deep(.models-tab__content) {
   position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  min-width: 240px;
-  z-index: 3000;
+  min-width: var(--reka-select-trigger-width, 240px);
+  width: var(--reka-select-trigger-width);
+  z-index: 3000 !important;
   overflow: hidden;
 }
 
-.models-tab__viewport {
+:deep(.models-tab__viewport) {
   padding: 4px;
 }
 
-.models-tab__option {
+:deep(.models-tab__option) {
   display: flex;
   align-items: center;
   padding: 6px 10px;
@@ -836,12 +837,12 @@ function failError(t: TestState | undefined): string {
   outline: none;
 }
 
-.models-tab__option[data-highlighted] {
+:deep(.models-tab__option[data-highlighted]) {
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
 }
 
-.models-tab__option[data-state="checked"] {
+:deep(.models-tab__option[data-state="checked"]) {
   color: var(--color-accent);
 }
 
