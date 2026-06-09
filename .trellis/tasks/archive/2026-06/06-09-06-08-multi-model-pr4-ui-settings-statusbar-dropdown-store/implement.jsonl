@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider trait + IPC wire shapes + Option<T> patterns — PR4 新增 IPC 必须匹配已有契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新增 db 函数 (update_session_model_id) 需遵循 DB 层规范 (soft FK, migration)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新增 IPC 的错误处理模式 — LlmError / String 错误"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Store 重构规范 — 新 providers/models stores + config store 重构"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "新组件 (SettingsModal, tabs) 需遵循组件规范"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "settings/ 子目录放置规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "TypeScript 类型定义 — ProviderRow, ModelWithProvider 接口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量基线 — vue-tsc strict + build"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "IPC 前后端对接 — camelCase args, Option<T> 处理"}

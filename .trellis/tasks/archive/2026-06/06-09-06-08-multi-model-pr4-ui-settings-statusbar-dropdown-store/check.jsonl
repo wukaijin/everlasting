@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证新增 IPC 的 wire shape 匹配已有契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 db 函数遵循规范"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 store 重构符合状态管理规范"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "验证新组件遵循组件规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "验证 TypeScript 类型定义完整性"}
