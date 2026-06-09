@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "LLM API 契约主 spec — PR1 multi-provider section 定义 ProviderProtocol/ProviderRow/ModelRow wire shape,PR2 要追加 Provider trait + Anthropic dispatch section"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Rust 模块目录约定 — 新建 llm/provider/ 子目录(mod.rs + anthropic.rs)的命名/导出模式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR1 写入的 soft FK 模式 + resolve-default fallback 模式 — PR2 的 catalog 解析直接复用"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "LlmError 5 类错误归一化约定 + 中文 user_message() 文案模式 — PR2 pre-flight 3 种文案按此模式写"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "tracing field 模式 (url/model/tools_count 等) — AnthropicProvider send 的 info! 日志保持一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层决策模式 (model_id resolve-default / catalog-first env-fallback) — PR2 chat 命令改 catalog 解析时用"}

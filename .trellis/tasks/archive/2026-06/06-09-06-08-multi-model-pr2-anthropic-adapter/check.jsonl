@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "PR2 实现质量基线 — 警告 0 / cargo test 全过 / spec 一致性 / 跨层契约遵循"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "LLM 契约 — check 要验证 PR2 section 落地 / AnthropicProvider wire shape 符合 catalog 解析"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误边界 — check 验证 pre-flight 3 种文案 + LlmError 归一化"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "PR1 写的 catalog dispatch 模式 — check 验证 chat 命令 catalog 解析路径与 spec 一致"}
