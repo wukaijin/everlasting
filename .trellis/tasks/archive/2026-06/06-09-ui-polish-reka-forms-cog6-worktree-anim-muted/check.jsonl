@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "R1 verify 3 settings tabs 表单控件渲染 reka-ui 风格; R2 verify Icon.vue 加 cog-6-tooth (用 heroicons, 0 依赖); R3 verify worktree chip 右边接缝齐; R4 verify 4 个 modal/popup 加 transition 不破行为"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "R1 verify v-model 双向绑定, form state 不破; R2/R3/R4 不动 store"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "R1 vue-tsc verify reka-ui 组件类型 (TextFieldRoot / SelectRoot / CheckboxRoot / RadioGroupRoot); R4 Transition event type"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "R2 verify Icon.vue 加 cog-6-tooth import + map entry, 跟 CogIcon 同 map 风格; 5 项都是改现有文件, 不新建 (除 transition 可能加 scoped style)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "R4 verify popover (ModelSelect / worktree) 加 transition 不破坏 onDocumentClick + Esc 关闭; 弹方向 CSS 不变 (top vs bottom); enter/leave 150ms ease-out"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "R1 verify reka-ui 包装跟项目其他用法一致 (SettingsModal 已有 Dialog + Tabs); R2 verify 选 heroicons 没用 iconify; R3 verify 只补 chevron 接缝不重做 chip; R4 verify 用 <Transition> 不引入新动画库"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "R5 verify --color-text-muted 加亮 (#64748b → #7c8aa0) 跟 11px mono 文字 (sidebar__title / status-bar / chat-input__hint) 配合, 不破坏 cjk 字体"}
+{"file": ".trellis/tasks/06-09-ui-polish-reka-forms-cog6-worktree-anim-muted/prd.md", "reason": "R1-R5 全部 acceptance criteria + D1-D3 ADR 决策 (heroicons Cog6ToothIcon / 混合动画 / #7c8aa0)"}

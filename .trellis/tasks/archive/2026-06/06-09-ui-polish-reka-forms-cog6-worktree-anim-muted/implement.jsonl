@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "R1 reka-ui 包装 form 控件 — Vue 3 <script setup> + scoped styles; R2 Icon map 加 cog-6-tooth; R3 worktree chip CSS; R4 Vue <Transition> 用法。11px mono + theme var 一致"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "R1 form 控件 v-model 双向绑定 useProvidersStore / useModelsStore; R2 Sidebar 引入 useChatStore; R3/R4 不动 store"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "R1 reka-ui TextFieldRoot / SelectRoot / CheckboxRoot / RadioGroupRoot TS 类型; R4 Transition event type (v-if + Transition 自动 hook)"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "R2 Icon.vue 加 cog-6-tooth icon (跟 CogIcon 同 map 风格); 不新建文件 (除 5 项都是改现有)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "R4 popover 动画 (ModelSelect / worktree) 沿用 PR5 popover-pattern — 弹方向规则, code skeleton; 加 transition 不能破坏现有 close 行为 (onDocumentClick + Esc)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "R1 reka-ui 包装不要重新写 input 逻辑; R2 选 heroicons 不用 iconify 体现 reuse (D1 决策); R3 修 CSS 不要重构 worktree chip 整体; R4 动画不要重写 popover 实现"}
+{"file": ".trellis/tasks/06-09-ui-polish-reka-forms-cog6-worktree-anim-muted/prd.md", "reason": "R1-R5 全部 acceptance criteria (form reka-ui / cog-6-tooth / worktree chip / popup anim / text-muted bright) + ADR-lite D1-D3 决策"}
