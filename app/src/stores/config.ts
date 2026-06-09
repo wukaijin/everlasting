@@ -1,12 +1,9 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
-interface LlmConfig {
-  model: string;
-  baseUrl: string;
-  configured: boolean;
-}
+import { useProvidersStore } from "./providers";
+import { useModelsStore } from "./models";
 
 /** localStorage key for the last active project id. Restored on app
  *  start (Q1 / PROPOSAL §5.5). The value is a project UUID; if it
@@ -15,14 +12,11 @@ interface LlmConfig {
 const LAST_ACTIVE_PROJECT_KEY = "everlasting.lastActiveProjectId";
 
 export const useConfigStore = defineStore("config", () => {
-  const model = ref<string>("");
-  const baseUrl = ref<string>("");
-  const configured = ref(false);
   const loaded = ref(false);
 
   // PR3 (BACKLOG §5.1 follow-up): the home directory is fetched once
   // on app start and cached here so the chat panel header can
-  // shorten the cwd display (`/home/carlos/code/foo` → `~/code/foo`).
+  // shorten the cwd display (`/home/carlos/code/foo` -> `~/code/foo`).
   // `null` means "not yet loaded" or "load failed" — in either case
   // the helper `simplifyPath` returns the original path unchanged,
   // so the UI is safe to render before this resolves.
@@ -32,6 +26,41 @@ export const useConfigStore = defineStore("config", () => {
   // at store creation so it's available before the chat store's
   // watcher fires its first run.
   const lastActiveProjectId = ref<string | null>(readLastActive());
+
+  // -----------------------------------------------------------------------
+  // Backward-compatible computed properties (derived from the catalog).
+  // Existing components (StatusBar, ChatPanel) still read these.
+  // Step 5 will clean up all call sites and remove these fields.
+  // -----------------------------------------------------------------------
+
+  /** The display name of the current default model, or `""` if none.
+   *  Note: Pinia auto-unwraps refs on the store proxy, so
+   *  `useModelsStore().defaultModel` is already `ModelWithProvider | null`
+   *  (not a ComputedRef). We read it directly without `.value`. */
+  const model = computed<string>(() => {
+    const modelsStore = useModelsStore();
+    return modelsStore.defaultModel?.displayName ?? "";
+  });
+
+  /** The base URL of the default model's provider, or `""` if none. */
+  const baseUrl = computed<string>(() => {
+    const modelsStore = useModelsStore();
+    const dm = modelsStore.defaultModel;
+    if (!dm) return "";
+    const provider = useProvidersStore().byId(dm.providerId);
+    return provider?.baseUrl ?? "";
+  });
+
+  /** True when a default model exists AND its provider has a non-empty
+   *  api_key. Drives the StatusBar's "ANTHROPIC_API_KEY 未设置" hint
+   *  and the warn styling. */
+  const configured = computed<boolean>(() => {
+    const modelsStore = useModelsStore();
+    const dm = modelsStore.defaultModel;
+    if (!dm) return false;
+    const provider = useProvidersStore().byId(dm.providerId);
+    return !!provider?.apiKey;
+  });
 
   function readLastActive(): string | null {
     try {
@@ -61,20 +90,21 @@ export const useConfigStore = defineStore("config", () => {
   });
 
   async function load() {
-    try {
-      const cfg = await invoke<LlmConfig>("get_llm_config");
-      model.value = cfg.model;
-      baseUrl.value = cfg.baseUrl;
-      configured.value = cfg.configured;
-    } catch (e) {
-      console.error("failed to load LLM config:", e);
-    }
+    // Load providers + models from the catalog (replaces the old
+    // `get_llm_config` env path). Store references are obtained at
+    // runtime (inside the function body) to avoid Pinia circular
+    // dependency issues during setup.
+    const providersStore = useProvidersStore();
+    const modelsStore = useModelsStore();
+
+    await Promise.all([providersStore.load(), modelsStore.load()]);
+
     // PR3: home_dir is a best-effort cache for display. A failure
     // (rare — sandboxed container without `$HOME`) is logged but
     // never propagates; the UI degrades to rendering the full
     // cwd path. We deliberately do NOT roll this into the same
-    // `try` as the LLM config: a missing `ANTHROPIC_API_KEY`
-    // would otherwise mask the home-dir load.
+    // `try` as the catalog: a missing provider/api_key would
+    // otherwise mask the home-dir load.
     try {
       homeDir.value = await invoke<string | null>("get_home_dir");
     } catch (e) {

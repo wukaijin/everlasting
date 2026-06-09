@@ -446,6 +446,107 @@ async fn set_default_model(
 }
 
 // ---------------------------------------------------------------------------
+// PR4 of multi-model task: per-session model override + test_provider
+// ---------------------------------------------------------------------------
+
+/// Update the per-session model override. The frontend's StatusBar
+/// dropdown calls this when the user selects a different model for a
+/// specific session. The value is stored as `sessions.model_id`
+/// (soft FK to `models.id`). The chat command's `resolve_chat_provider`
+/// reads this column and falls back to the global default when NULL.
+#[tauri::command]
+async fn update_session_model_id(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    model_id: String,
+) -> Result<(), String> {
+    db::update_session_model_id(&state.db, &session_id, &model_id)
+        .await
+        .map_err(|e| format!("update_session_model_id failed: {}", e))
+}
+
+/// Test a provider's connectivity by sending a lightweight request
+/// with the given `base_url`, `api_key`, and `protocol`. Returns
+/// a JSON object with `success`, `latencyMs`, and optional `error`.
+///
+/// - Anthropic: `POST {base_url}/v1/messages` with `max_tokens=1`
+///   and a minimal user message. A 200 means success; 401/403 means
+///   auth failure.
+/// - OpenAI: `GET {base_url}/models` with `Authorization: Bearer`.
+///   A 200 means success; 401 means auth failure.
+///
+/// The function does NOT access `AppState` — it only makes an HTTP
+/// request to validate the credentials, keeping the test isolated
+/// from the app's DB and LLM dispatch.
+#[tauri::command]
+async fn test_provider(
+    base_url: String,
+    api_key: String,
+    protocol: String,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {}", e))?;
+    let start = std::time::Instant::now();
+
+    let (success, error) = match protocol.as_str() {
+        "anthropic" => {
+            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}]
+            });
+            let resp = client
+                .post(&url)
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {}", e))?;
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (false, Some(format!("HTTP {}: {}", status, body_text.chars().take(200).collect::<String>())))
+            }
+        }
+        "openai" => {
+            let url = format!("{}/models", base_url.trim_end_matches('/'));
+            let resp = client
+                .get(&url)
+                .header("authorization", format!("Bearer {}", api_key))
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {}", e))?;
+
+            let status = resp.status();
+            if status.is_success() {
+                (true, None)
+            } else {
+                let body_text = resp.text().await.unwrap_or_default();
+                (false, Some(format!("HTTP {}: {}", status, body_text.chars().take(200).collect::<String>())))
+            }
+        }
+        _ => {
+            (false, Some(format!("unsupported protocol: {}", protocol)))
+        }
+    };
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    Ok(serde_json::json!({
+        "success": success,
+        "latencyMs": latency_ms,
+        "error": error,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands — session management
 // ---------------------------------------------------------------------------
 
@@ -2268,6 +2369,8 @@ pub fn run() {
             delete_model,
             get_default_model,
             set_default_model,
+            update_session_model_id,
+            test_provider,
             list_sessions,
             create_session,
             load_session,
@@ -2586,6 +2689,7 @@ mod tests {
             worktree_path: worktree_path.map(str::to_string),
             worktree_state,
             last_worktree_path: None,
+            model_id: None,
         }
     }
 

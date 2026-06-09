@@ -30,7 +30,6 @@
 
 import { computed, onUnmounted, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
-import { useConfigStore } from "../../stores/config";
 import { useProjectsStore } from "../../stores/projects";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
@@ -40,7 +39,6 @@ import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
-const configStore = useConfigStore();
 
 const emit = defineEmits<{
     send: [text: string];
@@ -375,10 +373,6 @@ if (typeof window !== "undefined") {
         <header class="chat-panel__header">
             <div class="chat-panel__title-row">
                 <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>
-                <span v-if="configStore.model" class="chat-panel__chip">
-                    <Icon name="command-line" :size="12" />
-                    {{ configStore.model }}
-                </span>
                 <span
                     v-if="showGitChip"
                     class="chat-panel__chip chat-panel__chip--git"

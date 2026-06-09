@@ -215,6 +215,13 @@ pub struct SessionRow {
     /// Preserved across detach so the UI can show a "上次 worktree"
     /// chip that lets the user re-attach or inspect the branch.
     pub last_worktree_path: Option<String>,
+    /// PR4 of multi-model: per-session model override. `None` when
+    /// the session uses the global default model (the chat command's
+    /// `resolve_chat_provider` falls back to `app_config.default_model_id`
+    /// when this is NULL or the referenced model was deleted). This is a
+    /// soft FK to `models.id` — no `REFERENCES` constraint so legacy rows
+    /// and dangling references don't break INSERTs.
+    pub model_id: Option<String>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -234,6 +241,9 @@ pub struct SessionSummary {
     pub worktree_state: WorktreeState,
     /// Mirror of [`SessionRow::last_worktree_path`].
     pub last_worktree_path: Option<String>,
+    /// PR4 of multi-model: per-session model override. `None` when the
+    /// session uses the global default model. Soft FK to `models.id`.
+    pub model_id: Option<String>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
@@ -1007,6 +1017,7 @@ pub async fn create_session(
         worktree_path: None,
         worktree_state: WorktreeState::None,
         last_worktree_path: None,
+        model_id: None,
     })
 }
 
@@ -1020,6 +1031,7 @@ pub async fn list_sessions(
         r#"
         SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd,
                s.worktree_path, s.worktree_state, s.last_worktree_path,
+               s.model_id,
                COALESCE(
                    (SELECT text FROM messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
@@ -1055,6 +1067,7 @@ pub async fn list_sessions(
                 worktree_path: r.try_get("worktree_path")?,
                 worktree_state: WorktreeState::from_str_opt(&state_str),
                 last_worktree_path: r.try_get("last_worktree_path")?,
+                model_id: r.try_get("model_id")?,
             })
         })
         .collect()
@@ -1069,7 +1082,7 @@ pub async fn load_session(
     let session_row = sqlx::query(
         r#"
         SELECT id, title, created_at, updated_at, model, project_id, current_cwd,
-               worktree_path, worktree_state, last_worktree_path
+               worktree_path, worktree_state, last_worktree_path, model_id
         FROM sessions
         WHERE id = ?
         "#,
@@ -1092,6 +1105,7 @@ pub async fn load_session(
                 worktree_path: r.try_get("worktree_path")?,
                 worktree_state: WorktreeState::from_str_opt(&state_str),
                 last_worktree_path: r.try_get("last_worktree_path")?,
+                model_id: r.try_get("model_id")?,
             }
         }
         None => return Ok(None),
@@ -1184,6 +1198,47 @@ pub async fn update_session_cwd(
         "#,
     )
     .bind(new_cwd)
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Session model assignment (PR4 of multi-model task)
+// ---------------------------------------------------------------------------
+
+/// Update the `model_id` soft FK on a session row. Used by the
+/// frontend's per-session model dropdown (StatusBar) so the user can
+/// switch models without changing the global default. The value is a
+/// UUID string referencing `models.id`, or can be set to NULL by
+/// passing an empty string (the resolve-default fallback in the chat
+/// command's `resolve_chat_provider` handles NULL by using the global
+/// default).
+///
+/// `updated_at` is bumped to the current time on every successful
+/// write so the session list re-sorts correctly.
+pub async fn update_session_model_id(
+    pool: &SqlitePool,
+    session_id: &str,
+    model_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    // Empty string → store NULL (session falls back to global default).
+    let model_id_value: Option<&str> = if model_id.is_empty() {
+        None
+    } else {
+        Some(model_id)
+    };
+    sqlx::query(
+        r#"
+        UPDATE sessions
+           SET model_id = ?, updated_at = ?
+         WHERE id = ?
+        "#,
+    )
+    .bind(model_id_value)
     .bind(&now)
     .bind(session_id)
     .execute(pool)
@@ -2669,5 +2724,69 @@ mod tests {
         let remaining = list_models(&pool).await.unwrap();
         assert!(!remaining.iter().any(|mwp| mwp.model.id == m1.id));
         assert!(remaining.iter().any(|mwp| mwp.model.id == m2.id));
+    }
+
+    // -----------------------------------------------------------------------
+    // PR4 of multi-model task: update_session_model_id + load_session
+    // model_id field tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_session_model_id_sets_and_clears() {
+        let pool = make_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        // New session: model_id is NULL (falls back to global default).
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert!(loaded.session.model_id.is_none());
+
+        // Set to a specific model.
+        let p = create_provider(&pool, "anthropic", "Test (model_id)", "https://api.anthropic.com", "sk-test")
+            .await
+            .unwrap();
+        let m = create_model(&pool, &p.id, "test-model", "Test Model", None, None, false, 100_000)
+            .await
+            .unwrap();
+        update_session_model_id(&pool, &s.id, &m.id).await.unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.session.model_id.as_deref(), Some(m.id.as_str()));
+
+        // Clear by passing empty string.
+        update_session_model_id(&pool, &s.id, "").await.unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert!(loaded.session.model_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_session_model_id_on_missing_session_is_noop() {
+        let pool = make_pool().await;
+        // Should not error — the UPDATE simply matches 0 rows.
+        update_session_model_id(&pool, "nonexistent-session-id", "some-model-id")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_session_includes_model_id() {
+        let pool = make_pool().await;
+        let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+            .await
+            .unwrap();
+        // Directly set model_id in the DB to verify the SELECT picks it up.
+        let p = create_provider(&pool, "anthropic", "Test (model_id select)", "https://api.anthropic.com", "sk-test")
+            .await
+            .unwrap();
+        let m = create_model(&pool, &p.id, "select-test-model", "Select Test Model", None, None, false, 100_000)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE sessions SET model_id = ? WHERE id = ?")
+            .bind(&m.id)
+            .bind(&s.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+        assert_eq!(loaded.session.model_id.as_deref(), Some(m.id.as_str()));
     }
 }

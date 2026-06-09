@@ -126,6 +126,11 @@ interface LoadedSession {
     worktree_state: "none" | "active" | "detached";
     worktree_path: string | null;
     last_worktree_path: string | null;
+    /** PR4 of multi-model: per-session model override. `null`
+     *  means the session uses the global default model. The
+     *  StatusBar dropdown reads/writes this via the
+     *  `update_session_model_id` IPC. */
+    model_id: string | null;
   };
   messages: LoadedMessage[];
 }

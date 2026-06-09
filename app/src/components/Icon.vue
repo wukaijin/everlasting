@@ -34,6 +34,19 @@ import {
   ArrowsPointingOutIcon,
   FolderIcon,
   MinusIcon,
+  CogIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  TrashIcon,
+  KeyIcon,
+  SignalIcon,
+  GlobeAltIcon,
+  AdjustmentsHorizontalIcon,
+  ServerIcon,
+  CircleStackIcon,
+  BoltIcon,
 } from "@heroicons/vue/24/outline";
 
 const props = withDefaults(
@@ -70,6 +83,19 @@ const map = {
   "restore": ArrowsPointingOutIcon,
   "folder": FolderIcon,
   "minus": MinusIcon,
+  "cog": CogIcon,
+  "eye": EyeIcon,
+  "eye-slash": EyeSlashIcon,
+  "chevron-down": ChevronDownIcon,
+  "chevron-up": ChevronUpIcon,
+  "trash": TrashIcon,
+  "key": KeyIcon,
+  "signal": SignalIcon,
+  "globe": GlobeAltIcon,
+  "adjustments": AdjustmentsHorizontalIcon,
+  "server": ServerIcon,
+  "circle-stack": CircleStackIcon,
+  "bolt": BoltIcon,
 } as const;
 
 const Component = computed(() => {
