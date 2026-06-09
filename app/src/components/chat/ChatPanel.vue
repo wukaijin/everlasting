@@ -19,7 +19,7 @@
 // `chatStore.simplifiedCwd` (prepared by PR3; e.g. `~/code/foo`).
 //
 // Step 4 follow-up: the diff chip is replaced by a tri-state
-// worktree chip with a dropdown menu:
+// worktree chip with a dropdown menu (see `WorktreeChip.vue`):
 //   - `none` (no worktree ever) → "attach worktree" button
 //   - `active` (worktree bound)  → "diff (N)" + dropdown with
 //     copy-path / copy-branch / detach / delete
@@ -27,14 +27,21 @@
 //     with the same actions (the file diff is from the stale
 //     worktree on disk; the copy buttons still work; detach and
 //     delete are still meaningful).
+//
+// 8-PR3 split: the worktree chip + dropdown moved to
+// `WorktreeChip.vue`; the diff overlay moved to `DiffModal.vue`.
+// This file now owns the session / project header state and the
+// action handlers (attach / detach / delete + confirm modal),
+// and delegates the chip + diff UI to the new components.
 
 import { computed, onUnmounted, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
-import DiffView from "./DiffView.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
+import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
+import DiffModal from "./DiffModal.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
@@ -89,7 +96,8 @@ const gitBranchLabel = computed<string>(() => {
 });
 
 // -----------------------------------------------------------------------
-// Step 4 / PR3: session-level diff modal
+// Step 4 / PR3: session-level diff modal (state only — UI moved
+// to `DiffModal.vue` in 8-PR3).
 // -----------------------------------------------------------------------
 
 const diffModalOpen = ref(false);
@@ -119,34 +127,9 @@ function closeDiffModal() {
 
 // -----------------------------------------------------------------------
 // Step 4 follow-up: tri-state worktree chip + dropdown
+// (UI moved to `WorktreeChip.vue` in 8-PR3; this file owns the
+// state derivation + action handlers).
 // -----------------------------------------------------------------------
-
-/** The dropdown that opens from the worktree chip. Closes on
- *  outside-click and on Escape. State is local to the chip — the
- *  chat store doesn't need to know whether the menu is open. */
-const worktreeMenuOpen = ref(false);
-const worktreeMenuRoot = ref<HTMLElement | null>(null);
-
-function toggleWorktreeMenu() {
-    worktreeMenuOpen.value = !worktreeMenuOpen.value;
-}
-
-function closeWorktreeMenu() {
-    worktreeMenuOpen.value = false;
-}
-
-function onDocumentClick(e: MouseEvent) {
-    if (!worktreeMenuOpen.value) return;
-    const target = e.target as Node | null;
-    if (worktreeMenuRoot.value && target && !worktreeMenuRoot.value.contains(target)) {
-        worktreeMenuOpen.value = false;
-    }
-}
-
-if (typeof document !== "undefined") {
-    document.addEventListener("click", onDocumentClick);
-    onUnmounted(() => document.removeEventListener("click", onDocumentClick));
-}
 
 /** Reactive count of files in the current session's diff. Reads
  *  the cache (no IPC) so the chip can show "diff (3 files)"
@@ -160,11 +143,15 @@ const diffFileCount = computed<number | null>(() => {
     return cached.files.length;
 });
 
+const worktreeState = computed<WorktreeState>(
+    () => currentSession.value?.worktree_state ?? "none",
+);
+
 /** Per-state worktree chip label. Mirrors the PR3 (single
  *  "diff" button) UX for `active`, and adds two new shapes for
  *  `none` and `detached`. */
 const worktreeChipLabel = computed<string>(() => {
-    const state = currentSession.value?.worktree_state ?? "none";
+    const state = worktreeState.value;
     if (state === "none") return "attach worktree";
     if (state === "detached") {
         const n = diffFileCount.value;
@@ -180,7 +167,7 @@ const worktreeChipLabel = computed<string>(() => {
 });
 
 const worktreeChipTitle = computed<string>(() => {
-    const state = currentSession.value?.worktree_state ?? "none";
+    const state = worktreeState.value;
     if (state === "none") {
         if (!currentProject.value?.is_git_repo) {
             return "This project isn't a git repo";
@@ -223,54 +210,13 @@ const worktreePathForDisplay = computed<string | null>(() => {
     return null;
 });
 
-/** "Copy <label>" — uses `navigator.clipboard.writeText` with a
- *  fallback for non-secure contexts. The toast goes through the
- *  projects store (the existing toast system in `AppShell.vue`).
- *  The operations are read-only; we explicitly do NOT disable
- *  them when `isStreaming` is true (REQ-26). */
-async function copyToClipboard(value: string, label: string) {
-    try {
-        if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(value);
-        } else {
-            // Fallback: legacy `document.execCommand("copy")` for
-            // non-secure contexts (some embedded webviews).
-            const ta = document.createElement("textarea");
-            ta.value = value;
-            ta.setAttribute("readonly", "");
-            ta.style.position = "absolute";
-            ta.style.left = "-9999px";
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand("copy");
-            document.body.removeChild(ta);
-        }
-        projectsStore.showToast(`已复制 ${label}`, "info", 2000);
-    } catch (e) {
-        projectsStore.showToast(`复制失败: ${String(e)}`, "error");
-    }
-}
-
-function onCopyWorktreePath() {
-    const p = worktreePathForDisplay.value;
-    if (!p) return;
-    void copyToClipboard(p, "worktree path");
-    closeWorktreeMenu();
-}
-
-function onCopyBranchName() {
-    if (!chatStore.currentSessionId) return;
-    void copyToClipboard(branchName.value, "branch name");
-    closeWorktreeMenu();
-}
-
 /** Click on the chip itself: for `active` we open the diff; for
  *  `none` we attach; for `detached` we open the diff (the
  *  diff still reflects the on-disk state). The dropdown is the
  *  second-click path; single-click is the most common path so
  *  it goes straight to the primary action. */
 function onChipClick() {
-    const state = currentSession.value?.worktree_state ?? "none";
+    const state = worktreeState.value;
     if (state === "none") {
         void onAttach();
         return;
@@ -282,7 +228,6 @@ function onChipClick() {
 async function onAttach() {
     const sid = chatStore.currentSessionId;
     if (!sid) return;
-    closeWorktreeMenu();
     try {
         await chatStore.attachWorktree(sid);
         projectsStore.showToast("worktree 已附加", "info", 2000);
@@ -294,7 +239,6 @@ async function onAttach() {
 async function onDetach() {
     const sid = chatStore.currentSessionId;
     if (!sid) return;
-    closeWorktreeMenu();
     try {
         await chatStore.detachWorktree(sid);
         projectsStore.showToast("worktree 已解绑", "info", 2000);
@@ -308,7 +252,7 @@ async function onDetach() {
 const confirmDeleteOpen = ref(false);
 
 function onDeleteClick() {
-    const state = currentSession.value?.worktree_state ?? "none";
+    const state = worktreeState.value;
     const hasDiff =
         state === "active" && (diffFileCount.value ?? 0) > 0;
     if (hasDiff) {
@@ -325,7 +269,6 @@ async function onDeleteConfirm() {
         return;
     }
     confirmDeleteOpen.value = false;
-    closeWorktreeMenu();
     try {
         await chatStore.deleteWorktree(sid);
         projectsStore.showToast("worktree 已删除", "info", 2000);
@@ -338,22 +281,16 @@ function onDeleteCancel() {
     confirmDeleteOpen.value = false;
 }
 
-/** Disabled-state predicates for the dropdown menu items.
- *  Detach/delete are disabled while streaming (REQ-13); the copy
- *  buttons are NOT (REQ-26). Attach is allowed mid-stream. */
-const detachDisabled = computed<boolean>(() => isStreaming.value);
-const deleteDisabled = computed<boolean>(() => isStreaming.value);
-
-const worktreeState = computed(() => currentSession.value?.worktree_state ?? "none");
-
+/** Esc key handling — closes whichever popup is on top: delete
+ *  confirm → worktree dropdown → diff modal. Popovers inside
+ *  `WorktreeChip` handle their own Esc when focused.
+ *  (WorktreeChip's own keydown listener is local; we keep this
+ *  here as a top-level fallback for when the chip doesn't catch
+ *  the key first.) */
 function onKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") {
         if (confirmDeleteOpen.value) {
             onDeleteCancel();
-            return;
-        }
-        if (worktreeMenuOpen.value) {
-            closeWorktreeMenu();
             return;
         }
         if (diffModalOpen.value) {
@@ -394,97 +331,20 @@ if (typeof window !== "undefined") {
                   dropdown. The chip itself is the primary action
                   (open diff / attach), the dropdown is for the
                   secondary actions (copy path / branch / detach /
-                  delete).
+                  delete). 8-PR3: UI extracted to `WorktreeChip.vue`.
                 -->
-                <div
+                <WorktreeChip
                     v-if="showWorktreeChip"
-                    ref="worktreeMenuRoot"
-                    class="chat-panel__worktree"
-                >
-                    <button
-                        type="button"
-                        :class="[
-                            'chat-panel__chip',
-                            'chat-panel__chip--worktree',
-                            {
-                                'chat-panel__chip--worktree--alone':
-                                    worktreeState === 'none',
-                            },
-                        ]"
-                        :title="worktreeChipTitle"
-                        @click="onChipClick"
-                    >
-                        <Icon name="document" :size="12" />
-                        {{ worktreeChipLabel }}
-                    </button>
-                    <button
-                        v-if="worktreeState !== 'none'"
-                        type="button"
-                        class="chat-panel__chip chat-panel__chip--worktree-toggle"
-                        :aria-label="'worktree options'"
-                        :title="'worktree options'"
-                        @click.stop="toggleWorktreeMenu"
-                    >
-                        <Icon
-                            :name="worktreeMenuOpen ? 'chevron-down' : 'chevron-right'"
-                            :size="12"
-                        />
-                    </button>
-                    <Transition name="chat-panel-popover">
-                        <div
-                            v-if="worktreeMenuOpen && worktreeState !== 'none'"
-                            class="chat-panel__menu"
-                            role="menu"
-                        >
-                            <button
-                                v-if="worktreePathForDisplay"
-                                type="button"
-                                class="chat-panel__menu-item"
-                                role="menuitem"
-                                @click="onCopyWorktreePath"
-                            >
-                                <Icon name="document" :size="12" />
-                                复制 worktree path
-                            </button>
-                            <button
-                                type="button"
-                                class="chat-panel__menu-item"
-                                role="menuitem"
-                                @click="onCopyBranchName"
-                            >
-                                <Icon name="refresh" :size="12" />
-                                复制 branch name
-                            </button>
-                            <div class="chat-panel__menu-sep" />
-                            <button
-                                type="button"
-                                class="chat-panel__menu-item"
-                                role="menuitem"
-                                :disabled="detachDisabled"
-                                @click="onDetach"
-                            >
-                                <Icon name="minus" :size="12" />
-                                解绑 (detach)
-                            </button>
-                            <button
-                                type="button"
-                                class="chat-panel__menu-item chat-panel__menu-item--danger"
-                                role="menuitem"
-                                :disabled="deleteDisabled"
-                                @click="onDeleteClick"
-                            >
-                                <Icon name="warn" :size="12" />
-                                删除 worktree
-                            </button>
-                        </div>
-                    </Transition>
-                </div>
-                <!--
-                  The legacy diff button is gone — replaced by the
-                  worktree chip above. The "attach" path is folded
-                  into the chip's primary click (no worktree →
-                  click chip → attach).
-                -->
+                    :state="worktreeState"
+                    :chip-label="worktreeChipLabel"
+                    :chip-title="worktreeChipTitle"
+                    :branch-name="branchName"
+                    :path-for-display="worktreePathForDisplay"
+                    :is-streaming="isStreaming"
+                    @chip-click="onChipClick"
+                    @detach-click="onDetach"
+                    @delete-click="onDeleteClick"
+                />
             </div>
         </header>
 
@@ -522,52 +382,17 @@ if (typeof window !== "undefined") {
         />
 
         <!--
-          Step 4 / PR3: session-level diff modal. Triggered by the
-          "diff" chip in the header. Closes on backdrop click, on
-          the close button, or on Esc. Renders the DiffView
-          component with the session's cached diff.
+          Step 4 / PR3: session-level diff modal. 8-PR3: UI
+          extracted to `DiffModal.vue`. State (open / loading /
+          error / result) stays here.
         -->
-        <Transition name="chat-panel-modal">
-            <div
-                v-if="diffModalOpen"
-                class="diff-modal-backdrop"
-                @click.self="closeDiffModal"
-            >
-                <div
-                    class="diff-modal"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Session diff"
-                >
-                    <header class="diff-modal__header">
-                        <h2 class="diff-modal__title">
-                            Session diff
-                            <span v-if="diffResult" class="diff-modal__count">
-                                ({{ diffResult.files.length }}
-                                {{ diffResult.files.length === 1 ? "file" : "files" }})
-                            </span>
-                        </h2>
-                        <button
-                            type="button"
-                            class="diff-modal__close"
-                            @click="closeDiffModal"
-                            aria-label="Close"
-                        >
-                            <Icon name="x" :size="14" />
-                        </button>
-                    </header>
-                    <div class="diff-modal__body">
-                        <div v-if="diffLoading" class="diff-modal__loading">
-                            Loading diff…
-                        </div>
-                        <div v-else-if="diffError" class="diff-modal__error">
-                            {{ diffError }}
-                        </div>
-                        <DiffView v-else-if="diffResult" :files="diffResult.files" />
-                    </div>
-                </div>
-            </div>
-        </Transition>
+        <DiffModal
+            :is-open="diffModalOpen"
+            :is-loading="diffLoading"
+            :error="diffError"
+            :result="diffResult"
+            @close="closeDiffModal"
+        />
 
         <!--
           Step 4 follow-up: confirmation modal for delete_worktree.
@@ -695,263 +520,5 @@ if (typeof window !== "undefined") {
     gap: 4px;
     color: var(--color-tool-shell);
     font-size: 11px;
-}
-
-/* -----------------------------------------------------------------------
- * Step 4 follow-up: tri-state worktree chip + dropdown
- * ------------------------------------------------------------------- */
-
-.chat-panel__worktree {
-    position: relative;
-    display: inline-flex;
-    align-items: stretch;
-}
-
-.chat-panel__chip--worktree {
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-    border-width: 1px;
-    border-style: solid;
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    border-right: 0;
-}
-
-/* When the chevron toggle is absent (worktreeState === 'none'),
- * the main chip is the only button in the group — restore its
- * right border and right radius to make it a complete pill. */
-.chat-panel__chip--worktree--alone {
-    border-top-right-radius: 4px;
-    border-bottom-right-radius: 4px;
-    border-right: 1px solid var(--color-accent);
-}
-
-.chat-panel__chip--worktree:hover {
-    background: var(--color-accent);
-    color: var(--color-bg-app);
-}
-
-.chat-panel__chip--worktree-toggle {
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-    border: 1px solid var(--color-accent);
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    border-top-right-radius: 4px;
-    border-bottom-right-radius: 4px;
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-    padding: 2px 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-left: 0;
-}
-
-.chat-panel__chip--worktree-toggle:hover {
-    background: var(--color-accent);
-    color: var(--color-bg-app);
-}
-
-.chat-panel__menu {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    min-width: 200px;
-    z-index: 100;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-}
-
-.chat-panel__menu-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
-    background: transparent;
-    border: 0;
-    color: var(--color-text-primary);
-    font: inherit;
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-    border-radius: 4px;
-}
-
-.chat-panel__menu-item:hover:not(:disabled) {
-    background: var(--color-bg-elevated);
-}
-
-.chat-panel__menu-item:disabled {
-    color: var(--color-text-muted);
-    cursor: not-allowed;
-}
-
-.chat-panel__menu-item--danger {
-    color: var(--color-tool-error);
-}
-
-.chat-panel__menu-item--danger:hover:not(:disabled) {
-    background: var(--color-bg-elevated);
-}
-
-.chat-panel__menu-sep {
-    height: 1px;
-    background: var(--color-bg-border);
-    margin: 4px 0;
-}
-
-/* -----------------------------------------------------------------------
- * Diff modal (step 4 / PR3). Full-viewport overlay; the inner
- * .diff-modal is centered and sized to leave 40px margin on each
- * side. Scrolling happens inside .diff-modal__body so the
- * header + close button stay pinned.
- * -------------------------------------------------------------------- */
-.diff-modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 40px;
-}
-
-.diff-modal {
-    background: var(--color-bg-surface);
-    border: 1px solid var(--color-bg-border);
-    border-radius: 8px;
-    width: 100%;
-    max-width: 1100px;
-    max-height: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-}
-
-.diff-modal__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--color-bg-border);
-    background: var(--color-bg-elevated);
-    flex-shrink: 0;
-}
-
-.diff-modal__title {
-    margin: 0;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    display: inline-flex;
-    align-items: baseline;
-    gap: 8px;
-}
-
-.diff-modal__count {
-    font-size: 11px;
-    color: var(--color-text-muted);
-    font-weight: 400;
-}
-
-.diff-modal__close {
-    background: transparent;
-    border: 0;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 4px;
-    border-radius: 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.diff-modal__close:hover {
-    background: var(--color-bg-border);
-    color: var(--color-text-primary);
-}
-
-.diff-modal__body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px 16px;
-    background: var(--color-bg-app);
-}
-
-.diff-modal__loading,
-.diff-modal__error {
-    padding: 24px;
-    text-align: center;
-    color: var(--color-text-muted);
-    font-size: 13px;
-}
-
-.diff-modal__error {
-    color: var(--color-tool-error);
-}
-
-/* -----------------------------------------------------------------------
- * R4 popup animations. Two separate transitions:
- *   - chat-panel-popover: fade + slide-down 4px (worktree dropdown,
- *     opens downward).
- *   - chat-panel-modal:    fade + scale 0.96→1 from center (diff modal).
- * Enter is 150ms ease-out, leave is 100ms ease-in (faster exit, per
- * the PR5 popover pattern).
- * ------------------------------------------------------------------- */
-.chat-panel-popover-enter-active,
-.chat-panel-popover-leave-active {
-    transition: opacity 150ms ease-out, transform 150ms ease-out;
-    transform-origin: top right;
-}
-
-.chat-panel-popover-enter-from,
-.chat-panel-popover-leave-to {
-    opacity: 0;
-    transform: translateY(-4px);
-}
-
-.chat-panel-popover-leave-active {
-    transition-duration: 100ms;
-    transition-timing-function: ease-in;
-}
-
-.chat-panel-modal-enter-active,
-.chat-panel-modal-leave-active {
-    transition: opacity 150ms ease-out;
-}
-
-.chat-panel-modal-enter-active .diff-modal,
-.chat-panel-modal-leave-active .diff-modal {
-    transition: opacity 150ms ease-out, transform 150ms ease-out;
-}
-
-.chat-panel-modal-enter-from,
-.chat-panel-modal-leave-to {
-    opacity: 0;
-}
-
-.chat-panel-modal-enter-from .diff-modal,
-.chat-panel-modal-leave-to .diff-modal {
-    opacity: 0;
-    transform: scale(0.96);
-}
-
-.chat-panel-modal-leave-active,
-.chat-panel-modal-leave-active .diff-modal {
-    transition-duration: 100ms;
-    transition-timing-function: ease-in;
 }
 </style>
