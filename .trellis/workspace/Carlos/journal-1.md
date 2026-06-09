@@ -250,3 +250,36 @@ Bug 2 of step 4 follow-up. libgit2 Patch::line_stats under-reports additions for
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: PR5 multi-model UX follow-up: 重布线 Settings/Model UI + test_model IPC
+
+**Date**: 2026-06-09
+**Task**: PR5 multi-model UX follow-up: 重布线 Settings/Model UI + test_model IPC
+**Branch**: `main`
+
+### Summary
+
+PR5 follow-up (commit b919d9e) 修复 PR4 整体 UX 错位. R1 Settings 入口从主区底部 StatusBar 改到 Sidebar footer (齿轮+中文设置), 整个 StatusBar.vue 删除 (-243). R2 Test 改测 model (后端新增 test_model IPC, 走 anthropic POST /v1/messages + openai POST /chat/completions round-trip 用真实 model.model_name, 旧 test_provider 保留+deprecate). 前端 ModelsTab 每行 Test 按钮行内展示, ProvidersTab Test 完全移除. R3 model 选择器从 StatusBar 移入 ChatInput 的 .chat-input__hint 右侧. R4 ModelSelect.vue 新建 (~290 行) 抄 worktree 手写 popover 向上弹 (bottom: calc(100% + 4px) vs worktree top: calc(100% + 4px)), 不用 reka-ui DropdownMenu (D3 决策). Spec: llm-contract.md append test_model IPC 7-section contract (含 OpenAI GET /models 错/POST round-trip 对 wrong vs correct); 新建 frontend/popover-pattern.md 记录手写 popover pattern + 弹方向规则 + 不要 reka-ui 的理由. 验证: 262 cargo tests pass, vue-tsc + pnpm build clean, trellis-check 33 criteria 全 PASS. 之前同一 session 完成了 numstat (30a5c43) — 顺序: numstat commit → finish-work → PR5 brainstorm (3 用户决策 R1/R2/R3 收口 + 3 AskUserQuestion 收敛) → implement → OpenAI 改 POST round-trip (用户决策) → check → update-spec → commit → finish-work.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b919d9e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
