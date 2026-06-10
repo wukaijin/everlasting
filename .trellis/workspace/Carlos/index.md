@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-06-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~475 | Active |
+| `journal-1.md` | ~509 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-06-10 | V2 路线图重排 + 技术线路愿景收敛到 docs/ROADMAP.md | `f995cb6`, `d744749` | `main` |
 | 8 | 2026-06-10 | Step 8 — 代码重构与文档清理 (5 PR batch) | `5171ecf`, `c151c77`, `2f8a677`, `0f9a167`, `b707e68` | `main` |
 | 7 | 2026-06-09 | fix SettingsModal reka-ui Select 层级 + 宽度 + 背景 (Vue 3 scoped + portal :deep()) | `c5e02d4`, `c1454e6` | `main` |
 | 6 | 2026-06-09 | UI polish: reka-ui form primitives + cog-6-tooth + worktree chip + popup animations + text-muted | `b85d5d9` | `main` |
