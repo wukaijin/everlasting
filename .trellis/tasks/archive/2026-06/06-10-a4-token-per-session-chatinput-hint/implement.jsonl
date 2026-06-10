@@ -1,0 +1,10 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent / TokenUsage / Provider 抽象契约;implement 时要在 Scenario 段加 Token Usage Tracking 段(Anthropic message_delta.usage 解析 + OpenAI stream_options.include_usage + 归一化到 4 字段)"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "Anthropic / OpenAI 归一化契约,WireCapabilities,Provider 工厂 dispatch;TokenUsage 在两个 provider 内的归一化映射规则(prompt→input / completion→output / cached_tokens→cache_read / cache_creation 填 0)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "sqlx migration 模式、idempotent ALTERs、nullable / DEFAULT 0 习惯、add_session_column_if_missing 探针模式;ALTER TABLE sessions 加 4 列 nullable INTEGER 必须用现成探针"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "sqlx 错误处理风格、tracing::warn + skip 模式;add_token_usage 单条 UPDATE 失败必须 log + skip 不阻塞 agent loop 主流程"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 模式、streamController 单一来源、SSE 监听路由(按 request_id 路由);TokenUsage 新 store 加 SSE chat-event 监听 currentSessionTokenUsage 更新"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui 2.9.9 组件用法、:deep() portal gotcha、Tooltip / Popover 模式;R8 hover tooltip 用 reka-ui Tooltip,注意 TooltipContent portal to body,样式规则要 :deep() 包裹"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "颜色 token (bg/text/accent/tool)、禁止硬编码 hex;50/75 颜色阈值要用 var(--color-warn) / var(--color-tool-error) 等 token,不能 #F00 / #F80"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "hand-rolled popover 模式(onDocumentClick + Esc close)、position direction 规则;R8 tooltip 位置方向参考"}
+{"file": "CONTEXT.md", "reason": "项目级 glossary,A4 任务建立的术语表(Turn / TokenUsage / Context Pressure / Cache Hit / Context Window / Per-session 累积 / Anthropic SSE Usage / OpenAI Stream Usage);sub-agent 实施时查术语"}

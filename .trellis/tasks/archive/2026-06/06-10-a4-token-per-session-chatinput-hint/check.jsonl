@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent 契约检查:Done { stop_reason, usage: Option<TokenUsage> } 字段命名一致性、TokenUsage 4 字段 schema、Anthropic / OpenAI 归一化映射必须符合 spec"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 检查:ALTER TABLE sessions 加 4 列 nullable INTEGER + add_session_column_if_missing 探针;不允许硬编码 DEFAULT 0(我们用 NULL 显 '-')"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理检查:add_token_usage 单条 UPDATE 失败必须 tracing::warn! + skip,不阻塞主流程;cancel / error 场景不累加"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 检查:TokenUsage state 加在哪个 store(facade 还是 streamController),SSE chat-event 监听是否路由正确(避免多 listener 重复)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "颜色 token 检查:50/75 颜色阈值必须用 var(--color-warn) / var(--color-tool-error) 等 design token,不允许 #F00 / #F80 / 硬编码 hex"}
