@@ -29,6 +29,7 @@ mod commands;
 mod db;
 mod git;
 mod llm;
+mod memory;
 mod projects;
 mod state;
 mod tools;
@@ -89,6 +90,10 @@ pub fn run() {
             commands::projects::hide_project,
             commands::projects::unhide_project,
             commands::projects::pick_project_dir,
+            // Memory (B5: user + project 2-layer loader)
+            commands::memory::read_memory_layers,
+            commands::memory::read_memory_content,
+            commands::memory::open_memory_in_editor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

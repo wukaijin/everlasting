@@ -1,7 +1,7 @@
 # IMPLEMENTATION — 实现讲解
 
 > Everlasting 的"自研决策 + 决策日志"。**本文件是决策档案**,不列路线图(路线图见 [ROADMAP.md](./ROADMAP.md))。
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),路线图见 [ROADMAP.md](./ROADMAP.md)),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -27,6 +27,44 @@
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
+
+### 2026-06-10 — B5 Memory 落地(User + Project 2 层先做,PR1 后端)
+
+- **决策**:`memory::loader` 拆 `mod.rs` / `file.rs` / `tokens.rs` / `loader.rs` / `watcher.rs` / `tests.rs` 6 文件,接口位 (`MemoryKind::Session` / `Runtime`) 占位 + `#[allow(dead_code)]` 标注,V2 2 期再启用
+  - **原因**:1 期只做 User / Project 2 层,但 loader 接口必须从 day 1 就分时设计,否则 V2 2 期加 Session / Runtime 时 load_for_session 签名会动 → 跨 3 层(B5 / B6 subagent / Runtime 检索)的契约大改
+  - **依据**:`.trellis/tasks/06-10-b5-memory-user-project-2layer/prd.md` D1 决策点 1(loader 接口分时设计)+ `.trellis/spec/backend/memory.md` §"Decision: 2 layers (V2 1 期), 4 layers (V2 2 期) with the same interface"
+  - **后果**:Session / Runtime 变体在 `resolve_path` 里返回 `None`,被 `load_layer` 翻成 `Error { reason: "session / runtime memory is not implemented in V2 1 期" }`;V2 2 期启用时只改这几个 `None` 即可
+- **决策**:`MemoryCache` 用 `RwLock<[Option<MemoryLayer>; 2]>`(User 层 1 个 slot + Project 层 `HashMap<ProjectId, [Option<...>; 2]>`),watcher 走 `invalidate_*` 不做 I/O,read-through 在 chat 任务里 re-read
+  - **原因**:watcher callback 是同步的(sync I/O on notify event loop 是反模式),缓存写者跟并发读者会有 race;read-through 模式让 watcher 保持纯状态变更,disk I/O 落在 chat 的 async 任务上
+  - **依据**:`.trellis/spec/backend/memory.md` §"Decision: Read-through cache + watcher-driven invalidation" + `tools/edit_file` 现有 ReadGuard 模式一致
+  - **后果**:watcher 1s 防抖(防 editor save 触发的 3 个连续 inotify 事件);watcher 用 `Weak<MemoryCache>` 不 keep `AppState` alive
+- **决策**:`tiktoken-rs` 0.6 cl100k_base 估算 token(`OnceLock<Mutex<CoreBPE>>` 进程单例)
+  - **原因**:Anthropic 没官方 tokenizer,社区反推 1-2% drift 在 "X tokens" 显示粒度下不可见;1 个 BPE 表省得多模型复杂度
+  - **依据**:PRD D7 不限制 token + `.trellis/spec/backend/memory.md` §"Decision: tiktoken-rs cl100k_base"
+  - **后果**:冷启动 ~200ms 一次性 BPE build 成本,后续 <1µs / token;cl100k_base 编码器 `!Send`,包 `tokio::sync::Mutex` 暴露 async `count_tokens`
+- **决策**:`MAX_FILE_SIZE = 100 KiB` 硬卡,超了翻 `LayerStatus::Error` 不进 cache 不进 prompt
+  - **原因**:PRD D7 说不限制 token,但信任用户不塞 50MB CLAUDE.md 不靠谱;4 文件 * 100 KiB ≈ 100K tokens 在 200K 上下文窗内可控
+  - **依据**:PRD 实施计划 R1 "失败兜底" + `.trellis/spec/backend/memory.md` §"Decision: Hard size cap (100 KiB) at the loader level"
+  - **后果**:`> 100 KiB` 文件前端 preview 显示 `Error` + reason(`"file is 204800 bytes, exceeds 102400 byte cap"`);不影响其他 3 层
+- **决策**:4 文件固定路径(User 走 `dirs::config_dir().join("everlasting")` → Linux `~/.config/everlasting/`,Project 走 `projects.path` 列),watcher 在 `AppState::load` 启动时按当前 project 列表注册,新 project 不 auto-watch
+  - **原因**:PRD D3 "新建 memory 文件需重启 session 生效" 延伸到"新建 project 也需要重启 watcher",watch 列表固定在启动时是预测行为
+  - **依据**:`.trellis/spec/backend/memory.md` §"Decision: Watcher does NOT auto-register new projects"
+  - **后果**:运行时新建 project 的 memory 仍能 read-through(下次 chat 缓存 miss 自动从盘读),只是没 hot-reload,要重启 app 才有
+- **决策**:`delete_session` 触发 `MemoryCache::invalidate_project(project_id)`,`delete_project` 不存在(本期不动 db),但 loader 留好接口位
+  - **原因**:同项目下个 session 不能拿到被删 session 残留的缓存
+  - **依据**:PRD R2 缓存结构 + `.trellis/spec/backend/memory.md` §"delete_session / delete_project cache invalidation"
+  - **后果**:User 层 cache 不受 session 删除影响(只 project 层被 invalidate)
+- **决策**:System prompt 注入位置 = 顶部 banner(`<system>...</system>`) + 4 个文件独立占段,顺序 Memory → Role(`build_system_prompt`) → Skill → history
+  - **原因**:Anthropic 协议原生的 `<system>` 标签是 server-injected reminder,LLM 不会当 user content;独立占段是 PRD D6 锁定("LLM 自己看")
+  - **依据**:`.trellis/spec/backend/llm-contract.md` §2 协议映射 + `docs/ARCHITECTURE.md` §2.2 第 ⑤a 子步骤
+  - **后果**:`build_context` 顺序固定,新加 banner / 占段都要按这个顺序;Anthropic XML 标签在 frontend rehydrate 路径无需特殊处理(LLM 看到就行)
+- **决策**:1 PR 拆成 PR1 (后端 loader + 注入) + PR2 (前端 `<MemoryPreview>` UI),本期只交 PR1
+  - **原因**:后端跟前端契约可独立验证(后端 IPC + agent loop 注入 + cargo test),前端 preview 组件需要 reka-ui tooltip / token 显示 / $EDITOR 跳转单独 design
+  - **依据**:PRD D9 PR 拆分决策
+  - **后果**:PR1 9 个文件后端 + 1 spec 段(`.trellis/spec/backend/memory.md` 完整 code-spec);PR2 留到下个 sub-agent
+- **沉淀**:`.trellis/spec/backend/memory.md` 新建(code-spec depth: 4 文件路径 / 失败兜底 6 种 / size cap 100 KiB / tiktoken 选择 / watcher 防抖 1s / cache invalidate 6 个 trigger / 20 个 cargo 测 + Good/Base/Bad + Wrong/Correct 对照)
+- **测试**:20 个新增 cargo 测(loader 6 + file 5 + tokens 4 + banner 3 + Arc smoke 1 + all_paths 1),全过;原 284 → 304 测
+- **Out of Scope 守住** (5 条):Session-level / Runtime memory / `use_memory` tool / 审计日志 / token 硬卡 LLM 摘要降级 / 跨设备同步 / 新建 memory 文件 hot-reload / 内嵌 Markdown 编辑器 / git commit —— 全部 0 命中
 
 ### 2026-06-10 — A4 Token 用量统计(per-session 累积 + ChatInput hint 区)
 

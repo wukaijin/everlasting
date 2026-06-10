@@ -46,6 +46,7 @@ use crate::agent::MAX_TURNS;
 use crate::llm::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role,
 };
+use crate::memory::loader::{build_banner, build_layers_block, load_for_session};
 use crate::state::{AppState, CancellationGuard, ChatEventPayload, ToolCallPayload};
 use crate::tools::ToolContext;
 
@@ -67,6 +68,7 @@ pub async fn chat(
     let cancellations = state.cancellations.clone();
     let session_active_request = state.session_active_request.clone();
     let read_guard = state.read_guard.clone();
+    let memory_cache = state.memory_cache.clone();
     let rid = request_id;
     let app_handle = app.clone();
 
@@ -281,12 +283,46 @@ pub async fn chat(
         // HEAD SHA so the model is explicitly grounded on every
         // request.
         let head_sha = lookup_head_sha(&worktree_path);
-        let system_prompt = build_system_prompt(
+        let base_prompt = build_system_prompt(
             &loaded_session.session,
             &project,
             &worktree_path,
             &head_sha,
         );
+
+        // B5 Memory (V2 1 期, 2026-06-10): inject the 4-layer
+        // memory (User CLAUDE.md / User AGENTS.md / Project
+        // CLAUDE.md / Project AGENTS.md) at the head of the
+        // system prompt, with a banner that lists the loaded
+        // layers and their token counts. Each layer is its
+        // own standalone block — the LLM sees them in
+        // canonical order, with no concatenation or
+        // override logic. Failure modes (missing file,
+        // permission error, > 100 KiB, non-UTF-8) are
+        // absorbed by the loader — a missing layer just
+        // doesn't appear in the banner or the layers block.
+        let memory_layers =
+            load_for_session(&memory_cache, &project.id, &project.path).await;
+        let memory_banner = build_banner(&memory_layers);
+        let memory_layers_block = build_layers_block(&memory_layers);
+        let system_prompt = if memory_banner.is_empty() && memory_layers_block.is_empty() {
+            // Fresh install with no memory files at all —
+            // skip the injection entirely to keep the prompt
+            // short.
+            base_prompt
+        } else {
+            let mut s = String::new();
+            if !memory_banner.is_empty() {
+                s.push_str(&memory_banner);
+                s.push_str("\n\n");
+            }
+            if !memory_layers_block.is_empty() {
+                s.push_str(&memory_layers_block);
+                s.push_str("\n\n");
+            }
+            s.push_str(&base_prompt);
+            s
+        };
 
         // Persist the most recent user-typed message before the
         // agent loop runs. Without this, the user message only

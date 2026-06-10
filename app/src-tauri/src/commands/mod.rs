@@ -23,6 +23,7 @@
 
 pub mod cancel;
 pub mod config;
+pub mod memory;
 pub mod projects;
 pub mod providers;
 pub mod sessions;
@@ -74,5 +75,8 @@ pub fn all_command_names() -> Vec<&'static str> {
         "hide_project",
         "unhide_project",
         "pick_project_dir",
+        "read_memory_layers",
+        "read_memory_content",
+        "open_memory_in_editor",
     ]
 }
