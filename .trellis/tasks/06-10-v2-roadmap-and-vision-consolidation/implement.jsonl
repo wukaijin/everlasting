@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md", "reason": "本任务的 single source of truth — 含 D1-D6 全部决策、V2 4 档完整分类、已实施粗粒度归类、9 个文件 inventory 表(每个文件的具体处理方式 + 行号定位)。实施前必读"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "D3 简化对象 — §2 路线图 7 步 + §3 待办整段移走到 ROADMAP;§1 自研决策 + §4 决策日志保留;§4 末尾追加新条目'2026-06-10 V2 路线图重排'。需要原文了解 §4 决策日志格式(每条:**决策** + **原因** + 关联条目)以保持新追加条目风格一致"}
+{"file": "docs/DESIGN.md", "reason": "D5 重构对象 — §3.1-3.4 整段删除(MVP/v1/v2/v3+ 产品版语义);§3.5 保留并改名为'明确不做(硬约束)';§3 顶部新增简略 §3.1 项目能力 + 指向 ROADMAP;§5 Step 8 进度补丁段删除(过时)。原文中 §3.5 包含的 12 条硬约束要逐条保留"}
+{"file": "docs/HANDOFF.md", "reason": "§2 当前进度对齐 V2(Step 8 已完成,删除滞后描述);§3 推荐阅读顺序中 IMPLEMENTATION §3 引用改为指向 ROADMAP;§1 项目是什么 + §4 接续 checklist 中关于'下一步候选'引用改指 ROADMAP"}
+{"file": "docs/ARCHITECTURE.md", "reason": "§2.4 实施映射表 — 旧 7 步'步骤 N → 关卡'映射过时,删除整段或改为指向 ROADMAP;§1 / §2 16 关卡 / §3-5 架构决策不动(跟路线图无关)"}
+{"file": "docs/BACKLOG.md", "reason": "§0.5 已落地段(从 BACKLOG 移除项)对齐 V2 移除项语义;§1-§7 候选段顶部的'Phase 1/Phase 2'优先级标记删除(优先级现在归 ROADMAP);附录 A 远期段保留(B8/B10/B11 在 V2 第四档,内容仍有效)"}
+{"file": "docs/TECH.md", "reason": "§1.4 扩展功能新增依赖表的'对应功能'列引用'BACKLOG §1-§7'保留(技术细节归 BACKLOG);删除/重构'随候选功能引入'描述中关于路线图优先级的暗示"}
+{"file": "docs/README.md", "reason": "第 17 行 IMPLEMENTATION 描述改为'决策档案'(不再含路线图);第 32 行第 3 步引导改为指向 ROADMAP;第 37 行当前进度引导改为指向 ROADMAP;新增 ROADMAP.md 入口条目"}
+{"file": "CLAUDE.md", "reason": "项目根第 9 行 Project Overview 段是路线图重灾区(含 MVP/v1/路线图外/Step 8 进度) — 重写为'指向 ROADMAP + 当前状态 1-2 句'符合 D4 顶层导航策略;第 138 行 IMPLEMENTATION 索引描述改为'决策档案';保留其余技术架构描述"}
+{"file": "README.md", "reason": "项目根第 18-19 行当前状态对齐 V2;第 43/46 行索引更新;**第 51-68 行'路线图(8 步)'完整表格删除** → 改为指向 ROADMAP 的导航句;符合 D4 顶层导航策略"}

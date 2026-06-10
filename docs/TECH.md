@@ -1,7 +1,7 @@
 # TECH — 技术栈
 
 > Everlasting 的"用什么库、为什么选这个库"。包括锁定项、候选但未定的、不用的、扩展功能新增的,以及选型决策。
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),实现路径见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -42,7 +42,7 @@
 
 ### 1.4 扩展功能新增依赖(随候选功能引入)
 
-下表依赖**仅在对应功能被选中实施时引入**,先调研评估,避免堆栈污染。
+下表依赖**仅在对应功能被选中实施时引入**,先调研评估,避免堆栈污染。**功能排期归 [ROADMAP.md §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),本表只列技术细节**。
 
 | 类别 | 库 | 用途 | 对应功能 |
 |------|-----|------|---------|
@@ -59,7 +59,7 @@
 | 图表(前端) | `ECharts` + `vue-echarts` | 生成式 UI chart | BACKLOG §5 |
 | 表格(前端) | `@tanstack/vue-table` | 生成式 UI table | BACKLOG §5 |
 | 表单(前端) | `vee-validate` | 生成式 UI form | BACKLOG §5 |
-| 工作流可视化 | `@vue-flow/core` | DAG 编辑器(留 Phase 2) | BACKLOG §4 编排 |
+| 工作流可视化 | `@vue-flow/core` | DAG 编辑器(后期再加) | BACKLOG §4 编排 |
 | 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
 
 **说明**:

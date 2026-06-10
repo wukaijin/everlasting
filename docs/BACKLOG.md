@@ -1,15 +1,15 @@
 # BACKLOG — 候选功能与技术选型
 
 > 7 个新功能方向(图片 / @ / command、Skill、Memory、角色/模式/编排、生成式 UI、飞书 IM、云端同步)的完整技术评估。
-> **优先级暂不排**,先沉淀方案,后续再决定取舍。所有交叉引用统一指向本文件。
+> **优先级 / 排期归 [ROADMAP.md](./ROADMAP.md),本文档只做技术评估**。
 >
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),实现路径见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md)。
 
 ---
 
 ## 0. 全局视角:这 7 个功能落在 5 个不同的层
 
-> 💡 **关于版本号**:本文出现的 Phase 1 / Phase 2 指各**功能自身**的阶段(例:UI primitives Phase 1 必做 4 种、角色 Phase 1 不做编排)。整体产品版本号定义在 [DESIGN.md §3](./DESIGN.md#3-scope明确什么做什么不做)(MVP / v1 / v2 / v3+)。两套不重叠,按上下文区分。
+> 💡 **关于版本号**:本文出现的 Phase 1 / Phase 2 指各**功能自身**的阶段(例:UI primitives Phase 1 必做 4 种、角色 Phase 1 不做编排)。**整体排期 / 优先级归 [ROADMAP.md §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)**,本文档不再维护排期。两套不重叠,按上下文区分。
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -29,14 +29,19 @@
 
 ---
 
-## 0.5 已落地的方向(从 BACKLOG 移除,记录在 [IMPLEMENTATION §3.1](./IMPLEMENTATION.md#31-已收尾milestone-表权威以-git-log---oneline--20-为准))
+## 0.5 已落地的方向(从 BACKLOG 移除,记录在 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成))
 
 > 这些方向已在独立任务中落地,不再作为 BACKLOG 候选。原 BACKLOG 段保留作为历史参考。
 
 - ✅ **多 Provider (Anthropic + OpenAI)** — 2026-06-08/09 落地,4 PR + 1 follow-up(`f9c5648` / `0a787ef` / `96e1f98` + 1 跨协议 PR)
-- ✅ **Project 基础结构 + 顶部 Tabs UI** — 2026-06-05/06 落地,3b-1(原步骤 3b-1,后端 PR1 + 前端 PR2 + post-fixes)
-- ✅ **Git worktree + diff** — 2026-06-07/08 落地,原步骤 4(worktree 解耦 + opt-in attach / detach / delete)
+- ✅ **Project 基础结构 + 顶部 Tabs UI** — 2026-06-05/06 落地,3b-1(后端 PR1 + 前端 PR2 + post-fixes)
+- ✅ **Git worktree + diff** — 2026-06-07/08 落地(worktree 解耦 + opt-in attach / detach / delete)
 - ✅ **工具集扩展(edit_file / grep / glob / list_dir + ReadGuard)** — 2026-06-07 落地(原属 BACKLOG §1 输入层扩展的下游)
+
+> 📌 **V2 重排移除项**(2026-06-10,详见 [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定) + [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION.md#4-决策日志)):
+> - 🗑️ **A1 xterm.js 嵌入式终端** — `shell` tool + 30K 落盘已覆盖,不做
+> - 🗑️ **A3 MCP 暴露** — 个人工具杠杆不足,不做
+> - 🗑️ **C5 Provider 限流(令牌桶)** — 个人使用未撞限流,不做
 
 ---
 
@@ -258,7 +263,10 @@ allowed-tools: [read_file, search_code, git_diff]
 | 飞书        | 消息内容外泄                    | 不在飞书存 session 历史       |
 | 云端        | 第三方数据托管                  | 只 push 摘要 + 端到端鉴权     |
 
-### 3.4 实施顺序建议(供参考,不是死规)
+### 3.4 实施顺序(供参考,排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))
+
+> 实施顺序的**宏观视图**在 [ROADMAP §2 V2 路线图 4 档分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排);本节只讲**功能落地的依赖拓扑**(从下到上,下层先做):
+
 ```
 下层先稳:
   §1 输入层(图片/@文件/command)→ §3 Memory → §2 Skill
@@ -272,7 +280,7 @@ allowed-tools: [read_file, search_code, git_diff]
 
 ---
 
-## 4. 跨设备(v2 候选)
+## 4. 跨设备
 
 **目标**:在多台设备上访问同一个 agent 工作环境。
 
@@ -295,12 +303,12 @@ allowed-tools: [read_file, search_code, git_diff]
   - 目标机器不能在跑 LLM(否则状态会变)
   - daemon 不自动 commit(避免过度设计),迁移时强制 commit + push
 
-**Phase 1(后期 v2 考虑)**:
-- [ ] VPS daemon 部署文档(系统级 systemd,配置文件)
-- [ ] 跨机器 session 列表同步(只读)
-- [ ] "工作树迁移"流程(GUI 按钮)
-- [ ] 多设备消息历史(只在源机器)
-- [ ] 配置文件跨设备同步
+**实施范围**(技术细节,排期归 [ROADMAP §2 第四档](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
+- VPS daemon 部署文档(系统级 systemd,配置文件)
+- 跨机器 session 列表同步(只读)
+- "工作树迁移"流程(GUI 按钮)
+- 多设备消息历史(只在源机器)
+- 配置文件跨设备同步
 
 **不做**:
 - ❌ 多端同时编辑同一 session(冲突解决不做)
@@ -313,7 +321,7 @@ allowed-tools: [read_file, search_code, git_diff]
 - 跨机器 worktree 路径冲突(用 session_id 隔离)
 - 源机器断网时目标机器不能接续 — 设计选择,不是 bug
 
-> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION.md#4-决策日志)。本节是 v2 候选,前期不展开实现细节。
+> 💡 详见 [IMPLEMENTATION §4 决策日志"方案 C"](./IMPLEMENTATION.md#4-决策日志)。本节功能在 [ROADMAP §2 第四档(最远远期)](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),前期不展开实现细节。
 
 ---
 
@@ -356,13 +364,12 @@ allowed-tools: [read_file, search_code, git_diff]
 
 ---
 
-## 附录 A: 远期候选 (v3+, 暂不评估)
+## 附录 A: 远期候选
 
-> 本节集中放 v3+ 远期项(已评估但不计划近期实施),原 BACKLOG §3-§7 候选功能按"已落地 / 远期"重新分组。每节内容保留原样,只调整标题层级 + 加 [v3+] 标识。
+> 本节集中放远期项(已评估但不计划近期实施),原 BACKLOG §3-§7 候选功能按"已落地 / 远期"重新分组。每节内容保留原样,只调整标题层级。**整体排期 / 优先级归 [ROADMAP.md §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)**,本附录不再标注时间。
 >
 > **重要**:本节编号"3-7"是历史原编号,内容跟 BACKLOG §3"跨 7 个功能的共同关注点"**完全无关**——后者是横向关注点,本附录是按功能归档的远期候选。
 
-> [v3+ 远期 — 暂不评估]
 
 ### 3. 多层 Memory 与约束
 
@@ -423,7 +430,6 @@ allowed-tools: [read_file, search_code, git_diff]
 - 跨项目 memory 泄漏 → 严格 user/project 边界
 - 用户改了 memory 不知道 → 启动 banner 提示"加载了 N 条 memory"
 
-> [v3+ 远期 — 暂不评估]
 
 ### 4. 多角色 · 多模式 · 可编排
 
@@ -512,11 +518,11 @@ struct WorkflowNode {
 **可视化**:
 - `@vue-flow/core`(原 React Flow,Vue 版同名)
 - 节点拖拽、连线、配置
-- **不做到 Phase 1**,Phase 1 只做单 agent + role/mode 切换
+- **首批不做**,首批只做单 agent + role/mode 切换
 
 **库/选型**:
 - 编排引擎:**自研**,DAG 调度 200-500 行 Rust 够用
-- 可视化:`@vue-flow/core`(Phase 2 再加)
+- 可视化:`@vue-flow/core`(后期再加)
 - 备选:`dagrs` 存在但不够主流
 
 **风险**:
@@ -524,34 +530,33 @@ struct WorkflowNode {
 - 跨 session 状态:崩溃恢复要细做
 - token 成本:多 agent 串行 = 多倍成本 → 预算上限硬卡
 
-**Phase 1 / Phase 2 范围划分**:
-- Phase 1:role + mode 切换,**无编排**
-- Phase 2:可视化 DAG 编辑器 + workflow 执行
+**范围划分**:
+- role + mode 切换(无编排)— 排期归 [ROADMAP §2 第二档 A2+B7](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)
+- 可视化 DAG 编辑器 + workflow 执行 — 排期归 [ROADMAP §2 第四档 B8](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)
 
-> [v3+ 远期 — 暂不评估]
 
 ### 5. 生成式 UI 开关
 
 **目标**:让 agent 的回复不只文本,可以是可交互的 UI。
 
 **两种范式**:
-- **约束式**(推荐,Phase 1):LLM 通过 tool use 输出结构化 JSON,前端按 type 渲染
-- **自由式**(v3+ 考虑):LLM 生成 HTML,前端沙箱渲染
+- **约束式**(推荐):LLM 通过 tool use 输出结构化 JSON,前端按 type 渲染
+- **自由式**(远期考虑):LLM 生成 HTML,前端沙箱渲染
 
-**约束式 UI primitives**(总览,Phase 1 只做前 4 种):
+**约束式 UI primitives**(总览,首批做前 4 种):
 
 | Type           | 渲染                  | Action 机制             | 范围       |
 |----------------|----------------------|-------------------------|------------|
-| `button`       | 按钮                 | 触发 Tauri command      | **Phase 1** |
-| `form`         | 表单                 | 提交收集输入            | Phase 2+    |
-| `selector`     | 单/多选              | 选完返回                | **Phase 1** |
-| `chart`        | 图表(折/柱/饼)      | 只读                    | Phase 2+    |
-| `table`        | 表格                 | 可排序                  | Phase 2+    |
-| `diff`         | 代码 diff            | 可应用/拒绝             | **Phase 1** |
-| `code_block`   | 语法高亮             | 可复制                  | **Phase 1** |
-| `markdown`     | 富文本               | —                       | Phase 1(基础,默认开) |
+| `button`       | 按钮                 | 触发 Tauri command      | 首批(必做) |
+| `form`         | 表单                 | 提交收集输入            | 后期       |
+| `selector`     | 单/多选              | 选完返回                | 首批(必做) |
+| `chart`        | 图表(折/柱/饼)      | 只读                    | 后期       |
+| `table`        | 表格                 | 可排序                  | 后期       |
+| `diff`         | 代码 diff            | 可应用/拒绝             | 首批(必做) |
+| `code_block`   | 语法高亮             | 可复制                  | 首批(必做) |
+| `markdown`     | 富文本               | —                       | 首批(基础,默认开) |
 
-**Phase 1 范围**:
+**首批范围**:
 - 必做:`button` / `selector` / `diff` / `code_block` 4 种
 - 够覆盖 80% 用例(agent 询问 / 申请确认 / 展示结果)
 - 4 种之外的需求降级为 text 描述
@@ -585,7 +590,6 @@ emit("ui:render", { primitives }) → 前端
 - 跨 session 持久化:UI 事件不存 DB(刷新即丢),除非显式标记
 - LLM 幻觉:输出的 JSON 不合法 → 兜底渲染为错误提示,不崩 UI
 
-> [v3+ 远期 — 暂不评估]
 
 ### 6. IM 通道(飞书)
 
@@ -653,7 +657,6 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 - 速率限制:飞书有 QPS 限制 → 批处理
 - 卡片长度:markdown 字段有限制 → 超长分页
 
-> [v3+ 远期 — 暂不评估]
 
 ### 7. 云端状态同步
 
@@ -701,7 +704,7 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 - **任何写操作(发消息)在本地确认弹窗**(可选关)
 - token 存 OS keychain,不进 DB
 
-**Phase 1 范围**(克制):
+**实施范围**(克制;排期归 [ROADMAP §2 第四档 B11](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
 - 只读:session 列表 + 最新 1 条消息
 - 简单写:发一条文本(限 500 字符)
 - **不做**:文件 diff 推送、tool 调用跟踪(数据量太大)
@@ -711,4 +714,4 @@ Tauri 进程 = GUI + Agent + Tools(全在一起)
 - 离线一致性:本地网络挂了,消息会丢(下次同步重试)
 - Worker 冷启动:首次访问慢(50-200ms)
 
-**v3+ 候选**:完全自托管(Go / Rust 写个小 server,跑在自己 VPS)
+**远期候选**:完全自托管(Go / Rust 写个小 server,跑在自己 VPS)

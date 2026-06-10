@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-当前状态：**MVP 步骤 1 / 2 / 3a / 3b-1 / 4 / 6a-多 Provider 已完成**；路线图外完成 Anthropic extended thinking 块展示 + 持久化 + spike-005 follow-up 7 PR(UI/UX 修复 + 工具稳定性 + 打断机制 + markdown + git_branch + pwd `~/` 简化) + 字体栈调整 + 6 个 UI/状态 bug 修复(streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限) + 工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard)。**当前进行：Step 8 代码重构(5 PR: 8-PR1 lib.rs 拆分 ✅ / 8-PR2 db.rs 拆分 ✅ / 8-PR3 前端拆 sub-components ✅ / 8-PR4 本次文档更新 + spec 清理 / 8-PR5 STRUCTURE.md)**。3b-2(完整三栏 UI + rig-core 迁移)**已废弃**(2026-06-09 决策:rig-core 弃用,自研 Provider trait 已完整支持多 Provider,详见 IMPLEMENTATION §4 决策日志)。已知 issue: bug 1+2 position 在 RDP 双显示器下未完全修好，TODO 跟踪。详见 `docs/IMPLEMENTATION.md` 的路线图。
+**当前状态(2026-06-10)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;V2 路线图已重排,🟢 第一档准备开始。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
+
+**路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
 ## Common Commands
 
@@ -132,11 +134,12 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 ## Documentation
 
 所有设计文档在 `docs/` 目录，全中文：
+- `ROADMAP.md` — **技术路线图(单一 source of truth)**,V2 4 档分类 + 已实施粗粒度归类
 - `ARCHITECTURE.md` — 系统架构、16 阶段请求生命周期、核心决策
-- `DESIGN.md` — 项目范围、约束、排除项
+- `DESIGN.md` — 项目能力边界 + 硬约束(明确不做)
 - `TECH.md` — 技术选型决策（锁定/候选/不用）
-- `IMPLEMENTATION.md` — 8 步路线图、决策日志
+- `IMPLEMENTATION.md` — 决策档案(§1 自研 agent core 决策 + §4 ADR 决策日志)
 - `HANDOFF.md` — session 交接指南
 - `HACKING-llm.md` — LLM API 兼容层笔记
 - `HACKING-wsl.md` — WSL 环境坑笔记
-- `BACKLOG.md` — 候选功能评估
+- `BACKLOG.md` — 候选功能技术评估(排期归 ROADMAP)

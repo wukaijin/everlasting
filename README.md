@@ -13,13 +13,7 @@
 
 ## 当前状态 (2026-06-10)
 
-权威看 `git log --oneline -20`,本节仅列关键 milestone:
-
-- ✅ MVP 步骤 1 / 2 / 3a / 3b-1 / 4(Git 集成)/ 6a-多 Provider 已完成
-- ✅ 路线图外完成 Anthropic extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI/状态 bug 修复 + 工具集扩展批次(edit_file / grep / glob)
-- ✅ **当前进行**:Step 8 代码重构(5 PR: 8-PR1 lib.rs 拆分 / 8-PR2 db.rs 拆分 / 8-PR3 前端拆 sub-components 已落地,8-PR4 文档更新 + spec 清理 本次,8-PR5 STRUCTURE.md 待办)
-- ⏸ MCP 暴露未开始;3b-2(完整三栏 UI + rig-core 迁移)已废弃
-- 🐛 已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好
+权威看 `git log --oneline -20`,**路线图与下一步选项归 [docs/ROADMAP.md](./docs/ROADMAP.md)**(V2 4 档分类 + 已实施粗粒度归类,本文档不重复)。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
 
 ## 代码结构
 
@@ -35,37 +29,23 @@ app/
 
 ## 文档
 
-设计文档在 [`docs/`](./docs/),按"需求/架构/技术/实现/候选"5 维拆分。
+设计文档在 [`docs/`](./docs/),按"需求/路线图/架构/技术/决策档案/候选"6 维拆分。
 
 | 文档 | 看什么 |
 |------|--------|
 | [docs/README.md](./docs/README.md) | 索引 + 必读参考学习清单(参考但不抄) |
-| [docs/DESIGN.md](./docs/DESIGN.md) | 项目是什么、什么不做、Scope(MVP/v1/v2/v3+) |
+| [docs/ROADMAP.md](./docs/ROADMAP.md) | **技术路线图(单一 source of truth)** — V2 4 档分类 + 已实施归类 + 维护承诺 |
+| [docs/DESIGN.md](./docs/DESIGN.md) | 项目能力边界 + 硬约束(明确不做) |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 系统怎么搭、16 关卡请求生命周期 |
 | [docs/TECH.md](./docs/TECH.md) | 锁定了哪些库(自研 Provider trait / rmcp / git2-rs / sqlx / nucleo 等) |
-| [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) | 8 步路线图 + 决策日志 + 下一步待办 |
-| [docs/BACKLOG.md](./docs/BACKLOG.md) | 7 个候选功能的技术评估(优先级未定) |
+| [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) | 决策档案 — §1 自研 agent core 决策 + §4 ADR 决策日志(只追加) |
+| [docs/BACKLOG.md](./docs/BACKLOG.md) | 7 个候选功能的技术评估(排期归 ROADMAP) |
 
-**第一次接触推荐顺序**:DESIGN §2-3 → ARCHITECTURE §1-2 → IMPLEMENTATION §2。
+**第一次接触推荐顺序**:DESIGN §3 → ROADMAP §1-2 → ARCHITECTURE §1-2。
 
-## 路线图(8 步,不写时间)
+## 路线图
 
-> 实时状态以 `git log --oneline -20` 为准;路线图语义在 2026-06-09 校准:rig-core 弃用,3b-2 标记废弃。
-
-| 阶段 | 步骤 | 目标 | 状态 |
-|------|------|------|------|
-| MVP | 1 | Tauri 骨架 + LLM 直连 + 流式显示 | ✅ |
-| MVP | 2 | Tool Calling(改文件 / 跑 shell) | ✅ |
-| MVP | 3a | SQLite + Session 持久化 | ✅ |
-| MVP | 3b-1 | 项目基础结构 + 顶部 Tabs UI | ✅ |
-| — | 3b-2 | ~~完整三栏 UI + rig-core 迁移~~ | ⛔ 废弃 (2026-06-09,rig-core 弃用) |
-| MVP | 4 | Git 集成(worktree + auto commit) | ✅ (worktree 解耦 + opt-in attach) |
-| MVP | 5 | WSL 体验(WSLg 显示,无跨边界) | ✅ (spike-001 验证) |
-| v1  | 6a | 多 Provider(Anthropic / OpenAI) | ✅ |
-| v1  | 6b | MCP 暴露 + 嵌入式终端 + 权限系统 | ⏸ 未开始 |
-| 跨  | 8 | 代码重构与文档清理(5 PR) | 🔄 当前进行 |
-
-详见 [IMPLEMENTATION §2](./docs/IMPLEMENTATION.md#2-实施路线图)。
+完整 V2 4 档分类 + 已实施项 + 移除项 + 维护承诺统一归 [docs/ROADMAP.md](./docs/ROADMAP.md),本文档不重复。
 
 ## 关键决策(为什么)
 

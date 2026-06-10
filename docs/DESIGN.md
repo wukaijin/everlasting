@@ -1,7 +1,7 @@
 # DESIGN — 需求设计
 
 > Everlasting 的"是什么、为什么、边界在哪"。这是文档的入口。
-> 架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),实现路径见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -45,73 +45,33 @@
 
 ---
 
-## 3. Scope(明确什么做、什么不做)
+## 3. 项目能力边界
 
-### 3.1 MVP(核心必做)
+> 本节讲"项目是什么 + 不是什么"。**做什么 + 什么时候做**见 [ROADMAP.md](./ROADMAP.md);**候选功能技术评估**见 [BACKLOG.md](./BACKLOG.md)。
 
-- [ ] 单项目 = 一个本地目录 + git 仓库
-- [ ] 一个项目下多个 session,每个 session 独立对话历史
-- [ ] 跟单个 agent 对话,流式输出 token
-- [x] Agent 工具基础集:`read_file` / `write_file` / `shell` 已实现(步骤 2)
-- [x] Agent 工具扩展:`edit_file` / `grep` / `glob` 已实现(2026-06-07,1 个 `feat(tools):` commit)
-- [ ] 文件变更实时显示(diff 视图)
-- [ ] Git 集成:每个 session 一个 worktree,自动 commit
-- [ ] WSL 项目管理:原生支持,文件操作走 WSL 内部路径
-- [ ] SQLite 持久化 session、message、tool call 记录
+### 3.1 项目能力(简略)
 
-### 3.2 v1(MVP 之后)
+**已具备**(完整 commit 走 `git log`,粗粒度状态见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成)):
 
-- [ ] **多 LLM provider 切换**(Anthropic / OpenAI / 本地 Ollama)
-- [ ] Token 用量统计 + 预算警告
-- [ ] 嵌入式 xterm.js,实时显示 agent 跑的 shell 命令
-- [ ] 完整的 tool 权限系统(per-tool, per-session, per-project)
-- [ ] Session 恢复(关掉应用明天接着聊)
-- [ ] MCP server 支持(把工具暴露给 Claude Desktop / Cursor)
+- Tauri 2 + Vue 3 桌面应用,WSL 优先
+- 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 16 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))
+- 多项目 / 多 session 管理(SQLite 持久化)
+- 工具集:`read_file` / `write_file` / `edit_file` / `shell` / `grep` / `glob` / `list_dir`(+ ReadGuard 防护)
+- Git 集成:worktree 解耦 + opt-in attach / detach / delete
+- 多 LLM Provider(Anthropic / OpenAI,自研 Provider trait)
+- 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器
 
-### 3.3 v2 及后续(候选功能)
+**未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
-> ⚠️ **版本号语义统一**:本文档用两套版本号,**不重叠**——
->
-> - **产品版**:MVP / v1 / v2 / v3+(§3.2 的 v1 指"整体产品的第一个发布版",多 LLM / xterm / 权限 / MCP / session 恢复)
-> - **功能版**:Phase 1 / Phase 2(下文各功能内的"v1/v2"是该**功能自身**的阶段,例:UI primitives Phase 1 必做 4 种、角色 Phase 1 不做编排)
->
-> 任何文档读到 v1/v2 时,先判定属于"产品版"还是"功能版",再读。
+- 输入层扩展:图片粘贴 / @文件补全 / /command 命令面板
+- 指令层:Skill 系统 / 多层 Memory
+- 拓扑层:多模式 / 权限系统 / Subagent / DAG workflow
+- 输出层:生成式 UI 4 primitives
+- 触达层:飞书 IM / 云端同步
 
-具体技术评估见 [BACKLOG.md](./BACKLOG.md),本节列出全部候选功能(以 9 项为基础,补 3 项):
+### 3.2 明确不做(硬约束)
 
-- [ ] **输入层扩展**:图片粘贴/拖拽 / @文件补全 / /command 命令面板
-- [ ] **Agent Skill**:打包"做某事的方法",用户和 LLM 都可调
-- [ ] **多层 Memory**:user / project / session / runtime 四层指令
-- [ ] **多角色**:架构师 / 开发者 / reviewer / tester / 文档作者
-- [ ] **多模式**:chat / plan / review / background / yolo
-- [ ] **可编排**:多 agent DAG 串行/并行(留 Phase 2)
-- [ ] **生成式 UI**:LLM 输出渲染为可交互组件(约束式,默认关)
-- [ ] **IM 通道**:飞书接入(触发 agent daemon 化,重大架构变更)
-- [ ] **云端同步**:Cloudflare Workers + D1,只 push 摘要
-- [ ] **工作树可视化**:git graph(看 session 分支关系)
-- [ ] **项目级自定义指令**:CLAUDE.md 之类的 per-project 系统 prompt
-- [ ] **Context 压缩**:长 session 自动摘要(早期不实现,失忆时再做)
-
-**注意事项**:
-- 这 12 项不全是独立功能,有一些强依赖(见 [BACKLOG.md §0 全局视角](./BACKLOG.md#0-全局视角这-7-个功能落在-5-个不同的层))
-- 飞书会触发 **agent daemon 化**,是最大的架构变更,要早评估
-- Skill / Memory / Role 共享 frontmatter loader,可以一次设计统一实现
-- 云端同步**不是**多端协作(明确不做),只是个人远程遥控
-
-### 3.4 远期(v3+)
-
-- [ ] 团队协作(暂时不做)
-- [ ] 云端同步(个人远程遥控,详见 [BACKLOG.md §7](./BACKLOG.md#7-云端状态同步))
-- [ ] 移动端(不做)
-- [ ] 公开市场(不做)
-
-> ⚠️ **关于"云端"**:本文档区分两个概念——
-> - **云端部署**:把 agent 跑在云服务器上 ❌ 不做
-> - **云端同步**:用云服务做"状态镜像 / 远程遥控通道" ✅ 远期考虑
->
-> 这两项**不矛盾**,前者是"agent 跑哪",后者是"数据镜像到哪"。
-
-### 3.5 明确不做
+> 硬约束 ≠ 排期相关。**这些是项目长期原则,不会因为 V2 / V3 路线图调整而松动**。路线图只动"做什么 + 什么时候做",不动"什么不做"。
 
 **核心不做**(项目根基):
 - ❌ **不包装 Claude Code SDK / Codex SDK** — 违背学习目标(详见 [IMPLEMENTATION.md §1](./IMPLEMENTATION.md#1-决策自己写-agent-runtime不用-sdk-包装))
@@ -131,6 +91,13 @@
 > - **云端同步**:用云服务做"状态镜像 / 远程遥控通道" ✅ 远期考虑
 >
 > 这两项**不矛盾**,前者是"agent 跑哪",后者是"数据镜像到哪"。详见 [BACKLOG §7](./BACKLOG.md#7-云端状态同步) 和 [BACKLOG §9 跨设备](./BACKLOG.md#9-跨设备v2-候选)。
+
+**V2 重排后新增的"不做"**(2026-06-10 决策):
+- ❌ **不做 xterm.js 嵌入式终端** — `shell` tool + 30K 落盘已覆盖"看 agent 在跑啥"的需求
+- ❌ **不做 MCP 暴露** — 个人工具,工具集对外开放杠杆不足
+- ❌ **不做 Provider 限流(令牌桶)** — 个人使用场景未撞到限流,后期按需再评估
+
+> 完整"移除"决策矩阵见 [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION.md#4-决策日志) + [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定)。
 
 ---
 
@@ -190,15 +157,6 @@
 - **Anthropic / OpenAI 协议变化** — 只能靠 adapter 层隔离
 - **Tauri 2 生态成熟度** — 还在快速演进,有些库还在追
 - **WSL 跨版本差异** — WSL2 行为稳定,但偶尔有 kernel upgrade 引起的边角问题
-
-**Step 8 (代码重构与文档清理) 进度 (2026-06-10)**:
-- 8-PR1 ✅ lib.rs (3195L) 拆为 state/commands/agent 子目录
-- 8-PR2 ✅ db.rs (2862L) 拆为 db/ 子模块
-- 8-PR3 ✅ ChatWindow/ModelsTab 拆为 sub-components
-- 8-PR4 🔄 文档更新 + 9 个空 spec 文件清理(本次)
-- 8-PR5 ⏳ STRUCTURE.md 创建
-
-详见 [IMPLEMENTATION §2.9](./IMPLEMENTATION.md#29-步骤-8--代码重构与文档清理)。
 
 ---
 

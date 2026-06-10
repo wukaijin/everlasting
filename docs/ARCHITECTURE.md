@@ -1,7 +1,7 @@
 # ARCHITECTURE — 架构设计
 
 > Everlasting 的"整体怎么搭、关键流程怎么走"。包括系统架构图、请求生命周期的 16 道关卡、以及核心架构决策。
-> 需求见 [DESIGN.md](./DESIGN.md),技术选型见 [TECH.md](./TECH.md),实现路径见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> 需求见 [DESIGN.md](./DESIGN.md),技术选型见 [TECH.md](./TECH.md),决策档案见 [IMPLEMENTATION.md](./IMPLEMENTATION.md),技术路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -519,27 +519,7 @@ agent loop 结束(text-only response or max_turns reached):
 
 ### 2.4 实施映射
 
-> 📌 **编号语义注意**:本表里的"步骤 N"指 [IMPLEMENTATION.md §2 路线图](./IMPLEMENTATION.md#2-实施路线图)的步骤号。其中"步骤 6"在 IMPLEMENTATION 里是"MCP + 多 Provider",**不是** 路线图外完成的 Anthropic extended thinking(虽然 commit `05671f5` 标题误用了"步骤 6"字样,详见 [IMPLEMENTATION §4 决策日志 2026-06-05 条](./IMPLEMENTATION.md#2026-06-05--路线图状态校对步骤-3a-完成步骤-3b-暂缓extended-thinking-路线图外完成))。
-
-| 关卡     | 最早实现(MVP)                       | 打磨阶段                     |
-|----------|--------------------------------------|------------------------------|
-| ① ②     | 步骤 1(基础)                         | 步骤 6 完善错误提示          |
-| ③       | 步骤 6(随 daemon 化)                 | 步骤 6 完善                  |
-| ④       | 步骤 3a(引入 Session)                | 步骤 5 状态机                |
-| ⑤       | 步骤 3a(基础)                        | 后续阶段 压缩、摘要           |
-| 5a-5c   | 后续阶段(随 BACKLOG 实施)            | 实施对应功能时                |
-| ⑥       | 步骤 1(reqwest) / 步骤 3b(rig)       | 步骤 6 多 provider + 重试    |
-| ⑦       | 步骤 1                               | 步骤 5 重连、断点续传        |
-| ⑧       | 步骤 2                               | BACKLOG §4.2 实施后 ⑧a 启用 |
-| ⑧a      | BACKLOG §4.2 实施后                  | 状态机细化                   |
-| ⑨       | 步骤 5(基础 allow/deny)              | 细粒度策略(后续)             |
-| ⑩       | 步骤 2                               | 步骤 5 PTY、xterm            |
-| ⑪       | 步骤 4                               | 步骤 7 自动 commit 策略      |
-| ⑫       | 步骤 2                               | —                            |
-| ⑬       | 后续阶段                             | 远期                         |
-| ⑭       | 步骤 1                               | 步骤 7 用量统计              |
-| ⑮       | 步骤 6(随 daemon 化)                 | 限速、合并、调优              |
-| ⑯       | 步骤 1                               | 步骤 7 用量统计 + BACKLOG §7 钩子 |
+> 16 关卡在 MVP 阶段和打磨阶段分别在哪落地,详见 [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + 各阶段的技术细节分散在 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION.md#4-决策日志) 对应日期条目。本节不再维护细粒度"步骤 N → 关卡"映射表(随 V2 路线图重排已过时)。
 
 ### 2.5 横切关注点:16 关之外但必做的事
 

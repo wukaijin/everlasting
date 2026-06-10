@@ -11,11 +11,12 @@
 
 | 文件 | 主题 | 性质 | 何时读 |
 |------|------|------|--------|
-| [DESIGN.md](./DESIGN.md) | 需求设计 | 已决定的项目边界 | 第一次接触项目,看"我到底在做什么" |
+| [DESIGN.md](./DESIGN.md) | 需求设计 | 已决定的项目能力边界 + 硬约束 | 第一次接触项目,看"我到底在做什么 / 不做什么" |
+| [ROADMAP.md](./ROADMAP.md) | 技术路线图(单一 source of truth) | V2 4 档分类 + 已实施粗粒度归类 + 维护承诺 | 看当前在哪一步、下一步选项、什么不做 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭、请求怎么流 | 写代码前,看"模块怎么分、调用怎么走" |
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
-| [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 实现讲解 | 路线图、决策记录、待办 | 动手时,看"下一步做什么" |
-| [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估 | 评估新功能时(优先级未定) |
+| [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + §4 决策日志(ADR 性质,只追加) | 想看"为什么这么做"的历史 ADR |
+| [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
 | [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
@@ -27,14 +28,15 @@
 ## 推荐阅读顺序
 
 **第一次接触**:
-1. [DESIGN.md](./DESIGN.md) §1-2 — 了解项目是什么、什么不做
-2. [ARCHITECTURE.md](./ARCHITECTURE.md) §1-2 — 了解系统怎么搭、请求生命周期
-3. [IMPLEMENTATION.md](./IMPLEMENTATION.md) §2 — 了解路线图,准备动手
+1. [DESIGN.md](./DESIGN.md) §1-3 — 了解项目是什么、什么不做
+2. [ROADMAP.md](./ROADMAP.md) §1-2 — 了解 V2 路线图与已实施项,准备动手
+3. [ARCHITECTURE.md](./ARCHITECTURE.md) §1-2 — 了解系统怎么搭、请求生命周期
 
 **写代码时反复查**:
 - 16 关卡 → [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡)
 - 选库依据 → [TECH.md](./TECH.md)
-- 当前进度 → [IMPLEMENTATION.md §3](./IMPLEMENTATION.md#3-待办与下一步)
+- 当前进度 → [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + §2 V2 路线图分类
+- "为什么这么做" → [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志)
 
 **评估新功能时**:
 - [BACKLOG.md §0](./BACKLOG.md#0-全局视角这-7-个功能落在-5-个不同的层) — 五层架构,看功能落在哪

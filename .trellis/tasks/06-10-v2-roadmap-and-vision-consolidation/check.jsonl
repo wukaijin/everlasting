@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md", "reason": "Acceptance Criteria + Definition of Done — 11 项验收清单 + grep 验证命令 + Out of Scope 边界。check 时逐项过"}
+{"file": "docs/ROADMAP.md", "reason": "新建产物的预期形态 — 必含:顶部 maintenance banner + 已实施粗粒度归类(原 7 步 ✅ + 路线图外完成 + Step 8 + 06-10 fix) + V2 4 档完整分类 + 移除项说明(A1/A3/C5) + B6/B7 理解纠正笔记。check 时验证内容齐全且与 prd D1-D6 一致"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "D3 简化后预期:§1 自研决策 + §4 决策日志(原 12 条 + 2026-06-10 V2 重排新条目);§2 §3 不应出现。grep 验证'## 2. 实施路线图' / '## 3. 待办与下一步' 已无;新增条目应包含删除/移除项 + 升档/重新归类 + 4 档简表 + 指向 ROADMAP 链接"}
+{"file": "docs/DESIGN.md", "reason": "D5 重构后预期:§3 标题改为'项目能力边界';§3.1 项目能力(简略 + 指向 ROADMAP);§3.2 明确不做(硬约束,原 §3.5 12 条全保留)。grep 验证 'MVP / v1 / v2 / v3+' 词组已无;§5 Step 8 进度补丁段已删"}
+{"file": "docs/HANDOFF.md", "reason": "对齐 V2 后预期:§2 当前进度不再含 'Step 8 进行中' 滞后描述;'下一步候选'引用全部指向 ROADMAP;§3 推荐阅读顺序中 IMPLEMENTATION 引用改为'决策档案'"}
+{"file": "docs/ARCHITECTURE.md", "reason": "§2.4 实施映射表预期已删除或精简到极简(只留 'MVP 阶段实现'/'打磨阶段' 两列归类,不再含 '步骤 N' 编号);§1-§3 / §4-§5 架构决策段不动"}
+{"file": "docs/BACKLOG.md", "reason": "§0.5 已落地段对齐 V2 移除项(A1/A3/C5 不再作为'已落地',它们是'不做');§1-§7 候选段'Phase 1/Phase 2' 标记应已删;附录 A 应保留(B8/B10/B11 内容仍有效)"}
+{"file": "docs/TECH.md", "reason": "§1.4 扩展功能新增依赖表预期保留(技术细节有效);'对应功能'列引用'BACKLOG §1-§7'保留;路线图优先级暗示已删"}
+{"file": "docs/README.md", "reason": "顶部索引应已含 ROADMAP.md 入口;IMPLEMENTATION 描述改为'决策档案';第 32/37 行引导指向 ROADMAP"}
+{"file": "CLAUDE.md", "reason": "顶层导航策略验证 — 第 9 行 Project Overview 段应短(1-2 句状态 + ROADMAP 链接);不再含 MVP/v1/Step 8/路线图外 等详细路线图描述;第 138 行索引描述对齐"}
+{"file": "README.md", "reason": "顶层导航策略验证 — 第 51-68 行'路线图(8 步)'表格应已删;改为简短导航句指向 ROADMAP;当前状态 1-2 句精简描述"}

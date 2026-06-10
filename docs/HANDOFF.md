@@ -1,8 +1,8 @@
 # Handoff — 新 Session 引导
 
-> **Step 8 (代码重构) 进行中 (2026-06-10)**。8-PR1 lib.rs 拆分 / 8-PR2 db.rs 拆分 / 8-PR3 前端拆 sub-components 已落地;8-PR4 文档更新 + 9 个空 spec 文件清理本 commit;8-PR5 STRUCTURE.md 待办。
+> 路线图与状态详见 [`docs/ROADMAP.md`](./ROADMAP.md)(V2 4 档分类 + 已实施粗粒度归类 + 维护承诺)。本文档只做 session 引导。
 > **最近 commit hash**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
-> ⚠️ 本文档"当前进度"段会滞后于实际 commit,**权威以 `git log --oneline -20` + [IMPLEMENTATION §3 路线图](./IMPLEMENTATION.md#3-待办与下一步)为准**。
+> ⚠️ 本文档"当前进度"段会滞后于实际 commit,**权威以 `git log --oneline -20` + [ROADMAP.md](./ROADMAP.md) 为准**。
 
 ---
 
@@ -25,25 +25,21 @@
 
 ## 2. 当前进度
 
-> 摘要可能滞后,权威看 `git log --oneline -20` + [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)。
+> 摘要可能滞后,权威看 `git log --oneline -20` + [ROADMAP.md §1 已实施](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + [ROADMAP.md §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)。
 
 **已完成项以 `git log --oneline` 为准;本节仅列结构性 milestone**(完整 commit 列表见 `.trellis/tasks/archive/2026-06/`):
 - ✅ 设计文档全套(`docs/` 下索引见 [README.md](./README.md))
 - ✅ 2 份外部评审(REVIEW-glm-5.1 + REVIEW-deepseek-v4-pro)+ 3b-1 阶段 2 份专项评审(`docs/_archive/2026-06-3b-1/`)
 - ✅ HACKING 系列(`HACKING-wsl.md` WSL 坑 / `HACKING-llm.md` LLM 兼容层差异 / `HACKING-markdown.md` 前端 markdown 渲染陷阱)
-- ✅ MVP 步骤 1 (骨架+LLM) → 2 (Tool) → 3a (SQLite) → 3b-1 (Projects) → 4 (Git worktree 解耦) → 6a (多 Provider) 已完成
-- ✅ 路线图外完成:extended thinking + spike-005 follow-up 7 PR + 字体栈 + 6 UI/状态 bug 修复 + 工具集扩展(edit_file / grep / glob)
-- ✅ **Step 8 (代码重构) 进行中**:8-PR1/2/3 已落地,8-PR4 本 commit,8-PR5 待办
+- ✅ MVP 主体步骤全部完成,详见 [ROADMAP.md §1.1](./ROADMAP.md#11-mvp-主体原-7-步路线图)
+- ✅ 路线图外完成项,详见 [ROADMAP.md §1.2](./ROADMAP.md#12-路线图外完成)
+- ✅ 完整 V2 路线图重排(2026-06-10)+ 9 文档对齐 + 顶层入口导航
 
-**当前状态**:
-- 🔄 **Step 8 (代码重构与文档清理)** 进行中(5 PR:8-PR1 lib.rs 拆分 ✅ / 8-PR2 db.rs 拆分 ✅ / 8-PR3 前端拆 sub-components ✅ / 8-PR4 本次 / 8-PR5 STRUCTURE.md)
-- ⏸ **步骤 6b (MCP 暴露)** 未开始
-- ⏸ **步骤 5 (嵌入式终端 + 权限系统)** 未开始
-- 🐛 已知 issue:**bug 1+2 position 在 RDP 双显示器下未完全修好**(候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
-- 下一步候选(详见 [IMPLEMENTATION §3](./IMPLEMENTATION.md#3-待办与下一步)):
-  - 完成 Step 8 → **8-PR5 STRUCTURE.md** (收尾)
-  - 或主线推进 → **步骤 5 (嵌入式终端 + 权限系统)** / **步骤 6b (MCP 暴露)**
-  - 或收尾 bug 1+2 position(setFullscreen 兜底 vs 继续找正确 fix)
+**已知 issue**:**bug 1+2 position 在 RDP 双显示器下未完全修好**(候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
+
+**下一步候选**(详见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
+- 🟢 第一档(立刻做,4 项):A4 Token 用量统计 / B5 Memory(user + project)/ C1 取消机制完整化 / D1 session 重命名
+- 🟡 第二档(接着做,7 项):A2+B7 权限系统+多模式 / B3 /command / C3 Context 压缩 / C4 审计日志 / B2 @文件补全 / D2 FTS5 / D3 session 内消息编辑
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 
@@ -54,8 +50,8 @@
 | 优先级 | 文档 | 什么时候读 |
 |--------|------|------------|
 | 1 | 本文件(`HANDOFF.md`) | **现在** |
-| 2 | [IMPLEMENTATION.md §3 路线图全貌表](./IMPLEMENTATION.md#3-待办与下一步) | 看当前在哪一步 + 下一步选项 |
-| 3 | [DESIGN.md §2.2 关键约束](./DESIGN.md#22-关键约束) | 知道"什么不做" |
+| 2 | [ROADMAP.md](./ROADMAP.md) §1-2 | 看当前在哪一步 + 下一步选项 |
+| 3 | [DESIGN.md §3 项目能力边界](./DESIGN.md#3-项目能力边界) | 知道"什么不做" |
 | 4 | [ARCHITECTURE.md §1-2](./ARCHITECTURE.md) | 了解 16 关卡(写代码时反复查) |
 | 5 | [HACKING-wsl.md](./HACKING-wsl.md) | 撞 WSL / 字体 / Rust 工具链问题时 |
 | 6 | [HACKING-llm.md](./HACKING-llm.md) | 写 / 改 LLM 客户端时 |
@@ -65,6 +61,7 @@
 | 10 | [BACKLOG.md](./BACKLOG.md) | 评估新功能时 |
 | 11 | [_reviews/REVIEW-glm-5.1.md](./_reviews/REVIEW-glm-5.1.md) + [_reviews/REVIEW-deepseek-v4-pro.md](./_reviews/REVIEW-deepseek-v4-pro.md) | 想看"外部怎么评"时(可选) |
 | 12 | [.trellis/spec/frontend/state-management.md](../.trellis/spec/frontend/state-management.md) | 改前端 store / 流式逻辑前先读(单源 streamController + chat facade 模式) |
+| 13 | [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志) | 想看"为什么这么做"的历史 ADR 决策 |
 
 **目录**:
 ```
@@ -98,12 +95,12 @@ docs/
 
 1. `git log --oneline -20` — 看最近 commit,有"步骤 N"字样的就是路线图节点
 2. `git status` — 看工作区是否干净;不干净先弄清楚是什么(可能是其他机器没 commit / 没 push 的改动)
-3. 读 [IMPLEMENTATION §3 路线图全貌表](./IMPLEMENTATION.md#3-待办与下一步) — 看路线图当前完成度
+3. 读 [ROADMAP.md §1-2](./ROADMAP.md) — 看路线图当前完成度 + 下一步候选
 4. 读 [IMPLEMENTATION §4 决策日志](./IMPLEMENTATION.md#4-决策日志) 最近 1-2 条 — 看最近做了什么决策
 
 ### 4.2 选下一步
 
-> **详细待办清单见 [IMPLEMENTATION.md §3 待办与下一步](../IMPLEMENTATION.md#3-待办与下一步)**——本节不重复维护。
+> **详细待办清单见 [ROADMAP.md §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)**——本节不重复维护。
 
 ### 4.3 起手前确认环境
 
@@ -151,7 +148,7 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 
 ## 6. 关键决策摘要
 
-> **完整决策日志见 [IMPLEMENTATION.md §4 决策日志](../IMPLEMENTATION.md#4-决策日志)**——本节不重复维护。最新关键决策会先出现在那里。
+> **完整决策日志见 [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志)**——本节不重复维护。最新关键决策会先出现在那里。
 
 ---
 
