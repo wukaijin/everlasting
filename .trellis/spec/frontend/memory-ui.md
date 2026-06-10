@@ -370,7 +370,11 @@ stopPropagation,不 preventDefault,只翻转自己内部的 `open` ref。
   编辑器,ProjectTabs 不需要),需要拆 — 但本期 PRD 明确
   锁了"只读 + 跳外部",不分歧
 
-### Decision: Memory dropdown 走 hand-rolled popover,不用 reka-ui
+### Decision: ~~Memory dropdown 走 hand-rolled popover,不用 reka-ui~~ (OBSOLETED 2026-06-11)
+
+> **OBSOLETED 2026-06-11**:被 `06-11-memory-modal-appheader-entry`
+> 替代,理由见下方新决策 "Memory entry 改为 AppHeader corner
+> action + reka-ui Dialog modal"。本节保留作为决策日志。
 
 **Context**: `.trellis/spec/frontend/popover-pattern.md` 锁定
 项目用 hand-rolled popover(`onDocumentClick` + Esc close),
@@ -378,17 +382,75 @@ stopPropagation,不 preventDefault,只翻转自己内部的 `open` ref。
  (worktree dropdown 是参考);(2) 不引入新依赖路径;
 (3) ~20 行 TS + CSS 就够。
 
-**Decision**: ProjectTabs 的 Memory dropdown 沿用
-WorktreeChip / ModelSelect 的 hand-rolled 模式。
+**Decision**: ~~ProjectTabs 的 Memory dropdown 沿用
+WorktreeChip / ModelSelect 的 hand-rolled 模式。~~
 
-**Consequences**:
+**为什么被推翻**:hand-rolled popover 的 `right: 0; min-width:
+480px` 锚点策略只在 trigger 处于视窗最右端时安全。Memory
+trigger 在 ProjectTabs 上的位置(项目 tab + add 按钮 之间)
+意味着它经常在视窗中部 — popover 向左展开 480-600px 直接
+溢出视窗左边界,文字被裁,与 sidebar 视觉重叠。viewport
+collision detection 是 hand-rolled popover 没有的能力。
+
+**Consequences (历史记录)**:
 - ✅ 三个 popover 行为一致(都响应 onDocumentClick、Esc、
   不 stopPropagation)
-- ✅ 视觉与 worktree dropdown 的 chip 风格对齐(Memory
-  trigger 的 hover / open 状态完全照搬 `tab__close` 的
-  `tab:hover` 模式)
-- ⚠️ 三个 hand-rolled popover 重复约 30 行 TS + 20 行 CSS
-  — `usePopover` composable 抽取是 OOS,见 popover-pattern.md
+- ✅ 视觉与 worktree dropdown 的 chip 风格对齐
+- ❌ 横向溢出 bug(2026-06-11 用户截图证据)
+- ❌ 语义混乱:Memory trigger 长得像 tab,误读为"Memory 项目"
+
+### Decision: Memory entry 改为 ChatPanel header Brain 按钮 + reka-ui Dialog modal (2026-06-11)
+
+**Context**: 上面的 hand-rolled popover 方案有横向溢出 bug +
+语义混乱(详见上节"为什么被推翻")。需要一个不依赖 trigger
+位置的承载方式,且让 Memory 与当前会话场景紧邻(memory 只
+对"当前 chat 中的 LLM"有意义,放在 chat header 里语义最强)。
+
+**Decision**: 把 Memory 入口从 ProjectTabs 上的 hand-rolled
+popover 迁移到 ChatPanel header(WorktreeChip 右侧)的 Brain
+图标按钮 + reka-ui Dialog modal。组件结构:
+
+- `app/src/components/chat/ChatPanel.vue` — header row 内
+  WorktreeChip 之后挂一个纯图标 button + MemoryModal,
+  `memoryModalOpen` ref 控制开关
+- `app/src/components/memory/MemoryModal.vue` — reka-ui
+  `DialogRoot / DialogPortal / DialogOverlay / DialogContent /
+  DialogClose` 五件套,内嵌 `<MemoryPreview kind="project">`
+- Brain 图标来自新增依赖 `@lucide/vue@^1.17.0`(heroicons 无
+  brain;CpuChip 不够精准)。Icon.vue 改造为支持 heroicons +
+  lucide 混用,zero glue 必需。
+- Modal 尺寸:`width: 80vw; min-width: 640px; max-width: 900px;
+  max-height: 80vh`,内部 MemoryPreview 列表自滚
+
+**为什么 ChatPanel header 而不是 AppHeader**:
+- AppHeader 是项目无关的 chrome(window 控件 + 项目 tab 切换),
+  Memory 是"当前会话 LLM 注入了哪些 memory"的查看面板,语义
+  上挂在 chat 容器里比挂在窗口顶栏更对路
+- ChatPanel header 已经承载 session 级的 chip(git branch、cwd、
+  worktree),Memory 是同类"session 上下文摘要"信息,排在
+  worktree chip 之后是自然延伸
+- AppHeader 顶栏空间被 ProjectTabs 占据;在 macOS 上 80px 红
+  绿灯 spacer + 项目 tab 后已经无 corner 空位
+
+**Consequences**:
+- ✅ 位置安全:reka-ui DialogPortal teleport 到 body,居中
+  布局完全独立于 trigger 位置 — 不会有横向溢出 bug
+- ✅ 视觉与 SettingsModal 统一(同样的 zoom + fade 动画曲线、
+  同样的 z-index 层级 2000/2001、同样的 close button 风格)
+- ✅ 语义清晰:Memory 与 session 上下文 chip 同行,不再混在
+  项目 tab 列里
+- ✅ 自带 a11y:focus trap / ESC / pointerdown-outside / aria-modal
+  全由 reka-ui Dialog 提供,不需手写
+- ⚠️ 新增 dependency `@lucide/vue` ~2KB tree-shake 后(只导
+  Brain 一个图标)。如果未来需要更多 lucide 图标,Icon.vue 已
+  备好混用通路。
+- ⚠️ `popover-pattern.md` "Don't: Use reka-ui Popover" 规则
+  **仍然适用** — 它针对 popover/dropdown。Modal 走 reka-ui
+  `Dialog*` 一直是项目惯例(SettingsModal 是参考)。两个规则
+  互不冲突:**popover hand-rolled, modal reka-ui**。
+- ⚠️ Settings → Memory tab 本期 **不动**(用户决策:留待下一
+  轮"Memory 功能性重构");两个入口并存,语义已分流(modal
+  = 快查,Settings tab = 管理台,后续重构会进一步区分)
 
 ---
 
@@ -448,9 +510,11 @@ Panel 卡住等渲染。用户在 editor 保存 → 触发 reload → 下次
 - **Don't** 给 memory 文件加内嵌编辑器 — PRD §8 锁定"只读
   + 跳外部编辑器"。任何"看起来更顺手"的内嵌 textarea 都
   是越界。
-- **Don't** 用 reka-ui `DropdownMenu` / `Popover` 做 Memory
-  dropdown — 沿用 hand-rolled pattern,见
-  `popover-pattern.md`。
+- **Don't** 用 reka-ui `DropdownMenu` / `Popover` 做新的 popover
+  / dropdown — 沿用 hand-rolled pattern,见
+  `popover-pattern.md`。**例外**:Modal 走 reka-ui `Dialog*`
+  仍然是项目惯例(SettingsModal / MemoryModal 都是 reka-ui),
+  这条规则不约束 modal 选型。
 - **Don't** 把 `memory:reloaded` 当成必然事件 — 当前
   backend 不 emit,前端必须以"无 emit 也能正常工作"为
   baseline 设计。`refresh` 按钮是用户手动保险栓。
@@ -482,7 +546,19 @@ Panel 卡住等渲染。用户在 editor 保存 → 触发 reload → 下次
 - `.trellis/spec/frontend/reka-ui-usage.md` — reka-ui Tab /
   Popover 模式;本期不用 Popover (手写 popover)
 - `.trellis/spec/frontend/popover-pattern.md` — Memory dropdown
-  沿用 hand-rolled 模式
+  ~~沿用 hand-rolled 模式~~(OBSOLETED 2026-06-11,见
+  `06-11-memory-modal-appheader-entry`;Memory 改为 modal,
+  popover-pattern 规则仍适用于其它真正的 popover 场景)
+- `.trellis/tasks/06-11-memory-modal-appheader-entry/prd.md` —
+  Memory 入口从 popover 迁移到 AppHeader corner action +
+  reka-ui Dialog modal 的设计文档
+- `app/src/components/memory/MemoryModal.vue` — 当前 Memory
+  快查入口的 reka-ui Dialog 实现(本期 PR2 是 popover,2026-
+  06-11 follow-up 替换)
+- `app/src/components/chat/ChatPanel.vue` — Brain 图标 trigger
+  挂载点(WorktreeChip 右侧);`useProjectsStore().currentProjectId`
+  存在时才显示。MemoryModal 实例化在同一文件,`memoryModalOpen`
+  ref 控制开关。
 - `.trellis/spec/frontend/design-tokens.md` — Memory 状态点颜色
   走 token (`#4ade80` / `#fbbf24` 是 token-usage 同一调色板)
 - `app/src/stores/streamController.test.ts` — vitest 单测模式

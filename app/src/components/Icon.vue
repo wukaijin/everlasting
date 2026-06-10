@@ -1,17 +1,20 @@
 <script setup lang="ts">
-// Icon — thin wrapper around @heroicons/vue. Centralises the icon
-// registry so individual components don't have to import every icon
-// they might use. Icons come from the 24/outline set, which is the
-// standard "stroke" style suitable for UI work in a dark theme.
+// Icon — thin wrapper around @heroicons/vue + @lucide/vue.
+// Centralises the icon registry so individual components don't have
+// to import every icon they might use. Heroicons come from the 24/
+// outline set; lucide is mixed in for icons heroicons doesn't ship
+// (e.g. `brain` for the Memory entry, 2026-06-11).
 //
 // To add a new icon, import the matching component from
-// "@heroicons/vue/24/outline" and add it to the `map` object below.
+// "@heroicons/vue/24/outline" (or "@lucide/vue" for icons the
+// heroicons set lacks) and add it to the `map` object below.
 //
 // NOTE: @heroicons/vue@2.x components are render functions that emit
-// an <svg> with NO width/height attributes. They cannot be sized via
-// props — they must be sized via CSS. We wrap them in a <span> sized
-// to the `size` prop, and force the inner svg to fill the span with
-// `:deep(svg)`.
+// an <svg> with NO width/height attributes — they must be sized via
+// CSS. @lucide/vue components ship default `width`/`height` props
+// (default 24); they are also CSS-sizable because the wrapping
+// `:deep(svg)` rule below forces width/height to 100%. The two
+// libraries coexist without further glue.
 
 import { computed } from "vue";
 import {
@@ -49,6 +52,7 @@ import {
   CircleStackIcon,
   BoltIcon,
 } from "@heroicons/vue/24/outline";
+import { Brain } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -98,6 +102,7 @@ const map = {
   "server": ServerIcon,
   "circle-stack": CircleStackIcon,
   "bolt": BoltIcon,
+  "brain": Brain,
 } as const;
 
 const Component = computed(() => {

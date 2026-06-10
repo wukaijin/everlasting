@@ -42,6 +42,7 @@ import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
 import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
+import MemoryModal from "../memory/MemoryModal.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
@@ -284,6 +285,23 @@ function onDeleteCancel() {
   confirmDeleteOpen.value = false;
 }
 
+// -----------------------------------------------------------------------
+// Memory entry (2026-06-11, `06-11-memory-modal-appheader-entry`)
+// -----------------------------------------------------------------------
+//
+// The Memory entry was originally a hand-rolled popover on ProjectTabs;
+// its `right: 0; min-width: 480px` anchor strategy spilled off-screen
+// when the trigger wasn't at the viewport's right edge. The follow-up
+// task moved it here — a Brain icon button next to WorktreeChip opens
+// a reka-ui Dialog modal (`MemoryModal.vue`) showing the active
+// project's CLAUDE.md / AGENTS.md.
+//
+// Implementation note: the button is only meaningful when a project is
+// active. We gate on `projectsStore.currentProjectId` (matching the
+// ProjectTabs dropdown's old visibility rule).
+
+const memoryModalOpen = ref(false);
+
 /** Esc key handling — closes whichever popup is on top: delete
  *  confirm → worktree dropdown → diff modal. Popovers inside
  *  `WorktreeChip` handle their own Esc when focused.
@@ -348,6 +366,16 @@ if (typeof window !== "undefined") {
           @detach-click="onDetach"
           @delete-click="onDeleteClick"
         />
+        <button
+          v-if="projectsStore.currentProjectId"
+          class="chat-panel__memory-btn"
+          type="button"
+          title="查看项目 memory (CLAUDE.md / AGENTS.md)"
+          aria-label="Memory"
+          @click="memoryModalOpen = true"
+        >
+          <Icon name="brain" :size="14" />
+        </button>
       </div>
     </header>
 
@@ -407,6 +435,13 @@ if (typeof window !== "undefined") {
       @cancel="onDeleteCancel"
       @confirm="onDeleteConfirm"
     />
+
+    <!--
+          Memory entry (2026-06-11). See the script comment above
+          for context. The modal handles its own focus trap / ESC /
+          outside-click close via reka-ui Dialog.
+        -->
+    <MemoryModal v-model:open="memoryModalOpen" />
   </section>
 </template>
 
@@ -474,6 +509,38 @@ if (typeof window !== "undefined") {
   max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Memory entry button (2026-06-11). Sits to the right of the
+   WorktreeChip, after the cwd chip's `margin-left: auto` has
+   pushed everything from cwd onward to the right. Visual matches
+   the chip family (small, 11px-ish height) but uses an icon
+   instead of text. */
+.chat-panel__memory-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  font-family: inherit;
+}
+
+.chat-panel__memory-btn:hover {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.chat-panel__memory-btn:active {
+  background: var(--color-bg-border);
 }
 
 .chat-panel__main {
