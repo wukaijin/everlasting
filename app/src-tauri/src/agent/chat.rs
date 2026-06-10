@@ -418,8 +418,34 @@ pub async fn chat(
                                     },
                                 );
                             }
-                            ChatEvent::Done { stop_reason: sr } => {
+                            ChatEvent::Done { stop_reason: sr, usage } => {
                                 stop_reason = sr.clone();
+                                // A4 (Token Usage Tracking):
+                                // accumulate the per-turn usage
+                                // into the session's column
+                                // totals. `None` means the
+                                // stream ended without a usage
+                                // report (cancel / error /
+                                // network drop) — we skip the
+                                // SQL write in that case. See
+                                // `db::sessions::add_token_usage`
+                                // for the column-additive
+                                // implementation.
+                                if let Some(t) = usage {
+                                    if let Err(e) =
+                                        crate::db::add_token_usage(&db, &session_id, t).await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "chat: failed to accumulate token usage (non-fatal)"
+                                        );
+                                    }
+                                } else {
+                                    tracing::info!(
+                                        request_id = %rid,
+                                        "chat: skipping token accumulation (no usage in Done event)"
+                                    );
+                                }
                             }
                             ChatEvent::Error { .. } => {
                                 emit_chat_event(&app_handle, &rid, &event);
@@ -559,6 +585,7 @@ pub async fn chat(
                     &rid,
                     &ChatEvent::Done {
                         stop_reason: Some("cancelled".to_string()),
+                        usage: None,
                     },
                 );
                 return;
@@ -579,7 +606,10 @@ pub async fn chat(
                 emit_chat_event(
                     &app_handle,
                     &rid,
-                    &ChatEvent::Done { stop_reason },
+                    &ChatEvent::Done {
+                        stop_reason,
+                        usage: None,
+                    },
                 );
                 return;
             }
@@ -658,6 +688,7 @@ pub async fn chat(
             &rid,
             &ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
+                usage: None,
             },
         );
     });

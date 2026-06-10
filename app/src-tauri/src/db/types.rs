@@ -188,6 +188,19 @@ pub struct SessionRow {
  /// soft FK to `models.id` — no `REFERENCES` constraint so legacy rows
  /// and dangling references don't break INSERTs.
  pub model_id: Option<String>,
+ /// A4 (Token Usage Tracking): per-session cumulative token
+ /// usage. All four are `None` for pre-A4 sessions (the
+ /// migration is non-destructive and the columns are
+ /// nullable). The frontend renders `None` as "—" with the
+ /// "升级前未统计" tooltip; the first LLM turn after the
+ /// upgrade starts the counters from 0 and they tick up
+ /// per turn. See
+ /// `.trellis/spec/backend/llm-contract.md` "Scenario: Token
+ /// Usage Tracking" for the schema.
+ pub input_tokens_total: Option<i64>,
+ pub output_tokens_total: Option<i64>,
+ pub cache_creation_total: Option<i64>,
+ pub cache_read_total: Option<i64>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -210,6 +223,17 @@ pub struct SessionSummary {
  /// PR4 of multi-model: per-session model override. `None` when the
  /// session uses the global default model. Soft FK to `models.id`.
  pub model_id: Option<String>,
+ /// A4: per-session cumulative token usage. Mirrors
+ /// [`SessionRow`]. The SessionList component reads this to
+ /// render the optional "X% / 200K" chip on each session
+ /// card. (Today the chat-input hint is the canonical place
+ /// to see the number, but the SessionList summary carries
+ /// the data so a future PR can wire up a session-card
+ /// indicator without re-loading.)
+ pub input_tokens_total: Option<i64>,
+ pub output_tokens_total: Option<i64>,
+ pub cache_creation_total: Option<i64>,
+ pub cache_read_total: Option<i64>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

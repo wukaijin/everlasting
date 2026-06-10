@@ -68,7 +68,7 @@ use super::wire::{
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::classify_error_response;
 use crate::llm::sse::SseParser;
-use crate::llm::types::{ChatEvent, ChatMessage, ToolDef};
+use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage, ToolDef};
 use crate::llm::LlmError;
 
 // ---------------------------------------------------------------------------
@@ -222,6 +222,14 @@ impl OpenAIProvider {
             "stream": true,
             "messages": msgs,
         });
+        // A4: ask OpenAI to include the final usage chunk in
+        // the SSE stream. Without this, OpenAI omits the
+        // `usage` field on all chunks and the agent loop has
+        // no per-turn token counts. See
+        // backend/llm-contract.md "Scenario: Token Usage
+        // Tracking" for the schema mapping
+        // (`prompt_tokens` → `input_tokens` etc).
+        body["stream_options"] = json!({ "include_usage": true });
         if !tools.is_empty() {
             body["tools"] = json!(tools);
         }
@@ -406,6 +414,19 @@ impl Provider for OpenAIProvider {
             // discriminator.
             let mut tool_call_state: HashMap<u32, ToolCallBuf> = HashMap::new();
             let mut stop_reason: Option<String> = None;
+            // A4: buffer OpenAI's `usage` payload from the
+            // final chunk(s) and emit it on the terminal `Done`
+            // event. OpenAI's `stream_options.include_usage`
+            // flag (set in `build_http_body`) makes the
+            // upstream send a chunk with `usage` populated and
+            // no `choices` — the chunk arrives AFTER
+            // `data: [DONE]`, but most clients (incl. ours)
+            // see the `usage` chunk in the same stream
+            // iteration. We accumulate defensively: each
+            // chunk with a `usage` field overwrites the
+            // previous (the cumulative semantics match
+            // Anthropic's per-turn accounting).
+            let mut usage: Option<TokenUsage> = None;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let bytes = match chunk_result {
@@ -461,6 +482,22 @@ impl Provider for OpenAIProvider {
                                 continue;
                             }
                         };
+
+                        // A4: OpenAI attaches a top-level
+                        // `usage` field on chunks where
+                        // `stream_options.include_usage` is set.
+                        // The schema (cumulative per-turn):
+                        //   { "usage": { "prompt_tokens": N,
+                        //                "completion_tokens": N,
+                        //                "total_tokens": N,
+                        //                "prompt_tokens_details": { "cached_tokens": N } } }
+                        // Some chunks carry ONLY `usage` (the
+                        // final one, with empty `choices`); we
+                        // still want to process those for the
+                        // usage payload.
+                        if let Some(u) = parse_openai_usage(&v) {
+                            usage = Some(u);
+                        }
 
                         // choices[0].delta is the typical shape.
                         // Some responses (final chunk) only
@@ -583,7 +620,7 @@ impl Provider for OpenAIProvider {
                 }
             }
 
-            yield Ok(ChatEvent::Done { stop_reason });
+            yield Ok(ChatEvent::Done { stop_reason, usage });
         };
         Box::pin(s)
     }
@@ -639,6 +676,58 @@ fn build_tool_call_event(buf: &ToolCallBuf, _idx: u32) -> Option<ChatEvent> {
         id: buf.id.clone(),
         name: buf.name.clone(),
         input,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// A4: parse_openai_usage — normalize OpenAI's `usage` chunk into
+// the protocol-agnostic `TokenUsage` schema.
+// ---------------------------------------------------------------------------
+
+/// Parse OpenAI's `usage` payload into a protocol-agnostic
+/// [`TokenUsage`]. Schema mapping (per
+/// `backend/llm-contract.md` "Scenario: Token Usage Tracking"
+/// §3 "OpenAI normalization"):
+///
+/// - `prompt_tokens` → `input_tokens`
+/// - `completion_tokens` → `output_tokens`
+/// - `prompt_tokens_details.cached_tokens` → `cache_read_input_tokens`
+/// - `cache_creation_input_tokens` → 0 (no OpenAI equivalent
+///   today; the field is documented but rarely populated)
+///
+/// Defensive: any field may be missing (older API versions /
+/// proxies omit the cached_tokens sub-object). Missing fields
+/// default to 0. Returns `None` if no recognizable integer fields
+/// were present (e.g. a chunk with no `usage` key, which is the
+/// common case on every non-final chunk).
+fn parse_openai_usage(v: &Value) -> Option<TokenUsage> {
+    let usage = v.get("usage")?;
+    let input = usage
+        .get("prompt_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let output = usage
+        .get("completion_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_read = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    if input == 0 && output == 0 && cache_read == 0 {
+        // Same all-zero contract as Anthropic: a real
+        // OpenAI turn with 0 prompt + 0 completion is not
+        // realistic, so an all-zero payload is treated as
+        // "no usage" and the agent loop's SQL write is
+        // skipped.
+        return None;
+    }
+    Some(TokenUsage {
+        input_tokens: input.min(u32::MAX as u64) as u32,
+        output_tokens: output.min(u32::MAX as u64) as u32,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: cache_read.min(u32::MAX as u64) as u32,
     })
 }
 
@@ -910,6 +999,118 @@ mod tests {
         assert_eq!(body["model"], "gpt-4.1");
         assert_eq!(body["max_tokens"], 8192);
         assert_eq!(body["stream"], true);
+    }
+
+    // ---- A4: stream_options.include_usage ----
+
+    #[test]
+    fn build_http_body_includes_stream_options_for_usage() {
+        // A4 (Token Usage Tracking): the request body must
+        // include `stream_options: { include_usage: true }`
+        // so OpenAI sends a final `usage` chunk in the SSE
+        // stream. Without this, `parse_openai_usage` never
+        // sees a payload and the agent loop's per-turn
+        // accumulation is skipped.
+        let wire = WireRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::User {
+                content: "hi".to_string(),
+            }],
+            tools: vec![],
+            reasoning_effort: None,
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &cfg());
+        let so = body
+            .get("stream_options")
+            .expect("stream_options key present");
+        assert_eq!(so["include_usage"], true);
+    }
+
+    // ---- A4: parse_openai_usage ----
+
+    #[test]
+    fn parse_openai_usage_full_payload() {
+        // Standard OpenAI cumulative usage chunk.
+        let v = serde_json::json!({
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 30,
+                "total_tokens": 230,
+                "prompt_tokens_details": { "cached_tokens": 50 }
+            }
+        });
+        let u = parse_openai_usage(&v).expect("non-zero usage");
+        assert_eq!(u.input_tokens, 200);
+        assert_eq!(u.output_tokens, 30);
+        // OpenAI has no cache_creation field today; the
+        // normalized schema still requires a value (0).
+        assert_eq!(u.cache_creation_input_tokens, 0);
+        assert_eq!(u.cache_read_input_tokens, 50);
+    }
+
+    #[test]
+    fn parse_openai_usage_minimal_payload() {
+        // Older API version / non-caching model: no
+        // `prompt_tokens_details` field.
+        let v = serde_json::json!({
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 10,
+                "total_tokens": 60
+            }
+        });
+        let u = parse_openai_usage(&v).expect("non-zero usage");
+        assert_eq!(u.input_tokens, 50);
+        assert_eq!(u.output_tokens, 10);
+        assert_eq!(u.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn parse_openai_usage_no_usage_key_returns_none() {
+        // The common case on every non-final chunk: no
+        // `usage` field at all. The agent loop's per-turn
+        // accumulation must NOT fire on these chunks.
+        let v = serde_json::json!({
+            "choices": [{
+                "delta": { "content": "hello" }
+            }]
+        });
+        assert!(parse_openai_usage(&v).is_none());
+    }
+
+    #[test]
+    fn parse_openai_usage_zero_returns_none() {
+        // All-zero usage → "no usage", same contract as
+        // Anthropic. (See parse_anthropic_usage's docstring
+        // for the rationale.)
+        let v = serde_json::json!({
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0
+            }
+        });
+        assert!(parse_openai_usage(&v).is_none());
+    }
+
+    #[test]
+    fn parse_openai_usage_empty_prompt_tokens_details() {
+        // Defensive: `prompt_tokens_details: {}` is valid
+        // OpenAI; we must not crash on it.
+        let v = serde_json::json!({
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_tokens_details": {}
+            }
+        });
+        let u = parse_openai_usage(&v).expect("non-zero usage");
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 20);
+        assert_eq!(u.cache_read_input_tokens, 0);
     }
 
     // ---- cross-protocol strip behavior (integration with wire) ----

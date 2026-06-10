@@ -337,6 +337,10 @@ fn make_session_row(
         worktree_state,
         last_worktree_path: None,
         model_id: None,
+        input_tokens_total: None,
+        output_tokens_total: None,
+        cache_creation_total: None,
+        cache_read_total: None,
     }
 }
 
@@ -613,3 +617,9 @@ fn synthetic_tool_result_message_serializes_to_anthropic_wire_shape() {
         "wire content must mention the tool name"
     );
 }
+
+// (A4 follow-up hotfix tests removed in the revert — see
+// `06-10-a4-token-per-session-chatinput-hint` task PRD for
+// the rationale. The per-turn `db::add_token_usage` call in
+// `agent::chat::chat` is unchanged; the cumulative tracker
+// + 3 exit-path emits reverted to `usage: None`.)

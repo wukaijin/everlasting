@@ -297,6 +297,33 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  .execute(pool)
  .await?;
 
+ // --- A4 (Token Usage Tracking): per-session token totals.
+ //
+ // Four nullable INTEGER columns. Nullable (no DEFAULT) so
+ // pre-A4 sessions keep NULL — the frontend renders NULL as
+ // "—" (the "升级前未统计" tooltip path). The agent loop
+ // accumulates via `UPDATE col = col + ?` on every LLM turn
+ // Done (see `db::sessions::add_token_usage`); a single
+ // session can record N turns, the column is the cumulative
+ // sum.
+ //
+ // Field semantics (mirror `llm::types::TokenUsage`):
+ // - `input_tokens_total`: sum of per-turn `input_tokens`
+ //   (Anthropic: inclusive of cache_creation + cache_read;
+ //    this is the "current context usage" the ChatInput hint
+ //    displays as percentage of `models.context_window`).
+ // - `output_tokens_total`: sum of per-turn `output_tokens`
+ //   (the response, not the context).
+ // - `cache_creation_total`: sum of
+ //   `cache_creation_input_tokens` (Anthropic only; OpenAI
+ //   reports 0 here today).
+ // - `cache_read_total`: sum of `cache_read_input_tokens`
+ //   (Anthropic + OpenAI's `cached_tokens`).
+ add_session_column_if_missing(pool, "input_tokens_total", "INTEGER").await?;
+ add_session_column_if_missing(pool, "output_tokens_total", "INTEGER").await?;
+ add_session_column_if_missing(pool, "cache_creation_total", "INTEGER").await?;
+ add_session_column_if_missing(pool, "cache_read_total", "INTEGER").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

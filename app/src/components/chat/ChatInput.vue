@@ -20,10 +20,28 @@
 // input itself is unchanged — the user can still see what's being
 // streamed; they just can't type a new message until the stream ends
 // (or they hit Stop and the stream bails out).
+//
+// A4 (Token Usage Tracking): the hint row is split into two regions.
+// Left: the original keyboard shortcuts ("⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令").
+// Center: the per-session token usage chip
+// ("14.2K · 7% / 200K") with color thresholds (green < 50%, yellow
+// 50-74%, red >= 75%) and a reka-ui Tooltip on hover that breaks down
+// the four counters (input / cache_read / cache_creation / output).
+// Right: the PR5 ModelSelect popover (unchanged).
+//
+// Pre-A4 sessions (the four columns are NULL) render as "—" with the
+// tooltip "升级前未统计". Brand-new sessions before their first LLM
+// turn also render as "—". A session that has accumulated 0 tokens
+// after at least one turn (e.g. a network-error turn) still renders
+// the number; the ChatInput doesn't special-case zero.
 
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipPortal, TooltipContent, TooltipArrow } from "reka-ui";
 import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
+import { useChatStore } from "../../stores/chat";
+import { useModelsStore } from "../../stores/models";
+import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -40,6 +58,46 @@ const emit = defineEmits<{
 const input = ref("");
 const isComposing = ref(false);
 const textareaEl = ref<HTMLTextAreaElement | null>(null);
+
+// A4: per-session token usage — read from the chat store's
+// reactive `currentSessionTokenUsage`. The model store provides
+// the context window for the percentage denominator. We only
+// need the default model's context_window; the model picker
+// popover already exposes the selected model and updates this
+// value on switch.
+const chatStore = useChatStore();
+const modelsStore = useModelsStore();
+
+/** The model row backing the current session, or `null` for
+ *  sessions that haven't resolved to a model yet (very
+ *  early in the app lifecycle, before the catalog loads). The
+ *  percentage denominator is `defaultModel.contextWindow` —
+ *  the chat command always uses the default model for
+ *  resolve-default fallback; a per-session override is also
+ *  possible but the user explicitly picks that, and the
+ *  percentage uses the same `defaultModel` for visual
+ *  stability (a session mid-stream with a per-session override
+ *  would still see "X% / 200K" of the default's window). */
+const currentModelContextWindow = computed<number>(() => {
+  const m = modelsStore.defaultModel;
+  return m?.contextWindow ?? 200_000;
+});
+
+/** Color threshold for the percentage bar. Matches the
+ *  PRD §Q4 decision 6 (50% yellow, 75% red):
+ *  - 0-49% → green
+ *  - 50-74% → yellow
+ *  - 75%+ → red.
+ *
+ *  The actual band lookup lives in `utils/tokenUsage.ts` so the
+ *  boundaries (49/50/74/75) can be unit-tested without spinning
+ *  up a Vue renderer + Pinia store. */
+const usageLevel = computed<TokenUsageLevel | null>(() => {
+  const u = chatStore.currentSessionTokenUsage;
+  if (!u) return null;
+  const pct = u.input_tokens / currentModelContextWindow.value;
+  return tokenUsageLevel(pct);
+});
 
 /** Auto-grow: reset height so the field shrinks when content is
  *  deleted, then size to scrollHeight (capped via CSS max-height). */
@@ -137,6 +195,69 @@ const sendDisabled = (): boolean => props.sending || !input.value.trim();
     </div>
     <div class="chat-input__hint">
       <span class="chat-input__hint-text">⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令</span>
+      <!-- A4: token usage chip. Render-mode depends on
+           whether the session has accumulated any usage:
+           - null → "—" with the "升级前未统计" tooltip
+           - non-null → the percentage line; tooltip breaks
+             the four counters down.
+           Color thresholds are 50% (yellow) and 75% (red);
+           see `usageLevel` computed above. -->
+      <TooltipProvider>
+        <TooltipRoot>
+          <TooltipTrigger
+            as-child
+          >
+            <span
+              class="chat-input__token-usage"
+              :class="{
+                [`chat-input__token-usage--${usageLevel}`]: usageLevel,
+              }"
+            >
+              <template v-if="chatStore.currentSessionTokenUsage">
+                {{ abbreviateTokens(chatStore.currentSessionTokenUsage.input_tokens) }}
+                ·
+                {{
+                  Math.min(
+                    100,
+                    Math.round(
+                      (chatStore.currentSessionTokenUsage.input_tokens /
+                        currentModelContextWindow) *
+                        100,
+                    ),
+                  )
+                }}% / {{ abbreviateTokens(currentModelContextWindow) }}
+              </template>
+              <template v-else>—</template>
+            </span>
+          </TooltipTrigger>
+          <TooltipPortal>
+            <TooltipContent class="chat-input__token-tooltip" :side-offset="6">
+              <template v-if="chatStore.currentSessionTokenUsage">
+                <div class="chat-input__token-tooltip-row">
+                  <span>input</span>
+                  <span>{{ abbreviateTokens(chatStore.currentSessionTokenUsage.input_tokens) }}</span>
+                </div>
+                <div class="chat-input__token-tooltip-row">
+                  <span>cache_read</span>
+                  <span>{{ abbreviateTokens(chatStore.currentSessionTokenUsage.cache_read_input_tokens) }}</span>
+                </div>
+                <div class="chat-input__token-tooltip-row">
+                  <span>cache_creation</span>
+                  <span>{{ abbreviateTokens(chatStore.currentSessionTokenUsage.cache_creation_input_tokens) }}</span>
+                </div>
+                <div class="chat-input__token-tooltip-row">
+                  <span>output</span>
+                  <span>{{ abbreviateTokens(chatStore.currentSessionTokenUsage.output_tokens) }}</span>
+                </div>
+              </template>
+              <template v-else>
+                <div class="chat-input__token-tooltip-empty">升级前未统计</div>
+              </template>
+              <TooltipArrow class="chat-input__token-tooltip-arrow" :size="6" />
+            </TooltipContent>
+          </TooltipPortal>
+        </TooltipRoot>
+      </TooltipProvider>
       <!-- PR5: model picker popover (upward-opening) attached to
            the right edge of the hint row. Replaces the
            bottom-of-content `StatusBar` from PR4. -->
@@ -274,5 +395,91 @@ const sendDisabled = (): boolean => props.sending || !input.value.trim();
 .chat-input__hint-text {
   flex: 1;
   min-width: 0;
+}
+
+/* A4 (Token Usage Tracking): the per-session token usage
+   chip in the hint row. The chip is a TooltipTrigger
+   (reka-ui); the trigger itself has no role, the span is
+   the visual target. The three color states map to the
+   threshold ladder:
+   - ok (0-49%): subtle green tint, still readable on dark
+   - warn (50-74%): amber, calls attention
+   - alert (75%+): red, stops the eye */
+.chat-input__token-usage {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  cursor: help;
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  transition: color 0.15s;
+  user-select: none;
+}
+
+.chat-input__token-usage--ok {
+  color: #4ade80; /* green-400 — readable on dark, doesn't shout */
+}
+
+.chat-input__token-usage--warn {
+  color: #fbbf24; /* amber-400 — matches --color-tool-shell family */
+}
+
+.chat-input__token-usage--alert {
+  color: var(--color-tool-error);
+}
+
+/* Tooltip content (reka-ui `TooltipContent` portal to body
+   — must use :deep() per `.trellis/spec/frontend/reka-ui-usage.md`
+   gotcha). The popover floats above the trigger (default
+   side is "top" since the chat input is at the bottom of the
+   viewport). */
+:deep(.chat-input__token-tooltip) {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  min-width: 180px;
+  z-index: 3000;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  animation: chat-input-tooltip-enter 150ms ease-out;
+}
+
+:deep(.chat-input__token-tooltip-row) {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 0;
+}
+
+:deep(.chat-input__token-tooltip-row span:first-child) {
+  color: var(--color-text-secondary);
+}
+
+:deep(.chat-input__token-tooltip-empty) {
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: 2px 0;
+}
+
+:deep(.chat-input__token-tooltip-arrow) {
+  fill: var(--color-bg-surface);
+  stroke: var(--color-bg-border);
+}
+
+@keyframes chat-input-tooltip-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

@@ -40,7 +40,7 @@ use super::wire::{
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::{classify_error_response, LlmError};
 use crate::llm::sse::SseParser;
-use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, ToolDef};
+use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, TokenUsage, ToolDef};
 
 /// Default `max_tokens` for LLM requests. Bumped from 1024 → 16384 in
 /// step 6 because extended thinking tokens count against the same budget
@@ -258,6 +258,18 @@ impl AnthropicProvider {
             let mut parser = SseParser::new();
             let mut block_state = BlockState::Idle;
             let mut stop_reason: Option<String> = None;
+            // A4: buffer Anthropic's `message_delta.usage` payload
+            // and emit it on the final `Done` event. Anthropic
+            // sends usage on the `message_delta` event (or
+            // sometimes on `message_stop`); some proxies also
+            // attach a `usage` field to the SSE `message_start`
+            // event. We treat `message_delta.usage` as the
+            // authoritative source (it's the cumulative usage
+            // for the turn) and a `message_start.usage` (if
+            // present) as the initial baseline that subsequent
+            // `message_delta.usage` overwrites. See
+            // `parse_anthropic_usage` for the per-field handling.
+            let mut usage: Option<TokenUsage> = None;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let bytes = match chunk_result {
@@ -502,7 +514,7 @@ impl AnthropicProvider {
                             }
                         }
 
-                        // --- message_delta: extract stop_reason ---
+                        // --- message_delta: extract stop_reason + usage ---
                         "message_delta" => {
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
                                 if let Some(delta) = v.get("delta") {
@@ -512,7 +524,60 @@ impl AnthropicProvider {
                                         stop_reason = Some(sr.to_string());
                                     }
                                 }
+                                // A4: usage is at the top level of
+                                // `message_delta`, not under `delta`.
+                                // Anthropic schema (cumulative per-turn):
+                                //   { "type": "message_delta",
+                                //     "delta": { "stop_reason": "..." },
+                                //     "usage": { "input_tokens": N,
+                                //                "output_tokens": N,
+                                //                "cache_creation_input_tokens": N,
+                                //                "cache_read_input_tokens": N } }
+                                // The first `message_delta` event for a
+                                // turn typically reports
+                                // `output_tokens: 1`; later ones carry
+                                // the cumulative value. We keep the
+                                // last seen non-null payload (defensive
+                                // — a per-event accumulator would
+                                // also work, but the chat command
+                                // only writes on `Done` anyway).
+                                if let Some(usage_value) = v.get("usage") {
+                                    if let Some(u) = parse_anthropic_usage(usage_value) {
+                                        usage = Some(u);
+                                    }
+                                }
                             }
+                        }
+
+                        // Some proxies (and the Anthropic SDK's
+                        // pre-stream `message_start`) attach
+                        // `usage: { ... }` at the top level of
+                        // `message_start`. We treat it as the
+                        // initial baseline; the subsequent
+                        // `message_delta.usage` (above) is the
+                        // authoritative cumulative payload and
+                        // overwrites this. Without this, a
+                        // connection that errored out before the
+                        // first `message_delta` would never get a
+                        // `usage` report.
+                        "message_start" => {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                                if let Some(usage_value) = v.get("message").and_then(|m| m.get("usage")) {
+                                    if let Some(u) = parse_anthropic_usage(usage_value) {
+                                        if usage.is_none() {
+                                            usage = Some(u);
+                                        }
+                                    }
+                                } else if let Some(usage_value) = v.get("usage") {
+                                    if let Some(u) = parse_anthropic_usage(usage_value) {
+                                        if usage.is_none() {
+                                            usage = Some(u);
+                                        }
+                                    }
+                                }
+                            }
+                            // We already emitted Start; log for debugging.
+                            tracing::debug!("▶ message_start");
                         }
 
                         "message_stop" => {
@@ -521,10 +586,6 @@ impl AnthropicProvider {
                         "ping" => {
                             tracing::debug!("▶ ping (heartbeat, ignored)");
                         }
-                        "message_start" => {
-                            // We already emitted Start; log for debugging.
-                            tracing::debug!("▶ message_start");
-                        }
                         other => {
                             tracing::debug!("▶ {} (unhandled)", other);
                         }
@@ -532,9 +593,44 @@ impl AnthropicProvider {
                 }
             }
 
-            yield Ok(ChatEvent::Done { stop_reason });
+            yield Ok(ChatEvent::Done { stop_reason, usage });
         }
     }
+}
+
+/// Parse Anthropic's `usage` payload into a protocol-agnostic
+/// [`TokenUsage`]. Defensive: any of the four fields may be missing
+/// (older Anthropic API versions / proxies only emitted a subset);
+/// missing fields default to 0. Returns `None` if no recognizable
+/// integer fields were present (e.g. a totally malformed payload).
+fn parse_anthropic_usage(v: &serde_json::Value) -> Option<TokenUsage> {
+    let input = v.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+    let output = v.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+    let cache_creation = v
+        .get("cache_creation_input_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_read = v
+        .get("cache_read_input_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    if input == 0 && output == 0 && cache_creation == 0 && cache_read == 0 {
+        // Distinguish "no usage payload" from "all-zero usage".
+        // A real Anthropic response with 0 input/output is
+        // extremely unlikely (a `0` `output_tokens` is only
+        // possible on `stop_reason: "max_tokens"` hitting the
+        // thinking budget before any visible answer, which is
+        // a server-config issue, not a normal case). Treat
+        // all-zero as "no payload" so the agent loop sees
+        // `usage: None` and skips the SQL write.
+        return None;
+    }
+    Some(TokenUsage {
+        input_tokens: input.min(u32::MAX as u64) as u32,
+        output_tokens: output.min(u32::MAX as u64) as u32,
+        cache_creation_input_tokens: cache_creation.min(u32::MAX as u64) as u32,
+        cache_read_input_tokens: cache_read.min(u32::MAX as u64) as u32,
+    })
 }
 
 impl Provider for AnthropicProvider {
@@ -768,5 +864,64 @@ mod tests {
         assert!(caps.supports_system_prompt);
         assert!(caps.supports_tools);
         assert!(caps.supports_streaming);
+    }
+
+    // ---- A4: parse_anthropic_usage ----
+
+    #[test]
+    fn parse_anthropic_usage_full_payload() {
+        // Anthropic's `message_delta.usage` (cumulative per-turn).
+        let v = serde_json::json!({
+            "input_tokens": 1234,
+            "output_tokens": 56,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 200,
+        });
+        let u = parse_anthropic_usage(&v).expect("non-zero usage");
+        assert_eq!(u.input_tokens, 1234);
+        assert_eq!(u.output_tokens, 56);
+        assert_eq!(u.cache_creation_input_tokens, 100);
+        assert_eq!(u.cache_read_input_tokens, 200);
+    }
+
+    #[test]
+    fn parse_anthropic_usage_minimal_payload() {
+        // Pre-caching Anthropic / older proxy / non-thinking
+        // call: only the two core fields are present. Defaults
+        // fill the cache fields to 0.
+        let v = serde_json::json!({
+            "input_tokens": 42,
+            "output_tokens": 7,
+        });
+        let u = parse_anthropic_usage(&v).expect("non-zero usage");
+        assert_eq!(u.input_tokens, 42);
+        assert_eq!(u.output_tokens, 7);
+        assert_eq!(u.cache_creation_input_tokens, 0);
+        assert_eq!(u.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn parse_anthropic_usage_zero_returns_none() {
+        // An all-zero payload is treated as "no usage
+        // information" so the agent loop's
+        // `if let Some(t) = usage { ... }` path correctly skips
+        // the SQL write. See the function's docstring for the
+        // rationale.
+        let v = serde_json::json!({
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        });
+        assert!(parse_anthropic_usage(&v).is_none());
+    }
+
+    #[test]
+    fn parse_anthropic_usage_empty_object_returns_none() {
+        // A `usage: {}` event (defensive — Anthropic doesn't
+        // emit this, but a proxy might) is treated as
+        // "no usage".
+        let v = serde_json::json!({});
+        assert!(parse_anthropic_usage(&v).is_none());
     }
 }

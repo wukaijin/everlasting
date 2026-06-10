@@ -10,7 +10,7 @@
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
 
-use crate::llm::types::{ContentBlock, MessageContent, Role};
+use crate::llm::types::{ContentBlock, MessageContent, Role, TokenUsage};
 
 use super::types::{LoadedSession, MessageRow, SessionRow, SessionSummary, WorktreeState};
 
@@ -67,6 +67,10 @@ pub async fn create_session(
  worktree_state: WorktreeState::None,
  last_worktree_path: None,
  model_id: model_id.map(|s| s.to_string()),
+ input_tokens_total: None,
+ output_tokens_total: None,
+ cache_creation_total: None,
+ cache_read_total: None,
  })
 }
 
@@ -81,6 +85,8 @@ pub async fn list_sessions(
  SELECT s.id, s.title, s.updated_at, s.project_id, s.current_cwd,
  s.worktree_path, s.worktree_state, s.last_worktree_path,
  s.model_id,
+ s.input_tokens_total, s.output_tokens_total,
+ s.cache_creation_total, s.cache_read_total,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -117,6 +123,10 @@ pub async fn list_sessions(
  worktree_state: WorktreeState::from_str_opt(&state_str),
  last_worktree_path: r.try_get("last_worktree_path")?,
  model_id: r.try_get("model_id")?,
+ input_tokens_total: r.try_get("input_tokens_total")?,
+ output_tokens_total: r.try_get("output_tokens_total")?,
+ cache_creation_total: r.try_get("cache_creation_total")?,
+ cache_read_total: r.try_get("cache_read_total")?,
  })
  })
  .collect()
@@ -131,7 +141,9 @@ pub async fn load_session(
  let session_row = sqlx::query(
  r#"
  SELECT id, title, created_at, updated_at, model, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id
+ worktree_path, worktree_state, last_worktree_path, model_id,
+ input_tokens_total, output_tokens_total,
+ cache_creation_total, cache_read_total
  FROM sessions
  WHERE id = ?
  "#,
@@ -155,6 +167,10 @@ pub async fn load_session(
  worktree_state: WorktreeState::from_str_opt(&state_str),
  last_worktree_path: r.try_get("last_worktree_path")?,
  model_id: r.try_get("model_id")?,
+ input_tokens_total: r.try_get("input_tokens_total")?,
+ output_tokens_total: r.try_get("output_tokens_total")?,
+ cache_creation_total: r.try_get("cache_creation_total")?,
+ cache_read_total: r.try_get("cache_read_total")?,
  }
  }
  None => return Ok(None),
@@ -289,6 +305,54 @@ pub async fn update_session_model_id(
  )
  .bind(model_id_value)
  .bind(&now)
+ .bind(session_id)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A4: per-session token usage accumulation
+// ---------------------------------------------------------------------------
+
+/// Accumulate one turn's [`TokenUsage`] into the session's per-column
+/// totals. Single SQL UPDATE, additive on the existing column
+/// values; a session that has N LLM turns ends up with the
+/// column-wise sum.
+///
+/// All four totals are updated in one statement so the row stays
+/// consistent (a partial write — input but not output, etc — would
+/// be a subtle bug visible as "input climbed but output didn't").
+/// NULL columns are treated as 0 by SQLite's `+` operator, so a
+/// pre-A4 session's first turn starts the counters from 0
+/// (subsequent UI loads show the running total, not "—").
+///
+/// The chat command calls this once per `ChatEvent::Done` with
+/// `usage: Some(t)`. Cancel / error / network drop paths pass
+/// `usage: None`; the chat command skips the call entirely in
+/// that case (no `add_token_usage(_, _)` invocation). See
+/// `agent::chat::chat` for the call site.
+pub async fn add_token_usage(
+ pool: &SqlitePool,
+ session_id: &str,
+ usage: &TokenUsage,
+) -> Result<(), sqlx::Error> {
+ sqlx::query(
+ r#"
+ UPDATE sessions
+ SET input_tokens_total = COALESCE(input_tokens_total, 0) + ?,
+ output_tokens_total = COALESCE(output_tokens_total, 0) + ?,
+ cache_creation_total = COALESCE(cache_creation_total, 0) + ?,
+ cache_read_total = COALESCE(cache_read_total, 0) + ?,
+ updated_at = ?
+ WHERE id = ?
+ "#,
+ )
+ .bind(usage.input_tokens)
+ .bind(usage.output_tokens)
+ .bind(usage.cache_creation_input_tokens)
+ .bind(usage.cache_read_input_tokens)
+ .bind(Utc::now().to_rfc3339())
  .bind(session_id)
  .execute(pool)
  .await?;

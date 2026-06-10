@@ -32,8 +32,8 @@ use super::{
  },
  providers::{create_provider, delete_provider, list_providers, update_provider},
  sessions::{
- create_session, delete_session, insert_system_event, list_sessions, load_session,
- persist_turn, set_worktree_state, touch_session, update_session_cwd,
+ add_token_usage, create_session, delete_session, insert_system_event, list_sessions,
+ load_session, persist_turn, set_worktree_state, touch_session, update_session_cwd,
  update_session_model_id,
  },
  types::WorktreeState,
@@ -280,10 +280,10 @@ async fn create_session_scopes_to_project() {
  .await
  .unwrap();
 
- let s1 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/foo", "GLM-4.7")
+ let s1 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/foo", "GLM-4.7", None)
  .await
  .unwrap();
- let s2 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/bar", "GLM-4.7")
+ let s2 = create_session(&pool, &Uuid::new_v4().to_string(), &p.id, "/tmp/bar", "GLM-4.7", None)
  .await
  .unwrap();
  assert_eq!(s1.project_id, p.id);
@@ -308,7 +308,7 @@ async fn load_session_returns_none_for_missing() {
 #[tokio::test]
 async fn persist_and_load_messages() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
 
@@ -349,7 +349,7 @@ async fn persist_and_load_messages() {
 #[tokio::test]
 async fn first_user_message_auto_titles_session() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
 
@@ -365,7 +365,7 @@ async fn first_user_message_auto_titles_session() {
 #[tokio::test]
 async fn second_user_message_does_not_overwrite_title() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
 
@@ -383,7 +383,7 @@ async fn second_user_message_does_not_overwrite_title() {
 #[tokio::test]
 async fn delete_session_cascades_messages() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  persist_turn(
@@ -403,7 +403,7 @@ async fn delete_session_cascades_messages() {
 #[tokio::test]
 async fn list_sessions_preview_truncates_at_80_chars() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  let long = "a".repeat(120);
@@ -419,7 +419,7 @@ async fn list_sessions_preview_truncates_at_80_chars() {
 #[tokio::test]
 async fn touch_session_updates_timestamp() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  let original = session.updated_at.clone();
@@ -432,7 +432,7 @@ async fn touch_session_updates_timestamp() {
 #[tokio::test]
 async fn update_session_cwd_persists() {
  let pool = test_pool().await;
- let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7")
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp/start", "GLM-4.7", None)
  .await
  .unwrap();
  assert_eq!(session.current_cwd, "/tmp/start");
@@ -449,7 +449,7 @@ async fn update_session_cwd_persists() {
 #[tokio::test]
 async fn new_session_defaults_to_none_state() {
  let pool = test_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  assert_eq!(s.worktree_state, WorktreeState::None);
@@ -464,7 +464,7 @@ async fn new_session_defaults_to_none_state() {
 #[tokio::test]
 async fn worktree_state_setter_round_trip() {
  let pool = test_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  // Attach.
@@ -544,7 +544,7 @@ async fn worktree_state_backfill_legacy_active() {
 #[tokio::test]
 async fn insert_system_event_appends_to_history() {
  let pool = test_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  persist_turn(
@@ -585,7 +585,7 @@ async fn insert_system_event_appends_to_history() {
 #[tokio::test]
 async fn insert_system_event_seq_increments() {
  let pool = test_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  insert_system_event(&pool, &s.id, "first", "attached").await.unwrap();
@@ -903,7 +903,7 @@ async fn delete_provider_cascade_does_not_touch_unrelated_models() {
 #[tokio::test]
 async fn update_session_model_id_sets_and_clears() {
  let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  // New session: model_id is NULL (falls back to global default).
@@ -939,7 +939,7 @@ async fn update_session_model_id_on_missing_session_is_noop() {
 #[tokio::test]
 async fn load_session_includes_model_id() {
  let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7")
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
  // Directly set model_id in the DB to verify the SELECT picks it up.
@@ -957,4 +957,112 @@ async fn load_session_includes_model_id() {
  .unwrap();
  let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
  assert_eq!(loaded.session.model_id.as_deref(), Some(m.id.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// A4: per-session token usage accumulation
+// ---------------------------------------------------------------------------
+
+use crate::llm::types::TokenUsage;
+
+#[tokio::test]
+async fn add_token_usage_first_turn_initializes_columns() {
+ // A pre-A4 session has all 4 columns NULL. The first
+ // `add_token_usage` call must initialize them from 0 (the
+ // SQL `COALESCE(col, 0) + ?` pattern) rather than NULL +
+ // value = NULL.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ assert!(loaded.session.input_tokens_total.is_none());
+ assert!(loaded.session.output_tokens_total.is_none());
+ assert!(loaded.session.cache_creation_total.is_none());
+ assert!(loaded.session.cache_read_total.is_none());
+
+ let u = TokenUsage {
+ input_tokens: 100,
+ output_tokens: 50,
+ cache_creation_input_tokens: 10,
+ cache_read_input_tokens: 20,
+ };
+ add_token_usage(&pool, &s.id, &u).await.unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ assert_eq!(loaded.session.input_tokens_total, Some(100));
+ assert_eq!(loaded.session.output_tokens_total, Some(50));
+ assert_eq!(loaded.session.cache_creation_total, Some(10));
+ assert_eq!(loaded.session.cache_read_total, Some(20));
+}
+
+#[tokio::test]
+async fn add_token_usage_accumulates_across_turns() {
+ // A4 PRD decision 2: per-session 累积 (single SQL UPDATE
+ // per turn). Verify that two consecutive calls add up
+ // rather than overwrite.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+ let u1 = TokenUsage {
+ input_tokens: 100,
+ output_tokens: 30,
+ cache_creation_input_tokens: 0,
+ cache_read_input_tokens: 50,
+ };
+ let u2 = TokenUsage {
+ input_tokens: 200,
+ output_tokens: 40,
+ cache_creation_input_tokens: 25,
+ cache_read_input_tokens: 75,
+ };
+ add_token_usage(&pool, &s.id, &u1).await.unwrap();
+ add_token_usage(&pool, &s.id, &u2).await.unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ assert_eq!(loaded.session.input_tokens_total, Some(300));
+ assert_eq!(loaded.session.output_tokens_total, Some(70));
+ assert_eq!(loaded.session.cache_creation_total, Some(25));
+ assert_eq!(loaded.session.cache_read_total, Some(125));
+}
+
+#[tokio::test]
+async fn add_token_usage_on_missing_session_is_noop() {
+ // UPDATE with a non-matching id matches 0 rows; the
+ // function returns Ok(()) and doesn't error.
+ let pool = make_pool().await;
+ let u = TokenUsage {
+ input_tokens: 10,
+ output_tokens: 5,
+ cache_creation_input_tokens: 0,
+ cache_read_input_tokens: 0,
+ };
+ add_token_usage(&pool, "nonexistent-session-id", &u).await.unwrap();
+}
+
+#[tokio::test]
+async fn list_sessions_includes_token_columns() {
+ // The A4 columns are in the SessionSummary shape too,
+ // so the SessionList (sidebar) can read them without
+ // a per-session IPC round-trip. Verify the SELECT
+ // carries them through.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+ let u = TokenUsage {
+ input_tokens: 500,
+ output_tokens: 100,
+ cache_creation_input_tokens: 50,
+ cache_read_input_tokens: 200,
+ };
+ add_token_usage(&pool, &s.id, &u).await.unwrap();
+
+ let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
+ let found = list.iter().find(|x| x.id == s.id).expect("session in list");
+ assert_eq!(found.input_tokens_total, Some(500));
+ assert_eq!(found.output_tokens_total, Some(100));
+ assert_eq!(found.cache_creation_total, Some(50));
+ assert_eq!(found.cache_read_total, Some(200));
 }

@@ -82,6 +82,25 @@ interface ChatEventPayload {
   stop_reason?: string;
   message?: string;
   category?: ErrorCategory;
+  /** A4 (Token Usage Tracking): the per-turn token usage report
+   *  from the LLM. `undefined` on every non-Done event, and on
+   *  Done events where the provider did not report usage
+   *  (cancel / error / network drop). Schema mirrors Rust
+   *  `llm::types::TokenUsage`. */
+  usage?: TokenUsagePayload;
+}
+
+/** A4: 4-field token usage payload from the LLM. Mirrors Rust
+ *  `llm::types::TokenUsage` (snake_case to match the existing
+ *  IPC convention — see backend/llm-contract.md "Scenario: Token
+ *  Usage Tracking" §3). The frontend reads this in the `done`
+ *  event handler to update the per-session totals displayed in
+ *  the ChatInput hint. */
+interface TokenUsagePayload {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
 }
 
 interface ToolCallPayload {
@@ -131,6 +150,16 @@ interface LoadedSession {
      *  ModelSelect popover in the chat input reads/writes this
      *  via the `update_session_model_id` IPC. */
     model_id: string | null;
+    /** A4 (Token Usage Tracking): per-session cumulative
+     *  token totals. `null` for pre-A4 sessions (the columns
+     *  are nullable; a legacy session's first post-upgrade
+     *  turn starts the counter from 0). The frontend uses
+     *  these to render the ChatInput hint area's
+     *  "14.2K · 7% / 200K" line. */
+    input_tokens_total: number | null;
+    output_tokens_total: number | null;
+    cache_creation_total: number | null;
+    cache_read_total: number | null;
   };
   messages: LoadedMessage[];
 }
@@ -477,6 +506,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (last.toolResults) markRaw(last.toolResults);
         if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
         if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
+        // A4 (Token Usage Tracking): per-turn usage report
+        // arrives on the `done` event. Hand the payload off to
+        // the chat store which owns the per-session running
+        // totals (rendered by ChatInput.vue's hint area).
+        if (event.usage) {
+          useChatStore().accumulateTokenUsage(req.sessionId, event.usage);
+        }
         finalizeRequest(req.requestId, req.sessionId, false);
         break;
       case "error":
@@ -631,6 +667,24 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     const messages = loaded ? rehydrateMessages(loaded.messages) : [];
     putMessages(sessionId, messages, pinnedSessions.has(sessionId));
     loadedFromDb.add(sessionId);
+    // A4: seed the per-session token usage map from the
+    // freshly-loaded session row. Without this, a page reload
+    // would show "—" in the ChatInput hint area until the next
+    // LLM turn in this session. The chat store owns the Map;
+    // the controller hands the row data over via the public
+    // `accumulateTokenUsage` API. (We use the same Map as the
+    // `done`-event path; first call seeds, subsequent calls
+    // add — so reload-then-`done` is correct: the first done
+    // event's `usage` is added to the seeded value.)
+    if (loaded && loaded.session.input_tokens_total !== null) {
+      useChatStore().accumulateTokenUsage(sessionId, {
+        input_tokens: loaded.session.input_tokens_total,
+        output_tokens: loaded.session.output_tokens_total ?? 0,
+        cache_creation_input_tokens:
+          loaded.session.cache_creation_total ?? 0,
+        cache_read_input_tokens: loaded.session.cache_read_total ?? 0,
+      });
+    }
     return messages;
   }
 

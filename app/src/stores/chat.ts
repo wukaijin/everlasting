@@ -28,7 +28,7 @@
 // were updated in the same PR.
 
 import { defineStore } from "pinia";
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useProjectsStore } from "./projects";
@@ -66,6 +66,18 @@ export interface ToolResultInfo {
 export interface ThinkingBlockInfo {
   text: string;
   signature: string;
+}
+
+/** A4 (Token Usage Tracking): per-session cumulative token usage.
+ *  Mirrors Rust `llm::types::TokenUsage` (snake_case) and the four
+ *  `*_total` columns in the `sessions` table. All four fields are
+ *  `null` for sessions that have never sent a message (pre-A4
+ *  rows, fresh sessions before their first LLM turn). */
+export interface SessionTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
 }
 
 /** Chat message with optional tool call/result/thinking metadata. */
@@ -108,6 +120,16 @@ export interface SessionSummary {
   /** PR4 of multi-model: per-session model override. `null` when the
    *  session uses the global default model. Soft FK to `models.id`. */
   model_id: string | null;
+  /** A4 (Token Usage Tracking): cumulative per-session token
+   *  totals as of the last LLM turn. `null` for pre-A4
+   *  sessions (the migration is non-destructive, so legacy
+   *  rows keep NULL until their first post-upgrade turn). The
+   *  ChatInput hint reads these to render the
+   *  "14.2K · 7% / 200K" line. */
+  input_tokens_total: number | null;
+  output_tokens_total: number | null;
+  cache_creation_total: number | null;
+  cache_read_total: number | null;
 }
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the
@@ -175,6 +197,70 @@ export const useChatStore = defineStore("chat", () => {
   const sessions = ref<SessionSummary[]>([]);
   const currentSessionId = ref<string | null>(null);
   const currentCwd = ref<string>("");
+
+  // -----------------------------------------------------------------------
+  // A4 (Token Usage Tracking): per-session running totals.
+  //
+  // The Map is keyed by session id; the value is the cumulative
+  // token usage as of the most recent LLM turn Done event. The
+  // data flow is:
+  //
+  //   Anthropic / OpenAI stream ends
+  //     → ChatEvent::Done { usage: Some(t) }
+  //     → streamController.handleChatEvent("done")
+  //     → useChatStore().accumulateTokenUsage(sid, t)
+  //     → tokenUsageBySession.get(sid) gets t added in place
+  //     → currentSessionTokenUsage computed re-evaluates
+  //     → ChatInput.vue re-renders the hint area
+  //
+  // The Map is also seeded from the `SessionSummary` returned by
+  // `list_sessions` / `load_session` so a fresh page reload
+  // shows the totals from the DB (the user sees the cumulative
+  // value, not "—" + reset). Subsequent per-turn increments are
+  // additive on top of the seeded totals.
+  //
+  // `null` (not `0`) for sessions that have never sent a turn —
+  // the ChatInput hint renders this as "—" with the
+  // "升级前未统计" tooltip.
+  // -----------------------------------------------------------------------
+  const tokenUsageBySession = reactive(
+    new Map<string, SessionTokenUsage | null>(),
+  );
+
+  /** Reactive getter for the current session's running token
+   *  totals. `null` when no session is active, or when the
+   *  active session has not yet sent its first turn (pre-A4
+   *  data or brand-new session). The ChatInput.vue hint area
+   *  reads this; the threshold coloring is computed inline in
+   *  the component (keeps the store API single-purpose). */
+  const currentSessionTokenUsage = computed<SessionTokenUsage | null>(
+    () => {
+      const sid = currentSessionId.value;
+      if (!sid) return null;
+      return tokenUsageBySession.get(sid) ?? null;
+    },
+  );
+
+  /** Add a per-turn usage report to the running session total.
+   *  Called by `streamController.handleChatEvent` on every
+   *  `done` event that carries a `usage` payload. Add-or-init
+   *  semantics: a first call seeds from 0; subsequent calls
+   *  add field-wise. */
+  function accumulateTokenUsage(
+    sessionId: string,
+    usage: SessionTokenUsage,
+  ): void {
+    const existing = tokenUsageBySession.get(sessionId);
+    if (!existing) {
+      tokenUsageBySession.set(sessionId, { ...usage });
+    } else {
+      existing.input_tokens += usage.input_tokens;
+      existing.output_tokens += usage.output_tokens;
+      existing.cache_creation_input_tokens +=
+        usage.cache_creation_input_tokens;
+      existing.cache_read_input_tokens += usage.cache_read_input_tokens;
+    }
+  }
 
   // -----------------------------------------------------------------------
   // Stream controller — single source of truth for messages + active
@@ -286,6 +372,23 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     await loadSessions(newId);
+    // A4: seed the per-session token usage map from the
+    // SessionSummary so the ChatInput hint area renders
+    // the right number on a fresh page reload (without this,
+    // the user would see "—" until they sent another turn).
+    for (const s of sessions.value) {
+      if (
+        s.input_tokens_total !== null &&
+        s.output_tokens_total !== null
+      ) {
+        tokenUsageBySession.set(s.id, {
+          input_tokens: s.input_tokens_total,
+          output_tokens: s.output_tokens_total,
+          cache_creation_input_tokens: s.cache_creation_total ?? 0,
+          cache_read_input_tokens: s.cache_read_total ?? 0,
+        });
+      }
+    }
     // Default to the most-recently-updated session if any exist;
     // otherwise leave the chat area in its empty state.
     if (sessions.value.length > 0) {
@@ -363,6 +466,32 @@ export const useChatStore = defineStore("chat", () => {
     // loss.
     await controller.ensureLoaded(sessionId);
     currentSessionId.value = sessionId;
+    // A4: pull the latest token totals from the freshly-loaded
+    // session into the in-memory map. Without this, switching
+    // to a session whose last update happened in another window
+    // would show stale "0" until the next Done event in THIS
+    // window. Cheap — one Map.set.
+    const fresh = await invoke<{
+      session: {
+        input_tokens_total: number | null;
+        output_tokens_total: number | null;
+        cache_creation_total: number | null;
+        cache_read_total: number | null;
+      };
+    } | null>("load_session", { sessionId: sessionId });
+    if (
+      fresh &&
+      fresh.session.input_tokens_total !== null &&
+      fresh.session.output_tokens_total !== null
+    ) {
+      tokenUsageBySession.set(sessionId, {
+        input_tokens: fresh.session.input_tokens_total,
+        output_tokens: fresh.session.output_tokens_total,
+        cache_creation_input_tokens:
+          fresh.session.cache_creation_total ?? 0,
+        cache_read_input_tokens: fresh.session.cache_read_total ?? 0,
+      });
+    }
     // Pull cwd from the session summary (the controller doesn't
     // expose session metadata; `list_sessions` already has the
     // value in memory). Avoids a redundant `load_session` IPC.
@@ -718,6 +847,11 @@ export const useChatStore = defineStore("chat", () => {
     messages,
     isCurrentSessionStreaming,
     currentRequestId,
+    // A4: per-session running token totals. The ChatInput
+    // hint area reads `currentSessionTokenUsage`; the Map is
+    // exposed for tests / future per-session UIs.
+    currentSessionTokenUsage,
+    tokenUsageBySession,
     // UI-side state (refs)
     sessions,
     currentSessionId,
@@ -738,5 +872,8 @@ export const useChatStore = defineStore("chat", () => {
     getDiff,
     getFileDiff,
     invalidateDiff,
+    // A4: hook called by streamController.handleChatEvent on
+    // every `done` event that carries a usage payload.
+    accumulateTokenUsage,
   };
 });

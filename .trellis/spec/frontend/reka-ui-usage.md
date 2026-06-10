@@ -290,6 +290,105 @@ moot — those don't use reka-ui `Select` per
 
 ---
 
+## Pattern: Tooltip for hover affordances (added 2026-06-10, A4 token-usage)
+
+Use reka-ui's `Tooltip` primitive for **hover-only static
+information** — e.g. breaking down a single number into
+its components, or providing a one-line hint that doesn't
+need its own click target.
+
+**Production instance** (2026-06-10, A4):
+`app/src/components/chat/ChatInput.vue` — the
+`chat-input__token-usage` chip (e.g. "14.2K · 7% / 200K")
+hovers out a 4-line breakdown (`input / cache_read /
+cache_creation / output`) via reka-ui `Tooltip`. The
+trigger is the chip itself; the tooltip content is
+the breakdown list.
+
+**Six-piece structure** (always required, in this order):
+
+```vue
+<TooltipProvider>
+  <TooltipRoot :delay-duration="150">
+    <TooltipTrigger as-child>
+      <span class="my-chip">14.2K</span>
+    </TooltipTrigger>
+    <TooltipPortal>
+      <TooltipContent class="my-chip__tooltip" :side-offset="4">
+        <TooltipArrow class="my-chip__tooltip-arrow" />
+        <!-- tooltip body -->
+      </TooltipContent>
+    </TooltipPortal>
+  </TooltipRoot>
+</TooltipProvider>
+```
+
+**Why all six pieces**:
+
+- **`TooltipProvider`** — top-level context provider. reka-ui 2.9.9's
+  `TooltipRoot` is **not** self-contained: it relies on a
+  `TooltipProviderContext` (Vue's Symbol-based `provide`/`inject`)
+  that the Provider `provide`s. Rendering `TooltipRoot` without a
+  `TooltipProvider` ancestor throws at runtime with
+  `Injection Symbol(TooltipProviderContext) not found` and the
+  entire Vue tree (here: `ChatWindow`) goes blank. TypeScript
+  / `pnpm build` does NOT catch this because the inject is
+  runtime-only. **Always wrap TooltipRoot in TooltipProvider.**
+  Add it as a local wrapper at the consumer site (one provider
+  per Tooltip instance, NOT app-root) — lifting to app root is
+  YAGNI for a single consumer.
+- **`TooltipRoot`** — context provider; `delay-duration` (ms) defers the open so quick mouse-passes don't trigger.
+- **`TooltipTrigger as-child`** — merges trigger props onto the existing child (`<span>` / `<button>`) so the chip's own class + click handler are preserved. **Without `as-child` the trigger renders as a `<button>` that wraps the chip — you lose styling and get a nested clickable.**
+- **`TooltipPortal`** — portals to `<body>` to escape overflow containers. **Required for the portal-child styling to work** (see gotcha above).
+- **`TooltipContent`** — receives `data-state="delayed-open|closed"` for animation; `side-offset` is the gap between trigger and tooltip (4px is the project default, matches `popover-pattern.md`).
+- **`TooltipArrow`** — the little triangle pointing at the trigger. Optional but conventional; users expect it.
+
+**Don't**: wrap `TooltipContent` in `v-if`. reka-ui
+manages the open/close lifecycle itself; `v-if` will fight
+it and the tooltip will flicker or fail to open.
+
+**Don't**: set `delay-duration="0"`. Even 100-150ms
+defer prevents "tooltip pops up on every mouse pass" —
+annoying for dense chip rows. The project's default
+delay-duration is 150ms.
+
+**Styling**: see `<style scoped>` gotcha above —
+`TooltipContent` portals to body, so the rule MUST be
+wrapped in `:deep()` to match. Trigger styles stay scoped.
+
+**Example CSS** (from ChatInput.vue A4):
+
+```css
+/* trigger — stays scoped, in-component */
+.chat-input__token-usage { ... }
+
+/* tooltip content — :deep() required */
+:deep(.chat-input__token-usage-tooltip) {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes tooltip-enter {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+:deep(.chat-input__token-usage-tooltip[data-state="delayed-open"]) {
+  animation: tooltip-enter 150ms ease-out;
+}
+```
+
+**Don't use reka-ui Tooltip** for click-triggered
+dropdowns / menus. Those are the hand-rolled popover
+pattern (see `popover-pattern.md`).
+
+---
+
 ## Convention: Wrap reka-ui primitives in project-scoped CSS classes
 
 Reka-ui primitives are unstyled by default. The project styles
