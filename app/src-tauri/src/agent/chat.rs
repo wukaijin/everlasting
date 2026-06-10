@@ -324,6 +324,7 @@ pub async fn chat(
             let mut redacted_thinking_data: Vec<String> = Vec::new();
             let mut pending_thinking: Option<PendingThinking> = None;
             let mut stop_reason: Option<String> = None;
+            let mut last_usage: Option<crate::llm::types::TokenUsage> = None;
             let mut had_error = false;
             // PR5: set when the user hits Stop mid-stream. We
             // bail out of both the per-event select! loop AND
@@ -420,6 +421,7 @@ pub async fn chat(
                             }
                             ChatEvent::Done { stop_reason: sr, usage } => {
                                 stop_reason = sr.clone();
+                                last_usage = usage.clone();
                                 // A4 (Token Usage Tracking):
                                 // accumulate the per-turn usage
                                 // into the session's column
@@ -603,12 +605,14 @@ pub async fn chat(
                 if let Err(e) = crate::db::touch_session(&db, &session_id).await {
                     tracing::warn!(error = %e, "failed to touch session");
                 }
+                // Emit Done to frontend AFTER persist is complete so
+                // that `reloadAfterFinalize` reads the full DB state.
                 emit_chat_event(
                     &app_handle,
                     &rid,
                     &ChatEvent::Done {
                         stop_reason,
-                        usage: None,
+                        usage: last_usage,
                     },
                 );
                 return;
