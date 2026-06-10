@@ -1,0 +1,11 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/backend/index.md", "reason": "后端 spec 入口 + Pre-Development Checklist"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/backend/llm-contract.md", "reason": "system prompt 注入规范 + 协议映射"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/backend/error-handling.md", "reason": "memory loader 失败兜底 + tracing::warn! 模式"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/backend/tool-contract.md", "reason": "Tauri command 模式(3 个 memory commands)"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/backend/test-model-contract.md", "reason": "单元测试模式(≥15 项 memory 测试)"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/frontend/index.md", "reason": "前端 spec 入口"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/frontend/state-management.md", "reason": "Pinia store 模式(memory cache store?)"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/frontend/reka-ui-usage.md", "reason": "UI 组件模式(Tab / Dropdown)"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/frontend/design-tokens.md", "reason": "UI 样式 token"}
+{"file": "/usr/local/code/github/everlasting/.trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层 Tauri command 契约"}
