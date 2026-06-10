@@ -10,6 +10,7 @@ import Icon from "../Icon.vue";
 import ProvidersTab from "./ProvidersTab.vue";
 import ModelsTab from "./ModelsTab.vue";
 import DefaultTab from "./DefaultTab.vue";
+import MemoryTab from "./MemoryTab.vue";
 
 const open = defineModel<boolean>("open", { required: true });
 </script>
@@ -39,6 +40,9 @@ const open = defineModel<boolean>("open", { required: true });
             <TabsTrigger value="default" class="settings-modal__tab">
               Default
             </TabsTrigger>
+            <TabsTrigger value="memory" class="settings-modal__tab">
+              Memory
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" class="settings-modal__content">
@@ -49,6 +53,9 @@ const open = defineModel<boolean>("open", { required: true });
           </TabsContent>
           <TabsContent value="default" class="settings-modal__content">
             <DefaultTab />
+          </TabsContent>
+          <TabsContent value="memory" class="settings-modal__content">
+            <MemoryTab />
           </TabsContent>
         </TabsRoot>
       </DialogContent>

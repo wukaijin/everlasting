@@ -15,11 +15,22 @@
 //
 // D3 restyle: dark theme tokens. Active tab uses the Prussian-muted
 // background and accent underline per spike-003.
+//
+// B5 follow-up (2026-06-10): added the "Memory" dropdown trigger
+// on the right of the project tab list. The dropdown is the
+// project-layer entry point (the 2 Project CLAUDE.md / AGENTS.md
+// files for the active project). User-layer memory is exposed via
+// the Settings page's "Memory" tab.
+
+import { computed, onUnmounted, ref, watch } from "vue";
 
 import { useProjectsStore } from "../stores/projects";
+import { useMemoryStore } from "../stores/memory";
 import Icon from "./Icon.vue";
+import MemoryPreview from "./memory/MemoryPreview.vue";
 
 const store = useProjectsStore();
+const memoryStore = useMemoryStore();
 
 defineProps<{
   /** Set of project ids that have a streaming session. The store
@@ -29,6 +40,11 @@ defineProps<{
 
 function onTabClick(id: string) {
   void store.switchProject(id);
+  // Close any open memory dropdown when switching projects — the
+  // dropdown's contents are project-scoped, so leaving it open
+  // would show stale state during the brief window before the
+  // new project's layers load.
+  memoryMenuOpen.value = false;
 }
 
 function onHide(id: string, e: MouseEvent) {
@@ -51,6 +67,57 @@ function tabTooltip(p: {
   }
   return p.path;
 }
+
+// --- Memory dropdown (B5) --------------------------------------------
+// Hand-rolled popover per `.trellis/spec/frontend/popover-pattern.md`.
+// The Memory dropdown shows the 2 Project layers for the active
+// project. We re-use the existing `MemoryPreview` component with
+// `kind="project"` so the panel and the dropdown render identically.
+
+const memoryMenuOpen = ref(false);
+const memoryMenuRoot = ref<HTMLElement | null>(null);
+
+const activeProjectId = computed<string | null>(
+  () => store.currentProjectId,
+);
+
+function toggleMemoryMenu() {
+  memoryMenuOpen.value = !memoryMenuOpen.value;
+}
+
+function onMemoryDocumentClick(e: MouseEvent) {
+  if (!memoryMenuOpen.value) return;
+  const target = e.target as Node | null;
+  if (memoryMenuRoot.value && target && !memoryMenuRoot.value.contains(target)) {
+    memoryMenuOpen.value = false;
+  }
+}
+
+function onMemoryKeydown(e: KeyboardEvent) {
+  if (memoryMenuOpen.value && e.key === "Escape") {
+    memoryMenuOpen.value = false;
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("click", onMemoryDocumentClick);
+  document.addEventListener("keydown", onMemoryKeydown);
+  onUnmounted(() => {
+    document.removeEventListener("click", onMemoryDocumentClick);
+    document.removeEventListener("keydown", onMemoryKeydown);
+  });
+}
+
+// Eagerly load the memory layers for the active project when the
+// dropdown opens (idempotent — the store skips re-fetches when
+// the project id is unchanged). This makes the dropdown's first
+// open feel instant on the second+ open; on the first open the
+// user sees the "加载中" state for ~50ms.
+watch(memoryMenuOpen, (open) => {
+  if (open && activeProjectId.value) {
+    void memoryStore.loadForProject(activeProjectId.value);
+  }
+});
 </script>
 
 <template>
@@ -95,6 +162,33 @@ function tabTooltip(p: {
         >
           <Icon name="x" :size="12" />
         </button>
+      </div>
+    </div>
+    <div
+      v-if="store.currentProjectId"
+      ref="memoryMenuRoot"
+      class="tabs__memory"
+    >
+      <button
+        class="tabs__memory-trigger"
+        :class="{ 'tabs__memory-trigger--open': memoryMenuOpen }"
+        type="button"
+        :title="'查看项目 memory (CLAUDE.md / AGENTS.md)'"
+        :aria-label="'Memory'"
+        :aria-expanded="memoryMenuOpen"
+        @click="toggleMemoryMenu"
+      >
+        <Icon name="document" :size="14" />
+        <span class="tabs__memory-label">Memory</span>
+        <Icon
+          :name="memoryMenuOpen ? 'chevron-up' : 'chevron-down'"
+          :size="10"
+        />
+      </button>
+      <div v-if="memoryMenuOpen" class="tabs__memory-popover">
+        <div class="tabs__memory-popover-inner">
+          <MemoryPreview kind="project" :project-id="activeProjectId" />
+        </div>
       </div>
     </div>
     <button
@@ -264,5 +358,69 @@ function tabTooltip(p: {
 .tabs__add:hover {
   background: var(--color-accent-muted);
   color: var(--color-accent);
+}
+
+/* ------------------------------------------------------------------- */
+/* Memory dropdown (B5 follow-up)                                       */
+/* ------------------------------------------------------------------- */
+
+.tabs__memory {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.tabs__memory-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--color-bg-border);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  transition: background 0.1s, color 0.1s;
+}
+
+.tabs__memory-trigger:hover,
+.tabs__memory-trigger--open {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.tabs__memory-label {
+  font-weight: 500;
+}
+
+.tabs__memory-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 1500;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  min-width: 480px;
+  max-width: 600px;
+  max-height: 70vh;
+  overflow: hidden;
+  animation: memory-popover-slide 150ms ease-out;
+}
+
+.tabs__memory-popover-inner {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+@keyframes memory-popover-slide {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 </style>
