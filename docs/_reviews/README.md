@@ -14,6 +14,7 @@
 
 | 文件 | 评审模型 | 评审日期 | 评审范围 |
 |---|---|---|---|
+| [`REVIEW-b5-memory-grill-2026-06-10.md`](./REVIEW-b5-memory-grill-2026-06-10.md) | Reasonix (grill-me interview) | 2026-06-10 | B5 Memory 设计复审: 概念混淆 / 注入频率 & 位置 / 命名策略 / 前端文本对齐; 9 题全决议 |
 | [`REVIEW-glm-5.1.md`](./REVIEW-glm-5.1.md) | GLM 5.1 | 2026-06 | 整体设计 / 架构 16 关卡 / 技术选型 / 实施路线图 / 风险管理 / 文档质量 |
 | [`REVIEW-deepseek-v4-pro.md`](./REVIEW-deepseek-v4-pro.md) | deepseek v4 pro | 2026-06 | 同上(两份独立评审,对照看更全面) |
 | [`REVIEW-claude-opus-2026-06-09.md`](./REVIEW-claude-opus-2026-06-09.md) | Claude Opus 4.8 | 2026-06-09 | 代码审计: 大文件重构计划 / 文档审阅 / 技术路线决策 / 项目结构全景图 |
