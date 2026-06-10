@@ -23,7 +23,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
@@ -76,7 +76,12 @@ pub struct AppState {
     /// Grill decision #3: pre-built provider catalog keyed by
     /// `models.id`. The chat command does a single lookup here
     /// instead of re-running `build_provider` on every chat.
-    pub catalog: Arc<ProviderCatalog>,
+    ///
+    /// Wrapped in `RwLock` so provider/model CRUD commands can
+    /// rebuild the catalog on config changes without restarting
+    /// the app. Read-heavy (every chat), write-rare (user saves
+    /// config).
+    pub catalog: Arc<RwLock<ProviderCatalog>>,
     /// Active chat request cancellation tokens, keyed by `request_id`.
     /// The frontend's Stop button calls `cancel_chat(request_id)`
     /// which looks up the token and calls `.cancel()`. The agent
@@ -178,11 +183,20 @@ impl AppState {
             config,
             tools,
             db,
-            catalog: Arc::new(catalog),
+            catalog: Arc::new(RwLock::new(catalog)),
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             session_active_request: Arc::new(Mutex::new(HashMap::new())),
             read_guard: ReadGuard::new(),
         }
+    }
+
+    /// Rebuild the in-memory provider catalog from the DB.
+    /// Called after any provider/model CRUD operation so the next
+    /// chat request picks up the new config without restart.
+    pub async fn rebuild_catalog(&self) {
+        let new_catalog = build_provider_catalog(&self.db).await;
+        let mut guard = self.catalog.write().await;
+        *guard = new_catalog;
     }
 }
 

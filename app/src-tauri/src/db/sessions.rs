@@ -31,6 +31,7 @@ pub async fn create_session(
  project_id: &str,
  initial_cwd: &str,
  model: &str,
+ model_id: Option<&str>,
 ) -> Result<SessionRow, sqlx::Error> {
  let now = Utc::now().to_rfc3339();
  let title = "新对话".to_string();
@@ -39,8 +40,8 @@ pub async fn create_session(
  r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL)
+ worktree_path, worktree_state, last_worktree_path, model_id)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?)
  "#,
  )
  .bind(session_id)
@@ -50,6 +51,7 @@ pub async fn create_session(
  .bind(model)
  .bind(project_id)
  .bind(initial_cwd)
+ .bind(model_id)
  .execute(pool)
  .await?;
 
@@ -64,7 +66,7 @@ pub async fn create_session(
  worktree_path: None,
  worktree_state: WorktreeState::None,
  last_worktree_path: None,
- model_id: None,
+ model_id: model_id.map(|s| s.to_string()),
  })
 }
 

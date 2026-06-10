@@ -35,9 +35,11 @@ pub async fn add_provider(
     base_url: String,
     api_key: String,
 ) -> Result<db::ProviderRow, String> {
-    db::create_provider(&state.db, &protocol, &display_name, &base_url, &api_key)
+    let row = db::create_provider(&state.db, &protocol, &display_name, &base_url, &api_key)
         .await
-        .map_err(|e| format!("add_provider failed: {}", e))
+        .map_err(|e| format!("add_provider failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(row)
 }
 
 #[tauri::command]
@@ -49,16 +51,20 @@ pub async fn update_provider(
     base_url: String,
     api_key: String,
 ) -> Result<Option<db::ProviderRow>, String> {
-    db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, &api_key)
+    let row = db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, &api_key)
         .await
-        .map_err(|e| format!("update_provider failed: {}", e))
+        .map_err(|e| format!("update_provider failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(row)
 }
 
 #[tauri::command]
 pub async fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
-    db::delete_provider(&state.db, &id)
+    let ok = db::delete_provider(&state.db, &id)
         .await
-        .map_err(|e| format!("delete_provider failed: {}", e))
+        .map_err(|e| format!("delete_provider failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(ok)
 }
 
 #[tauri::command]
@@ -81,7 +87,12 @@ pub async fn add_model(
     supports_thinking: bool,
     context_window: u32,
 ) -> Result<db::ModelRow, String> {
-    db::create_model(
+    let display_name = if display_name.is_empty() {
+        model_name.clone()
+    } else {
+        display_name
+    };
+    let row = db::create_model(
         &state.db,
         &provider_id,
         &model_name,
@@ -92,7 +103,9 @@ pub async fn add_model(
         context_window,
     )
     .await
-    .map_err(|e| format!("add_model failed: {}", e))
+    .map_err(|e| format!("add_model failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(row)
 }
 
 #[tauri::command]
@@ -107,7 +120,12 @@ pub async fn update_model(
     supports_thinking: bool,
     context_window: u32,
 ) -> Result<Option<db::ModelRow>, String> {
-    db::update_model(
+    let display_name = if display_name.is_empty() {
+        model_name.clone()
+    } else {
+        display_name
+    };
+    let row = db::update_model(
         &state.db,
         &id,
         &provider_id,
@@ -119,14 +137,18 @@ pub async fn update_model(
         context_window,
     )
     .await
-    .map_err(|e| format!("update_model failed: {}", e))
+    .map_err(|e| format!("update_model failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(row)
 }
 
 #[tauri::command]
 pub async fn delete_model(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
-    db::delete_model(&state.db, &id)
+    let ok = db::delete_model(&state.db, &id)
         .await
-        .map_err(|e| format!("delete_model failed: {}", e))
+        .map_err(|e| format!("delete_model failed: {}", e))?;
+    state.rebuild_catalog().await;
+    Ok(ok)
 }
 
 #[tauri::command]

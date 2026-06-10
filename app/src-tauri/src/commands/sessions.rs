@@ -59,7 +59,15 @@ pub async fn create_session(
     };
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    db::create_session(&state.db, &session_id, &project_id, &initial_cwd, &model)
+
+    // Read the current default model_id so the session is bound to
+    // a specific model at creation time (not just a free-text name).
+    let model_id = db::get_config_value(&state.db, "default_model_id")
+        .await
+        .ok()
+        .flatten();
+
+    db::create_session(&state.db, &session_id, &project_id, &initial_cwd, &model, model_id.as_deref())
         .await
         .map_err(|e| format!("create_session: db insert failed: {}", e))
 }

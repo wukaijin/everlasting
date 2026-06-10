@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider trait 定义、build_provider、ProviderCatalog 类型、wire shape — catalog 热更新改动的基础"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "多 Provider 抽象、models/providers CRUD、default_model_id、session model_id 绑定规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 操作规范、session CRUD 约束、migration 惯例"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "前端 Pinia store 模式、stream controller 规则、跨 store 数据流"}

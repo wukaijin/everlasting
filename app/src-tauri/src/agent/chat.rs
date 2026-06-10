@@ -78,7 +78,7 @@ pub async fn chat(
     // session_active_request entry because a pre-flight failure
     // is synchronous (no LLM call has started), so there is
     // nothing to cancel.
-    let resolved = match lookup_provider_for_default(&db, &catalog).await {
+    let resolved = match lookup_provider_for_session(&session_id, &db, &catalog).await {
         Ok(r) => r,
         Err(err) => {
             let (msg, category) = err.user_message_and_category();
@@ -667,36 +667,34 @@ pub async fn chat(
 
 /// PR1 catalog lookup for the default model.
 ///
-/// Falls back to [`resolve_chat_provider`] (a DB-driven path) when
-/// the catalog doesn't have the default — this keeps the legacy
-/// "no-catalog" cold-start path working while still preferring the
-/// pre-built catalog for the steady-state.
-async fn lookup_provider_for_default(
+/// Resolve the provider for a chat request, preferring the
+/// session's own `model_id` (per-session model override) and
+/// falling back to the global `default_model_id`.
+///
+/// Resolution chain:
+/// 1. Read `sessions.model_id` from DB (if set → use it)
+/// 2. If NULL or points to missing model → fall back to global
+///    `app_config.default_model_id`
+/// 3. If still not found → DB slow path (`resolve_chat_provider`)
+async fn lookup_provider_for_session(
+    session_id: &str,
     db: &SqlitePool,
-    catalog: &Arc<crate::state::ProviderCatalog>,
+    catalog: &Arc<tokio::sync::RwLock<crate::state::ProviderCatalog>>,
 ) -> Result<ResolvedChatProviderWrapper, PreFlightError> {
-    // Find the default model id first (still need DB for this).
-    let default_id = crate::db::get_config_value(db, "default_model_id")
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "lookup_provider_for_default: get_config_value failed");
-            PreFlightError::NoModel
-        })?
-        .ok_or(PreFlightError::NoModel)?;
+    // Determine which model_id to use: session override or global default.
+    let model_id = resolve_model_id_for_session(session_id, db).await?;
 
-    // Resolve display names + api_key pre-flight from DB. The
-    // catalog only stores `Arc<dyn Provider>`, so we re-read the
-    // row metadata for logging + the api_key check.
+    // Resolve display names + api_key pre-flight from DB.
     let models = crate::db::list_models(db).await.map_err(|e| {
-        tracing::error!(error = %e, "lookup_provider_for_default: list_models failed");
+        tracing::error!(error = %e, "lookup_provider_for_session: list_models failed");
         PreFlightError::NoModel
     })?;
     let mwp = models
         .into_iter()
-        .find(|m| m.model.id == default_id)
+        .find(|m| m.model.id == model_id)
         .ok_or(PreFlightError::NoModel)?;
     let providers = crate::db::list_providers(db).await.map_err(|e| {
-        tracing::error!(error = %e, "lookup_provider_for_default: list_providers failed");
+        tracing::error!(error = %e, "lookup_provider_for_session: list_providers failed");
         PreFlightError::ProviderMissing
     })?;
     let provider_row = providers
@@ -713,24 +711,25 @@ async fn lookup_provider_for_default(
         });
     }
 
-    // Fast path: catalog hit. We clone the Arc so the chat
-    // command owns its own reference (the catalog entry is
-    // shared across concurrent chats, which is fine — providers
-    // are stateless w.r.t. requests).
-    if let Some(arc_provider) = catalog.get(&default_id) {
-        return Ok(ResolvedChatProviderWrapper {
-            provider: arc_provider.clone(),
-            model_display_name: mwp.model.display_name.clone(),
-            provider_display_name: provider_row.display_name.clone(),
-        });
+    // Fast path: catalog hit. Acquire read lock (concurrent
+    // reads don't block each other).
+    {
+        let guard = catalog.read().await;
+        if let Some(arc_provider) = guard.get(&model_id) {
+            return Ok(ResolvedChatProviderWrapper {
+                provider: arc_provider.clone(),
+                model_display_name: mwp.model.display_name.clone(),
+                provider_display_name: provider_row.display_name.clone(),
+            });
+        }
     }
 
-    // Slow path: catalog miss (e.g. default model changed after
-    // AppState::load). Fall back to the legacy DB resolver and
-    // wrap the resulting Box into an Arc.
+    // Slow path: catalog miss (e.g. model added/changed but
+    // rebuild not yet complete). Fall back to the legacy DB
+    // resolver and wrap the resulting Box into an Arc.
     tracing::warn!(
-        default_id = %default_id,
-        "lookup_provider_for_default: catalog miss, falling back to DB resolver"
+        model_id = %model_id,
+        "lookup_provider_for_session: catalog miss, falling back to DB resolver"
     );
     let resolved = resolve_chat_provider(db).await?;
     Ok(ResolvedChatProviderWrapper {
@@ -738,6 +737,44 @@ async fn lookup_provider_for_default(
         model_display_name: resolved.model_display_name,
         provider_display_name: resolved.provider_display_name,
     })
+}
+
+/// Resolve the effective model_id for a session: prefer the
+/// session's own `model_id` override, fall back to the global
+/// `default_model_id`.
+async fn resolve_model_id_for_session(
+    session_id: &str,
+    db: &SqlitePool,
+) -> Result<String, PreFlightError> {
+    // Try session's own model_id first.
+    let session = crate::db::load_session(db, session_id).await.map_err(|e| {
+        tracing::error!(error = %e, "resolve_model_id_for_session: load_session failed");
+        PreFlightError::NoModel
+    })?;
+    if let Some(mid) = session.and_then(|s| s.session.model_id) {
+        // Verify the model still exists in the catalog (not deleted).
+        let models = crate::db::list_models(db).await.map_err(|e| {
+            tracing::error!(error = %e, "resolve_model_id_for_session: list_models failed");
+            PreFlightError::NoModel
+        })?;
+        if models.iter().any(|m| m.model.id == mid) {
+            return Ok(mid);
+        }
+        tracing::warn!(
+            session_id = %session_id,
+            model_id = %mid,
+            "resolve_model_id_for_session: session model_id points to deleted model, falling back to default"
+        );
+    }
+
+    // Fallback: global default.
+    crate::db::get_config_value(db, "default_model_id")
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "resolve_model_id_for_session: get_config_value failed");
+            PreFlightError::NoModel
+        })?
+        .ok_or(PreFlightError::NoModel)
 }
 
 /// Thin wrapper holding the resolved provider as an Arc (so we

@@ -129,12 +129,12 @@ const emit = defineEmits<{
                 />
             </Label>
             <Label class="model-form__field">
-                <span class="model-form__label">Display Name</span>
+                <span class="model-form__label">Display Name (optional)</span>
                 <input
                     v-model="form.displayName"
                     type="text"
                     class="model-form__input"
-                    placeholder="Claude Sonnet 4.5"
+                    placeholder="留空则使用 Model Name"
                 />
             </Label>
         </div>

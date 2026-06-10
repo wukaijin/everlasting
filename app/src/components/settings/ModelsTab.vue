@@ -61,7 +61,6 @@ const canSave = computed(
   () =>
     form.providerId !== "" &&
     form.modelName.trim() !== "" &&
-    form.displayName.trim() !== "" &&
     form.contextWindow > 0 &&
     !saving.value,
 );
@@ -105,6 +104,8 @@ async function save() {
   if (!canSave.value) return;
   saving.value = true;
   try {
+    // display_name fallback: empty → use model_name
+    const displayName = form.displayName.trim() || form.modelName.trim();
     // Build opts: omit undefined fields so Tauri IPC treats them as
     // None (not null). See HACKING-wsl FU-1.
     const opts: {
@@ -128,7 +129,7 @@ async function save() {
       await modelsStore.add(
         form.providerId,
         form.modelName.trim(),
-        form.displayName.trim(),
+        displayName,
         opts,
       );
     } else if (mode.value === "edit" && editId.value) {
@@ -136,7 +137,7 @@ async function save() {
         editId.value,
         form.providerId,
         form.modelName.trim(),
-        form.displayName.trim(),
+        displayName,
         opts,
       );
     }
