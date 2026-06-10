@@ -471,17 +471,18 @@ impl Provider for OpenAIProvider {
                             }
                             break;
                         }
-                        let v: Value = match serde_json::from_str(&event.data) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::debug!(
-                                    error = %e,
-                                    data = %event.data,
-                                    "openai: failed to parse SSE data JSON"
-                                );
-                                continue;
-                            }
-                        };
+                            let v: Value = match serde_json::from_str(&event.data) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    tracing::debug!(
+                                        error = %e,
+                                        data = %event.data,
+                                        "openai: failed to parse SSE data JSON"
+                                    );
+                                    continue;
+                                }
+                            };
+                            tracing::debug!(raw_data = %event.data, "▶ openai: SSE chunk");
 
                         // A4: OpenAI attaches a top-level
                         // `usage` field on chunks where
@@ -538,14 +539,16 @@ impl Provider for OpenAIProvider {
                                         yield Ok(ChatEvent::Delta { text: s.to_string() });
                                     }
                                 }
-                                // reasoning_content (o1/o3).
+                                // reasoning_content (o1/o3) or reasoning
+                                // (some OpenAI-compatible providers).
                                 // Emit as ThinkingDelta so the
                                 // frontend's existing
                                 // thinking-rendering path works.
-                                if let Some(s) = delta
+                                let reasoning = delta
                                     .get("reasoning_content")
                                     .and_then(|c| c.as_str())
-                                {
+                                    .or_else(|| delta.get("reasoning").and_then(|c| c.as_str()));
+                                if let Some(s) = reasoning {
                                     if !s.is_empty() {
                                         yield Ok(ChatEvent::ThinkingDelta { text: s.to_string() });
                                     }
@@ -561,6 +564,7 @@ impl Provider for OpenAIProvider {
                                     .get("tool_calls")
                                     .and_then(|t| t.as_array())
                                 {
+                                    tracing::debug!(tool_calls = %serde_json::to_string(tcs).unwrap_or_default(), "▶ openai: tool_calls delta");
                                     for tc in tcs {
                                         let idx = tc
                                             .get("index")
@@ -573,14 +577,19 @@ impl Provider for OpenAIProvider {
                                         if let Some(id) =
                                             tc.get("id").and_then(|s| s.as_str())
                                         {
-                                            entry.id = id.to_string();
+                                            if !id.is_empty() {
+                                                entry.id = id.to_string();
+                                            }
                                         }
                                         if let Some(name) = tc
                                             .get("function")
                                             .and_then(|f| f.get("name"))
                                             .and_then(|s| s.as_str())
+                                            .or_else(|| tc.get("name").and_then(|s| s.as_str()))
                                         {
-                                            entry.name = name.to_string();
+                                            if !name.is_empty() {
+                                                entry.name = name.to_string();
+                                            }
                                         }
                                         if let Some(args) = tc
                                             .get("function")
@@ -601,8 +610,13 @@ impl Provider for OpenAIProvider {
                         // `finish_reason` we see as the
                         // stream-end signal: emit any pending
                         // tool calls now.
-                        if stop_reason.is_some() {
-                            let keys: Vec<u32> = tool_call_state.keys().copied().collect();
+                                if stop_reason.is_some() {
+                                    tracing::debug!(
+                                        stop_reason = ?stop_reason,
+                                        tool_call_indices = ?tool_call_state.keys().collect::<Vec<_>>(),
+                                        "▶ openai: flushing tool calls on stop"
+                                    );
+                                    let keys: Vec<u32> = tool_call_state.keys().copied().collect();
                             for idx in keys {
                                 if let Some(buf) = tool_call_state.remove(&idx) {
                                     if let Some(ev) = build_tool_call_event(&buf, idx) {
