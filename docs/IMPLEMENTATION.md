@@ -1,7 +1,7 @@
 # IMPLEMENTATION — 实现讲解
 
-> Everlasting 的"按什么顺序做、决策记录、下一步是什么"。包括实施路线图、关键决策、待办、决策日志。
-> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
+> Everlasting 的"自研决策 + 决策日志"。**本文件是决策档案**,不列路线图(路线图见 [ROADMAP.md](./ROADMAP.md))。
+> 需求见 [DESIGN.md](./DESIGN.md),架构见 [ARCHITECTURE.md](./ARCHITECTURE.md),技术选型见 [TECH.md](./TECH.md),路线图见 [ROADMAP.md](./ROADMAP.md),候选功能见 [BACKLOG.md](./BACKLOG.md)。
 
 ---
 
@@ -24,235 +24,53 @@
 
 ---
 
-## 2. 实施路线图
-
-7 个步骤,每步完成才能进下一步。**不写时间承诺**,只写目标、可交付物、关键产出。
-
-> **路线图变更记录**(2026-06-04):原 8 步合并为 7 步——删除原步骤 5(WSL 验证,spike-001 已通过),拆原步骤 3 为 3a/3b。
-
-### 2.1 步骤 1 — 骨架与 LLM 直连 [MVP] ✅ 已完成(2026-06-04)
-
-**目标**:跑通"Tauri app + 跟 LLM 说一句话 + 流式显示"
-
-- 搭 Tauri 2 + Vue 3 + Vite + Pinia + reka-ui 项目(栈细节见 [TECH §1](./TECH.md#1-决策vue-3-全家桶替代-react))
-- Rust 端 LLM 客户端:`reqwest` + `futures-util` + `serde_json`,**手写 SSE 解析**(用 `futures-util::StreamExt`,**不**用 `eventsource-stream`——spike-002 验证手写解析器够用,见 [HACKING-llm.md](./HACKING-llm.md) 和 [spike-002 §"代码关键改动"](./spikes/002-reqwest-anthropic-sse.md#实际执行2026-06-04))
-- 4 个文件分模块(client / sse / error / types),实施 11 项 checklist 见 [HACKING-llm.md §"LLM 客户端实施 checklist"](./HACKING-llm.md#llm-客户端实施-checklist给步骤-1-2-写-rust-客户端时)
-- 前端:简单 chat UI(输入框 + 消息列表)
-- Tauri event 把 SSE chunk 推到前端(`emit("chat-event", ...)`)
-- **可交付物**:能聊天的最小 app
-
-**前置硬依赖**:
-- ✅ spike-001(WSL + Tauri 窗口 + 中文/Emoji)已于 2026-06-04 通过,见 [spikes/001](./spikes/001-wsl-tauri-window.md)
-- ✅ spike-002(reqwest + SSE + 错误分类)已于 2026-06-04 通过,见 [spikes/002](./spikes/002-reqwest-anthropic-sse.md)
-- 起点:搬 `~/tauri-spike/spike-app/` 到 `/usr/local/code/github/everlasting/app/`,扩成正式骨架。详细起点 + 验收标准见 [HANDOFF §4](./HANDOFF.md#4-mvp-步骤-1-是什么--起点--验收)
-
-**撞过的环境坑**:见 [HACKING-wsl.md](./HACKING-wsl.md)(linuxbrew pkg-config / pnpm 代理 / Rust 1.83 / cargo cache 锁 / WSLg CJK 字体)。**新机器或怀疑环境有问题时,先读 HACKING-wsl**。
-
-### 2.2 步骤 2 — Tool Calling [MVP] ✅ 已完成(2026-06-04)
-
-**目标**:agent 能读写文件、跑 shell
-
-- 定义 3 个 tool:`read_file` / `write_file` / `shell`
-- 解析 `tool_use` 块,执行,构造 `tool_result` 回填
-- agent loop 实现:消息 → LLM → tool_use? → 执行 → tool_result → LLM → ... → 完成
-- 前端显示 tool 调用过程(简化版)
-- **可交付物**:能帮我改代码的 agent
-
-### 2.3 步骤 3a — SQLite + Session 持久化 [MVP] ✅ 已完成(2026-06-05)
-
-**目标**:消息存 DB,重启能恢复,session 切换看历史
-
-- 引入 SQLite (`sqlx`),存 session / message
-- session 列表 + session 切换(单项目,无左侧项目栏)
-- 消息从 SQLite 加载,不再全内存
-- LLM 客户端不动(继续用 reqwest + 手写 SSE)
-- **可交付物**:关掉 app 再打开,历史消息还在
-
-### 2.4 步骤 3b — 多项目 + UI 三栏 + Rig 迁移 [MVP] ⚠️ 3b-1 ✅ 已完成(2026-06-05/06),3b-2 ⛔ 废弃(2026-06-09)
-
-**目标**:引入 Project 概念,三栏 UI,切 rig-core
-
-**拆解**:
-- **3b-1 ✅ 已完成** — 项目基础结构 + 顶部 Tabs UI(后端 PR1 + 前端 PR2 + post-fixes squash + docs follow-up)。`projects` 表 + `project_uuid`,`ToolContext.cwd` 默认 `~/`,`pick_project_dir` 走 Tauri native dialog,agent 工具不越出 project root。
-- **3b-2 ⛔ 废弃 (2026-06-09 决策)** — rig-core 0.38.1 弃用;完整三栏 UI 暂搁置(功能上不阻塞主线,后续若有需求再做)。多 Provider 抽象已通过自研 `Provider` trait 在 06-08 独立任务中完成,详见 §2.7 步骤 6a。
-
-**PR1(后端,3b-1 之一,2026-06-05 落地) ✅**:
-- `db.rs` migration + `projects` 表 + Auto-default `__default__` 兜底 + `PRAGMA foreign_keys = ON`
-- `projects/` 新模块(types / store / detector / boundary)
-- `tools/` 全部改造 — `ToolContext` 注入 + `shell` 加 `working_directory` 校验 + `read_file`/`write_file` 相对/绝对路径过 boundary
-- `lib.rs` `chat` 命令构造 `ToolContext`,turn 结束一次性写 `sessions.current_cwd`
-- 4 个现有 commands 改造(`create_session` / `list_sessions` / `load_session` / `delete_session`) + 7 个新 commands(`list_projects` / `create_project` / 等)
-- `ARCHITECTURE §3` worktree 路径术语 `project_hash` → `project_uuid`
-- 设计稿:`docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md` + spec `.trellis/spec/backend/project-cwd-boundary.md`
-
-**PR2(前端,3b-1 之二,commit `93a0753`,2026-06-05 落地) ✅**:
-- `stores/projects.ts` 新增
-- `stores/chat.ts` 改造
-- `ChatWindow.vue` Tab 栏 + 空状态 + "最近隐藏项目"列表
-- `pick_project_dir` + 手动输入 fallback
-- 端到端测试
-
-**Post-fixes(commit `18354a0` squash,2026-06-06 落地) ✅**:
-- 3 个 hotfix 修 PR1/PR2 wire format 偏差(Tauri 2 IPC arg camelCase + `Option<T>` null 行为 + tool_result 块只能出现在 user role)
-- FU-1 cwd `~/` 数据通路准备(backend `get_home_dir` + frontend `simplifyPath` 工具)
-- 完整 follow-up 列表 6 条沉淀到 `docs/_archive/2026-06-3b-1/FOLLOW-UP.md`(commit `7e888c9`)
-
-**可交付物**:能管多个项目、多个对话,agent 工具调用不越出 project root,为步骤 4 准备好 `<project_uuid>` 字段 ✅
-
-### 2.5 步骤 4 — Git 集成 [MVP] ✅ 已完成(2026-06-07/08,auto-commit 延后)
-
-**目标**:session 隔离 + 自动 commit
-
-- `git2-rs` 集成
-- session 创建时建 worktree(见 [ARCHITECTURE.md §3 worktree 决策](./ARCHITECTURE.md#3-决策每个-session-一个-git-worktree))
-- session 结束或定时自动 commit
-- 前端 diff 视图(用 `diff` (jsdiff) + 自渲染,见 `app/src/components/chat/DiffView.vue`)
-- **可交付物**:每个 session 是独立分支,能看 diff
-
-**落地状态**:
-- ✅ worktree 解耦(opt-in attach / detach / delete + 三态状态机 + LLM 透明度 + 安全网,2026-06-08)
-- ⏸ auto commit 仍 OOS(2026-06-09 决策延后,后续 v1 阶段再评估)
-- ✅ `git-diff-contract.md` 沉淀(Workdir-vs-branch-tip FileDiff source of truth)
-
-### 2.6 步骤 5 — 嵌入式终端 + 权限系统 [v1] 🔽 降为可选(v1 之后)
-
-**目标**:能看 agent 在跑啥,能控制 agent 能干啥
-
-- `xterm.js` + `portable-pty` 跑 shell
-- agent 跑的 `shell` tool 输出实时到 xterm
-- 权限系统雏形:每个 tool 可以 ask / allow / deny
-- **可交付物**:能看见、能拦住 agent
-
-**状态 (2026-06-09 决策)**:v1 阶段工具集已通过 `shell` tool + 30K 落盘部分覆盖"看 agent 在跑啥"的需求,嵌入式 xterm 完整 UI 降为可选(留作 v1 之后);权限系统基础架构在 `provider` 抽象里预留 hook,完整 per-tool/ per-session/ per-project 权限留 v1。
-
-### 2.7 步骤 6 — MCP 暴露 + 多 Provider [v1]
-
-**目标**:你的工具 Claude Code 也能用;切模型无痛
-
-#### 2.7.1 步骤 6a — 多 Provider [v1] ✅ 已完成(2026-06-08/09,4 PR + 1 follow-up)
-
-- `rmcp` 起一个 stdio MCP server(待 v1.5 实施,当前未开始)
-- 加 OpenAI provider 切换
-- 加 Ollama provider 切换(纯本地,省钱,可选)
-- **可交付物**:模型随便切 ✅
-
-**实际落地**(2026-06-08/09 独立任务 `06-08-multi-model-llm-provider-planning`):
-- **PR1** — data layer:3 表 `providers` / `models` / `app_config` + 8 CRUD + 10 IPC + seed(commit `f9c5648`)
-- **PR2** — Anthropic adapter:`Provider` trait + `AnthropicProvider` impl + catalog dispatch(commit `0a787ef`)
-- **PR3** — OpenAI adapter + 跨协议:`OpenAIProvider` + `provider::wire` WireMessage 中间层 + `strip_unsupported` 静默降级
-- **PR4 follow-up** — `fix(llm): OpenAI adapter endpoint() double-prefixes /v1/` (commit `96e1f98`)
-- 完整设计:`.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md`
-- 契约沉淀:`.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction (PR1)" section
-
-#### 2.7.2 步骤 6b — MCP 暴露 [v1] ⏸ 未开始
-
-- `rmcp` 0.16.0 起一个 stdio MCP server
-- 验证:Claude Desktop 能调用你的 read_file / shell / edit_file 等
-- **可交付物**:工具集对外开放;模型随便切(已完成)
-- **状态**:6a 已完成(多 Provider),6b MCP 未开始。
-
-### 2.8 步骤 7 — 打磨与文档 [跨阶段]
-
-- Token 用量统计
-- 错误处理完善
-- README 写完
-- 录个 demo 视频
-- **可交付物**:能给别人看的最小可用版本
-
-> ⚠️ **Agent Daemon 化的占位**:16 关卡(见 [ARCHITECTURE §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))中有 ⑮ Channel 输出(daemon → client)这一关,需要 agent core 拆出独立进程才能落地。**触发条件**:
-> - **若** BACKLOG 远期（v3+）段飞书 channel 决定实施 → 在步骤 5 之后插入"步骤 5.5 — Agent Daemon 化",再做步骤 6
-> - **若** 飞书不做 → 推迟到 v2 之后,daemon 化不阻塞当前 7 步
-> - **判断窗口**:在步骤 5 完成后、步骤 6 开始前问自己"长跑任务被打断是不是真痛?",痛就拆,不痛就跳
-> - 详见 [ARCHITECTURE.md §4 决策:Agent Daemon 化](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
-
-### 2.9 步骤 8 — 代码重构与文档清理 [跨阶段] 🔄 当前进行中
-
-**目标**:对积累下来的大型文件做物理拆分,让后续维护成本下降;同步清理过时的文档/spec
-
-**拆分动机**(详见 [`docs/_reviews/REVIEW-claude-opus-2026-06-09.md` §2](./_reviews/REVIEW-claude-opus-2026-06-09.md)):
-- `app/src-tauri/src/lib.rs` 3195L → 单文件过大,改一个命令要 scroll 几百行
-- `app/src-tauri/src/db.rs` 2862L → SQLite CRUD 全部塞一个文件,8 个函数相互纠缠
-- `app/src/components/ChatWindow.vue` 单文件 + `app/src/stores/chat.ts` 700+ L 流式逻辑混杂
-- 文档/HANDOFF 多处滞后,需要统一校准到 2026-06-09 git log 真实状态
-
-**5 PR 序列**:
-- **8-PR1 ✅ 已落地 (commit `5171ecf`)** — lib.rs 拆分为 `state/` + `commands/` + `agent/` 子目录
-- **8-PR2 ✅ 已落地 (commit `c151c77`)** — db.rs 拆分为 `db/` 子模块(mod/migrations/types/models/config/providers/projects/sessions/tests)
-- **8-PR3 ✅ 已落地 (commit `2f8a677`)** — ChatWindow / ModelsTab 拆为 `chat/` `settings/` `layout/` sub-components;`chat.ts` 拆出 `streamController.ts` 独立 Pinia store
-- **8-PR4 🔄 本 commit** — 文档统一更新到 2026-06-09 真实状态 + 9 个空 spec 文件清理(directory-structure / quality-guidelines / logging-guidelines / component-guidelines / hook-guidelines / type-safety)
-- **8-PR5 ⏳ 待办** — 创建 `STRUCTURE.md` 详细记录最终目录结构 + 模块职责
-
-**完成定义**:
-- ✅ `pnpm tauri build` 干净通过
-- ✅ `cargo test --lib` 全部 pass
-- ✅ 7 个文档(CLAUDE.md / README.md / TECH.md / DESIGN.md / HANDOFF.md / IMPLEMENTATION.md / BACKLOG.md)同步校准到 2026-06-09 状态
-- ⏳ `STRUCTURE.md` 创建(8-PR5)
-
----
-
-## 3. 待办与下一步
-
-**最后更新**:2026-06-10
-
-### 3.1 已收尾(milestone 表,权威以 `git log --oneline -20` 为准)
-
-| 步骤 | 内容 | 阶段 | 状态 |
-|------|------|------|------|
-| 1 | 骨架 + LLM 直连 | MVP | ✅ 已完成(2026-06-04) |
-| 2 | Tool Calling(agent loop + 3 个 tool) | MVP | ✅ 已完成(2026-06-04) |
-| 3a | SQLite + Session 持久化 | MVP | ✅ 已完成(2026-06-05) |
-| 3b-1 | 项目基础结构 + 顶部 Tabs UI | MVP | ✅ 已完成(2026-06-05/06) |
-| 4 | Git 集成(worktree + opt-in attach / detach / delete) | MVP | ✅ 已完成(2026-06-07/08);auto commit 延后 |
-| 5 | WSL 体验 | MVP | ✅ spike-001 通过(2026-06-04) |
-| 6a | 多 Provider(Anthropic / OpenAI) | v1 | ✅ 已完成(2026-06-08/09) |
-| 8-PR1/2/3 | 代码重构(8-PR1 lib.rs / 8-PR2 db.rs / 8-PR3 前端) | 跨 | ✅ 已完成(2026-06-09) |
-| — | 路线图外:extended thinking / spike-005 follow-up 7 PR / 字体栈 / 6 UI bug 修复 / 工具集扩展 / step 4 follow-up / 多 Provider 4 PR | 额外 | ✅ 已完成 |
-| 3b-2 | ~~完整三栏 UI + rig-core 迁移~~ | — | ⛔ 废弃 (2026-06-09) |
-| 6b | MCP 暴露 | v1 | ⏸ 未开始 |
-| 5(原) | 嵌入式终端 + 权限系统 | v1 | 🔽 降为可选 |
-
-> ⚠️ **编号语义注意**:commit `05671f5` 标题写"步骤 6 — Anthropic extended thinking",跟路线图 §2.7 "步骤 6 = MCP + 多 Provider" 不一致。extended thinking 实际是路线图外的额外功能(在表里单列"—"),并非提前实现 MCP 步骤 6。详见 [§4 决策日志 2026-06-05 条](#2026-06-05--路线图状态校对步骤-3a-完成步骤-3b-暂缓extended-thinking-路线图外完成)。
-
-### 3.2 当前进行
-
-- 🔄 **Step 8 (代码重构与文档清理)** — 8-PR4 本 commit(文档更新 + 9 个空 spec 文件清理);接下来 8-PR5 STRUCTURE.md
-
-### 3.3 下一步候选(三选一,详见 [HANDOFF §2 当前状态](./HANDOFF.md#2-当前进度))
-
-- 完成 Step 8 → **8-PR5 STRUCTURE.md** (收尾,优先级最高)
-- 主线推进 → **步骤 6b (MCP 暴露)** 或 **步骤 5 (嵌入式终端 + 权限系统)**
-- 收尾已知 issue → **bug 1+2 position 修复**(RDP 双显示器场景,候选 `setFullscreen(true)` 兜底 — 详见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md`)
-
-**已沉淀(spike 期间完成的)—— 不必再做,出问题查这里**:
-- ✅ Tauri 在 WSL 跑得通 + 中文对齐 → [spikes/001](./spikes/001-wsl-tauri-window.md)
-- ✅ Rust 端 LLM 客户端手写 reqwest + SSE 可走(GLM 3 处差异已知)→ [spikes/002](./spikes/002-reqwest-anthropic-sse.md)
-- ✅ WSL 环境坑 → [HACKING-wsl.md](./HACKING-wsl.md)
-- ✅ LLM 客户端实施 checklist + 切真 Claude 重测清单 → [HACKING-llm.md](./HACKING-llm.md)
-
-**已决定(不再讨论)**:
-- [x] 前端框架:**Vue 3 + Vite + Pinia**(见 [TECH §1.1](./TECH.md#11-锁定项经过调研验证))
-- [x] 前端 UI 库:**reka-ui** / shadcn-vue primitives(见 [TECH §1.4](./TECH.md#14-扩展功能新增依赖随候选功能引入))
-- [x] 包管理器:**pnpm**
-- [x] LLM 客户端:**手写 reqwest + SSE + 自研 Provider trait**(步骤 2 继续手写,2026-06-09 决策放弃 rig-core 改自研 `Provider` trait,见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [spike-002 §"结论"](./spikes/002-reqwest-anthropic-sse.md#结论))
-- [x] LLM BASE_URL / model / key:**全部从 env 读**(便于切 wukaijin / 真 Claude / 其他)
-- [x] 工作目录:**WSL 内部**(`~/...` 或 `/usr/local/code/...`),不走 `/mnt/c`
-- [x] Agent Daemon 化:**v1 之后再说**,本项目 7 步不阻塞(见 §2.8 占位)
-
-**等做完步骤 1-2 再决定**:
-- [ ] SQLite schema 最终长什么样
-- [ ] Tool 注册的最佳实践
-- [ ] Frontend 状态管理边界(Pinia store 怎么分)
-
-**候选功能(来自 [BACKLOG.md](./BACKLOG.md))的待评估**:
-- [ ] 是否要做 Skill / Memory / Role(技术选型已就绪,详见 BACKLOG §2 + 远期（v3+）段)
-- [ ] 是否做生成式 UI(详见 BACKLOG 远期（v3+）段)
-- [ ] 是否做飞书 channel(会触发架构变更,详见 BACKLOG 远期（v3+）段)
-
----
-
 ## 4. 决策日志
 
-> 按时间倒序记录。每次重大决策都加一条,包含"为什么"。
+> 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
+
+### 2026-06-10 — V2 路线图重排 + 技术线路愿景收敛(单一 source of truth = ROADMAP.md)
+
+- **决策**:把路线图与待办从本文件抽出,新建 [`docs/ROADMAP.md`](./ROADMAP.md) 作为**唯一**路线图入口。本文件变成纯"决策档案"(保留 §1 自研决策 + §4 决策日志)。
+  - **原因**:路线图 / 待办 / 决策日志 / 自研决策 4 类内容塞一个文件,职责不清;路线图随版本(V2 / V3)整体迭代时,跟决策日志混在一起改,会污染历史档案;单一入口便于其他文档 / 顶层入口(CLAUDE.md / README.md)统一引用
+  - **依据**:D1(SoT = ROADMAP.md)+ D3(IMPLEMENTATION.md 简化方案 b 中等)
+- **决策**:DESIGN.md §3 重构为"项目能力边界",删除原 MVP / v1 / v2 / v3+ 4 档产品版语义
+  - **原因**:产品版语义(整体 v1 = MVP 后第一版)与 V2 重排后的 4 档不重叠,易混淆;V2 4 档(🟢🟡🟠🔴)取代了原"产品版"分层,职责归 ROADMAP
+  - **依据**:D5(DESIGN §3 重构方案 a = 项目能力边界)
+- **决策**:BACKLOG.md 顶层 Phase 1 / Phase 2 优先级标记删除,优先级归 ROADMAP
+  - **原因**:BACKLOG 是技术评估,不适合同时承担"排期"职责;排期是路线图视角,归 ROADMAP
+  - **依据**:D4(综合删除/重构策略)
+- **决策**:顶层入口 3 文件(项目根 `CLAUDE.md` / `README.md` + `docs/README.md`)重写"项目概述" / "当前状态" 段为简短导航 + 指向 ROADMAP.md
+  - **原因**:顶层入口是读者最先看的,内嵌详细路线图会造成文档多源真相
+  - **依据**:D4 顶层入口策略
+- **决策**:ARCHITECTURE §2.4 实施映射表"步骤 N → 关卡"整段移除(归 ROADMAP)
+  - **原因**:步骤编号是旧 7 步路线图视角,V2 视角下不再有"步骤"概念
+  - **依据**:D6(历史极简,旧 7 步整段删除)
+- **决策**:**V2 路线图重排**(完整内容见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
+
+  **移除项**(明确不做):
+  - A1 xterm.js 嵌入式终端 — `shell` tool + 30K 落盘已覆盖
+  - A3 MCP 暴露 — 个人工具杠杆不足
+  - C5 Provider 限流(令牌桶)— 个人使用未撞限流
+
+  **升档 / 重新归类**:
+  - B5 Memory(user + project,2 层先做)从"v1 候选"升到 🟢 第一档
+  - C1 取消机制完整化从"打磨"升到 🟢 第一档
+  - A4 Token 用量统计从"打磨"升到 🟢 第一档
+  - D1 session 重命名 / 标记从"可选"升到 🟢 第一档
+  - A2 + B7 权限系统 + 多模式(合并工作组)从分散候选归到 🟡 第二档
+  - B6 = subagent(**不是**用户切角色)从"多角色"候选重命名为"Subagent",归 🟠 第三档(依赖 B5 Memory)
+  - B7 = mode 是 A2 权限系统的 UX 层,从独立"多模式"候选归到第二档的 A2 + B7 工作组
+  - B10 飞书 IM 推迟到 🔴 第四档(触发 daemon 化,重大架构变更)
+  - B11 云端同步推迟到 🔴 第四档
+
+  **4 档简表**:
+  - 🟢 第一档(立刻做,4 项):A4 / B5 / C1 / D1
+  - 🟡 第二档(接着做,7 项):A2+B7 / B3 / C3 / C4 / B2 / D2 / D3
+  - 🟠 第三档(缓做,8 项):B6 / B4 / B9 / C2 / C6 / B1 / A5-A6 / A7
+  - 🔴 第四档(最远远期,3 项):B8 / B10 / B11
+  - 🗑️ 移除(3 项):A1 / A3 / C5
+
+- **依据**:完整决策矩阵 D1-D6 见 [`.trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md`](../../.trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md)。
 
 ### 2026-06-07 — 工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard + Bash 落盘 + cat -n)
 
@@ -382,6 +200,6 @@
 
 ### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
 
-- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-1`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
-- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-2`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
-- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md FU-3`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
