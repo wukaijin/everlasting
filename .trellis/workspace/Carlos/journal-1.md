@@ -607,3 +607,41 @@ DB 新增 color_tag 列, Rust 新增 rename_session/set_session_color 两个 com
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 体验优化 — session 记忆 / 滚动 / 删除确认 / loading
+
+**Date**: 2026-06-11
+**Task**: 体验优化 P2 (F1-F4) / `06-11-session-loading`
+**Branch**: `main`
+
+### Summary
+
+F1 per-project last session 记忆(localStorage 键 `everlasting.lastSession_{projectId}`,对齐 lastActiveProjectId 模式)+ F2 发送后全程跟底滚动(forceFollowActive ref,用户上翻 >80px 停止,stream done 重置)+ F3 通用 ConfirmDialog 组件替换不可靠的原生 `window.confirm()`(空 session 直接删,有消息才弹确认)+ F4 session 切换 loading spinner(switchSession 合并双 IPC 为单 ensureLoaded,reloadAfterFinalize 用 scrollAfterReload counter 避免位置抖动)。F5 耗时统计延后单独实施。`trellis-check` 子代理找到 ChatPanel.vue spinner CSS 误嵌进 header 块的 critical bug 并自动修复(`vue-tsc --noEmit` + `pnpm build` 通过)。
+
+### Main Changes
+
+- (Add details)
+- spec 更新: `.trellis/spec/frontend/popover-pattern.md` 加 ConfirmDialog component pattern + Tauri webview `window.confirm()`/`alert()`/`prompt()` gotcha
+- spec index 同步: `.trellis/spec/frontend/index.md` Guidelines Index 表格更新
+- ROADMAP 标注: `docs/ROADMAP.md` §1.2 加 "体验优化批次 F1-F4" 条目(F5 备注延后)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0140502` | (see git log) |
+
+### Testing
+
+- [OK] `pnpm exec vue-tsc --noEmit` 通过
+- [OK] `pnpm build` 通过
+- [ ] 手动验证 5 个功能 golden path (建议:打开 Tauri dev 走一遍切换项目 / 发送 / 上翻 / 删除 / 切换 session)
+
+### Status
+
+[OK] **Completed (F1-F4) / F5 Deferred**
+
+### Next Steps
+
+- F5 LLM 耗时统计(单独 task,涉及 Rust DB migration `ttfb_ms`/`gen_ms`/`total_ms` + `tool_results.duration_ms`,前端计时 `Date.now()` 落 messages 字段)
