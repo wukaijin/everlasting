@@ -28,6 +28,27 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-11 — B5 Memory 注入位置重构:system_prompt 拼装 → synthetic user message + cache_control
+
+- **决策**:把 4 个 instructions 文件(User / Project × CLAUDE.md / AGENTS.md)从"`system_prompt` 字符串前缀"切到"synthetic user message 数组头部"路径,首块带 `cache_control: Some(CacheControl::Ephemeral)` 让 Anthropic 端命中 cache
+  - **原因**:B5 复审(grill-me 9 题)诊断出原实现做了 3 件事:①读 4 文件 → ②拼 system_prompt → ③每轮 `clone()` 重新发,但**没有任何 cache_control**,所以"每轮都发 100KB × 4"既不省 token 也是"实现的是 System Instruction Injection,不是 Memory"。验证文档 `docs/_reviews/FINDINGS-b5-cache-wire-validation.md` 进一步确认:**Claude Code / Aider 不是把 CLAUDE.md 放 user message,Claude Code 实际走 system block + cache_control**——复审原方案 A 的"业界参考"论断不准确
+  - **依据**:`docs/_reviews/REVIEW-b5-memory-grill-2026-06-10.md`(复审决议 §3 Q6)+ `docs/_reviews/FINDINGS-b5-cache-wire-validation.md`(P0/P1 验证)+ Anthropic docs `https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching`(`cache_control: { type: "ephemeral" }` 可挂在 system / tools / user message 任意 content block 上)
+  - **后果**:
+    1. **token 成本**:20-turn session 从 8MB input tokens 降到 1.26MB(6× 节省,Anthropic 5min cache TTL 内连续 turn 命中)
+    2. **schema 扩展**:`ContentBlock::Text` 加 `cache_control: Option<CacheControl>` 字段(`skip_serializing_if = Option::is_none`);新增 `CacheControl::Ephemeral` enum(预留 `Persistent` 1-hour TTL 扩展位)
+    3. **wire 层**:`WireMessage` 新增 `UserBlocks { blocks: Vec<WireBlock> }` 变体,只在检测到 user role 任意 text block 有 `cache_control` 时走新路径(否则维持原 `User { content: String }` 串接行为,热路径无开销);`strip_unsupported` 透传 UserBlocks;`openai::build_http_body` 把 UserBlocks flatten 成 string + 丢弃 cache_control(OpenAI Chat Completions 无 prompt-cache marker)
+    4. **loader API**:`build_banner` / `build_layers_block` **保留**(前端 `MemoryPreview` 还在用 String 形式显示),新增 `build_instructions_blocks(layers) -> Vec<ContentBlock>`(返回 block 数组,首块 banner + cache_control,后续块 AGENTS.md 标 `<primary>` / CLAUDE.md 标 `<reference>`)
+    5. **agent loop**:`agent/chat.rs` 在 20-turn 循环前 insert 两条 synthetic message 到 `messages` 头部(1 个 user 携带 instructions,1 个 assistant ack `Understood. I will follow these instructions throughout our session.`);`system_prompt` 退化为 `base_prompt`;synthetic message **不进 DB**(`persist_turn` 只持久化 user-typed 和 in-loop assistant/tool 消息),所以 reload session 时不出现,前端 `MessageList.visibleMessages` 看不到——零 UI 影响
+    6. **未来 Runtime Memory 复用**:Runtime Memory(V2 2 期 `use_memory` tool)走 user message + tool 路径,与本决议正交——Instructions 负责"静态约束",Memories 负责"动态知识",两者职责清晰
+- **决策**:选用方案 B(切到 messages + schema 改动 ~170 行)而非方案 C(留在 system + cache_control ~75 行)
+  - **原因**:用户(经 P0/P1 验证文档的 4 选 1)优先考虑**路径统一**——所有"非 LLM 输出的内容"(Instructions 后续 + Runtime Memory)都走 user message 注入,wire 层有统一抽象(chat_message_to_wire_messages),schema 一次扩展终身受益;接受多 ~100 行代码,换取架构一致性
+  - **依据**:`docs/_reviews/FINDINGS-b5-cache-wire-validation.md` §六(4 方案对比表)
+  - **后果**:5 个 backend 文件改动(types.rs / wire.rs / openai.rs / memory/loader.rs / agent/chat.rs)+ 4 个 frontend 文案替换,~140 行净增 + 4 新测试;前端零逻辑改动(synthetic 不进 DB → 不渲染)
+- **决策**:synthetic user message **不持久化**到 SQLite
+  - **原因**:①reload session 时不出现(synthetic 是"per-turn 重新构造的 ephemeral state",不是"per-session 持久化数据");②避免污染 DB 文本搜索(用户搜 "instructions" 不应命中 synthetic);③对齐 Claude Code 的行为(CLAUDE.md 在 system,reload session 后 system 重新构造,不进 conversation history DB)
+  - **依据**:`agent/chat.rs:332-340` 已有 `persist_turn` 只持久化 last user-typed message 的模式,本决议是该模式的延伸
+  - **后果**:`grep memory app/src-tauri/src/db/` 不需要改 schema;前端 `MessageList` 的 `visibleMessages` filter 不用动(因为根本不会看到 synthetic message)
+
 ### 2026-06-10 — B5 Memory 落地(User + Project 2 层先做,PR1 后端)
 
 - **决策**:`memory::loader` 拆 `mod.rs` / `file.rs` / `tokens.rs` / `loader.rs` / `watcher.rs` / `tests.rs` 6 文件,接口位 (`MemoryKind::Session` / `Runtime`) 占位 + `#[allow(dead_code)]` 标注,V2 2 期再启用

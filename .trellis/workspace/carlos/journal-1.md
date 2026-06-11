@@ -934,3 +934,80 @@ B5 落地后 Memory dropdown 在 ProjectTabs 中部时 popover (right:0 + min-wi
 ### Next Steps
 
 - None - task complete
+
+---
+
+**Date**: 2026-06-11
+**Task**: B5 Memory 重构:instructions 注入从 system_prompt 切到 user message + cache_control
+**Branch**: `main` (待 commit)
+**Source**: 复审文档 `docs/_reviews/REVIEW-b5-memory-grill-2026-06-10.md` + 验证文档 `docs/_reviews/FINDINGS-b5-cache-wire-validation.md`
+
+### Summary
+
+B5 复审 (grill-me 9 题) 诊断出原实现不是 Memory 而是 System Instruction Injection,且每轮 clone 100KB×4 instructions 进 system_prompt,既无 cache_control 也没省 token。本任务按复审决议 §6 改"切到 user message + assistant ack"路径,但**额外补上 cache_control: ephemeral** 让 Anthropic 端命中 cache(从 8MB 降到 1.26MB per 20-turn session,6× 节省)。
+
+### 实现路径
+
+**方案**:方案 B(用户从 P0/P1 验证文档的 4 选 1 中明确选择 B,即"全面重构"——加 schema 字段 + wire 层 block 边界保留 + 4 个文件改动)。
+
+**改动文件**(5 backend + 4 frontend):
+
+| 文件 | 改动 |
+|---|---|
+| `app/src-tauri/src/llm/types.rs` | 新增 `CacheControl` enum(`Ephemeral` 变体);`ContentBlock::Text` 加 `cache_control: Option<CacheControl>` 字段(`skip_serializing_if = Option::is_none`) |
+| `app/src-tauri/src/llm/provider/wire.rs` | `WireBlock::Text` 加 cache_control 字段;新增 `WireMessage::UserBlocks` 变体;`chat_message_to_wire_messages` 检测到 cacheable block 时切到 UserBlocks 路径(不串接);inverse 路径透传 |
+| `app/src-tauri/src/llm/provider/openai.rs` | `build_http_body` 加 `UserBlocks` 分支——flatten text 块,drop cache_control(OpenAI Chat Completions 无 prompt-cache marker) |
+| `app/src-tauri/src/memory/loader.rs` | 新增 `build_instructions_blocks(layers) -> Vec<ContentBlock>`,首块 banner 带 `cache_control: Ephemeral`,后续块 AGENTS.md 标 `<primary>`、CLAUDE.md 标 `<reference>` |
+| `app/src-tauri/src/agent/chat.rs` | 删 lines 304-325(system_prompt 拼装);改在 20-turn 循环前 insert synthetic user message + assistant ack 到 messages 数组头部;`system_prompt = base_prompt` |
+| `app/src/components/chat/ChatPanel.vue` | `title` 改"查看项目指令文件" |
+| `app/src/components/memory/MemoryModal.vue` | DialogTitle 改"项目指令文件" |
+| `app/src/components/memory/MemoryPreview.vue` | 7 处文案改"指令文件" |
+| `app/src/components/settings/MemoryTab.vue` | intro 文案改 |
+
+**新测试**(共 4 个,全部通过):
+- `types.rs` 更新 5 个 fixture(ContentBlock::Text 加 `cache_control: None` 字面量)
+- `wire.rs` 2 个新 round-trip 测试:`round_trip_preserves_cache_control_on_text_block` 验证 cache marker 在 ChatRequest → Wire → ChatMessage 路径不丢;`user_blocks_with_cache_control_are_not_concatenated` 验证 cacheable 块不被串接
+- `memory/tests.rs` 2 个新测试:`instructions_blocks_empty_when_no_layer_loaded` + `instructions_blocks_marks_only_first_block_as_cacheable`
+- `wire.rs` + `openai.rs` + `db/tests.rs` 现有 6 个 round-trip 测试 fixture 更新 cache_control 字面量
+
+### 关键设计决策
+
+1. **Wire 层新增 UserBlocks 变体**(不是改 User):保持热路径(普通 user text)走 `User { content: String }` 不变,新路径(cacheable)走 `UserBlocks { blocks: Vec<WireBlock> }`。Anthropic 走 block array + cache_control,OpenAI 走 flatten 后的 string。
+2. **不持久化 synthetic messages**:agent loop 的 `persist_turn` 只持久化 user-typed 和 in-loop assistant/tool 消息,synthetic message 永远在内存中,reload session 时不会出现,前端 `MessageList.visibleMessages` 看不到——零 UI 影响。
+3. **assistant acknowledgment 是必须的**:Anthropic 接受 user → user 模式但显式 ack 更清晰,对齐 Claude Code / Aider 的做法。
+4. **cache marker 只放第一块**:Anthropic 规则"最后一个 cache_control 块是 breakpoint",所以只有 banner 块标记,后续文件体块不标记。
+
+### Token 成本对比
+
+| 方案 | 20-turn session |
+|---|---|
+| **当前(无 cache)** | 100KB × 4 × 20 = 8MB input tokens |
+| **复审原方案 A**(synthetic user message 无 cache_control) | 8MB(同上,无 cache) |
+| **本方案 B**(切到 messages + cache_control) | ~1.26MB(cache 命中后) |
+| **方案 C**(留 system + cache_control,~75 行) | ~1.26MB(同 B 收益,代码量更少) |
+
+注:用户从 P0/P1 验证文档的 4 个方案中选 B 而非 C——优先考虑 schema 路径统一(未来 Runtime Memory 也走 user message 注入),接受更多代码量。
+
+### Testing
+
+- [OK] `cargo test --lib` — 308 passed, 0 failed(304 原有 + 4 新)
+- [OK] `pnpm build` — vue-tsc --noEmit + vite build 通过
+- [待验证] `cargo build`(用户手动跑,确认 Tauri 整体编译)
+- [待验证] 真实 LLM 调用验证 cache 命中(用 `FINDINGS-b5-cache-wire-validation.md` §四的 curl 脚本)
+
+### Status
+
+[OK] **代码完成,待 commit**
+
+### Next Steps
+
+- 用户决定是否 commit(可能需要分多个 commit:schema / wire / loader / agent / frontend)
+- 写 ADR 进 `docs/IMPLEMENTATION.md §4`:instructions 走 user message + cache_control 决策记录
+- `trellis-before-dev` skill 的 grill 流程补"先问'是什么',再问'怎么做'"检查项(避免下次重蹈"实现不是 Memory"覆辙)
+
+### 关键参考
+
+- 复审文档: `docs/_reviews/REVIEW-b5-memory-grill-2026-06-10.md`
+- P0/P1 验证: `docs/_reviews/FINDINGS-b5-cache-wire-validation.md`
+- Anthropic cache docs: `https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching`
+- 实施计划: `/home/carlos/.claude/plans/dazzling-coalescing-teapot.md`

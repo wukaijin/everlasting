@@ -56,3 +56,6 @@ app/src/assets/fonts/source/
 *.sqlite
 *.sqlite-journal
 .cache/
+
+
+reasonix.toml

@@ -126,6 +126,33 @@ pub fn build_banner(layers: &[MemoryLayer]) -> String;
 pub fn build_layers_block(layers: &[MemoryLayer]) -> String;
 ```
 
+> **2026-06-11 B5 refactor**: `build_banner` / `build_layers_block`
+> are still part of the public surface (the frontend `MemoryPreview`
+> consumes them as `String` to render the in-app preview panel),
+> but they are **not** what the agent loop uses to inject
+> instructions into the LLM context. Use `build_instructions_blocks`
+> for that — it returns a `Vec<ContentBlock>` shaped for the
+> synthetic user message and carries `cache_control: Some(Ephemeral)`
+> on the first block so Anthropic can cache the 4 instruction
+> files across the 20-turn loop. See `docs/IMPLEMENTATION.md §4`
+> 2026-06-11 entry for the full rationale.
+
+```rust
+// app/src-tauri/src/memory/loader.rs (added 2026-06-11)
+pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock>;
+// Returns an empty Vec when no layer is Loaded (caller skips the
+// synthetic message entirely on a fresh install).
+// Non-empty Vec shape:
+//   Block 0: banner text + cache_control: Some(CacheControl::Ephemeral)
+//            — the cache breakpoint on subsequent turns.
+//   Blocks 1..N: per loaded layer, in canonical order, with
+//            AGENTS.md wrapped in <primary instructions>...</primary>
+//            and CLAUDE.md in <reference>...</reference>.
+//            No cache_control on body blocks (Anthropic's
+//            "last cache_control block is the breakpoint" rule
+//            means only Block 0 needs the marker).
+```
+
 ```rust
 // app/src-tauri/src/memory/tokens.rs
 pub async fn count_tokens(text: &str) -> u32;  // cl100k_base
