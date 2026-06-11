@@ -77,6 +77,8 @@ pub fn run() {
             commands::sessions::load_session,
             commands::sessions::delete_session,
             commands::sessions::diff_worktree,
+            commands::sessions::rename_session,
+            commands::sessions::set_session_color,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,

@@ -130,6 +130,8 @@ export interface SessionSummary {
   output_tokens_total: number | null;
   cache_creation_total: number | null;
   cache_read_total: number | null;
+  /** D1 (Color Tag): palette index 0-7, null = no mark. */
+  color_tag: number | null;
 }
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the
@@ -517,6 +519,19 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  // D1: rename + color tag
+  async function renameSession(sessionId: string, newTitle: string) {
+    await invoke("rename_session", { sessionId, newTitle });
+    const s = sessions.value.find((x) => x.id === sessionId);
+    if (s) s.title = newTitle.slice(0, 80);
+  }
+
+  async function setSessionColor(sessionId: string, colorTag: number | null) {
+    await invoke("set_session_color", { sessionId, colorTag: colorTag });
+    const s = sessions.value.find((x) => x.id === sessionId);
+    if (s) s.color_tag = colorTag;
+  }
+
   // -----------------------------------------------------------------------
   // Step 4 follow-up: opt-in worktree actions
   //
@@ -865,6 +880,8 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     switchSession,
     deleteSession,
+    renameSession,
+    setSessionColor,
     attachWorktree,
     detachWorktree,
     deleteWorktree,

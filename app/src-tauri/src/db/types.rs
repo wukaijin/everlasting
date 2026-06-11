@@ -168,39 +168,16 @@ pub struct SessionRow {
  pub model: String,
  pub project_id: String,
  pub current_cwd: String,
- /// On-disk path to the session's git worktree. `None` for
- /// sessions that have never been attached (state `none`) or
- /// have been detached (state `detached` — see
- /// `last_worktree_path` for the historical path). Tools fall
- /// back to `current_cwd` when this is `None`.
  pub worktree_path: Option<String>,
- /// Current worktree state (see [`WorktreeState`]).
  pub worktree_state: WorktreeState,
- /// Path of the most recently detached worktree. `None` unless
- /// the session has been in `active` state at some point.
- /// Preserved across detach so the UI can show a "上次 worktree"
- /// chip that lets the user re-attach or inspect the branch.
  pub last_worktree_path: Option<String>,
- /// PR4 of multi-model: per-session model override. `None` when
- /// the session uses the global default model (the chat command's
- /// `resolve_chat_provider` falls back to `app_config.default_model_id`
- /// when this is NULL or the referenced model was deleted). This is a
- /// soft FK to `models.id` — no `REFERENCES` constraint so legacy rows
- /// and dangling references don't break INSERTs.
  pub model_id: Option<String>,
- /// A4 (Token Usage Tracking): per-session cumulative token
- /// usage. All four are `None` for pre-A4 sessions (the
- /// migration is non-destructive and the columns are
- /// nullable). The frontend renders `None` as "—" with the
- /// "升级前未统计" tooltip; the first LLM turn after the
- /// upgrade starts the counters from 0 and they tick up
- /// per turn. See
- /// `.trellis/spec/backend/llm-contract.md` "Scenario: Token
- /// Usage Tracking" for the schema.
  pub input_tokens_total: Option<i64>,
  pub output_tokens_total: Option<i64>,
  pub cache_creation_total: Option<i64>,
  pub cache_read_total: Option<i64>,
+ /// D1 (Color Tag): palette index 0-7, NULL = no mark.
+ pub color_tag: Option<i32>,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -213,27 +190,16 @@ pub struct SessionSummary {
  pub preview: String,
  pub project_id: String,
  pub current_cwd: String,
- /// Mirror of [`SessionRow::worktree_path`]. `None` for sessions
- /// in `none` or `detached` state.
  pub worktree_path: Option<String>,
- /// Mirror of [`SessionRow::worktree_state`].
  pub worktree_state: WorktreeState,
- /// Mirror of [`SessionRow::last_worktree_path`].
  pub last_worktree_path: Option<String>,
- /// PR4 of multi-model: per-session model override. `None` when the
- /// session uses the global default model. Soft FK to `models.id`.
  pub model_id: Option<String>,
- /// A4: per-session cumulative token usage. Mirrors
- /// [`SessionRow`]. The SessionList component reads this to
- /// render the optional "X% / 200K" chip on each session
- /// card. (Today the chat-input hint is the canonical place
- /// to see the number, but the SessionList summary carries
- /// the data so a future PR can wire up a session-card
- /// indicator without re-loading.)
  pub input_tokens_total: Option<i64>,
  pub output_tokens_total: Option<i64>,
  pub cache_creation_total: Option<i64>,
  pub cache_read_total: Option<i64>,
+ /// D1 (Color Tag): palette index 0-7, NULL = no mark.
+ pub color_tag: Option<i32>,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

@@ -195,3 +195,28 @@ pub async fn delete_session(
         .await
         .map_err(|e| format!("delete_session failed: {}", e))
 }
+
+#[tauri::command]
+pub async fn rename_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    new_title: String,
+) -> Result<(), String> {
+    if new_title.trim().is_empty() {
+        return Err("rename_session: title must not be empty".to_string());
+    }
+    db::rename_session(&state.db, &session_id, &new_title)
+        .await
+        .map_err(|e| format!("rename_session failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn set_session_color(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    color_tag: Option<i32>,
+) -> Result<(), String> {
+    db::set_session_color(&state.db, &session_id, color_tag)
+        .await
+        .map_err(|e| format!("set_session_color failed: {}", e))
+}

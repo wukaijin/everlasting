@@ -324,6 +324,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  add_session_column_if_missing(pool, "cache_creation_total", "INTEGER").await?;
  add_session_column_if_missing(pool, "cache_read_total", "INTEGER").await?;
 
+ // --- D1 (Session Rename + Color Tag): per-session color mark.
+ // Nullable INTEGER, 0-7 = palette index, NULL = no mark.
+ add_session_column_if_missing(pool, "color_tag", "INTEGER").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

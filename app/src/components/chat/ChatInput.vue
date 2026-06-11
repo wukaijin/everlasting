@@ -42,6 +42,7 @@ import ModelSelect from "./ModelSelect.vue";
 import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
+import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -97,6 +98,15 @@ const usageLevel = computed<TokenUsageLevel | null>(() => {
   if (!u) return null;
   const pct = u.input_tokens / currentModelContextWindow.value;
   return tokenUsageLevel(pct);
+});
+
+// D1: conditional background tint on chat-input__row from session color tag.
+const inputRowStyle = computed(() => {
+  const s = chatStore.sessions.find((x) => x.id === chatStore.currentSessionId);
+  if (!s || s.color_tag === null) return {};
+  const hex = colorTagHex(s.color_tag);
+  if (!hex) return {};
+  return { backgroundColor: hexToRgba(hex, 0.2) };
 });
 
 /** Auto-grow: reset height so the field shrinks when content is
@@ -161,7 +171,7 @@ function onEscKeydown() {
 
 <template>
   <footer class="chat-input" @keydown.escape.prevent="onEscKeydown">
-    <div class="chat-input__row">
+    <div class="chat-input__row" :style="inputRowStyle">
       <textarea
         ref="textareaEl"
         :value="input"

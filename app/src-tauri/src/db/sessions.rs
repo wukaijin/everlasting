@@ -40,8 +40,8 @@ pub async fn create_session(
  r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?)
+ worktree_path, worktree_state, last_worktree_path, model_id, color_tag)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL)
  "#,
  )
  .bind(session_id)
@@ -71,6 +71,7 @@ pub async fn create_session(
  output_tokens_total: None,
  cache_creation_total: None,
  cache_read_total: None,
+ color_tag: None,
  })
 }
 
@@ -87,6 +88,7 @@ pub async fn list_sessions(
  s.model_id,
  s.input_tokens_total, s.output_tokens_total,
  s.cache_creation_total, s.cache_read_total,
+ s.color_tag,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -112,6 +114,7 @@ pub async fn list_sessions(
  preview
  };
  let state_str: String = r.try_get("worktree_state")?;
+ let color_tag: Option<i32> = r.try_get("color_tag")?;
  Ok(SessionSummary {
  id: r.try_get("id")?,
  title: r.try_get("title")?,
@@ -127,6 +130,7 @@ pub async fn list_sessions(
  output_tokens_total: r.try_get("output_tokens_total")?,
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
+ color_tag,
  })
  })
  .collect()
@@ -143,7 +147,8 @@ pub async fn load_session(
  SELECT id, title, created_at, updated_at, model, project_id, current_cwd,
  worktree_path, worktree_state, last_worktree_path, model_id,
  input_tokens_total, output_tokens_total,
- cache_creation_total, cache_read_total
+ cache_creation_total, cache_read_total,
+ color_tag
  FROM sessions
  WHERE id = ?
  "#,
@@ -171,6 +176,7 @@ pub async fn load_session(
  output_tokens_total: r.try_get("output_tokens_total")?,
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
+ color_tag: r.try_get("color_tag")?,
  }
  }
  None => return Ok(None),
@@ -391,6 +397,53 @@ pub async fn set_worktree_state(
  .bind(state.as_str())
  .bind(worktree_path)
  .bind(last_worktree_path)
+ .bind(&now)
+ .bind(session_id)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// D1: Session rename + color tag
+// ---------------------------------------------------------------------------
+
+/// Rename a session. Truncates to 80 chars on the server side.
+pub async fn rename_session(
+ pool: &SqlitePool,
+ session_id: &str,
+ new_title: &str,
+) -> Result<(), sqlx::Error> {
+ let now = Utc::now().to_rfc3339();
+ let truncated: String = new_title.chars().take(80).collect();
+ sqlx::query(
+ r#"
+ UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?
+ "#,
+ )
+ .bind(&truncated)
+ .bind(&now)
+ .bind(session_id)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
+/// Set (or clear) a session's color tag. `None` or out-of-range clears the
+/// mark. Valid range: 0–7.
+pub async fn set_session_color(
+ pool: &SqlitePool,
+ session_id: &str,
+ color_tag: Option<i32>,
+) -> Result<(), sqlx::Error> {
+ let now = Utc::now().to_rfc3339();
+ let tag = color_tag.filter(|&t| (0..=7).contains(&t));
+ sqlx::query(
+ r#"
+ UPDATE sessions SET color_tag = ?, updated_at = ? WHERE id = ?
+ "#,
+ )
+ .bind(tag)
  .bind(&now)
  .bind(session_id)
  .execute(pool)

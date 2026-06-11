@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Session row schema + token usage columns 参考"}
+{"file": "docs/ARCHITECTURE.md", "reason": "16 阶段请求生命周期，确认 session 字段在 agent loop 中的使用位置"}
