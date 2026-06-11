@@ -40,7 +40,7 @@ const projectsStore = useProjectsStore();
       >
         <header class="memory-modal__header">
           <DialogTitle class="memory-modal__title">
-            Project Memory
+            项目指令文件
           </DialogTitle>
           <DialogClose as-child>
             <button type="button" class="memory-modal__close" aria-label="Close">

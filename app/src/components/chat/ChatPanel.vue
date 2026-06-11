@@ -370,7 +370,7 @@ if (typeof window !== "undefined") {
           v-if="projectsStore.currentProjectId"
           class="chat-panel__memory-btn"
           type="button"
-          title="查看项目 memory (CLAUDE.md / AGENTS.md)"
+          title="查看项目指令文件 (CLAUDE.md / AGENTS.md)"
           aria-label="Memory"
           @click="memoryModalOpen = true"
         >

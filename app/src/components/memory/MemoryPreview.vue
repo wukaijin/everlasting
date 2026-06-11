@@ -124,9 +124,9 @@ async function onOpenEditor(path: string) {
 
 // Header title. Slightly different wording per entry point.
 const headerTitle = computed<string>(() => {
-  if (props.kind === "user") return "User Memory";
-  if (props.kind === "project") return "Project Memory";
-  return "Memory";
+  if (props.kind === "user") return "用户指令文件";
+  if (props.kind === "project") return "项目指令文件";
+  return "指令文件";
 });
 
 const headerHint = computed<string>(() => {
@@ -136,7 +136,7 @@ const headerHint = computed<string>(() => {
   if (props.kind === "project") {
     return "项目根目录下的 CLAUDE.md + AGENTS.md(仅本项目可见)";
   }
-  return "所有 memory 文件(2 层 × 2 文件)";
+  return "用户 + 项目,共 4 个指令文件";
 });
 </script>
 
@@ -171,28 +171,28 @@ const headerHint = computed<string>(() => {
 
     <div v-if="store.error" class="memory-preview__error">
       <Icon name="warn" :size="14" />
-      <span>Memory 暂不可用:{{ store.error }}</span>
+      <span>指令文件暂不可用:{{ store.error }}</span>
     </div>
 
     <div
       v-if="!effectiveProjectId"
       class="memory-preview__empty"
     >
-      <p>请先选择一个项目以查看 memory 文件。</p>
+      <p>请先选择一个项目以查看指令文件。</p>
     </div>
 
     <div
       v-else-if="initialLoading && visibleLayers.length === 0"
       class="memory-preview__loading"
     >
-      加载 memory 文件中…
+      加载指令文件中…
     </div>
 
     <div
       v-else-if="visibleLayers.length === 0"
       class="memory-preview__empty"
     >
-      <p>该层下没有 memory 文件。</p>
+      <p>该层下没有指令文件。</p>
     </div>
 
     <div v-else class="memory-preview__list">
@@ -206,8 +206,8 @@ const headerHint = computed<string>(() => {
 
     <footer class="memory-preview__footer">
       <p>
-        Memory 文件每 <strong>1 秒</strong> 自动监听变更;
-        新建 memory 文件需重启 session 生效。
+        指令文件每 <strong>1 秒</strong> 自动监听变更;
+        新建文件需重启 session 生效。
         详细规范见
         <code>docs/IMPLEMENTATION.md</code> §4(B5 决策)。
       </p>

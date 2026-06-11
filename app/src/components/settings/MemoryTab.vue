@@ -17,8 +17,7 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
 <template>
   <div class="memory-tab">
     <p class="memory-tab__intro">
-      您的个人 memory 文件 — 由 agent 在每个 chat 请求的
-      <code>⑤a 上下文构造</code> 阶段自动加载(全局,所有项目可见)。
+      您的个人指令文件 — 在 session 启动时自动注入到对话上下文中(全局,所有项目可见)。
       点击展开预览;修改后 1 秒内自动重新加载。
     </p>
     <MemoryPreview kind="user" />
