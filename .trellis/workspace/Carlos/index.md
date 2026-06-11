@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-06-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~575 | Active |
+| `journal-1.md` | ~609 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-06-11 | D1: session 重命名 + 8 色标记 | `61c617a`, `8c58499` | `main` |
 | 11 | 2026-06-11 | C1 取消机制完整化 | `c4bc7eb` | `main` |
 | 10 | 2026-06-10 | A4 Token 用量统计 | `3748793` | `main` |
 | 9 | 2026-06-10 | V2 路线图重排 + 技术线路愿景收敛到 docs/ROADMAP.md | `f995cb6`, `d744749` | `main` |
