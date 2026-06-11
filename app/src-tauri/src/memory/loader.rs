@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use crate::llm::types::{CacheControl, ContentBlock};
 use crate::memory::file::{load_layer, resolve_path, user_dir};
 use crate::memory::types::{LayerStatus, MemoryKind, MemoryLayer, MemorySource};
 
@@ -285,6 +286,83 @@ pub fn build_layers_block(layers: &[MemoryLayer]) -> String {
             out.push_str(&section);
         }
     }
+    out
+}
+
+/// Build the cacheable content blocks for the synthetic
+/// "instructions" user message injected at the head of every
+/// agent-loop invocation.
+///
+/// B5 refactor (2026-06-11): the previous design concatenated
+/// the 4 instruction files into the `system_prompt` and sent
+/// the entire string on every turn of the 20-turn loop (≈ 8 MB
+/// of input tokens per session with all 4 files at 100 KiB).
+/// This function produces a block-shaped payload instead:
+///
+/// - The first block is the banner from [`build_banner`] and
+///   carries `cache_control: Some(CacheControl::Ephemeral)`.
+///   Anthropic reads this as a cache breakpoint: everything
+///   before it (on subsequent turns within the 5-min TTL)
+///   becomes eligible for a cache hit, billed at 0.1× the input
+///   rate. The banner is always the first block, so the
+///   breakpoint is at a stable position relative to the
+///   instructions content that follows.
+/// - Subsequent blocks (one per loaded layer, in canonical
+///   order: User CLAUDE → User AGENTS → Project CLAUDE →
+///   Project AGENTS) carry the file body. AGENTS.md is wrapped
+///   in `<primary instructions>...</primary>` because it is
+///   written specifically for Everlasting; CLAUDE.md is wrapped
+///   in `<reference>...</reference>` because it is the
+///   Claude-Code interop file (see review §3 Q4). Neither
+///   carries `cache_control` — only the banner block is the
+///   cache marker, per Anthropic's "last cache_control block is
+///   the breakpoint" rule.
+///
+/// `Missing` / `Error` layers are skipped (the agent silently
+/// absorbs them, the same way `build_layers_block` does).
+///
+/// Returns an empty `Vec` when NO layer is `Loaded` — the
+/// caller skips the synthetic message entirely on a fresh
+/// install.
+pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock> {
+    let loaded: Vec<&MemoryLayer> = layers
+        .iter()
+        .filter(|l| matches!(l.status, LayerStatus::Loaded))
+        .collect();
+    if loaded.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<ContentBlock> = Vec::with_capacity(loaded.len() + 1);
+
+    // Block 0: banner + cache_control: ephemeral. This is the
+    // cache breakpoint on subsequent turns.
+    out.push(ContentBlock::Text {
+        text: build_banner(layers),
+        cache_control: Some(CacheControl::Ephemeral),
+    });
+
+    // Blocks 1..N: per-layer file body, with AGENTS.md / CLAUDE.md
+    // priority wrapping per the B5 review §3 Q4 decision.
+    for layer in loaded {
+        let section = match layer.render_prompt_section() {
+            Some(s) => s,
+            None => continue, // defensive; the `Loaded` filter above already excludes this
+        };
+        let text = match layer.source {
+            MemorySource::Agents => {
+                format!("<primary instructions>\n{}\n</primary instructions>", section)
+            }
+            MemorySource::Claude => {
+                format!("<reference>\n{}\n</reference>", section)
+            }
+        };
+        out.push(ContentBlock::Text {
+            text,
+            cache_control: None,
+        });
+    }
+
     out
 }
 

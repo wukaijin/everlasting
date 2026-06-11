@@ -18,8 +18,10 @@ use std::sync::Arc;
 #[allow(unused_imports)]
 use crate::memory::file::{load_file, load_layer};
 use crate::memory::loader::{
-    all_paths, build_banner, build_layers_block, load_for_session, MemoryCache,
+    all_paths, build_banner, build_instructions_blocks, build_layers_block, load_for_session,
+    MemoryCache,
 };
+use crate::llm::types::{CacheControl, ContentBlock};
 use crate::memory::tokens::{count_tokens, ensure_initialized};
 use crate::memory::types::{LayerStatus, MemoryKind, MemorySource};
 use crate::memory::MAX_FILE_SIZE;
@@ -437,3 +439,88 @@ fn loaded_layer(
 // and through `MemoryCache` in the loader tests. The
 // `#[allow(unused_imports)]` below silences the "unused" lint
 // when the test is compiled in isolation.
+
+// ---- build_instructions_blocks (B5 cache_control refactor) ----
+
+/// When no layer is loaded, the builder returns an empty vec so
+/// the agent loop can skip the synthetic instructions message
+/// entirely (no banner, no cache marker, no message).
+#[test]
+fn instructions_blocks_empty_when_no_layer_loaded() {
+    let layers = vec![
+        missing_layer(MemoryKind::User, MemorySource::Claude),
+        missing_layer(MemoryKind::User, MemorySource::Agents),
+        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        missing_layer(MemoryKind::Project, MemorySource::Agents),
+    ];
+    let blocks = build_instructions_blocks(&layers);
+    assert!(blocks.is_empty());
+}
+
+/// When at least one layer is loaded, the builder produces:
+///
+/// - Block 0: the banner text with `cache_control: Some(Ephemeral)`
+///   (the Anthropic cache breakpoint).
+/// - Blocks 1..N: per loaded layer in canonical order, wrapped
+///   in `<primary>` for AGENTS.md and `<reference>` for CLAUDE.md
+///   (review §3 Q4 decision). No cache_control on the body blocks
+///   — only the first block is the marker.
+#[test]
+fn instructions_blocks_marks_only_first_block_as_cacheable() {
+    let layers = vec![
+        // First loaded: User CLAUDE.md → goes in block 1 as <reference>
+        loaded_layer(MemoryKind::User, MemorySource::Claude, "user-claude-body", 5),
+        // Second loaded: User AGENTS.md → block 2 as <primary>
+        loaded_layer(MemoryKind::User, MemorySource::Agents, "user-agents-body", 5),
+        missing_layer(MemoryKind::Project, MemorySource::Claude),
+        // Fourth loaded: Project AGENTS.md → block 3 as <primary>
+        loaded_layer(MemoryKind::Project, MemorySource::Agents, "project-agents-body", 5),
+    ];
+    let blocks = build_instructions_blocks(&layers);
+    // 1 banner + 3 loaded = 4 blocks
+    assert_eq!(blocks.len(), 4);
+
+    // Block 0: banner + cache_control: Ephemeral
+    match &blocks[0] {
+        ContentBlock::Text { text, cache_control } => {
+            assert!(text.starts_with("<system>已加载"));
+            assert!(text.contains("User CLAUDE.md"));
+            assert!(text.contains("User AGENTS.md"));
+            assert!(text.contains("Project AGENTS.md"));
+            assert_eq!(*cache_control, Some(CacheControl::Ephemeral));
+        }
+        other => panic!("expected Text block, got {:?}", other),
+    }
+
+    // Block 1: User CLAUDE.md → <reference> wrapper, no cache_control
+    match &blocks[1] {
+        ContentBlock::Text { text, cache_control } => {
+            assert!(text.starts_with("<reference>"));
+            assert!(text.contains("user-claude-body"));
+            assert!(text.ends_with("</reference>"));
+            assert_eq!(*cache_control, None);
+        }
+        other => panic!("expected Text block, got {:?}", other),
+    }
+
+    // Block 2: User AGENTS.md → <primary> wrapper, no cache_control
+    match &blocks[2] {
+        ContentBlock::Text { text, cache_control } => {
+            assert!(text.starts_with("<primary instructions>"));
+            assert!(text.contains("user-agents-body"));
+            assert!(text.ends_with("</primary instructions>"));
+            assert_eq!(*cache_control, None);
+        }
+        other => panic!("expected Text block, got {:?}", other),
+    }
+
+    // Block 3: Project AGENTS.md → <primary> wrapper, no cache_control
+    match &blocks[3] {
+        ContentBlock::Text { text, cache_control } => {
+            assert!(text.starts_with("<primary instructions>"));
+            assert!(text.contains("project-agents-body"));
+            assert_eq!(*cache_control, None);
+        }
+        other => panic!("expected Text block, got {:?}", other),
+    }
+}
