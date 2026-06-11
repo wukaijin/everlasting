@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "F5 落地后要在 'Scenario' 段追加 'Latency Tracking'(A4 'Token Usage Tracking' 已在的段),子代理需要看现有 scenario 格式(Good/Base/Bad 三档 + 24 必测项 + Wrong/Correct 对照)才能照着写新段"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "F5 的计时是 Anthropic / OpenAI 双 provider 都要走,子代理需要确认 WireMessage 跨协议中间层设计,避免在 provider 层写死 protocol-specific 字段(对齐 A4 决策:归一化在 provider,agent loop 拿的是 protocol-agnostic)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "R3 用 add_messages_column_if_missing 加 3 列 nullable + R6 session 累计走 SUM 查询,子代理需要看现有 migration / 探针 / ALTER 模式"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "R2 把 durationMs 嵌进 messages.content JSON 的 tool_result block,子代理需要看 tool_result 在 content 里的结构(ContentBlock::ToolResult 序列化形态),才能正确写 serde_json::Value::pointer_mut 路径"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "现有 { success, latencyMs, error } shape 是 latency_ms 字段命名的 precedent,F5 三列命名(ttfb_ms / gen_ms / total_ms)要保持 snake_case + ms 后缀一致性"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "R7 useLatencyStore 走 Pinia 模式,子代理需要看现有 store 写法(Pinia setup style / SSE listener 注入 / rehydrate seed 模式,跟 useChatStore / useConfigStore 对齐)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "R4 hover Tooltip 用 reka-ui Tooltip 组件,子代理需要看 reka-ui 现有用法(MemoryModal / SettingsModal 怎么引 Tooltip 的,避免重写 portal / arrow positioning 等细节)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "R4 '3.2s' 字号 / 颜色 / 间距 / R5 ToolCallCard statusText 旁耗时样式 / R6 session 底部 footer 视觉,都要走 design tokens,不能写死 hex"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "Tooltip 本质是 popover,需要看现有 popover 模式的 z-index / portal / arrow 处理(以防 reka-ui Tooltip 不够用需要 fallback)"}
+{"file": "archive/2026-06/06-10-a4-token-per-session-chatinput-hint/prd.md", "reason": "A4 prd 是 F5 的最近参考模板(跨层 + DB ALTER + agent loop + UI + spec 沉淀),子代理对照 A4 走 1 PR 全合节奏,确认 implement pattern 一致"}
+{"file": "archive/2026-06/06-11-session-loading/prd.md", "reason": "F5 原始 spec 在此 prd §F5(51-70, 97-103),子代理需要看原始 spec 的计时口径和展示位置定义,作为 F5 落地的 design authority"}

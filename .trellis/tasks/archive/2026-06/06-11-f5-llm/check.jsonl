@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "verify F5 落地后 'Scenario: Latency Tracking' 段是否被加入,Good/Base/Bad 三档 / 24 必测项 / Wrong/Correct 对照是否齐全,与 A4 'Scenario: Token Usage Tracking' 同构"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "verify ALTER 3 列 nullable 用 add_messages_column_if_missing 探针(无破坏性),旧 session 读到 NULL 不报错,索引 idx_messages_session_seq 不需要重建"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "verify tool:result 事件 payload 形态 / ContentBlock::ToolResult 序列化未破坏,R2 durationMs 嵌进 content JSON 后的 round-trip 正确(rehydrate 读回一致)"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "verify F5 latency_ms 命名(snake_case + ms 后缀)与 test-provider 的 latencyMs 形状一致,避免 IPC 字段命名分歧"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "verify useLatencyStore 走 Pinia setup style,SSE listener 注入 / rehydrate seed 模式与 useChatStore / useConfigStore 对齐,无 store 间循环依赖"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "verify R4 Tooltip 走 reka-ui 而非自写,hover 三行(TTFB / 生成 / 端到端)布局与项目其他 Tooltip 一致(MemoryModal hover 记忆条目)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "verify '3.2s' 字号 / 颜色 / 间距走 design tokens,无写死 hex / px;R6 session 底部 footer 与 A4 token usage hint 区域视觉协调"}
+{"file": "archive/2026-06/06-11-session-loading/prd.md", "reason": "verify F5 实施与原 §F5 spec 的计时口径(TTFB / 生成 / 端到端 / per-tool)、展示位置(消息角标 / ToolCallCard / session 底部)、持久化(ALTER + tool_results)三处一致;Acceptance Criteria 5 项全过"}
+{"file": "archive/2026-06/06-10-a4-token-per-session-chatinput-hint/prd.md", "reason": "verify F5 与 A4 的 1 PR 全合节奏一致:diff 估算 8-12 文件、commit message 一次说清、不拆 PR 中间态"}
