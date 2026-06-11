@@ -686,8 +686,15 @@ pub async fn chat(
                     &current_ctx,
                     Some(&read_guard),
                     Some(&session_id),
+                    token.clone(),
                 )
                 .await;
+                // C1: if the tool was cancelled, set the flag so the
+                // agent loop enters the cancel cleanup path below
+                // (persist partial turn + synthetic tool_result).
+                if token.is_cancelled() {
+                    cancelled = true;
+                }
                 // The shell tool (and any future tool that wants
                 // to move the agent's working directory) reports
                 // its new cwd through `update.new_cwd`.
@@ -719,6 +726,56 @@ pub async fn chat(
                     content: envelope_str,
                     is_error,
                 });
+
+                // C1: stop executing remaining tools once cancelled.
+                if cancelled {
+                    break;
+                }
+            }
+
+            // C1: if cancelled during tool execution, persist any
+            // tool results we did collect (partial results from
+            // the tool that was interrupted + results from earlier
+            // tools), then jump to the cancel cleanup path.
+            if cancelled {
+                let result_count = result_blocks.len();
+                if !result_blocks.is_empty() {
+                    let tool_result_msg = ChatMessage {
+                        role: Role::User,
+                        content: MessageContent::Blocks(result_blocks),
+                    };
+                    if let Err(e) = crate::db::persist_turn(
+                        &db,
+                        &session_id,
+                        tool_result_msg.role,
+                        &tool_result_msg.content,
+                        seq,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "failed to persist cancelled tool_result turn");
+                    }
+                    messages.push(tool_result_msg);
+                    tracing::info!(
+                        request_id = %rid,
+                        tool_results = result_count,
+                        "chat: cancelled during tool execution — persisted partial results"
+                    );
+                }
+                // Fall through to the existing cancel cleanup.
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                if let Err(e) = crate::db::touch_session(&db, &session_id).await {
+                    tracing::warn!(error = %e, "failed to touch session");
+                }
+                emit_chat_event(
+                    &app_handle,
+                    &rid,
+                    &ChatEvent::Done {
+                        stop_reason: Some("cancelled".to_string()),
+                        usage: None,
+                    },
+                );
+                return;
             }
 
             let tool_result_msg = ChatMessage {

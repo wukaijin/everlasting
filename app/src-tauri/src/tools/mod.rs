@@ -27,6 +27,8 @@ pub mod write_file;
 
 use std::path::PathBuf;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::llm::types::ToolDef;
 use crate::tools::read_guard::ReadGuard;
 
@@ -81,12 +83,46 @@ pub struct ToolContextUpdate {
 /// combination of arguments. The guard is a Tauri-managed `State`
 /// cloned in by `lib.rs::chat` so the dispatch signature stays
 /// uniform for tools that don't need it.
+///
+/// C1 (Cancel): `cancel` is a `CancellationToken` from the agent
+/// loop. The dispatch wraps every tool execution in `tokio::select!`
+/// so cancellation interrupts even long-running tools (e.g. shell).
+/// Tools that need custom cleanup (e.g. killing a child process)
+/// receive the token in their own execute signature; the outer
+/// select! provides a generic safety net for all tools.
 pub async fn execute_tool(
     name: &str,
     input: &serde_json::Value,
     ctx: &ToolContext,
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
+    cancel: CancellationToken,
+) -> (String, bool, ToolContextUpdate) {
+    // C1: generic cancel wrapper for all tools. The `biased;` ensures
+    // the cancel arm is polled first when both are ready, so a
+    // cancelled request returns immediately even if the tool future
+    // is also ready.
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            tracing::info!(tool = %name, "execute_tool: cancelled before/during tool execution");
+            ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default())
+        }
+        result = execute_tool_inner(name, input, ctx, guard, session_id, &cancel) => {
+            result
+        }
+    }
+}
+
+/// Inner dispatch without the cancel wrapper. Tools that need the
+/// token (e.g. shell for child.kill()) receive it here.
+async fn execute_tool_inner(
+    name: &str,
+    input: &serde_json::Value,
+    ctx: &ToolContext,
+    guard: Option<&ReadGuard>,
+    session_id: Option<&str>,
+    cancel: &CancellationToken,
 ) -> (String, bool, ToolContextUpdate) {
     match name {
         "read_file" => {
@@ -110,7 +146,7 @@ pub async fn execute_tool(
             ),
         },
         "shell" => {
-            let (out, is_err, update) = shell::execute(input, ctx, session_id).await;
+            let (out, is_err, update) = shell::execute(input, ctx, session_id, cancel).await;
             (out, is_err, update)
         }
         "grep" => {

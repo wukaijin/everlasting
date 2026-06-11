@@ -151,10 +151,16 @@ function submit() {
 }
 
 const sendDisabled = (): boolean => props.sending || !input.value.trim();
+
+function onEscKeydown() {
+  if (props.sending) {
+    onStop();
+  }
+}
 </script>
 
 <template>
-  <footer class="chat-input">
+  <footer class="chat-input" @keydown.escape.prevent="onEscKeydown">
     <div class="chat-input__row">
       <textarea
         ref="textareaEl"

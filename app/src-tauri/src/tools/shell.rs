@@ -35,7 +35,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use tokio::process::Command;
+use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::llm::types::ToolDef;
@@ -44,8 +46,6 @@ use crate::tools::{ToolContext, ToolContextUpdate};
 
 /// Max output before truncation (matches ARCHITECTURE.md §2.5.3).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-/// Command timeout in seconds (matches ARCHITECTURE.md §2.5.2).
-const TIMEOUT_SECS: u64 = 300;
 /// claude-code style threshold: outputs above this size spill to
 /// disk and the LLM gets a path instead of the full text.
 const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
@@ -54,6 +54,54 @@ const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
 const PREVIEW_BYTES: usize = 1 * 1024;
 /// Sub-directory under cwd where spilled outputs are written.
 const SPILL_DIR: &str = ".everlasting/outputs";
+
+/// Internal result from child process execution.
+struct ShellResult {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: i32,
+    cancelled: bool,
+}
+
+/// Kill a child process and collect whatever output was produced.
+async fn kill_and_collect(child: &mut Child) -> ShellResult {
+    // Best-effort kill.
+    let _ = child.kill().await;
+    // Wait for the process to exit so we don't leave a zombie.
+    let status = child.wait().await.ok();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_end(&mut stdout).await;
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_end(&mut stderr).await;
+    }
+    ShellResult {
+        stdout,
+        stderr,
+        exit_code: status.and_then(|s| s.code()).unwrap_or(-1),
+        cancelled: true,
+    }
+}
+
+/// Format stdout + stderr into a single string.
+fn format_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout_str = String::from_utf8_lossy(stdout);
+    let stderr_str = String::from_utf8_lossy(stderr);
+    let mut result = String::new();
+    if !stdout_str.is_empty() {
+        result.push_str(&stdout_str);
+    }
+    if !stderr_str.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str("[stderr]\n");
+        result.push_str(&stderr_str);
+    }
+    result
+}
 
 pub fn definition() -> ToolDef {
     ToolDef {
@@ -92,10 +140,18 @@ pub fn definition() -> ToolDef {
 /// `session_id` is currently unused by the shell tool itself, but we
 /// keep it in the signature for parity with the other tools in
 /// `mod.rs::execute_tool` — the dispatch is uniform.
+///
+/// C1 (Cancel): receives a `CancellationToken` so the child process
+/// can be killed on cancel. The flow is:
+/// 1. Spawn `sh -c <command>` as a background child process
+/// 2. `tokio::select!` between `child.wait()` and `cancel.cancelled()`
+/// 3. On cancel: `child.kill()` + collect partial stdout/stderr
+/// 4. On normal completion: collect full output as before
 pub async fn execute(
     input: &serde_json::Value,
     ctx: &ToolContext,
     _session_id: Option<&str>,
+    cancel: &CancellationToken,
 ) -> (String, bool, ToolContextUpdate) {
     let command = match input.get("command").and_then(|v| v.as_str()) {
         Some(c) => c,
@@ -131,7 +187,7 @@ pub async fn execute(
         }
     };
 
-    // 2. Configure the command. We use `sh -c` so the LLM can chain
+    // 2. Spawn the command. We use `sh -c` so the LLM can chain
     //    commands (`cmd1 && cmd2`, pipes, redirects). stdout AND
     //    stderr are captured so we can format the result.
     let mut cmd = Command::new("sh");
@@ -141,67 +197,82 @@ pub async fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // 3. Run with timeout. tokio::time::timeout wraps the future;
-    //    killing the underlying process is a TODO (best-effort: a
-    //    timeout still returns the partial output, the LLM can react).
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(TIMEOUT_SECS),
-        cmd.output(),
-    )
-    .await;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                format!("Failed to spawn command: {}", e),
+                true,
+                ToolContextUpdate::default(),
+            );
+        }
+    };
 
     let update = ToolContextUpdate {
         new_cwd: Some(validated_cwd.clone()),
     };
 
-    let (combined, exit_code, is_error) = match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            let mut result = String::new();
-            if !stdout.is_empty() {
-                result.push_str(&stdout);
-            }
-            if !stderr.is_empty() {
-                if !result.is_empty() {
-                    result.push('\n');
+    // 3. C1: race between child completion and cancellation.
+    //    On cancel, kill the child and collect whatever output
+    //    was produced so far.
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            tracing::info!("shell: cancellation requested, killing child process");
+            kill_and_collect(&mut child).await
+        }
+        status = child.wait() => {
+            match status {
+                Ok(status) => {
+                    let mut stdout = Vec::new();
+                    let mut stderr = Vec::new();
+                    // Best-effort read remaining output.
+                    if let Some(mut out) = child.stdout.take() {
+                        let _ = out.read_to_end(&mut stdout).await;
+                    }
+                    if let Some(mut err) = child.stderr.take() {
+                        let _ = err.read_to_end(&mut stderr).await;
+                    }
+                    ShellResult {
+                        stdout,
+                        stderr,
+                        exit_code: status.code().unwrap_or(-1),
+                        cancelled: false,
+                    }
                 }
-                result.push_str("[stderr]\n");
-                result.push_str(&stderr);
+                Err(e) => {
+                    return (
+                        format!("Failed to execute command: {}", e),
+                        true,
+                        update,
+                    );
+                }
             }
-
-            let exit_code = output.status.code().unwrap_or(-1);
-            if !result.is_empty() {
-                result.push_str(&format!("\n[exit code: {}]", exit_code));
-            } else {
-                result = format!("[exit code: {}]", exit_code);
-            }
-
-            let is_error = !output.status.success();
-            (result, exit_code, is_error)
-        }
-        Ok(Err(e)) => {
-            return (
-                format!("Failed to execute command: {}", e),
-                true,
-                update,
-            );
-        }
-        Err(_) => {
-            return (
-                format!("Command timed out after {} seconds", TIMEOUT_SECS),
-                true,
-                update,
-            );
         }
     };
 
-    // 4. Disk-spill: if output exceeds 30 KB, write the FULL output
+    // 4. Format output.
+    let mut combined = format_output(&result.stdout, &result.stderr);
+
+    let exit_code = result.exit_code;
+    if !combined.is_empty() {
+        combined.push_str(&format!("\n[exit code: {}]", exit_code));
+    } else {
+        combined = format!("[exit code: {}]", exit_code);
+    }
+
+    let is_error = !result.cancelled && exit_code != 0;
+
+    // 5. If cancelled, prepend marker so the LLM (and user) sees the
+    //    output was partial.
+    if result.cancelled {
+        combined = format!("[cancelled, partial output]\n{}", combined);
+        return (combined, true, update);
+    }
+
+    // 6. Disk-spill: if output exceeds 30 KB, write the FULL output
     //    to a file under `<validated_cwd>/.everlasting/outputs/` and
-    //    return a path + preview to the LLM. Note: we spill the full
-    //    combined text BEFORE the head+tail truncation, so the LLM
-    //    can `read_file` the whole thing if needed.
+    //    return a path + preview to the LLM.
     if combined.len() > DISK_SPILL_THRESHOLD {
         match spill_to_disk(&validated_cwd, &combined).await {
             Ok(path) => {
@@ -217,9 +288,6 @@ pub async fn execute(
                 return (msg, is_error, update);
             }
             Err(e) => {
-                // Falling back to inline truncation is better than
-                // dropping the output entirely; the LLM still sees
-                // something.
                 tracing::warn!(
                     error = %e,
                     cwd = %validated_cwd.display(),
@@ -229,7 +297,7 @@ pub async fn execute(
         }
     }
 
-    // 5. Inline path: apply the 50 KB head+tail truncation.
+    // 7. Inline path: apply the 50 KB head+tail truncation.
     (truncate_output(combined), is_error, update)
 }
 
@@ -310,12 +378,17 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     fn test_ctx(tmp: &tempfile::TempDir) -> ToolContext {
         ToolContext {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
         }
+    }
+
+    fn fresh_token() -> CancellationToken {
+        CancellationToken::new()
     }
 
     #[test]
@@ -337,6 +410,7 @@ mod tests {
             &serde_json::json!({"command": "echo hello"}),
             &test_ctx(&tmp),
             None,
+            &fresh_token(),
         )
         .await;
         assert!(!is_error);
@@ -353,6 +427,7 @@ mod tests {
             &serde_json::json!({"command": "echo error >&2 && false"}),
             &test_ctx(&tmp),
             None,
+            &fresh_token(),
         )
         .await;
         assert!(is_error);
@@ -362,7 +437,13 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_command_param() {
         let tmp = tempdir().unwrap();
-        let (msg, is_error, _) = execute(&serde_json::json!({}), &test_ctx(&tmp), None).await;
+        let (msg, is_error, _) = execute(
+            &serde_json::json!({}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
         assert!(is_error);
         assert!(msg.contains("Missing required parameter"));
     }
@@ -380,6 +461,7 @@ mod tests {
             }),
             &ctx,
             None,
+            &fresh_token(),
         )
         .await;
         assert!(!is_error, "{}", content);
@@ -401,6 +483,7 @@ mod tests {
             }),
             &ctx,
             None,
+            &fresh_token(),
         )
         .await;
         assert!(is_error);
@@ -429,6 +512,7 @@ mod tests {
             }),
             &ctx,
             None,
+            &fresh_token(),
         )
         .await;
         assert!(is_error);
@@ -446,7 +530,13 @@ mod tests {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: PathBuf::from("/etc"),
         };
-        let (msg, is_error, _) = execute(&serde_json::json!({"command": "pwd"}), &ctx, None).await;
+        let (msg, is_error, _) = execute(
+            &serde_json::json!({"command": "pwd"}),
+            &ctx,
+            None,
+            &fresh_token(),
+        )
+        .await;
         assert!(is_error);
         assert!(msg.contains("rejected") || msg.contains("outside"));
     }
@@ -459,6 +549,7 @@ mod tests {
             &serde_json::json!({"command": "echo hello world"}),
             &test_ctx(&tmp),
             None,
+            &fresh_token(),
         )
         .await;
         assert!(!is_error);
@@ -477,6 +568,7 @@ mod tests {
             &serde_json::json!({"command": "yes line | head -c 40000"}),
             &test_ctx(&tmp),
             None,
+            &fresh_token(),
         )
         .await;
         assert!(!is_error, "{}", &content[..200.min(content.len())]);
@@ -510,11 +602,64 @@ mod tests {
             &serde_json::json!({"command": "yes x | head -c 40000"}),
             &test_ctx(&tmp),
             None,
+            &fresh_token(),
         )
         .await;
         let dir = tmp.path().join(".everlasting/outputs");
         assert!(dir.exists());
         assert!(dir.is_dir());
+    }
+
+    /// C1: cancelling a long-running shell command kills the child
+    /// and returns partial output with a cancellation marker.
+    #[tokio::test]
+    async fn cancel_kills_child_process() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+        // Spawn a command that runs for 60 seconds.
+        let handle = tokio::spawn(async move {
+            execute(
+                &serde_json::json!({"command": "sleep 60"}),
+                &ctx,
+                None,
+                &token_clone,
+            )
+            .await
+        });
+        // Give the child a moment to start, then cancel.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        token.cancel();
+        let (content, is_error, _) = handle.await.unwrap();
+        assert!(is_error);
+        assert!(
+            content.contains("[cancelled, partial output]"),
+            "expected cancel marker, got: {}",
+            content
+        );
+    }
+
+    /// C1: cancelling before the child even starts returns the
+    /// cancel marker immediately.
+    #[tokio::test]
+    async fn cancel_before_spawn() {
+        let tmp = tempdir().unwrap();
+        let token = CancellationToken::new();
+        token.cancel();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({"command": "sleep 60"}),
+            &test_ctx(&tmp),
+            None,
+            &token,
+        )
+        .await;
+        assert!(is_error);
+        assert!(
+            content.contains("[cancelled, partial output]"),
+            "expected cancel marker, got: {}",
+            content
+        );
     }
 
     /// head_tail_preview unit test — short input passes through.
