@@ -1,18 +1,18 @@
 /**
- * D1: 8-color low-saturation palette for session color tags.
+ * D1: 8-color medium-saturation palette for session color tags.
  * Index 0-7 stored in DB as `color_tag INTEGER`.
  * NULL = no mark.
  */
 
 export const COLOR_PALETTE = [
-  "#8b7355", // 0 warm brown
-  "#7a8b6f", // 1 sage green
-  "#6b7d8e", // 2 slate blue
-  "#8e6b7d", // 3 dusty rose
-  "#7d8e6b", // 4 olive
-  "#6b7d7a", // 5 teal gray
-  "#8e7d6b", // 6 amber brown
-  "#6b6b8e", // 7 muted purple
+  "#d4826a", // 0 warm orange-brown
+  "#6a9e7e", // 1 forest green
+  "#6a82b5", // 2 sky blue
+  "#b56a9e", // 3 plum pink
+  "#8eb56a", // 4 apple green
+  "#6ab5ae", // 5 teal
+  "#b5a06a", // 6 amber gold
+  "#9e6ab5", // 7 lavender purple
 ] as const;
 
 export type ColorTagIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;

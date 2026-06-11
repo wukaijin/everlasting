@@ -158,7 +158,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   if (isActive || s.color_tag === null) return {};
   const hex = colorTagHex(s.color_tag);
   if (!hex) return {};
-  return { backgroundColor: hexToRgba(hex, 0.1) };
+  return { backgroundColor: hexToRgba(hex, 0.1), borderLeftColor: hex };
 }
 </script>
 
