@@ -540,3 +540,36 @@ A4 = 🟢 ROADMAP 第一档 'Token 用量统计' 落地。per-session 4 列 toke
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: C1 取消机制完整化
+
+**Date**: 2026-06-11
+**Task**: C1 取消机制完整化
+**Branch**: `main`
+
+### Summary
+
+execute_tool 统一 CancellationToken 包装 + shell spawn/child.kill + Esc 快捷键。309 tests passed, vue-tsc passed。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c4bc7eb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
