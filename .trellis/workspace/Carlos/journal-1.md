@@ -652,3 +652,36 @@ F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: F5 LLM 耗时统计 (TTFB/gen/total + per-tool + session cum) 落地
+
+**Date**: 2026-06-11
+**Task**: F5 LLM 耗时统计 (TTFB/gen/total + per-tool + session cum) 落地
+**Branch**: `main`
+
+### Summary
+
+独立任务 06-11-f5-llm 把体验优化批次里延后的 F5 实施了。1 PR 全合 (Rust 5 + Vue 5 + duration util + llm-contract spec + IMPLEMENTATION 决策)。前端 Date.now() 三段计时挂 in-memory assistant message,done 时通过 update_message_latency IPC 落 messages.ttfb_ms / gen_ms / total_ms 三列 nullable INTEGER (add_messages_column_if_missing 探针)。per-tool durationMs 嵌 messages.content JSON 的 tool_result block,record_tool_duration IPC 用 serde_json::Value::pointer_mut patch,零 schema 改动 (对比原 F5 spec 假设的 tool_results 表不存在)。UI: assistant 消息右下角总耗时 chip + reka-ui Tooltip 三行明细 (TTFB/生成/端到端), ToolCallCard statusText 旁显 duration, ChatPanel 底部 footer 显 session 累计 (Σ total_ms)。Pinia accumulateLatency 模式对齐 A4 accumulateTokenUsage, ensureLoaded 时从 DB 读累计 seed。317 cargo tests (含 +32 F5) + 82 vitest (含 +13 F5) + vue-tsc + pnpm build 全过。check 阶段 3 个 unhandled rejection 错误已 git stash 验证为 F4 followup 8509bff 引入的 pre-existing 问题,与 F5 无关。llm-contract.md 新增 Scenario: Latency Tracking (16 Good/Base/Bad cases, 18 Wrong/Correct markers, 4 设计决策),对齐 A4 Scenario: Token Usage Tracking 格式。docs/IMPLEMENTATION.md §4 追加 6 条 ADR-lite 决策。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `69be143` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
