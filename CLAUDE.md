@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-**当前状态(2026-06-10)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;V2 路线图已重排,🟢 第一档准备开始。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
+**当前状态(2026-06-11)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统（4 文件加载 + cache_control 注入）+ per-session token usage 已落地;V2 路线图已重排,🟢 第一档准备开始。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
@@ -52,7 +52,8 @@ app/
 │   ├── components/
 │   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo
 │   │   ├── chat/           # ChatPanel / MessageList / ChatInput / ToolCallCard / DiffView 等子组件
-│   │   ├── settings/       # ModelRow 等
+│   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
+│   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
 │   │   ├── ChatWindow.vue  # 顶层容器(69 行,纯组合)
 │   │   ├── SessionList.vue
 │   │   ├── ProjectTabs.vue
@@ -63,25 +64,30 @@ app/
 │   │   ├── config.ts       # useConfigStore: LLM 配置
 │   │   ├── models.ts       # models catalog
 │   │   ├── providers.ts    # providers 配置
-│   │   └── projects.ts     # projects 列表
-│   └── utils/              # path / markdown / messageFormat / lru
+│   │   ├── projects.ts     # projects 列表
+│   │   └── memory.ts       # memory/指令文件 UI 状态
+│   └── utils/              # path / markdown / messageFormat / tokenUsage / lru
 ├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后)
 │   └── src/
-│       ├── lib.rs          # Tauri 入口(94 行,纯 init + 命令注册)
+│       ├── lib.rs          # Tauri 入口(99 行,纯 init + 命令注册)
 │       ├── state.rs        # AppState 共享状态
 │       ├── main.rs         # Windows 子系统入口
 │       ├── db/             # SQLite 持久化(8-PR2 拆分, 8 个 CRUD 函数分散到子模块)
 │       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
 │       │   ├── providers.rs / projects.rs / sessions.rs / tests.rs
 │       ├── llm/            # LLM 客户端模块 + 自研 Provider trait
-│       │   ├── client.rs   # LlmConfig::from_env()、chat_stream_with_tools()、BlockState 状态机
-│       │   ├── provider.rs # Provider trait + AnthropicProvider + OpenAIProvider
-│       │   ├── wire.rs     # WireMessage 跨协议中间层
+│       │   ├── provider/   # Provider trait + AnthropicProvider + OpenAIProvider + wire.rs
 │       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析
 │       │   ├── error.rs    # LlmError 5 类错误分类、中文用户消息
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
+│       ├── memory/         # Memory/指令文件系统(4 文件加载 + cache_control 注入)
+│       │   ├── loader.rs   # load_for_session / build_instructions_blocks / build_banner
+│       │   ├── file.rs     # 单文件加载 + 大小校验
+│       │   ├── watcher.rs  # notify 文件监听 + debounce
+│       │   ├── tokens.rs   # token 估算
+│       │   └── types.rs    # MemoryLayer / MemoryKind / LayerStatus
 │       ├── agent/          # Agent Loop(8-PR1 拆分)
-│       ├── commands/       # Tauri commands(8-PR1 拆分,sessions/projects/config/cancel/providers/worktree)
+│       ├── commands/       # Tauri commands(8-PR1 拆分,sessions/projects/config/cancel/providers/worktree/memory)
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
 │       └── tools/          # Tool 定义与执行
@@ -93,14 +99,15 @@ docs/                       # 设计文档(全中文)
 
 ### 核心数据流
 
-前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → Tauri IPC `invoke("chat", { requestId, sessionId, messages })` → Rust `chat` 命令 **Agent Loop**（max 20 turns）→ 每轮：`chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 如果 tool_use 则执行 tool → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite，session 列表从 DB 读。前端 Pinia store 多 listener 监听，增量更新消息 + 工具卡片。
+前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → Tauri IPC `invoke("chat", { requestId, sessionId, messages })` → Rust `chat` 命令 **Agent Loop**（max 20 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）→ `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 如果 tool_use 则执行 tool → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite，session 列表从 DB 读。前端 Pinia store 多 listener 监听，增量更新消息 + 工具卡片。
 
 ### 关键架构决策
 
 - **自研 agent core**：不使用 Anthropic Agent SDK / Codex SDK，自己实现 Agent Loop、消息管理、tool 注册、权限检查（见 `docs/IMPLEMENTATION.md §1`）
 - **步骤 1 用手写 SSE 解析**：不用 eventsource-stream crate，`llm/sse.rs` 是自研状态机（已通过 spike-002 验证）
-- **自研 Provider trait（多 Provider 抽象）**：`llm/provider.rs` 定义 `Provider` trait，`AnthropicProvider` / `OpenAIProvider` 两个实现 + `llm/wire.rs` WireMessage 跨协议中间层（2026-06-08/09 落地，取代早期 rig-core 计划）
+- **自研 Provider trait（多 Provider 抽象）**：`llm/provider/` 定义 `Provider` trait，`AnthropicProvider` / `OpenAIProvider` 两个实现 + `wire.rs` WireMessage 跨协议中间层（2026-06-08/09 落地，取代早期 rig-core 计划）
 - **16 阶段请求生命周期**：完整的 agent 请求处理管线，定义在 `docs/ARCHITECTURE.md`
+- **Memory/指令文件系统**：4 个指令文件（User/Project × CLAUDE.md/AGENTS.md）固定路径加载 + notify 监听 + `build_instructions_blocks()` 构造带 `cache_control: ephemeral` 的 synthetic user message，实现 prompt caching（2026-06-11 B5 重构落地）
 - **daemon 化**：后期 Tauri GUI 进程与 Agent Daemon 进程分离，通过 Unix socket / WebSocket IPC
 
 ## Environment Variables
@@ -127,7 +134,7 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 | 桌面框架 | Tauri 2 |
 | 前端 | Vue 3 (`<script setup>`) + Vite + Pinia + reka-ui |
 | 后端 | Rust (edition 2021) + tokio |
-| HTTP/LLM | reqwest + 手写 SSE + 自研 Provider trait (Anthropic / OpenAI) | rig-core 0.38.1 **未采用**(2026-06-09 决策弃用,见 IMPLEMENTATION §4) |
+| HTTP/LLM | reqwest + 手写 SSE + 自研 Provider trait (Anthropic / OpenAI) |
 | 错误处理 | anyhow（边界）+ thiserror（领域） |
 | 日志 | tracing + tracing-subscriber |
 | 包管理 | pnpm（前端）、cargo（Rust） |

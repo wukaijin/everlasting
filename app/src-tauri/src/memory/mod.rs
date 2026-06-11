@@ -47,11 +47,7 @@ pub mod watcher;
 #[cfg(test)]
 mod tests;
 
-// Public re-exports. Some are referenced from `crate::state`
-// and `crate::agent::chat`; the rest are kept for the test
-// suite and the Tauri command surface.
-#[allow(unused_imports)]
-pub use loader::{build_banner, build_layers_block, load_for_session, MemoryCache};
+pub use loader::MemoryCache;
 #[allow(unused_imports)]
 pub use types::{LayerStatus, MemoryKind, MemoryLayer, MemoryLayerInfo, MemorySource};
 

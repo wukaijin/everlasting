@@ -18,7 +18,7 @@ use std::sync::Arc;
 #[allow(unused_imports)]
 use crate::memory::file::{load_file, load_layer};
 use crate::memory::loader::{
-    all_paths, build_banner, build_instructions_blocks, build_layers_block, load_for_session,
+    all_paths, build_banner, build_instructions_blocks, load_for_session,
     MemoryCache,
 };
 use crate::llm::types::{CacheControl, ContentBlock};
@@ -337,23 +337,6 @@ async fn banner_with_some_loaded_layers_lists_them() {
     assert!(banner.contains("1 tokens"));
     // Missing layers should not appear in the banner.
     assert!(!banner.contains("[User AGENTS.md]"));
-}
-
-#[tokio::test]
-async fn layers_block_renders_only_loaded_layers() {
-    let layers = vec![
-        loaded_layer(MemoryKind::User, MemorySource::Claude, "user-claude-body", 3),
-        missing_layer(MemoryKind::User, MemorySource::Agents),
-        loaded_layer(MemoryKind::Project, MemorySource::Agents, "project-agents-body", 4),
-        missing_layer(MemoryKind::Project, MemorySource::Claude),
-    ];
-    let block = build_layers_block(&layers);
-    assert!(block.contains("[User CLAUDE.md]"));
-    assert!(block.contains("user-claude-body"));
-    assert!(block.contains("[Project AGENTS.md]"));
-    assert!(block.contains("project-agents-body"));
-    assert!(!block.contains("[User AGENTS.md]"));
-    assert!(!block.contains("[Project CLAUDE.md]"));
 }
 
 // ---------------------------------------------------------------------------

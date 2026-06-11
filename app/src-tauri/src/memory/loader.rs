@@ -263,32 +263,6 @@ pub fn build_banner(layers: &[MemoryLayer]) -> String {
     )
 }
 
-/// Format the per-layer prompt section. Each loaded layer is a
-/// standalone block; `None` / `Error` layers are skipped.
-///
-/// Output (when 2 layers are loaded):
-/// ```text
-/// [User CLAUDE.md]
-/// <body>
-///
-/// [Project AGENTS.md]
-/// <body>
-/// ```
-///
-/// Returns the empty string when no layer is `Loaded`.
-pub fn build_layers_block(layers: &[MemoryLayer]) -> String {
-    let mut out = String::new();
-    for layer in layers {
-        if let Some(section) = layer.render_prompt_section() {
-            if !out.is_empty() {
-                out.push_str("\n\n");
-            }
-            out.push_str(&section);
-        }
-    }
-    out
-}
-
 /// Build the cacheable content blocks for the synthetic
 /// "instructions" user message injected at the head of every
 /// agent-loop invocation.
@@ -319,7 +293,7 @@ pub fn build_layers_block(layers: &[MemoryLayer]) -> String {
 ///   the breakpoint" rule.
 ///
 /// `Missing` / `Error` layers are skipped (the agent silently
-/// absorbs them, the same way `build_layers_block` does).
+/// absorbs them).
 ///
 /// Returns an empty `Vec` when NO layer is `Loaded` — the
 /// caller skips the synthetic message entirely on a fresh
