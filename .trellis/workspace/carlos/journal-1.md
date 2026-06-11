@@ -1011,3 +1011,58 @@ B5 复审 (grill-me 9 题) 诊断出原实现不是 Memory 而是 System Instruc
 - P0/P1 验证: `docs/_reviews/FINDINGS-b5-cache-wire-validation.md`
 - Anthropic cache docs: `https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching`
 - 实施计划: `/home/carlos/.claude/plans/dazzling-coalescing-teapot.md`
+
+---
+
+## Session 22 — 2026-06-12: 累计统计轮次=0 bug + ThinkingBlock 时间落库 + 多轮 timing 已知限制
+
+### 三件事一口气
+
+1. **修"累计 10.1s · 轮次 0"**——Vue 3 `reactive(new Map())` 不自动包装 value,`Map.get` 返回的是普通数组,深路径 mutation 不触发依赖追踪。`putMessages` 里把数组用 `reactive()` 包一层就修了。
+2. **ThinkingBlock 改用时间**——`thought for X tokens` → `thought for X.Xs`。in-memory 追踪(thinking_delta 起点 / delta+toolcall+done 关定时),`abbreviateDuration` 跟 F5 latency chip 同一把尺。
+3. **落库 thinkingDurationMs**——`messages.thinking_ms` 列 + 复用 `update_message_latency` IPC(同一个 UPDATE 写 4 列)。`rehydrateMessages` 读出来写到 `ChatMessage.thinkingDurationMs`。
+
+### 关键根因 #1:Vue 3 reactive Map 不 auto-wrap
+
+> "We'd want stored values to be reactive... But you must wrap them explicitly. The Map's get/set/delete traps track the Map itself, not the values' internal slots."
+
+`messagesBySession = reactive(new Map<string, ChatMessage[]>())` → `.get(sid)` 返回 plain array → 数组的 item 也是 plain → `last.latency = { ... }` 写穿到 plain object,Vue 看不见。修法:`messagesBySession.set(sid, reactive(messages))` 在 putMessages 里包一层。两层 reactive(reactive(Map) + reactive(array))都触发 set trap。
+
+### 关键根因 #2(用户截图揭示的):per-turn timing 是 per-request
+
+**症状**:多轮 tool_use 响应(thinking→shell→tool_result→thinking→shell→tool_result→thinking→text),3 个 assistant message,前两个 ThinkingBlock 显示"—",最后一个显示"0.7s"。
+
+**根因**:agent loop + RequestState 都是 per-request 的:
+- `agent/chat.rs:481` inner loop 收到 `Done` 事件只 set stop_reason + break,**不 emit**;只有最外层 line 670 才发 deferred Done。所以前端 1 个请求只看到 1 个 done 事件。
+- `RequestState.thinkingDurationMs` 在第一个 close boundary 就 set 了,后续 turn 的 close check(`=== null`)失败,不更新。→ 拿到的是**第一个 thinking 阶段**的耗时。
+- `reloadAfterFinalize` re-attach 找 `assistantSeq` 取**最大 seq** 写,前 N-1 个 message 的 latency / thinking 列在 DB 里全 NULL → rehydrate 出 undefined → "—"。
+
+**用户视觉**:
+- 多轮响应的前 N-1 个 assistant message:ThinkingBlock 头 "—",`MessageItem` 底部 latency chip 也 "—"
+- 最后一个:显示**第一个** thinking 阶段的时间(不是最后一个)
+- Session 累计 popover(`累计` / `轮次`)正确——走单独的 reactive Map
+- 累计 totalMs 也对——`accumulateLatency` 同步累加
+
+**修法(留 backlog)**:agent loop 在每次 `persist_turn` 之后 emit per-turn Done(带该 turn 的 seq + 自身 timing);`RequestState` 改成 `Map<seq, {ttfbMs, genMs, totalMs, thinkingMs}>` 累积;re-attach IPC 改成 N 次 fire。估 30-50 行改动,跨 agent/chat.rs + streamController.ts + chat.ts。
+
+### 单轮响应不受影响(为啥之前没发现)
+
+Q&A / 文档问题这种单轮 LLM 调用,agent loop 内部就一个 turn,deferred Done 跟 inner Done 几乎同步,`req.thinkingDurationMs` 一次就 close 完。bug 只在用了 tool 的多轮响应里现形,刚好是 Claude Code 风格——carlos 跑的是"node 版本是多少现在"这种 inspection 任务,大概率触发 tool_use 链。
+
+### 已沉淀
+
+- `.trellis/spec/backend/llm-contract.md` "Known Limitations (F5 — 2026-06-12 follow-up)" 新增一段
+- 配套 ADR-lite 走 IMPLEMENTATION.md §4(下次 commit 时加)
+
+### Testing
+
+- [OK] `pnpm vitest run` 89 passed(86 原有 + 2 新 full-flow 思考时间测试 + 1 新 IPC 形状测试)
+- [OK] `pnpm vue-tsc --noEmit` exit 0
+- [OK] `cargo test --lib db::` 52 passed(新增 1 个 `update_message_latency_patches_thinking_ms_independently` 测试)
+- [OK] `cargo check` 干净
+
+### Next Steps
+
+- 用户决定是否把 per-turn timing fix 排进 V2 路线图(估 30-50 行改动,3 文件)
+- 落库相关的 4 个 commit(schema / Rust / 前端 / spec)分批提
+- journal-1.md 第 1013 行快到 2000 上限,下次 session 考虑切到 journal-2.md
