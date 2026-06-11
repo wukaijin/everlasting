@@ -1066,3 +1066,46 @@ Q&A / 文档问题这种单轮 LLM 调用,agent loop 内部就一个 turn,deferr
 - 用户决定是否把 per-turn timing fix 排进 V2 路线图(估 30-50 行改动,3 文件)
 - 落库相关的 4 个 commit(schema / Rust / 前端 / spec)分批提
 - journal-1.md 第 1013 行快到 2000 上限,下次 session 考虑切到 journal-2.md
+
+---
+
+## Session 23 — 2026-06-12: F5 follow-up per-turn latency 实施 + plan 修订
+
+### 4-commit 实施完成
+
+PRD 写"估 30-50 行改动"是低估,实际 80-100 行(后端 +30 / 前端 +60),加上测试 + spec 改写。grill 完按 plan 走 4 个 commit:
+
+1. **commit 1** `e9ae89b` docs(spec): 删除 `Known Limitations` 段 + 追加 `### Per-Turn Tracking (F5 follow-up, 2026-06-12)` 子段
+2. **commit 2** `9efb094` feat(agent): Rust agent loop per-turn locals + `TurnComplete` variant + Start per-turn emit
+3. **commit 3** `1f312f4` feat(stream): 前端 `RequestState` 重构 + `case "turn_complete"` handler + `reloadAfterFinalize` for-of N 次 IPC
+4. **commit 4** `24e2add` test(latency): 改写 3 个 F5 thinking-phase timing 测试 + 新增 1 个 3-turn 测试 + ADR
+
+### 关键 plan 修订
+
+实施中发现的 plan 修订(写进 commit message + IMPLEMENTATION.md ADR):
+
+- **删 `RequestState.thinkingStartedAt` / `thinkingDurationMs` + 4 close boundary sites**:plan 写"保留 thinkingStartedAt (per-turn 闭包)",但 backend `TurnComplete` payload 已带 `thinking_ms` (从 `turn_thinking_done - turn_thinking_start` 算),前端再算就是双源。`last.thinkingDurationMs` 改由 `case "turn_complete"` 写(per-turn),前端 4 个 close site 全删
+- **`case "done"` 不再写 `last.latency`**:plan 写"保留 as 最后一条 turn 快速路径",但 frontend `Date.now()` 算的 `ttfbMs` 会覆盖 `TurnComplete` 写的 backend-precise 值(不同 time base)。`done` 变纯 stream-termination signal,`last.latency` 由 `TurnComplete` 写完就不再 touch
+- **PRD 行号错位**:6 处行号 PRD 写错,explore 阶段已识别,commit 3 message 里写"Plan revision"段说明
+
+### 关键设计点实现确认
+
+- `currentTurnIndex = -1` 起步,`case "start"` 触发 `currentTurnIndex++`(-1 → 0 → 1 → 2),`Map.set(currentTurnIndex, turnLatency)` 累积 per-turn
+- backend `Instant` 时间戳,前端 `Date.now()` 只在 startRequest 时设 `sendAt` + first delta 时设 `firstDeltaAt`(per-request 一次性,不再计算 timing)
+- `tool:call` 走独立 IPC `handleToolCall`,不在 `handleChatEvent` switch 里(测试需要这个区分)
+- 事件顺序:turn_complete 在 done 之前 emit(后端 `persist_turn` → `TurnComplete` → ... → `Done`)。如果 done 先,`finalizeRequest` 把 req 移到 `completedRequests`,后续 turn_complete 静默 drop — 测试必须严格按生产顺序
+
+### Testing
+
+- [OK] `pnpm vitest run` **92 passed**(89 旧 + 3 改写后 + 1 新 3-turn = 净 92;0 失败)
+- [OK] `pnpm vue-tsc --noEmit` exit 0
+- [OK] `cargo test --lib` **319 passed**(317 旧 + 1 新 4 列 3-turn INSERT + 1 来自 2026-06-12 F5-followup 上次 commit)
+- [OK] `cargo check` 干净
+- [OK] 4 unhandled errors(vitest) — 来自 F5 finalizeRequest 测试的 `__TAURI_INTERNALS__.invoke` 缺失,本任务未引入(commit 3 之前就存在)
+
+### Next Steps
+
+- 手动 smoke:`pnpm tauri dev` 跑 user screenshot 那个"node 版本是多少现在"任务,观察 3 个 ThinkingBlock 都显示时长(commit 4 AC4/AC6)
+- 累计 popover(`累计 1.2s · 轮次 3 · 平均 0.4s`)应自动 work(per-turn `accumulateLatency` 已对接)
+- reload session 应保留所有 3 turn 的 thinkingMs(per-turn IPC + DB 4 列 + rehydrate)
+- 后续 session 考虑切到 journal-2.md(1068 → 1116 行,仍 < 2000)
