@@ -1744,36 +1744,62 @@ commit message must list all touched concerns.
 | `update_message_latency` for tool_result rows | Tool-result rows have no per-message latency triple (per-tool duration lives in the JSON, not the columns). The IPC is only called for assistant turns. |
 | LLM-claimed TTFB (parse from `usage.creation_time` if exposed) | Anthropic doesn't expose this on `message_delta`; the frontend's `Date.now()` is the only source. |
 
-### Known Limitations (F5 — 2026-06-12 follow-up)
+### Per-Turn Tracking (F5 follow-up, 2026-06-12)
 
-#### Per-turn latency / thinking-duration only captured for the LAST assistant message in a multi-turn request
+F5 ships per-`RequestState` (one request = one LLM stream invocation), which works for the single-turn case but silently corrupts multi-turn agent responses: only the LAST assistant row's latency columns get written. This follow-up scopes the per-turn shape explicitly. The "Known Limitations: Per-turn latency only captured for the LAST assistant message" section that documented the bug has been **removed** — the bug is fixed by the changes below.
 
-**Symptom**: For an agent-loop response that uses tools (e.g. thinking → `shell` → tool_result → thinking → `shell` → tool_result → thinking → text), the frontend persists N assistant message rows (one per LLM call), but the `update_message_latency` IPC is fired ONCE for the request and re-attaches only the LAST assistant message (largest `seq`). The first N-1 messages' `ttfb_ms` / `gen_ms` / `total_ms` / `thinking_ms` columns stay NULL, so on session reload they rehydrate with `thinkingDurationMs = undefined` and the ThinkingBlock header renders `—`. The last message's `thinking_ms` is set to the FIRST thinking phase's duration (because `req.thinkingDurationMs` is closed on the first non-thinking boundary and never re-opened).
+#### Wire format — new `ChatEvent::TurnComplete` variant
 
-**Why it happens**:
+A new `ChatEvent` variant carries per-turn latency, emitted by the agent loop AFTER each `persist_turn` for an assistant row. Payload (mirrors `db::MessageLatency` plus the row's `seq`):
 
-1. **Agent loop is per-request, not per-turn** (`app/src-tauri/src/agent/chat.rs`).
-   The inner LLM-stream loop processes each `ChatEvent::Done` (line 481) by setting `stop_reason` and breaking out of the inner loop — but does NOT emit the event to the frontend. The deferred `Done` is emitted ONLY at the very end of the agent loop (line 670, after `persist_turn` + `touch_session`), gated on `should_continue == false`. So a 3-turn request sees 1 `done` event in the frontend, not 3.
+```rust
+TurnComplete {
+    seq: i64,                          // assistant row seq, written by persist_turn
+    ttfb_ms: Option<i64>,              // first_delta_at - turn_send_at
+    gen_ms: Option<i64>,               // done_at - first_delta_at
+    total_ms: Option<i64>,             // done_at - turn_send_at
+    thinking_ms: Option<i64>,          // turn_thinking_done - turn_thinking_start
+}
+```
 
-2. **Frontend `RequestState` is per-request, not per-turn** (`app/src/stores/streamController.ts:111`).
-   `latencyPending` / `thinkingDurationMs` / `firstDeltaAt` are set once and never reset between turns. The first `delta` (text) or `tool:call` boundary closes the timer (lines 661, 856); subsequent phases find the duration already set (`=== null` check fails) and skip.
+`seq` is the per-turn row handle (assigned by the agent loop in `app/src-tauri/src/agent/chat.rs` from the per-session `next_seq` counter). The 4 ms fields are `Option` so a turn that never reached the relevant boundary (e.g. thinking-only turn cut by a `tool:call`) still serializes cleanly. Wire transport: same `chat-event` channel as every other variant (the Tauri `emit("chat-event", payload)` in `app/src-tauri/src/agent/helpers.rs` `emit_chat_event`), discriminator is `"kind": "turn_complete"`.
 
-3. **`reloadAfterFinalize` re-attach writes to the largest-`seq` assistant only** (`app/src/stores/streamController.ts:1006-1013`).
-   The seq-lookup iterates all assistant rows and picks the largest — i.e. the last one. The IPC payload carries the same `thinkingMs` / `ttfbMs` / `genMs` / `totalMs` for that one row.
+#### Backend — `persist_turn` writes the 4 columns in one INSERT
 
-**User-visible behavior** (matches the 2026-06-12 screenshot):
+`app/src-tauri/src/agent/chat.rs` outer loop tracks 4 per-turn `Option<Instant>` locals per iteration:
 
-- First N-1 assistant messages in a multi-turn response: ThinkingBlock header shows `—` (no `thinking_ms` in DB).
-- Last assistant message: header shows the FIRST thinking phase's duration (e.g. `0.7s`), not the actual last phase.
-- Per-message `latency` chip (`MessageItem` footer) shows `totalMs` for the last message only; prior messages show `—`.
-- Per-session cumulative chip (ChatInput popover) and the `累计` / `轮次` counters are CORRECT (they accumulate across all turns via `accumulateLatency` + `accumulateTokenUsage` calls, and read from a separate reactive `Map` keyed by session id).
+- `turn_send_at` — set right before `provider.send(...)`
+- `turn_first_delta_at` — set on the first `ChatEvent::Delta` for this turn
+- `turn_thinking_start` — set on the first `ChatEvent::ThinkingDelta` for this turn
+- `turn_thinking_done` — set on the first non-thinking boundary (text `Delta`, `ToolCall`, `Done`, or `Error`)
 
-**Fix scope** (deferred — TBD):
+`ChatEvent::Start` no longer has the `if turn == 1` guard (`app/src-tauri/src/agent/chat.rs:422-425`) — every turn emits Start so the frontend can key its `latencyByTurn` per turn reliably.
 
-- Agent loop must emit a `Done` (or `TurnComplete`) event after EACH `persist_turn`, carrying the per-turn `seq` and the turn-local `thinkingDurationMs` / `latency` triple.
-- Frontend `RequestState` needs an array (or `Map<seq, {ttfbMs, genMs, totalMs, thinkingMs}>`) populated incrementally; the re-attach IPC fires per-`seq` instead of once.
-- `update_message_latency` IPC stays the same shape; just N calls instead of 1.
-- Estimated: 30-50 lines across `agent/chat.rs` + `streamController.ts` + `chat.ts` + the rehydrate test.
+At the `persist_turn` call site (line 600-607) the existing `latency: Option<&MessageLatency>` parameter is filled with `Some(&MessageLatency { ttfb_ms, gen_ms, total_ms, thinking_ms })` derived from the 4 Instants. The INSERT statement (`app/src-tauri/src/db/sessions.rs:565-595`) already binds all 4 columns — F5 added `thinking_ms` on 2026-06-12. Per-turn rows therefore get all 4 columns populated atomically, no follow-up `UPDATE` needed for the common case.
 
-**Why we accept it for now**: single-turn responses (no tools) are unaffected — which is the common shape for Q&A / doc-questions. The bug only shows in agent-loop responses that use tools. The cumulative popover stats stay correct, which is the user-facing number most people look at.
+Right after each successful `persist_turn` (assistant row), the loop emits `ChatEvent::TurnComplete { seq, ttfb_ms, gen_ms, total_ms, thinking_ms }`. Cancel-mid-turn and cancel-during-tool-exec paths also fire TurnComplete for whatever assistant row they persisted. The `MAX_TURNS = 20` safety net does NOT fire TurnComplete (it never persists).
+
+The final `ChatEvent::Done` emit (line 660-679, gated on `!should_continue`) is unchanged — it still terminates the stream and carries `stop_reason` + `usage`. Per-turn and stream-terminating events are conceptually distinct; collapsing them would muddy the wire contract.
+
+#### Frontend — `RequestState` keys per turn, not per request
+
+`app/src/stores/streamController.ts` `RequestState` (lines 56-120) drops the per-request single-value fields:
+
+- **Removed**: `latencyPending: { ttfbMs, genMs, totalMs } | null` (line 111)
+- **Removed**: per-request single-value `thinkingDurationMs: number | null` (line 96)
+
+…in favor of two new fields:
+
+- `currentTurnIndex: number` — bumped in the `case "start"` arm of `handleChatEvent`'s switch (line 637-640)
+- `latencyByTurn: Map<number, TurnLatency>` — keyed by `currentTurnIndex`, where `TurnLatency = { seq, ttfbMs, genMs, totalMs, thinkingMs }` mirrors the Rust `TurnComplete` payload
+
+The 4 close-boundary sites that snapshot `thinkingDurationMs` (text `delta` line 661, `tool:call` line 856, `done` line 715, `error` line 805) keep their single-value `thinkingStartedAt` / `thinkingDurationMs` locals as PER-TURN timer state — they're reset on every `Start` event, not on `startRequest`. The new `case "turn_complete"` arm writes to `latencyByTurn.set(currentTurnIndex, ...)` AND in-place mutates the reactive placeholder's `latency` / `thinkingDurationMs` so `currentSessionLatencyTurns` (in `chat.ts`) updates in real-time per turn, with no reload.
+
+`accumulateLatency(req.sessionId, totalMs)` moves from the `done` handler (line 743) to the `turn_complete` handler — same A4 `accumulateTokenUsage` per-done pattern, just one event earlier and fired N times per request instead of once.
+
+#### Re-attach — fire N `update_message_latency` IPCs per request
+
+`reloadAfterFinalize` (line 974-1113) iterates `req.latencyByTurn` and fires one `update_message_latency` IPC per entry, keyed by `lat.seq` (not by "max seq" of all assistant rows as in the F5 path). The in-place mutate loop is `m.seq === lat.seq` (per-turn) instead of "max seq" (per-request). `cancel` / `error` paths go through the same `reloadAfterFinalize` and naturally fire N IPCs for whatever turns had a `TurnComplete` arrive before the cancel/error.
+
+`update_message_latency` IPC signature is unchanged (F5 + 2026-06-12 already takes `(sessionId, seq, ttfbMs, genMs, totalMs, thinkingMs)`). The 4-column `UPDATE` in `app/src-tauri/src/db/sessions.rs:662-677` is also unchanged — it's just called N times instead of once.
 
