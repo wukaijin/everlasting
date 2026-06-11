@@ -46,7 +46,7 @@ use crate::agent::MAX_TURNS;
 use crate::llm::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role,
 };
-use crate::memory::loader::{build_banner, build_layers_block, load_for_session};
+use crate::memory::loader::{build_instructions_blocks, load_for_session};
 use crate::state::{AppState, CancellationGuard, ChatEventPayload, ToolCallPayload};
 use crate::tools::ToolContext;
 
@@ -290,39 +290,62 @@ pub async fn chat(
             &head_sha,
         );
 
-        // B5 Memory (V2 1 期, 2026-06-10): inject the 4-layer
-        // memory (User CLAUDE.md / User AGENTS.md / Project
-        // CLAUDE.md / Project AGENTS.md) at the head of the
-        // system prompt, with a banner that lists the loaded
-        // layers and their token counts. Each layer is its
-        // own standalone block — the LLM sees them in
-        // canonical order, with no concatenation or
-        // override logic. Failure modes (missing file,
-        // permission error, > 100 KiB, non-UTF-8) are
-        // absorbed by the loader — a missing layer just
-        // doesn't appear in the banner or the layers block.
+        // B5 Memory (V2 1 期, 2026-06-10, refactored 2026-06-11):
+        // the 4 instruction files (User / Project × CLAUDE.md /
+        // AGENTS.md) are injected as a **synthetic user message at
+        // the head of the `messages` array** rather than into the
+        // `system_prompt` string. The first text block of that
+        // message carries `cache_control: Some(CacheControl::Ephemeral)`,
+        // which the wire layer preserves as a separate content
+        // block (does NOT concatenate with adjacent text) so
+        // Anthropic can cache the instructions on turn 1 and read
+        // them from cache on turns 2..MAX_TURNS. Failure modes
+        // (missing file, permission error, > 100 KiB, non-UTF-8)
+        // are absorbed by the loader — a missing layer just
+        // doesn't appear in the payload.
         let memory_layers =
             load_for_session(&memory_cache, &project.id, &project.path).await;
-        let memory_banner = build_banner(&memory_layers);
-        let memory_layers_block = build_layers_block(&memory_layers);
-        let system_prompt = if memory_banner.is_empty() && memory_layers_block.is_empty() {
-            // Fresh install with no memory files at all —
-            // skip the injection entirely to keep the prompt
-            // short.
-            base_prompt
-        } else {
-            let mut s = String::new();
-            if !memory_banner.is_empty() {
-                s.push_str(&memory_banner);
-                s.push_str("\n\n");
-            }
-            if !memory_layers_block.is_empty() {
-                s.push_str(&memory_layers_block);
-                s.push_str("\n\n");
-            }
-            s.push_str(&base_prompt);
-            s
-        };
+        let instructions_blocks = build_instructions_blocks(&memory_layers);
+        if !instructions_blocks.is_empty() {
+            // Synthetic user message carrying the 4 instructions
+            // files. The first text block has the cache_control
+            // marker (see [`build_instructions_blocks`]).
+            messages.insert(
+                0,
+                ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Blocks(instructions_blocks),
+                },
+            );
+            // Assistant acknowledgment: tells the model it has
+            // read the instructions and will follow them. Without
+            // this, the next user-role message in the array would
+            // be in an odd position (user → user with no
+            // assistant turn in between). The Anthropic API
+            // accepts the user → user pattern in some cases but
+            // the explicit acknowledgment is what Claude Code /
+            // Aider do, and it makes the wire shape
+            // self-documenting.
+            messages.insert(
+                1,
+                ChatMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text(
+                        "Understood. I will follow these instructions throughout our session."
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+
+        // The system_prompt is now just the worktree-anchored
+        // base_prompt. Memory content has been moved into the
+        // synthetic user message above; sending it again in
+        // `system` would be redundant and would defeat the
+        // cache-control design (system content has no
+        // per-block cache_control — only the message-array
+        // content does).
+        let system_prompt = base_prompt;
 
         // Persist the most recent user-typed message before the
         // agent loop runs. Without this, the user message only
@@ -554,7 +577,7 @@ pub async fn chat(
                 }
             }
             if !full_text.is_empty() {
-                assistant_blocks.push(ContentBlock::Text { text: full_text });
+                assistant_blocks.push(ContentBlock::Text { text: full_text, cache_control: None });
             }
             for (id, name, input) in &tool_calls {
                 assistant_blocks.push(ContentBlock::ToolUse {
