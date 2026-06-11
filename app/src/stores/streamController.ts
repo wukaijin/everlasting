@@ -513,6 +513,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (event.usage) {
           useChatStore().accumulateTokenUsage(req.sessionId, event.usage);
         }
+        // F2: reset force-follow mode when the stream finishes.
+        useChatStore().forceFollowActive = false;
         finalizeRequest(req.requestId, req.sessionId, false);
         break;
       case "error":
@@ -527,6 +529,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (last.toolResults) markRaw(last.toolResults);
         if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
         if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
+        // F2: reset force-follow on error too.
+        useChatStore().forceFollowActive = false;
         finalizeRequest(req.requestId, req.sessionId, true);
         break;
     }
@@ -599,6 +603,9 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // batches the update so there's no visible blank gap.
     putMessages(sessionId, messages, false);
     loadedFromDb.add(sessionId);
+    // F4: notify MessageList to re-scroll after buffer replacement
+    // to avoid position jitter.
+    useChatStore().scrollAfterReload++;
   }
 
   // ---------------------------------------------------------------------

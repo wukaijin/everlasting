@@ -1,0 +1,3 @@
+{"file": "frontend/state-management.md", "reason": "F1/F2/F4 改动 chat.ts store + streamController 消息流，需要理解 Pinia store 模式和 controller 契约"}
+{"file": "backend/database-guidelines.md", "reason": "F5 需要 ALTER TABLE 加 ttfb_ms/gen_ms/total_ms/duration_ms 列，需遵循 SQLite migration 模式"}
+{"file": "frontend/design-tokens.md", "reason": "F3 ConfirmDialog 组件 + F4 spinner 需要使用正确 CSS 变量，不硬编码颜色"}

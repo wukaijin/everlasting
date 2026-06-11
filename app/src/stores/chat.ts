@@ -271,6 +271,19 @@ export const useChatStore = defineStore("chat", () => {
   // -----------------------------------------------------------------------
   const controller = useStreamControllerStore();
 
+  // F2: when true, auto-scroll follows every delta regardless of
+  // user position. Set on send(), cleared on stream-done or when
+  // the user manually scrolls up.
+  const forceFollowActive = ref(false);
+
+  // F4: true while switchSession is loading messages (IPC pending).
+  const sessionLoading = ref(false);
+
+  // F4: incremented after reloadAfterFinalize replaces messages, so
+  // MessageList can re-scroll to bottom. The value is a counter, not a
+  // boolean, to guarantee Vue detects the change.
+  const scrollAfterReload = ref(0);
+
   // -----------------------------------------------------------------------
   // Reactive projections over the controller's state. Components read
   // these and never touch the controller directly.
@@ -394,13 +407,20 @@ export const useChatStore = defineStore("chat", () => {
     // Default to the most-recently-updated session if any exist;
     // otherwise leave the chat area in its empty state.
     if (sessions.value.length > 0) {
-      const first = sessions.value[0];
-      currentSessionId.value = first.id;
-      currentCwd.value = first.current_cwd ?? "";
+      // F1: prefer per-project last active session over sessions[0].
+      const lastId = configStore.readLastSession(newId);
+      const target =
+        lastId && sessions.value.some((s) => s.id === lastId)
+          ? sessions.value.find((s) => s.id === lastId)!
+          : sessions.value[0];
+      currentSessionId.value = target.id;
+      currentCwd.value = target.current_cwd ?? "";
+      // F1: persist the selected session as last active for this project.
+      configStore.writeLastSession(newId, target.id);
       // Seed the controller's cache for the new active session so
       // the `messages` computed and the controller's per-session
       // event routing have something to look at on first render.
-      await controller.ensureLoaded(first.id);
+      await controller.ensureLoaded(target.id);
     } else {
       currentSessionId.value = null;
       currentCwd.value = "";
@@ -466,39 +486,28 @@ export const useChatStore = defineStore("chat", () => {
     // `messages` computed re-evaluates and the in-flight
     // message is right there — no DB reload, no `done`-event
     // loss.
-    await controller.ensureLoaded(sessionId);
-    currentSessionId.value = sessionId;
-    // A4: pull the latest token totals from the freshly-loaded
-    // session into the in-memory map. Without this, switching
-    // to a session whose last update happened in another window
-    // would show stale "0" until the next Done event in THIS
-    // window. Cheap — one Map.set.
-    const fresh = await invoke<{
-      session: {
-        input_tokens_total: number | null;
-        output_tokens_total: number | null;
-        cache_creation_total: number | null;
-        cache_read_total: number | null;
-      };
-    } | null>("load_session", { sessionId: sessionId });
-    if (
-      fresh &&
-      fresh.session.input_tokens_total !== null &&
-      fresh.session.output_tokens_total !== null
-    ) {
-      tokenUsageBySession.set(sessionId, {
-        input_tokens: fresh.session.input_tokens_total,
-        output_tokens: fresh.session.output_tokens_total,
-        cache_creation_input_tokens:
-          fresh.session.cache_creation_total ?? 0,
-        cache_read_input_tokens: fresh.session.cache_read_total ?? 0,
-      });
-    }
-    // Pull cwd from the session summary (the controller doesn't
-    // expose session metadata; `list_sessions` already has the
+    //
+    // F4: set loading state for spinner display. Cleared after
+    // ensureLoaded completes.
+    sessionLoading.value = true;
+    try {
+      await controller.ensureLoaded(sessionId);
+      currentSessionId.value = sessionId;
+      // F1: persist per-project last active session.
+      if (projectsStore.currentProjectId) {
+        configStore.writeLastSession(
+          projectsStore.currentProjectId,
+          sessionId,
+        );
+      }
+      // Pull cwd from the session summary (the controller doesn't
+      // expose session metadata; `list_sessions` already has the
     // value in memory). Avoids a redundant `load_session` IPC.
-    const summary = sessions.value.find((s) => s.id === sessionId);
-    currentCwd.value = summary?.current_cwd ?? "";
+      const summary = sessions.value.find((s) => s.id === sessionId);
+      currentCwd.value = summary?.current_cwd ?? "";
+    } finally {
+      sessionLoading.value = false;
+    }
   }
 
   async function deleteSession(sessionId: string) {
@@ -799,6 +808,10 @@ export const useChatStore = defineStore("chat", () => {
     // sessions and an IPC call for evicted ones.
     const msgs = await controller.ensureLoaded(sessionId);
 
+    // F2: activate force-follow mode so the chat stays scrolled to
+    // bottom for the entire duration of the stream.
+    forceFollowActive.value = true;
+
     const userMsg: ChatMessage = {
       id: genId(),
       role: "user",
@@ -873,6 +886,10 @@ export const useChatStore = defineStore("chat", () => {
     currentCwd,
     simplifiedCwd,
     diffCache,
+    // F2/F4: scroll follow mode + session loading
+    forceFollowActive,
+    sessionLoading,
+    scrollAfterReload,
     // Methods
     send,
     cancel,

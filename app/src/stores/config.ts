@@ -10,6 +10,7 @@ import { useModelsStore } from "./models";
  *  doesn't match any loaded project on start, the chat store's
  *  watcher falls back to the first visible project. */
 const LAST_ACTIVE_PROJECT_KEY = "everlasting.lastActiveProjectId";
+const LAST_SESSION_KEY_PREFIX = "everlasting.lastSession_";
 
 export const useConfigStore = defineStore("config", () => {
   const loaded = ref(false);
@@ -83,6 +84,27 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
+  // F1: per-project last active session persistence.
+  function readLastSession(projectId: string): string | null {
+    try {
+      return window.localStorage.getItem(LAST_SESSION_KEY_PREFIX + projectId);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeLastSession(projectId: string, sessionId: string | null): void {
+    try {
+      if (sessionId) {
+        window.localStorage.setItem(LAST_SESSION_KEY_PREFIX + projectId, sessionId);
+      } else {
+        window.localStorage.removeItem(LAST_SESSION_KEY_PREFIX + projectId);
+      }
+    } catch {
+      // fail silently
+    }
+  }
+
   // Persist on every change. The chat store updates
   // `lastActiveProjectId` whenever the user switches tabs.
   watch(lastActiveProjectId, (id) => {
@@ -122,6 +144,8 @@ export const useConfigStore = defineStore("config", () => {
     loaded,
     homeDir,
     lastActiveProjectId,
+    readLastSession,
+    writeLastSession,
     load,
   };
 });

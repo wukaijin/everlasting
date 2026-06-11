@@ -4,13 +4,12 @@
 // content churn (text/thinking streaming) and auto-scrolls to keep
 // the latest line in view.
 //
-// "Ghost" messages (post-rehydrate user messages that exist only to
-// carry tool_result blocks for the LLM) are filtered out here so
-// the chat list stays clean. Pure-thinking assistant messages
-// (no text, no tool calls) are kept visible so the user can see
-// the model's reasoning even when it never produced a reply.
+// F2: "force follow" mode — after sending, auto-scroll tracks every
+// delta regardless of user position. The user can opt out by
+// scrolling up >80px. The mode resets when the stream finishes
+// (streamController sets store.forceFollowActive = false on done/error).
 
-import { ref, watch, nextTick, computed } from "vue";
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
 import MessageItem from "./MessageItem.vue";
 
@@ -28,10 +27,6 @@ const visibleMessages = computed(() =>
   ),
 );
 
-/** True when the user is within `threshold` pixels of the bottom of
- *  the scroll container. Used to decide whether a content change
- *  should yank the user to the bottom or leave them in place to
- *  keep reading older messages. */
 function isNearBottom(el: HTMLElement, threshold = 80): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
 }
@@ -43,17 +38,17 @@ async function scrollToBottom() {
   }
 }
 
-// Auto-scroll on any new content — but only when the user is
-// already near the bottom. If they've scrolled up to read older
-// messages, the new streaming content should appear in place
-// below them, not yank them to the bottom.
-//
-// `flush: "pre"` is required so the watch callback runs BEFORE
-// Vue's DOM update; that's the only moment when `scrollHeight`
-// still reflects the pre-change geometry, and therefore the
-// only moment when `isNearBottom` returns a meaningful answer
-// (after the DOM flush, the new content has grown the
-// scrollHeight and the predicate would always be true).
+// F2: detect user manual scroll-up. When forceFollowActive is true
+// and the user scrolls up >80px, cancel the follow mode.
+function onScroll() {
+  if (!messagesEl.value || !store.forceFollowActive) return;
+  if (!isNearBottom(messagesEl.value, 80)) {
+    store.forceFollowActive = false;
+  }
+}
+
+// Auto-scroll on any content change. During force-follow mode, always
+// scroll; otherwise only scroll when user is near the bottom.
 watch(
   () =>
     store.messages
@@ -68,23 +63,17 @@ watch(
       .join("|"),
   () => {
     if (!messagesEl.value) return;
-    const wasNearBottom = isNearBottom(messagesEl.value);
-    void nextTick().then(() => {
-      if (wasNearBottom) scrollToBottom();
-    });
+    const shouldFollow =
+      store.forceFollowActive || isNearBottom(messagesEl.value);
+    if (!shouldFollow) return;
+    void nextTick().then(() => scrollToBottom());
   },
   { flush: "pre" },
 );
 
 // When the user switches sessions, jump to the bottom of the new
 // session. Session-switch is an explicit user action, so the
-// "don't interrupt reading" guard above does not apply — the
-// user has chosen to leave the old context.
-//
-// The 100ms retry handles the case where `controller.ensureLoaded`
-// populates messages across multiple frames (DB load + rehydrate
-// step). If the first scroll lands on an empty list, the second
-// will land on the populated one.
+// "don't interrupt reading" guard does not apply.
 watch(
   () => store.currentSessionId,
   async (newId, oldId) => {
@@ -93,6 +82,19 @@ watch(
     setTimeout(scrollToBottom, 100);
   },
 );
+
+// F4: after reloadAfterFinalize replaces the streaming buffer with
+// DB messages, re-scroll to bottom to avoid position jitter.
+watch(() => store.scrollAfterReload, () => {
+  void scrollToBottom();
+});
+
+onMounted(() => {
+  messagesEl.value?.addEventListener("scroll", onScroll, { passive: true });
+});
+onUnmounted(() => {
+  messagesEl.value?.removeEventListener("scroll", onScroll);
+});
 </script>
 
 <template>

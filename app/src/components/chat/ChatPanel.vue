@@ -380,7 +380,11 @@ if (typeof window !== "undefined") {
     </header>
 
     <main class="chat-panel__main">
-      <div v-if="!hasMessages" class="chat-panel__empty">
+      <!-- F4: loading spinner while switching sessions -->
+      <div v-if="chatStore.sessionLoading" class="chat-panel__loading">
+        <div class="chat-panel__spinner" />
+      </div>
+      <div v-else-if="!hasMessages" class="chat-panel__empty">
         <p>输入一句话,跟 LLM 聊聊看</p>
         <p class="chat-panel__empty-hint">中文输入测试 + 流式响应 + 工具调用</p>
         <p v-if="currentProject" class="chat-panel__empty-project">
@@ -462,6 +466,27 @@ if (typeof window !== "undefined") {
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   flex-shrink: 0;
+}
+
+.chat-panel__loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-panel__spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-bg-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
   min-width: 0;
 }
 

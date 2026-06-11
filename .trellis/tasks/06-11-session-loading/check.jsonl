@@ -1,0 +1,3 @@
+{"file": "frontend/state-management.md", "reason": "验证 chat.ts store 改动符合现有 Pinia 模式"}
+{"file": "frontend/design-tokens.md", "reason": "验证新增组件使用正确 CSS tokens"}
+{"file": "backend/database-guidelines.md", "reason": "验证 migration 遵循项目 SQLite 模式"}

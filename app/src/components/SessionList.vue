@@ -24,6 +24,7 @@ import {
   DropdownMenuSubTrigger,
 } from "reka-ui";
 import Icon from "./Icon.vue";
+import ConfirmDialog from "./common/ConfirmDialog.vue";
 
 const store = useChatStore();
 const projectsStore = useProjectsStore();
@@ -43,6 +44,10 @@ const menuY = ref(0);
 const editingId = ref<string | null>(null);
 const editingTitle = ref("");
 const editInput = ref<HTMLInputElement | null>(null);
+
+// --- F3: delete confirmation state ---
+const confirmOpen = ref(false);
+const pendingDeleteId = ref<string | null>(null);
 
 const visibleSessions = computed<SessionSummary[]>(() => {
   const all = store.sessions;
@@ -71,8 +76,7 @@ function onClick(id: string) {
 function onDelete(id: string, e: MouseEvent) {
   e.stopPropagation();
   if (store.isCurrentSessionStreaming && id === store.currentSessionId) return;
-  if (!confirm("删除此 session 及其所有消息？")) return;
-  void store.deleteSession(id);
+  requestDelete(id);
 }
 
 function formatTime(iso: string): string {
@@ -147,8 +151,30 @@ function contextDelete() {
   const id = contextSessionId.value;
   if (!id) return;
   if (store.isCurrentSessionStreaming && id === store.currentSessionId) return;
-  if (!confirm("删除此 session 及其所有消息？")) return;
-  void store.deleteSession(id);
+  requestDelete(id);
+}
+
+function requestDelete(id: string) {
+  const s = store.sessions.find((x) => x.id === id);
+  // Empty session (no preview) → delete directly
+  if (!s || !s.preview) {
+    void store.deleteSession(id);
+    return;
+  }
+  pendingDeleteId.value = id;
+  confirmOpen.value = true;
+}
+
+function onConfirmDelete() {
+  const id = pendingDeleteId.value;
+  confirmOpen.value = false;
+  pendingDeleteId.value = null;
+  if (id) void store.deleteSession(id);
+}
+
+function onCancelDelete() {
+  confirmOpen.value = false;
+  pendingDeleteId.value = null;
 }
 
 // --- D1: color helpers ---
@@ -268,6 +294,17 @@ function cardStyle(s: SessionSummary): Record<string, string> {
       </DropdownMenuContent>
     </DropdownMenuPortal>
   </DropdownMenuRoot>
+
+  <!-- F3: delete session confirmation -->
+  <ConfirmDialog
+    :open="confirmOpen"
+    title="确认删除 session?"
+    confirm-text="确认删除"
+    @confirm="onConfirmDelete"
+    @cancel="onCancelDelete"
+  >
+    <p>此 session 及其所有消息将被永久删除，无法撤销。</p>
+  </ConfirmDialog>
 </template>
 
 <style scoped>
