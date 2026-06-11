@@ -34,6 +34,35 @@ pub enum Role {
 }
 
 // ---------------------------------------------------------------------------
+// CacheControl — Anthropic prompt cache breakpoint marker
+// ---------------------------------------------------------------------------
+
+/// A `cache_control` hint attached to a content block. Anthropic's
+/// Messages API reads this field to decide where to put a cache
+/// breakpoint — the LAST block in a request that carries this
+/// marker is the cache boundary; everything before it becomes
+/// eligible for a cache hit on the next turn (within the 5-min
+/// TTL).
+///
+/// The B5 memory refactor (2026-06-11) attaches `Ephemeral` to
+/// the first content block of the synthetic "instructions" user
+/// message so the 4 instruction files (CLAUDE.md / AGENTS.md ×
+/// user / project) are cached on turn 1 and read from cache on
+/// turns 2..MAX_TURNS. Without this marker, Anthropic would
+/// 100% miss every turn and re-bill the full instructions
+/// payload.
+///
+/// Today only `Ephemeral` exists (5-min TTL, 1.25× write /
+/// 0.1× read pricing). A future `Persistent` (1-hour TTL) variant
+/// can land here without a schema break — the tagged-enum shape
+/// is forward-compatible.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum CacheControl {
+    Ephemeral,
+}
+
+// ---------------------------------------------------------------------------
 // ContentBlock — structured message content
 // ---------------------------------------------------------------------------
 
@@ -43,6 +72,14 @@ pub enum Role {
 pub enum ContentBlock {
     Text {
         text: String,
+        /// Optional Anthropic prompt-cache breakpoint. When `Some`,
+        /// the wire layer preserves this block as a separate
+        /// content block (does NOT concatenate it with adjacent
+        /// text blocks) and the Anthropic adapter emits
+        /// `cache_control: {"type": "ephemeral"}` next to the
+        /// block. See [`CacheControl`] for the cost model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
     /// Anthropic extended-thinking content block. `thinking` is the streamed
     /// (or summarized, depending on `display`) summary text the model
@@ -101,7 +138,7 @@ impl MessageContent {
             MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -364,6 +401,7 @@ mod tests {
     fn message_content_serialize_blocks_as_array() {
         let blocks = vec![ContentBlock::Text {
             text: "hi".to_string(),
+            cache_control: None,
         }];
         let mc = MessageContent::Blocks(blocks);
         let json = serde_json::to_string(&mc).unwrap();
@@ -381,7 +419,8 @@ mod tests {
                 assert_eq!(
                     blocks[0],
                     ContentBlock::Text {
-                        text: "hello".to_string()
+                        text: "hello".to_string(),
+                        cache_control: None,
                     }
                 );
             }
@@ -411,7 +450,7 @@ mod tests {
         match &msg.content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 2);
-                assert!(matches!(&blocks[0], ContentBlock::Text { text } if text == "let me read that"));
+                assert!(matches!(&blocks[0], ContentBlock::Text { text, .. } if text == "let me read that"));
                 assert!(matches!(&blocks[1], ContentBlock::ToolUse { name, .. } if name == "read_file"));
             }
             _ => panic!("expected Blocks"),
@@ -515,6 +554,7 @@ mod tests {
         let blocks = vec![
             ContentBlock::Text {
                 text: "hello ".to_string(),
+                cache_control: None,
             },
             ContentBlock::ToolUse {
                 id: "t1".to_string(),
@@ -523,6 +563,7 @@ mod tests {
             },
             ContentBlock::Text {
                 text: "world".to_string(),
+                cache_control: None,
             },
         ];
         let mc = MessageContent::Blocks(blocks);
@@ -643,6 +684,7 @@ mod tests {
             },
             ContentBlock::Text {
                 text: "visible answer".to_string(),
+                cache_control: None,
             },
             ContentBlock::RedactedThinking {
                 data: "redacted".to_string(),

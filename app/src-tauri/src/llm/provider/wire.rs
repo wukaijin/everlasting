@@ -45,7 +45,9 @@
 
 use serde_json::Value;
 
-use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ContentBlock, MessageContent, Role, ToolDef};
+use crate::llm::types::{
+    CacheControl, ChatEvent, ChatMessage, ChatRequest, ContentBlock, MessageContent, Role, ToolDef,
+};
 
 // ---------------------------------------------------------------------------
 // WireCapabilities
@@ -138,6 +140,15 @@ pub enum WireMessage {
     /// A user-role message. Content is plain text (Anthropic and
     /// OpenAI both accept string content for `role: "user"`).
     User { content: String },
+    /// A user-role message whose content MUST remain block-shaped
+    /// (multi-block, or any block carrying a [`CacheControl`]
+    /// marker). Anthropic serializes this as a content array; the
+    /// OpenAI adapter flattens it to a string (cache_control is
+    /// dropped, which is correct — OpenAI Chat Completions has no
+    /// prompt-cache marker). Used by the B5 memory refactor
+    /// (2026-06-11) to keep the synthetic instructions message's
+    /// `cache_control: ephemeral` from being concatenated away.
+    UserBlocks { blocks: Vec<WireBlock> },
     /// An assistant-role message. The model may emit text, reasoning,
     /// tool_use, signature blobs, or redacted-thinking payloads —
     /// all stored in order in `blocks`.
@@ -157,7 +168,18 @@ pub enum WireMessage {
 /// provider-agnostic representation of a tool result.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireBlock {
-    Text { text: String },
+    Text {
+        text: String,
+        /// Anthropic prompt-cache breakpoint marker. When `Some`,
+        /// the Anthropic adapter emits a `cache_control` field
+        /// next to this text block. The wire layer preserves this
+        /// block as a distinct entry (does NOT concatenate it with
+        /// adjacent text) so the cache boundary is exact.
+        ///
+        /// The OpenAI adapter drops this field when serializing
+        /// (OpenAI Chat Completions has no prompt-cache marker).
+        cache_control: Option<CacheControl>,
+    },
     /// Provider-agnostic reasoning block. Mapped to:
     /// - Anthropic `thinking` block (when target supports thinking).
     /// - OpenAI `reasoning_content` field of the streaming delta
@@ -250,59 +272,112 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
         Role::User => match msg.content {
             MessageContent::Text(s) => vec![WireMessage::User { content: s }],
             MessageContent::Blocks(blocks) => {
-                let mut out: Vec<WireMessage> = Vec::new();
-                let mut pending_text = String::new();
-                for block in blocks {
-                    match block {
-                        ContentBlock::Text { text } => {
-                            pending_text.push_str(&text);
-                        }
-                        ContentBlock::ToolResult {
-                            tool_use_id,
-                            content,
+                // B5 refactor (2026-06-11): if any text block in
+                // the user role carries a `cache_control` marker,
+                // we must keep block boundaries (concatenation
+                // would silently drop the cache marker, and
+                // Anthropic would 100% miss every turn). The
+                // legacy concatenation path is preserved for
+                // everything else.
+                let has_cacheable = blocks.iter().any(|b| {
+                    matches!(
+                        b,
+                        ContentBlock::Text {
+                            cache_control: Some(_),
                             ..
-                        } => {
-                            // Flush any pending text as a user
-                            // message first so the order of
-                            // [text, tool_result, text, tool_result]
-                            // is preserved in the wire array.
-                            if !pending_text.is_empty() {
-                                out.push(WireMessage::User {
-                                    content: std::mem::take(&mut pending_text),
+                        }
+                    )
+                });
+
+                if has_cacheable {
+                    let mut out: Vec<WireMessage> = Vec::new();
+                    let mut pending: Vec<WireBlock> = Vec::new();
+                    for block in blocks {
+                        match block {
+                            ContentBlock::Text {
+                                text,
+                                cache_control,
+                            } => {
+                                pending.push(WireBlock::Text {
+                                    text,
+                                    cache_control,
                                 });
                             }
-                            out.push(WireMessage::Tool {
-                                tool_call_id: tool_use_id,
+                            ContentBlock::ToolResult {
+                                tool_use_id,
                                 content,
-                            });
-                        }
-                        // Defensive: a `role: "user"` block is not
-                        // expected to contain assistant-side
-                        // constructs (thinking / tool_use /
-                        // redacted_thinking). The legacy
-                        // serialization might put them there if
-                        // someone mutated the DB by hand. Skip
-                        // rather than crash.
-                        ContentBlock::Thinking { .. }
-                        | ContentBlock::RedactedThinking { .. }
-                        | ContentBlock::ToolUse { .. } => {
-                            tracing::debug!(
-                                "chat_message_to_wire_messages: skipping unexpected assistant block in user-role message"
-                            );
+                                ..
+                            } => {
+                                if !pending.is_empty() {
+                                    out.push(WireMessage::UserBlocks {
+                                        blocks: std::mem::take(&mut pending),
+                                    });
+                                }
+                                out.push(WireMessage::Tool {
+                                    tool_call_id: tool_use_id,
+                                    content,
+                                });
+                            }
+                            ContentBlock::Thinking { .. }
+                            | ContentBlock::RedactedThinking { .. }
+                            | ContentBlock::ToolUse { .. } => {
+                                tracing::debug!(
+                                    "chat_message_to_wire_messages: skipping unexpected assistant block in user-role message"
+                                );
+                            }
                         }
                     }
+                    if !pending.is_empty() {
+                        out.push(WireMessage::UserBlocks { blocks: pending });
+                    }
+                    out
+                } else {
+                    let mut out: Vec<WireMessage> = Vec::new();
+                    let mut pending_text = String::new();
+                    for block in blocks {
+                        match block {
+                            ContentBlock::Text { text, .. } => {
+                                pending_text.push_str(&text);
+                            }
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } => {
+                                if !pending_text.is_empty() {
+                                    out.push(WireMessage::User {
+                                        content: std::mem::take(&mut pending_text),
+                                    });
+                                }
+                                out.push(WireMessage::Tool {
+                                    tool_call_id: tool_use_id,
+                                    content,
+                                });
+                            }
+                            ContentBlock::Thinking { .. }
+                            | ContentBlock::RedactedThinking { .. }
+                            | ContentBlock::ToolUse { .. } => {
+                                tracing::debug!(
+                                    "chat_message_to_wire_messages: skipping unexpected assistant block in user-role message"
+                                );
+                            }
+                        }
+                    }
+                    if !pending_text.is_empty() {
+                        out.push(WireMessage::User {
+                            content: pending_text,
+                        });
+                    }
+                    out
                 }
-                if !pending_text.is_empty() {
-                    out.push(WireMessage::User {
-                        content: pending_text,
-                    });
-                }
-                out
             }
         },
         Role::Assistant => {
             let blocks: Vec<WireBlock> = match msg.content {
-                MessageContent::Text(s) => vec![WireBlock::Text { text: s }],
+                MessageContent::Text(s) => vec![WireBlock::Text {
+                    text: s,
+                    cache_control: None,
+                }],
                 MessageContent::Blocks(blocks) => blocks
                     .into_iter()
                     .flat_map(content_block_to_wire_block)
@@ -315,7 +390,13 @@ fn chat_message_to_wire_messages(msg: ChatMessage) -> Vec<WireMessage> {
 
 fn content_block_to_wire_block(block: ContentBlock) -> Vec<WireBlock> {
     match block {
-        ContentBlock::Text { text } => vec![WireBlock::Text { text }],
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => vec![WireBlock::Text {
+            text,
+            cache_control,
+        }],
         ContentBlock::Thinking { thinking, signature } => {
             // The Anthropic-side Thinking block carries both
             // `thinking` text and an opaque `signature`. We split
@@ -356,6 +437,7 @@ fn content_block_to_wire_block(block: ContentBlock) -> Vec<WireBlock> {
             );
             vec![WireBlock::Text {
                 text: format!("[stray tool_result: {}]", content),
+                cache_control: None,
             }]
         }
     }
@@ -398,6 +480,17 @@ pub fn strip_unsupported(
         .into_iter()
         .filter_map(|m| match m {
             WireMessage::User { content } => Some(WireMessage::User { content }),
+            WireMessage::UserBlocks { blocks } => {
+                // B5 refactor (2026-06-11): `UserBlocks` carries
+                // block-level cache_control on text blocks. We
+                // keep it intact here — `block_supported` is a
+                // no-op for `Text` (see the decision matrix), so
+                // the cache marker survives `strip_unsupported`.
+                // Anthropic → OpenAI path: the OpenAI adapter
+                // drops cache_control at serialization time, so
+                // no special handling is needed here.
+                Some(WireMessage::UserBlocks { blocks })
+            }
             WireMessage::Tool {
                 tool_call_id,
                 content,
@@ -451,7 +544,7 @@ fn block_supported(block: &WireBlock, caps: &WireCapabilities) -> bool {
 #[allow(dead_code)] // used by tests; future PRs may call from a unified stream parser
 pub fn wire_block_to_chat_event(block: &WireBlock) -> Option<ChatEvent> {
     match block {
-        WireBlock::Text { text } => Some(ChatEvent::Delta { text: text.clone() }),
+        WireBlock::Text { text, .. } => Some(ChatEvent::Delta { text: text.clone() }),
         // `Reasoning` text is emitted as `ThinkingDelta` —
         // ChatEvent is the Anthropic-shaped one and we want the
         // frontend's existing thinking-rendering path to work
@@ -525,6 +618,21 @@ fn wire_message_to_chat_messages(msg: WireMessage) -> Vec<ChatMessage> {
             role: Role::User,
             content: MessageContent::Text(content),
         }],
+        WireMessage::UserBlocks { blocks } => {
+            // B5 refactor (2026-06-11): preserve block-level
+            // cache_control on text blocks by routing back
+            // through `MessageContent::Blocks`. The Anthropic
+            // adapter serializes the block array (with
+            // cache_control on the relevant block) and the
+            // OpenAI adapter flattens the same array to a string
+            // (dropping cache_control, which is fine — OpenAI
+            // Chat Completions has no prompt-cache marker).
+            let merged = wire_blocks_to_content_blocks(blocks);
+            vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(merged),
+            }]
+        }
         WireMessage::Tool {
             tool_call_id,
             content,
@@ -609,7 +717,13 @@ fn wire_blocks_to_content_blocks(blocks: Vec<WireBlock>) -> Vec<ContentBlock> {
 
 fn wire_block_to_content_block(block: WireBlock) -> ContentBlock {
     match block {
-        WireBlock::Text { text } => ContentBlock::Text { text },
+        WireBlock::Text {
+            text,
+            cache_control,
+        } => ContentBlock::Text {
+            text,
+            cache_control,
+        },
         // A standalone `Reasoning` (no following `Signature`) maps
         // to a `Thinking` block with empty signature. This is
         // normally handled inside `wire_blocks_to_content_blocks`
@@ -746,6 +860,7 @@ mod tests {
                 content: MessageContent::Blocks(vec![
                     ContentBlock::Text {
                         text: "looking at result:".to_string(),
+                        cache_control: None,
                     },
                     ContentBlock::ToolResult {
                         tool_use_id: "toolu_1".to_string(),
@@ -754,6 +869,7 @@ mod tests {
                     },
                     ContentBlock::Text {
                         text: "and another:".to_string(),
+                        cache_control: None,
                     },
                     ContentBlock::ToolResult {
                         tool_use_id: "toolu_2".to_string(),
@@ -795,6 +911,7 @@ mod tests {
                     },
                     ContentBlock::Text {
                         text: "answer".to_string(),
+                        cache_control: None,
                     },
                 ]),
             }],
@@ -815,7 +932,7 @@ mod tests {
         assert_eq!(blocks.len(), 3);
         assert!(matches!(&blocks[0], WireBlock::Reasoning { text } if text == "let me think"));
         assert!(matches!(&blocks[1], WireBlock::Signature { data } if data == "sig_abc"));
-        assert!(matches!(&blocks[2], WireBlock::Text { text } if text == "answer"));
+        assert!(matches!(&blocks[2], WireBlock::Text { text, .. } if text == "answer"));
     }
 
     // ---- strip_unsupported ----
@@ -833,6 +950,7 @@ mod tests {
                 },
                 WireBlock::Text {
                     text: "answer".to_string(),
+                    cache_control: None,
                 },
             ],
         }];
@@ -845,7 +963,7 @@ mod tests {
         // Text kept.
         assert_eq!(blocks.len(), 2);
         assert!(matches!(&blocks[0], WireBlock::Reasoning { text } if text == "thought"));
-        assert!(matches!(&blocks[1], WireBlock::Text { text } if text == "answer"));
+        assert!(matches!(&blocks[1], WireBlock::Text { text, .. } if text == "answer"));
     }
 
     #[test]
@@ -859,6 +977,7 @@ mod tests {
                 },
                 WireBlock::Text {
                     text: "answer".to_string(),
+                    cache_control: None,
                 },
             ],
         }];
@@ -868,7 +987,7 @@ mod tests {
             panic!("expected Assistant")
         };
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], WireBlock::Text { text } if text == "answer"));
+        assert!(matches!(&blocks[0], WireBlock::Text { text, .. } if text == "answer"));
     }
 
     #[test]
@@ -882,6 +1001,7 @@ mod tests {
                 },
                 WireBlock::Text {
                     text: "ok".to_string(),
+                    cache_control: None,
                 },
             ],
         }];
@@ -909,6 +1029,7 @@ mod tests {
                 },
                 WireBlock::Text {
                     text: "visible".to_string(),
+                    cache_control: None,
                 },
             ],
         }];
@@ -973,6 +1094,7 @@ mod tests {
     fn wire_block_text_to_chat_event_delta() {
         let ev = wire_block_to_chat_event(&WireBlock::Text {
             text: "hi".to_string(),
+            cache_control: None,
         })
         .expect("text maps to event");
         assert!(matches!(ev, ChatEvent::Delta { text } if text == "hi"));
@@ -1039,6 +1161,7 @@ mod tests {
                 },
                 ContentBlock::Text {
                     text: "the answer".to_string(),
+                    cache_control: None,
                 },
             ]),
         }];
@@ -1067,7 +1190,7 @@ mod tests {
             }
             other => panic!("expected Thinking, got {:?}", other),
         }
-        assert!(matches!(&blocks[1], ContentBlock::Text { text } if text == "the answer"));
+        assert!(matches!(&blocks[1], ContentBlock::Text { text, .. } if text == "the answer"));
     }
 
     #[test]
@@ -1105,5 +1228,138 @@ mod tests {
             }
             other => panic!("expected Thinking, got {:?}", other),
         }
+    }
+
+    // ---- B5 cache_control preservation ----
+    //
+    // The synthetic instructions user message carries
+    // `cache_control: Some(Ephemeral)` on its first text block so
+    // Anthropic can cache the 4 instruction files (CLAUDE.md /
+    // AGENTS.md × user / project) on turn 1 and read them from
+    // cache on turns 2..MAX_TURNS. These tests lock the wire
+    // round-trip preserves the cache marker.
+
+    #[test]
+    fn round_trip_preserves_cache_control_on_text_block() {
+        // A user message with a cacheable text block + a regular
+        // text block: round-trip should preserve cache_control on
+        // the first block and produce a `UserBlocks` wire shape
+        // (NOT concatenate, which would drop the marker).
+        let original = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Text {
+                    text: "<banner>loaded 4 instructions</banner>".to_string(),
+                    cache_control: Some(CacheControl::Ephemeral),
+                },
+                ContentBlock::Text {
+                    text: "<reference>CLAUDE.md body</reference>".to_string(),
+                    cache_control: None,
+                },
+            ]),
+        }];
+        let req = ChatRequest {
+            model: "m".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages: original,
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        // Critical: must be UserBlocks (not User { content }),
+        // otherwise concatenation drops the cache marker.
+        assert_eq!(wire.messages.len(), 1);
+        match &wire.messages[0] {
+            WireMessage::UserBlocks { blocks } => {
+                assert_eq!(blocks.len(), 2);
+                match &blocks[0] {
+                    WireBlock::Text {
+                        text,
+                        cache_control,
+                    } => {
+                        assert_eq!(text, "<banner>loaded 4 instructions</banner>");
+                        assert_eq!(*cache_control, Some(CacheControl::Ephemeral));
+                    }
+                    other => panic!("expected Text, got {:?}", other),
+                }
+                match &blocks[1] {
+                    WireBlock::Text {
+                        text,
+                        cache_control,
+                    } => {
+                        assert_eq!(text, "<reference>CLAUDE.md body</reference>");
+                        assert_eq!(*cache_control, None);
+                    }
+                    other => panic!("expected Text, got {:?}", other),
+                }
+            }
+            other => panic!("expected UserBlocks, got {:?}", other),
+        }
+        // Inverse: round-trip back to ChatMessage, verify
+        // cache_control survives the inverse path.
+        let back = wire_messages_to_chat_messages(wire.messages);
+        assert_eq!(back.len(), 1);
+        let ChatMessage { content: MessageContent::Blocks(blocks), .. } = &back[0] else {
+            panic!("expected Blocks content");
+        };
+        assert_eq!(blocks.len(), 2);
+        match &blocks[0] {
+            ContentBlock::Text {
+                text,
+                cache_control,
+            } => {
+                assert_eq!(text, "<banner>loaded 4 instructions</banner>");
+                assert_eq!(*cache_control, Some(CacheControl::Ephemeral));
+            }
+            other => panic!("expected Text, got {:?}", other),
+        }
+        match &blocks[1] {
+            ContentBlock::Text {
+                text,
+                cache_control,
+            } => {
+                assert_eq!(text, "<reference>CLAUDE.md body</reference>");
+                assert_eq!(*cache_control, None);
+            }
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn user_blocks_with_cache_control_are_not_concatenated() {
+        // Two user messages, both with cacheable text blocks —
+        // the legacy path would have concatenated them into a
+        // single `User { content: String }` (losing both cache
+        // markers). With cache_control present, each stays as a
+        // separate `UserBlocks` message.
+        let req = ChatRequest {
+            model: "m".to_string(),
+            max_tokens: 1024,
+            system: None,
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: "first chunk".to_string(),
+                        cache_control: Some(CacheControl::Ephemeral),
+                    },
+                    ContentBlock::Text {
+                        text: "second chunk".to_string(),
+                        cache_control: None,
+                    },
+                ]),
+            }],
+            stream: true,
+            tools: vec![],
+            thinking: None,
+        };
+        let wire = chat_request_to_wire(req, None);
+        // 1 UserBlocks message (not 1 User { content } and not 2
+        // separate User messages — both blocks belong to the same
+        // user message).
+        assert_eq!(wire.messages.len(), 1);
+        assert!(matches!(&wire.messages[0], WireMessage::UserBlocks { blocks } if blocks.len() == 2));
     }
 }

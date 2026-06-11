@@ -320,6 +320,7 @@ async fn persist_and_load_messages() {
  let assistant_blocks = vec![
  ContentBlock::Text {
  text: "OK reading".to_string(),
+ cache_control: None,
  },
  ContentBlock::ToolUse {
  id: "toolu_abc".to_string(),
@@ -574,7 +575,7 @@ async fn insert_system_event_appends_to_history() {
  assert_eq!(meta["event"], "attached");
  let blocks: Vec<ContentBlock> = serde_json::from_value(evt.content.clone()).unwrap();
  assert_eq!(blocks.len(),1);
- if let ContentBlock::Text { text } = &blocks[0] {
+ if let ContentBlock::Text { text, .. } = &blocks[0] {
  assert!(text.contains("[worktree event]"));
  assert!(text.contains("/data/wt"));
  } else {

@@ -170,6 +170,30 @@ impl OpenAIProvider {
                 super::wire::WireMessage::User { content } => {
                     msgs.push(json!({ "role": "user", "content": content }));
                 }
+                // B5 refactor (2026-06-11): a user message that
+                // carries a `cache_control` marker on any text
+                // block is emitted as `UserBlocks` (block-shaped
+                // content) instead of a single string. OpenAI Chat
+                // Completions has no prompt-cache marker, so we
+                // drop the cache_control and flatten the text
+                // blocks to a single string. This keeps OpenAI
+                // behavior identical to pre-refactor for the same
+                // logical content.
+                super::wire::WireMessage::UserBlocks { blocks } => {
+                    let mut content = String::new();
+                    for b in blocks {
+                        if let super::wire::WireBlock::Text { text, .. } = b {
+                            content.push_str(text);
+                        }
+                        // Defensive: a `UserBlocks` payload with
+                        // non-text blocks is unexpected (the wire
+                        // layer's `chat_message_to_wire_messages`
+                        // only produces text blocks for this
+                        // variant). Skip non-text rather than
+                        // crash.
+                    }
+                    msgs.push(json!({ "role": "user", "content": content }));
+                }
                 super::wire::WireMessage::Assistant { blocks } => {
                     let (text_parts, tool_calls) = assistant_blocks_to_openai(blocks);
                     let mut msg = json!({ "role": "assistant" });
@@ -267,7 +291,7 @@ fn assistant_blocks_to_openai(blocks: &[WireBlock]) -> (Vec<String>, Vec<Value>)
     let mut tool_calls: Vec<Value> = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
         match b {
-            WireBlock::Text { text } => text_parts.push(text.clone()),
+            WireBlock::Text { text, .. } => text_parts.push(text.clone()),
             WireBlock::Reasoning { text } => {
                 // Reasoning from prior turns: prepend to the
                 // assistant content as a hidden comment so the
@@ -947,6 +971,7 @@ mod tests {
                 blocks: vec![
                     WireBlock::Text {
                         text: "let me read".to_string(),
+                        cache_control: None,
                     },
                     WireBlock::ToolUse {
                         id: "call_42".to_string(),
@@ -1148,6 +1173,7 @@ mod tests {
                     },
                     ContentBlock::Text {
                         text: "the answer".to_string(),
+                        cache_control: None,
                     },
                 ]),
             }],
@@ -1294,6 +1320,7 @@ mod tests {
     fn wire_block_to_chat_event_text_path() {
         let ev = wire_block_to_chat_event(&WireBlock::Text {
             text: "hi".to_string(),
+            cache_control: None,
         })
         .unwrap();
         assert!(matches!(ev, ChatEvent::Delta { text } if text == "hi"));
