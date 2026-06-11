@@ -220,3 +220,89 @@ pub async fn set_session_color(
         .await
         .map_err(|e| format!("set_session_color failed: {}", e))
 }
+
+// ---------------------------------------------------------------------------
+// F5 (LLM Latency Tracking): per-message latency + per-tool duration IPCs
+//
+// Two new commands; both are write-only and fire-and-forget from the
+// frontend's `streamController` (the agent loop does not call them).
+// The IPC layer's `serde(rename_all)` mirrors the TypeScript payload
+// names — see `app/src/stores/streamController.ts` for the consumer.
+// ---------------------------------------------------------------------------
+
+/// Update the three latency columns on an assistant message row
+/// (TTFB / gen / total in milliseconds). The frontend measures
+/// the three values via `Date.now()` deltas around the
+/// `start` / first `delta` / `done` events of one chat
+/// invocation, then issues this IPC at `done`.
+///
+/// The controller tracks the assistant message by its
+/// caller-managed `seq` (the same handle it shares with the
+/// agent loop), so the IPC takes `(session_id, seq)` and the
+/// backend resolves the SQLite row id internally via
+/// `find_message_id_by_seq`. Each of the three millisecond
+/// values is optional so a cancel / error path can pass
+/// `None` for `ttfbMs` / `genMs` and still record the total
+/// time-to-cancel.
+#[tauri::command]
+pub async fn update_message_latency(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    seq: i64,
+    ttfb_ms: Option<i64>,
+    gen_ms: Option<i64>,
+    total_ms: Option<i64>,
+) -> Result<bool, String> {
+    // Resolve the (session_id, seq) pair to the auto-incrementing
+    // row id. The seq was assigned by the agent loop in the order
+    // user → assistant → user(tool_result) → ... so it's unique
+    // within a session by construction (UNIQUE(session_id, seq)
+    // constraint in the schema).
+    let message_id = match crate::db::find_message_id_by_seq(&state.db, &session_id, seq)
+        .await
+        .map_err(|e| format!("update_message_latency: lookup failed: {}", e))?
+    {
+        Some(id) => id,
+        None => {
+            // No matching row — the agent loop hasn't persisted
+            // the assistant turn yet (cancel cleanup can persist
+            // after the controller's `done` event fires). Treat
+            // as a no-op so the frontend doesn't surface an error
+            // for the cancel race.
+            return Ok(false);
+        }
+    };
+    let latency = crate::db::sessions::MessageLatency {
+        ttfb_ms,
+        gen_ms,
+        total_ms,
+    };
+    crate::db::update_message_latency(&state.db, message_id, &latency)
+        .await
+        .map_err(|e| format!("update_message_latency failed: {}", e))?;
+    Ok(true)
+}
+
+/// Patch a `duration_ms` field onto the `tool_result` block
+/// inside `messages.content` JSON for the given `tool_use_id`.
+/// Per PRD ADR-lite decision 1, the per-tool duration lives in
+/// the tool_result block itself (no schema change for the tool
+/// side). The frontend measures duration as
+/// `Date.now() - tool_call_received_at` and issues this IPC
+/// on every `tool:result` event.
+///
+/// `duration_ms` is an i64 (not `Option`) — the IPC always
+/// records a value; a missing block in the DB returns `Ok(false)`
+/// from the backend (no error), and the frontend treats that as
+/// a benign no-op.
+#[tauri::command]
+pub async fn record_tool_duration(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    duration_ms: i64,
+) -> Result<bool, String> {
+    crate::db::record_tool_duration(&state.db, &session_id, &tool_use_id, duration_ms)
+        .await
+        .map_err(|e| format!("record_tool_duration failed: {}", e))
+}

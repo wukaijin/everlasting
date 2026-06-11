@@ -79,6 +79,12 @@ pub fn run() {
             commands::sessions::diff_worktree,
             commands::sessions::rename_session,
             commands::sessions::set_session_color,
+            // F5 (LLM Latency Tracking): per-message latency +
+            // per-tool duration persistence. Called by the
+            // frontend `streamController` on `done` / `tool:result`
+            // events; the agent loop itself does not call them.
+            commands::sessions::update_message_latency,
+            commands::sessions::record_tool_duration,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,

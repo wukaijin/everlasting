@@ -185,7 +185,7 @@ pub async fn load_session(
  let msg_rows = sqlx::query(
  r#"
  SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results,
- created_at, seq, metadata
+ created_at, seq, metadata, ttfb_ms, gen_ms, total_ms
  FROM messages
  WHERE session_id = ?
  ORDER BY seq ASC
@@ -217,6 +217,12 @@ pub async fn load_session(
  created_at: r.try_get("created_at")?,
  seq: r.try_get("seq")?,
  metadata,
+ // F5: per-message latency breakdown. All three nullable
+ // for pre-F5 rows; the frontend `update_message_latency` IPC
+ // sets them at stream done.
+ ttfb_ms: r.try_get("ttfb_ms")?,
+ gen_ms: r.try_get("gen_ms")?,
+ total_ms: r.try_get("total_ms")?,
  })
  })
  .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -521,12 +527,22 @@ pub async fn insert_system_event(
 ///
 /// If the message is a user message and the session title is still the
 /// default "新对话", auto-generate a title from the message text.
+///
+/// F5 (LLM Latency Tracking): the optional `latency` carries the
+/// three millisecond values (ttfb / gen / total) measured by the
+/// frontend's `Date.now()` deltas around the `start` / first
+/// `delta` / `done` events. The values are NULL when the caller
+/// has not measured them (e.g. `tool_result` rows; the tool
+/// result is emitted as a user-role row by the agent loop and
+/// the latency is per assistant turn, not per tool). Pre-F5
+/// callers can pass `None` and the columns stay NULL.
 pub async fn persist_turn(
  pool: &SqlitePool,
  session_id: &str,
  role: Role,
  content: &MessageContent,
  seq: i64,
+ latency: Option<&MessageLatency>,
 ) -> Result<(), sqlx::Error> {
  let now = Utc::now().to_rfc3339();
  let role_str = match role {
@@ -544,8 +560,8 @@ pub async fn persist_turn(
  sqlx::query(
  r#"
  INSERT INTO messages
- (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq, ttfb_ms, gen_ms, total_ms)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  "#,
  )
  .bind(session_id)
@@ -556,6 +572,9 @@ pub async fn persist_turn(
  .bind(has_tool_results as i64)
  .bind(&now)
  .bind(seq)
+ .bind(latency.and_then(|l| l.ttfb_ms))
+ .bind(latency.and_then(|l| l.gen_ms))
+ .bind(latency.and_then(|l| l.total_ms))
  .execute(pool)
  .await?;
 
@@ -579,4 +598,175 @@ pub async fn persist_turn(
  }
 
  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// F5: per-message latency + per-tool-result duration persistence
+// ---------------------------------------------------------------------------
+
+/// Three-field latency breakdown measured by the frontend around
+/// the SSE event boundaries of one chat invocation. All three
+/// fields are optional because the cancel / error paths may
+/// only know the total (no `delta` was ever received → no
+/// `ttfb_ms`).
+///
+/// Field semantics (mirrored in `.trellis/spec/backend/llm-contract.md`
+/// "Scenario: Latency Tracking" §2):
+/// - `ttfb_ms`: send → first `delta` event (time-to-first-byte)
+/// - `gen_ms`:  first `delta` → `done` (active generation)
+/// - `total_ms`: send → `done` (end-to-end; always set when
+///   `total_ms.is_some()`)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MessageLatency {
+ pub ttfb_ms: Option<i64>,
+ pub gen_ms: Option<i64>,
+ pub total_ms: Option<i64>,
+}
+
+/// Update the latency columns on an already-persisted message row.
+/// Called from the frontend's `streamController.handleChatEvent("done")`
+/// after the three `Date.now()` deltas resolve. Updates the
+/// assistant row's three columns in one SQL statement; a no-op
+/// if the message id is unknown (defensive — the controller
+/// could in principle race the agent loop's `persist_turn` if
+/// the user cancels mid-stream and the cancel cleanup path
+/// persists the partial turn at a later time).
+///
+/// The `id` is the SQLite `messages.id` (auto-incrementing). The
+/// controller tracks this via the `seq` on the assistant message;
+/// the IPC layer looks up the id by `(session_id, seq)` and passes
+/// it here. See `find_message_id_by_seq` for the helper.
+pub async fn update_message_latency(
+ pool: &SqlitePool,
+ message_id: i64,
+ latency: &MessageLatency,
+) -> Result<(), sqlx::Error> {
+ sqlx::query(
+ r#"
+ UPDATE messages
+ SET ttfb_ms = ?, gen_ms = ?, total_ms = ?
+ WHERE id = ?
+ "#,
+ )
+ .bind(latency.ttfb_ms)
+ .bind(latency.gen_ms)
+ .bind(latency.total_ms)
+ .bind(message_id)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
+/// Find a session message's auto-incrementing row id by its
+/// caller-managed `seq`. Used by the F5 `update_message_latency`
+/// IPC: the frontend tracks the seq of the assistant placeholder
+/// (it appears in `messages.content` as a JSON-serialized
+/// `Vec<ContentBlock>`), but doesn't know the SQLite id at
+/// stream end (the row was inserted by the agent loop's
+/// `persist_turn`, not by the frontend). This helper bridges
+/// the two.
+pub async fn find_message_id_by_seq(
+ pool: &SqlitePool,
+ session_id: &str,
+ seq: i64,
+) -> Result<Option<i64>, sqlx::Error> {
+ let row: Option<(i64,)> = sqlx::query_as(
+ "SELECT id FROM messages WHERE session_id = ? AND seq = ?",
+ )
+ .bind(session_id)
+ .bind(seq)
+ .fetch_optional(pool)
+ .await?;
+ Ok(row.map(|(id,)| id))
+}
+
+/// Patch the `duration_ms` field onto a `tool_result` content
+/// block embedded in `messages.content` JSON, keyed by
+/// `tool_use_id`. Per PRD ADR-lite decision 1, the per-tool
+/// duration is embedded in the `tool_result` block rather
+/// than a column — zero schema change for the tool side.
+///
+/// The function reads the matching message row, walks the
+/// `content` JSON array, finds the `tool_result` block with
+/// the matching `tool_use_id`, and writes
+/// `{"duration_ms": <n>}` into the block. Other blocks and
+/// the rest of the message row are untouched. A missing
+/// `tool_use_id` is a no-op (the controller could in principle
+/// fire `tool:result` for a tool_use that hasn't been persisted
+/// yet, e.g. if the agent loop bails out before `persist_turn`
+/// runs — we don't want to surface that as an error).
+///
+/// Both user-role rows that carry `tool_result` blocks
+/// (the post-tool-execution turn the agent loop persists)
+/// AND assistant-role rows that were repaired by the
+/// 2013-orphan fix are supported: the search walks every
+/// `tool_result` block in the row's content array, so a
+/// durationMs patch lands on whichever row holds the
+/// matching block.
+pub async fn record_tool_duration(
+ pool: &SqlitePool,
+ session_id: &str,
+ tool_use_id: &str,
+ duration_ms: i64,
+) -> Result<bool, sqlx::Error> {
+ // Load every message row in the session that has tool_results,
+ // patch the matching block in memory, and UPDATE the row if
+ // the patch landed. SQLite's `json_patch` is also an option
+ // (no Rust-side parsing), but loading + writing in Rust keeps
+ // the patch logic readable and gives a free `did we actually
+ // find a block` boolean for the IPC return value.
+ let rows = sqlx::query(
+ r#"
+ SELECT id, content FROM messages
+ WHERE session_id = ? AND has_tool_results =1
+ ORDER BY seq ASC
+ "#,
+ )
+ .bind(session_id)
+ .fetch_all(pool)
+ .await?;
+
+ for row in rows {
+ let id: i64 = row.try_get("id")?;
+ let content_str: String = row.try_get("content")?;
+ let mut value: serde_json::Value = match serde_json::from_str(&content_str) {
+ Ok(v) => v,
+ Err(_) => continue, // corrupt content — skip silently
+ };
+ let Some(blocks) = value.as_array_mut() else {
+ continue;
+ };
+ let mut patched = false;
+ for block in blocks.iter_mut() {
+ let Some(obj) = block.as_object_mut() else {
+ continue;
+ };
+ let is_tool_result = obj.get("type").and_then(|v| v.as_str()) == Some("tool_result");
+ if !is_tool_result {
+ continue;
+ }
+ let matches = obj.get("tool_use_id").and_then(|v| v.as_str()) == Some(tool_use_id);
+ if !matches {
+ continue;
+ }
+ obj.insert(
+ "duration_ms".to_string(),
+ serde_json::Value::Number(duration_ms.into()),
+ );
+ patched = true;
+ }
+ if !patched {
+ continue;
+ }
+ let new_content = serde_json::to_string(&value).map_err(|e| {
+ sqlx::Error::Encode(format!("re-serialize content: {}", e).into())
+ })?;
+ sqlx::query("UPDATE messages SET content = ? WHERE id = ?")
+ .bind(&new_content)
+ .bind(id)
+ .execute(pool)
+ .await?;
+ return Ok(true);
+ }
+ Ok(false)
 }

@@ -6,6 +6,8 @@
 //      looked up from the same message's `toolResults`)
 //   4. The visible text bubble (with the blinking streaming cursor)
 //   5. The error footer (if the turn failed)
+//   6. F5 latency footer (right-aligned, hover tooltip with the
+//      TTFB / gen / total breakdown)
 //
 // The "is there a bubble" predicate mirrors the original ChatWindow
 // logic: any of {content, toolCalls, toolResults, thinkingBlocks,
@@ -20,9 +22,18 @@
 //   wait out the timer.
 
 import { computed, watch, onUnmounted } from "vue";
+import {
+  TooltipProvider,
+  TooltipRoot,
+  TooltipTrigger,
+  TooltipPortal,
+  TooltipContent,
+  TooltipArrow,
+} from "reka-ui";
 import type { ChatMessage } from "../../stores/chat";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer } from "../../utils/markdown";
+import { abbreviateDuration } from "../../utils/duration";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import Icon from "../Icon.vue";
@@ -87,6 +98,53 @@ watch(
 onUnmounted(() => {
   dispose();
 });
+
+// --- F5 latency footer -----------------------------------------------------
+// Renders the bottom-right of the assistant bubble with a 1-decimal
+// abbreviation of `totalMs` (e.g. "3.2s"). Hover surfaces the three-
+// line breakdown (TTFB / 生成 / 端到端). The trigger is the chip
+// itself; the tooltip content is a small block with the three rows.
+// The display is hidden for:
+//   - user-role messages (only assistant turns have a latency)
+//   - messages without a `latency` object (pre-F5 rows; UI shows
+//     "—" in place of the chip)
+//   - messages mid-stream (`streaming` true; the chip is in flux
+//     and the user is reading the bubble, not the footer)
+const showLatency = computed<boolean>(
+  () =>
+    props.message.role === "assistant" &&
+    !props.message.streaming &&
+    !!props.message.latency &&
+    typeof props.message.latency.totalMs === "number",
+);
+
+const latencyTotalLabel = computed<string>(() => {
+  const t = props.message.latency?.totalMs;
+  if (typeof t !== "number") return "—";
+  return abbreviateDuration(t);
+});
+
+// The three lines shown in the hover tooltip. Each is omitted (and
+// the row hidden) when the value is undefined — the cancel / error
+// path leaves ttfbMs / genMs null while totalMs is set, and the UI
+// shows only the available rows.
+const latencyRows = computed<
+  Array<{ label: string; value: string }>
+>(() => {
+  const lat = props.message.latency;
+  if (!lat) return [];
+  const rows: Array<{ label: string; value: string }> = [];
+  if (typeof lat.ttfbMs === "number") {
+    rows.push({ label: "TTFB", value: abbreviateDuration(lat.ttfbMs) });
+  }
+  if (typeof lat.genMs === "number") {
+    rows.push({ label: "生成", value: abbreviateDuration(lat.genMs) });
+  }
+  if (typeof lat.totalMs === "number") {
+    rows.push({ label: "端到端", value: abbreviateDuration(lat.totalMs) });
+  }
+  return rows;
+});
 </script>
 
 <template>
@@ -141,6 +199,41 @@ onUnmounted(() => {
       <Icon name="warn" :size="12" icon-class="msg__error-icon" />
       {{ message.error.message }}
     </div>
+
+    <!--
+      F5 (LLM Latency Tracking): per-message latency chip. Renders
+      the bottom-right of the assistant bubble (the bubble is
+      a `max-width: 75%` flex column; the chip is right-aligned
+      via `align-self: flex-end`). The chip shows the total
+      time in seconds (one decimal) and a hover tooltip breaks
+      it down into TTFB / 生成 / 端到端. Pre-F5 / cancel-mid-TTFB
+      / no-delta-arrived rows render "—" (handled by the
+      `latencyTotalLabel` computed and the conditional
+      `v-if="latencyRows.length"`).
+    -->
+    <TooltipProvider v-if="showLatency">
+      <TooltipRoot :delay-duration="150">
+        <TooltipTrigger as-child>
+          <span class="msg__latency">{{ latencyTotalLabel }}</span>
+        </TooltipTrigger>
+        <TooltipPortal>
+          <TooltipContent
+            class="msg__latency-tooltip"
+            :side-offset="4"
+          >
+            <div
+              v-for="row in latencyRows"
+              :key="row.label"
+              class="msg__latency-tooltip-row"
+            >
+              <span>{{ row.label }}</span>
+              <span>{{ row.value }}</span>
+            </div>
+            <TooltipArrow class="msg__latency-tooltip-arrow" :size="6" />
+          </TooltipContent>
+        </TooltipPortal>
+      </TooltipRoot>
+    </TooltipProvider>
   </li>
 </template>
 
@@ -246,6 +339,85 @@ onUnmounted(() => {
 
 .msg__error-icon {
   flex-shrink: 0;
+}
+
+/* F5 (LLM Latency Tracking): per-message latency chip. Sits
+   at the bottom-right of the assistant bubble. The chip
+   itself is the TooltipTrigger; the tooltip content is the
+   three-row breakdown (TTFB / 生成 / 端到端).
+
+   Visual decisions:
+   - 11px mono font to match the existing density (token
+     usage chip in ChatInput uses the same).
+   - 0.5px muted color so it doesn't fight the bubble for
+     attention — the user sees it on glance but isn't
+     pulled in.
+   - Right-aligned via `align-self: flex-end` (the parent
+     `li.msg` is `display: flex; flex-direction: column`,
+     so the chip is the rightmost element of the bubble
+     column). */
+.msg__latency {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  margin-top: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: help;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.msg__latency:hover {
+  color: var(--color-text-secondary);
+}
+
+/* Tooltip content (reka-ui `TooltipContent` portal to body
+   — must use :deep() per `.trellis/spec/frontend/reka-ui-usage.md`
+   gotcha). The popover floats above the chip (default
+   side is "top"). 11px mono, single-column row layout. */
+:deep(.msg__latency-tooltip) {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 6px 10px;
+  min-width: 140px;
+  z-index: 3000;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  animation: msg-latency-tooltip-enter 150ms ease-out;
+}
+
+:deep(.msg__latency-tooltip-row) {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 1px 0;
+}
+
+:deep(.msg__latency-tooltip-row span:first-child) {
+  color: var(--color-text-secondary);
+}
+
+:deep(.msg__latency-tooltip-arrow) {
+  fill: var(--color-bg-surface);
+  stroke: var(--color-bg-border);
+}
+
+@keyframes msg-latency-tooltip-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Markdown content (v-html). The HTML lives in a child tree without

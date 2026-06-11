@@ -355,7 +355,7 @@ pub async fn chat(
         if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
             let msg = last_user.clone();
             if let Err(e) =
-                crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq).await
+                crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None).await
             {
                 tracing::error!(error = %e, "failed to persist user turn");
             }
@@ -598,7 +598,7 @@ pub async fn chat(
                     content: MessageContent::Blocks(assistant_blocks),
                 };
                 if let Err(e) =
-                    crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq).await
+                    crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None).await
                 {
                     tracing::error!(error = %e, "failed to persist assistant turn");
                 }
@@ -621,6 +621,7 @@ pub async fn chat(
                         tool_result_msg.role,
                         &tool_result_msg.content,
                         seq,
+                        None,
                     )
                     .await
                     {
@@ -750,6 +751,7 @@ pub async fn chat(
                         tool_result_msg.role,
                         &tool_result_msg.content,
                         seq,
+                        None,
                     )
                     .await
                     {
@@ -788,6 +790,7 @@ pub async fn chat(
                 tool_result_msg.role,
                 &tool_result_msg.content,
                 seq,
+                None,
             )
             .await
             {

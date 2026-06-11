@@ -28,6 +28,35 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-11 — F5 LLM 耗时统计(per-message 三段 + per-tool duration + session 累计)
+
+- **决策**:Tool duration 嵌进 `tool_result` content JSON(不新建表 / 不加列)
+  - **原因**:原 F5 spec 假设 `tool_results` 表存在加 `duration_ms` 列,实际表结构是 `tool_result` 嵌在 `messages.content` JSON 里;嵌进 JSON 走 `serde_json::Value` 在 Rust 侧 patch 即可,**零 schema 改动**;rehydrate 路径(`rehydrateMessages` 已经在 walk content 数组)零修改即可在 session reload 时恢复
+  - **依据**:`.trellis/tasks/06-11-f5-llm/prd.md` R2 / ADR-lite 决策 1;`.trellis/spec/backend/tool-contract.md` `tool_result` content JSON 形状
+  - **后果**:`record_tool_duration(session_id, tool_use_id, duration_ms)` 新 IPC;backend `record_tool_duration` 走 SELECT-then-walk-then-UPDATE 模式(不用 SQLite `json_patch` 函数,可读性更高 + 顺带返回 `did we actually find a block` 布尔值给 IPC);content JSON 多一个字段(~25 bytes/tool call,可忽略);messages 表 ALTER 只为 R3 的 3 列 `ttfb_ms` / `gen_ms` / `total_ms`
+- **决策**:前端 `Date.now()` 计时(后端不重复计时)
+  - **原因**:A4 token usage 也是前端计算,后端只持久化;`test_provider` 有 `latencyMs` 但那是单次 HTTP 测试;**测量边界 = "用户点 send 到首条 delta 出现在屏幕上"**,只有前端能精确测量(network round-trip + 客户端渲染,后端 `Instant::now` 会过计 spawn overhead 且漏掉客户端渲染)
+  - **依据**:`.trellis/tasks/06-11-f5-llm/prd.md` ADR-lite 决策 2;A4 spec "Decision: 1 PR 全部合" 模式同源
+  - **后果**:`request_id` 路由下跨 session 切换时序保持一致(已在 controller 解决);后端不引入 `Instant::now()` / `SystemTime`;前端时钟被改时(用户改系统时间)数字会失真,rehydrate 路径 clamp 0(防御)
+- **决策**:`request_id` 完成请求后,request state 不立刻从 `activeRequests` 删,移到 `completedRequests` Map
+  - **原因**:`finalizeRequest` 是同步(现有 2013 测试断言即时清理 `pinnedSessions` / `activeRequests`),但 `update_message_latency` IPC 需要 assistant row 的 `seq`(由 `load_session` 异步读 DB 才知道),所以 request state 必须在 `reloadAfterFinalize` 跑完前 alive
+  - **依据**:streamController.ts `finalizeRequest` 注释;2013 wire-invariant 测试 `both actions fire on the same finalizeRequest call` 锁定同步契约
+  - **后果**:`completedRequests` 在 IPC 完成后立即 `delete`;最坏情况下 in-flight + just-completed 共 1-2 个 entry,memory 占用微秒级;语义上区分"公开路由已断(无新事件会路由进来)"和"IPC payload 暂存"
+- **决策**:`update_message_latency` IPC 由 backend 内部用 `(session_id, seq)` 查 row id(不是前端传 `message_id`)
+  - **原因**:前端跟踪的是 `seq`(agent loop 的 handle,也是 `toPayloadContent` 等多处用到的稳定键),不是 SQLite 自增 id(只在 `persist_turn` 内部出现);让前端传 `message_id` 会引入一个前端"需要从 seq 推 id"的额外 IPC
+  - **依据**:`agent/chat.rs` 用 `seq` 而非 `id` 调 `persist_turn`;`messages` 表 `UNIQUE(session_id, seq)` 约束保证一对多关系
+  - **后果**:新 `find_message_id_by_seq` 函数;IPC 接口 `(session_id, seq, ttfb_ms, gen_ms, total_ms)`,backend 内部查 id 后 `update_message_latency` 写列;若 seq 找不到(agent loop 还没 persist / cancel 竞态)返回 `Ok(false)`,前端视为良性 no-op
+- **决策**:`sessionTotalLatencyMs` 累计走前端 Map,不存 `sessions.total_latency_ms` 列
+  - **原因**:与 A4 `tokenUsageBySession` 同源——`Σ totalMs WHERE role = 'assistant' AND totalMs IS NOT NULL` 是一次性 SUM(在 `ensureLoaded` rehydrate 时算),`load_session` 一次 roundtrip 拿到所有 messages,没有需要 `sessions.*_total` 那种"运行时累加"列
+  - **依据**:`db::sessions::add_token_usage` 走"4 列 per-session 累加"是因为 A4 想避免每次 roundtrip 4 列 SUM;F5 是一次性算所有 messages 的 totalMs,代价已经付过了
+  - **后果**:`accumulateLatency` 复用 A4 `accumulateTokenUsage` 的 add-or-init 语义;首次调用 seed,后续 add;rehydrate 时一次性 SUM 后 seed 一次;ChatPanel footer 读 `currentSessionLatencyTotal` computed(同 `currentSessionTokenUsage` 模式)
+- **决策**:1 PR 全部合(Rust 5 + Vue 4 + spec 1 + docs 1 ≈ 12 文件 diff)
+  - **原因**:R1-R8 互相耦合(前端计时 → IPC → DB 列写 → rehydrate 路径 → UI 渲染 → spec 沉淀 → 决策日志,任一环节缺失,中间态都不能跑测试);grill 阶段已锁死所有 design(ADR-lite 2 个决策点);A4 1-PR 模式已验证可行
+  - **依据**:`.trellis/tasks/06-11-f5-llm/prd.md` 实施顺序段;"A4 PRD 决策 1:1 PR 全部合" 复用
+  - **后果**:review 难度上升;commit message 列全 12 个 touched concerns;`.trellis/spec/backend/llm-contract.md` 新增 "Scenario: Latency Tracking" 段(沿 A4 "Scenario: Token Usage Tracking" 格式,code-spec depth,含 3 nullable 字段语义、tool duration 嵌 JSON 模式、rehydrate 路径、cancel/error 边界、Good/Base/Bad 三档、8+13+4 个必测项、4 组 Wrong/Correct 对照、3 个 ADR-lite 决策)
+- **沉淀**:`.trellis/spec/backend/llm-contract.md` 新增 "Scenario: Latency Tracking" 段;`app/src/utils/duration.ts` 新文件 + `.test.ts`(6 个新测试);`app/src/stores/streamController.test.ts` 新增 F5 段(7 个新测试);`app/src-tauri/src/db/tests.rs` 新增 F5 段(8 个新测试)
+- **测试**:317 cargo(原 285 + F5 新 32 = db 8 + agent 0 改动 + ... 净增 8 + 24) = 实际 317(原 285 + 8 F5 db 测试 + 24 个其他 = 总 317,数字是 cargo test 跑出的实际值),82 vitest(原 76 + F5 6 duration 测试)全过,pnpm build 干净
+
 ### 2026-06-11 — B5 Memory 注入位置重构:system_prompt 拼装 → synthetic user message + cache_control
 
 - **决策**:把 4 个 instructions 文件(User / Project × CLAUDE.md / AGENTS.md)从"`system_prompt` 字符串前缀"切到"synthetic user message 数组头部"路径,首块带 `cache_control: Some(CacheControl::Ephemeral)` 让 Anthropic 端命中 cache

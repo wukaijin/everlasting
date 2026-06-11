@@ -37,6 +37,7 @@
 import { computed, onUnmounted, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
+import { abbreviateDuration } from "../../utils/duration";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
@@ -408,6 +409,36 @@ if (typeof window !== "undefined") {
       <MessageList v-else />
     </main>
 
+    <!--
+      F5 (LLM Latency Tracking): session-bottom latency footer.
+      Sits between the message list and the ChatInput; shows the
+      cumulative `Σ total_ms` for the active session, formatted
+      via `abbreviateDuration`. Pre-F5 / brand-new sessions
+      render "—" with the "升级前未统计" tooltip (mirroring
+      the A4 chat-input hint UX). The chip is right-aligned
+      so it doesn't crowd the ChatInput hint row above.
+    -->
+    <div v-if="chatStore.currentSessionId" class="chat-panel__latency-footer">
+      <span
+        class="chat-panel__latency-chip"
+        :title="
+          chatStore.currentSessionLatencyTotal !== null
+            ? '本次 session LLM 累计耗时'
+            : '升级前未统计'
+        "
+      >
+        <Icon name="clock" :size="11" />
+        <span class="chat-panel__latency-label">LLM 累计</span>
+        <span class="chat-panel__latency-value">
+          {{
+            chatStore.currentSessionLatencyTotal !== null
+              ? abbreviateDuration(chatStore.currentSessionLatencyTotal)
+              : "—"
+          }}
+        </span>
+      </span>
+    </div>
+
     <ChatInput
       :sending="chatStore.isCurrentSessionStreaming"
       @send="emit('send', $event)"
@@ -611,5 +642,46 @@ if (typeof window !== "undefined") {
   gap: 4px;
   color: var(--color-tool-shell);
   font-size: 11px;
+}
+
+/* F5 (LLM Latency Tracking): session-bottom latency footer.
+   Sits between the message list and the ChatInput. The
+   `latency-chip` is right-aligned via `margin-left: auto`
+   so the visual rhythm matches the chat-input hint row
+   above (which also has right-aligned elements). The
+   border-top separates the footer from the message list;
+   no border-bottom (the ChatInput has its own background
+   and they share the gap). */
+.chat-panel__latency-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 20px 6px;
+  border-top: 1px solid var(--color-bg-border);
+  background: var(--color-bg-app);
+}
+
+.chat-panel__latency-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  user-select: none;
+}
+
+.chat-panel__latency-label {
+  color: var(--color-text-secondary);
+}
+
+.chat-panel__latency-value {
+  color: var(--color-text-primary);
+  font-weight: 600;
 }
 </style>

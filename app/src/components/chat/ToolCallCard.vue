@@ -11,6 +11,16 @@
 // the output is shown directly when present (not inside <details>)
 // so the user sees the result immediately. Long input / output is
 // capped at ~200px tall and overflows with scroll.
+//
+// F5 (LLM Latency Tracking): the header's right-side status row
+// also renders the per-tool duration, measured by the controller
+// from `tool:call` → `tool:result` and embedded in the persisted
+// `tool_result` block as `duration_ms` (per PRD R2 / ADR-lite
+// decision 1). The duration shows next to the status text:
+//   - running: "…" (the in-flight indicator — duration unknown)
+//   - done / error: "0.3s" / "1.2s" / "12.4s" via
+//     `abbreviateDuration`. The `?` cursor + the existing
+//     color-when-error treatment still apply.
 
 import { computed, ref } from "vue";
 import {
@@ -25,6 +35,7 @@ import {
   toolAccentVar,
   toolIcon,
 } from "../../utils/messageFormat";
+import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
 
@@ -56,6 +67,26 @@ const statusText = computed<string>(() => {
   if (isError.value) return "error";
   if (hasResult.value) return "done";
   return "running…";
+});
+
+/** F5: per-tool duration label rendered next to `statusText` in
+ *  the header. Returns:
+ *    - "…" while the tool is running (no `result` yet — duration
+ *      unknown; the placeholder reads as a generic "still going")
+ *    - "0.3s" / "1.2s" / "12.4s" / "1m 4s" when `result.durationMs`
+ *      is set (post-F5 row with timing; pre-F5 rows have it
+ *      undefined and we render nothing)
+ *    - "" (empty) when the result is present but no duration was
+ *      captured (pre-F5 row, OR the in-memory measurement race
+ *      lost — defensive)
+ *
+ *  The `?` cursor and the right-side `tool-card__status` flex gap
+ *  (4px) take care of the visual when the label is empty. */
+const durationLabel = computed<string>(() => {
+  if (!hasResult.value) return "…";
+  const d = props.result?.durationMs;
+  if (typeof d !== "number") return "";
+  return abbreviateDuration(d);
 });
 
 /** Map the run state to a heroicon name for the status indicator.
@@ -184,6 +215,17 @@ async function toggleFileDiff() {
           <Icon :name="statusIconName" :size="14" />
         </span>
         <span>{{ statusText }}</span>
+        <!--
+          F5: per-tool duration (next to status text). Renders
+          the `durationLabel` ("…" while running, "0.3s" /
+          "1.2s" after done; empty for pre-F5 rows). The
+          separate `<span>` (vs. concatenating into statusText)
+          keeps the `?` cursor / color theming on the status
+          text untouched — the duration is its own visual
+          element with its own muted color and a slight
+          left margin to avoid the icon-glyph crowding.
+        -->
+        <span v-if="durationLabel" class="tool-card__duration">{{ durationLabel }}</span>
         <button
           v-if="showDiffButton"
           type="button"
@@ -332,6 +374,27 @@ async function toggleFileDiff() {
 }
 
 .tool-card--error .tool-card__status {
+  color: var(--color-tool-error);
+}
+
+/* F5 (LLM Latency Tracking): per-tool duration display. Renders
+   the "0.3s" / "…" label inside the existing `tool-card__status`
+   row, right after the status text. Mono font matches the rest
+   of the status row; the slightly-elevated color is a hint
+   that this is a measured value, not part of the status
+   label itself. */
+.tool-card__duration {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  user-select: none;
+}
+
+.tool-card--error .tool-card__duration {
   color: var(--color-tool-error);
 }
 

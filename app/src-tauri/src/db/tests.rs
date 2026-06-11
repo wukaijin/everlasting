@@ -32,9 +32,10 @@ use super::{
  },
  providers::{create_provider, delete_provider, list_providers, update_provider},
  sessions::{
- add_token_usage, create_session, delete_session, insert_system_event, list_sessions,
- load_session, persist_turn, set_worktree_state, touch_session, update_session_cwd,
- update_session_model_id,
+ add_token_usage, create_session, delete_session, find_message_id_by_seq,
+ insert_system_event, list_sessions, load_session, persist_turn,
+ record_tool_duration, set_worktree_state, touch_session, update_message_latency,
+ update_session_cwd, update_session_model_id, MessageLatency,
  },
  types::WorktreeState,
 };
@@ -313,7 +314,7 @@ async fn persist_and_load_messages() {
  .unwrap();
 
  let user_msg = MessageContent::Text("read the file".to_string());
- persist_turn(&pool, &session.id, Role::User, &user_msg,0)
+ persist_turn(&pool, &session.id, Role::User, &user_msg, 0, None)
  .await
  .unwrap();
 
@@ -329,7 +330,7 @@ async fn persist_and_load_messages() {
  },
  ];
  let assistant_msg = MessageContent::Blocks(assistant_blocks);
- persist_turn(&pool, &session.id, Role::Assistant, &assistant_msg,1)
+ persist_turn(&pool, &session.id, Role::Assistant, &assistant_msg, 1, None)
  .await
  .unwrap();
 
@@ -355,7 +356,7 @@ async fn first_user_message_auto_titles_session() {
  .unwrap();
 
  let msg = MessageContent::Text("帮我读一下 /etc/hostname".to_string());
- persist_turn(&pool, &session.id, Role::User, &msg,0)
+ persist_turn(&pool, &session.id, Role::User, &msg, 0, None)
  .await
  .unwrap();
 
@@ -370,10 +371,10 @@ async fn second_user_message_does_not_overwrite_title() {
  .await
  .unwrap();
 
- persist_turn(&pool, &session.id, Role::User, &MessageContent::Text("first".into()),0)
+ persist_turn(&pool, &session.id, Role::User, &MessageContent::Text("first".into()), 0, None)
  .await
  .unwrap();
- persist_turn(&pool, &session.id, Role::User, &MessageContent::Text("second".into()),1)
+ persist_turn(&pool, &session.id, Role::User, &MessageContent::Text("second".into()), 1, None)
  .await
  .unwrap();
 
@@ -392,7 +393,8 @@ async fn delete_session_cascades_messages() {
  &session.id,
  Role::User,
  &MessageContent::Text("hi".into()),
-0,
+ 0,
+ None,
  )
  .await
  .unwrap();
@@ -408,7 +410,7 @@ async fn list_sessions_preview_truncates_at_80_chars() {
  .await
  .unwrap();
  let long = "a".repeat(120);
- persist_turn(&pool, &session.id, Role::User, &MessageContent::Text(long),0)
+ persist_turn(&pool, &session.id, Role::User, &MessageContent::Text(long), 0, None)
  .await
  .unwrap();
 
@@ -553,7 +555,8 @@ async fn insert_system_event_appends_to_history() {
  &s.id,
  Role::User,
  &MessageContent::Text("hi".into()),
-0,
+ 0,
+ None,
  )
  .await
  .unwrap();
@@ -1067,3 +1070,274 @@ async fn list_sessions_includes_token_columns() {
  assert_eq!(found.cache_creation_total, Some(50));
  assert_eq!(found.cache_read_total, Some(200));
 }
+
+// ---------------------------------------------------------------------------
+// F5: LLM latency tracking
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn persist_turn_with_latency_writes_three_columns() {
+ // F5 PRD R3: assistant turns persist with the three latency
+ // columns. Pre-F5 callers can pass `None` and the columns
+ // stay NULL (verified by the `persist_turn_with_no_latency`
+ // test below). The columns are nullable so a legacy
+ // pre-upgrade session doesn't error out on rehydrate.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "ok".to_string(),
+ cache_control: None,
+ }]);
+ let latency = MessageLatency {
+ ttfb_ms: Some(420),
+ gen_ms: Some(2100),
+ total_ms: Some(3200),
+ };
+ persist_turn(&pool, &s.id, Role::Assistant, &content, 0, Some(&latency))
+ .await
+ .unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let m = loaded.messages.first().expect("one message");
+ assert_eq!(m.ttfb_ms, Some(420));
+ assert_eq!(m.gen_ms, Some(2100));
+ assert_eq!(m.total_ms, Some(3200));
+}
+
+#[tokio::test]
+async fn persist_turn_with_no_latency_leaves_columns_null() {
+ // Tool-result rows (the user-role turn the agent loop persists
+ // after tool execution) do not have a latency triple — the
+ // per-tool duration lives in the content JSON, not on the row.
+ // `persist_turn` accepts `None` and the three columns stay NULL.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "ok".to_string(),
+ cache_control: None,
+ }]);
+ persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+ .await
+ .unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let m = loaded.messages.first().expect("one message");
+ assert!(m.ttfb_ms.is_none());
+ assert!(m.gen_ms.is_none());
+ assert!(m.total_ms.is_none());
+}
+
+#[tokio::test]
+async fn update_message_latency_patches_columns_by_id() {
+ // The frontend's `update_message_latency` IPC calls this
+ // function on `done`. Verify a single UPDATE writes the three
+ // columns. The seq → id lookup is in `find_message_id_by_seq`
+ // (next test).
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "ok".to_string(),
+ cache_control: None,
+ }]);
+ persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None)
+ .await
+ .unwrap();
+
+ let id = find_message_id_by_seq(&pool, &s.id, 0)
+ .await
+ .unwrap()
+ .expect("id present");
+
+ update_message_latency(
+ &pool,
+ id,
+ &MessageLatency {
+ ttfb_ms: Some(100),
+ gen_ms: Some(200),
+ total_ms: Some(300),
+ },
+ )
+ .await
+ .unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let m = loaded.messages.first().expect("one message");
+ assert_eq!(m.ttfb_ms, Some(100));
+ assert_eq!(m.gen_ms, Some(200));
+ assert_eq!(m.total_ms, Some(300));
+}
+
+#[tokio::test]
+async fn update_message_latency_accepts_partial_payload() {
+ // Cancel / error paths may only know the total — `ttfb_ms` and
+ // `gen_ms` are NULL when the user hits Stop before the first
+ // delta. The function must accept a partial MessageLatency
+ // without panicking and write NULL for the missing fields.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "ok".to_string(),
+ cache_control: None,
+ }]);
+ persist_turn(&pool, &s.id, Role::Assistant, &content, 0, None)
+ .await
+ .unwrap();
+ let id = find_message_id_by_seq(&pool, &s.id, 0).await.unwrap().unwrap();
+
+ update_message_latency(
+ &pool,
+ id,
+ &MessageLatency {
+ ttfb_ms: None,
+ gen_ms: None,
+ total_ms: Some(500),
+ },
+ )
+ .await
+ .unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let m = loaded.messages.first().expect("one message");
+ assert!(m.ttfb_ms.is_none());
+ assert!(m.gen_ms.is_none());
+ assert_eq!(m.total_ms, Some(500));
+}
+
+#[tokio::test]
+async fn find_message_id_by_seq_returns_none_for_unknown_pair() {
+ // Defensive: a controller racing the agent loop's
+ // `persist_turn` (cancel cleanup persists after `done`)
+ // could fire `update_message_latency` before the row exists.
+ // The lookup must return `None`, not error.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let id = find_message_id_by_seq(&pool, &s.id, 999).await.unwrap();
+ assert!(id.is_none());
+}
+
+#[tokio::test]
+async fn record_tool_duration_patches_matching_tool_result_block() {
+ // F5 PRD R2 / ADR-lite decision 1: per-tool duration is
+ // embedded in the `tool_result` block of `messages.content`
+ // JSON. The function reads the message, walks the content
+ // array, finds the matching `tool_use_id`, and writes
+ // `{"duration_ms": <n>}` into the block. Other blocks in
+ // the array are untouched.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ // Persist a user-role turn with TWO tool_result blocks; only
+ // the second one should get the patch.
+ let content = MessageContent::Blocks(vec![
+ ContentBlock::ToolResult {
+ tool_use_id: "toolu_abc".to_string(),
+ content: "result for tool 1".to_string(),
+ is_error: false,
+ },
+ ContentBlock::ToolResult {
+ tool_use_id: "toolu_def".to_string(),
+ content: "result for tool 2".to_string(),
+ is_error: false,
+ },
+ ]);
+ persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+ .await
+ .unwrap();
+
+ let patched = record_tool_duration(&pool, &s.id, "toolu_def", 250)
+ .await
+ .unwrap();
+ assert!(patched, "patch landed on a block");
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let blocks = loaded.messages[0]
+ .content
+ .as_array()
+ .expect("content is array");
+ assert_eq!(blocks.len(), 2);
+ // First block: untouched.
+ assert_eq!(
+ blocks[0].get("duration_ms"),
+ None,
+ "first tool_result must NOT have duration_ms"
+ );
+ // Second block: duration_ms set.
+ assert_eq!(
+ blocks[1].get("duration_ms").and_then(|v| v.as_i64()),
+ Some(250)
+ );
+ // tool_use_id preserved verbatim (the patch must not mutate
+ // the other fields).
+ assert_eq!(
+ blocks[1].get("tool_use_id").and_then(|v| v.as_str()),
+ Some("toolu_def")
+ );
+}
+
+#[tokio::test]
+async fn record_tool_duration_returns_false_when_no_block_matches() {
+ // Defensive: a `tool:result` event for a tool_use the agent
+ // loop never persisted (e.g. the cancel cleanup) is a no-op,
+ // not an error. The IPC consumer (frontend) treats `Ok(false)`
+ // as a benign outcome.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+ tool_use_id: "toolu_existing".to_string(),
+ content: "x".to_string(),
+ is_error: false,
+ }]);
+ persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+ .await
+ .unwrap();
+
+ let patched = record_tool_duration(&pool, &s.id, "toolu_never_persisted", 100)
+ .await
+ .unwrap();
+ assert!(!patched);
+}
+
+#[tokio::test]
+async fn record_tool_duration_handles_text_only_message_without_error() {
+ // A text-only user message has no tool_result blocks; the
+ // function must return Ok(false) (no error) and not touch the
+ // content JSON.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "hello".to_string(),
+ cache_control: None,
+ }]);
+ persist_turn(&pool, &s.id, Role::User, &content, 0, None)
+ .await
+ .unwrap();
+
+ let patched = record_tool_duration(&pool, &s.id, "toolu_anything", 100)
+ .await
+ .unwrap();
+ assert!(!patched);
+}
+

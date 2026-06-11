@@ -51,6 +51,7 @@ import {
   ServerIcon,
   CircleStackIcon,
   BoltIcon,
+  ClockIcon,
 } from "@heroicons/vue/24/outline";
 import { Brain } from "@lucide/vue";
 
@@ -102,6 +103,7 @@ const map = {
   "server": ServerIcon,
   "circle-stack": CircleStackIcon,
   "bolt": BoltIcon,
+  "clock": ClockIcon,
   "brain": Brain,
 } as const;
 

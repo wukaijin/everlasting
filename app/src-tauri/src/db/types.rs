@@ -218,6 +218,18 @@ pub struct MessageRow {
  /// `Some(json)` for system events injected by the worktree
  /// commands. Used by rehydrate to filter or specially render.
  pub metadata: Option<serde_json::Value>,
+ /// F5 (LLM Latency Tracking): per-message latency breakdown.
+ /// All three fields are `null` for pre-F5 rows (the columns
+ /// are nullable; a legacy message's first post-upgrade turn
+ /// will have them set by the new `update_message_latency` IPC
+ /// fired at `done`). The UI reads these to render the
+ /// assistant bubble's bottom-right total + hover tooltip
+ /// (TTFB / 生成 / 端到端 breakdown). See
+ /// `.trellis/spec/backend/llm-contract.md` "Scenario: Latency
+ /// Tracking" for the field semantics.
+ pub ttfb_ms: Option<i64>,
+ pub gen_ms: Option<i64>,
+ pub total_ms: Option<i64>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.

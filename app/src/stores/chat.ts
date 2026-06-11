@@ -56,6 +56,14 @@ export interface ToolResultInfo {
   toolUseId: string;
   content: string;
   isError: boolean;
+  /** F5 (LLM Latency Tracking): wall-clock duration of this
+   *  specific tool invocation in milliseconds, measured as
+   *  `tool:result_at - tool:call_at` by the frontend. `null`
+   *  for pre-F5 rows (the field is embedded in the persisted
+   *  `tool_result` block — see PRD R2 + ADR-lite decision 1).
+   *  The ToolCallCard displays "0.3s" next to the status text
+   *  when this is set. */
+  durationMs?: number;
 }
 
 /** One thinking content block. The model can produce multiple blocks per
@@ -80,6 +88,28 @@ export interface SessionTokenUsage {
   cache_read_input_tokens: number;
 }
 
+/** F5 (LLM Latency Tracking): per-message latency breakdown
+ *  measured by the frontend around the SSE event boundaries of
+ *  one chat invocation. Mirrors the `MessageRow.ttfb_ms` /
+ *  `gen_ms` / `total_ms` columns in the DB and the Rust
+ *  `MessageLatency` struct in `db::sessions`.
+ *
+ *  All three fields are optional because:
+ *  - Pre-F5 rows keep NULL → UI shows "—"
+ *  - Cancel / error paths may only know `totalMs` (no `delta`
+ *    was ever received → no `ttfbMs`)
+ *  - Rehydrated messages from the DB inherit NULL when the row
+ *    was inserted before the F5 columns existed.
+ *
+ *  `totalMs` is the only field the UI always renders (when
+ *  present); `ttfbMs` and `genMs` are surfaced in the hover
+ *  tooltip breakdown. */
+export interface LatencyInfo {
+  ttfbMs?: number;
+  genMs?: number;
+  totalMs?: number;
+}
+
 /** Chat message with optional tool call/result/thinking metadata. */
 export interface ChatMessage {
   id: string;
@@ -95,6 +125,21 @@ export interface ChatMessage {
   /** Each entry is the opaque `data` payload of a `redacted_thinking`
    *  block — preserved verbatim for round-trip, never displayed. */
   redactedThinkingData?: string[];
+  /** F5 (LLM Latency Tracking): per-message latency breakdown
+   *  (TTFB / gen / total in ms). Rehydrated from the
+   *  `messages.ttfb_ms` / `gen_ms` / `total_ms` columns on
+   *  session load; the frontend `streamController` populates
+   *  it during streaming (via `Date.now()` deltas) and
+   *  fires `update_message_latency` IPC at `done` to persist.
+   *  Missing for pre-F5 / user-role / system-event rows. */
+  latency?: LatencyInfo;
+  /** F5: the seq the agent loop assigned to this row when it
+   *  was persisted. Used by the `update_message_latency` IPC
+   *  to look up the SQLite id via `find_message_id_by_seq`.
+   *  Set during rehydrate (from `messages.seq`); the
+   *  controller's streaming path tracks the assistant
+   *  placeholder's seq in `RequestState` instead. */
+  seq?: number;
 }
 
 /** Session summary shown in the sidebar. Snake_case to match PR1's
@@ -261,6 +306,63 @@ export const useChatStore = defineStore("chat", () => {
       existing.cache_creation_input_tokens +=
         usage.cache_creation_input_tokens;
       existing.cache_read_input_tokens += usage.cache_read_input_tokens;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // F5 (LLM Latency Tracking): per-session cumulative latency.
+  //
+  // The Map is keyed by session id; the value is the running
+  // total of `total_ms` across all assistant turns in the
+  // session, displayed in the ChatPanel footer ("本次 session
+  // LLM 累计耗时"). The data flow mirrors A4's token usage:
+  //
+  //   streamController.handleChatEvent("done")
+  //     → compute { ttfbMs, genMs, totalMs } for the assistant turn
+  //     → update_message_latency IPC to persist per-message columns
+  //     → sessionTotalLatencyMs map += totalMs (cumulative)
+  //
+  // The Map is also seeded from `load_session` so a fresh page
+  // reload shows the cumulative value (not "—"). The seed
+  // sums `Σ total_ms WHERE role = 'assistant' AND total_ms IS
+  // NOT NULL` — the controller does the sum during rehydrate
+  // and hands the value to `accumulateLatency` via
+  // `add-latency` (the per-message increments then stack on
+  // top).
+  //
+  // The sessionTotalLatencyMs is also exposed as a
+  // `currentSessionLatencyTotal` computed (mirroring
+  // `currentSessionTokenUsage`) for the ChatPanel footer to
+  // read.
+  // -----------------------------------------------------------------------
+  const sessionTotalLatencyMs = reactive(
+    new Map<string, number>(),
+  );
+
+  /** Reactive getter for the current session's running latency
+   *  total. `null` when no session is active OR when the
+   *  active session has not yet recorded a `total_ms` value
+   *  (pre-F5 data or brand-new session). The ChatPanel footer
+   *  reads this; "—" is rendered for `null`. */
+  const currentSessionLatencyTotal = computed<number | null>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return null;
+    return sessionTotalLatencyMs.get(sid) ?? null;
+  });
+
+  /** Add a per-turn latency report to the running session
+   *  total. Called by `streamController.handleChatEvent` on
+   *  every `done` event that resolved a `totalMs`. A first
+   *  call seeds the map (overwriting any prior seed value
+   *  from rehydrate). Subsequent calls add. The caller is
+   *  responsible for NOT firing this on cancel / error paths
+   *  that have no `totalMs`. */
+  function accumulateLatency(sessionId: string, totalMs: number): void {
+    const existing = sessionTotalLatencyMs.get(sessionId);
+    if (existing === undefined) {
+      sessionTotalLatencyMs.set(sessionId, totalMs);
+    } else {
+      sessionTotalLatencyMs.set(sessionId, existing + totalMs);
     }
   }
 
@@ -880,6 +982,11 @@ export const useChatStore = defineStore("chat", () => {
     // exposed for tests / future per-session UIs.
     currentSessionTokenUsage,
     tokenUsageBySession,
+    // F5: per-session running latency total. The ChatPanel
+    // footer reads `currentSessionLatencyTotal`; the Map is
+    // exposed for tests.
+    currentSessionLatencyTotal,
+    sessionTotalLatencyMs,
     // UI-side state (refs)
     sessions,
     currentSessionId,
@@ -909,5 +1016,9 @@ export const useChatStore = defineStore("chat", () => {
     // A4: hook called by streamController.handleChatEvent on
     // every `done` event that carries a usage payload.
     accumulateTokenUsage,
+    // F5: hook called by streamController.handleChatEvent on
+    // every `done` event that resolved a `totalMs`. Adds the
+    // per-turn `totalMs` to the running session total.
+    accumulateLatency,
   };
 });

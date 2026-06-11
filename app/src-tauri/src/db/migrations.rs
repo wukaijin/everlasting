@@ -328,6 +328,30 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // Nullable INTEGER, 0-7 = palette index, NULL = no mark.
  add_session_column_if_missing(pool, "color_tag", "INTEGER").await?;
 
+ // --- F5 (LLM Latency Tracking): per-message latency breakdown.
+ //
+ // Three nullable INTEGER columns on `messages`. Nullable (no
+ // DEFAULT) so pre-F5 rows keep NULL — the UI renders NULL as
+ // "—" with the "升级前未统计" tooltip (mirrors the A4 chat-input
+ // hint UX). The frontend `streamController` measures the three
+ // values via `Date.now()` deltas around the `start` / first
+ // `delta` / `done` events of each chat invocation, then issues
+ // a new IPC (`update_message_latency`) at stream end to persist
+ // them. Tool-call duration follows the same in-memory pattern
+ // but lives in the `messages.content` JSON, not as a column —
+ // see `db::sessions::record_tool_duration`.
+ //
+ // Field semantics (mirror the frontend `LatencyInfo`):
+ // - `ttfb_ms`: time-to-first-byte (send → first `delta` event)
+ // - `gen_ms`:  generation time (first `delta` → `done`)
+ // - `total_ms`: end-to-end (`send` → `done`)
+ // - `tool duration` lives inside the `tool_result` content block
+ //   (per R2 / PRD decision 1) and is patched via the
+ //   `record_tool_duration` IPC. Zero schema change for that.
+ add_messages_column_if_missing(pool, "ttfb_ms", "INTEGER").await?;
+ add_messages_column_if_missing(pool, "gen_ms", "INTEGER").await?;
+ add_messages_column_if_missing(pool, "total_ms", "INTEGER").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

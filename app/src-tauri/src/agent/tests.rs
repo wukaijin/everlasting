@@ -341,6 +341,7 @@ fn make_session_row(
         output_tokens_total: None,
         cache_creation_total: None,
         cache_read_total: None,
+        color_tag: None,
     }
 }
 

@@ -64,6 +64,39 @@ interface RequestState {
   // tool_use blocks, and tool_result blocks verbatim — the
   // Anthropic API 400s if any of those are missing or rewritten).
   history: unknown[];
+  // F5 (LLM Latency Tracking): wall-clock timestamps for the
+  // three latencies. `sendAt` is set on `startRequest`; the
+  // first `delta` event sets `firstDeltaAt`; the `done` event
+  // reads `Date.now()` for `doneAt`. The three millisecond
+  // values are computed in the `done` handler and stashed on
+  // `latencyPending`; `reloadAfterFinalize` reads the stashed
+  // value once the assistant row's seq is known and fires the
+  // `update_message_latency` IPC.
+  sendAt: number;
+  firstDeltaAt: number | null;
+  // F5: per-tool timing keyed by tool_use_id. Set on
+  // `tool:call` (in `handleToolCall`), read on `tool:result`
+  // (in `handleToolResult`) to compute `durationMs`. The
+  // result is patched onto the in-memory `toolResult` and
+  // sent to the `record_tool_duration` IPC to update the
+  // `messages.content` JSON.
+  toolStartedAt: Map<string, number>;
+  // F5: stashed at `done` time. The `done` handler computes
+  // the three values, writes them to the in-memory message,
+  // updates the per-session cumulative, and stashes them
+  // here so `reloadAfterFinalize` (which runs as part of
+  // `finalizeRequest` after the `done` event returns) can
+  // fire the `update_message_latency` IPC once the agent
+  // loop's persisted row's seq is known.
+  latencyPending: { ttfbMs: number | null; genMs: number | null; totalMs: number } | null;
+  // F5: per-request error flag. The cancel / network-drop
+  // path also persists a partial turn (with `usage: None`),
+  // so the seq-lookup is still meaningful — the errored
+  // turn just has its latency recorded without a usage.
+  // The flag is consulted by `reloadAfterFinalize` to
+  // decide whether to pass the latency through to the IPC
+  // (it always does — totalMs is meaningful even for
+  // errored turns).
 }
 
 interface ChatEventPayload {
@@ -127,6 +160,14 @@ interface LoadedMessage {
   has_tool_results: boolean;
   created_at: string;
   seq: number;
+  /** F5 (LLM Latency Tracking): per-message latency breakdown.
+   *  All three are `null` for pre-F5 rows. Rehydrated into
+   *  the assistant message's `latency` field; the
+   *  `MessageItem` footer renders `totalMs` and the hover
+   *  tooltip shows the three lines. */
+  ttfb_ms: number | null;
+  gen_ms: number | null;
+  total_ms: number | null;
 }
 
 interface LoadedSession {
@@ -209,18 +250,56 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
       ) {
         toolCalls.push({ id: b.id, name: b.name, input: (b.input as Record<string, unknown>) ?? {} });
       } else if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
+        // F5: per-tool duration is embedded in the tool_result
+        // block as `duration_ms` (per R2 / ADR-lite decision 1).
+        // Read it here so the ToolCallCard can display "0.3s"
+        // on reload. Pre-F5 blocks (no `duration_ms` field) leave
+        // it `undefined` → the card renders nothing.
+        const durationRaw = b.duration_ms;
+        const durationMs =
+          typeof durationRaw === "number" && Number.isFinite(durationRaw)
+            ? Math.max(0, Math.round(durationRaw))
+            : undefined;
         toolResults.push({
           toolUseId: b.tool_use_id,
           content: (b.content as string) ?? "",
           isError: !!b.is_error,
+          ...(durationMs !== undefined ? { durationMs } : {}),
         });
       }
     }
-    const msg: ChatMessage = { id: `${m.session_id}-${m.seq}`, role: m.role, content: m.text };
+    const msg: ChatMessage = {
+      id: `${m.session_id}-${m.seq}`,
+      role: m.role,
+      content: m.text,
+    };
     if (toolCalls.length) msg.toolCalls = toolCalls;
     if (toolResults.length) msg.toolResults = toolResults;
     if (thinkingBlocks.length) msg.thinkingBlocks = thinkingBlocks;
     if (redactedThinkingData.length) msg.redactedThinkingData = redactedThinkingData;
+    // F5: per-message latency. All three fields are nullable
+    // in the DB; only the assistant rows that ran an LLM turn
+    // will have non-null values. We attach `latency` only when
+    // at least one field is present, so the UI can use the
+    // presence-check (`m.latency && m.latency.totalMs`) to
+    // distinguish "—" from "0.0s" (which is a real value
+    // — extremely fast local proxy).
+    const hasLatency =
+      m.ttfb_ms !== null ||
+      m.gen_ms !== null ||
+      m.total_ms !== null;
+    if (hasLatency) {
+      msg.latency = {
+        ...(m.ttfb_ms !== null ? { ttfbMs: m.ttfb_ms } : {}),
+        ...(m.gen_ms !== null ? { genMs: m.gen_ms } : {}),
+        ...(m.total_ms !== null ? { totalMs: m.total_ms } : {}),
+      };
+    }
+    // The `seq` is plumbed through for the F5
+    // `update_message_latency` IPC. The streaming path tracks
+    // it on `RequestState` instead (the seq is the agent
+    // loop's handle, not the controller's).
+    msg.seq = m.seq;
     return msg;
   });
   // Merge user-message tool_results into the previous assistant
@@ -369,6 +448,19 @@ export const useStreamControllerStore = defineStore("streamController", () => {
   // request is for exactly one session.
   const activeRequests = reactive(new Map<string, RequestState>());
 
+  // F5: "just-completed" requests, keyed by request_id. The
+  // request entry is moved here from `activeRequests` when
+  // `finalizeRequest` runs, so the post-`done` cleanup is
+  // synchronous (the existing test suite asserts immediate
+  // state cleanup — see `finalizeRequest` paired-invariant
+  // test) but the request state itself stays accessible to
+  // `reloadAfterFinalize` for the latency IPC fire. The Map
+  // is deleted on the next user-visible `finalizeRequest` /
+  // stream start / session switch to bound memory. The two
+  // Maps together implement "drop the public route, keep
+  // the IPC payload".
+  const completedRequests = new Map<string, RequestState>();
+
   const listenerReady = ref(false);
 
   // ---------------------------------------------------------------------
@@ -472,7 +564,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         last.error = undefined;
         break;
       case "delta":
+        // F5: capture the first-delta timestamp exactly once,
+        // on the very first `delta` event. Subsequent deltas
+        // see `firstDeltaAt` already set and skip the write.
+        // The TTFB is computed in the `done` handler as
+        // `firstDeltaAt - sendAt`.
         if (event.text) last.content += event.text;
+        if (req.firstDeltaAt === null) {
+          req.firstDeltaAt = Date.now();
+        }
         break;
       case "thinking_delta":
         if (event.text) currentThinkingBlock(last).text += event.text;
@@ -487,6 +587,39 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
         break;
       case "done":
+        // F5: compute the three latency values, write them
+        // onto the in-memory assistant message, and bump the
+        // per-session cumulative total. The IPC fire is
+        // deferred to `reloadAfterFinalize` because the IPC
+        // needs the assistant row's seq (assigned by the
+        // agent loop in `persist_turn`), and that seq is
+        // only known after the agent loop's `load_session`
+        // roundtrip returns.
+        const doneAt = Date.now();
+        const sendAt = req.sendAt;
+        const firstDeltaAt = req.firstDeltaAt;
+        const ttfbMs = firstDeltaAt !== null ? firstDeltaAt - sendAt : null;
+        const genMs =
+          firstDeltaAt !== null ? doneAt - firstDeltaAt : null;
+        const totalMs = doneAt - sendAt;
+        const chat = useChatStore();
+        // Update the in-memory message so the UI shows "3.2s"
+        // immediately. `last` is the assistant placeholder
+        // being mutated; this is the same object the delta
+        // events were writing into.
+        last.latency = {
+          ...(ttfbMs !== null ? { ttfbMs } : {}),
+          ...(genMs !== null ? { genMs } : {}),
+          totalMs,
+        };
+        // Per-session cumulative total. Mirrors the A4 token
+        // usage `accumulateTokenUsage` pattern. Fires NOW
+        // (synchronous) so the ChatPanel footer updates in
+        // the same tick as the bubble.
+        chat.accumulateLatency(req.sessionId, totalMs);
+        // Stash the latency for the async `reloadAfterFinalize`
+        // to pick up and fire the IPC with the seq.
+        req.latencyPending = { ttfbMs, genMs, totalMs };
         // CRITICAL (PR3 self-check fix): the old chat.ts handler
         // set `last.streaming = false` here, which extinguishes the
         // blinking ▍ cursor in MessageItem.vue (rendered under
@@ -523,6 +656,29 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           message: event.message ?? "未知错误",
           category: event.category ?? "server",
         };
+        // F5: error path. The `totalMs` is still recorded
+        // (user wants to see "在 X 秒时断了"), but `ttfbMs`
+        // and `genMs` may be `null` (no delta arrived).
+        {
+          const doneAt = Date.now();
+          const sendAt = req.sendAt;
+          const firstDeltaAt = req.firstDeltaAt;
+          const ttfbMs = firstDeltaAt !== null ? firstDeltaAt - sendAt : null;
+          const genMs =
+            firstDeltaAt !== null ? doneAt - firstDeltaAt : null;
+          const totalMs = doneAt - sendAt;
+          last.latency = {
+            ...(ttfbMs !== null ? { ttfbMs } : {}),
+            ...(genMs !== null ? { genMs } : {}),
+            totalMs,
+          };
+          // Per-session cumulative: error turns also count
+          // toward the displayed total (the user can see
+          // "I spent 5s on this prompt and it errored out").
+          useChatStore().accumulateLatency(req.sessionId, totalMs);
+          // Stash for `reloadAfterFinalize` to fire the IPC.
+          req.latencyPending = { ttfbMs, genMs, totalMs };
+        }
         // Same post-stream markRaw — the error case is terminal
         // just like `done`, the arrays won't grow further.
         if (last.toolCalls) markRaw(last.toolCalls);
@@ -545,6 +701,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     if (!last || last.role !== "assistant") return;
     if (!last.toolCalls) last.toolCalls = [];
     last.toolCalls.push({ id: payload.id, name: payload.name, input: payload.input });
+    // F5: capture the start timestamp for the per-tool
+    // duration. The matching `tool:result` reads it, computes
+    // `durationMs = now - toolStartedAt`, and writes it onto
+    // the in-memory `toolResult` + fires the
+    // `record_tool_duration` IPC to persist the patch into
+    // the `messages.content` JSON's `tool_result` block.
+    // Stale entries (no `tool:result` ever arrived — cancel
+    // mid-tool) are harmless: the Map is dropped with the
+    // request state on `finalizeRequest`.
+    req.toolStartedAt.set(payload.id, Date.now());
   }
 
   function handleToolResult(payload: ToolResultPayload): void {
@@ -555,11 +721,38 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant") return;
     if (!last.toolResults) last.toolResults = [];
+    // F5: compute the per-tool duration. If the matching
+    // `tool:call` never set a timestamp (defensive — the
+    // events could in principle be out-of-order on a buggy
+    // SSE stream), the duration stays `undefined` and the
+    // ToolCallCard renders no time; the IPC is also skipped.
+    const start = req.toolStartedAt.get(payload.tool_use_id);
+    let durationMs: number | undefined;
+    if (typeof start === "number") {
+      durationMs = Math.max(0, Date.now() - start);
+    }
     last.toolResults.push({
       toolUseId: payload.tool_use_id,
       content: payload.content,
       isError: payload.is_error,
+      ...(durationMs !== undefined ? { durationMs } : {}),
     });
+    // F5: persist the duration into `messages.content` JSON
+    // (the `tool_result` block). Fire-and-forget; a failure
+    // logs but doesn't surface to the user. The in-memory
+    // value is what the UI shows.
+    if (durationMs !== undefined) {
+      void invoke("record_tool_duration", {
+        sessionId: req.sessionId,
+        toolUseId: payload.tool_use_id,
+        durationMs,
+      }).catch((e) => {
+        console.error(
+          "[streamController] record_tool_duration failed:",
+          e,
+        );
+      });
+    }
   }
 
   /** Mark a request as finished: drop from activeRequests, unpin
@@ -582,19 +775,58 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  per-turn split shape from DB. The diff cache is still
    *  invalidated so the worktree chip reflects post-send state. */
   function finalizeRequest(requestId: string, sessionId: string, _errored: boolean): void {
+    // F5: the synchronous cleanup (activeRequests.delete +
+    // pinnedSessions.delete + invalidateDiff) is the part
+    // that matches the pre-F5 contract — locked by the
+    // 2013 wire-invariant test (`finalizeRequest` clears
+    // `messagesBySession` and `loadedFromDb` via the
+    // follow-up `reloadAfterFinalize`, but the *immediate*
+    // teardown of `activeRequests` / `pinnedSessions` is
+    // synchronous). Keeping it synchronous also means the
+    // existing test suite (which calls `finalizeRequest`
+    // and asserts immediate state cleanup) keeps passing.
+    //
+    // The F5 IPC fire is async — it runs inside
+    // `reloadAfterFinalize` after the agent loop's
+    // `load_session` roundtrip returns with the assistant
+    // row's seq. We move the request state from
+    // `activeRequests` to `completedRequests` so the IPC
+    // can read the stashed `latencyPending` even after
+    // `activeRequests.delete`. The `completedRequests`
+    // entry is removed inside `reloadAfterFinalize` after
+    // the IPC is fired (or skipped, if there's no
+    // latency to persist).
+    const req = activeRequests.get(requestId);
+    if (req) {
+      completedRequests.set(requestId, req);
+    }
     activeRequests.delete(requestId);
     pinnedSessions.delete(sessionId);
     useChatStore().invalidateDiff(sessionId);
     // Fire-and-forget: replace streaming buffer with DB version.
     // Old buffer stays visible until DB load completes.
-    void reloadAfterFinalize(sessionId);
+    void reloadAfterFinalize(sessionId, requestId);
   }
 
   /** Reload a session's messages from DB after a stream finishes.
    *  Replaces the in-memory streaming buffer with the per-turn
    *  persisted shape, preventing the 2013 wire invariant without
-   *  causing a blank-page flash. */
-  async function reloadAfterFinalize(sessionId: string): Promise<void> {
+   *  causing a blank-page flash.
+   *
+   *  F5: also captures the `seq` of the assistant message that
+   *  the agent loop just persisted, then fires the
+   *  `update_message_latency` IPC (carrying the values the
+   *  `done` handler stashed on `req.latencyPending`). The
+   *  `done` event fires AFTER `persist_turn` returns
+   *  (the agent loop emits `done` only after the row is in
+   *  place — see `agent::chat::chat`), so the seq is stable
+   *  by the time we read it here.
+   *
+   *  This function also owns the post-`done` cleanup of the
+   *  request state (`activeRequests.delete` + `pinnedSessions.delete`).
+   *  Moving it here (vs. in `finalizeRequest`) means the
+   *  request state is alive for the entire IPC path. */
+  async function reloadAfterFinalize(sessionId: string, requestId?: string): Promise<void> {
     const loaded = await invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
@@ -606,6 +838,57 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // F4: notify MessageList to re-scroll after buffer replacement
     // to avoid position jitter.
     useChatStore().scrollAfterReload++;
+    // F5: persist the per-message latency to the DB. The
+    // rehydrated messages carry the seq on each row, so we
+    // find the LAST assistant message (the one the agent
+    // loop just persisted) and use its seq. The
+    // `latencyPending` was stashed on the request by the
+    // `done` / `error` handler; if it's null, the request
+    // was canceled before any latency was computed (no
+    // IPC needed). The request entry itself is now in
+    // `completedRequests` (moved there by `finalizeRequest`),
+    // not `activeRequests` — we read from there and drop
+    // the entry after the IPC fires (or the request
+    // becomes obsolete).
+    if (requestId) {
+      const req = completedRequests.get(requestId);
+      if (req && req.latencyPending) {
+        // Find the most-recently-persisted assistant message
+        // in the rehydrated buffer. The agent loop's
+        // `persist_turn` wrote one row; `rehydrateMessages`
+        // gave it a `seq` from the DB. We grab the largest
+        // seq on an assistant row.
+        let assistantSeq: number | null = null;
+        for (const m of messages) {
+          if (m.role === "assistant" && typeof m.seq === "number") {
+            if (assistantSeq === null || m.seq > assistantSeq) {
+              assistantSeq = m.seq;
+            }
+          }
+        }
+        if (assistantSeq !== null) {
+          const { ttfbMs, genMs, totalMs } = req.latencyPending;
+          void invoke("update_message_latency", {
+            sessionId,
+            seq: assistantSeq,
+            ttfbMs,
+            genMs,
+            totalMs,
+          }).catch((e) => {
+            console.error(
+              "[streamController] update_message_latency failed:",
+              e,
+            );
+          });
+        }
+      }
+      // Drop the completed request from the map now that
+      // we've either fired the IPC or decided to skip it.
+      // The Map has at most 1-2 entries at any time
+      // (in-flight + just-completed), so the size bound
+      // is tight.
+      completedRequests.delete(requestId);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -692,6 +975,26 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         cache_read_input_tokens: loaded.session.cache_read_total ?? 0,
       });
     }
+    // F5: seed the per-session latency total from the
+    // rehydrated messages. We sum `latency.totalMs` over
+    // every assistant role (matches the PRD R6 口径:
+    // "SUM(total_ms) WHERE session_id = ? AND role =
+    // 'assistant' AND total_ms IS NOT NULL"). Pre-F5
+    // messages have `latency` undefined; the sum ignores
+    // them. The seeded value is added to the running total
+    // on every subsequent `done` event via
+    // `accumulateLatency`.
+    let totalLatencyMs = 0;
+    let sawAnyLatency = false;
+    for (const m of messages) {
+      if (m.role === "assistant" && m.latency && typeof m.latency.totalMs === "number") {
+        totalLatencyMs += m.latency.totalMs;
+        sawAnyLatency = true;
+      }
+    }
+    if (sawAnyLatency) {
+      useChatStore().accumulateLatency(sessionId, totalLatencyMs);
+    }
     return messages;
   }
 
@@ -758,6 +1061,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       userMsgId: args.userMsg.id,
       assistantMsgId: args.assistantMsg.id,
       history: args.history,
+      // F5: capture the send timestamp for TTFB / total
+      // calculation. The `firstDeltaAt` field stays null until
+      // the first `delta` event arrives.
+      sendAt: Date.now(),
+      firstDeltaAt: null,
+      toolStartedAt: new Map(),
+      latencyPending: null,
     });
     // Pin the session while streaming — it cannot be evicted
     // even if the user visits 20+ other sessions.
