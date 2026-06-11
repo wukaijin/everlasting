@@ -1116,6 +1116,114 @@ async fn persist_turn_with_latency_writes_three_columns() {
 }
 
 #[tokio::test]
+async fn persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn() {
+ // F5 follow-up per-turn: a 3-turn agent response
+ // (thinking→shell→tool_result×2→text) persists 3
+ // assistant rows, each with its own 4-column
+ // MessageLatency populated. This locks the
+ // "per-turn rows all have 4 columns" contract that
+ // the F5 single-value `req.thinkingDurationMs`
+ // path violated (only the LAST turn's row had
+ // `thinking_ms` set; the first N-1 were NULL and
+ // rendered as "—" on reload).
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+  .await
+  .unwrap();
+
+ let mk_content = |text: &str| -> MessageContent {
+  MessageContent::Blocks(vec![ContentBlock::Text {
+   text: text.to_string(),
+   cache_control: None,
+  }])
+ };
+
+ // Turn 0 (assistant, seq=0): thinkingMs=200, totalMs=350
+ let lat0 = MessageLatency {
+  ttfb_ms: Some(180),
+  gen_ms: Some(170),
+  total_ms: Some(350),
+  thinking_ms: Some(200),
+ };
+ persist_turn(
+  &pool,
+  &s.id,
+  Role::Assistant,
+  &mk_content("t0 answer"),
+  0,
+  Some(&lat0),
+ )
+ .await
+ .unwrap();
+
+ // Turn 1 (assistant, seq=1): thinkingMs=300, totalMs=450
+ let lat1 = MessageLatency {
+  ttfb_ms: Some(220),
+  gen_ms: Some(230),
+  total_ms: Some(450),
+  thinking_ms: Some(300),
+ };
+ persist_turn(
+  &pool,
+  &s.id,
+  Role::Assistant,
+  &mk_content("t1 answer"),
+  1,
+  Some(&lat1),
+ )
+ .await
+ .unwrap();
+
+ // Turn 2 (assistant, seq=2): thinkingMs=500, totalMs=900
+ let lat2 = MessageLatency {
+  ttfb_ms: Some(300),
+  gen_ms: Some(600),
+  total_ms: Some(900),
+  thinking_ms: Some(500),
+ };
+ persist_turn(
+  &pool,
+  &s.id,
+  Role::Assistant,
+  &mk_content("t2 final answer"),
+  2,
+  Some(&lat2),
+ )
+ .await
+ .unwrap();
+
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ assert_eq!(loaded.messages.len(), 3);
+
+ // Each assistant row has its own per-turn 4-column
+ // latency. seq-lookup mirrors the agent loop's
+ // per-turn seq assignment.
+ let m0 = &loaded.messages[0];
+ assert_eq!(m0.ttfb_ms, Some(180));
+ assert_eq!(m0.gen_ms, Some(170));
+ assert_eq!(m0.total_ms, Some(350));
+ assert_eq!(m0.thinking_ms, Some(200));
+
+ let m1 = &loaded.messages[1];
+ assert_eq!(m1.ttfb_ms, Some(220));
+ assert_eq!(m1.gen_ms, Some(230));
+ assert_eq!(m1.total_ms, Some(450));
+ assert_eq!(m1.thinking_ms, Some(300));
+
+ let m2 = &loaded.messages[2];
+ assert_eq!(m2.ttfb_ms, Some(300));
+ assert_eq!(m2.gen_ms, Some(600));
+ assert_eq!(m2.total_ms, Some(900));
+ // THIS is the F5 follow-up contract: the LAST
+ // row's `thinking_ms` is the LAST turn's thinking
+ // duration (500ms), NOT the first turn's (200ms,
+ // which is what the F5 single-value
+ // `req.thinkingDurationMs` produced — the bug the
+ // user's "Thought for —" screenshot hit).
+ assert_eq!(m2.thinking_ms, Some(500));
+}
+
+#[tokio::test]
 async fn persist_turn_with_no_latency_leaves_columns_null() {
  // Tool-result rows (the user-role turn the agent loop persists
  // after tool execution) do not have a latency triple — the

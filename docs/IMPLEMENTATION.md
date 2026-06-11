@@ -28,6 +28,35 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-12 — F5 follow-up per-turn latency tracking(`Map<turnIndex, TurnLatency>` + `ChatEvent::TurnComplete`)
+
+- **决策**:新 `ChatEvent::TurnComplete { seq, ttfb_ms, gen_ms, total_ms, thinking_ms }` variant
+  - **原因**:扩展 `ChatEvent::Done` 会污染"stream-termination"语义(per-turn latency vs stream 结束),TS 端 `ChatEventPayload.kind` 是 close union,加新 variant 比扩展 Done 多一次 switch case 但语义清晰
+  - **依据**:agent loop `Done` 只携带 `stop_reason + usage`;per-turn latency 是正交维度;前端 switch 加 case(TS 强制)
+  - **后果**:`emit_chat_event` 单 `chat-event` 通道,前端 `case "turn_complete":` 写 `latencyByTurn.set(currentTurnIndex, ...)` + in-place mutate `last.latency` / `last.thinkingDurationMs`
+- **决策**:`persist_turn` 在 INSERT 时直接传 `Some(&MessageLatency{4 字段})`,不再走 `update_message_latency` IPC patch
+  - **原因**:F5 已经有 `latency: Option<&MessageLatency>` 第 6 参数(当时总传 `None`);F5 follow-up 改 `Some(&lat)` 零 IPC 落库,N 个 turn 0 IPC 写 DB
+  - **依据**:`db::sessions.rs:544-551` `persist_turn` signature 已支持;`MessageLatency` 4 字段 struct 已存在(`db::sessions.rs:639-645`)
+  - **后果**:`update_message_latency` IPC 仅在 `reloadAfterFinalize` 用(per-turn fire N 次);`accumulateLatency` 在 `case "turn_complete"` 调,per-turn 累加;取消/error 路径不 fire `TurnComplete`(error 没 persist,也没 IPC)
+- **决策**:`ChatEvent::Start` 每 turn emit(去掉 `if turn == 1` 守卫)
+  - **原因**:`currentTurnIndex` 切换需要明确边界,`Start` 语义最准("LLM 调用的开始 = 切 turnIndex");不依赖 `tool:result`(无 tool_use 的 final text turn 也能切);0 IPC,只改后端 emit 守卫 + 前端 handler
+  - **依据**:`agent/chat.rs:421-426` 旧 `if turn == 1` 守卫是历史简化,per-turn 修复后不需要
+  - **后果**:前端多收 N-1 个 Start 事件(无副作用,handler 是 `last.streaming = true; currentTurnIndex++`);每 turn 都触发 `last.streaming = true` 在 streaming UI 上 OK(cursor 一直闪)
+- **决策**:`accumulateLatency` 移到 `case "turn_complete"` handler(per-turn fire,每 turn 一次)
+  - **原因**:跟 A4 `accumulateTokenUsage` 模式完全一致(每 turn fire 一次);cancel/error 路径已发生的 turn 也能累加(`Σ perTurn.totalMs` 跟原 per-request `totalMs` 数值上等价)
+  - **依据**:`sessionTotalLatencyMs: Map<sessionId, number>` 维护逻辑不变
+  - **后果**:`Σ perTurn.totalMs` 累加 `N` 次(per turn)而不是 1 次(per request);`sessionTotalLatencyMs` 数值上跟原 per-request `totalMs` 相同(都基于 wall clock,只是累加单位变了)
+- **决策**:删除 `Known Limitations: Per-turn latency only captured for the LAST assistant message` 段(`.trellis/spec/backend/llm-contract.md`)
+  - **原因**:它描述的就是本任务修的 bug;决策档案"不保留已修复的 known limitation"原则
+  - **依据**:`.trellis/spec/backend/llm-contract.md` 行 1747-1778 整段被替换为新 `### Per-Turn Tracking (F5 follow-up, 2026-06-12)` 子段
+  - **后果**:spec 收紧为"所有 turn 都有 per-turn latency"
+- **决策**:`RequestState` 删 `thinkingStartedAt` / `thinkingDurationMs`(原本的 4 个 close-boundary sites 也一并删),不再在前端维护 per-turn thinking 计时
+  - **原因**:backend `ChatEvent::TurnComplete` payload 已带 `thinking_ms`(从 `turn_thinking_done - turn_thinking_start` `Instant` 对算),前端再算就是双源;前端 `last.thinkingDurationMs` 仅由 `case "turn_complete"` 写(per-turn)
+  - **依据**:后端 commit 2 `agent/chat.rs:434-510` 的 4 个 close boundary 已经设了 `turn_thinking_done`;前端的 4 个 close site 是冗余
+  - **后果**:`case "done"` / `case "error"` 不再写 `last.thinkingDurationMs`(turn_complete 已写);`error` 路径的 `last.thinkingDurationMs` 保持 undefined(语义:errored turn 没入库,也没 thinking duration 可显示)
+- **沉淀**:`.trellis/spec/backend/llm-contract.md`(删除 32 行 + 新增 68 行 `### Per-Turn Tracking` 子段);`app/src-tauri/src/llm/types.rs`(新 `ChatEvent::TurnComplete` variant,+32 行);`app/src-tauri/src/agent/chat.rs`(5 个 per-turn `Instant` locals + `build_turn_latency` helper + per-turn `persist_turn` 4 列 INSERT + per-turn `TurnComplete` emit,+260 行);`app/src/stores/streamController.ts`(`RequestState` 重构 + `ChatEventPayload` 加 `turn_complete` kind + 新 `case "turn_complete"` handler + `reloadAfterFinalize` 改 for-of N 次 IPC,+296 -188 行);`app/src/stores/streamController.test.ts`(改写 3 个 F5 thinking-phase timing 测试 + 新增 1 个 3-turn 测试);`app/src-tauri/src/db/tests.rs`(新增 1 个 `persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn`)
+- **测试**:318 cargo lib tests(原 317 + 1 新 4 列 3-turn INSERT 测试)全过;92 vitest(原 89 + 3 改写 + 1 新增 3-turn - 1 改写时合并 = 净增 3 = 92,具体见 streamController.test.ts 的 28 tests);vue-tsc / pnpm build 干净
+
 ### 2026-06-11 — F5 LLM 耗时统计(per-message 三段 + per-tool duration + session 累计)
 
 - **决策**:Tool duration 嵌进 `tool_result` content JSON(不新建表 / 不加列)

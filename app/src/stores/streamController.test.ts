@@ -844,28 +844,29 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
     expect(last.thinkingDurationMs).toBe(1_400);
   });
 
-  it("`handleToolCall` boundary case: thinking → tool_use (no text in between) still closes the timer", () => {
-    // Spike scenario: a model that thinks, then jumps
-    // straight to a tool_use block with no visible text.
-    // The previous text-`delta` close wouldn't fire here,
-    // so `handleToolCall` is the close boundary. If that
-    // close is missing, the header would render "—"
-    // even though the user "saw" thinking — confusing.
+  it("F5 follow-up per-turn: `turn_complete` event writes `latencyByTurn[turnIndex]` and in-place mutates `last.thinkingDurationMs`", () => {
+    // F5 follow-up: the thinking-time tracking is now
+    // fully owned by the agent loop. The frontend
+    // `case "turn_complete"` handler is the SINGLE
+    // writer for `last.thinkingDurationMs` and the
+    // per-turn entry in `latencyByTurn`. The previous
+    // F5 single-value `req.thinkingDurationMs` +
+    // 4 close boundaries on the frontend are GONE.
     //
-    // We drive `handleToolCall` directly because the
-    // streaming event-emitter path requires the IPC
-    // mock; the public surface we want to assert is the
-    // close-on-tool-call behavior itself.
+    // Spike: a model that thinks then jumps straight
+    // to a tool_use block with no visible text. The
+    // backend's `ChatEvent::ToolCall` arm closes the
+    // per-turn thinking timer; the duration comes
+    // back through `TurnComplete` here.
+    //
+    // We drive `handleChatEvent` directly to avoid the
+    // IPC mocks; we inject the request state and
+    // inject the events the agent loop would emit.
     const stream = useStreamControllerStore();
-    const chat = useChatStore();
-    const sid = "f5-thinking-tool-call-sid";
+    const sid = "f5-followup-turn-complete-sid";
 
-    // Seed: an in-flight request with a started thinking
-    // phase but no close yet. We bypass `startRequest`
-    // because that path would invoke the Tauri IPC; we
-    // only need the request state to be present.
     const req = {
-      requestId: "rid-thinking-tool-call",
+      requestId: "rid-turn-complete",
       sessionId: sid,
       projectId: null,
       userMsgId: "u1",
@@ -873,13 +874,10 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
       history: [],
       sendAt: 0,
       firstDeltaAt: null,
-      thinkingStartedAt: 1_000,
-      thinkingDurationMs: null,
       toolStartedAt: new Map<string, number>(),
-      latencyPending: null,
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
     };
-    // Cast: RequestState is internal; we only need the
-    // public-facing methods (handleToolCall) to read it.
     (stream as unknown as { activeRequests: Map<string, typeof req> })
       .activeRequests.set(req.requestId, req);
     stream.putMessages(
@@ -887,13 +885,45 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
       rehydrateMessages([usrTyped(0, "go"), asst(1, "", [])]),
       false,
     );
-    // Chat store needs to know about this session for
-    // any downstream computed (we don't read it here,
-    // but it mirrors the production shape).
-    void chat;
 
-    // Fire the tool:call handler. The boundary write
-    // happens before the per-tool timing write below it.
+    const handleChatEvent = (
+      stream as unknown as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          text?: string;
+          data?: string;
+          signature?: string;
+          seq?: number;
+          ttfb_ms?: number | null;
+          gen_ms?: number | null;
+          total_ms?: number | null;
+          thinking_ms?: number | null;
+        }) => void;
+      }
+    ).handleChatEvent;
+
+    // Simulate the turn-0 event sequence (backend):
+    // start → thinking_delta → tool_call (no text
+    // delta) → tool:result (after tool exec) →
+    // agent loop fires `TurnComplete(seq=1,
+    // thinkingMs=2_300)`.
+    //
+    // Note: `tool:call` rides its own IPC channel
+    // (`handleToolCall`), NOT `handleChatEvent`. Same
+    // for `tool:result` (`handleToolResult`). The
+    // `chat-event` channel only carries the per-turn
+    // / streaming events: start / delta /
+    // thinking_delta / signature_delta /
+    // redacted_thinking_delta / turn_complete / done /
+    // error.
+    handleChatEvent({ request_id: "rid-turn-complete", kind: "start" });
+    expect(req.currentTurnIndex).toBe(0);
+    handleChatEvent({
+      request_id: "rid-turn-complete",
+      kind: "thinking_delta",
+      text: "Reasoning…",
+    });
     (
       stream as unknown as {
         handleToolCall: (p: {
@@ -904,59 +934,71 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
         }) => void;
       }
     ).handleToolCall({
-      request_id: "rid-thinking-tool-call",
+      request_id: "rid-turn-complete",
       id: "call_1",
       name: "shell",
       input: { command: "ls" },
     });
-
-    // The thinking timer must have closed. The exact
-    // value depends on `Date.now()` at test time, so
-    // we only assert that it became a non-null finite
-    // number. The minimum-bound assertion is that the
-    // `thinkingDurationMs === null` → `>= 0`
-    // transition happened.
-    expect(req.thinkingDurationMs).not.toBeNull();
-    expect(typeof req.thinkingDurationMs).toBe("number");
-    expect(req.thinkingDurationMs!).toBeGreaterThanOrEqual(0);
-
-    // The tool-startedAt side of `handleToolCall` should
-    // also have recorded the per-tool start (regression
-    // guard so the boundary write doesn't accidentally
-    // shadow the existing per-tool timing logic).
+    // The per-tool timing path is unchanged from F5
+    // — no change to `req.toolStartedAt` set on
+    // `handleToolCall`. Just assert it still records
+    // the tool start so we don't regress it.
     expect(req.toolStartedAt.has("call_1")).toBe(true);
+    // Now the agent loop fires TurnComplete for turn 0.
+    handleChatEvent({
+      request_id: "rid-turn-complete",
+      kind: "turn_complete",
+      seq: 1,
+      ttfb_ms: null, // no text delta → no TTFB
+      gen_ms: null,
+      total_ms: 2_500,
+      thinking_ms: 2_300,
+    });
+
+    // `latencyByTurn[0]` carries the per-turn entry
+    // with the seq + 4 ms fields the agent loop
+    // shipped.
+    expect(req.latencyByTurn.size).toBe(1);
+    const turn0 = req.latencyByTurn.get(0);
+    expect(turn0).toBeDefined();
+    expect(turn0!.seq).toBe(1);
+    expect(turn0!.thinkingMs).toBe(2_300);
+    expect(turn0!.totalMs).toBe(2_500);
+    expect(turn0!.ttfbMs).toBeNull();
+    expect(turn0!.genMs).toBeNull();
+
+    // `last.thinkingDurationMs` is in-place mutated so
+    // the streaming placeholder's ThinkingBlock header
+    // shows the time. The `reactive(Map)` set trap
+    // (F5 commit 74e43e4 fix) fires
+    // `currentSessionLatencyTurns` re-eval.
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+    expect(last.thinkingDurationMs).toBe(2_300);
+    expect(last.latency?.totalMs).toBe(2_500);
   });
 
-  it("FULL FLOW: thinking_delta → delta → done sets `last.thinkingDurationMs` on the in-memory assistant message", () => {
-    // Production-shape streaming test (no IPC mocks). Mirrors
-    // the sequence the user's "Thought for —" screenshot hit:
-    //   1. chat.send pushes a placeholder assistant message
-    //   2. streamController.startRequest wires the request
-    //   3. The LLM streams `thinking_delta` events, then
-    //      `delta` (text) events, then a `done` event
-    //   4. The `done` handler should write
-    //      `last.thinkingDurationMs` on the placeholder
-    //      so the ThinkingBlock header shows the time.
+  it("FULL FLOW: thinking_delta → delta → done → turn_complete sets `last.thinkingDurationMs` on the in-memory assistant message (per-turn)", () => {
+    // F5 follow-up per-turn: production-shape streaming
+    // test (no IPC mocks). Mirrors the sequence the
+    // agent loop emits for a single-turn response:
+    //   1. start
+    //   2. thinking_delta events
+    //   3. text `delta` events
+    //   4. `done` event
+    //   5. (NEW in F5 follow-up) `turn_complete` event
+    //      carrying the per-turn seq + 4 ms values
     //
-    // We bypass `startRequest` (which would call Tauri
-    // IPC) and inject the request state directly, then
-    // drive the events through `handleChatEvent`. The
-    // cast below reaches into the private `activeRequests`
-    // Map — same pattern as the other boundary tests.
+    // The `turn_complete` handler is the SINGLE writer
+    // for `last.thinkingDurationMs` (the F5 single-value
+    // `req.thinkingDurationMs` + 4 close boundaries are
+    // gone — see the `RequestState` comment).
     const stream = useStreamControllerStore();
-    const sid = "f5-thinking-full-flow-sid";
+    const sid = "f5-followup-full-flow-sid";
 
-    // Seed the session with a user message + assistant
-    // placeholder. The placeholder is the SAME object
-    // the streaming `done` handler mutates — that
-    // mutability is what makes the in-memory chip
-    // appear in real-time (before `reloadAfterFinalize`
-    // runs).
     const messages = rehydrateMessages([usrTyped(0, "hi"), asst(1, "", [])]);
     stream.putMessages(sid, messages, false);
 
-    // Build a request state. The `handleChatEvent` reads
-    // from this to populate per-turn telemetry.
     const req = {
       requestId: "rid-full-flow",
       sessionId: sid,
@@ -966,10 +1008,9 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
       history: [],
       sendAt: 0,
       firstDeltaAt: null,
-      thinkingStartedAt: null,
-      thinkingDurationMs: null,
       toolStartedAt: new Map<string, number>(),
-      latencyPending: null,
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
     };
     (stream as unknown as { activeRequests: Map<string, typeof req> })
       .activeRequests.set(req.requestId, req);
@@ -982,16 +1023,25 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
           text?: string;
           data?: string;
           signature?: string;
+          seq?: number;
+          ttfb_ms?: number | null;
+          gen_ms?: number | null;
+          total_ms?: number | null;
+          thinking_ms?: number | null;
         }) => void;
       }
     ).handleChatEvent;
 
-    // Step 1: a `start` event (turn 1 only).
+    // Step 1: a `start` event. F5 follow-up: every
+    // turn emits Start now (the `if turn == 1` guard
+    // is gone on the backend). currentTurnIndex -1 → 0.
     handleChatEvent({ request_id: "rid-full-flow", kind: "start" });
+    expect(req.currentTurnIndex).toBe(0);
 
-    // Step 2: a few `thinking_delta` events. The first
-    // one sets `req.thinkingStartedAt`; subsequent ones
-    // append to the message's thinking block.
+    // Step 2: `thinking_delta` events. They append
+    // to the message's thinking block (UI side); the
+    // backend's `ChatEvent::ThinkingDelta` arm opens
+    // the per-turn `turn_thinking_start` timer.
     handleChatEvent({
       request_id: "rid-full-flow",
       kind: "thinking_delta",
@@ -1002,73 +1052,97 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
       kind: "thinking_delta",
       text: "Reasoning step 2.",
     });
-    expect(req.thinkingStartedAt).not.toBeNull();
-    expect(typeof req.thinkingStartedAt).toBe("number");
-    expect(req.thinkingDurationMs).toBeNull();
 
-    // Step 3: a text `delta` event. This is the
-    // production thinking-close boundary. The
-    // `thinkingDurationMs` should snap to a non-null
-    // finite number here, BEFORE `done` runs.
+    // Step 3: a text `delta` event. The backend's
+    // `ChatEvent::Delta` arm closes the thinking
+    // timer (sets `turn_thinking_done`).
     handleChatEvent({
       request_id: "rid-full-flow",
       kind: "delta",
       text: "Here's the answer.",
     });
-    expect(req.thinkingDurationMs).not.toBeNull();
-    expect(typeof req.thinkingDurationMs).toBe("number");
-    expect(req.thinkingDurationMs!).toBeGreaterThanOrEqual(0);
 
-    // Step 4: the `done` event. The handler should
-    // write `last.thinkingDurationMs` on the in-memory
-    // placeholder so the ThinkingBlock header shows
-    // the time (instead of falling back to "—").
+    // Step 4: the agent loop emits `turn_complete`
+    // right after `persist_turn` for the assistant
+    // row. This is the SINGLE writer for the
+    // per-turn latency / thinking time. (Real event
+    // order: turn_complete fires BEFORE done — see
+    // agent/chat.rs: persist_turn → emit_chat_event
+    // (turn_complete) → ... → emit_chat_event (done).
+    // If we emit done first, finalizeRequest moves
+    // the request to completedRequests, and the
+    // subsequent turn_complete's `activeRequests.get`
+    // returns undefined → silent drop. The test
+    // matches production order.)
+    handleChatEvent({
+      request_id: "rid-full-flow",
+      kind: "turn_complete",
+      seq: 1,
+      ttfb_ms: 420,
+      gen_ms: 2_100,
+      total_ms: 3_200,
+      thinking_ms: 850,
+    });
+
+    // Step 5: the `done` event. The handler does NOT
+    // write `last.thinkingDurationMs` anymore — that's
+    // turn_complete's job. The `done` handler still
+    // computes the in-memory `last.latency` (the "last
+    // turn fast path") and fires `finalizeRequest`.
     handleChatEvent({
       request_id: "rid-full-flow",
       kind: "done",
     });
 
-    const afterDone = stream.getMessages(sid)!;
-    const last = afterDone[afterDone.length - 1];
+    // After turn_complete: the streaming placeholder
+    // has the per-turn latency triple + the
+    // per-turn thinking duration. THIS is the
+    // contract the user's "Thought for —" screenshot
+    // hit: with the F5 single-value
+    // `req.thinkingDurationMs`, only the LAST
+    // turn's value reached `last`. The per-turn fix
+    // ships every turn's duration to its own row.
+    const afterTurnComplete = stream.getMessages(sid)!;
+    const last = afterTurnComplete[afterTurnComplete.length - 1];
     expect(last.role).toBe("assistant");
-    // THIS is the contract the user was seeing break:
-    // the placeholder must carry `thinkingDurationMs`
-    // by the time `done` returns. If this assertion
-    // fails, the bug is in the `done` handler's write
-    // path (or the close-boundary didn't fire
-    // upstream).
-    expect(last.thinkingDurationMs).toBe(req.thinkingDurationMs);
-    expect(typeof last.thinkingDurationMs).toBe("number");
+    expect(last.thinkingDurationMs).toBe(850);
+    expect(last.latency?.ttfbMs).toBe(420);
+    expect(last.latency?.genMs).toBe(2_100);
+    expect(last.latency?.totalMs).toBe(3_200);
+
+    // `latencyByTurn[0]` carries the per-turn entry
+    // for reloadAfterFinalize's per-seq IPC fire.
+    expect(req.latencyByTurn.size).toBe(1);
+    expect(req.latencyByTurn.get(0)?.seq).toBe(1);
   });
 
-  it("FULL FLOW + reloadAfterFinalize: thinkingDurationMs SURVIVES the array swap", async () => {
-    // The previous test only checked the in-memory value
-    // RIGHT AFTER `done` runs. Production code does more
-    // work after `done`: it calls `finalizeRequest` →
-    // `reloadAfterFinalize` (async), which:
-    //   1. `load_session` IPC → re-reads DB (the
-    //      rehydrated assistant row has NO
-    //      `thinking_ms` yet because the latency IPC
-    //      hasn't fired).
-    //   2. `putMessages` → REPLACES the in-memory array
-    //      with the rehydrated one. The placeholder
-    //      (which had `thinkingDurationMs` set by
-    //      the `done` handler) is GONE.
-    //   3. Re-attach: finds the new target by seq and
-    //      copies `req.thinkingDurationMs` onto it.
+  it("F5 follow-up per-turn: 3-turn request drives 3 latencyByTurn entries with distinct thinkingMs and same in-memory last.thinkingDurationMs (last turn wins)", () => {
+    // The user-screenshot scenario: a 3-turn agent
+    // response (thinking→shell→tool_result×2→text) is
+    // 3 LLM calls; the agent loop emits 3
+    // `TurnComplete` events with 3 distinct `seq` and
+    // 3 distinct `thinkingMs` values. The frontend
+    // `latencyByTurn` Map collects all 3 entries; the
+    // placeholder's `last.thinkingDurationMs` is
+    // overwritten per turn to the LATEST turn's value
+    // (the streaming buffer is a single merged
+    // assistant message — the per-turn split comes
+    // from `reloadAfterFinalize` after `done`).
     //
-    // If the re-attach drops the value, the user sees
-    // "—" even though `last.thinkingDurationMs` was
-    // correctly set during streaming. This test
-    // drives the full path and asserts the value
-    // SURVIVES the swap.
+    // This is the F5 single-value bug: with the old
+    // `req.thinkingDurationMs`, only the FIRST turn's
+    // duration was captured (the `=== null` guard
+    // blocked subsequent turns), so 2 of 3 ThinkingBlocks
+    // rendered "—". With the per-turn fix, all 3 turns
+    // are recorded in `latencyByTurn` and (after
+    // reload) on the per-turn split rows.
     const stream = useStreamControllerStore();
-    const sid = "f5-thinking-swap-survive-sid";
-    const messages = rehydrateMessages([usrTyped(0, "hi"), asst(1, "", [])]);
+    const sid = "f5-followup-3-turn-sid";
+    const messages = rehydrateMessages([usrTyped(0, "go"), asst(1, "", [])]);
     stream.putMessages(sid, messages, false);
 
     const req = {
-      requestId: "rid-swap-survive",
+      requestId: "rid-3-turn",
       sessionId: sid,
       projectId: null,
       userMsgId: "u1",
@@ -1076,10 +1150,9 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
       history: [],
       sendAt: 0,
       firstDeltaAt: null,
-      thinkingStartedAt: null,
-      thinkingDurationMs: null,
       toolStartedAt: new Map<string, number>(),
-      latencyPending: null,
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
     };
     (stream as unknown as { activeRequests: Map<string, typeof req> })
       .activeRequests.set(req.requestId, req);
@@ -1090,46 +1163,124 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
           request_id: string;
           kind: string;
           text?: string;
+          seq?: number;
+          ttfb_ms?: number | null;
+          gen_ms?: number | null;
+          total_ms?: number | null;
+          thinking_ms?: number | null;
         }) => void;
       }
     ).handleChatEvent;
 
-    handleChatEvent({ request_id: "rid-swap-survive", kind: "start" });
-    handleChatEvent({
-      request_id: "rid-swap-survive",
-      kind: "thinking_delta",
-      text: "thinking…",
-    });
-    handleChatEvent({
-      request_id: "rid-swap-survive",
-      kind: "delta",
-      text: "answer",
-    });
-    const expectedDuration = req.thinkingDurationMs!;
-    expect(expectedDuration).toBeGreaterThanOrEqual(0);
-    handleChatEvent({ request_id: "rid-swap-survive", kind: "done" });
+    const handleToolCall = (
+      stream as unknown as {
+        handleToolCall: (p: {
+          request_id: string;
+          id: string;
+          name: string;
+          input: unknown;
+        }) => void;
+      }
+    ).handleToolCall;
 
-    // `done` synchronously set `last.thinkingDurationMs` on
-    // the placeholder. Then it called `finalizeRequest` →
-    // `reloadAfterFinalize`, which is async fire-and-forget.
-    // Yield to the event loop so the async path can run
-    // (the IPC `load_session` will FAIL in the test env
-    // because there's no Tauri, but the test just needs the
-    // synchronous parts of `reloadAfterFinalize` to
-    // exercise — we can short-circuit the IPC by mocking).
-    //
-    // Wait — the IPC will throw. We need to mock
-    // `load_session` to return the persisted state.
-    // Use `vi.spyOn` on the Tauri module... actually
-    // simpler: drive `reloadAfterFinalize` indirectly by
-    // asserting the in-memory value AT `done`-time, then
-    // assert the re-attach path by mocking the IPC.
-    //
-    // For now, assert the synchronous part: the placeholder
-    // has `thinkingDurationMs` set, AND the re-attach
-    // contract is tested by the IPC-failure test below.
-    const afterDone = stream.getMessages(sid)!;
-    expect(afterDone[1].thinkingDurationMs).toBe(expectedDuration);
+    // Turn 0: start → thinking_delta → tool:call (handleToolCall,
+    // independent IPC channel — NOT handleChatEvent) →
+    // turn_complete(seq=1, thinkingMs=200)
+    handleChatEvent({ request_id: "rid-3-turn", kind: "start" });
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "thinking_delta",
+      text: "t0 think",
+    });
+    handleToolCall({
+      request_id: "rid-3-turn",
+      id: "c0",
+      name: "shell",
+      input: { command: "ls" },
+    });
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "turn_complete",
+      seq: 1,
+      ttfb_ms: null,
+      gen_ms: null,
+      total_ms: 350,
+      thinking_ms: 200,
+    });
+
+    // Turn 1: start → thinking_delta → tool:call → turn_complete(seq=3, thinkingMs=300)
+    handleChatEvent({ request_id: "rid-3-turn", kind: "start" });
+    expect(req.currentTurnIndex).toBe(1);
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "thinking_delta",
+      text: "t1 think",
+    });
+    handleToolCall({
+      request_id: "rid-3-turn",
+      id: "c1",
+      name: "shell",
+      input: { command: "pwd" },
+    });
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "turn_complete",
+      seq: 3,
+      ttfb_ms: null,
+      gen_ms: null,
+      total_ms: 450,
+      thinking_ms: 300,
+    });
+
+    // Turn 2: start → thinking_delta → delta (text only, no tool) → turn_complete(seq=5, thinkingMs=500)
+    handleChatEvent({ request_id: "rid-3-turn", kind: "start" });
+    expect(req.currentTurnIndex).toBe(2);
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "thinking_delta",
+      text: "t2 think",
+    });
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "delta",
+      text: "final answer",
+    });
+    handleChatEvent({
+      request_id: "rid-3-turn",
+      kind: "turn_complete",
+      seq: 5,
+      ttfb_ms: 180,
+      gen_ms: 600,
+      total_ms: 900,
+      thinking_ms: 500,
+    });
+
+    // The F5 follow-up contract: 3 distinct
+    // `latencyByTurn` entries, 3 distinct thinkingMs
+    // (the bug the user's screenshot hit had only the
+    // first turn's value reaching the UI), 3 distinct
+    // seq values (the agent loop's per-session
+    // `next_seq` counter).
+    expect(req.latencyByTurn.size).toBe(3);
+    expect(req.latencyByTurn.get(0)?.thinkingMs).toBe(200);
+    expect(req.latencyByTurn.get(1)?.thinkingMs).toBe(300);
+    expect(req.latencyByTurn.get(2)?.thinkingMs).toBe(500);
+    expect(req.latencyByTurn.get(0)?.seq).toBe(1);
+    expect(req.latencyByTurn.get(1)?.seq).toBe(3);
+    expect(req.latencyByTurn.get(2)?.seq).toBe(5);
+
+    // The placeholder's `last.thinkingDurationMs` is
+    // the LAST turn's value (the streaming buffer is
+    // merged). After `reloadAfterFinalize`, the
+    // per-turn split rows in DB carry each turn's
+    // own value — that's what the user's
+    // "Thought for X.Xs" header reads from after
+    // reload. The cumulative `currentSessionLatencyTurns`
+    // computed in chat.ts sees all 3 entries via
+    // `m.latency` on the rehydrated rows.
+    const afterAllTurns = stream.getMessages(sid)!;
+    const last = afterAllTurns[afterAllTurns.length - 1];
+    expect(last.thinkingDurationMs).toBe(500);
   });
 
   it("re-attach contract: setting `target.thinkingDurationMs` on the reactive target fires the per-message chip", async () => {
