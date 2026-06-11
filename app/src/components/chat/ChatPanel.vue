@@ -466,6 +466,7 @@ if (typeof window !== "undefined") {
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .chat-panel__loading {
@@ -486,8 +487,6 @@ if (typeof window !== "undefined") {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-  min-width: 0;
 }
 
 .chat-panel__title-row {
