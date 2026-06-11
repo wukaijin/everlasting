@@ -353,6 +353,38 @@ pub enum ChatEvent {
         stop_reason: Option<String>,
         usage: Option<TokenUsage>,
     },
+    /// F5 follow-up per-turn: emitted ONCE per LLM turn (right after
+    /// `persist_turn` for the assistant row). Carries the per-turn
+    /// latency triple plus the thinking-phase wall clock, plus the
+    /// assistant row's `seq` (assigned by the agent loop) so the
+    /// frontend can key its `latencyByTurn: Map<turnIndex, TurnLatency>`
+    /// and the reload `update_message_latency` IPC can fire N times
+    /// per request instead of 1. All four ms fields are `Option`
+    /// because a turn may have been cut before reaching the
+    /// corresponding boundary (e.g. thinking-only → tool_call with
+    /// no text delta; no `gen_ms` / no `ttfb_ms`).
+    TurnComplete {
+        /// Assistant row's `seq` (assigned by the agent loop in
+        /// `agent/chat.rs` from the per-session `next_seq` counter).
+        /// The frontend `update_message_latency` IPC takes this `seq`
+        /// to find the row to UPDATE.
+        seq: i64,
+        /// First `delta` → turn `send_at` (i.e. when the LLM started
+        /// returning content). `None` when no text delta arrived
+        /// before the turn's `done`.
+        ttfb_ms: Option<i64>,
+        /// `done` (or non-thinking boundary) → first `delta`. `None`
+        /// when no text delta arrived.
+        gen_ms: Option<i64>,
+        /// `done` (or non-thinking boundary) → turn `send_at`. Always
+        /// `Some` for a turn that reached `persist_turn` (the turn
+        /// must have started).
+        total_ms: Option<i64>,
+        /// First non-thinking boundary → first `thinking_delta` (the
+        /// thinking-phase wall clock). `None` when the turn never
+        /// entered the thinking phase (no `thinking_delta` SSE).
+        thinking_ms: Option<i64>,
+    },
     /// Stream errored. `category` maps to [`LlmErrorCategory`] strings.
     Error {
         message: String,

@@ -30,6 +30,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
@@ -49,6 +50,54 @@ use crate::llm::{
 use crate::memory::loader::{build_instructions_blocks, load_for_session};
 use crate::state::{AppState, CancellationGuard, ChatEventPayload, ToolCallPayload};
 use crate::tools::ToolContext;
+
+// ---------------------------------------------------------------------------
+// F5 follow-up per-turn latency — helpers
+// ---------------------------------------------------------------------------
+
+/// Convert two `Instant`s to an `i64` millisecond delta. `None`
+/// when either side is missing. Saturates to `i64::MAX` on
+/// negative deltas (shouldn't happen in practice — `done_at` is
+/// always strictly after `send_at` — but the saturation guards
+/// against clock anomalies like NTP step-backs).
+fn instant_delta_ms(start: Option<Instant>, end: Option<Instant>) -> Option<i64> {
+    match (start, end) {
+        (Some(s), Some(e)) => {
+            let d = e.saturating_duration_since(s);
+            Some(i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        }
+        _ => None,
+    }
+}
+
+/// Build a `MessageLatency` from the 5 per-turn `Instant`
+/// baselines the agent loop tracks (`send_at` /
+/// `first_delta_at` / `thinking_start` / `thinking_done` /
+/// `done_at`). `ttfb_ms` / `gen_ms` / `total_ms` / `thinking_ms`
+/// are independently `None` when the corresponding boundary
+/// wasn't reached — e.g. a turn that emitted `tool_call` straight
+/// from `thinking_delta` with no text delta has `ttfb_ms = None`
+/// and `gen_ms = None`, but `total_ms` and `thinking_ms` are set.
+///
+/// Used by the agent loop right before the
+/// `persist_turn(latency: Some(&MessageLatency))` call (the 4
+/// columns go into the same INSERT) and again (with the same
+/// values) when emitting `ChatEvent::TurnComplete` to the
+/// frontend.
+fn build_turn_latency(
+    turn_send_at: Option<Instant>,
+    turn_first_delta_at: Option<Instant>,
+    turn_thinking_start: Option<Instant>,
+    turn_thinking_done: Option<Instant>,
+    turn_done_at: Option<Instant>,
+) -> crate::db::MessageLatency {
+    crate::db::MessageLatency {
+        ttfb_ms: instant_delta_ms(turn_send_at, turn_first_delta_at),
+        gen_ms: instant_delta_ms(turn_first_delta_at, turn_done_at),
+        total_ms: instant_delta_ms(turn_send_at, turn_done_at),
+        thinking_ms: instant_delta_ms(turn_thinking_start, turn_thinking_done),
+    }
+}
 
 /// `chat` Tauri command entry. Returns immediately after spawning
 /// the agent loop; the actual work runs in the background and
@@ -363,6 +412,39 @@ pub async fn chat(
         }
 
         for turn in 1..=MAX_TURNS {
+            // F5 follow-up per-turn: 5 per-turn `Instant` locals
+            // that feed the `TurnComplete` event (and the
+            // 4-column INSERT via
+            // `persist_turn(latency: Some(...))`). Reset at the
+            // top of every iteration so a 2nd/3rd/... turn gets
+            // independent timing — the F5 single-value
+            // `RequestState` model only ever tracked the FIRST
+            // turn, which is what produced the "thinking_ms only
+            // set on the last assistant row" symptom.
+            //
+            // `send_at` / `first_delta_at` / `thinking_start` /
+            // `thinking_done` are stamped on the per-event arms
+            // of the inner select! loop. `done_at` is stamped on
+            // the `ChatEvent::Done` arm (the only event that
+            // signals "this turn finished") and is the canonical
+            // baseline for `gen_ms` and `total_ms`.
+            let mut turn_send_at: Option<Instant> = None;
+            let mut turn_first_delta_at: Option<Instant> = None;
+            let mut turn_thinking_start: Option<Instant> = None;
+            let mut turn_thinking_done: Option<Instant> = None;
+            let mut turn_done_at: Option<Instant> = None;
+            // Silence rustc "value assigned to `turn_send_at` is
+            // never read" on the `let mut var = None; var = Some(...)`
+            // pattern (the compiler conservatively tags the initial
+            // `None` path as dead because the very next statement
+            // reassigns). `let _ = turn_send_at;` consumes the
+            // initial `None` so the warning goes away. Touching
+            // the others is unnecessary — only `turn_send_at` is
+            // declared first and then unconditionally reassigned
+            // by the call-site set; the others are conditionally
+            // assigned by the event arms.
+            let _ = turn_send_at;
+
             // Dispatch through the catalog-resolved provider.
             // The provider was constructed once before the spawn
             // (above), so every turn of the 20-turn agent loop
@@ -373,6 +455,13 @@ pub async fn chat(
                 messages.clone(),
                 tool_defs.clone(),
             );
+            // Stamped right after `provider.send` returns; treated as
+            // the "turn start" baseline for the 4 derived ms values
+            // (ttfb / gen / total / thinking). The agent loop sets
+            // it BEFORE any per-event work so the wall clock measures
+            // the actual provider call, not the outer-loop bookkeeping
+            // around it.
+            turn_send_at = Some(Instant::now());
 
             // Accumulate text, tool_calls, thinking blocks, and
             // redacted_thinking payloads from this LLM turn.
@@ -420,9 +509,13 @@ pub async fn chat(
 
                         match &event {
                             ChatEvent::Start => {
-                                if turn == 1 {
-                                    emit_chat_event(&app_handle, &rid, &event);
-                                }
+                                // F5 follow-up: every turn emits Start
+                                // (the F5 `if turn == 1` guard is gone)
+                                // so the frontend can key its
+                                // `latencyByTurn` per turn reliably
+                                // — the `case "start"` handler bumps
+                                // `currentTurnIndex` for the new turn.
+                                emit_chat_event(&app_handle, &rid, &event);
                             }
                             ChatEvent::Delta { text } => {
                                 // A text delta means the model is
@@ -433,6 +526,28 @@ pub async fn chat(
                                 // to the text.
                                 flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
                                 text_parts.push(text.clone());
+                                // F5 follow-up per-turn: stamp the
+                                // first-delta wall clock exactly once
+                                // for this turn (the F5 frontend
+                                // derives `ttfbMs` from this; the
+                                // backend also uses it for the
+                                // `ttfb_ms` field in the
+                                // `TurnComplete` event + the
+                                // 4-column INSERT via
+                                // `persist_turn(latency: Some(...))`).
+                                if turn_first_delta_at.is_none() {
+                                    turn_first_delta_at = Some(Instant::now());
+                                }
+                                // Close the thinking phase if it's
+                                // still open. The boundary is the
+                                // first non-thinking event after the
+                                // thinking started — same set of
+                                // boundaries the frontend uses
+                                // (`text delta` / `tool:call` /
+                                // `done` / `error`).
+                                if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
+                                    turn_thinking_done = Some(Instant::now());
+                                }
                                 emit_chat_event(&app_handle, &rid, &event);
                             }
                             ChatEvent::ThinkingDelta { text } => {
@@ -442,6 +557,16 @@ pub async fn chat(
                                 let p = pending_thinking
                                     .get_or_insert_with(PendingThinking::default);
                                 p.text.push_str(text);
+                                // F5 follow-up per-turn: open the
+                                // thinking-phase timer if not already
+                                // open. Per-turn (NOT per-request) —
+                                // the outer loop's `None` reset at
+                                // the top of each iteration ensures a
+                                // 2nd/3rd/... turn starts without an
+                                // inherited timer state.
+                                if turn_thinking_start.is_none() {
+                                    turn_thinking_start = Some(Instant::now());
+                                }
                                 emit_chat_event(&app_handle, &rid, &event);
                             }
                             ChatEvent::SignatureDelta { signature } => {
@@ -467,6 +592,15 @@ pub async fn chat(
                                 // pending thinking so the order
                                 // is correct.
                                 flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                                // F5 follow-up per-turn: a
+                                // `tool_use` arriving without an
+                                // intervening text delta is also a
+                                // thinking-end boundary (mirrors
+                                // the frontend `handleToolCall`
+                                // close on `req.thinkingDurationMs`).
+                                if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
+                                    turn_thinking_done = Some(Instant::now());
+                                }
                                 tool_calls.push((id.clone(), name.clone(), input.clone()));
                                 let _ = app_handle.emit(
                                     "tool:call",
@@ -481,6 +615,28 @@ pub async fn chat(
                             ChatEvent::Done { stop_reason: sr, usage } => {
                                 stop_reason = sr.clone();
                                 last_usage = usage.clone();
+                                // F5 follow-up per-turn: stamp the
+                                // turn's `done_at` baseline
+                                // exactly once (the inner loop
+                                // breaks immediately after the
+                                // `done` arm, so this is the
+                                // last chance to capture it
+                                // before the outer-loop
+                                // bookkeeping).
+                                turn_done_at = Some(Instant::now());
+                                // F5 follow-up per-turn: close the
+                                // thinking-phase timer on the
+                                // `done` boundary. Covers the
+                                // thinking-only-no-text shape
+                                // (extended thinking followed
+                                // directly by `done` with no
+                                // visible response — rare but
+                                // possible). Without this, the
+                                // thinking_ms would be lost for
+                                // those turns.
+                                if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
+                                    turn_thinking_done = Some(Instant::now());
+                                }
                                 // A4 (Token Usage Tracking):
                                 // accumulate the per-turn usage
                                 // into the session's column
@@ -509,12 +665,42 @@ pub async fn chat(
                                 }
                             }
                             ChatEvent::Error { .. } => {
+                                // F5 follow-up per-turn: error
+                                // boundary also closes the
+                                // thinking timer (the network
+                                // could drop mid-thinking). The
+                                // "Thought for X.Xs" header is
+                                // still useful in the error case
+                                // — tells the user "the model
+                                // thought for 4.7s before the
+                                // connection died".
+                                if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
+                                    turn_thinking_done = Some(Instant::now());
+                                }
                                 emit_chat_event(&app_handle, &rid, &event);
                                 had_error = true;
                             }
                             ChatEvent::ToolResult { .. } => {
                                 // Not expected from LLM stream;
                                 // only used internally.
+                            }
+                            ChatEvent::TurnComplete { .. } => {
+                                // F5 follow-up: `TurnComplete` is
+                                // emitted by the agent loop AFTER
+                                // `persist_turn` for the assistant
+                                // row — not by the LLM stream. The
+                                // inner loop never sees it. This
+                                // arm exists only to satisfy the
+                                // exhaustive match. Log
+                                // defensively if it ever fires
+                                // (would mean a misconfigured
+                                // provider or a future code path
+                                // that pipes TurnComplete into the
+                                // stream).
+                                tracing::warn!(
+                                    request_id = %rid,
+                                    "chat: unexpected ChatEvent::TurnComplete in LLM stream — ignoring"
+                                );
                             }
                         }
 
@@ -597,10 +783,74 @@ pub async fn chat(
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks),
                 };
-                if let Err(e) =
-                    crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None).await
+                // F5 follow-up per-turn: build the 4-column
+                // `MessageLatency` from the per-turn `Instant`
+                // locals and pass it through `persist_turn` so
+                // the assistant row's `ttfb_ms` / `gen_ms` /
+                // `total_ms` / `thinking_ms` columns are
+                // populated atomically in the same INSERT
+                // (no follow-up `update_message_latency`
+                // round-trip needed for the common case).
+                let turn_latency = build_turn_latency(
+                    turn_send_at,
+                    turn_first_delta_at,
+                    turn_thinking_start,
+                    turn_thinking_done,
+                    turn_done_at,
+                );
+                if let Err(e) = crate::db::persist_turn(
+                    &db,
+                    &session_id,
+                    msg.role,
+                    &msg.content,
+                    seq,
+                    Some(&turn_latency),
+                )
+                .await
                 {
                     tracing::error!(error = %e, "failed to persist assistant turn");
+                } else {
+                    // F5 follow-up: emit `TurnComplete` per
+                    // turn (after a successful persist). The
+                    // frontend `case "turn_complete"` arm
+                    // (a) writes to `latencyByTurn` keyed by
+                    // `currentTurnIndex`, (b) in-place mutates
+                    // the reactive placeholder's
+                    // `latency` / `thinkingDurationMs` for
+                    // instant UI feedback (no reload needed),
+                    // and (c) fires `accumulateLatency` per
+                    // turn. The reload path's
+                    // `update_message_latency` IPC fires from
+                    // `reloadAfterFinalize` later, using the
+                    // same `seq` for the DB UPDATE.
+                    //
+                    // `seq` here is the assistant row's
+                    // seq (assigned by the agent loop in
+                    // the per-session `next_seq` counter
+                    // at the top of the function) — the
+                    // same value the frontend's
+                    // `find_message_id_by_seq` resolves
+                    // to the row id.
+                    //
+                    // Cancel / error paths inherit this
+                    // emit automatically because the
+                    // persist (and therefore the
+                    // TurnComplete) happens BEFORE the
+                    // cancel-aware branching at line ~700.
+                    // The MAX_TURNS safety net does NOT
+                    // fire TurnComplete — it returns
+                    // without persisting any new turn.
+                    emit_chat_event(
+                        &app_handle,
+                        &rid,
+                        &ChatEvent::TurnComplete {
+                            seq,
+                            ttfb_ms: turn_latency.ttfb_ms,
+                            gen_ms: turn_latency.gen_ms,
+                            total_ms: turn_latency.total_ms,
+                            thinking_ms: turn_latency.thinking_ms,
+                        },
+                    );
                 }
                 messages.push(msg);
                 seq += 1;
