@@ -74,6 +74,26 @@ interface RequestState {
   // `update_message_latency` IPC.
   sendAt: number;
   firstDeltaAt: number | null;
+  // F5 follow-up: thinking-only timing (drives the
+  // "Thought for X.Xs" header in `ThinkingBlock.vue`,
+  // replacing the previous "X tokens" estimate). Set on
+  // the first `thinking_delta` event; closed (and
+  // snapshotted into `thinkingDurationMs`) on the first
+  // non-thinking event after that — text `delta`, a
+  // `tool:call` IPC, the `done` event, or an `error`.
+  // Signature / redacted-thinking deltas do NOT close it
+  // (they're still inside the thinking phase). For
+  // messages that never entered the thinking phase,
+  // stays `null` end-to-end and the header falls back
+  // to "—". In-memory only for now (no DB column); the
+  // value lives on `ChatMessage.thinkingDurationMs`
+  // and is re-attached to the rehydrated message by
+  // `reloadAfterFinalize` so the post-stream swap
+  // doesn't lose it (same shape as the `latency`
+  // re-attach — see the comment there for why this
+  // matters with the `reactive(Map)`-stored arrays).
+  thinkingStartedAt: number | null;
+  thinkingDurationMs: number | null;
   // F5: per-tool timing keyed by tool_use_id. Set on
   // `tool:call` (in `handleToolCall`), read on `tool:result`
   // (in `handleToolResult`) to compute `durationMs`. The
@@ -168,6 +188,15 @@ interface LoadedMessage {
   ttfb_ms: number | null;
   gen_ms: number | null;
   total_ms: number | null;
+  /** F5 follow-up: thinking-phase wall-clock duration in ms.
+   *  `null` for messages that never entered the thinking
+   *  phase AND for pre-F5-follow-up rows. Rehydrated into
+   *  the assistant message's `thinkingDurationMs` field;
+   *  the `ThinkingBlock` header renders it as
+   *  "Thought for X.Xs" (replacing the previous "X tokens"
+   *  estimate). Persisted by `update_message_latency`'s
+   *  new 4th-column UPDATE — same IPC, one extra bind. */
+  thinking_ms: number | null;
 }
 
 interface LoadedSession {
@@ -294,6 +323,18 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
         ...(m.gen_ms !== null ? { genMs: m.gen_ms } : {}),
         ...(m.total_ms !== null ? { totalMs: m.total_ms } : {}),
       };
+    }
+    // F5 follow-up: thinking-phase wall-clock. Mirrors the
+    // `latency` triple's "only set if at least one field is
+    // present" rule — the ThinkingBlock header uses the
+    // `thinkingDurationMs !== undefined` presence check to
+    // distinguish "—" from "0.0s" (a real, extremely fast
+    // local-proxy value). Pre-F5-follow-up rows have the
+    // column NULL and fall through to undefined, which the
+    // UI renders as "—" — the same fallback the in-memory
+    // path used before this persistence work.
+    if (m.thinking_ms !== null) {
+      msg.thinkingDurationMs = m.thinking_ms;
     }
     // The `seq` is plumbed through for the F5
     // `update_message_latency` IPC. The streaming path tracks
@@ -497,7 +538,41 @@ export const useStreamControllerStore = defineStore("streamController", () => {
 
   /** Append an entry to the LRU, evicting the LRU non-pinned
    *  entry if over capacity. `reactive(Map)` tracks `set` /
-   *  `delete` for us, so we just mutate it directly. */
+   *  `delete` for us, so we just mutate it directly.
+   *
+   *  F5 (LLM Latency Tracking) follow-up: the array is
+   *  wrapped in `reactive()` on insertion. Vue 3's
+   *  `reactive(new Map())` does NOT auto-wrap stored values
+   *  (native Map uses internal slots, not property access,
+   *  so the outer Map's proxy can't intercept them) — see
+   *  https://vuejs.org/api/reactivity-core.html#reactive.
+   *  Without this wrap, the array and its items stay as
+   *  plain objects, and a per-item mutation like
+   *  `last.latency = { totalMs, ... }` (in the `done`
+   *  handler) or `target.latency = { totalMs, ... }` (in
+   *  `reloadAfterFinalize`) writes through a plain object
+   *  with no proxy in the way — Vue's effect tracker never
+   *  sees the change, and the `currentSessionLatencyTurns`
+   *  computed in chat.ts (which iterates the array and
+   *  reads `m.latency`) never re-evaluates. Symptom: the
+   *  cumulative chip in the ChatInput popover showed
+   *  "累计 10.1s" but "轮次 0" because `accumulateLatency`
+   *  fires the *outer* Map's set trap (which IS tracked)
+   *  while per-message `latency` assignment does not.
+   *
+   *  Wrapping here is safe for both code paths:
+   *  - `ensureLoaded` / `reloadAfterFinalize` call us with
+   *    a fresh `rehydrateMessages(loaded.messages)` array
+   *    of plain objects; `reactive()` deep-wraps them.
+   *  - The streaming path's `msgs.push(userMsg, assistantMsg)`
+   *    (in chat.ts) mutates the wrapped array; the new
+   *    items get wrapped on the proxy's set trap.
+   *  - `markRaw`d nested fields (toolCalls / toolResults /
+   *    thinkingBlocks / redactedThinkingData) skip the
+   *    wrap, preserving the existing memory-shape contract.
+   *
+   *  Cost: one `reactive()` call per putMessages (cheap —
+   *  Vue 3 wraps lazily on property access). */
   function putMessages(
     sessionId: string,
     messages: ChatMessage[],
@@ -510,7 +585,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // reflects the new recency.
       messagesBySession.delete(sessionId);
     }
-    messagesBySession.set(sessionId, messages);
+    messagesBySession.set(sessionId, reactive(messages));
     if (pinned) pinnedSessions.add(sessionId);
     evictIfNeeded();
   }
@@ -573,9 +648,38 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (req.firstDeltaAt === null) {
           req.firstDeltaAt = Date.now();
         }
+        // F5 follow-up: a text `delta` is the first signal
+        // that the model has finished thinking for this turn
+        // (signature / redacted-thinking deltas are still
+        // "inside" the thinking phase and don't close it).
+        // Snapshot the duration once, on the boundary. We
+        // also fall through to assign `last.thinkingDurationMs`
+        // — but the actual write onto the message happens in
+        // the `done` handler (so a `done` that arrives
+        // without a text delta in between — e.g. thinking
+        // → tool_use → done — still gets the duration).
+        if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
+          req.thinkingDurationMs = Date.now() - req.thinkingStartedAt;
+        }
         break;
       case "thinking_delta":
         if (event.text) currentThinkingBlock(last).text += event.text;
+        // F5 follow-up: stamp the start of the thinking phase
+        // on the very first `thinking_delta` after the most
+        // recent boundary. If the model interleaves
+        // (thinking → text → thinking again), the boundary
+        // close in the `delta` case above already cleared the
+        // timer by snapshotting `thinkingDurationMs`; we use
+        // `thinkingStartedAt === null` (NOT `thinkingDurationMs
+        // === null`) as the "not currently thinking" check so
+        // the next phase can re-open. The `done` handler reads
+        // the latest `thinkingDurationMs` (which only ever
+        // captures the FIRST closed interval — fine for the
+        // header, which is meant to be "total wall time spent
+        // reasoning", not a per-phase breakdown).
+        if (req.thinkingStartedAt === null) {
+          req.thinkingStartedAt = Date.now();
+        }
         break;
       case "signature_delta":
         if (event.signature) currentThinkingBlock(last).signature += event.signature;
@@ -599,6 +703,18 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         const sendAt = req.sendAt;
         const firstDeltaAt = req.firstDeltaAt;
         const ttfbMs = firstDeltaAt !== null ? firstDeltaAt - sendAt : null;
+        // F5 follow-up: close the thinking timer if it's
+        // still open. Covers the thinking-only-no-text
+        // shape (e.g. extended thinking immediately
+        // followed by `done` because the model produced
+        // no visible response — rare but possible). After
+        // this branch, `req.thinkingDurationMs` is
+        // terminal; the write to `last.thinkingDurationMs`
+        // happens below in the latency block (same place
+        // we write the rest of the per-message telemetry).
+        if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
+          req.thinkingDurationMs = doneAt - req.thinkingStartedAt;
+        }
         const genMs =
           firstDeltaAt !== null ? doneAt - firstDeltaAt : null;
         const totalMs = doneAt - sendAt;
@@ -612,6 +728,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           ...(genMs !== null ? { genMs } : {}),
           totalMs,
         };
+        // F5 follow-up: stash the thinking duration on the
+        // message in the same tick as the latency triple.
+        // Undefined for messages that never entered the
+        // thinking phase; the ThinkingBlock header falls
+        // back to "—" in that case.
+        if (req.thinkingDurationMs !== null) {
+          last.thinkingDurationMs = req.thinkingDurationMs;
+        }
         // Per-session cumulative total. Mirrors the A4 token
         // usage `accumulateTokenUsage` pattern. Fires NOW
         // (synchronous) so the ChatPanel footer updates in
@@ -672,6 +796,18 @@ export const useStreamControllerStore = defineStore("streamController", () => {
             ...(genMs !== null ? { genMs } : {}),
             totalMs,
           };
+          // F5 follow-up: error path also closes the
+          // thinking timer if it's still open (e.g. the
+          // network dropped mid-thinking with no text yet).
+          // The "Thought for X.Xs" header is still useful
+          // in the error case — tells the user "the model
+          // thought for 4.7s before the connection died".
+          if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
+            req.thinkingDurationMs = doneAt - req.thinkingStartedAt;
+          }
+          if (req.thinkingDurationMs !== null) {
+            last.thinkingDurationMs = req.thinkingDurationMs;
+          }
           // Per-session cumulative: error turns also count
           // toward the displayed total (the user can see
           // "I spent 5s on this prompt and it errored out").
@@ -711,6 +847,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // mid-tool) are harmless: the Map is dropped with the
     // request state on `finalizeRequest`.
     req.toolStartedAt.set(payload.id, Date.now());
+    // F5 follow-up: a `tool:call` arriving without an
+    // intervening text `delta` means the model went
+    // straight from thinking into a tool_use block (no
+    // response text). That's still a thinking-end
+    // boundary for our purposes — close the timer so the
+    // header shows the thinking wall time, not "—".
+    if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
+      req.thinkingDurationMs = Date.now() - req.thinkingStartedAt;
+    }
   }
 
   function handleToolResult(payload: ToolResultPayload): void {
@@ -868,12 +1013,88 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
         if (assistantSeq !== null) {
           const { ttfbMs, genMs, totalMs } = req.latencyPending;
+          // F5 follow-up: thinking duration is stashed on
+          // `RequestState.thinkingDurationMs` by the
+          // streaming `done` / `error` handler. Pass it
+          // through to the same `update_message_latency`
+          // IPC (which now also writes the `thinking_ms`
+          // column in the same UPDATE statement) so a
+          // page reload survives. `null` for turns that
+          // never entered the thinking phase — the
+          // column stays NULL and the rehydrated message
+          // carries `thinkingDurationMs = undefined`,
+          // which the ThinkingBlock header renders as
+          // "—".
+          const thinkingMs = req.thinkingDurationMs;
+          // F5 follow-up: the `load_session` IPC above read
+          // the assistant row BEFORE the latency IPC below
+          // has a chance to populate `total_ms` / `ttfb_ms`
+          // / `gen_ms`. So the rehydrated message carries
+          // `latency = undefined` and the per-turn list
+          // (`currentSessionLatencyTurns` in chat.ts) would
+          // lose the just-finished turn until the next
+          // reload. Re-attach the latency from
+          // `req.latencyPending` directly onto the
+          // rehydrated message here, so the swap in
+          // `putMessages` (immediately above) leaves the
+          // per-turn list and the per-message chip in sync
+          // with the values the `done` / `error` handler
+          // just stashed. The DB write that follows writes
+          // the same values to disk; on the NEXT session
+          // reload, the rehydrate path will pick them up
+          // from the columns.
+          //
+          // Reactivity note (F5 bug fix): the `putMessages`
+          // call above wraps the rehydrated array in
+          // `reactive()` (see `putMessages` doc for the
+          // rationale), so `messagesBySession.get(sessionId)`
+          // returns a reactive proxy of the array, and
+          // `.find(...)` returns a reactive proxy of the
+          // matching item. Mutating `target.latency = ...`
+          // crosses the proxy's set trap, which fires the
+          // effect tracker and re-evaluates the
+          // `currentSessionLatencyTurns` computed in chat.ts.
+          // Before the `putMessages` wrap, this assignment
+          // was a write to a plain object and silently
+          // dropped — the cumulative chip in the popover
+          // would show "累计 10.1s · 轮次 0" because
+          // `accumulateLatency` (which writes to a
+          // separate reactive Map) was tracked but the
+          // per-message latency was not.
+          //
+          // Identical construction as the `done` /
+          // `error` handlers above (omitempty spread for
+          // ttfbMs / genMs; totalMs always present).
+          const reactiveMessages = messagesBySession.get(sessionId);
+          if (reactiveMessages) {
+            const target = reactiveMessages.find(
+              (m) => m.role === "assistant" && m.seq === assistantSeq,
+            );
+            if (target) {
+              target.latency = {
+                ...(ttfbMs !== null ? { ttfbMs } : {}),
+                ...(genMs !== null ? { genMs } : {}),
+                totalMs,
+              };
+              // F5 follow-up: re-attach the thinking
+              // duration alongside the latency triple.
+              // In-memory only (no DB column) so the
+              // post-reload fallback for pre-F5 messages
+              // is "—" (no value), not a rehydrated
+              // value — but within a single app session
+              // the swap above would otherwise lose it.
+              if (req.thinkingDurationMs !== null) {
+                target.thinkingDurationMs = req.thinkingDurationMs;
+              }
+            }
+          }
           void invoke("update_message_latency", {
             sessionId,
             seq: assistantSeq,
             ttfbMs,
             genMs,
             totalMs,
+            thinkingMs,
           }).catch((e) => {
             console.error(
               "[streamController] update_message_latency failed:",
@@ -1066,6 +1287,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // the first `delta` event arrives.
       sendAt: Date.now(),
       firstDeltaAt: null,
+      // F5 follow-up: thinking timing starts on the first
+      // `thinking_delta` event (see `RequestState` comment
+      // for the close-triggers). Both stay null until
+      // thinking actually happens.
+      thinkingStartedAt: null,
+      thinkingDurationMs: null,
       toolStartedAt: new Map(),
       latencyPending: null,
     });
@@ -1163,5 +1390,34 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // UI components call — production callers go through `startRequest`
     // which routes the `done` / `error` events through this function.
     finalizeRequest,
+    // F5 follow-up: exposed for the thinking-timer boundary
+    // regression test. The test drives the `tool:call`
+    // path directly because the full IPC → event-emitter
+    // chain requires a Tauri mock we don't have in the
+    // test env. The test asserts the close-on-tool-call
+    // rule (thinking → tool_use with no text in between
+    // still closes the timer) — keeping the close logic
+    // in the same function as the per-tool timing
+    // means the two concerns share a test surface.
+    handleToolCall,
+    // F5 follow-up debug: exposed for the full-streaming
+    // flow test (thinking_delta → delta → done path).
+    // The test asserts that the per-message
+    // `thinkingDurationMs` lands on the in-memory
+    // `last` message when the close-boundary in the
+    // `delta` case fires — this is the production path
+    // the user's "Thought for —" screenshot was
+    // failing. The previous test (handleToolCall
+    // boundary) only covered the no-text-in-between
+    // edge case; this one covers the common shape.
+    handleChatEvent,
+    // F5 follow-up: exposed for the per-item latency reactivity
+    // regression test. Production callers go through
+    // `ensureLoaded` / `reloadAfterFinalize`, which both
+    // route to this function. The test needs to call it
+    // directly because the alternatives (`messagesBySession.set`
+    // from outside) would bypass the `reactive()` wrap and
+    // defeat the purpose of the test.
+    putMessages,
   };
 });

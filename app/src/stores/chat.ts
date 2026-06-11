@@ -140,6 +140,19 @@ export interface ChatMessage {
    *  controller's streaming path tracks the assistant
    *  placeholder's seq in `RequestState` instead. */
   seq?: number;
+  /** F5 follow-up: how long the model spent in the thinking
+   *  phase for this turn (drives the "Thought for X.Xs"
+   *  header in `ThinkingBlock.vue`, replacing the prior
+   *  "X tokens" estimate). Captured by the streaming
+   *  `streamController` from `RequestState.thinkingDurationMs`
+   *  on the first non-thinking boundary (text `delta`,
+   *  `tool:call`, `done`, or `error`). In-memory only for
+   *  now — no DB column — so a page reload loses it and the
+   *  header falls back to "—". A future F5-follow-up can
+   *  add a `messages.thinking_ms` column + an
+   *  `update_message_thinking` IPC, mirroring the
+   *  latency-tracking pattern, if reload-survival matters. */
+  thinkingDurationMs?: number;
 }
 
 /** Session summary shown in the sidebar. Snake_case to match PR1's
@@ -365,6 +378,35 @@ export const useChatStore = defineStore("chat", () => {
       sessionTotalLatencyMs.set(sessionId, existing + totalMs);
     }
   }
+
+  /** F5 follow-up: per-turn latency list for the active
+   *  session, in chronological order (oldest first). The
+   *  ChatInput popover renders this as a row-by-row breakdown
+   *  (TTFB / Gen / Total per turn). Derived purely from the
+   *  controller's in-memory messages — no separate Map needed,
+   *  because the streaming `done` / `error` handler writes
+   *  `latency` onto the assistant message in place, and
+   *  rehydrated rows carry the values from `messages.total_ms`
+   *  via `rehydrateMessages`. Returns `null` when no session
+   *  is active; empty array when the session has messages
+   *  but none of them recorded a latency (pre-F5 data, or a
+   *  fresh session before its first turn). The render layer
+   *  distinguishes "no session" (`null` → "—") from "no
+   *  latency yet" (`[]` → "0.0s · 0 turns" / similar) so the
+   *  user gets a stable label across the three states. */
+  const currentSessionLatencyTurns = computed<LatencyInfo[] | null>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return null;
+    const msgs = controller.getMessages(sid);
+    if (!msgs) return [];
+    const out: LatencyInfo[] = [];
+    for (const m of msgs) {
+      if (m.role !== "assistant") continue;
+      if (!m.latency) continue;
+      out.push(m.latency);
+    }
+    return out;
+  });
 
   // -----------------------------------------------------------------------
   // Stream controller — single source of truth for messages + active
@@ -987,6 +1029,13 @@ export const useChatStore = defineStore("chat", () => {
     // exposed for tests.
     currentSessionLatencyTotal,
     sessionTotalLatencyMs,
+    // F5 follow-up: per-turn latency list for the popover
+    // breakdown. Derived from the controller's in-memory
+    // messages (no separate Map — see the computed's doc
+    // comment for the rationale). `null` when no session
+    // is active; `[]` when the active session has no
+    // latency data yet.
+    currentSessionLatencyTurns,
     // UI-side state (refs)
     sessions,
     currentSessionId,

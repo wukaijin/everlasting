@@ -83,6 +83,10 @@ pub fn run() {
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`
             // events; the agent loop itself does not call them.
+            // F5 follow-up: `update_message_latency` now also
+            // carries the thinking-phase duration (4th bind,
+            // `thinking_ms`); same command, same fire path,
+            // same idempotency contract.
             commands::sessions::update_message_latency,
             commands::sessions::record_tool_duration,
             // Worktrees

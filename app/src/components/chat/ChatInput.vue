@@ -21,27 +21,48 @@
 // streamed; they just can't type a new message until the stream ends
 // (or they hit Stop and the stream bails out).
 //
-// A4 (Token Usage Tracking): the hint row is split into two regions.
-// Left: the original keyboard shortcuts ("⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令").
-// Center: the per-session token usage chip
-// ("14.2K · 7% / 200K") with color thresholds (green < 50%, yellow
-// 50-74%, red >= 75%) and a reka-ui Tooltip on hover that breaks down
-// the four counters (input / cache_read / cache_creation / output).
-// Right: the PR5 ModelSelect popover (unchanged).
+// Hint row layout (F5 follow-up):
+// - LEFT: LLM cumulative chip (clock icon + "Σ 1.2s" / "—") backed
+//   by a CLICKABLE popover that breaks the running total into a
+//   per-turn TTFB / Gen / Total list. Replaces the old
+//   "⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令" text — the keyboard
+//   hints are still documented here in the comment block but the
+//   the on-screen real estate now goes to the latency summary (which
+//   is useful during streaming, whereas the keyboard hint never
+//   changed and just ate horizontal space).
+// - CENTER: per-session token usage chip (reka-ui Tooltip on hover,
+//   "14.2K · 7% / 200K" with green/yellow/red thresholds and a 4-row
+//   breakdown tooltip). Unchanged from A4.
+// - RIGHT: model picker popover (ModelSelect, opens UP). Unchanged.
 //
-// Pre-A4 sessions (the four columns are NULL) render as "—" with the
-// tooltip "升级前未统计". Brand-new sessions before their first LLM
-// turn also render as "—". A session that has accumulated 0 tokens
-// after at least one turn (e.g. a network-error turn) still renders
-// the number; the ChatInput doesn't special-case zero.
+// A4 (Token Usage Tracking): the hint row's center token-usage chip
+// keeps its 50%/75% color thresholds and the "升级前未统计" fallback
+// for pre-A4 sessions (the four columns are NULL). Brand-new sessions
+// before their first LLM turn render as "—".
+//
+// F5 (LLM Latency Tracking) follow-up: the left chip renders "—"
+// for pre-F5 / brand-new sessions (currentSessionLatencyTotal ===
+// null). For sessions with at least one recorded turn, it shows
+// the cumulative Σ totalMs formatted via `abbreviateDuration`. The
+// popover (click-triggered, NOT hover) shows the per-turn list
+// (TTFB / Gen / Total per assistant message) plus a header with
+// 累计 / 轮次 / 平均 three rows. Pre-F5 / no-records sessions
+// show the three rows as "—" / 0 / "—" with the "本次 session
+// 还没有 LLM 耗时数据" empty footer. Click-outside / Esc closes
+// the popover. The popover is hand-written (ModelSelect style)
+// instead of reka-ui's `PopoverRoot` because (a) we already have
+// the hand-written pattern in the codebase, (b) the layout needs
+// a scrollable list with a sticky header, and (c) the reka-ui
+// `PopoverRoot` would require an extra import for one user.
 
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipPortal, TooltipContent, TooltipArrow } from "reka-ui";
 import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
 import { useChatStore } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
+import { abbreviateDuration } from "../../utils/duration";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 
 const props = defineProps<{
@@ -107,6 +128,85 @@ const inputRowStyle = computed(() => {
   const hex = colorTagHex(s.color_tag);
   if (!hex) return {};
   return { backgroundColor: hexToRgba(hex, 0.2) };
+});
+
+// -----------------------------------------------------------------------
+// F5 follow-up: LLM cumulative latency summary chip + clickable popover.
+// Mirrors the ModelSelect hand-written popover pattern (open/close
+// ref, click-outside + Esc handlers). The chip itself is just a
+// clock icon + "Σ 1.2s" label; clicking it opens the popover with
+// the per-turn breakdown. The trigger is hidden when no session is
+// active (matches the A4 token-usage chip's "no session → don't
+// render" rule).
+// -----------------------------------------------------------------------
+
+const latencyPopoverOpen = ref(false);
+const latencyPopoverRoot = ref<HTMLElement | null>(null);
+
+function toggleLatencyPopover() {
+  latencyPopoverOpen.value = !latencyPopoverOpen.value;
+}
+
+/** Click outside the latency popover root closes it. Mirrors
+ *  `ModelSelect.onDocumentClick` and the worktree dropdown's
+ *  pattern. */
+function onDocumentClick(e: MouseEvent) {
+  if (!latencyPopoverOpen.value) return;
+  const target = e.target as Node | null;
+  if (
+    latencyPopoverRoot.value &&
+    target &&
+    !latencyPopoverRoot.value.contains(target)
+  ) {
+    latencyPopoverOpen.value = false;
+  }
+}
+
+/** Esc closes the latency popover. Bound on `window` because
+ *  the trigger button may not have focus when the popover is
+ *  open. Same pattern as ModelSelect. */
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape" && latencyPopoverOpen.value) {
+    latencyPopoverOpen.value = false;
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("click", onDocumentClick);
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", onKeyDown);
+}
+onUnmounted(() => {
+  if (typeof document !== "undefined") {
+    document.removeEventListener("click", onDocumentClick);
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", onKeyDown);
+  }
+});
+
+/** Per-turn latency list for the popover breakdown. `null` →
+ *  no session active (chip hidden). `[]` → active session but
+ *  no turns recorded yet (chip renders "—"). Non-empty → the
+ *  popover renders a row per turn. */
+const latencyTurns = computed(() => chatStore.currentSessionLatencyTurns);
+
+/** Average totalMs across recorded turns. Computed live from
+ *  the per-turn list (no separate counter needed). Returns
+ *  `null` when no turns have been recorded. */
+const latencyAverage = computed<number | null>(() => {
+  const t = latencyTurns.value;
+  if (!t || t.length === 0) return null;
+  let sum = 0;
+  let count = 0;
+  for (const x of t) {
+    if (typeof x.totalMs === "number") {
+      sum += x.totalMs;
+      count++;
+    }
+  }
+  return count > 0 ? sum / count : null;
 });
 
 /** Auto-grow: reset height so the field shrinks when content is
@@ -210,7 +310,105 @@ function onEscKeydown() {
       </button>
     </div>
     <div class="chat-input__hint">
-      <span class="chat-input__hint-text">⏎ 发送 · ⇧⏎ 换行 · @ 引用文件 · / 命令</span>
+      <!-- F5 follow-up: LLM cumulative latency chip (LEFT).
+           Renders the Σ totalMs of every recorded assistant turn
+           in the active session. Clicking opens a popover with a
+           per-turn breakdown (TTFB / Gen / Total). Pre-F5 / no
+           session / no recorded turns → "—". -->
+      <div
+        v-if="chatStore.currentSessionId"
+        ref="latencyPopoverRoot"
+        class="chat-input__latency"
+      >
+        <button
+          type="button"
+          class="chat-input__latency-chip"
+          :class="{
+            'chat-input__latency-chip--open': latencyPopoverOpen,
+          }"
+          :aria-haspopup="'dialog'"
+          :aria-expanded="latencyPopoverOpen"
+          :title="
+            chatStore.currentSessionLatencyTotal !== null
+              ? '点击查看本次 session LLM 累计耗时明细'
+              : '本次 session 还没有 LLM 耗时数据'
+          "
+          @click="toggleLatencyPopover"
+        >
+          <Icon name="clock" :size="11" />
+          <span class="chat-input__latency-label">LLM</span>
+          <span class="chat-input__latency-value">
+            {{
+              chatStore.currentSessionLatencyTotal !== null
+                ? abbreviateDuration(chatStore.currentSessionLatencyTotal)
+                : "—"
+            }}
+          </span>
+        </button>
+        <Transition name="chat-input-latency-popover">
+          <div
+            v-if="latencyPopoverOpen"
+            class="chat-input__latency-popover"
+            role="dialog"
+            aria-label="LLM 累计耗时明细"
+          >
+            <div class="chat-input__latency-popover-header">
+              <Icon name="clock" :size="11" />
+              <span>本次 session LLM 累计耗时</span>
+            </div>
+            <div class="chat-input__latency-popover-summary">
+              <div class="chat-input__latency-popover-row">
+                <span>累计</span>
+                <span class="chat-input__latency-popover-strong">
+                  {{
+                    chatStore.currentSessionLatencyTotal !== null
+                      ? abbreviateDuration(chatStore.currentSessionLatencyTotal)
+                      : "—"
+                  }}
+                </span>
+              </div>
+              <div class="chat-input__latency-popover-row">
+                <span>轮次</span>
+                <span>{{ latencyTurns?.length ?? 0 }}</span>
+              </div>
+              <div class="chat-input__latency-popover-row">
+                <span>平均</span>
+                <span>
+                  {{ latencyAverage !== null ? abbreviateDuration(latencyAverage) : "—" }}
+                </span>
+              </div>
+            </div>
+            <div
+              v-if="latencyTurns && latencyTurns.length > 0"
+              class="chat-input__latency-popover-list"
+            >
+              <div
+                v-for="(turn, i) in latencyTurns"
+                :key="i"
+                class="chat-input__latency-popover-turn"
+              >
+                <div class="chat-input__latency-popover-turn-head">
+                  <span>turn {{ i + 1 }}</span>
+                  <span class="chat-input__latency-popover-strong">
+                    {{ turn.totalMs !== undefined ? abbreviateDuration(turn.totalMs) : "—" }}
+                  </span>
+                </div>
+                <div class="chat-input__latency-popover-turn-detail">
+                  <span>TTFB</span>
+                  <span>{{ turn.ttfbMs !== undefined ? abbreviateDuration(turn.ttfbMs) : "—" }}</span>
+                </div>
+                <div class="chat-input__latency-popover-turn-detail">
+                  <span>gen</span>
+                  <span>{{ turn.genMs !== undefined ? abbreviateDuration(turn.genMs) : "—" }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="chat-input__latency-popover-empty">
+              本次 session 还没有 LLM 耗时数据
+            </div>
+          </div>
+        </Transition>
+      </div>
       <!-- A4: token usage chip. Render-mode depends on
            whether the session has accumulated any usage:
            - null → "—" with the "升级前未统计" tooltip
@@ -408,9 +606,181 @@ function onEscKeydown() {
   gap: 8px;
 }
 
-.chat-input__hint-text {
-  flex: 1;
-  min-width: 0;
+/* F5 follow-up: LLM cumulative latency chip (LEFT of hint row).
+   Shape matches the existing token-usage chip and the A4 color
+   thresholds family, but it's a real clickable button (cursor
+   pointer) that opens a popover. Uses the same `color-bg-elevated`
+   base + `color-bg-border` outline as the worktree chip and the
+   `ModelSelect` trigger, so the visual family is consistent. */
+.chat-input__latency {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.chat-input__latency-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.chat-input__latency-chip:hover {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.chat-input__latency-chip--open {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.chat-input__latency-label {
+  color: var(--color-text-secondary);
+}
+
+.chat-input__latency-value {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+/* The latency popover (F5 follow-up). Hand-written like
+   ModelSelect's `.model-select__menu` — opens UPWARD because the
+   trigger sits at the bottom of the chat panel; opening down
+   would clip under the next sibling. Width is enough to fit the
+   longest "0.0s · 0.0s · 0.0s" line without overflow. The list
+   area scrolls when there are too many turns (rare, but a 50-turn
+   session shouldn't break the layout). */
+.chat-input__latency-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  top: auto;
+  left: 0;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 220px;
+  max-width: 280px;
+  max-height: 320px;
+  z-index: 200;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+
+.chat-input__latency-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-bg-border);
+}
+
+.chat-input__latency-popover-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-input__latency-popover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chat-input__latency-popover-row > span:first-child {
+  color: var(--color-text-secondary);
+}
+
+.chat-input__latency-popover-strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.chat-input__latency-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 200px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-bg-border);
+}
+
+.chat-input__latency-popover-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+.chat-input__latency-popover-turn + .chat-input__latency-popover-turn {
+  border-top: 1px dashed var(--color-bg-border);
+}
+
+.chat-input__latency-popover-turn-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-weight: 500;
+}
+
+.chat-input__latency-popover-turn-detail {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--color-text-secondary);
+  padding-left: 8px;
+}
+
+.chat-input__latency-popover-empty {
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: 6px 0;
+}
+
+/* Open/close animation. The popover opens UP, so it slides
+   from translateY(4px) (slightly below the final position) up
+   into place. Exit reverses. Matches the ModelSelect pattern. */
+.chat-input-latency-popover-enter-active,
+.chat-input-latency-popover-leave-active {
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transform-origin: bottom left;
+}
+
+.chat-input-latency-popover-enter-from,
+.chat-input-latency-popover-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.chat-input-latency-popover-leave-active {
+  transition-duration: 100ms;
+  transition-timing-function: ease-in;
 }
 
 /* A4 (Token Usage Tracking): the per-session token usage

@@ -185,7 +185,7 @@ pub async fn load_session(
  let msg_rows = sqlx::query(
  r#"
  SELECT id, session_id, role, content, text, has_tool_calls, has_tool_results,
- created_at, seq, metadata, ttfb_ms, gen_ms, total_ms
+ created_at, seq, metadata, ttfb_ms, gen_ms, total_ms, thinking_ms
  FROM messages
  WHERE session_id = ?
  ORDER BY seq ASC
@@ -223,6 +223,11 @@ pub async fn load_session(
  ttfb_ms: r.try_get("ttfb_ms")?,
  gen_ms: r.try_get("gen_ms")?,
  total_ms: r.try_get("total_ms")?,
+ // F5 follow-up: thinking-phase wall-clock. `None` for
+ // messages that never entered the thinking phase AND
+ // for pre-F5-follow-up rows. Set by the
+ // `update_message_thinking` IPC at stream done.
+ thinking_ms: r.try_get("thinking_ms")?,
  })
  })
  .collect::<Result<Vec<_>, sqlx::Error>>()?;
@@ -560,8 +565,8 @@ pub async fn persist_turn(
  sqlx::query(
  r#"
  INSERT INTO messages
- (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq, ttfb_ms, gen_ms, total_ms)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ (session_id, role, content, text, has_tool_calls, has_tool_results, created_at, seq, ttfb_ms, gen_ms, total_ms, thinking_ms)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  "#,
  )
  .bind(session_id)
@@ -575,6 +580,16 @@ pub async fn persist_turn(
  .bind(latency.and_then(|l| l.ttfb_ms))
  .bind(latency.and_then(|l| l.gen_ms))
  .bind(latency.and_then(|l| l.total_ms))
+ // F5 follow-up: thinking-phase duration. Persisted
+ // alongside the three latency columns in the same
+ // INSERT — both go in at the moment the agent loop
+ // calls `persist_turn` for the assistant row, which
+ // is also the row the frontend will fire
+ // `update_message_latency` / `update_message_thinking`
+ // against (those IPCs are the patch-after-the-fact
+ // path for rows persisted BEFORE the per-message
+ // telemetry was wired through the agent loop).
+ .bind(latency.and_then(|l| l.thinking_ms))
  .execute(pool)
  .await?;
 
@@ -616,21 +631,29 @@ pub async fn persist_turn(
 /// - `gen_ms`:  first `delta` → `done` (active generation)
 /// - `total_ms`: send → `done` (end-to-end; always set when
 ///   `total_ms.is_some()`)
+/// - `thinking_ms`: F5 follow-up — first `thinking_delta` →
+///   first non-thinking boundary (text `delta`, `tool:call`,
+///   `done`, or `error`). `None` when the message never
+///   entered the thinking phase. Drives the
+///   "Thought for X.Xs" header in ThinkingBlock.vue.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MessageLatency {
  pub ttfb_ms: Option<i64>,
  pub gen_ms: Option<i64>,
  pub total_ms: Option<i64>,
+ pub thinking_ms: Option<i64>,
 }
 
-/// Update the latency columns on an already-persisted message row.
-/// Called from the frontend's `streamController.handleChatEvent("done")`
-/// after the three `Date.now()` deltas resolve. Updates the
-/// assistant row's three columns in one SQL statement; a no-op
-/// if the message id is unknown (defensive — the controller
-/// could in principle race the agent loop's `persist_turn` if
-/// the user cancels mid-stream and the cancel cleanup path
-/// persists the partial turn at a later time).
+/// Update the latency + thinking-time columns on an
+/// already-persisted message row. Called from the frontend's
+/// `streamController.handleChatEvent("done")` after the four
+/// `Date.now()` deltas resolve (TTFB / gen / total +
+/// thinking). Updates the assistant row's four columns in
+/// one SQL statement; a no-op if the message id is unknown
+/// (defensive — the controller could in principle race the
+/// agent loop's `persist_turn` if the user cancels mid-stream
+/// and the cancel cleanup path persists the partial turn at
+/// a later time).
 ///
 /// The `id` is the SQLite `messages.id` (auto-incrementing). The
 /// controller tracks this via the `seq` on the assistant message;
@@ -644,13 +667,14 @@ pub async fn update_message_latency(
  sqlx::query(
  r#"
  UPDATE messages
- SET ttfb_ms = ?, gen_ms = ?, total_ms = ?
+ SET ttfb_ms = ?, gen_ms = ?, total_ms = ?, thinking_ms = ?
  WHERE id = ?
  "#,
  )
  .bind(latency.ttfb_ms)
  .bind(latency.gen_ms)
  .bind(latency.total_ms)
+ .bind(latency.thinking_ms)
  .bind(message_id)
  .execute(pool)
  .await?;

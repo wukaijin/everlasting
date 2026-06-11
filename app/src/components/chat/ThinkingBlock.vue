@@ -2,8 +2,14 @@
 // ThinkingBlock — collapsible <details> element for the model's
 // extended thinking text. Per spike-003 the left bar is a 3px
 // violet accent (--color-tool-thinking). The block is collapsed by
-// default — the header shows the estimated token count so the user
-// can decide whether to expand.
+// default — the header shows how long the thinking phase took
+// (e.g. "Thought for 1.4s") so the user can decide whether to
+// expand. F5 follow-up: the previous "X tokens" label was
+// replaced with an actual wall-clock measurement captured by the
+// streaming `streamController` (see `RequestState.thinkingStartedAt`
+// / `thinkingDurationMs`); the token count is no longer surfaced
+// here because the user's "did this take a long time?" question
+// is answered by time, not by content size.
 //
 // Bug-fix v3 layout (the previous "pill summary + detached body"
 // combo left a visible seam and made the violet 3px bar look like it
@@ -22,10 +28,8 @@
 
 import { computed } from "vue";
 import type { ThinkingBlockInfo } from "../../stores/chat";
-import {
-  thinkingDisplayText,
-  estimateThinkingTokens,
-} from "../../utils/messageFormat";
+import { thinkingDisplayText } from "../../utils/messageFormat";
+import { abbreviateDuration } from "../../utils/duration";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -37,10 +41,28 @@ const props = defineProps<{
   /** Show the "streaming…" hint independently of `streaming` —
    *  used when the model is producing thinking but no text yet. */
   showStreamingHint?: boolean;
+  /** F5 follow-up: how long the model spent in the thinking
+   *  phase for this turn (ms). Set on the assistant message
+   *  by `streamController` from `RequestState.thinkingDurationMs`.
+   *  `undefined` for messages that never entered the thinking
+   *  phase, or after a page reload (in-memory only, no DB
+   *  column) — the header falls back to "—" in that case. */
+  thinkingDurationMs?: number;
 }>();
 
 const text = computed(() => thinkingDisplayText(props.blocks));
-const tokens = computed(() => estimateThinkingTokens(props.blocks));
+// F5 follow-up: the header label. Uses `abbreviateDuration`
+// (same formatter as the F5 per-message latency chip) so the
+// scale matches the rest of the chat: "1.4s", "32.4s", "1m 23s".
+// Undefined → "—" (consistent with the F5 cumulative chip's
+// "pre-F5 / no data" fallback; we don't show "0.0s" for
+// "never thought" because that's misleading).
+const headerLabel = computed(() => {
+  if (typeof props.thinkingDurationMs === "number") {
+    return `Thought for ${abbreviateDuration(props.thinkingDurationMs)}`;
+  }
+  return "Thought for —";
+});
 </script>
 
 <template>
@@ -49,7 +71,7 @@ const tokens = computed(() => estimateThinkingTokens(props.blocks));
       <span class="thinking__icon" aria-hidden="true">
         <Icon name="thinking" :size="12" />
       </span>
-      <span>Thought for {{ tokens }} tokens</span>
+      <span>{{ headerLabel }}</span>
       <span v-if="blocks.length > 1" class="thinking__count">
         · {{ blocks.length }} blocks
       </span>

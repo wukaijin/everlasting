@@ -158,6 +158,7 @@ const latencyRows = computed<
       :blocks="message.thinkingBlocks"
       :streaming="message.streaming"
       :show-streaming-hint="showStreamingHint"
+      :thinking-duration-ms="message.thinkingDurationMs"
     />
 
     <div

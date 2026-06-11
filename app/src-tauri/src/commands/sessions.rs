@@ -230,20 +230,27 @@ pub async fn set_session_color(
 // names — see `app/src/stores/streamController.ts` for the consumer.
 // ---------------------------------------------------------------------------
 
-/// Update the three latency columns on an assistant message row
-/// (TTFB / gen / total in milliseconds). The frontend measures
-/// the three values via `Date.now()` deltas around the
+/// Update the latency + thinking-time columns on an
+/// assistant message row (TTFB / gen / total in
+/// milliseconds, plus `thinking_ms` — the F5 follow-up
+/// thinking-phase wall-clock). The frontend measures
+/// the four values via `Date.now()` deltas around the
 /// `start` / first `delta` / `done` events of one chat
-/// invocation, then issues this IPC at `done`.
+/// invocation (and the `thinking_delta` ↔ boundary
+/// events for `thinking_ms`), then issues this IPC at
+/// `done`.
 ///
 /// The controller tracks the assistant message by its
 /// caller-managed `seq` (the same handle it shares with the
 /// agent loop), so the IPC takes `(session_id, seq)` and the
 /// backend resolves the SQLite row id internally via
-/// `find_message_id_by_seq`. Each of the three millisecond
+/// `find_message_id_by_seq`. Each of the four millisecond
 /// values is optional so a cancel / error path can pass
-/// `None` for `ttfbMs` / `genMs` and still record the total
-/// time-to-cancel.
+/// `None` for the sub-components (`ttfbMs` / `genMs` /
+/// `thinkingMs`) and still record the total
+/// time-to-cancel. `thinkingMs` is `None` for messages
+/// that never entered the thinking phase — the frontend
+/// just doesn't include it in the payload in that case.
 #[tauri::command]
 pub async fn update_message_latency(
     state: State<'_, Arc<AppState>>,
@@ -252,6 +259,7 @@ pub async fn update_message_latency(
     ttfb_ms: Option<i64>,
     gen_ms: Option<i64>,
     total_ms: Option<i64>,
+    thinking_ms: Option<i64>,
 ) -> Result<bool, String> {
     // Resolve the (session_id, seq) pair to the auto-incrementing
     // row id. The seq was assigned by the agent loop in the order
@@ -276,6 +284,7 @@ pub async fn update_message_latency(
         ttfb_ms,
         gen_ms,
         total_ms,
+        thinking_ms,
     };
     crate::db::update_message_latency(&state.db, message_id, &latency)
         .await

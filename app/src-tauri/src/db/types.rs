@@ -230,6 +230,16 @@ pub struct MessageRow {
  pub ttfb_ms: Option<i64>,
  pub gen_ms: Option<i64>,
  pub total_ms: Option<i64>,
+ /// F5 follow-up: thinking-phase wall-clock duration (ms).
+ /// First `thinking_delta` → first non-thinking boundary
+ /// (text `delta`, `tool:call`, `done`, or `error`).
+ /// `None` for messages that never entered the thinking
+ /// phase. Drives the "Thought for X.Xs" header in
+ /// `ThinkingBlock.vue` (replaces the previous "X tokens"
+ /// estimate). Persisted by the `update_message_thinking`
+ /// IPC fired at stream end, same shape as
+ /// `update_message_latency`.
+ pub thinking_ms: Option<i64>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.

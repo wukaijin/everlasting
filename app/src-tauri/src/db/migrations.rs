@@ -352,6 +352,23 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  add_messages_column_if_missing(pool, "gen_ms", "INTEGER").await?;
  add_messages_column_if_missing(pool, "total_ms", "INTEGER").await?;
 
+ // --- F5 follow-up: thinking-phase timing.
+ //
+ // One nullable INTEGER column on `messages`. The frontend
+ // `streamController` measures the thinking-phase wall-clock
+ // (first `thinking_delta` → first non-thinking boundary:
+ // text `delta`, `tool:call` IPC, `done`, or `error`) and
+ // issues a new IPC (`update_message_thinking`) at stream
+ // end to persist it. NULL for messages that never entered
+ // the thinking phase — the UI renders NULL as "—" in the
+ // ThinkingBlock header. Schema-aligned with the three
+ // latency columns above: nullable INTEGER, no DEFAULT, no
+ // non-null upgrade path (pre-F5-follow-up rows stay NULL
+ // forever, which is the correct semantic — there's no
+ // retroactive way to measure how long a past turn spent
+ // thinking).
+ add_messages_column_if_missing(pool, "thinking_ms", "INTEGER").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

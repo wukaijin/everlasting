@@ -1095,6 +1095,7 @@ async fn persist_turn_with_latency_writes_three_columns() {
  ttfb_ms: Some(420),
  gen_ms: Some(2100),
  total_ms: Some(3200),
+ thinking_ms: Some(850),
  };
  persist_turn(&pool, &s.id, Role::Assistant, &content, 0, Some(&latency))
  .await
@@ -1105,6 +1106,13 @@ async fn persist_turn_with_latency_writes_three_columns() {
  assert_eq!(m.ttfb_ms, Some(420));
  assert_eq!(m.gen_ms, Some(2100));
  assert_eq!(m.total_ms, Some(3200));
+ // F5 follow-up: thinking_ms round-trips through
+ // `persist_turn` (the agent loop's path). The
+ // `update_message_thinking` IPC is a separate write
+ // that fires AFTER the controller sees `done`, so
+ // the `Some(850)` value here proves the column +
+ // `INSERT ... VALUES` bind order is correct.
+ assert_eq!(m.thinking_ms, Some(850));
 }
 
 #[tokio::test]
@@ -1164,6 +1172,7 @@ async fn update_message_latency_patches_columns_by_id() {
  ttfb_ms: Some(100),
  gen_ms: Some(200),
  total_ms: Some(300),
+ thinking_ms: Some(75),
  },
  )
  .await
@@ -1174,6 +1183,13 @@ async fn update_message_latency_patches_columns_by_id() {
  assert_eq!(m.ttfb_ms, Some(100));
  assert_eq!(m.gen_ms, Some(200));
  assert_eq!(m.total_ms, Some(300));
+ // F5 follow-up: thinking_ms is patched in the same
+ // UPDATE statement as the three latency columns. A
+ // non-None value here proves the bind order in
+ // `update_message_latency`'s SQL is correct (the
+ // frontend passes `thinking_ms` as the 4th payload
+ // field; the `WHERE id = ?` is the 5th bind).
+ assert_eq!(m.thinking_ms, Some(75));
 }
 
 #[tokio::test]
@@ -1203,6 +1219,7 @@ async fn update_message_latency_accepts_partial_payload() {
  ttfb_ms: None,
  gen_ms: None,
  total_ms: Some(500),
+ thinking_ms: None,
  },
  )
  .await
@@ -1213,6 +1230,55 @@ async fn update_message_latency_accepts_partial_payload() {
  assert!(m.ttfb_ms.is_none());
  assert!(m.gen_ms.is_none());
  assert_eq!(m.total_ms, Some(500));
+ // F5 follow-up: thinking_ms is also nullable in the
+ // partial-payload case (the model never entered the
+ // thinking phase, or the cancel cleanup path fired
+ // before the thinking close). The column round-trips
+ // `None` cleanly.
+ assert!(m.thinking_ms.is_none());
+}
+
+#[tokio::test]
+async fn update_message_latency_patches_thinking_ms_independently() {
+ // F5 follow-up: a turn that produced zero thinking (the
+ // model answered without a `thinking_delta` event) but
+ // had a real latency triple. The patch should land
+ // `thinking_ms = None` (column stays NULL because
+ // `persist_turn` wrote NULL) and `total_ms = Some(800)`,
+ // AND the IPC's UPDATE must not accidentally clear the
+ // `ttfb_ms` / `gen_ms` columns when the payload omits
+ // the sub-components. Locks the bind order in the
+ // single SQL statement.
+ let pool = make_pool().await;
+ let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+
+ let content = MessageContent::Blocks(vec![ContentBlock::Text {
+ text: "ok".to_string(),
+ cache_control: None,
+ }]);
+ // Persist with a non-None latency triple but
+ // `thinking_ms = None` — the agent loop's path doesn't
+ // know thinking-time at persist time; the controller
+ // fires the IPC to patch it after `done`.
+ let latency = MessageLatency {
+ ttfb_ms: Some(50),
+ gen_ms: Some(750),
+ total_ms: Some(800),
+ thinking_ms: None,
+ };
+ persist_turn(&pool, &s.id, Role::Assistant, &content, 0, Some(&latency))
+ .await
+ .unwrap();
+
+ // No follow-up IPC this time — thinking_ms stays NULL.
+ let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+ let m = loaded.messages.first().expect("one message");
+ assert_eq!(m.ttfb_ms, Some(50));
+ assert_eq!(m.gen_ms, Some(750));
+ assert_eq!(m.total_ms, Some(800));
+ assert!(m.thinking_ms.is_none());
 }
 
 #[tokio::test]

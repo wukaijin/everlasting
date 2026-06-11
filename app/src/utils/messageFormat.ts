@@ -66,17 +66,15 @@ export function thinkingDisplayText(
   return blocks.map((b) => b.text).join("\n\n");
 }
 
-/** Rough token estimate for the thinking header. Claude counts
- *  tokens closer to ~3.5 chars/token; we use length/4 as a
- *  conservative upper bound so the label is at least an order of
- *  magnitude right. */
-export function estimateThinkingTokens(
-  blocks: ThinkingBlockInfo[] | undefined,
-): number {
-  if (!blocks || blocks.length === 0) return 0;
-  const totalChars = blocks.reduce((n, b) => n + b.text.length, 0);
-  return Math.max(1, Math.round(totalChars / 4));
-}
+// F5 follow-up: `estimateThinkingTokens` used to live here and
+// was rendered in the ThinkingBlock header as "Thought for X
+// tokens". Replaced with a wall-clock duration captured by the
+// streaming `streamController` (see `RequestState.thinkingStartedAt`
+// / `thinkingDurationMs`) — the user's "did this take a long
+// time?" question is answered by time, not content size. The
+// helper is removed because nothing imports it; if a future
+// feature needs a token estimate for some other reason
+// (cost-cap copy, etc.), reintroduce it then.
 
 /** Find the matching tool_result for a given tool_use id on a
  *  message. The store's rehydrate path attaches user-message
