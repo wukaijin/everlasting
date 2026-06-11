@@ -74,26 +74,6 @@ interface RequestState {
   // `update_message_latency` IPC.
   sendAt: number;
   firstDeltaAt: number | null;
-  // F5 follow-up: thinking-only timing (drives the
-  // "Thought for X.Xs" header in `ThinkingBlock.vue`,
-  // replacing the previous "X tokens" estimate). Set on
-  // the first `thinking_delta` event; closed (and
-  // snapshotted into `thinkingDurationMs`) on the first
-  // non-thinking event after that — text `delta`, a
-  // `tool:call` IPC, the `done` event, or an `error`.
-  // Signature / redacted-thinking deltas do NOT close it
-  // (they're still inside the thinking phase). For
-  // messages that never entered the thinking phase,
-  // stays `null` end-to-end and the header falls back
-  // to "—". In-memory only for now (no DB column); the
-  // value lives on `ChatMessage.thinkingDurationMs`
-  // and is re-attached to the rehydrated message by
-  // `reloadAfterFinalize` so the post-stream swap
-  // doesn't lose it (same shape as the `latency`
-  // re-attach — see the comment there for why this
-  // matters with the `reactive(Map)`-stored arrays).
-  thinkingStartedAt: number | null;
-  thinkingDurationMs: number | null;
   // F5: per-tool timing keyed by tool_use_id. Set on
   // `tool:call` (in `handleToolCall`), read on `tool:result`
   // (in `handleToolResult`) to compute `durationMs`. The
@@ -101,14 +81,21 @@ interface RequestState {
   // sent to the `record_tool_duration` IPC to update the
   // `messages.content` JSON.
   toolStartedAt: Map<string, number>;
-  // F5: stashed at `done` time. The `done` handler computes
-  // the three values, writes them to the in-memory message,
-  // updates the per-session cumulative, and stashes them
-  // here so `reloadAfterFinalize` (which runs as part of
-  // `finalizeRequest` after the `done` event returns) can
-  // fire the `update_message_latency` IPC once the agent
-  // loop's persisted row's seq is known.
-  latencyPending: { ttfbMs: number | null; genMs: number | null; totalMs: number } | null;
+  // F5 follow-up per-turn: per-turn latency accumulator.
+  // Keyed by `currentTurnIndex` (0-based, incremented in
+  // the `case "start"` arm). Populated by the
+  // `case "turn_complete"` arm with the 4 ms values the
+  // agent loop emits right after `persist_turn`. The
+  // `seq` field on each entry is the assistant row's seq
+  // (assigned by the agent loop in the per-session
+  // `next_seq` counter) — used by `reloadAfterFinalize` to
+  // fire one `update_message_latency` IPC per entry (N per
+  // request, not 1). Replaces the F5 single-value
+  // `latencyPending` which only ever held the LAST turn's
+  // data and forced N-1 rows to stay NULL on multi-turn
+  // responses.
+  currentTurnIndex: number;
+  latencyByTurn: Map<number, TurnLatency>;
   // F5: per-request error flag. The cancel / network-drop
   // path also persists a partial turn (with `usage: None`),
   // so the seq-lookup is still meaningful — the errored
@@ -117,6 +104,17 @@ interface RequestState {
   // decide whether to pass the latency through to the IPC
   // (it always does — totalMs is meaningful even for
   // errored turns).
+}
+
+/** F5 follow-up per-turn: a single assistant row's latency
+ *  quadruple, with the row's `seq` for IPC routing.
+ *  Mirrors the Rust `ChatEvent::TurnComplete` payload. */
+interface TurnLatency {
+  seq: number;
+  ttfbMs: number | null;
+  genMs: number | null;
+  totalMs: number | null;
+  thinkingMs: number | null;
 }
 
 interface ChatEventPayload {
@@ -128,6 +126,7 @@ interface ChatEventPayload {
     | "signature_delta"
     | "redacted_thinking_delta"
     | "done"
+    | "turn_complete"
     | "error";
   text?: string;
   signature?: string;
@@ -141,6 +140,20 @@ interface ChatEventPayload {
    *  (cancel / error / network drop). Schema mirrors Rust
    *  `llm::types::TokenUsage`. */
   usage?: TokenUsagePayload;
+  // F5 follow-up per-turn: only present when `kind === "turn_complete"`.
+  // Mirrors Rust `ChatEvent::TurnComplete` payload. `seq` is the
+  // assistant row's seq (assigned by the agent loop in the
+  // per-session `next_seq` counter); the 4 ms fields are
+  // `Option<i64>` server-side and `number | null` here, with
+  // `null` for turns that never reached the corresponding
+  // boundary (e.g. a turn that emitted tool_call straight from
+  // thinking_delta with no text delta has `ttfb_ms: null` and
+  // `gen_ms: null` but `total_ms` and `thinking_ms` set).
+  seq?: number;
+  ttfb_ms?: number | null;
+  gen_ms?: number | null;
+  total_ms?: number | null;
+  thinking_ms?: number | null;
 }
 
 /** A4: 4-field token usage payload from the LLM. Mirrors Rust
@@ -635,6 +648,18 @@ export const useStreamControllerStore = defineStore("streamController", () => {
 
     switch (event.kind) {
       case "start":
+        // F5 follow-up: every turn emits Start now (the agent
+        // loop drops the `if turn == 1` guard on
+        // `agent/chat.rs:422-425`). Each Start is the boundary
+        // between turns — increment `currentTurnIndex` so the
+        // next `TurnComplete` writes to the right slot in
+        // `latencyByTurn`. The first Start moves -1 → 0 (turn 0
+        // starts). The 4 per-turn close boundaries below
+        // (`delta` / `tool:call` / `done` / `error`) reset
+        // `thinkingDurationMs`-equivalent state on each new
+        // turn — see the `RequestState` comment for the full
+        // close-trigger list.
+        req.currentTurnIndex++;
         last.streaming = true;
         last.error = undefined;
         break;
@@ -648,38 +673,31 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (req.firstDeltaAt === null) {
           req.firstDeltaAt = Date.now();
         }
-        // F5 follow-up: a text `delta` is the first signal
-        // that the model has finished thinking for this turn
-        // (signature / redacted-thinking deltas are still
-        // "inside" the thinking phase and don't close it).
-        // Snapshot the duration once, on the boundary. We
-        // also fall through to assign `last.thinkingDurationMs`
-        // — but the actual write onto the message happens in
-        // the `done` handler (so a `done` that arrives
-        // without a text delta in between — e.g. thinking
-        // → tool_use → done — still gets the duration).
-        if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
-          req.thinkingDurationMs = Date.now() - req.thinkingStartedAt;
-        }
+        // F5 follow-up per-turn: the close-boundary timer
+        // snapshot (`req.thinkingDurationMs = ...`) is gone.
+        // The placeholder's `last.thinkingDurationMs` is
+        // set by the `case "turn_complete"` handler with
+        // the backend's per-turn `thinking_ms` value
+        // (computed from the agent loop's per-turn
+        // `turn_thinking_done - turn_thinking_start`
+        // `Instant` pair). A `text delta` no longer needs
+        // to close the thinking timer on the frontend —
+        // the backend's `ChatEvent::Delta` arm closes it
+        // there.
         break;
       case "thinking_delta":
         if (event.text) currentThinkingBlock(last).text += event.text;
-        // F5 follow-up: stamp the start of the thinking phase
-        // on the very first `thinking_delta` after the most
-        // recent boundary. If the model interleaves
-        // (thinking → text → thinking again), the boundary
-        // close in the `delta` case above already cleared the
-        // timer by snapshotting `thinkingDurationMs`; we use
-        // `thinkingStartedAt === null` (NOT `thinkingDurationMs
-        // === null`) as the "not currently thinking" check so
-        // the next phase can re-open. The `done` handler reads
-        // the latest `thinkingDurationMs` (which only ever
-        // captures the FIRST closed interval — fine for the
-        // header, which is meant to be "total wall time spent
-        // reasoning", not a per-phase breakdown).
-        if (req.thinkingStartedAt === null) {
-          req.thinkingStartedAt = Date.now();
-        }
+        // F5 follow-up per-turn: the `req.thinkingStartedAt =
+        // Date.now()` start-of-thinking stamp is gone. The
+        // backend `ChatEvent::ThinkingDelta` arm opens its
+        // per-turn `turn_thinking_start: Option<Instant>`
+        // there; the corresponding `turn_thinking_done` is
+        // set on the first non-thinking boundary. The
+        // duration comes back through `ChatEvent::TurnComplete`
+        // and is written to `last.thinkingDurationMs` by the
+        // `case "turn_complete"` handler. The frontend no
+        // longer maintains per-turn wall-clock state for
+        // thinking (it has the agent loop for that now).
         break;
       case "signature_delta":
         if (event.signature) currentThinkingBlock(last).signature += event.signature;
@@ -690,60 +708,147 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           last.redactedThinkingData.push(event.data);
         }
         break;
-      case "done":
-        // F5: compute the three latency values, write them
-        // onto the in-memory assistant message, and bump the
-        // per-session cumulative total. The IPC fire is
-        // deferred to `reloadAfterFinalize` because the IPC
-        // needs the assistant row's seq (assigned by the
-        // agent loop in `persist_turn`), and that seq is
-        // only known after the agent loop's `load_session`
-        // roundtrip returns.
-        const doneAt = Date.now();
-        const sendAt = req.sendAt;
-        const firstDeltaAt = req.firstDeltaAt;
-        const ttfbMs = firstDeltaAt !== null ? firstDeltaAt - sendAt : null;
-        // F5 follow-up: close the thinking timer if it's
-        // still open. Covers the thinking-only-no-text
-        // shape (e.g. extended thinking immediately
-        // followed by `done` because the model produced
-        // no visible response — rare but possible). After
-        // this branch, `req.thinkingDurationMs` is
-        // terminal; the write to `last.thinkingDurationMs`
-        // happens below in the latency block (same place
-        // we write the rest of the per-message telemetry).
-        if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
-          req.thinkingDurationMs = doneAt - req.thinkingStartedAt;
+      case "turn_complete": {
+        // F5 follow-up per-turn: the agent loop emits this
+        // event right after `persist_turn` for the assistant
+        // row. The `seq` field is the assistant row's seq
+        // (assigned by the agent loop in the per-session
+        // `next_seq` counter) — used by `reloadAfterFinalize`
+        // to fire the `update_message_latency` IPC for THIS
+        // turn's row (N per request, not 1 as the F5
+        // "max seq" path did). The 4 ms fields are
+        // `Option<i64>` server-side; `null` for turns that
+        // never reached the corresponding boundary.
+        // The `{ }` wraps the case body so the `const`
+        // declarations don't leak into the next `case`
+        // block (TypeScript "Cannot redeclare
+        // block-scoped variable" if a sibling case
+        // happens to define `turnLatency` etc.).
+        if (typeof event.seq !== "number") {
+          // Defensive — the Rust side always sends `seq`
+          // for `turn_complete`, but if a future wire
+          // change drops it, drop the event rather than
+          // corrupt the Map.
+          break;
         }
-        const genMs =
-          firstDeltaAt !== null ? doneAt - firstDeltaAt : null;
-        const totalMs = doneAt - sendAt;
-        const chat = useChatStore();
-        // Update the in-memory message so the UI shows "3.2s"
-        // immediately. `last` is the assistant placeholder
-        // being mutated; this is the same object the delta
-        // events were writing into.
-        last.latency = {
-          ...(ttfbMs !== null ? { ttfbMs } : {}),
-          ...(genMs !== null ? { genMs } : {}),
-          totalMs,
+        const turnLatency: TurnLatency = {
+          seq: event.seq,
+          ttfbMs: event.ttfb_ms ?? null,
+          genMs: event.gen_ms ?? null,
+          totalMs: event.total_ms ?? null,
+          thinkingMs: event.thinking_ms ?? null,
         };
-        // F5 follow-up: stash the thinking duration on the
-        // message in the same tick as the latency triple.
-        // Undefined for messages that never entered the
-        // thinking phase; the ThinkingBlock header falls
-        // back to "—" in that case.
-        if (req.thinkingDurationMs !== null) {
-          last.thinkingDurationMs = req.thinkingDurationMs;
+        req.latencyByTurn.set(req.currentTurnIndex, turnLatency);
+        // In-place mutate the streaming placeholder's
+        // `latency` / `thinkingDurationMs` for instant UI
+        // feedback (no reload needed). The `reactive(Map)`
+        // set trap in `chat.ts` `putMessages` (F5 commit
+        // `74e43e4` fix) fires `currentSessionLatencyTurns`
+        // computed re-eval, so the ChatInput popover
+        // updates in real-time per turn.
+        if (
+          turnLatency.ttfbMs !== null ||
+          turnLatency.genMs !== null ||
+          turnLatency.totalMs !== null
+        ) {
+          last.latency = {
+            ...(turnLatency.ttfbMs !== null
+              ? { ttfbMs: turnLatency.ttfbMs }
+              : {}),
+            ...(turnLatency.genMs !== null
+              ? { genMs: turnLatency.genMs }
+              : {}),
+            ...(turnLatency.totalMs !== null
+              ? { totalMs: turnLatency.totalMs }
+              : {}),
+          };
         }
-        // Per-session cumulative total. Mirrors the A4 token
-        // usage `accumulateTokenUsage` pattern. Fires NOW
-        // (synchronous) so the ChatPanel footer updates in
-        // the same tick as the bubble.
-        chat.accumulateLatency(req.sessionId, totalMs);
-        // Stash the latency for the async `reloadAfterFinalize`
-        // to pick up and fire the IPC with the seq.
-        req.latencyPending = { ttfbMs, genMs, totalMs };
+        if (turnLatency.thinkingMs !== null) {
+          last.thinkingDurationMs = turnLatency.thinkingMs;
+        }
+        // Per-session cumulative: each turn contributes
+        // its own `totalMs`. Matches the A4
+        // `accumulateTokenUsage` per-done pattern. The
+        // `done` handler no longer fires
+        // `accumulateLatency` — `TurnComplete` is the
+        // single source of per-turn latency.
+        if (turnLatency.totalMs !== null) {
+          useChatStore().accumulateLatency(
+            req.sessionId,
+            turnLatency.totalMs,
+          );
+        }
+        break;
+      }
+      case "done":
+        // F5 follow-up per-turn: the `done` handler is the
+        // stream-termination signal. It does NOT compute or
+        // write per-turn latency values — those are the
+        // `turn_complete` handler's job (it ran earlier for
+        // every persisted turn and wrote `last.latency` /
+        // `last.thinkingDurationMs` from the backend's
+        // per-turn `Instant`-derived values). The
+        // `done` handler's responsibilities:
+        //
+        // - Set `last.streaming = false` to extinguish the
+        //   blinking ▍ cursor in MessageItem.vue.
+        // - markRaw the four deep-payload arrays (they're
+        //   done mutating).
+        // - Fire `accumulateTokenUsage` (A4 — the per-turn
+        //   usage report rides the `done` payload).
+        // - Reset `forceFollowActive` (F2).
+        // - `finalizeRequest` (moves the request from
+        //   `activeRequests` to `completedRequests` and
+        //   kicks off the async `reloadAfterFinalize` →
+        //   re-reads DB, re-attaches per-turn latency from
+        //   `req.latencyByTurn` to the rehydrated messages,
+        //   and fires N `update_message_latency` IPCs).
+        // F5 follow-up per-turn: the `last.latency` write
+        // is GONE (was here as the F5 "last turn fast
+        // path"). Reason: `turn_complete` already wrote
+        // `last.latency` with the backend's per-turn
+        // values (computed from `agent/chat.rs`
+        // per-turn `Instant` timestamps, NOT the
+        // frontend's `Date.now()`). The `done` handler's
+        // `ttfbMs = firstDeltaAt - sendAt` would OVERWRITE
+        // the backend-precise value with a frontend-DOM
+        // wall-clock measurement (a different time base).
+        // For multi-turn responses this is critical: the
+        // LAST turn's `last.latency` must match what
+        // `TurnComplete` emitted, not a stale
+        // `firstDeltaAt` from the first turn (the
+        // `firstDeltaAt` field is per-request, not
+        // per-turn — its value is set on the first delta
+        // of the request and never reset between turns,
+        // so the `done`-handler computation drifts from
+        // the actual final turn's TTFB).
+        //
+        // `accumulateTokenUsage` (A4) still fires from
+        // `done` — that path reads the per-turn usage
+        // from the `done` payload, NOT from a request-
+        // level Map, so it's per-turn correct.
+
+        // F5 follow-up per-turn: `accumulateLatency` is
+        // fired by the `case "turn_complete"` handler (one
+        // fire per turn) — NOT by `done` (which would
+        // double-count for multi-turn responses and miss
+        // turns that errored before reaching `done`).
+        // The single source for per-turn latency is
+        // `TurnComplete`; `done` is the stream-termination
+        // signal only.
+        //
+        // `last.latency` / `last.thinkingDurationMs` are
+        // NOT touched here (turn_complete already wrote
+        // them). The error path (no turn_complete) writes
+        // them in its own case below.
+        //
+        // `reloadAfterFinalize` later re-attaches
+        // per-turn from `req.latencyByTurn` onto the
+        // rehydrated (per-turn split) messages.
+        //
+        // The `req.latencyPending` stash is gone — the
+        // `reloadAfterFinalize` reads `req.latencyByTurn`
+        // directly.
         // CRITICAL (PR3 self-check fix): the old chat.ts handler
         // set `last.streaming = false` here, which extinguishes the
         // blinking ▍ cursor in MessageItem.vue (rendered under
@@ -798,22 +903,39 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           };
           // F5 follow-up: error path also closes the
           // thinking timer if it's still open (e.g. the
-          // network dropped mid-thinking with no text yet).
-          // The "Thought for X.Xs" header is still useful
-          // in the error case — tells the user "the model
-          // thought for 4.7s before the connection died".
-          if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
-            req.thinkingDurationMs = doneAt - req.thinkingStartedAt;
-          }
-          if (req.thinkingDurationMs !== null) {
-            last.thinkingDurationMs = req.thinkingDurationMs;
-          }
+          // F5 follow-up per-turn: the close-thinking-timer
+          // branch and the `last.thinkingDurationMs` write
+          // are gone. The error path never fires
+          // `TurnComplete` (the agent loop bails out of
+          // the outer loop on `had_error` and never reaches
+          // `persist_turn`), so the placeholder's
+          // `thinkingDurationMs` stays `undefined` for
+          // errored turns — the ThinkingBlock header
+          // falls back to "—". This is the correct
+          // semantic: a turn that errored before
+          // persisting has no per-turn thinking duration
+          // to record.
+
           // Per-session cumulative: error turns also count
           // toward the displayed total (the user can see
           // "I spent 5s on this prompt and it errored out").
+          // The F5 follow-up `turn_complete` path does NOT
+          // fire on error (the agent loop bails out of the
+          // outer loop on `had_error` and never reaches
+          // `persist_turn`, so no `TurnComplete` is emitted) —
+          // the error handler is the single fire for an
+          // errored turn. Matches the A4 `accumulateTokenUsage`
+          // per-done pattern.
           useChatStore().accumulateLatency(req.sessionId, totalMs);
-          // Stash for `reloadAfterFinalize` to fire the IPC.
-          req.latencyPending = { ttfbMs, genMs, totalMs };
+          // F5 follow-up: the `req.latencyPending` stash is
+          // gone. `reloadAfterFinalize` reads from
+          // `req.latencyByTurn` (or, for the no-turn case
+          // where the request errored before reaching
+          // `TurnComplete`, fires no IPC — there's no
+          // persisted assistant row to UPDATE). The error
+          // path's in-memory `last.latency` /
+          // `last.thinkingDurationMs` writes above are the
+          // only place these values live.
         }
         // Same post-stream markRaw — the error case is terminal
         // just like `done`, the arrays won't grow further.
@@ -849,13 +971,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     req.toolStartedAt.set(payload.id, Date.now());
     // F5 follow-up: a `tool:call` arriving without an
     // intervening text `delta` means the model went
-    // straight from thinking into a tool_use block (no
-    // response text). That's still a thinking-end
-    // boundary for our purposes — close the timer so the
-    // header shows the thinking wall time, not "—".
-    if (req.thinkingStartedAt !== null && req.thinkingDurationMs === null) {
-      req.thinkingDurationMs = Date.now() - req.thinkingStartedAt;
-    }
+    // F5 follow-up per-turn: the close-thinking-timer
+    // branch is gone. The `tool:call` boundary is closed
+    // on the backend (the agent loop's `ChatEvent::ToolCall`
+    // arm sets `turn_thinking_done = Some(Instant::now())`),
+    // and the duration ships back through the corresponding
+    // `ChatEvent::TurnComplete` event. The placeholder's
+    // `last.thinkingDurationMs` is written by the
+    // `turn_complete` case, not here.
   }
 
   function handleToolResult(payload: ToolResultPayload): void {
@@ -997,54 +1120,27 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // becomes obsolete).
     if (requestId) {
       const req = completedRequests.get(requestId);
-      if (req && req.latencyPending) {
-        // Find the most-recently-persisted assistant message
-        // in the rehydrated buffer. The agent loop's
-        // `persist_turn` wrote one row; `rehydrateMessages`
-        // gave it a `seq` from the DB. We grab the largest
-        // seq on an assistant row.
-        let assistantSeq: number | null = null;
-        for (const m of messages) {
-          if (m.role === "assistant" && typeof m.seq === "number") {
-            if (assistantSeq === null || m.seq > assistantSeq) {
-              assistantSeq = m.seq;
-            }
-          }
-        }
-        if (assistantSeq !== null) {
-          const { ttfbMs, genMs, totalMs } = req.latencyPending;
-          // F5 follow-up: thinking duration is stashed on
-          // `RequestState.thinkingDurationMs` by the
-          // streaming `done` / `error` handler. Pass it
-          // through to the same `update_message_latency`
-          // IPC (which now also writes the `thinking_ms`
-          // column in the same UPDATE statement) so a
-          // page reload survives. `null` for turns that
-          // never entered the thinking phase — the
-          // column stays NULL and the rehydrated message
-          // carries `thinkingDurationMs = undefined`,
-          // which the ThinkingBlock header renders as
-          // "—".
-          const thinkingMs = req.thinkingDurationMs;
-          // F5 follow-up: the `load_session` IPC above read
-          // the assistant row BEFORE the latency IPC below
-          // has a chance to populate `total_ms` / `ttfb_ms`
-          // / `gen_ms`. So the rehydrated message carries
-          // `latency = undefined` and the per-turn list
-          // (`currentSessionLatencyTurns` in chat.ts) would
-          // lose the just-finished turn until the next
-          // reload. Re-attach the latency from
-          // `req.latencyPending` directly onto the
-          // rehydrated message here, so the swap in
-          // `putMessages` (immediately above) leaves the
-          // per-turn list and the per-message chip in sync
-          // with the values the `done` / `error` handler
-          // just stashed. The DB write that follows writes
-          // the same values to disk; on the NEXT session
-          // reload, the rehydrate path will pick them up
-          // from the columns.
-          //
-          // Reactivity note (F5 bug fix): the `putMessages`
+      // F5 follow-up per-turn: iterate `latencyByTurn`
+      // (the per-turn Map populated by `case "turn_complete"`)
+      // and fire one `update_message_latency` IPC per entry.
+      // N entries → N IPCs (one per assistant row), not the
+      // F5 "max seq" single fire. The `done` / `error`
+      // handler no longer stashes a `latencyPending`
+      // single value — the `turn_complete` handler is
+      // the single source for per-turn latency, and
+      // `reloadAfterFinalize` reads it back here.
+      //
+      // Empty-map case: an error path that bailed out
+      // before reaching `persist_turn` (no
+      // `TurnComplete` emitted) — no IPC fires, no row
+      // to UPDATE. The in-memory `last.latency` /
+      // `last.thinkingDurationMs` writes from the `error`
+      // handler are the only place those values live.
+      if (req && req.latencyByTurn.size > 0) {
+        const reactiveMessages = messagesBySession.get(sessionId);
+        for (const [, turnLatency] of req.latencyByTurn) {
+          // Reactivity note (F5 bug fix, kept from
+          // the F5 commit `74e43e4`): the `putMessages`
           // call above wraps the rehydrated array in
           // `reactive()` (see `putMessages` doc for the
           // rationale), so `messagesBySession.get(sessionId)`
@@ -1053,48 +1149,49 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           // matching item. Mutating `target.latency = ...`
           // crosses the proxy's set trap, which fires the
           // effect tracker and re-evaluates the
-          // `currentSessionLatencyTurns` computed in chat.ts.
-          // Before the `putMessages` wrap, this assignment
+          // `currentSessionLatencyTurns` computed in
+          // chat.ts. Without the wrap, this assignment
           // was a write to a plain object and silently
           // dropped — the cumulative chip in the popover
-          // would show "累计 10.1s · 轮次 0" because
-          // `accumulateLatency` (which writes to a
-          // separate reactive Map) was tracked but the
-          // per-message latency was not.
+          // would show "累计 10.1s · 轮次 0".
           //
-          // Identical construction as the `done` /
-          // `error` handlers above (omitempty spread for
-          // ttfbMs / genMs; totalMs always present).
-          const reactiveMessages = messagesBySession.get(sessionId);
+          // The per-turn target is the rehydrated
+          // message whose `seq` matches this turn's
+          // `seq` (assigned by the agent loop in the
+          // per-session `next_seq` counter). The
+          // rehydrated messages carry the seq on each
+          // row from the DB; we find by exact match
+          // instead of the F5 "max seq" approach so
+          // every turn's row gets its own latency.
           if (reactiveMessages) {
             const target = reactiveMessages.find(
-              (m) => m.role === "assistant" && m.seq === assistantSeq,
+              (m) =>
+                m.role === "assistant" && m.seq === turnLatency.seq,
             );
             if (target) {
               target.latency = {
-                ...(ttfbMs !== null ? { ttfbMs } : {}),
-                ...(genMs !== null ? { genMs } : {}),
-                totalMs,
+                ...(turnLatency.ttfbMs !== null
+                  ? { ttfbMs: turnLatency.ttfbMs }
+                  : {}),
+                ...(turnLatency.genMs !== null
+                  ? { genMs: turnLatency.genMs }
+                  : {}),
+                ...(turnLatency.totalMs !== null
+                  ? { totalMs: turnLatency.totalMs }
+                  : {}),
               };
-              // F5 follow-up: re-attach the thinking
-              // duration alongside the latency triple.
-              // In-memory only (no DB column) so the
-              // post-reload fallback for pre-F5 messages
-              // is "—" (no value), not a rehydrated
-              // value — but within a single app session
-              // the swap above would otherwise lose it.
-              if (req.thinkingDurationMs !== null) {
-                target.thinkingDurationMs = req.thinkingDurationMs;
+              if (turnLatency.thinkingMs !== null) {
+                target.thinkingDurationMs = turnLatency.thinkingMs;
               }
             }
           }
           void invoke("update_message_latency", {
             sessionId,
-            seq: assistantSeq,
-            ttfbMs,
-            genMs,
-            totalMs,
-            thinkingMs,
+            seq: turnLatency.seq,
+            ttfbMs: turnLatency.ttfbMs,
+            genMs: turnLatency.genMs,
+            totalMs: turnLatency.totalMs,
+            thinkingMs: turnLatency.thinkingMs,
           }).catch((e) => {
             console.error(
               "[streamController] update_message_latency failed:",
@@ -1287,14 +1384,31 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // the first `delta` event arrives.
       sendAt: Date.now(),
       firstDeltaAt: null,
-      // F5 follow-up: thinking timing starts on the first
-      // `thinking_delta` event (see `RequestState` comment
-      // for the close-triggers). Both stay null until
-      // thinking actually happens.
-      thinkingStartedAt: null,
-      thinkingDurationMs: null,
+      // F5 follow-up per-turn: thinking-time tracking
+      // moved entirely to the `case "turn_complete"`
+      // handler — the `ChatEvent::TurnComplete` payload
+      // from the agent loop carries the 4 ms values
+      // (ttfb_ms / gen_ms / total_ms / thinking_ms)
+      // computed on the backend from per-turn
+      // `Instant` timestamps. The frontend no longer
+      // maintains a per-request `thinkingStartedAt` /
+      // `thinkingDurationMs` single-value timer — the
+      // 4 close boundaries (`delta` / `tool:call` /
+      // `done` / `error`) used to snapshot a single
+      // per-request duration, which the F5 follow-up
+      // per-turn fix removes. The placeholder's
+      // `last.thinkingDurationMs` is now set ONLY by
+      // the `turn_complete` case (per turn, with
+      // that turn's own thinking wall clock).
       toolStartedAt: new Map(),
-      latencyPending: null,
+      // F5 follow-up per-turn: -1 = "no start event received
+      // yet" (the first `case "start"` increments to 0).
+      // Using -1 instead of 0 avoids the off-by-one where
+      // turn 0 would land on index 1 (the bug that the
+      // original F5 single-value RequestState papered over
+      // by always writing to the same slot).
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
     });
     // Pin the session while streaming — it cannot be evicted
     // even if the user visits 20+ other sessions.
