@@ -1,0 +1,41 @@
+{
+  "id": "f5-followup-per-turn-timing",
+  "name": "f5-followup-per-turn-timing",
+  "title": "F5 follow-up: per-turn latency + thinking timing for multi-turn agent responses",
+  "description": "Fix the known limitation where multi-turn agent-loop responses (thinking → tool_use → tool_result → ... → text) only persist latency / thinking_ms on the LAST assistant message. First N-1 messages' ttfb_ms / gen_ms / total_ms / thinking_ms columns stay NULL because the agent loop's deferred `Done` event fires once per request (not per turn) and `RequestState.thinkingDurationMs` is closed on the first non-thinking boundary. Symptom: ThinkingBlock header shows '—' for the first N-1 messages, and the last message shows the FIRST thinking phase's duration (not the last). See .trellis/spec/backend/llm-contract.md 'Known Limitations (F5 — 2026-06-12 follow-up)' for the full root cause + fix scope.\n\nResolution: 4-commit implementation (spec-only → Rust agent loop → frontend RequestState+re-attach → test+ADR) + chore journal. New ChatEvent::TurnComplete variant carrying per-turn seq + 4 nullable ms. persist_turn now writes the 4-column MessageLatency on the assistant row INSERT (was None → columns stayed NULL for N-1 turns). RequestState: Map<turnIndex, TurnLatency> replaces per-request single-value latencyPending/thinkingDurationMs. reloadAfterFinalize iterates latencyByTurn and fires N update_message_latency IPCs (per-seq, not per-request 'max seq'). chat.ts accumulateLatency moves to per-turn (matches A4 accumulateTokenUsage per-done pattern). Plan revisions: removed RequestState.thinkingStartedAt/thinkingDurationMs + 4 close boundaries (backend TurnComplete payload now carries thinking_ms from per-turn Instant pair); removed case 'done' last.latency write (avoid overwriting backend-precise value with frontend Date.now()). 92/92 vitest + 319/319 cargo + vue-tsc clean. Verified by 3-turn per-turn test + 4-column 3-turn INSERT test.",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": "agent + frontend + spec",
+  "package": "backend+frontend",
+  "priority": "P2",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-06-12",
+  "completedAt": "2026-06-12",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "depends_on": [],
+  "blocks": [],
+  "discovered_from": "06-11-f5-llm",
+  "related_specs": [
+    ".trellis/spec/backend/llm-contract.md#per-turn-tracking-f5-follow-up-2026-06-12"
+  ],
+  "related_files": [
+    "app/src-tauri/src/llm/types.rs",
+    "app/src-tauri/src/agent/chat.rs",
+    "app/src/stores/streamController.ts",
+    "app/src/stores/streamController.test.ts",
+    "app/src-tauri/src/db/tests.rs",
+    ".trellis/spec/backend/llm-contract.md",
+    "docs/IMPLEMENTATION.md"
+  ],
+  "estimated_complexity": "L (80-100 lines across 7 files; PRD estimated 30-50 which was low)",
+  "notes": "PR revision: 1) removed RequestState.thinkingStartedAt/thinkingDurationMs and the 4 close boundaries (backend TurnComplete payload now carries thinking_ms from per-turn turn_thinking_done - turn_thinking_start Instant pair); 2) removed case 'done' last.latency write (avoid overwriting backend-precise value with frontend Date.now()). Both revisions written into ADR at docs/IMPLEMENTATION.md §4. 6 PRD line numbers were off — see commit 3 message's 'Plan revision' section.",
+  "meta": {}
+}
