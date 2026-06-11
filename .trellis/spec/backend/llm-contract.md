@@ -1744,3 +1744,36 @@ commit message must list all touched concerns.
 | `update_message_latency` for tool_result rows | Tool-result rows have no per-message latency triple (per-tool duration lives in the JSON, not the columns). The IPC is only called for assistant turns. |
 | LLM-claimed TTFB (parse from `usage.creation_time` if exposed) | Anthropic doesn't expose this on `message_delta`; the frontend's `Date.now()` is the only source. |
 
+### Known Limitations (F5 — 2026-06-12 follow-up)
+
+#### Per-turn latency / thinking-duration only captured for the LAST assistant message in a multi-turn request
+
+**Symptom**: For an agent-loop response that uses tools (e.g. thinking → `shell` → tool_result → thinking → `shell` → tool_result → thinking → text), the frontend persists N assistant message rows (one per LLM call), but the `update_message_latency` IPC is fired ONCE for the request and re-attaches only the LAST assistant message (largest `seq`). The first N-1 messages' `ttfb_ms` / `gen_ms` / `total_ms` / `thinking_ms` columns stay NULL, so on session reload they rehydrate with `thinkingDurationMs = undefined` and the ThinkingBlock header renders `—`. The last message's `thinking_ms` is set to the FIRST thinking phase's duration (because `req.thinkingDurationMs` is closed on the first non-thinking boundary and never re-opened).
+
+**Why it happens**:
+
+1. **Agent loop is per-request, not per-turn** (`app/src-tauri/src/agent/chat.rs`).
+   The inner LLM-stream loop processes each `ChatEvent::Done` (line 481) by setting `stop_reason` and breaking out of the inner loop — but does NOT emit the event to the frontend. The deferred `Done` is emitted ONLY at the very end of the agent loop (line 670, after `persist_turn` + `touch_session`), gated on `should_continue == false`. So a 3-turn request sees 1 `done` event in the frontend, not 3.
+
+2. **Frontend `RequestState` is per-request, not per-turn** (`app/src/stores/streamController.ts:111`).
+   `latencyPending` / `thinkingDurationMs` / `firstDeltaAt` are set once and never reset between turns. The first `delta` (text) or `tool:call` boundary closes the timer (lines 661, 856); subsequent phases find the duration already set (`=== null` check fails) and skip.
+
+3. **`reloadAfterFinalize` re-attach writes to the largest-`seq` assistant only** (`app/src/stores/streamController.ts:1006-1013`).
+   The seq-lookup iterates all assistant rows and picks the largest — i.e. the last one. The IPC payload carries the same `thinkingMs` / `ttfbMs` / `genMs` / `totalMs` for that one row.
+
+**User-visible behavior** (matches the 2026-06-12 screenshot):
+
+- First N-1 assistant messages in a multi-turn response: ThinkingBlock header shows `—` (no `thinking_ms` in DB).
+- Last assistant message: header shows the FIRST thinking phase's duration (e.g. `0.7s`), not the actual last phase.
+- Per-message `latency` chip (`MessageItem` footer) shows `totalMs` for the last message only; prior messages show `—`.
+- Per-session cumulative chip (ChatInput popover) and the `累计` / `轮次` counters are CORRECT (they accumulate across all turns via `accumulateLatency` + `accumulateTokenUsage` calls, and read from a separate reactive `Map` keyed by session id).
+
+**Fix scope** (deferred — TBD):
+
+- Agent loop must emit a `Done` (or `TurnComplete`) event after EACH `persist_turn`, carrying the per-turn `seq` and the turn-local `thinkingDurationMs` / `latency` triple.
+- Frontend `RequestState` needs an array (or `Map<seq, {ttfbMs, genMs, totalMs, thinkingMs}>`) populated incrementally; the re-attach IPC fires per-`seq` instead of once.
+- `update_message_latency` IPC stays the same shape; just N calls instead of 1.
+- Estimated: 30-50 lines across `agent/chat.rs` + `streamController.ts` + `chat.ts` + the rehydrate test.
+
+**Why we accept it for now**: single-turn responses (no tools) are unaffected — which is the common shape for Q&A / doc-questions. The bug only shows in agent-loop responses that use tools. The cumulative popover stats stay correct, which is the user-facing number most people look at.
+
