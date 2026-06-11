@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/06-11-c1/prd.md", "reason": "C1 PRD — 取消机制完整化的需求、技术方案、验收标准"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Tool 签名、execute_tool 分发、shell spillover 契约 — 修改 execute_tool 签名必须参考"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "cancel_inflight_for_session 契约 + 破坏性操作 cancel hook — 取消机制与 worktree 交互"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent 类型、Provider trait、SSE wire shape — done(cancelled) 事件契约"}
