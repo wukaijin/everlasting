@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-06-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~609 | Active |
+| `journal-1.md` | ~654 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-06-11 | 体验优化 — session 记忆 / 滚动 / 删除确认 / loading | `0140502`, `860c5ef`, `5ff353a` | `main` |
 | 12 | 2026-06-11 | D1: session 重命名 + 8 色标记 | `61c617a`, `8c58499` | `main` |
 | 11 | 2026-06-11 | C1 取消机制完整化 | `c4bc7eb` | `main` |
 | 10 | 2026-06-10 | A4 Token 用量统计 | `3748793` | `main` |

@@ -607,3 +607,48 @@ DB 新增 color_tag 列, Rust 新增 rename_session/set_session_color 两个 com
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 体验优化 — session 记忆 / 滚动 / 删除确认 / loading
+
+**Date**: 2026-06-11
+**Task**: 体验优化 — session 记忆 / 滚动 / 删除确认 / loading
+**Branch**: `main`
+
+### Summary
+
+F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{projectId},对齐 lastActiveProjectId 模式)+ F2 发送后全程跟底滚动(forceFollowActive ref,用户上翻 >80px 停止,stream done 重置)+ F3 通用 ConfirmDialog 组件替换不可靠的原生 window.confirm()(空 session 直接删,有消息才弹确认)+ F4 session 切换 loading spinner(switchSession 合并双 IPC 为单 ensureLoaded,reloadAfterFinalize 用 scrollAfterReload counter 避免位置抖动)。F5 耗时统计延后单独实施。trellis-check 子代理找到 ChatPanel.vue spinner CSS 误嵌进 header 块的 critical bug 并自动修复(vue-tsc --noEmit + pnpm build 通过)。
+
+### Main Changes
+
+- **`app/src/components/common/ConfirmDialog.vue`** (新建, 259 行): 通用确认弹窗组件, props (open, title, variant, confirmText) + body slot + confirm/cancel emits; Esc/Enter/backdrop 全部绑事件; v-if gate + Transition fade+scale 150ms; variants: danger/warning/default
+- **`app/src/stores/config.ts`** +24 行: `readLastSession` / `writeLastSession` (键 `everlasting.lastSession_{projectId}`),对齐 `readLastActive` / `writeLastActive` 模式
+- **`app/src/stores/chat.ts`** +89/-?: F1 `onProjectChange` + `switchSession` 读/写 `lastActiveSessionId`; F2 `send()` 设 `forceFollowActive = true`; F4 `sessionLoading` ref + `scrollAfterReload` counter(被 streamController 跨 store 触发)
+- **`app/src/stores/streamController.ts`** +7 行: `reloadAfterFinalize` 完成 `useChatStore().scrollAfterReload++`(跨 store coordination, 跟现有 `invalidateDiff` 同模式)
+- **`app/src/components/chat/MessageList.vue`** +66/-?: F2 滚动跟底逻辑(force-follow + onScroll 80px 阈值); F4 scroll-after-reload 计数器 watch + nextTick scroll
+- **`app/src/components/chat/ChatPanel.vue`** +27/-?: F4 session 切换 loading spinner(消息区中央小 spinner, `sessionLoading` 绑定)
+- **`app/src/components/SessionList.vue`** +45/-?: F1 接 `lastActiveSession` 持久化; F3 删 session 走 ConfirmDialog(有消息才弹,空 session 直删)
+- **`.trellis/spec/frontend/popover-pattern.md`** +136 行: 新增 Confirmation Dialog Pattern 段(ConfirmDialog 组件 API + 用法 + 规范 "空容器跳过 dialog") + Tauri Webview Gotcha 段(`window.confirm()`/`alert()`/`prompt()` 在 Tauri webview 静默吞掉,改用 in-app ConfirmDialog)
+- **`.trellis/spec/frontend/index.md`**: Guidelines Index 表格同步(标注 2026-06-11 体验优化 added ConfirmDialog + Tauri gotcha)
+- **`docs/ROADMAP.md`**: §1.2 路线图外完成 加 "体验优化批次 F1-F4" 条目(F5 备注延后单独实施)
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0140502` | (see git log) |
+| `860c5ef` | (see git log) |
+| `5ff353a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
