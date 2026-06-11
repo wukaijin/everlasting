@@ -38,6 +38,7 @@
 - ✅ 6 UI/状态 bug 修复(streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限 + minimize icon + 顶栏 padding)
 - ✅ 工具集扩展批次(`edit_file` / `grep` / `glob` / `list_dir` + ReadGuard + Bash 落盘 + cat -n 行号)
 - ✅ provider catalog hot-reload + display_name optional + session model_id binding(2026-06-10)
+- ✅ 体验优化批次 F1-F4(per-project session 记忆 / 发送后全程跟底滚动 / 通用 ConfirmDialog + 删除确认 / session 切换 loading + 修双 IPC + 修 reloadAfterFinalize 抖动,2026-06-11,F5 耗时统计延后单独实施)
 
 ---
 

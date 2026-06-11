@@ -460,6 +460,93 @@ Modal instances use **fade + scale 0.96 → 1**:
   scoped CSS. See DeleteWorktreeConfirm.vue for the
   reference implementation.
 
+### Confirmation Dialog Pattern (added 2026-06-11, 体验优化 PR `0140502`)
+
+> **Use `app/src/components/common/ConfirmDialog.vue` for all
+> destructive / confirmable actions.** This component supersedes
+> the older per-action `DeleteWorktreeConfirm` /
+> `DeleteModelConfirm` copies. When adding a new "are you sure?"
+> dialog in the app, always reach for `ConfirmDialog` first.
+
+**Props**:
+
+| Prop | Type | Default | Notes |
+|---|---|---|---|
+| `open` | `boolean` | — | v-model binding; `v-if` mounts/unmounts the dialog |
+| `title` | `string` | — | Header title (renders the warn icon automatically when `variant === "danger"`) |
+| `variant` | `"danger" \| "warning" \| "default"` | `"danger"` | Drives the confirm-button color (red / accent-muted / default) |
+| `confirmText` | `string` | `"确认"` | Confirm button label |
+
+**Slot**: `body` — arbitrary content (use `<p>` for short messages,
+nested markup for richer warnings).
+
+**Emits**: `cancel` (Escape, backdrop click, ✕ button, "取消" button)
+and `confirm` (Enter or confirm button click).
+
+**Built-in behavior**:
+
+- **Esc closes** (emits `cancel`).
+- **Enter confirms** (emits `confirm`).
+- **Backdrop click cancels** (`@click.self` on `.confirm-backdrop`).
+- **Focus** is auto-moved to the confirm button on `open` (via
+  `setTimeout(..., 0)` after the v-if mount), so Enter works
+  without a prior Tab.
+- **Transition** uses `name="confirm-modal"` with the 150ms
+  fade+scale convention from this file.
+
+**Why the component exists**: see the "Don't" section below
+about `window.confirm()` in Tauri webview. The whole reason
+`ConfirmDialog` is hand-rolled is that the native dialog
+silently no-ops in this environment.
+
+**Example usage** (session delete with body content):
+
+```vue
+<script setup lang="ts">
+import ConfirmDialog from "../common/ConfirmDialog.vue";
+const showConfirm = ref(false);
+const sessionIdToDelete = ref<string | null>(null);
+
+function askDelete(id: string) {
+  sessionIdToDelete.value = id;
+  showConfirm.value = true;
+}
+async function onConfirm() {
+  if (sessionIdToDelete.value) await doDelete(sessionIdToDelete.value);
+  showConfirm.value = false;
+}
+</script>
+
+<template>
+  <ConfirmDialog
+    :open="showConfirm"
+    title="删除 session"
+    variant="danger"
+    confirm-text="删除"
+    @cancel="showConfirm = false"
+    @confirm="onConfirm"
+  >
+    <p>该 session 包含 <strong>{{ messageCount }}</strong> 条消息,删除后无法恢复。</p>
+  </ConfirmDialog>
+</template>
+```
+
+**Convention: skip the dialog for empty containers.** A
+"delete this empty session" / "delete this fresh worktree" /
+"remove this unused provider" should NOT pop a confirm — the
+destructive cost is zero. Only show the dialog when there is
+real content the user might regret losing. The current rule in
+`SessionList.vue` is: a session is "empty" iff its message
+count is 0; non-empty sessions always go through
+`ConfirmDialog`.
+
+**Migration path** (optional, not blocking): the older
+`DeleteWorktreeConfirm` and `DeleteModelConfirm` components
+can be replaced with `ConfirmDialog` calls. The PRD
+(`.trellis/tasks/06-11-session-loading/prd.md`) marked this
+as "可选，不改也行" — defer until a third call site appears
+or visual drift is reported.
+
 ### Popover: fade + slide (direction matches position)
 
 Popover instances use **fade + slide**, where the slide direction
@@ -499,6 +586,55 @@ Size animations look broken at small sizes (4-8px change is
 invisible) and create reflow on the rest of the page. The
 popover should snap to its final size and only animate
 `opacity` + `transform`.
+
+---
+
+## Tauri Webview Gotcha: `window.confirm()` / `window.alert()` / `window.prompt()`
+
+> **Never call `window.confirm()` / `window.alert()` /
+> `window.prompt()` from this app's frontend code.** The Tauri
+> webview does NOT reliably display native browser dialogs —
+> the call often silently no-ops. Discovered during the 2026-06-11
+> 体验优化 PR (commit `0140502`): clicking "delete" on a
+> non-empty session would invoke `window.confirm()`, the dialog
+> never appeared, and the click was lost. The fix was to
+> replace it with the in-app `ConfirmDialog` component (see
+> the "Confirmation Dialog Pattern" section above).
+
+**Symptom**: the click handler runs, but the user sees nothing
+happen. No dialog. No error. The action that should follow
+the user's "OK" never executes.
+
+**Why it happens**: Tauri uses a webview (WebKit on macOS,
+WebView2 on Windows) for its frontend. These webviews
+**block synchronous native dialogs** in their default config
+to avoid pausing the main thread of the renderer. Tauri's
+own dialog plugin (`@tauri-apps/plugin-dialog`) wraps the
+native dialogs asynchronously — the synchronous
+`window.confirm()` from a regular Vue event handler is not
+wired up to it.
+
+**Fix**: use the in-app `ConfirmDialog` component (or
+`<Teleport>`-based modals for richer dialogs). The component
+is just DOM rendered in the same webview — no native dialog
+involved.
+
+**Migration checklist for existing code**:
+
+- [x] `SessionList.vue` `onDelete` + `contextDelete` — migrated
+  to `ConfirmDialog` in 0140502.
+- [ ] `DeleteWorktreeConfirm` — still uses its own hand-rolled
+  modal, not migrated. Defer until a third call site exists.
+- [ ] `DeleteModelConfirm` — same as above.
+- [ ] (Search the codebase for any remaining
+  `confirm(` / `alert(` / `prompt(` from Vue event handlers
+  before shipping a release.)
+
+**Note**: this gotcha is for the **synchronous** native dialog
+APIs from the renderer JS context. The async Tauri dialog
+plugin (`@tauri-apps/plugin-dialog`'s `ask()` / `message()`)
+works correctly but is overkill for a Vue component — the
+in-app `ConfirmDialog` is the right tool here.
 
 ---
 
