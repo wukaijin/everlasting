@@ -262,7 +262,9 @@ pub async fn grant_tool_permission(
 /// Deny path). Currently unused — the `cancel_session_asks`
 /// helper is MVP-clears-all because the rids aren't keyed by
 /// session. A future PR can key the map by `(session_id, rid)`
-/// and iterate.
+/// and iterate. Reserved for the `delete_session` integration
+/// (see `agent/permissions::cancel_session_asks`).
+#[allow(dead_code)]
 pub async fn cancel_pending_asks(store: &PermissionStore) {
  crate::agent::permissions::cancel_session_asks(store, "").await;
 }

@@ -47,6 +47,14 @@ use crate::db::Mode;
 /// | "critical"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+// `Critical` is reserved for the PermissionModal "极高" 风险
+// variant (3px red border + shield-x icon per UX spec). The
+// MVP's per-tool static map only ever returns Low / Medium /
+// High, so the variant is never constructed in PR1. The dead-
+// code allow is forward-compat — PR3 (PermissionModal) reads
+// the wire payload and renders the critical styling on this
+// variant.
+#[allow(dead_code)]
 pub enum Risk {
  Low,
  Medium,
@@ -55,6 +63,11 @@ pub enum Risk {
 }
 
 impl Risk {
+ // `as_str` is intentionally not used in PR1 — the IPC payload
+ // gets the lowercase string from `#[serde(rename_all = ...)]`
+ // on the enum itself. Kept as a method for any future caller
+ // that wants the string without going through serde.
+ #[allow(dead_code)]
  pub fn as_str(&self) -> &'static str {
  match self {
  Risk::Low => "low",
@@ -99,6 +112,16 @@ pub fn risk_for_tool(tool_name: &str) -> Risk {
 
 /// Audit event kinds. Serialized lowercase (matches DB column).
 /// 10 variants — see PRD `## A2 后端` "审计 `kind` 枚举" section.
+///
+/// `ModeChanged` / `YoloEntered` / `YoloExited` are written
+/// directly by the `set_session_mode` Tauri command via
+/// `db::record_audit_event(.., "mode_changed", ..)` (the
+/// command path uses string literals for the kind, not this
+/// enum, to keep the cross-module call graph tight). The
+/// variants are kept here as the typed single source of truth
+/// for the audit log schema — PR3's C4 audit-log UI will
+/// match on these.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
  /// ⑨ 关拒绝 (Tier 2 hit, Tier 3 timeout, Tier 3 user deny)
@@ -152,6 +175,15 @@ impl AuditKind {
 /// 不弹窗 (Tier 2 路径 + Tier 3 user "拒绝"/超时)
 /// - `Ask { reason, risk }`: 发 `permission:ask` event + 等
 /// frontend `permission_response` (120s 超时 → 自动转 Deny)
+///
+/// The `Ask` variant is reserved for the PermissionModal
+/// (PR3) — the intermediate state when `check()` has fired
+/// the IPC but not yet received the user's response. In PR1
+/// `check()` collapses `Ask` into `Allow` / `Deny` internally
+/// before returning, so the variant is never observed by
+/// the chat loop. Kept in the type so the PermissionModal
+/// wire shape stays stable.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Decision {
  Allow,
@@ -160,9 +192,11 @@ pub enum Decision {
 }
 
 impl Decision {
+ #[allow(dead_code)]
  pub fn is_deny(&self) -> bool {
  matches!(self, Decision::Deny { .. })
  }
+ #[allow(dead_code)]
  pub fn is_ask(&self) -> bool {
  matches!(self, Decision::Ask { .. })
  }
@@ -241,7 +275,12 @@ pub async fn resolve_ask(
 /// Cancel all pending asks for a session. Called from the
 /// destructive-op cancel hook (`delete_session` etc.) — same
 /// pattern as the `CancellationGuard` on the agent loop's
-/// `cancellations` map.
+/// `cancellations` map. Reserved for the future
+/// `delete_session` integration (the MVP `delete_session` IPC
+/// doesn't call this yet — the hook lives in `commands/
+/// sessions.rs` and will be wired in once the destructive-op
+/// audit pass lands).
+#[allow(dead_code)]
 pub async fn cancel_session_asks(
  store: &PermissionStore,
  _session_id: &str,
@@ -514,6 +553,16 @@ pub async fn check(
 /// are logged at `warn!` but never propagated — the audit log
 /// is best-effort (a write failure must not break the agent
 /// loop).
+///
+/// The `critical` field is included in the payload so the
+/// PermissionModal (PR3) / C4 audit-log UI can render the
+/// 3px red border + shield-x icon styling on critical-risk
+/// denials. The flag is `true` only for Tier 2 hard-kill-list
+/// denials (where the kill list is intrinsically
+/// catastrophic); Tier 4 mode denials are `false` (the LLM
+/// is "just" in a read-only mode, not a catastrophic
+/// operation). Tier 3 user-deny / timeout / cancel paths
+/// are also `false` (the user opted out, nothing catastrophic).
 async fn record_audit(
  _app: &AppHandle,
  db: &SqlitePool,
@@ -523,11 +572,18 @@ async fn record_audit(
  tool_input: &serde_json::Value,
  reason: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+ // Map audit kind to critical flag: only Tier 2 hard-kill
+ // denials are critical. Everything else is a "normal" path.
+ let critical = matches!(
+ kind,
+ AuditKind::ToolDenied | AuditKind::ToolDeniedYolo
+ );
  let payload = serde_json::json!({
  "tool_name": tool_name,
  "tool_input": tool_input,
  "reason": reason,
  "mode": ctx.mode.as_str(),
+ "critical": critical,
  });
  let payload_str = payload.to_string();
  crate::db::record_audit_event(
