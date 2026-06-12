@@ -56,8 +56,19 @@ tiktoken-rs = "0.6"
 notify = "6"
 dirs = "5"
 
+# P1 web_fetch (2026-06-12):
+# - `htmd` 0.5 for HTML→Markdown conversion. Leanest deps of the
+#   surveyed crates (~3 direct, ~33 transitive), Apache-2.0, passes
+#   the full turndown.js test corpus. See
+#   `.trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/html-to-markdown-rust.md`.
+htmd = "0.5"
+
 [dev-dependencies]
 tempfile = "3"
+# Mock HTTP server for `web_fetch` integration tests. Spin up a
+# localhost mock at runtime; assert on the request the tool sent
+# (URL, headers, redirect chain, etc.) and serve canned responses.
+httpmock = "0.7"
 
 [profile.dev]
 incremental = true

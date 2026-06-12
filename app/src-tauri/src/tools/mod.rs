@@ -23,6 +23,7 @@ pub mod list_dir;
 pub mod read_file;
 pub mod read_guard;
 pub mod shell;
+pub mod web_fetch;
 pub mod write_file;
 
 use std::path::PathBuf;
@@ -42,6 +43,7 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         grep::definition(),
         glob::definition(),
         list_dir::definition(),
+        web_fetch::definition(),
     ]
 }
 
@@ -159,6 +161,10 @@ async fn execute_tool_inner(
         }
         "list_dir" => {
             let (out, is_err) = list_dir::execute(input, ctx).await;
+            (out, is_err, ToolContextUpdate::default())
+        }
+        "web_fetch" => {
+            let (out, is_err) = web_fetch::execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default())
         }
         _ => (

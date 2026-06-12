@@ -45,6 +45,8 @@
 | **B5** Memory/指令文件系统 | 06-10/11 | 4 文件加载 + notify 监听 + `cache_control: ephemeral` 注入 + 前端 MemoryPreview UI + Settings Tab |
 | **C1** 取消机制完整化 | 06-11 | tool 执行中途可取消 |
 | **D1** session 重命名 + 8 色标记 | 06-11 | |
+| **P0 工具打磨** | 06-12 | `read_file` offset/limit + `shell` timeout |
+| **P1 web_fetch 工具** | 06-12 | 新增 8 号 tool:agent 自主抓取外部文档/API 参考/错误信息,SSRF 拦截 (RFC 1918/loopback/link-local/CGNAT/multicast/reserved + 169.254.169.254 短路),5 MiB body cap,30s timeout,htmd 0.5 转 markdown,attribution prefix (T1a prompt-injection 缓解)。PRD + 3 份 research 落 `.trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/` |
 
 ---
 
