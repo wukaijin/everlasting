@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ContentBlock / ChatMessage / ChatEvent / Extended Thinking 持久化契约 — 裁剪时必须保护 Thinking / RedactedThinking blocks，配对保护 tool_use ↔ tool_result，避免下一轮 API 400"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "B5 synthetic memory message (messages[0..1]) 永远不能被裁剪 — 这是 cache_control ephemeral 的 anchor，丢了会破坏 prompt caching"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "ResolvedChatProviderWrapper 需要新增 context_window 字段，从 catalog 的 ModelRow 取值 — 该 spec 定义 catalog resolution 路径"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "ModelRow.context_window 字段已存在于 db/types.rs，不需要改 schema；但需要确认 catalog 查询路径符合 sqlx 模式"}
