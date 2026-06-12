@@ -63,6 +63,16 @@ dirs = "5"
 #   `.trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/html-to-markdown-rust.md`.
 htmd = "0.5"
 
+# A2 + B7 (Permission system + per-session Mode, 2026-06-13):
+# - `libc` for the `geteuid()` root check (Unix) + `#[cfg]` branch
+#   for Windows. Avoids pulling the full `nix` crate for one call.
+# - `regex` 1.x for the Tier 2 hard kill list patterns in
+#   `agent/permissions/dangerous.rs`. Compile-time regex is not
+#   needed (the patterns are runtime constants); std + this
+#   dep is plenty.
+libc = "0.2"
+regex = "1"
+
 [dev-dependencies]
 tempfile = "3"
 # Mock HTTP server for `web_fetch` integration tests. Spin up a

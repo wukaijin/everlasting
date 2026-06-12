@@ -79,6 +79,10 @@ pub fn run() {
             commands::sessions::diff_worktree,
             commands::sessions::rename_session,
             commands::sessions::set_session_color,
+            // A2 + B7 (Permission system + per-session Mode, 2026-06-13)
+            commands::permissions::set_session_mode,
+            commands::permissions::permission_response,
+            commands::permissions::grant_tool_permission,
             // F5 (LLM Latency Tracking): per-message latency +
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`

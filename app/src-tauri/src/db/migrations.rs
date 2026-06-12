@@ -369,6 +369,77 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // thinking).
  add_messages_column_if_missing(pool, "thinking_ms", "INTEGER").await?;
 
+ // --- A2 + B7 (Permission system + per-session Mode, 2026-06-13).
+ //
+ // Per-session Mode binding (`sessions.mode TEXT`), persistent
+ // 4档 mode: `chat` / `plan` / `review` / `yolo`. Nullable (no
+ // DEFAULT) so pre-A2 sessions keep NULL; the backfill below
+ // writes `'chat'` for any NULL row. Pattern mirrors the
+ // worktree_state / model_id migrations — additive, idempotent.
+ //
+ // Two new tables: `session_tool_permissions` (per-session
+ // "always allow" set, indexed by tool_name + match_kind) and
+ // `session_audit_events` (the audit log; one row per
+ // decision path hit). Both use `ON DELETE CASCADE` so
+ // deleting a session cleans up its permission grants and
+ // audit trail — requires `PRAGMA foreign_keys = ON` which
+ // `init_pool` sets on first connection (see line 46).
+ add_session_column_if_missing(pool, "mode", "TEXT").await?;
+ sqlx::query(
+ r#"
+ UPDATE sessions SET mode = 'chat' WHERE mode IS NULL
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
+ sqlx::query(
+ r#"
+ CREATE TABLE IF NOT EXISTS session_tool_permissions (
+ session_id TEXT NOT NULL,
+ tool_name TEXT NOT NULL,
+ match_kind TEXT NOT NULL CHECK (match_kind IN ('tool','prefix','path')),
+ match_value TEXT,
+ granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+ PRIMARY KEY (session_id, tool_name, match_kind, match_value),
+ FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_session_tool_permissions_session
+ ON session_tool_permissions(session_id, tool_name)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
+ sqlx::query(
+ r#"
+ CREATE TABLE IF NOT EXISTS session_audit_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ session_id TEXT NOT NULL,
+ ts TEXT NOT NULL DEFAULT (datetime('now')),
+ kind TEXT NOT NULL,
+ payload_json TEXT,
+ FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_session_audit_events_session_ts
+ ON session_audit_events(session_id, ts DESC)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

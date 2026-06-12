@@ -202,6 +202,23 @@ pub struct ToolDef {
     pub input_schema: serde_json::Value,
 }
 
+impl ToolDef {
+    /// Test-only constructor: builds a `ToolDef` with a name
+    /// and a default empty `input_schema`. Used by
+    /// `agent::permissions::tests::filter_tools_for_mode_*`
+    /// to construct minimal tool lists without going through
+    /// the real `tools::builtin_tools()` registry (which would
+    /// require `AppState` context).
+    #[cfg(test)]
+    pub fn new_for_test(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: None,
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ThinkingConfig — request-side extended-thinking control
 // ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@
 pub mod chat;
 pub mod context;
 pub mod helpers;
+pub mod permissions;
 pub mod provider;
 pub mod system_prompt;
 pub mod tests;

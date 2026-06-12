@@ -40,8 +40,8 @@ pub async fn create_session(
  r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id, color_tag)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL)
+ worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat')
  "#,
  )
  .bind(session_id)
@@ -72,6 +72,7 @@ pub async fn create_session(
  cache_creation_total: None,
  cache_read_total: None,
  color_tag: None,
+ mode: crate::db::Mode::Chat,
  })
 }
 
@@ -88,7 +89,7 @@ pub async fn list_sessions(
  s.model_id,
  s.input_tokens_total, s.output_tokens_total,
  s.cache_creation_total, s.cache_read_total,
- s.color_tag,
+ s.color_tag, s.mode,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -115,6 +116,7 @@ pub async fn list_sessions(
  };
  let state_str: String = r.try_get("worktree_state")?;
  let color_tag: Option<i32> = r.try_get("color_tag")?;
+ let mode_str: String = r.try_get("mode")?;
  Ok(SessionSummary {
  id: r.try_get("id")?,
  title: r.try_get("title")?,
@@ -131,6 +133,7 @@ pub async fn list_sessions(
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
  color_tag,
+ mode: crate::db::Mode::from_str_opt(&mode_str),
  })
  })
  .collect()
@@ -148,7 +151,7 @@ pub async fn load_session(
  worktree_path, worktree_state, last_worktree_path, model_id,
  input_tokens_total, output_tokens_total,
  cache_creation_total, cache_read_total,
- color_tag
+ color_tag, mode
  FROM sessions
  WHERE id = ?
  "#,
@@ -160,6 +163,7 @@ pub async fn load_session(
  let session = match session_row {
  Some(r) => {
  let state_str: String = r.try_get("worktree_state")?;
+ let mode_str: String = r.try_get("mode")?;
  SessionRow {
  id: r.try_get("id")?,
  title: r.try_get("title")?,
@@ -177,6 +181,7 @@ pub async fn load_session(
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
  color_tag: r.try_get("color_tag")?,
+ mode: crate::db::Mode::from_str_opt(&mode_str),
  }
  }
  None => return Ok(None),

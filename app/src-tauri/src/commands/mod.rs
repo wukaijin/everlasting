@@ -24,6 +24,7 @@
 pub mod cancel;
 pub mod config;
 pub mod memory;
+pub mod permissions;
 pub mod projects;
 pub mod providers;
 pub mod sessions;
@@ -78,5 +79,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         "read_memory_layers",
         "read_memory_content",
         "open_memory_in_editor",
+        // A2 + B7 (Permission system + per-session Mode)
+        "set_session_mode",
+        "permission_response",
+        "grant_tool_permission",
     ]
 }

@@ -58,6 +58,7 @@
 pub mod config;
 pub mod migrations;
 pub mod models;
+pub mod permissions;
 pub mod projects;
 pub mod providers;
 pub mod sessions;
@@ -71,6 +72,7 @@ pub mod types;
 pub use config::*;
 pub use migrations::*;
 pub use models::*;
+pub use permissions::*;
 pub use projects::*;
 pub use providers::*;
 pub use sessions::*;

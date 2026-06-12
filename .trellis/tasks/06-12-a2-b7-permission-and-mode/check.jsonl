@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 ⑨ 关 5 道 check 描述在代码里的 wire format 一致性;Mode 行为 ⑨a 拦截正确性"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 ⑨ 关决策合约(deny > ask > mode > allow 顺序);`execute_tool` 签名变更对齐"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 `SessionSummary.mode` + `usePermissionsStore` + PermissionAsk IPC 协议正确性"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "验证 reka-ui 2.9.9 DialogContent `:deep()` 样式包裹 + primitive 选型合规"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "验证 4 档风险颜色 token 使用正确;modal 尺寸/间距 token 一致"}
+{"file": "docs/ARCHITECTURE.md", "reason": "验证 ⑨ 关 5 道 + ⑧a Mode 拦截 跟 §2.2 / §2.5.8 描述对齐;审计 hook 预留"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/research/permission-modal-ux.md", "reason": "13 条 PermissionModal AC 逐条验证;reka-ui portal gotcha 不踩坑"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/prd.md", "reason": "PRD §Acceptance Criteria(后端 10 + 前端 4 + 持久化 2 + PermissionModal 13)逐条验证"}

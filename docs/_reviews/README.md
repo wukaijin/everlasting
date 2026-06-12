@@ -13,6 +13,7 @@
 
 | 文件 | 类型 | 评审模型 | 评审日期 | 评审范围 |
 |---|---|---|---|---|
+| [`REVIEW-a2-b7-permission-mode-plan-2026-06-13.md`](./REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) | 设计评审 | Reasonix | 2026-06-13 | A2+B7 权限系统 + 多模式计划审查; 发现 ⑨ 关 5 道顺序不一致 (blocker) + Per-Mode Tool List 遗漏 + IPC 异常路径缺失 |
 | [`REVIEW-tool-comparison-2026-06-12.md`](./REVIEW-tool-comparison-2026-06-12.md) | 竞品调研 | — | 2026-06-12 | Tool 横向对比: Everlasting vs Claude Code / Open Code / Codex CLI / Cursor / Cline; 现有 7 tool 差距分析 + 缺失 tool 优先级 |
 | [`REVIEW-sse-agent-loop-2026-06-12.md`](./REVIEW-sse-agent-loop-2026-06-12.md) | 代码审计 | Reasonix | 2026-06-12 | SSE 解析 → Provider → Agent Loop → 前端消费全链路: 稳定性 / 正确性 / 取消安全 / 错误处理 / 并发; 整体 ★★★★½ |
 | [`REVIEW-b5-memory-grill-2026-06-10.md`](./REVIEW-b5-memory-grill-2026-06-10.md) | 设计复审 | Reasonix (grill-me) | 2026-06-10 | B5 Memory 设计: 概念混淆 / 注入频率 & 位置 / 命名策略 / 前端文本对齐; 9 题全决议 |

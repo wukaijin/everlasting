@@ -40,6 +40,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event, persist_turn_cwd, CANCELLED_MARKER,
 };
+use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
 use crate::agent::system_prompt::{build_system_prompt, lookup_head_sha};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
@@ -118,6 +119,7 @@ pub async fn chat(
     let session_active_request = state.session_active_request.clone();
     let read_guard = state.read_guard.clone();
     let memory_cache = state.memory_cache.clone();
+    let permission_asks = state.permission_asks.clone();
     let rid = request_id;
     let app_handle = app.clone();
 
@@ -332,6 +334,18 @@ pub async fn chat(
         // The final cwd value to persist at the end of the turn.
         let mut last_cwd: Option<PathBuf> = None;
 
+        // A2 + B7 (2026-06-13): capture the session's mode for the
+        // ⑨ 关 permission context + ⑧a Mode check (system prompt
+        // prefix + tool list filter + runtime intercept). Read
+        // once here, used in every turn's `provider.send(...)`
+        // call below.
+        let session_mode = loaded_session.session.mode;
+        let permission_ctx = PermissionContext {
+            session_id: session_id.clone(),
+            mode: session_mode,
+        };
+        let mode_prefix = permissions::mode_system_prefix(session_mode);
+
         // Step 4 follow-up Bug 3: build the LLM system prompt
         // **once** per chat invocation. The prompt describes the
         // session's working directory, worktree state, branch +
@@ -344,6 +358,11 @@ pub async fn chat(
             &worktree_path,
             &head_sha,
         );
+
+        // A2 + B7 ⑧a (layer 1/3): prepend the mode prefix to the
+        // system prompt. Layer 2 (tool list filter) and layer 3
+        // (runtime intercept in `permissions::check`) follow below.
+        let system_prompt = format!("{}\n\n{}", mode_prefix, base_prompt);
 
         // B5 Memory (V2 1 期, 2026-06-10, refactored 2026-06-11):
         // the 4 instruction files (User / Project × CLAUDE.md /
@@ -394,13 +413,15 @@ pub async fn chat(
         }
 
         // The system_prompt is now just the worktree-anchored
-        // base_prompt. Memory content has been moved into the
-        // synthetic user message above; sending it again in
-        // `system` would be redundant and would defeat the
-        // cache-control design (system content has no
-        // per-block cache_control — only the message-array
-        // content does).
-        let system_prompt = base_prompt;
+        // The `system_prompt` was already constructed above (with the
+        // mode prefix prepended for A2 + B7 ⑧a layer 1/3). Memory
+        // content has been moved into the synthetic user message
+        // above; sending it again in `system` would be redundant
+        // and would defeat the cache-control design (system
+        // content has no per-block cache_control — only the
+        // message-array content does). No-op rebind suppressed;
+        // `system_prompt` is consumed by `provider.send(...)` below.
+        let _ = &base_prompt;
 
         // Persist the most recent user-typed message before the
         // agent loop runs. Without this, the user message only
@@ -487,10 +508,18 @@ pub async fn chat(
             // (above), so every turn of the 20-turn agent loop
             // uses the same `Arc<dyn Provider>` — no per-turn
             // protocol re-resolution.
+            // A2 + B7 ⑧a (layer 2/3): filter the tool list by mode per
+            // turn. Plan/Review drop write tools so the LLM never
+            // attempts them (saves a turn + matches Claude Code's
+            // standard). Chat/Yolo keep the full set. Layer 3
+            // (runtime intercept) lives in `permissions::check`
+            // which guards `execute_tool` below.
+            let turn_tool_defs =
+                permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
             let mut stream = provider.send(
                 Some(system_prompt.clone()),
                 messages.clone(),
-                tool_defs.clone(),
+                turn_tool_defs,
             );
             // Stamped right after `provider.send` returns; treated as
             // the "turn start" baseline for the 4 derived ms values
@@ -968,6 +997,63 @@ pub async fn chat(
             // Execute tools and build tool_result message.
             let mut result_blocks: Vec<ContentBlock> = Vec::new();
             for (id, name, input) in &tool_calls {
+                // A2 + B7 ⑨ 关 dispatch: run the 5-tier permission
+                // check before any tool execution. `check()` returns
+                // a final `Decision` (Allow / Deny). The Ask tier is
+                // resolved internally (oneshot + 120s timeout); the
+                // agent loop sees only the final verdict here.
+                //
+                // Tier 2 (hard kill list) and Tier 4 (Mode block)
+                // hit silently — the LLM gets a `tool_result` with
+                // `is_error: true` and the reason string, then the
+                // agent loop continues. This is the documented
+                // contract per audit §1 ("Deny 优先于 Mode /
+                // Yolo") and PRD AC §后端.
+                let decision = permissions::check(
+                    &permission_ctx,
+                    &permission_asks,
+                    &db,
+                    &app_handle,
+                    name,
+                    input,
+                    &token,
+                )
+                .await;
+                if let Decision::Deny { reason, critical: _ } = decision {
+                    tracing::info!(
+                        session_id = %session_id,
+                        tool = %name,
+                        reason = %reason,
+                        "chat: tool denied by ⑨ 关"
+                    );
+                    // Emit `tool:result` with `is_error: true` so
+                    // the UI shows the denial + reason. The
+                    // envelope shape is preserved (matches the
+                    // success path's wire contract).
+                    let envelope = crate::agent::helpers::tool_result_envelope(
+                        &reason,
+                        &current_ctx.worktree_path,
+                    );
+                    let _ = app_handle.emit(
+                        "tool:result",
+                        crate::state::ToolResultPayload {
+                            request_id: rid.clone(),
+                            tool_use_id: id.clone(),
+                            content: envelope.clone(),
+                            is_error: true,
+                        },
+                    );
+                    result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: envelope,
+                        is_error: true,
+                    });
+                    // Skip this tool; continue with the next one
+                    // in the batch (multi-tool_use is serial per
+                    // the MVP, see PRD "Multi-tool_use 批处理").
+                    continue;
+                }
+
                 let (content, is_error, update) = crate::tools::execute_tool(
                     name,
                     input,

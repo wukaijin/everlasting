@@ -158,6 +158,65 @@ impl WorktreeState {
  }
 }
 
+// ---------------------------------------------------------------------------
+// A2 + B7: per-session Mode (2026-06-13)
+//
+// Each session carries a `mode` (one of `chat` / `plan` / `review` /
+// `yolo`) that drives both the agent loop's ⑨ 关 permission policy
+// and the ⑧a Mode check (tool list filtering + system prompt prefix
+// + runtime intercept). Background is reserved in the enum so a
+// future PR can add it without a schema change; the MVP UI does
+// not expose it.
+//
+// `from_str_opt` follows the same lenient-parse pattern as
+// `WorktreeState`: unknown / empty DB strings fall back to `Chat`
+// (the safest default — it grants the most permissive policy). The
+// `Serialize` form is the lowercase string (matches the DB column).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+ Chat,
+ Plan,
+ Review,
+ Yolo,
+ /// Reserved for a future PR (per BACKLOG §4.2). MVP UI does
+ /// not expose this; the enum position keeps the schema stable
+ /// if Background is ever promoted.
+ #[allow(dead_code)]
+ Background,
+}
+
+impl Mode {
+ pub fn as_str(&self) -> &'static str {
+ match self {
+ Mode::Chat => "chat",
+ Mode::Plan => "plan",
+ Mode::Review => "review",
+ Mode::Yolo => "yolo",
+ Mode::Background => "background",
+ }
+ }
+
+ /// Lenient parse: unknown / empty strings fall back to `Chat`
+ /// (the safest default — it grants the most permissive policy
+ /// and matches the migration backfill).
+ pub fn from_str_opt(s: &str) -> Self {
+ match s {
+ "plan" => Mode::Plan,
+ "review" => Mode::Review,
+ "yolo" => Mode::Yolo,
+ "background" => Mode::Background,
+ _ => Mode::Chat,
+ }
+ }
+}
+
+// ---------------------------------------------------------------------------
+// Row types (Serialize for Tauri IPC payload)
+// ---------------------------------------------------------------------------
+
 /// A session as stored in the DB.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionRow {
@@ -178,6 +237,12 @@ pub struct SessionRow {
  pub cache_read_total: Option<i64>,
  /// D1 (Color Tag): palette index 0-7, NULL = no mark.
  pub color_tag: Option<i32>,
+ /// A2 + B7 (Permission system + per-session Mode, 2026-06-13):
+ /// the session's current mode. Defaults to `Chat` for legacy
+ /// sessions via the migration backfill (see
+ /// `db::migrations::run_migrations`). Persisted on every
+ /// `set_session_mode` IPC call.
+ pub mode: Mode,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -200,6 +265,10 @@ pub struct SessionSummary {
  pub cache_read_total: Option<i64>,
  /// D1 (Color Tag): palette index 0-7, NULL = no mark.
  pub color_tag: Option<i32>,
+ /// A2 + B7: per-session Mode (see `SessionRow::mode`). The
+ /// sidebar uses this for the mode badge / chip without a
+ /// per-session IPC round-trip.
+ pub mode: Mode,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

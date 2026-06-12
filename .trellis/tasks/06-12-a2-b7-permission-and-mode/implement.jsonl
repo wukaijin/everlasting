@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Mode 行为 + ⑨ 关 5 道 check 描述;agent loop wire format 变更要在本文档同步"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "⑨ 关 5 道决策合约(白名单/schema/路径/deny/ask 顺序);`execute_tool` 签名变更要在本文档同步"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "`SessionSummary.mode` 字段 + `usePermissionsStore` + PermissionAsk IPC wire;stream controller 模式参考"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "`ModeSelect.vue` 案例参考(沿用 `ModelSelect.vue` 模式);modal 150ms fade+scale 动画参考"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui 2.9.9 `<DialogContent>` portal `:deep()` gotcha;primitive 选型"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "modal 颜色 / 字体 / 圆角 / 间距 token;风险等级 4 档颜色 token"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "boundary check 集成(⑨ 关第 3 道 check 直接复用 `assert_within_root`)"}
+{"file": "docs/ARCHITECTURE.md", "reason": "⑨ 关 5 道 check 设计 + 16 关卡全图(⑨ 关 + ⑧a Mode 拦截);§2.5.8 审计日志要同步"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/research/agent-permission-best-practice.md", "reason": "Claude Code / OpenHands / Aider / Cursor / Continue.dev 横向对比 + ⑨ 关 5-check 顺序论证"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/research/mode-state-machine.md", "reason": "Per-session 绑定 + ⑧a runtime intercept + ChatInput quick switcher"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/research/yolo-safety-design.md", "reason": "4 件套论证 + 两键 modal UX + 拒 root 实现"}
+{"file": ".trellis/tasks/06-12-a2-b7-permission-and-mode/research/permission-modal-ux.md", "reason": "PermissionModal 完整 spec(13 条 AC);reka-ui 2.9.9 portal gotcha 警告"}
