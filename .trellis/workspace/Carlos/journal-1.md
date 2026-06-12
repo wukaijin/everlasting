@@ -685,3 +685,36 @@ F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: C3 Context 压缩 + Token 预算管理 (P2)
+
+**Date**: 2026-06-12
+**Task**: C3 Context 压缩 + Token 预算管理 (P2)
+**Branch**: `main`
+
+### Summary
+
+实现 ARCHITECTURE §2.5.5 ⑤ Context 超限降级 MVP。新增 agent/context.rs（裁剪算法 + 14 单元测试），agent loop 每次 send 前估算 token，达到 context_window * 0.80 触发裁剪降到 0.50。保护优先级：B5 synthetic memory + 当前 user + Thinking blocks 永不裁剪；tool_use ↔ tool_result 成对原子丢。MAX_TURNS 20→50 兜底。ResolvedChatProviderWrapper 新增 context_window 字段从 ModelRow 流入。llm-contract.md 新增 pair atomicity gotcha。trellis-check 找到 1 个 blocker（pair 跨 protected tail 边界拆分）已修。371/371 lib 测试全绿。PR2 前端 UI 标记留后续。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e7f948` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
