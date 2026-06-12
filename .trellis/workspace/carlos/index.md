@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
-- **Last Active**: 2026-06-11
+- **Total Sessions**: 22
+- **Last Active**: 2026-06-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~936 | Active |
+| `journal-1.md` | ~1145 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-06-12 | Session 24: P0 tool enhancement (read_file offset/limit + shell timeout) | `eb4600d`, `fba579e` | `main` |
 | 21 | 2026-06-11 | Memory 入口重构:ProjectTabs popover → ChatPanel header Brain + reka-ui modal | `41ed943` | `main` |
 | 20 | 2026-06-09 | PR4 multi-model UI: Settings modal + StatusBar dropdown + store 重构 | `cb00812` | `06-08-multi-model-llm-provider-planning-pr1-data-layer` |
 | 19 | 2026-06-09 | Multi-model PR1: data layer (3 tables + 10 IPC + seed) | `f9c5648` | `06-08-multi-model-llm-provider-planning-pr1-data-layer` |

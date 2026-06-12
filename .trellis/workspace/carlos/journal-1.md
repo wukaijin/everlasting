@@ -1109,3 +1109,37 @@ PRD 写"估 30-50 行改动"是低估,实际 80-100 行(后端 +30 / 前端 +60)
 - 累计 popover(`累计 1.2s · 轮次 3 · 平均 0.4s`)应自动 work(per-turn `accumulateLatency` 已对接)
 - reload session 应保留所有 3 turn 的 thinkingMs(per-turn IPC + DB 4 列 + rehydrate)
 - 后续 session 考虑切到 journal-2.md(1068 → 1116 行,仍 < 2000)
+
+
+## Session 22: Session 24: P0 tool enhancement (read_file offset/limit + shell timeout)
+
+**Date**: 2026-06-12
+**Task**: Session 24: P0 tool enhancement (read_file offset/limit + shell timeout)
+**Branch**: `main`
+
+### Summary
+
+竞品调研 → ROADMAP 更新 → P0 实施: read_file 加 offset/limit 参数(行号从 offset 开始), shell 加 timeout 参数(默认 120s, 最大 600s). 13 个新测试, 332 全量通过.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eb4600d` | (see git log) |
+| `fba579e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
