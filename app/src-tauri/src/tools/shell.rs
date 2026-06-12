@@ -31,6 +31,13 @@
 //!   truncation unchanged (the 30K threshold is the claude-code
 //!   "spill to disk" trigger; the 50K is the step 2 "still inline but
 //!   head+tail" trigger — both apply in order).
+//!
+//! P0 enhancement (2026-06-12):
+//! - `timeout` parameter (int, ms, default 120000, max 600000) lets
+//!   the LLM set a per-command execution deadline. On timeout, the
+//!   child is killed and partial output is returned with a timeout
+//!   marker. This complements C1 CancellationToken (user cancel):
+//!   timeout is automatic, cancel is manual.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -54,6 +61,10 @@ const DISK_SPILL_THRESHOLD: usize = 30 * 1024;
 const PREVIEW_BYTES: usize = 1 * 1024;
 /// Sub-directory under cwd where spilled outputs are written.
 const SPILL_DIR: &str = ".everlasting/outputs";
+/// Default command timeout in milliseconds (2 minutes).
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// Maximum allowed timeout in milliseconds (10 minutes).
+const MAX_TIMEOUT_MS: u64 = 600_000;
 
 /// Internal result from child process execution.
 struct ShellResult {
@@ -61,6 +72,7 @@ struct ShellResult {
     stderr: Vec<u8>,
     exit_code: i32,
     cancelled: bool,
+    timed_out: bool,
 }
 
 /// Kill a child process and collect whatever output was produced.
@@ -82,6 +94,7 @@ async fn kill_and_collect(child: &mut Child) -> ShellResult {
         stderr,
         exit_code: status.and_then(|s| s.code()).unwrap_or(-1),
         cancelled: true,
+        timed_out: false,
     }
 }
 
@@ -111,6 +124,9 @@ pub fn definition() -> ToolDef {
              Optional `working_directory`: an absolute path inside the active project. \
              If omitted, the command runs in the session's current working directory \
              (which itself is inside the project root).\n\n\
+             Optional `timeout`: maximum execution time in milliseconds. Default: 120000 (2 min). \
+             Maximum: 600000 (10 min). On timeout the command is killed and partial output \
+             is returned with a `[timeout after Nms]` marker.\n\n\
              Outputs over 30 KB are saved to `<cwd>/.everlasting/outputs/<id>.txt`; \
              the tool returns the path plus a short preview so you can read the \
              full file with read_file."
@@ -128,6 +144,11 @@ pub fn definition() -> ToolDef {
                     "description": "Optional. Absolute path to use as the command's working directory. \
                                     Must be inside the active project root; if it is not, \
                                     the tool returns an error."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Optional. Maximum execution time in milliseconds. Default: 120000 (2 min). Max: 600000 (10 min). \
+                                    On timeout the command is killed and partial output is returned."
                 }
             },
             "required": ["command"]
@@ -187,7 +208,19 @@ pub async fn execute(
         }
     };
 
-    // 2. Spawn the command. We use `sh -c` so the LLM can chain
+    // 2. Parse timeout parameter. Default 120s, max 600s. Zero or
+    //    negative values use the default.
+    let raw_timeout = input
+        .get("timeout")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_TIMEOUT_MS as i64);
+    let timeout_ms = if raw_timeout <= 0 {
+        DEFAULT_TIMEOUT_MS
+    } else {
+        (raw_timeout as u64).min(MAX_TIMEOUT_MS)
+    };
+
+    // 3. Spawn the command. We use `sh -c` so the LLM can chain
     //    commands (`cmd1 && cmd2`, pipes, redirects). stdout AND
     //    stderr are captured so we can format the result.
     let mut cmd = Command::new("sh");
@@ -212,14 +245,21 @@ pub async fn execute(
         new_cwd: Some(validated_cwd.clone()),
     };
 
-    // 3. C1: race between child completion and cancellation.
-    //    On cancel, kill the child and collect whatever output
-    //    was produced so far.
+    // 4. C1 + timeout: race between child completion, cancellation,
+    //    and timeout. On cancel/timeout, kill the child and collect
+    //    whatever output was produced so far.
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
             tracing::info!("shell: cancellation requested, killing child process");
             kill_and_collect(&mut child).await
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
+            tracing::info!("shell: timeout after {}ms, killing child process", timeout_ms);
+            let mut r = kill_and_collect(&mut child).await;
+            r.timed_out = true;
+            r.cancelled = false; // timeout, not cancel
+            r
         }
         status = child.wait() => {
             match status {
@@ -238,6 +278,7 @@ pub async fn execute(
                         stderr,
                         exit_code: status.code().unwrap_or(-1),
                         cancelled: false,
+                        timed_out: false,
                     }
                 }
                 Err(e) => {
@@ -251,7 +292,7 @@ pub async fn execute(
         }
     };
 
-    // 4. Format output.
+    // 5. Format output.
     let mut combined = format_output(&result.stdout, &result.stderr);
 
     let exit_code = result.exit_code;
@@ -261,16 +302,21 @@ pub async fn execute(
         combined = format!("[exit code: {}]", exit_code);
     }
 
-    let is_error = !result.cancelled && exit_code != 0;
+    let is_error = result.cancelled || result.timed_out || exit_code != 0;
 
-    // 5. If cancelled, prepend marker so the LLM (and user) sees the
-    //    output was partial.
+    // 6. If cancelled, prepend marker.
     if result.cancelled {
         combined = format!("[cancelled, partial output]\n{}", combined);
         return (combined, true, update);
     }
 
-    // 6. Disk-spill: if output exceeds 30 KB, write the FULL output
+    // 7. If timed out, prepend marker with the timeout duration.
+    if result.timed_out {
+        combined = format!("[timeout after {}ms, partial output]\n{}", timeout_ms, combined);
+        return (combined, true, update);
+    }
+
+    // 8. Disk-spill: if output exceeds 30 KB, write the FULL output
     //    to a file under `<validated_cwd>/.everlasting/outputs/` and
     //    return a path + preview to the LLM.
     if combined.len() > DISK_SPILL_THRESHOLD {
@@ -297,7 +343,7 @@ pub async fn execute(
         }
     }
 
-    // 7. Inline path: apply the 50 KB head+tail truncation.
+    // 9. Inline path: apply the 50 KB head+tail truncation.
     (truncate_output(combined), is_error, update)
 }
 
@@ -746,5 +792,137 @@ mod tests {
     #[allow(dead_code)]
     fn _unused() -> tempfile::TempDir {
         tempdir().unwrap()
+    }
+
+    // --- P0: timeout tests ---
+
+    /// Shell with short timeout kills a long-running command.
+    #[tokio::test]
+    async fn timeout_kills_long_command() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let token = fresh_token();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({
+                "command": "sleep 60",
+                "timeout": 500
+            }),
+            &ctx,
+            None,
+            &token,
+        )
+        .await;
+        assert!(is_error);
+        assert!(
+            content.contains("[timeout after 500ms"),
+            "expected timeout marker, got: {}",
+            content
+        );
+        assert!(
+            content.contains("partial output"),
+            "expected partial output marker, got: {}",
+            content
+        );
+    }
+
+    /// Shell without timeout uses the default (120s). A fast command
+    /// completes normally.
+    #[tokio::test]
+    async fn no_timeout_uses_default() {
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({"command": "echo hello"}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("hello"));
+        assert!(!content.contains("timeout"), "should not have timeout marker");
+    }
+
+    /// timeout=0 is treated as default (120s). Fast command completes.
+    #[tokio::test]
+    async fn timeout_zero_treated_as_default() {
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({
+                "command": "echo ok",
+                "timeout": 0
+            }),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("ok"));
+    }
+
+    /// timeout=-1 is treated as default. Fast command completes.
+    #[tokio::test]
+    async fn timeout_negative_treated_as_default() {
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({
+                "command": "echo ok",
+                "timeout": -1
+            }),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("ok"));
+    }
+
+    /// timeout exceeding max is clamped. A fast command still completes.
+    #[tokio::test]
+    async fn timeout_exceeds_max_clamped() {
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _) = execute(
+            &serde_json::json!({
+                "command": "echo clamped",
+                "timeout": 999999999
+            }),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("clamped"));
+    }
+
+    /// Timeout and cancel are distinct: timeout fires first, no cancel
+    /// marker.
+    #[tokio::test]
+    async fn timeout_fires_before_cancel() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let token = fresh_token();
+        // Use a short timeout. Don't cancel — let timeout fire.
+        let (content, is_error, _) = execute(
+            &serde_json::json!({
+                "command": "sleep 10",
+                "timeout": 300
+            }),
+            &ctx,
+            None,
+            &token,
+        )
+        .await;
+        assert!(is_error);
+        assert!(
+            content.contains("[timeout after 300ms"),
+            "expected timeout marker, got: {}",
+            content
+        );
+        assert!(
+            !content.contains("[cancelled"),
+            "should not have cancel marker when timeout fires"
+        );
     }
 }

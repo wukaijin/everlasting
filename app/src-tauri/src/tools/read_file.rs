@@ -20,6 +20,15 @@
 //!   hasn't drifted on disk. The guard is `Option` so existing
 //!   callers (and unit tests that don't care) can pass `None` and
 //!   the read still works.
+//!
+//! P0 enhancement (2026-06-12):
+//! - `offset` (1-indexed, default 1) and `limit` (default 2000) let
+//!   the LLM read a specific line range from a large file instead of
+//!   getting the full 50KB head+tail truncation.
+//! - Line numbers in the output start from `offset` (not 1), so the
+//!   LLM can reference the real file line numbers in `edit_file`.
+//! - The ReadGuard fingerprint still covers the full file (offset/
+//!   limit only affect the output slice, not the guard).
 
 use std::path::Path;
 
@@ -47,7 +56,11 @@ pub fn definition() -> ToolDef {
              the session's current working directory) or absolute. In either case \
              the resolved file must be inside the active project root.\n\n\
              Output is prefixed with line numbers in `cat -n` format (tab-separated, \
-             1-based) to help you reference specific lines in `edit_file`."
+             1-based) to help you reference specific lines in `edit_file`.\n\n\
+             For large files, use `offset` and `limit` to read a specific line range \
+             instead of getting the full 50KB head+tail truncation. `offset` is \
+             1-indexed (the first line is line 1). Line numbers in the output reflect \
+             the real file line numbers, not relative to offset."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -56,6 +69,14 @@ pub fn definition() -> ToolDef {
                 "path": {
                     "type": "string",
                     "description": "Absolute or relative (to the session cwd) path of the file to read."
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Starting line number (1-indexed). Default: 1 (read from the beginning)."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return. Default: 2000."
                 }
             },
             "required": ["path"]
@@ -106,6 +127,16 @@ pub async fn execute(
         }
     };
 
+    // 3. Parse offset and limit parameters.
+    let offset = input
+        .get("offset")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2000) as usize;
+
     match tokio::fs::read_to_string(&validated).await {
         Ok(content) => {
             // Record the read in the guard so edit_file can verify
@@ -116,7 +147,7 @@ pub async fn execute(
             if let (Some(g), Some(sid)) = (guard, session_id) {
                 g.record_read(sid, &validated).await;
             }
-            (truncate_output(content), false)
+            (truncate_output(content, offset, limit), false)
         }
         Err(e) => (
             format!("Failed to read file '{}': {}", validated.display(), e),
@@ -125,18 +156,67 @@ pub async fn execute(
     }
 }
 
-/// Truncate output exceeding MAX_OUTPUT_BYTES (head + tail, omit middle),
-/// then prefix every line with its 1-based line number (`cat -n` style).
+/// Apply offset/limit slicing, then add line numbers, then apply
+/// head+tail truncation if the sliced content exceeds MAX_OUTPUT_BYTES.
 ///
-/// Truncation runs **first** so the byte budget measures the raw file
-/// (consistent with the step 2 contract), and the line numbers are
-/// computed on the truncated text. For a 60 KB file, the user gets
-/// the first 25 KB of line-numbered text, a truncation marker, and
-/// the last 25 KB of line-numbered text — the middle's line numbers
-/// are not echoed (the marker carries the missing byte count instead).
-fn truncate_output(content: String) -> String {
+/// Processing order:
+/// 1. Split content into lines
+/// 2. Slice by offset (1-indexed) and limit
+/// 3. Add line numbers starting from `offset`
+/// 4. Truncate if the line-numbered output exceeds MAX_OUTPUT_BYTES
+fn truncate_output(content: String, offset: usize, limit: usize) -> String {
+    // If offset is 1 and limit >= total lines, this is a full read —
+    // use the original fast path.
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    // offset is 1-indexed; convert to 0-indexed start.
+    let start = if offset == 0 {
+        0 // offset=0 treated as 1 (defensive)
+    } else {
+        offset.saturating_sub(1)
+    };
+
+    // If start is beyond the file, return empty.
+    if start >= total_lines {
+        return String::new();
+    }
+
+    let end = (start + limit).min(total_lines);
+    let sliced_lines = &lines[start..end];
+
+    // If reading the full file with default params (offset=1, limit=2000
+    // and file <= 2000 lines), use the original truncation path.
+    if start == 0 && end == total_lines {
+        return truncate_full_output(&content);
+    }
+
+    // Join sliced lines, add line numbers from `offset`, then truncate.
+    let sliced_text: String = sliced_lines.join("\n");
+    let numbered = add_line_numbers_with_offset(&sliced_text, offset.max(1));
+
+    // Truncate if the numbered output exceeds MAX_OUTPUT_BYTES.
+    if numbered.len() <= MAX_OUTPUT_BYTES {
+        return numbered;
+    }
+
+    // Head+tail truncation on the line-numbered output.
+    let head_end = TRUNCATE_HEAD;
+    let tail_start = numbered.len().saturating_sub(TRUNCATE_HEAD);
+    let omitted = numbered.len() - MAX_OUTPUT_BYTES;
+    format!(
+        "{}\n<truncated: omitted {} bytes>\n{}",
+        &numbered[..head_end],
+        omitted,
+        &numbered[tail_start..]
+    )
+}
+
+/// Full-file truncation path (no offset/limit). Kept for backward
+/// compatibility when reading the entire file.
+fn truncate_full_output(content: &str) -> String {
     if content.len() <= MAX_OUTPUT_BYTES {
-        return add_line_numbers(&content);
+        return add_line_numbers(content);
     }
     let head_end = TRUNCATE_HEAD;
     let tail_start = content.len() - TRUNCATE_HEAD;
@@ -149,18 +229,21 @@ fn truncate_output(content: String) -> String {
     )
 }
 
-/// Add `cat -n` style line numbers to `text`. Each output line is
-/// `<tab><line_num><tab><text>`. Lines are split on `\n`; an empty
-/// trailing string (text ending in `\n`) does not produce a phantom
-/// line number, matching `cat -n`.
+/// Add `cat -n` style line numbers to `text`, starting from line 1.
 fn add_line_numbers(text: &str) -> String {
+    add_line_numbers_with_offset(text, 1)
+}
+
+/// Add `cat -n` style line numbers to `text`, starting from
+/// `start_line`. Each output line is `<tab><line_num><tab><text>`.
+fn add_line_numbers_with_offset(text: &str, start_line: usize) -> String {
     let mut out = String::with_capacity(text.len() + text.lines().count() * 8);
     for (i, line) in text.lines().enumerate() {
         if i > 0 {
             out.push('\n');
         }
         out.push('\t');
-        out.push_str(&(i + 1).to_string());
+        out.push_str(&(start_line + i).to_string());
         out.push('\t');
         out.push_str(line);
     }
@@ -368,5 +451,144 @@ mod tests {
     fn add_line_numbers_single_line() {
         let out = add_line_numbers("hello");
         assert_eq!(out, "\t1\thello");
+    }
+
+    // --- P0: offset + limit tests ---
+
+    /// offset=3, limit=2 on a 5-line file → lines 3-4 only, numbered 3,4.
+    #[tokio::test]
+    async fn offset_limit_reads_correct_range() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "line1\nline2\nline3\nline4\nline5\n").unwrap();
+        let (content, is_error) = execute(
+            &serde_json::json!({
+                "path": tmp.path().join("a.txt").to_string_lossy(),
+                "offset": 3,
+                "limit": 2
+            }),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("\t3\tline3"), "got: {:?}", content);
+        assert!(content.contains("\t4\tline4"), "got: {:?}", content);
+        assert!(!content.contains("line1"), "should not contain line1");
+        assert!(!content.contains("line2"), "should not contain line2");
+        assert!(!content.contains("line5"), "should not contain line5");
+    }
+
+    /// offset beyond file length → empty output (is_error: false).
+    #[tokio::test]
+    async fn offset_beyond_file_returns_empty() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "only one line\n").unwrap();
+        let (content, is_error) = execute(
+            &serde_json::json!({
+                "path": tmp.path().join("a.txt").to_string_lossy(),
+                "offset": 100,
+                "limit": 10
+            }),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.is_empty(), "expected empty, got: {:?}", content);
+    }
+
+    /// limit extends past file end → returns up to EOF.
+    #[tokio::test]
+    async fn limit_beyond_eof_returns_to_end() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "a\nb\nc\n").unwrap();
+        let (content, is_error) = execute(
+            &serde_json::json!({
+                "path": tmp.path().join("a.txt").to_string_lossy(),
+                "offset": 2,
+                "limit": 9999
+            }),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("\t2\tb"), "got: {:?}", content);
+        assert!(content.contains("\t3\tc"), "got: {:?}", content);
+        assert!(!content.contains("\t1\ta"), "should not contain line 1");
+    }
+
+    /// No offset/limit → full file read, backward compatible.
+    #[tokio::test]
+    async fn no_offset_limit_reads_full_file() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "x\ny\nz\n").unwrap();
+        let (content, is_error) = execute(
+            &serde_json::json!({"path": tmp.path().join("a.txt").to_string_lossy()}),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("\t1\tx"));
+        assert!(content.contains("\t2\ty"));
+        assert!(content.contains("\t3\tz"));
+    }
+
+    /// ReadGuard fingerprint covers the full file even with offset/limit.
+    #[tokio::test]
+    async fn read_guard_covers_full_file_with_offset() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("a.txt");
+        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let guard = ReadGuard::new();
+
+        // Read with offset=2 — only get line2 and line3.
+        let (content, is_error) = execute(
+            &serde_json::json!({
+                "path": path.to_string_lossy(),
+                "offset": 2,
+                "limit": 2
+            }),
+            &test_ctx(&tmp),
+            Some(&guard),
+            Some("s1"),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        // Guard should still recognize the file (fingerprint from full read).
+        guard.verify_read("s1", &path).await.unwrap();
+    }
+
+    /// add_line_numbers_with_offset starts numbering from the given offset.
+    #[test]
+    fn add_line_numbers_with_offset_works() {
+        let out = add_line_numbers_with_offset("alpha\nbeta", 10);
+        assert_eq!(out, "\t10\talpha\n\t11\tbeta");
+    }
+
+    /// offset=0 is treated as offset=1 (defensive).
+    #[tokio::test]
+    async fn offset_zero_treated_as_one() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "first\nsecond\n").unwrap();
+        let (content, is_error) = execute(
+            &serde_json::json!({
+                "path": tmp.path().join("a.txt").to_string_lossy(),
+                "offset": 0,
+                "limit": 1
+            }),
+            &test_ctx(&tmp),
+            None,
+            None,
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        assert!(content.contains("\t1\tfirst"), "got: {:?}", content);
+        assert!(!content.contains("second"), "limit=1 should only return 1 line");
     }
 }

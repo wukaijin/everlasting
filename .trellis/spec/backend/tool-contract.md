@@ -96,6 +96,21 @@ impl ReadGuard {
  `<path>` + a1 KiB head+tail preview. The spill directory is **pruned on
  `delete_session`** (best-effort, never blocks the delete).
 
+#### P0 enhancement (2026-06-12): read_file offset/limit + shell timeout
+
+- `read_file` gains `offset` (int, 1-indexed, default 1) and `limit` (int, default 2000)
+  parameters. When provided, only lines `[offset, offset+limit)` are returned. Line
+  numbers in the output start from `offset` (not 1), so the LLM can reference real file
+  line numbers in `edit_file`. The ReadGuard fingerprint still covers the full file
+  (offset/limit only affect the output slice). `offset=0` is treated as 1 (defensive).
+  `offset` beyond EOF returns empty output (is_error: false).
+- `shell` gains `timeout` (int, milliseconds, default 120000, max 600000). On timeout,
+  the child process is killed, partial output is returned with a `[timeout after Nms,
+  partial output]` marker, and is_error: true. `timeout <= 0` uses the default (120s).
+  `timeout > 600000` is clamped to 600000. Timeout is distinct from C1 CancellationToken
+  cancel: timeout is automatic (time-based), cancel is manual (user-triggered). Both
+  kill the child and return partial output, but with different markers.
+
 ###3. Contracts
 
 #### Request
@@ -148,6 +163,12 @@ session_id)` into every `execute_tool` call.
 | `delete_session` for a session whose cwd is gone | — | Cleanup is best-effort, no cascade. User's delete intent wins. |
 | `ReadGuard.clear_session` on a missing session | — | Silent no-op (HashMap::remove returns None) |
 | `read_file` of binary file | `read_file` | `read_to_string` fails → is_error: true, "Failed to read file" (existing behavior, unchanged) |
+| `offset` beyond file length | `read_file` | Empty output (is_error: false) |
+| `offset=0` | `read_file` | Treated as offset=1 (defensive, reads from start) |
+| `limit` extends past EOF | `read_file` | Returns up to EOF, no error |
+| `timeout` expires during execution | `shell` | Child killed, partial output + `[timeout after Nms, partial output]` (is_error: true) |
+| `timeout <= 0` | `shell` | Uses default 120000ms |
+| `timeout > 600000` | `shell` | Clamped to 600000ms |
 
 ###5. Good / Base / Bad Cases
 
