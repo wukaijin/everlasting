@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check 阶段验证改动是否对齐 tool contract（schema、错误消息、测试列表）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证超时错误消息符合错误处理规范"}

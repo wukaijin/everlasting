@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Tool 定义 + ReadGuard + Bash spillover 的完整 contract，read_file/shell 改动必须对齐此 spec"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "path 校验 boundary 合约，read_file offset/limit 不影响但需确认不冲突"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误处理规范，shell timeout 超时的错误消息需对齐"}
+{"file": "docs/_reviews/REVIEW-tool-comparison-2026-06-12.md", "reason": "竞品调研报告，各家 offset/limit/timeout 参数设计的对照参考"}
