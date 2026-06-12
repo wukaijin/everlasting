@@ -32,26 +32,27 @@
 
 ### 1.2 路线图外完成
 
-- ✅ Anthropic extended thinking 块展示 + 持久化
-- ✅ spike-005 follow-up 7 PR(UI 紧凑 header / git_branch 显示 / 启动 batch backfill / pwd `~/` 简化 / write_file tracing / LLM cancel 机制 / markdown 渲染)
-- ✅ 字体栈调整(HarmonyOS Sans SC 子集打包)
-- ✅ 6 UI/状态 bug 修复(streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限 + minimize icon + 顶栏 padding)
-- ✅ 工具集扩展批次(`edit_file` / `grep` / `glob` / `list_dir` + ReadGuard + Bash 落盘 + cat -n 行号)
-- ✅ provider catalog hot-reload + display_name optional + session model_id binding(2026-06-10)
-- ✅ 体验优化批次 F1-F4(per-project session 记忆 / 发送后全程跟底滚动 / 通用 ConfirmDialog + 删除确认 / session 切换 loading + 修双 IPC + 修 reloadAfterFinalize 抖动,2026-06-11,F5 耗时统计延后单独实施)
+| 功能 | 日期 | 备注 |
+|------|------|------|
+| Anthropic extended thinking 块展示 + 持久化 | — | |
+| spike-005 follow-up 7 PR | — | UI 紧凑 header / git_branch 显示 / 启动 batch backfill / pwd `~/` 简化 / write_file tracing / LLM cancel 机制 / markdown 渲染 |
+| 字体栈调整(HarmonyOS Sans SC 子集打包) | — | |
+| 6 UI/状态 bug 修复 | — | streamController 架构 + 顶栏窗口控制 + Markdown 表格 + Tauri 2 权限 + minimize icon + 顶栏 padding |
+| 工具集扩展批次 | — | `edit_file` / `grep` / `glob` / `list_dir` + ReadGuard + Bash 落盘 + cat -n 行号 |
+| provider catalog hot-reload + display_name optional + session model_id binding | 06-10 | |
+| 体验优化批次 F1-F4 | 06-11 | per-project session 记忆 / 全程跟底滚动 / ConfirmDialog + 删除确认 / session 切换 loading + 双 IPC 修 + reloadAfterFinalize 抖动修 |
+| **A4** Token 用量统计 | 06-10 | per-session 累积 + ChatInput hint 区展示 |
+| **B5** Memory/指令文件系统 | 06-10/11 | 4 文件加载 + notify 监听 + `cache_control: ephemeral` 注入 + 前端 MemoryPreview UI + Settings Tab |
+| **C1** 取消机制完整化 | 06-11 | tool 执行中途可取消 |
+| **D1** session 重命名 + 8 色标记 | 06-11 | |
 
 ---
 
 ## 2. V2 路线图分类(2026-06-10 重排)
 
-### 🟢 第一档 — 立刻做(4 项)
+### 🟢 第一档 — ✅ 已全部完成(2026-06-10/11)
 
-| 编号 | 功能 | 价值 |
-|------|------|------|
-| A4   | Token 用量统计 | 成本可见性 + 优化依据 |
-| B5   | Memory(user + project,2 层先做) | 跨 session 指令一致性 |
-| C1   | 取消机制完整化 | 长跑任务用户控制权 |
-| D1   | session 重命名 / 标记 | session 列表可读性 |
+> A4 / B5 / C1 / D1 四项均已落地，详见 §1.2 已实施列表。
 
 ### 🟡 第二档 — 接着做(7 项)
 

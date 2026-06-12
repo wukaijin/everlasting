@@ -13,6 +13,7 @@
 
 | 文件 | 类型 | 评审模型 | 评审日期 | 评审范围 |
 |---|---|---|---|---|
+| [`REVIEW-tool-comparison-2026-06-12.md`](./REVIEW-tool-comparison-2026-06-12.md) | 竞品调研 | — | 2026-06-12 | Tool 横向对比: Everlasting vs Claude Code / Open Code / Codex CLI / Cursor / Cline; 现有 7 tool 差距分析 + 缺失 tool 优先级 |
 | [`REVIEW-sse-agent-loop-2026-06-12.md`](./REVIEW-sse-agent-loop-2026-06-12.md) | 代码审计 | Reasonix | 2026-06-12 | SSE 解析 → Provider → Agent Loop → 前端消费全链路: 稳定性 / 正确性 / 取消安全 / 错误处理 / 并发; 整体 ★★★★½ |
 | [`REVIEW-b5-memory-grill-2026-06-10.md`](./REVIEW-b5-memory-grill-2026-06-10.md) | 设计复审 | Reasonix (grill-me) | 2026-06-10 | B5 Memory 设计: 概念混淆 / 注入频率 & 位置 / 命名策略 / 前端文本对齐; 9 题全决议 |
 | [`REVIEW-glm-5.1.md`](./REVIEW-glm-5.1.md) | 设计评审 | GLM 5.1 | 2026-06 | 整体设计 / 架构 16 关卡 / 技术选型 / 实施路线图 / 风险管理 / 文档质量 |
