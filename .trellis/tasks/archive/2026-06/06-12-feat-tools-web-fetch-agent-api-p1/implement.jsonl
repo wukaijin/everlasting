@@ -1,0 +1,12 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/prd.md", "reason": "PRD 收敛版,含 10 条需求 + 13 条 AC + 7 类错误 + ADR"}
+{"file": ".trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/web-fetch-api-design.md", "reason": "6 家 web_fetch 横向对比 + Candidate A API 形状决策"}
+{"file": ".trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/html-to-markdown-rust.md", "reason": "选 htmd 0.5 决策 + builder API 用法"}
+{"file": ".trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/web-fetch-security.md", "reason": "IP block 代码 sketch + 7 类错误 + 5MiB/30s/5redirects 默认值"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "现有 tool 契约,需要补 web_fetch 章节"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ToolDef / ChatEvent shape + 工具调用 wire 协议"}
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "注册 builtin_tools() + execute_tool_inner() 派发点"}
+{"file": "app/src-tauri/src/tools/read_file.rs", "reason": "最接近的 pattern:ToolDef + execute + 详尽单测 (594 行)"}
+{"file": "app/src-tauri/src/tools/shell.rs", "reason": "timeout + CancellationToken 注入模式"}
+{"file": "app/src-tauri/src/llm/provider/anthropic.rs", "reason": "reqwest::Client 构造 + 错误处理参考 (line 209-219)"}
+{"file": "app/src-tauri/Cargo.toml", "reason": "添加 htmd 依赖的位置"}
