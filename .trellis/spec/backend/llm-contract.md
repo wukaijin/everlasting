@@ -351,6 +351,38 @@ response for guaranteed streaming.)
 **Consequences**: Cheap requests waste ~8k of budget, but no truncation on
 real workloads. Env override available.
 
+## Gotcha: tool_use ↔ tool_result Pair Atomicity (C3, 2026-06-12)
+
+**Rule**: Any code path that truncates / compacts / splits the `messages` array
+(e.g. C3 `compact_messages`) MUST treat an `assistant(tool_use)` + the immediately
+following `user(tool_result)` as **one atomic unit**. Either both stay in history
+or both are dropped. Never split them.
+
+**Why**: Anthropic returns `400 invalid_request_error` on the next turn if
+history has an `assistant(tool_use)` block whose `tool_use_id` has no matching
+`tool_result` (orphan request) or a `user(tool_result)` whose `tool_use_id`
+has no matching `tool_use` (orphan result). The error does NOT name the
+problem — the agent loop sees a generic 400 and retries, which 400s again.
+
+**When this bites**:
+- C3 context compression (the obvious case — dropping old turns)
+- Any future "summarize old messages" feature
+- Any future "sliding window context" feature
+- Edge case in `compact_messages`: when a pair straddles the **protected tail**
+ boundary (current user message is protected), the algorithm must recognize
+ `messages[len-2] = assistant(tool_use)` + `messages[len-1] = user(tool_result)`
+ and treat them as a single protected unit (not as separate droppable turns).
+
+**Test coverage** (in `agent/context.rs`):
+- `case_3_tool_use_tool_result_pair_intact_or_dropped_together`
+- `regression_pair_at_tail_split_under_pressure` (C3 PR1 regression)
+
+**Related**:
+- Thinking blocks have a similar atomicity requirement (see Validation & Error
+ Matrix row "`thinking` block appears after a `tool_use` block in history") —
+ the assistant turn is the atomic unit for thinking, while the pair is the
+ atomic unit for tool_use.
+
 ---
 
 ## Scenario: Token Usage Tracking (A4, 2026-06-10)

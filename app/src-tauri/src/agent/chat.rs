@@ -148,6 +148,12 @@ pub async fn chat(
         }
     };
     let provider: Arc<dyn crate::llm::Provider> = resolved.provider;
+    // C3 (2026-06-12): capture the context_window for the agent
+    // loop's per-turn token-budget compaction. We move this into
+    // the spawn closure below so every turn sees the same window
+    // (it's a property of the chosen model and is stable within
+    // one chat invocation — the user can't change models mid-chat).
+    let context_window: u32 = resolved.context_window;
     tracing::info!(
         request_id = %rid,
         session_id = %session_id,
@@ -412,6 +418,37 @@ pub async fn chat(
         }
 
         for turn in 1..=MAX_TURNS {
+            // C3 (2026-06-12) Context compression + token budget
+            // management. Before each `provider.send()`, estimate
+            // the token count of the current `messages` Vec. If it
+            // exceeds `context_window * 0.80`, trim old turns down
+            // to `context_window * 0.50`. The trim is in-memory
+            // only — the DB still holds every persisted message.
+            // See `agent::context::compact_messages` for the
+            // protection priority (head B5 pair + current user
+            // message + thinking-block atomicity + tool-use/tool-
+            // result pair atomicity).
+            {
+                let compacted = crate::agent::context::compact_messages(
+                    messages.clone(),
+                    context_window,
+                )
+                .await;
+                if compacted.dropped_count > 0 {
+                    tracing::info!(
+                        request_id = %rid,
+                        session_id = %session_id,
+                        turn,
+                        tokens_before = compacted.tokens_before,
+                        tokens_after = compacted.tokens_after,
+                        dropped_count = compacted.dropped_count,
+                        context_window,
+                        "agent loop: context compressed (C3)"
+                    );
+                }
+                messages = compacted.messages;
+            }
+
             // F5 follow-up per-turn: 5 per-turn `Instant` locals
             // that feed the `TurnComplete` event (and the
             // 4-column INSERT via
@@ -1124,6 +1161,7 @@ async fn lookup_provider_for_session(
                 provider: arc_provider.clone(),
                 model_display_name: mwp.model.display_name.clone(),
                 provider_display_name: provider_row.display_name.clone(),
+                context_window: mwp.model.context_window,
             });
         }
     }
@@ -1140,6 +1178,12 @@ async fn lookup_provider_for_session(
         provider: Arc::from(resolved.provider),
         model_display_name: resolved.model_display_name,
         provider_display_name: resolved.provider_display_name,
+        // C3: preserve the context_window from the catalog row we
+        // already looked up (`mwp.model.context_window`). The
+        // slow-path `resolve_chat_provider` returns a different
+        // `ResolvedChatProvider` type that doesn't carry the row
+        // metadata, so we read it from the row we already have.
+        context_window: mwp.model.context_window,
     })
 }
 
@@ -1188,4 +1232,11 @@ pub struct ResolvedChatProviderWrapper {
     pub provider: Arc<dyn crate::llm::Provider>,
     pub model_display_name: String,
     pub provider_display_name: String,
+    /// C3 (2026-06-12): the model's `context_window` in tokens,
+    /// sourced from `ModelRow.context_window`. Used by
+    /// [`crate::agent::context::compact_messages`] in the agent
+    /// loop to decide when to trim old messages. Always set from
+    /// the resolved catalog row, so callers can rely on it being
+    /// non-zero for any model the user can actually pick.
+    pub context_window: u32,
 }
