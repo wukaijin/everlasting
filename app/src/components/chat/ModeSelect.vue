@@ -179,6 +179,9 @@ async function onModePick(mode: SessionMode) {
       class="mode-select__trigger"
       :class="{
         'mode-select__trigger--disabled': isStreaming,
+        'mode-select__trigger--edit': currentMode === 'edit',
+        'mode-select__trigger--plan': currentMode === 'plan',
+        'mode-select__trigger--yolo': currentMode === 'yolo',
       }"
       :disabled="isStreaming"
       :aria-haspopup="'menu'"
@@ -256,15 +259,18 @@ async function onModePick(mode: SessionMode) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--color-text-secondary);
   cursor: pointer;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  /* 3 档化 2026-06-13: trigger font bumped 11px → 13px so the
+     mode label reads at the same scale as the textarea text
+     (14px) instead of looking like a tiny status chip. */
+  font-size: 13px;
   font-weight: 500;
   max-width: 120px;
   overflow: hidden;
@@ -277,6 +283,21 @@ async function onModePick(mode: SessionMode) {
   background: var(--color-bg-elevated);
   border-color: var(--color-bg-border);
   color: var(--color-text-primary);
+}
+
+/* 3 档 mode 用设计 token 区分颜色 (3 档化 2026-06-13):
+   - edit (默认, full power) → 蓝色 accent
+   - plan (read-only, safe)   → 青色 tool-read
+   - yolo (no-ask, 危险)      → 红色 tool-error
+   hover 态不变, 仍走 text-primary; mode color 主要用于 idle 态。 */
+.mode-select__trigger--edit {
+  color: var(--color-accent);
+}
+.mode-select__trigger--plan {
+  color: var(--color-tool-read);
+}
+.mode-select__trigger--yolo {
+  color: var(--color-tool-error);
 }
 
 .mode-select__trigger--disabled,

@@ -316,6 +316,16 @@ function onEscKeydown() {
 <template>
   <footer class="chat-input" @keydown.escape.prevent="onEscKeydown">
     <div class="chat-input__row" :style="inputRowStyle">
+      <!-- PR2 (B7): per-session Mode picker. Placed on the LEFT
+           of the input row (same line as the textarea), NOT in
+           the hint row, per Q4 P2 in the 2026-06-13 mode-redesign
+           grill-with-docs session. Rationale: mode = "input
+           context" — physically adjacent to the input box. Same
+           popover pattern as `ModelSelect` (upward-opening,
+           hand-rolled) but separate visual position. The trigger
+           shows the current Mode label (Edit / Plan / Yolo).
+           Shift+Tab cycles Mode via `useKeyboard`. -->
+      <ModeSelect />
       <textarea
         ref="textareaEl"
         :value="input"
@@ -520,12 +530,6 @@ function onEscKeydown() {
            the right edge of the hint row. Replaces the
            bottom-of-content `StatusBar` from PR4. -->
       <ModelSelect />
-      <!-- PR2 (B7): per-session Mode picker. Same popover pattern
-           as `ModelSelect` (upward-opening, hand-rolled), placed
-           next to the model picker for parity. The trigger
-           shows the current Mode label (Edit / Plan /
-           Yolo). Shift+Tab cycles Mode via `useKeyboard`. -->
-      <ModeSelect />
     </div>
   </footer>
 </template>
