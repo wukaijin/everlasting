@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "9 关决策合约 — 将扩写新 'Scenario: Path-based Permission' 段,描述 Tier 4 path-based 弹窗 + 3 种 match_kind 行为 + Yolo bypass 语义"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "仓库边界哲学 + 将新增 is_within_root(&self, path) -> bool 函数 spec(从现有 assert_within_root 抽出) — path-based 判定的核心 helper"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Tier 4 错误路径处理:permission:ask emit 失败 / 120s timeout / session delete racing 时的 fallback 决策"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "session_tool_permissions(match_kind CHECK ...) 已有 3 种 match_kind schema,本任务只 wire 现有 schema 不动 column,需对齐 DB 规范"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "mode_system_prefix 行为 + 8a 三重防御(system prompt / tool list / runtime intercept)— Tier 3 Mode check 提前后,这些仍生效,需对齐"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "usePermissionsStore.PermissionAsk type 加 path?: string 字段(供 PermissionModal 渲染 path 范围行)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "PermissionModal 头部 path 范围行(仓库内/外标签 + 路径字符串) — popover 模式的案例扩展"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "PermissionModal path 范围行用色:仓库内(emerald)/ 仓库外(amber) — 复用现有 design tokens,不引入新色板"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "PermissionModal 仍用 reka-ui DialogContent,portal 子元素样式 :deep() gotcha 警告延续(06-12 PR3 验证)"}
+{"file": ".trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md", "reason": "本任务 PRD 本身(10 决策 + 行为矩阵 + 行为 AC 30 条 + 文件清单 + 实施 PR 拆分)"}
+{"file": "docs/_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md", "reason": "re-grill session 文档(本任务交付时同步创建,记录 10 决策的 grill 过程)— 实施时参考以理解每条决策的上下文"}

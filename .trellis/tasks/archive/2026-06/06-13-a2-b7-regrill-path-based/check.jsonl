@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "新 Scenario 段将扩写,check 阶段需验证 path-based 决策合约的完整性(15 条行为 AC + 6 条持久化 AC + 3 条 Mode check 顺序 AC + 2 条 Yolo 行为 AC + 4 条 shell 解析 AC 都要覆盖)"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "is_within_root 函数 spec 正确性 + boundary 哲学(仓库内 default allow)对齐 + 边界 case(相对路径 / symlink / .. / 空字符串)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "session_tool_permissions 3 种 match_kind 写入/读取对称性(读时按 tool_name 过滤,写时按 tool 类型自动选 kind) — check 阶段验证 DB 行为"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Tier 4 异常路径:permission:ask emit 失败 fallback / 120s timeout / session delete race / rid 过期 — 错误处理对齐"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "mode_system_prefix 跟新 Tier 3 顺序对齐:Plan 模式的 system prompt 说 'cannot execute write tool' 跟 Tier 3 runtime 拦截语义一致"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "usePermissionsStore.pendingPermission.path 字段 nullable / 持久化对齐 / 跨 session 不共享(每 session 独立 store)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "PermissionModal path 范围行(仓库内 emerald / 仓库外 amber)视觉规范 + 跟现有 risk tint 颜色协调"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "新增的 path 范围行用色不引入新 token,复用现有 --color-tool-success / --color-tool-warning"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui DialogContent 行为不变,本任务只动 modal 内部子元素,需要验证 :deep() 选择器仍正确生效"}
+{"file": ".trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md", "reason": "30 条 AC 全清单 — check 阶段要逐条对照验证(行为 15 + 持久化 6 + Mode check 3 + Yolo 2 + shell 解析 4)"}
+{"file": "docs/_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md", "reason": "re-grill session 决策上下文 — check 阶段如发现某条决策实施有歧义,回查 grill 过程"}
