@@ -9,12 +9,14 @@ import { computed, onMounted } from "vue";
 import { useChatStore } from "../stores/chat";
 import { useConfigStore } from "../stores/config";
 import { useProjectsStore } from "../stores/projects";
+import { usePermissionsStore } from "../stores/permissions";
 import ChatPanel from "./chat/ChatPanel.vue";
 import EmptyProjectState from "./chat/EmptyProjectState.vue";
 
 const store = useChatStore();
 const config = useConfigStore();
 const projectsStore = useProjectsStore();
+const permissionsStore = usePermissionsStore();
 
 onMounted(async () => {
   config.load();
@@ -31,6 +33,16 @@ onMounted(async () => {
   // If neither condition holds, the empty state will show. The
   // chat store's watcher fires for `currentProjectId = null` and
   // just clears sessions.
+
+  // A2 + B7 PR3: mount the global `permission:ask` listener.
+  // The store's `start()` registers the listener and wires
+  // payloads into `pendingPermission`; `<PermissionModal>`
+  // (mounted in `ChatPanel`) reads that ref. We pass the
+  // projects store's `showToast` so the 120s-timeout path can
+  // surface "权限询问已超时,已自动拒绝".
+  void permissionsStore.start(
+    (msg, level) => projectsStore.showToast(msg, level),
+  );
 });
 
 const showEmptyState = computed<boolean>(

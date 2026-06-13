@@ -331,21 +331,32 @@ for event in stream {
 
 #### ⑧ 决策分叉(LLM 给的指令 + Mode 维度)
 
-**子步骤 8a — Mode 检查**(在解析出 tool_use 之前先做):
+**子步骤 8a — Mode 检查**(A2 + B7 PR1 落地,2026-06-13,**已实施**):
+
 ```
 对当前 session.mode:
-  ├─ Chat       → 正常
-  ├─ Plan       → 拒绝所有 tool_use,改返回 text "我不能执行,只能分析"
-  ├─ Review     → 只允许 read 工具,拒绝 write/edit
-  ├─ Background → 同 Chat,但 emit 走 "background:" 前缀,前端不强提示
-  └─ Yolo       → 跳过 ⑨ 权限检查,直接执行(危险,默认关)
+  ├─ Chat       → 正常 (full tool list + ⑨ 5-tier 检查)
+  ├─ Plan       → ⑧a 三重防御:① system prompt 前缀禁止 write,
+  │               ② tool list 过滤掉 write_file/edit_file/shell,
+  │               ③ Tier 4 runtime intercept 兜底(LLM 漏发 tool_use)
+  ├─ Review     → 同 Plan,但 system prompt 强调 "只读分析"
+  ├─ Background → 同 Chat,但 emit 走 "background:" 前缀(MVP 移除 UI)
+  └─ Yolo       → full tool list + 跳过 Tier 3 user-ask,Tier 2 hard kill list 仍生效
 ```
+
+**实现位置**:`app/src-tauri/src/agent/permissions.rs`:
+- `mode_system_prefix(mode)` → ① per-turn system prompt 前缀
+- `filter_tools_for_mode(tools, mode)` → ② per-turn tool list 过滤
+- `check()` Tier 4 → ③ runtime intercept 兜底
+
+**详见** [tool-contract.md §"⑨ 关 Permission Decision Layer"](./../trellis/spec/backend/tool-contract.md) +
+[llm-contract.md §"Per-Session Mode + ⑨ 关 Permission Layer"](./../trellis/spec/backend/llm-contract.md)。
 
 **子步骤 8b — 内容类型分发**:
 | LLM 返回          | 走向                                  |
 |-------------------|---------------------------------------|
 | 纯 text           | 直接到 ⑭ 走 ChatToken                |
-| tool_use          | 进入 ⑨ 权限检查 → ⑩ 执行             |
+| tool_use          | 进入 ⑨ 权限检查(5-tier) → ⑩ 执行             |
 | 混合(text + tool) | text 到 ⑭,tool 进 ⑨                  |
 | **ui_render**(新) | 到 ⑭ 走 UiCard(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)) |
 
@@ -353,30 +364,71 @@ for event in stream {
 - **风险**:Mode 误判 → LLM 收到 "Plan 模式下不能执行",但它应该用 Plan 模式思考再用 Chat 模式执行
 - **详见 [BACKLOG.md §4.2 多模式](./BACKLOG.md#42-多模式mode)**
 
-#### ⑨ Tool 权限检查(关键关卡)
+#### ⑨ Tool 权限检查(关键关卡,A2 + B7 PR1 落地,**已实施**)
+
+**5-tier 决策顺序**(SOT,跟 Claude Code `deny > ask > mode > allow` 一致):
 
 ```
-对每个 tool_use:
-  ├─ 工具在 session 白名单?(role.tools.whitelist)
-  │    └─ 否 → 拒绝,tool_result = "tool not allowed"
-  ├─ 参数 schema 校验(JSON 合法?字段对?)
-  │    └─ 否 → 拒绝,告诉 LLM "参数错误,请重试"
-  ├─ 路径检查(读写的文件在工作目录内?)
-  │    └─ 否 → 拒绝
-  ├─ 是否需要用户确认?(per-tool, per-mode 决定)
-  │    ├─ 是 → 走 channel 发 "permission:ask",等用户 yes/no
-  │    └─ 否 → 放行
-  └─ 危险操作?(rm -rf /, git push --force, sudo ...)
-       └─ 必须 confirm,默认 deny
+对每个 tool_use(name, input):
+  │
+  ├─ Tier 0. Boundary (assert_within_root) — 项目根目录硬墙,前置于 ⑨
+  │   └─ 失败 → bail out,不调 execute_tool
+  │
+  ├─ Tier 1. Hooks           (pre-call 接口, MVP no-op)
+  │   └─ 命中 hook override? → 用 hook 决定(本期不实现)
+  │
+  ├─ Tier 2. Deny rules      (硬 kill list, 10 个命令模式)
+  │   ├─ 命中 → Decision::Deny { critical: true, reason: ... }
+  │   ├─ Yolo 也走 — 静默拒绝, audit 记 tool_denied_yolo
+  │   └─ → Tier 6 写 audit event
+  │
+  ├─ Tier 3. Ask rules       (session_tool_permissions + emit + await)
+  │   ├─ 查 session_tool_permissions:
+  │   │   有 "始终允许"(match_kind='tool', match_value=NULL)
+  │   │   → 跳过弹窗,直接 Allow
+  │   │   无 → emit("permission:ask", { rid, toolName, toolInput, risk, reason? })
+  │   │       等前端 permission_response (120s 超时 → 自动 Deny)
+  │   │ 收到响应:
+  │   │   allow_once  → Allow(不写表)
+  │   │   allow_always → Allow + INSERT INTO session_tool_permissions
+  │   │   deny        → Deny { reason: "user denied" }
+  │   │   timeout     → Deny { reason: "permission timed out after 120s, treat as denied" }
+  │   │                + audit kind="permission_timeout"
+  │   └─ 与 C1 cancel 共享 select!: 用户按 Stop 走 cancel 分支(整轮终止)
+  │
+  ├─ Tier 4. Mode check      (Plan/Review 拦截, ⑧a 第三层兜底)
+  │   ├─ Plan/Review + tool ∈ {write_file, edit_file, shell}
+  │   │   → Deny { reason: "I cannot execute X in Y mode (read-only session)" }
+  │   └─ read 类工具不受影响
+  │
+  ├─ Tier 5. Allow rules     (默认 allow-all, MVP 阶段)
+  │   └─ tool 不在白名单 → Deny(本期默认全开, 后期可收缩)
+  │
+  └─ Tier 6. Audit hook      (每个决策路径写 session_audit_events)
+      └─ kind: tool_allowed / tool_denied / tool_permission_ask /
+               permission_granted / permission_timeout / tool_denied_yolo /
+               mode_changed / yolo_entered / yolo_exited / request_cancelled
+      ↓
+  → 放行 execute_tool(若 Allow) / 构造 is_error tool_result(若 Deny)
 ```
 
-- **这是 harness 设计中最容易写错也最重要的关卡**
-- 常见模式:
-  - **静态规则**:路径前缀匹配、命令白名单
-  - **动态规则**:根据 LLM 推理结果判断("它在删文件 → 要 confirm")
-  - **用户偏好**:某些操作永远 ask,某些永远 allow
-- **失败后果**:返回错误给 LLM,LLM 会自我修正 —— 这是 agent 区别于普通脚本的核心
-- **跟 Mode 配合**:Plan 模式到这里被 ⑧a 拦了,根本到不了 ⑨;Yolo 模式跳过 ⑨
+**关键行为**:
+- **Deny 优先于 Ask**:`rm -rf /` 在 Yolo 下也是静默拒绝
+  (Tier 2 硬墙, 不弹窗, audit 区分 `tool_denied_yolo`)
+- **拒绝 ≠ Cancel 整轮**:拒绝只跳该 tool_use,LLM 收到
+  `is_error: true` 可自决;CancellationToken(C1)才是整轮终止
+- **超时 vs 主动 deny** 在 audit log 区分:`reason` 字段不同
+  ("user denied" vs "permission timed out after 120s, treat as denied")
+
+**实现位置**:
+- ⑨ 关 dispatch: `app/src-tauri/src/agent/permissions.rs::check()`
+- Tier 2 硬 kill list: `app/src-tauri/src/agent/permissions/dangerous.rs::is_kill_listed()`
+- IPC bridge: `app/src-tauri/src/commands/permissions.rs::{set_session_mode, permission_response, grant_tool_permission}`
+- 前端消费: `app/src/stores/permissions.ts` + `app/src/components/chat/PermissionModal.vue`
+
+**详见** [tool-contract.md §"⑨ 关 Permission Decision Layer"](./../trellis/spec/backend/tool-contract.md) +
+[permission-modal-ux.md](./../trellis/tasks/06-12-a2-b7-permission-and-mode/research/permission-modal-ux.md) +
+[agent-permission-best-practice.md](./../trellis/tasks/06-12-a2-b7-permission-and-mode/research/agent-permission-best-practice.md)。
 
 #### ⑩ Tool 执行
 
@@ -584,16 +636,64 @@ agent loop 结束(text-only response or max_turns reached):
 - **超限**:`channel.send("rate_limited, retrying in Xs")`,前端提示,自动重试
 - **不能省**:省钱 + 避免封号;Anthropic 429 是软警告,3 次之后硬封
 
-#### 2.5.8 ⑯ 审计日志
+#### 2.5.8 ⑯ 审计日志(A2 + B7 PR1 落地,2026-06-13,**已实施**)
 
-- **每次记录**:
-  - ⑨ 权限决策(allow / deny / ask-and-result)
-  - ⑩ tool 执行(tool_name, args hash, duration, exit_code)
-  - ⑬ 循环检测触发次数
-  - ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出)
-- **存储**:`~/.local/share/everlasting/audit/<date>.jsonl` 每行一个事件
-- **用途**:回看"agent 刚才为啥没做 X"、"那次权限拒绝是不是太严了"、"哪步最慢"
-- **不能省**:个人项目也必备 — 没 audit 排查问题靠记忆
+**每次记录**:
+- ⑨ 权限决策(10 类 `AuditKind` 枚举,见下)
+- ⑩ tool 执行(tool_name, args, duration, exit_code — 部分由
+  F5 tool duration 字段携带)
+- ⑬ 循环检测触发次数
+- ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出)
+
+**存储**:`session_audit_events` 表(SQLite),schema:
+```sql
+CREATE TABLE session_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    kind TEXT NOT NULL,           -- AuditKind 字符串
+    payload_json TEXT,            -- 统一 JSON 结构
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_session_audit_events_session_ts
+    ON session_audit_events(session_id, ts DESC);
+```
+
+**10 类 AuditKind**(`agent::permissions::AuditKind`):
+| Kind | 触发条件 |
+|---|---|
+| `tool_denied` | Tier 2 命中 + Tier 3 user deny + Tier 3 sender dropped |
+| `tool_allowed` | Tier 3 AllowOnce / Tier 3 "始终允许" 命中 / Tier 5 默认 |
+| `tool_permission_ask` | Tier 3 emit `permission:ask` |
+| `permission_granted` | Tier 3 "始终允许" → 写 `session_tool_permissions` |
+| `permission_timeout` | Tier 3 120s 超时 |
+| `tool_denied_yolo` | Tier 2 命中 + mode = Yolo(跟普通 `tool_denied` 区分) |
+| `mode_changed` | `set_session_mode` 调用 |
+| `yolo_entered` / `yolo_exited` | Mode 在 Yolo 之间切换 |
+| `request_cancelled` | C1 cancel 触发(tier 3 await 被 cancel 打断) |
+
+**统一 payload JSON 结构**(`permissions::record_audit`):
+```json
+{
+  "tool_name": "shell",
+  "tool_input": { "command": "ls -la" },
+  "reason": "matches denylist: rm -rf /",
+  "mode": "chat",
+  "critical": true
+}
+```
+
+`critical: bool` 字段对前端 `PermissionModal` 的 3px 红左 border
++ shield-x icon 渲染至关重要(PR1 follow-up 加,PR3 使用)。
+
+**Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错
+(必须保证不破坏 agent loop)。
+
+**UI 查询**(C4 任务):本期不实现 UI(仅写表),C4 接走查询 UI。
+
+**用途**:回看"agent 刚才为啥没做 X"、"那次权限拒绝是不是太严了"、
+"哪步最慢"、Yolo 模式下被静默拒绝的 hard-kill 命令审计
+(`tool_denied_yolo` 字段配合 `critical: true`)。
 
 ---
 

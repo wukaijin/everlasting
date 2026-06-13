@@ -246,3 +246,106 @@ The two actions are paired, not independent — the
 `streamController.test.ts` `finalizeRequest` describe block has a
 `both actions fire on the same finalizeRequest call (paired
 invariant)` test that locks this.
+
+### Per-session Mode field (added 2026-06-13, PR2 of A2 + B7)
+
+`SessionSummary.mode: "chat" | "plan" | "review" | "yolo" | "background"`
+is the per-session mode override. The wire field is snake_case
+(untyped on the Rust side via `Option<String>` in
+`db::models::SessionRow`) and serializes as the lowercase `Mode`
+enum string. The `Background` variant is reserved in the enum for
+schema stability but never appears in the UI; the
+`SessionMode = "chat" | "plan" | "review" | "yolo"` subset is the
+user-facing surface (`MODE_CYCLE` constant in `app/src/stores/chat.ts`).
+
+The store-level orchestrator is `requestSetMode(sessionId, mode)`
+in `chat.ts`. Both UI entry points (popover via `ModeSelect.vue`
+and `Shift+Tab` cycle in `ChatInput.vue`) call this single method,
+which:
+
+- Short-circuits when the target mode matches current.
+- Refuses the call while the session is streaming (the `:disabled`
+  contract; mirrors `ModelSelect.vue`).
+- For `Yolo`, flips `pendingYoloConfirm = true` (the modal mounts
+  via `v-if`; the modal's confirm button calls `confirmYolo()`
+  which fires the actual `set_session_mode` IPC).
+
+### Permissions store + PermissionModal IPC bridge (added 2026-06-13, PR3 of A2 + B7)
+
+For anything related to the ⑨ 关 user-confirmation IPC, the single
+source of truth is `usePermissionsStore()` in
+`app/src/stores/permissions.ts`. The backend's
+`agent/permissions::check` emits a `permission:ask` event when a
+tool_use lands on Tier 3 of the 5-tier decision layer; the store
+listens for that event and exposes the pending payload via
+`pendingPermission`. `<PermissionModal>` (mounted in
+`ChatPanel.vue`) renders whenever the slot is non-null.
+
+The store mirrors the backend's behavior closely. Key design
+points:
+
+- **Single slot, replacement semantics**: `pendingPermission`
+  holds exactly one ask at a time. When the backend emits a new
+  `permission:ask` (e.g. the next tool_use in a multi-tool turn),
+  the listener overwrites `pendingPermission`. The modal's
+  `:key` binding should be on `pendingPermission.rid` so it
+  remounts on every replace (resets focus + scroll).
+- **120s timer** (`ASK_TIMEOUT_MS = 120_000`): the store arms a
+  client-side timer that mirrors the backend's
+  `tokio::time::sleep(ASK_TIMEOUT)`. Duplication is intentional:
+  it lets us (a) close the modal at the same moment the backend
+  resolves the oneshot, and (b) surface a
+  "权限询问已超时,已自动拒绝" toast via `useProjectsStore.showToast`.
+  Both paths converge to a deny — race-guard via `timerRid.value`
+  catches "user clicked just as timer fired".
+- **IPC wire shape** (matches `agent::permissions::PermissionAskPayload`
+  via `#[serde(rename_all = "camelCase")]`):
+
+  ```typescript
+  // Server → Client: emit("permission:ask", payload)
+  interface PermissionAsk {
+    rid: string;                         // UUID, ties to the oneshot
+    toolName: string;
+    toolInput: Record<string, unknown>;
+    risk: "low" | "medium" | "high" | "critical";
+    reason?: string;
+  }
+
+  // Client → Server: invoke("permission_response", { rid, decision })
+  type PermissionDecision = "allow_once" | "allow_always" | "deny";
+  ```
+
+- **Lifecycle**: `permissionsStore.start(toast)` is called from
+  `ChatWindow.vue`'s `onMounted` (passes the projects-store
+  `showToast` for the timeout path). `stop()` is reserved for
+  future hot-reload / test scenarios; the listener lives for
+  the lifetime of the Tauri process in practice.
+
+The store never owns visual chrome — `<PermissionModal>` is the
+component that owns the DOM. This matches the pattern in
+`ModeSelect.vue` / `YoloConfirmModal.vue`: stores hold reactive
+state, components handle rendering. The Modal's three buttons
+each call `store.respond(rid, decision)`; cancel/Esc/X/backdrop
+also route through `respond(rid, "deny")` per spec Q6.
+
+#### Acceptance criteria covered (PermissionModal 14 条)
+
+| AC | Where it's enforced |
+|---|---|
+| 居中 + 4px backdrop-blur | `<PermissionModal>` template + CSS `:deep(.permission-modal-backdrop)` |
+| 56x56 shield icon 容器,risk tint bg | `iconTintStyle` computed, `.permission-modal__icon` |
+| Critical 3px 红左 border + shield-x icon | `:deep(.permission-modal--critical)` + `RISK_META.critical.iconName` |
+| `JSON.stringify(_, null, 2)` 渲染在 `<pre>` | `formattedInput` computed |
+| terminal icon (左) + copy icon (右) | `.permission-modal__preview-icon` + `.permission-modal__copy` |
+| "工具类别: X · 风险等级: Y" + risk 颜色点 | `.permission-modal__risk` + `.permission-modal__risk-dot` |
+| 3 按钮等宽 33%,顺序 拒绝/仅一次/始终允许 | `.permission-modal__actions` + grid |
+| Critical Enter 改 拒绝 | `defaultDecision` computed |
+| Esc / X / 遮罩 = 拒绝 | `onKeyDown` + `@click.self="onCancel"` |
+| 始终允许 → `INSERT INTO session_tool_permissions` | Backend `check()` Tier 3 `AllowAlways` (PR1 已有) |
+| 仅一次 → 不写表 | Backend `check()` Tier 3 `AllowOnce` (PR1 已有) |
+| 拒绝 → 后续 tool_use 继续按 ⑨ 关 | Backend `check()` Tier 3 `Deny` (PR1 已有) |
+| Stop(C1) → CancellationToken + audit 区分 | Backend `check()` `tokio::select!` cancel branch (PR1 已有) |
+| 不渲染 checkbox | 没有 checkbox in template |
+| 同一 turn 多 tool_use 串行 | Backend `for tool_use in turn.tool_uses` (PR1 已有) |
+| reka-ui DialogContent `:deep()` gotcha | 模板不用 reka-ui (手写 `<Teleport>` + `:deep()`) |
+| 120s 超时 → 自动 deny | `startAskTimer` + toast |

@@ -104,6 +104,32 @@ if let Some(final_cwd) = turn_state.last_cwd {
 }
 ```
 
+## 5. ⑨ 关 Tier 0 集成 (A2 + B7 PR1, 2026-06-13)
+
+PR1 的 `⑨ 关 5-tier 决策层`(`app/src-tauri/src/agent/permissions::check`)
+把 `assert_within_root` 集成作为 Tier 0 hard guard,放在 Tier 1
+Hooks 之前:
+
+```rust
+// app/src-tauri/src/agent/chat.rs: L70-71,在 permission::check 之前
+let effective_cwd = input.get("working_directory")
+    .and_then(Value::as_str)
+    .map(Path::new)
+    .unwrap_or(&ctx.cwd);
+let validated_cwd = boundary::assert_within_root(&ctx.project_root, effective_cwd)?;
+```
+
+行为:
+- boundary 失败 → agent loop bail out, 不调 `permission::check` 也不
+  调 `execute_tool`。这是 Tier 0 hard error (不是 ⑨ 关 Decision)。
+- boundary 成功 → 走 ⑨ 关 Tier 1-6,见 `tool-contract.md §"⑨ 关
+  Permission Decision Layer"`。
+- 这保留了 §2 的 7 个 edge case 合约(前缀陷阱、symlink、broken
+  symlink、nonexistent 等) — boundary check 是不可绕过的最后一道
+  关。
+- 工具内部的二次 boundary check(每个 tool 自己的 `assert_within_root`
+  调用) 仍然保留,作为 defense in depth。
+
 ## 5. 关联
 
 - PROPOSAL §4.4 (`chat` command + ToolContext 改造)

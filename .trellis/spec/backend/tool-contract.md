@@ -1,10 +1,10 @@
-# Tool Contract —工具定义 + ReadGuard + Bash Spillover
+# Tool Contract —工具定义 + ReadGuard + Bash Spillover + ⑨ 关
 
-> **基线**:2026-06-10 commit `0f9a167` (8-PR5拆分后)
+> **基线**:2026-06-13(PR1 + PR3 of `06-12-a2-b7-permission-and-mode`)
 > **来源**:从原 `llm-contract.md` (3149 行)拆出本文件
 > **同源文档**:
-> - [llm-contract.md](./llm-contract.md) —核心类型 + Extended Thinking + 反模式汇总
-> - [tool-contract.md](./tool-contract.md) (本文) —工具定义 + ReadGuard + shell spillover
+> - [llm-contract.md](./llm-contract.md) —核心类型 + Extended Thinking + 反模式汇总 + ⑨ 关 IPC 协议
+> - [tool-contract.md](./tool-contract.md) (本文) —工具定义 + ReadGuard + shell spillover + ⑨ 关 5-tier 决策合约
 > - [worktree-contract.md](./worktree-contract.md) — attach/detach/delete + cancel + system prompt
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider trait + catalog + Anthropic/OpenAI 分发
 > - [test-model-contract.md](./test-model-contract.md) — `test_model` IPC
@@ -520,3 +520,261 @@ parallel tests). Production `execute` always passes `false`.
   downstream would strip it.
 - **T6 (audit)** — `tracing::info!(url, final_url, status, bytes, duration_ms)`,
   no body in logs.
+
+---
+
+## Scenario: ⑨ 关 Permission Decision Layer (A2 + B7 PR1, 2026-06-13)
+
+> **Source of truth**: the 5-tier evaluation order lives in
+> `app/src-tauri/src/agent/permissions.rs` (PR1 implementation) +
+> `app/src-tauri/src/agent/permissions/dangerous.rs` (Tier 2 hard
+> kill list). The IPC surface is `app/src-tauri/src/commands/permissions.rs`.
+> PR3 (2026-06-13) wired the frontend `usePermissionsStore` +
+> `<PermissionModal>` to consume the IPC; the spec cross-references
+> `.trellis/spec/frontend/state-management.md §"Permissions store
+> + PermissionModal IPC bridge"` for the TS side.
+
+### 1. Scope / Trigger
+
+The ⑨ 关 is the unified decision point between the agent
+loop's `provider.send()` stream and `tools::execute_tool`. On
+every `tool_use` block, the agent loop calls
+`permissions::check()` and uses the returned `Decision` to
+either execute the tool, skip it (with an `is_error: true`
+tool_result for the LLM to self-correct), or await user
+input. This is the only place tool execution is gated; the
+agent loop MUST NOT call `execute_tool` without first calling
+`permissions::check` for every tool_use.
+
+The full 5-tier order + the ⑧a system-prompt / tool-list
+defenses are documented in
+`llm-contract.md §"Per-Session Mode + ⑨ 关 Permission Layer"`.
+This file's section is the **tool-side** contract: the
+`execute_tool` signature, the hard kill list contents, the
+`session_tool_permissions` schema, and the audit log payload.
+
+### 2. Signatures
+
+#### `execute_tool` (gated wrapper, PR1 改造后)
+
+```rust
+// app/src-tauri/src/agent/chat.rs: ⑨ 关 dispatch 入口
+let decision = permissions::check(
+    &ctx,                  // PermissionContext { session_id, mode }
+    &state.permission_asks, // PermissionStore
+    &state.db,
+    &app_handle,
+    tool_name,
+    tool_input,
+    &cancel_token,         // C1 cancellation
+).await;
+
+match decision {
+    Decision::Allow => execute_tool(name, input, &ctx).await,
+    Decision::Deny { reason, critical: _ } => {
+        // 构造 is_error: true tool_result 回 LLM
+        // 不触发 CancellationToken
+        return ToolResult { is_error: true, content: reason };
+    }
+    Decision::Ask { reason: _, risk: _ } => unreachable!(),
+    // ⑨ 关 在 check() 内部 collapse Ask → Allow / Deny
+}
+```
+
+The actual `tools::execute_tool(name, input, ctx)` (no
+permission args) is unchanged from PR1. The `permissions::check`
+wrapper is the new layer.
+
+#### `Risk` enum
+
+```rust
+// app/src-tauri/src/agent/permissions.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Risk { Low, Medium, High, Critical }
+```
+
+`Critical` is reserved for future use (PR3's PermissionModal
+already reads it from the wire payload, but the per-tool
+static map only returns Low / Medium / High in the MVP).
+Serializes lowercase to match the frontend TS type
+(`"low" | "medium" | "high" | "critical"`).
+
+#### Per-tool risk map
+
+```rust
+// app/src-tauri/src/agent/permissions.rs
+pub fn risk_for_tool(tool_name: &str) -> Risk {
+    match tool_name {
+        "shell" => Risk::High,
+        "write_file" | "edit_file" => Risk::Medium,
+        _ => Risk::Low,  // read_file / grep / glob / list_dir / web_fetch
+    }
+}
+```
+
+#### `session_tool_permissions` schema (PR1 新增)
+
+```sql
+CREATE TABLE session_tool_permissions (
+    session_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    match_kind TEXT NOT NULL CHECK (match_kind IN ('tool', 'prefix', 'path')),
+    match_value TEXT,           -- NULL for 'tool', command-prefix or glob otherwise
+    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, tool_name, match_kind, match_value),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+```
+
+MVP only writes `match_kind = 'tool'`, `match_value = NULL`. The
+`prefix` / `path` variants are reserved in the schema (per
+`research/permission-modal-ux.md §Q4 "持久化方案"` 决策) but
+the decision-matching code in `permissions::check` only checks
+the `tool` variant today. `ON DELETE CASCADE` requires
+`PRAGMA foreign_keys = ON` at connection init (verified in
+`db/mod.rs`).
+
+#### `session_audit_events` schema (PR1 新增)
+
+```sql
+CREATE TABLE session_audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
+    kind TEXT NOT NULL,           -- AuditKind as_str() output
+    payload_json TEXT,            -- JSON object (see §6 audit payload)
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_session_audit_events_session_ts
+    ON session_audit_events(session_id, ts DESC);
+```
+
+### 3. Hard kill list (Tier 2)
+
+The kill list lives in
+`app/src-tauri/src/agent/permissions/dangerous.rs`. Static
+match — pure function `is_kill_listed(tool_name, input) ->
+Option<String>` returns the trigger reason when the tool
+input matches a hard-coded dangerous pattern. MVP triggers:
+
+| Command | Pattern |
+|---|---|
+| `rm -rf /` | `^rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)*/\s*$` |
+| `rm -rf /*` | `^rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)*/\*` |
+| `mkfs` | `\bmkfs\b` (any arg) |
+| `dd if=` | `\bdd\b.*\bif\s*=` |
+| fork bomb | `:\(\)\s*\{.*:\|:&.*\};:` |
+| `> /dev/sda` | `>\s*/dev/(sda\|nvme\d)` |
+| `chmod -R 777 /` | `\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)*777\s+/` |
+| `git push --force` / `git push -f` 主分支 | `\bgit\b.*\bpush\b.*(\-\-force\|-f\b)` |
+| `curl ... \| bash` | `\bcurl\b.*\|\s*(ba)?sh\b` |
+| `wget ... \| bash` | `\bwget\b.*\|\s*(ba)?sh\b` |
+
+All shell patterns apply **only** to `tool_name == "shell"`.
+`write_file` / `edit_file` are NOT subject to the command
+patterns (they have their own path-boundary enforcement via
+`projects::boundary::assert_within_root`, already in place
+from step 1).
+
+### 4. `permission:ask` IPC protocol (cross-reference llm-contract.md)
+
+**Wire shape** (server → client, camelCase per Rust
+`#[serde(rename_all = "camelCase")]` on
+`PermissionAskPayload`):
+
+```jsonc
+{
+  "rid": "550e8400-e29b-41d4-a716-446655440000",
+  "toolName": "shell",
+  "toolInput": { "command": "ls -la" },
+  "risk": "high",
+  "reason": "The tool shell requires your confirmation (risk: 高)."
+}
+```
+
+**IPC command** (client → server):
+`invoke("permission_response", { rid, decision })` where
+`decision` is one of `"allow_once"` / `"allow_always"` /
+`"deny"`. The Tauri command lives in
+`commands::permissions::permission_response` and looks up
+the `HashMap<rid, oneshot::Sender>` keyed by `rid`. Unknown
+`decision` returns `Err`; unknown `rid` returns `Ok(false)`
+(best-effort no-op, NOT an error).
+
+### 5. Boundary check integration (⑨ 关 Tier 0 / pre-check)
+
+The `projects::boundary::assert_within_root` check (documented
+in `project-cwd-boundary.md`) is the project's Tier 1 hard
+guard. PR1 ⑨ 关 integrates with it as the **first** check
+even before Tier 1 Hooks:
+
+```rust
+// In agent/chat.rs: L70-71, before permission::check
+// (this is the existing step-1 boundary check, unchanged
+// from before PR1)
+let effective_cwd = input.get("working_directory")
+    .and_then(Value::as_str)
+    .map(Path::new)
+    .unwrap_or(&ctx.cwd);
+let validated_cwd = boundary::assert_within_root(&ctx.project_root, effective_cwd)?;
+```
+
+A boundary violation is a Tier 0 hard error (not a ⑨ 关
+Decision) — the agent loop bails out before any tool
+execution. This preserves the 7-edge-case contract in
+`project-cwd-boundary.md` §2.
+
+### 6. Audit payload shape (10 类 AuditKind)
+
+`permissions::record_audit` writes the audit row with a
+uniform payload JSON shape:
+
+```json
+{
+  "tool_name": "shell",
+  "tool_input": { "command": "ls -la" },
+  "reason": "matches denylist: rm -rf /",
+  "mode": "chat",
+  "critical": true
+}
+```
+
+`critical: true` is set ONLY for Tier 2 hard-kill denials
+(where the kill list is intrinsically catastrophic). Tier 3
+user-deny / timeout / cancel paths are `critical: false`
+(the user opted out, nothing catastrophic; the LLM needs
+to self-correct, not be told "the world is ending").
+
+The 10 `AuditKind` variants are listed in
+`llm-contract.md §6`. Audit write failures are best-effort
+(`tracing::warn!` + continue) — they MUST NOT break the
+agent loop.
+
+### 7. Tests Required (PR1 已有)
+
+| Test | Asserts |
+|---|---|
+| `permissions::tests::risk_for_tool_categorization` | per-tool static map correct |
+| `permissions::tests::risk_label_cn_is_full_text` | 中文 label 完整 |
+| `permissions::tests::audit_kind_round_trip` | 10 类 AuditKind 都 serializable |
+| `permissions::tests::filter_tools_for_mode_drops_writes_in_plan_review` | ⑧a tool filter |
+| `permissions::dangerous::tests::kill_list_blocks_rm_rf_root` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_fork_bomb` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_mkfs` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_dev_sd_write` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_normal_dev_commands_pass` | Tier 2 不误杀 |
+| `permissions::dangerous::tests::kill_list_does_not_block_normal_rm` | Tier 2 不误杀正常 rm |
+| `permissions::dangerous::tests::kill_list_blocks_chmod_777_root` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_dd` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_git_push_force_protected` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_blocks_curl_pipe_shell` | Tier 2 命中 |
+| `permissions::dangerous::tests::kill_list_empty_command_passes` | 空 input 不误杀 |
+| `permissions::dangerous::tests::kill_list_only_checks_shell` | kill list 仅作用于 shell,不影响 edit_file |
+
+(总计 20 个 PR1 落地的 permission 测试,见
+`cargo test --lib permissions` 输出。)
+
+PR3 不新增 backend 测试 — ⑨ 关 backend 行为已在 PR1 锁定;
+PR3 全部新增是 frontend store + modal 测试,见
+`llm-contract.md §8 "Tests Required" / Frontend`。

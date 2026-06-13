@@ -13,9 +13,17 @@
 
 ## Status
 
-Filled (2026-06-09). Future dropdowns / popovers in this project
-SHOULD follow this pattern unless the use case has a reason to
-deviate (e.g. accessibility requirements that demand
+Filled (2026-06-09). PR2 follow-up (2026-06-13, A2 + B7 task
+`06-12-a2-b7-permission-and-mode`) added a third production
+instance: `ModeSelect.vue` in the ChatInput hint row, with the
+same upward-opening popover geometry as `ModelSelect`. PR3 of
+the same task added `PermissionModal.vue` (a CENTER modal,
+not a popover — see "Modal vs Popover" callout below) but the
+popover pattern itself was unchanged.
+
+Future dropdowns / popovers in this project SHOULD follow this
+pattern unless the use case has a reason to deviate (e.g.
+accessibility requirements that demand
 `reka-ui`'s built-in `aria-haspopup` / `aria-controls`).
 
 ---
@@ -320,10 +328,11 @@ customize both without forking the popover component.
 ## Don't: Use `reka-ui` `DropdownMenu` for New Dropdowns in This Project
 
 **Why**:
-- The worktree dropdown and `ModelSelect` are the existing
-  visual + behavioural reference. A `reka-ui` `DropdownMenu`
-  would render with a different default chrome (different
-  border, padding, focus ring), creating visual drift.
+- The worktree dropdown, `ModelSelect`, and `ModeSelect` are
+  the existing visual + behavioural reference. A `reka-ui`
+  `DropdownMenu` would render with a different default chrome
+  (different border, padding, focus ring), creating visual
+  drift.
 - The hand-rolled pattern already covers the project's
   a11y minimum (`aria-haspopup`, `aria-expanded`,
   `role="menu"`, `role="menuitem"`). Reka-ui's additional
@@ -332,6 +341,29 @@ customize both without forking the popover component.
   polymorphism that has shifted API between alpha and stable;
   adding it for one component pins the project to a
   specific reka-ui minor.
+
+**ModeSelect.vue** (PR2, 2026-06-13) is the third production
+instance of the hand-rolled popover pattern. It lives in the
+ChatInput hint row next to `ModelSelect`, opens upward, and
+follows the same code skeleton (state + onDocumentClick +
+onKeydown) verbatim. The 4 entries (Chat / Plan / Review /
+Yolo) are listed in popover order matching `MODE_CYCLE` from
+`stores/chat.ts`; clicking Yolo routes through
+`chatStore.requestSetMode(sid, "yolo")` which gates the
+`set_session_mode` IPC behind a Yolo confirm modal — so the
+popover closes immediately and the Yolo modal opens on top.
+The Shift+Tab cycle in `ChatInput.vue` (via `useKeyboard`)
+routes through the same `requestSetMode` orchestrator, so the
+keyboard and popover paths share exactly one confirm gate.
+
+**PermissionModal.vue** (PR3, 2026-06-13) is NOT a popover
+— it's a CENTER modal (teleported to `<body>` via Vue
+`<Teleport>`). It uses a different shape (centered, with
+backdrop + blur) because ⑨ 关 is a critical decision and
+needs to fully block the user's input flow until they click
+one of the 3 buttons. See `reka-ui-usage.md` §"Gotcha:
+`<style scoped>` does NOT apply to portal children" — the
+`<Teleport>` requires `:deep()` for all modal CSS rules.
 
 **Exception**: switch to reka-ui if the dropdown needs
 keyboard-first navigation (↑/↓/Home/End/Enter), virtual

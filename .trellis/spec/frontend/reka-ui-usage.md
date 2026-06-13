@@ -179,7 +179,20 @@ Wrap the class name (and any data-attribute selectors) in
 | `SelectContent` / `SelectViewport` / `SelectItem` | rendered to `<body>` via `<SelectPortal>` | **Yes** — wrap in `:deep()` |
 | `DialogContent` (when nested inside another dialog) | rendered to `<body>` via `<DialogPortal>` | **Yes** — wrap in `:deep()` |
 | `DialogOverlay` (sibling of `DialogContent` inside `DialogPortal`) | rendered to `<body>` | **Yes** — wrap in `:deep()` |
+| `<Teleport to="body">` content (Vue's built-in Teleport, not reka-ui) | rendered to `<body>` | **Yes** — wrap in `:deep()` |
 | Trigger icon / label / form field wrapper | inside the component's own template | **No** — keep scoped |
+
+The last row was added when the PR3 `PermissionModal.vue` (2026-06-13)
+chose Vue's built-in `<Teleport to="body">` over reka-ui's
+`DialogPortal` (the modal isn't a reka-ui `Dialog` — it's hand-rolled
+markup with the same visual / behavioral contract as the
+`DialogContent`-based modals). The Teleport still portals the
+modal's DOM to `<body>`, so the `<style scoped>` compiler's
+`data-v-xxx` attribute is never applied to the teleported elements
+and every CSS rule that targets them must be wrapped in `:deep()`.
+This is a *Vue* `Teleport` constraint, not a reka-ui one — but
+reka-ui's `*Portal` primitives use the same `<Teleport>` under
+the hood, so the same `:deep()` rule applies.
 
 **Example** (the project's working pattern in
 `app/src/components/settings/ProvidersTab.vue`, 2026-06-09):

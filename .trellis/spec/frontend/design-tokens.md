@@ -172,6 +172,16 @@ step. Don't add `--radius-md` unless it's reused 3+ times.
 Border **width** is always `1px` — no thicker borders in
 this design. Border **style** is always `solid`.
 
+**Exception (2026-06-13)**: the `PermissionModal --critical`
+variant and the `YoloConfirmModal` content card use a 3px red
+left border (`var(--color-tool-error)`). This is a deliberate
+one-off — the 3px width is reserved for "extreme risk" modals
+in the app, so the two highest-stakes confirmation surfaces
+(Yolo entry, Tier 2 hard-deny) look like visual cousins. See
+`yolo-safety-design.md §7` and `permission-modal-ux.md §"视觉规范"`.
+No new token is needed; the existing
+`--color-tool-error` is the only color used.
+
 ---
 
 ## Don't: Hardcode color / spacing / radius values in component CSS
@@ -198,6 +208,47 @@ token is ever updated.
 
 **Exception**: the `app/src/style.css` file itself, where
 the token values are defined.
+
+---
+
+## Modal Tokens (added 2026-06-13, PR3 of A2 + B7)
+
+The `PermissionModal` (and the pre-existing `YoloConfirmModal`
++ `SettingsModal` + `MemoryModal`) all share a modal-pattern
+set of values. These are NOT new CSS variables — they're
+convention values that the modals reference via the existing
+tokens. Captured here so a future modal knows what to reach for
+without re-deriving the numbers.
+
+| Concern | Value | Token / source |
+|---|---|---|
+| Backdrop z-index | `9998` | Convention (overlay below content) |
+| Content z-index | `9999` | Convention (above overlay) |
+| Toast z-index | `10000` | Per PR1 audit §3.2 (toast above all modals) |
+| Backdrop alpha | `70%` mix of `--color-bg-app` + 4px blur | `color-mix(in srgb, var(--color-bg-app) 70%, transparent)` |
+| Modal width | `min(560px, 90vw)` | PermissionModal (smaller than SettingsModal's `720px`) |
+| Modal max-height | `80vh` | PermissionModal body scrolls above this |
+| Modal padding | `16px` | `YoloConfirmModal` + `ConfirmDialog` precedent |
+| Border radius | `8px` | Matches `--color-bg-surface` cards |
+| Box shadow | `0 8px 24px rgba(0,0,0,0.5)` | Standard modal shadow |
+| Animation | `150ms` enter / `100ms` leave (fade + scale 0.96→1) | `popover-pattern.md` "Modal: fade + scale" |
+| Critical border-left | `3px solid var(--color-tool-error)` | See "Border Tokens" exception above |
+
+**Risk-level visual** (PermissionModal header icon container +
+risk label dot):
+
+| Risk level | Icon | Tint color | Container bg (12% mix) |
+|---|---|---|---|
+| `low` | `info` (lucide) | `var(--color-text-muted)` | gray tint |
+| `medium` | `circle-dot` (lucide) | `var(--color-tool-write)` | emerald tint |
+| `high` | `shield-check` (heroicons) | `var(--color-tool-shell)` | amber tint |
+| `critical` | `shield-x` (lucide) | `var(--color-tool-error)` | red tint |
+
+The risk-label Chinese text (`低` / `中` / `高` / `极高`) lives
+in `app/src/stores/permissions.ts` as the `RISK_META` constant;
+the `Risk.label_cn()` method on the backend
+(`agent/permissions::Risk`) is the source of truth (mirrored on
+the frontend to avoid an IPC round-trip for a static label).
 
 ---
 

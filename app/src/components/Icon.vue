@@ -53,7 +53,7 @@ import {
   BoltIcon,
   ClockIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain } from "@lucide/vue";
+import { Brain, ShieldX, Terminal, Copy, Info, CircleDot, Check } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
