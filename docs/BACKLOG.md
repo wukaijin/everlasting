@@ -37,6 +37,14 @@
 - ✅ **Project 基础结构 + 顶部 Tabs UI** — 2026-06-05/06 落地,3b-1(后端 PR1 + 前端 PR2 + post-fixes)
 - ✅ **Git worktree + diff** — 2026-06-07/08 落地(worktree 解耦 + opt-in attach / detach / delete)
 - ✅ **工具集扩展(edit_file / grep / glob / list_dir + ReadGuard)** — 2026-06-07 落地(原属 BACKLOG §1 输入层扩展的下游)
+- ✅ **B5 Memory(4 文件 + cache_control 注入)** — 2026-06-10/11 落地,2 PR(后端 loader + 前端 MemoryPreview)。原 BACKLOG §3 多层 Memory 范围内
+- ✅ **A4 Token 用量统计** — 2026-06-10 落地
+- ✅ **C1 取消机制完整化** — 2026-06-11 落地(CancellationToken,tool 执行中途可取消)
+- ✅ **D1 session 重命名 + 8 色标记** — 2026-06-11 落地
+- ✅ **C3 Context 压缩 + token 硬卡** — 2026-06-12 落地(MVP 简单裁剪,MAX_TURNS 20 → 50;LLM summarization 留给 C3-v2)
+- ✅ **A2 + B7 权限系统 + 多模式(合并工作组)** — 2026-06-12/13 落地(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 10 类 AuditKind;后 2 项 06-13 re-grill 取代 06-12 PRD)
+- ✅ **P0 工具打磨(`read_file` offset/limit + `shell` timeout)** — 2026-06-12 落地
+- ✅ **P1 web_fetch 工具** — 2026-06-12 落地(SSRF 拦截 + 5 MiB body cap + 30s timeout + htmd 0.5)
 
 > 📌 **V2 重排移除项**(2026-06-10,详见 [ROADMAP §3 移除项](./ROADMAP.md#3-移除项--已废弃v2-重排2026-06-10-决定) + [IMPLEMENTATION §4 决策日志 2026-06-10 条](./IMPLEMENTATION.md#4-决策日志)):
 > - 🗑️ **A1 xterm.js 嵌入式终端** — `shell` tool + 30K 落盘已覆盖,不做
@@ -131,7 +139,7 @@ DB 存引用(message_id, path, hash, mime, size)
 **入口**:输入 `/` 触发
 
 **命令分类**:
-- **内置**:`/clear`、`/model <name>`、`/permissions <tool>`、`/mode plan|chat|review`、`/help`
+- **内置**:`/clear`、`/model <name>`、`/permissions <tool>`、`/mode plan|edit|yolo`、`/help`
 - **用户定义**:`.everlasting/commands/*.md`,每个文件 = 一个命令
 
 **用户命令文件格式**:
@@ -481,16 +489,22 @@ fallback = "claude-haiku-3.5"
 
 | 模式          | 描述                       | Tool 调用?     | 用户确认?  |
 |---------------|----------------------------|----------------|------------|
-| **Chat**      | 正常对话,实时流式          | 是             | 危险动作   |
-| **Plan**      | 思考但**不执行**           | 否(只看)      | 计划确认   |
-| **Review**    | 只读不写                   | 否(只读 tool) | —          |
-| **Background** | 后台跑,完成时通知         | 是             | 危险动作   |
-| **Yolo**      | 无任何确认(危险,默认关)   | 是             | 无         |
+| **Edit**      | 正常对话 + 实时流式 + 全 tool list | 是             | 危险动作(⑨ 5-tier) |
+| **Plan**      | 思考但**不执行**           | 否(只读 tool)  | 计划确认   |
+| **Yolo**      | 无任何确认(危险,默认关)   | 是             | 无(整段 bypass Tier 4 弹窗,Tier 2 硬墙仍生效) |
+
+> **历史演进**(详见 [IMPLEMENTATION §4 决策日志 2026-06-13 "Mode 3 档化"](./IMPLEMENTATION.md)):
+> - 2026-06-12 落地 4 档:`Chat` / `Plan` / `Review` / `Yolo`
+> - 2026-06-13 grill-with-docs session 重新审视语义,3 档化:`Chat → Edit` 改名 + `Review` 移除(行为跟 `Plan` 重复)
+> - `Background` enum 留位置,UI 不暴露(留作远期接 channel router 的扩展位)
+> - **Breaking wire rename**:不保留 `'chat'` / `'review'` 字符串 alias;v6 migration 启动时跑两次幂等 UPDATE 落库
 
 **实现**:
-- `enum Mode { Chat, Plan, Review, Background, Yolo }`
-- 在 ARCHITECTURE §2.2 第 ⑨ 关(权限检查)统一处理
-- 状态机:Mode 切换写审计日志
+- `enum Mode { Edit, Plan, Yolo, Background }`(Background 留位不暴露 UI)
+- 在 ARCHITECTURE §2.2 第 ⑨ 关(权限检查)统一处理 + ⑧a Mode 检查(Tier 3 提前拦截 Plan 的 tool_use)
+- 状态机:Mode 切换写审计日志(`AuditKind::mode_changed` / `yolo_entered` / `yolo_exited`,详见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md#258-⑯-审计日志a2--b7-pr1-落地2026-06-13已实施))
+- 前端:`<ModeSelect>` 放 input row 左侧,3 档颜色区分(Edit 默认 / Plan 琥珀 / Yolo 红)
+- 完整 PRD 走 `.trellis/tasks/archive/2026-06/06-12-a2-b7-permission-and-mode/`(已被 `06-13-a2-b7-regrill-path-based` re-grill 取代,顶部加 Superseded 标记)
 
 #### 4.3 可编排(Orchestration)
 
@@ -531,7 +545,8 @@ struct WorkflowNode {
 - token 成本:多 agent 串行 = 多倍成本 → 预算上限硬卡
 
 **范围划分**:
-- role + mode 切换(无编排)— 排期归 [ROADMAP §2 第二档 A2+B7](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)
+- mode 切换(无 role 编排)— ✅ A2+B7 已落地(2026-06-12/13),见 [ROADMAP §1.2](./ROADMAP.md#12-路线图外完成) + [IMPLEMENTATION §4 决策日志 2026-06-13](./IMPLEMENTATION.md#4-决策日志)
+- role 切换 — 远期(未排期,排期归 [ROADMAP §2 V2 路线图分类](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排))
 - 可视化 DAG 编辑器 + workflow 执行 — 排期归 [ROADMAP §2 第四档 B8](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)
 
 

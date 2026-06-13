@@ -56,18 +56,25 @@
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
 - 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 16 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集:`read_file` / `write_file` / `edit_file` / `shell` / `grep` / `glob` / `list_dir`(+ ReadGuard 防护)
+- 工具集:`read_file` / `write_file` / `edit_file` / `shell` / `grep` / `glob` / `list_dir` / `web_fetch`(ReadGuard 防护 + Bash 落盘 + cat -n)
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete
-- 多 LLM Provider(Anthropic / OpenAI,自研 Provider trait)
+- 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 10 类 AuditKind + web_fetch 接入 ⑨(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- C3 Context 压缩 + token 硬卡:`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,MAX_TURNS 20 → 50(详见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级c3-mvp2026-06-12-落地已实施))
+- B5 Memory/指令文件系统:4 文件(User / Project × CLAUDE.md / AGENTS.md) + `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + notify 监听
+- A4 Token 用量统计:per-session 累积(4 列)+ ChatInput hint 区 0-49% 绿 / 50-74% 黄 / 75%+ 红
+- D1 session 重命名 + 8 色标记
+- C1 取消机制完整化:tool 执行中途可取消(CancellationToken)
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
-- 输入层扩展:图片粘贴 / @文件补全 / /command 命令面板
-- 指令层:Skill 系统 / 多层 Memory
-- 拓扑层:多模式 / 权限系统 / Subagent / DAG workflow
-- 输出层:生成式 UI 4 primitives
-- 触达层:飞书 IM / 云端同步
+- 输入层扩展:图片粘贴 / @文件补全(B2)/ /command 命令面板(B3)
+- 指令层:Skill 系统(B4);Runtime Memory 与 Session Memory(B5 留位未启用)
+- 拓扑层:Subagent(B6,依赖 B5 Session Memory)/ DAG workflow(B8)
+- 输出层:生成式 UI 4 primitives(B9)
+- 触达层:飞书 IM(B10)/ 云端同步(B11)
+- 循环检测(C2)/ 大输出截断统一(C6)/ RDP 双屏 position bug 修复(A7)
 
 ### 3.2 明确不做(硬约束)
 
@@ -128,7 +135,7 @@
 
 | 风险                          | 严重度 | 缓解                                          |
 |-------------------------------|--------|-----------------------------------------------|
-| Rig 0.x breaking change       | 中     | 锁版本,major 升级专门花时间                  |
+| Rig 0.x breaking change       | 中     | rig-core 已弃用(2026-06-09),改自研 Provider trait;rig 升级不再适用 |
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#9-工具权限检查) 实施的前提 |
@@ -138,10 +145,10 @@
 
 ### 5.2 工程权衡
 
-**复杂度 vs 学习价值**:
+**复杂度 vs 学习价值**(历史决策,2026-06-04 起 + 2026-06-09 rig-core 弃用):
 - 选 rig:省掉 50% 样板代码,但少学 50% harness 细节
 - 选 reqwest:多学 50%,但每个字节都懂
-- **决策**:前两步手写学,第三步切 rig 干活
+- **决策**:前两步手写学(步骤 1-2);rig-core 评估后于 2026-06-09 弃用(0.38.1 阶段),改自研 `Provider` trait 走 Anthropic / OpenAI 双 Provider(详见 [TECH §2](./TECH.md#2-决策rig-core-弃用2026-06-09改自研-provider-trait) + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志))
 
 **功能范围 vs 完成度**:
 - MVP 8 项都做,每项做到 70 分,胜过做 15 项每项 40 分

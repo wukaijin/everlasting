@@ -54,5 +54,5 @@ OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_toke
 ## 相关决策
 
 - 设计决策走 [`docs/IMPLEMENTATION.md §4 决策日志`](../IMPLEMENTATION.md#4-决策日志)(本文件不重复)
-- 路线图定位走 [`docs/ROADMAP.md §2 第一档`](../ROADMAP.md#2-v2-路线图分类2026-06-10-重排)
-- 跨层契约走 `.trellis/spec/backend/llm-contract.md`(待 A4 任务启动后补 Scenario: Token Usage Tracking 段)
+- 路线图定位走 [`docs/ROADMAP.md §1.2 已实施`](../ROADMAP.md#12-路线图外完成)(A4 已于 2026-06-10 落地,本术语表作为历史术语定义保留)
+- 跨层契约走 `.trellis/spec/backend/llm-contract.md` "Scenario: Token Usage Tracking" 段

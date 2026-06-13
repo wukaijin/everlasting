@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-**当前状态(2026-06-11)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统（4 文件加载 + cache_control 注入）+ per-session token usage 已落地;V2 路线图已重排,🟢 第一档准备开始。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
+**当前状态(2026-06-13)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统（4 文件加载 + cache_control 注入）+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 50)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 10 类 AuditKind)已全部落地;V2 路线图第一档收口 + 第二档 2/7 进 §1 已实施,剩余 5 项在第二档,详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 

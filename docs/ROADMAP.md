@@ -47,23 +47,26 @@
 | **D1** session 重命名 + 8 色标记 | 06-11 | |
 | **P0 工具打磨** | 06-12 | `read_file` offset/limit + `shell` timeout |
 | **P1 web_fetch 工具** | 06-12 | 新增 8 号 tool:agent 自主抓取外部文档/API 参考/错误信息,SSRF 拦截 (RFC 1918/loopback/link-local/CGNAT/multicast/reserved + 169.254.169.254 短路),5 MiB body cap,30s timeout,htmd 0.5 转 markdown,attribution prefix (T1a prompt-injection 缓解)。PRD + 3 份 research 落 `.trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/` |
+| **C3** Context 压缩 + token 硬卡 | 06-12 | 5a 加载层 token 预算 + 超限降级(参见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级) + [ARCHITECTURE §2.2 ⑤](./ARCHITECTURE.md))。完整 PRD 走 `.trellis/tasks/archive/2026-06/06-12-c3-context-token/` |
+| **A2 + B7** 权限系统 + 多模式(合并工作组) | 06-12/13 | ⑨ 关 5-tier 决策层(path-based,re-grill SOT)+ 3 档 Mode(`edit` / `plan` / `yolo`,`Background` enum 留位 UI 不暴露) + `match_kind` 3 种 wire 全连(`tool` / `prefix` / `path`)+ YoloConfirmModal + PermissionModal 路径范围行 + ⑯ 审计日志 10 类 AuditKind。`tools::web_fetch` 也接入 ⑨(Tier 4 走 `match_kind='tool'`) |
+| **Mode 3 档化**(Q4 P2 后续) | 06-13 | `Mode::Chat → Edit` 改名 + `Mode::Review` 移除(行为跟 Plan 重复);v6 migration 启动时跑两次幂等 UPDATE;**breaking wire rename**,不保留 alias |
 
 ---
 
-## 2. V2 路线图分类(2026-06-10 重排)
+## 2. V2 路线图分类(2026-06-10 重排,2026-06-13 收尾更新)
 
-### 🟢 第一档 — ✅ 已全部完成(2026-06-10/11)
+### 🟢 第一档 — ✅ 已全部完成(2026-06-10/11,本档收口)
 
 > A4 / B5 / C1 / D1 四项均已落地，详见 §1.2 已实施列表。
 
-### 🟡 第二档 — 接着做(7 项)
+### 🟡 第二档 — 大部分完成(2026-06-12/13,2 项进 §1,剩 5 项)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
-| A2 + B7 | **权限系统 + 多模式(合并工作组)** | ⑨ 权限检查 + ⑧a Mode 联动 |
+| ~~A2 + B7~~ | ~~权限系统 + 多模式(合并工作组)~~ | ✅ 06-12/13 落地,见 §1.2 |
+| ~~C3~~ | ~~Context 压缩 + token 硬卡~~ | ✅ 06-12 落地,见 §1.2 |
 | B3   | /command 命令面板 | 输入层扩展 |
-| C3   | Context 压缩 + token 硬卡 | ⑤ context 构造的 token 预算 |
-| C4   | 审计日志 | ⑨ ⑩ ⑬ ⑮ 事件可回看 |
+| C4   | 审计日志 | ✅ ⑨ ⑩ ⑬ ⑮ 事件回看写入已落地(2026-06-13 A2+B7 PR1);**待补** 审计日志 UI(C4 接管,见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md#258-⑯-审计日志a2--b7-pr1-落地2026-06-13已实施) 末尾"UI 查询 (C4 任务)") |
 | B2   | @文件补全 | 输入层扩展 |
 | D2   | SQLite FTS5 全局搜索 | 历史消息可检索 |
 | D3   | session 内消息编辑 / 重发 | session 灵活交互 |
@@ -121,14 +124,15 @@
 
 ### 4.2 B7 = Mode 是 A2 权限系统的 UX 层
 
-- **正确语义**:B7(mode = chat / plan / review / background / yolo)**不是**独立功能,是 A2 权限系统的**前端 UX 层**
-- **联动链**:前端 mode 切换 → 后端 ARCHITECTURE §2.2 **⑧a Mode 检查**(plan 模式拒 tool_use / review 模式只读 / yolo 跳过 ⑨) + ⑨ 权限检查 联动
-- **工作组划分**:A2 + B7 合并做(基础设施 + UX 一组),列在第二档
+- **正确语义**:B7(mode = `edit` / `plan` / `yolo`)**不是**独立功能,是 A2 权限系统的**前端 UX 层**;`Background` enum 留位但 UI 不暴露
+- **历史演进**:2026-06-12 落地 4 档(`Chat` / `Plan` / `Review` / `Yolo`),2026-06-13 grill-with-docs session 3 档化(`Chat → Edit` 改名 + `Review` 移除,行为跟 `Plan` 重复);详见 [IMPLEMENTATION §4 决策日志 2026-06-13 "Mode 3 档化"](./IMPLEMENTATION.md)
+- **联动链**:前端 mode 切换 → 后端 ARCHITECTURE §2.2 **⑧a Mode 检查**(plan 模式拒 tool_use / yolo 跳过 ⑨ Tier 4 弹窗但 Tier 2 硬墙仍生效) + ⑨ 权限检查 联动
+- **工作组划分**:A2 + B7 合并做(基础设施 + UX 一组),已进 §1.2 已实施
 
-### 4.3 A2 + B7 合并工作组(第二档 7 项之一)
+### 4.3 A2 + B7 合并工作组(2026-06-12/13 完成,已进 §1.2)
 
 - A2(后端 ⑨ 权限基础架构) + B7(前端 mode 切换 UI)是一组工作,不能拆
-- 实施顺序:先 A2 后 B7(B7 依赖 A2 暴露的 mode 配置)
+- 实施顺序:先 A2 后 B7(B7 依赖 A2 暴露的 mode 配置),3 档化(Q4 P2 后续)单列 ADR
 
 ---
 

@@ -46,14 +46,15 @@
 │  ┌─────────────────────────────────────────────────┐    │
 │  │  agent core  ← 核心,自研                      │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  LLM Client (基于 rig-core)              │    │    │
-│  │  │  - Anthropic / OpenAI / Ollama           │    │    │
-│  │  │  - SSE 流式解析                          │    │    │
+│  │  │  LLM Client (自研 Provider trait)        │    │    │
+│  │  │  - Anthropic / OpenAI 自研 adapter        │    │    │
+│  │  │  - 手写 SSE 状态机                         │    │    │
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
 │  │  │  Tool Registry                           │    │    │
 │  │  │  - read_file / write_file / edit_file   │    │    │
-│  │  │  - shell / grep / glob                   │    │    │
+│  │  │  - shell / grep / glob / list_dir       │    │    │
+│  │  │  - web_fetch (06-12 落地,SSRF 拦截)     │    │    │
 │  │  │  - use_skill / use_memory / use_ui      │    │    │
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
@@ -642,16 +643,23 @@ agent loop 结束(text-only response or max_turns reached):
 - **命中后**:emit `warning:loop_detected`,LLM 收到 `tool_result = "loop detected, please reconsider"`,**不强制打断**(让 LLM 有机会说明为什么)
 - **实现位置**:⑬ 关卡内,需 LLM 端做相似度计算,不能纯 hash
 
-#### 2.5.5 ⑤ Context 超限降级
+#### 2.5.5 ⑤ Context 超限降级(C3 MVP,2026-06-12 落地,**已实施**)
 
-- **触发**:总 token > 模型 window 的 90%
+- **触发**:总 token > `context_window * 0.80`(MVP 阈值,留 0.20 余量给 tiktoken cl100k_base 1-2% 漂移)
 - **保护顺序**(先保护什么):
-  1. **不动**:`system_prompt` + `role.system_prompt` + `4 层 Memory`(agent 行为不能丢)
-  2. **优先丢**:runtime tool_result(从最老开始丢)
-  3. **次优丢**:老 user / assistant 消息(从最老开始丢)
-  4. **最后手段**:LLM 摘要中间消息(贵且慢,只在前 3 步都不够时)
+  1. **不动**:`system_prompt` + `role.system_prompt` + 4 层 Memory 合成段(B5 `memory_synthetic` + `assistant_ack` 永远不被裁剪)
+  2. **优先丢**:runtime tool_result(从最老 turn 开始丢)
+  3. **次优丢**:老 user / assistant turn(从最老开始丢)
+  4. **裁剪目标**:降到 `context_window * 0.50`
+  5. **未来手段**(未实施):LLM 摘要中间消息(贵且慢,留给 C3-v2)
+- **配对保护**:`assistant(tool_use)` + `user(tool_result)` 必须成对丢,避免 API 400
+- **不丢**:Thinking / RedactedThinking blocks(只随整 turn 丢,不会"丢一半";signature 对不上会 400)
 - **不丢**:当前 user message、当前 tool_result
 - **不能做**:丢 system prompt、丢 role prompt、丢所有 memory
+- **MAX_TURNS 兜底**:20 → 50(2026-06-12 C3 PR1 改;正常 token 预算会先触发,50 轮兜底覆盖极端 case)
+- **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护 + 优先级算法)
+- **完整 PRD**:[.trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md](./../trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md)
+- **未实施**(MVP 留口子):前端"context compressed at turn N"UI 标记(PR2)+ compressed_out DB 列(C4 覆盖)+ LLM summarization(C3-v2)
 
 #### 2.5.6 Session 切换的并发态
 
