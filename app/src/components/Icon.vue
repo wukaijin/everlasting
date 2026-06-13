@@ -18,6 +18,7 @@
 
 import { computed } from "vue";
 import {
+  ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
   XMarkIcon,
@@ -70,6 +71,7 @@ const props = withDefaults(
 );
 
 const map = {
+  "arrow-down": ArrowDownIcon,
   "arrow-up": ArrowUpIcon,
   "check": CheckIcon,
   "x": XMarkIcon,
