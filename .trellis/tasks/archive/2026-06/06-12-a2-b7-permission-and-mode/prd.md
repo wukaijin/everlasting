@@ -1,3 +1,18 @@
+> ## ⚠️ Superseded by 06-13-a2-b7-regrill-path-based (2026-06-13)
+>
+> 本 PRD 是 06-12 实施时的设计档案,记录 "risk-based 弹窗 + Tier 4 Mode 顺序" 方案的落地过程。
+> 2026-06-13 通过 re-grill-me session 重新审视,锁定 10 个核心决策,把方案重构为:
+> - 弹窗判定: risk-based → **path-based**(仓库内 default allow,仓库外 ask)
+> - Tier 顺序: Hooks → Deny → Ask → Mode → Allow → Audit → **Hooks → Deny → Mode → Path → Allow → Audit**(Mode 提前)
+> - "始终允许" 粒度: 只有 `tool` 类 → **3 种 match_kind 全 wire**(tool / path-glob / prefix)
+> - Yolo × 仓库外: 走 modal → **silent**(Yolo bypass)
+> - shell 策略: 总是 Tier 3 → **前缀白名单 + asklist 三档**
+>
+> 新设计完整 PRD 参见: **[`.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md`](../../06-13-a2-b7-regrill-path-based/prd.md)**
+> 实施时以新 PRD 为准;本文保留作历史档案,便于回溯 06-12 commit (`442fb3d` / `db0f762` / `3a50212` 等)。
+>
+> ADR 落档: [`docs/IMPLEMENTATION.md §4 — 2026-06-13 Re-grill path-based 模型`](../../../../docs/IMPLEMENTATION.md#4-决策日志)
+
 # A2 + B7 权限系统 + 多模式(合并工作组)
 
 ## Goal
