@@ -28,28 +28,24 @@
 // the drag region so it's clickable in the future. Window control
 // buttons now use heroicons instead of the old ー/□/❐/✕ typography.
 //
-// Maximize behavior (bug-fix v4): the previous v3 logic divided
-// `monitor.size` by `monitor.scaleFactor` to convert to logical
-// pixels before calling `setSize(new LogicalSize(...))`. On WSLg
-// that produced a 1920×1080 ceiling regardless of the host's
-// actual 4K display, because WSLg's virtual monitor reports a
-// physical size of 1920×1080 with scaleFactor=1.0 — so
-// `monitor.size / scaleFactor` == `monitor.size`. The fix is to
-// use `PhysicalSize` directly (skip the scaleFactor math) and
-// read the size from the *window's* current monitor (not the
-// global `currentMonitor()`), since the window may live on a
-// different display than the primary. macOS keeps
-// `toggleMaximize()` so the red lights + native fullscreen
-// semantics still work.
+// Maximize behavior: every platform defers to the OS-native
+// `toggleMaximize()`. We deliberately do NOT manually setSize +
+// setPosition to "fill the whole monitor including the taskbar",
+// even though that would cover a bit more screen, because Wayland
+// (WSLg uses Weston) forbids clients from setting window position —
+// setPosition() is silently ignored by the compositor, so a manual
+// maximize ended up growing the window rightward instead of snapping
+// to the monitor's top-left (Wayland protocol limit; Tauri issue
+// #14913; same limit hits GTK/Qt/SDL). Native toggleMaximize() is
+// compositor-driven, so the position is always correct on Wayland /
+// X11 / Win / macOS, the custom title bar stays visible (this is
+// maximize, not fullscreen), and toggle semantics restore the
+// pre-maximize size/position automatically. `win.isMaximized()` is
+// the authoritative state, so we no longer compare outerSize to the
+// monitor's physical size.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  getCurrentWindow,
-  currentMonitor,
-  LogicalSize,
-  PhysicalSize,
-  PhysicalPosition,
-} from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { platform, type Platform } from "@tauri-apps/plugin-os";
 import AppLogo from "./AppLogo.vue";
 import Icon from "../Icon.vue";
@@ -61,51 +57,17 @@ const isMac = ref(false);
 let unlistenResize: (() => void) | null = null;
 const win = getCurrentWindow();
 
-/** Default "restored" size — matches `tauri.conf.json` window defaults. */
-const DEFAULT_W = 1440;
-const DEFAULT_H = 900;
-
 /** Re-sync `isMaximized` with reality. Called on mount + on every
- *  resize. Behaviour differs per platform — see comment block above. */
+ *  resize. We defer maximize to the OS, so `win.isMaximized()` is
+ *  authoritative on every platform — no need to compare the outer
+ *  size against the monitor's physical size (that heuristic only
+ *  existed to back a manual setSize-based maximize). */
 async function syncMaximizedState() {
   try {
-    if (isMac.value) {
-      isMaximized.value = await win.isMaximized();
-      return;
-    }
-    // Win / Linux: a window is "maximized" (in our sense) iff its
-    // outer size matches the *window's* current monitor's full
-    // physical size, within a 4px tolerance for AA / DPI rounding.
-    // `win.outerSize()` and `monitor.size` are both in physical
-    // pixels per Tauri 2 docs, so they compare directly. The
-    // standalone `currentMonitor()` from `@tauri-apps/api/window`
-    // resolves to the monitor the current webview is on (per
-    // Tauri 2 docs), which is what we want — using
-    // `win.currentMonitor()` would require a WebviewWindow method
-    // that isn't exposed in this Tauri version.
-    const monitor = await monitorAtWindow();
-    if (!monitor) {
-      isMaximized.value = await win.isMaximized();
-      return;
-    }
-    const winSize = await win.outerSize();
-    isMaximized.value =
-      Math.abs(winSize.width - monitor.size.width) < 4 &&
-      Math.abs(winSize.height - monitor.size.height) < 4;
+    isMaximized.value = await win.isMaximized();
   } catch (e) {
     console.error("[TitleBar] syncMaximizedState failed", e);
   }
-}
-
-/** Pick the monitor the Tauri window is currently on. The
- *  user can drag the window between any of the system's
- *  monitors (e.g. RDP virtual display + host primary in an RDP
- *  session, or just multi-monitor on a desktop), and clicking
- *  maximize should fill whichever monitor the window is on
- *  right now. `currentMonitor()` is exactly that — it returns
- *  the monitor that contains the current webview. */
-async function monitorAtWindow(): Promise<Awaited<ReturnType<typeof currentMonitor>>> {
-  return await currentMonitor();
 }
 
 onMounted(async () => {
@@ -148,72 +110,18 @@ async function onMinimize() {
 
 async function onToggleMaximize() {
   try {
-    if (isMac.value) {
-      // macOS: defer to the OS so the native fullscreen / maximize
-      // animation + red-light semantics are preserved.
-      await win.toggleMaximize();
-      return;
-    }
-    // Win / Linux / WSLg: toggle between "fill the monitor the
-    // window is currently on" and the default 1440×900 (centered
-    // on that monitor). This is what users expect from a maximize
-    // button when the OS work area is unacceptably small.
-    //
-    // TODO(bug-position): in some RDP / multi-monitor setups
-    // (RDP virtual display + host primary, both reported as
-    // monitors), the window ends up growing rightward instead of
-    // moving to the host primary's top-left after setSize. The
-    // order is setPosition-then-setSize (Tauri's auto-clamp on
-    // setSize overrode the position otherwise), but the issue
-    // persists. Likely candidate: `setFullscreen(true)` as a
-    // deliberate "maximize" trade-off. See prd.md "Progress so
-    // far" + journal-1.md (2026-06-07).
-    if (isMaximized.value) {
-      // Restore: LogicalSize matches the tauri.conf.json default.
-      // Center on the monitor using PhysicalPosition to keep the
-      // math consistent with the maximize case below.
-      await win.setSize(new LogicalSize(DEFAULT_W, DEFAULT_H));
-      const monitor = await monitorAtWindow();
-      if (monitor) {
-        const factor = monitor.scaleFactor;
-        const winW = DEFAULT_W * factor;
-        const winH = DEFAULT_H * factor;
-        const mW = monitor.size.width;
-        const mH = monitor.size.height;
-        const x = monitor.position.x + Math.max(0, (mW - winW) / 2);
-        const y = monitor.position.y + Math.max(0, (mH - winH) / 2);
-        await win.setPosition(new PhysicalPosition(x, y));
-      }
-      isMaximized.value = false;
-    } else {
-      // Maximize: fill the entire physical monitor the window is
-      // on. `monitorAtWindow` reads `currentMonitor()` so the
-      // user can drag the window to a different display first,
-      // then click maximize to fill that display.
-      const monitor = await monitorAtWindow();
-      if (!monitor) {
-        // No monitor info (very unusual) — fall back to OS maximize.
-        await win.toggleMaximize();
-        return;
-      }
-      try {
-        // Order matters: setPosition first, then setSize. If we
-        // resize first, Tauri may auto-reposition the window to
-        // keep it on-screen, and the subsequent setPosition can
-        // be overridden by a window manager clamp.
-        await win.setPosition(
-          new PhysicalPosition(monitor.position.x, monitor.position.y),
-        );
-        await win.setSize(
-          new PhysicalSize(monitor.size.width, monitor.size.height),
-        );
-      } catch (e) {
-        console.error("[TitleBar] setSize/Position failed, falling back to toggleMaximize", e);
-        await win.toggleMaximize();
-        return;
-      }
-      isMaximized.value = true;
-    }
+    // Defer to OS-native maximize on every platform. We intentionally
+    // do NOT manually setSize + setPosition to "fill the monitor
+    // including the taskbar": Wayland (WSLg uses Weston) forbids
+    // clients from setting window position, so setPosition() is
+    // silently ignored and a manual maximize grew the window rightward
+    // instead of snapping to the monitor's top-left (the old
+    // "bug-position"). Native toggleMaximize() is compositor-driven,
+    // so the position is always correct on Wayland/X11/Win/macOS, the
+    // custom title bar stays visible (maximize, not fullscreen), and
+    // toggling again restores the pre-maximize size/position. See the
+    // header comment + Wayland protocol limit / Tauri issue #14913.
+    await win.toggleMaximize();
   } catch (e) {
     console.error("[TitleBar] toggleMaximize failed", e);
   }
