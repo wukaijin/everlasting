@@ -315,3 +315,30 @@ pub async fn grant_tool_permission(
 pub async fn cancel_pending_asks(store: &PermissionStore) {
  crate::agent::permissions::cancel_session_asks(store, "").await;
 }
+
+// ---------------------------------------------------------------------------
+// C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events
+// ---------------------------------------------------------------------------
+
+/// Read all audit events for a session, newest first. Wired to the
+/// C4 AuditLogModal's "load on open" call. The row set is the
+/// raw `session_audit_events` rows; the frontend parses
+/// `payload_json` per `kind` (see `prd.md` "payload 形态").
+///
+/// Empty / missing session returns an empty `Vec` (NOT an error)
+/// — the modal renders its "暂无审计事件" placeholder. Any DB
+/// error is wrapped as a `String` for the frontend's toast path.
+///
+/// MVP scope: full pull (no pagination / no virtual scroll). The
+/// `idx_session_audit_events_session_ts` index keeps the
+/// `ORDER BY ts DESC` cheap; >500-event sessions are a follow-up
+/// optimization (PRD "Edge Cases" TODO).
+#[tauri::command]
+pub async fn list_session_audit_events(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::AuditEventRow>, String> {
+    db::list_audit_events(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("list_session_audit_events failed: {}", e))
+}

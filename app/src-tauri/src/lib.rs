@@ -83,6 +83,10 @@ pub fn run() {
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,
             commands::permissions::grant_tool_permission,
+            // C4 (Audit-log query UI, 2026-06-14) — read-side
+            // command for the AuditLogModal. The write side (⑩
+            // `tool_executed`) lands in the agent loop.
+            commands::permissions::list_session_audit_events,
             // F5 (LLM Latency Tracking): per-message latency +
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`

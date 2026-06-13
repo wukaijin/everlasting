@@ -83,5 +83,7 @@ pub fn all_command_names() -> Vec<&'static str> {
         "set_session_mode",
         "permission_response",
         "grant_tool_permission",
+        // C4 (Audit-log query UI, 2026-06-14)
+        "list_session_audit_events",
     ]
 }

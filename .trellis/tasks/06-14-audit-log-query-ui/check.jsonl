@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "check 复用 record_audit helper / AuditEventRow / MemoryModal 模式，勿重复造"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "check 后端 AuditEventRow 与前端按 kind 渲染的 wire 一致性"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "check db 写入/查询/test 是否符合规范（含新增 tool_executed 的 test）"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "check stores/audit.ts 是否符合 Pinia 单源/facade 模式"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "check 颜色是否用 design token、无硬编码 hex"}

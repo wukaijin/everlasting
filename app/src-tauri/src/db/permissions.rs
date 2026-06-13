@@ -31,6 +31,7 @@
 //! the caller decides how to surface the error (the agent loop
 //! wraps each call in `tracing::warn!` on failure).
 
+use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
 use super::Mode;
@@ -204,22 +205,21 @@ pub async fn record_audit_event(
  Ok(())
 }
 
-/// Read all audit events for `session_id`, newest first. Wired
-/// for the future C4 audit log panel; not currently called by
-/// any Tauri command. Sorted by `ts DESC` (the schema's index
-/// supports this — `idx_session_audit_events_session_ts`).
-#[allow(dead_code)]
+/// Read all audit events for `session_id`, newest first. Wired to
+/// the C4 audit-log UI's `list_session_audit_events` Tauri command
+/// (2026-06-14). Sorted by `ts DESC` (the schema's index supports
+/// this — `idx_session_audit_events_session_ts`).
 pub async fn list_audit_events(
  pool: &SqlitePool,
  session_id: &str,
 ) -> Result<Vec<AuditEventRow>, sqlx::Error> {
  let rows = sqlx::query(
  r#"
- SELECT id, session_id, ts, kind, payload_json
- FROM session_audit_events
- WHERE session_id = ?
- ORDER BY ts DESC
- "#,
+        SELECT id, session_id, ts, kind, payload_json
+        FROM session_audit_events
+        WHERE session_id = ?
+        ORDER BY ts DESC
+        "#,
  )
  .bind(session_id)
  .fetch_all(pool)
@@ -237,13 +237,27 @@ pub async fn list_audit_events(
  .collect()
 }
 
-/// Row shape for [`list_audit_events`]. The `payload_json` column
-/// stays a `String` (raw JSON text) so callers can re-parse per
-/// row rather than committing to a typed shape upfront — different
-/// `kind` values carry different payload schemas today, and a
-/// locked struct would force premature commitments.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+/// Row shape for [`list_audit_events`] and the
+/// `list_session_audit_events` Tauri command. The `payload_json`
+/// column stays a `String` (raw JSON text) so callers can re-parse
+/// per row rather than committing to a typed shape upfront —
+/// different `kind` values carry different payload schemas today,
+/// and a locked struct would force premature commitments.
+///
+/// C4 PR1 follow-up (check phase, 2026-06-14): the struct uses
+/// `#[serde(rename_all = "camelCase")]` — NOT plain snake_case —
+/// matching every other `db::*Row` type that crosses the IPC
+/// boundary (`SessionRow`, `SessionSummary`, `ProviderRow`,
+/// `ModelRow`). The Rust fields stay snake_case (per Rust style)
+/// but the wire shape is camelCase: the C4 audit-log UI's TS
+/// interface reads `sessionId` / `payloadJson`, not `session_id`
+/// / `payload_json`. This is mandated by
+/// `.trellis/spec/backend/database-guidelines.md` ("All Serialize
+/// structs that cross the IPC boundary have
+/// #[serde(rename_all = \"camelCase\")]") and confirmed by every
+/// existing Row struct in `db/types.rs`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditEventRow {
  pub id: i64,
  pub session_id: String,

@@ -34,7 +34,7 @@
 // action handlers (attach / detach / delete + confirm modal),
 // and delegates the chip + diff UI to the new components.
 
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import MessageList from "./MessageList.vue";
@@ -43,6 +43,7 @@ import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
 import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
+import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionModal from "./PermissionModal.vue";
 import Icon from "../Icon.vue";
 
@@ -303,6 +304,36 @@ function onDeleteCancel() {
 
 const memoryModalOpen = ref(false);
 
+// -----------------------------------------------------------------------
+// Audit entry (C4 audit-log UI, 2026-06-14 PR2)
+// -----------------------------------------------------------------------
+//
+// A shield icon button next to the Memory button opens the
+// AuditLogModal. The modal is bound to the CURRENT session (not
+// the project), so it's `v-if`'d on `chatStore.currentSessionId`
+// — Memory uses `projectsStore.currentProjectId` because memory
+// files live at the project level, whereas audit events live at
+// the session level. When the user switches session while the
+// modal is open, the `watch(currentSessionId)` below closes it
+// (PRD edge case "切 session 时 Modal 开着" → 关闭 Modal,换
+// 上下文).
+
+const auditModalOpen = ref(false);
+
+watch(
+  () => chatStore.currentSessionId,
+  () => {
+    // Switching session while the audit modal is open closes it
+    // so the next open rebinds to the new session (the modal's
+    // `boundSessionId` reads `chatStore.currentSessionId` at
+    // open time, so closing here forces the next open to use
+    // the new id).
+    if (auditModalOpen.value) {
+      auditModalOpen.value = false;
+    }
+  },
+);
+
 /** Esc key handling — closes whichever popup is on top: delete
  *  confirm → worktree dropdown → diff modal. Popovers inside
  *  `WorktreeChip` handle their own Esc when focused.
@@ -377,6 +408,24 @@ if (typeof window !== "undefined") {
         >
           <Icon name="brain" :size="14" />
         </button>
+        <!--
+                  C4 audit-log entry (2026-06-14 PR2). Sits next to
+                  the Memory button but is gated on the CURRENT
+                  SESSION (not project) — audit events are scoped to
+                  a session via the `session_audit_events.session_id`
+                  FK. The watcher above closes the modal if the user
+                  switches session while it's open.
+                -->
+        <button
+          v-if="chatStore.currentSessionId"
+          class="chat-panel__audit-btn"
+          type="button"
+          title="查看会话审计日志"
+          aria-label="Audit"
+          @click="auditModalOpen = true"
+        >
+          <Icon name="shield-check" :size="14" />
+        </button>
       </div>
     </header>
 
@@ -447,6 +496,15 @@ if (typeof window !== "undefined") {
           outside-click close via reka-ui Dialog.
         -->
     <MemoryModal v-model:open="memoryModalOpen" />
+
+    <!--
+          C4 audit-log modal (2026-06-14 PR2). See the script
+          comment above for context. The modal handles its own
+          focus trap / ESC / outside-click close via reka-ui
+          Dialog. The watcher on `chatStore.currentSessionId`
+          closes the modal on session switch.
+        -->
+    <AuditLogModal v-model:open="auditModalOpen" />
 
     <!--
           A2 + B7 PR3: ⑨ 关 permission modal. Single modal,
@@ -575,6 +633,36 @@ if (typeof window !== "undefined") {
 }
 
 .chat-panel__memory-btn:active {
+  background: var(--color-bg-border);
+}
+
+/* C4 audit-log entry button (2026-06-14 PR2). Sits to the right
+   of the Memory button. Visually identical to the memory button
+   (chip-family icon button) so the two read as a pair. */
+.chat-panel__audit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  font-family: inherit;
+}
+
+.chat-panel__audit-btn:hover {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.chat-panel__audit-btn:active {
   background: var(--color-bg-border);
 }
 

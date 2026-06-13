@@ -51,6 +51,7 @@
 | **A2 + B7** 权限系统 + 多模式(合并工作组) | 06-12/13 | ⑨ 关 5-tier 决策层(path-based,re-grill SOT)+ 3 档 Mode(`edit` / `plan` / `yolo`,`Background` enum 留位 UI 不暴露) + `match_kind` 3 种 wire 全连(`tool` / `prefix` / `path`)+ YoloConfirmModal + PermissionModal 路径范围行 + ⑯ 审计日志 10 类 AuditKind。`tools::web_fetch` 也接入 ⑨(Tier 4 走 `match_kind='tool'`) |
 | **Mode 3 档化**(Q4 P2 后续) | 06-13 | `Mode::Chat → Edit` 改名 + `Mode::Review` 移除(行为跟 Plan 重复);v6 migration 启动时跑两次幂等 UPDATE;**breaking wire rename**,不保留 alias |
 | **A7** RDP 双屏 position bug 修复 | 06-14 | 根因 = Wayland 禁止客户端 setPosition(WSLg/Weston 忽略,#14913 非可绕过),放弃手动铺满整屏,全平台改原生 `toggleMaximize()`;详见 [IMPLEMENTATION §4 2026-06-14](./IMPLEMENTATION.md#4-决策日志) |
+| **C4** 审计日志查询 UI | 06-14 | ⑩ `tool_executed` 落表(`record_tool_executed_audit`,payload `{tool_name, tool_input, duration_ms, exit_code}`)+ Tauri command `list_session_audit_events` + `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选 + 计数 + 刷新 + 按 kind 分发渲染)。⑬ ⑮ 仍只 tracing(收益低)。完整 PRD 走 `.trellis/tasks/06-14-audit-log-query-ui/`,架构描述见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md#258-⑯-审计日志a2--b7-pr1--c4-pr1pr2-落地2026-06-1314已实施) |
 
 ---
 
@@ -60,14 +61,14 @@
 
 > A4 / B5 / C1 / D1 四项均已落地，详见 §1.2 已实施列表。
 
-### 🟡 第二档 — 大部分完成(2026-06-12/13,2 项进 §1,剩 5 项)
+### 🟡 第二档 — 大部分完成(2026-06-12/13/14,3 项进 §1,剩 4 项)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | ~~A2 + B7~~ | ~~权限系统 + 多模式(合并工作组)~~ | ✅ 06-12/13 落地,见 §1.2 |
 | ~~C3~~ | ~~Context 压缩 + token 硬卡~~ | ✅ 06-12 落地,见 §1.2 |
 | B3   | /command 命令面板 | 输入层扩展 |
-| C4   | 审计日志 | ✅ ⑨ ⑩ ⑬ ⑮ 事件回看写入已落地(2026-06-13 A2+B7 PR1);**待补** 审计日志 UI(C4 接管,见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md#258-⑯-审计日志a2--b7-pr1-落地2026-06-13已实施) 末尾"UI 查询 (C4 任务)") |
+| ~~C4~~ | ~~审计日志~~ | ✅ 06-13/14 落地,见 §1.2(⑨ ⑩ 写入 + 查询 UI)|
 | B2   | @文件补全 | 输入层扩展 |
 | D2   | SQLite FTS5 全局搜索 | 历史消息可检索 |
 | D3   | session 内消息编辑 / 重发 | session 灵活交互 |

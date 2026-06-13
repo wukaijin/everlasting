@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR1 record_audit_event 写入 + list_audit_events 查询 + db test pool 规范"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "⑩ tool 执行落表点定位 + duration 来源（F5 tool duration 字段是否可复用）"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "PR2 stores/audit.ts 必须遵循 Pinia facade/单源模式（CLAUDE.md 强调改 store 前必读）"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "AuditLogModal 用 reka-ui Dialog + scoped/portal 的 :deep() gotcha"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "critical 红左条 + 带色 icon + duration 用 token，禁止硬编码 hex"}
+{"file": ".trellis/spec/frontend/memory-ui.md", "reason": "MemoryModal 是最直接的对称参考（header 入口按钮 + v-model:open Modal 模式）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "AuditEventRow serde wire + 前端按 kind 分发渲染的跨层一致性"}

@@ -675,14 +675,13 @@ agent loop 结束(text-only response or max_turns reached):
 - **超限**:`channel.send("rate_limited, retrying in Xs")`,前端提示,自动重试
 - **不能省**:省钱 + 避免封号;Anthropic 429 是软警告,3 次之后硬封
 
-#### 2.5.8 ⑯ 审计日志(A2 + B7 PR1 落地,2026-06-13,**已实施**)
+#### 2.5.8 ⑯ 审计日志(A2 + B7 PR1 + C4 PR1/PR2 落地,2026-06-13/14,**已实施**)
 
 **每次记录**:
 - ⑨ 权限决策(10 类 `AuditKind` 枚举,见下)
-- ⑩ tool 执行(tool_name, args, duration, exit_code — 部分由
-  F5 tool duration 字段携带)
-- ⑬ 循环检测触发次数
-- ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出)
+- ⑩ tool 执行(C4 PR1, 2026-06-14 落表:tool_name, tool_input, duration_ms, exit_code — `record_tool_executed_audit` 在 agent loop tool 执行完成处写)
+- ⑬ 循环检测触发次数(只 `tracing::info!`,**未落表** — 收益低,C4 OOS)
+- ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出;**未落表** — daemon 化前是单 client,无路由可记)
 
 **存储**:`session_audit_events` 表(SQLite),schema:
 ```sql
@@ -698,7 +697,7 @@ CREATE INDEX idx_session_audit_events_session_ts
     ON session_audit_events(session_id, ts DESC);
 ```
 
-**10 类 AuditKind**(`agent::permissions::AuditKind`):
+**11 类 AuditKind**(`agent::permissions::AuditKind`,C4 PR1 加 `ToolExecuted`):
 | Kind | 触发条件 |
 |---|---|
 | `tool_denied` | Tier 2 命中 + Tier 3 user deny + Tier 3 sender dropped |
@@ -710,29 +709,53 @@ CREATE INDEX idx_session_audit_events_session_ts
 | `mode_changed` | `set_session_mode` 调用 |
 | `yolo_entered` / `yolo_exited` | Mode 在 Yolo 之间切换 |
 | `request_cancelled` | C1 cancel 触发(tier 3 await 被 cancel 打断) |
+| `tool_executed`(C4 PR1, 2026-06-14)| ⑩ tool 执行完成(agent loop 调 `record_tool_executed_audit`) |
 
-**统一 payload JSON 结构**(`permissions::record_audit`):
+**统一 payload JSON 结构** — 按 kind 分发:
+
+⑨ 关类(7 种走 `permissions::record_audit`,统一 `{tool_name, tool_input, reason?, mode, critical?}`):
 ```json
 {
   "tool_name": "shell",
   "tool_input": { "command": "ls -la" },
   "reason": "matches denylist: rm -rf /",
-  "mode": "chat",
+  "mode": "edit",
   "critical": true
 }
 ```
 
-`critical: bool` 字段对前端 `PermissionModal` 的 3px 红左 border
-+ shield-x icon 渲染至关重要(PR1 follow-up 加,PR3 使用)。
+⑩ `tool_executed` payload(C4 PR1,独立 helper `record_tool_executed_audit`):
+```json
+{
+  "tool_name": "shell",
+  "tool_input": { "command": "cargo build" },
+  "duration_ms": 3210,
+  "exit_code": 0
+}
+```
+`exit_code` 是 `Option<i32>`:`null` = 该 tool 无 exit code(read_file / write_file / edit_file / grep / glob / list_dir / web_fetch);`0` = 成功;`-1` = 被 kill(timeout / cancel);非 0 = 失败。C4 前端按值着色(绿 / 警示 / 红)。
+
+⑯ mode 类(`set_session_mode` 直接 inline 写,不走 `record_audit`):
+```json
+{
+  "prev_mode": "edit",
+  "new_mode": "yolo"
+}
+```
+
+`critical: bool` 字段对前端 `PermissionModal` 的 3px 红左 border + shield-x icon 渲染至关重要;`tool_denied` / `tool_denied_yolo` = `true`,其他 ⑨ 关类 = `false`。
 
 **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错
 (必须保证不破坏 agent loop)。
 
-**UI 查询**(C4 任务):本期不实现 UI(仅写表),C4 接走查询 UI。
+**UI 查询**(C4 任务,2026-06-14 PR2 已实施):
+- Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`(`camelCase` wire:`id` / `sessionId` / `ts` / `kind` / `payloadJson: Option<String>`)
+- 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog)挂在 `ChatPanel` header Memory 按钮旁,绑当前 session。顶部 kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;列表按 `ts DESC, id DESC` 排序(秒精度 tie 由 `id DESC` 稳定化),按 kind 分发渲染 reason / duration+exit_code / mode from→to。critical 事件 3px 红左条(复用 PermissionModal 约定)。MVP 全量拉取,无分页 / 无虚拟滚动 / 无实时推送。
 
 **用途**:回看"agent 刚才为啥没做 X"、"那次权限拒绝是不是太严了"、
-"哪步最慢"、Yolo 模式下被静默拒绝的 hard-kill 命令审计
-(`tool_denied_yolo` 字段配合 `critical: true`)。
+"哪步最慢"(⑩ `tool_executed` 落表后可用)、Yolo 模式下被静默
+拒绝的 hard-kill 命令审计(`tool_denied_yolo` 字段配合
+`critical: true`)。
 
 ---
 

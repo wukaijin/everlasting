@@ -170,6 +170,12 @@ pub enum AuditKind {
  PermissionTimeout,
  /// C1 cancel 触发的请求终止 (与 Tier 3 deny 区分)
  RequestCancelled,
+ /// ⑩ tool 执行完成 (C4 任务 PR1, 2026-06-14): payload 携带
+ /// `tool_name` / `tool_input` / `duration_ms` / `exit_code`,
+ /// 用于"哪步最慢 / 哪步报错"的事后回看。落表点在 agent
+ /// loop 拿到 `execute_tool` 返回值之后 (duration + exit_code
+ /// 已知), 见 `agent/chat.rs` 的 tool 执行循环。
+ ToolExecuted,
 }
 
 impl AuditKind {
@@ -185,6 +191,7 @@ impl AuditKind {
  Self::ToolDeniedYolo => "tool_denied_yolo",
  Self::PermissionTimeout => "permission_timeout",
  Self::RequestCancelled => "request_cancelled",
+ Self::ToolExecuted => "tool_executed",
  }
  }
 }
@@ -1135,6 +1142,52 @@ async fn record_audit(
  .await
 }
 
+/// C4 PR1 (2026-06-14): record a `tool_executed` audit row. Unlike
+/// [`record_audit`], this row carries **duration + exit_code**
+/// instead of the ⑨ 关 payload shape (`reason` / `mode` /
+/// `critical`). The agent loop calls this from the tool-execution
+/// loop right after `execute_tool` returns, with the wall-clock
+/// delta measured in the loop and the exit code the tool reported.
+///
+/// **Best-effort** (same contract as `record_audit`): a DB write
+/// failure is logged at `warn!` and swallowed — the agent loop
+/// never sees the error and continues normally.
+///
+/// `duration_ms` is `u128` from `Duration::as_millis()`; JSON has
+/// no problem serializing the wider type and the value in practice
+/// is well under `u64::MAX` (a single tool call rarely exceeds
+/// MAX_TIMEOUT_MS = 600_000ms).
+///
+/// `exit_code` is `None` for tools that don't produce one
+/// (`read_file` / `write_file` / `edit_file` / `grep` / `glob` /
+/// `list_dir` / `web_fetch`); `Some(code)` for `shell`. The C4
+/// audit-log UI uses `Some(0)` vs `Some(non-zero)` to color the
+/// icon, and `None` for "N/A" — don't hardcode 0 to represent
+/// "no exit code", that would conflate "succeeded" with "N/A".
+pub async fn record_tool_executed_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    duration_ms: u128,
+    exit_code: Option<i32>,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ToolExecuted.as_str(),
+        Some(&payload_str),
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // ⑧a Mode check helpers — used by agent/chat.rs before every turn
 // ---------------------------------------------------------------------------
@@ -1283,11 +1336,16 @@ mod tests {
         AuditKind::ToolDeniedYolo,
         AuditKind::PermissionTimeout,
         AuditKind::RequestCancelled,
+        AuditKind::ToolExecuted,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
         assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
     }
+    // C4 PR1 (2026-06-14): lock the new variant's wire string so a
+    // future rename / typo here breaks the test instead of corrupting
+    // audit rows the frontend can no longer dispatch on.
+    assert_eq!(AuditKind::ToolExecuted.as_str(), "tool_executed");
  }
 
  // =====================================================================

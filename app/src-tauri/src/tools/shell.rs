@@ -168,12 +168,21 @@ pub fn definition() -> ToolDef {
 /// 2. `tokio::select!` between `child.wait()` and `cancel.cancelled()`
 /// 3. On cancel: `child.kill()` + collect partial stdout/stderr
 /// 4. On normal completion: collect full output as before
+///
+/// **C4 PR1 (2026-06-14)**: returns a 4-tuple
+/// `(content, is_error, update, exit_code)`. The `exit_code` is
+/// `Some(code)` once the child process has run (the `[exit code: N]`
+/// line the formatted content carries is sourced from here). The
+/// early-out paths that never spawn a child (`Missing required
+/// parameter`, `working_directory rejected`, `Failed to spawn`)
+/// return `None` — there's no process to ask. The agent loop feeds
+/// the value into the `tool_executed` audit row.
 pub async fn execute(
     input: &serde_json::Value,
     ctx: &ToolContext,
     _session_id: Option<&str>,
     cancel: &CancellationToken,
-) -> (String, bool, ToolContextUpdate) {
+) -> (String, bool, ToolContextUpdate, Option<i32>) {
     let command = match input.get("command").and_then(|v| v.as_str()) {
         Some(c) => c,
         None => {
@@ -181,6 +190,7 @@ pub async fn execute(
                 "Missing required parameter: command".to_string(),
                 true,
                 ToolContextUpdate::default(),
+                None,
             );
         }
     };
@@ -204,6 +214,7 @@ pub async fn execute(
                 ),
                 true,
                 ToolContextUpdate::default(),
+                None,
             );
         }
     };
@@ -237,6 +248,7 @@ pub async fn execute(
                 format!("Failed to spawn command: {}", e),
                 true,
                 ToolContextUpdate::default(),
+                None,
             );
         }
     };
@@ -286,6 +298,7 @@ pub async fn execute(
                         format!("Failed to execute command: {}", e),
                         true,
                         update,
+                        None,
                     );
                 }
             }
@@ -303,17 +316,23 @@ pub async fn execute(
     }
 
     let is_error = result.cancelled || result.timed_out || exit_code != 0;
+    // The child ran; surface the exit code so the agent loop can
+    // audit it (C4 PR1). `result.exit_code` is `-1` only on the
+    // kill-and-collect path when the wait returned no status —
+    // we still surface it rather than collapsing to None so the
+    // audit row records "killed (-1)" distinct from "no exit code".
+    let reported_exit_code = Some(exit_code);
 
     // 6. If cancelled, prepend marker.
     if result.cancelled {
         combined = format!("[cancelled, partial output]\n{}", combined);
-        return (combined, true, update);
+        return (combined, true, update, reported_exit_code);
     }
 
     // 7. If timed out, prepend marker with the timeout duration.
     if result.timed_out {
         combined = format!("[timeout after {}ms, partial output]\n{}", timeout_ms, combined);
-        return (combined, true, update);
+        return (combined, true, update, reported_exit_code);
     }
 
     // 8. Disk-spill: if output exceeds 30 KB, write the FULL output
@@ -331,7 +350,7 @@ pub async fn execute(
                     preview,
                     exit_code
                 );
-                return (msg, is_error, update);
+                return (msg, is_error, update, reported_exit_code);
             }
             Err(e) => {
                 tracing::warn!(
@@ -344,7 +363,7 @@ pub async fn execute(
     }
 
     // 9. Inline path: apply the 50 KB head+tail truncation.
-    (truncate_output(combined), is_error, update)
+    (truncate_output(combined), is_error, update, reported_exit_code)
 }
 
 /// Write `contents` to `<cwd>/.everlasting/outputs/<uuid>.txt`,
@@ -452,7 +471,7 @@ mod tests {
     #[tokio::test]
     async fn execute_echo() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, update) = execute(
+        let (content, is_error, update, _) = execute(
             &serde_json::json!({"command": "echo hello"}),
             &test_ctx(&tmp),
             None,
@@ -469,7 +488,7 @@ mod tests {
     #[tokio::test]
     async fn execute_stderr_command() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "echo error >&2 && false"}),
             &test_ctx(&tmp),
             None,
@@ -483,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_command_param() {
         let tmp = tempdir().unwrap();
-        let (msg, is_error, _) = execute(
+        let (msg, is_error, _, _) = execute(
             &serde_json::json!({}),
             &test_ctx(&tmp),
             None,
@@ -500,7 +519,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
         let ctx = test_ctx(&tmp);
 
-        let (content, is_error, update) = execute(
+        let (content, is_error, update, _) = execute(
             &serde_json::json!({
                 "command": "pwd",
                 "working_directory": ctx.worktree_path.join("sub").to_string_lossy(),
@@ -522,7 +541,7 @@ mod tests {
     async fn execute_rejects_working_directory_outside_root() {
         let tmp = tempdir().unwrap();
         let ctx = test_ctx(&tmp);
-        let (msg, is_error, update) = execute(
+        let (msg, is_error, update, _) = execute(
             &serde_json::json!({
                 "command": "ls",
                 "working_directory": "/etc",
@@ -547,7 +566,7 @@ mod tests {
     async fn execute_rejects_nonexistent_working_directory() {
         let tmp = tempdir().unwrap();
         let ctx = test_ctx(&tmp);
-        let (msg, is_error, _) = execute(
+        let (msg, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "ls",
                 "working_directory": ctx
@@ -576,7 +595,7 @@ mod tests {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: PathBuf::from("/etc"),
         };
-        let (msg, is_error, _) = execute(
+        let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),
             &ctx,
             None,
@@ -591,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn small_output_inline() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "echo hello world"}),
             &test_ctx(&tmp),
             None,
@@ -610,7 +629,7 @@ mod tests {
     async fn large_output_spills_to_disk() {
         let tmp = tempdir().unwrap();
         // Generate ~40 KB of stdout.
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "yes line | head -c 40000"}),
             &test_ctx(&tmp),
             None,
@@ -677,7 +696,7 @@ mod tests {
         // Give the child a moment to start, then cancel.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         token.cancel();
-        let (content, is_error, _) = handle.await.unwrap();
+        let (content, is_error, _, _) = handle.await.unwrap();
         assert!(is_error);
         assert!(
             content.contains("[cancelled, partial output]"),
@@ -693,7 +712,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let token = CancellationToken::new();
         token.cancel();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "sleep 60"}),
             &test_ctx(&tmp),
             None,
@@ -802,7 +821,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let ctx = test_ctx(&tmp);
         let token = fresh_token();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "sleep 60",
                 "timeout": 500
@@ -830,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn no_timeout_uses_default() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "echo hello"}),
             &test_ctx(&tmp),
             None,
@@ -846,7 +865,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_zero_treated_as_default() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "echo ok",
                 "timeout": 0
@@ -864,7 +883,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_negative_treated_as_default() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "echo ok",
                 "timeout": -1
@@ -882,7 +901,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_exceeds_max_clamped() {
         let tmp = tempdir().unwrap();
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "echo clamped",
                 "timeout": 999999999
@@ -904,7 +923,7 @@ mod tests {
         let ctx = test_ctx(&tmp);
         let token = fresh_token();
         // Use a short timeout. Don't cancel — let timeout fire.
-        let (content, is_error, _) = execute(
+        let (content, is_error, _, _) = execute(
             &serde_json::json!({
                 "command": "sleep 10",
                 "timeout": 300

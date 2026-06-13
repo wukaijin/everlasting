@@ -75,7 +75,8 @@ pub struct ToolContextUpdate {
     pub new_cwd: Option<PathBuf>,
 }
 
-/// Execute a tool by name. Returns `(content_string, is_error, ctx_update)`.
+/// Execute a tool by name. Returns `(content_string, is_error,
+/// ctx_update, exit_code)`.
 ///
 /// `ctx` is injected (not held) — see `PROPOSAL §4.4` / GLM review
 /// §1.2. Tools are pure functions, testable in isolation.
@@ -92,6 +93,16 @@ pub struct ToolContextUpdate {
 /// Tools that need custom cleanup (e.g. killing a child process)
 /// receive the token in their own execute signature; the outer
 /// select! provides a generic safety net for all tools.
+///
+/// **exit_code (C4 PR1, 2026-06-14)**: the 4th tuple element is
+/// `Option<i32>`. Only `shell` returns `Some(code)` (the child
+/// process exit status); every other tool returns `None` (they
+/// don't spawn a process). The agent loop feeds this into the
+/// `tool_executed` audit row so the C4 audit-log UI can color
+/// non-zero exit codes without re-parsing the formatted content
+/// string. **Never** use `Some(0)` as a sentinel for "no exit
+/// code" — that conflates a successful shell run with the "N/A"
+/// case the UI renders for path tools.
 pub async fn execute_tool(
     name: &str,
     input: &serde_json::Value,
@@ -99,7 +110,7 @@ pub async fn execute_tool(
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
     cancel: CancellationToken,
-) -> (String, bool, ToolContextUpdate) {
+) -> (String, bool, ToolContextUpdate, Option<i32>) {
     // C1: generic cancel wrapper for all tools. The `biased;` ensures
     // the cancel arm is polled first when both are ready, so a
     // cancelled request returns immediately even if the tool future
@@ -108,7 +119,7 @@ pub async fn execute_tool(
         biased;
         _ = cancel.cancelled() => {
             tracing::info!(tool = %name, "execute_tool: cancelled before/during tool execution");
-            ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default())
+            ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default(), None)
         }
         result = execute_tool_inner(name, input, ctx, guard, session_id, &cancel) => {
             result
@@ -125,52 +136,54 @@ async fn execute_tool_inner(
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
     cancel: &CancellationToken,
-) -> (String, bool, ToolContextUpdate) {
+) -> (String, bool, ToolContextUpdate, Option<i32>) {
     match name {
         "read_file" => {
             let (out, is_err) = read_file::execute(input, ctx, guard, session_id).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         "write_file" => {
             let (out, is_err) = write_file::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         "edit_file" => match (guard, session_id) {
             (Some(g), Some(sid)) => {
                 let (out, is_err) = edit_file::execute(input, ctx, g, sid).await;
-                (out, is_err, ToolContextUpdate::default())
+                (out, is_err, ToolContextUpdate::default(), None)
             }
             _ => (
                 "edit_file called without a ReadGuard / session_id; this is a bug."
                     .to_string(),
                 true,
                 ToolContextUpdate::default(),
+                None,
             ),
         },
         "shell" => {
-            let (out, is_err, update) = shell::execute(input, ctx, session_id, cancel).await;
-            (out, is_err, update)
+            let (out, is_err, update, exit_code) = shell::execute(input, ctx, session_id, cancel).await;
+            (out, is_err, update, exit_code)
         }
         "grep" => {
             let (out, is_err) = grep::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         "glob" => {
             let (out, is_err) = glob::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         "list_dir" => {
             let (out, is_err) = list_dir::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         "web_fetch" => {
             let (out, is_err) = web_fetch::execute(input, ctx).await;
-            (out, is_err, ToolContextUpdate::default())
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         _ => (
             format!("Unknown tool: {}", name),
             true,
             ToolContextUpdate::default(),
+            None,
         ),
     }
 }

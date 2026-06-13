@@ -1062,7 +1062,18 @@ pub async fn chat(
                     continue;
                 }
 
-                let (content, is_error, update) = crate::tools::execute_tool(
+                // C4 PR1 (2026-06-14): record wall-clock start for
+                // the `tool_executed` audit row's `duration_ms` field.
+                // The F5 `record_tool_duration` IPC measures duration
+                // on the frontend (`Date.now()`); the agent loop
+                // needs its own backend-side measurement because (a)
+                // the audit write happens here, not in the frontend,
+                // and (b) the IPC value would be racy with the
+                // frontend's own bookkeeping. The two clocks are
+                // independent by design (one drives the audit log,
+                // the other drives the per-tool chip latency UI).
+                let tool_exec_start = Instant::now();
+                let (content, is_error, update, exit_code) = crate::tools::execute_tool(
                     name,
                     input,
                     &current_ctx,
@@ -1071,6 +1082,32 @@ pub async fn chat(
                     token.clone(),
                 )
                 .await;
+                // C4 PR1 (2026-06-14): write the `tool_executed`
+                // audit row with the wall-clock duration + the
+                // exit_code the tool layer reported. Best-effort
+                // (failures are logged at warn! and swallowed —
+                // matches the existing ⑨ 关 audit contract). Only
+                // fire this AFTER the tool ran (we are past the
+                // permission check and past `execute_tool`), so the
+                // row carries a real duration + a real exit_code.
+                let duration_ms = tool_exec_start.elapsed().as_millis();
+                if let Err(e) = permissions::record_tool_executed_audit(
+                    &db,
+                    &session_id,
+                    name,
+                    input,
+                    duration_ms,
+                    exit_code,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        session_id = %session_id,
+                        tool = %name,
+                        "chat: record_tool_executed_audit failed (non-fatal)"
+                    );
+                }
                 // C1: if the tool was cancelled, set the flag so the
                 // agent loop enters the cancel cleanup path below
                 // (persist partial turn + synthetic tool_result).
