@@ -1143,3 +1143,67 @@ PRD 写"估 30-50 行改动"是低估,实际 80-100 行(后端 +30 / 前端 +60)
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: Session 25 — 2026-06-13: A2+B7 PR1-3 + 3 档化 + Mode UI redesign
+
+**Date**: 2026-06-13
+**Task**: Session 25 — 2026-06-13: A2+B7 PR1-3 + 3 档化 + Mode UI redesign
+**Branch**: `main`
+
+### Summary
+
+A2+B7 任务完整收尾: PR1 backend (442fb3d) + 8 check fixes (d0b9063) + PR1.5 手动 smoke 通过 + PR2 前端 (db0f762) + PR3 PermissionModal + spec sync (3a50212) + 2 check fixes (09da97c) + 3 档化 rename (39213c2) + ModeSelect UI redesign (da4da8a, 3 commit rebase 成 1)。
+
+## 主要改动
+- 后端 5 文件 + 前端 9 文件 + Icon.vue 加 lucide icons + spec 6 文件 + ARCHITECTURE 升级 + ADR 进 IMPLEMENTATION.md §4
+- DB v5 改默认 mode='edit' + v6 backfill (chat→edit, review→plan, 启动跑)
+- ⑨ 关 5 道 check + ⑧a 三重防御 + Yolo 4 件套 + 10 AuditKind 完整
+- Tier 4 matches!(ctx.mode, Mode::Plan) (3 档化后 Review 移除)
+- 前端 ModeSelect popover (4 options → 3 options: Edit/Plan/Yolo) + YoloConfirmModal + PermissionModal + usePermissionsStore + permission:ask IPC
+- 30 AC (后端 10 + 前端 4 + 持久化 2 + PermissionModal 14) 全部通过
+- 3 档化: grill-with-docs session 重新设计 (rename Chat→Edit, drop Review, 3 commit 合并 1) + ModeSelect 字体加大 + 3 档颜色 (Edit 蓝/Plan 青/Yolo 红) + 拆出 hint row 放 input row 左侧
+
+## 测试
+- cargo test --lib 398 passed (含 27 PR1 permission 测试)
+- pnpm vitest run 153 passed (含 33 PR2 + 28 PR3 新增)
+- pnpm build 干净 (vue-tsc + vite, 4.50s)
+- 4 unhandled errors pre-existing in streamController.test.ts (不在本任务)
+
+## 已知未做 (移到 backlog)
+- PR3.5 手动 smoke (docs/_reviews/PR3-SMOKE-TEST.md 5 case): 用户后续跑 pnpm tauri dev 验证
+- Risk gate (Chat 模式跳过 Tier 3 Low/Medium risk): grill Q1 锁定 A 纯改名, risk gate 留 backlog
+- cancel_session_asks 改为 HashMap<(session_id, rid), Sender>: 留 future PR
+- bug 1+2 (RDP 双显示器 position): 已知 issue 不在 PR 范围
+
+## 决策记录
+- docs/IMPLEMENTATION.md §4 加 2026-06-13 'Mode 3 档化' ADR (Context / Decision / Alternatives / 影响范围)
+- grill-with-docs 7 题决策 (Q1 语义 / Q2 DB+wire / Q3 label+icon / Q4 位置 / Q5 交互 / Q6 落地 / Q7 commit)
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `442fb3d` | (see git log) |
+| `d0b9063` | (see git log) |
+| `db0f762` | (see git log) |
+| `3a50212` | (see git log) |
+| `09da97c` | (see git log) |
+| `39213c2` | (see git log) |
+| `da4da8a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
