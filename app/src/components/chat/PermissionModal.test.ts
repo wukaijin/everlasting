@@ -56,6 +56,7 @@ import {
   usePermissionsStore,
   type PermissionAsk,
 } from "../../stores/permissions";
+import { useChatStore } from "../../stores/chat";
 
 function mountModal(): VueWrapper {
   return mount(PermissionModal, {
@@ -306,5 +307,115 @@ describe("PermissionModal", () => {
     const reason = qs(".permission-modal__reason");
     expect(reason).not.toBeNull();
     expect(reason!.textContent).toBe("matches denylist: rm -rf /");
+  });
+
+  // -----------------------------------------------------------------
+  // Path range row (re-grill 2026-06-13 PR2, Q10)
+  // -----------------------------------------------------------------
+  //
+  // The modal renders a "path range" row between the subtitle and
+  // the command preview block ONLY when `ask.path` is set. The
+  // badge text + color depend on whether the path is inside the
+  // session's `currentCwd` (computed via the `isPathInRoot`
+  // helper in `app/src/utils/path.ts`).
+  //
+  // The chat store's `currentCwd` is wired in `ChatWindow.vue`;
+  // for the test we set it explicitly via the store API so the
+  // in-repo / out-of-repo decision is reproducible without
+  // spinning up a full Tauri session.
+
+  it("renders path range row with 仓库内 badge when path is inside currentCwd", async () => {
+    const store = useChatStore();
+    store.currentCwd = "/repo";
+    seedAsk({
+      rid: "rid-path-inrepo",
+      toolName: "write_file",
+      toolInput: { path: "/repo/src/foo.ts", content: "..." },
+      risk: "medium",
+      path: "/repo/src/foo.ts",
+    });
+    wrapper = mountModal();
+    await nextTick();
+    const row = qs(".permission-modal__path-range");
+    expect(row).not.toBeNull();
+    const text = qs(".permission-modal__path-range-text");
+    expect(text).not.toBeNull();
+    expect(text!.textContent).toBe("/repo/src/foo.ts");
+    const badge = qs(".permission-modal__path-range-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("仓库内");
+    // Badge color references the emerald tool-color token.
+    expect(badge!.getAttribute("style") ?? "").toContain(
+      "--color-tool-write",
+    );
+  });
+
+  it("renders path range row with 仓库外 badge when path is outside currentCwd", async () => {
+    const store = useChatStore();
+    store.currentCwd = "/repo";
+    seedAsk({
+      rid: "rid-path-outrepo",
+      toolName: "read_file",
+      toolInput: { path: "/etc/hosts" },
+      risk: "low",
+      path: "/etc/hosts",
+    });
+    wrapper = mountModal();
+    await nextTick();
+    const row = qs(".permission-modal__path-range");
+    expect(row).not.toBeNull();
+    const badge = qs(".permission-modal__path-range-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("仓库外");
+    // Badge color references the amber tool-color token.
+    expect(badge!.getAttribute("style") ?? "").toContain(
+      "--color-tool-shell",
+    );
+  });
+
+  it("does NOT render path range row when path is absent (shell)", async () => {
+    seedAsk({
+      rid: "rid-no-path-shell",
+      toolName: "shell",
+      toolInput: { command: "echo hi" },
+      risk: "high",
+    });
+    wrapper = mountModal();
+    await nextTick();
+    expect(qs(".permission-modal__path-range")).toBeNull();
+  });
+
+  it("does NOT render path range row when path is absent (web_fetch)", async () => {
+    seedAsk({
+      rid: "rid-no-path-webfetch",
+      toolName: "web_fetch",
+      toolInput: { url: "https://example.com" },
+      risk: "medium",
+    });
+    wrapper = mountModal();
+    await nextTick();
+    expect(qs(".permission-modal__path-range")).toBeNull();
+  });
+
+  it("treats prefix-trap path as out-of-repo (defends against /repo/foobar vs /repo/foo)", async () => {
+    // Mirrors the Rust is_within_root edge case #5: /repo/foobar
+    // must NOT be treated as inside /repo/foo. The frontend
+    // helper has the same predicate so the badge should be
+    // "仓库外" (amber) — better to ask one extra time than to
+    // silently bypass the Tier 4 path gate.
+    const store = useChatStore();
+    store.currentCwd = "/repo/foo";
+    seedAsk({
+      rid: "rid-prefix-trap",
+      toolName: "write_file",
+      toolInput: { path: "/repo/foobar" },
+      risk: "medium",
+      path: "/repo/foobar",
+    });
+    wrapper = mountModal();
+    await nextTick();
+    const badge = qs(".permission-modal__path-range-badge");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toBe("仓库外");
   });
 });

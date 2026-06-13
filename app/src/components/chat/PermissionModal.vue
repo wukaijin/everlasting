@@ -1,17 +1,24 @@
 <script setup lang="ts">
-// PermissionModal — ⑨ 关 三-button 确认弹窗 (PR3 of A2 + B7).
+// PermissionModal — ⑨ 关 三-button 确认弹窗 (PR3 of A2 + B7,
+// path range row added in PR2 of re-grill 2026-06-13).
 //
 // Triggers when the backend agent loop emits `permission:ask`
 // (via `usePermissionsStore.pendingPermission`). Renders the
-// 5-part layout specified in
+// 6-part layout specified in
 // `.trellis/tasks/06-12-a2-b7-permission-and-mode/research/permission-modal-ux.md`
-// §"Final Output: 可粘贴到 PRD 的 spec 段落":
+// §"Final Output: 可粘贴到 PRD 的 spec 段落",
+// extended in re-grill Q10 with a **path range row** for path tools:
 //
 //   1. Header — shield icon 容器 (56x56, risk-tint bg) + 标题 + 关闭 X
 //   2. Subtitle — "Agent 想在项目 X 下执行以下操作:"
-//   3. Command preview — terminal icon + `<pre>` + copy icon
-//   4. Risk label — "工具类别: <tool> · 风险等级: <risk-label-cn>"
-//   5. Footer — 3 buttons (拒绝 / 仅一次 / 始终允许),critical 时
+//   3. Path range row — only for path tools (read_file / write_file
+//      / edit_file / list_dir / grep / glob); shows the path the
+//      agent wants to touch + an in-repo (emerald) / out-of-repo
+//      (amber) badge. For shell / web_fetch this row is entirely
+//      hidden (no empty placeholder, no layout shift).
+//   4. Command preview — terminal icon + `<pre>` + copy icon
+//   5. Risk label — "工具类别: <tool> · 风险等级: <risk-label-cn>"
+//   6. Footer — 3 buttons (拒绝 / 仅一次 / 始终允许),critical 时
 //      focus 改"拒绝"
 //
 // 关闭/取消语义 (per spec Q6):
@@ -25,17 +32,29 @@
 //   - Critical risk 时 modal 卡片左 border 3px red (3px 而非 4px —
 //     design-tokens.md "Border width is always 1px" 例外,跟
 //     YoloConfirmModal 的 3px 对齐)
+//   - Path range row badge: in-repo = `--color-tool-write`
+//     (emerald, same family as `write_file` tool color); out-of-repo
+//     = `--color-tool-shell` (amber, same family as `shell` tool
+//     color). Per re-grill spec the original brief mentioned
+//     `--color-tool-success` / `--color-tool-warning` but those
+//     tokens don't exist in `app/src/style.css` today; we reuse the
+//     closest existing tool-color tokens (same Tailwind 400-500
+//     palette) per design-tokens.md "Don't add a new `--color-*`
+//     token for a one-off use".
 //   - Reka-ui 2.9.9 `DialogContent` portals to <body> — see the
 //     `:deep()` gotcha notes in `.trellis/spec/frontend/reka-ui-usage.md`.
 //     All `permission-modal__*` classes used in CSS are wrapped in
 //     `:deep()`.
 //
 // 测试: `PermissionModal.test.ts` 覆盖 3-button emission, critical
-// risk focus, Esc/click-outside cancel, copy button. Reka-ui
-// `DialogContent` 的实际渲染由 component test 覆盖。
+// risk focus, Esc/click-outside cancel, copy button, path range
+// row presence/absence. Reka-ui `DialogContent` 的实际渲染由
+// component test 覆盖。
 
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import Icon from "../Icon.vue";
+import { useChatStore } from "../../stores/chat";
+import { isPathInRoot } from "../../utils/path";
 import {
   RISK_META,
   usePermissionsStore,
@@ -43,6 +62,7 @@ import {
 } from "../../stores/permissions";
 
 const store = usePermissionsStore();
+const chatStore = useChatStore();
 
 /** Open when there's a pending ask. Mirrors the
  *  `YoloConfirmModal` pattern of deriving `open` from a store
@@ -114,6 +134,48 @@ const riskLabelText = computed<string>(() => {
   if (!r) return "";
   return RISK_META[r].label;
 });
+
+/** Whether to render the path range row (re-grill 2026-06-13
+ *  PR2). Mirrors the backend's `#[serde(skip_serializing_if =
+ *  "Option::is_none")]` on `path`: true only when the active
+ *  ask has a `path` field. Shell / web_fetch leave this row
+ *  entirely hidden. */
+const hasPath = computed<boolean>(
+  () => typeof ask.value?.path === "string" && ask.value.path.length > 0,
+);
+
+/** The path string to display, or empty string when absent. */
+const pathText = computed<string>(() => ask.value?.path ?? "");
+
+/** In-repo vs out-of-repo flag. Mirrors the Rust
+ *  `projects::boundary::is_within_root` predicate (re-grill
+ *  2026-06-13). The frontend helper `isPathInRoot` is a
+ *  component-wise lexical match — see `.trellis/utils/path.ts`
+ *  for the rationale and edge cases.
+ *
+ *  Empty / unknown cwd (e.g. very early in app boot before the
+ *  chat store has resolved a session) → we treat the path as
+ *  "outside" defensively (out-of-repo badge). This matches the
+ *  "default-allow in-repo / ask out-of-repo" Tier 4 contract
+ *  from the re-grill spec — better to ask one extra time than
+ *  to silently bypass the gate. */
+const isInRepo = computed<boolean>(() => {
+  if (!hasPath.value) return false;
+  const root = chatStore.currentCwd;
+  if (!root) return false;
+  return isPathInRoot(pathText.value, root);
+});
+
+/** Path range row badge: "仓库内" (in-repo, emerald) or "仓库外"
+ *  (out-of-repo, amber). Color tokens reuse `--color-tool-write`
+ *  and `--color-tool-shell` (see file header note on the design
+ *  tokens naming). */
+const pathBadgeText = computed<string>(() =>
+  isInRepo.value ? "仓库内" : "仓库外",
+);
+const pathBadgeColor = computed<string>(() =>
+  isInRepo.value ? "var(--color-tool-write)" : "var(--color-tool-shell)",
+);
 
 /** Copy-state ref: `false` → show copy icon, `true` → show check
  *  icon (after a successful clipboard write). Auto-resets to
@@ -248,11 +310,40 @@ watch(
             </button>
           </header>
 
-          <!-- Body: subtitle + command preview + risk label -->
+          <!-- Body: subtitle + path range + command preview + risk label -->
           <div class="permission-modal__body">
             <p class="permission-modal__subtitle">
               Agent 想在当前项目下执行以下操作:
             </p>
+
+            <!-- Path range row (re-grill 2026-06-13 PR2, Q10):
+                 Only renders when `ask.path` is set (path tools —
+                 read_file / write_file / edit_file / list_dir /
+                 grep / glob). For shell / web_fetch the row is
+                 entirely absent (no empty placeholder, no layout
+                 shift). The badge reflects the in-repo / out-of-repo
+                 decision computed against the session's currentCwd;
+                 the badge color reuses the existing tool-color
+                 tokens (see file header note). -->
+            <div v-if="hasPath" class="permission-modal__path-range">
+              <span
+                class="permission-modal__path-range-icon"
+                aria-hidden="true"
+              >
+                <Icon name="folder" :size="14" />
+              </span>
+              <code class="permission-modal__path-range-text">{{ pathText }}</code>
+              <span
+                class="permission-modal__path-range-badge"
+                :style="{
+                  color: pathBadgeColor,
+                  borderColor: pathBadgeColor,
+                  background: `color-mix(in srgb, ${pathBadgeColor} 12%, transparent)`,
+                }"
+              >
+                {{ pathBadgeText }}
+              </span>
+            </div>
 
             <!-- Command preview block: terminal icon (left) +
                  <pre> + copy icon (right) -->
@@ -448,6 +539,60 @@ watch(
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
   line-height: 1.4;
+}
+
+/* Path range row (re-grill 2026-06-13 PR2). Renders only when
+   `ask.path` is set; the inline badge color is bound via :style
+   to the in-repo / out-of-repo tool-color token. The badge
+   uses an inline `style` for color + a 12% mix for background
+   (matches the risk-icon container's `iconTintStyle` pattern
+   above, so the visual language is consistent). */
+:deep(.permission-modal__path-range) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+:deep(.permission-modal__path-range-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+:deep(.permission-modal__path-range-text) {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:deep(.permission-modal__path-range-badge) {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 /* Command preview block: terminal icon (left) + <pre> (mid) +

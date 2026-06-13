@@ -63,6 +63,16 @@ export interface PermissionAsk {
    *  prompt is emitted; the modal renders it under the
    *  command preview when present. */
   reason?: string;
+  /** Path scope row (re-grill 2026-06-13, Q10 "保留 risk 字段
+   *  作 UI 视觉,加 path 范围行"). Only set for path tools
+   *  (read_file / write_file / edit_file / list_dir / grep /
+   *  glob); `undefined` for shell / web_fetch — the modal
+   *  hides the path range row entirely when this is absent
+   *  (no empty placeholder, no layout shift). The backend
+   *  serializes with `#[serde(skip_serializing_if =
+   *  "Option::is_none")]` so the field is truly absent on
+   *  the wire for non-path tools. */
+  path?: string;
 }
 
 /** Three-button response vocabulary. Matches the backend
