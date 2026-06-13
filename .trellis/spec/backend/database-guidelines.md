@@ -319,3 +319,73 @@ one, walk this checklist:
       function; cascade test for `ON DELETE CASCADE` parent
 - [ ] `PRAGMA foreign_keys = ON` in `test_pool` so cascade tests are
       real
+
+---
+
+## Pattern: `match_kind` discriminator for permission tables (added 2026-06-13)
+
+> **Source**: A2+B7 task `06-12-a2-b7-permission-and-mode` + re-grill
+> `06-13-a2-b7-regrill-path-based` (path-based model).
+
+The `session_tool_permissions` table uses a `match_kind` TEXT
+column with a CHECK constraint to discriminate between the
+three kinds of "always allow" rows the user can grant:
+
+```sql
+CREATE TABLE session_tool_permissions (
+    session_id TEXT NOT NULL,
+    tool_name  TEXT NOT NULL,
+    match_kind TEXT NOT NULL CHECK (match_kind IN ('tool', 'prefix', 'path')),
+    match_value TEXT,           -- NULL for 'tool', command-prefix or glob otherwise
+    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (session_id, tool_name, match_kind, match_value),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+```
+
+### Why `match_kind` and not a separate table
+
+Three reasons:
+
+1. **Same query path.** The Tier 4 lookup is
+   `SELECT match_value FROM session_tool_permissions WHERE
+    session_id = ? AND tool_name = ? AND match_kind = ?`.
+   A separate table would either force the same column
+   triplet on every tool-type table (3 × duplicate) or
+   a UNION across tables (3 × the indexes).
+2. **Uniqueness by composite key.** `(session_id,
+   tool_name, match_kind, match_value)` is the natural
+   composite key — a user shouldn't be able to grant
+   "the same path-glob twice" any more than "the same
+   prefix twice". Splitting across tables would lose
+   this natural UNIQUE invariant.
+3. **Single `ON DELETE CASCADE` foreign key.** All three
+   kinds are session-scoped, so one `sessions(id)` FK
+   covers everything. Splitting would force 3 FKs to
+   maintain.
+
+### Storage conventions per kind
+
+| `match_kind` | `match_value` | Example | Used for |
+|---|---|---|---|
+| `tool` | `NULL` | `NULL` | `web_fetch`, future tool-level grants |
+| `prefix` | first whitespace token of the shell command | `'cargo'` | Shell command prefixes (whitelist/asklist entries) |
+| `path` | sqlite GLOB pattern (parent + `/*`) | `'/Users/me/Documents/*'` | Path tools (read/write/edit/list_dir/grep/glob) |
+
+The GLOB in `path` uses sqlite GLOB semantics (`*` does
+NOT cross `/`, `?` matches one char). The re-grill PRD
+explicitly accepts that `**` recursion is **not** supported
+(`out of scope`).
+
+### Indexing
+
+The PK `(session_id, tool_name, match_kind, match_value)`
+covers the Tier 4 query as a covering index. No extra
+index is needed for the MVP.
+
+### PR1 vs re-grill diff
+
+PR1 of A2+B7 wrote only `match_kind='tool'`, `match_value=NULL`.
+The re-grill task wires the 3-variant schema. The CHECK
+constraint was already in place (it was reserved in the
+original schema), so no migration is needed.

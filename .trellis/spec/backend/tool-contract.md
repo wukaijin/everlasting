@@ -778,3 +778,74 @@ agent loop.
 PR3 不新增 backend 测试 — ⑨ 关 backend 行为已在 PR1 锁定;
 PR3 全部新增是 frontend store + modal 测试,见
 `llm-contract.md §8 "Tests Required" / Frontend`。
+
+---
+
+## Scenario: Path-based Permission Layer (A2+B7 re-grill, 2026-06-13)
+
+> **Source of truth**: this scenario supersedes the Tier 3 / Tier
+> 4 ordering in the previous "⑨ 关 Permission Decision Layer"
+> section above. The hard-kill-list (Tier 2) is INVARIANT —
+> `dangerous::is_kill_listed` is untouched. The re-grill only
+> restructures Tier 3-5 + adds path-based dispatch in Tier 4.
+> The new file `app/src-tauri/src/agent/permissions/shell_trust.rs`
+> is a Tier 4 helper. The IPC wire shape is **backward-
+> compatible** — `PermissionAskPayload` gained a `path` field
+> with `skip_serializing_if = "Option::is_none"`.
+
+### 1. New 5-Tier Order (re-grill SOT)
+
+```
+Tier 1. Hooks           (MVP no-op)
+Tier 2. Deny rules      (硬 kill list,shell 9 个 regex,Yolo 走)
+Tier 3. Mode check      (Plan 拦截 write/edit/shell,text 错,不发 modal)
+Tier 4. Path / Prefix / External policy
+       ├─ Path 工具:is_within_root → 查 session_tool_permissions
+       │   (match_kind='path') → hit Allow / miss silent(in) / miss ask(out)
+       ├─ Shell:classify_prefix → Allow(whitelist) / Ask(asklist + 未知)
+       └─ Web Fetch:查 match_kind='tool' for 'web_fetch' → hit Allow / miss ask
+       (Yolo:整段 bypass,直接 Allow;Tier 2 仍 hard wall)
+Tier 5. Allow rules     (default allow-all)
+Tier 6. Audit           (写 session_audit_events)
+```
+
+### 2. New files
+
+| File | Lines | Purpose |
+|---|---|---|
+| `app/src-tauri/src/agent/permissions/shell_trust.rs` | ~120 + tests | Whitelist (~60) + asklist (~30) const tables + `classify_prefix` (note: asklist is a curated reference list — both asklist hits and unknown prefixes collapse to `ShellTrust::Ask` in PR1; the split between "asklist" and "unknown" reason text is reserved for a future behavioral PR) |
+| `app/src-tauri/src/projects/boundary.rs` (extension) | +20 | `is_within_root` non-failing boolean (no canonicalize) |
+| `app/src-tauri/src/agent/permissions/mod.rs` (rewrite) | +200 -120 | 5-tier reorder + path dispatch + Tier 4 helpers |
+
+### 3. Wire compat
+
+- `PermissionAskPayload`: added `path: Option<String>`, `#[serde(skip_serializing_if = "Option::is_none")]` — old PermissionModal code that doesn't read `path` still works.
+- `commands::permissions::grant_tool_permission` Tauri command: added optional `match_kind` + `match_value` args; defaults to old behavior (`tool` / `None`) when omitted.
+
+### 4. Match-kind table (session_tool_permissions)
+
+| match_kind | match_value | Use case | Persistence trigger |
+|---|---|---|---|
+| `tool` | NULL | `web_fetch`, or any future tool with no path/prefix | Tier 4 "始终允许" on web_fetch / future tools |
+| `prefix` | first whitespace token | Shell commands (`cargo`, `git`, …) | Tier 4 "始终允许" on shell |
+| `path` | parent + `/*` glob | Path tools (`/Users/me/Documents/*`) | Tier 4 "始终允许" on read/write/edit/list_dir/grep/glob |
+
+### 5. Out of scope (re-grill ⑨ 关)
+
+- shell 白名单/asklist UI 自定义:用户增删 — 留 PR3+
+- 跨 session 信任同步 — 留 future
+- path-glob `**` 递归 — 留 PR3+ 考虑自己写 matcher
+- prefix 通配符(`cargo *` glob)— 留 PR3+
+- "始终允许" 撤销 UI — 留 PR3+
+- web_fetch per-domain — 留 PR3+ 增 `match_kind='domain'`
+
+### 6. Tests added (re-grill)
+
+39 net new tests across `agent::permissions::shell_trust` (14
+new), `agent::permissions::tests` (17 new: 8 dispatch/extract/
+glob/payload tests + 9 carried-over mode/audit/risk/filter
+tests that survived the rewrite), and
+`projects::boundary::tests` (8 new — for `is_within_root`).
+Total backend suite: 437 tests (was 398 pre-PR1; +39 net new).
+See `cargo test --lib agent::permissions` and
+`cargo test --lib projects::boundary` output.

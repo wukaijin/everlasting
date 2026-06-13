@@ -501,6 +501,50 @@ Tier 6. Audit hook      — 每个决策路径写 session_audit_events
 - **超时 vs 主动 deny** 在 audit log 区分:`reason` 字段不同
   ("user denied" vs "permission timed out after 120s, treat as denied")
 
+#### 4.1. Re-grill update 2026-06-13: 5-tier 重排 + path-based 决策
+
+> Supersedes 4 节上述旧设计。Source of truth:
+> `.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md` §1。
+
+旧设计 ⑨ 关 Tier 3 "总是弹窗" 在 Edit 模式下读 README
+都要弹,反直觉;Tier 4 Mode check 在 Ask 之后让 Plan
+模式下"用户点始终允许,然后被 Mode 拒"成为坏交互。
+re-grill 锁定 10 决策,把决策层重构:
+
+**新 Tier 顺序**:
+
+```
+Tier 1. Hooks           (MVP no-op)
+Tier 2. Deny rules      (硬 kill list,shell 9 个 regex,Yolo 走 — 静默拒)
+Tier 3. Mode check      (Plan 拦截 write/edit/shell,text 错,不发 modal)
+Tier 4. Path / Prefix / External policy
+       ├─ Path 工具:is_within_root → 查 session_tool_permissions
+       │   (match_kind='path') → hit Allow / miss silent(in) / miss ask(out)
+       ├─ Shell:classify_prefix → Allow(whitelist) / Ask(asklist + 未知)
+       └─ Web Fetch:查 match_kind='tool' for 'web_fetch' → hit Allow / miss ask
+       (Yolo:整段 bypass,直接 Allow;Tier 2 仍 hard wall)
+Tier 5. Allow rules     (default allow-all)
+Tier 6. Audit           (写 session_audit_events)
+```
+
+**跟旧设计 diff**:
+
+| 改动 | 旧 (PR1) | 新 (re-grill) |
+|---|---|---|
+| Tier 顺序 | Hooks → Deny → Ask → Mode → Allow → Audit | Hooks → Deny → **Mode → Path/Prefix** → Allow → Audit |
+| 弹窗判定 | risk 等级 + 总是弹 | **path-based**:仓库内 silent,仓库外 ask |
+| Mode check 时机 | Tier 4(在 Ask 之后) | **Tier 3(在 Ask 之前)** — 消除 Plan + 始终允许坏交互 |
+| "始终允许"持久化 | 只 `tool` | **3 种 match_kind: tool + path-glob + prefix** |
+| shell 策略 | 总是 Tier 3 | **白名单/asklist/未知 三档**(prefix 解析) |
+| Yolo × 仓库外 | 走 Tier 3 modal | **silent**(Yolo bypass Tier 4) |
+| Tier 2 kill list | 9 regex | **不变** |
+| `PermissionAskPayload` | rid + tool + input + risk + reason | + **`path: Option<String>`** (新, `skip_serializing_if`) |
+| `Risk` 字段 | 4 档 | 不变(4 档,UI 视觉) |
+
+详细 ⑨ 关 contract 见 `tool-contract.md §"Scenario: Path-based
+Permission Layer"`,包括 `shell_trust::classify_prefix` 的
+whitelist / asklist 完整表。
+
 ### 5. ⑨ 关 ↔ `permission:ask` IPC 协议
 
 **Server → Client**:后端 `agent::permissions::check` Tier 3 发:

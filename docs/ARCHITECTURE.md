@@ -340,7 +340,7 @@ for event in stream {
   │               ② tool list 过滤掉 write_file/edit_file/shell,
   │               ③ Tier 4 runtime intercept 兜底(LLM 漏发 tool_use)
   ├─ Background → 同 Edit,但 emit 走 "background:" 前缀(MVP 移除 UI)
-  └─ Yolo       → full tool list + 跳过 Tier 3 user-ask,Tier 2 hard kill list 仍生效
+  └─ Yolo       → full tool list + 跳过 Tier 4 user-ask (整段 bypass),Tier 2 hard kill list 仍生效
 ```
 
 **实现位置**:`app/src-tauri/src/agent/permissions.rs`:
@@ -363,9 +363,9 @@ for event in stream {
 - **风险**:Mode 误判 → LLM 收到 "Plan 模式下不能执行",但它应该用 Plan 模式思考再用 Chat 模式执行
 - **详见 [BACKLOG.md §4.2 多模式](./BACKLOG.md#42-多模式mode)**
 
-#### ⑨ Tool 权限检查(关键关卡,A2 + B7 PR1 落地,**已实施**)
+#### ⑨ Tool 权限检查(关键关卡,A2 + B7 落地,re-grill 2026-06-13,**已实施**)
 
-**5-tier 决策顺序**(SOT,跟 Claude Code `deny > ask > mode > allow` 一致):
+**5-tier 决策顺序**(re-grill SOT,path-based 决策层):
 
 ```
 对每个 tool_use(name, input):
@@ -376,32 +376,46 @@ for event in stream {
   ├─ Tier 1. Hooks           (pre-call 接口, MVP no-op)
   │   └─ 命中 hook override? → 用 hook 决定(本期不实现)
   │
-  ├─ Tier 2. Deny rules      (硬 kill list, 10 个命令模式)
+  ├─ Tier 2. Deny rules      (硬 kill list, 9 个 shell regex)
   │   ├─ 命中 → Decision::Deny { critical: true, reason: ... }
   │   ├─ Yolo 也走 — 静默拒绝, audit 记 tool_denied_yolo
   │   └─ → Tier 6 写 audit event
   │
-  ├─ Tier 3. Ask rules       (session_tool_permissions + emit + await)
-  │   ├─ 查 session_tool_permissions:
-  │   │   有 "始终允许"(match_kind='tool', match_value=NULL)
-  │   │   → 跳过弹窗,直接 Allow
-  │   │   无 → emit("permission:ask", { rid, toolName, toolInput, risk, reason? })
-  │   │       等前端 permission_response (120s 超时 → 自动 Deny)
-  │   │ 收到响应:
-  │   │   allow_once  → Allow(不写表)
-  │   │   allow_always → Allow + INSERT INTO session_tool_permissions
-  │   │   deny        → Deny { reason: "user denied" }
-  │   │   timeout     → Deny { reason: "permission timed out after 120s, treat as denied" }
-  │   │                + audit kind="permission_timeout"
-  │   └─ 与 C1 cancel 共享 select!: 用户按 Stop 走 cancel 分支(整轮终止)
-  │
-  ├─ Tier 4. Mode check      (Plan 拦截, ⑧a 第三层兜底; 3 档化 2026-06-13 Review 移除)
+  ├─ Tier 3. Mode check      (Plan 拦截, ⑧a 第三层兜底; 3 档化 2026-06-13 Review 移除)
   │   ├─ Plan + tool ∈ {write_file, edit_file, shell}
   │   │   → Deny { reason: "I cannot execute X in Plan mode (read-only session)" }
+  │   │   **不**emit permission:ask — Mode 提前到 Tier 3 消除
+  │   │   旧设计的 "Plan + 始终允许" 坏交互
   │   └─ read 类工具不受影响
   │
+  ├─ Tier 4. Path / Prefix / External policy
+  │   │
+  │   ├─ Path 工具(read_file / write_file / edit_file /
+  │   │   list_dir / grep / glob):
+  │   │   - 解析 `path` arg → is_within_root(session.cwd, path)?
+  │   │     - YES → 查 session_tool_permissions(match_kind='path')
+  │   │             → hit → Allow
+  │   │                       miss → Allow (silent, 仓库内 default)
+  │   │     - NO  → 查 session_tool_permissions(match_kind='path')
+  │   │             → hit → Allow
+  │   │                       miss → emit("permission:ask", { ..., path })
+  │   │
+  │   ├─ Shell:
+  │   │   - first whitespace token → classify_prefix(token)
+  │   │     - Allow (whitelist)  → Allow (silent)
+  │   │     - Ask   (asklist/未知) → emit("permission:ask", { ..., path=cmd })
+  │   │
+  │   └─ Web Fetch:
+  │       - 总是外部 → 查 session_tool_permissions(match_kind='tool',
+  │         tool_name='web_fetch')
+  │         → hit → Allow
+  │                   miss → emit("permission:ask", { ..., path=url })
+  │
+  │   Yolo 模式:整段 Tier 4 silent,直接 Allow(不查
+  │   session_tool_permissions,不发 modal)。仍受 Tier 2 拦截
+  │
   ├─ Tier 5. Allow rules     (默认 allow-all, MVP 阶段)
-  │   └─ tool 不在白名单 → Deny(本期默认全开, 后期可收缩)
+  │   └─ 未来可在此处加全局 allow/deny 规则
   │
   └─ Tier 6. Audit hook      (每个决策路径写 session_audit_events)
       └─ kind: tool_allowed / tool_denied / tool_permission_ask /
@@ -411,23 +425,41 @@ for event in stream {
   → 放行 execute_tool(若 Allow) / 构造 is_error tool_result(若 Deny)
 ```
 
+**"始终允许" 持久化**(re-grill Q6:wire 3 种 match_kind):
+
+| match_kind | match_value | 触发 |
+|---|---|---|
+| `tool` | NULL | web_fetch "始终允许" |
+| `prefix` | 第一个 token | shell "始终允许" (`cargo`, `git`, ...) |
+| `path` | parent + `/*` glob | path 工具 "始终允许" (`/Users/me/Documents/*`) |
+
+DB schema 已在 06-12 落地(CHECK 约束支持 3 种),re-grill
+只 wire 实现。`sqlite GLOB *` 不跨 `/` 是已知限制(PR3+ 考虑
+自写 matcher 支持 `**`)。
+
 **关键行为**:
-- **Deny 优先于 Ask**:`rm -rf /` 在 Yolo 下也是静默拒绝
+- **Deny 优先于一切**:`rm -rf /` 在 Yolo 下也是静默拒绝
   (Tier 2 硬墙, 不弹窗, audit 区分 `tool_denied_yolo`)
+- **Mode 提前到 Tier 3**:消除旧 "Plan + 始终允许" 坏交互
+- **Yolo 整段 bypass Tier 4**:Yolo = "no questions asked"
+  (Tier 2 仍 hard wall)
 - **拒绝 ≠ Cancel 整轮**:拒绝只跳该 tool_use,LLM 收到
   `is_error: true` 可自决;CancellationToken(C1)才是整轮终止
 - **超时 vs 主动 deny** 在 audit log 区分:`reason` 字段不同
   ("user denied" vs "permission timed out after 120s, treat as denied")
 
 **实现位置**:
-- ⑨ 关 dispatch: `app/src-tauri/src/agent/permissions.rs::check()`
+- ⑨ 关 dispatch: `app/src-tauri/src/agent/permissions/mod.rs::check()`
 - Tier 2 硬 kill list: `app/src-tauri/src/agent/permissions/dangerous.rs::is_kill_listed()`
+- Tier 4 shell 分类: `app/src-tauri/src/agent/permissions/shell_trust.rs::classify_prefix()`
+- Tier 4 path boundary: `app/src-tauri/src/projects/boundary.rs::is_within_root()`
 - IPC bridge: `app/src-tauri/src/commands/permissions.rs::{set_session_mode, permission_response, grant_tool_permission}`
 - 前端消费: `app/src/stores/permissions.ts` + `app/src/components/chat/PermissionModal.vue`
 
-**详见** [tool-contract.md §"⑨ 关 Permission Decision Layer"](./../trellis/spec/backend/tool-contract.md) +
-[permission-modal-ux.md](./../trellis/tasks/06-12-a2-b7-permission-and-mode/research/permission-modal-ux.md) +
-[agent-permission-best-practice.md](./../trellis/tasks/06-12-a2-b7-permission-and-mode/research/agent-permission-best-practice.md)。
+**详见** [tool-contract.md §"Scenario: Path-based Permission Layer"](./../trellis/spec/backend/tool-contract.md) +
+[project-cwd-boundary.md §6 "is_within_root"](./../trellis/spec/backend/project-cwd-boundary.md) +
+[docs/_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md](./_reviews/REVIEW-a2-b7-regrill-path-based-2026-06-13.md) +
+[IMPLEMENTATION.md §4 "2026-06-13 Re-grill ADR"](./IMPLEMENTATION.md)。
 
 #### ⑩ Tool 执行
 

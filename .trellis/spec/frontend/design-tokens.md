@@ -81,6 +81,22 @@ executes. New tool categories should pick a new color from
 the same family (Tailwind 400-500 range for readability on
 dark background).
 
+**Note (re-grill 2026-06-13 PR2)**: the re-grill brief
+referred to `--color-tool-success` and `--color-tool-warning`
+tokens for the PermissionModal path-range row's in-repo /
+out-of-repo badge. These tokens **do not exist** in
+`app/src/style.css` — the project uses the 5 tokens listed
+above. To stay within the "Don't add a new `--color-*`
+token for a one-off use" rule below, PR2 reuses the
+existing `--color-tool-write` (emerald) and `--color-tool-shell`
+(amber) tokens for the in-repo / out-of-repo badges. The
+visual semantics are tight (in-repo writes already use the
+`write_file` color; the `shell` color carries the
+"extra caution" connotation that fits "out of repo"). If a
+future refactor renames these tokens or introduces
+`--color-tool-success` / `--color-tool-warning`, the
+PermissionModal path-range row should be updated to follow.
+
 ---
 
 ## Decision: `--color-text-muted` bumped to `#7c8aa0` (2026-06-09)

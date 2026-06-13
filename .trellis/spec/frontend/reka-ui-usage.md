@@ -194,6 +194,16 @@ This is a *Vue* `Teleport` constraint, not a reka-ui one — but
 reka-ui's `*Portal` primitives use the same `<Teleport>` under
 the hood, so the same `:deep()` rule applies.
 
+**Re-grill 2026-06-13 PR2 (path range row)**: the new
+`.permission-modal__path-range*` classes added to the
+PermissionModal follow the same convention — every rule
+is wrapped in `:deep(...)`. No new gotcha is introduced;
+the path range row is rendered inside the same `<Teleport
+to="body">` boundary as the rest of the modal, so the
+existing `:deep()` rule applies verbatim. See the
+`PermissionModal: path range row` case study in
+`popover-pattern.md` for the layout + color-token details.
+
 **Example** (the project's working pattern in
 `app/src/components/settings/ProvidersTab.vue`, 2026-06-09):
 

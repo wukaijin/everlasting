@@ -365,6 +365,97 @@ one of the 3 buttons. See `reka-ui-usage.md` §"Gotcha:
 `<style scoped>` does NOT apply to portal children" — the
 `<Teleport>` requires `:deep()` for all modal CSS rules.
 
+### PermissionModal: path range row (re-grill 2026-06-13 PR2)
+
+The re-grill task `06-13-a2-b7-regrill-path-based` (Q10
+"保留 risk 字段作 UI 视觉,加 path 范围行") extended the
+PermissionModal with a **path range row** between the
+subtitle and the command preview block. Layout:
+
+```
+┌─ permission-modal__path-range ────────────────────────┐
+│  📁  /repo/src/foo.ts                       [仓库内]  │
+└───────────────────────────────────────────────────────┘
+```
+
+| Element | Class | Purpose |
+|---|---|---|
+| Container | `.permission-modal__path-range` | Same dark surface + border-radius-8px treatment as the existing `.permission-modal__preview` block below it (visual consistency) |
+| Folder icon | `.permission-modal__path-range-icon` | 14px `Icon name="folder"` (already in the registry), `--color-text-muted` tint |
+| Path text | `.permission-modal__path-range-text` | `<code>` element, monospace 12px, single-line ellipsis for long paths (`overflow: hidden; text-overflow: ellipsis`) |
+| Badge | `.permission-modal__path-range-badge` | Pill-shaped (`border-radius: 999px`), 11px sans, 2px×8px padding, color/border-color set via inline `:style` binding |
+
+**Badge text + color** (driven by `isPathInRoot(path, session.currentCwd)`,
+the frontend mirror of the Rust `is_within_root`):
+
+| Predicate | Badge text | Color token | Background |
+|---|---|---|---|
+| `isPathInRoot(path, cwd) === true` | `仓库内` | `var(--color-tool-write)` (emerald) | 12% mix of the color token |
+| `isPathInRoot(path, cwd) === false` | `仓库外` | `var(--color-tool-shell)` (amber) | 12% mix of the color token |
+
+**Why reuse `--color-tool-write` / `--color-tool-shell`**:
+the re-grill brief mentioned `--color-tool-success` /
+`--color-tool-warning` but those tokens do not exist in
+`app/src/style.css` today (the existing tool-color tokens
+are `--color-tool-read` / `-write` / `-shell` / `-error`
+/ `-thinking`). Per design-tokens.md "Don't add a new
+`--color-*` token for a one-off use", we reuse the
+closest existing tool-color tokens — same Tailwind 400-500
+palette, semantically right (in-repo writes use the
+`write_file` color, out-of-repo uses the `shell` color
+because the warning visual language is "extra caution").
+A future token rename / new token should revisit this
+choice.
+
+**Conditional render** (`v-if="hasPath"` in the template):
+
+```vue
+<div v-if="hasPath" class="permission-modal__path-range">
+  <span class="permission-modal__path-range-icon" aria-hidden="true">
+    <Icon name="folder" :size="14" />
+  </span>
+  <code class="permission-modal__path-range-text">{{ pathText }}</code>
+  <span
+    class="permission-modal__path-range-badge"
+    :style="{
+      color: pathBadgeColor,
+      borderColor: pathBadgeColor,
+      background: `color-mix(in srgb, ${pathBadgeColor} 12%, transparent)`,
+    }"
+  >
+    {{ pathBadgeText }}
+  </span>
+</div>
+```
+
+`hasPath` is `typeof ask.path === "string" && ask.path.length > 0`,
+mirroring the backend's `#[serde(skip_serializing_if =
+"Option::is_none")]` on `PermissionAskPayload.path`. When
+the field is absent (shell / web_fetch), the entire row is
+removed from the DOM — no empty placeholder, no layout
+shift. `v-if` is the correct gate (not `v-show`); see the
+"Don't: Forget the v-if Gate on the Popover Element" rule
+above for the focus-order rationale.
+
+**`:deep()` requirement**: like every other `.permission-modal__*`
+rule, the path-range row's CSS lives in `:deep()` because
+the modal portals to `<body>` via `<Teleport>` (Vue's
+`<style scoped>` compiler doesn't apply the `data-v-xxx`
+attribute to teleported elements; see reka-ui-usage.md
+§"Gotcha: <style scoped> does NOT apply to portal
+children"). This is no new gotcha — same convention as
+the existing PermissionModal styles.
+
+**Empty `currentCwd` defensive behavior**: if the chat
+store's `currentCwd` is empty (very early in app boot,
+before the chat store has resolved a session), `isInRepo`
+returns `false` and the badge renders as out-of-repo
+(amber, 仓库外). This matches the Tier 4 contract — better
+to ask one extra time than to silently bypass the gate.
+When the session later loads and `currentCwd` populates,
+the badge updates reactively because `isInRepo` is a
+`computed` over the chat store's ref.
+
 **Exception**: switch to reka-ui if the dropdown needs
 keyboard-first navigation (↑/↓/Home/End/Enter), virtual
 scrolling for >100 items, or `aria-controls` referencing

@@ -309,11 +309,35 @@ points:
     toolInput: Record<string, unknown>;
     risk: "low" | "medium" | "high" | "critical";
     reason?: string;
+    /** Re-grill 2026-06-13 (PR2): path scope field. Backend
+     *  serializes with `#[serde(skip_serializing_if =
+     *  "Option::is_none")]` so the field is truly absent for
+     *  shell / web_fetch — the modal checks
+     *  `typeof ask.path === "string"` to decide whether to
+     *  render the path range row. Only set for path tools
+     *  (read_file / write_file / edit_file / list_dir /
+     *  grep / glob). */
+    path?: string;
   }
 
   // Client → Server: invoke("permission_response", { rid, decision })
   type PermissionDecision = "allow_once" | "allow_always" | "deny";
   ```
+
+- **Path range row** (re-grill 2026-06-13 PR2): `<PermissionModal>`
+  reads `ask.path` and computes the in-repo / out-of-repo badge
+  against the session's `currentCwd` via the
+  `isPathInRoot(target, root)` helper in `app/src/utils/path.ts`.
+  The helper mirrors the Rust `projects/boundary::is_within_root`
+  predicate (component-wise lexical match, see
+  `.trellis/spec/backend/project-cwd-boundary.md §6`). When
+  `path` is absent (shell / web_fetch) the row is entirely
+  hidden via `v-if="hasPath"` — no empty placeholder, no layout
+  shift. The badge color reuses existing tool-color tokens:
+  in-repo = `--color-tool-write` (emerald), out-of-repo =
+  `--color-tool-shell` (amber). See the
+  `PermissionModal: path range row` case study in
+  `popover-pattern.md` for visual + behavioral details.
 
 - **Lifecycle**: `permissionsStore.start(toast)` is called from
   `ChatWindow.vue`'s `onMounted` (passes the projects-store

@@ -130,6 +130,58 @@ let validated_cwd = boundary::assert_within_root(&ctx.project_root, effective_cw
 - 工具内部的二次 boundary check(每个 tool 自己的 `assert_within_root`
   调用) 仍然保留,作为 defense in depth。
 
+## 6. Non-failing boolean variant: `is_within_root` (re-grill 2026-06-13)
+
+> **Added in**: A2+B7 re-grill task `06-13-a2-b7-regrill-path-based`
+> **Location**: `app/src-tauri/src/projects/boundary.rs::is_within_root`
+
+⑨ 关 Tier 4 的 path-based 决策层需要 "is `target` inside
+`root`?" 的二元判定,**不能**走 `assert_within_root` 的错误
+返回契约(那个会拒绝不存在的路径,permission 层必须宽容
+not-yet-existing 的 write target)。所以新增一个非失败
+boolean 版本:
+
+```rust
+pub fn is_within_root(root: &Path, target: &Path) -> bool
+```
+
+### 与 `assert_within_root` 的差异
+
+| 维度 | `assert_within_root` | `is_within_root` |
+|---|---|---|
+| 返回 | `Result<PathBuf>` | `bool` |
+| 不存在的 target | 拒绝(`canonicalize` 失败) | 接受(lexical walk 父目录) |
+| Symlink | `canonicalize` 解析 | lexical,不解析(用户视角) |
+| 错误信息 | 详细 anyhow 消息 | 无 |
+| 调用方 | tool 层(写前最后一道关) | permission 层(decision 辅助) |
+
+### 关键行为
+
+- 同样使用 `Path::starts_with` 做 component-wise 比较(防
+  `/repo/foobar` vs `/repo/foo` 前缀陷阱)。
+- 内部做 `..` / `.` 组件的 lexical normalize,所以
+  `root/../sibling/file` 被正确归类为 "outside root"。
+- 容忍 not-yet-existing write target:看其父目录是否在
+  root 内(用户即将创建的文件)。
+- 工具层 `assert_within_root` 仍然是 disk write 的 source
+  of truth;permission 层只是辅助 decision。
+
+### 7 个 edge case(全过)
+
+| # | 场景 | 期望 |
+|---|---|---|
+| 1 | target == root | ✅ |
+| 2 | target 是 root 的直接子目录 | ✅ |
+| 3 | target 是 root 的多级后代 | ✅ |
+| 4 | target 是 root 的 sibling | ❌ |
+| 5 | target 是 root 的前缀陷阱(`/repo/foo` vs `/repo/foobar`) | ❌ |
+| 6 | target 不存在但在 root 内 | ✅(parent 在 root 内) |
+| 7 | target 不存在且在 root 外 | ❌ |
+| 8 | empty target | ❌ |
+
+8 个 unit test 在 `projects::boundary::tests::is_within_root_*`
+锁定。
+
 ## 5. 关联
 
 - PROPOSAL §4.4 (`chat` command + ToolContext 改造)
