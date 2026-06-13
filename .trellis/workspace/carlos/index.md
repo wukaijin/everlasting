@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
+- **Total Sessions**: 24
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1209 | Active |
+| `journal-1.md` | ~1340 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-06-13 | Session 26 — 2026-06-13: A2+B7 Re-grill path-based ⑨ 关 5-tier | `34c8f9c`, `70da5ab`, `2bcfc25`, `a3c6a76`, `e1fafad` | `main` |
 | 23 | 2026-06-13 | Session 25 — 2026-06-13: A2+B7 PR1-3 + 3 档化 + Mode UI redesign | `442fb3d`, `d0b9063`, `db0f762`, `3a50212`, `09da97c`, `39213c2`, `da4da8a` | `main` |
 | 22 | 2026-06-12 | Session 24: P0 tool enhancement (read_file offset/limit + shell timeout) | `eb4600d`, `fba579e` | `main` |
 | 21 | 2026-06-11 | Memory 入口重构:ProjectTabs popover → ChatPanel header Brain + reka-ui modal | `41ed943` | `main` |

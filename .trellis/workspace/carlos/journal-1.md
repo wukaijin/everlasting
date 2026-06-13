@@ -1207,3 +1207,134 @@ A2+B7 任务完整收尾: PR1 backend (442fb3d) + 8 check fixes (d0b9063) + PR1.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Session 26 — 2026-06-13: A2+B7 Re-grill path-based ⑨ 关 5-tier
+
+**Date**: 2026-06-13
+**Task**: Session 26 — 2026-06-13: A2+B7 Re-grill path-based ⑨ 关 5-tier
+**Branch**: `main`
+
+### Summary
+
+re-grill session 锁定 10 决策(弹窗 path-based + Tier 重排 + 3 match_kind 全 wire)→ 起新 follow-up task 06-13 → 5 commit 合入(后端 5 文件 + 1 新模块 + 前端 5 文件 + 8 spec + ARCHITECTURE §2.2 ⑨ 改写),440 cargo + 169 vitest pass, 0 warning, 旧 06-12 PRD Superseded
+
+### Main Changes
+
+### Session 26 — 2026-06-13: A2+B7 Re-grill path-based ⑨ 关 5-tier 重排 + 2 PR 合入
+
+**Branch**: main
+
+### 起点 + 三件套
+
+1. **re-grill-me session** — 06-12 PR1-3 落地后跑了一天,用户用 `/grill-me` 重新审视 ⑨ 关 + Mode 设计,锁定 10 个核心决策(path-based 模型 + Tier 重排 + 3 match_kind 全 wire)
+2. **起新 follow-up task** — `.trellis/tasks/06-13-a2-b7-regrill-path-based/`,独立 PRD (399 行) + 2 jsonl (各 11 条) + 跟 06-12 双向引用 (旧 PRD 加 Superseded 标记)
+3. **ADR 落档** — `docs/IMPLEMENTATION.md §4` 新增 2026-06-13 re-grill ADR(Context / 10 决策 / 9 否决 / 6 commit 拆分 / 影响范围)
+
+### 10 个 re-grill 决策(摘要)
+
+| # | 决策 | 关键理由 |
+|---|---|---|
+| Q1 | 弹窗 = **path-based**(仓库内 default allow,仓库外 ask) | "build 跑 coding 任务"心智一致 |
+| Q2 | shell = **前缀白名单 + asklist + Tier 2 兜底** | "B 试图精确会输"哲学 |
+| Q3 | 仓库边界 = **Session.cwd 严格 prefix** | 复用 boundary::assert_within_root |
+| Q4 | Yolo × 仓库外 = **silent bypass** | 跟 Yolo "no questions" 一致 |
+| Q5 | Tier 顺序 = **Hooks → Deny → Mode → Path → Allow → Audit** | Mode 提前,消除 Plan + 始终允许坏交互 |
+| Q6 | "始终允许" 粒度 = **3 种 match_kind 全 wire** | schema 已留,只 wire |
+| Q7 | shell prefix 解析 = **第一个 token**,无递归 | 简单可预测 |
+| Q8 | path-glob 粒度 = **父目录 + `*` 通配** (sqlite GLOB) | 跟心智一致,sqlite GLOB 够用 |
+| Q9 | Plan × path policy = **Plan 不豁免** | 跟新 Tier 顺序自然衍生 |
+| Q10 | Risk 字段 = **保留作 UI 视觉,加 path 范围行** | path + risk 是 orthogonal 维度 |
+
+完整 grill 过程:PRD §2 表格 + ADR 段。
+
+### 5 commit 合入
+
+| Hash | Message |
+|---|---|
+| 34c8f9c | feat(agent): boundary::is_within_root 抽出 + 2026-06-13 re-grill ADR |
+| 70da5ab | feat(agent): ⑨ 关 path-based 5-tier 重排 + shell_trust 新模块 + match_kind wiring (内含 2.5 path 字段语义 fix) |
+| 2bcfc25 | feat(frontend): PermissionModal 路径范围行 + isPathInRoot helper |
+| a3c6a76 | docs(spec): path-based 决策合约同步 8 spec + ARCHITECTURE §2.2 ⑨ |
+| e1fafad | chore(docs): 06-12-a2-b7-permission-and-mode PRD 顶部加 Superseded 标记 |
+
+### 关键实施细节
+
+- **PR1 后端 5 文件改 + 1 新模块**:`projects/boundary.rs::is_within_root` 抽出 + 8 edge case tests / `agent/permissions/mod.rs::check` 大改(5-tier 重排,17 新 unit test) / `agent/permissions/shell_trust.rs` 新文件(~30 白名单 + ~10 asklist,14 test) / `agent/chat.rs` PermissionContext wire-up / `commands/permissions.rs` match_kind 3 种 wiring
+- **PR2 前端 5 文件改**:`components/chat/PermissionModal.vue` 新增 path 范围行(folder icon + monospace + 仓库内/仓库外 badge,v-if="hasPath" gate) / `utils/path.ts` 新增 `isPathInRoot` 镜像 Rust(11 test 覆盖 7 edge case) / `permissions.ts` PermissionAsk 加 `path?: string` / `PermissionModal.test.ts` 加 5 新 path 测试
+- **设计 deviation(已 documented)**:PR2 sub-agent 用 `--color-tool-write` (emerald) + `--color-tool-shell` (amber) 替代 dispatch 提示的 `--color-tool-success/warning`(后者 token 不存在),复用现有 tool-color,documented in `design-tokens.md` Note 块 + `PermissionModal.vue` header
+- **2.4 check 关键发现**:`ask_path` 之前无条件 `path: Some(...)`,导致 shell / web_fetch 也带 path 字段 → UX bug(PermissionModal 给 shell 命令渲染"仓库外" amber 误导)。2.5 fix 在 `ask_path` 加 `path_for_modal: Option<&str>`,3 call sites 显式传(shell/web_fetch 传 None),3 wire shape unit test
+- **commit 5 (fix) 取消**:fix 实际已含在 commit 2(70da5ab),所以 5 commit 落地,不是原计划 6 commit
+
+### 测试统计
+
+- **Backend**: 398 → 440 cargo tests (+42:14 shell_trust + 17 permission + 8 boundary + 3 wire shape)
+- **Frontend**: 153 → 169 vitest (+16:8 path.test + 5 PermissionModal path + 3 已有 + ...)
+- **0 warning**(`cargo check` / `vue-tsc` / `pnpm build` 全部干净)
+- 4 pre-existing streamController unhandled rejections(06-12 已知,留 8-PR6)
+
+### Spec 同步
+
+- **Backend spec (4)**:tool-contract / project-cwd-boundary / llm-contract / database-guidelines — 各加 path-based Scenario 段
+- **Frontend spec (4)**:state-management / popover-pattern / design-tokens / reka-ui-usage — 加 path 范围行案例 + token 替换说明
+- **docs/ARCHITECTURE.md §2.2 ⑨**:完整改写为新 5-tier 顺序 + path-based 语义
+
+### 沉淀
+
+- 完整 PRD: `.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md` (399 行)
+- ADR: `docs/IMPLEMENTATION.md §4` 2026-06-13 段
+- 旧 06-12 PRD 顶部 Superseded 标记(双向引用)
+- re-grill 决策档案完整
+
+### Out of Scope (本任务不做,留 backlog)
+
+- **shell 白名单/asklist UI 自定义** — 用户在 Settings 增删
+- **跨 session 信任同步** — 每 session 独立 session_tool_permissions
+- **path-glob `**` 递归支持** — sqlite GLOB 不支持,子目录要再次允许
+- **prefix 通配符** — match_value='cargo' 字面匹配,无 glob
+- **风险等级 dashboard** — C4 接走 (V2 第二档)
+- **Background Mode 启用** — enum 留位置,UI 不提供 (沿 06-12 决策)
+- **web_fetch per-domain 始终允许** — web_fetch 始终允许 = 整 tool,per-domain 留 future
+- **"始终允许" 撤销 UI** — Settings 看 + 删 session_tool_permissions 行
+- **`SHELL_ASKLIST` 折叠** — 跟 unknown 都走 Ask,asklist-vs-unknown 区分 (PRD §1 reason 区分) 留 future
+- **Plan + write "no modal" unit test** — 需 tauri::test::mock_app() 基建,非本任务
+- **`isPathInRoot` 跟 Rust `is_within_root` 7 edge case 持续 parity 维护** — 11 + 8 测试当前对齐,后续修改需双侧同步
+
+### Next Steps
+
+- 用户决定是否把 web_fetch per-domain 排进 V2 (跟 C4 审计 UI 联动)
+- journal-1.md 1209 → 1300+ 行,下次 session 考虑切到 journal-2.md
+- V2 第二档剩余 6 项:B3 /command 面板 / C3 context 压缩 + token 硬卡 / C4 审计 UI / B2 @文件补全 / D2 FTS5 全局搜索 / D3 session 内消息编辑重发
+
+### Git Commits
+
+| Hash | Message |
+|---|---|
+| 34c8f9c | feat(agent): boundary::is_within_root 抽出 + 2026-06-13 re-grill ADR |
+| 70da5ab | feat(agent): ⑨ 关 path-based 5-tier 重排 + shell_trust 新模块 + match_kind wiring |
+| 2bcfc25 | feat(frontend): PermissionModal 路径范围行 + isPathInRoot helper |
+| a3c6a76 | docs(spec): path-based 决策合约同步 8 spec + ARCHITECTURE §2.2 ⑨ |
+| e1fafad | chore(docs): 06-12-a2-b7-permission-and-mode PRD 顶部加 Superseded 标记 |
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `34c8f9c` | (see git log) |
+| `70da5ab` | (see git log) |
+| `2bcfc25` | (see git log) |
+| `a3c6a76` | (see git log) |
+| `e1fafad` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
