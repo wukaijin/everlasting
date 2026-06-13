@@ -74,7 +74,7 @@
 - 拓扑层:Subagent(B6,依赖 B5 Session Memory)/ DAG workflow(B8)
 - 输出层:生成式 UI 4 primitives(B9)
 - 触达层:飞书 IM(B10)/ 云端同步(B11)
-- 循环检测(C2)/ 大输出截断统一(C6)/ RDP 双屏 position bug 修复(A7)
+- 循环检测(C2)/ 大输出截断统一(C6)
 
 ### 3.2 明确不做(硬约束)
 

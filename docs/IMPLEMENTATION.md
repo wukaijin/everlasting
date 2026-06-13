@@ -28,6 +28,27 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-14 — TitleBar maximize 改用原生 toggleMaximize()(position bug 根因 = Wayland setPosition 限制)
+
+**Context**: session 15(2026-06-07)留的 TODO(bug-position):RDP 双显示器下点最大化,窗口"grow rightward"而非贴 host 主屏左上角。跨多 session 试过 setSize/setPosition 顺序互换、cursorPosition 定位,均失败。06-14 重新排查定位根因。
+
+**根因(关键)**:**不是 Tauri bug,是 Wayland 协议根本限制**。Wayland 安全模型禁止客户端设置窗口位置——position 由合成器决定。WSLg 用 Weston(Wayland 合成器),`setPosition()` 被合成器**静默忽略**。影响所有 toolkit(GTK/Qt/SDL/Tauri),Tauri issue #14913 / Weston / Qt 社区均证实。故"先 setPosition 移到 monitor 左上角再 setSize 铺满"在 WSLg 下**协议层面就不可能**——setPosition 被忽略,setSize 让窗口从原位向右下生长,正是报告现象。
+
+**Decision**:放弃"应用控制位置 + 手动铺满整屏(含任务栏)"的非标准 maximize,全平台统一 `win.toggleMaximize()`:
+- 合成器/WM 原生 maximize,position 由系统决定 → Wayland/X11/Win/macOS 位置都正确
+- 自定义 title bar 保留(maximize ≠ fullscreen)
+- toggle 语义自动还原到最大化前状态
+- `isMaximized` 从"比对 outerSize vs monitor.size"启发式 → 直接 `win.isMaximized()`(权威)
+- 代价:铺满 work area 而非整屏(WSLg/RDP 虚拟屏通常无任务栏,= 整屏);还原尊重用户拖动过的大小而非强制 1440×900(改善)
+
+**Alternatives**(已否决):
+- **手动 setSize+setPosition 铺满**:Wayland 下 setPosition 被忽略,失败(根因)
+- **`setFullscreen(true)`**:位置对,但 fullscreen 隐藏自定义 title bar,看不见 min/max/close,只能 Esc 退出 → 体验不可接受
+- **平台分流(WSLg→toggleMaximize,其他→手动)**:`platform()` 只返回 `linux`,无法精确区分 Wayland/X11,增加复杂度 + 误判
+- **保持现状不修**:原生 toggleMaximize 几乎零代价且更标准,无理由不修
+
+RDP 双屏验证通过(2026-06-14)。代码 `app/src/components/layout/TitleBar.vue`;A7 出第三档进 §1.2。
+
 ### 2026-06-13 — A2+B7 Re-grill: path-based 模型 + Tier 重排(Mode 提前)+ 3 match_kind 全 wire
 
 **Context**: A2+B7 任务的 PR1 + PR2 + PR3 + 3 档化(2026-06-13)在 main 上跑了一天后,通过 re-grill-me session 重新审视权限判定 + Mode 联动的设计。发现两个反直觉 + 1 个粒度不足:
@@ -278,7 +299,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
   **4 档简表**:
   - 🟢 第一档(立刻做,4 项):A4 / B5 / C1 / D1
   - 🟡 第二档(接着做,7 项):A2+B7 / B3 / C3 / C4 / B2 / D2 / D3
-  - 🟠 第三档(缓做,8 项):B6 / B4 / B9 / C2 / C6 / B1 / A5-A6 / A7
+  - 🟠 第三档(缓做,8 项):B6 / B4 / B9 / C2 / C6 / B1 / A5-A6 / A7（注:A7 已于 2026-06-14 解决出档,见 §4 2026-06-14 ADR;此为重排时快照）
   - 🔴 第四档(最远远期,3 项):B8 / B10 / B11
   - 🗑️ 移除(3 项):A1 / A3 / C5
 
@@ -316,7 +337,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
   - **commit**:`abde429` + spec `bf9b35b`
 - **决策**:顶栏窗口控制 bug 1+2(尺寸 + 位置)的 size 部分通过 Tauri 2 capabilities 补全权限修好
   - **原因**:`setSize` 之前静默失败是 Tauri 2 默认 deny(没在 `capabilities/default.json` 声明);补 `set-size` / `set-position` / `outer-size` / `outer-position` / `current-monitor` 等 11 个权限
-  - **已知 issue**:position 部分在 RDP 双显示器场景下未完全修好(窗口 grow rightward 而非贴 host 主屏左上角),TODO 跟踪,候选 `setFullscreen(true)` 兜底
+  - **已知 issue**(当时):position 部分在 RDP 双显示器场景下未完全修好(窗口 grow rightward 而非贴 host 主屏左上角),TODO 跟踪,候选 `setFullscreen(true)` 兜底 — **[2026-06-14 ✅ 已解决]**:根因 = Wayland 禁止客户端 setPosition(非 Tauri bug,不可绕过),改原生 `toggleMaximize()`,详见 §4 2026-06-14 ADR
   - **commit**:`bd5ea7b`
 - **决策**:Markdown 表格 td/th border 改用 `--color-bg-border-strong: #3B475A`
   - **原因**:dark mode 下原 `--color-bg-border: #1E2530` 跟气泡底色 `#1A2030` 只差 4 亮度单位,看不清

@@ -36,12 +36,12 @@
 - ✅ 完整 V2 路线图重排(2026-06-10)+ 9 文档对齐 + 顶层入口导航
 - ✅ V2 第二档 2/7 落地(2026-06-12/13):**C3** context 压缩 + token 硬卡 + **A2+B7** 权限系统 + 多模式(含 3 档 Mode `edit`/`plan`/`yolo` + ⑨ 关 5-tier path-based 决策层 + ⑯ 审计日志 10 类 AuditKind + web_fetch 接入 ⑨)。详见 [ROADMAP.md §1.2](./ROADMAP.md#12-路线图外完成) + [IMPLEMENTATION §4 决策日志 2026-06-13](./IMPLEMENTATION.md#4-决策日志)。
 
-**已知 issue**:**bug 1+2 position 在 RDP 双显示器下未完全修好**(候选 `setFullscreen(true)` 兜底会丢 maximize 语义 — 见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far')
+**position bug(2026-06-14 ✅ 已解决)**:根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,**非 Tauri bug,无法绕过**),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`。RDP 双屏环境验证通过。决策档案见 [IMPLEMENTATION §4 2026-06-14](./IMPLEMENTATION.md#4-决策日志);历史见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far'
 
 **下一步候选**(详见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
 - 🟢 第一档(立刻做,4 项):A4 Token 用量统计 / B5 Memory(user + project)/ C1 取消机制完整化 / D1 session 重命名 — ✅ 全部完成
 - 🟡 第二档(接着做,5 项剩):B3 /command / C4 审计日志 UI(写入已完成,只差查询 UI)/ B2 @文件补全 / D2 FTS5 / D3 session 内消息编辑
-- 🟠 第三档(缓做,8 项):B6 Subagent / B4 Skill / B9 生成式 UI / C2 循环检测 / C6 大输出截断统一 / B1 图片 / A5-A6 打磨 / A7 RDP 双屏 position
+- 🟠 第三档(缓做,7 项):B6 Subagent / B4 Skill / B9 生成式 UI / C2 循环检测 / C6 大输出截断统一 / B1 图片 / A5-A6 打磨
 - 🔴 第四档(最远远期,3 项):B8 DAG workflow / B10 飞书 IM / B11 云端同步
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。

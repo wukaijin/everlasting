@@ -1338,3 +1338,21 @@ re-grill session 锁定 10 决策(弹窗 path-based + Tier 重排 + 3 match_kind
 ### Next Steps
 
 - None - task complete
+
+---
+
+### Session 16 (2026-06-14): RDP 双屏 position bug 收尾(A7,session 15 遗留 TODO)
+
+**根因(关键)**:**不是 Tauri bug,是 Wayland 协议根本限制** — 安全模型禁止客户端 setPosition,position 由 compositor 决定;WSLg 用 Weston(Wayland),`setPosition()` 被静默忽略(Tauri issue #14913,GTK/Qt/SDL 同病)。故"先 setPosition 再 setSize 铺满"在 WSLg 下协议层面不可能,解释了 session 15 所有顺序互换尝试都失败。
+
+**修复**:`TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台统一 `win.toggleMaximize()`(合成器原生,position 系统决定);`isMaximized` 改直接 `win.isMaximized()`(权威)。净删 ~90 行。
+
+**决策**:AskUserQuestion 4 选 1 → 原生 maximize(否决 setFullscreen 丢 title bar / 平台分流难检测 Wayland / 保持现状无理由)。
+
+**改动**:`TitleBar.vue`(4 块)+ 文档 9 处(CLAUDE / ROADMAP §1.2+§2 / HANDOFF×2 / DESIGN / IMPLEMENTATION §4 新 ADR + 2 历史 ADR superseded 注记)。
+
+**验证**:`vue-tsc --noEmit` ✓ + `pnpm build` ✓(2806 modules 4.86s)+ 用户 RDP 双屏验证通过。
+
+**沉淀**:完整 ADR 在 `docs/IMPLEMENTATION.md §4` 2026-06-14(根因 + Decision + 4 Alternatives);A7 出第三档进 ROADMAP §1.2。本条不重复 ADR 细节。
+
+**Next**:git commit 待用户指示(默认不动)。

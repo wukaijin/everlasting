@@ -50,6 +50,7 @@
 | **C3** Context 压缩 + token 硬卡 | 06-12 | 5a 加载层 token 预算 + 超限降级(参见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级) + [ARCHITECTURE §2.2 ⑤](./ARCHITECTURE.md))。完整 PRD 走 `.trellis/tasks/archive/2026-06/06-12-c3-context-token/` |
 | **A2 + B7** 权限系统 + 多模式(合并工作组) | 06-12/13 | ⑨ 关 5-tier 决策层(path-based,re-grill SOT)+ 3 档 Mode(`edit` / `plan` / `yolo`,`Background` enum 留位 UI 不暴露) + `match_kind` 3 种 wire 全连(`tool` / `prefix` / `path`)+ YoloConfirmModal + PermissionModal 路径范围行 + ⑯ 审计日志 10 类 AuditKind。`tools::web_fetch` 也接入 ⑨(Tier 4 走 `match_kind='tool'`) |
 | **Mode 3 档化**(Q4 P2 后续) | 06-13 | `Mode::Chat → Edit` 改名 + `Mode::Review` 移除(行为跟 Plan 重复);v6 migration 启动时跑两次幂等 UPDATE;**breaking wire rename**,不保留 alias |
+| **A7** RDP 双屏 position bug 修复 | 06-14 | 根因 = Wayland 禁止客户端 setPosition(WSLg/Weston 忽略,#14913 非可绕过),放弃手动铺满整屏,全平台改原生 `toggleMaximize()`;详见 [IMPLEMENTATION §4 2026-06-14](./IMPLEMENTATION.md#4-决策日志) |
 
 ---
 
@@ -82,7 +83,7 @@
 | C6   | 大输出截断统一 | ⑩ ⑫ 边界处统一处理 |
 | B1   | 图片支持(multimodal) | 输入层扩展 |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
-| A7   | RDP 双屏 position bug 修复 | 已知 issue 收尾 |
+| ~~A7~~ | ~~RDP 双屏 position bug 修复~~ | ✅ 06-14 落地(根因 Wayland setPosition 限制),见 §1.2 |
 
 ### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项)
 
