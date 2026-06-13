@@ -53,7 +53,7 @@ import {
   BoltIcon,
   ClockIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, Terminal, Copy, Info, CircleDot, Check } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -105,6 +105,16 @@ const map = {
   "bolt": BoltIcon,
   "clock": ClockIcon,
   "brain": Brain,
+  // PR3 (A2 + B7): PermissionModal visuals — lucide icons
+  // for the shield/terminal/copy/info family. Heroicons
+  // doesn't ship a `shield-x` variant; we use lucide's.
+  "shield-x": ShieldX,
+  "shield-check": ShieldCheck,
+  "terminal": Terminal,
+  "copy": Copy,
+  "info": Info,
+  "circle-dot": CircleDot,
+  "check-mini": Check,
 } as const;
 
 const Component = computed(() => {

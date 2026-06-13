@@ -241,7 +241,7 @@ risk label dot):
 |---|---|---|---|
 | `low` | `info` (lucide) | `var(--color-text-muted)` | gray tint |
 | `medium` | `circle-dot` (lucide) | `var(--color-tool-write)` | emerald tint |
-| `high` | `shield-check` (heroicons) | `var(--color-tool-shell)` | amber tint |
+| `high` | `shield-check` (lucide) | `var(--color-tool-shell)` | amber tint |
 | `critical` | `shield-x` (lucide) | `var(--color-tool-error)` | red tint |
 
 The risk-label Chinese text (`低` / `中` / `高` / `极高`) lives
