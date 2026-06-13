@@ -335,12 +335,11 @@ for event in stream {
 
 ```
 对当前 session.mode:
-  ├─ Chat       → 正常 (full tool list + ⑨ 5-tier 检查)
+  ├─ Edit       → 正常 (full tool list + ⑨ 5-tier 检查; 3 档化 2026-06-13 原 Chat 改名)
   ├─ Plan       → ⑧a 三重防御:① system prompt 前缀禁止 write,
   │               ② tool list 过滤掉 write_file/edit_file/shell,
   │               ③ Tier 4 runtime intercept 兜底(LLM 漏发 tool_use)
-  ├─ Review     → 同 Plan,但 system prompt 强调 "只读分析"
-  ├─ Background → 同 Chat,但 emit 走 "background:" 前缀(MVP 移除 UI)
+  ├─ Background → 同 Edit,但 emit 走 "background:" 前缀(MVP 移除 UI)
   └─ Yolo       → full tool list + 跳过 Tier 3 user-ask,Tier 2 hard kill list 仍生效
 ```
 
@@ -396,9 +395,9 @@ for event in stream {
   │   │                + audit kind="permission_timeout"
   │   └─ 与 C1 cancel 共享 select!: 用户按 Stop 走 cancel 分支(整轮终止)
   │
-  ├─ Tier 4. Mode check      (Plan/Review 拦截, ⑧a 第三层兜底)
-  │   ├─ Plan/Review + tool ∈ {write_file, edit_file, shell}
-  │   │   → Deny { reason: "I cannot execute X in Y mode (read-only session)" }
+  ├─ Tier 4. Mode check      (Plan 拦截, ⑧a 第三层兜底; 3 档化 2026-06-13 Review 移除)
+  │   ├─ Plan + tool ∈ {write_file, edit_file, shell}
+  │   │   → Deny { reason: "I cannot execute X in Plan mode (read-only session)" }
   │   └─ read 类工具不受影响
   │
   ├─ Tier 5. Allow rules     (默认 allow-all, MVP 阶段)

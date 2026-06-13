@@ -411,14 +411,15 @@ in the UI (PR2 decision).
 
 | Mode | UI | Tool execution | User confirm | Notes |
 |---|---|---|---|---|
-| `Chat` | ✓ | full | dangerous-tool ask | Default; matches Claude Code `default` |
+| `Edit` | ✓ | full | dangerous-tool ask | Default (2026-06-13 rename from `Chat`); matches Claude Code `default` |
 | `Plan` | ✓ | read-only (write tools filtered) | — | ⑧a system-prompt + tool-list filter + runtime intercept |
-| `Review` | ✓ | read-only | — | Same as Plan (no system-prompt "switch back" hint) |
 | `Yolo` | ✓ | full (skip Tier 3 ask) | none | Hard kill list (Tier 2) still enforced |
 | `Background` | ✗ (enum only) | n/a | n/a | Reserved; future |
 
-`Mode` serializes lowercase (`"chat"` / `"plan"` / `"review"`
-/ `"yolo"` / `"background"`) on the IPC wire.
+`Mode` serializes lowercase (`"edit"` / `"plan"` / `"yolo"`
+/ `"background"`) on the IPC wire. (2026-06-13: `"chat"`
+renamed to `"edit"`, `"review"` removed; breaking wire
+change — see ADR in `docs/IMPLEMENTATION.md §4`.)
 
 ### 3. ⑧a Triple Defense (Mode interception)
 
@@ -436,8 +437,8 @@ Claude Code `--permission-mode plan` design (see
    LLM never attempts a forbidden tool.
 2. **Per-turn tool list filter** —
    `permissions::filter_tools_for_mode(tools, mode)` returns a
-   filtered tool list. `Plan` / `Review` drop `write_file`,
-   `edit_file`, `shell`; `Chat` / `Yolo` keep the full set.
+   filtered tool list. `Plan` drops `write_file`,
+   `edit_file`, `shell`; `Edit` / `Yolo` keep the full set.
    The filtered list is what the LLM sees in the request body
    `tools` field — LLM doesn't even know the forbidden tools
    exist in those modes.
@@ -445,7 +446,7 @@ Claude Code `--permission-mode plan` design (see
    LLM may still emit a forbidden `tool_use` (prompt-injection
    attack, model regression, etc.). The agent loop's Tier 4
    in `permissions::check` catches this: if
-   `Mode::Plan | Mode::Review` and the tool is in the
+   `Mode::Plan` and the tool is in the
    write-block list, the loop returns
    `Decision::Deny { reason: "I cannot execute X in Y mode
    (read-only session)", critical: false }` and the agent loop
@@ -479,9 +480,9 @@ Tier 3. Ask rules       — session_tool_permissions + emit + await
        │   timeout     → Deny { reason: "permission timed out after 120s, treat as denied" }
        │                + audit kind="permission_timeout"
        ↓
-Tier 4. Mode check      — Plan/Review 拦截
-       │ Plan/Review 模式 + tool ∈ {write_file, edit_file, shell}
-       │ → Deny { reason: "I cannot execute X in Y mode" }
+Tier 4. Mode check      — Plan 拦截 (3 档化 2026-06-13: Review 移除)
+       │ Plan 模式 + tool ∈ {write_file, edit_file, shell}
+       │ → Deny { reason: "I cannot execute X in Plan mode" }
        ↓
 Tier 5. Allow rules     — 默认 allow-all (MVP 阶段)
        ↓
@@ -552,7 +553,7 @@ PR1 在 `agent::permissions::AuditKind` 实现了 10 类事件(见
   "tool_name": "shell",
   "tool_input": { "command": "ls -la" },
   "reason": "matches denylist: rm -rf /",
-  "mode": "chat",
+  "mode": "edit",
   "critical": true
 }
 ```
@@ -592,7 +593,7 @@ PR1 在 `agent::permissions::AuditKind` 实现了 10 类事件(见
 | `permissions::tests::risk_label_cn_is_full_text` | 中文 label 完整 |
 | `permissions::tests::mode_as_str_round_trip` | 5 个 mode 都 round-trip |
 | `permissions::tests::mode_from_str_unknown_defaults_to_chat` | lenient parse |
-| `permissions::tests::filter_tools_for_mode_drops_writes_in_plan_review` | ⑧a tool filter |
+| `permissions::tests::filter_tools_for_mode_drops_writes_in_plan` | ⑧a tool filter |
 | `permissions::tests::filter_tools_for_mode_keeps_full_for_chat_yolo` | ⑧a full tool list |
 | `permissions::tests::mode_system_prefix_is_non_empty` | 5 个 mode 都有 prefix |
 | `permissions::tests::audit_kind_round_trip` | 10 类 AuditKind 都 serializable |

@@ -2,7 +2,7 @@
 //
 // PR2 (B7 front-end): one centralised place for app-wide
 // keybindings. The first consumer is Shift+Tab mode cycling
-// (Chat → Plan → Review → Yolo → Chat), wired by the
+// (Edit → Plan → Yolo → Edit), wired by the
 // `registerShiftTabModeCycle` helper below. Future PRs can add
 // Ctrl+K / Cmd+P / etc. without scattering `addEventListener`
 // calls across components.

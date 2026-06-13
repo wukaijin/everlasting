@@ -24,7 +24,7 @@ import ModeSelect from "./ModeSelect.vue";
 import { useChatStore } from "../../stores/chat";
 
 /** Seed the chat store with a single fake session in `mode`. */
-function seedSession(id: string, mode: "chat" | "plan" | "review" | "yolo" = "chat") {
+function seedSession(id: string, mode: "edit" | "plan" | "yolo" = "edit") {
   const store = useChatStore();
   store.sessions = [
     {
@@ -79,7 +79,7 @@ describe("ModeSelect", () => {
     expect(label.text()).toBe("Plan");
   });
 
-  it("opens the popover on trigger click and lists all 4 modes", async () => {
+  it("opens the popover on trigger click and lists all 3 modes", async () => {
     seedSession("s1");
     wrapper = mount(ModeSelect);
     await wrapper.find(".mode-select__trigger").trigger("click");
@@ -87,21 +87,21 @@ describe("ModeSelect", () => {
     const menu = wrapper.find(".mode-select__menu");
     expect(menu.exists()).toBe(true);
     const items = wrapper.findAll(".mode-select__item");
-    // 4 entries: Chat / Plan / Review / Yolo (Background is
-    // intentionally omitted per PR2 spec).
-    expect(items.length).toBe(4);
-    const labels = items.map((i) => i.find(".mode-select__item-name").text());
-    expect(labels).toEqual(["Chat", "Plan", "Review", "Yolo"]);
+    // 3 entries: Edit / Plan / Yolo (Background reserved in
+    // backend, Review dropped 2026-06-13).
+    expect(items.length).toBe(3);
+    const labels = items.map((i) => i.find(".mode-select__item-name").text().trim());
+    expect(labels).toEqual(["Edit", "Plan", "Yolo"]);
   });
 
   it("clicking a non-Yolo mode fires set_session_mode IPC via the store", async () => {
-    seedSession("s1", "chat");
+    seedSession("s1", "edit");
     wrapper = mount(ModeSelect);
     await wrapper.find(".mode-select__trigger").trigger("click");
     await nextTick();
     // Click Plan.
     const items = wrapper.findAll(".mode-select__item");
-    // items[0]=Chat, items[1]=Plan
+    // items[0]=Edit, items[1]=Plan
     await items[1].trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("set_session_mode", {
@@ -111,13 +111,13 @@ describe("ModeSelect", () => {
   });
 
   it("clicking Yolo opens the confirm modal and does NOT fire IPC yet", async () => {
-    seedSession("s1", "chat");
+    seedSession("s1", "edit");
     wrapper = mount(ModeSelect);
     await wrapper.find(".mode-select__trigger").trigger("click");
     await nextTick();
     const items = wrapper.findAll(".mode-select__item");
-    // items[3]=Yolo
-    await items[3].trigger("click");
+    // items[2]=Yolo
+    await items[2].trigger("click");
     await flushPromises();
     // IPC should NOT have fired yet — the confirm modal gates it.
     expect(invokeMock).not.toHaveBeenCalled();
@@ -127,12 +127,12 @@ describe("ModeSelect", () => {
   });
 
   it("confirming the Yolo modal fires the IPC with mode=yolo", async () => {
-    seedSession("s1", "chat");
+    seedSession("s1", "edit");
     wrapper = mount(ModeSelect);
     await wrapper.find(".mode-select__trigger").trigger("click");
     await nextTick();
     const items = wrapper.findAll(".mode-select__item");
-    await items[3].trigger("click");
+    await items[2].trigger("click");
     await flushPromises();
     // Click the modal's confirm button.
     await wrapper.find(".yolo-confirm-modal__btn--confirm").trigger("click");
@@ -144,12 +144,12 @@ describe("ModeSelect", () => {
   });
 
   it("cancelling the Yolo modal does NOT fire the IPC", async () => {
-    seedSession("s1", "chat");
+    seedSession("s1", "edit");
     wrapper = mount(ModeSelect);
     await wrapper.find(".mode-select__trigger").trigger("click");
     await nextTick();
     const items = wrapper.findAll(".mode-select__item");
-    await items[3].trigger("click");
+    await items[2].trigger("click");
     await flushPromises();
     await wrapper.find(".yolo-confirm-modal__btn--cancel").trigger("click");
     await flushPromises();

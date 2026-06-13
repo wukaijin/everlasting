@@ -8,13 +8,14 @@
 //    geometry as ModeSelect — both open UP). Same `bottom: calc(100%
 //    + 4px); top: auto;` and `translateY(4px → 0)` slide.
 //
-// 2. **Compact 4-row list vs grouped model list**: ModeSelect has
-//    exactly 4 entries (Chat / Plan / Review / Yolo), so no
+// 2. **Compact 3-row list vs grouped model list**: ModeSelect has
+//    exactly 3 entries (Edit / Plan / Yolo), so no
 //    grouping / scrolling is needed. Width can be narrower
-//    (~220px vs `ModelSelect`'s 220px).
+//    (~220px vs `ModelSelect`'s 220px). 3 档化 2026-06-13: Review
+//    移除 (跟 Plan 行为重复), Chat 改名 Edit (语义更清晰)。
 //
 // UX flow:
-// - Click trigger → popover opens with the 4 modes listed.
+// - Click trigger → popover opens with the 3 modes listed.
 // - Click a non-Yolo mode → popover closes immediately, IPC fires.
 // - Click Yolo → popover closes, **YoloConfirmModal** opens
 //   (driven by the shared `pendingYoloConfirm` flag in the
@@ -45,33 +46,34 @@ const menuRoot = ref<HTMLElement | null>(null);
 /** Mode options shown in the popover. Order matches
  *  `MODE_CYCLE` in `chat.ts` so the popover reads top-to-bottom
  *  in the same order Shift+Tab cycles. `Background` is
- *  intentionally excluded per PRD ("4 选项,不显示 Background"). */
+ *  intentionally excluded (reserved in backend enum only).
+ *  3 档化 2026-06-13: 删 Review, Chat 改名 Edit。 */
 interface ModeOption {
   value: SessionMode;
   label: string;
+  /** Lucide icon name from `Icon.vue`'s registry. */
+  icon: string;
   /** Plain-language description rendered under the label. */
   description: string;
 }
 
 const modeOptions: readonly ModeOption[] = [
   {
-    value: "chat",
-    label: "Chat",
-    description: "正常使用,可调用所有工具,危险操作需确认",
+    value: "edit",
+    label: "Edit",
+    icon: "pencil",
+    description: "默认模式,可调用所有工具,危险操作需确认",
   },
   {
     value: "plan",
     label: "Plan",
+    icon: "clipboard-list",
     description: "只分析与制定方案,不执行写操作",
-  },
-  {
-    value: "review",
-    label: "Review",
-    description: "只读分析,可读文件/搜索,不可写",
   },
   {
     value: "yolo",
     label: "Yolo",
+    icon: "shield-x",
     description: "跳过所有用户确认,硬 kill list 仍然拦截",
   },
 ] as const;
@@ -88,18 +90,19 @@ const hasSession = computed<boolean>(() => !!chatStore.currentSessionId);
  *  the UI). */
 const currentMode = computed<SessionMode>(() => {
   const sid = chatStore.currentSessionId;
-  if (!sid) return "chat";
+  if (!sid) return "edit";
   const s = chatStore.sessions.find((x) => x.id === sid);
-  if (!s) return "chat";
-  if (s.mode === "plan" || s.mode === "review" || s.mode === "yolo") {
+  if (!s) return "edit";
+  if (s.mode === "plan" || s.mode === "yolo") {
     return s.mode;
   }
-  return "chat";
+  // Anything else (Edit / Background / legacy / null) → Edit as default.
+  return "edit";
 });
 
 const currentModeLabel = computed<string>(() => {
   const m = modeOptions.find((o) => o.value === currentMode.value);
-  return m?.label ?? "Chat";
+  return m?.label ?? "Edit";
 });
 
 /** Lock the chip + popover while the active session is
@@ -211,7 +214,10 @@ async function onModePick(mode: SessionMode) {
           role="menuitem"
           @click="onModePick(opt.value)"
         >
-          <span class="mode-select__item-name">{{ opt.label }}</span>
+          <span class="mode-select__item-name">
+            <Icon :name="opt.icon" :size="14" />
+            {{ opt.label }}
+          </span>
           <span class="mode-select__item-desc">{{ opt.description }}</span>
           <span
             v-if="opt.value === currentMode"

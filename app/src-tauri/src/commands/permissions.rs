@@ -82,14 +82,16 @@ pub async fn set_session_mode(
  mode: String,
 ) -> Result<db::SessionRow, String> {
  // Parse + validate the mode string. Unknown / empty falls
- // back to Chat per the lenient-parse contract (matches
- // `db::types::Mode::from_str_opt`).
+ // back to Edit per the lenient-parse contract (matches
+ // `db::types::Mode::from_str_opt`). Old 'chat' / 'review'
+ // strings intentionally NOT aliased — the v6 migration
+ // rewrites historical rows; new IPC calls must use the
+ // 3 档 wire names ('edit' / 'plan' / 'yolo').
  let new_mode = match mode.as_str() {
  "plan" => db::Mode::Plan,
- "review" => db::Mode::Review,
  "yolo" => db::Mode::Yolo,
  "background" => db::Mode::Background,
- _ => db::Mode::Chat,
+ _ => db::Mode::Edit,
  };
 
  // Yolo safety guard: refuse to enable Yolo when running as

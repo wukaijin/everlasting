@@ -249,13 +249,13 @@ invariant)` test that locks this.
 
 ### Per-session Mode field (added 2026-06-13, PR2 of A2 + B7)
 
-`SessionSummary.mode: "chat" | "plan" | "review" | "yolo" | "background"`
+`SessionSummary.mode: "edit" | "plan" | "yolo" | "background"`
 is the per-session mode override. The wire field is snake_case
 (untyped on the Rust side via `Option<String>` in
 `db::models::SessionRow`) and serializes as the lowercase `Mode`
 enum string. The `Background` variant is reserved in the enum for
 schema stability but never appears in the UI; the
-`SessionMode = "chat" | "plan" | "review" | "yolo"` subset is the
+`SessionMode = "edit" | "plan" | "yolo"` subset is the
 user-facing surface (`MODE_CYCLE` constant in `app/src/stores/chat.ts`).
 
 The store-level orchestrator is `requestSetMode(sessionId, mode)`

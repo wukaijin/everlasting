@@ -53,7 +53,7 @@ import {
   BoltIcon,
   ClockIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -115,6 +115,10 @@ const map = {
   "info": Info,
   "circle-dot": CircleDot,
   "check-mini": Check,
+  // 3 档 Mode UI (2026-06-13): "pencil" reused (heroicons
+  // PencilSquareIcon already in registry above); only need to
+  // add the lucide clipboard-list for Plan.
+  "clipboard-list": ClipboardList,
 } as const;
 
 const Component = computed(() => {

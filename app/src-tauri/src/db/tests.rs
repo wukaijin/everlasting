@@ -1522,24 +1522,20 @@ async fn record_tool_duration_handles_text_only_message_without_error() {
 
 #[tokio::test]
 async fn update_session_mode_persists_and_round_trips() {
- // The migration backfill sets mode='chat' on legacy rows; the
- // `set_session_mode` IPC call must flip it to any of the 4
+ // The migration backfill sets mode='edit' on legacy rows; the
+ // `set_session_mode` IPC call must flip it to any of the 3
  // valid modes and survive a re-load.
  let pool = make_pool().await;
  let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
  .await
  .unwrap();
- // Default after create_session = 'chat'.
+ // Default after create_session = 'edit'.
  let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.mode, crate::db::Mode::Chat);
+ assert_eq!(loaded.session.mode, crate::db::Mode::Edit);
 
  update_session_mode(&pool, &s.id, crate::db::Mode::Plan).await.unwrap();
  let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
  assert_eq!(loaded.session.mode, crate::db::Mode::Plan);
-
- update_session_mode(&pool, &s.id, crate::db::Mode::Review).await.unwrap();
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.mode, crate::db::Mode::Review);
 
  update_session_mode(&pool, &s.id, crate::db::Mode::Yolo).await.unwrap();
  let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
@@ -1656,7 +1652,7 @@ async fn record_audit_event_inserts_and_cascades_on_delete() {
 }
 
 #[tokio::test]
-async fn mode_backfill_legacy_null_to_chat() {
+async fn mode_backfill_legacy_null_to_edit() {
  // Simulate a pre-A2 session with `mode IS NULL` (column was
  // added but the backfill hasn't run yet). Mirrors what a
  // real upgrade path looks like between the ALTER and the
@@ -1709,11 +1705,11 @@ async fn mode_backfill_legacy_null_to_chat() {
  .unwrap();
  // Run the full migration (adds the `mode` column + backfills).
  run_migrations(&pool).await.unwrap();
- // Verify the backfill set mode='chat' on the legacy row.
+ // Verify the backfill set mode='edit' on the legacy row.
  let mode: Option<String> = sqlx::query_scalar("SELECT mode FROM sessions WHERE id = 'legacy-1'")
  .fetch_one(&pool)
  .await
  .unwrap();
- assert_eq!(mode.as_deref(), Some("chat"));
+ assert_eq!(mode.as_deref(), Some("edit"));
 }
 

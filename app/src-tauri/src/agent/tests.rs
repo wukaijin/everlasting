@@ -342,7 +342,7 @@ fn make_session_row(
         cache_creation_total: None,
         cache_read_total: None,
         color_tag: None,
-        mode: db::Mode::Chat,
+        mode: db::Mode::Edit,
     }
 }
 

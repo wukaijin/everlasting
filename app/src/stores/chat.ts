@@ -190,25 +190,27 @@ export interface SessionSummary {
   cache_read_total: number | null;
   /** D1 (Color Tag): palette index 0-7, null = no mark. */
   color_tag: number | null;
-  /** A2 + B7 (Permission system + per-session Mode, 2026-06-13):
-   *  the session's current mode. The Rust side serializes the
-   *  `Mode` enum as its lowercase string (`chat` / `plan` /
-   *  `review` / `yolo` / `background`); `Background` is reserved
-   *  in the enum and never appears in the UI. PR2 wires the
-   *  frontend ModeSelect to flip this via `set_session_mode` IPC.
-   *  See `app/src-tauri/src/db/types.rs::Mode`. */
-  mode: "chat" | "plan" | "review" | "yolo" | "background";
+  /** A2 + B7 (Permission system + per-session Mode, 2026-06-13;
+   *  3 档化 2026-06-13): the session's current mode. The Rust
+   *  side serializes the `Mode` enum as its lowercase string
+   *  (`edit` / `plan` / `yolo` / `background`); `Background` is
+   *  reserved in the enum and never appears in the UI. PR2
+   *  wires the frontend ModeSelect to flip this via
+   *  `set_session_mode` IPC. See
+   *  `app/src-tauri/src/db/types.rs::Mode`. */
+  mode: "edit" | "plan" | "yolo" | "background";
 }
 
-/** User-facing mode subset — the four modes the MVP UI exposes.
+/** User-facing mode subset — the three modes the MVP UI exposes.
  *  Excludes `Background` (reserved in the backend enum for
- *  schema stability but never shown to the user; PR2 scope). */
-export type SessionMode = "chat" | "plan" | "review" | "yolo";
+ *  schema stability but never shown to the user). */
+export type SessionMode = "edit" | "plan" | "yolo";
 
 /** Cycle order for `useKeyboard` Shift+Tab iteration. Matches
- *  Claude Code's `Shift+Tab` cycle convention: Chat → Plan →
- *  Review → Yolo → Chat (forward). */
-export const MODE_CYCLE: SessionMode[] = ["chat", "plan", "review", "yolo"];
+ *  Claude Code's `Shift+Tab` cycle convention: Edit → Plan →
+ *  Yolo → Edit (forward). 3 档化 2026-06-13: Review 移除, Yolo
+ *  紧跟 Plan 后面。 */
+export const MODE_CYCLE: SessionMode[] = ["edit", "plan", "yolo"];
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the
  *  Rust `git::diff::FileDiff` struct. Field names are

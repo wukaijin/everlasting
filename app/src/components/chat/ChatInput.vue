@@ -261,8 +261,8 @@ function onStop() {
  * on the textarea can't reliably do once focus has moved
  * elsewhere.
  *
- * The cycle order is `MODE_CYCLE` (Chat → Plan → Review →
- * Yolo → Chat). We delegate the actual IPC + Yolo confirm
+ * The cycle order is `MODE_CYCLE` (Edit → Plan →
+ * Yolo → Edit). We delegate the actual IPC + Yolo confirm
  * gate to `chatStore.requestSetMode` so the popover path
  * (`ModeSelect`) and the keyboard path share exactly one
  * orchestrator — Shift+Tab into Yolo will pop the same
@@ -278,7 +278,7 @@ async function cycleMode(): Promise<void> {
   if (!sid) return;
   const summary = chatStore.sessions.find((s) => s.id === sid);
   if (!summary) return;
-  const current = (summary.mode as SessionMode) ?? "chat";
+  const current = (summary.mode as SessionMode) ?? "edit";
   const idx = MODE_CYCLE.indexOf(current);
   if (idx === -1) return;
   const next = MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];
@@ -523,7 +523,7 @@ function onEscKeydown() {
       <!-- PR2 (B7): per-session Mode picker. Same popover pattern
            as `ModelSelect` (upward-opening, hand-rolled), placed
            next to the model picker for parity. The trigger
-           shows the current Mode label (Chat / Plan / Review /
+           shows the current Mode label (Edit / Plan /
            Yolo). Shift+Tab cycles Mode via `useKeyboard`. -->
       <ModeSelect />
     </div>

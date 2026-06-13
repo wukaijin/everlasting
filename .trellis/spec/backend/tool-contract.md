@@ -735,7 +735,7 @@ uniform payload JSON shape:
   "tool_name": "shell",
   "tool_input": { "command": "ls -la" },
   "reason": "matches denylist: rm -rf /",
-  "mode": "chat",
+  "mode": "edit",
   "critical": true
 }
 ```

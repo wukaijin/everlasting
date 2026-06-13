@@ -499,11 +499,12 @@ pub async fn check(
  }
  };
 
- // ----- Tier 4: Mode check (Plan/Review block writes) -----
- // ⑨ 关第 4 道 + ⑧a 三重防御的最后一层. Plan/Review 模式下
+ // ----- Tier 4: Mode check (Plan blocks writes) -----
+ // ⑨ 关第 4 道 + ⑧a 三重防御的最后一层. Plan 模式下
  // 即便 LLM 仍发 write/edit/shell (tool list 过滤通常已挡住),
- // 也拦截. read 类工具不受影响.
- if matches!(ctx.mode, Mode::Plan | Mode::Review) {
+ // 也拦截. read 类工具不受影响. (3 档化 2026-06-13: Review
+ // 移除,只剩 Plan 一个只读 mode。)
+ if matches!(ctx.mode, Mode::Plan) {
  if matches!(tool_name, "write_file" | "edit_file" | "shell") {
  tracing::info!(
  session_id = %ctx.session_id,
@@ -611,13 +612,7 @@ You are in Plan mode. You may read files, search, and run readonly \
 commands (cat / grep / git log / etc.) to understand the codebase, \
 but you CANNOT execute any write tool (write_file, edit_file, shell \
 with side effects). If the user asks for an edit, propose the \
-change as a diff and ask them to switch to Chat mode to apply it.",
- Mode::Review => "\
-You are in Review mode. You may only perform readonly analysis \
-(read_file, grep, glob, list_dir, git log/diff). You CANNOT \
-execute write tools or shell commands with side effects. If the \
-user asks for a code change, decline and ask them to switch to \
-Chat mode.",
+change as a diff and ask them to switch to Edit mode to apply it.",
  Mode::Yolo => "\
 You are in Yolo mode. All user-confirmation modals are \
 automatically skipped. Hard-deny rules (rm -rf /, mkfs, dd if=, \
@@ -627,26 +622,27 @@ denied. Operate with care.",
  Mode::Background => "\
 You are in Background mode. (Reserved — not currently exposed in \
 the UI.)",
- Mode::Chat => "\
-You are in Chat mode. You have full access to all tools. \
-Destructive shell commands are silently denied; other commands \
-trigger a one-time confirmation modal the first time the user \
-sees them per session.",
+ Mode::Edit => "\
+You are in Edit mode (the default). You have full access to all \
+tools. Destructive shell commands are silently denied; other \
+commands trigger a one-time confirmation modal the first time the \
+user sees them per session.",
  }
 }
 
-/// ⑧a tool list filter: Plan/Review drop the write tools,
-/// Chat/Yolo keep the full set. Returns the filtered tool list
-/// to pass to `ChatRequest.tools`. Plan/Review mode still
-/// emits the full tool list to the LLM in some Claude-Code-like
-/// designs; we choose the explicit filter per audit §2
-/// recommendation (saves a turn + reduces confusion).
+/// ⑧a tool list filter: Plan drops the write tools, Edit/Yolo
+/// keep the full set. Returns the filtered tool list to pass
+/// to `ChatRequest.tools`. Plan mode still emits the full
+/// tool list to the LLM in some Claude-Code-like designs; we
+/// choose the explicit filter per audit §2 recommendation
+/// (saves a turn + reduces confusion). 3 档化 2026-06-13:
+/// Review 移除, 只剩 Plan 一个只读 mode。
 pub fn filter_tools_for_mode(
  tools: Vec<crate::llm::ToolDef>,
  mode: Mode,
 ) -> Vec<crate::llm::ToolDef> {
  match mode {
- Mode::Plan | Mode::Review => tools
+ Mode::Plan => tools
  .into_iter()
  .filter(|t| !matches!(t.name.as_str(), "write_file" | "edit_file" | "shell"))
  .collect(),
@@ -664,16 +660,16 @@ mod tests {
 
  #[test]
  fn mode_as_str_round_trip() {
- for m in [Mode::Chat, Mode::Plan, Mode::Review, Mode::Yolo, Mode::Background] {
+ for m in [Mode::Edit, Mode::Plan, Mode::Yolo, Mode::Background] {
  assert_eq!(Mode::from_str_opt(m.as_str()), m);
  }
  }
 
  #[test]
  fn mode_from_str_unknown_defaults_to_chat() {
- assert_eq!(Mode::from_str_opt(""), Mode::Chat);
- assert_eq!(Mode::from_str_opt("nonsense"), Mode::Chat);
- assert_eq!(Mode::from_str_opt("PLAN"), Mode::Chat); // case-sensitive
+ assert_eq!(Mode::from_str_opt(""), Mode::Edit);
+ assert_eq!(Mode::from_str_opt("nonsense"), Mode::Edit);
+ assert_eq!(Mode::from_str_opt("PLAN"), Mode::Edit); // case-sensitive
  }
 
  #[test]
@@ -709,7 +705,7 @@ mod tests {
  assert!(!names.contains(&"write_file"));
  assert!(!names.contains(&"shell"));
 
- let filtered = filter_tools_for_mode(tools.clone(), Mode::Review);
+ let filtered = filter_tools_for_mode(tools.clone(), Mode::Plan);
  let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
  assert!(!names.contains(&"write_file"));
  assert!(!names.contains(&"shell"));
@@ -722,7 +718,7 @@ mod tests {
  crate::llm::ToolDef::new_for_test("write_file"),
  crate::llm::ToolDef::new_for_test("shell"),
  ];
- for m in [Mode::Chat, Mode::Yolo] {
+ for m in [Mode::Edit, Mode::Yolo] {
  let filtered = filter_tools_for_mode(tools.clone(), m);
  assert_eq!(filtered.len(), tools.len(), "Mode {:?} should keep all tools", m);
  }
@@ -730,7 +726,7 @@ mod tests {
 
  #[test]
  fn mode_system_prefix_is_non_empty() {
- for m in [Mode::Chat, Mode::Plan, Mode::Review, Mode::Yolo, Mode::Background] {
+ for m in [Mode::Edit, Mode::Plan, Mode::Yolo, Mode::Background] {
  assert!(!mode_system_prefix(m).is_empty());
  }
  }

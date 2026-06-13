@@ -346,7 +346,7 @@ customize both without forking the popover component.
 instance of the hand-rolled popover pattern. It lives in the
 ChatInput hint row next to `ModelSelect`, opens upward, and
 follows the same code skeleton (state + onDocumentClick +
-onKeydown) verbatim. The 4 entries (Chat / Plan / Review /
+onKeydown) verbatim. The 4 entries (Edit / Plan /
 Yolo) are listed in popover order matching `MODE_CYCLE` from
 `stores/chat.ts`; clicking Yolo routes through
 `chatStore.requestSetMode(sid, "yolo")` which gates the

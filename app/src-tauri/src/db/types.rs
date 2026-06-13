@@ -159,27 +159,33 @@ impl WorktreeState {
 }
 
 // ---------------------------------------------------------------------------
-// A2 + B7: per-session Mode (2026-06-13)
+// A2 + B7: per-session Mode (2026-06-13, 3-档化 2026-06-13)
 //
-// Each session carries a `mode` (one of `chat` / `plan` / `review` /
-// `yolo`) that drives both the agent loop's ⑨ 关 permission policy
+// Each session carries a `mode` (one of `edit` / `plan` / `yolo`)
+// that drives both the agent loop's ⑨ 关 permission policy
 // and the ⑧a Mode check (tool list filtering + system prompt prefix
 // + runtime intercept). Background is reserved in the enum so a
 // future PR can add it without a schema change; the MVP UI does
 // not expose it.
 //
+// 3 档化决策 (2026-06-13 ADR-lite in IMPLEMENTATION.md §4):
+// - Chat 改名 Edit (语义更清晰 — "I want edits to happen")
+// - Review 删除 (行为与 Plan 重复, system prompt 强调的"只读分析"价值不大)
+// - Yolo 保留
+// - Breaking rename: 'chat'/'review' wire 字符串直接移除, 不保留 alias
+//   (单机 desktop app, 无跨版本兼容需求)
+//
 // `from_str_opt` follows the same lenient-parse pattern as
-// `WorktreeState`: unknown / empty DB strings fall back to `Chat`
-// (the safest default — it grants the most permissive policy). The
-// `Serialize` form is the lowercase string (matches the DB column).
+// `WorktreeState`: unknown / empty DB strings fall back to `Edit`
+// (the most permissive policy). The `Serialize` form is the
+// lowercase string (matches the DB column).
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
- Chat,
+ Edit,
  Plan,
- Review,
  Yolo,
  /// Reserved for a future PR (per BACKLOG §4.2). MVP UI does
  /// not expose this; the enum position keeps the schema stable
@@ -191,24 +197,24 @@ pub enum Mode {
 impl Mode {
  pub fn as_str(&self) -> &'static str {
  match self {
- Mode::Chat => "chat",
+ Mode::Edit => "edit",
  Mode::Plan => "plan",
- Mode::Review => "review",
  Mode::Yolo => "yolo",
  Mode::Background => "background",
  }
  }
 
- /// Lenient parse: unknown / empty strings fall back to `Chat`
- /// (the safest default — it grants the most permissive policy
- /// and matches the migration backfill).
+ /// Lenient parse: unknown / empty strings fall back to `Edit`
+ /// (the most permissive policy, matches the migration backfill).
+ /// Old 'chat' / 'review' strings are NOT aliased — they fall
+ /// through to `Edit` (and a startup backfill rewrites them in
+ /// the DB on first run).
  pub fn from_str_opt(s: &str) -> Self {
  match s {
  "plan" => Mode::Plan,
- "review" => Mode::Review,
  "yolo" => Mode::Yolo,
  "background" => Mode::Background,
- _ => Mode::Chat,
+ _ => Mode::Edit,
  }
  }
 }

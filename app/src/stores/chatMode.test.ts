@@ -49,7 +49,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
    *  in the requested mode and return the session id. */
   function seedSession(opts: {
     id: string;
-    mode?: "chat" | "plan" | "review" | "yolo" | "background";
+    mode?: "edit" | "plan" | "yolo" | "background";
   }): string {
     const store = useChatStore();
     store.sessions = [
@@ -69,7 +69,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         cache_creation_total: null,
         cache_read_total: null,
         color_tag: null,
-        mode: opts.mode ?? "chat",
+        mode: opts.mode ?? "edit",
       },
     ];
     store.currentSessionId = opts.id;
@@ -77,7 +77,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
   }
 
   it("fires set_session_mode IPC for a non-Yolo mode", async () => {
-    const sid = seedSession({ id: "s1", mode: "chat" });
+    const sid = seedSession({ id: "s1", mode: "edit" });
     invokeMock.mockResolvedValue({});
 
     const store = useChatStore();
@@ -104,7 +104,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
   });
 
   it("does NOT fire IPC when target is Yolo — flips pendingYoloConfirm instead", async () => {
-    const sid = seedSession({ id: "s1", mode: "chat" });
+    const sid = seedSession({ id: "s1", mode: "edit" });
     invokeMock.mockResolvedValue({});
 
     const store = useChatStore();
@@ -115,11 +115,11 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
     expect(store.pendingYoloConfirm).toBe(true);
     // Local session row should NOT have flipped yet — the modal
     // is still pending.
-    expect(store.sessions[0].mode).toBe("chat");
+    expect(store.sessions[0].mode).toBe("edit");
   });
 
   it("confirmYolo fires the IPC with mode=yolo and clears pendingYoloConfirm", async () => {
-    const sid = seedSession({ id: "s1", mode: "chat" });
+    const sid = seedSession({ id: "s1", mode: "edit" });
     invokeMock.mockResolvedValue({});
 
     const store = useChatStore();
@@ -137,7 +137,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
   });
 
   it("cancelYolo clears pendingYoloConfirm without touching IPC", async () => {
-    const sid = seedSession({ id: "s1", mode: "chat" });
+    const sid = seedSession({ id: "s1", mode: "edit" });
     invokeMock.mockResolvedValue({});
 
     const store = useChatStore();
@@ -148,7 +148,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
 
     expect(store.pendingYoloConfirm).toBe(false);
     expect(invokeMock).not.toHaveBeenCalled();
-    expect(store.sessions[0].mode).toBe("chat");
+    expect(store.sessions[0].mode).toBe("edit");
   });
 
   it("returns false and skips IPC when no sessionId is passed", async () => {
@@ -170,7 +170,7 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         cache_creation_total: null,
         cache_read_total: null,
         color_tag: null,
-        mode: "chat",
+        mode: "edit",
       },
     ];
     invokeMock.mockResolvedValue({});

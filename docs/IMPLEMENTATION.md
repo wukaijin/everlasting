@@ -28,6 +28,32 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-13 — A2 + B7 Mode 3 档化(Chat→Edit 改名 + Review 移除)
+
+**Context**:A2 + B7 任务的 PR1 + PR2 + PR3 在 2026-06-13 落地,共 5 个 commit (442fb3d / d0b9063 / db0f762 / 3a50212 / 09da97c),4 档 Mode (Chat / Plan / Review / Yolo) 全部上 main。grill-with-docs session (2026-06-13) 重新审视语义,锁定 3 档新方案。
+
+**Decision**:
+1. `Mode::Chat` 改名 `Mode::Edit`(语义更清晰 — "I want edits to happen")
+2. `Mode::Review` 移除(行为跟 `Mode::Plan` 完全重复,只是 system prompt 强调"只读分析"—— 价值不大)
+3. 3 档最终集合:`edit` / `plan` / `yolo`(Background enum 留位置,UI 不暴露)
+4. **Breaking wire rename**:不保留 `'chat'` / `'review'` 字符串 alias
+5. v6 migration:`UPDATE sessions SET mode='edit' WHERE mode='chat'` + `mode='plan' WHERE mode='review'`,两次幂等 UPDATE,启动时跑
+6. Risk gate(Chat 模式跳过 Tier 3 Low/Medium risk)留 backlog,不在本次范围
+
+**Alternatives**:
+- **Edit 名字**:Build / Work / Default / Code 都考虑过。Edit 胜在跟 Claude Code 的 "default" 心智一致 + 跟 "edit_file" tool 名有自然连接(暗示"模式包含编辑")
+- **保留 Review**:决定不保留。System prompt 强调"只读分析"在 Plan 的拦截里已经隐含,4→3 简化 12% UI 噪音
+- **保留 wire alias**('chat' / 'review' 字符串兼容):考虑过。决定不保留 — 单机 desktop app,无跨版本兼容需求,alias 长期是技术债
+
+**影响范围**:
+- Backend:`db/types.rs` Mode enum + `as_str` + `from_str_opt`;`db/migrations.rs` v5 改默认 + v6 backfill;`commands/permissions.rs` parse;`agent/permissions/mod.rs` Tier 4 + `mode_system_prefix` + `filter_tools_for_mode`;`db/sessions.rs` 默认;`db/tests.rs` + `agent/tests.rs` 测试 fixture
+- Frontend:`Icon.vue` 加 ClipboardList;`stores/chat.ts` SessionMode + MODE_CYCLE;`components/chat/ModeSelect.vue` 选项 + 注释;`components/chat/ChatInput.vue` 注释 + 默认值;`stores/chatMode.test.ts` + `ModeSelect.test.ts` 断言
+- Spec:`.trellis/spec/backend/{llm-contract,tool-contract,project-cwd-boundary}.md` + `.trellis/spec/frontend/{state-management,popover-pattern,design-tokens}.md` + `docs/ARCHITECTURE.md` §2.2 ⑨ / §2.5.8 ⑯
+
+**Commit 拆分**:
+- Commit 1:rename + spec + ADR(本次主要工作,2-3 文件)
+- Commit 2:ModeSelect 位置改 hint row 左侧(Q4 P2)
+
 ### 2026-06-12 — F5 follow-up per-turn latency tracking(`Map<turnIndex, TurnLatency>` + `ChatEvent::TurnComplete`)
 
 - **决策**:新 `ChatEvent::TurnComplete { seq, ttfb_ms, gen_ms, total_ms, thinking_ms }` variant

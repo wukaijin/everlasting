@@ -72,7 +72,7 @@ pub async fn create_session(
  cache_creation_total: None,
  cache_read_total: None,
  color_tag: None,
- mode: crate::db::Mode::Chat,
+ mode: crate::db::Mode::Edit,
  })
 }
 
