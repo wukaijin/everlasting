@@ -231,24 +231,69 @@ pub async fn permission_response(
 // grant_tool_permission — direct "remember this tool" write
 // ---------------------------------------------------------------------------
 
-/// Insert a "always allow" row for `(session_id, tool_name)`.
-/// MVP only supports `match_kind = 'tool'` + `match_value = NULL`;
-/// future PRs can extend to `prefix` / `path`.
+/// Insert an "always allow" row for `(session_id, tool_name)`
+/// with the given `match_kind` + `match_value`. Wired to the
+/// future "manage remembered permissions" UI (PR3+); the
+/// `permission:ask` IPC flow (via `permission_response`) also
+/// writes the row via the agent loop's `check()` on
+/// `AllowAlways` using `permissions::match_value_for_allow_always`
+/// to auto-pick the right `match_kind` for the tool type
+/// (path / prefix / tool — re-grill Q6).
 ///
-/// Reserved for a future "manage remembered permissions" UI;
-/// not currently called from the frontend (the `permission:ask`
-/// flow already writes the row via the agent loop's
-/// `check()` on `AllowAlways`).
+/// **Validation** (re-grill Q6 schema lock):
+/// - `match_kind` MUST be one of `"tool"` / `"prefix"` / `"path"`.
+/// - `match_value` MUST be `None` when `match_kind = "tool"`.
+/// - `match_value` MUST be `Some` for `prefix` and `path`.
+///
+/// The DB schema also enforces `match_kind IN ('tool', 'prefix',
+/// 'path')` via a CHECK constraint (see `db::migrations`).
+/// Passing a value that doesn't match the constraint is
+/// reported as a `db::grant_tool_permission` error (the IPC
+/// wraps it as `Err`).
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn grant_tool_permission(
  state: State<'_, Arc<AppState>>,
  session_id: String,
  tool_name: String,
+ match_kind: Option<String>,
+ match_value: Option<String>,
 ) -> Result<(), String> {
- db::grant_tool_permission(&state.db, &session_id, &tool_name, "tool", None)
+ // Default the `match_kind` to `"tool"` when omitted
+ // (back-compat with the pre-re-grill IPC, which only
+ // wrote tool-level grants).
+ let kind = match_kind.as_deref().unwrap_or("tool");
+ // Validation: match_value must be Some for prefix / path.
+ match kind {
+ "tool" => {
+ // match_value is ignored for `tool`; we still pass
+ // through what the frontend sent for transparency.
+ db::grant_tool_permission(
+ &state.db,
+ &session_id,
+ &tool_name,
+ kind,
+ match_value.as_deref(),
+ )
  .await
  .map_err(|e| format!("grant_tool_permission failed: {}", e))
+ }
+ "prefix" | "path" => {
+ let value = match_value.as_deref().ok_or_else(|| {
+ format!(
+ "grant_tool_permission: match_kind='{}' requires a non-NULL match_value",
+ kind
+ )
+ })?;
+ db::grant_tool_permission(&state.db, &session_id, &tool_name, kind, Some(value))
+ .await
+ .map_err(|e| format!("grant_tool_permission failed: {}", e))
+ }
+ other => Err(format!(
+ "grant_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
+ other
+ )),
+ }
 }
 
 // ---------------------------------------------------------------------------

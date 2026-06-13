@@ -325,7 +325,7 @@ pub async fn chat(
         };
         let turn_ctx = ToolContext {
             worktree_path: worktree_path.clone(),
-            cwd: session_cwd,
+            cwd: session_cwd.clone(),
         };
         // The mutable tool context is used as the "current" cwd
         // within the turn — the shell tool reports updates through
@@ -340,9 +340,17 @@ pub async fn chat(
         // once here, used in every turn's `provider.send(...)`
         // call below.
         let session_mode = loaded_session.session.mode;
+        // A2+B7 re-grill (2026-06-13): the permission context
+        // carries the session's `cwd` so Tier 4 (path-based) can
+        // decide "is this path inside the project?" via
+        // `is_within_root(ctx.cwd, path)`. The project root is
+        // NOT plumbed through — the tool layer's
+        // `assert_within_root` is the source of truth for the
+        // project boundary.
         let permission_ctx = PermissionContext {
             session_id: session_id.clone(),
             mode: session_mode,
+            cwd: session_cwd.clone(),
         };
         let mode_prefix = permissions::mode_system_prefix(session_mode);
 
