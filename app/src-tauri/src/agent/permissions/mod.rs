@@ -13,11 +13,12 @@
 //! Tier 1. Hooks           — pre-call interface (MVP: no-op)
 //! Tier 2. Deny rules      — hard kill list (shell 9 regex,
 //!                            always silent — Yolo included)
-//! Tier 3. Mode check      — Plan blocks write/edit/shell
-//!                            (text error, NO modal — early
-//!                            intercept eliminates the
-//!                            "user click 始终允许 → Mode 拒"
-//!                            bad interaction)
+//! Tier 3. Mode check      — Plan blocks write_file/edit_file
+//!                            (file writes only; text error, NO
+//!                            modal). shell NOT blocked here —
+//!                            it's heterogenous (git diff vs git
+//!                            push), so its Mode decision lives
+//!                            in Tier 4 (三档分类 2026-06-14).
 //! Tier 4. Path / Prefix / External policy
 //!         ├─ Path tools (read_file / write_file /
 //!         │   edit_file / list_dir / grep / glob):
@@ -28,10 +29,12 @@
 //!         │     - NO  → check session_tool_permissions
 //!         │             (match_kind='path') → hit → Allow
 //!         │                                       miss → emit ask
-//!         ├─ Shell:
-//!         │   - first whitespace token → classify_prefix
-//!         │     - Allow  → Allow (silent)
-//!         │     - Ask    → emit ask
+//!         ├─ Shell (三档 2026-06-14):
+//!         │   - check prefix grant → Allow (始终允许 命中)
+//!         │   - else classify_prefix →
+//!         │     - ReadOnly   → Allow (silent; Plan included)
+//!         │     - SideEffect → Plan: emit ask / Edit: Allow
+//!         │     - Ask        → emit ask (Plan & Edit)
 //!         ├─ Web Fetch:
 //!         │   - always external → check tool grant
 //!         │                     → hit → Allow
@@ -435,19 +438,18 @@ pub async fn check(
  return Decision::Deny { reason, critical };
  }
 
- // ----- Tier 3: Mode check (Plan blocks writes) -----
- // ⑨ 关第 3 道 + ⑧a 三重防御的最后一层. Plan 模式下
- // 即便 LLM 仍发 write/edit/shell (tool list 过滤通常已挡住),
- // 也拦截. read 类工具不受影响. (3 档化 2026-06-13: Review
- // 移除,只剩 Plan 一个只读 mode。)
+ // ----- Tier 3: Mode check (Plan blocks file writes) -----
+ // ⑨ 关第 3 道 + ⑧a 三重防御的最后一层. Plan 模式拦截
+ // write_file/edit_file (纯写工具, 无歧义, 直接 text error
+ // 不弹窗 — 避免 "用户点始终允许 → 仍被 Mode 拒" 的鬼畜交互).
  //
- // **NEW (re-grill)**: this is now Tier 3 (was Tier 4). The
- // shift to Tier 3 means the user NEVER sees a "始终允许" modal
- // for a write tool in Plan mode — the LLM gets a text error
- // directly. No more "user clicks 始终允许 → still gets
- // Mode-denied" bad interaction.
+ // **shell 不再在此层拦截 (三档分类 2026-06-14)**: shell 是
+ // 异构工具 (git diff 读 / git push 写), 一刀切会把只读命令
+ // 也禁掉且无放行口子. shell 的 mode 感知下沉到 Tier 4 的
+ // Shell 分支: ReadOnly→Allow, SideEffect/Ask→弹窗 (Plan 下
+ // 用户可当场放行). 见 shell_trust.rs 三档分类.
  if matches!(ctx.mode, Mode::Plan) {
- if matches!(tool_name, "write_file" | "edit_file" | "shell") {
+ if matches!(tool_name, "write_file" | "edit_file") {
  tracing::info!(
  session_id = %ctx.session_id,
  mode = %ctx.mode.as_str(),
@@ -561,24 +563,45 @@ pub async fn check(
  }
  ToolKind::Shell => {
  let cmd = tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+ // (a) "始终允许" prefix-grant hit → silent Allow. Closes the
+ // old gap: match_value_for_allow_always wrote match_kind='prefix'
+ // rows for shell but Tier 4 never queried them — a user's
+ // AllowAlways on a shell command now sticks across turns.
+ if let Ok(true) = check_prefix_grant(db, &ctx.session_id, &shell_trust::first_token_for_allow_always(cmd)).await {
+ let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ return Decision::Allow;
+ }
+ // (b) Three-tier classification + per-Mode mapping. shell is
+ // heterogenous (git diff vs git push), so the Mode decision
+ // lives HERE in Tier 4, not in Tier 3.
+ //   Plan: ReadOnly→silent Allow; SideEffect/Ask→modal.
+ //   Edit: ReadOnly/SideEffect→silent Allow; Ask→modal.
+ //   Yolo never reaches here (Tier 4 bypassed at the top).
  match shell_trust::classify_prefix(cmd) {
- shell_trust::ShellTrust::Allow => {
- // Whitelist hit — silent Allow.
+ shell_trust::ShellTrust::ReadOnly => {
+ // Pure read — allow silently in every mode (Plan included).
+ let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ return Decision::Allow;
+ }
+ shell_trust::ShellTrust::SideEffect => {
+ if ctx.mode == Mode::Plan {
+ // Plan is read-only; surface the side effect to the
+ // user instead of silently allowing it.
+ return ask_path(app, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
+ }
+ // Edit: silent Allow (old whitelist behaviour).
  let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  shell_trust::ShellTrust::Ask => {
- // Asklist or unknown prefix — modal.
- // Shell commands are NOT path tools — the modal renders
- // the command inline via `toolInput` (no "path scope"
- // row). `path_for_modal = None` keeps the `path` field
- // OFF the wire so the frontend's `v-if="hasPath"` does
- // not render a misleading scope row for a shell ask.
- return ask_path(
- app, db, store, ctx,
- tool_name, tool_input,
- cmd, None, token,
- ).await;
+ // Asklist / unknown / structurally complex — modal in
+ // every interactive mode. Shell commands are NOT path
+ // tools: the modal renders the command inline via
+ // `toolInput` (no "path scope" row). `path_for_modal =
+ // None` keeps the `path` field OFF the wire so the
+ // frontend's `v-if="hasPath"` does not render a
+ // misleading scope row for a shell ask.
+ return ask_path(app, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
  }
  }
  }
@@ -807,6 +830,40 @@ async fn check_tool_grant(
  tool_name: &str,
 ) -> Result<bool, sqlx::Error> {
  crate::db::has_tool_permission(db, session_id, tool_name).await
+}
+
+/// Check `session_tool_permissions` for a shell-prefix grant.
+/// Returns `Ok(true)` if any row has `tool_name='shell'`,
+/// `match_kind='prefix'`, and `match_value = first_token` (exact
+/// match — prefix grants store the bare command name like
+/// `cargo`, not a glob).
+///
+/// Closes the old gap where `match_value_for_allow_always` wrote
+/// `match_kind='prefix'` rows for shell but Tier 4 never queried
+/// them: a user's "始终允许" on a shell command now sticks.
+async fn check_prefix_grant(
+ db: &SqlitePool,
+ session_id: &str,
+ first_token: &str,
+) -> Result<bool, sqlx::Error> {
+ if first_token.is_empty() {
+ return Ok(false);
+ }
+ let row: Option<(i64,)> = sqlx::query_as(
+ r#"
+ SELECT 1 FROM session_tool_permissions
+ WHERE session_id = ?
+   AND tool_name = 'shell'
+   AND match_kind = 'prefix'
+   AND match_value = ?
+ LIMIT 1
+ "#,
+ )
+ .bind(session_id)
+ .bind(first_token)
+ .fetch_optional(db)
+ .await?;
+ Ok(row.is_some())
 }
 
 /// Emit `permission:ask` + await the user's response (or

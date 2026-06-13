@@ -792,17 +792,25 @@ PR3 全部新增是 frontend store + modal 测试,见
 > is a Tier 4 helper. The IPC wire shape is **backward-
 > compatible** — `PermissionAskPayload` gained a `path` field
 > with `skip_serializing_if = "Option::is_none"`.
+>
+> **Update 2026-06-14 (shell 三档分类)**: `ShellTrust` 从 2 档
+> (Allow/Ask) 拆成 3 档 (ReadOnly/SideEffect/Ask),shell 的 Mode
+> 感知从 Tier 3 下沉到 Tier 4 (见下 §1/§2)。Tier 3 现在只拦
+> write_file/edit_file。IPC wire 形状不变。
 
 ### 1. New 5-Tier Order (re-grill SOT)
 
 ```
 Tier 1. Hooks           (MVP no-op)
 Tier 2. Deny rules      (硬 kill list,shell 9 个 regex,Yolo 走)
-Tier 3. Mode check      (Plan 拦截 write/edit/shell,text 错,不发 modal)
+Tier 3. Mode check      (Plan 拦截 write_file/edit_file,text 错,不发 modal;shell 不在此层)
 Tier 4. Path / Prefix / External policy
        ├─ Path 工具:is_within_root → 查 session_tool_permissions
        │   (match_kind='path') → hit Allow / miss silent(in) / miss ask(out)
-       ├─ Shell:classify_prefix → Allow(whitelist) / Ask(asklist + 未知)
+       ├─ Shell (三档 2026-06-14):先查 prefix grant → Allow;否则 classify_prefix →
+       │     ReadOnly(纯读,含 git diff/log/status 等只读子命令) → Allow(Plan 也静默)
+       │     SideEffect(可恢复副作用:mkdir/git push/cargo) → Plan:ask / Edit:Allow
+       │     Ask(高危/未知/含 |,&&,;) → ask(Plan & Edit)
        └─ Web Fetch:查 match_kind='tool' for 'web_fetch' → hit Allow / miss ask
        (Yolo:整段 bypass,直接 Allow;Tier 2 仍 hard wall)
 Tier 5. Allow rules     (default allow-all)
@@ -813,7 +821,7 @@ Tier 6. Audit           (写 session_audit_events)
 
 | File | Lines | Purpose |
 |---|---|---|
-| `app/src-tauri/src/agent/permissions/shell_trust.rs` | ~120 + tests | Whitelist (~60) + asklist (~30) const tables + `classify_prefix` (note: asklist is a curated reference list — both asklist hits and unknown prefixes collapse to `ShellTrust::Ask` in PR1; the split between "asklist" and "unknown" reason text is reserved for a future behavioral PR) |
+| `app/src-tauri/src/agent/permissions/shell_trust.rs` | ~250 + tests | 三档分类(2026-06-14):`READ_ONLY_WHITELIST`(~40) + `SIDE_EFFECT_WHITELIST`(~30) + `SHELL_ASKLIST`(~30 参考) + `GIT_READONLY_SUBCOMMANDS`(~23) const tables + `classify_prefix`(结构降级:含 `\|`/`&&`/`;` → Ask + git 子命令细化 + 通用表;asklist 仍为参考表,未命中前两表即 Ask) |
 | `app/src-tauri/src/projects/boundary.rs` (extension) | +20 | `is_within_root` non-failing boolean (no canonicalize) |
 | `app/src-tauri/src/agent/permissions/mod.rs` (rewrite) | +200 -120 | 5-tier reorder + path dispatch + Tier 4 helpers |
 

@@ -28,6 +28,29 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-14 — shell 权限三档分类(ReadOnly/SideEffect/Ask)+ plan 模式只读放行 + 复杂命令弹窗兜底
+
+**Context**: A2+B7 re-grill(2026-06-13)把 Mode 检查提到 Tier 3 后,plan 模式对 shell 一刀切 Deny——连 `git diff`/`git status` 这种纯读命令也禁,且 Tier 3 提前 return 绕过 Tier 4 弹窗,用户无法当场放行(只能被迫切模式)。同时暴露 `ShellTrust` 两档(Allow/Ask)只看首 token 的粒度问题:`git log | bash` 被判 Allow(首 token git),而 Tier 2 只兜 `curl\|bash`,不兜 `git\|bash`——pipe/链里藏的副作用靠用户肉眼。用户进一步要求:像 `ENV=noop && cargo check` 这种代码判不了的命令,plan/edit 都要有弹窗放行可能,而非硬拒堵死。
+
+**Decision**:把 shell 的 Mode 感知从 Tier 3 **下沉到 Tier 4 的 Shell 分支**,并把 `ShellTrust` 从 2 档拆成 3 档:
+- `ReadOnly`(纯读:ls/cat/git diff/...)→ 任何模式静默 Allow(解决 plan 痛点)
+- `SideEffect`(可恢复副作用:mkdir/git push/cargo)→ edit 静默 / plan 弹窗
+- `Ask`(高危/未知/结构复杂)→ plan & edit 都弹窗(放行口子,不硬拒)
+
+三处关键设计:
+1. **git 子命令细化**:git diff/log/status/show/blame 等(只读子命令)→ ReadOnly;其余 git 子命令(push/commit/reset/config/branch/...)→ SideEffect(保守,宁误判写)。`git` 整体不再归一档——这是 plan 能放 `git diff` 而不放 `git push` 的关键。
+2. **结构降级**:cmd 含 `|`(含 `||`)/`&&`/`;` → Ask。堵 `git log | bash` 误放行;也覆盖用户提的 `ENV=noop && cargo check`(代码判不了 → 弹窗给放行口子,而非硬拒)。代价:纯读 pipe(`git status \| head`)也弹窗,可点"始终允许"消音。
+3. **shell "始终允许"接通**:Tier 4 Shell 分支新增 `check_prefix_grant`(match_kind='prefix' 精确匹配 first token)。修了 re-grill 留下的"`match_value_for_allow_always` 写了 prefix grant 但从不查"瑕疵。
+
+**保留 re-grill 的初衷**:Tier 3 仍对 write_file/edit_file 硬拒(纯写工具无歧义,plan 语义=只读,弹窗会模糊 plan/edit 边界)——"用户点始终允许 → 仍被 Mode 拒"的鬼畜交互对这俩仍成立。shell 因异构(git diff 读 / git push 写)才下沉到 Tier 4 按三档细分。
+
+**Alternatives**(已否决):
+- **Tier 3 放行白名单 shell(方案 A)**:粒度仍不够(git 整体白名单 → git push 漏放),否决。
+- **首 token 粗分两堆(不细化 git 子命令)**:`git diff` 放不出来(痛点未解),否决。
+- **pipe 保留首 token 现状(只降级 &&/;)**:`git log \| bash` 仍误放 Allow,否决。
+
+**影响面**:后端内聚,3 文件(`shell_trust.rs` 重写 + `mod.rs` Tier 3/4 + `db/permissions.rs` 注释);前端(`permissions.ts`/`PermissionModal.vue`)不动(只认 `permission:ask` payload,与 `ShellTrust` 枚举解耦)。452 lib 测试全绿(含 18 个 `classify_*` 新测试覆盖三档/git 子命令/结构降级)。代码 `app/src-tauri/src/agent/permissions/{shell_trust.rs,mod.rs}`;spec `.trellis/spec/backend/tool-contract.md` "Scenario: Path-based Permission" 同步更新。
+
 ### 2026-06-14 — TitleBar maximize 改用原生 toggleMaximize()(position bug 根因 = Wayland setPosition 限制)
 
 **Context**: session 15(2026-06-07)留的 TODO(bug-position):RDP 双显示器下点最大化,窗口"grow rightward"而非贴 host 主屏左上角。跨多 session 试过 setSize/setPosition 顺序互换、cursorPosition 定位,均失败。06-14 重新排查定位根因。

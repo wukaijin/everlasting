@@ -9,11 +9,17 @@
 //!
 //! 2. **Per-session "always allow" set**
 //! ([`grant_tool_permission`] / [`has_tool_permission`] /
-//! [`revoke_tool_permission`]) — backs the ⑨ 关 Tier 3 short-circuit
+//! [`revoke_tool_permission`]) — backs the ⑨ 关 Tier 4 short-circuit
 //! ("this session has previously granted this tool, don't ask again").
-//! Schema-level `match_kind` (`tool` / `prefix` / `path`) is reserved
-//! for a future PR; MVP only uses `match_kind = 'tool'` and
-//! `match_value = NULL` (one row per `session_id` × `tool_name`).
+//! All three `match_kind` values are now live:
+//! - `tool` — whole-tool grant (e.g. web_fetch); `match_value IS NULL`.
+//! - `path` — sqlite GLOB on a filesystem path (path tools); checked
+//!   by `permissions::check_path_grant`.
+//! - `prefix` — exact command-prefix match for `shell` (e.g. `cargo`);
+//!   the write side (`match_value_for_allow_always`) has existed since
+//!   the re-grill; the read side (`permissions::check_prefix_grant`)
+//!   was wired in the 三档分类 refactor (2026-06-14), closing the old
+//!   "stored but never queried" gap.
 //!
 //! 3. **Audit log persistence** ([`record_audit_event`] /
 //! [`list_audit_events`]) — every ⑨ 关 decision path hits the
