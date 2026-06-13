@@ -190,7 +190,25 @@ export interface SessionSummary {
   cache_read_total: number | null;
   /** D1 (Color Tag): palette index 0-7, null = no mark. */
   color_tag: number | null;
+  /** A2 + B7 (Permission system + per-session Mode, 2026-06-13):
+   *  the session's current mode. The Rust side serializes the
+   *  `Mode` enum as its lowercase string (`chat` / `plan` /
+   *  `review` / `yolo` / `background`); `Background` is reserved
+   *  in the enum and never appears in the UI. PR2 wires the
+   *  frontend ModeSelect to flip this via `set_session_mode` IPC.
+   *  See `app/src-tauri/src/db/types.rs::Mode`. */
+  mode: "chat" | "plan" | "review" | "yolo" | "background";
 }
+
+/** User-facing mode subset — the four modes the MVP UI exposes.
+ *  Excludes `Background` (reserved in the backend enum for
+ *  schema stability but never shown to the user; PR2 scope). */
+export type SessionMode = "chat" | "plan" | "review" | "yolo";
+
+/** Cycle order for `useKeyboard` Shift+Tab iteration. Matches
+ *  Claude Code's `Shift+Tab` cycle convention: Chat → Plan →
+ *  Review → Yolo → Chat (forward). */
+export const MODE_CYCLE: SessionMode[] = ["chat", "plan", "review", "yolo"];
 
 /** One file in the worktree diff (step 4 / PR3). Mirror of the
  *  Rust `git::diff::FileDiff` struct. Field names are
@@ -1014,6 +1032,103 @@ export const useChatStore = defineStore("chat", () => {
     await controller.cancel(rid);
   }
 
+  // -----------------------------------------------------------------------
+  // A2 + B7 (PR2 front-end): per-session Mode changes via the
+  // `set_session_mode` Tauri command. Both the popover entry
+  // (`ModeSelect.vue`) and the keyboard entry (`Shift+Tab` in
+  // `ChatInput.vue` via `useKeyboard`) call this so the Yolo
+  // confirm modal flow can live in exactly one place. The
+  // component-side handlers (`ModeSelect.onModePick`,
+  // `ChatInput.cycleMode`) just route here.
+  //
+  // We deliberately do NOT ship the Yolo confirm modal as a
+  // store-managed thing — the modal is visual chrome and a
+  // store shouldn't own a `<Teleport>` target. Instead, the
+  // store exposes:
+  //   - `pendingYoloConfirm`: a reactive boolean the modal
+  //     mounts against (`v-if`).
+  //   - `requestSetMode(sessionId, mode)`: the orchestrator
+  //     that flips the Yolo gate for non-Chat modes and
+  //     short-circuits when the gate is already open.
+  //   - `confirmYolo()` / `cancelYolo()`: confirm / cancel the
+  //     pending modal (the modal calls these on its buttons).
+  //
+  // `ModeSelect` reads `pendingYoloConfirm` to render the modal
+  // (it owns the modal mount today; the store only holds the
+  // boolean). `ChatInput`'s `cycleMode` calls `requestSetMode`
+  // — the Yolo transition will surface in `ModeSelect`'s
+  // mounted modal because both UIs share the same store state.
+  // -----------------------------------------------------------------------
+
+  /** True while the Yolo confirm modal should be mounted. Both
+   *  UI entry points (`ModeSelect` popover + `ChatInput`
+   *  Shift+Tab) flip this through `requestSetMode`. The modal
+   *  is unmounted via `v-if` when this flips false. */
+  const pendingYoloConfirm = ref(false);
+
+  /** Orchestrator for a mode change. The caller passes the
+   *  target mode; this method handles the Yolo gate. Returns
+   *  `true` if the mode was applied (or already current),
+   *  `false` if the call was deferred to the modal. Errors
+   *  propagate to the caller via the `invoke` throw. */
+  async function requestSetMode(
+    sessionId: string,
+    mode: SessionMode,
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    if (isCurrentSessionStreaming.value) return false;
+
+    // No-op when the mode is already current. The optimistic
+    // local update below is also a no-op, but we skip the IPC
+    // round-trip to keep Shift+Tab snappy.
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (summary && summary.mode === mode) return true;
+
+    // Yolo always requires the confirm ceremony. We stage the
+    // modal mount and let `confirmYolo` fire the IPC.
+    if (mode === "yolo") {
+      pendingYoloConfirm.value = true;
+      return false;
+    }
+
+    // Non-Yolo mode: apply directly.
+    try {
+      await invoke("set_session_mode", { sessionId, mode });
+      if (summary) {
+        (summary as { mode: string }).mode = mode;
+      }
+      return true;
+    } catch (e) {
+      console.error("Failed to update session mode:", e);
+      return false;
+    }
+  }
+
+  /** Called by `YoloConfirmModal`'s confirm button. Fires the
+   *  pending IPC, optimistic-updates the session row, and
+   *  closes the modal. No-op when no session is active or
+   *  streaming kicked in while the modal was open. */
+  async function confirmYolo(): Promise<void> {
+    pendingYoloConfirm.value = false;
+    const sid = currentSessionId.value;
+    if (!sid) return;
+    if (isCurrentSessionStreaming.value) return;
+    try {
+      await invoke("set_session_mode", { sessionId: sid, mode: "yolo" });
+      const summary = sessions.value.find((s) => s.id === sid);
+      if (summary) {
+        (summary as { mode: string }).mode = "yolo";
+      }
+    } catch (e) {
+      console.error("Failed to confirm Yolo:", e);
+    }
+  }
+
+  /** Cancel the pending Yolo confirm — no mode change. */
+  function cancelYolo(): void {
+    pendingYoloConfirm.value = false;
+  }
+
   return {
     // Reactive state (computed projections)
     messages,
@@ -1069,5 +1184,12 @@ export const useChatStore = defineStore("chat", () => {
     // every `done` event that resolved a `totalMs`. Adds the
     // per-turn `totalMs` to the running session total.
     accumulateLatency,
+    // A2 + B7 (PR2): per-session Mode setters. The Yolo gate
+    // is held in `pendingYoloConfirm` and consumed by the
+    // YoloConfirmModal mounted by `ModeSelect.vue`.
+    pendingYoloConfirm,
+    requestSetMode,
+    confirmYolo,
+    cancelYolo,
   };
 });

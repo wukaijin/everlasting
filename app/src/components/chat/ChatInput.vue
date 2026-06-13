@@ -59,11 +59,13 @@ import { computed, onUnmounted, ref } from "vue";
 import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipPortal, TooltipContent, TooltipArrow } from "reka-ui";
 import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
-import { useChatStore } from "../../stores/chat";
+import ModeSelect from "./ModeSelect.vue";
+import { useChatStore, MODE_CYCLE, type SessionMode } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 import { abbreviateDuration } from "../../utils/duration";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
+import { registerShiftTabCycle } from "../../utils/useKeyboard";
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -248,6 +250,48 @@ function onSubmit() {
 function onStop() {
   emit("stop");
 }
+
+/**
+ * PR2 (B7): Shift+Tab cycle through the per-session Mode.
+ *
+ * Wired via the `useKeyboard` module so the listener lives at
+ * the capture phase on `window` — the default browser
+ * behaviour (reverse-tab focus traversal) MUST be suppressed
+ * with `e.preventDefault()`, which a per-component listener
+ * on the textarea can't reliably do once focus has moved
+ * elsewhere.
+ *
+ * The cycle order is `MODE_CYCLE` (Chat → Plan → Review →
+ * Yolo → Chat). We delegate the actual IPC + Yolo confirm
+ * gate to `chatStore.requestSetMode` so the popover path
+ * (`ModeSelect`) and the keyboard path share exactly one
+ * orchestrator — Shift+Tab into Yolo will pop the same
+ * `YoloConfirmModal` as clicking Yolo in the popover.
+ *
+ * Streaming gate: the cycle is suppressed while the active
+ * session is streaming (matches `ModeSelect`'s `:disabled`
+ * contract and the backend rule "mode applies on next turn
+ * boundary" — PR1 mode check at ⑧a).
+ */
+async function cycleMode(): Promise<void> {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return;
+  const summary = chatStore.sessions.find((s) => s.id === sid);
+  if (!summary) return;
+  const current = (summary.mode as SessionMode) ?? "chat";
+  const idx = MODE_CYCLE.indexOf(current);
+  if (idx === -1) return;
+  const next = MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];
+  if (next === current) return;
+  await chatStore.requestSetMode(sid, next);
+}
+
+registerShiftTabCycle({
+  cycle: () => {
+    void cycleMode();
+  },
+  enabled: () => !chatStore.isCurrentSessionStreaming && !!chatStore.currentSessionId,
+});
 
 function submit() {
   const text = input.value;
@@ -476,6 +520,12 @@ function onEscKeydown() {
            the right edge of the hint row. Replaces the
            bottom-of-content `StatusBar` from PR4. -->
       <ModelSelect />
+      <!-- PR2 (B7): per-session Mode picker. Same popover pattern
+           as `ModelSelect` (upward-opening, hand-rolled), placed
+           next to the model picker for parity. The trigger
+           shows the current Mode label (Chat / Plan / Review /
+           Yolo). Shift+Tab cycles Mode via `useKeyboard`. -->
+      <ModeSelect />
     </div>
   </footer>
 </template>

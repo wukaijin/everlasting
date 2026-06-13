@@ -1,0 +1,384 @@
+<script setup lang="ts">
+// ModeSelect — per-session Mode picker. Mirrors `ModelSelect.vue`'s
+// hand-written popover pattern (see `.trellis/spec/frontend/popover-pattern.md`)
+// with two differences:
+//
+// 1. **Upward vs downward popover**: `ModelSelect` opens UP because
+//    the trigger sits at the bottom of the chat input (same
+//    geometry as ModeSelect — both open UP). Same `bottom: calc(100%
+//    + 4px); top: auto;` and `translateY(4px → 0)` slide.
+//
+// 2. **Compact 4-row list vs grouped model list**: ModeSelect has
+//    exactly 4 entries (Chat / Plan / Review / Yolo), so no
+//    grouping / scrolling is needed. Width can be narrower
+//    (~220px vs `ModelSelect`'s 220px).
+//
+// UX flow:
+// - Click trigger → popover opens with the 4 modes listed.
+// - Click a non-Yolo mode → popover closes immediately, IPC fires.
+// - Click Yolo → popover closes, **YoloConfirmModal** opens
+//   (driven by the shared `pendingYoloConfirm` flag in the
+//   chat store — see `useChatStore.requestSetMode`).
+//
+// Streaming state: per PR2 spec, all UI is `:disabled` while
+// `isCurrentSessionStreaming` is true. Mirrors `ModelSelect`'s
+// contract and matches the backend rule "mode changes apply on
+// the next turn boundary" (PR1 mode check at ⑧a — no mid-stream
+// flips).
+//
+// `Shift+Tab` cycle is registered in `ChatInput.vue` via
+// `useKeyboard` and routes through the SAME `requestSetMode`
+// store action — so a Shift+Tab flip into Yolo opens the same
+// modal the popover would.
+
+import { computed, onUnmounted, ref } from "vue";
+
+import { useChatStore, type SessionMode } from "../../stores/chat";
+import Icon from "../Icon.vue";
+import YoloConfirmModal from "./YoloConfirmModal.vue";
+
+const chatStore = useChatStore();
+
+const menuOpen = ref(false);
+const menuRoot = ref<HTMLElement | null>(null);
+
+/** Mode options shown in the popover. Order matches
+ *  `MODE_CYCLE` in `chat.ts` so the popover reads top-to-bottom
+ *  in the same order Shift+Tab cycles. `Background` is
+ *  intentionally excluded per PRD ("4 选项,不显示 Background"). */
+interface ModeOption {
+  value: SessionMode;
+  label: string;
+  /** Plain-language description rendered under the label. */
+  description: string;
+}
+
+const modeOptions: readonly ModeOption[] = [
+  {
+    value: "chat",
+    label: "Chat",
+    description: "正常使用,可调用所有工具,危险操作需确认",
+  },
+  {
+    value: "plan",
+    label: "Plan",
+    description: "只分析与制定方案,不执行写操作",
+  },
+  {
+    value: "review",
+    label: "Review",
+    description: "只读分析,可读文件/搜索,不可写",
+  },
+  {
+    value: "yolo",
+    label: "Yolo",
+    description: "跳过所有用户确认,硬 kill list 仍然拦截",
+  },
+] as const;
+
+/** True if the user has any session active. When no session is
+ *  active we don't render the chip — there's nothing to switch. */
+const hasSession = computed<boolean>(() => !!chatStore.currentSessionId);
+
+/** Current mode for the active session. Reads from the
+ *  `SessionSummary.mode` wire field (per-session override). Falls
+ *  back to `"chat"` for pre-PR2 sessions whose wire payload
+ *  may be missing the field (defensive — PR1's backfill
+ *  guarantees it but legacy rows could theoretically still hit
+ *  the UI). */
+const currentMode = computed<SessionMode>(() => {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return "chat";
+  const s = chatStore.sessions.find((x) => x.id === sid);
+  if (!s) return "chat";
+  if (s.mode === "plan" || s.mode === "review" || s.mode === "yolo") {
+    return s.mode;
+  }
+  return "chat";
+});
+
+const currentModeLabel = computed<string>(() => {
+  const m = modeOptions.find((o) => o.value === currentMode.value);
+  return m?.label ?? "Chat";
+});
+
+/** Lock the chip + popover while the active session is
+ *  streaming. Mirrors `ModelSelect`'s contract and matches
+ *  the backend's "mode applies on next turn boundary" rule. */
+const isStreaming = computed<boolean>(
+  () => chatStore.isCurrentSessionStreaming,
+);
+
+function toggleMenu() {
+  if (isStreaming.value) return;
+  menuOpen.value = !menuOpen.value;
+}
+
+function closeMenu() {
+  menuOpen.value = false;
+}
+
+/** Click outside the popover root closes it. Mirrors
+ *  `ModelSelect.onDocumentClick` / worktree dropdown. */
+function onDocumentClick(e: MouseEvent) {
+  if (!menuOpen.value) return;
+  const target = e.target as Node | null;
+  if (menuRoot.value && target && !menuRoot.value.contains(target)) {
+    menuOpen.value = false;
+  }
+}
+
+/** Esc closes the popover. Bound on `window` because the
+ *  trigger may not have focus when the popover is open. */
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape" && menuOpen.value) {
+    menuOpen.value = false;
+  }
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("click", onDocumentClick);
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", onKeyDown);
+}
+onUnmounted(() => {
+  if (typeof document !== "undefined") {
+    document.removeEventListener("click", onDocumentClick);
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", onKeyDown);
+  }
+});
+
+/** Click handler for a popover row. Delegates to the chat
+ *  store so the Yolo confirm flow is shared with the
+ *  `Shift+Tab` keyboard entry (see `useKeyboard` /
+ *  `ChatInput.cycleMode`). Always closes the popover so the
+ *  user sees immediate feedback (the modal — if any — opens
+ *  on top). */
+async function onModePick(mode: SessionMode) {
+  closeMenu();
+  const sid = chatStore.currentSessionId;
+  if (!sid) return;
+  await chatStore.requestSetMode(sid, mode);
+}
+</script>
+
+<template>
+  <div
+    v-if="hasSession"
+    ref="menuRoot"
+    class="mode-select"
+  >
+    <button
+      type="button"
+      class="mode-select__trigger"
+      :class="{
+        'mode-select__trigger--disabled': isStreaming,
+      }"
+      :disabled="isStreaming"
+      :aria-haspopup="'menu'"
+      :aria-expanded="menuOpen"
+      :title="
+        isStreaming
+          ? 'Streaming 中,无法切换 Mode'
+          : '点击切换当前 session 的 Mode(Shift+Tab 循环)'
+      "
+      @click="toggleMenu"
+    >
+      <span class="mode-select__label">{{ currentModeLabel }}</span>
+      <Icon
+        :name="menuOpen ? 'chevron-down' : 'chevron-up'"
+        :size="10"
+        class="mode-select__chevron"
+      />
+    </button>
+    <Transition name="mode-select-popover">
+      <div
+        v-if="menuOpen"
+        class="mode-select__menu"
+        role="menu"
+      >
+        <button
+          v-for="opt in modeOptions"
+          :key="opt.value"
+          type="button"
+          class="mode-select__item"
+          :class="{
+            'mode-select__item--active': opt.value === currentMode,
+          }"
+          role="menuitem"
+          @click="onModePick(opt.value)"
+        >
+          <span class="mode-select__item-name">{{ opt.label }}</span>
+          <span class="mode-select__item-desc">{{ opt.description }}</span>
+          <span
+            v-if="opt.value === currentMode"
+            class="mode-select__item-check"
+            aria-hidden="true"
+          >●</span>
+        </button>
+      </div>
+    </Transition>
+
+    <!-- Yolo confirm modal — driven by the store's
+         `pendingYoloConfirm` flag so both the popover and the
+         Shift+Tab cycle can open it from one place. The modal
+         calls `chatStore.confirmYolo()` / `cancelYolo()` on
+         its buttons. -->
+    <YoloConfirmModal
+      :open="chatStore.pendingYoloConfirm"
+      :disabled="isStreaming"
+      @cancel="chatStore.cancelYolo()"
+      @confirm="chatStore.confirmYolo()"
+    />
+  </div>
+</template>
+
+<style scoped>
+/* Hand-written popover mirroring `ModelSelect`. The trigger sits
+   at the bottom of the chat input row, so the popover opens
+   UPWARD (matches `ModelSelect`'s geometry). Width matches the
+   longest entry's label+description pair. */
+.mode-select {
+  position: relative;
+  display: inline-flex;
+}
+
+.mode-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.mode-select__trigger:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-bg-border);
+  color: var(--color-text-primary);
+}
+
+.mode-select__trigger--disabled,
+.mode-select__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-select__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-select__chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.mode-select__menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  top: auto;
+  right: 0;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 220px;
+  z-index: 100;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mode-select__item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 1px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mode-select__item:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+}
+
+.mode-select__item--active {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+.mode-select__item-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mode-select__item-desc {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.mode-select__item--active .mode-select__item-desc {
+  color: var(--color-text-secondary);
+}
+
+.mode-select__item-check {
+  color: var(--color-accent);
+  font-size: 10px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* Upward-opening popover slide animation — same shape as
+   `ModelSelect`'s upward transition (see popover-pattern.md
+   "Popover: fade + slide (direction matches position)"). */
+.mode-select-popover-enter-active,
+.mode-select-popover-leave-active {
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transform-origin: bottom right;
+}
+
+.mode-select-popover-enter-from,
+.mode-select-popover-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.mode-select-popover-leave-active {
+  transition-duration: 100ms;
+  transition-timing-function: ease-in;
+}
+</style>
