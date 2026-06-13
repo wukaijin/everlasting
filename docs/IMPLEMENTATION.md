@@ -28,6 +28,57 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-13 — A2+B7 Re-grill: path-based 模型 + Tier 重排(Mode 提前)+ 3 match_kind 全 wire
+
+**Context**: A2+B7 任务的 PR1 + PR2 + PR3 + 3 档化(2026-06-13)在 main 上跑了一天后,通过 re-grill-me session 重新审视权限判定 + Mode 联动的设计。发现两个反直觉 + 1 个粒度不足:
+- **反直觉 #1**:旧设计 Tier 3 "总是弹窗" → Edit 模式读 README 都要弹(用户跑 coding 任务被弹 10+ 次)
+- **反直觉 #2**:旧设计 Tier 4 Mode check 在 Tier 3 Ask 之后 → Plan + 写操作有"用户点始终允许,然后被 Mode 拒"的坏交互
+- **粒度不足**:PRD 原预留 3 种 `match_kind` schema(`tool` / `prefix` / `path`)但只 wire 了 `tool` → 用户想"信任 ~/Documents 整片"没辙
+
+re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md`](../.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md)。旧 06-12 PRD 加 Superseded 标记保留作历史档案,新实施以新 PRD 为准。
+
+**Decision** (10 项,re-grill session 输出):
+
+1. **弹窗判定 = path-based**(Q1)— 仓库内 default allow,仓库外 ask,跟"build 跑 coding 任务"心智一致
+2. **shell 策略 = 前缀白名单 + asklist + Tier 2 兜底**(Q2)— 静态 ~30 个白名单 + ~10 个 asklist,`bash` / `sudo` / `cd` 这种"容器"前缀永远 Ask
+3. **仓库边界 = Session.cwd 严格 prefix 匹配**(Q3)— 跟现有 `boundary::assert_within_root` 复用,新增 `is_within_root(&self, path) -> bool` 抽出
+4. **Yolo × 仓库外 = silent**(Q4)— Yolo bypass 整个 Tier 4 modal,跟 Yolo "no questions asked" 哲学一致;Tier 2 硬墙仍生效
+5. **Tier 顺序 = Hooks → Deny → Mode → Path → Allow → Audit**(Q5)— Mode 提前到 Tier 3,消除 Plan + 始终允许坏交互
+6. **"始终允许" 粒度 = tool + path-glob + prefix 3 种 match_kind 全 wire**(Q6)— schema 已有,只 wire;3-button modal 触发时按 tool 类型自动选 match_kind
+7. **shell prefix 解析 = 第一个 token,无递归/无 alias/无 pipe**(Q7)— "B 试图精确会输"哲学一致,`find -delete` / `echo > /tmp/x` 副作用 Tier 2 兜底
+8. **path-glob 持久化粒度 = 父目录 + `*` 通配(sqlite GLOB)**(Q8)— 用户允许 `src/foo.rs` → `src/*`;sqlite GLOB 不支持 `**` 递归,子目录要再次允许
+9. **Plan × path policy = Plan 不豁免**(Q9)— 仓库外 read 在 Plan 模式仍 ask;跟新 Tier 顺序自然衍生
+10. **Risk 字段保留 = 4 档作 UI 视觉,加 path 范围行**(Q10)— 零改动兼容,path + risk 是 orthogonal 维度
+
+**Alternatives** (已 grill 否决):
+- **B/Q1**: Risk-based 弹窗 — Edit 模式读文件要弹,反直觉
+- **B/Q2**: 解析 shell 命令路径 token 判定仓库内/外 — pipe / env 变量 / `cd` 切换可绕过,试图精确会输
+- **B/Q4**: Yolo 仓库外仍 ask — 跟 Yolo "no questions" 哲学矛盾
+- **B/Q5**: 维持旧 Tier 顺序 — Plan + 始终允许坏交互保留
+- **B/Q6**: 只 wire `tool` match_kind — path 工具想信任整目录没辙
+- **B/Q7**: 递归解析 shell(`sudo X` → 跳到 X)— 跟"试图精确会输"哲学冲突
+- **A/Q8**: 最小精确(只记 path 自身)— path 工具太严,同目录 10 文件弹 10 次
+- **B/Q9**: Plan 豁免 path policy — 跟"仓库外一律 ask"模型冲突
+- **C/Q10**: 废弃 risk 字段 — UI 改动大,跟现有 UX 偏离
+
+**影响范围**:
+- Backend 新模块:`projects/boundary.rs::is_within_root`(从 `assert_within_root` 抽出);`agent/permissions/shell_trust.rs` 新文件(~120 行,白名单 + asklist 2 张 const 表 + classify_prefix 函数)
+- Backend 改:`agent/permissions/mod.rs::check` 大改(5 tier 重排,按 tool 类型分派 Tier 4,~200 行净增);`commands/permissions.rs::permission_response` 写 match_kind 按 tool 类型自动选;`db/sessions.rs::grant_tool_permission` 维持(3 种 match_kind schema 已有,match_value 规范化)
+- Backend 不动:`agent/permissions/dangerous.rs`(9 个 regex 不动);`mode_system_prefix` / `filter_tools_for_mode`(维持)
+- Frontend 改:`components/chat/PermissionModal.vue` 加 path 范围行(仓库内 emerald / 仓库外 amber);`stores/permissions.ts::PermissionAsk` type 加 `path?: string`
+- Spec 改:`.trellis/spec/backend/{tool-contract,project-cwd-boundary,llm-contract,error-handling,database-guidelines}.md` + `.trellis/spec/frontend/{state-management,popover-pattern,design-tokens,reka-ui-usage}.md`
+- Docs 改:`docs/ARCHITECTURE.md` §2.2 ⑨ 改写为新 Tier 顺序 + path-based 语义
+- 估算 ~950 行净增(含测试):5 文件后端 + 4 文件前端 + 5 文件 spec + 2 文件 docs
+- 实施 2 PR:PR1 后端 path-based 决策层 + shell 白名单 + match_kind 全 wire;PR2 前端 PermissionModal 路径范围行 + spec 同步
+
+**Commit 拆分计划**:
+- Commit 1:boundary::is_within_root + ADR(本 ADR)
+- Commit 2:agent/permissions/shell_trust.rs 新模块 + 27 PR1 测试重写
+- Commit 3:agent/permissions/mod.rs::check 大改(5 tier 重排)
+- Commit 4:commands/permissions.rs::permission_response + db/sessions.rs::grant_tool_permission 3 match_kind 全 wire
+- Commit 5:spec 同步(5 文件)+ ARCHITECTURE §2.2 ⑨ 改写
+- Commit 6:PermissionModal.vue path 范围行 + permissions.ts type + 8 新 vitest
+
 ### 2026-06-13 — A2 + B7 Mode 3 档化(Chat→Edit 改名 + Review 移除)
 
 **Context**:A2 + B7 任务的 PR1 + PR2 + PR3 在 2026-06-13 落地,共 5 个 commit (442fb3d / d0b9063 / db0f762 / 3a50212 / 09da97c),4 档 Mode (Chat / Plan / Review / Yolo) 全部上 main。grill-with-docs session (2026-06-13) 重新审视语义,锁定 3 档新方案。
