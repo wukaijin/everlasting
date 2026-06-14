@@ -1476,3 +1476,37 @@ R3: chat.rs + chat_loop.rs (副本逐行同步) match degradation -> emit Error{
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: unify chat loop dispatch — RULE-A-006 闭环
+
+**Date**: 2026-06-15
+**Task**: unify chat loop dispatch — RULE-A-006 闭环
+**Branch**: `main`
+
+### Summary
+
+把 production chat.rs 的 agent loop spawn 闭包体(~1000 行)替换为 run_chat_loop(14 params)单次调用,消除 chat_loop.rs/chat.rs 副本,production + test 共享同一函数路径。chat_loop.rs 去 dead_code 标记,chat.rs spawn 内重复 CancellationGuard 移除(等价证明见 PRD Current Code State)。484 tests pass(cargo test --lib),0 warnings(cargo check + cargo check --tests),9 agent_loop_* 集成测试现覆盖 production 真实路径。DEBT.md RULE-A-006 partial → closed,ARCHITECTURE.md §2.5.5 加注 agent loop body 统一。新增 2 个 spec 文件:.trellis/spec/backend/agent-loop-architecture.md(codify run_chat_loop 14-param shared entry point 模式 + CancellationGuard 等价证明 + faithful-port drift hazard 反模式)和 .trellis/spec/guides/debt-status-evolution-guide.md(DEBT.md partial→closed 3-step transition + stale docstring 反模式 + 行为导向 docstring 写法)。遗留:PRD Definition of Done 7 步手动 checklist(text-only/tool_use/cancel/error/multi-turn/permission:ask)需 pnpm tauri dev + 真实 API,自动化环境未跑,但 emit wire contract 已被 9 个 MockProvider 集成测试覆盖。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `33d8404` | (see git log) |
+| `4b5008d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
