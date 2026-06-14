@@ -38,8 +38,8 @@
 - **Implementation**: `Policy::limited(MAX_REDIRECTS)` 不重做 IP check(RULE-E-003)
 - **Impact**: 内部文档矛盾,实施者/维护者困惑
 - **Resolution**: 实施 RULE-E-003 时统一 docstring + security notes,删除 "not implemented" 或改为 "implemented,see `web_fetch.rs:SECTION`"
-- **Decision**: 随 RULE-E-003 修复
-- **Related DEBT**: RULE-E-003 (P0)
+- **Decision**: ✅ resolved — 2026-06-14 PR3 (`06-14-p0-web-fetch-redirect-ssrf`) 实施 `build_redirect_policy` 时同步修复:`web_fetch.rs:15-19` 引用 `build_redirect_policy` 和 `resolve_and_check_sync`,明确说明 "applied to the initial URL AND to every redirect target via `redirect::Policy::custom` callback"
+- **Related DEBT**: RULE-E-003 (P0,closed)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 
 ---

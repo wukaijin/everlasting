@@ -123,10 +123,13 @@
 - **Description**: `Policy::limited(MAX_REDIRECTS)` 不重做 host resolution + IP check;docstring 自相矛盾(`:17` 写 "each redirect target" vs §5 "not implemented")
 - **Impact**: `attacker.com → 169.254.169.254` 绕 SSRF 打 AWS metadata 泄漏 IAM 临时凭证
 - **Fix**: 自定义 `Policy::custom` 每 3xx 重做 `lookup_host` + `is_blocked`(~30 行);同步修 spec 内部矛盾
-- **Status**: open
+- **Status**: closed
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p0-web-fetch-redirect-ssrf`
+- **Related Task**: `.trellis/tasks/06-14-p0-web-fetch-redirect-ssrf`
+- **Closed At**: `4b46bc6`
+- **Related PR**: (待创建)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5 + §3.1
+- **Resolution Notes**: 实施 `redirect::Policy::custom` callback + 同步 `resolve_and_check_sync` (硬编码 `allow_private=false` 防止测试 bypass 漏到生产 redirect 路径),加 `WebFetchError::RedirectBlocked { from, to }` 变体。`web_fetch.rs:17` docstring 同步更新引用 `build_redirect_policy` 与 `resolve_and_check_sync`,DRIFT-002 矛盾已闭合。31 个 web_fetch 测试 + 469 后端测试全 pass。
 
 ---
 
