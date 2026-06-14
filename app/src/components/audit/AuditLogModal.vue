@@ -186,7 +186,22 @@ async function onRefresh(): Promise<void> {
             <span class="audit-modal__filter-label">类别</span>
             <SelectRoot v-model="kindSelectValue">
               <SelectTrigger class="audit-modal__select-trigger" aria-label="类别">
-                <SelectValue placeholder="全部" />
+                <!-- The placeholder is a NEUTRAL hint distinct from the
+                     "全部" item label. SelectValue falls back to the
+                     placeholder ONLY when no SelectItem matches the
+                     current modelValue; since the store's initial
+                     kindFilter === null maps to v-model="__all__",
+                     which matches the first SelectItem (value
+                     "__all__", label "全部"), the trigger renders the
+                     SELECTED item text — not the placeholder — on
+                     open. This keeps "全部" a real selection (normal
+                     text color, no data-placeholder attribute) instead
+                     of a placeholder-style ghost. Keeping the
+                     placeholder as a separate cue ("选择类别") makes
+                     the selected-vs-placeholder state visually
+                     auditable. See reka-ui 2.9.9 SelectValue.js:
+                     slotText = selectedLabel.length ? join : placeholder. -->
+                <SelectValue placeholder="选择类别" />
                 <SelectIcon class="audit-modal__select-icon">
                   <Icon name="chevron-down" :size="12" />
                 </SelectIcon>
@@ -318,6 +333,20 @@ async function onRefresh(): Promise<void> {
   width: 80vw;
   min-width: 640px;
   max-width: min(960px, calc(100vw - 40px));
+  /* min-height keeps the modal from looking thin/top-heavy when a
+     session has only 1-2 events (or the empty state). 440px pairs
+     with min-width: 640px to a ~3:4 aspect that feels substantial
+     without crowding the 80vh max-height ceiling. The flex column
+     layout means the extra height is absorbed by
+     `.audit-modal__body` (flex: 1, min-height: 0) — header +
+     filters stay pinned to the top, the list region grows. This
+     matches MemoryModal's approach (it relies on content height +
+     max-height: 80vh + min-height: 0 on the scroll region; here
+     we additionally pin a floor so an empty session doesn't
+     collapse to ~120px tall). No separate footer element exists
+     (the 刷新 button lives inside `.audit-modal__filters`), so
+     there is no fixed-bottom layer to displace. */
+  min-height: 440px;
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
@@ -429,6 +458,19 @@ async function onRefresh(): Promise<void> {
   justify-content: space-between;
   gap: 6px;
   padding: 4px 8px;
+  /* min-width stabilizes the trigger's rendered width across
+     short ("全部" = 2 CJK chars) and long ("tool_permission_ask"
+     dropdown labels don't land here, but the widest selected
+     label is "Yolo 静默拒绝" = 7 CJK chars) option values. Without
+     it, the trigger width jitters as the user picks different
+     options. 140px comfortably fits the widest Chinese label +
+     the chevron icon with a small cushion; mirrors the per-trigger
+     width strategy that `ProvidersTab.vue`'s `.providers-tab__trigger`
+     applies via `width: 100%` in a form context (here we want a
+     compact inline control in a dense filter row, so min-width
+     instead of full width). */
+  min-width: 140px;
+  box-sizing: border-box;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   border-radius: 4px;
