@@ -67,7 +67,8 @@ const open = defineModel<boolean>("open", { required: true });
 .settings-modal__overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
+  backdrop-filter: blur(4px);
   z-index: 2000;
   animation: settings-modal-fade 150ms ease-out;
 }

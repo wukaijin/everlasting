@@ -182,6 +182,25 @@ Wrap the class name (and any data-attribute selectors) in
 | `<Teleport to="body">` content (Vue's built-in Teleport, not reka-ui) | rendered to `<body>` | **Yes** — wrap in `:deep()` |
 | Trigger icon / label / form field wrapper | inside the component's own template | **No** — keep scoped |
 
+**Update (2026-06-14) — Vue 3.5 empirical behavior**: The
+"never applied / must `:deep()`" model above is the
+*theoretical* Vue 3 description. **Empirically in Vue 3.5**,
+scoped CSS propagates `data-v-xxx` to `<Teleport>` / reka-ui
+`*Portal` children, so plain `<style scoped>` reaches the
+teleported DOM **without** `:deep()`. Proof: `SettingsModal.vue`
++ `MemoryModal.vue` style their reka-ui `DialogOverlay` /
+`DialogContent` in plain `<style scoped>` (no `:deep()`) and
+render correctly — overlay background / padding / shadow all
+apply. So the table's **"Yes" = defensive recommendation, not
+a hard requirement** on current Vue. `:deep()` is a strict
+superset: harmless when scoped already matches, and a safety
+net if a future Vue upgrade reverts the propagation.
+`PermissionModal.vue` wraps every rule in `:deep()` as the safe
+default (41 occurrences); new code may omit it for portal
+children, but wrapping stays the preferred default. Both
+coexisting styles (plain scoped vs `:deep()`-wrapped) are
+correct under Vue 3.5.
+
 The last row was added when the PR3 `PermissionModal.vue` (2026-06-13)
 chose Vue's built-in `<Teleport to="body">` over reka-ui's
 `DialogPortal` (the modal isn't a reka-ui `Dialog` — it's hand-rolled
