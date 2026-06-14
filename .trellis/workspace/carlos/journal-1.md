@@ -1432,3 +1432,47 @@ P1 Agent Loop 集成测试落地 (RULE-A-006)。新建 MockProvider (#[cfg(test)
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: PR4 C3 tail pair orphan + 超窗降级 (RULE-A-001/002 closed)
+
+**Date**: 2026-06-15
+**Task**: PR4 C3 tail pair orphan + 超窗降级 (RULE-A-001/002 closed)
+**Branch**: `main`
+
+### Summary
+
+PR4 (RULE-A-001 + RULE-A-002) 完成, review-debt-consolidation 本轮 5 finding 全闭环。
+
+R1: group_droppable_turns orphan 分支改 skip (隐式保护 tool_use-bearing assistant), 不再 singleton drop 留孤立 tool_use/tool_result 撞 Anthropic 400。
+R2: CompactResult 加 degradation: DegradationKind { None, NoCandidates, StillOver }, 全 droppable 丢完仍超窗返回 StillOver。
+R3: chat.rs + chat_loop.rs (副本逐行同步) match degradation -> emit Error{InvalidRequest} + 早返回, 不静默发超窗 prompt 撞 prompt is too long。全套 484 tests pass (+6 新单测), 0 warning。
+
+关键: PR4 是首个触发 chat_loop.rs/chat.rs 副本漂移的场景, 实施时同步改两份 (tracing/message/category/early-return/CancellationGuard 全一致), 验证 degradation check 在 provider.send 之前 (位置正确)。
+
+意外收获: check + 独立核实发现 prd R3 '必须 emit TurnComplete' 是过度保守瑕疵 — 前端 error case 已独立 reload (streamController.ts:948->1097), 实现 不 emit TurnComplete 才正确 (StillOver 无 persist, emit 反违反 F5)。
+
+归档 PR4 + 父 task review-debt-consolidation [5/5 done]。本轮 review consolidation 全闭环: RULE-E-001/002/003 + RULE-A-001/002 closed, RULE-A-006 partial (后续 unify-chat-loop-dispatch task 完全闭环)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef9c88e` | (see git log) |
+| `cf0a91c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

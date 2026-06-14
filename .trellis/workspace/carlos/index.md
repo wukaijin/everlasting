@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
-- **Last Active**: 2026-06-14
+- **Total Sessions**: 27
+- **Last Active**: 2026-06-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1434 | Active |
+| `journal-1.md` | ~1478 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-06-15 | PR4 C3 tail pair orphan + 超窗降级 (RULE-A-001/002 closed) | `ef9c88e`, `cf0a91c` | `main` |
 | 26 | 2026-06-14 | P1 Agent Loop 集成测试 + RULE-A-006 partial 闭环 | `e0916ef`, `fdca6dc`, `ce156eb` | `main` |
 | 25 | 2026-06-14 | C4 审计日志查询 UI | `dba8dea`, `2174a5e`, `4e8efb7` | `main` |
 | 24 | 2026-06-13 | Session 26 — 2026-06-13: A2+B7 Re-grill path-based ⑨ 关 5-tier | `34c8f9c`, `70da5ab`, `2bcfc25`, `a3c6a76`, `e1fafad` | `main` |
