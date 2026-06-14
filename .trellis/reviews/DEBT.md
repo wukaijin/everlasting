@@ -108,9 +108,11 @@
 - **Description**: `child.kill()` 只 kill 直接子;`Command::new("sh")` **无** `process_group(N)`
 - **Impact**: `sleep 60 &`/管道/`nohup` 产生的孤儿进程 cancel/timeout 后继续跑,资源累积泄漏
 - **Fix**: `process_group(0)` + kill PGID(传 `-PID` 给 kill,Unix;Windows 用 `creation_flags`)(~15 行)
-- **Status**: open
+- **Status**: closed
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p0-shell-process-group`
+- **Related Task**: `.trellis/tasks/06-14-p0-shell-process-group`
+- **Closed At**: `29e2ea8`
+- **Related PR**: (待创建)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5 + §3.1
 
 ### RULE-E-003 — web_fetch redirect 不重做 IP 校验 → SSRF 绕过
