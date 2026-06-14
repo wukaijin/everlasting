@@ -3,7 +3,7 @@
   "name": "p0-web-fetch-redirect-ssrf",
   "title": "P0 web_fetch redirect IP 校验",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

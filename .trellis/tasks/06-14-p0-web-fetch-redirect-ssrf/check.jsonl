@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "web_fetch tool spec — redirect SSRF 防护必须在契约中明确(原 docstring 自相矛盾已记录为 DRIFT-002)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "WebFetchError 加 RedirectBlocked variant 对齐错误分类"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-E-003 finding 完整描述 + 修复方向"}
+{"file": ".trellis/reviews/SPEC-DRIFT.md", "reason": "DRIFT-002 docstring 矛盾修复(PR merge 后需在此标 resolved by PR #N)"}
+{"file": "docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md", "reason": "§2.5 + §3.1 原始论据"}
+{"file": "app/src-tauri/src/tools/web_fetch.rs", "reason": "实施目标文件"}

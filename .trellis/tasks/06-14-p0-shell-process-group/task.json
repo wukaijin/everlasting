@@ -3,7 +3,7 @@
   "name": "p0-shell-process-group",
   "title": "P0 shell process_group + kill PGID",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "shell tool spec — 进程组 kill 行为需要在契约中说明"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-E-002 finding 完整描述 + 修复方向"}
+{"file": "docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md", "reason": "§2.5 + §3.1 原始论据"}
+{"file": "app/src-tauri/src/tools/shell.rs", "reason": "实施目标文件,需保持原有测试兼容(cancel_kills_child_process 等)"}
+{"file": "app/src-tauri/Cargo.toml", "reason": "确认 libc 依赖,若缺需加 libc = \"0.2\""}
