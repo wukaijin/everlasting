@@ -1391,3 +1391,44 @@ brainstorm 起 PRD(独立 Modal / header Memory 旁入口 / 本任务补⑩tool_
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: P1 Agent Loop 集成测试 + RULE-A-006 partial 闭环
+
+**Date**: 2026-06-14
+**Task**: P1 Agent Loop 集成测试 + RULE-A-006 partial 闭环
+**Branch**: `main`
+
+### Summary
+
+P1 Agent Loop 集成测试落地 (RULE-A-006)。新建 MockProvider (#[cfg(test)] scripted stream) + ChatEventSink trait + run_chat_loop 测试变体 + 9 个 agent_loop_* 集成测试, 覆盖 cancel/max_turns/C3/tool_use/error path。全套 478 tests pass。
+
+诊断并修复: tempdir 生命周期 bug (make_harness drop tempdir -> assert_within_root canonicalize 失败 -> run_chat_loop pre-flight 早退 -> 6 测试 send=0 + cancel 挂死) + MockProvider 两个真 bug (VecDeque off-by-shift / InvalidRequest 错误类型保留 message)。
+
+架构决策: run_chat_loop 是 production chat.rs 的忠实移植副本 (偏离 PRD R2 的 chat_inner 共享), 采纳方案 B 半闭环 — permissions::check sink 化使 ⑨关权限层 (RULE-B-*) 真共享真闭环; C3/cancel/max_turns/错误路径半闭环; persist 失败(A-003)/audit 时序(A-004)/worktree destroy(E-005) 无保护。DEBT.md RULE-A-006 标记 partial + Partial Closure Note。完全闭环待后续 unify-chat-loop-dispatch task (两份代码未漂移, 迁移最低成本时机)。
+
+顺带归档 3 个 P0 task (shell env_clear / process_group / web_fetch SSRF, 代码+review 已关闭但状态残留 in_progress)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e0916ef` | (see git log) |
+| `fdca6dc` | (see git log) |
+| `ce156eb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
