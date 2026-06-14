@@ -169,10 +169,18 @@
 - **Description**: Agent Loop turn 边界(cancel / max_turns / C3 触发 / orphan 配对)只能手动验证,无 mock HTTP server 驱动的完整 turn 集成测试
 - **Impact**: P0 修复(RULE-E-001/002/003 + RULE-A-001/002)无回归保护,等于盲修
 - **Fix**: `MockProvider` 实现 trait 返回预设 `Stream<ChatEvent>`,跑完整 chat 命令断言 messages + DB rows + events
-- **Status**: open
+- **Status**: **partial (2026-06-14)** — 测试基础设施已落地,agent loop body 未统一(见下方 Partial Closure Note)
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-agent-loop-integration-tests`(**必须在 P0 修复前完成**)
+- **Related Task**: ✅ 已完成 `06-14-p1-agent-loop-integration-tests`(2026-06-14);⏳ 待开 `06-XX-p1-unify-chat-loop-dispatch`(production chat.rs → run_chat_loop 迁移,完全闭环)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §3.5 + REVIEW-sse-agent-loop §8 P5(2026-06-12 提出,0 落地)
+
+> **Partial Closure Note (2026-06-14)**: MockProvider(`llm/provider/mock.rs`,`#[cfg(test)]` 守卫)+ `ChatEventSink` trait(`state.rs`)+ 9 个 `agent_loop_*` 集成测试(`agent/tests.rs`)已落地,全套 478 tests pass。
+>
+> - **真共享(真闭环)**:`permissions::check` Tier 3 `permission:ask` 路径已 sink 化(`AppHandleSink`),production 与 test 调同一函数 → ⑨关权限层(RULE-B-*)修复有真实回归保护。
+> - **副本(半闭环)**:agent loop body 分裂为两份代码 — production `chat.rs` 保留 ~1000 行 inline spawn 闭包(emit 走 `app_handle.emit`),test `chat_loop::run_chat_loop`(609 行)是结构平行的忠实移植(emit 走 `dyn ChatEventSink`),7 维度逐项核查(C3/MAX_TURNS/send/cancel/permission/audit/persist)对等、非简化版。**但两份代码会漂移**:
+>   - 有保护:C3 / cancel race / MAX_TURNS / 错误路径 emit(改副本即测)
+>   - 无保护:persist 失败(RULE-A-003)/ audit 时序(RULE-A-004)/ worktree destroy(RULE-E-005)改的是 production `chat.rs`,副本不同步则测试失效
+> - **完全闭环**需后续 task `06-XX-p1-unify-chat-loop-dispatch`:把 production `chat.rs` spawn 闭包改为调用 `run_chat_loop`,消除副本。迁移是独立 P1 工作量(production 是 8 个月迭代 + 6 轮 review 的 battle-tested 代码,每条 emit 是 wire contract,diff 985→2000+ 行,回归风险高),不应混在本 task。**现在两份代码刚写、几乎未漂移,是开迁移 task 的最低成本时机。**
 
 ### RULE-B-001 — delete_session 不直接清理 permission_asks
 
@@ -655,7 +663,7 @@
 | P2 SSE data_buf 加 1 MiB 上限 | RULE-D-003 (P2) | open |
 | P3 persist_turn 失败 emit Error | RULE-A-003 (P1) | open |
 | P4 GLM max_tokens 500/400 误分类加 keyword | RULE-D-006 (P2) | open |
-| P5 mock HTTP server 集成测试 | RULE-A-006 (P1,**PR5 前移**) | open |
+| P5 mock HTTP server 集成测试 | RULE-A-006 (P1,**PR5 前移**) | partial (2026-06-14) |
 
 ### REVIEW-b5-memory-grill-2026-06-10(9 题决议)
 
