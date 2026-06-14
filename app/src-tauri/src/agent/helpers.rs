@@ -142,6 +142,15 @@ pub async fn persist_turn_cwd(
 /// `messages[]` + `sending` state. Failures are logged but not
 /// surfaced to the caller — the agent loop is best-effort about
 /// streaming; if the AppHandle is gone we can't do anything useful.
+///
+/// Dead code as of 2026-06-15 (RULE-A-006 closure): the agent loop
+/// body now lives in `chat_loop::run_chat_loop` and dispatches
+/// every chat-event through the `ChatEventSink` trait
+/// (`emit_chat_event_via_sink`). Kept here for future
+/// helper-callers that may need to emit from a non-`run_chat_loop`
+/// context (e.g. a future IPC command that synthesizes a Done
+/// event without running the full loop).
+#[allow(dead_code)]
 pub fn emit_chat_event(app: &AppHandle, rid: &str, event: &ChatEvent) {
     let payload = ChatEventPayload {
         request_id: rid.to_string(),
@@ -223,15 +232,22 @@ pub const CANCELLED_MARKER: &str = "[已停止]";
 // ---------------------------------------------------------------------------
 // Sink-based emit helpers (P1 RULE-A-006)
 //
-// The agent loop's `chat` Tauri command emits on three Tauri
-// channels: `chat-event` / `tool:call` / `tool:result`. The
-// `ChatEventSink` trait abstracts the underlying emitter so the
-// loop can run against a `MockEmitter` in tests. These helpers
-// take a `&dyn ChatEventSink` and are the per-call sites'
-// replacement for the legacy `AppHandle` variants
-// ([`emit_chat_event`] and [`emit_tool_result`]) — which the
-// Tauri command still uses for paths that pre-date the sink
-// abstraction (the pre-flight error emits at the top of `chat`).
+// The agent loop body in `chat_loop::run_chat_loop` emits on
+// three Tauri channels: `chat-event` / `tool:call` / `tool:result`
+// / `permission:ask`. The `ChatEventSink` trait abstracts the
+// underlying emitter so the loop can run against a `MockEmitter`
+// in tests AND against the production `AppHandleSink` in the
+// `chat` Tauri command (P1 RULE-A-006 closure, 2026-06-15).
+// `emit_chat_event_via_sink` is the per-call-site helper for the
+// `chat-event` channel; the `tool:call` / `tool:result` /
+// `permission:ask` channels are dispatched through the
+// `sink.emit_*` methods directly.
+//
+// The legacy `AppHandle` variants ([`emit_chat_event`] and
+// [`emit_tool_result`]) survive as dead code for future
+// helper-callers — paths that pre-date the sink abstraction or
+// future IPC commands that synthesize events without running
+// the full loop.
 // ---------------------------------------------------------------------------
 
 /// Emit a `ChatEvent` on the `chat-event` channel via the
@@ -239,12 +255,10 @@ pub const CANCELLED_MARKER: &str = "[已停止]";
 /// dispatches through the trait so the agent loop body is
 /// testable without a Tauri `AppHandle`.
 ///
-/// Currently called only from `chat_loop::run_chat_loop` (which
-/// is itself test-gated per P1 RULE-A-006). The non-test build
-/// treats it as dead code; the `#[allow(dead_code)]` keeps it
-/// available without forcing a `#[cfg(test)]` re-gate at every
-/// call site.
-#[allow(dead_code)]
+/// Used by the production agent loop body in
+/// [`crate::agent::chat_loop::run_chat_loop`] (P1 RULE-A-006
+/// closure, 2026-06-15). Every chat-event emit on the agent
+/// loop's per-event select! arm goes through this helper.
 pub fn emit_chat_event_via_sink(
     sink: &Arc<dyn ChatEventSink>,
     rid: &str,

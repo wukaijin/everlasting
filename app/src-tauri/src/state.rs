@@ -416,18 +416,12 @@ pub struct ToolResultPayload {
 /// for assertion; the production `AppHandleSink` forwards to
 /// `app.emit(name, payload)` for live IPC dispatch.
 ///
-/// `emit_chat_event` / `emit_tool_call` / `emit_tool_result` are
-/// currently dispatched only through the test-gated
-/// `chat_loop::run_chat_loop` (P1 RULE-A-006); the production
-/// `chat.rs` still emits via `app.emit(name, payload)` directly
-/// and uses this trait only for `emit_permission_ask` (which
-/// `permissions::check` Tier 3 calls through `&sink`). The three
-/// "test-only" methods are therefore dead code in the non-test
-/// build — `#[allow(dead_code)]` keeps them available without a
-/// `#[cfg(test)]` re-gate at every call site. The architecture
-/// decision (whether `chat.rs` should switch to dispatching all
-/// four emits through this trait) is pending test results.
-#[allow(dead_code)]
+/// All four methods are exercised in production (P1 RULE-A-006
+/// closure, 2026-06-15): `chat_loop::run_chat_loop` dispatches
+/// every agent-loop emit through the trait, with the production
+/// `AppHandleSink` forwarding to `tauri::AppHandle::emit` for
+/// live IPC dispatch. The test variant (`MockEmitter` in
+/// `agent/tests.rs`) records events into a Vec for assertion.
 pub trait ChatEventSink: Send + Sync + 'static {
     /// Emit a `ChatEvent` on the `chat-event` channel.
     fn emit_chat_event(&self, payload: &ChatEventPayload);

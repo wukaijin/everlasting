@@ -1,47 +1,28 @@
-//! Agent Loop body — testable variant (P1 RULE-A-006, 2026-06-14).
+//! Agent Loop body — production + test entry point
+//! (P1 RULE-A-006, 2026-06-15).
 //!
-//! This file is a test-friendly counterpart of the spawn closure
-//! inside `chat.rs::chat`. The two implementations are NOT shared:
-//! production keeps its ~1000-line inline closure (battle-tested,
-//! every emit is a wire contract) and dispatches all four event
-//! channels (`chat-event` / `tool:call` / `tool:result` /
-//! `permission:ask`) through `app_handle.emit`. The test path
-//! (`run_chat_loop` here) is a separate, structurally-parallel
-//! implementation that dispatches the same four channels through a
-//! `dyn ChatEventSink`, so integration tests can record events
-//! without a Tauri `AppHandle`.
+//! This file is the **single** implementation of the agent loop
+//! body, called by both the production `chat` Tauri command
+//! (with an `AppHandleSink`) and the integration tests in
+//! `agent/tests.rs` (with a `MockEmitter`). Before the
+//! RULE-A-006 closure, the production `chat.rs` carried a
+//! ~1000-line inline spawn closure that was a faithful copy of
+//! `run_chat_loop`; PR4 (06-14-p0-c3-tail-pair-orphan) had
+//! already proven the two could drift and would have to be kept
+//! in sync. The closure migration removed the copy — production
+//! now routes through this function, and the 9 `agent_loop_*`
+//! integration tests cover the real production path.
 //!
-//! Why a separate function instead of refactoring `chat.rs`:
-//!
-//! - The agent loop body is ~1000 lines of densely commented
-//!   turn-orchestration code. Refactoring it for trait dispatch
-//!   in a single PR would inflate the diff to 4× the size and
-//!   risk subtle behavior changes (every emit is a critical
-//!   wire contract).
-//! - The testable variant focuses on the **turn-loop invariants**
-//!   the audit called out: turn count, cancel race, max_turns
-//!   fallback, error path emit, and provider dispatch. It does
-//!   NOT re-test the protocol layer (covered by 105 dedicated
-//!   tests) or the boundary / ReadGuard layers.
-//! - The Tauri command path keeps its 1-emit = 1-line shape
-//!   that's already battle-tested; the testable path uses the
-//!   same `ChatEventSink` trait (introduced for the production
-//!   `permissions::check` Tier 3 `permission:ask` dispatch —
-//!   that path IS already routed through `AppHandleSink` in
-//!   production) so the test variant gets a single `MockEmitter`
-//!   sink for all four channels.
-//!
-//! # Drift hazard
-//!
-//! Because `chat.rs` and `chat_loop.rs` are two implementations
-//! of the same invariants, any change to one MUST be mirrored in
-//! the other or the integration tests lose their regression
-//! protection. The audit's RULE-A-006 fix is therefore
-//! **partial**: the test surface locks the turn-orchestration
-//! invariants (cancel / max_turns / C3 / error path), but
-//! production drift in `chat.rs` (e.g. a new emit site, a
-//! reordered persist) won't be caught until a future PR migrates
-//! `chat.rs` to dispatch through `run_chat_loop` itself.
+//! All four event channels (`chat-event` / `tool:call` /
+//! `tool:result` / `permission:ask`) dispatch through the
+//! `dyn ChatEventSink` trait so a `MockEmitter` can record
+//! events into a Vec for test assertion. The production
+//! `AppHandleSink` forwards to `tauri::AppHandle::emit` for
+//! live IPC dispatch. The `permissions::check` Tier 3
+//! `permission:ask` path uses the same trait (this is the
+//! reason `ChatEventSink` was introduced — and why the trait
+//! is now exercised in production at every emit site, not
+//! just the test variant).
 //!
 //! # What this function does NOT do
 //!
@@ -81,20 +62,32 @@ use crate::state::{ChatEventSink, ToolCallPayload};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
-/// Test entry point for the agent loop. Currently consumed ONLY
-/// by `agent/tests.rs` integration tests (P1 RULE-A-006). The
-/// production `chat` Tauri command in `chat.rs` does NOT yet
-/// route through this function — the architecture direction
-/// (whether `chat.rs` should call `run_chat_loop` with an
-/// `AppHandleSink`, or keep its existing inline closure) is
-/// pending test results + diff audit.
+/// Production + test entry point for the agent loop body
+/// (P1 RULE-A-006, 2026-06-15). Called by:
 ///
-/// Until that decision lands, the function is dead code in the
-/// non-test build. `#[allow(dead_code)]` silences the warning
-/// without `#[cfg(test)]` (which would force every consumer to
-/// re-gate imports).
+/// - The `chat` Tauri command in `chat.rs`, which builds an
+///   `AppHandleSink` and spawns the call on the Tauri runtime.
+///   This is the **production** path — every real chat request
+///   routes through here.
+/// - The 9 `agent_loop_*` integration tests in `agent/tests.rs`,
+///   which build a `MockEmitter` and call this function inline
+///   against scripted `MockProvider` responses. These tests now
+///   cover the real production path (no separate "test
+///   variant" exists).
+///
+/// The 14-parameter signature is unchanged from the previous
+/// test-only variant; the production caller just supplies a
+/// pre-resolved `Arc<dyn Provider>`, an `Arc<dyn ChatEventSink>`
+/// wrapping the live `AppHandle`, and the standard
+/// `AppState`-cloned resources (`db` / `read_guard` /
+/// `memory_cache` / `permission_asks` / cancel maps).
+///
+/// `run_chat_loop` owns the per-turn `CancellationGuard` that
+/// removes the (rid → token) and (session_id → rid) entries on
+/// every exit path (normal / error / cancel / max_turns /
+/// StillOver). The chat command's pre-flight inserts those
+/// entries; the agent loop's own RAII Drop cleans them up.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
     provider: Arc<dyn Provider>,
@@ -288,12 +281,6 @@ pub async fn run_chat_loop(
         // terminates the chat instead of silently firing the
         // over-budget request. `None` / `NoCandidates` are safe-to-
         // proceed.
-        //
-        // DRIFT HAZARD: this block mirrors `chat.rs::chat`'s C3
-        // block 1:1. The emit Error text, the tracing log line, the
-        // `InvalidRequest` category, and the early return are
-        // intentionally identical to production. See the module
-        // docstring's "Drift hazard" section.
         {
             let compacted =
                 crate::agent::context::compact_messages(messages.clone(), context_window).await;
@@ -762,10 +749,22 @@ pub async fn run_chat_loop(
     );
 }
 
-/// F5 per-turn latency helper — see `chat.rs::build_turn_latency`
-/// for the production twin. Test-only here (used by
-/// `run_chat_loop` which is itself test-gated).
-#[allow(dead_code)]
+/// F5 per-turn latency helper — builds a [`crate::db::MessageLatency`]
+/// from the 5 per-turn `Instant` baselines the agent loop tracks
+/// (`send_at` / `first_delta_at` / `thinking_start` /
+/// `thinking_done` / `done_at`). `ttfb_ms` / `gen_ms` /
+/// `total_ms` / `thinking_ms` are independently `None` when the
+/// corresponding boundary wasn't reached — e.g. a turn that
+/// emitted `tool_call` straight from `thinking_delta` with no
+/// text delta has `ttfb_ms = None` and `gen_ms = None`, but
+/// `total_ms` and `thinking_ms` are set.
+///
+/// Used by `run_chat_loop` (now the production + test entry
+/// point) right before the
+/// `persist_turn(latency: Some(&MessageLatency))` call (the 4
+/// columns go into the same INSERT) and again (with the same
+/// values) when emitting `ChatEvent::TurnComplete` to the
+/// frontend.
 fn build_turn_latency(
     turn_send_at: Option<Instant>,
     turn_first_delta_at: Option<Instant>,
@@ -781,7 +780,6 @@ fn build_turn_latency(
     }
 }
 
-#[allow(dead_code)]
 fn instant_delta_ms(start: Option<Instant>, end: Option<Instant>) -> Option<i64> {
     match (start, end) {
         (Some(s), Some(e)) => {
@@ -792,7 +790,6 @@ fn instant_delta_ms(start: Option<Instant>, end: Option<Instant>) -> Option<i64>
     }
 }
 
-#[allow(dead_code)]
 async fn load_for_session(
     cache: &Arc<MemoryCache>,
     project_id: &str,
