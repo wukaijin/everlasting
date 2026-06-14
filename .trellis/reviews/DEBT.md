@@ -93,9 +93,11 @@
 - **Description**: `Command::new("sh")` **无** `env_clear()`,继承含 `ANTHROPIC_API_KEY` 的全部 env
 - **Impact**: LLM 一句 `env`/`printenv` 即窃取 API key,配合 shell `curl -X POST` 外传。LLM agent 经典提权面。Permission Tier 4 ask 防"该不该执行",防不了"执行后内部窃密"
 - **Fix**: `Command::new("sh").env_clear()` + 白名单注入(PATH/HOME/LANG/TERM/LC_*),排除 `*_API_KEY`/`*_TOKEN`(~10 行)
-- **Status**: open
+- **Status**: closed
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p0-shell-env-clear`
+- **Related Task**: `.trellis/tasks/06-14-p0-shell-env-clear`
+- **Closed At**: `2abd7a2`
+- **Related PR**: (待创建)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5 + §3.1
 
 ### RULE-E-002 — shell 不 kill 进程组 → 孤儿进程
