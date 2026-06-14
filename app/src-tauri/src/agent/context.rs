@@ -54,9 +54,41 @@ const TARGET_RATIO: f64 = 0.50;
 /// the insertion site.
 const PROTECTED_HEAD: usize = 2;
 
+/// What kind of state did we leave the message list in after
+/// compaction?
+///
+/// RULE-A-002 (2026-06-14): `StillOver` is the failure mode that
+/// used to silently send an over-budget prompt to the LLM. When the
+/// agent loop sees `StillOver` it MUST emit an `Error` event and
+/// abort the turn (do NOT call `provider.send`) — otherwise the
+/// over-budget prompt will 400 on `prompt is too long`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub enum DegradationKind {
+    /// Either below trigger, or compacted cleanly to target. The
+    /// caller may safely proceed with `provider.send`.
+    None,
+    /// Compaction ran but produced no droppable candidates (the
+    /// middle is empty / all implicitly-protected tool_use turns).
+    /// Safe to proceed — the message list is unchanged.
+    NoCandidates,
+    /// Compaction dropped everything it could but the list is still
+    /// over the target threshold. The caller MUST NOT send this to
+    /// the LLM — it would 400 on `prompt is too long`. The agent
+    /// loop emits an `Error` event and aborts the turn instead.
+    StillOver {
+        /// Estimated tokens of the trimmed list.
+        tokens_after: u32,
+        /// The target threshold we tried to compact to.
+        target: u32,
+    },
+}
+
 /// Result of [`compact_messages`]. Always returned — even when no
 /// compaction happened (in which case `dropped_count == 0` and
-/// `messages` is unchanged from the input).
+/// `messages` is unchanged from the input). The `degradation` field
+/// tells the caller whether the trim was clean (`None` / `NoCandidates`)
+/// or whether the budget was still over after exhausting all safe
+/// candidates (`StillOver` — see [`DegradationKind`]).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CompactResult {
     /// The (possibly trimmed) message list to send to the LLM.
@@ -70,6 +102,10 @@ pub struct CompactResult {
     /// trimmed list). Equal to `tokens_before` when
     /// `dropped_count == 0`.
     pub tokens_after: u32,
+    /// What happened to the budget. `None` / `NoCandidates` are
+    /// safe-to-proceed; `StillOver` MUST be surfaced as an Error
+    /// by the agent loop.
+    pub degradation: DegradationKind,
 }
 
 /// Estimate the total token count of a message list using the
@@ -171,6 +207,7 @@ pub async fn compact_messages(
             dropped_count: 0,
             tokens_before,
             tokens_after: tokens_before,
+            degradation: DegradationKind::None,
         };
     }
 
@@ -185,6 +222,7 @@ pub async fn compact_messages(
             dropped_count: 0,
             tokens_before,
             tokens_after: tokens_before,
+            degradation: DegradationKind::NoCandidates,
         };
     }
 
@@ -202,6 +240,7 @@ pub async fn compact_messages(
             dropped_count: 0,
             tokens_before,
             tokens_after: tokens_before,
+            degradation: DegradationKind::NoCandidates,
         };
     }
 
@@ -238,6 +277,7 @@ pub async fn compact_messages(
             dropped_count: 0,
             tokens_before,
             tokens_after: tokens_before,
+            degradation: DegradationKind::NoCandidates,
         };
     }
 
@@ -251,11 +291,29 @@ pub async fn compact_messages(
 
     let tokens_after = estimate_messages_tokens(&out).await;
 
+    // RULE-A-002 (2026-06-14): if we exhausted every safe droppable
+    // candidate but the budget is still over the target, surface
+    // this as `StillOver` so the agent loop can fail loudly
+    // (emit Error + abort the turn) instead of silently sending an
+    // over-budget prompt that would 400 on `prompt is too long`.
+    let degradation = if (tokens_after as u64) > (target as u64) {
+        tracing::error!(
+            tokens_after,
+            target,
+            dropped_count,
+            "C3 compaction: all droppable exhausted but still over target"
+        );
+        DegradationKind::StillOver { tokens_after, target }
+    } else {
+        DegradationKind::None
+    };
+
     CompactResult {
         messages: out,
         dropped_count,
         tokens_before,
         tokens_after,
+        degradation,
     }
 }
 
@@ -328,6 +386,14 @@ async fn estimate_messages_tokens_iter(
 ///   assistant text-only turn, assistant turn with thinking but
 ///   no tool_use, etc.).
 ///
+/// **RULE-A-001 invariant (2026-06-14)**: an
+/// `assistant(tool_use)` message whose matching `tool_result` is
+/// NOT in the droppable middle is **implicitly protected** —
+/// `group_droppable_turns` returns NO group covering it. Dropping
+/// such a message as a singleton would orphan the tool_use block
+/// (Anthropic 400) and could later produce an orphan tool_result
+/// if the matching id surfaces in a future turn.
+///
 /// The returned ranges are `(start, end)` exclusive-end indices
 /// into `messages`, ordered oldest-first (so the caller can drop
 /// from the front until the budget is satisfied).
@@ -365,11 +431,31 @@ fn group_droppable_turns(
                 // group). Advance past it.
                 i += 1;
             } else {
-                // Assistant(tool_use) without a following
-                // tool_result — unusual but possible if the
-                // history was truncated by an older path. Treat
-                // as a singleton (drop alone).
-                groups.push((i, i + 1));
+                // RULE-A-001 fix (2026-06-14): an
+                // assistant(tool_use) message whose matching
+                // tool_result is NOT in the droppable middle
+                // (history truncated by an older path, edge race,
+                // etc.). We MUST NOT drop this as a singleton —
+                // that would orphan the tool_use block from the
+                // LLM's view (Anthropic 400 "tool_use without a
+                // matching tool_result"), and if a future turn
+                // boundary later lands a tool_result for this id
+                // in the messages vec, the orphan tool_result
+                // would also 400 ("tool_result without a matching
+                // tool_use"). Treat it as implicitly protected by
+                // skipping (emit no group). The pre-fix code did
+                // `groups.push((i, i + 1))` here; that was the
+                // orphan-tool_use bug.
+                //
+                // Invariant: any tool_use-bearing assistant turn
+                // whose tool_result pair is not ALSO in the
+                // droppable middle stays. We cannot know whether
+                // the tool_result is "next" in a future turn
+                // boundary that compaction crossed.
+                tracing::debug!(
+                    index = i,
+                    "C3: protecting tool_use assistant turn (no complete pair in droppable middle)"
+                );
                 i += 1;
             }
         } else {
@@ -788,9 +874,11 @@ mod tests {
     }
 
     #[test]
-    fn group_droppable_turns_orphan_tool_use_is_singleton() {
-        // Edge case: assistant(tool_use) without a following
-        // user(tool_result). Defensive: treat as singleton.
+    fn group_droppable_turns_protects_orphan_tool_use() {
+        // RULE-A-001 (2026-06-14): assistant(tool_use) without a
+        // following user(tool_result) is IMPLICITLY PROTECTED —
+        // no group covers it. Pre-fix code emitted a singleton
+        // here, which orphaned the tool_use block when dropped.
         let messages = vec![
             user("B5"),
             assistant("ack"),
@@ -799,7 +887,90 @@ mod tests {
             user("tail"),
         ];
         let groups = group_droppable_turns(&messages, 2, 4);
-        assert_eq!(groups, vec![(2, 3), (3, 4)]);
+        // Only the singleton assistant("done") at index 3 is
+        // droppable. The assistant_tool_use at index 2 is skipped
+        // (no group emitted), so it survives compaction intact.
+        assert_eq!(groups, vec![(3, 4)]);
+    }
+
+    /// RULE-A-001 (2026-06-14): middle segment with an
+    /// assistant(tool_use) followed by TWO plain user(text)
+    /// messages — the assistant's tool_result is not present in
+    /// the droppable middle. The assistant(tool_use) MUST be
+    /// skipped (no group emitted), so it stays in the messages
+    /// list intact. The two plain user(text) messages are normal
+    /// singletons.
+    #[test]
+    fn group_protects_orphan_tool_use() {
+        let messages = vec![
+            user("B5"),
+            assistant("ack"),
+            assistant_tool_use("tu_orphan", "read_file"),
+            user("first plain reply"),
+            user("second plain reply"),
+            user("tail"),
+        ];
+        // head = 2, tail = 5.
+        let groups = group_droppable_turns(&messages, 2, 5);
+        // The assistant_tool_use at index 2 is implicitly protected
+        // (skipped). The two plain user(text) at indices 3 and 4 are
+        // droppable singletons.
+        assert_eq!(
+            groups,
+            vec![(3, 4), (4, 5)],
+            "orphan tool_use assistant turn must NOT appear in any group"
+        );
+        // Sanity: index 2 is not the start of any group.
+        assert!(
+            !groups.iter().any(|(s, _)| *s == 2),
+            "the implicitly-protected tool_use turn must not start a group"
+        );
+    }
+
+    /// RULE-A-001 (2026-06-14): a complete
+    /// `(assistant(tool_use), user(tool_result))` pair sitting in
+    /// the droppable middle is one atomic group (start, end = i+2).
+    #[test]
+    fn group_drops_complete_pair() {
+        let messages = vec![
+            user("B5"),
+            assistant("ack"),
+            user("padding q"),
+            assistant("padding a"),
+            assistant_tool_use("tu_complete", "grep"),
+            user_tool_result("tu_complete"),
+            user("tail"),
+        ];
+        // head = 2, tail = 6.
+        let groups = group_droppable_turns(&messages, 2, 6);
+        // Expect the two padding singletons (2,3) (3,4) and then
+        // the pair (4,6) covering both the assistant(tool_use) and
+        // the user(tool_result).
+        assert_eq!(groups, vec![(2, 3), (3, 4), (4, 6)]);
+    }
+
+    /// RULE-A-001 (2026-06-14): an `assistant(tool_use)` whose
+    /// following message is NOT a user(tool_result) but the tail
+    /// is plain user(text). The assistant(tool_use) MUST be
+    /// skipped (no group emitted), so it's protected alongside
+    /// the protected tail.
+    #[test]
+    fn group_protects_tool_use_at_tail() {
+        let messages = vec![
+            user("B5"),
+            assistant("ack"),
+            user("padding"),
+            assistant_tool_use("tu_tail_adjacent", "read_file"),
+            user("tail plain text"),
+        ];
+        // head = 2, tail = 4.
+        let groups = group_droppable_turns(&messages, 2, 4);
+        // Only the padding user(text) at index 2 is droppable.
+        // The assistant_tool_use at index 3 is implicitly protected
+        // — its tool_result is NOT in the middle (the next message
+        // is plain user text, not a tool_result), and the tail at
+        // index 4 is also plain text (not a tool_result).
+        assert_eq!(groups, vec![(2, 3)]);
     }
 
     // -----------------------------------------------------------------------
@@ -817,11 +988,18 @@ mod tests {
     // Regression: pair at tail boundary — if the last two messages
     // form an assistant(tool_use) + user(tool_result) pair and
     // aggressive compaction is required, the pair must NOT be split.
-    // The PROTECTED_TAIL covers the user(tool_result), but the
-    // algorithm's singleton classification of the assistant(tool_use)
-    // (because `i+1 < tail_index` is false when i+1 == tail_index)
-    // makes it droppable. Under heavy pressure this leaves an
-    // orphan tool_result.
+    // The PROTECTED_TAIL covers the user(tool_result); the
+    // assistant(tool_use) is implicitly protected because the pair
+    // spans the tail boundary (`i+1 == tail_index` branch — neither
+    // side is droppable). RULE-A-001 (2026-06-14) keeps this
+    // invariant intact.
+    //
+    // Note: this scenario produces `DegradationKind::StillOver`
+    // because the budget is still over target after the padding is
+    // dropped but the tail pair can't be touched. The agent loop
+    // MUST surface `StillOver` as an Error (RULE-A-002). This test
+    // only asserts pair integrity; the `StillOver` signal is
+    // covered by `compact_emits_still_over_degradation` below.
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -872,5 +1050,94 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // RULE-A-002 (2026-06-14): compact_messages surfaces
+    // `DegradationKind::StillOver` when it runs out of safe droppable
+    // candidates but the budget is still over the target. The agent
+    // loop is expected to turn this into an Error event (covered by
+    // `agent/tests.rs::agent_loop_*` integration tests), NOT to
+    // silently send the over-budget prompt.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn compact_emits_still_over_degradation() {
+        // Construct a messages list where the only droppable middle
+        // message is small but the protected tail is HUGE, so that
+        // after dropping the middle the budget is still over the
+        // (artificially small) target.
+        //
+        // Layout: head[2 small] + middle[1 small droppable] +
+        //         tail[1 huge user text].
+        // context_window = 1000 → trigger = 800, target = 500.
+        // The huge tail alone is well over 500 tokens.
+        let mut messages = Vec::new();
+        messages.push(user("B5 memory instructions"));
+        messages.push(assistant("ack"));
+        // One droppable middle user(text) message — small but
+        // still needs to be the FIRST candidate so it gets dropped.
+        messages.push(user("droppable middle"));
+        // Protected tail: huge user text (> target 500 tokens).
+        messages.push(user(big_pad(8_000)));
+
+        let result = compact_messages(messages, 1000).await;
+
+        // The middle "droppable" message must have been dropped.
+        assert!(
+            result.dropped_count >= 1,
+            "expected the middle message to be dropped (got dropped_count={})",
+            result.dropped_count
+        );
+        // The huge tail must survive (it's protected).
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.role == Role::User && m.content.to_text().contains("lazy dog")),
+            "the huge protected tail must survive compaction"
+        );
+        // The degradation signal MUST be StillOver — the budget is
+        // still over target after exhausting the only droppable
+        // candidate.
+        match &result.degradation {
+            DegradationKind::StillOver {
+                tokens_after,
+                target,
+            } => {
+                assert!(
+                    *tokens_after > *target,
+                    "tokens_after ({}) must be > target ({})",
+                    tokens_after,
+                    target
+                );
+                assert_eq!(*target, target_threshold(1000));
+            }
+            other => panic!(
+                "expected DegradationKind::StillOver, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// Companion: when no compaction is needed (under the trigger),
+    /// the result's `degradation` is `None`. Sanity-checks the
+    /// "happy path" branch so the enum wiring is exercised both
+    /// ways in context.rs unit tests.
+    #[tokio::test]
+    async fn compact_emits_none_when_under_trigger() {
+        let messages = vec![
+            user("B5 memory"),
+            assistant("ack"),
+            user("hello"),
+            assistant("hi"),
+            user("current"),
+        ];
+        // context_window = 200_000 → trigger = 160_000. The tiny
+        // messages are well under the trigger so compaction is a
+        // no-op.
+        let result = compact_messages(messages, 200_000).await;
+        assert_eq!(result.dropped_count, 0);
+        assert_eq!(result.degradation, DegradationKind::None);
     }
 }

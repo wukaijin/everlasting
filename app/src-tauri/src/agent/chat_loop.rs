@@ -279,6 +279,21 @@ pub async fn run_chat_loop(
         // C3 compaction (test pass-through: if messages don't exceed
         // the test's tiny context_window, dropped_count == 0 and
         // the messages vec is unchanged).
+        //
+        // RULE-A-002 (2026-06-14): `compact_messages` now returns a
+        // `DegradationKind` signal. `StillOver` means every safe
+        // droppable candidate was exhausted but the budget is still
+        // over target — sending the list would 400 on `prompt is
+        // too long`. The agent loop emits an `Error` event +
+        // terminates the chat instead of silently firing the
+        // over-budget request. `None` / `NoCandidates` are safe-to-
+        // proceed.
+        //
+        // DRIFT HAZARD: this block mirrors `chat.rs::chat`'s C3
+        // block 1:1. The emit Error text, the tracing log line, the
+        // `InvalidRequest` category, and the early return are
+        // intentionally identical to production. See the module
+        // docstring's "Drift hazard" section.
         {
             let compacted =
                 crate::agent::context::compact_messages(messages.clone(), context_window).await;
@@ -294,7 +309,43 @@ pub async fn run_chat_loop(
                     "agent loop: context compressed (C3)"
                 );
             }
-            messages = compacted.messages;
+            match compacted.degradation {
+                crate::agent::context::DegradationKind::None
+                | crate::agent::context::DegradationKind::NoCandidates => {
+                    messages = compacted.messages;
+                }
+                crate::agent::context::DegradationKind::StillOver {
+                    tokens_after,
+                    target,
+                } => {
+                    // FAIL FAST: surface the over-budget state to
+                    // the frontend as a typed Error. Do NOT call
+                    // `provider.send` — the response would 400 on
+                    // `prompt is too long`. Identical message /
+                    // tracing / category to production `chat.rs`.
+                    tracing::error!(
+                        request_id = %rid,
+                        session_id = %session_id,
+                        turn,
+                        tokens_after,
+                        target,
+                        "agent loop: C3 compaction exhausted but still over target — aborting turn"
+                    );
+                    let msg = format!(
+                        "Context window exceeded after compaction ({} tokens, target {}). \
+                         A single tool_result or message may be too large — try a narrower query.",
+                        tokens_after, target
+                    );
+                    sink.emit_chat_event(&crate::state::ChatEventPayload {
+                        request_id: rid.clone(),
+                        event: ChatEvent::Error {
+                            message: msg,
+                            category: LlmErrorCategory::InvalidRequest,
+                        },
+                    });
+                    return;
+                }
+            }
         }
 
         let mut turn_send_at: Option<Instant> = None;

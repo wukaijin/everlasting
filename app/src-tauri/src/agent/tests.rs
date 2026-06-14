@@ -1426,3 +1426,145 @@ async fn agent_loop_error_path_emits_chat_event_error() {
     // Server category for HTTP 5xx.
     assert_eq!(error_events[0].1, crate::llm::LlmErrorCategory::Server);
 }
+
+// ---------------------------------------------------------------------------
+// 10) C3 degradation — `StillOver` aborts the turn with an Error event
+//     (RULE-A-002, 2026-06-14)
+// ---------------------------------------------------------------------------
+
+/// When `compact_messages` runs out of safe droppable candidates but
+/// the budget is still over the target, the agent loop MUST:
+///
+/// 1. Emit exactly one `ChatEvent::Error` with
+///    `LlmErrorCategory::InvalidRequest`.
+/// 2. NOT call `provider.send` (the over-budget request would 400
+///    on `prompt is too long`).
+/// 3. NOT emit a terminal `Done` event (the chat is aborted, not
+///    completed). The frontend treats `Error` as terminal.
+///
+/// This is the integration-test guard for RULE-A-002. The unit
+/// level is covered by `agent::context::tests::compact_emits_still_over_degradation`;
+/// this test verifies the agent loop body (in `chat_loop.rs`)
+/// translates the signal into the Error event correctly. It MUST
+/// mirror the production `chat.rs` C3 block (see module docstring
+/// "Drift hazard" — the two implementations share the same wire
+/// contract here).
+#[tokio::test]
+async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    // The provider script has ONE turn's worth of events. If the
+    // agent loop's C3 guard works, `send` is never called and the
+    // script is left unconsumed. If the guard is broken, the
+    // provider WILL be called and we'll see call_count == 1.
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "should never reach".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    // Construct messages that force `DegradationKind::StillOver`:
+    // head[2 small] + middle[1 small droppable] + tail[1 HUGE].
+    // context_window = 1000 → trigger = 800, target = 500.
+    // After dropping the middle, head(2 tiny) + tail(1 huge > 500)
+    // is still over target → StillOver.
+    //
+    // big_pad(8_000) ≈ 8KB ≈ ~2000 tokens (well over target 500).
+    let huge = {
+        // Mirror the helper used by context.rs tests — repeated
+        // ASCII filler that cl100k_base encodes at ~4 chars/token.
+        "the quick brown fox jumps over the lazy dog. "
+            .repeat(8_000 / 45 + 1)
+            .chars()
+            .take(8_000)
+            .collect::<String>()
+    };
+    let messages = vec![
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("tiny head 1".into()),
+        },
+        ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text("tiny head 2".into()),
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("droppable middle".into()),
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(huge),
+        },
+    ];
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        // Force tiny context_window so compaction triggers and
+        // StillOver fires.
+        1000,
+        "rid-c3-still-over".into(),
+        h.session_id.clone(),
+        messages,
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    // (1) `provider.send` was NEVER called — the C3 guard
+    //     short-circuited before dispatch.
+    assert_eq!(
+        mock.call_count(),
+        0,
+        "provider.send MUST NOT be called when C3 degradation is StillOver"
+    );
+
+    // (2) Exactly one Error event with the InvalidRequest category.
+    let error_events: Vec<_> = emitter
+        .chat_events()
+        .into_iter()
+        .filter_map(|p| match p.event {
+            ChatEvent::Error { message, category } => Some((message, category)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        error_events.len(),
+        1,
+        "exactly one Error event expected on StillOver (got {})",
+        error_events.len()
+    );
+    let (err_msg, err_cat) = &error_events[0];
+    assert!(
+        err_msg.contains("Context window exceeded after compaction"),
+        "Error message should describe the over-budget state, got: {}",
+        err_msg
+    );
+    assert_eq!(
+        *err_cat,
+        crate::llm::LlmErrorCategory::InvalidRequest,
+        "category should be InvalidRequest (mirrors prompt-too-long 400)"
+    );
+
+    // (3) No terminal Done event — the chat is aborted via Error,
+    //     not completed via Done.
+    let done_count = emitter
+        .chat_events()
+        .iter()
+        .filter(|p| matches!(&p.event, ChatEvent::Done { .. }))
+        .count();
+    assert_eq!(
+        done_count, 0,
+        "no Done event expected — the turn was aborted, not completed"
+    );
+}

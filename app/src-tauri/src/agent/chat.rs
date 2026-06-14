@@ -474,6 +474,15 @@ pub async fn chat(
             // protection priority (head B5 pair + current user
             // message + thinking-block atomicity + tool-use/tool-
             // result pair atomicity).
+            //
+            // RULE-A-002 (2026-06-14): `compact_messages` now
+            // returns a `DegradationKind` signal. `StillOver` means
+            // every safe droppable candidate was exhausted but the
+            // budget is still over target — sending the list would
+            // 400 on `prompt is too long`. The agent loop emits an
+            // `Error` event + terminates the chat instead of
+            // silently firing the over-budget request. `None` /
+            // `NoCandidates` are safe-to-proceed.
             {
                 let compacted = crate::agent::context::compact_messages(
                     messages.clone(),
@@ -492,7 +501,49 @@ pub async fn chat(
                         "agent loop: context compressed (C3)"
                     );
                 }
-                messages = compacted.messages;
+                match compacted.degradation {
+                    crate::agent::context::DegradationKind::None
+                    | crate::agent::context::DegradationKind::NoCandidates => {
+                        messages = compacted.messages;
+                    }
+                    crate::agent::context::DegradationKind::StillOver {
+                        tokens_after,
+                        target,
+                    } => {
+                        // FAIL FAST: surface the over-budget state to
+                        // the frontend as a typed Error. Do NOT call
+                        // `provider.send` — the response would 400 on
+                        // `prompt is too long` and we'd lose the
+                        // chance to explain what happened. We do not
+                        // write a new assistant turn to the DB
+                        // (context is unchanged); the frontend's
+                        // reload path reads the last persisted turn
+                        // consistently. CancellationGuard RAII Drop
+                        // still cleans up the cancel maps.
+                        tracing::error!(
+                            request_id = %rid,
+                            session_id = %session_id,
+                            turn,
+                            tokens_after,
+                            target,
+                            "agent loop: C3 compaction exhausted but still over target — aborting turn"
+                        );
+                        let msg = format!(
+                            "Context window exceeded after compaction ({} tokens, target {}). \
+                             A single tool_result or message may be too large — try a narrower query.",
+                            tokens_after, target
+                        );
+                        emit_chat_event(
+                            &app_handle,
+                            &rid,
+                            &ChatEvent::Error {
+                                message: msg,
+                                category: LlmErrorCategory::InvalidRequest,
+                            },
+                        );
+                        return;
+                    }
+                }
             }
 
             // F5 follow-up per-turn: 5 per-turn `Instant` locals
