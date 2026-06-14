@@ -614,6 +614,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **触发场景**:用户在 LLM 流式输出中点 stop,或 long-running tool 内中断
 - **位置**:② Tauri IPC 之后立刻建 `CancellationToken`;⑩ tool 执行内 `tokio::select!` 监听
 - **关键设计**:取消**不立即终止 LLM 请求**,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
+- **`shell` 进程组杀整组**(RULE-E-002,2026-06-14):`shell` tool 的子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程,不再留孤儿。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
 
 #### 2.5.2 ⑩ Tool 超时回填

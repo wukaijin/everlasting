@@ -47,6 +47,17 @@
 //!   closes the leak where an LLM `env`/`printenv` could read
 //!   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `*_TOKEN` / `*_SECRET`
 //!   from the parent. See `.trellis/reviews/DEBT.md §RULE-E-001`.
+//!
+//! P0 enhancement (2026-06-14 — RULE-E-002):
+//! - The child process is started as a new process group leader via
+//!   `process_group(0)`. On cancel or timeout we kill the entire
+//!   group (PGID = the sh PID) so grandchildren spawned by
+//!   `sh -c "sleep 60 &"` / pipelines / `nohup` / `&` are also
+//!   reaped, eliminating the orphan-process leak that
+//!   `child.kill()` previously left behind. See
+//!   `.trellis/reviews/DEBT.md §RULE-E-002`.
+//!   Windows behaviour is unchanged (it stays on `child.kill()`);
+//!   full Windows `CREATE_NEW_PROCESS_GROUP` is a follow-up.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -135,11 +146,52 @@ struct ShellResult {
     timed_out: bool,
 }
 
-/// Kill a child process and collect whatever output was produced.
+/// Kill the child process and collect whatever output was produced.
+///
+/// On Unix the child was spawned with `process_group(0)`, so the
+/// `sh` process is the leader of a new process group whose PGID
+/// equals `child.id()`. Killing the group with `kill(-pid, SIGKILL)`
+/// reaches the `sh` shell AND any descendants it forked (`&` /
+/// pipelines / `nohup`), closing the RULE-E-002 orphan-process
+/// leak that the plain `child.kill().await` left behind. ESRCH
+/// (process already exited) is treated as success; other kill
+/// failures are logged at `warn!` level but never propagated to
+/// the caller — the worst case is that a descendant lingers
+/// briefly, which the eventual `child.wait()` below will
+/// catch once stdout/stderr pipes close.
 async fn kill_and_collect(child: &mut Child) -> ShellResult {
-    // Best-effort kill.
-    let _ = child.kill().await;
-    // Wait for the process to exit so we don't leave a zombie.
+    // 1. Send the kill signal.
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            let pid_raw = pid as i32;
+            // Negative pid => "send signal to the process group whose
+            // PGID is |pid|". Safe because process_group(0) made
+            // `pid` == PGID.
+            let ret = unsafe { libc::kill(-pid_raw, libc::SIGKILL) };
+            if ret != 0 {
+                let errno = std::io::Error::last_os_error();
+                if errno.raw_os_error() != Some(libc::ESRCH) {
+                    tracing::warn!(
+                        error = %errno,
+                        pid = pid_raw,
+                        "shell: killpg failed (non-ESRCH); descendant may linger"
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows path (MVP, not yet hardened per RULE-E-002). We
+        // fall back to tokio's `child.kill()` which only reaches
+        // the direct child — the same orphan-leak window the Unix
+        // fix closes remains open here until `CREATE_NEW_PROCESS_GROUP`
+        // is wired up.
+        let _ = child.kill().await;
+    }
+
+    // 2. Wait for the process to exit so we don't leave a zombie.
     let status = child.wait().await.ok();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -227,9 +279,11 @@ pub fn definition() -> ToolDef {
 ///
 /// C1 (Cancel): receives a `CancellationToken` so the child process
 /// can be killed on cancel. The flow is:
-/// 1. Spawn `sh -c <command>` as a background child process
+/// 1. Spawn `sh -c <command>` as a background child process (Unix:
+///    in its own process group via `process_group(0)`, PGID = sh PID)
 /// 2. `tokio::select!` between `child.wait()` and `cancel.cancelled()`
-/// 3. On cancel: `child.kill()` + collect partial stdout/stderr
+/// 3. On cancel: send `SIGKILL` to the entire process group (Unix)
+///    or `child.kill()` (Windows, MVP) + collect partial stdout/stderr
 /// 4. On normal completion: collect full output as before
 ///
 /// **C4 PR1 (2026-06-14)**: returns a 4-tuple
@@ -310,6 +364,15 @@ pub async fn execute(
     // hardening that prevents the child from leaking credentials
     // back to the LLM via `env` / `printenv` / `cat /proc/self/...`.
     apply_safe_env(&mut cmd);
+    // RULE-E-002: make the child the leader of a brand-new process
+    // group. `kill_and_collect` will then send SIGKILL to the whole
+    // group on cancel/timeout, so descendants of `&` / pipelines /
+    // `nohup` are reaped along with the direct `sh` child. On
+    // non-Unix platforms the flag is a no-op and we fall back to
+    // `child.kill()` (which leaves the orphan window open — the
+    // Windows fix is intentionally deferred).
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -328,16 +391,17 @@ pub async fn execute(
     };
 
     // 4. C1 + timeout: race between child completion, cancellation,
-    //    and timeout. On cancel/timeout, kill the child and collect
-    //    whatever output was produced so far.
+    //    and timeout. On cancel/timeout, kill the entire process group
+    //    (Unix) or the direct child (Windows) and collect whatever
+    //    output was produced so far.
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            tracing::info!("shell: cancellation requested, killing child process");
+            tracing::info!("shell: cancellation requested, killing process group");
             kill_and_collect(&mut child).await
         }
         _ = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)) => {
-            tracing::info!("shell: timeout after {}ms, killing child process", timeout_ms);
+            tracing::info!("shell: timeout after {}ms, killing process group", timeout_ms);
             let mut r = kill_and_collect(&mut child).await;
             r.timed_out = true;
             r.cancelled = false; // timeout, not cancel
@@ -1013,6 +1077,160 @@ mod tests {
             !content.contains("[cancelled"),
             "should not have cancel marker when timeout fires"
         );
+    }
+
+    // --- P0 (RULE-E-002): process_group(0) + kill PGID ---
+
+    /// Backgrounded grandchildren get killed on cancel.
+    ///
+    /// Spawns a shell command that backgrounds a `sleep 60`, captures
+    /// its PID to a file, then `wait`s on it. We cancel the
+    /// `CancellationToken` and verify the sleep's `/proc/<pid>`
+    /// disappears within 2s — proving `kill_and_collect` reached the
+    /// grandchild (not just the direct `sh` child).
+    #[tokio::test]
+    async fn cancel_kills_backgrounded_grandchildren() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        // The script writes sleep's PID to a file, then `wait`s on it.
+        // `$!` is the PID of the most-recent backgrounded process.
+        let pid_file = tmp.path().join("sleep.pid");
+        let cmd = format!(
+            "sleep 60 & echo $! > {}; wait $!",
+            pid_file.display()
+        );
+
+        let handle = tokio::spawn(async move {
+            execute(
+                &serde_json::json!({"command": cmd}),
+                &ctx,
+                None,
+                &token_clone,
+            )
+            .await
+        });
+
+        // Wait for the script to write the PID file (≤ ~1s).
+        let mut attempts = 0;
+        while !pid_file.exists() && attempts < 50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            attempts += 1;
+        }
+        assert!(pid_file.exists(), "sleep pid file should exist");
+
+        // Give sleep a moment to fully spawn before we cancel.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        token.cancel();
+        let (content, is_error, _, _) = handle.await.unwrap();
+        assert!(is_error);
+        assert!(
+            content.contains("[cancelled, partial output]"),
+            "expected cancel marker, got: {}",
+            content
+        );
+
+        // Verify the backgrounded sleep is gone.
+        let pid_str = std::fs::read_to_string(&pid_file).unwrap();
+        let pid: i32 = pid_str
+            .trim()
+            .parse()
+            .expect("pid file should contain an integer");
+        // /proc/<pid> should not exist on Linux — best-effort probe.
+        let proc_path = format!("/proc/{}", pid);
+        let mut gone = false;
+        for _ in 0..40 {
+            if !std::path::Path::new(&proc_path).exists() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "sleep grandchild should be killed, but {} still exists",
+            proc_path
+        );
+    }
+
+    /// Timeout kills pipeline descendants (`yes | head`).
+    ///
+    /// `head -c 100` exits after 100 bytes, but `yes` keeps producing
+    /// output forever — without a process-group kill the `yes`
+    /// process keeps running and writing to a now-broken pipe. We
+    /// confirm timeout fires (so the tool returns an error to the
+    /// LLM) and that the backgrounded `yes` process spawned by the
+    /// tool is reaped along with the `sh` child.
+    #[tokio::test]
+    async fn timeout_kills_pipeline_grandchildren() {
+        let tmp = tempdir().unwrap();
+        let ctx = test_ctx(&tmp);
+        let token = fresh_token();
+        // The script writes:
+        //   line 1: the sh PID ($$)
+        //   line 2: the `yes` backgrounded PID ($!)
+        // It then `wait`s on yes so the sh process blocks until
+        // we kill the group.
+        let pids_file = tmp.path().join("pids.txt");
+        let cmd = format!(
+            "sh -c 'echo $$ > {pids}; yes > /dev/null & echo $! >> {pids}; wait $!'",
+            pids = pids_file.display()
+        );
+        let (content, is_error, _, _) = execute(
+            &serde_json::json!({
+                "command": cmd,
+                "timeout": 200
+            }),
+            &ctx,
+            None,
+            &token,
+        )
+        .await;
+        assert!(is_error, "{}", content);
+        assert!(
+            content.contains("[timeout after 200ms"),
+            "got: {}",
+            content
+        );
+        assert!(
+            pids_file.exists(),
+            "pids file should have been written: {}",
+            content
+        );
+
+        // Read the recorded PIDs. sh's PID == PGID (per process_group(0)),
+        // and the `yes` backgrounded child is in that group.
+        let pids_raw = std::fs::read_to_string(&pids_file).unwrap();
+        let mut pids_iter = pids_raw.lines();
+        let sh_pid: i32 = pids_iter
+            .next()
+            .expect("sh pid line")
+            .trim()
+            .parse()
+            .expect("sh pid is int");
+        let yes_pid: i32 = pids_iter
+            .next()
+            .expect("yes pid line")
+            .trim()
+            .parse()
+            .expect("yes pid is int");
+
+        // Give the OS a moment to deliver the kill and reap the
+        // descendants before we scan /proc.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Both /proc/<sh_pid> and /proc/<yes_pid> should be gone.
+        for pid in [sh_pid, yes_pid] {
+            let proc_path = format!("/proc/{}", pid);
+            assert!(
+                !std::path::Path::new(&proc_path).exists(),
+                "process group descendant not killed: {} still exists",
+                proc_path
+            );
+        }
     }
 
     // --- P0 (RULE-E-001): env_clear + safe allowlist ---
