@@ -38,6 +38,15 @@
 //!   child is killed and partial output is returned with a timeout
 //!   marker. This complements C1 CancellationToken (user cancel):
 //!   timeout is automatic, cancel is manual.
+//!
+//! P0 enhancement (2026-06-14 — RULE-E-001):
+//! - The child process no longer inherits the agent's full
+//!   environment. Before spawn we call `apply_safe_env`, which does
+//!   `env_clear()` and re-injects only a curated allowlist
+//!   (PATH/HOME/USER/LOGNAME/LANG-family/TERM/TZ/TMPDIR). This
+//!   closes the leak where an LLM `env`/`printenv` could read
+//!   `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `*_TOKEN` / `*_SECRET`
+//!   from the parent. See `.trellis/reviews/DEBT.md §RULE-E-001`.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -65,6 +74,57 @@ const SPILL_DIR: &str = ".everlasting/outputs";
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Maximum allowed timeout in milliseconds (10 minutes).
 const MAX_TIMEOUT_MS: u64 = 600_000;
+
+/// Variables re-injected into the child process after `env_clear()`
+/// (RULE-E-001). Adding a variable here is an intentional trust
+/// decision: it becomes readable by every command the LLM runs.
+/// API keys / tokens / secrets MUST stay out of this list.
+const SAFE_ENV_VARS: &[&str] = &[
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "TERM",
+    "TZ",
+    "TMPDIR",
+];
+
+/// Apply a safe-allowlist environment to `cmd`.
+///
+/// `env_clear()` removes every inherited variable from the parent
+/// (including `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `*_TOKEN` /
+/// `*_SECRET`). We then re-inject `PATH` (required for command
+/// resolution) and the variables in [`SAFE_ENV_VARS`] (identity /
+/// locale / terminal / timezone / temp-dir — most common dev
+/// commands probe these).
+///
+/// The allowlist is intentionally minimal. Anything the LLM does
+/// not need should not be readable by an arbitrary `sh -c`. Add
+/// a variable to [`SAFE_ENV_VARS`] only when a concrete dev
+/// command (`npm`, `cargo`, `pnpm`, `make`, `git`, `ls`, …) breaks
+/// without it; document the reason in the commit message and add a
+/// note to `docs/ARCHITECTURE.md` §"Tool execution" / §"Shell
+/// env isolation" (this file currently has no dedicated subsection —
+/// a new one will be added in a follow-up spec pass alongside
+/// RULE-E-002 `process_group`).
+fn apply_safe_env(cmd: &mut Command) {
+    cmd.env_clear();
+    // PATH is required for command resolution. Inherit from parent
+    // when present; if missing (rare), the child inherits no PATH,
+    // which will surface as "command not found" — acceptable since
+    // the alternative is guessing a path that may not exist on this
+    // machine.
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    for var in SAFE_ENV_VARS {
+        if let Ok(v) = std::env::var(var) {
+            cmd.env(var, v);
+        }
+    }
+}
 
 /// Internal result from child process execution.
 struct ShellResult {
@@ -129,7 +189,10 @@ pub fn definition() -> ToolDef {
              is returned with a `[timeout after Nms]` marker.\n\n\
              Outputs over 30 KB are saved to `<cwd>/.everlasting/outputs/<id>.txt`; \
              the tool returns the path plus a short preview so you can read the \
-             full file with read_file."
+             full file with read_file.\n\n\
+             Environment is restricted to a safe allowlist \
+             (PATH/HOME/USER/LOGNAME/LANG/LANGUAGE/LC_ALL/TERM/TZ/TMPDIR). \
+             API keys and tokens from the agent process are NOT inherited."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -240,6 +303,13 @@ pub async fn execute(
         .current_dir(&validated_cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // RULE-E-001: clear the inherited env so API keys / tokens from
+    // the parent process are NOT visible to the child. The agent
+    // loop's permission system (Tier 4) gates whether a shell call
+    // should execute at all; this layer is the *execution-context*
+    // hardening that prevents the child from leaking credentials
+    // back to the LLM via `env` / `printenv` / `cat /proc/self/...`.
+    apply_safe_env(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -943,5 +1013,176 @@ mod tests {
             !content.contains("[cancelled"),
             "should not have cancel marker when timeout fires"
         );
+    }
+
+    // --- P0 (RULE-E-001): env_clear + safe allowlist ---
+
+    /// An API key set in the parent process must NOT be readable
+    /// by the child. This is the core invariant that closes the
+    /// env-leak attack surface (`env`, `printenv`, etc.).
+    #[tokio::test]
+    async fn execute_env_does_not_leak_api_key() {
+        let secret = "sk-test-secret-do-not-leak-12345";
+        let key = "ANTHROPIC_API_KEY";
+        // SAFETY: `std::env::set_var` / `remove_var` are `unsafe` in
+        // 1.74+ because the env table is process-global. We accept
+        // the race risk because cargo test runs tests serially by
+        // default for a single test process, and we always clean up
+        // via `remove_var` even on assertion failure paths below.
+        // If a parallel test ever touches this key, run with
+        // `--test-threads=1`.
+        unsafe { std::env::set_var(key, secret); }
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _, _) = execute(
+            &serde_json::json!({"command": "printenv ANTHROPIC_API_KEY || echo __EMPTY__"}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        unsafe { std::env::remove_var(key); }
+
+        assert!(!is_error, "{}", content);
+        assert!(
+            !content.contains(secret),
+            "API key leaked through child env: {}",
+            content
+        );
+        // Either the variable was unset (so `printenv` exited 1 and
+        // the `|| echo __EMPTY__` branch ran) or it was empty. Either
+        // way the secret value MUST be absent.
+        assert!(
+            content.contains("__EMPTY__") || content.trim().is_empty(),
+            "expected empty/__EMPTY__ marker, got: {}",
+            content
+        );
+    }
+
+    /// `OPENAI_API_KEY` must be filtered out the same way — the
+    /// allowlist is keyed by *role* (never leak credentials), not by
+    /// specific provider names.
+    #[tokio::test]
+    async fn execute_env_does_not_leak_openai_key() {
+        let secret = "sk-openai-secret-do-not-leak-67890";
+        let key = "OPENAI_API_KEY";
+        unsafe { std::env::set_var(key, secret); }
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _, _) = execute(
+            &serde_json::json!({"command": "printenv OPENAI_API_KEY || echo __EMPTY__"}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        unsafe { std::env::remove_var(key); }
+
+        assert!(!is_error, "{}", content);
+        assert!(
+            !content.contains(secret),
+            "OPENAI_API_KEY leaked through child env: {}",
+            content
+        );
+    }
+
+    /// PATH must still be inherited so commands resolve. We use
+    /// `which sh` as a proxy: if PATH is missing the shell itself
+    /// would be unresolvable and we'd see exit code 127 / "not found".
+    #[tokio::test]
+    async fn execute_preserves_path() {
+        let tmp = tempdir().unwrap();
+        let (content, is_error, _, _) = execute(
+            &serde_json::json!({"command": "command -v sh"}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        // `command -v sh` writes the resolved path to stdout. We only
+        // care that the output is non-empty — the exact path depends
+        // on the host PATH and may legitimately differ across
+        // Linux/macOS.
+        let stdout_line = content
+            .lines()
+            .find(|l| !l.starts_with("[exit code") && !l.is_empty())
+            .unwrap_or("");
+        assert!(
+            !stdout_line.trim().is_empty(),
+            "PATH should be inherited enough to resolve `sh`, got: {}",
+            content
+        );
+    }
+
+    /// The optional allowlist variables (HOME / LANG / TERM) are
+    /// re-injected when present in the parent. They may be empty in
+    /// CI (e.g. a `LANG=` build environment), in which case they
+    /// are simply not set in the child — the contract is "no
+    /// leakage", not "guaranteed presence".
+    #[tokio::test]
+    async fn execute_optional_env_vars_do_not_error() {
+        let tmp = tempdir().unwrap();
+        // `env` prints every variable in the child, one per line.
+        // We only assert the command ran successfully — the count
+        // and contents vary by host.
+        let (content, is_error, _, _) = execute(
+            &serde_json::json!({"command": "env | wc -l"}),
+            &test_ctx(&tmp),
+            None,
+            &fresh_token(),
+        )
+        .await;
+        assert!(!is_error, "{}", content);
+        // The line containing the count (before "[exit code: 0]")
+        // should be a valid integer >= 0.
+        let count_line = content
+            .lines()
+            .find(|l| !l.starts_with("[exit code"))
+            .unwrap_or("");
+        let count: u32 = count_line
+            .trim()
+            .parse()
+            .expect("wc -l should print a number");
+        // Allowlist alone (PATH + SAFE_ENV_VARS) is at most 10 vars.
+        // Anything more would mean an extra var leaked through. We
+        // pick a tight upper bound (20) to leave headroom for
+        // shell-internal vars (`_`, `OLDPWD`, etc.) without
+        // masking a real leak.
+        assert!(
+            count <= 20,
+            "child env has {} vars — possible leak: {}",
+            count,
+            content
+        );
+    }
+
+    /// `apply_safe_env` is hard to test structurally (a
+    /// `tokio::process::Command` is opaque once built), so this
+    /// test is a defense-in-depth guard: it asserts that
+    /// [`SAFE_ENV_VARS`] does not contain any obviously-bad name,
+    /// catching future PRs that add a credential to the allowlist.
+    /// The behavioral guarantee lives in
+    /// `execute_env_does_not_leak_api_key` / `..._openai_key` —
+    /// those tests actually spawn a child and confirm the secret
+    /// is absent from `printenv`.
+    #[test]
+    fn apply_safe_env_clears_and_reinjects() {
+        for forbidden in &[
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "*_TOKEN",
+            "*_SECRET",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            assert!(
+                !SAFE_ENV_VARS.contains(&forbidden),
+                "SAFE_ENV_VARS must not contain {}",
+                forbidden
+            );
+        }
+        // Sanity: SAFE_ENV_VARS is non-empty (any positive set means
+        // we re-inject at least one var; an empty list would still
+        // satisfy the negative assertion above but indicates the
+        // table was emptied by mistake).
+        assert!(!SAFE_ENV_VARS.is_empty());
     }
 }

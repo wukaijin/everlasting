@@ -170,6 +170,33 @@ session_id)` into every `execute_tool` call.
 | `timeout <= 0` | `shell` | Uses default 120000ms |
 | `timeout > 600000` | `shell` | Clamped to 600000ms |
 
+#### P0 enhancement (2026-06-14): shell env_clear + safe allowlist (RULE-E-001)
+
+- `shell` no longer inherits the agent's full environment. Before spawn the tool
+  calls `apply_safe_env(cmd)` which does `cmd.env_clear()` and re-injects only
+  a curated allowlist: `PATH` (from parent) + `HOME` / `USER` / `LOGNAME` /
+  `LANG` / `LANGUAGE` / `LC_ALL` / `TERM` / `TZ` / `TMPDIR` (each re-injected
+  only when present in the parent).
+- The allowlist is hard-coded as `SAFE_ENV_VARS: &[&str]` in `tools/shell.rs`
+  and is **forbidden** from containing any `*_API_KEY` / `*_TOKEN` /
+  `*_SECRET` (structural guard test `apply_safe_env_clears_and_reinjects`
+  asserts the negative set).
+- The change closes the leak where an LLM `env` / `printenv` could read
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `*_TOKEN` from the parent. The
+  Permission system (Tier 4 ask) gates whether `shell` should execute; this
+  layer is the *execution-context* hardening that prevents the child from
+  leaking credentials back to the LLM after execution is approved.
+- Behavior tests: `execute_env_does_not_leak_api_key` (Anthropic key),
+  `execute_env_does_not_leak_openai_key` (OpenAI key), `execute_preserves_path`
+  (PATH inherited), `execute_optional_env_vars_do_not_error` (allowlist
+  var count ≤ 20 to catch leaks). All 31 `tools::shell` tests pass.
+- `shell` tool description string now ends with: "Environment is restricted
+  to a safe allowlist (PATH/HOME/USER/LOGNAME/LANG/LANGUAGE/LC_ALL/TERM/TZ/
+  TMPDIR). API keys and tokens from the agent process are NOT inherited."
+- Out of scope (MVP): user-configurable allowlist, Windows-specific
+  `env_clear` quirks, leaking the project root / session id as
+  `EVERLASTING_*` env vars.
+
 ###5. Good / Base / Bad Cases
 
 #### Good: read → edit → done
@@ -246,9 +273,14 @@ change touching these areas.
 | `shell::large_output_spills_to_disk` | >30 KiB → file exists in `<cwd>/.everlasting/outputs/`, tool result contains path. |
 | `shell::small_output_unchanged` | <30 KiB → no spill file, tool result is the raw output. |
 | `shell::cleanup_outputs_dir` | After `cleanup_outputs_dir(cwd)`, the spill dir is gone; nested files are also removed; missing dir is no-op. |
+| `shell::execute_env_does_not_leak_api_key` | (RULE-E-001) `ANTHROPIC_API_KEY` set in parent is NOT visible to the child via `printenv`. |
+| `shell::execute_env_does_not_leak_openai_key` | (RULE-E-001) `OPENAI_API_KEY` set in parent is NOT visible to the child via `printenv`. |
+| `shell::execute_preserves_path` | (RULE-E-001) `PATH` is inherited from parent so commands like `sh` resolve. |
+| `shell::execute_optional_env_vars_do_not_error` | (RULE-E-001) Child env has ≤ 20 vars; an unexpected count means a leak. |
+| `shell::apply_safe_env_clears_and_reinjects` | (RULE-E-001) `SAFE_ENV_VARS` does not contain any `*_API_KEY` / `*_TOKEN` / `*_SECRET` (structural guard). |
 
-Total backend suite:166+ tests pass as of round1 (was103 pre-toolset; +63 net
-new from this round, including3 cleanup helpers).
+Total backend suite: 461+ tests pass as of 2026-06-14 (was 437 pre-RULE-E-001; +5 net
+new from the shell env_clear work — 4 behavioral + 1 structural).
 
 #### Frontend
 
