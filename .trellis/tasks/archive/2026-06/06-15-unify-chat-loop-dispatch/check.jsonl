@@ -1,0 +1,3 @@
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-006 验收 + Closure Note 更新确认"}
+{"file": "docs/ARCHITECTURE.md", "reason": "R6 架构文档加注验收"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent emit 合规检查"}
