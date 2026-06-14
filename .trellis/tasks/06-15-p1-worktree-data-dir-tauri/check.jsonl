@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "verify worktree 路径策略是否仍符合合约;attach/detach/delete 路径根目录是否统一到 app_data_dir"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "verify AppState 改动不破坏现有 14-param run_chat_loop / CancellationGuard / 其他架构契约"}

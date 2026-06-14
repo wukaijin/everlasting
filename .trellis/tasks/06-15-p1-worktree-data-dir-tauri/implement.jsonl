@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "worktree 路径策略合约;本次改动是替换 data_dir() 来源,需对照合约判断是否破坏 attach/detach/delete 语义"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "AppState struct 改动相关;本次加 app_data_dir 字段 + load 构造处赋值,需对照 AppState 当前设计"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend 总览,定位 worktree / agent-loop / database 子系统的边界"}

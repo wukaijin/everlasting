@@ -288,13 +288,14 @@
 
 - **Level**: P1 (**P3 升级**)
 - **Subsystem**: Tools
-- **File**: `app/src-tauri/src/git/worktree.rs:40-56`
+- **File**: `app/src-tauri/src/git/worktree.rs:40-56`(旧路径;修复后函数已删)
 - **Description**: `data_dir` 用 env 变量,fallback 到 `/tmp`(world-writable + 重启清空)
 - **Impact**: Windows/macOS 部署后 worktree 路径异常;**`/tmp` 重启清空 = 用户工作数据丢失**
 - **Fix**: 改用 Tauri `app_data_dir()`,跨平台一致
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — worktree `data_dir()` 已删,改用 `state.app_data_dir`(与 SQLite DB 同根 `~/.local/share/com.wukaijin.everlasting/`),`/tmp` fallback 消失
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-worktree-data-dir-tauri`
+- **Related Task**: .trellis/tasks/06-15-p1-worktree-data-dir-tauri
+- **Closed At**: <pending commit>(carlos commit 后回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5(P3 评级偏低,meta-review 升级 P1)
 
 ---
@@ -683,6 +684,7 @@
 | 2026-06-14 | RULE-C-001 | P1 | P1(确认) | PRD 承诺"立即生效"是产品诚信问题 | meta-review §2.5 |
 | 2026-06-14 | RULE-C-003 | P1 | P3 | 过度压缩 ≠ 数据丢失 | meta-review §2.2 |
 | 2026-06-14 | RULE-E-006 | P3 | P1 | `/tmp` fallback 重启清空 = 工作数据丢失 | meta-review §2.3 |
+| 2026-06-15 | RULE-E-006 | open | **closed** | worktree data_dir 从 env/home/tmp 改 Tauri app_data_dir,对齐 DB,消除 /tmp 数据丢失;`git::data_dir()` 函数 + re-export + 模块 docstring 全部删除,Grill decision #2 不变式保留(`catalog` 紧跟 `db`,`app_data_dir` 落在 data-plane group 内) | .trellis/tasks/06-15-p1-worktree-data-dir-tauri |
 | 2026-06-15 | RULE-A-006 | partial | **closed** | production `chat.rs` → `run_chat_loop` 迁移完成,副本消除,9 个 agent_loop_* 测试现覆盖 production 真实路径 | `.trellis/tasks/06-15-unify-chat-loop-dispatch` |
 
 ---
@@ -705,7 +707,7 @@
 | PR11 | `06-14-p1-openai-o1-max-completion-tokens` | RULE-D-002 | — |
 | PR12 | `06-14-p1-glob-spawn-blocking` | RULE-E-004 | — |
 | PR13 | `06-14-p1-worktree-destroy-await` | RULE-E-005 | 依赖 PR5 |
-| PR14 | `06-14-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
+| PR14 | `06-15-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
 | PR-N+ | P2 各项子 task | RULE-*-P2 | — |
 | PR-N+ | P3 各项子 task | RULE-*-P3 | — |
 
@@ -721,5 +723,5 @@
 
 ---
 
-**最后更新**: 2026-06-14 by carlos
-**下个 review**: REVIEW-XXX-2026-XX-XX(待定,前移 RULE-E-006 工作数据丢失风险后建议尽快)
+**最后更新**: 2026-06-15 by carlos
+**下个 review**: REVIEW-XXX-2026-XX-XX(待定)

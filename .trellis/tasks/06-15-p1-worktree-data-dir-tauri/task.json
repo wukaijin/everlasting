@@ -1,0 +1,34 @@
+{
+  "id": "p1-worktree-data-dir-tauri",
+  "name": "p1-worktree-data-dir-tauri",
+  "title": "P1 worktree data_dir → Tauri app_data_dir (RULE-E-006)",
+  "description": "消除 worktree env-based data_dir() 的 /tmp fallback 数据丢失风险,对齐 DB 已用的 app_data_dir()。DEBT.md §RULE-E-006。",
+  "status": "completed",
+  "dev_type": "bugfix",
+  "scope": "backend",
+  "package": "backend",
+  "priority": "P1",
+  "creator": "carlos",
+  "assignee": "carlos",
+  "createdAt": "2026-06-15",
+  "completedAt": "2026-06-15",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "<pending carlos commit>",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "app/src-tauri/src/git/worktree.rs",
+    "app/src-tauri/src/state.rs",
+    "app/src-tauri/src/commands/worktree.rs",
+    ".trellis/reviews/DEBT.md"
+  ],
+  "notes": "DEBT.md 子 task 编排表 PR14。DEBT 文末点名「前移 RULE-E-006 工作数据丢失风险后建议尽快」。PRD 已自包含(research + 6 处精确改动清单 + 验证命令 + DoD + 闭环文档),接手 agent 无需再探索代码库,按 prd.md §4 执行即可。暂不实施,待其他 agent 接手。实施 agent 不 commit(留给 carlos)。",
+  "meta": {
+    "debt_rule": "RULE-E-006",
+    "debt_pr": "PR14"
+  }
+}

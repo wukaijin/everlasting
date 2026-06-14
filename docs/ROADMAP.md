@@ -52,6 +52,7 @@
 | **Mode 3 档化**(Q4 P2 后续) | 06-13 | `Mode::Chat → Edit` 改名 + `Mode::Review` 移除(行为跟 Plan 重复);v6 migration 启动时跑两次幂等 UPDATE;**breaking wire rename**,不保留 alias |
 | **A7** RDP 双屏 position bug 修复 | 06-14 | 根因 = Wayland 禁止客户端 setPosition(WSLg/Weston 忽略,#14913 非可绕过),放弃手动铺满整屏,全平台改原生 `toggleMaximize()`;详见 [IMPLEMENTATION §4 2026-06-14](./IMPLEMENTATION.md#4-决策日志) |
 | **C4** 审计日志查询 UI | 06-14 | ⑩ `tool_executed` 落表(`record_tool_executed_audit`,payload `{tool_name, tool_input, duration_ms, exit_code}`)+ Tauri command `list_session_audit_events` + `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog,绑当前 session,kind 下拉 + "仅 critical" 复选 + 计数 + 刷新 + 按 kind 分发渲染)。⑬ ⑮ 仍只 tracing(收益低)。完整 PRD 走 `.trellis/tasks/06-14-audit-log-query-ui/`,架构描述见 [ARCHITECTURE §2.5.8](./ARCHITECTURE.md#258-⑯-审计日志a2--b7-pr1--c4-pr1pr2-落地2026-06-1314已实施) |
+| **RULE-E-006** worktree 路径对齐 Tauri `app_data_dir` | 06-15 | 删 `git::data_dir()` env-based 函数 + re-export + 模块 docstring,`AppState` 加 `app_data_dir: PathBuf` 字段(落在 data-plane group 内,保留 Grill decision #2 catalog-after-db 不变式),`attach_worktree` 从 state 取,worktree 与 SQLite DB 同根 `~/.local/share/com.wukaijin.everlasting/`,`/tmp` fallback 消失。`cargo check` 0 warning,`cargo test --lib` 484/484 pass。完整 PRD 走 `.trellis/tasks/06-15-p1-worktree-data-dir-tauri/` |
 
 ---
 
