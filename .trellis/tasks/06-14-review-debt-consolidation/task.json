@@ -22,7 +22,8 @@
     "06-14-p0-shell-env-clear",
     "06-14-p0-shell-process-group",
     "06-14-p0-web-fetch-redirect-ssrf",
-    "06-14-p0-c3-tail-pair-orphan"
+    "06-14-p0-c3-tail-pair-orphan",
+    "06-14-p1-agent-loop-integration-tests"
   ],
   "parent": null,
   "relatedFiles": [],

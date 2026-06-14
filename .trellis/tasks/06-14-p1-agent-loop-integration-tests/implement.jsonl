@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider trait / ChatEvent / ChatMessage 类型定义,MockProvider 需对齐"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "集成测试 DB 内存 SQLite + migrations 应用规范"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-006 finding 完整描述 + 修复方向"}
+{"file": "docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md", "reason": "§3.5 测试缺口 + §1.1 全局架构图 agent loop 主体"}
+{"file": "docs/_reviews/REVIEW-sse-agent-loop-2026-06-12.md", "reason": "§8 P5 mock HTTP server 集成测试债务源(2026-06-12 提出,0 落地)"}
+{"file": "app/src-tauri/src/llm/provider/mod.rs", "reason": "Provider trait 定义,MockProvider 实现的契约"}
+{"file": "app/src-tauri/src/commands/sessions.rs", "reason": "chat 命令入口,chat_inner 抽函数目标"}
+{"file": "app/src-tauri/src/agent/chat.rs", "reason": "Agent Loop 主体,集成测试 turn 编排逻辑覆盖目标"}

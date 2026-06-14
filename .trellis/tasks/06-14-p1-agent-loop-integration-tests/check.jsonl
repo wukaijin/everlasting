@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Provider trait contract,MockProvider 必须完全符合 trait"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "集成测试 DB 设置需符合项目 DB 规范"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-006 finding + 修复目标"}
+{"file": "docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md", "reason": "§3.5 测试缺口原始论据"}
+{"file": "app/src-tauri/src/llm/provider/mod.rs", "reason": "Provider trait + build_provider factory"}
+{"file": "app/src-tauri/src/commands/sessions.rs", "reason": "chat 命令结构,chat_inner 抽函数验证"}
