@@ -6,12 +6,12 @@
 //   1. A `v-model:open` reka-ui `Dialog*` shell (composition
 //      mirrors `MemoryModal.vue` and `SettingsModal.vue`).
 //   2. A header row: title + close X.
-//   3. A filter row: kind dropdown (native `<select>` themed to
-//      match the project's form-control look, per reka-ui-usage.md
-//      "Gotcha: TextFieldRoot does NOT exist in 2.9.9" → native
-//      `<input>` / `<select>` is the project pattern) + a "仅
-//      critical" checkbox (native `<input type="checkbox">`) +
-//      a count chip + a manual refresh button.
+//   3. A filter row: kind dropdown (reka-ui `Select*` matching the
+//      Settings forms, per reka-ui-usage.md "Convention: Wrap
+//      reka-ui primitives in project-scoped CSS classes") + a "仅
+//      critical" checkbox (reka-ui `CheckboxRoot`/`CheckboxIndicator`,
+//      mirroring `ModelForm.vue`) + a count chip + a manual refresh
+//      button.
 //   4. A scrollable list of `<AuditLogItem>` rows. Empty state
 //      shows "暂无审计事件".
 //
@@ -33,7 +33,7 @@
 // no live push. A manual 刷新 button is the stopgap for the
 // "Modal 开着期间 agent 又写新事件" case.
 
-import { computed, watch } from "vue";
+import { computed, useId, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -41,6 +41,17 @@ import {
   DialogContent,
   DialogTitle,
   DialogClose,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectIcon,
+  SelectPortal,
+  SelectContent,
+  SelectViewport,
+  SelectItem,
+  SelectItemText,
+  CheckboxRoot,
+  CheckboxIndicator,
 } from "reka-ui";
 
 import Icon from "../Icon.vue";
@@ -53,6 +64,15 @@ const open = defineModel<boolean>("open", { required: true });
 
 const store = useAuditStore();
 const chatStore = useChatStore();
+
+/** Stable unique id for the "仅 critical" checkbox. Used to link
+ *  the `<label :for>` to the reka-ui `CheckboxRoot` (which renders
+ *  as `<button role="checkbox">` — `<label>` cannot contain a
+ *  button per HTML spec, so the association must go through
+ *  `for`/`id` instead). `useId()` is Vue 3.5's SSR-safe unique id
+ *  generator; we generate it once at setup and reuse it for the
+ *  component's lifetime. */
+const onlyCriticalId = useId();
 
 /** The session this modal is bound to. Bound to the CURRENT session
  *  at the moment of opening (the entry button sits in ChatPanel's
@@ -94,8 +114,10 @@ watch(
 );
 
 /** The kind dropdown's two-way model. The store keeps
- *  `kindFilter: string | null`; the native `<select>` only deals
- *  in strings, so we map `null` ↔ `"__all__"` on the wire. */
+ *  `kindFilter: string | null`; the reka-ui `SelectRoot` only
+ *  deals in strings, so we map `null` ↔ `"__all__"` on the wire
+ *  (the sentinel is also what the `<SelectItem :value="...">`
+ *  emits for the "全部" option). */
 const kindSelectValue = computed<string>({
   get: () => store.kindFilter ?? "__all__",
   set: (v: string) => {
@@ -106,7 +128,14 @@ const kindSelectValue = computed<string>({
 /** The critical-only checkbox's two-way model. Routed through
  *  the store action (not directly mutating `store.onlyCritical`)
  *  so the toggle semantics stay centralized — symmetric with
- *  `kindSelectValue`'s setter dispatching `setKindFilter`. */
+ *  `kindSelectValue`'s setter dispatching `setKindFilter`. The
+ *  boolean shape pairs with reka-ui `CheckboxRoot`'s default
+ *  `v-model` (which binds `modelValue`/`update:modelValue` in
+ *  reka-ui 2.9.9 — `v-model:checked` is NOT a valid binding in
+ *  this version; the original C4 follow-up PR used `v-model:checked`
+ *  by mistake, which silently dropped the toggle event and the
+ *  checkbox could not be checked. See ModelForm.vue for the
+ *  canonical `v-model` usage on the same primitive.) */
 const onlyCriticalModel = computed<boolean>({
   get: () => store.onlyCritical,
   set: (_v: boolean) => store.toggleCritical(),
@@ -153,27 +182,62 @@ async function onRefresh(): Promise<void> {
         </header>
 
         <div class="audit-modal__filters">
-          <label class="audit-modal__filter">
+          <div class="audit-modal__filter">
             <span class="audit-modal__filter-label">类别</span>
-            <select v-model="kindSelectValue" class="audit-modal__select">
-              <option
-                v-for="opt in AUDIT_KIND_OPTIONS"
-                :key="opt.value ?? '__all__'"
-                :value="opt.value ?? '__all__'"
-              >
-                {{ opt.label }}
-              </option>
-            </select>
-          </label>
+            <SelectRoot v-model="kindSelectValue">
+              <SelectTrigger class="audit-modal__select-trigger" aria-label="类别">
+                <SelectValue placeholder="全部" />
+                <SelectIcon class="audit-modal__select-icon">
+                  <Icon name="chevron-down" :size="12" />
+                </SelectIcon>
+              </SelectTrigger>
+              <SelectPortal>
+                <SelectContent
+                  class="audit-modal__select-content"
+                  position="popper"
+                  :side-offset="4"
+                >
+                  <SelectViewport class="audit-modal__select-viewport">
+                    <SelectItem
+                      v-for="opt in AUDIT_KIND_OPTIONS"
+                      :key="opt.value ?? '__all__'"
+                      :value="opt.value ?? '__all__'"
+                      class="audit-modal__select-option"
+                    >
+                      <SelectItemText>{{ opt.label }}</SelectItemText>
+                    </SelectItem>
+                  </SelectViewport>
+                </SelectContent>
+              </SelectPortal>
+            </SelectRoot>
+          </div>
 
-          <label class="audit-modal__check">
-            <input
+          <!-- reka-ui CheckboxRoot renders as `<button role="checkbox">`,
+               so a wrapping `<label>` is illegal HTML (label cannot contain
+               interactive elements) and causes a double-toggle on label
+               text click (browser default click forwarding + reka-ui's
+               own click handler). The outer element is therefore a `<div>`;
+               the caption lives in a sibling `<label :for>` that targets
+               the CheckboxRoot's stable `:id` (`onlyCriticalId`), so the
+               text↔control association still works through the standard
+               `for`/`id` mechanism. Mirrors `.model-form__field--check`
+               in ModelForm.vue (which also drops the label wrapper). -->
+          <div class="audit-modal__check">
+            <CheckboxRoot
               v-model="onlyCriticalModel"
-              type="checkbox"
               class="audit-modal__checkbox"
-            />
-            <span>仅 critical ({{ store.criticalCount }})</span>
-          </label>
+              aria-label="仅 critical"
+              :id="onlyCriticalId"
+            >
+              <CheckboxIndicator class="audit-modal__checkbox-indicator">
+                <Icon name="check" :size="11" />
+              </CheckboxIndicator>
+            </CheckboxRoot>
+            <label
+              class="audit-modal__check-label"
+              :for="onlyCriticalId"
+            >仅 critical ({{ store.criticalCount }})</label>
+          </div>
 
           <span class="audit-modal__count">{{ countText }}</span>
 
@@ -352,11 +416,18 @@ async function onRefresh(): Promise<void> {
   font-weight: 500;
 }
 
-/* Native `<select>` themed to match the project's form-control
-   look (`.providers-tab__input` / `.models-tab__input` pattern
-   from reka-ui-usage.md "Gotcha: TextFieldRoot does NOT exist
-   in 2.9.9"). */
-.audit-modal__select {
+/* reka-ui Select trigger — rendered inside this component's own
+   template, so the rule stays scoped (no `:deep()` needed). The
+   visual contract mirrors `.providers-tab__trigger` /
+   `.models-tab__trigger` from the Settings forms (see
+   reka-ui-usage.md "Convention: Wrap reka-ui primitives in
+   project-scoped CSS classes"). Smaller padding here because the
+   filter row is denser than a Settings form field. */
+.audit-modal__select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   padding: 4px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
@@ -364,30 +435,132 @@ async function onRefresh(): Promise<void> {
   color: var(--color-text-primary);
   font-size: 12px;
   font-family: inherit;
-  outline: none;
   cursor: pointer;
+  outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.audit-modal__select:focus {
+.audit-modal__select-trigger:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.audit-modal__select-trigger[data-state="open"] {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
+.audit-modal__select-icon {
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* reka-ui SelectContent / Viewport / Item are rendered to <body>
+   via <SelectPortal>, so they escape this component's scoped-CSS
+   boundary. Wrap each rule in `:deep(...)` per
+   `.trellis/spec/frontend/reka-ui-usage.md` "Gotcha: `<style
+   scoped>` does NOT apply to portal children". Width strategy
+   uses `--reka-select-trigger-width` (the `--reka-` prefix, NOT
+   `--radix-`) to size the dropdown to its trigger. */
+:deep(.audit-modal__select-content) {
+  position: fixed;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: var(--reka-select-trigger-width, 200px);
+  width: var(--reka-select-trigger-width);
+  max-height: var(--reka-select-content-available-height);
+  z-index: 3000 !important;
+  overflow: hidden;
+}
+
+:deep(.audit-modal__select-viewport) {
+  padding: 4px;
+}
+
+:deep(.audit-modal__select-option) {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+:deep(.audit-modal__select-option[data-highlighted]) {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+:deep(.audit-modal__select-option[data-state="checked"]) {
+  color: var(--color-accent);
+}
+
+/* Container for the "仅 critical" checkbox + caption. Was a `<label>`
+   in the first C4 follow-up draft, but reka-ui CheckboxRoot renders
+   as `<button role="checkbox">` — a `<label>` cannot contain a
+   button per HTML spec, and the browser's default label→control click
+   forwarding stacked on top of reka-ui's own click handler, producing
+   a double-toggle. Now a plain `<div>`; the caption lives in a
+   sibling `<label :for>` so the click association still works
+   through the standard `for`/`id` mechanism. */
 .audit-modal__check {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 11px;
   color: var(--color-text-secondary);
-  cursor: pointer;
   user-select: none;
 }
 
-.audit-modal__checkbox {
-  margin: 0;
+.audit-modal__check-label {
   cursor: pointer;
-  accent-color: var(--color-accent);
+}
+
+/* reka-ui CheckboxRoot — does NOT portal, so scoped rule applies.
+   Visual contract mirrors `.model-form__checkbox` in ModelForm.vue
+   (16px square, `--color-bg-app` bg, accent on
+   `[data-state="checked"]`). */
+.audit-modal__checkbox {
+  width: 16px;
+  height: 16px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.audit-modal__checkbox:hover {
+  border-color: var(--color-accent-muted);
+}
+
+.audit-modal__checkbox[data-state="checked"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.audit-modal__checkbox-indicator {
+  /* The white check mark sits on `--color-accent` (the checked
+     state bg). Hardcoded `#fff` mirrors `.model-form__checkbox-indicator`
+     in ModelForm.vue — there is no `--color-on-accent` token yet, and
+     the project's convention is to inline the constant white when the
+     contrasting-on-accent use case appears (see design-tokens.md
+     "Don't: Hardcode color" — exception: indicators on accent bg). */
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
 }
 
 .audit-modal__count {
