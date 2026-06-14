@@ -35,6 +35,15 @@ impl Serialize for WorktreeState {
 pub enum ProviderProtocol {
  Anthropic,
  Openai,
+ /// P1 RULE-A-006 (2026-06-14): test-only protocol. The
+ /// `MockProvider` (in `llm/provider/mock.rs`, `#[cfg(test)]`
+ /// only) reports this so the agent loop can dispatch through
+ /// the catalog in integration tests without needing a real
+ /// network round-trip. `#[cfg(test)]` ensures the variant is
+ /// invisible to production serde — the wire format is
+ /// unaffected.
+ #[cfg(test)]
+ Mock,
 }
 
 #[allow(dead_code)]
@@ -43,6 +52,8 @@ impl ProviderProtocol {
  match self {
  Self::Anthropic => "anthropic",
  Self::Openai => "openai",
+ #[cfg(test)]
+ Self::Mock => "mock",
  }
  }
 

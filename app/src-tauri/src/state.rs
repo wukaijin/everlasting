@@ -26,6 +26,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::permissions::PermissionAskPayload;
 use crate::agent::permissions::PermissionStore;
 use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
 use crate::memory::MemoryCache;
@@ -390,4 +391,83 @@ pub struct ToolResultPayload {
     pub tool_use_id: String,
     pub content: String,
     pub is_error: bool,
+}
+
+// ---------------------------------------------------------------------------
+// ChatEventSink — abstracted emit surface (P1 RULE-A-006)
+//
+// The agent loop's only Tauri-side dependency is `AppHandle::emit`
+// for three event channels: `chat-event` / `tool:call` / `tool:result`.
+// The trait abstracts that surface so the agent loop can run
+// against a `MockEmitter` in integration tests, and the production
+// `AppHandle` simply implements the same trait (via a one-line
+// wrapper struct, see `AppHandleSink`).
+//
+// The trait is split into 3 non-generic methods (one per channel)
+// so it remains dyn-compatible — Rust requires that trait objects
+// (`dyn Trait`) do not have generic methods. Each method takes
+// the typed payload directly; serde dispatch happens at the
+// `AppHandle::emit` boundary in production, or is recorded
+// verbatim in `MockEmitter` for tests.
+// ---------------------------------------------------------------------------
+
+/// The three Tauri channels the agent loop emits on. A test
+/// implementation (e.g. `MockEmitter`) records events into a Vec
+/// for assertion; the production `AppHandleSink` forwards to
+/// `app.emit(name, payload)` for live IPC dispatch.
+///
+/// `emit_chat_event` / `emit_tool_call` / `emit_tool_result` are
+/// currently dispatched only through the test-gated
+/// `chat_loop::run_chat_loop` (P1 RULE-A-006); the production
+/// `chat.rs` still emits via `app.emit(name, payload)` directly
+/// and uses this trait only for `emit_permission_ask` (which
+/// `permissions::check` Tier 3 calls through `&sink`). The three
+/// "test-only" methods are therefore dead code in the non-test
+/// build — `#[allow(dead_code)]` keeps them available without a
+/// `#[cfg(test)]` re-gate at every call site. The architecture
+/// decision (whether `chat.rs` should switch to dispatching all
+/// four emits through this trait) is pending test results.
+#[allow(dead_code)]
+pub trait ChatEventSink: Send + Sync + 'static {
+    /// Emit a `ChatEvent` on the `chat-event` channel.
+    fn emit_chat_event(&self, payload: &ChatEventPayload);
+    /// Emit a `ToolCallPayload` on the `tool:call` channel.
+    fn emit_tool_call(&self, payload: &ToolCallPayload);
+    /// Emit a `ToolResultPayload` on the `tool:result` channel.
+    fn emit_tool_result(&self, payload: &ToolResultPayload);
+    /// Emit a `PermissionAskPayload` on the `permission:ask`
+    /// channel. The ⑨ 关 Tier 3 path uses this to surface the
+    /// permission modal prompt to the frontend; the test
+    /// `MockEmitter` records it so the test can assert
+    /// "Tier 4 was triggered" without a live UI.
+    fn emit_permission_ask(&self, payload: PermissionAskPayload);
+}
+
+/// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
+/// scope; we forward each method to `app.emit(name, payload)`.
+pub struct AppHandleSink {
+    pub app: AppHandle,
+}
+
+impl ChatEventSink for AppHandleSink {
+    fn emit_chat_event(&self, payload: &ChatEventPayload) {
+        if let Err(e) = self.app.emit("chat-event", payload.clone()) {
+            tracing::warn!(error = %e, "AppHandleSink: chat-event emit failed");
+        }
+    }
+    fn emit_tool_call(&self, payload: &ToolCallPayload) {
+        if let Err(e) = self.app.emit("tool:call", payload.clone()) {
+            tracing::warn!(error = %e, "AppHandleSink: tool:call emit failed");
+        }
+    }
+    fn emit_tool_result(&self, payload: &ToolResultPayload) {
+        if let Err(e) = self.app.emit("tool:result", payload.clone()) {
+            tracing::warn!(error = %e, "AppHandleSink: tool:result emit failed");
+        }
+    }
+    fn emit_permission_ask(&self, payload: PermissionAskPayload) {
+        if let Err(e) = self.app.emit("permission:ask", payload) {
+            tracing::warn!(error = %e, "AppHandleSink: permission:ask emit failed");
+        }
+    }
 }

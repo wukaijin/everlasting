@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::db;
 use crate::llm::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Role};
-use crate::state::{ChatEventPayload, ToolResultPayload};
+use crate::state::{ChatEventPayload, ChatEventSink, ToolResultPayload};
 
 // ---------------------------------------------------------------------------
 // Tool result envelope (REQ-16)
@@ -219,3 +219,40 @@ pub async fn cancel_inflight_for_session(
 /// but it would be inlined as part of markdown; the bracketed text
 /// survives DOMPurify unchanged and is locale-friendly.
 pub const CANCELLED_MARKER: &str = "[已停止]";
+
+// ---------------------------------------------------------------------------
+// Sink-based emit helpers (P1 RULE-A-006)
+//
+// The agent loop's `chat` Tauri command emits on three Tauri
+// channels: `chat-event` / `tool:call` / `tool:result`. The
+// `ChatEventSink` trait abstracts the underlying emitter so the
+// loop can run against a `MockEmitter` in tests. These helpers
+// take a `&dyn ChatEventSink` and are the per-call sites'
+// replacement for the legacy `AppHandle` variants
+// ([`emit_chat_event`] and [`emit_tool_result`]) — which the
+// Tauri command still uses for paths that pre-date the sink
+// abstraction (the pre-flight error emits at the top of `chat`).
+// ---------------------------------------------------------------------------
+
+/// Emit a `ChatEvent` on the `chat-event` channel via the
+/// supplied `ChatEventSink`. Mirrors [`emit_chat_event`] but
+/// dispatches through the trait so the agent loop body is
+/// testable without a Tauri `AppHandle`.
+///
+/// Currently called only from `chat_loop::run_chat_loop` (which
+/// is itself test-gated per P1 RULE-A-006). The non-test build
+/// treats it as dead code; the `#[allow(dead_code)]` keeps it
+/// available without forcing a `#[cfg(test)]` re-gate at every
+/// call site.
+#[allow(dead_code)]
+pub fn emit_chat_event_via_sink(
+    sink: &Arc<dyn ChatEventSink>,
+    rid: &str,
+    event: &ChatEvent,
+) {
+    let payload = ChatEventPayload {
+        request_id: rid.to_string(),
+        event: event.clone(),
+    };
+    sink.emit_chat_event(&payload);
+}

@@ -49,7 +49,9 @@ use crate::llm::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Role,
 };
 use crate::memory::loader::{build_instructions_blocks, load_for_session};
-use crate::state::{AppState, CancellationGuard, ChatEventPayload, ToolCallPayload};
+use crate::state::{
+    AppState, CancellationGuard, ChatEventPayload, ToolCallPayload,
+};
 use crate::tools::ToolContext;
 
 // ---------------------------------------------------------------------------
@@ -185,6 +187,20 @@ pub async fn chat(
         map.insert(session_id.clone(), rid.clone());
     }
 
+    // P1 RULE-A-006 (2026-06-14): wrap the AppHandle in a
+    // ChatEventSink so the agent loop body can dispatch through
+    // the trait. The `permissions::check` Tier 3 `permission:ask`
+    // emit is the one place inside the agent loop body that
+    // needs this trait (the rest of the body still uses
+    // `app_handle.emit` directly — see the original closure for
+    // the chat-event / tool:call / tool:result emits). The
+    // testable variant in `chat_loop.rs` uses the same trait
+    // for ALL emits, so tests get a single MockEmitter sink.
+    let sink: Arc<dyn crate::state::ChatEventSink> = Arc::new(crate::state::AppHandleSink {
+        app: app.clone(),
+    });
+    let sink_for_spawn = sink.clone();
+
     tauri::async_runtime::spawn(async move {
         // The token's clone moves into this task; cancellation in
         // `cancel_chat` is observed via the original we just put
@@ -200,6 +216,7 @@ pub async fn chat(
             session_id: session_id.clone(),
         };
         let mut messages = messages;
+        let _ = &sink_for_spawn;
         // Start seq from the highest existing seq in this session + 1.
         let loaded_session = match crate::db::load_session(&db, &session_id).await {
             Ok(Some(loaded)) => loaded,
@@ -1021,7 +1038,7 @@ pub async fn chat(
                     &permission_ctx,
                     &permission_asks,
                     &db,
-                    &app_handle,
+                    &sink,
                     name,
                     input,
                     &token,

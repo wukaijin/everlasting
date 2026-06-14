@@ -58,10 +58,10 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::db::Mode;
+use crate::state::ChatEventSink;
 
 // ---------------------------------------------------------------------------
 // Risk enum (serialized to IPC in `permission:ask` payload)
@@ -414,7 +414,7 @@ pub async fn check(
  ctx: &PermissionContext,
  store: &PermissionStore,
  db: &SqlitePool,
- app: &AppHandle,
+ sink: &Arc<dyn ChatEventSink>,
  tool_name: &str,
  tool_input: &serde_json::Value,
  token: &tokio_util::sync::CancellationToken,
@@ -441,7 +441,7 @@ pub async fn check(
  reason = %reason,
  "permission::check: Tier 2 deny"
  );
- let _ = record_audit(app, db, ctx, kind, tool_name, tool_input, Some(&reason)).await;
+ let _ = record_audit( db, ctx, kind, tool_name, tool_input, Some(&reason)).await;
  return Decision::Deny { reason, critical };
  }
 
@@ -469,9 +469,8 @@ pub async fn check(
  ctx.mode.as_str()
  );
  let _ = record_audit(
- app,
- db,
- ctx,
+   db,
+   ctx,
  AuditKind::ToolDenied,
  tool_name,
  tool_input,
@@ -500,7 +499,7 @@ pub async fn check(
  );
  // Tier 6 audit for the Allow path (Tier 2 / Tier 3 deny paths
  // already wrote their own audit rows above).
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
 
@@ -533,7 +532,7 @@ pub async fn check(
  path = %abs_path.display(),
  "permission::check: Tier 4 path grant hit"
  );
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  if inside {
@@ -545,13 +544,13 @@ pub async fn check(
  path = %abs_path.display(),
  "permission::check: Tier 4 path inside root, silent Allow"
  );
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  // Outside the project, no grant → modal.
  let path_owned = abs_path.to_string_lossy().to_string();
  return ask_path(
- app, db, store, ctx,
+    sink, db, store, ctx,
  tool_name, tool_input,
  &path_owned, Some(&path_owned), token,
  ).await;
@@ -563,7 +562,7 @@ pub async fn check(
  // the permission layer, default to Allow
  // (the tool layer's schema validation is the
  // real gate).
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  }
@@ -575,7 +574,7 @@ pub async fn check(
  // rows for shell but Tier 4 never queried them — a user's
  // AllowAlways on a shell command now sticks across turns.
  if let Ok(true) = check_prefix_grant(db, &ctx.session_id, &shell_trust::first_token_for_allow_always(cmd)).await {
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  // (b) Three-tier classification + per-Mode mapping. shell is
@@ -587,17 +586,17 @@ pub async fn check(
  match shell_trust::classify_prefix(cmd) {
  shell_trust::ShellTrust::ReadOnly => {
  // Pure read — allow silently in every mode (Plan included).
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  shell_trust::ShellTrust::SideEffect => {
  if ctx.mode == Mode::Plan {
  // Plan is read-only; surface the side effect to the
  // user instead of silently allowing it.
- return ask_path(app, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
+ return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
  }
  // Edit: silent Allow (old whitelist behaviour).
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  shell_trust::ShellTrust::Ask => {
@@ -608,7 +607,7 @@ pub async fn check(
  // None` keeps the `path` field OFF the wire so the
  // frontend's `v-if="hasPath"` does not render a
  // misleading scope row for a shell ask.
- return ask_path(app, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
+ return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
  }
  }
  }
@@ -617,11 +616,11 @@ pub async fn check(
  // session_tool_permissions match_kind='tool' for
  // `web_fetch`. If hit, Allow; else modal.
  if let Ok(true) = check_tool_grant(db, &ctx.session_id, "web_fetch").await {
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  return ask_path(
- app, db, store, ctx,
+    sink, db, store, ctx,
  tool_name, tool_input,
  tool_input.get("url").and_then(|v| v.as_str()).unwrap_or(""),
  // Web fetch is always external — the modal renders
@@ -638,7 +637,7 @@ pub async fn check(
  // Unknown / future tool — default Allow (Tier 5).
  // The tool layer's own boundary checks (e.g.
  // ReadGuard for edit_file) are the real gate.
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  return Decision::Allow;
  }
  }
@@ -901,7 +900,7 @@ async fn check_prefix_grant(
 ///   a misleading "仓库外" badge for a shell command or URL
 ///   is a UX bug.
 async fn ask_path(
-    app: &AppHandle,
+    sink: &Arc<dyn ChatEventSink>,
     db: &SqlitePool,
     store: &PermissionStore,
     ctx: &PermissionContext,
@@ -928,13 +927,10 @@ async fn ask_path(
  // asks.
  path: path_for_modal.map(|p| p.to_string()),
  };
- if let Err(e) = app.emit("permission:ask", &payload) {
- tracing::warn!(error = %e, "permission::check: failed to emit permission:ask");
- }
+ let _ = sink.emit_permission_ask(payload);
  let _ = record_audit(
- app,
- db,
- ctx,
+   db,
+   ctx,
  AuditKind::ToolPermissionAsk,
  tool_name,
  tool_input,
@@ -946,7 +942,7 @@ async fn ask_path(
  biased;
  _ = token.cancelled() => {
  let _ = resolve_ask(store, &rid, PermissionResponse::Deny).await;
- let _ = record_audit(app, db, ctx, AuditKind::RequestCancelled, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::RequestCancelled, tool_name, tool_input, None).await;
  return Decision::Deny {
  reason: "request cancelled by user".to_string(),
  critical: false,
@@ -961,7 +957,7 @@ async fn ask_path(
  tool = %tool_name,
  "permission::check: Tier 4 timed out after 120s"
  );
- let _ = record_audit(app, db, ctx, AuditKind::PermissionTimeout, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::PermissionTimeout, tool_name, tool_input, None).await;
  return Decision::Deny {
  reason: "permission timed out after 120s, treat as denied".to_string(),
  critical: false,
@@ -971,7 +967,7 @@ async fn ask_path(
  };
  match resp {
  Ok(PermissionResponse::AllowOnce) => {
- let _ = record_audit(app, db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
  Decision::Allow
  }
  Ok(PermissionResponse::AllowAlways) => {
@@ -995,18 +991,18 @@ async fn ask_path(
  "permission::check: grant_tool_permission failed (non-fatal)"
  );
  }
- let _ = record_audit(app, db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
  Decision::Allow
  }
  Ok(PermissionResponse::Deny) => {
- let _ = record_audit(app, db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
  Decision::Deny {
  reason: "user denied".to_string(),
  critical: false,
  }
  }
  Err(_) => {
- let _ = record_audit(app, db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
+ let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
  Decision::Deny {
  reason: "permission ask cancelled before response".to_string(),
  critical: false,
@@ -1111,7 +1107,6 @@ pub(crate) fn match_value_for_allow_always(
 /// operation). Tier 3 user-deny / timeout / cancel paths
 /// are also `false` (the user opted out, nothing catastrophic).
 async fn record_audit(
- _app: &AppHandle,
  db: &SqlitePool,
  ctx: &PermissionContext,
  kind: AuditKind,

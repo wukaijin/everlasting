@@ -358,3 +358,6 @@ mod tests {
 pub mod anthropic;
 pub mod openai;
 pub mod wire;
+
+#[cfg(test)]
+pub mod mock;

@@ -29,6 +29,7 @@
 //!   inlined in `lib.rs`.
 
 pub mod chat;
+pub mod chat_loop;
 pub mod context;
 pub mod helpers;
 pub mod permissions;

@@ -625,3 +625,804 @@ fn synthetic_tool_result_message_serializes_to_anthropic_wire_shape() {
 // the rationale. The per-turn `db::add_token_usage` call in
 // `agent::chat::chat` is unchanged; the cumulative tracker
 // + 3 exit-path emits reverted to `usage: None`.)
+
+// ===========================================================================
+// P1 RULE-A-006 (2026-06-14): Agent Loop integration tests
+// ===========================================================================
+//
+// The single-function unit tests above exercise individual
+// building blocks (cancel token mechanics, system prompt shape,
+// synthetic tool_result). They DO NOT cover turn-orchestration
+// invariants (cancel mid-turn, MAX_TURNS fallback, C3
+// compaction under load, error path emit, tool_use → tool_result
+// loop) — those need the full agent loop body running against
+// scripted events.
+//
+// The integration tests below run the full `run_chat_loop`
+// (see `agent::chat_loop`) with a `MockProvider` (scripted
+// `Provider` impl) and a `MockEmitter` (records events into a
+// Vec for assertion). The 9 tests cover the P1 debt items
+// listed in `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md`
+// §2.1 + §3.5.
+//
+// Design notes:
+// - The test AppState is the minimum needed: a DB pool (in-
+//   memory SQLite with migrations), a MemoryCache (empty),
+//   the cancellation + session_active maps, a read guard, and
+//   the permission store. The catalog is bypassed — tests
+//   pass a pre-built `Arc<MockProvider>` directly to
+//   `run_chat_loop`.
+// - Each test creates a fresh project + session in the test
+//   DB so cross-test state is impossible.
+// - The default model's `context_window` is set large enough
+//   (200_000) that C3 never fires unintentionally; the C3
+//   tests pass a smaller window to force compaction.
+
+use std::sync::atomic::Ordering;
+use std::sync::Mutex as StdMutex;
+
+use futures_util::StreamExt;
+use sqlx::SqlitePool;
+use tokio::sync::Mutex as AsyncMutex;
+
+use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::permissions::new_permission_store;
+use crate::llm::provider::mock::{MockProvider, MockResponse};
+use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage};
+use crate::llm::Provider;
+use crate::memory::MemoryCache;
+use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
+use crate::tools::read_guard::ReadGuard;
+
+/// Test ChatEventSink that records every emitted event into
+/// a `Vec` for assertion. Mirrors the production
+/// `AppHandleSink` (which forwards to `tauri::AppHandle::emit`)
+/// but is in-process and inspectable.
+///
+/// Uses `std::sync::Mutex` (not `tokio::sync::Mutex`) for the
+/// internal storage: the sink is only ever called from the agent
+/// loop's emit sites, which never hold the lock across an `.await`.
+/// `std::sync::Mutex` lets the test code call `.lock().unwrap()`
+/// synchronously without pulling in `.await` plumbing.
+#[derive(Default)]
+struct MockEmitter {
+    chat_events: Arc<StdMutex<Vec<ChatEventPayload>>>,
+    tool_calls: Arc<StdMutex<Vec<ToolCallPayload>>>,
+    tool_results: Arc<StdMutex<Vec<ToolResultPayload>>>,
+    permission_asks: Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
+}
+
+impl MockEmitter {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Snapshot all chat-event payloads recorded so far.
+    fn chat_events(&self) -> Vec<ChatEventPayload> {
+        self.chat_events.lock().unwrap().clone()
+    }
+
+    /// Count of `Done` events with `stop_reason = Some("cancelled")`
+    /// — the contract the cancel path uses to signal end-of-stream.
+    fn cancel_done_count(&self) -> usize {
+        self.chat_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| {
+                matches!(&p.event, ChatEvent::Done { stop_reason, .. }
+                    if stop_reason.as_deref() == Some("cancelled"))
+            })
+            .count()
+    }
+
+    /// Count of `Done` events with `stop_reason = Some("max_turns")`.
+    fn max_turns_done_count(&self) -> usize {
+        self.chat_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| {
+                matches!(&p.event, ChatEvent::Done { stop_reason, .. }
+                    if stop_reason.as_deref() == Some("max_turns"))
+            })
+            .count()
+    }
+
+    /// Count of `Error` chat-events.
+    fn error_event_count(&self) -> usize {
+        self.chat_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| matches!(&p.event, ChatEvent::Error { .. }))
+            .count()
+    }
+
+    /// Number of `tool:call` events recorded.
+    fn tool_call_count(&self) -> usize {
+        self.tool_calls.lock().unwrap().len()
+    }
+
+    /// Number of `tool:result` events recorded.
+    fn tool_result_count(&self) -> usize {
+        self.tool_results.lock().unwrap().len()
+    }
+}
+
+impl ChatEventSink for MockEmitter {
+    fn emit_chat_event(&self, payload: &ChatEventPayload) {
+        self.chat_events.lock().unwrap().push(payload.clone());
+    }
+    fn emit_tool_call(&self, payload: &ToolCallPayload) {
+        self.tool_calls.lock().unwrap().push(payload.clone());
+    }
+    fn emit_tool_result(&self, payload: &ToolResultPayload) {
+        self.tool_results.lock().unwrap().push(payload.clone());
+    }
+    fn emit_permission_ask(
+        &self,
+        payload: crate::agent::permissions::PermissionAskPayload,
+    ) {
+        self.permission_asks.lock().unwrap().push(payload);
+    }
+}
+
+async fn test_pool() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    db::migrations::run_migrations(&pool).await.unwrap();
+    pool
+}
+
+/// Build a fresh AppState-equivalent for a test: in-memory DB +
+/// empty cache + cancel maps. The test passes a pre-built
+/// `Arc<MockProvider>` to `run_chat_loop` directly, bypassing
+/// the catalog.
+///
+/// `project_id` / `project_path` are kept on the harness for
+/// readability (callers can see what session they're talking to
+/// via the named fields) even though no test reads them back —
+/// the values are also stored in the DB row the harness inserts.
+///
+/// **Lifetime invariant**: the harness owns the `tempfile::TempDir`
+/// guard (`_tempdir`) for the entire test. Without it, `make_harness`
+/// returning would drop the guard and delete the on-disk directory
+/// before `run_chat_loop`'s pre-flight `assert_within_root` could
+/// `canonicalize()` it — that path (chat_loop.rs:173) returns Err
+/// on a missing directory, the agent loop short-circuits with an
+/// Error emit, `provider.send` is never called, and `call_count`
+/// stays 0. The 6 FAILED + 1 hung test symptom in the first run
+/// was exactly this regression. The leading underscore on
+/// `_tempdir` is intentional — the value is never read, only
+/// kept alive by being a struct field.
+#[allow(dead_code)]
+struct TestHarness {
+    db: SqlitePool,
+    project_id: String,
+    project_path: std::path::PathBuf,
+    session_id: String,
+    cancellations: Arc<AsyncMutex<HashMap<String, CancellationToken>>>,
+    session_active_request: Arc<AsyncMutex<HashMap<String, String>>>,
+    read_guard: ReadGuard,
+    memory_cache: Arc<MemoryCache>,
+    permission_asks: crate::agent::permissions::PermissionStore,
+    /// TempDir guard — kept alive for the duration of the test so
+    /// the project_path directory remains on disk while the agent
+    /// loop's pre-flight canonicalizes it. See struct docstring.
+    _tempdir: tempfile::TempDir,
+}
+
+async fn make_harness() -> TestHarness {
+    let pool = test_pool().await;
+    // Create a project in the default "Legacy" bucket (the
+    // migration's seed). We use a fresh path in the tempdir
+    // so the worktree assertion (assert_within_root) succeeds
+    // even though the path doesn't exist on disk for the
+    // text-only / tool-execution-skipping tests.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project_path = dir.path().to_path_buf();
+    db::create_project(
+        &pool,
+        "test-project",
+        project_path.to_str().unwrap(),
+        false,
+        None,
+    )
+    .await
+    .expect("create_project");
+    // The project id is generated server-side; re-fetch.
+    let projects = db::list_projects(&pool, false).await.expect("list_projects");
+    let project_id = projects
+        .iter()
+        .find(|p| p.path == project_path.to_string_lossy().to_string())
+        .map(|p| p.id.clone())
+        .expect("project should be present after create");
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    db::create_session(
+        &pool,
+        &session_id,
+        &project_id,
+        project_path.to_str().unwrap(),
+        "mock-model",
+        None,
+    )
+    .await
+    .expect("create_session");
+
+    TestHarness {
+        db: pool,
+        project_id,
+        project_path,
+        session_id,
+        cancellations: Arc::new(AsyncMutex::new(HashMap::new())),
+        session_active_request: Arc::new(AsyncMutex::new(HashMap::new())),
+        read_guard: ReadGuard::new(),
+        memory_cache: MemoryCache::arc(),
+        permission_asks: new_permission_store(),
+        // Move the TempDir guard INTO the harness so it lives as
+        // long as the harness (i.e. the whole test). Without this
+        // move, `dir` drops at the end of `make_harness` and the
+        // temp directory is deleted before `run_chat_loop` can
+        // canonicalize it.
+        _tempdir: dir,
+    }
+}
+
+fn test_messages() -> Vec<ChatMessage> {
+    vec![ChatMessage {
+        role: Role::User,
+        content: MessageContent::Text("hello".to_string()),
+    }]
+}
+
+// ---------------------------------------------------------------------------
+// 1) Basic text-only response
+// ---------------------------------------------------------------------------
+
+/// The simplest turn-orchestration invariant: a single-turn
+/// text-only response results in exactly 1 `send` call and
+/// one terminal `Done { stop_reason: Some("end_turn") }`
+/// event. Covers the regression where pre-fix the agent loop
+/// called `send` twice for a single-turn response (the
+/// "thinking_ms only on last turn" bug class — same family
+/// of off-by-one).
+#[tokio::test]
+async fn agent_loop_basic_text_only_completes() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "hi".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-basic".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(mock.call_count(), 1, "expected exactly 1 send call");
+    let done = emitter
+        .chat_events()
+        .into_iter()
+        .filter_map(|p| match p.event {
+            ChatEvent::Done { stop_reason, .. } => stop_reason,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // `filter_map` flattens one layer of `Option`, so `done` is
+    // `Vec<String>` — the extracted `stop_reason` values that were
+    // `Some(...)`. The `Some("end_turn")` case means we see
+    // exactly one entry here.
+    assert_eq!(done, vec!["end_turn".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// 2) Tool use → tool result loop
+// ---------------------------------------------------------------------------
+
+/// Turn 1: model emits `tool_use` (the agent loop's `stop_reason`
+/// becomes "tool_use"). The agent loop MUST execute the tool
+/// (default-allow for read tools) and call `send` a SECOND time.
+/// Turn 2: model emits a final text response. The loop MUST
+/// terminate with `Done { stop_reason: Some("end_turn") }`.
+///
+/// This is the "tool_use triggers another turn" invariant — if
+/// the agent loop's tool execution path is broken (e.g. the
+/// `should_continue` branch fails to re-enter the outer loop),
+/// this test fails with `mock.call_count() == 1`.
+#[tokio::test]
+async fn agent_loop_tool_use_triggers_tool_result_turn() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: tool_use. The MockProvider script
+        // auto-exhausts on this call index.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_1".into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: text response (after the agent loop
+        // built the tool_result message).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-tool".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(
+        mock.call_count(),
+        2,
+        "tool_use must trigger exactly one more turn (2 sends total)"
+    );
+    assert_eq!(emitter.tool_call_count(), 1);
+    // list_dir is a read-only tool that goes through Tier 5
+    // default-allow; the agent loop emits one `tool:result`
+    // (success path, is_error=false) before re-entering the
+    // outer loop.
+    assert_eq!(emitter.tool_result_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 3) Cancel in turn 2 kills the loop
+// ---------------------------------------------------------------------------
+
+/// Spawn `run_chat_loop` and cancel its token after turn 1 has
+/// cleanly completed and turn 2's `send` has been observed. The
+/// agent loop MUST:
+/// - emit `Done { stop_reason: Some("cancelled") }` (exactly
+///   one, not zero, not two)
+/// - call `send` exactly twice (turn 1 tool_use + the cancelled
+///   turn 2)
+/// - NOT emit `tool:result` for a turn 2 tool (turn 2 is a
+///   HangingThenCancel so no tool_use arrives)
+///
+/// The semantics here match PRD R3 "2 turn cancel":
+/// - Turn 1 emits `tool_use` (`list_dir` with `path: "."`). The
+///   agent loop runs the read tool through Tier 5 default-allow,
+///   persists the tool_result, and re-enters the outer loop for
+///   turn 2. Critically, `run_chat_loop` does NOT exit on
+///   `tool_use` (only `end_turn` / non-`tool_use` exits) — see
+///   `chat_loop.rs`'s `should_continue` branch.
+/// - Turn 2 is `HangingThenCancel`: the stream is forever
+///   pending. The cancel side-channel polls `call_count` and
+///   fires the cancel token once `call_count >= 2` (turn 2's
+///   `send` has been called). The agent loop's `select!` cancel
+///   arm (`biased;` first) wins over the pending stream and
+///   emits exactly one `Done("cancelled")`.
+///
+/// We gate the cancel on `call_count >= 2` (not 1) so that turn
+/// 1 completes normally — earlier versions gated on 1, which
+/// races with the tool-execution path and can flip the
+/// `cancelled` flag mid-tool.
+#[tokio::test]
+async fn agent_loop_cancel_in_turn_2_kills_loop() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: tool_use. `list_dir` is a read tool → Tier 5
+        // default-allow (no permission ask), the agent loop
+        // executes it, persists the tool_result, and re-enters
+        // the outer loop for turn 2.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_1".into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: this script entry is consumed (call_count → 2)
+        // but the agent loop is cancelled mid-stream (the
+        // `HangingThenCancel` arm keeps the stream pending
+        // until the cancel arm wins the `select!`).
+        MockResponse::HangingThenCancel,
+    ]));
+    let call_handle = mock.call_count_handle();
+    let cancel_token = CancellationToken::new();
+    let cancel_for_task = cancel_token.clone();
+    let cancel_handle = tokio::spawn(async move {
+        // Poll until call_count >= 2 (turn 2's send has been
+        // observed by the agent loop), then cancel. Gating on 2
+        // lets turn 1's tool_use + tool execution + tool_result
+        // persist complete cleanly before the cancel fires —
+        // the cancel races only against turn 2's pending stream.
+        loop {
+            if call_handle.load(Ordering::SeqCst) >= 2 {
+                cancel_for_task.cancel();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    });
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-cancel".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        cancel_token,
+    )
+    .await;
+    cancel_handle.await.unwrap();
+
+    assert_eq!(
+        mock.call_count(),
+        2,
+        "agent loop should call send twice (turn 1 tool_use + the cancelled turn 2)"
+    );
+    assert_eq!(
+        emitter.cancel_done_count(),
+        1,
+        "exactly one Done(cancelled) event expected"
+    );
+    assert_eq!(emitter.max_turns_done_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 4) MAX_TURNS fallback
+// ---------------------------------------------------------------------------
+
+/// Script the mock to always emit `tool_use` (no end_turn),
+/// forcing the agent loop to hit MAX_TURNS. The agent loop
+/// MUST emit `Done { stop_reason: Some("max_turns") }` and
+/// must call `send` exactly MAX_TURNS times.
+///
+/// This covers the "infinite tool loop" pathological case
+/// (C3 + MAX_TURNS safety net, see context.rs for the C3
+/// half; this test is the MAX_TURNS half).
+#[tokio::test]
+async fn agent_loop_max_turns_emits_done_marker() {
+    use crate::agent::MAX_TURNS;
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+
+    // Build a script with MAX_TURNS tool_use responses.
+    // The agent loop will keep emitting tool_use, executing
+    // the tool (Tier 5 default-allow for list_dir), and
+    // calling send again. After MAX_TURNS iterations, the
+    // outer loop bails.
+    let mut script = Vec::with_capacity(MAX_TURNS);
+    for i in 0..MAX_TURNS {
+        script.push(MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: format!("toolu_max_{}", i),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]));
+    }
+    let mock = Arc::new(MockProvider::new(script));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-maxturns".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(
+        mock.call_count(),
+        MAX_TURNS,
+        "agent loop should call send MAX_TURNS times"
+    );
+    assert_eq!(
+        emitter.max_turns_done_count(),
+        1,
+        "exactly one Done(max_turns) event expected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5) MockProvider script exhaustion
+// ---------------------------------------------------------------------------
+
+/// When the agent loop asks for more turns than the test
+/// scripted, MockProvider surfaces a typed
+/// `LlmError::InvalidRequest { "exhausted" }` and the agent
+/// loop bails with `had_error = true`. The test asserts:
+/// - the typed error message made it to the agent loop
+///   (proves the exhaustion contract is observable)
+/// - exactly one `send` was attempted (the second was never
+///   reached because the first hit the error path)
+///
+/// This guards against silent script-overflow regressions.
+#[tokio::test]
+async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    // Script has 0 entries — the very first send hits
+    // exhaustion. The agent loop's `if had_error` branch
+    // returns before persisting any assistant turn.
+    let mock = Arc::new(MockProvider::new(vec![]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-exhaust".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    // The agent loop's error path emits one `ChatEvent::Error`
+    // and returns; we expect at least one error event in the
+    // recorded events.
+    assert_eq!(emitter.error_event_count(), 1, "one error event");
+    assert!(emitter
+        .chat_events()
+        .iter()
+        .any(|p| matches!(&p.event,
+            ChatEvent::Error { message, .. } if message.contains("exhausted"))));
+    assert_eq!(mock.call_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 6) C3 compaction preserves the agent loop (no panic / no error)
+// ---------------------------------------------------------------------------
+
+/// Force C3 compaction by setting a tiny context_window (10
+/// tokens). The agent loop MUST:
+/// - NOT panic (C3 returns whatever it can trim; with an
+///   empty messages vec after compaction, the turn body
+///   short-circuits and the model just sees the system
+///   prompt + nothing)
+/// - emit `Done` (some stop_reason) — the loop must
+///   terminate, not hang
+///
+/// This is the safety-net test for C3 (the bigger
+/// pair-atomicity invariant — RULE-A-001 — is covered by
+/// the upstream `agent::context::tests`; this integration
+/// test just asserts "the agent loop survives a C3 run").
+#[tokio::test]
+async fn agent_loop_c3_compaction_does_not_panic() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "after-c3".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    // context_window = 10 forces aggressive trimming. The
+    // estimator (tiktoken cl100k_base) on a tiny
+    // `["hello"]` message is already > 0 tokens; the
+    // agent loop's pre-compact check (80% of window)
+    // triggers and trims. With a 10-token window, the
+    // agent loop may end up with 0 middle messages to
+    // drop; the B5 synthetic user/assistant head pair
+    // + the current user message are protected, so the
+    // loop survives.
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        10,
+        "rid-c3".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    // The loop should have completed (one Done event) and
+    // not emitted any error events.
+    let events = emitter.chat_events();
+    assert!(
+        events
+            .iter()
+            .any(|p| matches!(&p.event, ChatEvent::Done { .. })),
+        "agent loop must terminate with a Done event after C3 compaction"
+    );
+    assert_eq!(
+        emitter.error_event_count(),
+        0,
+        "no error events expected (C3 is best-effort, not fatal)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7) Provider protocol is `Mock`
+// ---------------------------------------------------------------------------
+
+/// The `MockProvider::protocol()` returns
+/// `ProviderProtocol::Mock`. This is the catalog dispatch
+/// contract — the chat command's pre-flight could reject
+/// unknown protocols, so we test that the protocol wire
+/// format is well-formed end-to-end.
+#[test]
+fn mock_provider_reports_mock_protocol() {
+    let mock = MockProvider::new(vec![]);
+    assert_eq!(mock.protocol(), db::ProviderProtocol::Mock);
+    let caps = mock.capabilities();
+    assert!(caps.supports_system_prompt);
+    assert!(caps.supports_tools);
+    assert!(caps.supports_streaming);
+}
+
+// ---------------------------------------------------------------------------
+// 8) MockProvider call count tracking
+// ---------------------------------------------------------------------------
+
+/// `call_count()` is the primary assertion surface for "did
+/// the agent loop dispatch the expected number of turns?".
+/// This unit test guards the counter itself (the agent-loop
+/// integration tests above rely on it being accurate).
+#[tokio::test]
+async fn mock_provider_call_count_tracks_send_calls() {
+    let mock = Arc::new(MockProvider::new(vec![
+        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+        })]),
+        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+        })]),
+        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+        })]),
+    ]));
+    assert_eq!(mock.call_count(), 0);
+    let _ = mock
+        .send(None, vec![], vec![])
+        .collect::<Vec<_>>()
+        .await
+        .len();
+    assert_eq!(mock.call_count(), 1);
+    let _ = mock.send(None, vec![], vec![]).collect::<Vec<_>>().await.len();
+    assert_eq!(mock.call_count(), 2);
+    let _ = mock.send(None, vec![], vec![]).collect::<Vec<_>>().await.len();
+    assert_eq!(mock.call_count(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// 9) Error path emits ChatEvent::Error
+// ---------------------------------------------------------------------------
+
+/// The `ErrThenEnd` script entry must surface to the
+/// frontend as a `ChatEvent::Error` event, NOT a silent
+/// loop. This is the canonical error-path contract.
+#[tokio::test]
+async fn agent_loop_error_path_emits_chat_event_error() {
+    use crate::llm::error::LlmError;
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::ErrThenEnd(
+        LlmError::Server {
+            status: 503,
+            message: "service unavailable".into(),
+        },
+    )]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-err".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    let error_events: Vec<_> = emitter
+        .chat_events()
+        .into_iter()
+        .filter_map(|p| match p.event {
+            ChatEvent::Error { message, category } => Some((message, category)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(error_events.len(), 1, "one error event expected");
+    let (msg, _cat) = &error_events[0];
+    assert!(msg.contains("服务") || msg.contains("服务器"));
+    // Server category for HTTP 5xx.
+    assert_eq!(error_events[0].1, crate::llm::LlmErrorCategory::Server);
+}
