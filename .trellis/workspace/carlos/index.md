@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-06-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1512 | Active |
+| `journal-1.md` | ~1546 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-06-15 | fix RULE-E-006 worktree data_dir → Tauri app_data_dir | `d54c878`, `1077a3d` | `main` |
 | 28 | 2026-06-15 | unify chat loop dispatch — RULE-A-006 闭环 | `33d8404`, `4b5008d` | `main` |
 | 27 | 2026-06-15 | PR4 C3 tail pair orphan + 超窗降级 (RULE-A-001/002 closed) | `ef9c88e`, `cf0a91c` | `main` |
 | 26 | 2026-06-14 | P1 Agent Loop 集成测试 + RULE-A-006 partial 闭环 | `e0916ef`, `fdca6dc`, `ce156eb` | `main` |

@@ -1510,3 +1510,37 @@ R3: chat.rs + chat_loop.rs (副本逐行同步) match degradation -> emit Error{
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: fix RULE-E-006 worktree data_dir → Tauri app_data_dir
+
+**Date**: 2026-06-15
+**Task**: fix RULE-E-006 worktree data_dir → Tauri app_data_dir
+**Branch**: `main`
+
+### Summary
+
+P1 bugfix per DEBT §RULE-E-006: 替换 env-based git::data_dir() 为 Tauri app_data_dir()(与 SQLite DB 同根 ~/.local/share/com.wukaijin.everlasting/),消除 /tmp fallback 工作数据丢失风险。AppState 加 pub app_data_dir: PathBuf 字段;attach_worktree 从 state 取;删 git::data_dir() 函数 + re-export + 模块 docstring;worktree_path docstring 措辞同步。6 处改动按 prd.md §4 verbatim 实施,check agent 发现 Grill decision #2 不变式冲突并 auto-fix(app_data_dir 落在 catalog 之后的 data-plane group 内,保留 catalog-after-db)。cargo check 0 warning, cargo test --lib 484/484 pass。DEBT.md §RULE-E-006 closed + Re-evaluation Log 加行 + ROADMAP §1.2 补行 + task.json status completed,债闭环。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d54c878` | (see git log) |
+| `1077a3d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
