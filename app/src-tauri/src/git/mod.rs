@@ -8,7 +8,6 @@
 //!   changes (used by `attach_worktree` and `detach_worktree` to
 //!   refuse the destructive operation when there are uncommitted
 //!   edits).
-//! - [`data_dir`]: XDG-compliant app data dir for worktree storage.
 //! - [`session_worktree_path`]: canonical on-disk path for a
 //!   session worktree.
 //! - [`diff::diff_worktree`]: compute the per-file diff between
@@ -26,6 +25,6 @@ pub mod error;
 pub mod worktree;
 
 pub use worktree::{
-    check_clean, create as create_worktree, data_dir, destroy as destroy_worktree,
+    check_clean, create as create_worktree, destroy as destroy_worktree,
     worktree_path as session_worktree_path,
 };

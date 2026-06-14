@@ -31,32 +31,8 @@ use crate::git::error::GitError;
 /// `session/xxx` as a flat group.
 pub const SESSION_BRANCH_PREFIX: &str = "session/";
 
-/// Compute the platform-appropriate app data dir for our worktrees.
-///
-/// WSL/Linux first (the project's primary dev target per
-/// `docs/HACKING-wsl.md`). Cross-platform will be added when we
-/// ship to Windows / macOS — the right primitive there is
-/// Tauri's `app.path().app_data_dir()` rather than `std::env::var`.
-pub fn data_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("everlasting");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join(".local").join("share").join("everlasting");
-        }
-    }
-    // Last-resort fallback. Should not happen on supported platforms.
-    tracing::warn!(
-        "neither XDG_DATA_HOME nor HOME is set; falling back to /tmp/everlasting"
-    );
-    PathBuf::from("/tmp/everlasting")
-}
-
 /// The on-disk directory where this session's worktree is checked
-/// out. Layout: `<data_dir>/worktrees/<project_uuid>/<session_uuid>`.
+/// out. Layout: `<app_data_dir>/worktrees/<project_uuid>/<session_uuid>`.
 ///
 /// Note: we use the project UUID (not path slug) because project
 /// paths can change via `update_project_path`; the UUID is the

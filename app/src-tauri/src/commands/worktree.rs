@@ -63,7 +63,7 @@ pub async fn attach_worktree(
 
     // Disk first, then DB. If the worktree creation fails we
     // don't touch the DB; the user can retry.
-    let data_dir = git::data_dir();
+    let data_dir = state.app_data_dir.clone();
     let wt_path = git::session_worktree_path(&data_dir, &project.id, &session_id);
     git::create_worktree(project_path, &wt_path, &session_id)
         .map_err(|e| format!("attach_worktree: worktree creation failed: {}", e))?;

@@ -85,6 +85,16 @@ pub struct AppState {
     /// the app. Read-heavy (every chat), write-rare (user saves
     /// config).
     pub catalog: Arc<RwLock<ProviderCatalog>>,
+    /// RULE-E-006: Tauri-resolved app data dir. Same root as the
+    /// SQLite db above; worktree storage lives under
+    /// `<app_data_dir>/worktrees/<project_uuid>/<session_uuid>`.
+    /// Replaces the old env-based `git::data_dir()` whose `/tmp`
+    /// fallback risked data loss on reboot.
+    ///
+    /// Lives in the data-plane group (right after `catalog`) so
+    /// the data-root invariants are colocated, while preserving
+    /// Grill decision #2 (`catalog` immediately after `db`).
+    pub app_data_dir: std::path::PathBuf,
     /// Active chat request cancellation tokens, keyed by `request_id`.
     /// The frontend's Stop button calls `cancel_chat(request_id)`
     /// which looks up the token and calls `.cancel()`. The agent
@@ -229,6 +239,7 @@ impl AppState {
             tools,
             db,
             catalog: Arc::new(RwLock::new(catalog)),
+            app_data_dir,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             session_active_request: Arc::new(Mutex::new(HashMap::new())),
             read_guard: ReadGuard::new(),
