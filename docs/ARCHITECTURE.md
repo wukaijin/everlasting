@@ -661,6 +661,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护 + 优先级算法)
 - **完整 PRD**:[.trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md](./../trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md)
 - **未实施**(MVP 留口子):前端"context compressed at turn N"UI 标记(PR2)+ compressed_out DB 列(C4 覆盖)+ LLM summarization(C3-v2)
+- **BUG 修复(2026-06-14,RULE-A-001 + RULE-A-002)**:① `group_droppable_turns` 的 orphan 分支改 skip(隐式保护 tool_use-bearing assistant),不再 singleton drop 留下孤立 tool_use/tool_result(撞 Anthropic 400);② `CompactResult` 加 `degradation: DegradationKind`,全 droppable 丢完仍超窗时返回 `StillOver { tokens_after, target }`,agent loop(chat.rs + chat_loop.rs 副本同步)emit `ChatEvent::Error { InvalidRequest }` + 早返回,不静默发超窗 prompt 撞 `prompt is too long`。详见 [DEBT.md](./../trellis/reviews/DEBT.md) RULE-A-001/002。
 
 #### 2.5.6 Session 切换的并发态
 

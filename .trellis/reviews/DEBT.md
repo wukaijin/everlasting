@@ -67,7 +67,7 @@
 - **Description**: `group_droppable_turns` tail pair 边界可能产生 orphan tool_result,代码注释自承 "Under heavy pressure this leaves an orphan tool_result";当 assistant(tool_use) 紧邻 protected tail 时被当 singleton drop,而 tail user(tool_result) 保留
 - **Impact**: 极压场景撞 Anthropic 400 "tool_result without matching tool_use",整 chat 崩
 - **Fix**: 把 tail-adjacent assistant(tool_use) 纳入隐式保护,补触发该路径的单测
-- **Status**: open
+- **Status**: **closed (2026-06-14)** — `group_droppable_turns` orphan 分支改 skip(隐式保护 tool_use-bearing assistant,不再 singleton drop),context.rs:433-459;3 新单测 + 1 改名
 - **Owner**: carlos
 - **Related Task**: 待开 `06-14-p0-c3-tail-pair-orphan`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
@@ -80,7 +80,7 @@
 - **Description**: `compact_messages` 全部 middle 丢完仍超 target 时**静默不丢**,greedy drop 循环无"still over after compaction"错误返回
 - **Impact**: 单条超大 tool_result(shell dump/read_file)单独构成 tail 时,超窗仍发给 LLM 撞 `prompt is too long`
 - **Fix**: 全丢完仍超 target 时返回 Result/emit Error,而非静默继续
-- **Status**: open
+- **Status**: **closed (2026-06-14)** — `CompactResult` 加 `degradation: DegradationKind`,全 droppable 丢完仍超窗返回 `StillOver { tokens_after, target }`;chat.rs + chat_loop.rs(副本同步)`match degradation` → emit `ChatEvent::Error { InvalidRequest }` + 早返回,不静默发超窗 prompt
 - **Owner**: carlos
 - **Related Task**: 待开 `06-14-p0-c3-tail-pair-orphan`(同 PR)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
