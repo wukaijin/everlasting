@@ -1356,3 +1356,38 @@ re-grill session 锁定 10 决策(弹窗 path-based + Tier 重排 + 3 match_kind
 **沉淀**:完整 ADR 在 `docs/IMPLEMENTATION.md §4` 2026-06-14(根因 + Decision + 4 Alternatives);A7 出第三档进 ROADMAP §1.2。本条不重复 ADR 细节。
 
 **Next**:git commit 待用户指示(默认不动)。
+
+
+## Session 25: C4 审计日志查询 UI
+
+**Date**: 2026-06-14
+**Task**: C4 审计日志查询 UI
+**Branch**: `main`
+
+### Summary
+
+brainstorm 起 PRD(独立 Modal / header Memory 旁入口 / 本任务补⑩tool_executed落表 / 呈现方案 mockup)。后端 PR1:AuditKind::ToolExecuted 落表 + list_session_audit_events command + execute_tool 扩为含 Option<exit_code> 的 4 元组(shell 填值,他 tool None) + 4 db test;check 抓 AuditEventRow 缺 rename_all=camelCase 的跨层 must-fix 并自修加回归 test。前端 PR2:AuditLogModal + stores/audit.ts + utils/audit.ts(11 类 kind 分发解析三层容错) + ChatPanel header Memory 旁入口(盾牌 icon,绑当前 session,切 session 关 Modal) + critical 3px 红左条 + exit_code 颜色编码(0/killed/非0)。follow-up:表单控件原生改 reka-ui 对齐 Settings(check 抓 v-model:checked 在 2.9.9 不存在 + label 包 button 双触发两个 bug 并自修) + 三处 UI 微调(SelectTrigger min-width 140 / 默认选全部 placeholder 分离 / DialogContent min-height 440)。核实并修正 ARCHITECTURE §2.5.8 ⑩⑬⑮ gap(⑩ 已补,⑬⑮ 仍只 tracing)。cargo test 456 + vue-tsc/pnpm build 全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dba8dea` | (see git log) |
+| `2174a5e` | (see git log) |
+| `4e8efb7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
