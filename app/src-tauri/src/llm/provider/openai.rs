@@ -109,7 +109,7 @@ impl OpenAIConfig {
     /// `/v1/v1/chat/completions` against any base_url that already
     /// included the version — which is every real OpenAI-compatible
     /// provider (the `https://api.openai.com/v1` seed and any
-    /// user-added proxy like `https://hub.wukaijin.com/v1`).
+    /// user-added proxy like `https://hub.example.com/v1`).
     /// The upstream returns 404 "path not found: /v1/v1/chat/completions",
     /// the SSE parser never sees a stream, and `finalizeRequest`
     /// evicts the in-memory cache so the UI lands on the empty
@@ -822,7 +822,7 @@ mod tests {
 
     // BUG FIX (06-09-fix-session): real OpenAI-compatible
     // providers (the seed's `https://api.openai.com/v1` and any
-    // user-added proxy like `https://hub.wukaijin.com/v1`)
+    // user-added proxy like `https://hub.example.com/v1`)
     // already include the `/v1` version in `base_url`. The
     // endpoint helper must NOT add another `/v1/`, otherwise
     // the upstream 404s with `path not found: /v1/v1/chat/completions`
@@ -842,10 +842,10 @@ mod tests {
         assert_eq!(c.endpoint(), "https://api.openai.com/v1/chat/completions");
 
         let c = OpenAIConfig {
-            base_url: "https://hub.wukaijin.com/v1".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
             ..cfg()
         };
-        assert_eq!(c.endpoint(), "https://hub.wukaijin.com/v1/chat/completions");
+        assert_eq!(c.endpoint(), "https://api.deepseek.com/v1/chat/completions");
     }
 
     // ---- protocol() and capabilities() ----
@@ -1335,23 +1335,48 @@ mod tests {
         assert!(matches!(ev, ChatEvent::ThinkingDelta { text } if text == "thinking..."));
     }
 
-    // ---- live integration test (requires hub.wukaijin.com reachable) ----
+    // ---- live integration test (env-gated, no hardcoded endpoint) ----
 
-    /// Live integration test against the real MiniMax OpenAI-compatible
-    /// endpoint, mirroring the user's default-model configuration.
-    /// Set `EVERLASTING_RUN_LIVE_OPENAI_TEST=1` to opt in (skipped by
-    /// default to keep CI fast and offline-safe).
+    /// Live integration smoke test against any OpenAI-compatible endpoint.
+    /// Off by default. Opt in by setting all of:
+    /// - `EVERLASTING_RUN_LIVE_OPENAI_TEST=1` (master switch)
+    /// - `EVERLASTING_LIVE_OPENAI_BASE_URL` (e.g. `https://api.openai.com/v1`)
+    /// - `EVERLASTING_LIVE_OPENAI_API_KEY`
+    /// Optional: `EVERLASTING_LIVE_OPENAI_MODEL` (default `"test-model"`).
+    /// Missing any of those prints a one-line notice and returns success
+    /// — keeps CI fast, offline-safe, and free of committed
+    /// secrets/endpoints.
     #[tokio::test]
-    async fn live_send_against_hub_wukaijin() {
+    async fn live_openai_compat_smoke_test() {
         if std::env::var("EVERLASTING_RUN_LIVE_OPENAI_TEST").is_err() {
-            eprintln!("skipping live test (set EVERLASTING_RUN_LIVE_OPENAI_TEST=1 to run)");
+            eprintln!(
+                "skipping live test (set EVERLASTING_RUN_LIVE_OPENAI_TEST=1 plus \
+                 EVERLASTING_LIVE_OPENAI_BASE_URL / EVERLASTING_LIVE_OPENAI_API_KEY / \
+                 EVERLASTING_LIVE_OPENAI_MODEL to run)"
+            );
             return;
         }
+        let base_url = match std::env::var("EVERLASTING_LIVE_OPENAI_BASE_URL") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                eprintln!("skipping live test (EVERLASTING_LIVE_OPENAI_BASE_URL not set or empty)");
+                return;
+            }
+        };
+        let api_key = match std::env::var("EVERLASTING_LIVE_OPENAI_API_KEY") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                eprintln!("skipping live test (EVERLASTING_LIVE_OPENAI_API_KEY not set or empty)");
+                return;
+            }
+        };
+        let model = std::env::var("EVERLASTING_LIVE_OPENAI_MODEL")
+            .unwrap_or_else(|_| "test-model".to_string());
         use futures_util::StreamExt;
         let c = OpenAIConfig {
-            base_url: "https://hub.wukaijin.com/v1".to_string(),
-            model: "MiniMax-M3".to_string(),
-            api_key: "ah-22ae6bdaec4403cfe1a10fd5f56dbe0f6eeafd71661c46ad7b43a267c2922f86".to_string(),
+            base_url,
+            model,
+            api_key,
             max_tokens: 65536,
             reasoning_effort: None,
         };

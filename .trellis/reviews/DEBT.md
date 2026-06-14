@@ -292,7 +292,7 @@
 - **Description**: `data_dir` 用 env 变量,fallback 到 `/tmp`(world-writable + 重启清空)
 - **Impact**: Windows/macOS 部署后 worktree 路径异常;**`/tmp` 重启清空 = 用户工作数据丢失**
 - **Fix**: 改用 Tauri `app_data_dir()`,跨平台一致
-- **Status**: **closed (2026-06-15)** — worktree `data_dir()` 已删,改用 `state.app_data_dir`(与 SQLite DB 同根 `~/.local/share/com.wukaijin.everlasting/`),`/tmp` fallback 消失
+- **Status**: **closed (2026-06-15)** — worktree `data_dir()` 已删,改用 `state.app_data_dir`(与 SQLite DB 同根 `~/.local/share/dev.everlasting.app/`),`/tmp` fallback 消失
 - **Owner**: carlos
 - **Related Task**: .trellis/tasks/06-15-p1-worktree-data-dir-tauri
 - **Closed At**: <pending commit>(carlos commit 后回填)

@@ -7,7 +7,7 @@
 需要的环境变量(参考 `~/sse-spike/Cargo.toml` 同样的协议):
 
 ```bash
-export ANTHROPIC_BASE_URL=https://api.wukaijin.com   # 可选,默认 api.anthropic.com
+export ANTHROPIC_BASE_URL=https://<your-anthropic-compat-host>   # 可选,默认 api.anthropic.com
 export ANTHROPIC_API_KEY=sk-...                      # 必填(或 ANTHROPIC_AUTH_TOKEN)
 export LLM_MODEL=GLM-4.7                             # 可选,默认 GLM-4.7
 export LLM_MAX_TOKENS=1024                           # 可选,默认 1024
@@ -48,7 +48,7 @@ app/
 │       └── ChatWindow.vue
 └── src-tauri/
     ├── Cargo.toml
-    ├── tauri.conf.json   # identifier=com.wukaijin.everlasting, productName=Everlasting
+    ├── tauri.conf.json   # identifier=dev.everlasting.app, productName=Everlasting
     ├── build.rs
     ├── icons/
     ├── capabilities/

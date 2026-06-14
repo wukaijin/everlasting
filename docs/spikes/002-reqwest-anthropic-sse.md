@@ -190,7 +190,7 @@ unset ANTHROPIC_API_KEY
 - Rust:cargo 1.96.0(linuxbrew 装的,1.83 太老,已升级)
 - 项目:`~/sse-spike/`,release build 1m00s
 
-**重要前提**:本次跑的**不是真的 Anthropic Claude API**,而是 **智谱 GLM-4.7 通过 Anthropic 兼容协议**转发的服务(用户决定用 wukaijin.com 转发)。所以:
+**重要前提**:本次跑的**不是真的 Anthropic Claude API**,而是 **智谱 GLM-4.7 通过 Anthropic 兼容协议**转发的服务(用户决定用 `<your-anthropic-compat-host>` 转发)。所以:
 - SSE 协议理论上等价(都走 Anthropic 协议)
 - model 写 `GLM-4.7`(不是 `claude-haiku-4-5`)
 - 错误响应 / HTTP 状态码可能跟真 Claude 不完全一致(GLM 兼容层有差异)
@@ -208,7 +208,7 @@ unset ANTHROPIC_API_KEY
 |------|------------------|------|------|
 | 成功 | HTTP 200 + 6 事件顺序 + 流式中文 | ✅ HTTP 200,`message_start → ping → content_block_start → 49×content_block_delta → content_block_stop → message_delta → message_stop`,输出完整中文"Rust 的所有权是...内存管理机制..." | **完美** |
 | A 401 错 key | HTTP 401 + `type: authentication_error` | HTTP 401,error=`{"code":"","message":"Invalid token (request id: 202606040746161667876668268d9d6oumb0OUc)","type":"new_api_error"}` | ⚠️ 状态码对,type 是 `new_api_error` 而非 `authentication_error`(GLM 差异) |
-| B 400 max_tokens=999999 | HTTP 400 + `type: invalid_request_error` | **HTTP 200,正常 stream 50 个 delta** | ❌ GLM 不验证 max_tokens 上限,**该用例不适用 wukaijin 转发** |
+| B 400 max_tokens=999999 | HTTP 400 + `type: invalid_request_error` | **HTTP 200,正常 stream 50 个 delta** | ❌ GLM 不验证 max_tokens 上限,**该用例不适用 `<your-proxy>` 转发** |
 | C 400 content 空串 | HTTP 400 或类似 | **HTTP 500**,error=`{"error":{"type":"invalid_request_error","message":"[1213][未正常接收到prompt参数。][20260604154619bcfec0cd2f094b81]"},"type":"error"}` | ⚠️ 状态码 500(不是 4xx),但内层 `type: invalid_request_error` 语义对 |
 | D 网络断开 | 连接错误,非 JSON | `error sending request for url (...)`,被 catch → `eprintln!("❌ 网络/连接错误: {}")` + `exit(3)` | ✅ 网络层独立识别,不走错误响应 JSON 解析路径 |
 
@@ -232,13 +232,13 @@ unset ANTHROPIC_API_KEY
 **软退路(都没走)**:
 - ~~换 `eventsource-stream` crate~~:手写解析器够用,6 事件顺序 100% 对
 - ~~切 rig-core~~:多一层抽象换不来实际收益(已知 GLM 兼容层差异,rig-core 也要做适配)
-- ~~切 Anthropic 兼容服务~~:已经在用 wukaijin(GLM 兼容)
+- ~~切 Anthropic 兼容服务~~:已经在用 `<your-proxy>`(GLM 兼容)
 
 ### 后续动作
 
 - ✅ spike-002 通过 → 步骤 1-2 可用 reqwest 手写 SSE,不必上 rig-core
 - ⏳ 步骤 1 实施时,LLM 客户端模块要:
-  - 支持 BASE_URL env(便于切 wukaijin / 真 Claude / 其他)
+  - 支持 BASE_URL env(便于切 `<your-proxy>` / 真 Claude / 其他)
   - 支持 model env(便于切 GLM-4.7 / Claude / 其他)
   - 错误归一化(把 GLM 兼容层差异吸收掉)
   - 未知 SSE 事件不崩(unhandled 但继续)

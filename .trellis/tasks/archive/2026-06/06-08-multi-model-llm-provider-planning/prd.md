@@ -15,7 +15,7 @@
 - **`IMPLEMENTATION.md §2.7 步骤 6`**: "MCP 暴露 + 多 Provider [v1] 未开始",列了 "加 OpenAI provider 切换" + "加 Ollama provider 切换(纯本地,省钱)" — 范围跟 MCP 捆绑,没独立规划
 - **`DESIGN.md §3`**: 一个 checkbox "多 LLM provider 切换(Anthropic / OpenAI / 本地 Ollama)"
 - **`TECH.md §1`**: rig-core 0.38.1 已锁,理由含 "20+ provider,后期切 OpenAI / 本地模型无痛" — 技术选型已定但**没用上**
-- **`HACKING-llm.md`**: GLM-4.7(wukaijin 转发的 Anthropic 兼容层)vs 真 Anthropic Claude 的 3 处差异(401 error.type / 400 类错返 5xx / max_tokens 不严格)+ ping 心跳 + extended thinking 兼容层 — **真踩过**的坑,价值最高
+- **`HACKING-llm.md`**: GLM-4.7(`<your-proxy>` 转发的 Anthropic 兼容层)vs 真 Anthropic Claude 的 3 处差异(401 error.type / 400 类错返 5xx / max_tokens 不严格)+ ping 心跳 + extended thinking 兼容层 — **真踩过**的坑,价值最高
 - **`BACKLOG.md §4 多角色`**: role-level model 偏好 (`role.model.preferred / fallback`),v3+ 远期
 - **`ARCHITECTURE.md §2.5.7`**: LLM Provider 限流的占位描述(假设多 provider 已存在)
 
@@ -32,7 +32,7 @@
 | 档位 | 范围 | 工作量 | 现状 |
 |---|---|---|---|
 | **A. 同 provider 多 model** | opus/sonnet/haiku 切换 | 极小 | 几乎能跑,缺 UI 入口 + per-session 持久化 |
-| **B. 多 provider 但都走 Anthropic 兼容协议** | Anthropic 官方 / wukaijin 转发 / 第三方 Anthropic-compat | 小 | 几乎能跑,缺 `LlmConfig` 加 `provider` 字段做命名区分 + per-session 选 |
+| **B. 多 provider 但都走 Anthropic 兼容协议** | Anthropic 官方 / `<your-proxy>` 转发 / 第三方 Anthropic-compat | 小 | 几乎能跑,缺 `LlmConfig` 加 `provider` 字段做命名区分 + per-session 选 |
 | **C. 真·多 provider 协议** | Anthropic / OpenAI / Ollama / Gemini 等不同 wire format | 大 | **要重写 `client.rs` 的请求/响应/SSE/tool 块映射**,rig-core 抽象或自写 adapter 二选一 |
 
 ## Assumptions(临时假设,待验证)
@@ -53,7 +53,7 @@
   - 现有 4 个 HACKING-llm 坑(GLM 兼容 / thinking / extended thinking / redacted_thinking)留 Anthropic adapter 内部处理
   - Provider 概念 = `{ protocol: Anthropic | OpenAI, base_url: String, api_key: String }` — 极轻
 - [x] **Q3:Provider / Model 形态** — **user-managed,SQLite 存,嵌套结构**(2026-06-08 决议)
-  - Providers 列表 — user 可加/改/删,**多个同 protocol 的 provider 可共存**(e.g., Anthropic 官方 + wukaijin 转发)
+  - Providers 列表 — user 可加/改/删,**多个同 protocol 的 provider 可共存**(e.g., Anthropic 官方 + `<your-proxy>` 转发)
   - Models 列表,绑到某个 Provider(provider_id 外键)
   - Default Model(单选,全局)— 新 session 默认用
   - Session 启动:Default Model;运行中:可"自由切换"到 catalog 任何 model
@@ -235,7 +235,7 @@
 
 **Context**:用户希望"user 新建可以 provider,在 provider 内可以新建模型"。
 
-**Decision**:SQLite 加 `providers` / `models` / `app_config` 三表,user 可加/改/删,**多个同 protocol 的 provider 可共存**(e.g., Anthropic 官方 + wukaijin 转发)。
+**Decision**:SQLite 加 `providers` / `models` / `app_config` 三表,user 可加/改/删,**多个同 protocol 的 provider 可共存**(e.g., Anthropic 官方 + `<your-proxy>` 转发)。
 
 **Consequences**:
 - ✅ 跟"user-managed"原则一致

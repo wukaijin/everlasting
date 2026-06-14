@@ -32,7 +32,7 @@
 
 ### D5: 不需要 kill switch
 
-**Context**: 用户接受 API 不支持 thinking 会 400 的风险（wukaijin.com proxy 应当兼容）。
+**Context**: 用户接受 API 不支持 thinking 会 400 的风险(`<your-anthropic-compat-host>` proxy 应当兼容)。
 **Decision**: 不加 `LLM_THINKING=off` 开关。代码里 thinking 始终发送，失败的话由用户改代码或换 API。
 **Consequences**: MVP 最简单；生产环境真要关掉得改代码。
 

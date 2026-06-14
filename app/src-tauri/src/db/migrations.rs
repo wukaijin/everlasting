@@ -223,7 +223,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // --- PR1 of multi-model task: providers / models / app_config.
  //
  // The `providers` table is the user-managed catalog of LLM
- // endpoints (Anthropic官方, wukaijin转发, OpenAI官方, ...);
+ // endpoints (Anthropic官方, 第三方Anthropic-compat, OpenAI官方, ...);
  // multiple rows may share the same `protocol`. `models` binds
  // model names to a provider with capability hints and per-row
  // overrides for `max_tokens` / `thinking_effort`. `app_config`

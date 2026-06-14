@@ -1,7 +1,7 @@
 //! Provider CRUD.
 //!
 //! Each row in the `providers` table is one LLM endpoint the user
-//! has registered (e.g. "Anthropic官方" + "wukaijin转发" both with
+//! has registered (e.g. "Anthropic官方" + "第三方Anthropic-compat" both with
 //! `protocol=anthropic`). Multiple rows may share the same
 //! `protocol`; the `display_name` is what disambiguates them in
 //! the UI. The enum dispatch lives in

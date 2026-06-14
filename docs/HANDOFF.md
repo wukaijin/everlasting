@@ -175,7 +175,7 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 
 - **项目根**:`/usr/local/code/github/everlasting/`
 - **当前 branch**:`main`
-- **远端**:`git@github.com:wukaijin/everlasting.git`,**已同步**
+- **远端**:`git@github.com:<your-github-username>/everlasting.git`,**已同步**
 - **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
 - **当前日期**:2026-06-13
 

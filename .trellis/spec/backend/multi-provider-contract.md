@@ -869,7 +869,7 @@ impl Provider for OpenAIProvider { ... }
 
 This **mismatch is intentional**: Anthropic historically exposes `https://<host>` as the protocol root and the API lives at `/v1/messages`; OpenAI exposes `https://<host>/v1` as the versioned root and the completion endpoint is `/chat/completions` (the `/v1` is part of the host path, not an endpoint component). The convention matches `test_model` / `test_provider` in `lib.rs` (which both pass `provider.base_url` straight through and append the path component).
 
-**BUG FIX (06-09-fix-session):** prior to this fix, `OpenAIConfig::endpoint()` appended `/v1/chat/completions` (matching the table row above the table's convention was already documented as `+ "/v1/chat/completions"`). Against any realistic `base_url` that already included `/v1` (the seed and every real OpenAI-compatible proxy like `https://hub.wukaijin.com/v1`), this produced `/v1/v1/chat/completions` and the upstream404'd with `path not found: /v1/v1/chat/completions`. The SSE parser never saw a stream, the agent loop emitted `ChatEvent::Error`, and `streamController.finalizeRequest` evicted the in-memory cache (per the8509bff2013-wire-invariant fix) so the UI landed on the empty state — exactly the "新 session发送消息，闪一下变空" symptom. The fix updates the table + code + spec in lockstep.
+**BUG FIX (06-09-fix-session):** prior to this fix, `OpenAIConfig::endpoint()` appended `/v1/chat/completions` (matching the table row above the table's convention was already documented as `+ "/v1/chat/completions"`). Against any realistic `base_url` that already included `/v1` (the seed and every real OpenAI-compatible proxy like `https://api.deepseek.com/v1`), this produced `/v1/v1/chat/completions` and the upstream404'd with `path not found: /v1/v1/chat/completions`. The SSE parser never saw a stream, the agent loop emitted `ChatEvent::Error`, and `streamController.finalizeRequest` evicted the in-memory cache (per the8509bff2013-wire-invariant fix) so the UI landed on the empty state — exactly the "新 session发送消息，闪一下变空" symptom. The fix updates the table + code + spec in lockstep.
 
 #### `strip_unsupported` decision matrix
 
@@ -1105,7 +1105,7 @@ keyword, the function falls back to the HTTP status
 |------|---------|
 | `endpoint_trims_trailing_slash` | `base_url = "https://x.com/v1/"` → endpoint has no double slash |
 | `endpoint_uses_provided_base_url` | Custom proxy base URL works |
-| `endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` | `base_url = "https://api.openai.com/v1"` and `base_url = "https://hub.wukaijin.com/v1"` both produce `<base>/chat/completions` (no `/v1/v1/`) |
+| `endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` | `base_url = "https://api.openai.com/v1"` and `base_url = "https://api.deepseek.com/v1"` both produce `<base>/chat/completions` (no `/v1/v1/`) |
 | `openai_provider_reports_openai_capabilities_and_protocol` | `protocol() == Openai`, all3 caps true |
 | `openai_provider_is_send_sync` | `Send + Sync` (compile-time) |
 | `build_http_body_system_prompt_becomes_first_message` | `system: Some(s)` → first `role: "system"` message |

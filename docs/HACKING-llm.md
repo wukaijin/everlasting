@@ -1,6 +1,6 @@
 # HACKING-llm: LLM API 兼容层差异笔记
 
-> 当前实测环境:用 `wukaijin.com` 转发的 **GLM-4.7** 走 Anthropic 兼容协议,**不是真的 Anthropic Claude API**。SSE 协议理论上等价,但错误响应 / HTTP 状态码 / 边界行为有 3 处差异。
+> 当前实测环境:用 `<your-anthropic-compat-host>` 转发的 **GLM-4.7** 走 Anthropic 兼容协议,**不是真的 Anthropic Claude API**。SSE 协议理论上等价,但错误响应 / HTTP 状态码 / 边界行为有 3 处差异。
 >
 > 写给未来的自己(或者下个 session),实施 LLM 客户端时别再踩这些坑。
 >
@@ -10,7 +10,7 @@
 
 ## 现状一句话
 
-- **当前 base URL**:`https://api.wukaijin.com/v1/messages`(从 `ANTHROPIC_BASE_URL` env 读)
+- **当前 base URL**:`https://<your-anthropic-compat-host>/v1/messages`(从 `ANTHROPIC_BASE_URL` env 读)
 - **当前 model**:`GLM-4.7`
 - **当前 API key**:环境变量 `ANTHROPIC_API_KEY`(智谱风格 `sk-g4HcGHnrqbc...`,不是 Anthropic 风格)
 - **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`
@@ -23,7 +23,7 @@
 
 ### 差异 1:401 的 `error.type` 字段
 
-| | GLM-4.7 (wukaijin) | Anthropic 真 Claude(预期) |
+| | GLM-4.7 (`<your-anthropic-compat-host>`) | Anthropic 真 Claude(预期) |
 |---|---|---|
 | HTTP 状态 | 401 | 401 |
 | `error.type` | `new_api_error` | `authentication_error` |
@@ -58,7 +58,7 @@
 
 GLM-4.7 在 `max_tokens: 999999` 时**正常 stream**(不报错,不截断到某个值)。Anthropic 真 Claude 应该返 400。
 
-**客户端对策**:**实施时不要在客户端做 max_tokens 上限预检**,由 server 报(切到真 Claude 时它会报;wukaijin 不报,那就不预检,server 决定)。
+**客户端对策**:**实施时不要在客户端做 max_tokens 上限预检**,由 server 报(切到真 Claude 时它会报;`<your-proxy>` 不报,那就不预检,server 决定)。
 
 ---
 
@@ -86,7 +86,7 @@ message_stop
 来源:spike-002 撞到的所有坑。
 
 - [ ] **BASE_URL 从 env 读**(`ANTHROPIC_BASE_URL`),空时 fallback 到 `https://api.anthropic.com`
-- [ ] **Model 从 env 读**(`LLM_MODEL` 或类似),默认 `GLM-4.7` 兼容 wukaijin
+- [ ] **Model 从 env 读**(`LLM_MODEL` 或类似),默认 `GLM-4.7` 兼容 `<your-proxy>`
 - [ ] **API key 从 env 读**(`ANTHROPIC_API_KEY`),env 注入不落盘
 - [ ] **SSE 解析**:`event:` / `data:` / 空行 三段式,buffer 累积跨 chunk
 - [ ] **未知事件不崩**:unknown event type 记日志 + continue
@@ -370,7 +370,7 @@ function finalizeRequest(requestId: string, sessionId: string, _errored: boolean
 
 **现象**:用户点"新 session" → 输入消息发送 → 页面上: 用户消息 + 红色 Stop 按钮闪一下 → 立即变空 session 状态。切换 session 回来: 只有用户消息, **无任何 assistant 回复**。`test_model` 按钮显示 OK(对同一个 model 测连通性也是 OK 的)。
 
-**根因**:`OpenAIConfig::endpoint()` 返回 `base_url + "/v1/chat/completions"`,但**真实 OpenAI 兼容 provider 的 `base_url` 已经包含 `/v1`**(PR1 seed `https://api.openai.com/v1`、用户 `https://hub.wukaijin.com/v1`、所有 OpenAI 兼容代理都是这格式),所以拼出来是 `/v1/v1/chat/completions`,upstream 404。
+**根因**:`OpenAIConfig::endpoint()` 返回 `base_url + "/v1/chat/completions"`,但**真实 OpenAI 兼容 provider 的 `base_url` 已经包含 `/v1`**(PR1 seed `https://api.openai.com/v1`、用户 `https://<your-openai-compat-host>/v1`、所有 OpenAI 兼容代理都是这格式),所以拼出来是 `/v1/v1/chat/completions`,upstream 404。
 
 **为什么 `test_model` 不出问题**:`lib.rs::test_model` 走的是**另一段代码**(`format!("{}/chat/completions", provider.base_url.trim_end_matches('/'))`,**没有** `/v1/`)。chat 走 `OpenAIProvider::endpoint()`(有 `/v1/`)。**两个地方对 OpenAI URL 的拼接方式不一致**,test 路径正确、production 路径错误。
 
@@ -380,17 +380,19 @@ function finalizeRequest(requestId: string, sessionId: string, _errored: boolean
 
 **复现命令**:
 ```bash
-# 直接跑 openai.rs::tests::live_send_against_hub_wukaijin(默认 skip,设环境变量打开)
+# 直接跑 openai.rs::tests::live_openai_compat_smoke_test(默认 skip,设 4 个 env var)
 EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
+  EVERLASTING_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
+  EVERLASTING_LIVE_OPENAI_API_KEY=sk-... \
   PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-  cargo test --lib live_send_against_hub_wukaijin -- --nocapture
+  cargo test --lib live_openai_compat_smoke_test -- --nocapture
 # 修前: Err(InvalidRequest("path not found: /v1/v1/chat/completions"))
 # 修后: [Start, Delta("还没"), Delta("吃呢..."), Done { stop_reason: "end_turn" }]
 ```
 
 **修法**:`OpenAIConfig::endpoint()` 改成 `base_url + "/chat/completions"`(不重复加 `/v1/`),跟 `test_model` / `test_provider` 拼接方式对齐。同时更新 `.trellis/spec/backend/llm-contract.md` Protocol differences table 把 OpenAI URL 那行从 `"+ "/v1/chat/completions"` 改成 `"+ "/chat/completions"` + 新加一段 "`base_url` convention is per-protocol, NOT symmetric" 说明两种 protocol 的 seed base_url 形状。
 
-**回归测试**:`openai::tests::endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` 锁住 `base_url = "https://api.openai.com/v1"` 和 `"https://hub.wukaijin.com/v1"` 两种真实 base_url shape 都只拼一次 `/v1/`。同时把老的 `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 测试用例的 base_url 从 `https://x.com/` / `https://x.com/openai`(无 /v1,触发旧 bug 行为)更新到 `https://x.com/v1/` / `https://x.com/openai/v1`(有 /v1,真实场景)。
+**回归测试**:`openai::tests::endpoint_does_not_double_prefix_v1_when_base_url_includes_v1` 锁住 `base_url = "https://api.openai.com/v1"` 和 `"https://api.deepseek.com/v1"` 两种真实 base_url shape 都只拼一次 `/v1/`。同时把老的 `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 测试用例的 base_url 从 `https://x.com/` / `https://x.com/openai`(无 /v1,触发旧 bug 行为)更新到 `https://x.com/v1/` / `https://x.com/openai/v1`(有 /v1,真实场景)。
 
 **经验沉淀**:**"base_url 约定" 必须 explicit,不要从 seed 形状或单条 test 里 infer**。这次 bug 之所以 264 个 cargo test + 55 个 vitest 都没抓到,是因为:
 1. `endpoint_trims_trailing_slash` / `endpoint_uses_provided_base_url` 用的是无 `/v1` 的 base_url,只测了"加 /v1 之后能 trim 尾斜杠" / "自定义 host 工作"——**没**测"base_url 已经有 /v1 时不要重复加"这个最关键的 invariance。
@@ -399,4 +401,4 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 
 **未来防护**:
 - OpenAI / Anthropic 各抽一个 `pub fn chat_completions_url(base_url: &str) -> String` / `pub fn anthropic_messages_url(base_url: &str) -> String` helper,在 `lib.rs::test_model` / `test_provider` 和 `provider::*` adapter 里都调它,保证单一来源。
-- `openai::tests::live_send_against_hub_wukaijin` 在 CI 上默认开(只对 staging 仓库,对 prod 关,避免泄露真 api_key)。
+- `openai::tests::live_openai_compat_smoke_test` 在 CI 上默认开(env-driven,不泄露真 api_key / 私人 endpoint;只对 staging 仓库,对 prod 关,避免烧钱)

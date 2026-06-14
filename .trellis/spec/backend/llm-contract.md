@@ -29,7 +29,7 @@ The `ChatRequest` / `ContentBlock` / `ChatEvent` types are aligned to the offici
 Two operator choices that look like "compat layer" are actually configuration knobs:
 
 - **`ANTHROPIC_BASE_URL`** — a proxy or a self-hosted relay that follows the Anthropic
- schema. The current dev setup uses `wukaijin.com`'s Claude-compat endpoint; the
+ schema. The current dev setup uses `<your-anthropic-compat-host>`'s Claude-compat endpoint; the
  payload is still Anthropic-shaped, not OpenAI-shaped.
 - If at any point we switch to OpenAI-compat, the `reasoning_content` field replaces
  the `thinking` block entirely; that change would happen here, not in the UI.
@@ -163,7 +163,7 @@ Delta types observed: `text_delta`, `input_json_delta`, `thinking_delta`, `signa
 
 | Key | Required | Default | Notes |
 |-----|----------|---------|-------|
-| `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) | yes | — | The dev setup uses `wukaijin.com` proxy tokens; `ANTHROPIC_AUTH_TOKEN` is the legacy alias. |
+| `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) | yes | — | The dev setup uses `<your-anthropic-compat-host>` proxy tokens; `ANTHROPIC_AUTH_TOKEN` is the legacy alias. |
 | `ANTHROPIC_BASE_URL` | no | `https://api.anthropic.com` | Trailing `/v1/messages` is appended by `LlmConfig::endpoint()`. |
 | `LLM_MODEL` | no | `GLM-4.7` | |
 | `LLM_MAX_TOKENS` | no | `16384` | Was `1024` before step6. |

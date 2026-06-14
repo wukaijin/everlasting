@@ -69,7 +69,7 @@ impl ProviderProtocol {
 }
 
 /// A user-managed LLM provider entry. Multiple rows may share the
-/// same `protocol` (e.g. "Anthropic官方" + "wukaijin转发" both
+/// same `protocol` (e.g. "Anthropic官方" + "第三方Anthropic-compat" both
 /// `protocol=anthropic`); the `display_name` is the user-facing
 /// label that disambiguates them in the UI.
 #[derive(Debug, Clone, Serialize)]
