@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [DEBT.md Status Evolution Guide](./debt-status-evolution-guide.md) | Evolve `RULE-*` entries partial → closed correctly, avoid the stale-docstring anti-pattern at the partial-closure handoff | When changing any DEBT.md rule's status |
 
 ---
 

@@ -662,6 +662,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **完整 PRD**:[.trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md](./../trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md)
 - **未实施**(MVP 留口子):前端"context compressed at turn N"UI 标记(PR2)+ compressed_out DB 列(C4 覆盖)+ LLM summarization(C3-v2)
 - **BUG 修复(2026-06-14,RULE-A-001 + RULE-A-002)**:① `group_droppable_turns` 的 orphan 分支改 skip(隐式保护 tool_use-bearing assistant),不再 singleton drop 留下孤立 tool_use/tool_result(撞 Anthropic 400);② `CompactResult` 加 `degradation: DegradationKind`,全 droppable 丢完仍超窗时返回 `StillOver { tokens_after, target }`,agent loop(chat.rs + chat_loop.rs 副本同步)emit `ChatEvent::Error { InvalidRequest }` + 早返回,不静默发超窗 prompt 撞 `prompt is too long`。详见 [DEBT.md](./../trellis/reviews/DEBT.md) RULE-A-001/002。
+- **Agent loop body 统一(2026-06-15,RULE-A-006 闭环)**:`chat` Tauri 命令的 spawn 闭包体改为单次 `chat_loop::run_chat_loop(...)` 调用,production 与 test 共享同一函数体(无副本)。所有四个 emit 通道(chat-event / tool:call / tool:result / permission:ask)统一走 `dyn ChatEventSink` trait(生产接 `AppHandleSink`,测试接 `MockEmitter`)。9 个 `agent_loop_*` 集成测试现覆盖 production 真实路径,改 agent loop body = 改 1 处,无 drift hazard。详见 [DEBT.md](./../trellis/reviews/DEBT.md) RULE-A-006。
 
 #### 2.5.6 Session 切换的并发态
 
