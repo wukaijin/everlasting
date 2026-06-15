@@ -15,11 +15,12 @@
 //
 // Re-fetch triggers:
 //   1. `loadForProject(projectId)` on panel mount + on project change.
-//   2. A `memory:reloaded` event listener (defensive — the backend
-//      watcher does not currently emit it, but the contract is in
-//      place; if/when PR1 follow-up adds the emit, the store picks
-//      it up for free).
-//   3. The "刷新" button in the panel header, exposed via `refresh()`.
+//   2. The "刷新" button in the panel header, exposed via `refresh()`.
+//
+// Freshness note (2026-06-15): the backend has NO background watcher
+// now — every `read_memory_layers` call stats each file's mtime and
+// reloads on change (RULE-C-001 fence). So a re-fetch (trigger 1 or
+// 2) always returns current state; there is no event to listen for.
 //
 // Failure policy: any `invoke` failure is caught and stored in
 // `error`; the layers array is left at its previous value so the
@@ -29,7 +30,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // --- Types — mirror `MemoryLayerInfo` from the Rust side. -----------
 // Field names are snake_case to match the serde renaming on the
@@ -64,12 +64,6 @@ export interface MemoryLayerInfo {
   char_count: number;
 }
 
-// Module-level handle for the `memory:reloaded` listener. Set once
-// on the first call to `loadForProject` and never re-registered
-// (Pinia store is a singleton; mirrors the `unlistenRefresh`
-// pattern in `projects.ts`).
-let unlistenReloaded: UnlistenFn | null = null;
-
 export const useMemoryStore = defineStore("memory", () => {
   // ---------------------------------------------------------------------
   // State
@@ -80,38 +74,6 @@ export const useMemoryStore = defineStore("memory", () => {
   const loading = ref<boolean>(false);
   const error = ref<string | null>(null);
   const lastProjectId = ref<string | null>(null);
-
-  // ---------------------------------------------------------------------
-  // Listener: `memory:reloaded` (defensive — not emitted today)
-  // ---------------------------------------------------------------------
-
-  /** Register the `memory:reloaded` listener exactly once. The
-   *  payload (when/if the backend starts emitting it) is the list
-   *  of `(kind, source)` tuples that changed; we ignore the payload
-   *  and just re-fetch the full layer list (the cost is one
-   *  `read_memory_layers` IPC, which is small). */
-  async function ensureReloadedListener(): Promise<void> {
-    if (unlistenReloaded !== null) return;
-    try {
-      unlistenReloaded = await listen<unknown>("memory:reloaded", () => {
-        // The reload may apply to a different project (the user
-        // might have edited their user-level file while viewing a
-        // project). We re-fetch the CURRENT project (not whatever
-        // the event might reference — the event payload schema is
-        // TBD and we'll lock it down when the backend starts
-        // emitting it).
-        if (lastProjectId.value) {
-          void fetchLayers(lastProjectId.value);
-        }
-      });
-    } catch (e) {
-      // `listen` failing at startup would be a Tauri runtime
-      // problem, not a data problem — log so it's visible in
-      // devtools but don't crash the store.
-      // eslint-disable-next-line no-console
-      console.error("memory: ensureReloadedListener failed:", e);
-    }
-  }
 
   // ---------------------------------------------------------------------
   // Fetching
@@ -148,7 +110,6 @@ export const useMemoryStore = defineStore("memory", () => {
    *  listener is registered once, the fetch just overwrites
    *  state. */
   async function loadForProject(projectId: string): Promise<void> {
-    await ensureReloadedListener();
     await fetchLayers(projectId);
   }
 

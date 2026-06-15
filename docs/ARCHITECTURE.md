@@ -76,7 +76,7 @@
 │  │  Infrastructure                                   │    │
 │  │  - SQLite (sqlx) — 元数据 + 消息历史            │    │
 │  │  - git2-rs — worktree / diff / commit            │
-│  │  - notify — 文件监听(后期)                      │
+│  │  - tiktoken-rs — memory token 估算                      │
 │  │  - (无 WSL Bridge:Tauri 全跑 WSL 内,无 wslapi)  │
 │  └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘

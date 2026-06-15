@@ -20,11 +20,13 @@
 //! Memory is a "premium" context feature; one missing file must
 //! never break a chat session.
 //!
-//! **Hot-reload**: a `notify::RecommendedWatcher` watches the 4
-//! fixed paths. Events are coalesced through a 1s debounce so a
-//! single editor save (which fires several inotify events) yields a
-//! single cache invalidation. The cache lives in
-//! `AppState::memory_cache`; reads are non-blocking through
+//! **Freshness (RULE-C-001 fence, 2026-06-15)**: there is NO
+//! background watcher. Every `load_for_session` stats each of the
+//! 4 files' `mtime` and reloads the slot when it changed since the
+//! last load — the read path is the authority on freshness, so a
+//! file saved between reads is always reflected on the next read
+//! (no debounce window, no dropped-watcher hazard). The cache lives
+//! in `AppState::memory_cache`; reads are non-blocking through
 //! `tokio::sync::RwLock`.
 //!
 //! Files in this module:
@@ -32,8 +34,8 @@
 //!   `MemoryLayer`, `MemoryLayerInfo` (the wire / preview types).
 //! - [`file`] — 4 fixed path resolution (`user_dir` / `project_path`).
 //! - [`tokens`] — `count_tokens` (cl100k_base via `tiktoken-rs`).
-//! - [`loader`] — `MemoryCache` + `load_for_session` + `invalidate_*`.
-//! - [`watcher`] — `notify` integration + 1s debounce.
+//! - [`loader`] — `MemoryCache` + `load_for_session` (mtime-fenced
+//!   read-through).
 //! - [`commands`] — Tauri command surface (3 commands, lives in
 //!   `crate::commands::memory`).
 //! - [`tests`] — `#[cfg(test)]` integration tests (≥15 cases).
@@ -42,7 +44,6 @@ pub mod file;
 pub mod loader;
 pub mod tokens;
 pub mod types;
-pub mod watcher;
 
 #[cfg(test)]
 mod tests;
@@ -58,9 +59,3 @@ pub use types::{LayerStatus, MemoryKind, MemoryLayer, MemoryLayerInfo, MemorySou
 /// file larger than 100KB is almost certainly a content-store
 /// accidentally committed to a memory slot, not a real CLAUDE.md.
 pub const MAX_FILE_SIZE: u64 = 100 * 1024;
-
-/// 1-second debounce window for `notify` events. Editor save emits
-/// multiple inotify events (Modify + CloseWrite + sometimes
-/// Create); coalescing them into a single cache invalidation keeps
-/// the watcher quiet.
-pub const WATCHER_DEBOUNCE_MS: u64 = 1000;

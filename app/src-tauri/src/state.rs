@@ -130,13 +130,12 @@ pub struct AppState {
     /// session and (b) the file hasn't been modified on disk since.
     /// Lives in process state, not persisted.
     pub read_guard: ReadGuard,
-    /// B5 Memory cache (V2 1 期, 2026-06-10). Holds the 4
-    /// fixed memory files (2 layers × 2 sources) for the
-    /// duration of the process. The `notify`-based watcher
-    /// invalidates entries on file write; the chat command
-    /// calls `load_for_session` on every turn to read
-    /// through this cache. Lives in process state, not
-    /// persisted.
+    /// B5 Memory cache (V2 1 期, 2026-06-10; mtime fence
+    /// 2026-06-15). Holds the 4 fixed memory files (2 layers
+    /// × 2 sources) for the duration of the process. Each
+    /// `load_for_session` stats every file's `mtime` and
+    /// reloads on change — no background watcher. Lives in
+    /// process state, not persisted.
     pub memory_cache: Arc<MemoryCache>,
     /// A2 + B7 (Permission system + per-session Mode,
     /// 2026-06-13): in-flight `permission:ask` oneshot senders,
@@ -197,31 +196,13 @@ impl AppState {
         // leave the catalog half-built.
         let catalog = build_provider_catalog(&db).await;
 
-        // B5 Memory: collect all project paths for the watcher's
-        // initial watch list. New projects created at runtime
-        // are NOT auto-watched (per the PRD's "新建 project
-        // 也需要重启 watcher" extension of the
-        // "新建 memory 文件需重启 session 生效" rule).
-        let project_paths: Vec<(String, String)> =
-            match crate::db::list_projects(&db, true).await {
-                Ok(projects) => projects
-                    .into_iter()
-                    .map(|p| (p.id, p.path))
-                    .collect(),
-                Err(e) => {
-                    tracing::warn!(error = %e, "AppState::load: list_projects failed; watcher will start with no project paths");
-                    Vec::new()
-                }
-            };
+        // B5 Memory cache. Read-through with an mtime fence
+        // (RULE-C-001, 2026-06-15): every `load_for_session`
+        // stats each file and reloads on change, so no
+        // background watcher is needed — the cache is always
+        // fresh on the next read. New projects are picked up
+        // automatically (first load stats the file).
         let memory_cache = MemoryCache::arc();
-        // Spawn the watcher with a Weak ref so the watcher
-        // does NOT keep AppState alive past Drop.
-        if let Err(e) = crate::memory::watcher::start_watcher(
-            std::sync::Arc::downgrade(&memory_cache),
-            project_paths,
-        ) {
-            tracing::warn!(error = %e, "AppState::load: memory watcher failed to start; reload will not be hot");
-        }
 
         // Startup batch backfill of pre-PR2 project rows. The fix:
         // spawn a fire-and-forget task that re-probes the git

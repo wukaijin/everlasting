@@ -231,61 +231,87 @@ async fn loader_load_for_session_partial_files() {
 }
 
 #[tokio::test]
-async fn loader_invalidate_user_slot_re_reads() {
+async fn loader_mtime_fence_sees_file_change() {
+    let user_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    std::fs::write(user_dir.path().join("CLAUDE.md"), "v1").unwrap();
+
+    let cache = MemoryCache::new();
+    let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    assert!(first[0].content.contains("v1"));
+
+    // Rewrite the file — the fence must surface the new body on
+    // the very next read, with NO explicit invalidation. This is
+    // the RULE-C-001 contract; the old watcher-debounce path
+    // would have served stale "v1" for up to 1s (or forever, if
+    // the watcher was dropped — see RULE-C-004).
+    std::fs::write(user_dir.path().join("CLAUDE.md"), "v2").unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+
+    let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    assert!(
+        second[0].content.contains("v2"),
+        "mtime fence failed: expected v2, got {:?}",
+        second[0].content
+    );
+}
+
+#[tokio::test]
+async fn loader_mtime_fence_hit_when_unchanged() {
+    let user_dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    std::fs::write(user_dir.path().join("CLAUDE.md"), "stable body").unwrap();
+
+    let cache = MemoryCache::new();
+    let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    // Second read with no file change — fence hits (mtime equal)
+    // and returns the same cached content.
+    let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    assert_eq!(first[0].content, second[0].content);
+    assert!(second[0].content.contains("stable body"));
+}
+
+#[tokio::test]
+async fn loader_mtime_fence_sees_file_appear() {
+    // File absent at first load → Missing (cached with mtime
+    // None). File appears → next load's stat yields Some; the
+    // None != Some trips the fence → reload → Loaded.
     let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
     let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
 
-    // First load: file missing.
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(first[0].status, LayerStatus::Missing);
 
-    // Create the file outside the cache.
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "now it exists").unwrap();
+    std::fs::write(user_dir.path().join("CLAUDE.md"), "appeared").unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
 
-    // Cache hit (no invalidation) → still Missing.
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
-    assert_eq!(second[0].status, LayerStatus::Missing);
-
-    // Invalidate the user Claude slot → next load sees the file.
-    cache.invalidate_user_slot(MemorySource::Claude).await;
-    let third = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
-    assert_eq!(third[0].status, LayerStatus::Loaded);
-    assert!(third[0].content.contains("now it exists"));
+    assert_eq!(second[0].status, LayerStatus::Loaded);
+    assert!(second[0].content.contains("appeared"));
 }
 
 #[tokio::test]
-async fn loader_invalidate_project_does_not_touch_user() {
+async fn loader_mtime_fence_sees_file_vanish() {
+    // File present → Loaded (mtime Some). File removed → next
+    // load's stat yields None; Some != None trips the fence →
+    // reload → Missing.
     let user_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
     let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
-
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "user body").unwrap();
-    std::fs::write(project_dir.path().join("CLAUDE.md"), "project body").unwrap();
+    std::fs::write(user_dir.path().join("CLAUDE.md"), "here").unwrap();
 
     let cache = MemoryCache::new();
-    let _ = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
-    cache.invalidate_project("proj-1").await;
+    let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    assert_eq!(first[0].status, LayerStatus::Loaded);
 
-    // Edit user file; cache must reflect (invalidation
-    // shouldn't have touched the user slot).
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "user body v2").unwrap();
-    let layers = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
-    // The project slot was invalidated, so project CLAUDE.md
-    // re-reads ("project body"). The user slot was NOT
-    // invalidated, so user CLAUDE.md still shows the old
-    // cached value (cache miss path: load_layer sees
-    // "user body" still on disk → returns the same content;
-    // semantically the user slot wasn't touched).
-    assert_eq!(layers[2].content, "project body");
-    // The user slot's content reflects what was on disk at
-    // the first load (the cache was not invalidated, but
-    // the file content was — so the second load is a cache
-    // hit and returns the stale value). This is the
-    // intentional behavior: only `invalidate_user*` clears
-    // the user slot.
-    assert_eq!(layers[0].content, "user body");
+    std::fs::remove_file(user_dir.path().join("CLAUDE.md")).unwrap();
+
+    let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
+    assert_eq!(second[0].status, LayerStatus::Missing);
 }
 
 #[tokio::test]
@@ -376,12 +402,11 @@ async fn all_paths_yields_four_entries_in_canonical_order() {
 
 #[tokio::test]
 async fn memory_cache_arc_smoke() {
+    // Exercises the public construction + peek surface. The
+    // invalidate_* API was removed with the watcher (RULE-C-001,
+    // 2026-06-15) — freshness is now the mtime fence's job,
+    // covered by the loader_mtime_fence_* tests above.
     let cache = Arc::new(MemoryCache::new());
-    cache.invalidate_user().await;
-    cache.invalidate_user_slot(MemorySource::Claude).await;
-    cache.invalidate_project("missing-id").await;
-    cache.invalidate_project_slot("missing-id", MemorySource::Agents).await;
-    // No assertion — just exercises the public API.
     let _ = cache.peek_user(MemorySource::Claude).await;
     let _ = cache.peek_project("missing-id", MemorySource::Claude).await;
 }

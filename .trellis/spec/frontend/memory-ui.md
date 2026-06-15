@@ -11,6 +11,17 @@
 >
 > **何时读本文**:实现 B5 Memory PR2(前端 UI 预览),或修改 `useMemoryStore` / `<MemoryPreview>` / `<MemoryLayerItem>` / `<MemoryTab>` 时。
 
+> **⚠️ Updated 2026-06-15 (RULE-C-001)**: the backend `notify`
+> watcher was removed (freshness is now an mtime fence in
+> `load_for_session`). The `memory:reloaded` event is therefore
+> **never emitted**; the defensive `listen("memory:reloaded")` in
+> `useMemoryStore` was deleted. Re-fetch now happens only via
+> `loadForProject` (mount / project switch) and `refresh()` (刷新
+> button) — both call `read_memory_layers`, which is always
+> current thanks to the fence. The `memory:reloaded` / watcher
+> mentions below are the **old** design. See
+> `.trellis/tasks/06-15-p1-memory-watcher-appstate/`.
+
 ---
 
 ## Scenario: B5 Memory Preview UI (PR2)

@@ -212,26 +212,29 @@
 
 - **Level**: P1 (**C-P1-1 升级**)
 - **Subsystem**: Memory
-- **File**: `app/src-tauri/src/memory/watcher.rs:179-219` + `loader.rs:206-214`
+- **File**: `app/src-tauri/src/memory/watcher.rs:179-219` + `loader.rs:206-214`(watcher.rs 已删)
 - **Description**: notify → 标 pending → 等 1s debounce → invalidate;read-through 无 fence
 - **Impact**: 编辑器保存后立即下一条消息**概率性读到旧指令**。PRD 承诺"立即生效"是概率性非确定性,产品诚信问题
 - **Fix**: 加 read-through fence 或 invalidate 时标记,read 检测 fence
-- **Status**: open
+- **Status**: **closed (2026-06-15)**
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-memory-watcher-appstate`
+- **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
+- **Closed At**: (待 commit 回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3 + §6
+- **Resolution Notes**: brainstorm 核实发现 watcher **疑似完全失效**(`start_watcher` 返回值在 `state.rs:219` 被丢弃 → `RecommendedWatcher` drop → inotify handle 关闭 → debounce loop 因 tx drop 退出;严重性 >> 原"概率性 race",实为确定性读旧)。grill 决策 **W 方案**:砍 notify watcher,改 read-through **mtime fence**——`MemoryCache` slot 加 `CachedLayer { layer, mtime }`,`read_or_load_*` 每次 `tokio::fs::metadata` stat 比较 mtime,不符则 reload。read 路径成为 freshness 权威,无 debounce 窗口、无 watcher 依赖;C-002/C-004 自动满足。`watcher.rs` 整文件删 + `invalidate_*` API 删 + `notify` 依赖移除 + 前端 `memory:reloaded` dead listener 清理。4 个 fence 测试(change/hit/appear/vanish),489 tests pass。
 
 ### RULE-C-002 — 新建 project / memory 文件不自动 watch
 
 - **Level**: P1
 - **Subsystem**: Memory
-- **File**: `app/src-tauri/src/state.rs:178-197`
+- **File**: `app/src-tauri/src/state.rs:178-197`(project_paths 收集块已删)
 - **Description**: 仅启动时收集一次 `list_projects`;运行时新增 project 目录不 watch(`watcher.rs:75-79` 注释承认)
 - **Impact**: 新建 project 后写其 CLAUDE.md,memory cache 不失效(直到重启)
 - **Fix**: `MemoryWatcher` 提升到 AppState,加 `add_watch(project_id)` API
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — 自动满足:watcher 删除后 memory freshness 走 mtime fence;新 project 首次 `load_for_session` 即 stat 其文件,无需 watch/add_watch API。见 RULE-C-001 Resolution Notes。
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-memory-watcher-appstate`(同 PR)
+- **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
+- **Closed At**: (待 commit 回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
 ### RULE-D-001 — API key 明文存储
@@ -403,12 +406,14 @@
 
 - **Level**: P2
 - **Subsystem**: Memory
-- **File**: `app/src-tauri/src/state.rs:192-197`
+- **File**: `app/src-tauri/src/state.rs:192-197`(start_watcher 调用已删)
 - **Description**: 成功路径返回值被丢弃
 - **Impact**: 靠 notify 内部 thread 生命周期间接维持,结构不健壮;阻碍 RULE-C-002 的 add_watch 扩展
 - **Fix**: 提升到 AppState,便于后续 add_watch(随 RULE-C-001/C-002 同 PR)
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — 自动满足:watcher 整体删除,不再有"返回值丢弃 → handle drop"问题(无 watcher 可丢弃)。原 grill D2"AppState 加字段"方案被 D3(砍 watcher 改 mtime 轮询)推翻——发现 watcher 疑似完全失效(C-001)后,mtime fence 让 watcher 全链路冗余,直接删除比重构持有更净。见 RULE-C-001 Resolution Notes。
 - **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
+- **Closed At**: (待 commit 回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
 ### RULE-C-005 — user_dir 路径与 Claude Code 不一致
@@ -693,6 +698,9 @@
 | 2026-06-15 | RULE-A-003 | open | **closed** | 5 处 persist 失败分类处理:正常路径 3 处 emit `Error{Server}`+return(对齐 RULE-A-002 StillOver),cancel 路径 2 处 log-only(避免与 cancelled `Done` 双终止事件);前端不基于 category 分支故复用 `Server`,零前端改动。`emit_persist_failure` helper 集中文案;`agent_loop_persist_failure_emits_error` 测试(trigger 拦截 INSERT) | `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order` |
 | 2026-06-15 | RULE-A-004 | open | **closed** | `record_tool_executed_audit` 块从 cancel 检查前移到后(`else if` 串联),cancelled 的 tool 不落 audit;两检查背靠背无 await,token 状态一致。`agent_loop_cancel_skips_audit_for_cancelled_tool` 测试 | 同上 task |
 | 2026-06-15 | RULE-E-005 | open | **closed** | `cancel_inflight_for_session` 加 `inflight_exits` 参数返回 `oneshot::Receiver`(单消费者),新增 `await_inflight_exit`(10s timeout backstop);`delete_worktree`/`detach_worktree`/`delete_session` 三处 await;chat.rs spawn 闭包 `run_chat_loop` 后 `done_tx.send` + 清 entry。独立 map + oneshot(不动 cancellations 值类型,规避 Tauri JoinHandle 存储语义不确定)。4 cancel 单测(3 改造 + 1 新增)。spec Ordering invariant 改写。487 tests pass | `.trellis/tasks/06-15-worktree-destroy-await-cancel-rule-e-005` |
+| 2026-06-15 | RULE-C-001 | open | **closed** | 砍 notify watcher 改 read-through mtime fence;brainstorm 核实发现 watcher 疑似完全失效(返回值丢弃→handle drop→确定性读旧,严重性>>原"概率性 race")。W 方案:slot 加 `CachedLayer{layer,mtime}`,read 每次 stat 比较,read 路径成 freshness 权威。watcher.rs/invalidate_*/notify 依赖/前端 dead listener 全清,4 fence 测试,489 pass | `.trellis/tasks/06-15-p1-memory-watcher-appstate` |
+| 2026-06-15 | RULE-C-002 | open | **closed** | 自动满足:watcher 删后新 project 首 `load_for_session` 即 stat,无需 watch/add_watch | 同上 task |
+| 2026-06-15 | RULE-C-004 | open | **closed** | 自动满足:watcher 删除,无 handle 可丢弃;D2"AppState 加字段"方案被 D3 砍 watcher 推翻 | 同上 task |
 
 ---
 
@@ -708,7 +716,7 @@
 | **PR5b** | **`06-15-unify-chat-loop-dispatch`** | **RULE-A-006(闭环)** | **依赖 PR5 — production `chat.rs` → `run_chat_loop` 迁移,副本消除** |
 | PR6+PR7 | `06-15-p1-persist-emit-error-and-audit-cancel-order` | RULE-A-003 + RULE-A-004(合并一个 task) | ✅ closed (2026-06-15) — PR5(RULE-A-006)解阻后合并实现 |
 | PR8 | `06-14-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | — |
-| PR9 | `06-14-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | — |
+| PR9 | `06-15-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | ✅ closed (2026-06-15) — W 方案:砍 watcher 改 mtime fence,C-002/C-004 自动满足 |
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |
 | PR11 | `06-14-p1-openai-o1-max-completion-tokens` | RULE-D-002 | — |
 | PR12 | `06-14-p1-glob-spawn-blocking` | RULE-E-004 | — |

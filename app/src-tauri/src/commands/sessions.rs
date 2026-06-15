@@ -140,27 +140,16 @@ pub async fn delete_session(
     // leak fingerprints for a session the user just deleted.
     state.read_guard.clear_session(&session_id).await;
 
-    // Load the session row BEFORE the destructive work so we
-    // know which project to invalidate the memory cache for.
-    // The cache invalidation is part of the "delete this
-    // session" semantic — any future session in the same
-    // project should re-read memory from disk.
+    // Load the session row BEFORE the destructive work so the
+    // cwd / worktree cleanup below knows what to tear down.
+    // (The memory cache needs no explicit invalidation: the
+    // mtime fence in `load_for_session` re-reads on the next
+    // access, and deleting a session does not touch the
+    // project's memory files anyway.)
     let session_for_cleanup = db::load_session(&state.db, &session_id)
         .await
         .ok()
         .flatten();
-
-    // B5 Memory (V2 1 期, 2026-06-10): invalidate the project's
-    // memory cache so a future `load_for_session` (e.g. for
-    // a new session in the same project) re-reads the files
-    // from disk. The user-layer cache is unaffected — it
-    // survives session deletion.
-    if let Some(ref loaded) = session_for_cleanup {
-        state
-            .memory_cache
-            .invalidate_project(&loaded.session.project_id)
-            .await;
-    }
 
     if let Some(ref loaded) = session_for_cleanup {
         let cwd = &loaded.session.current_cwd;

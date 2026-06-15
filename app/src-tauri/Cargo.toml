@@ -46,14 +46,13 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 # incremental cache and sccache if configured.
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 
-# B5 Memory (V2 first-tier, 2026-06-10):
+# B5 Memory (V2 first-tier, 2026-06-10; mtime fence 2026-06-15):
 # - `tiktoken-rs` for cl100k_base token estimation (4 files * <2K each
 #   in 200K context — estimation is good enough; not exact per-model).
-# - `notify` 8.x for inotify-based hot-reload of the 4 memory files
-#   (1s debounce coalesces editor save → multiple Modify events).
 # - `dirs` 5.x to resolve `~/.config/everlasting/` cross-platform.
+# (notify was removed: freshness is now an mtime fence in
+# load_for_session, not a background watcher.)
 tiktoken-rs = "0.6"
-notify = "6"
 dirs = "5"
 
 # P1 web_fetch (2026-06-12):

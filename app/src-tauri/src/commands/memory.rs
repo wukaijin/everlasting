@@ -31,8 +31,8 @@ use crate::state::AppState;
 
 /// Read the per-session memory layer summary (User + Project
 /// layers). The frontend calls this on memory-preview panel
-/// mount and on every `memory:reloaded` event from the
-/// watcher.
+/// mount. Freshness is handled by the mtime fence in
+/// `load_for_session` — every call re-checks each file's `mtime`.
 #[tauri::command]
 pub async fn read_memory_layers(
     state: State<'_, Arc<AppState>>,
@@ -193,17 +193,7 @@ pub async fn open_memory_in_editor(
     };
 
     match result {
-        Ok(_) => {
-            // Also invalidate the cache so the watcher event
-            // that follows the editor's save can race with our
-            // own state (or not — the watcher will fire
-            // either way; this is just defensive).
-            state
-                .memory_cache
-                .invalidate_project(&project_id)
-                .await;
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(e) => {
             tracing::warn!(error = %e, path = %resolved.display(), "open_memory_in_editor failed");
             Err(e)

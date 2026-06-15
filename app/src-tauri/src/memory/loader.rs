@@ -3,30 +3,26 @@
 /// The cache is structured as two halves:
 /// - **User layer** (1 set of 2 files, `CLAUDE.md` + `AGENTS.md`):
 ///   global across all projects. Read once on first access, then
-///   cached; invalidated by `invalidate_user()` (called by the
-///   watcher when the user edits one of the user-layer files).
+///   cached.
 /// - **Project layer** (1 set of 2 files per project): keyed by
-///   `project_id`. Cached on first access; invalidated by
-///   `invalidate_project(project_id)` (called by the watcher AND
-///   by `delete_session` / `delete_project`).
+///   `project_id`. Cached on first access.
 ///
-/// The cache holds **`Option<[MemoryLayer; 2]>`** rather than
-/// `[MemoryLayer; 2]` because:
-/// 1. We want a "not yet loaded" state separate from "loaded
-///    but missing" (the latter is encoded in each layer's
-///    `status`).
-/// 2. The watcher's invalidation handler can simply set the slot
-///    to `None`; the next `load_for_session` call re-reads.
+/// Each slot holds `Option<CachedLayer>` where `CachedLayer` pairs
+/// the loaded `MemoryLayer` with the file's `mtime` at load time.
+/// `None` means "not yet loaded"; the read path stats the current
+/// `mtime` and reloads when it differs (RULE-C-001 fence) — so
+/// freshness is decided at read time, with no background watcher.
 ///
 /// **Concurrency**: the cache uses `tokio::sync::RwLock` so
 /// concurrent chat requests on different projects can read
-/// their respective slots in parallel; the writer path
-/// (invalidation) takes the write lock only for the duration of
-/// the slot swap.
+/// their respective slots in parallel; the writer path (a cache
+/// miss / mtime change) takes the write lock only for the
+/// duration of the slot swap.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use tokio::sync::RwLock;
 
@@ -34,20 +30,36 @@ use crate::llm::types::{CacheControl, ContentBlock};
 use crate::memory::file::{load_layer, resolve_path, user_dir};
 use crate::memory::types::{LayerStatus, MemoryKind, MemoryLayer, MemorySource};
 
+/// A cached memory layer paired with the file's `mtime` at load
+/// time. The read-through fence stats the current `mtime` and
+/// compares: equal ⇒ cache hit (return `layer`), different ⇒ the
+/// file changed (or appeared / vanished) ⇒ reload.
+///
+/// `mtime = None` covers both "file absent" and "filesystem
+/// refuses `modified()`" (rare); a file that later appears flips
+/// to `Some` and trips the inequality. This makes the read path
+/// the authority on freshness — no dependence on a background
+/// watcher (RULE-C-001 fence, 2026-06-15).
+#[derive(Clone)]
+pub(crate) struct CachedLayer {
+    layer: MemoryLayer,
+    mtime: Option<SystemTime>,
+}
+
 /// A single project's two-file memory slot: `[CLAUDE.md, AGENTS.md]`.
 ///
 /// `None` means "not yet loaded" — the loader must re-read on
 /// the next request. `Some([...])` is the cached pair; either
 /// element may be `Loaded` / `Missing` / `Error` per
 /// [`LayerStatus`].
-pub type ProjectSlot = [Option<MemoryLayer>; 2];
+pub type ProjectSlot = [Option<CachedLayer>; 2];
 
 /// User-layer two-file slot.
-pub type UserSlot = [Option<MemoryLayer>; 2];
+pub type UserSlot = [Option<CachedLayer>; 2];
 
 /// Convert `(kind, source)` to the slot index (0 = Claude, 1 =
-/// Agents). Centralised so the cache, loader, and watcher all
-/// agree on the mapping.
+/// Agents). Centralised so the cache and loader agree on the
+/// mapping.
 fn slot_index(source: MemorySource) -> usize {
     match source {
         MemorySource::Claude => 0,
@@ -55,10 +67,23 @@ fn slot_index(source: MemorySource) -> usize {
     }
 }
 
-/// Process-wide memory cache. Lives inside `AppState`. The
-/// `notify` watcher holds a `Weak<MemoryCache>` so dropping the
-/// state (on app shutdown) cleanly severs the watcher callback
-/// without a deadlock.
+/// Stat a memory file's `modified` time for the read-through
+/// fence. Returns `None` when the path is unresolvable, the file
+/// is absent, or the filesystem refuses `modified()` — all
+/// treated as "no usable mtime" (see [`CachedLayer`]).
+///
+/// Uses `tokio::fs::metadata` (async) so we never block the
+/// runtime on a syscall (contrast RULE-E-004's glob lesson).
+async fn file_mtime(path: Option<&std::path::Path>) -> Option<SystemTime> {
+    let path = path?;
+    tokio::fs::metadata(path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+}
+
+/// Process-wide memory cache. Lives inside `AppState`. Read-
+/// through with an mtime fence (no background watcher).
 pub struct MemoryCache {
     user: RwLock<UserSlot>,
     project: RwLock<HashMap<String, ProjectSlot>>,
@@ -74,59 +99,28 @@ impl MemoryCache {
         }
     }
 
-    /// Wrap in `Arc` for storage in `AppState` and for the
-    /// watcher to share. Convenience: `Arc::new(MemoryCache::new())`.
+    /// Wrap in `Arc` for storage in `AppState`. Convenience:
+    /// `Arc::new(MemoryCache::new())`.
     pub fn arc() -> Arc<Self> {
         Arc::new(Self::new())
-    }
-
-    /// Invalidate the entire user-layer cache. The next
-    /// `load_for_session` call will re-read both user files.
-    /// Cheap — just sets both slots to `None`.
-    #[allow(dead_code)]
-    pub async fn invalidate_user(&self) {
-        let mut guard = self.user.write().await;
-        guard[0] = None;
-        guard[1] = None;
-    }
-
-    /// Invalidate a single user-layer slot (e.g. the watcher
-    /// saw a write to `CLAUDE.md`; `AGENTS.md` is unchanged and
-    /// its cached `Loaded` / `Missing` is still valid).
-    pub async fn invalidate_user_slot(&self, source: MemorySource) {
-        let mut guard = self.user.write().await;
-        guard[slot_index(source)] = None;
-    }
-
-    /// Invalidate an entire project's cache (both files). Called
-    /// by `delete_session` and `delete_project` and by the
-    /// watcher for any write under a project's directory.
-    pub async fn invalidate_project(&self, project_id: &str) {
-        let mut guard = self.project.write().await;
-        guard.remove(project_id);
-    }
-
-    /// Invalidate a single project-layer slot.
-    pub async fn invalidate_project_slot(
-        &self,
-        project_id: &str,
-        source: MemorySource,
-    ) {
-        let mut guard = self.project.write().await;
-        if let Some(slot) = guard.get_mut(project_id) {
-            slot[slot_index(source)] = None;
-        }
     }
 
     /// Read-only peek at a user-layer slot. Returns `None` if
     /// the slot has never been populated; otherwise returns the
     /// cached layer (which may itself be `Missing` / `Error`).
+    ///
+    /// Note: this peeks the **cache**, not the file — it does not
+    /// apply the mtime fence. The read path goes through
+    /// `read_or_load_user` instead. Kept as an introspection API
+    /// for tests / diagnostics.
+    #[allow(dead_code)]
     pub async fn peek_user(&self, source: MemorySource) -> Option<MemoryLayer> {
         let guard = self.user.read().await;
-        guard[slot_index(source)].clone()
+        guard[slot_index(source)].as_ref().map(|c| c.layer.clone())
     }
 
     /// Read-only peek at a project-layer slot.
+    #[allow(dead_code)]
     pub async fn peek_project(
         &self,
         project_id: &str,
@@ -135,7 +129,7 @@ impl MemoryCache {
         let guard = self.project.read().await;
         guard
             .get(project_id)
-            .and_then(|slot| slot[slot_index(source)].clone())
+            .and_then(|slot| slot[slot_index(source)].as_ref().map(|c| c.layer.clone()))
     }
 }
 
@@ -146,7 +140,7 @@ impl Default for MemoryCache {
 }
 
 /// The 4 fixed file paths the cache is responsible for. Used by
-/// the watcher to register the right inotify watches and by the
+/// `load_for_session`'s mtime fence to stat each file and by the
 /// Tauri command `read_memory_content` to resolve a path back
 /// to a `(kind, source)` tuple for the preview UI.
 ///
@@ -202,33 +196,63 @@ pub async fn load_for_session(
     out
 }
 
-/// User-layer read-through.
+/// User-layer read-through with an mtime fence (RULE-C-001).
+///
+/// Stats the file's current `mtime`; if it matches the cached
+/// slot's `mtime`, return the cached layer (hit). Otherwise
+/// reload from disk and store the fresh layer + mtime. This
+/// makes the read path the authority on freshness — a file
+/// saved between cache population and the next read is always
+/// reflected, with no dependence on a background watcher.
 async fn read_or_load_user(cache: &MemoryCache, source: MemorySource) -> MemoryLayer {
-    if let Some(cached) = cache.peek_user(source).await {
-        return cached;
+    let path = resolve_path(MemoryKind::User, source, None);
+    let mtime = file_mtime(path.as_deref()).await;
+    {
+        let guard = cache.user.read().await;
+        if let Some(cached) = &guard[slot_index(source)] {
+            if cached.mtime == mtime {
+                return cached.layer.clone();
+            }
+        }
     }
     let layer = load_layer(MemoryKind::User, source, None).await;
     let mut guard = cache.user.write().await;
-    guard[slot_index(source)] = Some(layer.clone());
+    guard[slot_index(source)] = Some(CachedLayer {
+        layer: layer.clone(),
+        mtime,
+    });
     layer
 }
 
-/// Project-layer read-through.
+/// Project-layer read-through with an mtime fence (RULE-C-001).
+/// See [`read_or_load_user`] for the fence rationale.
 async fn read_or_load_project(
     cache: &MemoryCache,
     project_id: &str,
     project_path: &str,
     source: MemorySource,
 ) -> MemoryLayer {
-    if let Some(cached) = cache.peek_project(project_id, source).await {
-        return cached;
+    let path = resolve_path(MemoryKind::Project, source, Some(project_path));
+    let mtime = file_mtime(path.as_deref()).await;
+    {
+        let guard = cache.project.read().await;
+        if let Some(slot) = guard.get(project_id) {
+            if let Some(cached) = &slot[slot_index(source)] {
+                if cached.mtime == mtime {
+                    return cached.layer.clone();
+                }
+            }
+        }
     }
     let layer = load_layer(MemoryKind::Project, source, Some(project_path)).await;
     let mut guard = cache.project.write().await;
     let entry = guard
         .entry(project_id.to_string())
         .or_insert([None, None]);
-    entry[slot_index(source)] = Some(layer.clone());
+    entry[slot_index(source)] = Some(CachedLayer {
+        layer: layer.clone(),
+        mtime,
+    });
     layer
 }
 
@@ -391,8 +415,7 @@ pub fn resolve_user_known_path(
 }
 
 /// Re-exported for the Tauri command surface (defined in
-/// `crate::commands::memory`). Avoids the watcher module
-/// re-importing `resolve_path` directly.
+/// `crate::commands::memory`).
 #[allow(dead_code)]
 pub fn resolve_one(
     kind: MemoryKind,

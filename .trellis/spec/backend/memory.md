@@ -27,11 +27,24 @@ layers are forward-compat enum variants that exist on the type
 level but are never populated. The contract here describes V2
 1 期; the Session / Runtime design is deferred to V2 2 期.
 
-The memory system is a **read-through cache** with **notify**-
-based hot-reload. The agent core reads the 4 fixed memory files
-(2 layers × 2 filenames) on every chat turn, formats them into
-the system prompt, and watches the files for editor saves so
-the next turn sees the latest content.
+> **⚠️ Updated 2026-06-15 (RULE-C-001/C-002/C-004)**: the
+> `notify`-based watcher was **removed**. Freshness is now a
+> read-through **mtime fence** — every `load_for_session` stats
+> each file's `mtime` and reloads the slot on change. The
+> `invalidate_*` API, the debounce loop, and `MemoryWatcher` are
+> all gone; C-002 (new-project watch) and C-004 (dropped-watcher
+> hazard) are satisfied for free. The `notify watcher` /
+> `Decision: ...watcher-driven invalidation` sections below
+> describe the **old** design and are kept as historical
+> reference — they no longer match the code. See
+> `.trellis/tasks/06-15-p1-memory-watcher-appstate/`.
+
+The memory system is a **read-through cache** whose freshness
+is decided at **read time** by an mtime fence (no background
+watcher). The agent core reads the 4 fixed memory files (2
+layers × 2 filenames) on every chat turn, stats each file's
+`mtime`, and reloads any slot whose `mtime` changed since the
+last load — so the next turn always sees the latest content.
 
 ---
 
