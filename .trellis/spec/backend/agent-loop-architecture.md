@@ -236,9 +236,11 @@ the new `v2` as the canonical entry point. Do not leave a "v1" around
 | `agent_loop_c3_compaction_does_not_panic` | C3 compaction in turn N → turn N+1 still runs |
 | `agent_loop_c3_still_over_emits_error_and_skips_provider` | C3 still-over → emit error, skip `provider.send` (PR4 invariant) |
 | `agent_loop_error_path_emits_chat_event_error` | Error mid-loop → `ChatEvent::Error` → loop exits |
+| `agent_loop_persist_failure_emits_error` | RULE-A-003 (2026-06-15): `persist_turn` failure on a normal persist site → `ChatEvent::Error{Server}` + loop aborts (matches the StillOver pattern) |
+| `agent_loop_cancel_skips_audit_for_cancelled_tool` | RULE-A-004 (2026-06-15): a tool cancelled mid-execution is NOT recorded as `tool_executed` (audit moved after the cancel check) |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
 
-All 10 must pass on every change to `run_chat_loop`. If any fails, the
+All 12 must pass on every change to `run_chat_loop`. If any fails, the
 production call site in `chat.rs` is **at risk** of the same defect
 (failing the integration test means production would also fail).

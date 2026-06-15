@@ -1,0 +1,1 @@
+{"file": "spec/backend/agent-loop-architecture.md", "reason": "验证:run_chat_loop 改动符合契约(14 参数不变 / CancellationGuard 单一来源 / 无 test-only 分支或 cfg(test) 门控);新增的 persist-fail 测试 + audit-cancel 测试已补进 'Tests Required' 清单;10 个集成测试全过(production call site 风险等同,fail = production 也会 fail)"}

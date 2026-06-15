@@ -139,26 +139,28 @@
 
 - **Level**: P1
 - **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat.rs:439-447/875-886/1205-1216`
+- **File**: `app/src-tauri/src/agent/chat_loop.rs`(迁移后;旧 `chat.rs:439-447/875-886/1205-1216` 行号已失效,见 RULE-A-006)
 - **Description**: `persist_turn` 失败只 `tracing::error!` 后继续,无 Error 事件 emit
 - **Impact**: 磁盘满/DB 锁竞争失败时,消息"发了回了"但下次打开 session 空白
 - **Fix**: 失败时 emit Error 事件(兑现 REVIEW-sse P3)
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — 5 处 `persist_turn` 失败路径分类处理:正常路径 3 处(初始 user `:263` / assistant turn `:513` / tool_result `:723`)→ `emit_persist_failure`(emit `ChatEvent::Error{Server}` 中文文案)+ `return`;cancel 路径 2 处(`:544`/`:687`)→ 保持 `tracing::error!`-only(避免与 cancelled `Done` 双终止事件冲突)。helper `emit_persist_failure` 在 `chat_loop.rs` 末尾。决策 = emit Error + 终止(对齐 RULE-A-002 StillOver),category 复用 `Server`(已验证前端不基于 category 分支,零前端改动)。集成测试 `agent_loop_persist_failure_emits_error`(`BEFORE INSERT ON messages` trigger 拦截,断言 call_count==0 + 1 Error + Server + 文案)。
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-persist-turn-emit-error`
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1 + REVIEW-sse-agent-loop §8 P3(2026-06-12 提出,0 落地)
+- **Related Task**: `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order`
+- **Closed At**: <pending commit>(carlos commit 后回填)
+- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1 + REVIEW-sse-agent-loop §8 P3(2026-06-12 提出,0 落地 → 2026-06-15 兑现)
 
 ### RULE-A-004 — record_tool_executed_audit 在 cancel 检查之前 → audit 撒谎
 
 - **Level**: P1
 - **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat.rs:1094-1116`
-- **Description**: audit 在 `:1114-1116` cancel 检查之前调用,cancel 短路的 tool 仍记一行 `tool_executed`
+- **File**: `app/src-tauri/src/agent/chat_loop.rs:643`(迁移后;旧 `chat.rs:1094-1116` 行号已失效)
+- **Description**: audit 在 cancel 检查之前调用,cancel 短路的 tool 仍记一行 `tool_executed`
 - **Impact**: 审计完整性破坏,追责和回放分析误导
 - **Fix**: audit 提到 cancel 检查之后
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — `record_tool_executed_audit` 块从 cancel 检查**前**移到**后**,用 `if token.is_cancelled() { cancelled = true; } else if audit {...}` 串联 —— cancelled 的 tool 不落 audit。两检查背靠背无 `.await`,token 状态一致。集成测试 `agent_loop_cancel_skips_audit_for_cancelled_tool`(turn 1 `list_dir` tool_use + cancel task `yield_now` gate call_count>=1,断言 `session_audit_events` 无 `tool_executed` 行)。
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-audit-cancel-order`
+- **Related Task**: `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order`
+- **Closed At**: <pending commit>(carlos commit 后回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
 ### RULE-A-006 — Agent Loop 集成测试缺口(MockProvider)
@@ -660,7 +662,7 @@
 | 原建议 | DEBT.md 对应 | 当前状态 |
 |---|---|---|
 | P2 SSE data_buf 加 1 MiB 上限 | RULE-D-003 (P2) | open |
-| P3 persist_turn 失败 emit Error | RULE-A-003 (P1) | open |
+| P3 persist_turn 失败 emit Error | RULE-A-003 (P1) | closed (2026-06-15) |
 | P4 GLM max_tokens 500/400 误分类加 keyword | RULE-D-006 (P2) | open |
 | P5 mock HTTP server 集成测试 | RULE-A-006 (P1,**PR5 前移**) | closed (2026-06-15) |
 
@@ -686,6 +688,8 @@
 | 2026-06-14 | RULE-E-006 | P3 | P1 | `/tmp` fallback 重启清空 = 工作数据丢失 | meta-review §2.3 |
 | 2026-06-15 | RULE-E-006 | open | **closed** | worktree data_dir 从 env/home/tmp 改 Tauri app_data_dir,对齐 DB,消除 /tmp 数据丢失;`git::data_dir()` 函数 + re-export + 模块 docstring 全部删除,Grill decision #2 不变式保留(`catalog` 紧跟 `db`,`app_data_dir` 落在 data-plane group 内) | .trellis/tasks/06-15-p1-worktree-data-dir-tauri |
 | 2026-06-15 | RULE-A-006 | partial | **closed** | production `chat.rs` → `run_chat_loop` 迁移完成,副本消除,9 个 agent_loop_* 测试现覆盖 production 真实路径 | `.trellis/tasks/06-15-unify-chat-loop-dispatch` |
+| 2026-06-15 | RULE-A-003 | open | **closed** | 5 处 persist 失败分类处理:正常路径 3 处 emit `Error{Server}`+return(对齐 RULE-A-002 StillOver),cancel 路径 2 处 log-only(避免与 cancelled `Done` 双终止事件);前端不基于 category 分支故复用 `Server`,零前端改动。`emit_persist_failure` helper 集中文案;`agent_loop_persist_failure_emits_error` 测试(trigger 拦截 INSERT) | `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order` |
+| 2026-06-15 | RULE-A-004 | open | **closed** | `record_tool_executed_audit` 块从 cancel 检查前移到后(`else if` 串联),cancelled 的 tool 不落 audit;两检查背靠背无 await,token 状态一致。`agent_loop_cancel_skips_audit_for_cancelled_tool` 测试 | 同上 task |
 
 ---
 
@@ -699,8 +703,7 @@
 | PR4 | `06-14-p0-c3-tail-pair-orphan` | RULE-A-001 + RULE-A-002 | — |
 | **PR5** | **`06-14-p1-agent-loop-integration-tests`** | **RULE-A-006** | **必须在 P0 修复后立刻补,为后续 P1 提供回归保护** |
 | **PR5b** | **`06-15-unify-chat-loop-dispatch`** | **RULE-A-006(闭环)** | **依赖 PR5 — production `chat.rs` → `run_chat_loop` 迁移,副本消除** |
-| PR6 | `06-14-p1-persist-turn-emit-error` | RULE-A-003 | 依赖 PR5 |
-| PR7 | `06-14-p1-audit-cancel-order` | RULE-A-004 | 依赖 PR5 |
+| PR6+PR7 | `06-15-p1-persist-emit-error-and-audit-cancel-order` | RULE-A-003 + RULE-A-004(合并一个 task) | ✅ closed (2026-06-15) — PR5(RULE-A-006)解阻后合并实现 |
 | PR8 | `06-14-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | — |
 | PR9 | `06-14-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | — |
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |

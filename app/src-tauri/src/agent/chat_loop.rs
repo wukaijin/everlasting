@@ -260,10 +260,15 @@ pub async fn run_chat_loop(
     // Persist the most recent user message before the agent loop runs.
     if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
         let msg = last_user.clone();
+        // RULE-A-003 (2026-06-15): if the very first user message
+        // can't be persisted, abort with a visible Error —
+        // continuing would let the LLM answer a message the DB
+        // never recorded, so the next session reload is blank.
         if let Err(e) = crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None)
             .await
         {
-            tracing::error!(error = %e, "failed to persist user turn");
+            emit_persist_failure(&sink, &rid, &e);
+            return;
         }
         seq += 1;
     }
@@ -510,6 +515,12 @@ pub async fn run_chat_loop(
                 turn_thinking_done,
                 turn_done_at,
             );
+            // RULE-A-003 (2026-06-15): assistant turn persist
+            // failure → emit Error + abort. Previously this was a
+            // silent log, but the `messages.push` + `seq += 1`
+            // below it still ran, drifting the in-memory seq out
+            // of sync with the DB. TurnComplete stays on the
+            // success path only (unchanged).
             if let Err(e) = crate::db::persist_turn(
                 &db,
                 &session_id,
@@ -520,20 +531,20 @@ pub async fn run_chat_loop(
             )
             .await
             {
-                tracing::error!(error = %e, "failed to persist assistant turn");
-            } else {
-                emit_chat_event_via_sink(
-                    &sink,
-                    &rid,
-                    &ChatEvent::TurnComplete {
-                        seq,
-                        ttfb_ms: turn_latency.ttfb_ms,
-                        gen_ms: turn_latency.gen_ms,
-                        total_ms: turn_latency.total_ms,
-                        thinking_ms: turn_latency.thinking_ms,
-                    },
-                );
+                emit_persist_failure(&sink, &rid, &e);
+                return;
             }
+            emit_chat_event_via_sink(
+                &sink,
+                &rid,
+                &ChatEvent::TurnComplete {
+                    seq,
+                    ttfb_ms: turn_latency.ttfb_ms,
+                    gen_ms: turn_latency.gen_ms,
+                    total_ms: turn_latency.total_ms,
+                    thinking_ms: turn_latency.thinking_ms,
+                },
+            );
             messages.push(msg);
             seq += 1;
         }
@@ -541,6 +552,11 @@ pub async fn run_chat_loop(
         if cancelled {
             if !tool_calls.is_empty() {
                 let tool_result_msg = build_synthetic_tool_result_message(&tool_calls);
+                // RULE-A-003 (2026-06-15): cancel path — log-only,
+                // NOT emit_persist_failure. The loop is about to
+                // emit its terminal cancelled `Done`; an Error
+                // here would be a second terminal event conflicting
+                // with it. The user already knows they cancelled.
                 if let Err(e) = crate::db::persist_turn(
                     &db,
                     &session_id,
@@ -640,7 +656,20 @@ pub async fn run_chat_loop(
             )
             .await;
             let duration_ms = tool_exec_start.elapsed().as_millis();
-            if let Err(e) = permissions::record_tool_executed_audit(
+            // RULE-A-004 (2026-06-15): audit AFTER the cancel
+            // check. Previously `record_tool_executed_audit` ran
+            // before the `token.is_cancelled()` test, so a tool
+            // whose execution was interrupted by a cancel (token
+            // fired during `execute_tool`) still got a
+            // `tool_executed` audit row — lying to the audit log
+            // (the tool did not complete from the user's intent;
+            // they hit Stop). Now a cancelled-in-flight tool is
+            // marked `cancelled` and skipped for auditing. The two
+            // checks are back-to-back with no `.await` between
+            // them, so the token state is identical across both.
+            if token.is_cancelled() {
+                cancelled = true;
+            } else if let Err(e) = permissions::record_tool_executed_audit(
                 &db,
                 &session_id,
                 name,
@@ -651,9 +680,6 @@ pub async fn run_chat_loop(
             .await
             {
                 tracing::warn!(error = %e, "chat: record_tool_executed_audit failed (non-fatal)");
-            }
-            if token.is_cancelled() {
-                cancelled = true;
             }
             if let Some(new_cwd) = update.new_cwd.clone() {
                 current_ctx.cwd = new_cwd.clone();
@@ -684,6 +710,9 @@ pub async fn run_chat_loop(
                     role: Role::User,
                     content: MessageContent::Blocks(result_blocks),
                 };
+                // RULE-A-003 (2026-06-15): cancel path — log-only
+                // (see the synthetic tool_result site above for why
+                // this stays tracing-only instead of emit_persist_failure).
                 if let Err(e) = crate::db::persist_turn(
                     &db,
                     &session_id,
@@ -720,6 +749,10 @@ pub async fn run_chat_loop(
             role: Role::User,
             content: MessageContent::Blocks(result_blocks),
         };
+        // RULE-A-003 (2026-06-15): tool_result persist failure →
+        // emit Error + abort. Previously silent + `seq += 1` drift;
+        // the next turn's LLM context would otherwise be built on a
+        // tool_result the DB never recorded.
         if let Err(e) = crate::db::persist_turn(
             &db,
             &session_id,
@@ -730,7 +763,8 @@ pub async fn run_chat_loop(
         )
         .await
         {
-            tracing::error!(error = %e, "failed to persist tool_result turn");
+            emit_persist_failure(&sink, &rid, &e);
+            return;
         }
         messages.push(tool_result_msg);
         seq += 1;
@@ -788,6 +822,35 @@ fn instant_delta_ms(start: Option<Instant>, end: Option<Instant>) -> Option<i64>
         }
         _ => None,
     }
+}
+
+/// RULE-A-003 (2026-06-15): `persist_turn` failure is no longer
+/// silent. On the **normal** persist sites (initial user message,
+/// assistant turn, tool_result turn) a failure now emits a typed
+/// `ChatEvent::Error { Server }` so the frontend surfaces it —
+/// disk-full / DB-lock contention would otherwise leave the next
+/// session reload blank (the message was rendered to the user but
+/// never reached the DB). The caller then `return`s, matching
+/// RULE-A-002's `StillOver` pattern (data-integrity failure →
+/// emit Error + terminate the loop).
+///
+/// The **cancel-path** persist sites (synthetic tool_result after
+/// cancel, cancelled tool_result turn) intentionally do NOT call
+/// this — they stay `tracing::error!`-only so the loop still emits
+/// its single terminal cancelled `Done` event instead of two
+/// terminal events (Error + Done) that would conflict.
+fn emit_persist_failure(sink: &Arc<dyn ChatEventSink>, rid: &str, err: &sqlx::Error) {
+    tracing::error!(error = %err, "agent loop: persist_turn failed");
+    sink.emit_chat_event(&crate::state::ChatEventPayload {
+        request_id: rid.to_string(),
+        event: ChatEvent::Error {
+            message: format!(
+                "保存对话记录失败(可能磁盘满或数据库被占用),请重试。详情: {}",
+                err
+            ),
+            category: LlmErrorCategory::Server,
+        },
+    });
 }
 
 async fn load_for_session(

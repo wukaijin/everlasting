@@ -1568,3 +1568,208 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         "no Done event expected — the turn was aborted, not completed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 10) RULE-A-003: persist_turn failure surfaces a typed Error
+// ---------------------------------------------------------------------------
+
+/// RULE-A-003 (2026-06-15): when `persist_turn` fails (disk full /
+/// DB-lock contention) on a NORMAL persist site (initial user
+/// message / assistant turn / tool_result turn), the agent loop
+/// must NOT stay silent — it emits a `ChatEvent::Error { Server }`
+/// and aborts. Previously the failure was `tracing::error!`-only,
+/// so the message was rendered to the user but never reached the
+/// DB; the next session reload was blank, and the in-memory seq
+/// drifted out of sync with the DB. The cancel-path persist sites
+/// intentionally stay log-only (no Error) to avoid emitting two
+/// terminal events — that's a code-review invariant, not a
+/// runtime path this test exercises.
+///
+/// We force the failure with a `BEFORE INSERT ON messages` trigger
+/// that always ABORTs. This blocks only INSERT (what `persist_turn`
+/// does); SELECT (what `load_session` / `get_project` do) is
+/// unaffected, so the loop reaches the persist site cleanly. The
+/// initial user-message persist runs before the `for turn` loop, so
+/// `provider.send` is never called (`call_count == 0`).
+#[tokio::test]
+async fn agent_loop_persist_failure_emits_error() {
+    let h = make_harness().await;
+    // Poison INSERTs into `messages`: persist_turn's INSERT will
+    // RAISE, but load_session's SELECT on `messages` still works.
+    sqlx::query(
+        r#"CREATE TRIGGER messages_no_insert BEFORE INSERT ON messages
+           BEGIN
+               SELECT RAISE(ABORT, 'simulated persist failure');
+           END"#,
+    )
+    .execute(&h.db)
+    .await
+    .expect("install fail-insert trigger");
+
+    let emitter = Arc::new(MockEmitter::new());
+    // The provider script is never consumed (call_count stays 0).
+    // Provided as a sentinel so a broken fix that skipped the
+    // abort would surface as call_count == 1.
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "should never reach".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-persist-fail".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+    )
+    .await;
+
+    // (1) provider.send was never called — the initial user-message
+    //     persist (before the `for turn` loop) failed and aborted.
+    assert_eq!(
+        mock.call_count(),
+        0,
+        "persist failure must abort before provider.send is called"
+    );
+
+    // (2) Exactly one Error event, category Server, persist-failure
+    //     copy. Mirrors the StillOver test's assertion shape.
+    let error_events: Vec<_> = emitter
+        .chat_events()
+        .into_iter()
+        .filter_map(|p| match p.event {
+            ChatEvent::Error { message, category } => Some((message, category)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        error_events.len(),
+        1,
+        "exactly one Error event expected on persist failure (got {})",
+        error_events.len()
+    );
+    let (err_msg, err_cat) = &error_events[0];
+    assert!(
+        err_msg.contains("保存对话记录失败"),
+        "Error message should be the persist-failure copy, got: {}",
+        err_msg
+    );
+    assert_eq!(
+        *err_cat,
+        crate::llm::LlmErrorCategory::Server,
+        "category should be Server (system-side, not a bad request)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 11) RULE-A-004: a cancelled tool is NOT recorded as tool_executed
+// ---------------------------------------------------------------------------
+
+/// RULE-A-004 (2026-06-15): `record_tool_executed_audit` must run
+/// AFTER the `token.is_cancelled()` check. A tool whose execution
+/// was interrupted by a cancel must NOT get a `tool_executed` audit
+/// row — recording it would lie to the audit log (the user hit
+/// Stop; the tool did not complete from their intent).
+///
+/// Turn 1 emits `tool_use` (`list_dir` — a read tool that does NOT
+/// consult the cancel token, so execute_tool runs to completion
+/// regardless). A side task cancels the token once `call_count >= 1`
+/// (turn 1's `send` has been called). The cancel task `yield_now`s
+/// (no sleep) so it re-checks at every agent-loop await point and
+/// cancels as early as possible. Two landing spots, both correct:
+/// - mid-stream → the `select!`'s biased cancel arm wins, the tool
+///   never executes → no audit row (trivially correct).
+/// - at/after execute_tool returns → `token.is_cancelled()` is true
+///   at the audit check → audit skipped (the RULE-A-004 fix).
+/// Either way `session_audit_events` has zero `tool_executed` rows.
+///
+/// Contrast `agent_loop_tool_use_triggers_tool_result_turn` (no
+/// cancel): the same `list_dir` DOES write an audit row there — so
+/// this is a real regression guard, not a tautology.
+#[tokio::test]
+async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: tool_use. `list_dir` is a read tool → Tier 5
+        // default-allow, and it does NOT consult the cancel token,
+        // so execute_tool runs to completion even after cancel.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_1".into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2 sentinel — only consumed if the loop re-enters
+        // (it shouldn't; cancel aborts before turn 2).
+        MockResponse::HangingThenCancel,
+    ]));
+    let call_handle = mock.call_count_handle();
+    let cancel_token = CancellationToken::new();
+    let cancel_for_task = cancel_token.clone();
+    let cancel_handle = tokio::spawn(async move {
+        // yield_now (not sleep) so the cancel task re-runs at every
+        // agent-loop await point and cancels as soon as turn 1's
+        // send has been observed.
+        loop {
+            if call_handle.load(Ordering::SeqCst) >= 1 {
+                cancel_for_task.cancel();
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-audit-cancel".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.permission_asks,
+        cancel_token,
+    )
+    .await;
+    cancel_handle.await.unwrap();
+
+    // No tool_executed audit row for this session — the cancelled
+    // tool must not leave a "this tool ran" record behind it.
+    let audit_count: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM session_audit_events
+           WHERE session_id = ? AND kind = 'tool_executed'"#,
+    )
+    .bind(&h.session_id)
+    .fetch_one(&h.db)
+    .await
+    .expect("count tool_executed audit rows");
+    assert_eq!(
+        audit_count, 0,
+        "a cancelled tool must NOT be recorded as tool_executed (RULE-A-004)"
+    );
+}
