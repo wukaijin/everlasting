@@ -136,6 +136,21 @@ pub async fn delete_session(
     // longer exists (orphan rows / FK violation / blank reload).
     await_inflight_exit(exit_rx, "delete_session").await;
 
+    // RULE-B-001 (2026-06-16): drop any pending `permission:ask`
+    // oneshot senders for this session. With the agent loop
+    // already exited this mostly clears residual entries (its
+    // CancellationToken already raced the ask future to Deny),
+    // but wiring it explicitly removes the latent dependency on
+    // the biased select! and stops the store leaking entries
+    // across session churn. cancel_session_asks filters by
+    // session_id (RULE-B-002), so other sessions' pending asks
+    // are untouched.
+    crate::agent::permissions::cancel_session_asks(
+        &state.permission_asks,
+        &session_id,
+    )
+    .await;
+
     // Clear the in-memory ReadGuard for this session so we don't
     // leak fingerprints for a session the user just deleted.
     state.read_guard.clear_session(&session_id).await;

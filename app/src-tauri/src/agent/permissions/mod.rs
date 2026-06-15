@@ -275,29 +275,46 @@ pub enum PermissionResponse {
  Deny,
 }
 
+/// A pending `permission:ask` awaiting the user's response. The
+/// `session_id` binding lets `cancel_session_asks` filter by
+/// session (RULE-B-002) so cancelling one session's in-flight
+/// asks never drops another session's pending oneshot sender. The
+/// `rid` key alone can't carry the session — the resolve-side
+/// `permission_response` IPC sends only the rid — so the session
+/// lives on the value (approach A, RULE-B-002).
+#[derive(Debug)]
+pub struct PendingAsk {
+ session_id: String,
+ tx: oneshot::Sender<PermissionResponse>,
+}
+
 /// In-flight permission asks, keyed by `rid` (random request id
 /// emitted with the `permission:ask` event). The agent loop
-/// inserts a `(rid, oneshot::Sender)` pair before emitting;
-/// the IPC `permission_response` handler looks up by `rid` and
-/// sends the response. The sender is `Drop`-ed (and thus removed
-/// from the map) on timeout.
+/// inserts a `(rid, PendingAsk)` pair before emitting; the IPC
+/// `permission_response` handler looks up by `rid` and forwards
+/// the response on the inner `tx`. An entry is removed (and its
+/// sender dropped) on timeout, and a whole session's entries are
+/// dropped by `cancel_session_asks` (wired into `delete_session`).
 pub type PermissionStore =
- Arc<Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>>;
+ Arc<Mutex<HashMap<String, PendingAsk>>>;
 
 pub fn new_permission_store() -> PermissionStore {
  Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Insert a pending ask. The `rid` is a UUID string (the agent
-/// loop generates it). The returned `oneshot::Receiver` is the
-/// future the agent loop awaits in `check()`.
+/// loop generates it); `session_id` binds the entry to its
+/// session so `cancel_session_asks` can filter (RULE-B-002). The
+/// returned `oneshot::Receiver` is the future the agent loop
+/// awaits in `check()`.
 pub async fn register_ask(
  store: &PermissionStore,
+ session_id: &str,
  rid: String,
 ) -> oneshot::Receiver<PermissionResponse> {
  let (tx, rx) = oneshot::channel();
  let mut map = store.lock().await;
- map.insert(rid, tx);
+ map.insert(rid, PendingAsk { session_id: session_id.to_string(), tx });
  rx
 }
 
@@ -311,33 +328,29 @@ pub async fn resolve_ask(
  response: PermissionResponse,
 ) -> bool {
  let mut map = store.lock().await;
- if let Some(tx) = map.remove(rid) {
- tx.send(response).is_ok()
+ if let Some(ask) = map.remove(rid) {
+ ask.tx.send(response).is_ok()
  } else {
  false
  }
 }
 
-/// Cancel all pending asks for a session. Called from the
-/// destructive-op cancel hook (`delete_session` etc.) — same
-/// pattern as the `CancellationGuard` on the agent loop's
-/// `cancellations` map. Reserved for the future
-/// `delete_session` integration (the MVP `delete_session` IPC
-/// doesn't call this yet — the hook lives in `commands/
-/// sessions.rs` and will be wired in once the destructive-op
-/// audit pass lands).
-#[allow(dead_code)]
+/// Cancel all pending asks for a session, leaving other sessions'
+/// asks intact (RULE-B-002). Called from the destructive-op
+/// cancel hook — `delete_session` (`commands/sessions.rs`) wires
+/// this in after the agent loop has exited. Removed `PendingAsk`
+/// values drop in place, so their oneshot senders drop and the
+/// awaiting `check()` receiver returns `Err(RecvError)`, which
+/// `check()` treats as Deny (same as the timeout path).
 pub async fn cancel_session_asks(
  store: &PermissionStore,
- _session_id: &str,
+ session_id: &str,
 ) {
- // MVP: simple "drop all pending" — the rid key has no session
- // binding yet (the rids are UUIDs). For a future PR, key the
- // map by `(session_id, rid)` and iterate. Today, the oneshot
- // senders drop on the `clear()` and the receiver returns
- // `Err(RecvError)` which `check()` treats as Deny.
  let mut map = store.lock().await;
- map.clear();
+ // Retain only asks NOT owned by the cancelled session. retain
+ // drops the removed values here → their senders drop → the
+ // awaiting receiver resolves Err → check() picks the Deny path.
+ map.retain(|_, ask| ask.session_id != session_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +950,7 @@ async fn ask_path(
  Some(&reason),
  )
  .await;
- let rx = register_ask(store, rid.clone()).await;
+ let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
  let resp = tokio::select! {
  biased;
  _ = token.cancelled() => {
@@ -1250,6 +1263,38 @@ mod tests {
  for m in [Mode::Edit, Mode::Plan, Mode::Yolo, Mode::Background] {
  assert_eq!(Mode::from_str_opt(m.as_str()), m);
  }
+ }
+
+ #[tokio::test]
+ async fn cancel_session_asks_isolates_by_session() {
+ // RULE-B-002: cancelling one session's asks must NOT drop
+ // another session's pending sender. Before the fix the body
+ // was a map.clear() that wiped the whole store.
+ let store = new_permission_store();
+ let rx_a = register_ask(&store, "sess-a", "rid-a".to_string()).await;
+ let _rx_b = register_ask(&store, "sess-b", "rid-b".to_string()).await;
+ {
+ let map = store.lock().await;
+ assert_eq!(map.len(), 2, "both asks registered");
+ }
+
+ cancel_session_asks(&store, "sess-a").await;
+
+ {
+ let map = store.lock().await;
+ assert!(
+ !map.contains_key("rid-a"),
+ "session A's ask must be cancelled"
+ );
+ assert!(
+ map.contains_key("rid-b"),
+ "session B's ask must survive cancel of A"
+ );
+ assert_eq!(map.len(), 1);
+ }
+ // A's sender was dropped by the cancel → its receiver resolves
+ // Err, which check() treats as Deny (same as the timeout path).
+ assert!(rx_a.await.is_err());
  }
 
  #[test]

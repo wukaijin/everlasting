@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
-use crate::agent::permissions::{PermissionResponse, PermissionStore};
+use crate::agent::permissions::PermissionResponse;
 use crate::db;
 use crate::state::AppState;
 
@@ -296,25 +296,6 @@ pub async fn grant_tool_permission(
  }
 }
 
-// ---------------------------------------------------------------------------
-// Permission store bridge — lets commands/permissions.rs reach
-// AppState's PermissionStore without leaking the alias through
-// the public interface. The actual store lives in
-// [`crate::state::AppState::permission_asks`].
-// ---------------------------------------------------------------------------
-
-/// Helper for the destructive-op cancel hook: cancel all pending
-/// asks for the session (so an in-flight `permission:ask` future
-/// returns `Err` and the agent loop's `tokio::select!` picks the
-/// Deny path). Currently unused — the `cancel_session_asks`
-/// helper is MVP-clears-all because the rids aren't keyed by
-/// session. A future PR can key the map by `(session_id, rid)`
-/// and iterate. Reserved for the `delete_session` integration
-/// (see `agent/permissions::cancel_session_asks`).
-#[allow(dead_code)]
-pub async fn cancel_pending_asks(store: &PermissionStore) {
- crate::agent::permissions::cancel_session_asks(store, "").await;
-}
 
 // ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events
