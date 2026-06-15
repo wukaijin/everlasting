@@ -277,14 +277,16 @@
 
 - **Level**: P1
 - **Subsystem**: Tools
-- **File**: `app/src-tauri/src/commands/worktree.rs:237-260` + `helpers.rs:198-205`
+- **File**: `app/src-tauri/src/commands/worktree.rs` + `commands/sessions.rs` + `agent/helpers.rs` + `agent/chat.rs` + `state.rs`
 - **Description**: destroy 紧接 `cancel_inflight_for_session`(`helpers.rs` 只 `token.cancel()` 不 await 退出)
 - **Impact**: 窄窗口内 agent loop 下一次写 ENOENT/panic/残留 fingerprint 指向已删文件
 - **Fix**: `cancel_inflight_for_session` 返回退出信号,destroy await
-- **Status**: open
+- **Status**: **closed (2026-06-15)** — `cancel_inflight_for_session` 加 `inflight_exits` 参数,取消 token 后 take 出 `oneshot::Receiver`(单消费者)返回;新增 `await_inflight_exit(rx, label)` helper(10s 防御性 timeout,超时 log warn + 仍进行)。`delete_worktree` / `detach_worktree` / `delete_session` 三处在 destructive 工作前 await。chat.rs spawn 闭包 `run_chat_loop().await` 后 `done_tx.send(())` + 清 `inflight_exits` entry。`AppState.inflight_exits` 新字段 + `load` 初始化。**不动 `cancellations` map 值类型**(cancel_chat / run_chat_loop / CancellationGuard / TestHarness 全不碰,最小涟漪)。设计决策 = 独立 map + oneshot(规避 `tauri::async_runtime::JoinHandle` 跨 Mutex<HashMap> 存储/await 语义不确定);scope = 三者皆 await(用户确认,共享同一 helper 同一类 race)。4 个 cancel 单测(3 改造补第 4 参 + 1 新增 `cancel_inflight_returns_exit_signal_resolving_on_completion`,spawn+flag+sleep 模式证明"先 pending、send 后才 resolve")。487 tests pass。
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-worktree-destroy-await`
+- **Related Task**: `.trellis/tasks/06-15-worktree-destroy-await-cancel-rule-e-005`
+- **Closed At**: `(回填见下条 commit)`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
+- **Resolution Notes**: spec `backend/worktree-contract.md` 同步——cancel_inflight_for_session 签名(`Option<oneshot::Receiver<()>>`)、AppState.inflight_exits 字段、Ordering invariant 改写为 "cancel → **await 退出** → destructive → event"、cancel-hook 步骤补 take receiver + await。
 
 ### RULE-E-006 — git::worktree::data_dir 走 env 而非 Tauri path
 
@@ -690,6 +692,7 @@
 | 2026-06-15 | RULE-A-006 | partial | **closed** | production `chat.rs` → `run_chat_loop` 迁移完成,副本消除,9 个 agent_loop_* 测试现覆盖 production 真实路径 | `.trellis/tasks/06-15-unify-chat-loop-dispatch` |
 | 2026-06-15 | RULE-A-003 | open | **closed** | 5 处 persist 失败分类处理:正常路径 3 处 emit `Error{Server}`+return(对齐 RULE-A-002 StillOver),cancel 路径 2 处 log-only(避免与 cancelled `Done` 双终止事件);前端不基于 category 分支故复用 `Server`,零前端改动。`emit_persist_failure` helper 集中文案;`agent_loop_persist_failure_emits_error` 测试(trigger 拦截 INSERT) | `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order` |
 | 2026-06-15 | RULE-A-004 | open | **closed** | `record_tool_executed_audit` 块从 cancel 检查前移到后(`else if` 串联),cancelled 的 tool 不落 audit;两检查背靠背无 await,token 状态一致。`agent_loop_cancel_skips_audit_for_cancelled_tool` 测试 | 同上 task |
+| 2026-06-15 | RULE-E-005 | open | **closed** | `cancel_inflight_for_session` 加 `inflight_exits` 参数返回 `oneshot::Receiver`(单消费者),新增 `await_inflight_exit`(10s timeout backstop);`delete_worktree`/`detach_worktree`/`delete_session` 三处 await;chat.rs spawn 闭包 `run_chat_loop` 后 `done_tx.send` + 清 entry。独立 map + oneshot(不动 cancellations 值类型,规避 Tauri JoinHandle 存储语义不确定)。4 cancel 单测(3 改造 + 1 新增)。spec Ordering invariant 改写。487 tests pass | `.trellis/tasks/06-15-worktree-destroy-await-cancel-rule-e-005` |
 
 ---
 
@@ -709,7 +712,7 @@
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |
 | PR11 | `06-14-p1-openai-o1-max-completion-tokens` | RULE-D-002 | — |
 | PR12 | `06-14-p1-glob-spawn-blocking` | RULE-E-004 | — |
-| PR13 | `06-14-p1-worktree-destroy-await` | RULE-E-005 | 依赖 PR5 |
+| PR13 | `06-15-worktree-destroy-await-cancel-rule-e-005` | RULE-E-005 | ✅ closed (2026-06-15) — 依赖 PR5(RULE-A-006 已 closed,解阻) |
 | PR14 | `06-15-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
 | PR-N+ | P2 各项子 task | RULE-*-P2 | — |
 | PR-N+ | P3 各项子 task | RULE-*-P3 | — |

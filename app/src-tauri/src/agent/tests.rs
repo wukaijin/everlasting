@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::helpers::{
@@ -187,7 +187,11 @@ async fn cancel_inflight_for_session_cancels_token() {
         Arc::new(Mutex::new(HashMap::new()));
     let session_active_request: Arc<Mutex<HashMap<String, String>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    // Register a fake request for session "s1".
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    // Register a fake request for session "s1". No exit receiver is
+    // registered (simulates a chat that predates the RULE-E-005
+    // signal wiring, or one whose spawn closure already drained it).
     let token = CancellationToken::new();
     {
         let mut map = cancellations.lock().await;
@@ -198,10 +202,19 @@ async fn cancel_inflight_for_session_cancels_token() {
         s2p.insert("s1".to_string(), "rid-1".to_string());
     }
     assert!(!token.is_cancelled());
-    cancel_inflight_for_session(&cancellations, &session_active_request, "s1").await;
+    let exit_rx =
+        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
+            .await;
     assert!(
         token.is_cancelled(),
         "matching request's token should be cancelled"
+    );
+    // No receiver was registered → helper returns None (caller's
+    // `await_inflight_exit` becomes a no-op, but the token cancel
+    // still took effect).
+    assert!(
+        exit_rx.is_none(),
+        "no exit signal should be returned when none was registered"
     );
 }
 
@@ -213,13 +226,24 @@ async fn cancel_inflight_for_session_missing_session_is_noop() {
         Arc::new(Mutex::new(HashMap::new()));
     let session_active_request: Arc<Mutex<HashMap<String, String>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     // Nothing registered.
-    cancel_inflight_for_session(&cancellations, &session_active_request, "s-missing").await;
-    // No panic, no state change. (Asserts on the maps being
-    // empty would be a tautology given the setup, but the
-    // function returning is the actual contract.)
-    assert!(cancellations.lock().await.is_empty());
+    let exit_rx = cancel_inflight_for_session(
+        &cancellations,
+        &session_active_request,
+        &inflight_exits,
+        "s-missing",
+    )
+    .await;
+    // No panic, no state change. Returns None (no in-flight request).
+    assert!(
+        cancellations.lock().await.is_empty(),
+        "nothing to cancel"
+    );
+    assert!(exit_rx.is_none(), "no exit signal for a missing session");
     assert!(session_active_request.lock().await.is_empty());
+    assert!(inflight_exits.lock().await.is_empty());
 }
 
 /// Step 4 follow-up: `cancel_inflight_for_session` is a no-op
@@ -232,6 +256,8 @@ async fn cancel_inflight_for_session_token_gone_is_noop() {
         Arc::new(Mutex::new(HashMap::new()));
     let session_active_request: Arc<Mutex<HashMap<String, String>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     // session_active_request has the entry, but the
     // cancellations map doesn't (the request already
     // finished and the CancellationGuard cleaned up).
@@ -239,11 +265,94 @@ async fn cancel_inflight_for_session_token_gone_is_noop() {
         let mut s2p = session_active_request.lock().await;
         s2p.insert("s1".to_string(), "rid-gone".to_string());
     }
-    cancel_inflight_for_session(&cancellations, &session_active_request, "s1").await;
-    // No panic; the function is best-effort.
+    let exit_rx =
+        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
+            .await;
+    // No panic; the function is best-effort. No token found → no
+    // exit receiver either (returns None).
+    assert!(exit_rx.is_none());
 }
 
-/// Step 4 follow-up (REQ-16): the tool result envelope has
+/// RULE-E-005 (2026-06-15): `cancel_inflight_for_session` returns a
+/// "agent loop exited" signal (`oneshot::Receiver`) that the
+/// destructive commands await before deleting. This test proves the
+/// signal's core contract: it stays **pending** while the producer
+/// (the `chat` spawn closure standing in here) is silent, and
+/// **resolves** only once the producer fires (i.e. `run_chat_loop`
+/// returned). Without this, `delete_worktree`'s `await` would be a
+/// no-op and the race the fix targets would still be open.
+///
+/// Mirrors `select_loop_breaks_on_cancellation`'s spawn + flag +
+/// sleep pattern (a receiver is single-consumer, so we can't poll it
+/// twice — we race it in a task and assert on a shared flag).
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_inflight_returns_exit_signal_resolving_on_completion() {
+    let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let session_active_request: Arc<Mutex<HashMap<String, String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Stand up a full in-flight registration (token + exit receiver +
+    // session→rid), matching what `chat` does on spawn.
+    let token = CancellationToken::new();
+    let (done_tx, done_rx) = oneshot::channel::<()>();
+    {
+        let mut m = cancellations.lock().await;
+        m.insert("rid-1".to_string(), token.clone());
+    }
+    {
+        let mut m = inflight_exits.lock().await;
+        m.insert("rid-1".to_string(), done_rx);
+    }
+    {
+        let mut m = session_active_request.lock().await;
+        m.insert("s1".to_string(), "rid-1".to_string());
+    }
+
+    // Cancel + take the exit signal.
+    let exit_rx =
+        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
+            .await;
+    assert!(token.is_cancelled(), "token should be cancelled");
+    let exit_rx = exit_rx.expect("an in-flight request yields an exit signal");
+    // The receiver was taken out of the map (single-consumer).
+    assert!(
+        inflight_exits.lock().await.is_empty(),
+        "exit receiver should be drained from the map"
+    );
+
+    // Race the receiver in a task so we can assert on a shared flag
+    // (a `oneshot::Receiver` can only be awaited once).
+    let resolved = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let resolved_c = resolved.clone();
+    let handle = tokio::spawn(async move {
+        let _ = exit_rx.await;
+        resolved_c.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    // The agent loop has NOT exited yet (producer silent) → the
+    // awaiting task must stay pending.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !resolved.load(std::sync::atomic::Ordering::SeqCst),
+        "exit signal must NOT resolve before the agent loop exits"
+    );
+
+    // Simulate the `chat` spawn closure finishing `run_chat_loop`.
+    let _ = done_tx.send(());
+
+    // Now the signal resolves promptly.
+    tokio::time::timeout(Duration::from_millis(500), handle)
+        .await
+        .expect("await task should complete after the producer signals")
+        .expect("task should not panic");
+    assert!(
+        resolved.load(std::sync::atomic::Ordering::SeqCst),
+        "exit signal should resolve once the producer signals completion"
+    );
+}
 /// exactly the shape `{"result": <content>, "cwd": <path>}`.
 /// This is the LLM-facing contract — the LLM gets the cwd so
 /// it can correlate tool results with the worktree state.

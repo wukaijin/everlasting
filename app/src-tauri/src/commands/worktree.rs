@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::agent::helpers::cancel_inflight_for_session;
+use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::db;
 use crate::git;
 use crate::state::AppState;
@@ -116,12 +116,18 @@ pub async fn detach_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<db::SessionRow, String> {
-    cancel_inflight_for_session(
+    let exit_rx = cancel_inflight_for_session(
         &state.cancellations,
         &state.session_active_request,
+        &state.inflight_exits,
         &session_id,
     )
     .await;
+    // RULE-E-005 (2026-06-15): wait for the agent loop to actually
+    // exit before unbinding — a still-running loop could persist a
+    // tool_result whose `cwd` envelope points at this worktree,
+    // leaving a stale reference after detach.
+    await_inflight_exit(exit_rx, "detach_worktree").await;
 
     let loaded = db::load_session(&state.db, &session_id)
         .await
@@ -194,12 +200,20 @@ pub async fn delete_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<db::SessionRow, String> {
-    cancel_inflight_for_session(
+    let exit_rx = cancel_inflight_for_session(
         &state.cancellations,
         &state.session_active_request,
+        &state.inflight_exits,
         &session_id,
     )
     .await;
+    // RULE-E-005 (2026-06-15): wait for the agent loop to fully exit
+    // BEFORE destroying the worktree dir. Cancel only sets the token
+    // flag; the loop checks it at the next stream boundary / after
+    // the current tool, so without this await an in-flight tool
+    // could write into the directory we're about to `destroy_worktree`
+    // (ENOENT / panic / orphaned fingerprint).
+    await_inflight_exit(exit_rx, "delete_worktree").await;
 
     let loaded = db::load_session(&state.db, &session_id)
         .await

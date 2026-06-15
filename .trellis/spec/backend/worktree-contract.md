@@ -109,15 +109,21 @@ pub async fn insert_system_event(
 // app/src-tauri/src/agent/helpers.rs
 pub fn tool_result_envelope(content: String, worktree_path: &Path) -> String;
 // Returns: {"result": "<content>", "cwd": "<worktree_path>"}
-// Lives in agent::helpers (NOT in the tool modules) so the existing60+ tool
+// Lives in agent::helpers (NOT in the tool modules) so the existing 60+ tool
 // unit tests are unchanged.
 
 pub async fn cancel_inflight_for_session(
  cancellations: &Arc<Mutex<HashMap<String, CancellationToken>>>,
  session_active_request: &Arc<Mutex<HashMap<String, String>>>,
+ inflight_exits: &Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
  session_id: &str,
-) -> Option<String>;
-// Returns the cancelled request_id, or None if no in-flight request.
+) -> Option<oneshot::Receiver<()>>;
+// Cancels the in-flight token for `session_id` (if any) AND returns
+// the matching "agent loop exited" signal (RULE-E-005, 2026-06-15).
+// Returns None when no in-flight request exists, or when a concurrent
+// destructive op already drained the single-consumer receiver. The
+// caller passes the result to `await_inflight_exit(rx, label)` before
+// doing destructive work.
 ```
 
 #### New AppState field
@@ -128,7 +134,13 @@ struct AppState {
  session_active_request: Arc<Mutex<HashMap<String, String>>>,
  // Maps session_id -> currently active request_id.
  // Inserted by `chat` on spawn; cleared by CancellationGuard on Drop.
- // Read by the3 destructive paths to find the request_id to cancel.
+ // Read by the 3 destructive paths to find the request_id to cancel.
+ inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
+ // RULE-E-005 (2026-06-15): request_id -> "agent loop exited" signal.
+ // `chat` inserts the Receiver on spawn; the spawn closure `.send(())`s
+ // the paired Sender once `run_chat_loop` returns, then removes the
+ // entry. `cancel_inflight_for_session` drains the Receiver (single-
+ // consumer) so the destructive caller can `await_inflight_exit` it.
 }
 ```
 
@@ -231,12 +243,21 @@ Session context:
 1. Look up the active `request_id` for `session_id`.
 2. If found, fetch the matching `CancellationToken` from
  `cancellations` and `.cancel()`.
-3. Return; the agent loop's `tokio::select!` notices and exits
- cleanly, which clears the map entry via the `CancellationGuard`.
-- **Ordering invariant**: cancel → destructive execute → system event
- injection (if any). The system event must land AFTER the cancel
- completes (so the event reflects the post-cancel state) and BEFORE
- the LLM's next turn (so the LLM sees it).
+3. Take the matching exit `oneshot::Receiver` out of `inflight_exits`
+ (single-consumer) and return it.
+4. The caller `await_inflight_exit(rx, label)` — awaits the signal
+ (10 s timeout backstop) before the destructive work runs, so the
+ agent loop's in-flight tool can't write into a just-deleted worktree.
+- **Ordering invariant (RULE-E-005, updated 2026-06-15)**: cancel →
+ **await agent-loop exit** → destructive execute → system event
+ injection (if any). The cancel token only *sets* the flag; the agent
+ loop checks it at stream-event boundaries and *after* the current
+ tool (`chat_loop.rs:670`), so one in-flight tool may still run before
+ the loop returns. Without the await, that tool could write into a
+ just-deleted worktree (ENOENT / panic / orphaned fingerprint). The
+ destructive caller `await_inflight_exit(rx, label)` (10 s defensive
+ timeout backstop) closes the race; the system event still lands BEFORE
+ the LLM's next turn.
 - Frontend guard: `detach` / `delete worktree` menu items are
  `:disabled="chatStore.isStreaming"`. This is a UX guard, not the
  safety net — the backend cancel hook covers the in-flight IPC case.

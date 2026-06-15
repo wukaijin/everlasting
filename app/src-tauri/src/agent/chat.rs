@@ -70,6 +70,7 @@ pub async fn chat(
     let catalog = state.catalog.clone();
     let cancellations = state.cancellations.clone();
     let session_active_request = state.session_active_request.clone();
+    let inflight_exits = state.inflight_exits.clone();
     let read_guard = state.read_guard.clone();
     let memory_cache = state.memory_cache.clone();
     let permission_asks = state.permission_asks.clone();
@@ -140,6 +141,21 @@ pub async fn chat(
         let mut map = session_active_request.lock().await;
         map.insert(session_id.clone(), rid.clone());
     }
+    // RULE-E-005 (2026-06-15): create the "agent loop exited"
+    // signal. The Receiver goes into `inflight_exits` keyed by
+    // request_id, so `cancel_inflight_for_session` can hand it to
+    // a destructive command, which awaits it (via
+    // `await_inflight_exit`) before deleting the worktree/session.
+    // The Sender moves into the spawn closure and fires when
+    // `run_chat_loop` returns — i.e. the loop has fully exited,
+    // including any in-flight tool that was already dispatched when
+    // cancel fired. Closing the race where the loop writes into a
+    // just-deleted worktree.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut map = inflight_exits.lock().await;
+        map.insert(rid.clone(), done_rx);
+    }
 
     // P1 RULE-A-006 (2026-06-14): wrap the AppHandle in a
     // ChatEventSink so the agent loop body can dispatch through
@@ -187,6 +203,18 @@ pub async fn chat(
             token,
         )
         .await;
+        // RULE-E-005 (2026-06-15): the agent loop has fully exited.
+        // Signal any destructive command awaiting the
+        // `cancel_inflight_for_session` receiver so it proceeds
+        // with the delete. `send` is `Err` if no one is awaiting
+        // (no destructive op, or it already drained + timed out) —
+        // both are fine, we ignore it.
+        let _ = done_tx.send(());
+        // Clean up the `inflight_exits` entry (no-op if
+        // `cancel_inflight_for_session` already took it). This lives
+        // here, not in `CancellationGuard`, because the exit signal
+        // is the chat command's concern, not the agent loop's.
+        inflight_exits.lock().await.remove(&rid);
     });
 
     Ok(())

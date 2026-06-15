@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::agent::helpers::cancel_inflight_for_session;
+use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::db;
 use crate::git;
 use crate::state::AppState;
@@ -123,12 +123,18 @@ pub async fn delete_session(
     // delete button while streaming (REQ-13) and to call
     // `cancel_chat` first, but the backend is the last line of
     // defense.
-    cancel_inflight_for_session(
+    let exit_rx = cancel_inflight_for_session(
         &state.cancellations,
         &state.session_active_request,
+        &state.inflight_exits,
         &session_id,
     )
     .await;
+    // RULE-E-005 (2026-06-15): wait for the agent loop to exit
+    // before deleting DB rows. Without this, an in-flight
+    // `persist_turn` after deletion writes to a session that no
+    // longer exists (orphan rows / FK violation / blank reload).
+    await_inflight_exit(exit_rx, "delete_session").await;
 
     // Clear the in-memory ReadGuard for this session so we don't
     // leak fingerprints for a session the user just deleted.

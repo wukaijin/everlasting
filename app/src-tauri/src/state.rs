@@ -23,7 +23,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::permissions::PermissionAskPayload;
@@ -109,6 +109,22 @@ pub struct AppState {
     /// BEFORE the destructive work runs, so the LLM can't write
     /// to a half-deleted worktree.
     pub session_active_request: Arc<Mutex<HashMap<String, String>>>,
+    /// RULE-E-005 (2026-06-15): request_id → "agent loop exited"
+    /// signal. The `chat` command creates a `oneshot` pair per
+    /// spawn, stores the `Receiver` here keyed by `request_id`,
+    /// and moves the `Sender` into the spawn closure. When
+    /// `run_chat_loop` returns (the agent loop has fully exited —
+    /// including any in-flight tool that was already dispatched
+    /// when cancel fired), the closure `.send(())`s, resolving
+    /// the receiver. The destructive commands (`delete_session` /
+    /// `detach_worktree` / `delete_worktree`) `await` the receiver
+    /// (via `cancel_inflight_for_session`) with a defensive
+    /// timeout BEFORE doing the destructive work, closing the race
+    /// where the loop writes into a just-deleted worktree. The
+    /// entry is taken out of the map by `cancel_inflight_for_session`
+    /// (single-consumer receiver); if no destructive op drains it,
+    /// the spawn closure removes it after `.send`.
+    pub inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
     /// Per-session read fingerprints. The `edit_file` tool consults
     /// this guard to ensure the LLM (a) read the file in the current
     /// session and (b) the file hasn't been modified on disk since.
@@ -242,6 +258,7 @@ impl AppState {
             app_data_dir,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             session_active_request: Arc::new(Mutex::new(HashMap::new())),
+            inflight_exits: Arc::new(Mutex::new(HashMap::new())),
             read_guard: ReadGuard::new(),
             memory_cache,
             permission_asks: crate::agent::permissions::new_permission_store(),

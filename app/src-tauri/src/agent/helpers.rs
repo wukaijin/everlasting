@@ -16,10 +16,11 @@
 //!   by `delete_session`, `detach_worktree`, `delete_worktree`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::db;
@@ -175,30 +176,50 @@ pub fn emit_tool_result(app: &AppHandle, payload: &ToolResultPayload) {
 // Destructive-op cancel hook
 // ---------------------------------------------------------------------------
 
-/// Cancel an in-flight chat request for `session_id`, if any.
-/// Called at the entry of `delete_session` / `detach_worktree` /
-/// `delete_worktree` so a streaming LLM can't write into a
-/// half-destroyed session/worktree. No-op when the session isn't
-/// streaming. The cancellation is best-effort: the agent loop
-/// notices on its next event boundary and bails out cleanly,
-/// emitting a `done` event with `stop_reason: "cancelled"`.
+/// Cancel an in-flight chat request for `session_id`, if any, and
+/// return its "agent loop exited" signal. Called at the entry of
+/// `delete_session` / `detach_worktree` / `delete_worktree` so a
+/// streaming LLM can't write into a half-destroyed session/worktree.
+/// No-op when the session isn't streaming. The cancellation is
+/// best-effort: the agent loop notices on its next event boundary and
+/// bails out cleanly, emitting a `done` event with `stop_reason:
+/// "cancelled"`.
 ///
-/// The `cancellations` and `session_active_request` arguments are
-/// pulled out of `AppState` (rather than taking `&AppState`
-/// directly) so this helper can be `pub` and unit-tested with
-/// bare `Arc<Mutex<HashMap<...>>>` values — see
+/// **RULE-E-005 (2026-06-15)**: cancelling the token only *sets* the
+/// flag — it does NOT wait for the agent loop to actually exit. The
+/// loop checks cancel at stream-event boundaries and *after* a tool
+/// executes (`chat_loop.rs:670`), so when cancel fires there can still
+/// be one in-flight tool that runs to completion before the loop
+/// returns. If the destructive command deletes the worktree in that
+/// window, the in-flight write hits a deleted dir (ENOENT / panic /
+/// orphaned fingerprint). To close the race we also return the
+/// `oneshot::Receiver` that the `chat` spawn closure `.send(())`s when
+/// `run_chat_loop` returns; the caller `await`s it (with a timeout,
+/// see the call sites) BEFORE the destructive work runs.
+///
+/// Returns `None` when the session has no in-flight request (the
+/// common case) OR when a second destructive op already drained the
+/// receiver (single-consumer — concurrent destructive ops on the same
+/// session are a degraded case; the second one proceeds without
+/// awaiting, which is safe because the first already gated the exit).
+///
+/// The `cancellations` / `session_active_request` / `inflight_exits`
+/// arguments are pulled out of `AppState` (rather than taking
+/// `&AppState` directly) so this helper can be `pub` and unit-tested
+/// with bare `Arc<Mutex<HashMap<...>>>` values — see
 /// `crate::agent::tests::cancel_inflight_for_session_*`.
 pub async fn cancel_inflight_for_session(
     cancellations: &Arc<Mutex<std::collections::HashMap<String, CancellationToken>>>,
     session_active_request: &Arc<Mutex<std::collections::HashMap<String, String>>>,
+    inflight_exits: &Arc<Mutex<std::collections::HashMap<String, oneshot::Receiver<()>>>>,
     session_id: &str,
-) {
+) -> Option<oneshot::Receiver<()>> {
     let request_id = {
         let map = session_active_request.lock().await;
         map.get(session_id).cloned()
     };
     let Some(rid) = request_id else {
-        return;
+        return None;
     };
     let token = {
         let map = cancellations.lock().await;
@@ -212,10 +233,55 @@ pub async fn cancel_inflight_for_session(
             "destructive op: cancelled in-flight chat"
         );
     }
-    // The `session_active_request` entry is removed by the
-    // `CancellationGuard` on Drop, after the agent loop exits.
-    // We don't remove it here — the in-flight loop still uses it
-    // during cleanup.
+    // RULE-E-005: take the exit receiver out of the map (single-
+    // consumer) so the caller can `await` it. The `chat` spawn
+    // closure `.send(())`s when `run_chat_loop` returns; if the
+    // caller drops the receiver without awaiting, or the session
+    // wasn't in-flight, this is `None` and the spawn closure still
+    // removes the map entry after its own `.send`.
+    let exit_rx = {
+        let mut map = inflight_exits.lock().await;
+        map.remove(&rid)
+    };
+    // The `session_active_request` + `cancellations` entries are
+    // removed by the `CancellationGuard` on Drop, after the agent
+    // loop exits. We don't remove them here — the in-flight loop
+    // still uses them during cleanup.
+    exit_rx
+}
+
+/// RULE-E-005 (2026-06-15): await the agent loop's exit signal
+/// returned by [`cancel_inflight_for_session`], with a defensive
+/// timeout so a hung loop can't block a destructive command
+/// forever. `None` (the session had no in-flight request, or a
+/// concurrent destructive op already drained the single-consumer
+/// receiver) returns immediately.
+///
+/// Outcomes:
+/// - `Ok(Ok(()))` / `Ok(Err(_))` — the loop exited (the `Err` arm
+///   is the sender dropping without sending, e.g. the spawn task
+///   panicked; still "exited"). Proceed.
+/// - `Err(_)` (timeout) — log a warning and proceed anyway. The
+///   user explicitly invoked the destructive op, so we never block
+///   indefinitely; the 10 s bound comfortably exceeds one tool
+///   execution (the worst-case window between cancel and exit).
+///
+/// `label` is the op name for the timeout warning log (e.g.
+/// `"delete_worktree"`) so the warning is attributable.
+pub async fn await_inflight_exit(exit_rx: Option<oneshot::Receiver<()>>, label: &str) {
+    let Some(rx) = exit_rx else {
+        return;
+    };
+    match tokio::time::timeout(Duration::from_secs(10), rx).await {
+        Ok(Ok(())) | Ok(Err(_)) => {}
+        Err(_) => {
+            tracing::warn!(
+                op = %label,
+                timeout_secs = 10,
+                "destructive op: agent loop did not exit within timeout — proceeding anyway"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
