@@ -1,0 +1,33 @@
+{
+  "id": "p1-permission-asks-cleanup",
+  "name": "p1-permission-asks-cleanup",
+  "title": "p1-permission-asks-cleanup",
+  "description": "RULE-B-001 (delete_session 接入 cancel_session_asks) + RULE-B-002 (cancel_session_asks 按 session 过滤,不再 clear() 全清) — PermissionStore value 加 session_id 绑定",
+  "status": "pending",
+  "dev_type": null,
+  "scope": null,
+  "package": "backend",
+  "priority": "P1",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-06-16",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "app/src-tauri/src/agent/permissions/mod.rs",
+    "app/src-tauri/src/commands/sessions.rs",
+    "app/src-tauri/src/commands/permissions.rs",
+    "app/src-tauri/src/agent/tests.rs"
+  ],
+  "notes": "已记账待实施;与 06-16-p1-openai-o1-glob-spawn-blocking 拆分(用户决策:B 工作量大~50 行+测试、性质为清理隐性依赖,单独 task)",
+  "meta": {
+    "debt": ["RULE-B-001", "RULE-B-002"]
+  }
+}
