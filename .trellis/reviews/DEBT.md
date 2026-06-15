@@ -258,9 +258,10 @@
 - **Description**: 硬编码 `max_tokens`;o1/o3/o4-mini 要求 `max_completion_tokens`,发 `max_tokens` 会 400
 - **Impact**: 用户配置 o1 model 后所有 chat 400
 - **Fix**: `is_o1_family` 分支改用 `max_completion_tokens`(~10 行)
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — `is_o1_family`(o1/o3/o4 前缀,case-insensitive) 分支:o1 family 用 `max_completion_tokens` 否则 `max_tokens`;+3 单测(matches/rejects/body 构造)+1 回归断言
 - **Owner**: carlos
-- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-E-004 合并,已实施待 commit）
+- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-E-004 合并实施）
+- **Closed At**: `361336e`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 ### RULE-E-004 — glob 用 sync std::fs::read_dir 阻塞 tokio runtime
@@ -271,9 +272,10 @@
 - **Description**: `walk_dir` 被 async fn 直接调,其他 tool 都用 `tokio::fs`
 - **Impact**: 大 repo(Chromium/Linux kernel)glob 卡死 worker,拖累同 runtime 并发 session
 - **Fix**: `spawn_blocking` 包裹 walk_dir
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — walk + glob match + mtime collect 整体包 `tokio::task::spawn_blocking`(返回 `(Vec<Match>, usize)`),sort/输出留 async 侧;GlobMatcher Send 验证通过,7 个 glob 单测行为不变
 - **Owner**: carlos
-- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-D-002 合并,已实施待 commit）
+- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-D-002 合并实施）
+- **Closed At**: `361336e`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 
 ### RULE-E-005 — worktree destroy 不等 cancel 生效就删目录
@@ -701,6 +703,8 @@
 | 2026-06-15 | RULE-C-001 | open | **closed** | 砍 notify watcher 改 read-through mtime fence;brainstorm 核实发现 watcher 疑似完全失效(返回值丢弃→handle drop→确定性读旧,严重性>>原"概率性 race")。W 方案:slot 加 `CachedLayer{layer,mtime}`,read 每次 stat 比较,read 路径成 freshness 权威。watcher.rs/invalidate_*/notify 依赖/前端 dead listener 全清,4 fence 测试,489 pass | `.trellis/tasks/06-15-p1-memory-watcher-appstate` |
 | 2026-06-15 | RULE-C-002 | open | **closed** | 自动满足:watcher 删后新 project 首 `load_for_session` 即 stat,无需 watch/add_watch | 同上 task |
 | 2026-06-15 | RULE-C-004 | open | **closed** | 自动满足:watcher 删除,无 handle 可丢弃;D2"AppState 加字段"方案被 D3 砍 watcher 推翻 | 同上 task |
+| 2026-06-16 | RULE-D-002 | open | **closed** | is_o1_family 前缀分支(o1/o3/o4),o1 family 用 max_completion_tokens;+3 单测。与 E-004 合并 task(两项均小修 active bug) | `.trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking` |
+| 2026-06-16 | RULE-E-004 | open | **closed** | glob walk+match+collect 包 spawn_blocking(GlobMatcher Send 验证);与 D-002 合并 task | 同上 task |
 
 ---
 
@@ -718,7 +722,7 @@
 | PR8 | `06-16-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | open(已记账 2026-06-16,待实施) |
 | PR9 | `06-15-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | ✅ closed (2026-06-15) — W 方案:砍 watcher 改 mtime fence,C-002/C-004 自动满足 |
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |
-| PR11+PR12 | `06-16-p1-openai-o1-glob-spawn-blocking` | RULE-D-002 + RULE-E-004(合并一个 task) | ⏳ 已实施待 commit(2026-06-16) — 两项均小修 active bug,合并 PR |
+| PR11+PR12 | `06-16-p1-openai-o1-glob-spawn-blocking` | RULE-D-002 + RULE-E-004(合并一个 task) | ✅ closed (2026-06-16) → `361336e` — 两项均小修 active bug,合并 PR |
 | PR13 | `06-15-worktree-destroy-await-cancel-rule-e-005` | RULE-E-005 | ✅ closed (2026-06-15) — 依赖 PR5(RULE-A-006 已 closed,解阻) |
 | PR14 | `06-15-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
 | PR-N+ | P2 各项子 task | RULE-*-P2 | — |
