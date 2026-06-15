@@ -718,3 +718,37 @@ F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: P1 RULE-A-003 + RULE-A-004: persist emit Error + audit cancel order
+
+**Date**: 2026-06-15
+**Task**: P1 RULE-A-003 + RULE-A-004: persist emit Error + audit cancel order
+**Branch**: `main`
+
+### Summary
+
+修复 agent loop 两处静默正确性 bug(趁 RULE-A-006 集成测试解阻的黄金窗口)。RULE-A-003: 5 处 persist_turn 失败从静默改为显式处理 —— 正常路径 3 处(初始 user/assistant turn/tool_result)接 emit_persist_failure(emit ChatEvent::Error{Server} 中文文案)+return,对齐 RULE-A-002 StillOver 模式;cancel 路径 2 处保持 tracing-only 避免与 cancelled Done 双终止事件冲突。RULE-A-004: record_tool_executed_audit 块从 token.is_cancelled() 检查前移到后(else if 串联),cancelled 的 tool 不落 audit 行。新增 emit_persist_failure helper + 2 个集成测试(agent_loop_persist_failure_emits_error 用 BEFORE INSERT trigger 拦截 / agent_loop_cancel_skips_audit_for_cancelled_tool 用 yield_now cancel gate)。category 复用 Server(已验证前端不基于 category 分支,零前端改动)。486 tests pass(484+2),cargo check 0 warning。改动单文件 chat_loop.rs + tests.rs。DEBT.md 两条 RULE closed + spec Tests Required 表 10→12。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8ee7d9` | (see git log) |
+| `220185a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
