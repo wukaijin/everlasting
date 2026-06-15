@@ -1544,3 +1544,37 @@ P1 bugfix per DEBT §RULE-E-006: 替换 env-based git::data_dir() 为 Tauri app_
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: 砍 memory watcher 改 read-through mtime fence (RULE-C-001/C-002/C-004)
+
+**Date**: 2026-06-15
+**Task**: 砍 memory watcher 改 read-through mtime fence (RULE-C-001/C-002/C-004)
+**Branch**: `main`
+
+### Summary
+
+brainstorm 核实发现 notify watcher 疑似完全失效(start_watcher 返回值被丢弃→RecommendedWatcher drop→inotify 关闭→确定性读旧,严重性 >> 原「概率性 race」)。决策 W 方案:删 watcher 全链路,MemoryCache slot 加 CachedLayer{layer,mtime},read_or_load 每次 tokio::fs::metadata stat 比较 mtime 不符则 reload,read 路径成 freshness 权威。C-002(新 project watch)/C-004(handle drop)自动满足。删 watcher.rs + invalidate_* API + notify 依赖 + 前端 memory:reloaded dead listener;4 个 fence 测试(change/hit/appear/vanish);489 tests pass 0 warning。DEBT C-001/C-002/C-004 closed;ARCHITECTURE + spec memory.md/memory-ui.md 横幅同步。净 -268 行。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `759607c` | (see git log) |
+| `8d1b805` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
