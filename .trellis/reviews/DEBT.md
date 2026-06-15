@@ -190,9 +190,10 @@
 - **Description**: delete_session 只调 `cancel_inflight_for_session`,未调 `cancel_session_asks`(`mod.rs:330`,标 `#[allow(dead_code)]`)
 - **Impact**: 实际不泄漏(biased select! 间接清理),但隐性依赖,`cancel_session_asks` 死代码误导维护者
 - **Fix**: 先改 `cancel_session_asks` 按 session_id 过滤(RULE-B-002),再接入 delete_session
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — `delete_session` 在 `await_inflight_exit` 后接入 `cancel_session_asks`(`commands/sessions.rs`);显式清理移除对 biased select! 的隐性依赖
 - **Owner**: carlos
-- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup（已记账,待实施）
+- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup
+- **Closed At**: `3b16528`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
 
 ### RULE-B-002 — cancel_session_asks 是 map.clear() 全清(latent bug)
@@ -203,9 +204,10 @@
 - **Description**: `_session_id: &str` 下划线前缀,body 直接 `clear()`,session_id 参数被忽略
 - **Impact**: 当前安全只因未被调用。一旦未来接到 delete_session(RULE-B-001),会误清其他 session 的 pending ask
 - **Fix**: 改函数签名接受并过滤,先修接口再接调用
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — `PermissionStore` value 改 `PendingAsk{session_id,tx}`(rid key 不变,resolve 端 IPC 只传 rid 故 session 落 value);`cancel_session_asks` 用 `map.retain` 按 session 过滤(去 `#[allow(dead_code)]`);`register_ask` 加 session_id 参;删 `cancel_pending_asks` dead wrapper;+跨 session 隔离单测(cancel A 不动 B)
 - **Owner**: carlos
-- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup（已记账,待实施,同 task）
+- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup
+- **Closed At**: `3b16528`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2 + §3.3
 
 ### RULE-C-001 — memory watcher debounce 1s 窗口内 race
@@ -719,7 +721,7 @@
 | **PR5** | **`06-14-p1-agent-loop-integration-tests`** | **RULE-A-006** | **必须在 P0 修复后立刻补,为后续 P1 提供回归保护** |
 | **PR5b** | **`06-15-unify-chat-loop-dispatch`** | **RULE-A-006(闭环)** | **依赖 PR5 — production `chat.rs` → `run_chat_loop` 迁移,副本消除** |
 | PR6+PR7 | `06-15-p1-persist-emit-error-and-audit-cancel-order` | RULE-A-003 + RULE-A-004(合并一个 task) | ✅ closed (2026-06-15) — PR5(RULE-A-006)解阻后合并实现 |
-| PR8 | `06-16-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | open(已记账 2026-06-16,待实施) |
+| PR8 | `06-16-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | ✅ closed (2026-06-16) → `3b16528` — store value 加 session 绑定,delete_session 接入 |
 | PR9 | `06-15-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | ✅ closed (2026-06-15) — W 方案:砍 watcher 改 mtime fence,C-002/C-004 自动满足 |
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |
 | PR11+PR12 | `06-16-p1-openai-o1-glob-spawn-blocking` | RULE-D-002 + RULE-E-004(合并一个 task) | ✅ closed (2026-06-16) → `361336e` — 两项均小修 active bug,合并 PR |
