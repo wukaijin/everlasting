@@ -239,13 +239,25 @@ impl OpenAIProvider {
             })
             .collect();
 
-        // 4. Top-level body.
+        // 4. Top-level body. RULE-D-002 (2026-06-16): OpenAI's
+        //    o1+ reasoning family (o1 / o1-mini / o1-preview /
+        //    o1-pro, o3 / o3-mini / o3-pro, o4-mini) rejects the
+        //    standard `max_tokens` field and requires
+        //    `max_completion_tokens` — emitting the wrong key
+        //    gets a 400 on every chat. Pick the key per model
+        //    family; the value is the same configured cap either
+        //    way.
         let mut body = json!({
             "model": config.model,
-            "max_tokens": config.max_tokens,
             "stream": true,
             "messages": msgs,
         });
+        let max_tokens_key = if is_o1_family(&config.model) {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        body[max_tokens_key] = json!(config.max_tokens);
         // A4: ask OpenAI to include the final usage chunk in
         // the SSE stream. Without this, OpenAI omits the
         // `usage` field on all chunks and the agent loop has
@@ -326,6 +338,19 @@ fn assistant_blocks_to_openai(blocks: &[WireBlock]) -> (Vec<String>, Vec<Value>)
         }
     }
     (text_parts, tool_calls)
+}
+
+/// Whether `model` belongs to OpenAI's o1+ reasoning family —
+/// o1 / o1-mini / o1-preview / o1-pro, o3 / o3-mini / o3-pro,
+/// o4-mini, and any successor following the same naming. These
+/// models reject the standard `max_tokens` request field and
+/// require `max_completion_tokens` (RULE-D-002); see
+/// `build_http_body` where the request key is picked. Matching
+/// is by id prefix, lower-cased, so it tolerates casing variants
+/// third-party gateways may emit.
+fn is_o1_family(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
 }
 
 impl Provider for OpenAIProvider {
@@ -1038,6 +1063,68 @@ mod tests {
         assert_eq!(body["model"], "gpt-4.1");
         assert_eq!(body["max_tokens"], 8192);
         assert_eq!(body["stream"], true);
+        // RULE-D-002 regression guard: non-o1 models must NOT emit
+        // the o1-only key.
+        assert!(
+            body.get("max_completion_tokens").is_none(),
+            "non-o1 model must not emit max_completion_tokens: {body}"
+        );
+    }
+
+    // ---- RULE-D-002: o1+ family uses max_completion_tokens ----
+
+    #[test]
+    fn is_o1_family_matches_reasoning_models() {
+        // o1 line: o1 / o1-mini / o1-preview / o1-pro
+        assert!(is_o1_family("o1"));
+        assert!(is_o1_family("o1-mini"));
+        assert!(is_o1_family("o1-preview"));
+        assert!(is_o1_family("o1-pro"));
+        // o3 line: o3 / o3-mini / o3-pro
+        assert!(is_o1_family("o3"));
+        assert!(is_o1_family("o3-mini"));
+        assert!(is_o1_family("o3-pro"));
+        // o4 line
+        assert!(is_o1_family("o4-mini"));
+        // case-insensitive (third-party gateways may emit caps)
+        assert!(is_o1_family("O1-MINI"));
+        assert!(is_o1_family("  o3-mini  ")); // trims whitespace
+    }
+
+    #[test]
+    fn is_o1_family_rejects_non_reasoning_models() {
+        assert!(!is_o1_family("gpt-4o"));
+        assert!(!is_o1_family("gpt-4o-mini"));
+        assert!(!is_o1_family("gpt-4.1"));
+        assert!(!is_o1_family("chatgpt-4o-latest"));
+        assert!(!is_o1_family("glm-4.7"));
+    }
+
+    #[test]
+    fn build_http_body_o1_family_uses_max_completion_tokens() {
+        let wire = WireRequest {
+            model: "o1-mini".to_string(),
+            max_tokens: Some(8192),
+            system: None,
+            messages: vec![WireMessage::User {
+                content: "x".to_string(),
+            }],
+            tools: vec![],
+            reasoning_effort: None,
+        };
+        let c = OpenAIConfig {
+            model: "o3-mini".to_string(),
+            max_tokens: 8192,
+            ..cfg()
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &c);
+        // o1+ family MUST use max_completion_tokens ...
+        assert_eq!(body["max_completion_tokens"], 8192);
+        // ... and MUST NOT carry max_tokens (the server 400s on it).
+        assert!(
+            body.get("max_tokens").is_none(),
+            "o1 family must not emit max_tokens (server 400s): {body}"
+        );
     }
 
     // ---- A4: stream_options.include_usage ----

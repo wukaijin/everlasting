@@ -109,55 +109,72 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         "glob: walking tree"
     );
 
-    // 3. Walk the directory tree, collecting matches with their mtime.
-    let mut matches: Vec<Match> = Vec::new();
-    let mut truncated = 0usize;
-    let walker = match walk_dir(&validated_root) {
-        Ok(w) => w,
-        Err(e) => {
+    // 3. Walk + match + collect OFF the tokio worker (RULE-E-004,
+    //    2026-06-16). `walk_dir` uses sync `std::fs::read_dir`,
+    //    which blocks the async runtime on large repos (a
+    //    Chromium checkout / Linux kernel tree). Offload the
+    //    entire walk + glob match + mtime read to the blocking
+    //    pool so one big glob can't starve other sessions sharing
+    //    the runtime. Sort + output formatting stay on the async
+    //    side (pure CPU, no syscall).
+    let root = validated_root.clone();
+    let worktree = ctx.worktree_path.clone();
+    let join = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<Match>, usize), std::io::Error> {
+            let walker = walk_dir(&root)?;
+            let mut matches: Vec<Match> = Vec::new();
+            let mut truncated = 0usize;
+            for entry in walker {
+                let ft = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+                if !ft.is_file() {
+                    continue;
+                }
+                let abs = entry.path();
+                // Compute the path RELATIVE to the search root. The
+                // LLM supplies patterns relative to `path` (or cwd),
+                // so the pattern only makes sense against the
+                // relative form.
+                let rel_for_match = abs
+                    .strip_prefix(&root)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| abs.clone());
+                if !glob.is_match(&rel_for_match) {
+                    continue;
+                }
+                let mtime = entry.metadata().ok().and_then(|m| m.modified().ok());
+                // Display path relative to the project root for the LLM.
+                let rel = abs
+                    .strip_prefix(&worktree)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| abs.to_path_buf());
+                if matches.len() >= MAX_RESULTS {
+                    truncated += 1;
+                    continue;
+                }
+                matches.push(Match {
+                    path: rel.to_string_lossy().to_string(),
+                    mtime,
+                });
+            }
+            Ok((matches, truncated))
+        },
+    );
+    let (mut matches, truncated) = match join.await {
+        Ok(Ok(tuple)) => tuple,
+        Ok(Err(e)) => {
             return (
                 format!("Failed to walk directory '{}': {}", validated_root.display(), e),
                 true,
             );
         }
+        Err(e) => {
+            // spawn_blocking task panicked or was cancelled.
+            return (format!("glob walk task failed: {}", e), true);
+        }
     };
-    for entry in walker {
-        let ft = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
-        if !ft.is_file() {
-            continue;
-        }
-        let abs = entry.path();
-        // Compute the path RELATIVE to the search root. The LLM
-        // supplies patterns relative to `path` (or cwd), so the
-        // pattern only makes sense against the relative form.
-        let rel_for_match = abs
-            .strip_prefix(&validated_root)
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|_| abs.clone());
-        if !glob.is_match(&rel_for_match) {
-            continue;
-        }
-        let mtime = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok());
-        // Display path relative to the project root for the LLM.
-        let rel = abs
-            .strip_prefix(&ctx.worktree_path)
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|_| abs.to_path_buf());
-        if matches.len() >= MAX_RESULTS {
-            truncated += 1;
-            continue;
-        }
-        matches.push(Match {
-            path: rel.to_string_lossy().to_string(),
-            mtime,
-        });
-    }
 
     // 4. Sort by mtime descending (most recent first). Files without
     //    an mtime sink to the bottom.

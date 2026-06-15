@@ -192,7 +192,7 @@
 - **Fix**: 先改 `cancel_session_asks` 按 session_id 过滤(RULE-B-002),再接入 delete_session
 - **Status**: open
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-permission-asks-cleanup`
+- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup（已记账,待实施）
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
 
 ### RULE-B-002 — cancel_session_asks 是 map.clear() 全清(latent bug)
@@ -205,7 +205,7 @@
 - **Fix**: 改函数签名接受并过滤,先修接口再接调用
 - **Status**: open
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-permission-asks-cleanup`(同 PR)
+- **Related Task**: .trellis/tasks/06-16-p1-permission-asks-cleanup（已记账,待实施,同 task）
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2 + §3.3
 
 ### RULE-C-001 — memory watcher debounce 1s 窗口内 race
@@ -260,7 +260,7 @@
 - **Fix**: `is_o1_family` 分支改用 `max_completion_tokens`(~10 行)
 - **Status**: open
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-openai-o1-max-completion-tokens`
+- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-E-004 合并,已实施待 commit）
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 ### RULE-E-004 — glob 用 sync std::fs::read_dir 阻塞 tokio runtime
@@ -273,7 +273,7 @@
 - **Fix**: `spawn_blocking` 包裹 walk_dir
 - **Status**: open
 - **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-glob-spawn-blocking`
+- **Related Task**: .trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking（与 RULE-D-002 合并,已实施待 commit）
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 
 ### RULE-E-005 — worktree destroy 不等 cancel 生效就删目录
@@ -715,11 +715,10 @@
 | **PR5** | **`06-14-p1-agent-loop-integration-tests`** | **RULE-A-006** | **必须在 P0 修复后立刻补,为后续 P1 提供回归保护** |
 | **PR5b** | **`06-15-unify-chat-loop-dispatch`** | **RULE-A-006(闭环)** | **依赖 PR5 — production `chat.rs` → `run_chat_loop` 迁移,副本消除** |
 | PR6+PR7 | `06-15-p1-persist-emit-error-and-audit-cancel-order` | RULE-A-003 + RULE-A-004(合并一个 task) | ✅ closed (2026-06-15) — PR5(RULE-A-006)解阻后合并实现 |
-| PR8 | `06-14-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | — |
+| PR8 | `06-16-p1-permission-asks-cleanup` | RULE-B-001 + RULE-B-002 | open(已记账 2026-06-16,待实施) |
 | PR9 | `06-15-p1-memory-watcher-appstate` | RULE-C-001 + RULE-C-002 + RULE-C-004 | ✅ closed (2026-06-15) — W 方案:砍 watcher 改 mtime fence,C-002/C-004 自动满足 |
 | PR10 | `06-14-p1-api-key-encryption` | RULE-D-001 | — |
-| PR11 | `06-14-p1-openai-o1-max-completion-tokens` | RULE-D-002 | — |
-| PR12 | `06-14-p1-glob-spawn-blocking` | RULE-E-004 | — |
+| PR11+PR12 | `06-16-p1-openai-o1-glob-spawn-blocking` | RULE-D-002 + RULE-E-004(合并一个 task) | ⏳ 已实施待 commit(2026-06-16) — 两项均小修 active bug,合并 PR |
 | PR13 | `06-15-worktree-destroy-await-cancel-rule-e-005` | RULE-E-005 | ✅ closed (2026-06-15) — 依赖 PR5(RULE-A-006 已 closed,解阻) |
 | PR14 | `06-15-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
 | PR-N+ | P2 各项子 task | RULE-*-P2 | — |
@@ -737,5 +736,5 @@
 
 ---
 
-**最后更新**: 2026-06-15 by carlos
+**最后更新**: 2026-06-16 by carlos
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
