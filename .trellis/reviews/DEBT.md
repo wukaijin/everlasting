@@ -219,7 +219,7 @@
 - **Status**: **closed (2026-06-15)**
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
-- **Closed At**: (待 commit 回填)
+- **Closed At**: `759607c`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3 + §6
 - **Resolution Notes**: brainstorm 核实发现 watcher **疑似完全失效**(`start_watcher` 返回值在 `state.rs:219` 被丢弃 → `RecommendedWatcher` drop → inotify handle 关闭 → debounce loop 因 tx drop 退出;严重性 >> 原"概率性 race",实为确定性读旧)。grill 决策 **W 方案**:砍 notify watcher,改 read-through **mtime fence**——`MemoryCache` slot 加 `CachedLayer { layer, mtime }`,`read_or_load_*` 每次 `tokio::fs::metadata` stat 比较 mtime,不符则 reload。read 路径成为 freshness 权威,无 debounce 窗口、无 watcher 依赖;C-002/C-004 自动满足。`watcher.rs` 整文件删 + `invalidate_*` API 删 + `notify` 依赖移除 + 前端 `memory:reloaded` dead listener 清理。4 个 fence 测试(change/hit/appear/vanish),489 tests pass。
 
@@ -234,7 +234,7 @@
 - **Status**: **closed (2026-06-15)** — 自动满足:watcher 删除后 memory freshness 走 mtime fence;新 project 首次 `load_for_session` 即 stat 其文件,无需 watch/add_watch API。见 RULE-C-001 Resolution Notes。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
-- **Closed At**: (待 commit 回填)
+- **Closed At**: `759607c`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
 ### RULE-D-001 — API key 明文存储
@@ -413,7 +413,7 @@
 - **Status**: **closed (2026-06-15)** — 自动满足:watcher 整体删除,不再有"返回值丢弃 → handle drop"问题(无 watcher 可丢弃)。原 grill D2"AppState 加字段"方案被 D3(砍 watcher 改 mtime 轮询)推翻——发现 watcher 疑似完全失效(C-001)后,mtime fence 让 watcher 全链路冗余,直接删除比重构持有更净。见 RULE-C-001 Resolution Notes。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-p1-memory-watcher-appstate`
-- **Closed At**: (待 commit 回填)
+- **Closed At**: `759607c`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
 ### RULE-C-005 — user_dir 路径与 Claude Code 不一致
