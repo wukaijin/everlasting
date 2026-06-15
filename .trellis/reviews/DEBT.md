@@ -284,7 +284,7 @@
 - **Status**: **closed (2026-06-15)** — `cancel_inflight_for_session` 加 `inflight_exits` 参数,取消 token 后 take 出 `oneshot::Receiver`(单消费者)返回;新增 `await_inflight_exit(rx, label)` helper(10s 防御性 timeout,超时 log warn + 仍进行)。`delete_worktree` / `detach_worktree` / `delete_session` 三处在 destructive 工作前 await。chat.rs spawn 闭包 `run_chat_loop().await` 后 `done_tx.send(())` + 清 `inflight_exits` entry。`AppState.inflight_exits` 新字段 + `load` 初始化。**不动 `cancellations` map 值类型**(cancel_chat / run_chat_loop / CancellationGuard / TestHarness 全不碰,最小涟漪)。设计决策 = 独立 map + oneshot(规避 `tauri::async_runtime::JoinHandle` 跨 Mutex<HashMap> 存储/await 语义不确定);scope = 三者皆 await(用户确认,共享同一 helper 同一类 race)。4 个 cancel 单测(3 改造补第 4 参 + 1 新增 `cancel_inflight_returns_exit_signal_resolving_on_completion`,spawn+flag+sleep 模式证明"先 pending、send 后才 resolve")。487 tests pass。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-worktree-destroy-await-cancel-rule-e-005`
-- **Closed At**: `(回填见下条 commit)`
+- **Closed At**: `16f373a`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 - **Resolution Notes**: spec `backend/worktree-contract.md` 同步——cancel_inflight_for_session 签名(`Option<oneshot::Receiver<()>>`)、AppState.inflight_exits 字段、Ordering invariant 改写为 "cancel → **await 退出** → destructive → event"、cancel-hook 步骤补 take receiver + await。
 
