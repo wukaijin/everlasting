@@ -146,7 +146,7 @@
 - **Status**: **closed (2026-06-15)** — 5 处 `persist_turn` 失败路径分类处理:正常路径 3 处(初始 user `:263` / assistant turn `:513` / tool_result `:723`)→ `emit_persist_failure`(emit `ChatEvent::Error{Server}` 中文文案)+ `return`;cancel 路径 2 处(`:544`/`:687`)→ 保持 `tracing::error!`-only(避免与 cancelled `Done` 双终止事件冲突)。helper `emit_persist_failure` 在 `chat_loop.rs` 末尾。决策 = emit Error + 终止(对齐 RULE-A-002 StillOver),category 复用 `Server`(已验证前端不基于 category 分支,零前端改动)。集成测试 `agent_loop_persist_failure_emits_error`(`BEFORE INSERT ON messages` trigger 拦截,断言 call_count==0 + 1 Error + Server + 文案)。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order`
-- **Closed At**: <pending commit>(carlos commit 后回填)
+- **Closed At**: `d8ee7d9`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1 + REVIEW-sse-agent-loop §8 P3(2026-06-12 提出,0 落地 → 2026-06-15 兑现)
 
 ### RULE-A-004 — record_tool_executed_audit 在 cancel 检查之前 → audit 撒谎
@@ -160,7 +160,7 @@
 - **Status**: **closed (2026-06-15)** — `record_tool_executed_audit` 块从 cancel 检查**前**移到**后**,用 `if token.is_cancelled() { cancelled = true; } else if audit {...}` 串联 —— cancelled 的 tool 不落 audit。两检查背靠背无 `.await`,token 状态一致。集成测试 `agent_loop_cancel_skips_audit_for_cancelled_tool`(turn 1 `list_dir` tool_use + cancel task `yield_now` gate call_count>=1,断言 `session_audit_events` 无 `tool_executed` 行)。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-15-p1-persist-emit-error-and-audit-cancel-order`
-- **Closed At**: <pending commit>(carlos commit 后回填)
+- **Closed At**: `d8ee7d9`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
 ### RULE-A-006 — Agent Loop 集成测试缺口(MockProvider)
@@ -297,7 +297,7 @@
 - **Status**: **closed (2026-06-15)** — worktree `data_dir()` 已删,改用 `state.app_data_dir`(与 SQLite DB 同根 `~/.local/share/dev.everlasting.app/`),`/tmp` fallback 消失
 - **Owner**: carlos
 - **Related Task**: .trellis/tasks/06-15-p1-worktree-data-dir-tauri
-- **Closed At**: <pending commit>(carlos commit 后回填)
+- **Closed At**: `d8ee7d9`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5(P3 评级偏低,meta-review 升级 P1)
 
 ---
