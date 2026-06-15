@@ -3,7 +3,7 @@
   "name": "p1-openai-o1-glob-spawn-blocking",
   "title": "p1-openai-o1-glob-spawn-blocking",
   "description": "RULE-D-002 (OpenAI o1 family max_completion_tokens) + RULE-E-004 (glob spawn_blocking) — 两条小修 active bug 合并 PR",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "backend",
@@ -11,7 +11,7 @@
   "creator": "Carlos",
   "assignee": "Carlos",
   "createdAt": "2026-06-16",
-  "completedAt": null,
+  "completedAt": "2026-06-16",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -26,6 +26,9 @@
   ],
   "notes": "合并 D-002+E-004;B-001/B-002(permission store 重构)单独开 06-16-p1-permission-asks-cleanup",
   "meta": {
-    "debt": ["RULE-D-002", "RULE-E-004"]
+    "debt": [
+      "RULE-D-002",
+      "RULE-E-004"
+    ]
   }
 }
