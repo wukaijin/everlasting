@@ -378,8 +378,10 @@
 - **Description**: regex 无 `(?i)` 大小写敏感;`find / -delete` 走 `READ_ONLY_WHITELIST` **直接 Allow**;长选项 / 子 shell / env 展开不匹配
 - **Impact**: `find / -delete` 是漏网之鱼;其余有 Tier 4 Ask 兜底缓解
 - **Fix**: 加 `(?i)` + `find -delete` 黑名单 + 长选项 / 子 shell / env 展开检测
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — DENY_PATTERNS 全部正则加 `(?i)`(堵 `RM -RF /`/`MKFS`/`DD IF=` 大小写绕过);新增 `find ... -delete` + `find ... -exec(dir)` 两条硬墙(closes 真实漏网:`find` 在 Tier 4 是 ReadOnly,kill list 是唯一拦截层)。**不动** shell_trust find=ReadOnly 分级(双层架构:Tier4 放行 find / Tier2 拦破坏性 action,注释 :105-108 现成立)。长选项 / 子shell / env 展开不在本批(DEBT 已标"Tier4 兜底",避免范围蔓延)。+3 测试(大小写绕过 / find 漏网 / benign find 放行),498 tests pass
 - **Owner**: carlos
+- **Related Task**: （无单独 task,见 commit `5f1cdd0`）
+- **Closed At**: `5f1cdd0`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
 
 ### RULE-B-005 — shell trust 结构降级 false positive
@@ -451,7 +453,7 @@
 - **Description**: 精确匹配失败后按文件名
 - **Impact**: 跨 project 的 CLAUDE.md 写入可能误失效其他 project/user cache
 - **Fix**: 加 parent_dir 校验
-- **Status**: open
+- **Status**: wontfix(2026-06-16)— 引用的 `watcher.rs` 已随 RULE-C-001 删除(改 read-through mtime fence 取代),路径表 fallback 逻辑不复存在。见 §收尾路径建议。
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
@@ -535,8 +537,10 @@
 - **Description**: 按字节切片 `&content[..head_end]`;`diff.rs:298-302` 已修但 read_file **没同步**
 - **Impact**: 多字节字符边界 panic,**同 repo 内不一致**
 - **Fix**: 同步 diff.rs 的 `floor_char_boundary`
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — 4 处字节切片(`truncate_full_output` head/tail + `truncate_output` numbered head/tail,行号因 offset/limit 重构漂移,原 :222-225)改用 std `str::floor_char_boundary`(head)/`ceil_char_boundary`(tail);对齐 git/diff.rs 字符边界逻辑(后者对 `&[u8]` 手写循环,read_file 是 `&str` 用 std helper 更地道)。+2 多字节不 panic 测试(72KB 单字 CJK full path + 119KB offset path),498 tests pass
 - **Owner**: carlos
+- **Related Task**: （无单独 task,见 commit `5f1cdd0`）
+- **Closed At**: `5f1cdd0`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5 + §3.6
 
 ### RULE-E-010 — shell spillover 文件不日常清理
@@ -634,7 +638,7 @@
 - **Description**: `/mnt/c/...` 路径 watcher 可能收不到事件
 - **Impact**: WSL 用户 memory 缓存不更新
 - **Fix**: 实测验证,失败则 fallback polling
-- **Status**: open
+- **Status**: wontfix(2026-06-16)— watcher 已随 RULE-C-001 删除,memory freshness 走 read-through mtime fence(stat 不依赖 inotify),WSL/9p 可靠性问题自动消解。见 §收尾路径建议。
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
@@ -707,6 +711,10 @@
 | 2026-06-15 | RULE-C-004 | open | **closed** | 自动满足:watcher 删除,无 handle 可丢弃;D2"AppState 加字段"方案被 D3 砍 watcher 推翻 | 同上 task |
 | 2026-06-16 | RULE-D-002 | open | **closed** | is_o1_family 前缀分支(o1/o3/o4),o1 family 用 max_completion_tokens;+3 单测。与 E-004 合并 task(两项均小修 active bug) | `.trellis/tasks/06-16-p1-openai-o1-glob-spawn-blocking` |
 | 2026-06-16 | RULE-E-004 | open | **closed** | glob walk+match+collect 包 spawn_blocking(GlobMatcher Send 验证);与 D-002 合并 task | 同上 task |
+| 2026-06-16 | RULE-C-007 | open | **wontfix** | 引用的 watcher.rs 已随 RULE-C-001 删除(mtime fence 取代),fallback 逻辑不存在 | §收尾路径建议 |
+| 2026-06-16 | RULE-C-009 | open | **wontfix** | watcher 删除后 freshness 走 mtime stat,不依赖 inotify,WSL 可靠性问题消解 | §收尾路径建议 |
+| 2026-06-16 | RULE-B-004 | open | **closed** | DENY_PATTERNS 全加 (?i) + 新增 find -delete/-exec 硬墙;不动 shell_trust 分级(双层架构);长选项/子shell/env 留 Tier4 兜底;+3 测试,498 pass | §收尾路径建议 |
+| 2026-06-16 | RULE-E-009 | open | **closed** | 4 处字节切片改 floor/ceil_char_boundary(对齐 diff.rs);+2 多字节测试,498 pass | §收尾路径建议 |
 
 ---
 
@@ -729,6 +737,45 @@
 | PR14 | `06-15-p1-worktree-data-dir-tauri` | RULE-E-006 | — |
 | PR-N+ | P2 各项子 task | RULE-*-P2 | — |
 | PR-N+ | P3 各项子 task | RULE-*-P3 | — |
+
+---
+
+## 收尾路径建议(基于 ROADMAP 耦合,2026-06-16 评估)
+
+> 维度:按"与接下来 ROADMAP 里程碑的耦合"给债务排收尾节奏。**不替代**上方"子 task 编排建议"(那是按 PR 依赖顺序),两者互补——编排建议看依赖,本段看功能契机。
+>
+> **现状判断**:P0 已清零(5/5 closed);P1 仅剩 `RULE-D-001`(API key 明文);**无任何债务阻塞 ROADMAP 第二档功能**。
+
+### 三梯队
+
+| 梯队 | RULE | 处置 |
+|---|---|---|
+| 🟢 可一直挂 | A-005 / A-008 / A-009 / B-003 / B-006 / C-003 / C-006 / D-004~D-008 / E-007 / E-010 / E-011 | 卫生债,不坏功能 |
+| 🟡 看到顺手修 | **B-004**(`find / -delete` 漏网,P2 唯一偏安全)、**E-009**(read_file UTF-8 panic,同 repo diff.rs 已修纯不一致)、**D-003**(SSE data_buf 无上限,第三方代理可踩) | 独立便宜活,任意时点可挑 |
+| 🔴 需决策 | **D-001**(API key 明文,P1) | 接受风险 vs 引入 keyring 依赖(Linux 走 Secret Service/D-Bus,WSL 体验存疑),建议先标"已知接受" |
+
+### 按 ROADMAP 里程碑的收尾契机
+
+| ROADMAP 里程碑 | 耦合债务 | 建议 |
+|---|---|---|
+| **B2 / B3 / D2**(输入/检索层) | 无直接耦合 | 零负担推进,不顺手不修 |
+| **D3**(消息编辑/重发) | 会重走 turn 边界 + message 持久化 → 自然碰到 **A-007**(error 路径 partial text 丢失)、**A-010**(二次取消语义) | 做 D3 时是修这俩的天然窗口 |
+| **B6 Subagent**(第三档,harness 学习价值最高) | worker agent 独立 context/token 预算 → **A-008**(estimator 两版重复)、**D-004/D-005**(capabilities 派生错误会污染 subagent 上下文) | **进 B6 前先抽 A-008 helper + 修 D-004/D-005** |
+
+### 已失效债务清理(本次评估发现)
+
+`RULE-C-001`(2026-06-15)Resolution Notes:watcher 已**整文件删除**改 read-through mtime fence。以下 2 条 finding 引用的 `watcher.rs` 已不存在,本次标 wontfix:
+
+- **RULE-C-007**(`watcher.rs:331-339` 路径表 fallback)→ wontfix
+- **RULE-C-009**(WSL/9p inotify 可靠性)→ wontfix(无 watcher 可失效)
+
+### 建议执行节奏
+
+1. ✅ **B-004 + E-009 已完成**(2026-06-16,498 tests pass);**D-003 待做**(SSE data_buf cap,下一批)。
+2. 推 B2/B3/D2(零耦合功能)。
+3. 做 D3 时顺手清 A-007 + A-010。
+4. 进 B6 前抽 A-008 + 修 D-004/D-005。
+5. D-001 待个人威胁模型决策(暂标已知接受)。
 
 ---
 
