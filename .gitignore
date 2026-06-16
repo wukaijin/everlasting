@@ -57,6 +57,9 @@ app/src/assets/fonts/source/
 *.sqlite-journal
 .cache/
 
+# App 运行时数据(shell tool outputs spillover 落盘 + 本地 commands fixture)
+.everlasting/
+
 
 reasonix.toml
 .codegraph/

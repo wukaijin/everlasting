@@ -21,6 +21,12 @@ the same task added `PermissionModal.vue` (a CENTER modal,
 not a popover — see "Modal vs Popover" callout below) but the
 popover pattern itself was unchanged.
 
+B3 /command (2026-06-16, task `06-16-b3-command-palette`) added
+`<TriggerMenu>` — the fourth production instance and the first
+whose trigger element is **external** to the popover's `root` (a
+sibling `<textarea>`, not a child of `root`). See "Variation:
+External Trigger Element" below.
+
 Future dropdowns / popovers in this project SHOULD follow this
 pattern unless the use case has a reason to deviate (e.g.
 accessibility requirements that demand
@@ -154,6 +160,73 @@ The `role="menu"` + `role="menuitem"` is the minimum a11y
 hint. Full keyboard nav (↑ / ↓ / Enter) is **not** implemented
 in either production instance; if a future dropdown needs
 keyboard-first navigation, switch to `reka-ui` `DropdownMenu`.
+
+---
+
+## Variation: External Trigger Element (`triggerEl` prop)
+
+> Added 2026-06-16 (B3 /command, task `06-16-b3-command-palette`).
+> `<TriggerMenu>` is the first popover whose **trigger element lives
+> outside the popover's `root`** — the trigger is `ChatInput`'s
+> `<textarea>`, and the menu is a sibling panel anchored above it.
+> B2 (@文件) and B4 (skill) will hit the same shape when they reuse
+> `<TriggerMenu>`.
+
+**Problem**: the standard `onDocumentClick` (§Pattern.3) only checks
+`root.contains(target)`. When the trigger element is **outside**
+`root` (a sibling, not a child), clicking the trigger to reposition
+the caret mid-type registers as an "outside click" and **closes the
+panel** — the user is typing `/he`, clicks to fix a typo, and the
+autocomplete vanishes.
+
+**Why ModeSelect / ModelSelect don't hit this**: their trigger button
+sits **inside** their own `root` wrapper
+(`<div ref="root">…<button/><menu/></div>`), so `root.contains(trigger)`
+is always true. `<TriggerMenu>` can't wrap the textarea (the textarea
+owns its own layout / v-model / autosize), so the menu mounts as a
+sibling and the textarea is external.
+
+**Solution**: add an optional `triggerEl` prop
+(`HTMLElement | null`) and have `onDocumentClick` treat it as "inside":
+
+```ts
+// TriggerMenu.vue
+const props = withDefaults(defineProps<{
+  triggerEl?: HTMLElement | null;
+}>(), { triggerEl: null });
+
+function onDocumentClick(e: MouseEvent) {
+  if (!open.value) return;
+  const target = e.target as Node | null;
+  if (!target) return;
+  const insideRoot = root.value?.contains(target) ?? false;
+  const insideTrigger = props.triggerEl?.contains(target) ?? false;
+  if (!insideRoot && !insideTrigger) {
+    open.value = false;
+  }
+}
+```
+
+The parent passes its textarea ref via template binding (Vue
+auto-unwraps the parent's template ref):
+
+```vue
+<TriggerMenu :trigger-el="textareaEl" ... />
+```
+
+**Don't** pass a `{ readonly value: HTMLElement | null }` ref-like
+object — `vue-tsc` rejects it and Vue's template binding already
+unwraps refs. A plain `HTMLElement | null` is the reactive-enough
+shape (the parent re-binds on every render).
+
+**When to use**: any popover whose trigger is a sibling / external
+element (can't be wrapped in the popover's `root`). For popovers
+whose trigger is inside `root` (ModeSelect / ModelSelect / worktree
+dropdown), the standard pattern suffices — no `triggerEl` needed.
+
+**Reference**: `app/src/components/chat/TriggerMenu.vue` (B3 PR2,
+commit `d57788a`). The `triggerEl` extension was caught + fixed by
+the `trellis-check` pass on PR2.
 
 ---
 
