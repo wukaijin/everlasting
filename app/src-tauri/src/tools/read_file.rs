@@ -200,9 +200,11 @@ fn truncate_output(content: String, offset: usize, limit: usize) -> String {
         return numbered;
     }
 
-    // Head+tail truncation on the line-numbered output.
-    let head_end = TRUNCATE_HEAD;
-    let tail_start = numbered.len().saturating_sub(TRUNCATE_HEAD);
+    // Head+tail truncation on the line-numbered output. Slice at
+    // UTF-8 char boundaries (RULE-E-009) — the line-number prefix
+    // is ASCII, but the source lines can be multibyte.
+    let head_end = numbered.floor_char_boundary(TRUNCATE_HEAD);
+    let tail_start = numbered.ceil_char_boundary(numbered.len().saturating_sub(TRUNCATE_HEAD));
     let omitted = numbered.len() - MAX_OUTPUT_BYTES;
     format!(
         "{}\n<truncated: omitted {} bytes>\n{}",
@@ -218,8 +220,13 @@ fn truncate_full_output(content: &str) -> String {
     if content.len() <= MAX_OUTPUT_BYTES {
         return add_line_numbers(content);
     }
-    let head_end = TRUNCATE_HEAD;
-    let tail_start = content.len() - TRUNCATE_HEAD;
+    // RULE-E-009: slice at a UTF-8 char boundary, never the middle
+    // of a multi-byte sequence (CJK / emoji in a ≥50KB file would
+    // panic on the byte slice). floor = walk back to a char start
+    // (head); ceil = walk forward (tail). Mirrors the byte-walk in
+    // `git::diff::build_untracked_diff`.
+    let head_end = content.floor_char_boundary(TRUNCATE_HEAD);
+    let tail_start = content.ceil_char_boundary(content.len() - TRUNCATE_HEAD);
     let omitted = content.len() - MAX_OUTPUT_BYTES;
     let head = add_line_numbers(&content[..head_end]);
     let tail = add_line_numbers(&content[tail_start..]);
@@ -590,5 +597,39 @@ mod tests {
         assert!(!is_error, "{}", content);
         assert!(content.contains("\t1\tfirst"), "got: {:?}", content);
         assert!(!content.contains("second"), "limit=1 should only return 1 line");
+    }
+
+    /// RULE-E-009: truncating a >50KB multibyte (CJK) file must not
+    /// panic on a half-character byte boundary. Pre-fix,
+    /// `&content[..TRUNCATE_HEAD]` split a 3-byte sequence and
+    /// panicked.
+    #[test]
+    fn truncate_full_output_multibyte_no_panic() {
+        // 72 KB of a single CJK glyph (3 bytes/char) — the 25 KB
+        // head end lands mid-character without floor_char_boundary.
+        let content = "中".repeat(24_000);
+        let out = truncate_full_output(&content);
+        assert!(
+            out.contains("<truncated:"),
+            "should truncate, got len {}",
+            out.len()
+        );
+    }
+
+    /// RULE-E-009: the offset/limit numbered-output truncation path
+    /// must also slice at char boundaries (the prefix is ASCII but
+    /// source lines can be multibyte).
+    #[test]
+    fn truncate_output_offset_multibyte_no_panic() {
+        // ~1.2 KB/line of CJK; 100 lines. offset=2 forces the
+        // numbered (non-full) path; 99 numbered lines ≈ 119 KB > 50 KB.
+        let line: String = "中".repeat(400);
+        let content = format!("{}\n", line).repeat(100);
+        let out = truncate_output(content, 2, 100);
+        assert!(
+            out.contains("<truncated:"),
+            "should truncate, got len {}",
+            out.len()
+        );
     }
 }

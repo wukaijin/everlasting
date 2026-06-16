@@ -26,43 +26,56 @@
 const DENY_PATTERNS: &[(&str, &str)] = &[
  // rm -rf / or rm -rf /* — recursive delete at filesystem root
  (
- r"(^|\s)rm\s+(-[a-zA-Z]*[rRfF][a-zA-Z]*\s+)*(/\*?\s*$)",
+ r"(?i)(^|\s)rm\s+(-[a-zA-Z]*[rRfF][a-zA-Z]*\s+)*(/\*?\s*$)",
  "rm -rf / is denied: deletes the entire filesystem root",
  ),
  // mkfs — make a new filesystem (wipes a partition)
  (
- r"(^|\s)mkfs(\.\w+)?\s+",
+ r"(?i)(^|\s)mkfs(\.\w+)?\s+",
  "mkfs is denied: formats a block device",
  ),
  // dd if=... of=... — direct block device write
  (
- r"(^|\s)dd\b[^|;&]*\sif=",
+ r"(?i)(^|\s)dd\b[^|;&]*\sif=",
  "dd with if= is denied: can clobber block devices",
  ),
  // fork bomb: `:(){:|:&};:`
  (
- r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:",
+ r"(?i):\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:",
  "fork bomb is denied: classic shell denial-of-service",
  ),
  // `> /dev/sda` (or any /dev/sdX) — direct write to disk
  (
- r">\s*/dev/(sd|hd|nvme|vd|xvd)",
+ r"(?i)>\s*/dev/(sd|hd|nvme|vd|xvd)",
  "redirect to block device is denied: corrupts the disk",
  ),
  // chmod -R 777 / — recursive permission open at root
  (
- r"(^|\s)chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)*(0?77[0-7]|777)\s+/(\s|$)",
+ r"(?i)(^|\s)chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)*(0?77[0-7]|777)\s+/(\s|$)",
  "chmod 777 on / is denied: removes all permission protection on /",
  ),
  // git push --force / -f to a protected branch (main / master / develop)
  (
- r"(^|\s)git\s+push\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)*(--force\s+)?(origin\s+)?(main|master|develop)\s*$",
+ r"(?i)(^|\s)git\s+push\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)*(--force\s+)?(origin\s+)?(main|master|develop)\s*$",
  "force-push to a protected branch is denied",
  ),
  // curl ... | bash / sh — pipe remote script to a shell
  (
- r"(^|\s)(curl|wget)\s+[^|]*\|\s*(ba)?sh(\s|$)",
+ r"(?i)(^|\s)(curl|wget)\s+[^|]*\|\s*(ba)?sh(\s|$)",
  "curl|bash / wget|sh is denied: pipe a remote script straight into a shell",
+ ),
+ // find ... -delete — recursive delete via find's -delete action.
+ // Closes RULE-B-004: `find` is ReadOnly in Tier 4 (shell_trust.rs),
+ // so this kill list is the only layer that catches `find / -delete`.
+ (
+ r"(?i)(^|\s)find\b.*\s-delete\b",
+ "find -delete is denied: recursive delete via find",
+ ),
+ // find ... -exec / -execdir — find running an arbitrary command
+ // per match (`find / -exec rm -rf {} ;` is rm-at-a-distance).
+ (
+ r"(?i)(^|\s)find\b.*\s-exec(dir)?\b",
+ "find -exec is denied: runs an arbitrary command per match",
  ),
 ];
 
@@ -204,5 +217,34 @@ mod tests {
  // `ls /dev`, `cat /dev/null`, etc. — not block device writes.
  assert!(is_kill_listed("shell", &json!({"command": "ls /dev"})).is_none());
  assert!(is_kill_listed("shell", &json!({"command": "cat /dev/null > /tmp/x"})).is_none());
+ }
+
+ // --- RULE-B-004: case-insensitive + find -delete / -exec ---
+
+ #[test]
+ fn kill_list_blocks_case_variants() {
+ // (?i) closes the uppercase-bypass hole (RM -RF /, MKFS, DD).
+ assert!(is_kill_listed("shell", &json!({"command": "RM -RF /"})).is_some());
+ assert!(is_kill_listed("shell", &json!({"command": "MKFS.EXT4 /dev/sdb1"})).is_some());
+ assert!(is_kill_listed("shell", &json!({"command": "DD IF=/dev/zero OF=/dev/sda"})).is_some());
+ }
+
+ #[test]
+ fn kill_list_blocks_find_delete_and_exec() {
+ // `find` is ReadOnly in Tier 4 (shell_trust.rs), so the kill
+ // list is the only layer that catches these destructive actions.
+ assert!(is_kill_listed("shell", &json!({"command": "find / -delete"})).is_some());
+ assert!(is_kill_listed("shell", &json!({"command": "find . -name \"*.tmp\" -delete"})).is_some());
+ assert!(is_kill_listed("shell", &json!({"command": "find / -exec rm -rf {} ;"})).is_some());
+ assert!(is_kill_listed("shell", &json!({"command": "find . -execdir chmod 777 {} +"})).is_some());
+ // Case-insensitive find bypass.
+ assert!(is_kill_listed("shell", &json!({"command": "FIND / -DELETE"})).is_some());
+ }
+
+ #[test]
+ fn kill_list_does_not_block_benign_find() {
+ // Plain find (no -delete / -exec) stays read-only.
+ assert!(is_kill_listed("shell", &json!({"command": "find . -name foo"})).is_none());
+ assert!(is_kill_listed("shell", &json!({"command": "find / -type f -name \"*.rs\""})).is_none());
  }
 }
