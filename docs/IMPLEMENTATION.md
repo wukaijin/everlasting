@@ -28,6 +28,22 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-16 — 审批内联到 ToolCallCard + 按 session 分区 + 拒绝并反馈(取代全局 PermissionModal)
+
+**Context**: 全局单例 `<PermissionModal>`(挂 ChatPanel,Teleport to body,状态为 `usePermissionsStore.pendingPermission` 单槽 ref)在多 session 并发审批时三连问题:① `setPending` 直接覆盖旧 pending 且不对旧 rid respond,旧 ask 留在后端 oneshot store 跑满 120s 超时 → `Decision::Deny`,该 session agent loop 卡 120s(用户感知"没问我就处理了",实际是超时拒);② payload `PermissionAskPayload` 不带 sessionId,modal 文案写死"当前项目"、path badge 用 `chatStore.currentCwd`(用户当前看的 session),跨 session 时指鹿为马;③ `deny` reason 写死 `"user denied"`,LLM 不知为何被拒、无法纠错。
+
+**Decision**: 审批 UI 从全局 modal 改为内联到 `ToolCallCard` 的「待审批」态,以 `tool_use_id` 为关联键:
+- 后端 `PermissionAskPayload` 加 `session_id` + `tool_use_id`(agent loop 在 `for (id, name, input)` 里已持有 tool_use_id,`check()`/`ask_path()` 签名穿透即可);`PermissionResponse::Deny` 扩展带 `reason: String`;`permission_response` IPC 接收 `reason`。deny 反馈作为 `tool_result(is_error)` 内容回填 LLM。
+- 前端 store `pendingPermission`(单槽) → `pendingBySession: Map<sessionId, ask>`,listener 按 sessionId 路由;每 ask 独立 120s 计时(按 rid,取代共享单 timerRid)。
+- `ToolCallCard` 以 `call.id === pending.toolUseId` 渲染审批态(仅一次/始终允许/拒绝/拒绝并说明 4 操作,"拒绝并说明"展开输入框);`hasResult` 到来即视为审批窗口关闭(allow→exec / deny / cancel 都产生 result),清 pending + 隐藏审批 UI。
+- **彻底移除** `<PermissionModal>`(组件 + ChatPanel 引用 + 测试)。
+- SessionList 给有待审批的 session 加脉动 shield 标记(切走也能感知,后端 120s 超时语义不变)。
+- 「拒绝并说明」用分离式输入框(主按钮「拒绝」一键 deny,「拒绝并说明」二级展开),符合 Claude Code 体感。
+
+**关键不变量**:`tool:call`(chat_loop L423)必先于 `permission:ask`(ask_path)发出——前端收到审批事件时目标 ToolCallCard 已渲染,`toolUseId` 匹配成立;同 session 的 `check()` 串行 await(同 session 最多一个 pending),跨 session 才并发,正好匹配 per-session 分区。
+
+**影响面**:后端 3 文件(`permissions/mod.rs` enum/payload/签名/分支 + `commands/permissions.rs` IPC + `chat_loop.rs` 传 tool_use_id);前端 `permissions.ts` store 重写 + `permissions.test.ts` + `ToolCallCard.vue`/`.test.ts` 审批态 + `SessionList.vue` badge,删 `PermissionModal.vue`/`.test.ts`,`ChatPanel.vue`/`ChatWindow.vue` 引用清理;spec `.trellis/spec/backend/tool-contract.md` §4 permission:ask IPC 同步。测试:后端 68 lib 测试全绿(含 sessionId/toolUseId camelCase + Deny reason 2 个新测试);前端 vitest 全绿(含 permissions 多 session 共存/respond 按 rid 精确清除 + ToolCallCard 审批态 8 测试)。
+
 ### 2026-06-14 — shell 权限三档分类(ReadOnly/SideEffect/Ask)+ plan 模式只读放行 + 复杂命令弹窗兜底
 
 **Context**: A2+B7 re-grill(2026-06-13)把 Mode 检查提到 Tier 3 后,plan 模式对 shell 一刀切 Deny——连 `git diff`/`git status` 这种纯读命令也禁,且 Tier 3 提前 return 绕过 Tier 4 弹窗,用户无法当场放行(只能被迫切模式)。同时暴露 `ShellTrust` 两档(Allow/Ask)只看首 token 的粒度问题:`git log | bash` 被判 Allow(首 token git),而 Tier 2 只兜 `curl\|bash`,不兜 `git\|bash`——pipe/链里藏的副作用靠用户肉眼。用户进一步要求:像 `ENV=noop && cargo check` 这种代码判不了的命令,plan/edit 都要有弹窗放行可能,而非硬拒堵死。

@@ -272,7 +272,11 @@ pub struct PermissionContext {
 pub enum PermissionResponse {
  AllowOnce,
  AllowAlways,
- Deny,
+ /// `reason` is the user's optional feedback text (the
+ /// "拒绝并说明" path). Empty string = plain deny. The agent
+ /// loop surfaces this as the `tool_result(is_error)` content
+ /// so the LLM learns *why* it was denied.
+ Deny { reason: String },
 }
 
 /// A pending `permission:ask` awaiting the user's response. The
@@ -373,6 +377,15 @@ pub async fn cancel_session_asks(
 #[serde(rename_all = "camelCase")]
 pub struct PermissionAskPayload {
  pub rid: String,
+ /// Session this ask belongs to (per-session approval routing,
+ /// 2026-06-16). The frontend keys pending asks by `sessionId`
+ /// so multi-session concurrency no longer collides on the
+ /// single-slot `pendingPermission`.
+ pub session_id: String,
+ /// The `tool_use_id` of the tool_use that triggered this ask.
+ /// The frontend matches `ToolCallInfo.id === toolUseId` to
+ /// render the inline approval state on the right ToolCallCard.
+ pub tool_use_id: String,
  pub tool_name: String,
  pub tool_input: serde_json::Value,
  pub risk: Risk,
@@ -430,6 +443,7 @@ pub async fn check(
  sink: &Arc<dyn ChatEventSink>,
  tool_name: &str,
  tool_input: &serde_json::Value,
+ tool_use_id: &str,
  token: &tokio_util::sync::CancellationToken,
 ) -> Decision {
  // ----- Tier 1: Hooks (no-op for MVP — pre-call interface reserved) -----
@@ -565,7 +579,7 @@ pub async fn check(
  return ask_path(
     sink, db, store, ctx,
  tool_name, tool_input,
- &path_owned, Some(&path_owned), token,
+ &path_owned, Some(&path_owned), tool_use_id, token,
  ).await;
  }
  None => {
@@ -606,7 +620,7 @@ pub async fn check(
  if ctx.mode == Mode::Plan {
  // Plan is read-only; surface the side effect to the
  // user instead of silently allowing it.
- return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
+ return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, tool_use_id, token).await;
  }
  // Edit: silent Allow (old whitelist behaviour).
  let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
@@ -620,7 +634,7 @@ pub async fn check(
  // None` keeps the `path` field OFF the wire so the
  // frontend's `v-if="hasPath"` does not render a
  // misleading scope row for a shell ask.
- return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, token).await;
+ return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, tool_use_id, token).await;
  }
  }
  }
@@ -643,7 +657,7 @@ pub async fn check(
  // not render a misleading scope row for a web_fetch
  // ask (it would otherwise show "仓库外" against a URL,
  // which is wrong — the URL is not a filesystem path).
- None, token,
+ None, tool_use_id, token,
  ).await;
  }
  ToolKind::Other => {
@@ -921,6 +935,7 @@ async fn ask_path(
     tool_input: &serde_json::Value,
     path_or_cmd: &str,
     path_for_modal: Option<&str>,
+    tool_use_id: &str,
     token: &tokio_util::sync::CancellationToken,
 ) -> Decision {
  let rid = uuid::Uuid::new_v4().to_string();
@@ -928,6 +943,8 @@ async fn ask_path(
  let reason = build_ask_reason(tool_name, path_or_cmd, risk);
  let payload = PermissionAskPayload {
  rid: rid.clone(),
+ session_id: ctx.session_id.clone(),
+ tool_use_id: tool_use_id.to_string(),
  tool_name: tool_name.to_string(),
  tool_input: tool_input.clone(),
  risk,
@@ -954,7 +971,14 @@ async fn ask_path(
  let resp = tokio::select! {
  biased;
  _ = token.cancelled() => {
- let _ = resolve_ask(store, &rid, PermissionResponse::Deny).await;
+ let _ = resolve_ask(
+ store,
+ &rid,
+ PermissionResponse::Deny {
+ reason: "request cancelled by user".to_string(),
+ },
+ )
+ .await;
  let _ = record_audit( db, ctx, AuditKind::RequestCancelled, tool_name, tool_input, None).await;
  return Decision::Deny {
  reason: "request cancelled by user".to_string(),
@@ -1007,10 +1031,26 @@ async fn ask_path(
  let _ = record_audit( db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
  Decision::Allow
  }
- Ok(PermissionResponse::Deny) => {
- let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
+ Ok(PermissionResponse::Deny { reason }) => {
+ // Surface the user's optional "拒绝并说明" feedback as the
+ // tool_result(is_error) content so the LLM learns *why* it
+ // was denied. Empty feedback falls back to "user denied".
+ let deny_reason = if reason.trim().is_empty() {
+ "user denied".to_string()
+ } else {
+ reason
+ };
+ let _ = record_audit(
+ db,
+ ctx,
+ AuditKind::ToolDenied,
+ tool_name,
+ tool_input,
+ Some(&deny_reason),
+ )
+ .await;
  Decision::Deny {
- reason: "user denied".to_string(),
+ reason: deny_reason,
  critical: false,
  }
  }
@@ -1543,6 +1583,8 @@ mod tests {
  fn permission_ask_payload_wire_shape_includes_path() {
  let p = PermissionAskPayload {
  rid: "test-rid".to_string(),
+ session_id: "test-session".to_string(),
+ tool_use_id: "tu-1".to_string(),
  tool_name: "read_file".to_string(),
  tool_input: serde_json::json!({"path": "/x"}),
  risk: Risk::High,
@@ -1562,6 +1604,8 @@ mod tests {
  fn permission_ask_payload_omits_path_when_none() {
  let p = PermissionAskPayload {
  rid: "test-rid".to_string(),
+ session_id: "test-session".to_string(),
+ tool_use_id: "tu-2".to_string(),
  tool_name: "shell".to_string(),
  tool_input: serde_json::json!({"command": "ls"}),
  risk: Risk::High,
@@ -1598,6 +1642,8 @@ mod tests {
  fn permission_ask_payload_omits_path_for_shell() {
  let p = PermissionAskPayload {
  rid: "shell-rid".to_string(),
+ session_id: "test-session".to_string(),
+ tool_use_id: "tu-3".to_string(),
  tool_name: "shell".to_string(),
  tool_input: serde_json::json!({"command": "rm -rf /tmp/foo"}),
  risk: Risk::High,
@@ -1630,6 +1676,8 @@ mod tests {
  fn permission_ask_payload_omits_path_for_web_fetch() {
  let p = PermissionAskPayload {
  rid: "webfetch-rid".to_string(),
+ session_id: "test-session".to_string(),
+ tool_use_id: "tu-4".to_string(),
  tool_name: "web_fetch".to_string(),
  tool_input: serde_json::json!({"url": "https://example.com/api"}),
  risk: Risk::Low,
@@ -1663,6 +1711,8 @@ mod tests {
  fn permission_ask_payload_includes_path_for_path_tool() {
  let p = PermissionAskPayload {
  rid: "path-rid".to_string(),
+ session_id: "test-session".to_string(),
+ tool_use_id: "tu-5".to_string(),
  tool_name: "read_file".to_string(),
  tool_input: serde_json::json!({"path": "/Users/me/repo/src/foo.rs"}),
  risk: Risk::Low,
@@ -1681,5 +1731,52 @@ mod tests {
  s
  );
  assert!(s.contains("\"toolName\":\"read_file\""), "toolName: {}", s);
+ }
+
+ /// 2026-06-16 (inline approval card): payload carries `sessionId`
+ /// + `toolUseId` (camelCase) so the frontend routes the ask to the
+ /// right session and matches it to the right ToolCallCard.
+ #[test]
+ fn permission_ask_payload_carries_session_and_tool_use_id() {
+ let p = PermissionAskPayload {
+ rid: "r1".to_string(),
+ session_id: "sess-42".to_string(),
+ tool_use_id: "tooluse_abc".to_string(),
+ tool_name: "write_file".to_string(),
+ tool_input: serde_json::json!({"path": "/x"}),
+ risk: Risk::Medium,
+ reason: None,
+ path: Some("/x".to_string()),
+ };
+ let s = serde_json::to_string(&p).unwrap();
+ assert!(s.contains("\"sessionId\":\"sess-42\""), "sessionId camelCase: {}", s);
+ assert!(
+ s.contains("\"toolUseId\":\"tooluse_abc\""),
+ "toolUseId camelCase: {}",
+ s
+ );
+ }
+
+ /// 2026-06-16: PermissionResponse::Deny carries the user's
+ /// feedback reason; empty string = plain deny. The agent loop
+ /// surfaces the reason as the tool_result(is_error) content.
+ #[test]
+ fn permission_response_deny_carries_reason() {
+ let resp = PermissionResponse::Deny {
+ reason: "use git clean instead".to_string(),
+ };
+ if let PermissionResponse::Deny { reason } = resp {
+ assert_eq!(reason, "use git clean instead");
+ } else {
+ panic!("expected Deny");
+ }
+ let plain = PermissionResponse::Deny {
+ reason: String::new(),
+ };
+ if let PermissionResponse::Deny { reason } = plain {
+ assert!(reason.is_empty());
+ } else {
+ panic!("expected Deny");
+ }
  }
 }

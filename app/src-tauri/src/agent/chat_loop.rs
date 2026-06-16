@@ -623,6 +623,7 @@ pub async fn run_chat_loop(
                 &sink,
                 name,
                 input,
+                id,
                 &token,
             )
             .await;

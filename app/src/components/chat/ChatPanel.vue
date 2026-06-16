@@ -44,7 +44,6 @@ import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
-import PermissionModal from "./PermissionModal.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
@@ -505,16 +504,6 @@ if (typeof window !== "undefined") {
           closes the modal on session switch.
         -->
     <AuditLogModal v-model:open="auditModalOpen" />
-
-    <!--
-          A2 + B7 PR3: ⑨ 关 permission modal. Single modal,
-          driven by `usePermissionsStore.pendingPermission` —
-          the store listens for `permission:ask` Tauri events
-          and the modal mounts whenever the store has a pending
-          ask. Modal handles its own Esc/Enter/outside-click
-          cancel (delegates to store.respond with "deny").
-        -->
-    <PermissionModal />
   </section>
 </template>
 

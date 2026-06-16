@@ -1,29 +1,26 @@
 // Tests for `usePermissionsStore` — the ⑨ 关 ↔ `permission:ask`
 // IPC bridge.
 //
-// Coverage targets (PR3 spec §"PermissionModal Acceptance Criteria"
-// + store contract):
-//   1. `start()` registers a listener; `permission:ask` events
-//      populate `pendingPermission`.
-//   2. `respond(rid, decision)` invokes `permission_response` IPC
-//      with the right args + clears `pendingPermission` if rid
-//      matches.
-//   3. `startAskTimer` / 120s timeout → auto-deny + toast (verified
-//      with a stubbed `window.setTimeout` via fake timers).
-//   4. New ask replaces the prior (single-slot semantics).
-//   5. `stop()` tears down the listener + clears state.
+// 2026-06-16 (inline approval card): the store now routes pending
+// asks PER SESSION. Coverage targets:
+//   1. `start()` registers a listener; `permission:ask` routes into
+//      `pendingBySession` by `sessionId`.
+//   2. Same-session replace (serial agent loop → one slot/session).
+//   3. **Multi-session coexistence** — the core bug fix: asks in
+//      different sessions no longer overwrite each other.
+//   4. `respond(rid, decision, reason?)` invokes `permission_response`
+//      with the right args + clears ONLY the matching rid's pending
+//      (does NOT touch another session's pending).
+//   5. deny forwards the "拒绝并说明" feedback reason.
+//   6. Per-rid 120s timer → auto-deny + toast.
+//   7. `stop()` tears down + clears all.
 //
-// Tauri IPC + event are mocked via `vi.mock("@tauri-apps/api/event")`
-// and `vi.mock("@tauri-apps/api/core")` so the suite runs in jsdom
-// without a real Tauri runtime.
+// Tauri IPC + event are mocked so the suite runs in jsdom without a
+// real Tauri runtime.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
-// Tauri mocks — both IPC invoke and event listen. The listener
-// mock captures the handler so tests can drive events directly
-// (rather than relying on `emit()` which the real API exposes
-// only via `AppHandle` on the Rust side).
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
 
@@ -53,10 +50,23 @@ import {
 
 const sampleAsk: PermissionAsk = {
   rid: "rid-1",
+  sessionId: "sess-1",
+  toolUseId: "tooluse-1",
   toolName: "shell",
   toolInput: { command: "ls -la" },
   risk: "high",
   reason: "Test reason",
+};
+
+/** A second ask in a DIFFERENT session — the multi-concurrency
+ *  fixture. */
+const otherSessionAsk: PermissionAsk = {
+  rid: "rid-9",
+  sessionId: "sess-2",
+  toolUseId: "tooluse-9",
+  toolName: "write_file",
+  toolInput: { path: "/tmp/x" },
+  risk: "medium",
 };
 
 describe("usePermissionsStore", () => {
@@ -76,98 +86,111 @@ describe("usePermissionsStore", () => {
 
   it("start() registers a permission:ask listener", async () => {
     const store = usePermissionsStore();
-    // listenMock is wired in the vi.mock factory above.
     await store.start();
     expect(capturedHandler).not.toBeNull();
   });
 
-  it("setPending populates pendingPermission", () => {
+  it("setPending routes the ask by sessionId", () => {
     const store = usePermissionsStore();
-    expect(store.pendingPermission).toBeNull();
+    expect(store.getPending("sess-1")).toBeUndefined();
     store.setPending(sampleAsk);
-    expect(store.pendingPermission).toEqual(sampleAsk);
+    expect(store.getPending("sess-1")).toEqual(sampleAsk);
+    expect(store.hasPending("sess-1")).toBe(true);
   });
 
-  it("a new ask replaces the prior (single-slot semantics)", () => {
+  it("a new ask in the SAME session replaces the prior", () => {
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
-    const second: PermissionAsk = {
+    const next: PermissionAsk = {
       rid: "rid-2",
+      sessionId: "sess-1",
+      toolUseId: "tooluse-2",
       toolName: "write_file",
       toolInput: { path: "/tmp/x" },
       risk: "medium",
     };
-    store.setPending(second);
-    expect(store.pendingPermission?.rid).toBe("rid-2");
+    store.setPending(next);
+    expect(store.getPending("sess-1")?.rid).toBe("rid-2");
+    expect(store.pendingSessionIds).toEqual(["sess-1"]);
   });
 
-  it("respond fires permission_response IPC with the rid + decision", async () => {
+  it("asks in DIFFERENT sessions coexist (multi-session concurrency)", () => {
+    const store = usePermissionsStore();
+    store.setPending(sampleAsk); // sess-1
+    store.setPending(otherSessionAsk); // sess-2
+    // Both survive — no silent overwrite (the old single-slot bug).
+    expect(store.getPending("sess-1")?.rid).toBe("rid-1");
+    expect(store.getPending("sess-2")?.rid).toBe("rid-9");
+    expect(store.pendingSessionIds).toHaveLength(2);
+    expect(store.pendingSessionIds.sort()).toEqual(["sess-1", "sess-2"]);
+  });
+
+  it("respond allow_once fires IPC + clears the matching session pending", async () => {
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
     await store.respond(sampleAsk.rid, "allow_once");
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: sampleAsk.rid,
       decision: "allow_once",
+      reason: undefined,
     });
-    // Local state is cleared after respond (matches our UX
-    // contract — the modal closes regardless of IPC outcome).
-    expect(store.pendingPermission).toBeNull();
+    expect(store.getPending("sess-1")).toBeUndefined();
   });
 
-  it("respond with allow_always fires the right IPC", async () => {
+  it("respond deny forwards the 拒绝并说明 feedback reason", async () => {
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
-    await store.respond(sampleAsk.rid, "allow_always");
+    await store.respond(sampleAsk.rid, "deny", "use git clean instead");
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: sampleAsk.rid,
-      decision: "allow_always",
+      decision: "deny",
+      reason: "use git clean instead",
     });
   });
 
-  it("respond with deny fires the right IPC", async () => {
+  it("respond deny without feedback sends reason: undefined", async () => {
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
     await store.respond(sampleAsk.rid, "deny");
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: sampleAsk.rid,
       decision: "deny",
+      reason: undefined,
     });
   });
 
-  it("respond does NOT clear pendingPermission if rid doesn't match", async () => {
+  it("respond on one session does NOT clear another session's pending", async () => {
     const store = usePermissionsStore();
-    store.setPending(sampleAsk);
-    // Respond with a different rid (race: user clicked button after
-    // a new ask arrived).
-    await store.respond("rid-other", "deny");
-    expect(store.pendingPermission?.rid).toBe("rid-1");
+    store.setPending(sampleAsk); // sess-1
+    store.setPending(otherSessionAsk); // sess-2
+    await store.respond("rid-1", "allow_once");
+    expect(store.getPending("sess-1")).toBeUndefined();
+    // sess-2 untouched — the old store would have lost this.
+    expect(store.getPending("sess-2")?.rid).toBe("rid-9");
   });
 
-  it("clearPending empties the slot + clears the timer", () => {
+  it("clearPending(sessionId) empties that session + its timer", () => {
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
-    expect(store.pendingPermission).not.toBeNull();
-    store.clearPending();
-    expect(store.pendingPermission).toBeNull();
+    expect(store.hasPending("sess-1")).toBe(true);
+    store.clearPending("sess-1");
+    expect(store.hasPending("sess-1")).toBe(false);
   });
 
-  it("120s timer fires deny + toast", () => {
+  it("120s timer fires deny + toast for the rid", () => {
     vi.useFakeTimers();
     const toastMock = vi.fn();
     const store = usePermissionsStore();
     store.setPending(sampleAsk);
-    // start() wires the toast callback.
     void store.start(toastMock);
-    // Advance to just before the timeout.
     vi.advanceTimersByTime(ASK_TIMEOUT_MS - 100);
     expect(invokeMock).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
-    // Cross the timeout.
     vi.advanceTimersByTime(200);
-    // The timer should have fired a deny + surfaced a toast.
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: sampleAsk.rid,
       decision: "deny",
+      reason: undefined,
     });
     expect(toastMock).toHaveBeenCalledWith(
       "权限询问已超时,已自动拒绝",
@@ -175,16 +198,15 @@ describe("usePermissionsStore", () => {
     );
   });
 
-  it("stop() tears down the listener + clears state", async () => {
+  it("stop() tears down the listener + clears all pending", async () => {
     const store = usePermissionsStore();
     await store.start();
     expect(capturedUnlisten).not.toBeNull();
     store.setPending(sampleAsk);
+    store.setPending(otherSessionAsk);
     store.stop();
-    // capturedUnlisten was called.
     expect(capturedUnlisten).toHaveBeenCalled();
-    // State is reset.
-    expect(store.pendingPermission).toBeNull();
+    expect(store.pendingSessionIds).toEqual([]);
   });
 
   it("start() is idempotent — calling twice replaces the prior unlisten", async () => {
@@ -192,7 +214,6 @@ describe("usePermissionsStore", () => {
     await store.start();
     const firstUnlisten = capturedUnlisten;
     await store.start();
-    // The first listener was torn down.
     expect(firstUnlisten).toHaveBeenCalled();
   });
 });

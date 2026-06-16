@@ -718,6 +718,8 @@ from step 1).
 ```jsonc
 {
   "rid": "550e8400-e29b-41d4-a716-446655440000",
+  "sessionId": "sess-abc",
+  "toolUseId": "toolu_01ABC",
   "toolName": "shell",
   "toolInput": { "command": "ls -la" },
   "risk": "high",
@@ -725,10 +727,22 @@ from step 1).
 }
 ```
 
+`sessionId` (2026-06-16, inline approval card) routes the ask to the
+right session in the frontend's per-session `pendingBySession` map —
+this fixes the multi-session concurrency bug where asks from different
+sessions collided on a single global slot. `toolUseId` lets the inline
+`<ToolCallCard>` match `call.id === toolUseId` to render the approval
+state on the exact card that triggered the ask. `path` is also present
+for path tools (omitted for shell / web_fetch — see
+`PermissionAskPayload`'s `#[serde(skip_serializing_if)]`).
+
 **IPC command** (client → server):
-`invoke("permission_response", { rid, decision })` where
+`invoke("permission_response", { rid, decision, reason })` where
 `decision` is one of `"allow_once"` / `"allow_always"` /
-`"deny"`. The Tauri command lives in
+`"deny"`. `reason` (2026-06-16) is the user's optional "拒绝并说明"
+feedback — only meaningful for `"deny"` (pass `undefined` otherwise);
+the agent loop surfaces it as the `tool_result(is_error)` content so
+the LLM learns *why* it was denied. The Tauri command lives in
 `commands::permissions::permission_response` and looks up
 the `HashMap<rid, oneshot::Sender>` keyed by `rid`. Unknown
 `decision` returns `Err`; unknown `rid` returns `Ok(false)`

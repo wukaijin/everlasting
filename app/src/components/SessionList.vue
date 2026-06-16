@@ -12,6 +12,7 @@ import { computed, nextTick, ref } from "vue";
 import { useChatStore, type SessionSummary } from "../stores/chat";
 import { useProjectsStore } from "../stores/projects";
 import { useStreamControllerStore } from "../stores/streamController";
+import { usePermissionsStore } from "../stores/permissions";
 import { COLOR_PALETTE, colorTagHex, hexToRgba } from "../utils/colorTag";
 import {
   DropdownMenuContent,
@@ -29,6 +30,7 @@ import ConfirmDialog from "./common/ConfirmDialog.vue";
 const store = useChatStore();
 const projectsStore = useProjectsStore();
 const streamController = useStreamControllerStore();
+const permStore = usePermissionsStore();
 
 const DEFAULT_VISIBLE = 8;
 const expanded = ref(false);
@@ -219,6 +221,13 @@ function cardStyle(s: SessionSummary): Record<string, string> {
             aria-hidden="true"
             title="正在生成"
           />
+          <span
+            v-if="permStore.hasPending(s.id)"
+            class="session-item__pending-approval"
+            title="有待审批的工具调用 — 切到此会话处理"
+          >
+            <Icon name="shield-check" :size="11" />
+          </span>
         </div>
         <div class="session-item__meta">
           <span class="session-item__project">{{ projectNameFor(s) }}</span>
@@ -433,6 +442,17 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   background: var(--color-accent);
   animation: pulseDot 1.5s ease-in-out infinite;
   margin-top: 1px;
+}
+
+/* 2026-06-16: marks sessions with a pending permission ask so the
+   user sees which session is blocked even after switching away
+   (the inline approval card only renders for the current session). */
+.session-item__pending-approval {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-tool-shell);
+  animation: pulseDot 1.5s ease-in-out infinite;
 }
 
 @keyframes pulseDot {

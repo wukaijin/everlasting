@@ -1,44 +1,47 @@
 // usePermissionsStore — Pinia store for the ⑨ 关 ↔ `permission:ask`
 // IPC bridge.
 //
-// PR3 (A2 + B7): the backend `agent/permissions::check` emits a
-// `permission:ask` event with `{ rid, tool_name, tool_input,
-// risk, reason? }` when a tool_use lands on Tier 3 of the 5-tier
-// decision layer (no "始终允许" record for the tool in the active
-// session). This store is the frontend-side counterpart:
+// 2026-06-16 (inline approval card): the store now routes pending
+// asks PER SESSION (`pendingBySession: Map<sessionId, PermissionAsk>`)
+// instead of a single global slot. This fixes the multi-session
+// concurrency bug where a new `permission:ask` from session B
+// silently overwrote session A's pending ask — leaving A's agent
+// loop blocked for 120s until a timeout deny. Each session now has
+// its own slot, and each ask arms an independent 120s timer keyed
+// by `rid`.
+//
+// The backend `agent/permissions::check` emits a `permission:ask`
+// event with `{ rid, sessionId, toolUseId, toolName, toolInput,
+// risk, reason?, path? }` when a tool_use lands on Tier 4 (no
+// grant + outside-repo / shell Ask / web_fetch). This store:
 //
 //   1. On app boot, `start()` registers a global listener on the
-//      `permission:ask` Tauri event and wires the payload into
-//      `pendingPermission` (a single-slot ref so a new ask
-//      replaces the old one — see §"Multi-tool_use 批处理" in the
-//      spec).
-//   2. `<PermissionModal>` reads `pendingPermission` and mounts
-//      when it's non-null. The modal's 3 buttons each invoke
-//      `respond(rid, decision)` which calls `permission_response`
-//      IPC; the backend wakes the oneshot it had registered for
-//      that `rid` and continues the agent loop.
-//   3. The store also arms a 120s client-side timer that mirrors
-//      the backend's `ASK_TIMEOUT` — if the user doesn't pick a
-//      button in time, we fire `permission_response({decision:
-//      "deny"})` ourselves and surface a toast saying "权限询问
-//      已超时,已自动拒绝". The backend's own 120s timer also
-//      fires (we can't cancel it; we just match its deadline).
-//      Duplicated timeout is OK because both paths converge to a
-//      deny — see the IPC 异常路径 table in the spec.
+//      `permission:ask` Tauri event and routes the payload into
+//      `pendingBySession` keyed by `sessionId`.
+//   2. The inline `<ToolCallCard>` approval UI reads
+//      `getPending(currentSessionId)` and matches
+//      `ask.toolUseId === call.id` to render the pending state on
+//      the right card. The buttons invoke `respond(rid, decision,
+//      reason?)` — `reason` is the optional "拒绝并说明" feedback.
+//   3. Each ask arms an independent 120s client-side timer (keyed
+//      by rid) mirroring the backend's `ASK_TIMEOUT` — if the user
+//      doesn't respond in time, we fire `permission_response({decision:
+//      "deny"})` ourselves + surface a toast. The backend's own 120s
+//      timer also fires; both converge to a deny.
 //
 // IPC wire shape (matches `agent::permissions::PermissionAskPayload`,
 // which uses `#[serde(rename_all = "camelCase")]`):
 //
 //   Server → Client: emit("permission:ask", payload)
-//   Client → Server: invoke("permission_response", { rid, decision })
+//   Client → Server: invoke("permission_response", { rid, decision, reason? })
 //
-// The `decision` string is one of `"allow_once"`, `"allow_always"`,
-// `"deny"` — exactly what the backend's `PermissionResponse` enum
-// deserializes from (see `agent/permissions.rs::PermissionResponse`
-// and `commands/permissions.rs::permission_response`).
+// `decision` is one of `"allow_once"`, `"allow_always"`, `"deny"`.
+// `reason` is the user's optional "拒绝并说明" feedback (only
+// meaningful for `"deny"`); the backend surfaces it as the
+// `tool_result(is_error)` content so the LLM learns why it was denied.
 
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { reactive, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -55,23 +58,28 @@ export type Risk = "low" | "medium" | "high" | "critical";
  *  `#[serde(rename_all = "camelCase")]` directive. */
 export interface PermissionAsk {
   rid: string;
+  /** Session this ask belongs to (per-session routing, 2026-06-16).
+   *  The store keys pending asks by `sessionId` so multi-session
+   *  concurrency no longer collides on a single slot. */
+  sessionId: string;
+  /** The `tool_use_id` of the tool_use that triggered this ask.
+   *  The inline `<ToolCallCard>` matches `call.id === toolUseId`
+   *  to render the approval state on the right card. */
+  toolUseId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
   risk: Risk;
   /** Optional human-readable reason (e.g. "matches denylist:
-   *  rm -rf /"). Populated by the backend when the Tier 3
-   *  prompt is emitted; the modal renders it under the
+   *  rm -rf /"). Populated by the backend when the Tier 4
+   *  prompt is emitted; the card renders it under the
    *  command preview when present. */
   reason?: string;
-  /** Path scope row (re-grill 2026-06-13, Q10 "保留 risk 字段
-   *  作 UI 视觉,加 path 范围行"). Only set for path tools
-   *  (read_file / write_file / edit_file / list_dir / grep /
-   *  glob); `undefined` for shell / web_fetch — the modal
-   *  hides the path range row entirely when this is absent
-   *  (no empty placeholder, no layout shift). The backend
+  /** Path scope row (re-grill 2026-06-13, Q10). Only set for path
+   *  tools (read_file / write_file / edit_file / list_dir / grep /
+   *  glob); `undefined` for shell / web_fetch — the card hides the
+   *  path range row entirely when this is absent. The backend
    *  serializes with `#[serde(skip_serializing_if =
-   *  "Option::is_none")]` so the field is truly absent on
-   *  the wire for non-path tools. */
+   *  "Option::is_none")]`. */
   path?: string;
 }
 
@@ -80,17 +88,16 @@ export interface PermissionAsk {
  *  (string → `PermissionResponse` enum). */
 export type PermissionDecision = "allow_once" | "allow_always" | "deny";
 
-/** Mirror of the backend's 120s ask timeout. We don't actually
- *  NEED to fire a deny at 120s — the backend has its own
- *  `tokio::time::sleep(ASK_TIMEOUT)` that auto-denies. We
- *  duplicate the timeout on the frontend so we can (a) surface
- *  a "已超时,自动拒绝" toast and (b) close the modal without
- *  waiting on the backend's response. The duplication is
- *  intentional — see store doc comment. */
+/** Mirror of the backend's 120s ask timeout. Each ask arms its own
+ *  timer (keyed by rid) — they no longer share a single slot. The
+ *  backend has its own `tokio::time::sleep(ASK_TIMEOUT)` that
+ *  auto-denies; we duplicate on the frontend so we can (a) surface a
+ *  "已超时,自动拒绝" toast and (b) clear the local pending without
+ *  waiting on the backend's resolution. */
 export const ASK_TIMEOUT_MS = 120_000;
 
 /** Decision → Chinese label (mirror of the `Risk.label_cn` mapping
- *  on the backend). Kept here so the modal doesn't need to reach
+ *  on the backend). Kept here so the card doesn't need to reach
  *  into the Rust crate. */
 export const RISK_LABEL_CN: Record<Risk, string> = {
   low: "低",
@@ -99,7 +106,7 @@ export const RISK_LABEL_CN: Record<Risk, string> = {
   critical: "极高",
 };
 
-/** Title + icon-name mapping per risk level. Drives the modal
+/** Title + icon-name mapping per risk level. Drives the card
  *  header's icon container + label. Full chinese labels
  *  ("全中文" per audit §6.2 feedback). */
 export const RISK_META: Record<
@@ -134,23 +141,28 @@ export const RISK_META: Record<
 
 export const usePermissionsStore = defineStore("permissions", () => {
   // -----------------------------------------------------------------------
-  // Single-slot pending ask
+  // Per-session pending asks
   // -----------------------------------------------------------------------
 
-  /** The currently-visible `permission:ask` payload, or `null`
-   *  when no modal is showing. Per spec Q7 (multi-tool_use
-   *  批处理), the backend emits one ask per tool_use serially;
-   *  the store replaces `pendingPermission` on each new event.
-   *  The modal's `:key` is bound to `pendingPermission.rid` so
-   *  it remounts on every new ask (resets focus, scrolls the
-   *  preview to top, etc.). */
-  const pendingPermission = ref<PermissionAsk | null>(null);
+  /** Pending asks keyed by `sessionId`. One slot per session — the
+   *  agent loop's serial `check()` means a single session has at
+   *  most one pending ask at a time, but multiple sessions can
+   *  each have their own (multi-session concurrency). Replaces the
+   *  old single-slot `pendingPermission` which silently dropped a
+   *  session's ask when another session's ask arrived. */
+  const pendingBySession = reactive(new Map<string, PermissionAsk>());
 
-  /** The `rid` we currently have a 120s timer armed for. Stored
-   *  as a ref so the timer's clear-on-replace logic can verify
-   *  it's still the same ask (race-guard against the user
-   *  clicking a button just as the timer fires). */
-  const timerRid = ref<string | null>(null);
+  /** Active 120s timers, keyed by `rid`. Each ask times out
+   *  independently (the old store shared one `timerRid` slot, so a
+   *  new ask's timer silently orphaned the prior ask's timer). */
+  const timersByRid = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** SessionIds that currently have a pending ask. Drives the
+   *  SessionList / session-tab "有待审批" badge so the user can see
+   *  which sessions are blocked even after switching away. */
+  const pendingSessionIds = computed<string[]>(() => [
+    ...pendingBySession.keys(),
+  ]);
 
   /** Unlisten handle for the `permission:ask` listener. Set on
    *  `start()` and torn down on `stop()`. */
@@ -159,56 +171,35 @@ export const usePermissionsStore = defineStore("permissions", () => {
   /** Optional toast surface — the store doesn't own the toast
    *  system (that lives in `useProjectsStore`), but we accept a
    *  callback at `start()` so the 120s-timeout path can show
-   *  "权限询问已超时,已自动拒绝". This keeps the store free of
-   *  a hard dependency on the projects store. */
+   *  "权限询问已超时,已自动拒绝". */
   let showToast: ((msg: string, level: "info" | "warn" | "error") => void) | null =
     null;
 
   // -----------------------------------------------------------------------
-  // Ask timer (120s timeout — auto-deny + toast)
+  // Ask timer (per-rid 120s timeout — auto-deny + toast)
   // -----------------------------------------------------------------------
 
-  function clearAskTimer(): void {
-    timerRid.value = null;
+  function clearTimer(rid: string): void {
+    const t = timersByRid.get(rid);
+    if (t !== undefined) {
+      clearTimeout(t);
+      timersByRid.delete(rid);
+    }
   }
 
-  /** Arm the 120s timer for `rid`. If a new ask arrives before
-   *  the previous timer fires, the new ask replaces the ref and
-   *  a new timer is armed; the previous timer is left to fire
-   *  into a no-op (the `respond()` is keyed by rid and will
-   *  gracefully no-op against a stale rid — see the IPC
-   *  异常路径 table "重复 permission_response" in the spec).
-   *
-   *  Even though the backend has its own 120s timer, we duplicate
-   *  it here so we can:
-   *    (a) close the modal at the same moment (the backend only
-   *        resolves the oneshot at its timeout; the modal stays
-   *        mounted until the agent loop resumes and the next
-   *        event arrives),
-   *    (b) surface a toast "权限询问已超时,已自动拒绝" — without
-   *        a client-side timer the user would see a frozen
-   *        modal for the full 120s.
-   *  See store doc comment for the rationale. */
+  /** Arm an independent 120s timer for `rid`. When it fires we
+   *  best-effort deny (the backend auto-denies at 120s too;
+   *  `respond()` no-ops on a stale rid) + surface a toast + the
+   *  matching pending is cleared by `respond()`. */
   function startAskTimer(rid: string): void {
-    timerRid.value = rid;
-    window.setTimeout(() => {
-      // Race-guard: if the user clicked a button between
-      // schedule and fire, the store state has moved on and
-      // we shouldn't re-deny. `timerRid.value === rid` is the
-      // canonical check (the click path clears the ref).
-      if (timerRid.value !== rid) return;
-      // The backend will also auto-deny at 120s; calling
-      // `respond("deny")` here is a no-op against the backend's
-      // already-resolved oneshot. Safe — `permission_response`
-      // returns `Ok(false)` for a stale rid (best-effort).
+    const t = window.setTimeout(() => {
+      timersByRid.delete(rid);
       void respond(rid, "deny").catch(() => {
         // Swallow — best-effort; the backend already auto-denied.
       });
-      // Surface the user-facing explanation (the user has been
-      // staring at a frozen modal for 120s; the toast confirms
-      // the auto-deny happened).
       showToast?.("权限询问已超时,已自动拒绝", "warn");
     }, ASK_TIMEOUT_MS);
+    timersByRid.set(rid, t);
   }
 
   // -----------------------------------------------------------------------
@@ -217,9 +208,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
 
   /** Mount the global `permission:ask` listener. Idempotent —
    *  calling twice replaces the prior unlisten. The `toast`
-   *  callback is optional; it's used by the 120s-timeout path
-   *  to surface a "已超时" toast. Pass `null` to skip (e.g. in
-   *  tests). Call from `App.vue`'s `onMounted`. */
+   *  callback is optional; it's used by the 120s-timeout path. */
   async function start(toast?: typeof showToast): Promise<void> {
     if (unlisten) {
       unlisten();
@@ -231,68 +220,95 @@ export const usePermissionsStore = defineStore("permissions", () => {
     });
   }
 
-  /** Tear down the listener. Call from `App.vue`'s
-   *  `onUnmounted` (defensive — for a single-window Tauri app
-   *  this is mostly redundant with the process lifetime, but
-   *  it makes the store cleanly testable). */
+  /** Tear down the listener + clear ALL pending asks + timers. */
   function stop(): void {
     if (unlisten) {
       unlisten();
       unlisten = null;
     }
     showToast = null;
-    clearAskTimer();
-    pendingPermission.value = null;
+    for (const rid of [...timersByRid.keys()]) {
+      clearTimer(rid);
+    }
+    pendingBySession.clear();
   }
 
-  /** Wire a new ask into the store. Called by the listener
-   *  AND exposed for tests. Replacing the prior pending ask
-   *  (if any) is the canonical multi-tool_use path: the
-   *  modal's `:key="pendingPermission.rid"` triggers a
-   *  remount, so the new ask gets a fresh focus + scroll
-   *  state. */
+  /** Route a new ask into its session's slot. If the same session
+   *  already has a pending ask (same-session replace — the agent
+   *  loop is serial so this is the normal next-tool_use path),
+   *  clear the prior timer first so it can't fire into the new
+   *  ask. */
   function setPending(ask: PermissionAsk): void {
-    pendingPermission.value = ask;
+    const prev = pendingBySession.get(ask.sessionId);
+    if (prev) {
+      clearTimer(prev.rid);
+    }
+    pendingBySession.set(ask.sessionId, ask);
     startAskTimer(ask.rid);
   }
 
-  /** Clear the pending ask (e.g. after the modal emits a
-   *  decision). The backend's resolution is fire-and-forget
-   *  via the oneshot; we don't wait for the agent loop to
-   *  resume here. The next `permission:ask` event (for the
-   *  next tool_use in the same turn) re-arms the modal. */
-  function clearPending(): void {
-    pendingPermission.value = null;
-    clearAskTimer();
+  /** Read the pending ask for a session (or `undefined`). The
+   *  inline `<ToolCallCard>` calls this with `currentSessionId`
+   *  and matches `ask.toolUseId === call.id`. */
+  function getPending(sessionId: string): PermissionAsk | undefined {
+    return pendingBySession.get(sessionId);
   }
 
-  /** Send the user's decision to the backend. Best-effort —
-   *  a throw is caught and logged; the modal closes either
-   *  way (a stale rid returns `Ok(false)` from the backend,
-   *  which is a benign no-op per the spec). */
+  /** Whether a session currently has a pending ask. Drives the
+   *  SessionList badge. */
+  function hasPending(sessionId: string): boolean {
+    return pendingBySession.has(sessionId);
+  }
+
+  /** Clear the pending ask for a session (+ its timer). Called
+   *  after the card emits a decision; `respond()` also clears
+   *  internally, so this is mostly for explicit teardown / tests. */
+  function clearPending(sessionId: string): void {
+    const ask = pendingBySession.get(sessionId);
+    if (ask) {
+      clearTimer(ask.rid);
+    }
+    pendingBySession.delete(sessionId);
+  }
+
+  /** Send the user's decision to the backend + clear the matching
+   *  pending (looked up by `rid`) and its timer. `reason` is the
+   *  optional "拒绝并说明" feedback — only sent for `"deny"`; the
+   *  backend surfaces it as the `tool_result(is_error)` content. */
   async function respond(
     rid: string,
     decision: PermissionDecision,
+    reason?: string,
   ): Promise<void> {
     try {
-      await invoke("permission_response", { rid, decision });
+      await invoke("permission_response", {
+        rid,
+        decision,
+        // Only deny carries a reason (the user's feedback text).
+        reason: decision === "deny" ? reason : undefined,
+      });
     } catch (e) {
       console.error("usePermissionsStore.respond failed:", e);
     }
-    // Always clear locally so the modal closes regardless of
-    // IPC outcome (the modal's `:key` will be `undefined` after
-    // `clearPending`; the `v-if` unmounts the modal).
-    if (pendingPermission.value?.rid === rid) {
-      clearPending();
+    // Clear the matching pending (looked up by rid) + its timer.
+    for (const [sid, ask] of pendingBySession) {
+      if (ask.rid === rid) {
+        clearTimer(rid);
+        pendingBySession.delete(sid);
+        break;
+      }
     }
   }
 
   return {
-    pendingPermission,
+    pendingBySession,
+    pendingSessionIds,
     // start/stop manage the listener lifecycle (App.vue mount/unmount)
     start,
     stop,
     setPending,
+    getPending,
+    hasPending,
     clearPending,
     respond,
   };

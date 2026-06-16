@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 permission wire 契约:payload 新增字段(tool_use_id+session_id) + PermissionResponse::Deny reason + IPC reason 穿透 完整且向后一致"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证时序不变量:tool:call 必先于 permission:ask(卡片已渲染)、串行 check、deny/cancel→tool_result 回填;加时序防御"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证错误路径:120s 独立超时(每 ask)、cancel 转 denied 态、rid 过期 no-op、切走 session 仍超时的行为正确"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 deny 反馈作为 tool_result(is_error) 回填 LLM,yolo/plan mode 行为不变"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "验证 path badge 用发起 session cwd 判仓库内/外,跨 session 不再指鹿为马"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证后端单测覆盖:payload 序列化、deny reason 反序列化、check 签名穿透"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 store 按 session 路由不串台、每 ask 独立计时、respond 透传 reason、切走不丢失"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "验证「拒绝并说明」展开输入框交互正确(展开/提交/留空 deny)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "验证审批卡片/SessionList badge 用色复用现有 token"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "验证 PermissionModal 彻底移除,无残留 import/Teleport/portal 引用"}
+{"file": ".trellis/tasks/06-16-inline-permission-approval-card-per-session/prd.md", "reason": "逐条对照 10 条 AC + ADR 决策(分离式反馈框/120s+列表标记/移除 modal)是否落实"}

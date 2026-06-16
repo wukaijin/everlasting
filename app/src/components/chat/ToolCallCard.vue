@@ -22,7 +22,7 @@
 //     `abbreviateDuration`. The `?` cursor + the existing
 //     color-when-error treatment still apply.
 
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   useChatStore,
   type ToolCallInfo,
@@ -35,6 +35,13 @@ import {
   toolAccentVar,
   toolIcon,
 } from "../../utils/messageFormat";
+import {
+  RISK_LABEL_CN,
+  RISK_META,
+  usePermissionsStore,
+  type PermissionDecision,
+} from "../../stores/permissions";
+import { isPathInRoot } from "../../utils/path";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
@@ -144,6 +151,7 @@ const displayContent = computed<string | null>(() => {
 // didn't actually change).
 // -----------------------------------------------------------------------
 const chatStore = useChatStore();
+const permStore = usePermissionsStore();
 const fileDiffOpen = ref(false);
 const fileDiffLoading = ref(false);
 const fileDiffError = ref<string | null>(null);
@@ -191,6 +199,82 @@ async function toggleFileDiff() {
     fileDiffLoading.value = false;
   }
 }
+
+// -----------------------------------------------------------------------
+// 2026-06-16 (inline approval): when this card's tool_use is the one
+// the backend is asking permission for (`pendingAsk.toolUseId ===
+// call.id`), render the inline approval UI (replaces the old global
+// <PermissionModal>). The ask is per-session; this card only renders
+// the current session's messages, so `currentCwd` IS the asking
+// session's cwd — fixing the old modal's cross-session cwd mix-up.
+// -----------------------------------------------------------------------
+const pendingAsk = computed(() => {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return undefined;
+  const ask = permStore.getPending(sid);
+  return ask && ask.toolUseId === props.call.id ? ask : undefined;
+});
+
+/** Show the approval UI only while there's no result yet — once the
+ *  tool resolves (allow→exec→result, deny→result, cancel→result)
+ *  the approval window is closed and the regular result view takes
+ *  over. */
+const isPendingApproval = computed(
+  () => !hasResult.value && !!pendingAsk.value,
+);
+
+const riskMeta = computed(() =>
+  pendingAsk.value ? RISK_META[pendingAsk.value.risk] : null,
+);
+
+const showFeedback = ref(false);
+const feedback = ref("");
+
+/** In-repo / out-of-repo badge for path tools. `currentCwd` is the
+ *  asking session's cwd (this card renders the current session). */
+const pathBadgeText = computed(() => {
+  const p = pendingAsk.value?.path;
+  if (!p) return "";
+  const root = chatStore.currentCwd;
+  if (!root) return "仓库外";
+  return isPathInRoot(p, root) ? "仓库内" : "仓库外";
+});
+const pathBadgeColor = computed(() =>
+  pathBadgeText.value === "仓库内"
+    ? "var(--color-tool-write)"
+    : "var(--color-tool-shell)",
+);
+
+async function respondApproval(
+  decision: PermissionDecision,
+  reason?: string,
+): Promise<void> {
+  if (!pendingAsk.value) return;
+  await permStore.respond(pendingAsk.value.rid, decision, reason);
+  showFeedback.value = false;
+  feedback.value = "";
+}
+
+function submitDenyFeedback(): void {
+  void respondApproval("deny", feedback.value.trim() || undefined);
+}
+
+function cancelFeedback(): void {
+  showFeedback.value = false;
+  feedback.value = "";
+}
+
+/** When a result arrives the approval is resolved (allow→exec, deny,
+ *  or cancel) — clear the store's pending so its 120s timer can't
+ *  later fire a misleading "已超时" toast. */
+watch(hasResult, (now, was) => {
+  if (now && !was) {
+    const sid = chatStore.currentSessionId;
+    if (sid && permStore.hasPending(sid)) {
+      permStore.clearPending(sid);
+    }
+  }
+});
 </script>
 
 <template>
@@ -240,6 +324,53 @@ async function toggleFileDiff() {
             <Icon :name="fileDiffOpen ? 'chevron-down' : 'chevron-right'" :size="12" />
             diff
         </button>
+      </div>
+    </div>
+
+    <!--
+      2026-06-16 inline approval: when this tool_use is the one the
+      backend is asking about, render the approval actions inline
+      (replaces the removed global <PermissionModal>). Only shows
+      while there's no result yet (isPendingApproval).
+    -->
+    <div
+      v-if="isPendingApproval && pendingAsk"
+      class="tool-card__approval"
+    >
+      <div class="tool-card__approval-head">
+        <span
+          class="tool-card__approval-dot"
+          :style="{ background: riskMeta?.iconColor }"
+        ></span>
+        <span class="tool-card__approval-title">需要权限</span>
+        <span class="tool-card__approval-risk">风险: {{ RISK_LABEL_CN[pendingAsk.risk] }}</span>
+      </div>
+      <p v-if="pendingAsk.reason" class="tool-card__approval-reason">{{ pendingAsk.reason }}</p>
+      <div v-if="pendingAsk.path" class="tool-card__approval-path">
+        <code>{{ pendingAsk.path }}</code>
+        <span
+          class="tool-card__approval-badge"
+          :style="{ color: pathBadgeColor, borderColor: pathBadgeColor }"
+        >{{ pathBadgeText }}</span>
+      </div>
+
+      <div v-if="showFeedback" class="tool-card__approval-feedback">
+        <textarea
+          v-model="feedback"
+          class="tool-card__approval-textarea"
+          rows="2"
+          placeholder="告诉 agent 为什么拒绝 / 该怎么做（可选）"
+        ></textarea>
+        <div class="tool-card__approval-feedback-actions">
+          <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="submitDenyFeedback">提交拒绝</button>
+          <button type="button" class="tool-card__approval-btn" @click="cancelFeedback">取消</button>
+        </div>
+      </div>
+      <div v-else class="tool-card__approval-actions">
+        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--once" @click="respondApproval('allow_once')">仅一次</button>
+        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--always" @click="respondApproval('allow_always')">始终允许</button>
+        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="respondApproval('deny')">拒绝</button>
+        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="showFeedback = true">拒绝并说明</button>
       </div>
     </div>
 
@@ -492,5 +623,127 @@ async function toggleFileDiff() {
 
 .tool-card__diff-error {
   color: var(--color-tool-error);
+}
+
+/* 2026-06-16 inline approval UI (replaces the global PermissionModal). */
+.tool-card__approval {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-card__approval-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.tool-card__approval-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tool-card__approval-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.tool-card__approval-risk {
+  color: var(--color-text-muted);
+}
+
+.tool-card__approval-reason {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.tool-card__approval-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-card__approval-path code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.tool-card__approval-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.4;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.tool-card__approval-actions,
+.tool-card__approval-feedback-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tool-card__approval-btn {
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  transition: filter 0.1s;
+}
+
+.tool-card__approval-btn:hover {
+  filter: brightness(1.08);
+}
+
+.tool-card__approval-btn--always {
+  background: var(--color-accent);
+  color: #ffffff;
+  border-color: var(--color-accent);
+}
+
+.tool-card__approval-btn--deny {
+  color: var(--color-tool-error);
+  border-color: var(--color-tool-error);
+}
+
+.tool-card__approval-textarea {
+  width: 100%;
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  resize: vertical;
 }
 </style>

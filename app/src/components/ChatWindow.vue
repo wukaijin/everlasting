@@ -34,11 +34,12 @@ onMounted(async () => {
   // chat store's watcher fires for `currentProjectId = null` and
   // just clears sessions.
 
-  // A2 + B7 PR3: mount the global `permission:ask` listener.
-  // The store's `start()` registers the listener and wires
-  // payloads into `pendingPermission`; `<PermissionModal>`
-  // (mounted in `ChatPanel`) reads that ref. We pass the
-  // projects store's `showToast` so the 120s-timeout path can
+  // A2 + B7 PR3 + 2026-06-16: mount the global `permission:ask`
+  // listener. The store's `start()` registers the listener and
+  // routes payloads into `pendingBySession` (keyed by sessionId);
+  // the inline `<ToolCallCard>` approval UI reads
+  // `getPending(currentSessionId)` and matches `toolUseId`. We pass
+  // the projects store's `showToast` so the 120s-timeout path can
   // surface "权限询问已超时,已自动拒绝".
   void permissionsStore.start(
     (msg, level) => projectsStore.showToast(msg, level),

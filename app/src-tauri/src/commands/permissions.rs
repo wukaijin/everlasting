@@ -199,11 +199,17 @@ pub async fn permission_response(
  state: State<'_, Arc<AppState>>,
  rid: String,
  decision: String,
+ reason: Option<String>,
 ) -> Result<bool, String> {
  let response = match decision.as_str() {
  "allow_once" => PermissionResponse::AllowOnce,
  "allow_always" => PermissionResponse::AllowAlways,
- "deny" => PermissionResponse::Deny,
+ // `reason` is the user's optional "拒绝并说明" feedback.
+ // Empty / None → plain deny. The agent loop surfaces this as
+ // the tool_result(is_error) content for the LLM.
+ "deny" => PermissionResponse::Deny {
+ reason: reason.unwrap_or_default(),
+ },
  other => {
  return Err(format!(
  "permission_response: unknown decision '{}'",
