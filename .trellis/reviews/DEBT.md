@@ -465,8 +465,10 @@
 - **Description**: `data_buf` 无 cap(GB 级 data OOM);`data:` 精确前缀带尾随空格,无空格版本被静默 drop
 - **Impact**: 主流 provider 不触发;第三方代理发无空格版本被静默 drop;恶意上游 GB 级 data OOM
 - **Fix**: 加 1 MiB cap + 容忍无空格版本(REVIEW-sse §8 P2 复述,2026-06-12 提出,0 落地)
-- **Status**: open
+- **Status**: **closed (2026-06-16)** — `MAX_DATA_BYTES = 1 MiB` 常量,data 分支累积检查 `data_buf.len() + added <= cap`,超限 drop 该 event 余下 data 行(防恶意/buggy 上游 GB 级 data OOM);`strip_prefix("data:")` 后去一格空格,同时容忍 `data:x` 无空格版本(原 `strip_prefix("data: ")` 精确匹配把无空格版当 malformed 静默 drop — REVIEW-sse §8 P2,2026-06-12 提出,4 个月 0 落地,本次兑现)。`feed` 签名不变(超限 data 全 drop 时 data_buf 空 → 空行不 emit event,行为合理)。+4 测试(无空格 / 有空格回归 / cap 累积 / 单行超 cap 不 OOM),502 tests pass
 - **Owner**: carlos
+- **Related Task**: （无单独 task,见 commit `e715f84`）
+- **Closed At**: `e715f84`
 - **Discovered In**: REVIEW-sse-agent-loop-2026-06-12 §8 + REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 ### RULE-D-004 — WireRequest.reasoning_effort dead field
@@ -715,6 +717,7 @@
 | 2026-06-16 | RULE-C-009 | open | **wontfix** | watcher 删除后 freshness 走 mtime stat,不依赖 inotify,WSL 可靠性问题消解 | §收尾路径建议 |
 | 2026-06-16 | RULE-B-004 | open | **closed** | DENY_PATTERNS 全加 (?i) + 新增 find -delete/-exec 硬墙;不动 shell_trust 分级(双层架构);长选项/子shell/env 留 Tier4 兜底;+3 测试,498 pass | §收尾路径建议 |
 | 2026-06-16 | RULE-E-009 | open | **closed** | 4 处字节切片改 floor/ceil_char_boundary(对齐 diff.rs);+2 多字节测试,498 pass | §收尾路径建议 |
+| 2026-06-16 | RULE-D-003 | open | **closed** | MAX_DATA_BYTES=1MiB cap(超限 drop 余下 data)+ strip_prefix(data:) 去空格容忍无空格版;+4 测试,502 pass | §收尾路径建议 |
 
 ---
 
@@ -771,7 +774,7 @@
 
 ### 建议执行节奏
 
-1. ✅ **B-004 + E-009 已完成**(2026-06-16,498 tests pass);**D-003 待做**(SSE data_buf cap,下一批)。
+1. ✅ **B-004 + E-009 + D-003 全部完成**(2026-06-16,502 tests pass;执行节奏第 1 条三项收口)。
 2. 推 B2/B3/D2(零耦合功能)。
 3. 做 D3 时顺手清 A-007 + A-010。
 4. 进 B6 前抽 A-008 + 修 D-004/D-005。
