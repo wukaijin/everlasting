@@ -752,3 +752,36 @@ F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 内联审批卡片改造 (06-16)
+
+**Date**: 2026-06-16
+**Task**: 内联审批卡片改造 (06-16)
+**Branch**: `main`
+
+### Summary
+
+审批从全局单例 PermissionModal 改为内联到 ToolCallCard 的「待审批」态,按 session 分区路由,支持「拒绝并反馈」回填 LLM。修多 session 串台/120s 静默超时 deny/deny 无反馈三连问题。后端 payload+PermissionResponse+IPC reason 穿透,前端 store 从单槽改 pendingBySession Map + 独立计时,ToolCallCard 渲染 4 操作(拒绝并说明展开反馈),SessionList 加待审批 badge,彻底移除 PermissionModal。18 files +975/-1398。测试 cargo test --lib 489/0、vitest 156/0、vue-tsc 干净。spec tool-contract §4 + IMPLEMENTATION ADR 同步。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b3c6961` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
