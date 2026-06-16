@@ -55,17 +55,33 @@
 // a scrollable list with a sticky header, and (c) the reka-ui
 // `PopoverRoot` would require an extra import for one user.
 
-import { computed, onUnmounted, ref } from "vue";
+import { computed, nextTick, onUnmounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipPortal, TooltipContent, TooltipArrow } from "reka-ui";
 import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
 import ModeSelect from "./ModeSelect.vue";
+import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import { useChatStore, MODE_CYCLE, type SessionMode } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
+import { useProjectsStore } from "../../stores/projects";
 import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";
 import { abbreviateDuration } from "../../utils/duration";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
+
+/** B3 `/command` palette (PR2): wire DTO from the Rust
+ *  `resource_loader::CommandInfo`. Field names are snake_case to
+ *  mirror the Rust struct (BACKLOG §5.2 — TS interface mirrors
+ *  Rust verbatim; Tauri command ARGS use camelCase per
+ *  HACKING-wsl FU-4, so the `invoke` call below uses `projectId`). */
+interface CommandInfo {
+  name: string;
+  description: string;
+  argument_hint: string | null;
+  source: string;
+  is_builtin: boolean;
+}
 
 const props = defineProps<{
   /** True while the model is generating. Disables the input. */
@@ -91,6 +107,7 @@ const textareaEl = ref<HTMLTextAreaElement | null>(null);
 // value on switch.
 const chatStore = useChatStore();
 const modelsStore = useModelsStore();
+const projectsStore = useProjectsStore();
 
 /** The model row backing the current session, or `null` for
  *  sessions that haven't resolved to a model yet (very
@@ -224,6 +241,10 @@ function onTextareaInput(e: Event) {
   if (isComposing.value) return;
   input.value = (e.target as HTMLTextAreaElement).value;
   autosize();
+  // B3: re-evaluate the command-palette trigger on every input
+  //  (open when the current line becomes `/foo`, close when the
+  //  user types past the command-name region).
+  syncCommandPalette();
 }
 
 function onCompositionStart() {
@@ -234,9 +255,40 @@ function onCompositionEnd(e: CompositionEvent) {
   isComposing.value = false;
   input.value = (e.target as HTMLTextAreaElement).value;
   autosize();
+  // B3: an IME commit may have inserted a `/` (or removed it);
+  // re-evaluate the trigger state now that composition is over.
+  syncCommandPalette();
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // B3: when the command palette is open, ArrowUp / ArrowDown /
+  //  Enter / Escape belong to the palette, not the textarea.
+  //  Enter MUST NOT submit while the palette is open (otherwise
+  //  selecting `clear` would also send `/clear` as a chat
+  //  message). We intercept here, before the existing
+  //  Enter-to-submit branch below.
+  if (commandPaletteOpen.value) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      triggerMenu.value?.moveActive(1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      triggerMenu.value?.moveActive(-1);
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey && !isComposing.value) {
+      e.preventDefault();
+      triggerMenu.value?.confirmActive();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeCommandPalette();
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey && !isComposing.value) {
     e.preventDefault();
     submit();
@@ -293,6 +345,226 @@ registerShiftTabCycle({
   enabled: () => !chatStore.isCurrentSessionStreaming && !!chatStore.currentSessionId,
 });
 
+// -----------------------------------------------------------------------
+// B3 `/command` palette (PR2).
+//
+// The TriggerMenu is a reusable skeleton (TriggerMenu.vue); this
+// block owns the B3-specific wiring:
+//   - detection: open the panel when the textarea's CURRENT LINE
+//     starts with `/` AND the line is otherwise empty (matches
+//     Claude Code's "type / to see commands" UX). Multi-line
+//     drafts only look at the cursor's line, so `/help` on line 2
+//     of a draft still triggers.
+//   - IME safety: never open during composition (Chinese IME
+//     candidates include `/` as a literal char in some schemas).
+//   - data source: lazy `list_commands` IPC the first time the
+//     panel opens in a session; the backend's mtime-fence cache
+//     makes subsequent opens free.
+//   - keyboard routing: when the panel is open, ArrowUp / ArrowDown
+//     / Enter / Escape are intercepted HERE (before the textarea's
+//     own Enter handler) and routed to the TriggerMenu. Enter no
+//     longer submits while the panel is open.
+//   - dispatch: builtins (`/help` `/clear` `/new`) run client-side
+//     (no LLM round-trip); custom commands are PR3 territory —
+//     PR2 leaves a console breadcrumb so the wiring is obvious.
+// -----------------------------------------------------------------------
+
+const triggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
+const commandPaletteOpen = ref(false);
+const commandItems = ref<TriggerMenuItem[]>([]);
+/** Text the user typed AFTER the `/`. Empty string = "show all".
+ *  Computed from the textarea's current line on every input. */
+const commandFilter = ref("");
+/** Marker so we don't refetch `list_commands` on every keystroke.
+ *  Cleared when the panel closes (so a future edit to a command
+ *  file is picked up on the next open — the backend's mtime fence
+ *  makes the IPC cheap anyway, but the round-trip itself is not
+ *  free). */
+let commandsLoaded = false;
+
+/** The cursor's current line in the textarea. Used for trigger
+ *  detection (must START with `/` and be otherwise empty) and
+ *  for extracting the filter text. Splits on `\n` and indexes by
+ *  `selectionStart`. */
+function currentLineInfo(): { line: string; lineStart: number } {
+  const el = textareaEl.value;
+  if (!el) return { line: "", lineStart: 0 };
+  const pos = el.selectionStart ?? input.value.length;
+  const upto = input.value.slice(0, pos);
+  const lineStart = upto.lastIndexOf("\n") + 1;
+  const lineEnd = input.value.indexOf("\n", pos);
+  const line =
+    lineEnd === -1
+      ? input.value.slice(lineStart)
+      : input.value.slice(lineStart, lineEnd);
+  return { line, lineStart };
+}
+
+/** True when the cursor's current line is exactly `/` optionally
+ *  followed by command-name characters ([a-z0-9_-]). The "starts
+ *  with `/` AND nothing else on the line beyond command chars"
+ *  rule matches Claude Code: typing `/he` opens the panel filtered
+ *  to `help`; typing `/hello world` (space) closes it because the
+ *  line is no longer a command-name shape. */
+function detectCommandTrigger(): { trigger: boolean; filter: string } {
+  const { line } = currentLineInfo();
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith("/")) return { trigger: false, filter: "" };
+  // After the `/`, allow command-name chars only. Any space or
+  // punctuation means the user moved on from autocomplete.
+  const rest = trimmed.slice(1);
+  if (rest.length > 0 && !/^[a-zA-Z0-9_-]+$/.test(rest)) {
+    return { trigger: false, filter: "" };
+  }
+  return { trigger: true, filter: rest };
+}
+
+/** Fetch the command list (builtin + user + project) from the
+ *  backend. The backend's `AppState.command_cache` is mtime-fenced
+ *  so this is a cheap read after the first scan. We map the wire
+ *  `CommandInfo` to the panel's `TriggerMenuItem` here so the
+ *  panel stays data-source-agnostic (B2 will source from a file
+ *  walker, not this function). */
+async function loadCommands(): Promise<void> {
+  if (commandsLoaded) return;
+  const projectId = projectsStore.currentProjectId;
+  try {
+    const list = await invoke<CommandInfo[]>("list_commands", {
+      projectId: projectId ?? null,
+    });
+    commandItems.value = list.map((c) => ({
+      key: `${c.source}:${c.name}`,
+      name: c.name,
+      description: c.description || undefined,
+      argument_hint: c.argument_hint ?? undefined,
+      source: c.source,
+      is_builtin: c.is_builtin,
+    }));
+    commandsLoaded = true;
+  } catch (e) {
+    console.error("list_commands failed:", e);
+    commandItems.value = [];
+    commandsLoaded = true;
+  }
+}
+
+/** Open the panel + lazy-load the command list. Called from the
+ *  input watcher when `detectCommandTrigger` flips to true. */
+async function openCommandPalette(filter: string): Promise<void> {
+  commandFilter.value = filter;
+  commandPaletteOpen.value = true;
+  await loadCommands();
+}
+
+function closeCommandPalette(): void {
+  commandPaletteOpen.value = false;
+  // Drop the cached list so the next open re-scans. The backend's
+  // mtime fence makes this nearly free; the round-trip is the only
+  // cost, and a user editing their `~/.config/everlasting/commands/`
+  // between two opens expects the new file to show up.
+  commandsLoaded = false;
+  commandItems.value = [];
+}
+
+/** Re-evaluate trigger state on every input. Open the panel when
+ *  the cursor enters command shape; close it when the user types
+ *  past the command-name region (space, punctuation, newline) or
+ *  deletes the leading `/`. */
+function syncCommandPalette(): void {
+  if (isComposing.value) return;
+  const { trigger, filter } = detectCommandTrigger();
+  if (trigger) {
+    if (!commandPaletteOpen.value) {
+      void openCommandPalette(filter);
+    } else {
+      commandFilter.value = filter;
+    }
+  } else if (commandPaletteOpen.value) {
+    closeCommandPalette();
+  }
+}
+
+/** Selected-item dispatcher. Called by TriggerMenu's `@select`.
+ *  Builtins run client-side; custom commands are PR3 territory.
+ *
+ *  The `/` prefix and any filter the user typed are stripped from
+ *  the textarea BEFORE dispatch — so selecting `clear` from the
+ *  panel leaves the input empty (ready for the next message),
+ *  matching Claude Code. */
+async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
+  // Strip the `/`-prefixed command token from the current line.
+  // We remove the leading `/` + the command name (+ any filter
+  // chars the user had typed). Leaves any surrounding text intact
+  // (rare — the trigger only fires when the line is a bare
+  // command-name shape).
+  const { lineStart } = currentLineInfo();
+  const beforeLine = input.value.slice(0, lineStart);
+  const afterToken = input.value.slice(lineStart);
+  // The user may have typed a prefix (e.g. `/he` for `help`); we
+  // remove the entire typed prefix, not just the matched name, so
+  // no leftover `lp` stays in the box after selecting `help`.
+  const tokenEnd = afterToken.search(/[\s\n]/) === -1 ? afterToken.length : afterToken.search(/[\s\n]/);
+  const newAfter = afterToken.slice(tokenEnd);
+  input.value = beforeLine + newAfter;
+  // Close the panel first so the dispatch side-effects (modal,
+  // invoke) don't race with a still-mounted panel.
+  closeCommandPalette();
+  // Refocus + autosize so the cursor lands back in the textarea.
+  await nextTick();
+  const el = textareaEl.value;
+  if (el) {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+    el.focus();
+  }
+
+  const sid = chatStore.currentSessionId;
+
+  if (item.is_builtin) {
+    // Dispatch builtin commands. None of these go to the LLM.
+    switch (item.name) {
+      case "help":
+        // `/help` is a no-op dispatch: the panel already shows the
+        // full list when open, and there's no separate help view in
+        // PR2. Re-open the panel so the user sees the full list
+        // again (the close above was so the dispatch could run; for
+        // help we want the list visible). Filter is cleared.
+        await openCommandPalette("");
+        break;
+      case "clear":
+        if (!sid) return;
+        try {
+          await chatStore.clearSessionMessages(sid);
+        } catch (e) {
+          console.error("/clear failed:", e);
+        }
+        break;
+      case "new":
+        try {
+          await chatStore.createNewSession();
+        } catch (e) {
+          console.error("/new failed:", e);
+        }
+        break;
+      default:
+        console.warn("Unknown builtin command:", item.name);
+    }
+    return;
+  }
+
+  // Custom command — PR3 territory. PR2 leaves a console
+  // breadcrumb and a user-visible toast so the wiring is
+  // obvious during development. The body is NOT fetched here
+  // (`get_command_body` is PR3); the user message is not sent.
+  console.info(
+    `[B3] custom command "/${item.name}" selected — body expansion is PR3 (not yet wired).`,
+  );
+  projectsStore.showToast(
+    `用户命令 /${item.name} 的模板展开将在 PR3 实现`,
+    "info",
+  );
+}
+
 function submit() {
   const text = input.value;
   if (!text.trim() || props.sending) return;
@@ -326,6 +598,25 @@ function onEscKeydown() {
            shows the current Mode label (Edit / Plan / Yolo).
            Shift+Tab cycles Mode via `useKeyboard`. -->
       <ModeSelect />
+      <!-- B3 (PR2): command palette. Anchored to the input row
+           (position: relative on the row makes it the
+           offsetParent); opens UPWARD above the textarea when the
+           user types `/` at the start of the current line. The
+           TriggerMenu component is a reusable skeleton (see its
+           top-of-file comment) — B2 (@file) and B4 (skill) will
+           reuse it with a different trigger char + data source. -->
+      <TriggerMenu
+        ref="triggerMenu"
+        :open="commandPaletteOpen"
+        :items="commandItems"
+        :filter="commandFilter"
+        trigger="/"
+        header-label="命令"
+        empty-label="无匹配命令"
+        :trigger-el="textareaEl"
+        @select="onCommandSelect"
+        @close="closeCommandPalette"
+      />
       <textarea
         ref="textareaEl"
         :value="input"
@@ -542,6 +833,7 @@ function onEscKeydown() {
 }
 
 .chat-input__row {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 8px;

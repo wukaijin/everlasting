@@ -692,6 +692,51 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** B3 `/clear` (PR2): clear all messages from the active session
+   *  **but keep the session row** (title / color / mode / model /
+   *  project / created_at all survive). Mirrors the backend's
+   *  `clear_session_messages` Tauri command — `DELETE FROM messages
+   *  WHERE session_id = ?` + audit log. The session continues to
+   *  be the current session (no `switchSession` churn).
+   *
+   *  Side effects (in order):
+   *  1. If a stream is in-flight on this session, cancel it first —
+   *     otherwise the in-flight turn would re-persist a message
+   *     *after* we wiped the table, undoing the clear.
+   *  2. Fire the IPC. The DB rows are gone; the audit row records
+   *     the clear.
+   *  3. Evict the controller's in-memory buffer + re-seed an empty
+   *     one via `ensureLoaded` so the UI re-renders blank without a
+   *     flash of stale content. We use `evict` + `ensureLoaded`
+   *     (NOT `refresh`) because the worktree baseline is unchanged —
+   *     no system event was injected.
+   *  4. Drop the diff cache (the cleared messages had ToolCallCards
+   *     that may have referenced a now-irrelevant diff).
+   *
+   *  No-op when no session is active. Throws surface to the caller
+   *  (the caller currently logs to console; a future toast hook
+   *  could surface IPC failures). */
+  async function clearSessionMessages(sessionId: string): Promise<void> {
+    // Cancel any in-flight stream first. `cancel` is fire-and-forget
+    // IPC (the `done` event does the state reset); we await a short
+    // tick so the backend has flushed the cancel before we wipe the
+    // DB. The `done` event for the cancelled request will arrive
+    // after our evict, but `evict` already removed the session from
+    // `activeRequests`'s pinning, and the controller's
+    // `finalizeRequest` is a no-op on an evicted session.
+    if (sessionId === currentSessionId.value && isCurrentSessionStreaming.value) {
+      await cancel();
+    }
+    await invoke("clear_session_messages", { sessionId });
+    controller.evict(sessionId);
+    diffCache.value.delete(sessionId);
+    // Re-seed an empty buffer so the UI re-renders immediately.
+    // `ensureLoaded` will hit the (now empty) DB and produce `[]`.
+    if (sessionId === currentSessionId.value) {
+      await controller.ensureLoaded(sessionId);
+    }
+  }
+
   // D1: rename + color tag
   async function renameSession(sessionId: string, newTitle: string) {
     await invoke("rename_session", { sessionId, newTitle });
@@ -1170,6 +1215,8 @@ export const useChatStore = defineStore("chat", () => {
     createNewSession,
     switchSession,
     deleteSession,
+    // B3 (PR2): `/clear` — wipe messages, keep session row.
+    clearSessionMessages,
     renameSession,
     setSessionColor,
     attachWorktree,
