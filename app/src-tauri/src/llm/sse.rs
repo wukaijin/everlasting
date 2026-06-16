@@ -8,6 +8,12 @@
 //! heartbeat event we don't care about — the caller must tolerate unknown
 //! event types and continue.
 
+/// Maximum bytes buffered for a single event's `data` field. Guards
+/// against a malicious/buggy upstream emitting a GB-sized data line
+/// that would OOM the process (RULE-D-003). Over-cap lines are
+/// dropped silently for the rest of the event.
+const MAX_DATA_BYTES: usize = 1024 * 1024; // 1 MiB
+
 #[derive(Debug, Default)]
 pub struct SseParser {
     event_type: String,
@@ -42,11 +48,23 @@ impl SseParser {
                 }
             } else if let Some(rest) = line.strip_prefix("event: ") {
                 self.event_type = rest.to_string();
-            } else if let Some(rest) = line.strip_prefix("data: ") {
-                if !self.data_buf.is_empty() {
-                    self.data_buf.push('\n');
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                // SSE spec allows at most one leading space after the
+                // colon. Tolerate both "data: x" and "data:x" (RULE-D-003:
+                // some proxies/compat layers omit the space).
+                let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                // Cap the buffered data at 1 MiB so a malicious or buggy
+                // upstream can't OOM us with a GB-sized data field
+                // (RULE-D-003). Once over cap, drop further data lines
+                // for this event.
+                let needs_newline = !self.data_buf.is_empty();
+                let added = rest.len() + usize::from(needs_newline);
+                if self.data_buf.len() + added <= MAX_DATA_BYTES {
+                    if needs_newline {
+                        self.data_buf.push('\n');
+                    }
+                    self.data_buf.push_str(rest);
                 }
-                self.data_buf.push_str(rest);
             } else if line.starts_with("id:") || line.starts_with("retry:") {
                 // Per spec, "id:" sets Last-Event-ID and "retry:" sets
                 // reconnect time. We don't use either; ignore silently.
@@ -104,5 +122,62 @@ mod tests {
         let events = p.feed(": this is a comment\nevent: ping\ndata: z\n\n");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "ping");
+    }
+
+    // --- RULE-D-003: tolerate "data:" without a space ---
+
+    #[test]
+    fn data_field_without_space_is_tolerated() {
+        // No space after "data:" — some proxies/compat layers omit it.
+        let mut p = SseParser::new();
+        let events = p.feed("data:no-space-here\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "no-space-here");
+    }
+
+    #[test]
+    fn data_field_with_space_still_works() {
+        // Regression: the standard "data: x" form must still parse.
+        let mut p = SseParser::new();
+        let events = p.feed("data: with-space\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "with-space");
+    }
+
+    // --- RULE-D-003: 1 MiB data_buf cap ---
+
+    #[test]
+    fn data_field_capped_at_1mib() {
+        // Two 700 KB data lines = 1.4 MB > 1 MiB cap. The first fits,
+        // the second overflows and is dropped — data_buf stays bounded.
+        let mut p = SseParser::new();
+        let big = "x".repeat(700_000);
+        let chunk = format!("data: {}\ndata: {}\n\n", big, big);
+        let events = p.feed(&chunk);
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].data.len() <= MAX_DATA_BYTES,
+            "data not capped: got {} bytes",
+            events[0].data.len()
+        );
+        // First line preserved (second dropped).
+        assert!(
+            events[0].data.len() >= 700_000,
+            "first line lost: got {} bytes",
+            events[0].data.len()
+        );
+    }
+
+    #[test]
+    fn single_oversized_data_line_does_not_oom() {
+        // One 2 MB data line alone exceeds the 1 MiB cap → dropped
+        // entirely; with no other data the event isn't emitted (the
+        // empty data_buf suppresses it). The point: no panic, no
+        // unbounded buffer growth.
+        let mut p = SseParser::new();
+        let huge = "y".repeat(2 * 1024 * 1024);
+        let chunk = format!("data: {}\n\n", huge);
+        let events = p.feed(&chunk);
+        assert!(events.is_empty());
     }
 }
