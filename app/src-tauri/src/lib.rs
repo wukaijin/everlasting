@@ -31,6 +31,7 @@ mod git;
 mod llm;
 mod memory;
 mod projects;
+mod resource_loader;
 mod state;
 mod tools;
 
@@ -76,6 +77,7 @@ pub fn run() {
             commands::sessions::create_session,
             commands::sessions::load_session,
             commands::sessions::delete_session,
+            commands::sessions::clear_session_messages,
             commands::sessions::diff_worktree,
             commands::sessions::rename_session,
             commands::sessions::set_session_color,
@@ -114,6 +116,9 @@ pub fn run() {
             commands::memory::read_memory_layers,
             commands::memory::read_memory_content,
             commands::memory::open_memory_in_editor,
+            // B3 /command palette (2026-06-16)
+            commands::command_palette::list_commands,
+            commands::command_palette::get_command_body,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -22,6 +22,7 @@
 //! alongside the rest.
 
 pub mod cancel;
+pub mod command_palette;
 pub mod config;
 pub mod memory;
 pub mod permissions;
@@ -64,6 +65,7 @@ pub fn all_command_names() -> Vec<&'static str> {
         "create_session",
         "load_session",
         "delete_session",
+        "clear_session_messages",
         "attach_worktree",
         "detach_worktree",
         "delete_worktree",
@@ -79,6 +81,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         "read_memory_layers",
         "read_memory_content",
         "open_memory_in_editor",
+        // B3 /command palette
+        "list_commands",
+        "get_command_body",
         // A2 + B7 (Permission system + per-session Mode)
         "set_session_mode",
         "permission_response",

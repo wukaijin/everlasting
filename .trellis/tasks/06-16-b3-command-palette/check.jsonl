@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验收 clear_session_messages DELETE/级联符合 DB 规范,无消息软 FK 悬垂,幂等"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "验收 ResourceLoader mtime fence 与 memory 侧模式一致(read-through freshness)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "验收 TriggerMenu popover(Esc/onDocumentClick/方向/动画)合规,与 ModeSelect 一致"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "验收 reka-ui 用法无 portal :deep() 遗漏,--reka- 变量正确"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "验收命令面板颜色全用 token,无硬编码 hex"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验收 store action 模式 + SSE listener 路由合规,命令分发不污染 streamController"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验收充分复用现有 action/popover/fence/send,无重复实现"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验收 list_commands wire 前后端字段一致(TS interface snake_case 决策)"}

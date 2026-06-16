@@ -256,6 +256,23 @@ pub async fn delete_session(pool: &SqlitePool, session_id: &str) -> Result<(), s
  Ok(())
 }
 
+/// Delete all messages for a session, keeping the session row itself.
+///
+/// B3 `/clear`: clears the conversation but preserves session metadata
+/// (title / color / mode / model / project / timestamps). Audit events
+/// (`session_audit_events`) are session-scoped and intentionally kept —
+/// they record what the agent *did*, not the live message buffer.
+pub async fn delete_messages_by_session(
+ pool: &SqlitePool,
+ session_id: &str,
+) -> Result<(), sqlx::Error> {
+ sqlx::query("DELETE FROM messages WHERE session_id = ?")
+ .bind(session_id)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
 /// Bump the session's `updated_at` to now. Called at the end of a turn.
 pub async fn touch_session(pool: &SqlitePool, session_id: &str) -> Result<(), sqlx::Error> {
  let now = Utc::now().to_rfc3339();

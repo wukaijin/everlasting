@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "clear_session_messages 的 DELETE + 级联清理(sqlx 模式/命名/软 FK),参考现有 delete_session"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "ResourceLoader 复用 memory 的路径解析 + mtime fence(RULE-C-001 模式)做 .everlasting/commands/ 扫描缓存"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "扫描 project .everlasting/commands/ 用 project.path 边界校验;user 命令走 config_dir(~/.config/everlasting)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "TriggerMenu 复用 ModeSelect 手写 popover 模式(onDocumentClick + Esc + 方向规则 + 150ms 动画)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "命令面板若用 reka-ui Popover/Listbox:portal :deep() gotcha + --reka- CSS 变量 + anti-DropdownMenu rationale"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat store action 复用(send/createSession/requestSetMode);新增 executeCommand 分发 action 的模式"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "命令面板颜色/间距用 token,禁止硬编码 hex;内置命令 vs 用户命令视觉区分"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "B3 本质是复用拼装(action/popover/fence/send/loader);确保不重复造轮子,通用 ResourceLoader 为 Skill/Memory 复用预留"}

@@ -206,6 +206,43 @@ pub async fn delete_session(
         .map_err(|e| format!("delete_session failed: {}", e))
 }
 
+/// B3 `/clear`: clear the current session's messages but keep the
+/// session row (title/color/mode/model/project/timestamps).
+///
+/// Mirrors the in-flight cleanup `delete_session` does (cancel any
+/// running chat, drop pending permission asks, clear the ReadGuard)
+/// so a cleared session starts from a clean runtime slate — but does
+/// NOT tear down the worktree or delete the session row. Audit events
+/// are kept (they record agent actions, not the live buffer).
+#[tauri::command]
+pub async fn clear_session_messages(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    // Cancel any in-flight chat first (the backend is the last line
+    // of defense — the frontend disables the trigger while
+    // streaming). Wait for the loop to exit so a late `persist_turn`
+    // can't re-write messages we just cleared.
+    let exit_rx = cancel_inflight_for_session(
+        &state.cancellations,
+        &state.session_active_request,
+        &state.inflight_exits,
+        &session_id,
+    )
+    .await;
+    await_inflight_exit(exit_rx, "clear_session_messages").await;
+
+    // Drop pending permission asks + read fingerprints so the fresh
+    // conversation starts clean.
+    crate::agent::permissions::cancel_session_asks(&state.permission_asks, &session_id).await;
+    state.read_guard.clear_session(&session_id).await;
+
+    // Delete messages only; the session row + audit log survive.
+    db::delete_messages_by_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("clear_session_messages failed: {}", e))
+}
+
 #[tauri::command]
 pub async fn rename_session(
     state: State<'_, Arc<AppState>>,

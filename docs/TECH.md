@@ -52,7 +52,7 @@
 | 模糊搜索 | `nucleo` | @文件补全(fzf 算法 Rust 端口) | BACKLOG §1 输入层 @文件 |
 | gitignore 解析 | `ignore` | 过滤项目扫描范围 | BACKLOG §1 输入层 @文件 |
 | 文件监听 | `notify` | memory / config 文件变更检测 | BACKLOG §3 Memory |
-| YAML 解析 | `serde_yml` | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role |
+| YAML 解析 | 手写 parser(B3);~~`serde_yml`~~(已废弃) | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role / B3 /command |
 | TOML 解析 | `toml` | role / config 解析 | BACKLOG §4 Role |
 | 飞书 SDK | 用现有 `feishu-integration` skill | 消息收发 | BACKLOG §6 飞书 |
 | 命令面板(前端) | reka-ui `command` (或自写 `<TriggerMenu>`) | 输入触发器 | BACKLOG §1 输入层 |
@@ -63,7 +63,8 @@
 | 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
 
 **说明**:
-- `image`、`libheif-rs`、`nucleo`、`ignore`、`notify`、`serde_yml` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif)
+- `image`、`libheif-rs`、`nucleo`、`ignore`、`notify` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif)
+- **`serde_yml` 已废弃(2026-06-16 发现)**:`serde_yml` + 前代 `serde_yaml` 均在 crates.io 标 "Deprecated"(`0.0.13` 仅 compat shim)。B3 `/command` 的 frontmatter(`name` / `description` / `argument-hint` 单行标量)改用**手写 parser**(`app/src-tauri/src/resource_loader.rs::parse_frontmatter`,~40 行,split `---` + `key:value`),零依赖。未来 Skill / Memory / Role frontmatter 字段复杂化(多行 / 数组)时再上 maintained fork(候选 `serde_yaml_neo`)——§5 共享 loader 契约仍成立(parser 隔在 `parse_frontmatter` 函数后,替换局部)。
 - 前端不引入 UI 框架(Element Plus / Vuetify 太重),自己攒 + 用 reka-ui / shadcn-vue primitives
 - **ECharts 替代 recharts 的理由**:recharts 纯 React,跨框架方案 ECharts + vue-echarts 更成熟,中文文档全
 

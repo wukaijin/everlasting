@@ -32,7 +32,7 @@ use super::{
  },
  providers::{create_provider, delete_provider, list_providers, update_provider},
  sessions::{
- add_token_usage, create_session, delete_session, find_message_id_by_seq,
+ add_token_usage, create_session, delete_messages_by_session, delete_session, find_message_id_by_seq,
  insert_system_event, list_sessions, load_session, persist_turn,
  record_tool_duration, set_worktree_state, touch_session, update_message_latency,
  update_session_cwd, update_session_model_id, MessageLatency,
@@ -402,6 +402,35 @@ async fn delete_session_cascades_messages() {
 
  delete_session(&pool, &session.id).await.unwrap();
  assert!(load_session(&pool, &session.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn delete_messages_by_session_keeps_session_drops_messages() {
+ let pool = test_pool().await;
+ let session = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+ .await
+ .unwrap();
+ persist_turn(
+ &pool,
+ &session.id,
+ Role::User,
+ &MessageContent::Text("hi".into()),
+ 0,
+ None,
+ )
+ .await
+ .unwrap();
+
+ // Sanity: the message was persisted.
+ let before = load_session(&pool, &session.id).await.unwrap().unwrap();
+ assert_eq!(before.messages.len(), 1);
+
+ // B3 /clear: messages gone, session row + metadata survive.
+ delete_messages_by_session(&pool, &session.id).await.unwrap();
+ let after = load_session(&pool, &session.id).await.unwrap().unwrap();
+ assert!(after.messages.is_empty(), "messages should be cleared");
+ assert_eq!(after.session.id, session.id, "session row must survive /clear");
+ assert_eq!(after.session.title, before.session.title, "metadata preserved");
 }
 
 #[tokio::test]
