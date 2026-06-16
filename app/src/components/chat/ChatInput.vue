@@ -365,8 +365,8 @@ registerShiftTabCycle({
 //     own Enter handler) and routed to the TriggerMenu. Enter no
 //     longer submits while the panel is open.
 //   - dispatch: builtins (`/help` `/clear` `/new`) run client-side
-//     (no LLM round-trip); custom commands are PR3 territory —
-//     PR2 leaves a console breadcrumb so the wiring is obvious.
+//     (no LLM round-trip); custom commands fetch their template body
+//     via `get_command_body` and send it as a user message.
 // -----------------------------------------------------------------------
 
 const triggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
@@ -485,7 +485,10 @@ function syncCommandPalette(): void {
 }
 
 /** Selected-item dispatcher. Called by TriggerMenu's `@select`.
- *  Builtins run client-side; custom commands are PR3 territory.
+ *  Builtins run client-side (no LLM round-trip); custom commands
+ *  fetch their template body via `get_command_body` and send it as
+ *  a user message (the command name itself is stripped from the
+ *  textarea and never enters the LLM payload).
  *
  *  The `/` prefix and any filter the user typed are stripped from
  *  the textarea BEFORE dispatch — so selecting `clear` from the
@@ -552,17 +555,35 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
     return;
   }
 
-  // Custom command — PR3 territory. PR2 leaves a console
-  // breadcrumb and a user-visible toast so the wiring is
-  // obvious during development. The body is NOT fetched here
-  // (`get_command_body` is PR3); the user message is not sent.
-  console.info(
-    `[B3] custom command "/${item.name}" selected — body expansion is PR3 (not yet wired).`,
-  );
-  projectsStore.showToast(
-    `用户命令 /${item.name} 的模板展开将在 PR3 实现`,
-    "info",
-  );
+  // Custom command — PR3: fetch the template body and send it to the
+  // LLM as a user message (the command name itself is not part of the
+  // payload, matching Claude Code's slash-command UX). `get_command_body`
+  // returns `None` only if the command vanished between list + fetch
+  // (rare — file deleted mid-flight) or the frontmatter had no body;
+  // either way we surface a toast and bail without sending.
+  const projectId = projectsStore.currentProjectId ?? null;
+  let body: string | null = null;
+  try {
+    body = await invoke<string | null>("get_command_body", {
+      name: item.name,
+      projectId,
+    });
+  } catch (e) {
+    console.error(`get_command_body "/${item.name}" failed:`, e);
+    projectsStore.showToast(
+      `命令 /${item.name} 读取失败: ${String(e)}`,
+      "error",
+    );
+    return;
+  }
+  if (!body || !body.trim()) {
+    projectsStore.showToast(
+      `命令 /${item.name} 的模板体为空`,
+      "warn",
+    );
+    return;
+  }
+  await chatStore.send(body);
 }
 
 function submit() {
