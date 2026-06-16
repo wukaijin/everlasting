@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
-- **Last Active**: 2026-06-16
+- **Total Sessions**: 32
+- **Last Active**: 2026-06-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1615 | Active |
+| `journal-1.md` | ~1764 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-06-17 | B3 /command 命令面板 | `ac0592e`, `d57788a`, `03d3964`, `30fd7d5` | `main` |
 | 31 | 2026-06-16 | 评估 P1 债务 + 实施 D-002/E-004 + 记账 B-001/B-002 | `361336e`, `0891547`, `09634f1` | `main` |
 | 30 | 2026-06-15 | 砍 memory watcher 改 read-through mtime fence (RULE-C-001/C-002/C-004) | `759607c`, `8d1b805` | `main` |
 | 29 | 2026-06-15 | fix RULE-E-006 worktree data_dir → Tauri app_data_dir | `d54c878`, `1077a3d` | `main` |
