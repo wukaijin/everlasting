@@ -373,3 +373,126 @@ also route through `respond(rid, "deny")` per spec Q6.
 | 同一 turn 多 tool_use 串行 | Backend `for tool_use in turn.tool_uses` (PR1 已有) |
 | reka-ui DialogContent `:deep()` gotcha | 模板不用 reka-ui (手写 `<Teleport>` + `:deep()`) |
 | 120s 超时 → 自动 deny | `startAskTimer` + toast |
+
+### D3 PR2 (2026-06-17): inline message edit (user messages only)
+
+The UI half of the session message edit / resend feature
+(PR1 landed the backend `edit_user_message` Tauri command in
+commit `308d277`; PR2 wires the frontend). The user-initiated
+edit flow lives entirely in the chat store + `MessageItem.vue`
++ a new `<MessageActionsMenu>` component. Resend is left as a
+disabled placeholder pending PR3.
+
+#### Chat store API additions
+
+- `editingMessageSeq: Ref<number | null>` — the message seq
+  currently in inline edit mode (`null` = no row). Lives on the
+  store, not as a local ref, because `MessageList` remounts
+  on session switch and would lose a local `ref`. A single
+  nullable scalar is the right shape: only one row can be in
+  edit mode at a time. Cleared on Save success, on Cancel, and
+  on session switch.
+- `editMessage(sessionId, messageSeq, newContent)` — bridge to
+  the backend `edit_user_message` IPC. The flow:
+  1. Cancel any in-flight stream on the session (current session
+     uses the existing `cancel()` wrapper; cross-session edits
+     go through `controller.cancel(rid)` directly with the
+     resolved `requestId`).
+  2. `await invoke<void>("edit_user_message", { sessionId,
+     messageSeq, newContent })`. The backend's `Result<(), String>`
+     becomes a JS rejection on failure — we let it propagate
+     so the caller (`MessageItem.vue`'s Save handler) can
+     toast and keep edit mode active for retry.
+  3. `await controller.refresh(sessionId)` — evict + re-load
+     the in-memory buffer from DB. The rehydrated messages
+     carry the new `content` / `text` columns + the trimmed
+     tail (cascade DELETE).
+
+The `newContent` is a plain `string` (matches the backend
+`MessageContent::Text` variant). The `MessageContent` Rust type
+also has a `Blocks` variant for richer content (e.g. images,
+tool blocks), but PR2 only edits plain text — richer
+content editing is a future enhancement.
+
+Multi-listener safety: `editMessage` only mutates the
+controller's per-session buffer (via `controller.refresh`),
+never the `sessions` list directly, and never
+`currentSessionId`. The SessionList / project tab subscribers
+see the title's `updated_at` advance via the existing
+`controller.activeRequests.size` watcher (which fires
+`loadSessions` on any shrink). Pinia deep proxies mean no
+listener sees a "reset" event — the new content lands in
+place on the reactive array.
+
+#### `<MessageActionsMenu>` component
+
+A new `app/src/components/chat/MessageActionsMenu.vue` renders
+the hover-triggered ⋯ button + reka-ui `DropdownMenu` with
+three items:
+
+| Item | Enabled when | Handler |
+|---|---|---|
+| Edit | `role==="user"` AND `!isEditing` AND `!isStreaming` | `emit("edit", seq)` → parent enters edit mode |
+| Resend | always disabled in PR2 | no-op (tooltip "PR3 待实施") |
+| Copy | always | `navigator.clipboard.writeText(content)` + toast |
+
+Why reka-ui `DropdownMenu` (not the hand-rolled
+`popover-pattern.md`): the message-hover ⋯ trigger is
+per-row ephemeral (appears on hover, hides on leave). Reka-ui
+gives keyboard arrow / Esc / focus-return a11y out of the box,
+and `DropdownMenuTrigger` `as-child` lets us style the existing
+button without wrapping in a new element. Trade-off (acknowledged
+in `popover-pattern.md`): we now have two popover
+implementations. Future work could extract `usePopover`.
+
+Trigger placement: `position: absolute; top: -8px; right: 4px`
+inside the parent `.msg <li>`. The parent's `position: relative`
+gives the trigger an anchor. Opacity transitions drive the
+hover-in / hover-out feel — the trigger is `opacity: 0` by
+default and the parent's `.msg:hover .msg-actions` rule
+flips it to `1`. `:focus-within` keeps it visible when
+keyboard focus arrives on the wrapper.
+
+Stream race: when `isStreaming` is true (per-session, read from
+`controller.streamingSessionIds`), the trigger is `disabled` and
+the `.msg-actions--streaming` class drops `pointer-events: none`
++ `opacity: 0`. The same gate is applied at the menu item level
+(Edit requires `!isStreaming`), so even a stray click can't
+fire Edit mid-stream.
+
+#### `MessageItem.vue` edit mode
+
+When `chatStore.editingMessageSeq === message.seq`, the bubble
+is hidden and replaced with:
+
+- `<textarea>` — autosize 2-20 rows, follows the bubble's width.
+  v-model bound to a local `editBuffer: Ref<string>` (NOT to
+  `props.message.content` directly — the controller's streaming
+  `delta` handler also mutates that field, and a live v-model
+  would race the streaming text append).
+- Save / Cancel buttons — Save fires the chat store's
+  `editMessage`; Cancel clears `editingMessageSeq` and resets
+  the buffer. Both are disabled while the IPC is in-flight
+  (`isSaving` ref).
+- Inline error row — if the IPC rejects, the error message
+  is shown in-place (so the user knows what to fix) AND a
+  toast fires via `projectsStore.showToast`. Edit mode stays
+  active so the user can retry without retyping.
+
+The local `editBuffer` is re-seeded whenever edit mode opens
+for this row OR the underlying `message.content` changes
+(so a streaming turn that ends mid-edit re-seeds the buffer
+with the final content rather than the stale pre-stream text).
+
+The `displayContent` computed pauses the markdown pipeline
+while the textarea is open (`isEditingThisMessage ? "" :
+props.message.content`) so the debounced renderer doesn't
+clobber the user's edits. The watcher on
+`[editingMessageSeq, message.content]` re-schedules the render
+on cancel / save so the bubble re-renders with the new
+content.
+
+The `<li>` carries a `.msg--editing` class while in edit mode
+to give the row a subtle accent border + tinted background
+(analogous to `.tool-card--pending`). The user can still see
+the surrounding context but the row is clearly demarcated.

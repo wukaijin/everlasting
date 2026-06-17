@@ -522,6 +522,17 @@ export const useChatStore = defineStore("chat", () => {
   // boolean, to guarantee Vue detects the change.
   const scrollAfterReload = ref(0);
 
+  // D3 PR2 (2026-06-17): the message seq currently in inline edit
+  // mode (`null` = no row is being edited). Stored on the chat store
+  // rather than as a local ref in MessageItem because (a) MessageList
+  // remounts on session switch and would lose a local ref, and
+  // (b) only one row can be in edit mode at a time, so a single
+  // nullable scalar is the right shape. The MessageItem reads it as
+  // a computed and the parent flips it via the
+  // `<MessageActionsMenu>`'s `edit` emit. Cleared on Save success
+  // (the IPC + refresh has finished) and on Cancel.
+  const editingMessageSeq = ref<number | null>(null);
+
   // -----------------------------------------------------------------------
   // Reactive projections over the controller's state. Components read
   // these and never touch the controller directly.
@@ -1200,6 +1211,107 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
+  // D3 PR2 (2026-06-17): user message edit + cascade delete
+  //
+  // Mirrors the backend `edit_user_message` Tauri command (PR1,
+  // commit `308d277`): in-place update the row's content, cascade-
+  // delete every strictly-later message in the session, append an
+  // audit row. The frontend flow is:
+  //
+  //   1. Cancel any in-flight stream on the session — the backend
+  //      `edit_user_message` command also cancels as a defense in
+  //      depth (cancel_inflight_for_session + await_inflight_exit),
+  //      but doing it on the frontend too means the in-memory
+  //      `streaming` flag on the placeholder message clears via
+  //      the same `done` event path, and the user sees the input
+  //      row's send button re-enable in the same tick.
+  //   2. Fire the IPC. The backend's `Result<(), String>` becomes
+  //      a JS rejection on failure (Tauri's IPC contract) — we
+  //      let it propagate to the caller, which surfaces it via a
+  //      toast and keeps the parent in edit mode for retry.
+  //   3. Refresh the controller's per-session message buffer
+  //      from the DB. `refresh` evicts + re-loads, so the
+  //      rehydrated buffer shows the new content (the new
+  //      `content` / `text` columns + the bumped
+  //      `metadata.edited_at`) AND the trimmed tail (the cascade
+  //      DELETE). The Vue computed `messages` re-evaluates and
+  //      the <MessageList> re-renders.
+  //
+  // The `Resend` half is intentionally NOT wired in PR2. The
+  // backend doesn't have a `Resend` IPC yet (needs a new
+  // `ChatEvent::Resend` variant + an audit kind + the spec for
+  // the cancel-vs-resend race), and the dispatch prompt's "DoD"
+  // lists it under "留 PR3". The UI menu item stays disabled with
+  // a "PR3 待实施" tooltip.
+  //
+  // Multi-listener safety: this method only mutates the
+  // controller's per-session buffer (via `controller.refresh`),
+  // never the `sessions` list directly, and never the
+  // `currentSessionId` ref. The SessionList / project tab
+  // subscribers see the title's `updated_at` advance via the
+  // existing `controller.activeRequests.size` watcher (which
+  // fires `loadSessions` on any shrink). Pinia deep proxies
+  // mean no listener sees a "reset" event — the new content
+  // lands in place on the reactive array.
+  // -----------------------------------------------------------------------
+  async function editMessage(
+    sessionId: string,
+    messageSeq: number,
+    newContent: string,
+  ): Promise<void> {
+    if (!sessionId) {
+      throw new Error("editMessage: sessionId is required");
+    }
+    if (typeof messageSeq !== "number") {
+      throw new Error("editMessage: messageSeq is required");
+    }
+    if (typeof newContent !== "string") {
+      throw new Error("editMessage: newContent must be a string");
+    }
+    // 1. Stream race — cancel any in-flight stream on this
+    // session. The chat store's `cancel` is per-current-session
+    // (it reads `currentRequestId`); for cross-session edits
+    // (e.g. user edits a message in session A while session B is
+    // streaming) we use the controller's lower-level `cancel`
+    // with the resolved requestId. The current session's case
+    // is the common one and goes through the existing wrapper.
+    if (sessionId === currentSessionId.value && isCurrentSessionStreaming.value) {
+      await cancel();
+    } else {
+      const rid = controller.currentRequestId(sessionId);
+      if (rid) {
+        await controller.cancel(rid);
+      }
+    }
+    // 2. Fire the IPC. The backend takes `newContent` as a
+    // plain string and wraps it in `MessageContent::Text`
+    // (mirrors the wire shape the `chat` command's
+    // `toPayloadContent` emits for a plain text message). The
+    // Rust side serializes the new content to `messages.content`
+    // (JSON `Vec<ContentBlock>` form) and the `text` denormalized
+    // column. On error, the backend's `Result::Err(String)`
+    // surfaces here as a rejected promise — we let it propagate
+    // so the caller (`MessageItem.vue`'s Save handler) can
+    // toast and keep the edit mode active.
+    await invoke<void>("edit_user_message", {
+      sessionId,
+      messageSeq,
+      newContent,
+    });
+    // 3. Refresh the per-session message buffer. We always
+    // refresh, even if the user is currently viewing a
+    // different session — the rehydrated buffer lives in the
+    // controller's LRU keyed by sessionId and will surface
+    // correctly when the user navigates back. The `refresh`
+    // helper does evict + ensureLoaded, so the new content +
+    // trimmed tail are read from the DB and the in-memory
+    // `messagesBySession` is replaced atomically (no blank
+    // page flash — see the BUG FIX comment in
+    // `finalizeRequest` for the same invariant).
+    await controller.refresh(sessionId);
+  }
+
+  // -----------------------------------------------------------------------
   // A2 + B7 (PR2 front-end): per-session Mode changes via the
   // `set_session_mode` Tauri command. Both the popover entry
   // (`ModeSelect.vue`) and the keyboard entry (`Shift+Tab` in
@@ -1328,6 +1440,11 @@ export const useChatStore = defineStore("chat", () => {
     forceFollowActive,
     sessionLoading,
     scrollAfterReload,
+    // D3 PR2: the message seq currently in inline edit mode.
+    // Written by `<MessageActionsMenu>`'s `edit` emit, cleared
+    // on Save success / Cancel. UI consumers read it via
+    // `chatStore.editingMessageSeq` (a `number | null`).
+    editingMessageSeq,
     // Methods
     send,
     cancel,
@@ -1360,5 +1477,10 @@ export const useChatStore = defineStore("chat", () => {
     requestSetMode,
     confirmYolo,
     cancelYolo,
+    // D3 PR2 (2026-06-17): user message edit + cascade delete
+    // bridge to the backend `edit_user_message` IPC. Called by
+    // `MessageItem.vue`'s Save handler; the parent catches
+    // errors and keeps the edit mode active for retry.
+    editMessage,
   };
 });

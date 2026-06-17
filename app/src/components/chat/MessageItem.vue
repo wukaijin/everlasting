@@ -20,8 +20,21 @@
 //   The 50ms debounce collapses bursts of SSE deltas into a single
 //   re-render; on stream end we flush so the final frame doesn't
 //   wait out the timer.
+//
+// D3 PR2 (2026-06-17): inline message edit (user messages only).
+//   On hover, a small ⋯ button appears at the top-right of the
+//   <li> via `<MessageActionsMenu>`. Clicking it opens a
+//   DropdownMenu with Edit / Resend / Copy; only Edit is wired
+//   (Resend is a PR3 placeholder, Copy just hits the clipboard).
+//   Edit replaces the bubble with a <textarea> + Save / Cancel
+//   buttons; Save fires the chat store's `editMessage` (which
+//   cancels any in-flight stream, fires the backend IPC, then
+//   refreshes the in-memory buffer). Failure keeps the edit
+//   mode active so the user can retry. The streaming state on
+//   the parent <li> blocks the menu trigger entirely (defense
+//   against mid-stream edits racing the LLM).
 
-import { computed, watch, onUnmounted } from "vue";
+import { computed, ref, watch, onUnmounted } from "vue";
 import {
   TooltipProvider,
   TooltipRoot,
@@ -31,17 +44,25 @@ import {
   TooltipArrow,
 } from "reka-ui";
 import type { ChatMessage } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import { useProjectsStore } from "../../stores/projects";
+import { useStreamControllerStore } from "../../stores/streamController";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer } from "../../utils/markdown";
 import { abbreviateDuration } from "../../utils/duration";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
+import MessageActionsMenu from "./MessageActionsMenu.vue";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
   message: ChatMessage;
 }>();
+
+const chatStore = useChatStore();
+const projectsStore = useProjectsStore();
+const controller = useStreamControllerStore();
 
 const hasVisibleBubble = computed<boolean>(() => {
   const m = props.message;
@@ -67,6 +88,144 @@ const showStreamingHint = computed<boolean>(
   () => !!props.message.streaming && !props.message.content,
 );
 
+// --- Streaming state ----------------------------------------------------
+// D3 PR2: the `MessageActionsMenu` greys out its trigger entirely
+// when a stream is in flight on the same session. We read the
+// controller's `streamingSessionIds` directly so the menu gets
+// a per-session view (other sessions can keep streaming; only
+// the current session's edit affordance is locked). The `isAtLeastOne`
+// shape avoids subscribing to per-message deltas — we only need a
+// boolean per session.
+const isStreaming = computed<boolean>(() => {
+  if (props.message.streaming) return true;
+  // The streaming flag on the placeholder covers the user-sent
+  // turn's own assistant message; for the per-session guard we
+  // additionally read the controller's set. The two overlap on
+  // the placeholder but neither subscribes to the other, so
+  // a stale read of one is caught by the other.
+  const sid = chatStore.currentSessionId;
+  if (!sid) return false;
+  return controller.streamingSessionIds.has(sid);
+});
+
+// --- D3 PR2: inline edit state -----------------------------------------
+// `editingMessageSeq` lives on the chat store so it survives the
+// MessageList re-render (Vue key-based remount on session switch
+// would lose a local `ref`). A single ref is enough — only one
+// row can be in edit mode at a time (opening a second one closes
+// the first). The `isEditingThisMessage` computed derives the
+// boolean for the current row.
+const isEditingThisMessage = computed<boolean>(
+  () =>
+    chatStore.editingMessageSeq !== null &&
+    chatStore.editingMessageSeq === props.message.seq,
+);
+
+// Local textarea buffer. The ref starts with the message's
+// current `content` on edit-mode entry and is reset on cancel
+// / save-success. We deliberately do NOT bind `v-model` directly
+// to `props.message.content` because (a) the prop is read-only
+// from the parent's perspective (we don't want to mutate the
+// store's reactive ChatMessage from the textarea handler), and
+// (b) the controller's `done` / `error` / `delta` handlers
+// also mutate the in-memory message's `content` — a live
+// v-model would race the streaming text append. The local
+// ref + explicit commit on Save sidesteps both.
+const editBuffer = ref<string>(props.message.content);
+const isSaving = ref<boolean>(false);
+const editError = ref<string | null>(null);
+
+// Watch the seq → content transition: when the user opens
+// edit mode for THIS message, seed the buffer with the current
+// `content`. We watch the message's `content` (not just the
+// editing flag) so a streaming turn that ends mid-edit still
+// re-seeds the buffer with the final content (otherwise the
+// textarea would show stale text from before the stream
+// completed). The same watcher also resets `editError` so a
+// fresh edit session doesn't carry over the previous error.
+watch(
+  () => [chatStore.editingMessageSeq, props.message.content] as const,
+  ([newSeq, newContent]) => {
+    if (newSeq === props.message.seq) {
+      editBuffer.value = newContent;
+      editError.value = null;
+    }
+  },
+  { immediate: true },
+);
+
+// `MessageActionsMenu`'s `edit` emit handler. Routes to the
+// chat store so the editing-message-seq flips to this row's
+// seq; the local `isEditingThisMessage` then re-evaluates and
+// the textarea renders.
+function onEdit(messageSeq: number) {
+  if (props.message.role !== "user") return;
+  if (isStreaming.value) return;
+  chatStore.editingMessageSeq = messageSeq;
+}
+
+function cancelEdit() {
+  chatStore.editingMessageSeq = null;
+  editBuffer.value = props.message.content;
+  editError.value = null;
+}
+
+async function saveEdit() {
+  if (!props.message.seq) {
+    editError.value = "消息缺少 seq,无法编辑";
+    return;
+  }
+  if (isSaving.value) return;
+  const trimmed = editBuffer.value.trim();
+  if (trimmed.length === 0) {
+    editError.value = "内容不能为空";
+    return;
+  }
+  if (trimmed === props.message.content) {
+    // No-op: same content as before. Close the edit mode so
+    // the user doesn't see a textarea that's stuck open.
+    cancelEdit();
+    return;
+  }
+  isSaving.value = true;
+  editError.value = null;
+  try {
+    // The session id we send must be the one this message
+    // belongs to. The store's `currentSessionId` is the user's
+    // *current* session — for a rehydrated message this is
+    // always the same value (MessageList only renders messages
+    // for the active session), so this is correct. Defensive:
+    // if the user somehow triggers edit on a message from a
+    // different session (shouldn't happen, the menu is per-
+    // message in the active list), the IPC would error with
+    // "session not found" and the catch path surfaces it.
+    const sid = chatStore.currentSessionId;
+    if (!sid) {
+      throw new Error("editMessage: no current session");
+    }
+    await chatStore.editMessage(sid, props.message.seq, trimmed);
+    // Refresh succeeded. The controller's `refresh` has
+    // already replaced the in-memory buffer; we close the
+    // edit mode so the bubble re-renders with the new
+    // content (the rehydrated message carries the new
+    // `text` column).
+    chatStore.editingMessageSeq = null;
+  } catch (e) {
+    // Failure path: keep edit mode active so the user can
+    // adjust and retry. The error message is the IPC's
+    // `String` rejection (e.g. "edit_user_message: user
+    // message at seq 5 not found in session ...") or a
+    // generic message for client-side errors.
+    editError.value = String(e);
+    projectsStore.showToast(
+      `编辑失败: ${String(e)}`,
+      "error",
+    );
+  } finally {
+    isSaving.value = false;
+  }
+}
+
 // --- Markdown pipeline ----------------------------------------------------
 // `displayContent` is a thin pass-through to `message.content`. The
 // leading-whitespace trim that PR7 put here now lives inside
@@ -74,7 +233,14 @@ const showStreamingHint = computed<boolean>(
 // layer owns its own input policy. We keep the named computed because
 // (a) the watch below needs a stable dependency reference, and (b) it
 // documents intent at the call site ("this is the text we render").
-const displayContent = computed<string>(() => props.message.content);
+// `editingThisMessage` is read-only here — the markdown pipeline
+// pauses while the textarea is open (we don't want a streaming
+// delta to clobber the user's edits). The watcher on
+// `displayContent` re-schedules on cancel / save so the final
+// bubble renders the new content.
+const displayContent = computed<string>(() =>
+  isEditingThisMessage.value ? "" : props.message.content,
+);
 
 const { rendered, schedule, flush, dispose } = createDebouncedRenderer(50);
 
@@ -149,7 +315,37 @@ const latencyRows = computed<
 </script>
 
 <template>
-  <li :class="['msg', `msg--${message.role}`, { 'msg--err': message.error }]">
+  <li
+    :class="[
+      'msg',
+      `msg--${message.role}`,
+      {
+        'msg--err': message.error,
+        'msg--editing': isEditingThisMessage,
+      },
+    ]"
+  >
+    <!--
+      D3 PR2: hover-triggered actions menu. Renders a small ⋯
+      button at the top-right of the row (absolute-positioned
+      via the .msg-actions class). Hidden when the message is
+      being edited or the session is streaming. The hover
+      affordance is the parent <li>'s `:hover` so the menu
+      stays visible while the cursor moves onto it. See the
+      `<MessageActionsMenu>` component for the dropdown shape
+      and the disable rules.
+    -->
+    <MessageActionsMenu
+      v-if="message.seq !== undefined"
+      :message-seq="message.seq"
+      :session-id="chatStore.currentSessionId ?? ''"
+      :content="message.content"
+      :role="message.role"
+      :is-editing="isEditingThisMessage"
+      :is-streaming="isStreaming"
+      @edit="onEdit"
+    />
+
     <ThinkingBlock
       v-if="
         message.role === 'assistant' &&
@@ -186,7 +382,66 @@ const latencyRows = computed<
       />
     </div>
 
-    <div v-if="showBubble" class="msg__bubble">
+    <!--
+      D3 PR2: inline edit mode for user messages. The bubble
+      (markdown render) is hidden and replaced with a <textarea>
+      + Save / Cancel buttons. The textarea is autosize-shaped
+      (2-20 rows, follows width). Save fires the chat store's
+      `editMessage`, which cancels any in-flight stream, calls
+      the backend `edit_user_message` IPC, then refreshes the
+      in-memory buffer. Failure keeps the edit mode active and
+      shows an inline error + toast.
+
+      The edit-mode branch is mutually exclusive with the
+      streaming branch (the menu trigger is disabled when
+      streaming, so the user can't open edit during a stream),
+      but the v-if checks both `isEditingThisMessage` AND the
+      absence of streaming as a defensive guard.
+    -->
+    <div
+      v-if="isEditingThisMessage && !isStreaming && message.role === 'user'"
+      class="msg__editor"
+    >
+      <textarea
+        v-model="editBuffer"
+        class="msg__editor-textarea"
+        rows="3"
+        :aria-label="`编辑消息 seq ${message.seq}`"
+        :disabled="isSaving"
+        data-testid="msg-editor-textarea"
+      />
+      <div
+        v-if="editError"
+        class="msg__editor-error"
+        role="alert"
+        data-testid="msg-editor-error"
+      >
+        <Icon name="warn" :size="12" icon-class="msg__editor-error-icon" />
+        {{ editError }}
+      </div>
+      <div class="msg__editor-actions">
+        <button
+          type="button"
+          class="msg__editor-btn msg__editor-btn--cancel"
+          :disabled="isSaving"
+          data-testid="msg-editor-cancel"
+          @click="cancelEdit"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          class="msg__editor-btn msg__editor-btn--save"
+          :disabled="isSaving || editBuffer.trim().length === 0"
+          data-testid="msg-editor-save"
+          @click="saveEdit"
+        >
+          {{ isSaving ? "保存中..." : "保存" }}
+        </button>
+      </div>
+    </div>
+
+    <div v-else-if="showBubble" class="msg__bubble">
       <span
         v-if="hasVisibleBubble || message.content"
         class="msg__markdown"
@@ -267,6 +522,11 @@ const latencyRows = computed<
   display: flex;
   flex-direction: column;
   max-width: 75%;
+  /* Position context for the absolute-positioned
+     .msg-actions trigger — see MessageActionsMenu.vue.
+     `relative` lets the trigger anchor to the row's
+     top-right without flowing inline. */
+  position: relative;
 }
 
 .msg--user {
@@ -276,6 +536,35 @@ const latencyRows = computed<
 
 .msg--assistant {
   align-self: flex-start;
+}
+
+/* D3 PR2: the inline edit mode gets a subtle accent border
+   + a tinted background to signal "this row is in
+   edit-mode" — analogous to the visual hint the
+   .tool-card--pending class gives the tool card. The user
+   can still see the surrounding context (no full
+   `outline` ring) but the row is clearly demarcated. */
+.msg--editing {
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--color-bg-border));
+}
+
+/* D3 PR2: hover affordance for the .msg-actions trigger.
+   The trigger is `position: absolute; top: -8px; right: 4px`
+   inside MessageActionsMenu and starts at `opacity: 0`; we
+   fade it in when the user hovers the row. `:focus-within`
+   keeps it visible while keyboard focus is anywhere inside
+   the row (e.g. a Save button after a click). The check for
+   `msg--editing` / `msg--err` is handled by the
+   MessageActionsMenu's own state classes (they keep
+   `pointer-events: none` + `opacity: 0` even when the
+   parent is hovered). */
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions {
+  opacity: 1;
 }
 
 .msg__redacted {
@@ -350,6 +639,117 @@ const latencyRows = computed<
   50% {
     opacity: 0;
   }
+}
+
+/* D3 PR2: inline edit mode (user messages only). The
+   bubble is replaced with a <textarea> + Save / Cancel.
+   The textarea visually echoes the bubble's padding /
+   radius so the edit-mode "row" feels like an in-place
+   mutation of the bubble, not a totally different UI. */
+.msg__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 60%, var(--color-bg-border));
+  background: var(--color-bg-elevated);
+  /* `max-width: 100%` so the editor never overflows the
+     parent <li> (which is itself `max-width: 75%`); the
+     75% cap comes from the .msg rule. */
+  max-width: 100%;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.msg__editor-textarea {
+  width: 100%;
+  min-height: 60px;
+  max-height: 320px;
+  padding: 6px 8px;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  box-sizing: border-box;
+}
+
+.msg__editor-textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.msg__editor-textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.msg__editor-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-tool-error);
+  background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.msg__editor-error-icon {
+  flex-shrink: 0;
+}
+
+.msg__editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.msg__editor-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid var(--color-bg-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.msg__editor-btn:hover:not(:disabled) {
+  background: var(--color-bg-surface);
+  border-color: var(--color-text-muted);
+}
+
+.msg__editor-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.msg__editor-btn--save {
+  background: var(--color-accent);
+  color: #ffffff;
+  border-color: var(--color-accent);
+}
+
+.msg__editor-btn--save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 85%, #000);
+  border-color: color-mix(in srgb, var(--color-accent) 85%, #000);
+}
+
+.msg__editor-btn--save:disabled {
+  background: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  border-color: transparent;
+  color: #ffffff;
 }
 
 .msg__error {

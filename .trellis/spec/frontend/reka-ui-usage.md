@@ -599,3 +599,158 @@ defineOptions({ inheritAttrs: false });
 - PR5 follow-up PR (`b919d9e`) — established the
   hand-rolled popover pattern; UI polish PR (this one)
   established the reka-ui form-control pattern.
+
+---
+
+## D3 PR2 (2026-06-17): `DropdownMenu` for per-message actions
+
+D3 PR2 added the first production use of reka-ui's
+`DropdownMenu` primitive — for the per-message ⋯ menu on
+chat rows (`<MessageActionsMenu>` mounted in
+`MessageItem.vue`). The dropdown has three items: Edit,
+Resend (disabled, PR3), Copy.
+
+### Why reka-ui `DropdownMenu` (not the hand-rolled popover)
+
+`popover-pattern.md` documents the project's hand-rolled
+popover pattern (used by `ModelSelect`, `ModeSelect`,
+`TriggerMenu`, worktree dropdown). It's a stable
+`onDocumentClick` + `Esc` close pair. For the message
+hover menu, reka-ui is the right primitive because:
+
+- The trigger is per-row ephemeral (appears on `:hover`,
+  hides on `:mouseleave`). The hand-rolled pattern
+  assumes a stable trigger element; binding a
+  document-level click handler that re-checks the
+  hover state on every render is awkward.
+- Reka-ui `DropdownMenu` ships keyboard a11y out of the
+  box: arrow up/down navigation, `Enter` to select,
+  `Esc` to close, focus-return to the trigger. The
+  hand-rolled pattern would need ~50 lines of keydown
+  handler to match.
+- The trade-off (acknowledged in `popover-pattern.md`):
+  we now have two popover implementations in the
+  codebase. Future work could extract a `usePopover`
+  composable to consolidate. Out of scope for D3.
+
+### Component shape (six pieces, in order)
+
+```vue
+<DropdownMenuRoot>
+  <DropdownMenuTrigger as-child>
+    <button class="msg-actions__trigger">…</button>
+  </DropdownMenuTrigger>
+  <DropdownMenuPortal>
+    <DropdownMenuContent
+      class="msg-actions__content"
+      :side-offset="4"
+      align="end"
+    >
+      <DropdownMenuItem
+        class="msg-actions__item"
+        :disabled="!canEdit()"
+        @select="onEdit"
+      >
+        <Icon name="pencil" :size="14" />
+        <span>编辑</span>
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        class="msg-actions__item"
+        :disabled="true"
+        @select.prevent
+      >
+        <Icon name="refresh" :size="14" />
+        <span>重发</span>
+        <span class="msg-actions__item-hint">PR3 待实施</span>
+      </DropdownMenuItem>
+      <DropdownMenuSeparator class="msg-actions__separator" />
+      <DropdownMenuItem
+        class="msg-actions__item"
+        @select="onCopy"
+      >
+        <Icon name="copy" :size="14" />
+        <span>复制</span>
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenuPortal>
+</DropdownMenuRoot>
+```
+
+### Required pieces (and why)
+
+- **`DropdownMenuRoot`** — the context provider. reka-ui
+  2.9.9's `DropdownMenuContent` is **not** self-contained:
+  it relies on a `DropdownMenuContext` (Vue's Symbol-based
+  `provide`/`inject`) that the Root `provide`s. Rendering
+  `DropdownMenuContent` without a `DropdownMenuRoot`
+  ancestor throws at runtime with
+  `Injection Symbol(DropdownMenuContext) not found`.
+  TypeScript / `pnpm build` does NOT catch this because
+  the inject is runtime-only. **Always wrap
+  `DropdownMenuContent` in a `DropdownMenuRoot`.**
+- **`DropdownMenuTrigger as-child`** — merges trigger
+  props onto the existing child (the `<button>`) so the
+  trigger's own class + click handler are preserved.
+  **Without `as-child` the trigger renders as a default
+  `<button>` that wraps the child — you lose the styling
+  and get a nested clickable.**
+- **`DropdownMenuPortal`** — portals to `<body>` to
+  escape overflow containers. **Required for the
+  portal-child styling to work** (see the `:deep()`
+  gotcha above). The dropdown can otherwise be clipped
+  by the `.msg` row's `overflow` (none today, but the
+  portal is cheap insurance against future changes).
+- **`DropdownMenuContent`** — receives
+  `data-state="open|closed"` for animation. `side-offset`
+  is the gap between trigger and dropdown (4px matches
+  the project default). `align="end"` aligns the right
+  edge of the dropdown with the right edge of the
+  trigger — the typical pattern for a top-right ⋯
+  trigger.
+- **`DropdownMenuItem`** — receives `data-highlighted`
+  (focus / hover) and `data-disabled` (the `:disabled`
+  prop) as CSS selectors. The `@select` event fires
+  on click / Enter; we pass `.prevent` for the
+  Resend placeholder so the click doesn't dismiss the
+  menu (otherwise the dropdown closes even though
+  nothing happened, which is misleading).
+- **`DropdownMenuSeparator`** — a thin horizontal rule
+  between the action groups. The CSS class on the
+  separator follows the same BEM-style convention as
+  every other component in the codebase.
+
+### Don't: forget `DropdownMenuPortal`
+
+Without the portal, the dropdown renders inline next to
+the trigger. If the trigger is inside an `overflow:
+hidden` ancestor (e.g. a future `.msg__tools` clipping
+its content), the dropdown is clipped and invisible.
+The portal is the default in the reka-ui docs for a
+reason; mirror the pattern in `SelectContent` /
+`DialogContent` etc. (see the portal gotcha above).
+
+### Don't: `@select="onEdit"` for the disabled Resend item
+
+The Resend item is `disabled` (PR3 placeholder). The
+`@select` event would still fire on Enter / click in
+some reka-ui versions even with `:disabled` if the
+handler is bound — pass `@select.prevent` to be safe
+(no-op handler + prevented close). Edit and Copy both
+do work, so they bind `@select` to the real handler.
+
+### Don't: re-style items via inline `style=""`
+
+The items use BEM classes (`.msg-actions__item`,
+`.msg-actions__item-icon`, `.msg-actions__item-hint`).
+Inline `style` would bypass the design tokens and
+break future theme swaps.
+
+### Reference
+
+- `app/src/components/chat/MessageActionsMenu.vue` —
+  production instance.
+- `app/src/components/chat/MessageItem.vue` — parent
+  that mounts it, plus the inline edit-mode UI.
+- `.trellis/spec/frontend/state-management.md` §
+  "D3 PR2 (2026-06-17): inline message edit" — the
+  store API + flow.
