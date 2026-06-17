@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
+- **Total Sessions**: 36
 - **Last Active**: 2026-06-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1864 | Active |
+| `journal-1.md` | ~1943 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 36 | 2026-06-17 | D3 session 消息编辑/重发 3 PR 闭环 + 点击 bug 修复;D2 降第三档标双驱动 | `6918f27`, `308d277`, `114b239`, `e747625`, `14e73e2`, `d6b6ad8` | `main` |
 | 35 | 2026-06-17 | B2 PR2 @文件内容注入 | `a00adbc` | `main` |
 | 34 | 2026-06-17 | B2 PR1.5 输入框 token 着色(CM6 迁移) | `1ed212c`, `8e7c975` | `main` |
 | 33 | 2026-06-17 | B2 @文件补全 PR1(前端面板+后端 list_files) | `f3ac7a0` | `main` |

@@ -1903,3 +1903,41 @@ B2 PR3 落地(user message 下方 📎 已引用文件: 提示行 + DB metadata 
 
 - 继续 B2 @文件补全 路线图后续 PR (B2 §1.2 已 3/3 落地: PR1 panel + PR1.5 token 着色 + PR2 注入 + PR3 提示; 剩余 5 项)
 - B2 完成后考虑 reload 旧 metadata 行(B2 PR3 前写入的 array 形式 metadata 不能被 rehydrate 解析)— 可选 backfill SQL
+
+
+## Session 36: D3 session 消息编辑/重发 3 PR 闭环 + 点击 bug 修复;D2 降第三档标双驱动
+
+**Date**: 2026-06-17
+**Task**: D3 session 消息编辑/重发 3 PR 闭环 + 点击 bug 修复;D2 降第三档标双驱动
+**Branch**: `main`
+
+### Summary
+
+V2 第二档最后一项 D3 全套落地。3 PR 拆分:PR1(308d277)后端 edit_user_message 单事务(in-place UPDATE + cascade DELETE seq>N + audit,复用 messages.metadata JSON 零 migration);PR2(114b239)前端 MessageActionsMenu(reka-ui DropdownMenu)+ MessageItem inline edit mode + chat store editMessage(streamController.cancel 防 race);PR3(e747625)Resend 实质化(复用 chat IPC + resendSeq flag,方案 A 否决独立 IPC)+(edited) 标签(metadata.edited_at 读取)+ AuditKind::ResendMessage + C4 审计 UI 暴露 + RULE-A-010 spec 偏离声明关闭(A-010 留实现路径)。收尾 fix(d6b6ad8):MessageActionsMenu 点击无响应根因 = TooltipTrigger as-child 嵌套 DropdownMenuTrigger as-child 吞点击 + @click.stop,方案 A 移除 Tooltip 改原生 :title,reka-ui-usage.md 加 gotcha 沉淀 + 顺手修 PR3 漏改的 Resend disabled spec drift。另:应 user review 降 D2(FTS5 全局搜索)到第三档并标双驱动路径(用户驱动 MVP + Agent 驱动 search_history tool,共享 search_messages command)。verdict:spec gotcha > 封装组件(2 处使用点异构,YAGNI,根因是特定反模式)。research/ 2 份(行业 edit/resend 惯例 + persist 模式)。验证 cargo test --lib 562 pass / vue-tsc 0 error / build 通过 / 用户 dev 手验点击修复。DEBT RULE-A-010 closed(e747625),RULE-A-007(error arm partial text)仍 open 留独立 task。journal-1 接近 2000 行上限,下次 session 注意归档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6918f27` | (see git log) |
+| `308d277` | (see git log) |
+| `114b239` | (see git log) |
+| `e747625` | (see git log) |
+| `14e73e2` | (see git log) |
+| `d6b6ad8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
