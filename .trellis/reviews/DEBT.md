@@ -582,6 +582,8 @@
 - **Impact**: MVP 简化,但与 spec 不符,影响 LLM 自我收敛能力
 - **Fix**: 实现二次取消语义,或更新 spec 标"已偏离"
 - **Status**: **closed (2026-06-17)** — D3 PR3 实施时顺手收口,方式 = **spec 偏离声明**(非实现)。spec 在 `docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释段,说明 MVP 简化决策 + 未来实现路径;DEBT 自身 Re-evaluation Log 加一行 open→closed;`docs/IMPLEMENTATION.md §4` 2026-06-17 加 D3 完成 ADR 段落,完整说明偏离理由 + 二次取消实现路径(为未来预留)。原 "Fix" 的实现路径本批次不做(理由见 ADR:tool 取消窗口短 + 二次取消 UX friction + 单用户场景误点概率低)。
+- **Closed At**: `e747625`
+- **Related Task**: `.trellis/tasks/06-17-d3-message-edit-resend`
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1 + `.trellis/reviews/SPEC-DRIFT.md`
 
