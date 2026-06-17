@@ -1941,3 +1941,37 @@ V2 第二档最后一项 D3 全套落地。3 PR 拆分:PR1(308d277)后端 edit_u
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: RULE-A-007 error arm persist partial turn 修复(对称 cancel 路径)
+
+**Date**: 2026-06-18
+**Task**: RULE-A-007 error arm persist partial turn 修复(对称 cancel 路径)
+**Branch**: `main`
+
+### Summary
+
+修 DEBT RULE-A-007(P2 Agent Loop):SSE 流中途 error 时 agent loop 的 error arm 直接 return 丢弃已累积 text_parts/thinking/tool_calls,与 cancel 路径不对称(reload 后 partial 消失)。Fix 对称 cancel:决策 A=ERROR_MARKER('[生成出错中断]')text 追加对称 CANCELLED_MARKER(否决 metadata interrupted 双表达);决策 B=persist 失败 log-only 不 emit_persist_failure(error 已 pre-emit terminal Error,第二个会双 terminal 冲突,对称 cancel tool_result persist 失败);决策 C=persist 成功后 emit TurnComplete(seq 指向 partial)。新增 if had_error 退出块防 error 后继续 loop。不动 chat.rs(RULE-A-006)/cancel 路径/正常 Done/RULE-A-003/RULE-A-004/前端。5 新测试(partial/empty/thinking+tool_use/persist-fail-log-only/TurnComplete),cargo test --lib 567 pass(562→567 0 回归),cargo check 0 warning。spec:agent-loop-architecture 加 Turn-boundary persist symmetry pattern + error-handling 加 6 行 persist 失败矩阵。DEBT RULE-A-007 closed(2dc1824)。trellis-check 0 fail/2 流程性 warning。注:本 session 也含 D3 全套(已 session 36 归档)+ D2 降档,A-007 是独立 P2 债收口。journal-1 1943→~1970 行接近上限,下次 session 注意归档 journal-1→journal-2。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2dc1824` | (see git log) |
+| `2f46e65` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

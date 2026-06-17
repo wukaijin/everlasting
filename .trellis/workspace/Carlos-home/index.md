@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 36
-- **Last Active**: 2026-06-17
+- **Total Sessions**: 37
+- **Last Active**: 2026-06-18
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1943 | Active |
+| `journal-1.md` | ~1977 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-06-18 | RULE-A-007 error arm persist partial turn 修复(对称 cancel 路径) | `2dc1824`, `2f46e65` | `main` |
 | 36 | 2026-06-17 | D3 session 消息编辑/重发 3 PR 闭环 + 点击 bug 修复;D2 降第三档标双驱动 | `6918f27`, `308d277`, `114b239`, `e747625`, `14e73e2`, `d6b6ad8` | `main` |
 | 35 | 2026-06-17 | B2 PR2 @文件内容注入 | `a00adbc` | `main` |
 | 34 | 2026-06-17 | B2 PR1.5 输入框 token 着色(CM6 迁移) | `1ed212c`, `8e7c975` | `main` |
