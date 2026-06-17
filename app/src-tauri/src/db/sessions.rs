@@ -726,6 +726,42 @@ pub async fn find_message_id_by_seq(
  Ok(row.map(|(id,)| id))
 }
 
+/// B2 PR3: write the per-user-turn `@relpath` injection
+/// manifest to `messages.metadata`. Called from the agent loop
+/// after `inject_at_tokens` returns the manifest — the
+/// `persist_turn` call earlier in the same turn already wrote
+/// the row with `metadata: None`, so this is a patch on top of
+/// the just-inserted row.
+///
+/// The function is a single `UPDATE` keyed by
+/// `(session_id, seq)`. The frontend rehydrate path reads
+/// `metadata` back via `MessageRow.metadata` (see
+/// `db::types.rs::MessageRow`) and parses it into the
+/// `ChatMessage.injections` array. Bumps no `updated_at` —
+/// the message is immutable from the moment it's inserted.
+pub async fn update_message_metadata(
+ pool: &SqlitePool,
+ session_id: &str,
+ seq: i64,
+ metadata: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+ let meta_str = serde_json::to_string(metadata)
+ .map_err(|e| sqlx::Error::Encode(format!("serialize metadata: {}", e).into()))?;
+ sqlx::query(
+ r#"
+ UPDATE messages
+ SET metadata = ?
+ WHERE session_id = ? AND seq = ?
+ "#,
+ )
+ .bind(&meta_str)
+ .bind(session_id)
+ .bind(seq)
+ .execute(pool)
+ .await?;
+ Ok(())
+}
+
 /// Patch the `duration_ms` field onto a `tool_result` content
 /// block embedded in `messages.content` JSON, keyed by
 /// `tool_use_id`. Per PRD ADR-lite decision 1, the per-tool

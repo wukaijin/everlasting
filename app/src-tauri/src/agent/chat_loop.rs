@@ -258,7 +258,24 @@ pub async fn run_chat_loop(
     let _ = &base_prompt;
 
     // Persist the most recent user message before the agent loop runs.
-    if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
+    //
+    // B2 PR3 (2026-06-17): also snap the original (pre-inject)
+    // content for the `persist_turn` call below. PR2 stores the
+    // raw `@relpath` text as source of truth; PR3 adds the
+    // injection manifest to `messages.metadata` so the frontend
+    // hint row survives session reload. We keep BOTH the
+    // original content (DB `content` + `text` columns) and the
+    // manifest (DB `metadata` JSON) — the user sees the
+    // original `@relpath` in the bubble and the hint row below
+    // it; a reload reads both back.
+    //
+    // We capture the seq now (before persist) so the
+    // `ChatEvent::FileInjections` event below can identify the
+    // user row to the frontend (the controller's user-message
+    // keys on reload are `${sid}-${seq}`, so `message_seq`
+    // round-trips through the DB and matches the rehydrated
+    // key).
+    let (last_user_snapshot, last_user_seq) = if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
         let msg = last_user.clone();
         // RULE-A-003 (2026-06-15): if the very first user message
         // can't be persisted, abort with a visible Error —
@@ -270,8 +287,17 @@ pub async fn run_chat_loop(
             emit_persist_failure(&sink, &rid, &e);
             return;
         }
+        // B2 PR3: snap the seq for the FileInjections event;
+        // the original (un-injected) content stays in the
+        // `messages` vec at this point because the inject
+        // pass below mutates the in-memory copy in place —
+        // but the DB row is already locked to the original.
+        let user_seq = seq;
         seq += 1;
-    }
+        (Some(msg.content), user_seq)
+    } else {
+        (None, -1)
+    };
 
     // B2 PR2: expand `@relpath` tokens in user messages into file
     // content (text) or placeholder (image/PDF/Office/binary). Runs
@@ -279,7 +305,72 @@ pub async fn run_chat_loop(
     // `@relpath` as source of truth) and BEFORE the turn loop, so C3
     // compaction + `provider.send` see the expanded content. A reloaded
     // session re-expands against the current file contents.
-    crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx).await;
+    //
+    // B2 PR3 (2026-06-17): the function now also returns the
+    // per-token injection manifest for the LAST user text message.
+    // We (a) persist the manifest as `messages.metadata` on the user
+    // row (update, not insert — the row was just written above with
+    // `None` metadata), and (b) push a `ChatEvent::FileInjections`
+    // event so the live-streaming user message's hint row appears
+    // before the assistant starts.
+    let (last_user_after_inject, injections) =
+        crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx).await;
+    if !injections.is_empty() && last_user_snapshot.is_some() {
+        // Update the user row with the injection manifest as
+        // metadata. The `update_message_metadata` IPC at the
+        // SQL layer (added in this PR — see `db::sessions.rs`)
+        // is the single write path; using a fresh SQL UPDATE
+        // here keeps the contract that `messages.metadata` is
+        // only ever set by the agent loop.
+        //
+        // B2 PR3 (bug fix 2026-06-17): wrap the manifest in
+        // an object envelope `{"injections": [...]}` so the
+        // frontend rehydrate path can read it back via
+        // `m.metadata.injections` (see
+        // `streamController.ts::rehydrateMessages`). The
+        // previous form (`serde_json::to_value(&injections)`)
+        // serialized the `Vec<InjectionRecord>` directly as a
+        // top-level JSON array, which the rehydrate path's
+        // `meta.injections` lookup treated as undefined and
+        // silently dropped every entry. The envelope leaves
+        // room for future metadata fields (latency, tags,
+        // links) without another rehydrate-path migration.
+        let meta = serde_json::json!({ "injections": &injections });
+        if let Err(e) = crate::db::update_message_metadata(
+            &db,
+            &session_id,
+            last_user_seq,
+            &meta,
+        )
+        .await
+        {
+            tracing::warn!(
+                request_id = %rid,
+                session_id = %session_id,
+                message_seq = last_user_seq,
+                error = %e,
+                "agent loop: failed to persist injection manifest as messages.metadata (non-fatal)"
+            );
+        }
+        // Live-push the manifest to the frontend. The
+        // controller's `handleChatEvent("file_injections")`
+        // case patches the user message's `injections` array
+        // by `request_id` + `message_seq`.
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::FileInjections {
+                request_id: rid.clone(),
+                message_seq: last_user_seq,
+                injections: injections.clone(),
+            },
+        );
+    }
+    // Silence the unused warning on `last_user_after_inject` —
+    // we keep the in-place expansion in `messages` but the
+    // returned clone is not needed (the chat loop iterates
+    // `messages` directly downstream).
+    let _ = last_user_after_inject;
 
     for turn in 1..=MAX_TURNS {
         // C3 compaction (test pass-through: if messages don't exceed
@@ -458,6 +549,21 @@ pub async fn run_chat_loop(
                         ChatEvent::ToolResult { .. } => {}
                         ChatEvent::TurnComplete { .. } => {
                             tracing::warn!(request_id = %rid, "chat: unexpected TurnComplete in LLM stream");
+                        }
+                        // B2 PR3: `FileInjections` is emitted ONCE per
+                        // user turn from the agent loop's pre-turn
+                        // hook (right after `inject_at_tokens` runs) —
+                        // NOT from the LLM stream. A `FileInjections`
+                        // arriving inside the per-event stream loop
+                        // would mean the wire shape leaked (e.g. a
+                        // provider re-emitted it). Drop it; the
+                        // controller already received the legitimate
+                        // one above.
+                        ChatEvent::FileInjections { .. } => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                "chat: unexpected FileInjections in LLM stream (ignoring — already emitted pre-turn)"
+                            );
                         }
                     }
                     if matches!(event, ChatEvent::Done { .. } | ChatEvent::Error { .. }) {

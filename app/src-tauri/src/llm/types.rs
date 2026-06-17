@@ -17,6 +17,7 @@
 //!   model emits `thinking_delta` / `signature_delta` SSE events and as
 //!   `redacted_thinking` content blocks close.
 
+use crate::agent::at_file::InjectionRecord;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ---------------------------------------------------------------------------
@@ -406,6 +407,25 @@ pub enum ChatEvent {
     Error {
         message: String,
         category: LlmErrorCategory,
+    },
+    /// B2 PR3: per-token `@relpath` injection manifest, emitted
+    /// once per user turn (right after `inject_at_tokens` runs on
+    /// the last user message). The frontend `streamController`
+    /// patches the matching user message's `injections` array so
+    /// the hint row under the bubble renders. The same manifest
+    /// is also written to `messages.metadata` (see
+    /// `db::persist_turn` caller in `chat_loop.rs`) so the hint
+    /// survives session reload.
+    ///
+    /// `request_id` + `message_seq` identify the target user
+    /// message on the frontend (the controller's user messages
+    /// are keyed by id, but on reload the id is `${sid}-${seq}`
+    /// — `message_seq` lets the controller locate the row
+    /// without a separate per-request `userMsgId` plumbing).
+    FileInjections {
+        request_id: String,
+        message_seq: i64,
+        injections: Vec<InjectionRecord>,
     },
 }
 
@@ -893,5 +913,111 @@ mod tests {
         // there. (`serde(tag = "kind")` does not skip None
         // fields by default.)
         assert!(v.get("usage").map(|x| x.is_null()).unwrap_or(false));
+    }
+
+    // -----------------------------------------------------------------------
+    // B2 PR3: InjectionRecord / ChatEvent::FileInjections wire shape
+    // -----------------------------------------------------------------------
+
+    /// Verify `InjectionRecord` serializes with the exact shape the
+    /// frontend's `InjectionEntry` discriminated union expects:
+    /// `{ path: string, action: { kind: 'injected'|'degraded'|'skipped', ... } }`.
+    /// The metadata-persist path serializes via `serde_json::Value`
+    /// and the rehydrate path decodes back into `InjectionRecord` —
+    /// round-trip through both `String` and `Value` is verified.
+    #[test]
+    fn b2_pr3_injection_record_wire_shape() {
+        use crate::agent::at_file::{
+            FileKind, InjectionAction, InjectionRecord, SkipReason,
+        };
+        let records = vec![
+            InjectionRecord {
+                path: "src/foo.ts".to_string(),
+                action: InjectionAction::Injected { lines: 48 },
+            },
+            InjectionRecord {
+                path: "bar.png".to_string(),
+                action: InjectionAction::Degraded { file_kind: FileKind::Image },
+            },
+            InjectionRecord {
+                path: "doc.pdf".to_string(),
+                action: InjectionAction::Degraded { file_kind: FileKind::Pdf },
+            },
+            InjectionRecord {
+                path: "doc.docx".to_string(),
+                action: InjectionAction::Degraded { file_kind: FileKind::Office },
+            },
+            InjectionRecord {
+                path: "x.zip".to_string(),
+                action: InjectionAction::Degraded { file_kind: FileKind::Binary },
+            },
+            InjectionRecord {
+                path: "missing.txt".to_string(),
+                action: InjectionAction::Skipped { reason: SkipReason::Missing },
+            },
+            InjectionRecord {
+                path: "../../etc/passwd".to_string(),
+                action: InjectionAction::Skipped { reason: SkipReason::OutOfRoot },
+            },
+            InjectionRecord {
+                path: "/etc/shadow".to_string(),
+                action: InjectionAction::Skipped { reason: SkipReason::Unreadable },
+            },
+        ];
+        let json = serde_json::to_string(&records).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = v.as_array().unwrap();
+        // Injected: kind=injected, has `lines`.
+        assert_eq!(arr[0]["path"], "src/foo.ts");
+        assert_eq!(arr[0]["action"]["kind"], "injected");
+        assert_eq!(arr[0]["action"]["lines"], 48);
+        // Degraded: kind=degraded, has `file_kind` (snake_case enum).
+        assert_eq!(arr[1]["action"]["kind"], "degraded");
+        assert_eq!(arr[1]["action"]["file_kind"], "image");
+        assert_eq!(arr[2]["action"]["file_kind"], "pdf");
+        assert_eq!(arr[3]["action"]["file_kind"], "office");
+        assert_eq!(arr[4]["action"]["file_kind"], "binary");
+        // Skipped: kind=skipped, has `reason` (snake_case enum).
+        assert_eq!(arr[5]["action"]["kind"], "skipped");
+        assert_eq!(arr[5]["action"]["reason"], "missing");
+        assert_eq!(arr[6]["action"]["reason"], "out_of_root");
+        assert_eq!(arr[7]["action"]["reason"], "unreadable");
+        // Round-trip via `String` (the IPC JSON path).
+        let decoded: Vec<InjectionRecord> = serde_json::from_str(&json).unwrap();
+        assert_eq!(records, decoded);
+        // Round-trip via `serde_json::Value` (the
+        // `update_message_metadata` persist path: `to_value`
+        // → `Value::String` for the SQL column → `from_str` on
+        // reload).
+        let meta = serde_json::to_value(&records).unwrap();
+        let meta_back: Vec<InjectionRecord> = serde_json::from_value(meta).unwrap();
+        assert_eq!(records, meta_back);
+    }
+
+    /// Verify `ChatEvent::FileInjections` wire shape — the frontend
+    /// `case "file_injections"` arm reads `event.message_seq` and
+    /// `event.injections` off the IPC payload, then `msgs.find`
+    /// patches the user message's `injections` array.
+    #[test]
+    fn b2_pr3_chat_event_file_injections_wire_shape() {
+        use crate::agent::at_file::{InjectionAction, InjectionRecord};
+        let ev = ChatEvent::FileInjections {
+            request_id: "rid123".to_string(),
+            message_seq: 42,
+            injections: vec![InjectionRecord {
+                path: "foo.txt".to_string(),
+                action: InjectionAction::Injected { lines: 12 },
+            }],
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // The `kind` discriminator is snake_case from the enum tag.
+        assert_eq!(v["kind"], "file_injections");
+        // The other 3 fields are top-level on the JSON object.
+        assert_eq!(v["request_id"], "rid123");
+        assert_eq!(v["message_seq"], 42);
+        assert_eq!(v["injections"][0]["path"], "foo.txt");
+        assert_eq!(v["injections"][0]["action"]["kind"], "injected");
+        assert_eq!(v["injections"][0]["action"]["lines"], 12);
     }
 }
