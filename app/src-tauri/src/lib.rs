@@ -125,6 +125,9 @@ pub fn run() {
             // B3 /command palette (2026-06-16)
             commands::command_palette::list_commands,
             commands::command_palette::get_command_body,
+            // B4 skill stretches (2026-06-18): merged /-trigger panel
+            commands::panel::list_panel_items,
+            commands::panel::get_skill_body,
             // B2 @文件补全 (2026-06-17)
             commands::files::list_files,
         ])

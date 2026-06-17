@@ -26,6 +26,7 @@ pub mod command_palette;
 pub mod config;
 pub mod files;
 pub mod memory;
+pub mod panel;
 pub mod permissions;
 pub mod projects;
 pub mod providers;
@@ -85,6 +86,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         // B3 /command palette
         "list_commands",
         "get_command_body",
+        // B4 skill stretches (2026-06-18): merged panel IPC
+        "list_panel_items",
+        "get_skill_body",
         // B2 @文件补全
         "list_files",
         // A2 + B7 (Permission system + per-session Mode)

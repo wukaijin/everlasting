@@ -50,6 +50,16 @@ pub enum SkillSource {
 
 /// A parsed skill directory: frontmatter + `SKILL.md` body. `body` is
 /// returned to the LLM when it calls `use_skill(name)` (L1 activation).
+///
+/// `allowed_tools` is the **declarative** (informational) list of tools
+/// the skill is designed to use — parsed from `allowed-tools:` (or
+/// `allowed_tools:`) in the frontmatter. Empty Vec means "not declared".
+/// The list is **not enforced** at execution time: the existing ⑨ 5-tier
+/// permission layer still gates every tool call, and `use_skill` itself
+/// does not consult this list. The data is surfaced in the L0 listing
+/// block so the model sees a hint like `(tools: read_file, grep)` after
+/// the description. See `.trellis/tasks/06-18-skill-stretches/prd.md`
+/// Stretch 1 for the grill-converged decision (declarative, not enforced).
 #[derive(Clone, Debug)]
 pub struct SkillResource {
  pub name: String,
@@ -59,23 +69,39 @@ pub struct SkillResource {
  pub body: String,
  pub path: PathBuf,
  pub source: SkillSource,
+    /// Skill-stated tool preferences (declarative). Deduplicated,
+    /// trimmed; empty = not declared. Not consulted by ⑨ or `use_skill`.
+    pub allowed_tools: Vec<String>,
 }
 
-/// Frontmatter parsed from a SKILL.md (hand-rolled; scalars only, same
-/// parser shape as B3). MVP fields: `name`, `description`.
+/// Frontmatter parsed from a SKILL.md (hand-rolled; scalars + a single
+/// array field, same parser shape as B3 with a hand-rolled array
+/// extension for `allowed-tools`). MVP fields: `name`, `description`,
+/// `allowed-tools`. The array parser is a thin wrapper (~20 lines) over
+/// the B3 scalar apply path: strip `[` `]`, comma split, trim, dedup.
+/// See `.trellis/tasks/06-18-skill-stretches/prd.md` Stretch 1 §"parser
+/// 升级决策" for the YAGNI justification (graduate to `serde_yaml_neo`
+/// only when complex / multi-line fields appear).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Frontmatter {
  name: Option<String>,
  description: Option<String>,
+ allowed_tools: Vec<String>,
 }
 
 /// Wire DTO for the L0 skill listing + (future) UI. The listing only
 /// needs `name` + `description` — the body is fetched on L1 activation.
+///
+/// `allowed_tools` (Stretch 1, 2026-06-18): the skill's declared tool
+/// preferences (informational; not enforced). Surfaced in the L0
+/// listing as `(tools: a, b)` after the description. Empty Vec = the
+/// skill did not declare anything.
 #[derive(Serialize, Clone)]
 pub struct SkillInfo {
  pub name: String,
  pub description: String,
  pub source: String,
+ pub allowed_tools: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -93,13 +119,19 @@ pub struct SkillInfo {
 /// <markdown body...>
 /// ```
 ///
-/// Rules (identical to `resource_loader::parse_frontmatter`):
+/// Rules (identical to `resource_loader::parse_frontmatter` for the
+/// scalar fields, plus one extension for the array field):
 /// - Opening `---` fence optional; if absent the whole file is the
 ///   body and `name` is derived from the parent directory by the
 ///   caller.
-/// - Keys are single-line `key: value` scalars. Multi-line / arrays
-///   are out of scope (graduates to a YAML crate if a future field
-///   like `allowed-tools` needs them — see `resource_loader.rs:9`).
+/// - Scalar keys are single-line `key: value`. Multi-line values
+///   are still out of scope (a `serde_yaml_neo` swap is the
+///   graduate path when a real field needs them — see
+///   `resource_loader.rs:9`).
+/// - One array field is supported: `allowed-tools` (or its
+///   snake_case alias `allowed_tools`) — single-line `[a, b, c]`
+///   only; multi-line / nested → empty + `warn!` (Stretch 1
+///   tolerant parse, see `parse_allowed_tools`).
 /// - Values trimmed; balanced surrounding quotes stripped; leading
 ///   `#` lines treated as comments.
 /// - Unknown keys ignored (forward-compat).
@@ -154,8 +186,74 @@ fn apply_kv(fm: &mut Frontmatter, line: &str) {
  match k {
   "name" => fm.name = Some(v),
   "description" => fm.description = Some(v),
+  // Stretch 1 (declared 2026-06-18): `allowed-tools` is a
+  // single-line, comma-separated array. Accept `allowed_tools`
+  // (snake_case) as an alias for YAML-style flexibility. The
+  // parsed list lives in `SkillResource.allowed_tools` for the
+  // L0 listing hint; it is NOT enforced at execution time.
+  "allowed-tools" | "allowed_tools" => {
+   fm.allowed_tools = parse_allowed_tools(&v);
+  }
   _ => {}
  }
+}
+
+/// Parse a single-line array value like `[read_file, grep, git_diff]`
+/// into a deduplicated, trimmed Vec<String>.
+///
+/// Tolerant: any of `[]` / `not_an_array` / multi-line / nested → empty
+/// Vec + `tracing::warn!` (mirrors B3 bad-file skip). The intent is to
+/// **never** abort the whole skill load because of a malformed
+/// `allowed-tools` field; the L0 listing simply omits the hint.
+fn parse_allowed_tools(raw: &str) -> Vec<String> {
+ let raw = raw.trim();
+ // Strip surrounding quotes (the B3 scalar apply path already does
+ // this, but a user may write `allowed-tools: "[a, b]"` and we want
+ // the array-strip to be the canonical form).
+ let raw = raw
+  .strip_prefix('"')
+  .and_then(|s| s.strip_suffix('"'))
+  .or_else(|| raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+  .unwrap_or(raw)
+  .trim();
+ // Detect "looks like a single-line array" — must start with `[` and
+ // end with `]`. Anything else (multi-line, nested, bare word) is
+ // treated as malformed: empty Vec + warn, so the rest of the skill
+ // (name, description, body) still loads.
+ let inner = if let Some(stripped) = raw.strip_prefix('[') {
+  match stripped.strip_suffix(']') {
+  Some(s) => s,
+  None => {
+   tracing::warn!(
+    raw = %raw,
+    "skills: `allowed-tools` value starts with `[` but does not end with `]`; ignoring"
+   );
+   return Vec::new();
+  }
+  }
+ } else {
+  // No brackets at all — warn and treat as not declared. The PRD
+  // explicitly says "非数组格式如多行/嵌套 → 该字段空 + warn".
+  tracing::warn!(
+  raw = %raw,
+  "skills: `allowed-tools` is not a single-line `[a, b, c]` array; ignoring (per Stretch 1 tolerant parse)"
+  );
+  return Vec::new();
+ };
+ // Split on comma, trim each item, drop empties, dedup (preserve first
+ // occurrence order — stable listing for tests + L0 block).
+ let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+ let mut out = Vec::new();
+ for part in inner.split(',') {
+  let t = part.trim();
+  if t.is_empty() {
+  continue;
+  }
+  if seen.insert(t.to_string()) {
+  out.push(t.to_string());
+  }
+ }
+ out
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +380,7 @@ async fn load_skill_file(
   body,
   path: skill_path.to_path_buf(),
   source,
+  allowed_tools: fm.allowed_tools,
  }))
 }
 
@@ -375,6 +474,7 @@ fn resource_to_info(r: &SkillResource) -> SkillInfo {
    SkillSource::Project => "project",
   }
   .to_string(),
+  allowed_tools: r.allowed_tools.clone(),
  }
 }
 
@@ -428,6 +528,14 @@ pub async fn find_skill(
 /// from the memory instructions cache window — skill add/remove does
 /// not bust the memory cache).
 ///
+/// Stretch 1 (2026-06-18): when a skill declared `allowed-tools`,
+/// the listing line carries an informational `(tools: a, b)` suffix
+/// right after the description. The model can read the hint, but the
+/// list is **not enforced** — `use_skill` and ⑨ do not consult it.
+/// Format: `- <name>: <description>  (tools: a, b)` (description
+/// omitted when empty, exactly as before; tools suffix omitted when
+/// `allowed_tools` is empty).
+///
 /// Returns an empty `Vec` when there are no skills — the caller
 /// (agent loop, PR2) skips the listing message entirely, symmetric to
 /// `memory::loader::build_banner` returning `""` on a fresh install.
@@ -438,10 +546,14 @@ pub fn build_skill_listing_block(infos: &[SkillInfo]) -> Vec<ContentBlock> {
  let lines: Vec<String> = infos
   .iter()
   .map(|s| {
+   let allowed_suffix = match s.allowed_tools.as_slice() {
+    [] => String::new(),
+    tools => format!("  (tools: {})", tools.join(", ")),
+   };
    if s.description.trim().is_empty() {
-    format!("- {}", s.name)
+    format!("- {}{}", s.name, allowed_suffix)
    } else {
-    format!("- {}: {}", s.name, s.description)
+    format!("- {}: {}{}", s.name, s.description, allowed_suffix)
    }
   })
   .collect();
@@ -676,11 +788,13 @@ mod tests {
     name: "review-pr".into(),
     description: "review 一个 PR".into(),
     source: "project".into(),
+    allowed_tools: vec![],
    },
    SkillInfo {
     name: "commit".into(),
     description: "".into(),
     source: "user".into(),
+    allowed_tools: vec![],
    },
   ];
   let blocks = build_skill_listing_block(&infos);
@@ -691,7 +805,146 @@ mod tests {
   assert!(text.contains("- review-pr: review 一个 PR"));
   assert!(text.contains("- commit"));
   assert!(!text.contains("- commit: "), "empty description omits the colon");
+  assert!(!text.contains("tools:"), "empty allowed_tools must not render a suffix");
   assert!(text.contains("use_skill"));
   assert_eq!(*cache_control, Some(CacheControl::Ephemeral));
+ }
+
+ // ---- Stretch 1: `allowed-tools` array parse + L0 render ----
+
+ #[test]
+ fn parse_allowed_tools_basic() {
+  assert_eq!(
+   parse_allowed_tools("[read_file, grep, git_diff]"),
+   vec!["read_file".to_string(), "grep".to_string(), "git_diff".to_string()]
+  );
+ }
+
+ #[test]
+ fn parse_allowed_tools_dedup_and_trim() {
+  // duplicates + extra spaces → dedup + trim, preserve first-seen order
+  assert_eq!(
+   parse_allowed_tools("[a, a, b , c,  b]"),
+   vec!["a".to_string(), "b".to_string(), "c".to_string()]
+  );
+ }
+
+ #[test]
+ fn parse_allowed_tools_empty_array() {
+  assert!(parse_allowed_tools("[]").is_empty());
+  assert!(parse_allowed_tools("[ , , ]").is_empty(), "whitespace-only items dropped");
+ }
+
+ #[test]
+ fn parse_allowed_tools_no_brackets_warns_and_empty() {
+  // multi-line / nested / no brackets → empty + warn (per Stretch 1
+  // tolerant parse — the rest of the skill still loads).
+  assert!(parse_allowed_tools("read_file, grep").is_empty());
+  assert!(parse_allowed_tools("not_an_array").is_empty());
+ }
+
+ #[test]
+ fn parse_allowed_tools_unbalanced_brackets_warns() {
+  // starts with `[` but does not end with `]` → empty + warn.
+  assert!(parse_allowed_tools("[read_file, grep").is_empty());
+ }
+
+ #[test]
+ fn parse_allowed_tools_strips_quotes() {
+  // user writes `allowed-tools: "[a, b]"` (B3 scalar apply would
+  // leave the value as `"[a, b]"`; our array parser strips the
+  // surrounding quotes before bracket-stripping).
+  assert_eq!(
+   parse_allowed_tools("\"[a, b]\""),
+   vec!["a".to_string(), "b".to_string()]
+  );
+  assert_eq!(
+   parse_allowed_tools("'[c]'"),
+   vec!["c".to_string()]
+  );
+ }
+
+ #[test]
+ fn apply_kv_allowed_tools_aliases() {
+  // Both `allowed-tools` and `allowed_tools` (snake_case) accepted.
+  let mut fm = Frontmatter::default();
+  apply_kv(&mut fm, "allowed-tools: [a, b]");
+  assert_eq!(fm.allowed_tools, vec!["a".to_string(), "b".to_string()]);
+  let mut fm = Frontmatter::default();
+  apply_kv(&mut fm, "allowed_tools: [c, d]");
+  assert_eq!(fm.allowed_tools, vec!["c".to_string(), "d".to_string()]);
+ }
+
+ #[test]
+ fn frontmatter_parses_allowed_tools() {
+  // End-to-end: a real SKILL.md frontmatter with allowed-tools
+  // populates `allowed_tools` on the resulting `Frontmatter`.
+  let input = "---\nname: review-pr\ndescription: d\nallowed-tools: [read_file, grep]\n---\nbody";
+  let (fm, body) = parse_frontmatter(input);
+  assert_eq!(fm.name.as_deref(), Some("review-pr"));
+  assert_eq!(fm.description.as_deref(), Some("d"));
+  assert_eq!(fm.allowed_tools, vec!["read_file".to_string(), "grep".to_string()]);
+  assert_eq!(body, "body");
+ }
+
+ #[test]
+ fn frontmatter_missing_allowed_tools_is_empty() {
+  // The MVP minimal set: a skill without `allowed-tools` MUST still
+  // load — `allowed_tools` is just an empty Vec, not an error.
+  let (fm, _) = parse_frontmatter("---\nname: x\ndescription: y\n---\nb");
+  assert!(fm.allowed_tools.is_empty());
+ }
+
+ #[test]
+ fn listing_renders_allowed_tools_suffix() {
+  // When `allowed_tools` is non-empty, the listing line carries
+  // `  (tools: a, b)` after the description. When empty, no suffix.
+  let infos = vec![
+   SkillInfo {
+    name: "review-pr".into(),
+    description: "review 一个 PR".into(),
+    source: "project".into(),
+    allowed_tools: vec!["read_file".into(), "grep".into()],
+   },
+   SkillInfo {
+    name: "commit".into(),
+    description: "".into(),
+    source: "user".into(),
+    allowed_tools: vec![],
+   },
+  ];
+  let blocks = build_skill_listing_block(&infos);
+  let ContentBlock::Text { text, .. } = &blocks[0] else {
+   panic!("expected Text block");
+  };
+  assert!(
+   text.contains("- review-pr: review 一个 PR  (tools: read_file, grep)"),
+   "allowed-tools suffix should appear after description, got: {text}"
+  );
+  assert!(
+   !text.contains("- commit  (tools:"),
+   "empty allowed_tools must NOT render a (tools: ...) suffix, got: {text}"
+  );
+ }
+
+ #[test]
+ fn listing_renders_allowed_tools_with_empty_description() {
+  // Edge case: a skill with an empty description but a non-empty
+  // `allowed-tools`. The line should be `- name  (tools: ...)`
+  // (no colon, but the suffix IS present).
+  let infos = vec![SkillInfo {
+   name: "minimal".into(),
+   description: "".into(),
+   source: "user".into(),
+   allowed_tools: vec!["shell".into()],
+  }];
+  let blocks = build_skill_listing_block(&infos);
+  let ContentBlock::Text { text, .. } = &blocks[0] else {
+   panic!("expected Text block");
+  };
+  assert!(
+   text.contains("- minimal  (tools: shell)"),
+   "expected `<name>  (tools: ...)` shape, got: {text}"
+  );
  }
 }

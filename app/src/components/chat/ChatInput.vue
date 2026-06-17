@@ -104,16 +104,20 @@ import { abbreviateDuration } from "../../utils/duration";
 import { colorTagHex, hexToRgba } from "../../utils/colorTag";
 import { registerShiftTabCycle } from "../../utils/useKeyboard";
 
-/** B3 `/command` palette (PR2): wire DTO from the Rust
- *  `resource_loader::CommandInfo`. Field names are snake_case to
- *  mirror the Rust struct (BACKLOG §5.2 — TS interface mirrors
- *  Rust verbatim; Tauri command ARGS use camelCase per
- *  HACKING-wsl FU-4, so the `invoke` call below uses `projectId`). */
-interface CommandInfo {
+/** B4 (Stretch 2) merged `/`-trigger panel (2026-06-18): wire DTO
+ *  from the Rust `commands::panel::PanelItem`. The `source` field is
+ *  one of `"builtin"` / `"command"` / `"skill"`. The dispatcher
+ *  (`onCommandSelect` further below) reads `source` to pick the
+ *  right path:
+ *  - `"builtin"` → client-side action (B3 `executeCommand` for
+ *    `/help` / `/clear` / `/new`)
+ *  - `"command"` → `get_command_body` → user message (B3 path)
+ *  - `"skill"` → `get_skill_body` → user message (Stretch 2 path) */
+interface PanelItem {
   name: string;
   description: string;
   argument_hint: string | null;
-  source: string;
+  source: "builtin" | "command" | "skill";
   is_builtin: boolean;
 }
 
@@ -518,7 +522,7 @@ registerShiftTabCycle({
 // B3 `/command` palette (PR2).
 //
 // The TriggerMenu is a reusable skeleton (TriggerMenu.vue); this
-// block owns the B3-specific wiring:
+// block owns the B3 + B4 Stretch 2 wiring:
 //   - detection: open the panel when the editor's CURRENT LINE
 //     starts with `/` AND the line is otherwise empty (matches
 //     Claude Code's "type / to see commands" UX). Multi-line
@@ -526,16 +530,18 @@ registerShiftTabCycle({
 //     of a draft still triggers.
 //   - IME safety: CM fires `docChanged` only at composition commit,
 //     so the panel never opens mid-composition.
-//   - data source: lazy `list_commands` IPC the first time the
+//   - data source: lazy `list_panel_items` IPC the first time the
 //     panel opens in a session; the backend's mtime-fence cache
-//     makes subsequent opens free.
+//     (CommandCache + SkillCache) makes subsequent opens free.
 //   - keyboard routing: when the panel is open, ArrowUp / ArrowDown
 //     / Enter / Escape are intercepted by the CM keymap (see
 //     buildKeymap above) and routed to the TriggerMenu. Enter no
 //     longer submits while the panel is open.
 //   - dispatch: builtins (`/help` `/clear` `/new`) run client-side
 //     (no LLM round-trip); custom commands fetch their template body
-//     via `get_command_body` and send it as a user message.
+//     via `get_command_body` and skills fetch their SKILL.md body
+//     via `get_skill_body` — both are then sent as a user message
+//     to the LLM (B4 Stretch 2 path; agent loop unchanged).
 // -----------------------------------------------------------------------
 
 const triggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
@@ -544,11 +550,11 @@ const commandItems = ref<TriggerMenuItem[]>([]);
 /** Text the user typed AFTER the `/`. Empty string = "show all".
  *  Computed from the editor's current line on every doc change. */
 const commandFilter = ref("");
-/** Marker so we don't refetch `list_commands` on every keystroke.
+/** Marker so we don't refetch `list_panel_items` on every keystroke.
  *  Cleared when the panel closes (so a future edit to a command
- *  file is picked up on the next open — the backend's mtime fence
- *  makes the IPC cheap anyway, but the round-trip itself is not
- *  free). */
+ *  or skill file is picked up on the next open — the backend's
+ *  mtime fence makes the IPC cheap anyway, but the round-trip
+ *  itself is not free). */
 let commandsLoaded = false;
 
 // B2 @文件 palette. Symmetrical to the B3 command block above: a second
@@ -601,17 +607,18 @@ function detectCommandTrigger(): { trigger: boolean; filter: string } {
   return { trigger: true, filter: rest };
 }
 
-/** Fetch the command list (builtin + user + project) from the
- *  backend. The backend's `AppState.command_cache` is mtime-fenced
- *  so this is a cheap read after the first scan. We map the wire
- *  `CommandInfo` to the panel's `TriggerMenuItem` here so the
- *  panel stays data-source-agnostic (B2 will source from a file
- *  walker, not this function). */
+/** Fetch the merged `/`-trigger panel (builtin + custom command +
+ *  skill) from the backend. B4 Stretch 2: the single `list_panel_items`
+ *  IPC replaces the B3-only `list_commands` so the same TriggerMenu
+ *  surfaces commands AND skills (the dispatcher in `onCommandSelect`
+ *  reads `item.source` to pick the right body-fetch IPC). The backend
+ *  already enforces the cross-type priority rules (builtin always
+ *  wins; skill covers custom command; project covers user). */
 async function loadCommands(): Promise<void> {
   if (commandsLoaded) return;
   const projectId = projectsStore.currentProjectId;
   try {
-    const list = await invoke<CommandInfo[]>("list_commands", {
+    const list = await invoke<PanelItem[]>("list_panel_items", {
       projectId: projectId ?? null,
     });
     commandItems.value = list.map((c) => ({
@@ -624,7 +631,7 @@ async function loadCommands(): Promise<void> {
     }));
     commandsLoaded = true;
   } catch (e) {
-    console.error("list_commands failed:", e);
+    console.error("list_panel_items failed:", e);
     commandItems.value = [];
     commandsLoaded = true;
   }
@@ -687,21 +694,22 @@ function replaceDoc(newDoc: string, caret?: number): void {
 }
 
 /** Selected-item dispatcher. Called by TriggerMenu's `@select`.
- *  Builtins run client-side (no LLM round-trip); custom commands
- *  fetch their template body via `get_command_body` and send it as
- *  a user message (the command name itself is stripped from the
- *  editor and never enters the LLM payload).
+ *  Three dispatch paths, picked by `item.source` (B4 Stretch 2):
+ *  - `builtin` → client-side action (no LLM): `/help` reopens the
+ *    panel; `/clear` clears messages; `/new` creates a session.
+ *  - `command` → `get_command_body` → user message (B3 path).
+ *  - `skill` → `get_skill_body` → user message (B4 Stretch 2 path,
+ *    mirrors the command body expansion — zero agent-loop changes).
  *
- *  The `/` prefix and any filter the user typed are stripped from
- *  the editor BEFORE dispatch — so selecting `clear` from the
- *  panel leaves the input empty (ready for the next message),
- *  matching Claude Code. */
+ *  In all three cases the `/`-prefixed token is stripped from the
+ *  editor BEFORE dispatch, so selecting `clear` from the panel
+ *  leaves the input empty (ready for the next message), matching
+ *  Claude Code. */
 async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
-  // Strip the `/`-prefixed command token from the current line.
-  // We remove the leading `/` + the command name (+ any filter
-  // chars the user had typed). Leaves any surrounding text intact
-  // (rare — the trigger only fires when the line is a bare
-  // command-name shape).
+  // Strip the `/`-prefixed command/skill token from the current line.
+  // We remove the leading `/` + the name (+ any filter chars the
+  // user had typed). Leaves any surrounding text intact (rare — the
+  // trigger only fires when the line is a bare name shape).
   const { lineStart } = currentLineInfo();
   const doc = input.value;
   const beforeLine = doc.slice(0, lineStart);
@@ -722,7 +730,10 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
 
   const sid = chatStore.currentSessionId;
 
-  if (item.is_builtin) {
+  // B4 Stretch 2: source-aware dispatch. The `source` field on the
+  // panel item is set by the backend `list_panel_items` IPC; we
+  // mirror its three-value union literally here.
+  if (item.is_builtin || item.source === "builtin") {
     // Dispatch builtin commands. None of these go to the LLM.
     switch (item.name) {
       case "help":
@@ -754,30 +765,30 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
     return;
   }
 
-  // Custom command — PR3: fetch the template body and send it to the
-  // LLM as a user message (the command name itself is not part of the
-  // payload, matching Claude Code's slash-command UX). `get_command_body`
-  // returns `None` only if the command vanished between list + fetch
-  // (rare — file deleted mid-flight) or the frontmatter had no body;
-  // either way we surface a toast and bail without sending.
+  // User-invoked body fetch — same shape for commands and skills
+  // (both end up as a user message). The IPC name is the only
+  // differentiator; a `get_skill_body` for a missing skill returns
+  // `None` (same contract as `get_command_body`).
   const projectId = projectsStore.currentProjectId ?? null;
+  const ipc = item.source === "skill" ? "get_skill_body" : "get_command_body";
+  const label = item.source === "skill" ? "skill" : "命令";
   let body: string | null = null;
   try {
-    body = await invoke<string | null>("get_command_body", {
+    body = await invoke<string | null>(ipc, {
       name: item.name,
       projectId,
     });
   } catch (e) {
-    console.error(`get_command_body "/${item.name}" failed:`, e);
+    console.error(`${ipc} "/${item.name}" failed:`, e);
     projectsStore.showToast(
-      `命令 /${item.name} 读取失败: ${String(e)}`,
+      `${label} /${item.name} 读取失败: ${String(e)}`,
       "error",
     );
     return;
   }
   if (!body || !body.trim()) {
     projectsStore.showToast(
-      `命令 /${item.name} 的模板体为空`,
+      `${label} /${item.name} 的模板体为空`,
       "warn",
     );
     return;
@@ -991,13 +1002,21 @@ function onEscKeydown() {
            shows the current Mode label (Edit / Plan / Yolo).
            Shift+Tab cycles Mode via `useKeyboard`. -->
       <ModeSelect />
-      <!-- B3 (PR2): command palette. Anchored to the input row
+      <!-- B3 (PR2) + B4 (Stretch 2, 2026-06-18): merged
+           command + skill palette. Anchored to the input row
            (position: relative on the row makes it the
            offsetParent); opens UPWARD above the editor when the
            user types `/` at the start of the current line. The
            TriggerMenu component is a reusable skeleton (see its
-           top-of-file comment) — B2 (@file) and B4 (skill) will
-           reuse it with a different trigger char + data source.
+           top-of-file comment) — B2 (@file) reuses it with a
+           different trigger char + data source. The data source
+           switched from `list_commands` (B3) to `list_panel_items`
+           (B4 Stretch 2) so the same panel surfaces builtins +
+           custom commands + skills; the `source` chip on each row
+           tells the user which type they're picking. The
+           `onCommandSelect` dispatcher routes by `item.source`:
+           builtin → client action, command → get_command_body,
+           skill → get_skill_body.
            `:trigger-el` points at the CM `.cm-editor` DOM node
            (view.dom) so click-to-reposition-caret inside CM
            doesn't close the panel. -->

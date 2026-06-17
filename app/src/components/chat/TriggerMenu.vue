@@ -544,6 +544,29 @@ defineExpose({
   background: color-mix(in srgb, var(--color-tool-write) 12%, transparent);
 }
 
+/* B4 Stretch 2 (2026-06-18): in the merged `/`-trigger panel, custom
+   commands are no longer split into "user" / "project" rows — the
+   backend collapses them to a single "command" source (the project
+   > user precedence is enforced inside the listing). The chip uses
+   a neutral read color so it's clearly distinct from `builtin`
+   (accent) and `skill` (thinking) without the user/project split
+   the B3 panel had. */
+.trigger-menu__row-source--command {
+  color: var(--color-tool-read);
+  border-color: color-mix(in srgb, var(--color-tool-read) 40%, transparent);
+  background: color-mix(in srgb, var(--color-tool-read) 12%, transparent);
+}
+
+/* Skill = directive layer; use the thinking color (matches the
+   pre-staged skill token color in chatInputTokens.ts). B4 Stretch 2
+   added `skill` to the merged `/`-trigger panel as a third source
+   type, distinct from `command` (file/dir) and `builtin` (system). */
+.trigger-menu__row-source--skill {
+  color: var(--color-tool-thinking);
+  border-color: color-mix(in srgb, var(--color-tool-thinking) 40%, transparent);
+  background: color-mix(in srgb, var(--color-tool-thinking) 12%, transparent);
+}
+
 /* Open/close animation. Upward popover → slides from translateY(4px)
    up into place, matching `ModeSelect` / `ModelSelect`. Enter
    150ms ease-out, leave 100ms ease-in. */
