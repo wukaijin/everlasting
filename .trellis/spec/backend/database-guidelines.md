@@ -185,6 +185,95 @@ This split is documented in `db.rs:130-150` next to the
 
 ---
 
+## Pattern: `update_message_metadata` for post-persist metadata patches (B2 PR3, 2026-06-17)
+
+The `messages.metadata TEXT` JSON column is the right place for
+"computed-after-the-fact" message-level state — anything that the
+agent loop only knows AFTER `persist_turn` has already happened.
+The `persist_turn` signature accepts an `Option<serde_json::Value>`
+parameter, but the value must be **available at persist time** to
+use that parameter.
+
+When the metadata is computed **after** the message is persisted
+(B2 PR3: the `@`-file injection manifest is computed in
+`inject_at_tokens`, which runs after `persist_turn` to keep the
+DB row's `content` as the source of truth at the original
+`@relpath` form), use a separate `update_message_metadata`
+function instead:
+
+```rust
+// app/src-tauri/src/db/sessions.rs
+pub async fn update_message_metadata(
+    pool: &SqlitePool,
+    session_id: &str,
+    seq: i64,
+    metadata: serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE messages
+           SET metadata = ?,
+               updated_at = datetime('now')
+         WHERE session_id = ?
+           AND seq = ?
+        "#,
+    )
+    .bind(&metadata)
+    .bind(session_id)
+    .bind(seq)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+```
+
+### When to use which path
+
+| Path | When |
+|---|---|
+| `persist_turn(..., metadata: Some(...))` | Metadata is known at the moment of INSERT (e.g. worktree event metadata, latency breakdown, role-based flags). |
+| `update_message_metadata(session_id, seq, json)` | Metadata is computed AFTER the message is persisted (e.g. injection manifest, future "post-render preview" data). |
+
+### Rules
+
+- `update_message_metadata` keys on `(session_id, seq)` (the
+  stable handle the agent loop already has), not the auto-increment
+  `id`. This keeps the call site close to the agent loop without
+  forcing a `find_message_id_by_seq` round-trip.
+- The `UPDATE` is single-row by composite key. If the row doesn't
+  exist (race between cancel and persist), the update is a no-op
+  and `Result::Ok(())` is returned — same defensive no-op
+  pattern as `record_tool_duration` (F5).
+- Bump `updated_at` on the row so observers can see "this row
+  was patched post-insert".
+- Never use `update_message_metadata` to **fix up** the `content`
+  column — `content` is the source of truth, the `metadata` column
+  is the parallel channel. The agent loop persists the original
+  `@relpath` in `content`; the `metadata` carries the post-inject
+  manifest. The two are read together at rehydrate time.
+
+### Why a separate function (not just `persist_turn` with a 2nd call)
+
+A second `persist_turn` call on the same `(session_id, seq)`
+would either:
+1. Conflict on the unique key (FK error), or
+2. Require a separate "is this an insert or an update?" branch in
+   the SQL.
+
+The single-purpose `update_message_metadata` keeps the call site
+explicit and the SQL trivial.
+
+### Tests
+
+| Test | Asserts |
+|---|---|
+| `update_message_metadata_writes_json_to_column` | A call with `serde_json::json!({"injections": [...]})` lands in the `metadata` column verbatim. |
+| `update_message_metadata_bumps_updated_at` | The row's `updated_at` advances past `created_at`. |
+| `update_message_metadata_on_unknown_seq_is_noop` | A `(session_id, seq)` pair with no matching row returns `Ok(())` with no error. |
+| `rehydrate_reads_injections_from_metadata` | The rehydrate path (e.g. `load_session` + `streamController.ts` `metadata` parse) surfaces the injected field back to the UI. |
+
+---
+
 ## Pattern: denormalized list endpoints
 
 When the UI renders a list with parent-table fields (e.g. a model picker

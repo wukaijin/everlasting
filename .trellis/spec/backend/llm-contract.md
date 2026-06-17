@@ -1265,6 +1265,103 @@ Anthropic requires thinking blocks at the head of an assistant message. If
 tool_use), the next turn400s. The fix lives in `toPayloadContent`; the
 ordering is tested in the frontend type-check.
 
+### Mistake: Serde newtype variants under `#[serde(tag = "...")]` produce `null` field shape (B2 PR3, 2026-06-17)
+
+When an enum is annotated `#[serde(tag = "kind")]` and a variant is
+`Degraded(FileKind)` (newtype form), serde serializes the inner enum
+**by variant name as a key, with `null` as the value**:
+
+```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InjectionAction {
+    Injected { lines: usize },
+    Degraded(FileKind),                  // <- newtype form
+    Skipped(SkipReason),                 // <- newtype form
+}
+```
+
+```jsonc
+// WRONG - produced by the newtype form above
+{
+  "kind": "degraded",
+  "image": null                          // <- "image" is the FileKind variant name; value is null
+}
+```
+
+The frontend's `InjectionRecord` discriminated union expected
+`{ kind: "degraded", file_kind: "image" }` - completely different
+shape. The TS layer silently fails to discriminate, and the Vue
+render never matches a branch, so the user sees nothing.
+
+**Fix**: Use struct variants so the inner field name is explicit, and
+**always** `rename_all = "snake_case"` on the inner enum:
+
+```rust
+// GOOD
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InjectionAction {
+    Injected { lines: usize },
+    Degraded { file_kind: FileKind },    // <- struct variant
+    Skipped { reason: SkipReason },      // <- struct variant
+}
+
+#[serde(rename_all = "snake_case")]
+pub enum FileKind { Image, Pdf, Office, Binary }
+
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason { OutOfRoot, Missing, Unreadable }
+```
+
+```jsonc
+// CORRECT
+{
+  "kind": "degraded",
+  "file_kind": "image"
+}
+```
+
+**How to catch this in CI**: add a wire-shape round-trip test for every
+new `ChatEvent` variant (and any cross-layer struct with an enum that
+serializes via tag). The test must assert the JSON shape **and** that
+the value carries through both the IPC `String` and `serde_json::Value`
+paths (metadata column persist path).
+
+**Apply to**: any `#[serde(tag = "...")]` enum that holds another
+enum in a variant. Rule of thumb - if you find yourself writing
+`SomeEnum(InnerEnum)`, change it to `SomeEnum { field: InnerEnum }`
+before writing the test, or the test will pass on the wrong shape.
+
+### Mistake: Adding a new `ChatEvent` variant without a wire-shape round-trip test (B2 PR3, 2026-06-17)
+
+Every `ChatEvent` variant that crosses the IPC boundary must have a
+back-to-back `serde_json::to_value` -> `serde_json::from_value` test
+that asserts the exact JSON shape the TS layer will read. Without
+this test, a wire-shape change (such as the newtype mistake above)
+goes undetected by `cargo test --lib` - only the manual frontend
+smoke test or the user's "I see nothing" report catches it.
+
+**Required for every new variant** (see also
+`.trellis/spec/guides/cross-layer-thinking-guide.md`
+"Adding a New ChatEvent Variant"):
+
+1. Test asserts the **exact JSON** the variant produces (snake_case
+   fields, no `null` shape, correct tag value).
+2. Test round-trips through both `String` (IPC) and
+   `serde_json::Value` (metadata column path) - they share the
+   serializer but the consumer code differs.
+3. If the variant carries a nested enum, the test asserts the inner
+   enum's `rename_all` behavior and the newtype-vs-struct shape (see
+   "Serde newtype variants" mistake above).
+4. The matching TS discriminated union is locked in
+   `app/src/stores/chat.ts` with the same field names (snake_case, no
+   camelCase rewrite) - `vue-tsc --noEmit` catches shape drift in the
+   TS layer.
+
+**Why "just type-check" isn't enough**: `vue-tsc` validates that
+TS types exist; it does not validate that the Rust serializer
+produces a shape that matches. The Rust test is the only place
+where the serializer's output is asserted.
+
 ---
 
 ## Anti-Patterns

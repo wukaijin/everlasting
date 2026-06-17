@@ -223,6 +223,84 @@ wire-level details and `backend/error-handling.md` for the failure modes.
 
 ---
 
+## Adding a New ChatEvent Variant (B2 PR3, 2026-06-17)
+
+Unlike `ContentBlock` (Anthropic-shape), `ChatEvent` is a **project-defined
+wire type** — the Rust agent loop defines the variants, the SSE parser
+emits them, and the TS frontend consumes them. Adding a new variant (e.g.
+`FileInjections` from B2 PR3) requires coordinated changes in **seven**
+places:
+
+### Checklist
+
+- [ ] **`app/src-tauri/src/llm/types.rs` — Rust `ChatEvent` enum.**
+      Add the variant. Use `#[serde(tag = "kind", rename_all = "snake_case")]`
+      on the enum. **Critical**: if the variant carries a nested enum, use
+      **struct variants** (`{ field: InnerEnum }`) and `rename_all = "snake_case"`
+      on the inner enum. Newtype variants under `tag = "..."` produce
+      `{ kind, "image": null }` shapes — see `backend/llm-contract.md`
+      "Serde newtype variants" mistake.
+- [ ] **`app/src-tauri/src/llm/types.rs` — wire-shape test.** Add a
+      `serde_json::to_value` -> `serde_json::from_value` round-trip test
+      that asserts the **exact JSON** the variant produces. Test through
+      both `String` (IPC path) and `serde_json::Value` (metadata column
+      path) — they share the serializer but the consumer code differs.
+      Cover each variant of any inner enum (the 1 Injected + 4 Degraded
+      kinds + 3 Skipped reasons matrix in the B2 PR3 case).
+- [ ] **`app/src-tauri/src/agent/chat_loop.rs` (or wherever events are
+      emitted) — emit site.** Push the new variant at the correct
+      lifecycle boundary (B2 PR3: immediately after `inject_at_tokens`).
+      Add a defensive match arm in the per-event stream loop so a
+      stray variant from the LLM stream is `warn + drop` instead of
+      triggering `non_exhaustive` warnings.
+- [ ] **`app/src/stores/streamController.ts` — `ChatEventPayload` type.**
+      Add the new `kind` to the discriminated union. If the variant
+      carries payload fields, add them with **snake_case** names to match
+      the Rust wire (no camelCase rewrite — see `backend/llm-contract.md`
+      "Wrong vs Correct" §7 for rationale).
+- [ ] **`app/src/stores/streamController.ts` — `handleChatEvent` switch.**
+      Add a `case` arm that routes the payload to the right message.
+      B2 PR3: `case "file_injections"` patches the user message's
+      `injections` field by `request_id` + `message_seq`. Include
+      `markRaw` on any new parallel-array field (matches `toolCalls` /
+      `toolResults` / `thinkingBlocks`).
+- [ ] **`app/src/stores/streamController.ts` — rehydrate path.** If the
+      variant's payload is persisted to the DB (B2 PR3: `messages.metadata`
+      JSON column), parse it back into the typed in-memory field on session
+      load. Defensive shape validation: skip entries that don't match
+      `{ path: string, action: { kind: string } }` so a malformed
+      persisted row never crashes rehydrate.
+- [ ] **`app/src/stores/chat.ts` — `ChatMessage` field.** Add the typed
+      field (B2 PR3: `injections?: InjectionEntry[]`) so `vue-tsc` catches
+      the in-memory shape.
+- [ ] **`app/src/components/chat/MessageItem.vue` (or sibling) — render.**
+      Conditionally render the UI for the new field (B2 PR3: a small
+      `FileInjectionsHint.vue` child component matching the
+      `.msg__tools` container pattern, with secondary color + monospace
+      path + ✓/⊘ glyphs).
+
+### Pre-flight checks (before opening the PR)
+
+- [ ] All wire-shape round-trip tests pass (`cargo test --lib`).
+- [ ] `cargo check` is green (0 warnings).
+- [ ] `vue-tsc --noEmit` is green (0 errors).
+- [ ] `pnpm build` is green.
+- [ ] Manual smoke test in `pnpm tauri dev`:
+      - Send a message that triggers the new variant. Observe the UI
+        updates in real time (not just on session reload).
+      - Session switch + return preserves the rendered output.
+      - Re-typing the same message does not double-emit (idempotency).
+
+### Reference
+
+- `backend/llm-contract.md` "Serde newtype variants" mistake + "Adding
+  a new ChatEvent variant" mistake — both fix the same class of bug.
+- The B2 PR3 implementation added `FileInjections` following this
+  checklist. Search the commit history for the
+  `06-17-b2-pr3-at-file-injection-hint` task directory.
+
+---
+
 ## Worktree State Transitions Affect LLM Context (2026-06-08)
 
 A worktree state change is not a pure UI event — it changes the LLM's
