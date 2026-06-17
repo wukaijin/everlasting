@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/06-17-d3-message-edit-resend/research/persist-patterns.md", "reason": "验证选了 in-place + messages.metadata JSON(无 schema 改动),符合 append-only+lineage 排除理由"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "检查 cascade delete 时序 + turn 边界一致性 + cancellation token 串联"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "检查 ChatEvent wire 一致(可能新增 EditMessage variant)+ tool_result 重排不影响契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查 edit + cascade delete 单事务包裹 + update_message_metadata 复用模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查 emit_persist_failure 复用 + Error 分类正确"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "检查 ChatMessage interface 字段一致(messages.metadata 字段对前端透明)+ edit flow 不破坏 stream 流式状态"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查后端 Tauri command → 前端 store → MessageItem 渲染链路闭环"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查复用 update_message_metadata / record_tool_duration / ToolCallCard 模式,不重发明"}

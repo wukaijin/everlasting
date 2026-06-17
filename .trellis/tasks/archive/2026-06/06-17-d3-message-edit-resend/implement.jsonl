@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/06-17-d3-message-edit-resend/research/industry-edit-resend.md", "reason": "业界 Edit/Resend UI 模式参考(8/9 工具收敛到 hover → ⋯ DropdownMenu + cascade delete)"}
+{"file": ".trellis/tasks/06-17-d3-message-edit-resend/research/persist-patterns.md", "reason": "持久化模式决策依据(in-place + metadata JSON,UNIQUE(session_id,seq) 兼容,seq 续号)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "turn 边界 + cascade delete 时机 + stream race cancellation token 用法"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent variant 清单(可能新增 EditMessage 事件 + ChatEvent::Error wire 复用)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "metadata JSON 持久化模式 + update_message_metadata 同构 in-place patch + 单事务 wrap 原则"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "emit_persist_failure 模式(cascade delete 失败走此路径)+ InvalidRequest vs Server 分类"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "ChatMessage interface + chat store edit flow + 多 listener 增量更新约束"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "DropdownMenu 模式 + hover trigger + 弹层定位"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "edit 后端 Tauri command → 前端 store → MessageItem 渲染的跨层数据流"}
