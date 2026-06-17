@@ -79,3 +79,36 @@ cargo test --lib **569 pass**(567→569,+2 D-005 测试),cargo check **0 warning
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: B4 skill stretch: allowed-tools + /skill 入口合并面板
+
+**Date**: 2026-06-18
+**Task**: B4 skill stretch: allowed-tools + /skill 入口合并面板
+**Branch**: `main`
+
+### Summary
+
+grill 收敛 6 决策(声明性 / 手写 parser / 正文作 user message / 合并面板 / builtin 胜出+skill 覆盖 custom)。trellis-implement 做 PR1 后端(SkillResource/SkillInfo 加 allowed_tools 字段 + parse_allowed_tools 手写单行数组解析 + build_skill_listing_block 渲染 tools 提示) + PR2 后端(panel.rs 新增 list_panel_items 合并 IPC + get_skill_body 对齐 get_command_body) + 前端(ChatInput 按 source 路由 dispatch builtin/command/skill + TriggerMenu CSS)。trellis-check 修 2 小问题: parse_frontmatter 文档与已支持 allowed-tools 数组矛盾(stale docstring anti-pattern) + TriggerMenu 缺 .trigger-menu__row-source--command CSS。worktree-vs-project 路径不对称是 B3 既有 pattern(list_commands 同)非本次回归。cargo check 零 warning, cargo test --lib 605 passed, pnpm build clean。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cc23c8a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
