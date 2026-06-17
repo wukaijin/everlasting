@@ -92,6 +92,10 @@ import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
 import ModeSelect from "./ModeSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
+// PR1.5 PR-B: token-coloring ViewPlugin for `/command` + `@file`
+// (skill token is pre-staged for B4). See chatInputTokens.ts for the
+// regex boundaries + IME-safety rationale.
+import { tokenHighlightPlugin } from "./chatInputTokens";
 import { useChatStore, MODE_CYCLE, type SessionMode } from "../../stores/chat";
 import { useModelsStore } from "../../stores/models";
 import { useProjectsStore } from "../../stores/projects";
@@ -409,6 +413,10 @@ onMounted(() => {
       editableCompartment.of(EditorState.readOnly.of(props.sending ? true : false)),
       EditorView.updateListener.of(onEditorUpdate),
       buildKeymap(),
+      // PR1.5 PR-B: color `/command` + `@file` tokens in the editor.
+      // Pure-decoration plugin — never dispatches / mutates doc /
+      // selection, so it's invisible to the input / IME / caret flow.
+      tokenHighlightPlugin,
     ],
   });
   view.value = new EditorView({
@@ -790,16 +798,87 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
 // the agent loop).
 // -----------------------------------------------------------------------
 
-/** Detect `@` at the start of the current line (at-start trigger,
- *  matches Claude Code). The filter is whatever the user typed after
- *  `@` (a path prefix, may contain `/`); a space ends the token. */
+/** Detect `@` anywhere on the current line (Cursor-style trigger). The
+ *  trigger fires when the nearest `@` to the LEFT of the caret is
+ *  preceded by line-start or whitespace (defends against emails like
+ *  `name@host`), AND the span between that `@` and the caret contains
+ *  no whitespace (the token hasn't been closed yet). Returns the full
+ *  geometry so `detectFileTrigger` (open/close the panel) and
+ *  `onFileSelect` (replace the token) share ONE source of truth — no
+ *  duplicated scan logic, no off-by-one between the two call sites.
+ *
+ *  - `trigger`: whether the panel should be open right now.
+ *  - `filter`: the text typed after `@` (path prefix, may include `/`).
+ *  - `atOffset`: doc offset of the `@` char (inclusive); -1 when not
+ *    triggered. Used as the LEFT edge of the replace span.
+ *  - `tokenEnd`: doc offset ONE past the last token char (exclusive);
+ *    -1 when not triggered. Used as the RIGHT edge of the replace
+ *    span — bounded by the first whitespace, line end, or the caret,
+ *    whichever comes first. */
+function currentAtToken(): {
+  trigger: boolean;
+  filter: string;
+  atOffset: number;
+  tokenEnd: number;
+} {
+  const v = view.value;
+  if (!v) return { trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+  const head = v.state.selection.main.head;
+  const line = v.state.doc.lineAt(head);
+  const lineText = line.text;
+  const caretCol = head - line.from;
+  // Walk left from the caret looking for the nearest `@` on this line.
+  let atCol = -1;
+  for (let i = caretCol - 1; i >= 0; i--) {
+    const ch = lineText[i];
+    if (ch === " ") break; // whitespace stops the search — no `@`
+    // is part of the current token anymore.
+    if (ch === "@") {
+      atCol = i;
+      break;
+    }
+  }
+  if (atCol === -1) {
+    return { trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+  }
+  // Boundary check: the char before `@` must be line-start or
+  // whitespace. Otherwise this is an inline word like `name@host`.
+  const prevCh = atCol > 0 ? lineText[atCol - 1] : "";
+  const prevIsBoundary = atCol === 0 || /\s/.test(prevCh);
+  if (!prevIsBoundary) {
+    return { trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+  }
+  // The token spans `@` up to the caret OR the first whitespace after
+  // `@`, whichever is closer. (Cursor is always <= first whitespace
+  // because the left-walk above already bailed on whitespace; we still
+  // compute the explicit boundary for the replace span.)
+  const afterAt = lineText.slice(atCol + 1, caretCol);
+  if (afterAt.includes(" ")) {
+    return { trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+  }
+  const atOffset = line.from + atCol;
+  // tokenEnd = exclusive end of the token. Either the first whitespace
+  // after `@` on the rest of the line, or the caret (user is still
+  // typing into the token), or the line end.
+  let endCol = caretCol;
+  for (let i = caretCol; i < lineText.length; i++) {
+    if (/\s/.test(lineText[i])) {
+      endCol = i;
+      break;
+    }
+    endCol = i + 1;
+  }
+  const tokenEnd = line.from + endCol;
+  return { trigger: true, filter: afterAt, atOffset, tokenEnd };
+}
+
+/** Detect `@` anywhere on the current line (Cursor-style). The filter
+ *  is whatever the user typed after `@` (a path prefix, may contain
+ *  `/`); a space ends the token. See `currentAtToken` for the full
+ *  geometry + boundary rules. */
 function detectFileTrigger(): { trigger: boolean; filter: string } {
-  const { line } = currentLineInfo();
-  const trimmed = line.trimStart();
-  if (!trimmed.startsWith("@")) return { trigger: false, filter: "" };
-  const rest = trimmed.slice(1);
-  if (rest.includes(" ")) return { trigger: false, filter: "" };
-  return { trigger: true, filter: rest };
+  const { trigger, filter } = currentAtToken();
+  return { trigger, filter };
 }
 
 /** Fetch the project file list. Re-runs on every open (filesLoaded is
@@ -851,20 +930,20 @@ function syncFilePalette(): void {
 }
 
 /** Replace the `@<filter>` token on the current line with `@<relpath>`
- *  and place the caret right after it. The token is `@` + the filter
- *  chars the user typed (up to the first whitespace); we overwrite
- *  that whole span with the chosen file's relative path, leaving any
- *  trailing text on the line intact. */
+ *  and place the caret right after it. Works anywhere on the line
+ *  (Cursor-style): we replace the doc span [`atOffset`, `tokenEnd`)
+ *  returned by `currentAtToken` — that's the `@` + the filter the user
+ *  typed, regardless of whether the `@` sits at the line start or
+ *  mid-sentence. Any text before the `@` and after the token is left
+ *  intact. */
 async function onFileSelect(item: TriggerMenuItem): Promise<void> {
-  const { lineStart } = currentLineInfo();
+  const { atOffset, tokenEnd } = currentAtToken();
+  if (atOffset < 0 || tokenEnd < 0) return;
   const doc = input.value;
-  const beforeLine = doc.slice(0, lineStart);
-  const afterAt = doc.slice(lineStart);
-  const spaceIdx = afterAt.search(/[\s]/);
-  const tokenEnd = spaceIdx === -1 ? afterAt.length : spaceIdx;
-  const newAfter = `@${item.name}` + afterAt.slice(tokenEnd);
-  const newDoc = beforeLine + newAfter;
-  const caret = lineStart + 1 + item.name.length;
+  const beforeAt = doc.slice(0, atOffset);
+  const afterToken = doc.slice(tokenEnd);
+  const newDoc = beforeAt + `@${item.name}` + afterToken;
+  const caret = atOffset + 1 + item.name.length;
   closeFilePalette();
   replaceDoc(newDoc, caret);
   await nextTick();
@@ -1266,6 +1345,37 @@ function onEscKeydown() {
 
 :deep(.chat-input__field--disabled .cm-editor .cm-content) {
   caret-color: var(--color-text-muted);
+}
+
+/* PR1.5 PR-B: token coloring. The marks are added by the
+   `tokenHighlightPlugin` in chatInputTokens.ts as CSS classes on
+   inline `<span>`s inside `.cm-content`. We scope them under
+   `.chat-input__field` (consistent with the other CM `:deep()` rules
+   above) so the styling can't leak if a second CM instance ever
+   mounts elsewhere in the app. Colors reuse existing design tokens
+   (design-tokens.md: "Don't add a new `--color-*` token for a
+   one-off use"):
+     - `/command` → --color-accent (matches B3 command palette family)
+     - `@file`    → --color-tool-read (matches read_file tool family)
+     - skill      → --color-tool-thinking (violet, pre-staged for B4)
+   font-weight: 600 makes the tokens pop visually without needing a
+   brighter color. */
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-command) {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-file) {
+  color: var(--color-tool-read);
+  font-weight: 600;
+}
+
+/* B4 skill token — pre-staged. The class is not applied by any regex
+   today (chatInputTokens.ts has no skill entry in TOKEN_KINDS yet),
+   but the CSS rule is ready so B4 only needs to add the match logic. */
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-skill) {
+  color: var(--color-tool-thinking);
+  font-weight: 600;
 }
 
 /* Shared shape for both the Send and Stop action buttons. PR5
