@@ -761,7 +761,7 @@
 
 | ROADMAP 里程碑 | 耦合债务 | 建议 |
 |---|---|---|
-| **B2 / B3 / D2**(输入/检索层) | 无直接耦合 | 零负担推进,不顺手不修 |
+| **B2 / B3**(输入/触发层;**D2 已于 2026-06-17 降档到第三档**,见 [IMPLEMENTATION §4 2026-06-17](../docs/IMPLEMENTATION.md)) | 无直接耦合 | 零负担推进,不顺手不修 |
 | **D3**(消息编辑/重发) | 会重走 turn 边界 + message 持久化 → 自然碰到 **A-007**(error 路径 partial text 丢失)、**A-010**(二次取消语义) | 做 D3 时是修这俩的天然窗口 |
 | **B6 Subagent**(第三档,harness 学习价值最高) | worker agent 独立 context/token 预算 → **A-008**(estimator 两版重复)、**D-004/D-005**(capabilities 派生错误会污染 subagent 上下文) | **进 B6 前先抽 A-008 helper + 修 D-004/D-005** |
 

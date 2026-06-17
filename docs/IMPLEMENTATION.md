@@ -28,6 +28,30 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-17 — D2(SQLite FTS5 全局搜索)从第二档降档到第三档 + 标注双驱动路径
+
+**Context**: 2026-06-17 user review D2 设计后明确延后,触发两点判断:
+- **痛点不足**:用户当前 session 积累尚浅(数十量级),B5 Memory 指令系统(写)+ C3 Context 压缩(当次 session 内管理)已覆盖"当次 memory"层;D2 价值 = "跨 session 找回过去对话",依赖 session 基数到一定量(类比 Notion / VSCode 全文搜索"用了就回不去"前提是积累)
+- **双驱动价值大于单驱动**:用户 modal(`Cmd/Ctrl+K`)+ agent tool(`search_history` LLM 决策时调)共享同一个 `search_messages` Tauri command,实现成本几乎不翻倍,但**让 LLM 主动挖过去对话**比"用户自己搜再问 agent"更接近 Claude Code 那种"agent 知道过去"的体验
+
+**Decision**: D2 从 ROADMAP §2 第二档移到 §2 第三档(缓做),描述补"双驱动路径 + 实施顺序",**保留后端 `search_messages` Tauri command 形态预想**(不破坏未来增量实施路径,未来可单独按双驱动范围重新评估排期)。**D3(session 内消息编辑/重发)按原排期仍留第二档**——DEBT 收尾建议第 3 条"D3 自然碰 A-007(error 路径 partial text)/ A-010(二次取消语义),应最后做",降档会跟该建议冲突,本批次没动这两条债,降档理由不充分。
+
+**双驱动路径**(作为 D2 未来实施时的预设范围,降低"开新 task 时重新讨论"成本):
+- **① 用户驱动**(MVP,~150-200 行,1 PR 闭环):后端 `messages_fts` 虚拟表(FTS5,unicode61)+ `search_messages(query, project_id?, limit) -> Vec<MessageSearchHit>` Tauri command(query 长度硬卡防 LIKE abuse);前端顶栏搜索图标 + `Cmd/Ctrl+K` 触发 Modal,结果列表显示 `session_title` + `project_name` + 高亮 hit 片段 + 点开跳到 message 并 scroll into view
+- **② Agent 驱动**(增量,~100 行,1 PR 闭环):`search_history(query)` tool 接 ② 既有 tool 注册表,LLM description 写清"用过去 session 的 message 内容回答用户关于'上次怎么 X'的问题";**共享** `search_messages` Tauri command;permission Tier 1 只读白名单;`allowed-tools` 默认不挂(LLM 看不到自动不可调,需用户显式开,防滥用)
+- **实施顺序**:先 ① 后 ②;**① 可独立 ship**,② 是 ① 的复用增量,非并行(避免 ② 提前 share 搜索基础设施时 ① UI 还没定)
+- **CJK 鲁棒性**:① 第一版用 `unicode61` tokenize + 前端分词提示;jieba-rs / trigram 等 CJK 优化放 D2-v2(不在 D2 范围)
+
+**反向触发**(拉回第二档的条件):session 基数到 50+ / 用户多次表达"想找回过去对话" / B5/C3 层出现"需跨 session 引用"的需求。
+
+**Alternatives**(已否决):
+- **降到第四档(最远远期)**:跟 daemon 化(B10 飞书)/ 云端同步(B11)等同档,但 D2 实现复杂度极低(DB 索引 + Tauri command + UI,~200-300 行),不与 daemon 化同等量级,第三档更准
+- **保持第二档不动**:用户明确延后,违背 user 决定
+- **D2 + D3 一起降档**:D3 是 V2 第二档里仅剩的 1 项,降档会让第二档提前"伪清零";且 DEBT 建议 D3 与 A-007/A-010 同步,本批次没动这两条债,D3 降档理由不充分
+- **只做用户驱动(砍掉双驱动设计)**:用户体验上"用户搜 + 喂给 agent"比"agent 自动搜"多一轮交互,落差明显;双驱动后端零增量、前端仅多 1 tool 注册 + permission 配置,几乎零成本
+
+**影响面**: 仅 ROADMAP §2 表格行移动 + 描述补充;无代码 / spec / test 变更。DEBT.md §"按 ROADMAP 里程碑的收尾契机"B2/B3/D2 行同步修正为"B2/B3(D2 暂缓)"。**未开新 task**——按 user 决定延后,等触发条件出现时再 `trellis-brainstorm` 起新 task。
+
 ### 2026-06-16 — 审批内联到 ToolCallCard + 按 session 分区 + 拒绝并反馈(取代全局 PermissionModal)
 
 **Context**: 全局单例 `<PermissionModal>`(挂 ChatPanel,Teleport to body,状态为 `usePermissionsStore.pendingPermission` 单槽 ref)在多 session 并发审批时三连问题:① `setPending` 直接覆盖旧 pending 且不对旧 rid respond,旧 ask 留在后端 oneshot store 跑满 120s 超时 → `Decision::Deny`,该 session agent loop 卡 120s(用户感知"没问我就处理了",实际是超时拒);② payload `PermissionAskPayload` 不带 sessionId,modal 文案写死"当前项目"、path badge 用 `chatStore.currentCwd`(用户当前看的 session),跨 session 时指鹿为马;③ `deny` reason 写死 `"user denied"`,LLM 不知为何被拒、无法纠错。
