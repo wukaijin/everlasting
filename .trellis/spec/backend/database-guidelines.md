@@ -274,6 +274,221 @@ explicit and the SQL trivial.
 
 ---
 
+## Pattern: `edit_user_message` — in-place edit + cascade delete + audit (D3 PR1, 2026-06-17)
+
+Editing a user message requires **three** changes in one logical
+step: replace the row's `content`/`text`, wipe every strictly-later
+message in the session (so the next resend starts from a clean
+slate — assistant `tool_use` blocks on row N+1+ reference the old
+prompt), and append an audit row. `db::sessions::edit_user_message`
+wraps all three in a single `sqlx::Transaction` so a partial
+failure cannot leave the DB in a split-brain state (e.g. content
+updated but tail not deleted → assistant turn still references the
+old prompt).
+
+### When to use
+
+A user-driven IPC that wants to mutate the content of an existing
+user message AND clear everything the LLM generated downstream of
+it. The function is intentionally **not** exposed for assistant
+message edits — see "Don't edit assistant messages" below.
+
+### Schema impact
+
+**Zero**. The edit re-uses the existing `messages.content` /
+`text` / `metadata` columns. `metadata` carries the per-edit
+fields (`edited_at` + `original_content`) — the same JSON column
+that `update_message_metadata` writes. No new migration needed.
+
+### Persisted shape after one edit
+
+```jsonc
+// messages.metadata JSON, first edit:
+{
+  "edited_at": "2026-06-17T12:34:56+00:00",
+  "original_content": "old prompt text"
+}
+
+// after a SECOND edit (original_content preserved; edited_at bumped):
+{
+  "edited_at": "2026-06-17T13:00:00+00:00",
+  "original_content": "old prompt text"  // unchanged — points at pre-ANY-edit value
+}
+```
+
+### Implementation (`db::sessions::edit_user_message`)
+
+```rust
+pub async fn edit_user_message(
+    pool: &SqlitePool,
+    session_id: &str,
+    message_seq: i64,
+    new_content: &MessageContent,
+) -> Result<(), sqlx::Error> {
+    // 1. Resolve (session_id, seq) → id via find_message_id_by_seq.
+    //    Unknown pair → silent Ok(()) (defensive no-op, matches F5
+    //    latency IPC contract).
+    let message_id = match find_message_id_by_seq(pool, session_id, message_seq).await? {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    let mut tx = pool.begin().await?;
+
+    // 2. Read current content (for the no-op check + backup).
+    let current_content_str: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM messages WHERE id = ? AND session_id = ?",
+    )
+    .bind(message_id)
+    .bind(session_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let current_content_str = match current_content_str {
+        Some(s) => s,
+        None => {
+            tx.rollback().await?;
+            return Ok(());  // row vanished mid-transaction
+        }
+    };
+
+    // 3. No-op fast path: same JSON → return without writing.
+    let new_content_json = serde_json::to_string(new_content)?;
+    if new_content_json == current_content_str {
+        tx.rollback().await?;
+        return Ok(());
+    }
+
+    // 4. Compute the metadata patch (edited_at always; original_content
+    //    only on the first edit). Uses SQLite's `json_patch` (RFC 7396)
+    //    so a `COALESCE(metadata, '{}')` falls back to a fresh object.
+    let now = Utc::now().to_rfc3339();
+    let existing_edited_at: Option<String> = sqlx::query_scalar(
+        "SELECT json_extract(metadata, '$.edited_at') FROM messages WHERE id = ?",
+    )
+    .bind(message_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let metadata_patch = if existing_edited_at.is_some() {
+        serde_json::json!({ "edited_at": &now }).to_string()
+    } else {
+        let original_content_value = serde_json::from_str(&current_content_str)
+            .unwrap_or_else(|_| serde_json::Value::String(current_content_str.clone()));
+        serde_json::json!({
+            "edited_at": &now,
+            "original_content": original_content_value,
+        })
+        .to_string()
+    };
+    let new_metadata_json: String = sqlx::query_scalar(
+        "SELECT json_patch(COALESCE(metadata, '{}'), ?) FROM messages WHERE id = ?",
+    )
+    .bind(&metadata_patch)
+    .bind(message_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // 5. UPDATE the row: content + text + metadata.
+    sqlx::query(
+        "UPDATE messages SET content = ?, text = ?, metadata = ? \
+         WHERE id = ? AND session_id = ?",
+    )
+    .bind(&new_content_json)
+    .bind(new_content.to_text())
+    .bind(&new_metadata_json)
+    .bind(message_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // 6. Cascade-delete every strictly-later message in the session.
+    //    `messages` has no outgoing FKs to other tables (only an index
+    //    on `(session_id, seq)`), so a single DELETE is enough. Audit
+    //    events (`session_audit_events`) are session-scoped and kept —
+    //    they record what the agent DID, not the live message buffer.
+    sqlx::query("DELETE FROM messages WHERE session_id = ? AND seq > ?")
+        .bind(session_id)
+        .bind(message_seq)
+        .execute(&mut *tx)
+        .await?;
+
+    // 7. Audit row: kind='edit_message' (string literal — the cross-
+    //    module call graph stays tight; matches `set_session_mode`'s
+    //    `mode_changed` audit pattern).
+    let audit_payload = serde_json::json!({
+        "message_seq": message_seq,
+        "new_text_preview": new_content.to_text().chars().take(80).collect::<String>(),
+        "edited_at": &now,
+    })
+    .to_string();
+    sqlx::query(
+        "INSERT INTO session_audit_events (session_id, ts, kind, payload_json) \
+         VALUES (?, datetime('now'), 'edit_message', ?)",
+    )
+    .bind(session_id)
+    .bind(&audit_payload)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+```
+
+### Tauri command wiring
+
+The IPC layer is `commands::sessions::edit_user_message`. It:
+
+1. Cancels any in-flight chat on the session via
+   `cancel_inflight_for_session` + `await_inflight_exit` (the
+   same pattern `delete_session` / `clear_session_messages` use).
+   Without this gate, an in-flight `persist_turn` could race the
+   cascade DELETE.
+2. Confirms the session exists + the (session_id, seq) pair
+   resolves to a user-role row (explicit error to the frontend,
+   even though the DB-layer helper is silent).
+3. Delegates to `db::sessions::edit_user_message`. Errors wrap
+   as `String` for the IPC rejection.
+
+### Don't edit assistant messages
+
+Editing assistant messages is intentionally NOT supported in D3
+PR1. Reasons:
+
+- Assistant turns can carry `tool_use` blocks with stable
+  `tool_use_id`s that downstream `tool_result` turns reference.
+  Mutating the assistant content without rewriting every
+  following `tool_result` would produce an orphan-request /
+  orphan-result pair (Anthropic returns `400` on the next turn).
+- The industry consensus is "user-only" (Cursor / Cline / Cody /
+  OpenHands / OpenCode / OpenCode / ChatGPT — see
+  `.trellis/tasks/06-17-d3-message-edit-resend/research/industry-edit-resend.md`).
+- A future PR can wire assistant edits as a higher-level
+  "rewrite turn" operation that cascades the rewrite into the
+  dependent `tool_result` rows. Out of scope for PR1.
+
+### Permission / audit
+
+Edit is a **user-initiated direct IPC** — not an LLM tool
+invocation. The ⑨ 关 permission layer (Tier 2 deny list, Tier 3
+"始终允许" check, Tier 4 Mode interception) does **not** apply.
+The audit log captures every edit (`session_audit_events` row
+with `kind='edit_message'`) so the user can review changes later.
+
+### Tests (D3 PR1, `db/tests.rs`)
+
+| Test | Asserts |
+|---|---|
+| `edit_user_message_cascade_deletes_subsequent_messages` | 3-turn session → after edit, only the edited row survives; cascade wipes assistant + tool_result |
+| `edit_user_message_writes_edited_at_metadata` | First edit stamps a non-empty `edited_at` (RFC3339, contains "T") |
+| `edit_user_message_preserves_original_content_on_first_edit` | `metadata.original_content` equals the pre-edit value verbatim |
+| `edit_user_message_preserves_original_across_subsequent_edits` | Re-edit does NOT overwrite `original_content`; it stays at the pre-ANY-edit value |
+| `edit_user_message_records_audit_event` | `session_audit_events` has 1 row with `kind='edit_message'` + JSON payload carrying `message_seq` / `new_text_preview` / `edited_at` |
+| `edit_user_message_is_noop_when_content_unchanged` | Save-without-change: 3 turns intact, `metadata` null, no audit row |
+| `edit_user_message_on_unknown_seq_is_silent_noop` | Unknown `(session_id, seq)` → Ok(()) with no error; original history intact |
+| `edit_user_message_atomic_rollback_on_db_error` | Synthetic `RAISE(FAIL)` trigger on audit INSERT → entire transaction rolls back; 3 turns intact, no audit row committed |
+
+---
+
 ## Pattern: denormalized list endpoints
 
 When the UI renders a list with parent-table fields (e.g. a model picker

@@ -16,6 +16,7 @@ use tauri::State;
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::db;
 use crate::git;
+use crate::llm::types::MessageContent;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -361,4 +362,131 @@ pub async fn record_tool_duration(
     crate::db::record_tool_duration(&state.db, &session_id, &tool_use_id, duration_ms)
         .await
         .map_err(|e| format!("record_tool_duration failed: {}", e))
+}
+
+// ---------------------------------------------------------------------------
+// D3 PR1 (2026-06-17): edit_user_message
+//
+// User-driven IPC: edit a user message in place + cascade-delete every
+// strictly-later message in the session + append an audit row. The
+// frontend then re-runs the chat send pipeline (separate IPC, PR2/3
+// work) so the agent loop regenerates the assistant + tool_use chain
+// against the new prompt.
+//
+// Three concerns the command owns:
+//
+// 1. **Stream race (cancel-first)**: if a chat stream is in-flight
+//    for this session, cancel it and wait for the loop to exit
+//    BEFORE touching the DB. Mirrors `delete_session` /
+//    `clear_session_messages` (both call `cancel_inflight_for_session`
+//    + `await_inflight_exit`). Without this gate, the in-flight
+//    loop's next `persist_turn` writes into a session where the
+//    user just deleted the assistant turn.
+//
+// 2. **Permission bypass**: edit does NOT consult the ⑨ 关
+//    permission layer. The industry consensus (Cursor / Cline /
+//    Cody / OpenHands / OpenCode) is to bypass the modal entirely
+//    for user-initiated direct IPCs; the audit log captures every
+//    edit so the user can review later.
+//
+// 3. **Atomicity**: the DB layer wraps the UPDATE + cascade DELETE
+//    + INSERT audit in a single transaction. Any failure rolls
+//    back all three. The command surfaces the error as a
+//    `Result::Err` string (no `ChatEvent::Error` — there is no
+//    active stream to emit on; the caller is the Tauri IPC
+//    surface, which already converts `Err` to a rejected JS
+//    promise on the frontend).
+// ---------------------------------------------------------------------------
+
+/// D3 PR1 IPC: edit a user message in place + cascade-delete tail
+/// + record an audit row. The frontend re-runs the chat send
+/// pipeline (separate IPC) to regenerate the assistant chain
+/// against the new prompt.
+///
+/// `new_content` is the new `MessageContent` for the user row.
+/// The wire shape is the standard Anthropic `ContentBlockPayload`
+/// union — `Text` for plain text or `Blocks` for richer content
+/// (mirrors what `toPayloadContent` accepts on the send path).
+/// The DB layer serializes it via `MessageContent`'s `Serialize`
+/// impl so the round-trip is lossless.
+///
+/// Returns `Ok(())` on success. Errors are wrapped as `String`
+/// for the Tauri IPC rejection (the frontend surfaces them as a
+/// toast — same contract as `delete_session` /
+/// `clear_session_messages`).
+#[tauri::command]
+pub async fn edit_user_message(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    message_seq: i64,
+    new_content: MessageContent,
+) -> Result<(), String> {
+    // 1. Stream race: cancel any in-flight chat on this session
+    // first. Mirrors `delete_session` /
+    // `clear_session_messages`. Wait for the loop to exit so the
+    // DB-layer cascade DELETE can't race an in-flight
+    // `persist_turn`.
+    let exit_rx = cancel_inflight_for_session(
+        &state.cancellations,
+        &state.session_active_request,
+        &state.inflight_exits,
+        &session_id,
+    )
+    .await;
+    await_inflight_exit(exit_rx, "edit_user_message").await;
+
+    // 2. Confirm the session exists. The DB-layer helper is a
+    // silent no-op on unknown session (matches the F5 latency
+    // IPC contract) — but the user-facing command should
+    // surface an explicit error so the frontend doesn't silently
+    // succeed on a stale session id.
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("edit_user_message: load_session failed: {}", e))?
+        .ok_or_else(|| {
+            format!("edit_user_message: session '{}' not found", session_id)
+        })?;
+    // Confirm the user message we're editing exists too — same
+    // UX rationale (silent no-op on the DB layer is the F5
+    // latency patch pattern; explicit error here so the frontend
+    // can toast "message not found").
+    let edited_msg = loaded
+        .messages
+        .iter()
+        .find(|m| m.seq == message_seq && m.role == "user")
+        .ok_or_else(|| {
+            format!(
+                "edit_user_message: user message at seq {} not found in session '{}'",
+                message_seq, session_id
+            )
+        })?;
+    // Defensive: confirm we resolved the same row we're about to
+    // patch. The DB layer uses (session_id, seq) as the lookup
+    // key — if the loaded row's id differs from what
+    // `find_message_id_by_seq` returns, the helper and the
+    // loader disagree, which means a corrupt DB. Surface as an
+    // error rather than silently editing the wrong row.
+    let resolved_id = db::find_message_id_by_seq(&state.db, &session_id, message_seq)
+        .await
+        .map_err(|e| format!("edit_user_message: lookup failed: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "edit_user_message: user message at seq {} not found in session '{}' (resolver mismatch)",
+                message_seq, session_id
+            )
+        })?;
+    if resolved_id != edited_msg.id {
+        return Err(format!(
+            "edit_user_message: resolved id {} != loaded id {} for seq {} — refusing to edit",
+            resolved_id, edited_msg.id, message_seq
+        ));
+    }
+
+    // 3. Hand off to the DB layer. Single transaction wraps the
+    // UPDATE + cascade DELETE + INSERT audit; a failure returns
+    // `sqlx::Error` which we wrap as a `String` for the IPC
+    // rejection. The frontend surfaces as a toast.
+    db::edit_user_message(&state.db, &session_id, message_seq, &new_content)
+        .await
+        .map_err(|e| format!("edit_user_message: db failed: {}", e))
 }

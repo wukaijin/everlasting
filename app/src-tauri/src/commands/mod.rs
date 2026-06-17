@@ -93,5 +93,7 @@ pub fn all_command_names() -> Vec<&'static str> {
         "grant_tool_permission",
         // C4 (Audit-log query UI, 2026-06-14)
         "list_session_audit_events",
+        // D3 PR1 (2026-06-17): edit a user message in place.
+        "edit_user_message",
     ]
 }

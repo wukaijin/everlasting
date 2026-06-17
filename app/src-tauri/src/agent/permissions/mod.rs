@@ -176,6 +176,13 @@ pub enum AuditKind {
  /// loop 拿到 `execute_tool` 返回值之后 (duration + exit_code
  /// 已知), 见 `agent/chat.rs` 的 tool 执行循环。
  ToolExecuted,
+ /// D3 PR1 (2026-06-17): user 在 session 内编辑了一条 user 消息
+ /// (in-place update + 级联删后续 message + 重新 send 前的
+ /// edit 落点)。payload 携带 `message_seq` /
+ /// `new_text_preview` / `edited_at`。落表点在
+ /// `db::sessions::edit_user_message` 的事务尾部,与 cascade
+ /// delete 同一个事务,失败回滚不入审计。
+ EditMessage,
 }
 
 impl AuditKind {
@@ -192,6 +199,7 @@ impl AuditKind {
  Self::PermissionTimeout => "permission_timeout",
  Self::RequestCancelled => "request_cancelled",
  Self::ToolExecuted => "tool_executed",
+ Self::EditMessage => "edit_message",
  }
  }
 }
@@ -1417,6 +1425,10 @@ mod tests {
         AuditKind::PermissionTimeout,
         AuditKind::RequestCancelled,
         AuditKind::ToolExecuted,
+        // D3 PR1 (2026-06-17): user message edit kind. Locked
+        // alongside the other variants so a future rename breaks
+        // this test instead of corrupting audit rows.
+        AuditKind::EditMessage,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -1426,6 +1438,10 @@ mod tests {
     // future rename / typo here breaks the test instead of corrupting
     // audit rows the frontend can no longer dispatch on.
     assert_eq!(AuditKind::ToolExecuted.as_str(), "tool_executed");
+    // D3 PR1 (2026-06-17): pin the wire string for the new edit
+    // kind. The DB layer (`db::sessions::edit_user_message`) writes
+    // `'edit_message'` verbatim — these two strings MUST agree.
+    assert_eq!(AuditKind::EditMessage.as_str(), "edit_message");
  }
 
  // =====================================================================

@@ -100,6 +100,10 @@ pub fn run() {
             // same idempotency contract.
             commands::sessions::update_message_latency,
             commands::sessions::record_tool_duration,
+            // D3 PR1 (2026-06-17): edit a user message in place +
+            // cascade-delete tail + audit. UI / Resend are PR2/3
+            // (the frontend re-uses `chat` IPC for the resend).
+            commands::sessions::edit_user_message,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,
