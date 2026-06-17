@@ -241,10 +241,10 @@ function onTextareaInput(e: Event) {
   if (isComposing.value) return;
   input.value = (e.target as HTMLTextAreaElement).value;
   autosize();
-  // B3: re-evaluate the command-palette trigger on every input
-  //  (open when the current line becomes `/foo`, close when the
-  //  user types past the command-name region).
+  // B3/B2: re-evaluate both trigger palettes on every input. Only one
+  //  can match — a line starts with `/` XOR `@` — so at most one opens.
   syncCommandPalette();
+  syncFilePalette();
 }
 
 function onCompositionStart() {
@@ -255,37 +255,51 @@ function onCompositionEnd(e: CompositionEvent) {
   isComposing.value = false;
   input.value = (e.target as HTMLTextAreaElement).value;
   autosize();
-  // B3: an IME commit may have inserted a `/` (or removed it);
-  // re-evaluate the trigger state now that composition is over.
+  // B3/B2: an IME commit may have inserted/removed a `/` or `@`;
+  // re-evaluate both trigger states now that composition is over.
   syncCommandPalette();
+  syncFilePalette();
 }
 
 function onKeydown(e: KeyboardEvent) {
-  // B3: when the command palette is open, ArrowUp / ArrowDown /
-  //  Enter / Escape belong to the palette, not the textarea.
-  //  Enter MUST NOT submit while the palette is open (otherwise
-  //  selecting `clear` would also send `/clear` as a chat
-  //  message). We intercept here, before the existing
-  //  Enter-to-submit branch below.
-  if (commandPaletteOpen.value) {
+  // B3/B2: when either trigger palette is open, ArrowUp / ArrowDown /
+  //  Enter / Escape belong to the palette, not the textarea. Enter
+  //  MUST NOT submit while a palette is open (otherwise selecting an
+  //  item would also send the raw `@filter` / `/cmd` text as a chat
+  //  message). Only one palette is open at a time (a line starts with
+  //  `/` XOR `@`); route to whichever is active.
+  if (commandPaletteOpen.value || filePaletteOpen.value) {
+    const menu = filePaletteOpen.value ? fileTriggerMenu.value : triggerMenu.value;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      triggerMenu.value?.moveActive(1);
+      menu?.moveActive(1);
       return;
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      triggerMenu.value?.moveActive(-1);
+      menu?.moveActive(-1);
+      return;
+    }
+    if (e.key === "Tab" && !e.shiftKey) {
+      // Tab = accept selection (same as Enter). Shift+Tab is NOT
+      // intercepted here — it stays bound to the Mode cycle
+      // (registerShiftTabCycle on window capture).
+      e.preventDefault();
+      menu?.confirmActive();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey && !isComposing.value) {
       e.preventDefault();
-      triggerMenu.value?.confirmActive();
+      menu?.confirmActive();
       return;
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      closeCommandPalette();
+      if (filePaletteOpen.value) {
+        closeFilePalette();
+      } else {
+        closeCommandPalette();
+      }
       return;
     }
   }
@@ -381,6 +395,18 @@ const commandFilter = ref("");
  *  makes the IPC cheap anyway, but the round-trip itself is not
  *  free). */
 let commandsLoaded = false;
+
+// B2 @文件 palette. Symmetrical to the B3 command block above: a second
+// <TriggerMenu> caller with trigger="@" + fuzzysort. The two palettes
+// are mutually exclusive (a line can't start with both `/` and `@`),
+// so only one is open at a time; onKeydown routes keys to whichever is
+// open. `filesLoaded` is cleared on close so the next `@` re-fetches
+// the file list (source trees churn — no backend mtime cache).
+const fileTriggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
+const filePaletteOpen = ref(false);
+const fileItems = ref<TriggerMenuItem[]>([]);
+const fileFilter = ref("");
+let filesLoaded = false;
 
 /** The cursor's current line in the textarea. Used for trigger
  *  detection (must START with `/` and be otherwise empty) and
@@ -586,6 +612,105 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   await chatStore.send(body);
 }
 
+// -----------------------------------------------------------------------
+// B2 `@文件` palette (PR1).
+//
+// Symmetrical to the B3 block above but for the `@` trigger char. The
+// file list comes from the backend `list_files` command (gitignore +
+// built-in excludes + depth/count caps), fetched once per open; the
+// <TriggerMenu>'s built-in fuzzysort (fuzzy prop) narrows it on each
+// keystroke. Selecting a file replaces the `@filter` token on the
+// current line with `@<relpath>` and leaves the caret right after it
+// (PR1: the token is a path hint; PR2 will resolve + inject content in
+// the agent loop).
+// -----------------------------------------------------------------------
+
+/** Detect `@` at the start of the current line (at-start trigger,
+ *  matches Claude Code). The filter is whatever the user typed after
+ *  `@` (a path prefix, may contain `/`); a space ends the token. */
+function detectFileTrigger(): { trigger: boolean; filter: string } {
+  const { line } = currentLineInfo();
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith("@")) return { trigger: false, filter: "" };
+  const rest = trimmed.slice(1);
+  if (rest.includes(" ")) return { trigger: false, filter: "" };
+  return { trigger: true, filter: rest };
+}
+
+/** Fetch the project file list. Re-runs on every open (filesLoaded is
+ *  cleared on close) so newly-added files show up — no backend mtime
+ *  cache, since source trees churn and the frontend only fires this
+ *  once per `@` open. */
+async function loadFiles(): Promise<void> {
+  if (filesLoaded) return;
+  const projectId = projectsStore.currentProjectId;
+  try {
+    const paths = await invoke<string[]>("list_files", {
+      projectId: projectId ?? null,
+    });
+    fileItems.value = paths.map((p) => ({ key: p, name: p }));
+    filesLoaded = true;
+  } catch (e) {
+    console.error("list_files failed:", e);
+    fileItems.value = [];
+    filesLoaded = true;
+  }
+}
+
+async function openFilePalette(filter: string): Promise<void> {
+  fileFilter.value = filter;
+  filePaletteOpen.value = true;
+  await loadFiles();
+}
+
+function closeFilePalette(): void {
+  filePaletteOpen.value = false;
+  filesLoaded = false;
+  fileItems.value = [];
+}
+
+/** Re-evaluate the `@` trigger on every input — mirror of
+ *  syncCommandPalette. Opens when the line becomes `@foo`, closes when
+ *  the user types a space / deletes the `@`. */
+function syncFilePalette(): void {
+  if (isComposing.value) return;
+  const { trigger, filter } = detectFileTrigger();
+  if (trigger) {
+    if (!filePaletteOpen.value) {
+      void openFilePalette(filter);
+    } else {
+      fileFilter.value = filter;
+    }
+  } else if (filePaletteOpen.value) {
+    closeFilePalette();
+  }
+}
+
+/** Replace the `@<filter>` token on the current line with `@<relpath>`
+ *  and place the caret right after it. The token is `@` + the filter
+ *  chars the user typed (up to the first whitespace); we overwrite
+ *  that whole span with the chosen file's relative path, leaving any
+ *  trailing text on the line intact. */
+async function onFileSelect(item: TriggerMenuItem): Promise<void> {
+  const { lineStart } = currentLineInfo();
+  const beforeLine = input.value.slice(0, lineStart);
+  const afterAt = input.value.slice(lineStart);
+  const spaceIdx = afterAt.search(/[\s]/);
+  const tokenEnd = spaceIdx === -1 ? afterAt.length : spaceIdx;
+  const newAfter = `@${item.name}` + afterAt.slice(tokenEnd);
+  input.value = beforeLine + newAfter;
+  closeFilePalette();
+  await nextTick();
+  const el = textareaEl.value;
+  if (el) {
+    const caret = lineStart + 1 + item.name.length;
+    el.setSelectionRange(caret, caret);
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+    el.focus();
+  }
+}
+
 function submit() {
   const text = input.value;
   if (!text.trim() || props.sending) return;
@@ -638,6 +763,30 @@ function onEscKeydown() {
         @select="onCommandSelect"
         @close="closeCommandPalette"
       />
+      <!-- B2 (PR1): @文件 palette. Second <TriggerMenu> caller —
+           trigger="@", fuzzysort (fuzzy prop), #row slot renders a
+           file icon + relative path. Mutually exclusive with the
+           command palette above (a line starts with `/` XOR `@`). -->
+      <TriggerMenu
+        ref="fileTriggerMenu"
+        :open="filePaletteOpen"
+        :items="fileItems"
+        :filter="fileFilter"
+        trigger="@"
+        header-label="文件"
+        empty-label="无匹配文件"
+        fuzzy
+        :trigger-el="textareaEl"
+        @select="onFileSelect"
+        @close="closeFilePalette"
+      >
+        <template #row="{ item }">
+          <span class="chat-input__file-row">
+            <Icon name="document" :size="12" />
+            <code class="chat-input__file-path">{{ item.name }}</code>
+          </span>
+        </template>
+      </TriggerMenu>
       <textarea
         ref="textareaEl"
         :value="input"
@@ -1234,5 +1383,29 @@ function onEscKeydown() {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* B2 @文件 palette row (rendered via <TriggerMenu>'s #row slot). The
+   slot content is parent-scoped, so these rules live here (not in
+   TriggerMenu.vue). Occupies the full row width (the panel's grid is
+   `1fr auto`; a file row has no meta column). Monospace path + ellipsis
+   for long relative paths; the document icon matches the read_file
+   tool family visually. */
+.chat-input__file-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  grid-column: 1 / -1;
+  color: var(--color-text-secondary);
+}
+
+.chat-input__file-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

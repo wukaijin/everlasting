@@ -24,6 +24,7 @@
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
+pub mod files;
 pub mod memory;
 pub mod permissions;
 pub mod projects;
@@ -84,6 +85,8 @@ pub fn all_command_names() -> Vec<&'static str> {
         // B3 /command palette
         "list_commands",
         "get_command_body",
+        // B2 @文件补全
+        "list_files",
         // A2 + B7 (Permission system + per-session Mode)
         "set_session_mode",
         "permission_response",

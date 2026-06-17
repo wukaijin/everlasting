@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "检查 TriggerMenu复用符合手写popover pattern triggerEl/几何/动画/v-if"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "检查文件行配色复用现有token 无新增"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "检查 chat store 访问约定 currentCwd/session"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "检查 list_files越界校验存在 is_within_root"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查坏路径/失败降级符合风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查前端IPC与后端list_files跨层数据流一致性"}
+{"file": ".trellis/tasks/06-17-b2-at-file-completion/research/at-file-ux-conventions.md", "reason": "检查UX对齐CC at-start/token形态/palette互斥路由"}

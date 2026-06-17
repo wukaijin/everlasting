@@ -18,9 +18,11 @@
 //   the panel; opening downward would clip below the viewport. Same
 //   `bottom: calc(100% + 4px); top: auto;` + `translateY(4px → 0)`
 //   slide as `ModeSelect` / `ModelSelect`.
-// - **Prefix filter, not fuzzy**. PR2 scope (prd "Open Questions" 1):
-//   simple `name.startsWith(filter)`; a fuzzy matcher library is YAGNI
-//   for ~10 commands.
+// - **Prefix filter by default; opt-in fuzzy**. B3 (/command, ~10
+//   items) uses the simple `name.startsWith(filter)` branch. B2
+//   (@file, thousands of paths) passes `fuzzy` → fuzzysort
+//   (substring-aware, score-sorted) so `appcp` matches
+//   `app/src/components/chat/ChatPanel.vue`.
 // - **snake_case wire DTO**. `CommandInfo` fields mirror the Rust
 //   struct verbatim per BACKLOG §5.2 (`argument_hint` etc.). The
 //   Tauri command ARG is camelCase per HACKING-wsl FU-4.
@@ -41,8 +43,14 @@
 // owns the panel DOM + keyboard navigation + click-outside/Esc close.
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import fuzzysort from "fuzzysort";
 
 import Icon from "../Icon.vue";
+
+/** Max rows the fuzzy matcher surfaces. B2 passes thousands of file
+ *  paths; capping the panel keeps the render + scroll cheap. B3
+ *  (/command, ~10 items) never hits this. */
+const FUZZY_LIMIT = 50;
 
 /** A single row in the panel. `CommandInfo` from the Rust
  *  `resource_loader::CommandInfo` (BACKLOG §5.2: TS interface mirrors
@@ -104,12 +112,18 @@ const props = withDefaults(
      *  Passed as a plain element (the parent's template ref is
      *  auto-unwrapped by Vue's template binding). */
     triggerEl?: HTMLElement | null;
+    /** When true, filter via fuzzysort (substring-aware, score-sorted)
+     *  instead of plain prefix match. B2 (@file, thousands of paths)
+     *  sets this; B3 (/command) leaves the default prefix behaviour
+     *  unchanged. */
+    fuzzy?: boolean;
   }>(),
   {
     trigger: "/",
     headerLabel: "命令",
     emptyLabel: "无匹配项",
     triggerEl: null,
+    fuzzy: false,
   },
 );
 
@@ -123,14 +137,22 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement | null>(null);
 
-/** Locally-filtered items. Prefix match on `name` (case-insensitive
- *  for latin chars; CJK has no case so the lowercasing is a no-op).
- *  Builtins sort first (their `key` already starts with a builtin
- *  marker in B3's source — we just preserve `items` order so the
- *  backend's `builtin > project > user` precedence stays intact). */
+/** Locally-filtered items. Two modes:
+ *  - `fuzzy` (B2 @file): fuzzysort substring match, score-sorted, capped
+ *    at `FUZZY_LIMIT`. Thousands of paths need this — `appcp` should
+ *    find `app/src/components/chat/ChatPanel.vue`.
+ *  - default (B3 /command): prefix match on `name` (case-insensitive;
+ *    CJK has no case so the lowercasing is a no-op). Builtins keep
+ *    their `builtin > project > user` order (we preserve `items` order). */
 const filtered = computed<TriggerMenuItem[]>(() => {
-  const f = props.filter.trim().toLowerCase();
-  if (!f) return props.items;
+  const raw = props.filter.trim();
+  if (!raw) return props.items;
+  if (props.fuzzy) {
+    return fuzzysort
+      .go(raw, props.items, { key: "name", limit: FUZZY_LIMIT })
+      .map((r) => r.obj);
+  }
+  const f = raw.toLowerCase();
   return props.items.filter((it) => it.name.toLowerCase().startsWith(f));
 });
 

@@ -1,0 +1,13 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层 pre-dev checklist + 组件/store 约定入口"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "TriggerMenu 第2个caller + triggerEl外部触发器variation + 向上popover几何/动画约定 PR1核心复用"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "@row文件行slot配色/图标用现有token 不加新token"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat store currentCwd/currentSessionId 访问约定"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端层 pre-dev checklist + 命令注册/测试约定入口"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "list_files 路径必须在 project root 内 is_within_root 校验"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "list_files 失败/坏路径/越界的降级与错误风格"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "PR2 @token注入与 build_instructions_blocks 同构 content block构造参考"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "PR2 @token解析注入在 agent loop 发送前的阶段定位"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 TriggerMenu/list_dir/mtime fence缓存 B3 command_cache同构"}
+{"file": ".trellis/tasks/06-17-b2-at-file-completion/research/at-file-ux-conventions.md", "reason": "触发at-start / @relpath token形态 / 注入语义 对齐CC"}
+{"file": ".trellis/tasks/06-17-b2-at-file-completion/research/fuzzy-matching-impl.md", "reason": "fuzzysort选型 + 前端一次IPC缓存本地匹配策略"}

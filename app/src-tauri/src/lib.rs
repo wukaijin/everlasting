@@ -27,6 +27,7 @@
 mod agent;
 mod commands;
 mod db;
+mod files;
 mod git;
 mod llm;
 mod memory;
@@ -119,6 +120,8 @@ pub fn run() {
             // B3 /command palette (2026-06-16)
             commands::command_palette::list_commands,
             commands::command_palette::get_command_body,
+            // B2 @文件补全 (2026-06-17)
+            commands::files::list_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
