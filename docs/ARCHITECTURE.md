@@ -477,7 +477,7 @@ match tool_call.name {
     "glob"        => globset walk, cap 100, mtime desc,
     "list_dir"    => tokio::fs::read_dir, alphabetical + `/` suffix on dirs,
                      non-recursive,
-    "use_skill"   => 加载 skill 内容 → 注入 system prompt(详见 [BACKLOG §2](./BACKLOG.md#2-agent-skill-系统))
+    "use_skill"   => SkillCache 取 SKILL.md 正文 → tool_result 回填(L1,2026-06-18 落地,详见 [IMPLEMENTATION §4](./IMPLEMENTATION.md#4-决策日志))
     "use_memory"  => 读 / 写 runtime memory(详见 [BACKLOG §3](./BACKLOG.md#3-多层-memory-与约束))
     "use_ui"      => 构造 UiCard 走 ⑭ 分支(详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关))
     ...

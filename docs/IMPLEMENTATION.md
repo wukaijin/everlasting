@@ -269,6 +269,32 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
 - Commit 5:spec 同步(5 文件)+ ARCHITECTURE §2.2 ⑨ 改写
 - Commit 6:PermissionModal.vue path 范围行 + permissions.ts type + 8 新 vitest
 
+### 2026-06-18 — B4 Skill 系统(use_skill 虚拟 tool + 三层渐进披露)
+
+**Context**:第三档 B4 要把"做事方法"打包成可复用单元。前置调研([docs/research/skill-system-survey.md](../research/skill-system-survey.md),一手抓取 Claude Code / Hermes / opencode / agentskills.io)确认业界已收敛到"虚拟 tool + 渐进式披露"模式。本仓库 B3 /command 已落地 ResourceLoader,B5 memory 已有 synthetic message 注入机制。brainstorm 收敛 4 决策后 2 PR 落地。
+
+**Decision**:
+1. `use_skill` 虚拟 tool(非 system prompt 全量注入),三层渐进披露:L0 清单(name+description)独立 synthetic message 常驻 → L1 模型调 `use_skill` 返回正文 → L2 reference 文件用 `read_file` 拉
+2. 加载层 = 独立 `SkillCache`(复制 B3 `resource_loader` 模式,B3 零改动),唯一结构差异:skill 是目录(`<name>/SKILL.md`)非单文件 → scan 走子目录
+3. L1 正文走 tool_result 回填(⑫ 路径复用),非 system prompt 注入 —— 修正 BACKLOG §2 过时表述,保 cache_control 结构
+4. frontmatter 最小集 name+description(对齐 agentskills.io),复用 B3 手写 parser(`serde_yml` 已废弃)
+5. `use_skill` 归 `ToolKind::Other`(default Allow),Plan 模式自动放行(`filter_tools_for_mode` 黑名单制,无需额外代码)
+
+**Alternatives**:
+- L0 清单附加 block(共享 memory message)vs 独立 synthetic message:选后者 —— 与 memory 解耦(skill 增删不破坏 memory cache 断点)
+- 抽 `ResourceLoader<Kind>` 泛型合并 command+skill vs 独立 SkillCache:选后者(YAGNI,避免 B3 回归),稳定后再 refactor
+- 含 allowed-tools vs 最小集:选最小集(MVP 先跑通数据流,parser 不升级)
+- 注入 system prompt vs 注入消息流:选消息流(保 cache_control 结构 + 对齐 Claude Code 原话)
+
+**影响范围**:
+- Backend:`skill/{mod,loader}.rs`(新,加载层 + `build_skill_listing_block`);`tools/use_skill.rs`(新,虚拟 tool definition + execute);`tools/mod.rs`(`execute_tool` 加 `skill_cache` 参数 + `use_skill` 分发 + `builtin_tools` 注册);`agent/chat_loop.rs`(`run_chat_loop` 加 `skill_cache` 参数 + L0 清单注入 + execute_tool 传参);`agent/chat.rs`(传 `skill_cache`);`state.rs`(`skill_cache` 字段)
+- 测试:`skill/loader.rs` 17 单测 + `agent/tests.rs` 2 集成(`use_skill` body 加载 / 未知 skill 报错)+ 16 处 `run_chat_loop` 调用加 `skill_cache` 实参。`cargo test --lib` 588/588 pass
+- 文档:docs/research/skill-system-survey.md(前置调研)+ ROADMAP §1.2 B4 + ARCHITECTURE ⑩ use_skill 占位更新
+
+**修正 BACKLOG §2 两处过时**:① 选型 `serde_yml` → 手写 parser(B3 已废弃);② "注入 system prompt" → "注入消息流"
+
+**Commit 拆分**:本任务 2 PR(PR1 加载层 + PR2 接入 agent loop),单次 task 收尾。
+
 ### 2026-06-13 — A2 + B7 Mode 3 档化(Chat→Edit 改名 + Review 移除)
 
 **Context**:A2 + B7 任务的 PR1 + PR2 + PR3 在 2026-06-13 落地,共 5 个 commit (442fb3d / d0b9063 / db0f762 / 3a50212 / 09da97c),4 档 Mode (Chat / Plan / Review / Yolo) 全部上 main。grill-with-docs session (2026-06-13) 重新审视语义,锁定 3 档新方案。

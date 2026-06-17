@@ -23,6 +23,7 @@ pub mod list_dir;
 pub mod read_file;
 pub mod read_guard;
 pub mod shell;
+pub mod use_skill;
 pub mod web_fetch;
 pub mod write_file;
 
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::types::ToolDef;
+use crate::skill::loader::SkillCache;
 use crate::tools::read_guard::ReadGuard;
 
 /// All built-in tools available as of step 2 + the toolset extension.
@@ -44,6 +46,7 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         glob::definition(),
         list_dir::definition(),
         web_fetch::definition(),
+        use_skill::definition(),
     ]
 }
 
@@ -109,6 +112,7 @@ pub async fn execute_tool(
     ctx: &ToolContext,
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
+    skill_cache: Option<&SkillCache>,
     cancel: CancellationToken,
 ) -> (String, bool, ToolContextUpdate, Option<i32>) {
     // C1: generic cancel wrapper for all tools. The `biased;` ensures
@@ -121,7 +125,7 @@ pub async fn execute_tool(
             tracing::info!(tool = %name, "execute_tool: cancelled before/during tool execution");
             ("Tool execution was cancelled".to_string(), true, ToolContextUpdate::default(), None)
         }
-        result = execute_tool_inner(name, input, ctx, guard, session_id, &cancel) => {
+        result = execute_tool_inner(name, input, ctx, guard, session_id, skill_cache, &cancel) => {
             result
         }
     }
@@ -135,6 +139,7 @@ async fn execute_tool_inner(
     ctx: &ToolContext,
     guard: Option<&ReadGuard>,
     session_id: Option<&str>,
+    skill_cache: Option<&SkillCache>,
     cancel: &CancellationToken,
 ) -> (String, bool, ToolContextUpdate, Option<i32>) {
     match name {
@@ -179,6 +184,18 @@ async fn execute_tool_inner(
             let (out, is_err) = web_fetch::execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
+        "use_skill" => match skill_cache {
+            Some(cache) => {
+                let (out, is_err) = use_skill::execute(input, cache, ctx).await;
+                (out, is_err, ToolContextUpdate::default(), None)
+            }
+            None => (
+                "use_skill called without a SkillCache; this is a bug.".to_string(),
+                true,
+                ToolContextUpdate::default(),
+                None,
+            ),
+        },
         _ => (
             format!("Unknown tool: {}", name),
             true,

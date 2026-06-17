@@ -58,6 +58,7 @@ use crate::llm::{
     ToolDef,
 };
 use crate::memory::MemoryCache;
+use crate::skill::loader::SkillCache;
 use crate::state::{ChatEventSink, ToolCallPayload};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
@@ -101,6 +102,7 @@ pub async fn run_chat_loop(
     session_active_request: Arc<Mutex<std::collections::HashMap<String, String>>>,
     read_guard: ReadGuard,
     memory_cache: Arc<MemoryCache>,
+    skill_cache: Arc<SkillCache>,
     permission_asks: crate::agent::permissions::PermissionStore,
     token: CancellationToken,
     // D3 PR3 (2026-06-17): resend context. When `Some(seq)`,
@@ -232,6 +234,7 @@ pub async fn run_chat_loop(
     let memory_layers = load_for_session(&memory_cache, &project.id, &project.path).await;
     let instructions_blocks =
         crate::memory::loader::build_instructions_blocks(&memory_layers);
+    let has_memory = !instructions_blocks.is_empty();
     if !instructions_blocks.is_empty() {
         messages.insert(
             0,
@@ -248,6 +251,40 @@ pub async fn run_chat_loop(
                     "Understood. I will follow these instructions throughout our session."
                         .to_string(),
                 ),
+            },
+        );
+    }
+
+    // B4 skill listing (L0): an independent synthetic user message,
+    // decoupled from the memory instructions cache window so skill
+    // add/remove does not bust the memory cache breakpoint (PR2
+    // brainstorm Q1 decision). Empty when no skill files exist —
+    // skipped, symmetric to the memory `instructions_blocks.is_empty()`
+    // guard above.
+    //
+    // Uses `worktree_path` (not `project.path`) so the L0 listing
+    // resolves from the same dir the `use_skill` L1 activation
+    // (`tools/use_skill.rs`, via `ctx.worktree_path`) consults —
+    // otherwise a worktree-attached session would list skills from
+    // the main project root but resolve them from the worktree,
+    // turning a matching listing into a "not found" on L1.
+    // (`worktree_path` already went through `assert_within_root`
+    // canonicalize above, so symlinks are resolved consistently on
+    // both sides; `SkillCache` keys by the path string, so the L0
+    // + L1 cache slots line up.)
+    let skill_listing_path = worktree_path.to_string_lossy().to_string();
+    let skill_infos =
+        crate::skill::loader::list_skill_infos(&skill_cache, Some(&skill_listing_path)).await;
+    let skill_blocks = crate::skill::loader::build_skill_listing_block(&skill_infos);
+    if !skill_blocks.is_empty() {
+        // Insert after the memory user/assistant pair (pos 2) when
+        // memory is present, else at the head (pos 0).
+        let skill_pos = if has_memory { 2 } else { 0 };
+        messages.insert(
+            skill_pos,
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(skill_blocks),
             },
         );
     }
@@ -883,6 +920,7 @@ pub async fn run_chat_loop(
                 &current_ctx,
                 Some(&read_guard),
                 Some(&session_id),
+                Some(&skill_cache),
                 token.clone(),
             )
             .await;

@@ -33,6 +33,7 @@ mod llm;
 mod memory;
 mod projects;
 mod resource_loader;
+mod skill;
 mod state;
 mod tools;
 

@@ -84,6 +84,7 @@ pub async fn chat(
     let inflight_exits = state.inflight_exits.clone();
     let read_guard = state.read_guard.clone();
     let memory_cache = state.memory_cache.clone();
+    let skill_cache = state.skill_cache.clone();
     let permission_asks = state.permission_asks.clone();
     let rid = request_id;
     // The `app` clone lives on through `AppHandleSink` (built
@@ -210,6 +211,7 @@ pub async fn chat(
             session_active_request,
             read_guard,
             memory_cache,
+            skill_cache,
             permission_asks,
             token,
             // D3 PR3 (2026-06-17): pass the resend context

@@ -780,6 +780,7 @@ use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, ChatMessage, TokenUsage};
 use crate::llm::Provider;
 use crate::memory::MemoryCache;
+use crate::skill::loader::SkillCache;
 use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
 use crate::tools::read_guard::ReadGuard;
 
@@ -857,6 +858,13 @@ impl MockEmitter {
     fn tool_result_count(&self) -> usize {
         self.tool_results.lock().unwrap().len()
     }
+
+    /// Snapshot all `tool:result` payloads (content + is_error) — for
+    /// asserting what the agent loop fed back to the LLM (e.g. a
+    /// resolved skill body, or an "is_error" self-correction nudge).
+    fn tool_results_snapshot(&self) -> Vec<ToolResultPayload> {
+        self.tool_results.lock().unwrap().clone()
+    }
 }
 
 impl ChatEventSink for MockEmitter {
@@ -918,6 +926,7 @@ struct TestHarness {
     session_active_request: Arc<AsyncMutex<HashMap<String, String>>>,
     read_guard: ReadGuard,
     memory_cache: Arc<MemoryCache>,
+    skill_cache: Arc<SkillCache>,
     permission_asks: crate::agent::permissions::PermissionStore,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
@@ -972,6 +981,7 @@ async fn make_harness() -> TestHarness {
         session_active_request: Arc::new(AsyncMutex::new(HashMap::new())),
         read_guard: ReadGuard::new(),
         memory_cache: MemoryCache::arc(),
+        skill_cache: SkillCache::arc(),
         permission_asks: new_permission_store(),
         // Move the TempDir guard INTO the harness so it lives as
         // long as the harness (i.e. the whole test). Without this
@@ -1026,6 +1036,7 @@ async fn agent_loop_basic_text_only_completes() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1106,6 +1117,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1123,6 +1135,159 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
     // (success path, is_error=false) before re-entering the
     // outer loop.
     assert_eq!(emitter.tool_result_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 2b) B4 use_skill loads the skill body into the tool_result
+// ---------------------------------------------------------------------------
+
+/// B4: turn 1 model emits `use_skill("review-pr")`. The agent loop
+/// resolves the skill body from the SkillCache (a real skill file
+/// seeded under the project's `.everlasting/skills/`) and feeds it
+/// back as the tool_result — L1 activation via the tool_result path
+/// (PR2 brainstorm Q2). Turn 2: final text. Asserts the body lands
+/// in the tool_result with is_error=false.
+#[tokio::test]
+async fn agent_loop_use_skill_loads_body_into_tool_result() {
+    let h = make_harness().await;
+    // Seed a real skill the loader will scan.
+    let skill_dir = h
+        .project_path
+        .join(".everlasting")
+        .join("skills")
+        .join("review-pr");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: review a PR\n---\nREVIEW-SKILL-BODY",
+    )
+    .unwrap();
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_skill".into(),
+                name: "use_skill".into(),
+                input: serde_json::json!({"skill_name": "review-pr"}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "applied".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-skill".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        mock.call_count(),
+        2,
+        "use_skill must trigger a second turn (body fed back as tool_result)"
+    );
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 1, "exactly one tool_result for use_skill");
+    assert!(
+        results[0].content.contains("REVIEW-SKILL-BODY"),
+        "tool_result must carry the skill body, got: {}",
+        results[0].content
+    );
+    assert!(
+        !results[0].is_error,
+        "resolved skill must be a success tool_result"
+    );
+}
+
+/// B4: `use_skill("nope")` with no matching skill returns
+/// is_error=true — the standard ⑫ error-feedback path so the LLM
+/// can self-correct.
+#[tokio::test]
+async fn agent_loop_use_skill_unknown_returns_error() {
+    let h = make_harness().await;
+    // No skill files seeded → "nope" won't resolve.
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_miss".into(),
+                name: "use_skill".into(),
+                input: serde_json::json!({"skill_name": "nope"}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-skill-miss".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+    )
+    .await;
+
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].is_error,
+        "unknown skill must be is_error so the LLM can self-correct"
+    );
+    assert!(
+        results[0].content.contains("not found"),
+        "error content should name the missing skill, got: {}",
+        results[0].content
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1380,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         cancel_token,
         None,
@@ -1288,6 +1454,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1342,6 +1509,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1412,6 +1580,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1522,6 +1691,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1632,6 +1802,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1749,6 +1920,7 @@ async fn agent_loop_persist_failure_emits_error() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -1870,6 +2042,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         cancel_token,
         None,
@@ -1949,6 +2122,7 @@ async fn agent_loop_error_persists_partial_text() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -2011,6 +2185,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -2065,6 +2240,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -2153,6 +2329,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
@@ -2209,6 +2386,7 @@ async fn agent_loop_error_emits_turn_complete() {
         h.session_active_request,
         h.read_guard,
         h.memory_cache,
+        h.skill_cache,
         h.permission_asks,
         CancellationToken::new(),
         None,
