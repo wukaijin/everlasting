@@ -1,0 +1,6 @@
+{"file": "docs/research/skill-system-survey.md", "reason": "核对实现决策与调研一致:虚拟 tool(非 system prompt 全量注入)/三层披露/正文注入消息流(非 system prompt)/复用 B3 加载层/不动 B3"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "核对 use_skill tool 定义符合 builtin_tools 契约 + execute_tool_inner 分发正确 + ⑨ 关接入 + 不存在 skill 返回 is_error=true 自纠错路径"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "核对 L0 清单注入与 memory build_instructions_blocks 模式一致(⑤a 阶段 + cache_control 断点 + 空清单 skip 对称 build_banner)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对 chat_loop 接入未引入 faithful-port drift(use_skill 注入路径在单源 run_chat_loop 内,无副本同步问题)"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "check 时确认 DEBT 无新增(本任务 DoD 声明 0 新增债);若发现新 RULE 按指南登记"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对独立 SkillCache 复制 B3 的 reuse 判断得当:无过度复制可抽未抽 / 无漏抽象;~200 行重复在 YAGNI 阈值内可接受"}

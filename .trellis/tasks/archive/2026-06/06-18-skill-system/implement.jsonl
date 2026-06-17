@@ -1,0 +1,5 @@
+{"file": "docs/research/skill-system-survey.md", "reason": "本任务 research-first 产物:use_skill 虚拟 tool 设计 + 三层渐进披露 + 精确注入位置行号(chat_loop.rs:233 / state.rs:177 / tools/mod.rs:140) + 与 B3 ResourceLoader 复用边界 + BACKLOG §2 两处过时修正(serde_yml 废弃 / 注入消息流非 system prompt)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "use_skill 虚拟 tool 须符合的契约:builtin_tools() 注册 / execute_tool_inner 分发 / ⑨ 关 5-tier 接入。PR2 注册 use_skill + 加执行分支的依据"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "B5 memory 加载 + build_instructions_blocks synthetic message + ⑤a context-construction 注入阶段。L0 skill 清单(独立第二条 synthetic message + cache_control 断点)复用同构模式"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop shared entry point pattern(production+test 单源)。PR2 在 chat_loop 注入 L0 清单须遵循此 pattern,避免 faithful-port drift hazard 反模式"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "加载层=独立 SkillCache 复制 B3 模式的 reuse 判断(YAGNI 当前不抽 ResourceLoader<Kind> 泛型)。指南裁定何时复制 vs 抽象,本任务显式选择复制"}
