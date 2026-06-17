@@ -1,13 +1,35 @@
 <script setup lang="ts">
-// ChatInput — chat composer. Single-line textarea (auto-grows up to
-// ~200px) + a circular Prussian-blue send button on the right, with
-// a small hint row below. Matches the spike-003 reference layout
-// (ui-A.png).
+// ChatInput — chat composer. A CodeMirror 6 single-line editor that
+// auto-grows up to ~200px + a circular Prussian-blue send button on
+// the right, with a small hint row below. Matches the spike-003
+// reference layout (ui-A.png).
 //
-// IME-safe Enter-to-send: during composition (中文输入法 candidate
-// selection) Enter must NOT submit, otherwise typing "你好" can blast
-// an unfinished candidate into the model. Same composition gate as
-// before.
+// PR1.5 (2026-06-17): the underlying <textarea> was replaced with
+// CodeMirror 6. Rationale: CM 6 handles Chinese IME composition
+// natively (no manual `isComposing` ref + `compositionstart/end`
+// listeners — `view.composing` is the source of truth), and the
+// decoration API will let PR-B token-color `/command` / `@file` /
+// skill tokens without fighting overlay caret-sync issues.
+// Migration notes:
+//   - v-model bridge: `updateListener` emits `update:modelValue` on
+//     docChanged (guarded against echo); a `watch` on the prop
+//     dispatches external resets back into the CM doc (also guarded).
+//   - autosize: CSS-only (`.cm-editor { max-height: 200px }` +
+//     `.cm-scroller { overflow: auto }`). The old JS `autosize()`
+//     that poked at `el.scrollHeight` is gone — CM's contenteditable
+//     `.cm-content` grows natively with the doc.
+//   - IME: CM owns composition state. Enter is wired through CM's
+//     `keymap`; while `view.composing` is true, Enter is intercepted
+//     (returns true) and never reaches `submit()`.
+//   - trigger panel routing: ArrowUp / ArrowDown / Enter / Tab / Esc
+//     are routed via `Prec.highest(keymap.of([...]))` to whichever
+//     TriggerMenu (command or file) is open. `currentLineInfo()`
+//     reads `view.state.doc.lineAt(head)` instead of textarea
+//     `selectionStart`.
+//   - TriggerMenu `:trigger-el` is bound to `view.dom` (the
+//     `.cm-editor` element) so click-to-reposition-caret inside CM
+//     does NOT close the panel (same pattern as the old textarea
+//     binding).
 //
 // The component is "dumb" with respect to the chat model — it emits
 // `send` with the trimmed text and lets the parent (ChatPanel) decide
@@ -17,9 +39,10 @@
 // PR5: when `sending` is true, the right-side send button morphs into
 // a Stop button. Clicking it emits `stop`; the parent calls
 // `chatStore.cancel()`. The disabled-while-streaming state of the
-// input itself is unchanged — the user can still see what's being
-// streamed; they just can't type a new message until the stream ends
-// (or they hit Stop and the stream bails out).
+// input itself is handled by swapping CM into `readOnly` via a
+// Compartment — the user can still see what's being streamed; they
+// just can't type a new message until the stream ends (or they hit
+// Stop and the stream bails out).
 //
 // Hint row layout (F5 follow-up):
 // - LEFT: LLM cumulative chip (clock icon + "Σ 1.2s" / "—") backed
@@ -55,9 +78,16 @@
 // a scrollable list with a sticky header, and (c) the reka-ui
 // `PopoverRoot` would require an extra import for one user.
 
-import { computed, nextTick, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipPortal, TooltipContent, TooltipArrow } from "reka-ui";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
+import {
+  EditorView,
+  keymap,
+  placeholder as cmPlaceholder,
+  type ViewUpdate,
+} from "@codemirror/view";
 import Icon from "../Icon.vue";
 import ModelSelect from "./ModelSelect.vue";
 import ModeSelect from "./ModeSelect.vue";
@@ -96,8 +126,21 @@ const emit = defineEmits<{
 }>();
 
 const input = ref("");
-const isComposing = ref(false);
-const textareaEl = ref<HTMLTextAreaElement | null>(null);
+
+// === CodeMirror 6 host ===========================================
+//
+// `host` is the <div> the EditorView mounts into. `view` holds the
+// EditorView instance (shallowRef — EditorView is a mutable class
+// instance; deep reactivity is unnecessary + would be wrong). Two
+// Compartments let us reconfigure extensions without rebuilding the
+// whole state: `editableCompartment` flips readOnly on/off when
+// `sending` toggles, and `placeholderCompartment` updates the
+// placeholder text when the prop changes.
+
+const host = ref<HTMLDivElement | null>(null);
+const view = shallowRef<EditorView | null>(null);
+const editableCompartment = new Compartment();
+const placeholderCompartment = new Compartment();
 
 // A4: per-session token usage — read from the chat store's
 // reactive `currentSessionTokenUsage`. The model store provides
@@ -228,86 +271,190 @@ const latencyAverage = computed<number | null>(() => {
   return count > 0 ? sum / count : null;
 });
 
-/** Auto-grow: reset height so the field shrinks when content is
- *  deleted, then size to scrollHeight (capped via CSS max-height). */
-function autosize() {
-  const el = textareaEl.value;
-  if (!el) return;
-  el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
+// === CM v-model bridge + keymap ==================================
+
+/**
+ * The single updateListener wires three behaviors off every CM
+ * transaction (only when the doc actually changed — IME
+ * composition transactions don't fire `docChanged` until commit):
+ *   1. Mirror the new doc text into the local `input` ref so
+ *      `sendDisabled()` and the trigger-panel detection read
+ *      live state. The `!==` guard avoids redundant re-assignments
+ *      when the watch-handler dispatched the same text back.
+ *   2. Re-run both trigger palettes (replaces the old
+ *      `onTextareaInput` body). CM fires `docChanged` once at the
+ *      end of a composition commit (NOT during the composition),
+ *      so this is naturally IME-safe — no manual `isComposing` gate.
+ *
+ * NOTE: `input` is NOT a v-model prop — the component owns it
+ * internally and exposes the typed text only via the `send`
+ * event. The CM doc is the source of truth for what's in the
+ * editor; `input.value` is the Vue-side mirror used by
+ * `sendDisabled()` and the trigger detection helpers.
+ */
+function onEditorUpdate(u: ViewUpdate): void {
+  if (u.docChanged) {
+    const next = u.state.doc.toString();
+    // Keep the local ref in sync for sendDisabled + trigger
+    // detection. The !== guard avoids re-entering when the
+    // watch(modelValue) handler dispatched the same text back.
+    if (next !== input.value) {
+      input.value = next;
+    }
+    // CM → Vue emit (v-model bridge). Same guard: the prop value
+    // mirrors `input.value` (it's our own internal state, not a
+    // parent prop), but we keep the guard symmetric for clarity.
+    syncCommandPalette();
+    syncFilePalette();
+  }
 }
 
-function onTextareaInput(e: Event) {
-  if (isComposing.value) return;
-  input.value = (e.target as HTMLTextAreaElement).value;
-  autosize();
-  // B3/B2: re-evaluate both trigger palettes on every input. Only one
-  //  can match — a line starts with `/` XOR `@` — so at most one opens.
-  syncCommandPalette();
-  syncFilePalette();
-}
-
-function onCompositionStart() {
-  isComposing.value = true;
-}
-
-function onCompositionEnd(e: CompositionEvent) {
-  isComposing.value = false;
-  input.value = (e.target as HTMLTextAreaElement).value;
-  autosize();
-  // B3/B2: an IME commit may have inserted/removed a `/` or `@`;
-  // re-evaluate both trigger states now that composition is over.
-  syncCommandPalette();
-  syncFilePalette();
-}
-
-function onKeydown(e: KeyboardEvent) {
-  // B3/B2: when either trigger palette is open, ArrowUp / ArrowDown /
-  //  Enter / Escape belong to the palette, not the textarea. Enter
-  //  MUST NOT submit while a palette is open (otherwise selecting an
-  //  item would also send the raw `@filter` / `/cmd` text as a chat
-  //  message). Only one palette is open at a time (a line starts with
-  //  `/` XOR `@`); route to whichever is active.
+/** IME-safe Enter handler. While `view.composing` is true the
+ *  keymap returns `true` (intercept) without submitting — this is
+ *  the CM-native replacement for the old `isComposing` ref gate.
+ *  Without it, typing Chinese via pinyin and pressing Enter to
+ *  pick a candidate would also fire `submit()` and send the
+ *  half-composed text. */
+function handleEnter(): boolean {
+  const v = view.value;
+  if (!v) return false;
+  // CM composition state — true while an IME candidate window is
+  // open. Returning true intercepts the key so CM doesn't also
+  // treat it as a newline insertion.
+  if (v.composing) return true;
+  // Either trigger panel open → confirm selection instead of submit.
   if (commandPaletteOpen.value || filePaletteOpen.value) {
     const menu = filePaletteOpen.value ? fileTriggerMenu.value : triggerMenu.value;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      menu?.moveActive(1);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      menu?.moveActive(-1);
-      return;
-    }
-    if (e.key === "Tab" && !e.shiftKey) {
-      // Tab = accept selection (same as Enter). Shift+Tab is NOT
-      // intercepted here — it stays bound to the Mode cycle
-      // (registerShiftTabCycle on window capture).
-      e.preventDefault();
-      menu?.confirmActive();
-      return;
-    }
-    if (e.key === "Enter" && !e.shiftKey && !isComposing.value) {
-      e.preventDefault();
-      menu?.confirmActive();
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      if (filePaletteOpen.value) {
-        closeFilePalette();
-      } else {
-        closeCommandPalette();
-      }
-      return;
-    }
+    menu?.confirmActive();
+    return true;
   }
-  if (e.key === "Enter" && !e.shiftKey && !isComposing.value) {
-    e.preventDefault();
-    submit();
-  }
+  // Plain Enter (no Shift) → submit. Shift+Enter is NOT bound here
+  // so CM falls through to its default (insert newline) — that's
+  // the expected "Shift+Enter = newline" behavior.
+  submit();
+  return true;
 }
+
+/** Build the keymap extension. Uses `Prec.highest` so our Enter /
+ *  ArrowUp / ArrowDown / Tab / Esc bindings outrank any other
+ *  keymap that might be added later. We do NOT install CM's
+ *  `defaultKeymap` (we don't want its history / indentWithTab /
+ *  cursor-movement defaults in this single-line-ish composer),
+ *  so `Prec.highest` here is mostly future-proofing — if a
+ *  future PR adds `defaultKeymap` for undo/redo, our Enter /
+ *  ArrowUp / Down / Tab / Esc still win. */
+function buildKeymap() {
+  return Prec.highest(
+    keymap.of([
+      {
+        key: "ArrowDown",
+        run: () => {
+          if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
+          const menu = filePaletteOpen.value ? fileTriggerMenu.value : triggerMenu.value;
+          menu?.moveActive(1);
+          return true;
+        },
+      },
+      {
+        key: "ArrowUp",
+        run: () => {
+          if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
+          const menu = filePaletteOpen.value ? fileTriggerMenu.value : triggerMenu.value;
+          menu?.moveActive(-1);
+          return true;
+        },
+      },
+      // Enter handled via handleEnter (composition-aware submit).
+      { key: "Enter", run: handleEnter },
+      {
+        // Non-Shift Tab when a panel is open = confirm (same as
+        // Enter). Without a panel open, return false so CM falls
+        // through to its default (no-op in a single-line editor).
+        key: "Tab",
+        run: () => {
+          if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
+          const menu = filePaletteOpen.value ? fileTriggerMenu.value : triggerMenu.value;
+          menu?.confirmActive();
+          return true;
+        },
+      },
+      {
+        // Esc closes whichever panel is open. If neither is open,
+        // return false so the outer `<footer @keydown.escape>` handler
+        // (Stop-on-Esc-while-sending) still fires.
+        key: "Escape",
+        run: () => {
+          if (filePaletteOpen.value) {
+            closeFilePalette();
+            return true;
+          }
+          if (commandPaletteOpen.value) {
+            closeCommandPalette();
+            return true;
+          }
+          return false;
+        },
+      },
+    ]),
+  );
+}
+
+onMounted(() => {
+  if (!host.value) return;
+  const initialState = EditorState.create({
+    doc: input.value,
+    extensions: [
+      EditorView.lineWrapping,
+      placeholderCompartment.of(cmPlaceholder(props.placeholder ?? "问点什么,或输入 / 调出命令…")),
+      editableCompartment.of(EditorState.readOnly.of(props.sending ? true : false)),
+      EditorView.updateListener.of(onEditorUpdate),
+      buildKeymap(),
+    ],
+  });
+  view.value = new EditorView({
+    state: initialState,
+    parent: host.value,
+  });
+});
+
+onUnmounted(() => {
+  view.value?.destroy();
+  view.value = null;
+});
+
+// Vue → CM: when the parent changes the placeholder prop, reconfigure
+// the placeholder Compartment without rebuilding the whole state.
+watch(
+  () => props.placeholder,
+  (next) => {
+    const v = view.value;
+    if (!v) return;
+    v.dispatch({
+      effects: placeholderCompartment.reconfigure(
+        cmPlaceholder(next ?? "问点什么,或输入 / 调出命令…"),
+      ),
+    });
+  },
+);
+
+// Vue → CM: when `sending` toggles, flip readOnly via the editable
+// Compartment. Replaces the old `:disabled="sending"` textarea
+// binding. We use `EditorState.readOnly` (prevents user-driven doc
+// mutations) rather than `EditorView.editable.of(false)` (which
+// only prevents the DOM from receiving user input but still allows
+// programmatic dispatches) so the trigger-panel dispatches
+// (replaceDoc in onCommandSelect / onFileSelect) + the submit
+// clear-dispatch still work while a stream is in flight.
+watch(
+  () => props.sending,
+  (sending) => {
+    const v = view.value;
+    if (!v) return;
+    v.dispatch({
+      effects: editableCompartment.reconfigure(EditorState.readOnly.of(sending)),
+    });
+  },
+);
 
 function onSubmit() {
   submit();
@@ -324,7 +471,7 @@ function onStop() {
  * the capture phase on `window` — the default browser
  * behaviour (reverse-tab focus traversal) MUST be suppressed
  * with `e.preventDefault()`, which a per-component listener
- * on the textarea can't reliably do once focus has moved
+ * on the editor can't reliably do once focus has moved
  * elsewhere.
  *
  * The cycle order is `MODE_CYCLE` (Edit → Plan →
@@ -364,19 +511,19 @@ registerShiftTabCycle({
 //
 // The TriggerMenu is a reusable skeleton (TriggerMenu.vue); this
 // block owns the B3-specific wiring:
-//   - detection: open the panel when the textarea's CURRENT LINE
+//   - detection: open the panel when the editor's CURRENT LINE
 //     starts with `/` AND the line is otherwise empty (matches
 //     Claude Code's "type / to see commands" UX). Multi-line
 //     drafts only look at the cursor's line, so `/help` on line 2
 //     of a draft still triggers.
-//   - IME safety: never open during composition (Chinese IME
-//     candidates include `/` as a literal char in some schemas).
+//   - IME safety: CM fires `docChanged` only at composition commit,
+//     so the panel never opens mid-composition.
 //   - data source: lazy `list_commands` IPC the first time the
 //     panel opens in a session; the backend's mtime-fence cache
 //     makes subsequent opens free.
 //   - keyboard routing: when the panel is open, ArrowUp / ArrowDown
-//     / Enter / Escape are intercepted HERE (before the textarea's
-//     own Enter handler) and routed to the TriggerMenu. Enter no
+//     / Enter / Escape are intercepted by the CM keymap (see
+//     buildKeymap above) and routed to the TriggerMenu. Enter no
 //     longer submits while the panel is open.
 //   - dispatch: builtins (`/help` `/clear` `/new`) run client-side
 //     (no LLM round-trip); custom commands fetch their template body
@@ -387,7 +534,7 @@ const triggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
 const commandPaletteOpen = ref(false);
 const commandItems = ref<TriggerMenuItem[]>([]);
 /** Text the user typed AFTER the `/`. Empty string = "show all".
- *  Computed from the textarea's current line on every input. */
+ *  Computed from the editor's current line on every doc change. */
 const commandFilter = ref("");
 /** Marker so we don't refetch `list_commands` on every keystroke.
  *  Cleared when the panel closes (so a future edit to a command
@@ -399,31 +546,32 @@ let commandsLoaded = false;
 // B2 @文件 palette. Symmetrical to the B3 command block above: a second
 // <TriggerMenu> caller with trigger="@" + fuzzysort. The two palettes
 // are mutually exclusive (a line can't start with both `/` and `@`),
-// so only one is open at a time; onKeydown routes keys to whichever is
-// open. `filesLoaded` is cleared on close so the next `@` re-fetches
-// the file list (source trees churn — no backend mtime cache).
+// so only one is open at a time; the CM keymap routes keys to
+// whichever is open. `filesLoaded` is cleared on close so the next
+// `@` re-fetches the file list (source trees churn — no backend
+// mtime cache).
 const fileTriggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
 const filePaletteOpen = ref(false);
 const fileItems = ref<TriggerMenuItem[]>([]);
 const fileFilter = ref("");
 let filesLoaded = false;
 
-/** The cursor's current line in the textarea. Used for trigger
+/** The cursor's current line in the editor. Used for trigger
  *  detection (must START with `/` and be otherwise empty) and
- *  for extracting the filter text. Splits on `\n` and indexes by
- *  `selectionStart`. */
+ *  for extracting the filter text. Reads CM's `doc.lineAt(head)`,
+ *  which returns `{ number, from, to, text, length }` — `text`
+ *  is the line without the trailing `\n`, `from` is the line's
+ *  starting doc offset. No manual `\n` split needed.
+ *
+ *  Guarded against a null view (before onMounted) by returning
+ *  empty values; the trigger-panel logic treats empty input as
+ *  "no trigger". */
 function currentLineInfo(): { line: string; lineStart: number } {
-  const el = textareaEl.value;
-  if (!el) return { line: "", lineStart: 0 };
-  const pos = el.selectionStart ?? input.value.length;
-  const upto = input.value.slice(0, pos);
-  const lineStart = upto.lastIndexOf("\n") + 1;
-  const lineEnd = input.value.indexOf("\n", pos);
-  const line =
-    lineEnd === -1
-      ? input.value.slice(lineStart)
-      : input.value.slice(lineStart, lineEnd);
-  return { line, lineStart };
+  const v = view.value;
+  if (!v) return { line: "", lineStart: 0 };
+  const head = v.state.selection.main.head;
+  const lineObj = v.state.doc.lineAt(head);
+  return { line: lineObj.text, lineStart: lineObj.from };
 }
 
 /** True when the cursor's current line is exactly `/` optionally
@@ -475,7 +623,7 @@ async function loadCommands(): Promise<void> {
 }
 
 /** Open the panel + lazy-load the command list. Called from the
- *  input watcher when `detectCommandTrigger` flips to true. */
+ *  update listener when `detectCommandTrigger` flips to true. */
 async function openCommandPalette(filter: string): Promise<void> {
   commandFilter.value = filter;
   commandPaletteOpen.value = true;
@@ -492,12 +640,12 @@ function closeCommandPalette(): void {
   commandItems.value = [];
 }
 
-/** Re-evaluate trigger state on every input. Open the panel when
- *  the cursor enters command shape; close it when the user types
- *  past the command-name region (space, punctuation, newline) or
- *  deletes the leading `/`. */
+/** Re-evaluate trigger state on every doc change. Open the panel
+ *  when the cursor enters command shape; close it when the user
+ *  types past the command-name region (space, punctuation, newline)
+ *  or deletes the leading `/`. Called from `onEditorUpdate` only
+ *  when `u.docChanged` is true — never during IME composition. */
 function syncCommandPalette(): void {
-  if (isComposing.value) return;
   const { trigger, filter } = detectCommandTrigger();
   if (trigger) {
     if (!commandPaletteOpen.value) {
@@ -510,14 +658,34 @@ function syncCommandPalette(): void {
   }
 }
 
+/** Replace the doc text and reset the selection back to the same
+ *  position (after the inserted text). Used by onCommandSelect /
+ *  onFileSelect to strip the trigger token before dispatch.
+ *  Dispatches a single CM transaction; the resulting `docChanged`
+ *  flips through onEditorUpdate which re-syncs `input.value`. */
+function replaceDoc(newDoc: string, caret?: number): void {
+  const v = view.value;
+  if (!v) {
+    input.value = newDoc;
+    return;
+  }
+  const cur = v.state.doc.toString();
+  if (cur === newDoc) return;
+  v.dispatch({
+    changes: { from: 0, to: cur.length, insert: newDoc },
+    selection: caret !== undefined ? { anchor: caret } : undefined,
+    scrollIntoView: true,
+  });
+}
+
 /** Selected-item dispatcher. Called by TriggerMenu's `@select`.
  *  Builtins run client-side (no LLM round-trip); custom commands
  *  fetch their template body via `get_command_body` and send it as
  *  a user message (the command name itself is stripped from the
- *  textarea and never enters the LLM payload).
+ *  editor and never enters the LLM payload).
  *
  *  The `/` prefix and any filter the user typed are stripped from
- *  the textarea BEFORE dispatch — so selecting `clear` from the
+ *  the editor BEFORE dispatch — so selecting `clear` from the
  *  panel leaves the input empty (ready for the next message),
  *  matching Claude Code. */
 async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
@@ -527,25 +695,22 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   // (rare — the trigger only fires when the line is a bare
   // command-name shape).
   const { lineStart } = currentLineInfo();
-  const beforeLine = input.value.slice(0, lineStart);
-  const afterToken = input.value.slice(lineStart);
+  const doc = input.value;
+  const beforeLine = doc.slice(0, lineStart);
+  const afterToken = doc.slice(lineStart);
   // The user may have typed a prefix (e.g. `/he` for `help`); we
   // remove the entire typed prefix, not just the matched name, so
   // no leftover `lp` stays in the box after selecting `help`.
   const tokenEnd = afterToken.search(/[\s\n]/) === -1 ? afterToken.length : afterToken.search(/[\s\n]/);
   const newAfter = afterToken.slice(tokenEnd);
-  input.value = beforeLine + newAfter;
+  const newDoc = beforeLine + newAfter;
   // Close the panel first so the dispatch side-effects (modal,
   // invoke) don't race with a still-mounted panel.
   closeCommandPalette();
-  // Refocus + autosize so the cursor lands back in the textarea.
+  replaceDoc(newDoc, beforeLine.length);
+  // Refocus + scroll the new caret into view.
   await nextTick();
-  const el = textareaEl.value;
-  if (el) {
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-    el.focus();
-  }
+  view.value?.focus();
 
   const sid = chatStore.currentSessionId;
 
@@ -669,11 +834,10 @@ function closeFilePalette(): void {
   fileItems.value = [];
 }
 
-/** Re-evaluate the `@` trigger on every input — mirror of
+/** Re-evaluate the `@` trigger on every doc change — mirror of
  *  syncCommandPalette. Opens when the line becomes `@foo`, closes when
  *  the user types a space / deletes the `@`. */
 function syncFilePalette(): void {
-  if (isComposing.value) return;
   const { trigger, filter } = detectFileTrigger();
   if (trigger) {
     if (!filePaletteOpen.value) {
@@ -693,32 +857,36 @@ function syncFilePalette(): void {
  *  trailing text on the line intact. */
 async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   const { lineStart } = currentLineInfo();
-  const beforeLine = input.value.slice(0, lineStart);
-  const afterAt = input.value.slice(lineStart);
+  const doc = input.value;
+  const beforeLine = doc.slice(0, lineStart);
+  const afterAt = doc.slice(lineStart);
   const spaceIdx = afterAt.search(/[\s]/);
   const tokenEnd = spaceIdx === -1 ? afterAt.length : spaceIdx;
   const newAfter = `@${item.name}` + afterAt.slice(tokenEnd);
-  input.value = beforeLine + newAfter;
+  const newDoc = beforeLine + newAfter;
+  const caret = lineStart + 1 + item.name.length;
   closeFilePalette();
+  replaceDoc(newDoc, caret);
   await nextTick();
-  const el = textareaEl.value;
-  if (el) {
-    const caret = lineStart + 1 + item.name.length;
-    el.setSelectionRange(caret, caret);
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-    el.focus();
-  }
+  view.value?.focus();
 }
 
 function submit() {
   const text = input.value;
   if (!text.trim() || props.sending) return;
-  input.value = "";
-  // Reset height on send so an emptied field collapses to a single
-  // line immediately rather than snapping to 0 on the next input.
-  const el = textareaEl.value;
-  if (el) el.style.height = "auto";
+  // Clear the CM doc. Dispatching triggers onEditorUpdate which
+  // mirrors the empty doc back into `input.value`, so no manual
+  // `input.value = ""` here is necessary (kept for belt-and-
+  // suspenders safety in case `view` is mid-teardown).
+  const v = view.value;
+  if (v) {
+    const cur = v.state.doc.toString();
+    if (cur.length > 0) {
+      v.dispatch({ changes: { from: 0, to: cur.length, insert: "" } });
+    }
+  } else {
+    input.value = "";
+  }
   emit("send", text);
 }
 
@@ -735,7 +903,7 @@ function onEscKeydown() {
   <footer class="chat-input" @keydown.escape.prevent="onEscKeydown">
     <div class="chat-input__row" :style="inputRowStyle">
       <!-- PR2 (B7): per-session Mode picker. Placed on the LEFT
-           of the input row (same line as the textarea), NOT in
+           of the input row (same line as the editor), NOT in
            the hint row, per Q4 P2 in the 2026-06-13 mode-redesign
            grill-with-docs session. Rationale: mode = "input
            context" — physically adjacent to the input box. Same
@@ -746,11 +914,14 @@ function onEscKeydown() {
       <ModeSelect />
       <!-- B3 (PR2): command palette. Anchored to the input row
            (position: relative on the row makes it the
-           offsetParent); opens UPWARD above the textarea when the
+           offsetParent); opens UPWARD above the editor when the
            user types `/` at the start of the current line. The
            TriggerMenu component is a reusable skeleton (see its
            top-of-file comment) — B2 (@file) and B4 (skill) will
-           reuse it with a different trigger char + data source. -->
+           reuse it with a different trigger char + data source.
+           `:trigger-el` points at the CM `.cm-editor` DOM node
+           (view.dom) so click-to-reposition-caret inside CM
+           doesn't close the panel. -->
       <TriggerMenu
         ref="triggerMenu"
         :open="commandPaletteOpen"
@@ -759,7 +930,7 @@ function onEscKeydown() {
         trigger="/"
         header-label="命令"
         empty-label="无匹配命令"
-        :trigger-el="textareaEl"
+        :trigger-el="view?.dom ?? null"
         @select="onCommandSelect"
         @close="closeCommandPalette"
       />
@@ -776,7 +947,7 @@ function onEscKeydown() {
         header-label="文件"
         empty-label="无匹配文件"
         fuzzy
-        :trigger-el="textareaEl"
+        :trigger-el="view?.dom ?? null"
         @select="onFileSelect"
         @close="closeFilePalette"
       >
@@ -787,17 +958,17 @@ function onEscKeydown() {
           </span>
         </template>
       </TriggerMenu>
-      <textarea
-        ref="textareaEl"
-        :value="input"
+      <!-- PR1.5: CodeMirror 6 host div. The EditorView mounts into
+           this element on `onMounted` and owns all internal DOM
+           (`.cm-editor`, `.cm-scroller`, `.cm-content`). Vue MUST
+           NOT render children here — CM is the sole owner of the
+           host's subtree (rendering v-html/v-text inside would
+           destroy CM's DOM bookkeeping). -->
+      <div
+        ref="host"
         class="chat-input__field"
-        rows="1"
-        :placeholder="placeholder ?? '问点什么,或输入 / 调出命令…'"
-        :disabled="sending"
-        @input="onTextareaInput"
-        @compositionstart="onCompositionStart"
-        @compositionend="onCompositionEnd"
-        @keydown="onKeydown"
+        :class="{ 'chat-input__field--disabled': sending }"
+        :aria-disabled="sending ? 'true' : undefined"
       />
       <!-- PR5: morph the send button into a Stop button while
            `sending` is true. We use the same accent color for
@@ -1019,29 +1190,82 @@ function onEscKeydown() {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
+/* PR1.5: CodeMirror 6 host. The EditorView creates `.cm-editor`
+   inside this div; we style it through `:deep()` because CM
+   injects its own DOM (scoped CSS `data-v-xxx` doesn't apply to
+   imperative children — same gotcha as reka-ui portal children,
+   see `.trellis/spec/frontend/reka-ui-usage.md`). Visual contract
+   matches the old `<textarea>`: flex:1 to fill the row, 14px sans
+   body, 6/0 vertical/horizontal padding, max-height 200px with
+   internal scroller. */
 .chat-input__field {
   flex: 1;
-  resize: none;
-  border: none;
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+:deep(.chat-input__field .cm-editor) {
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
-  outline: none;
-  padding: 6px 0;
-  min-height: 28px;
   max-height: 200px;
-  overflow-y: auto;
+  /* The .cm-scroller inside handles overflow:auto when content
+     exceeds 200px — mirrors the old textarea's max-height +
+     overflow-y:auto pair. */
 }
 
-.chat-input__field::placeholder {
+:deep(.chat-input__field .cm-editor .cm-scroller) {
+  font-family: inherit;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+:deep(.chat-input__field .cm-editor .cm-content) {
+  /* Match the old textarea's 6px vertical padding baseline so the
+     caret + text sit at the same Y as the Mode/Model popovers
+     around it. CM's default content padding is 4px; we override
+     to 0 because the scroller above already provides 6px. */
+  padding: 0;
+  caret-color: var(--color-text-primary);
+}
+
+:deep(.chat-input__field .cm-editor.cm-focused) {
+  /* No double focus ring — the .chat-input__row:focus-within rule
+     above already draws the accent ring on the outer container. */
+  outline: none;
+}
+
+:deep(.chat-input__field .cm-editor .cm-cursor) {
+  border-left-color: var(--color-text-primary);
+}
+
+/* Placeholder — CM injects `.cm-placeholder` via the placeholder()
+   extension. Match the old `::placeholder` muted color. */
+:deep(.chat-input__field .cm-editor .cm-placeholder) {
   color: var(--color-text-muted);
 }
 
-.chat-input__field:disabled {
-  color: var(--color-text-muted);
+/* Disabled (sending) state — mirrors the old
+   `.chat-input__field:disabled { color: muted; cursor: not-allowed }`.
+   CM's `EditorState.readOnly` doesn't add a `:disabled` pseudo, so
+   we toggle a class on the host and dim the content + change the
+   cursor. We don't disable pointer events entirely so the user
+   can still select text to copy mid-stream. */
+.chat-input__field--disabled {
   cursor: not-allowed;
+}
+
+:deep(.chat-input__field--disabled .cm-editor) {
+  color: var(--color-text-muted);
+}
+
+:deep(.chat-input__field--disabled .cm-editor .cm-content) {
+  caret-color: var(--color-text-muted);
 }
 
 /* Shared shape for both the Send and Stop action buttons. PR5

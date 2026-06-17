@@ -111,7 +111,19 @@ export function registerKeybinding(binding: KeyBinding): KeyBindingHandle {
  *  binding calls `e.preventDefault()` to override the default
  *  focus-shift behavior. `enabled` is the streaming gate.
  *
- *  This is the only consumer of `registerKeybinding` in PR2;
+ *  PR1.5 (2026-06-17, B2): the handler also calls
+ *  `e.stopPropagation()` so the event does NOT continue
+ *  propagating to a CodeMirror 6 `EditorView` host. The current
+ *  ChatInput CM instance does NOT install `defaultKeymap`, so
+ *  Shift+Tab has no CM-side binding today — but if a future PR
+ *  adds `defaultKeymap` (e.g. for undo/redo), its Shift+Tab
+ *  "inverse-indent" command would otherwise run AFTER our
+ *  capture-phase cycle and double-handle the key. The capture-
+ *  phase stopPropagation is a small, defensive choke point that
+ *  future-proofs the cycle without coupling to whether CM has
+ *  a Shift+Tab binding.
+ *
+ *  This is the only consumer of `registerKeybinding` today;
  *  future PRs can add their own bindings or call this helper
  *  with a different `cycle` fn (e.g. "cycle projects" with
  *  Ctrl+Tab). */
@@ -124,6 +136,12 @@ export function registerShiftTabCycle(opts: {
     shiftKey: true,
     handler: (e) => {
       e.preventDefault();
+      // Stop the event from reaching any target/bubble-phase
+      // listener (e.g. a future CodeMirror `defaultKeymap`
+      // Shift+Tab "inverse-indent" command). Capture-phase
+      // listeners fire BEFORE the target, so stopPropagation
+      // here is the correct choke point. Cheap + defensive.
+      e.stopPropagation();
       opts.cycle();
     },
     enabled: opts.enabled,

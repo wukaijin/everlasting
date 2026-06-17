@@ -183,6 +183,44 @@ describe("useKeyboard — registerShiftTabCycle", () => {
     scope.stop();
   });
 
+  it("stopPropagation so CM defaultKeymap Shift+Tab unindent doesn't double-fire (PR1.5)", () => {
+    // Without this, the CodeMirror 6 ChatInput's defaultKeymap
+    // catches Shift+Tab at the target/bubble phase and runs its
+    // inverse-indent command AFTER our capture-phase cycle
+    // already ran. Capture-phase stopPropagation is the choke
+    // point — it prevents the event from reaching CM's host
+    // listener at all.
+    //
+    // NOTE: this test file does NOT dispose listeners between
+    // tests (the `effectScope` here is not a Vue component scope
+    // so `onUnmounted` doesn't fire). Each test piles a new
+    // Shift+Tab listener onto window; that's a pre-existing
+    // pattern (see the sibling tests above — they all rely on
+    // the cycle spy being unique to the local closure, not on
+    // the listener being unique). We follow the same pattern:
+    // assert that stopPropagation is called AT LEAST once
+    // (older listeners from prior tests may also call it), but
+    // the important property is that the just-registered binding
+    // DID call it.
+    const scope = effectScope();
+    scope.run(() => {
+      const cycle = vi.fn();
+      registerShiftTabCycle({ cycle });
+      const ev = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      const stopSpy = vi.spyOn(ev, "stopPropagation");
+      window.dispatchEvent(ev);
+      expect(cycle).toHaveBeenCalledOnce();
+      expect(ev.defaultPrevented).toBe(true);
+      expect(stopSpy).toHaveBeenCalled();
+    });
+    scope.stop();
+  });
+
   it("skips when enabled() returns false", () => {
     const scope = effectScope();
     scope.run(() => {

@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "检查 popover anchor 不变(trigger-el→view.dom 唯一改)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "检查着色复用现有 token"}
+{"file": ".trellis/tasks/06-17-b2-pr1-5-token-highlight/research/codemirror-vue-integration.md", "reason": "检查 v-model/IME 实现符合 research"}
+{"file": ".trellis/tasks/06-17-b2-pr1-5-token-highlight/research/codemirror-token-highlight-migration.md", "reason": "检查迁移风险规避(IME Enter/Shift+Tab stopPropagation/trigger-el)"}
