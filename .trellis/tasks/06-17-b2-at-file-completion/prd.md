@@ -94,3 +94,9 @@
 
 - [`research/at-file-ux-conventions.md`](research/at-file-ux-conventions.md) — CC @ at-start + 注入文件内容 + `@relpath` 不加 `/` + 多文件 + 不支持行号。
 - [`research/fuzzy-matching-impl.md`](research/fuzzy-matching-impl.md) — 前端 fuzzysort（3.2KB/0dep）一次 IPC 缓存 + 本地匹配；nucleo 留后续。
+
+## Status（2026-06-17 session 收尾）
+
+- **PR1 完成**：commit `f3ac7a0`（前端 `<TriggerMenu>` 第二 caller：@触发 + fuzzysort + Tab=Enter + #row slot + 互斥路由；后端 `files::walk_files` + `list_files` command；8 单测；`vue-tsc` 0 错误 + `cargo test --lib` 526 passed + e2e 通过）。实现修正：不做后端 mtime 缓存（源码树频繁变化，前端每次 @ 拉新更合适）。
+- **PR2 拆出独立 task** → `.trellis/tasks/06-17-b2-pr2-at-file-injection/`（后端 agent loop 解析 `@token` 注入文件内容，对齐 CC；下次 session 继续）。
+- 本 task（PR1 范围）archive。
