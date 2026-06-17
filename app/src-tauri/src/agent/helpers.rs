@@ -295,6 +295,17 @@ pub async fn await_inflight_exit(exit_rx: Option<oneshot::Receiver<()>>, label: 
 /// survives DOMPurify unchanged and is locale-friendly.
 pub const CANCELLED_MARKER: &str = "[已停止]";
 
+/// RULE-A-007 (2026-06-17): symmetric counterpart to
+/// [`CANCELLED_MARKER`] for the **error** path. When the LLM
+/// stream emits a `ChatEvent::Error` mid-turn, the agent loop
+/// now persists whatever partial content accumulated
+/// (`text_parts` / `finalized_thinking` / `tool_calls`) —
+/// matching the cancel path's behavior — and appends this
+/// marker to the text so a reload shows the user where the
+/// turn broke. The two markers share the same bracketed-text
+/// style so the rehydrate path can render either uniformly.
+pub const ERROR_MARKER: &str = "[生成出错中断]";
+
 // ---------------------------------------------------------------------------
 // Sink-based emit helpers (P1 RULE-A-006)
 //

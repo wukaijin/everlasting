@@ -48,7 +48,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event_via_sink, persist_turn_cwd,
-    CANCELLED_MARKER,
+    CANCELLED_MARKER, ERROR_MARKER,
 };
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
@@ -625,15 +625,26 @@ pub async fn run_chat_loop(
             }
         }
 
-        if had_error {
-            return;
-        }
-
+        // RULE-A-007 (2026-06-17): the error path no longer bails
+        // out with raw `return`. Instead — symmetric with the
+        // cancel path below — the agent loop flushes any pending
+        // thinking, appends an `ERROR_MARKER` to the text, and
+        // persists the partial turn so a reload shows the user
+        // where the turn broke. Previously the error arm returned
+        // immediately, dropping already-rendered
+        // `text_parts` / `finalized_thinking` / `tool_calls`
+        // — an asymmetry vs the cancel path that did persist.
         if cancelled {
             flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
             tracing::info!(
                 request_id = %rid,
                 "chat: cancelled — persisting partial turn"
+            );
+        } else if had_error {
+            flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+            tracing::info!(
+                request_id = %rid,
+                "chat: errored — persisting partial turn"
             );
         }
 
@@ -653,6 +664,18 @@ pub async fn run_chat_loop(
             } else {
                 full_text.push_str("\n\n");
                 full_text.push_str(CANCELLED_MARKER);
+            }
+        } else if had_error {
+            // RULE-A-007 (2026-06-17): symmetric to the
+            // CANCELLED_MARKER branch above. Empty-text error →
+            // marker alone; non-empty → marker appended after the
+            // partial text. The UI renders the marker inline; a
+            // reload reads both back from the DB.
+            if full_text.is_empty() {
+                full_text = ERROR_MARKER.to_string();
+            } else {
+                full_text.push_str("\n\n");
+                full_text.push_str(ERROR_MARKER);
             }
         }
         if !full_text.is_empty() {
@@ -687,6 +710,16 @@ pub async fn run_chat_loop(
             // below it still ran, drifting the in-memory seq out
             // of sync with the DB. TurnComplete stays on the
             // success path only (unchanged).
+            //
+            // RULE-A-007 (2026-06-17): on the **error path**,
+            // persist failure is log-only (NOT
+            // `emit_persist_failure`). The loop already emitted a
+            // terminal `ChatEvent::Error` from the per-event arm
+            // at line ~598; emitting a second Error here would be
+            // a conflicting double-terminal event. The pattern
+            // mirrors the cancel path's synthetic tool_result
+            // persist (log-only, see below at the `if cancelled`
+            // block).
             if let Err(e) = crate::db::persist_turn(
                 &db,
                 &session_id,
@@ -697,9 +730,25 @@ pub async fn run_chat_loop(
             )
             .await
             {
-                emit_persist_failure(&sink, &rid, &e);
-                return;
+                if had_error {
+                    tracing::error!(
+                        error = %e,
+                        request_id = %rid,
+                        "failed to persist errored partial assistant turn (log-only — Error already emitted)"
+                    );
+                    return;
+                } else {
+                    emit_persist_failure(&sink, &rid, &e);
+                    return;
+                }
             }
+            // TurnComplete fires on the success path for every
+            // mode (normal / cancel / error). The error path's
+            // TurnComplete coexists with the pre-emit Error event
+            // (RULE-A-007 decision C): Error = "something went
+            // wrong", TurnComplete = "this seq's partial turn is
+            // now in the DB + here's the latency breakdown". The
+            // controller routes each event independently.
             emit_chat_event_via_sink(
                 &sink,
                 &rid,
@@ -747,6 +796,21 @@ pub async fn run_chat_loop(
                     usage: None,
                 },
             );
+            return;
+        }
+
+        // RULE-A-007 (2026-06-17): the error path persisted its
+        // partial assistant turn above (with ERROR_MARKER + a
+        // TurnComplete event). The loop has already emitted its
+        // terminal `ChatEvent::Error` from the per-event arm;
+        // emitting another terminal `Done` would conflict. Exit
+        // without further tool execution / next-turn dispatch —
+        // symmetric with the cancel `return` above. The frontend
+        // treats the Error event as terminal; no follow-up Done
+        // is required.
+        if had_error {
+            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+            let _ = crate::db::touch_session(&db, &session_id).await;
             return;
         }
 

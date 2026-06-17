@@ -28,6 +28,49 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-17 — RULE-A-007 error arm 对称 cancel 路径 persist partial turn
+
+**Context**: DEBT RULE-A-007(P2,Agent Loop)记录了 SSE 流中途 error 时 agent loop 行为不对称的问题:error arm 直接 `return`,**丢弃已累积的 `text_parts` / `finalized_thinking` / `tool_calls`** —— 这些 delta 已通过 `ChatEvent::Delta` 渲染给前端,但 reload 后从 DB 读不到。cancel 路径却正确地 flush + 构造 assistant_blocks + `CANCELLED_MARKER` 追加 + `persist_turn` 落库。两条 terminal 路径(except normal Done)行为不一致,是数据完整性 + UX 一致性 bug。
+
+**Decision A**: `ERROR_MARKER` text 追加,对称 `CANCELLED_MARKER`
+
+新增 const `pub const ERROR_MARKER: &str = "[生成出错中断]"`,定义位置在 `agent/helpers.rs` 跟 `CANCELLED_MARKER` 同处(文案对齐中文风格 + 方括号包裹,跟 `"[已停止]"` 一致)。text 追加逻辑加 `else if had_error { ... }` 分支,完全对称 cancel 的 `CANCELLED_MARKER` 追加:`full_text.is_empty() ? marker_alone : "\n\n" + marker`。
+
+**否决**:metadata `interrupted: "error"` 字段方案。理由:D3 加了 metadata 通道,但 cancel 用的是 text marker(既定模式);引入 metadata 会让"中断标记"有两种表达(cancel=text / error=metadata),增加前端渲染分支。对称性优先,单表达更简单。
+
+**Decision B**: error arm persist 失败 = log-only,不 emit_persist_failure
+
+error 路径在 L598 已 emit `ChatEvent::Error`(per-event arm)给前端。若 partial turn persist 再 emit 第二个 Error(`emit_persist_failure`),会发出**两个 terminal Error 事件**,前端 terminal 处理逻辑会 fire 两次,行为未定义且冲突。
+
+**对称依据**:cancel 路径的 synthetic tool_result persist 失败也 log-only(`chat_loop.rs` 注释明确"loop is about to emit terminal cancelled Done, an Error here would be second terminal event")。error 路径同构——terminal 已发,后续 persist 失败只 `tracing::error!` + return。
+
+**否决**:error persist 失败也 emit_persist_failure(RULE-A-003 正常路径模式)。理由:正常路径没 pre-emit terminal,所以 emit_persist_failure 是**首个** terminal;error 路径已 pre-emit,场景不同。RULE-A-003 的"emit + abort"模式适用于"还没有 terminal 信号"的路径,error 路径不适用。
+
+**Decision C**: error arm 也 emit TurnComplete
+
+cancel 路径 persist 后 emit TurnComplete(seq + latency 给前端定位 partial message)。error 对称也 emit TurnComplete(seq 指向 partial turn),否则前端收不到 partial message 的 seq 定位,latency breakdown 丢失。
+
+**Error 事件 + TurnComplete 并存的合理性**:两个事件携带不相交的信息——Error = "出错了"(terminal 信号),TurnComplete = "这个 seq 的 partial turn 已落库 + latency"。前端 listener 各自处理,不冲突。controller 把 Error 当 terminal(终止 streaming UI),把 TurnComplete 当 per-turn 元数据(attach latency 到对应 seq)。
+
+**Alternatives considered & rejected**:
+
+1. **不动 error arm,更新 spec 标"已知偏离"**(参考 RULE-A-010 D3 处理方式):否决。RULE-A-010 是 UX 设计决策(二次取消语义)留待未来实现;A-007 是**数据丢失 bug**,reload 后 partial turn 消失,不是设计权衡,必须修。
+2. **error arm 也 emit Done(`stop_reason: "error"`)** 让前端有 terminal Done:否决。Error 事件本身就是 terminal 信号(前端 chat store 把 Error 当 terminal 处理),再 emit Done 是双 terminal。cancel 路径 emit Done 因为 cancel 没有 pre-emit "cancelled" 事件;error 路径已有 pre-emit Error,场景不同。
+3. **把 error persist 失败改成 emit + 不 return**(让 loop 继续走 cancel/max_turns 路径):否决。error persist 失败说明 DB 写不进去,继续 loop 只会撞更多 persist 失败,且 TurnComplete 也会失败。log + return 是最干净的失败处理。
+
+**影响面**:
+
+- 代码:`agent/helpers.rs`(加 `ERROR_MARKER` const)+ `agent/chat_loop.rs`(改 error arm:删 `if had_error { return; }`,加 `else if had_error { flush + log }` + `else if had_error { ERROR_MARKER 追加 }` + persist 失败 `if had_error { log-only } else { emit_persist_failure }` + 新增 `if had_error { persist_cwd + touch + return }` 退出块)。**不动 chat.rs**(RULE-A-006 闭环,chat.rs 是薄 pre-flight)+ **不动 cancel 路径** + **不动 RULE-A-003 正常路径** + **不动 RULE-A-004 audit 顺序**。
+- 测试:5 新增(`agent_loop_error_persists_partial_text` / `_empty_text_uses_error_marker` / `_persists_thinking_and_tool_calls` / `_persist_failure_is_log_only` / `_emits_turn_complete`),全 pass。567 tests total pass,0 warning。
+- Spec:`backend/agent-loop-architecture.md` 加 "Pattern: Turn-boundary persist symmetry — error arm matches cancel arm" 段(含 When to apply / When NOT to apply / Constants);`backend/error-handling.md` 加 "Agent Loop Error Paths — terminal event + persist invariants" 段 + persist 失败处理矩阵(6 行,明确每处 persist site 的 failure handling)。
+- DEBT:RULE-A-007 open → closed (2026-06-17);Re-evaluation Log 加一行。
+
+**关联**:
+
+- DEBT RULE-A-003(cancel/正常 persist 失败处理参考,P1 closed `d8ee7d9`)—— error arm persist 失败 log-only 对称 cancel tool_result,不破坏正常路径 emit_persist_failure。
+- DEBT RULE-A-006(chat_loop 单一权威,P1 closed `759607c`-ish via `06-15-unify-chat-loop-dispatch`)—— 改 chat_loop 改 1 处全生效,9+ agent_loop_* 测试覆盖真实 production 路径。
+- DEBT §收尾路径建议第 3 条(D3 收尾时提过 A-007 留独立 task——本 ADR 即是)。
+
 ### 2026-06-17 — D3(session 内消息编辑/重发)3 PR 闭环 + RULE-A-010 spec 偏离声明
 
 **Context**: D3 是 V2 第二档(`§2`)最后一项,DEBT 收尾建议第 3 条"D3 自然碰 A-007(error 路径 partial text)/ A-010(二次取消语义),应最后做"指明 D3 实施是顺手收口的天然窗口。本任务前 2 PR 已落地:

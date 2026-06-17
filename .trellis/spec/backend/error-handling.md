@@ -64,6 +64,69 @@ See `backend/llm-contract.md` §4 Validation & Error Matrix for the full list.
 
 ---
 
+## Agent Loop Error Paths — terminal event + persist invariants
+
+The agent loop's `run_chat_loop` (see `backend/agent-loop-architecture.md`)
+has three terminal paths that exit the per-turn stream loop early:
+**normal Done**, **cancel**, and **error**. Each has its own
+terminal-event + persist contract.
+
+### Path: `ChatEvent::Error` mid-turn (RULE-A-007, 2026-06-17)
+
+When the LLM stream emits `ChatEvent::Error`, the per-event arm:
+
+1. Emits the `Error` to the frontend immediately (this is the
+   terminal signal — the controller treats it as end-of-stream).
+2. Sets `had_error = true` and breaks out of the stream loop.
+
+After the stream loop, the agent loop **persists the partial turn**
+symmetric with the cancel path (RULE-A-007 fix; previously the error
+arm did `if had_error { return; }` and dropped all accumulated
+content):
+
+1. Flushes pending thinking into `finalized_thinking`.
+2. Builds assistant blocks (`thinking` + `text` + `tool_use` +
+   `redacted_thinking`).
+3. Appends `ERROR_MARKER` (`"[生成出错中断]"`) to the text —
+   symmetric to the cancel path's `CANCELLED_MARKER`. Empty-text
+   edge case: marker alone.
+4. `persist_turn` the partial row.
+5. Emits `ChatEvent::TurnComplete { seq, ...latency }` so the
+   frontend has the partial row's seq + latency (RULE-A-007
+   decision C). This **coexists** with the pre-emit `Error` event
+   — they carry disjoint information and the controller routes
+   each independently.
+6. Persists cwd + touches the session, then returns. The error
+   path does NOT emit a follow-up `Done` event (the pre-emit
+   `Error` is the terminal; emitting `Done` would conflict).
+
+### Persist failure on the error path is log-only (RULE-A-007 decision B)
+
+RULE-A-003 (2026-06-15) made **normal-path** persist failures
+emit a typed `ChatEvent::Error{Server}` + abort (so disk-full /
+DB-lock contention doesn't silently swallow the user message).
+The error path is **different**: the per-event arm already emitted
+the terminal `Error`. Calling `emit_persist_failure` on top would
+produce two terminal events (Error + Error) and the frontend's
+terminal handling would fire twice.
+
+The error path therefore follows the **same log-only pattern** the
+cancel path uses for its synthetic tool_result persist (cancel's
+terminal `Done{cancelled}` is about to fire, so an Error there
+would also be a double-terminal). The "exactly one terminal event
+per request" invariant stays intact.
+
+| Persist site | Failure handling | Why |
+|---|---|---|
+| Initial user message (normal path) | `emit_persist_failure` + return | First persist; no terminal yet — Error becomes the terminal (RULE-A-003) |
+| Assistant turn (normal Done path) | `emit_persist_failure` + return | Mid-request; no terminal yet — Error becomes the terminal (RULE-A-003) |
+| Tool_result turn (normal path) | `emit_persist_failure` + return | Mid-request; no terminal yet — Error becomes the terminal (RULE-A-003) |
+| Cancel's synthetic tool_result persist | `tracing::error!` log-only | Cancel's terminal `Done{cancelled}` is about to fire — double-terminal hazard |
+| Cancel's cancelled tool_result persist | `tracing::error!` log-only | Same as above |
+| **Error path's assistant partial persist** | **`tracing::error!` log-only** | **Per-event arm already emitted terminal `Error` — double-terminal hazard (RULE-A-007 decision B)** |
+
+---
+
 ## Common Mistakes
 
 <!-- Error handling mistakes your team has made -->

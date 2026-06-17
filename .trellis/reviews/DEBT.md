@@ -329,12 +329,14 @@
 
 - **Level**: P2
 - **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat.rs:741-756`
+- **File**: `app/src-tauri/src/agent/chat_loop.rs`(2026-06-15 RULE-A-006 闭环后;旧 `chat.rs:741-756` 行号已失效,逻辑迁移到 `chat_loop::run_chat_loop`)
 - **Description**: Error arm 不 persist 已累积 text
-- **Impact**: SSE 流中途 error 时已渲染的 delta,reload 后从 DB 读不到(与 cancel 路径 `:796-805` 不对称)
+- **Impact**: SSE 流中途 error 时已渲染的 delta,reload 后从 DB 读不到(与 cancel 路径不对称)
 - **Fix**: Error arm persist 已累积 text
-- **Status**: open
+- **Status**: **closed (2026-06-17)** — error arm 对称 cancel 路径 persist partial turn:flush thinking + 构造 assistant_blocks + `ERROR_MARKER`(`"[生成出错中断]"`,对称 `CANCELLED_MARKER`)追加 text + `persist_turn` 落库 + emit TurnComplete(seq + latency 指向 partial turn)。设计决策 A/B/C:**A** = ERROR_MARKER text 追加(非 metadata,对称 CANCELLED_MARKER 既有模式,否决 metadata `interrupted` 双表达);**B** = persist 失败 log-only(`tracing::error!`-only,对称 cancel tool_result persist 失败模式,否决 `emit_persist_failure`——error 路径已 pre-emit Error(L598),再 emit 第二个 terminal Error 会冲突,违反"单 terminal 事件"不变量);**C** = persist 成功后 emit TurnComplete(seq 指向 partial turn,跟 cancel/正常路径对称),Error + TurnComplete 并存不冲突(各自携带不相交的信息:Error="出错了" / TurnComplete="这个 seq 的 partial turn 已落库 + latency")。error 路径在 persist + TurnComplete 后 `persist_turn_cwd + touch_session + return`,**不** emit Done(Error 已是 terminal)。新增 `ERROR_MARKER` const 在 `agent/helpers.rs`(跟 `CANCELLED_MARKER` 同处)。5 新测试:`agent_loop_error_persists_partial_text` / `agent_loop_error_empty_text_uses_error_marker` / `agent_loop_error_persists_thinking_and_tool_calls` / `agent_loop_error_persist_failure_is_log_only` / `agent_loop_error_emits_turn_complete`,全 pass。
 - **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-17-a-007-error-arm-partial-text`
+- **Closed At**: TBD(主 agent commit 后回填)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
 ### RULE-A-008 — estimate_messages_tokens 与 _iter 版大段重复
@@ -721,6 +723,7 @@
 | 2026-06-16 | RULE-E-009 | open | **closed** | 4 处字节切片改 floor/ceil_char_boundary(对齐 diff.rs);+2 多字节测试,498 pass | §收尾路径建议 |
 | 2026-06-16 | RULE-D-003 | open | **closed** | MAX_DATA_BYTES=1MiB cap(超限 drop 余下 data)+ strip_prefix(data:) 去空格容忍无空格版;+4 测试,502 pass | §收尾路径建议 |
 | 2026-06-17 | RULE-A-010 | open | **closed** | D3 PR3 实施时收口,方式 = spec 偏离声明(非实现二次取消语义):`docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释 + `docs/IMPLEMENTATION.md §4` 2026-06-17 D3 ADR 完整说明偏离理由 + 未来实现路径(tool 取消分支 + cancel check 之间加 N 状态机)。原 "实现二次取消语义" 选项不在本批次做(MVP 简化决策:tool 取消窗口短 + 二次取消 UX friction + 单用户误点概率低) | `.trellis/tasks/06-17-d3-message-edit-resend` |
+| 2026-06-17 | RULE-A-007 | open | **closed** | error arm 对称 cancel 路径 persist partial turn。设计决策 A/B/C:**A** = `ERROR_MARKER`(`"[生成出错中断]"`)text 追加,对称 `CANCELLED_MARKER` 既有模式(否决 metadata 双表达);**B** = persist 失败 log-only(对称 cancel tool_result persist 失败,否决 `emit_persist_failure`——error 路径已 pre-emit Error,再 emit 第二个 terminal Error 冲突);**C** = persist 成功后 emit TurnComplete(seq + latency 指向 partial turn),Error + TurnComplete 并存不冲突。新增 `ERROR_MARKER` const 在 `agent/helpers.rs`;改 `chat_loop.rs`(RULE-A-006 闭环后单一权威,不动 chat.rs)。5 新测试覆盖 partial text/empty/thinking+tool_use/persist-fail-log-only/TurnComplete;567 tests 全 pass,0 warning。spec 同步:`agent-loop-architecture.md` 加 "Turn-boundary persist symmetry" pattern + 测试表 5 行;`error-handling.md` 加 "Agent Loop Error Paths" 段 + persist 失败处理矩阵 | `.trellis/tasks/06-17-a-007-error-arm-partial-text` |
 
 ---
 
