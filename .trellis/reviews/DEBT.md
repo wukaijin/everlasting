@@ -346,8 +346,10 @@
 - **File**: `app/src-tauri/src/agent/context.rs:85-133` vs `:275-317`
 - **Description**: 两函数大段重复,新增 ContentBlock 变体易漏算
 - **Fix**: 抽公共 helper
-- **Status**: open
+- **Status**: **closed (2026-06-18)** — 抽 `push_message_tokens(buf, m)` helper(role + to_text + blocks 序列化),`estimate_messages_tokens` 与 `estimate_messages_tokens_iter` 共用;原两版 buf 构造一字不差重复,iter 版仅多 `dropped[i]` 跳过。context case_1~7 压缩测试回归通过,行为不变
 - **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-18-p2-reasoning-caps-estimator-dedup`
+- **Closed At**: `87cd6cc`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
 ### RULE-A-009 — 死代码抑制噪音
@@ -481,8 +483,10 @@
 - **Description**: `#[allow(dead_code)]`,注释说"OpenAI reads it"但实际 OpenAI 读 `config.reasoning_effort`(`openai.rs:266`)
 - **Impact**: 架构误导,未来 PR 以为已接好
 - **Fix**: 接通 `from_model_row` 或删字段
-- **Status**: open
+- **Status**: **closed (2026-06-18)** — **删字段**(非接通)。reasoning_effort 是 OpenAI-specific 参数,不属于 provider-agnostic wire 层;真参数流转 `config.reasoning_effort → HTTP body`(openai.rs:278)已完整,wire 字段冗余。删 `WireRequest.reasoning_effort` 字段 + docstring bullet + `chat_request_to_wire` 初始化 + openai.rs 9 处测试构造。接通是"为用而用"增复杂度无跨协议收益(Anthropic 走 ThinkingConfig 另一条路)
 - **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-18-p2-reasoning-caps-estimator-dedup`
+- **Closed At**: `87cd6cc`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 ### RULE-D-005 — OpenAI supports_reasoning_effort caps hardcode true
@@ -493,8 +497,10 @@
 - **Description**: hardcode true;`WireCapabilities::from_model_row`(`wire.rs:97-110`)已实现正确派生却没被调用
 - **Impact**: gpt-4o(无 reasoning)model 错误保留 Reasoning 块,污染上下文
 - **Fix**: 调 `from_model_row`
-- **Status**: open
+- **Status**: **closed (2026-06-18)** — 抽 testable 的 `openai_caps(Option<&str>)` 函数,`send` 的 caps 从 `self.config.reasoning_effort.is_some()` 派生(替代硬编码 true)。gpt-4o(无 thinking_effort)→ None → supports_reasoning_effort=false → strip_unsupported 正确丢弃历史 Reasoning 块。**未直接调 from_model_row**:Provider::send 签名不带 model_row,threading 是 trait 级改动超范围;config.reasoning_effort 已由 build_provider 从 model_row.thinking_effort 填入,语义等价。from_model_row 保留(wire.rs tests 覆盖,留 future PR thread caps)。+2 测试(派生 + 端到端 strip)
 - **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-18-p2-reasoning-caps-estimator-dedup`
+- **Closed At**: `87cd6cc`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 ### RULE-D-006 — GLM max_tokens 500/400 误分类加 keyword
@@ -724,6 +730,9 @@
 | 2026-06-16 | RULE-D-003 | open | **closed** | MAX_DATA_BYTES=1MiB cap(超限 drop 余下 data)+ strip_prefix(data:) 去空格容忍无空格版;+4 测试,502 pass | §收尾路径建议 |
 | 2026-06-17 | RULE-A-010 | open | **closed** | D3 PR3 实施时收口,方式 = spec 偏离声明(非实现二次取消语义):`docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释 + `docs/IMPLEMENTATION.md §4` 2026-06-17 D3 ADR 完整说明偏离理由 + 未来实现路径(tool 取消分支 + cancel check 之间加 N 状态机)。原 "实现二次取消语义" 选项不在本批次做(MVP 简化决策:tool 取消窗口短 + 二次取消 UX friction + 单用户误点概率低) | `.trellis/tasks/06-17-d3-message-edit-resend` |
 | 2026-06-17 | RULE-A-007 | open | **closed** | error arm 对称 cancel 路径 persist partial turn。设计决策 A/B/C:**A** = `ERROR_MARKER`(`"[生成出错中断]"`)text 追加,对称 `CANCELLED_MARKER` 既有模式(否决 metadata 双表达);**B** = persist 失败 log-only(对称 cancel tool_result persist 失败,否决 `emit_persist_failure`——error 路径已 pre-emit Error,再 emit 第二个 terminal Error 冲突);**C** = persist 成功后 emit TurnComplete(seq + latency 指向 partial turn),Error + TurnComplete 并存不冲突。新增 `ERROR_MARKER` const 在 `agent/helpers.rs`;改 `chat_loop.rs`(RULE-A-006 闭环后单一权威,不动 chat.rs)。5 新测试覆盖 partial text/empty/thinking+tool_use/persist-fail-log-only/TurnComplete;567 tests 全 pass,0 warning。spec 同步:`agent-loop-architecture.md` 加 "Turn-boundary persist symmetry" pattern + 测试表 5 行;`error-handling.md` 加 "Agent Loop Error Paths" 段 + persist 失败处理矩阵 | `.trellis/tasks/06-17-a-007-error-arm-partial-text` |
+| 2026-06-18 | RULE-D-005 | open | **closed** | openai_caps() 从 config.reasoning_effort 派生 caps(替代硬编码 true);gpt-4o 无 thinking_effort → caps.supports_reasoning_effort=false → strip 丢弃历史 Reasoning 块。未直接调 from_model_row(send 签名不带 model_row,config.reasoning_effort 等价);+2 测试 | `.trellis/tasks/06-18-p2-reasoning-caps-estimator-dedup` |
+| 2026-06-18 | RULE-D-004 | open | **closed** | 删 WireRequest.reasoning_effort 死字段(OpenAI-specific 不属 wire 层;真参数走 config)+ docstring + 初始化 + 9 处测试构造 | 同上 task |
+| 2026-06-18 | RULE-A-008 | open | **closed** | 抽 push_message_tokens helper,estimate_messages_tokens 与 _iter 共用;case_1~7 回归通过 | 同上 task |
 
 ---
 
@@ -798,5 +807,5 @@
 
 ---
 
-**最后更新**: 2026-06-16 by carlos
+**最后更新**: 2026-06-18 by carlos
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
