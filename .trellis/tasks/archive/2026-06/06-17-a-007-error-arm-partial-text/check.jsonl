@@ -1,0 +1,6 @@
+{"file": ".trellis/reviews/DEBT.md", "reason": "验证 RULE-A-007 closed 回填 + RULE-A-003 log-only 对称性"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查 error partial persist + log-only 失败处理 spec 一致"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "检查 ChatEvent Error/TurnComplete emit 顺序不冲突"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "检查 error/cancel persist 对称性 spec 同步"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 cancel persist 路径不重发明"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层 persist → reload → 前端读 partial 闭环"}

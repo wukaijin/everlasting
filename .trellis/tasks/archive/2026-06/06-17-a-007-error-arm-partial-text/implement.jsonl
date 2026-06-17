@@ -1,0 +1,6 @@
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-007 本条(P2 open)+ RULE-A-003(cancel/正常 persist 失败处理参考,L719-723 log-only 模板)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "16 阶段请求生命周期 + turn 边界 + error/cancel persist 对称语义"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error 分类(InvalidRequest/Server)+ emit 规则 + persist 失败处理(RULE-A-003)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent variant(Error/Done/TurnComplete)wire 契约 + emit 顺序"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "persist_turn 模式 + 单事务 + 失败 emit_persist_failure(RULE-A-003)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层(后端 persist → reload → 前端读 partial)数据流一致性"}
