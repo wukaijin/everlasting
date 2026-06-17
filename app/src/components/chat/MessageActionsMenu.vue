@@ -67,11 +67,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  TooltipProvider,
-  TooltipRoot,
-  TooltipTrigger,
-  TooltipPortal,
-  TooltipContent,
 } from "reka-ui";
 
 import Icon from "../Icon.vue";
@@ -208,40 +203,24 @@ async function onCopy() {
     }"
   >
     <DropdownMenuRoot>
-      <TooltipProvider>
-        <TooltipRoot :delay-duration="300">
-          <TooltipTrigger as-child>
-            <DropdownMenuTrigger
-              as-child
-              :disabled="isEditing || isStreaming"
-            >
-              <button
-                type="button"
-                class="msg-actions__trigger"
-                :aria-label="isStreaming ? '流式生成中,无法操作' : '消息操作'"
-                data-testid="msg-actions-trigger"
-                @click.stop
-              >
-                <Icon
-                  name="ellipsis"
-                  :size="16"
-                  icon-class="msg-actions__icon"
-                />
-              </button>
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipPortal>
-            <TooltipContent
-              class="msg-actions__tooltip"
-              :side-offset="6"
-            >
-              <span v-if="isStreaming">流式生成中</span>
-              <span v-else-if="isEditing">编辑中</span>
-              <span v-else>消息操作</span>
-            </TooltipContent>
-          </TooltipPortal>
-        </TooltipRoot>
-      </TooltipProvider>
+      <DropdownMenuTrigger
+        as-child
+        :disabled="isEditing || isStreaming"
+      >
+        <button
+          type="button"
+          class="msg-actions__trigger"
+          :aria-label="isStreaming ? '流式生成中,无法操作' : '消息操作'"
+          :title="isStreaming ? '流式生成中' : isEditing ? '编辑中' : '消息操作'"
+          data-testid="msg-actions-trigger"
+        >
+          <Icon
+            name="ellipsis"
+            :size="16"
+            icon-class="msg-actions__icon"
+          />
+        </button>
+      </DropdownMenuTrigger>
       <DropdownMenuPortal>
         <DropdownMenuContent
           class="msg-actions__content"
@@ -380,22 +359,9 @@ async function onCopy() {
   display: inline-flex;
 }
 
-/* Tooltip content (reka-ui `TooltipContent` portal to body —
-   must use :deep() per `.trellis/spec/frontend/reka-ui-usage.md`
-   gotcha). */
-:deep(.msg-actions__tooltip) {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 11px;
-  color: var(--color-text-primary);
-  z-index: 3000;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-}
-
 /* Dropdown content (reka-ui `DropdownMenuContent` portal to body —
-   :deep() required for the same reason as the tooltip). */
+   :deep() required per `.trellis/spec/frontend/reka-ui-usage.md`
+   gotcha on portal children). */
 :deep(.msg-actions__content) {
   min-width: 160px;
   background: var(--color-bg-surface);

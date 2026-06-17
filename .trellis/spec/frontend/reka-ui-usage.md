@@ -710,14 +710,36 @@ hover menu, reka-ui is the right primitive because:
 - **`DropdownMenuItem`** — receives `data-highlighted`
   (focus / hover) and `data-disabled` (the `:disabled`
   prop) as CSS selectors. The `@select` event fires
-  on click / Enter; we pass `.prevent` for the
-  Resend placeholder so the click doesn't dismiss the
-  menu (otherwise the dropdown closes even though
-  nothing happened, which is misleading).
+  on click / Enter; on any `:disabled` item bind
+  `@select.prevent` (not a bare `@select`) so a stray
+  click / Enter doesn't dismiss the menu with nothing
+  happening (misleading).
 - **`DropdownMenuSeparator`** — a thin horizontal rule
   between the action groups. The CSS class on the
   separator follows the same BEM-style convention as
   every other component in the codebase.
+
+### Don't: wrap `DropdownMenuTrigger` in `TooltipTrigger` (as-child nesting)
+
+Never nest a `TooltipTrigger as-child` around a
+`DropdownMenuTrigger as-child` that shares the same
+`<button>`. Both `as-child` wrappers merge their
+listeners onto the one element, and reka-ui's Tooltip
+registers a `pointerdown` handler that **swallows the
+click** — the DropdownMenu never receives its open
+signal. Hover-reveal still works (it's `:hover`-driven),
+which masks the bug during casual testing.
+
+Root cause of the D3 MessageActionsMenu "click 没反应"
+bug (fixed 2026-06-17). Symptom: hover shows the ⋯
+button, click is dead-silent, no console error.
+
+**Fix**: for a hint on the trigger, use the native
+`:title` attribute — it doesn't participate in the DOM
+event flow, so zero conflict. (`MessageActionsMenu.vue`
+uses `:title` after the fix.) Same underlying rule as
+the §"Don't use reka-ui Tooltip for click-triggered
+dropdowns" gotcha above, from the inverse direction.
 
 ### Don't: forget `DropdownMenuPortal`
 
@@ -729,14 +751,19 @@ The portal is the default in the reka-ui docs for a
 reason; mirror the pattern in `SelectContent` /
 `DialogContent` etc. (see the portal gotcha above).
 
-### Don't: `@select="onEdit"` for the disabled Resend item
+### Don't: bind `@select` (without `.prevent`) on a `:disabled` item
 
-The Resend item is `disabled` (PR3 placeholder). The
-`@select` event would still fire on Enter / click in
-some reka-ui versions even with `:disabled` if the
-handler is bound — pass `@select.prevent` to be safe
-(no-op handler + prevented close). Edit and Copy both
-do work, so they bind `@select` to the real handler.
+On a `:disabled` `DropdownMenuItem`, the `@select`
+event can still fire on Enter / click in some reka-ui
+versions even with `:disabled` set, if a handler is
+bound. Bind `@select.prevent` instead (no-op handler
++ prevented menu close) so a disabled item genuinely
+does nothing. (D3 historical: the Resend item was a
+disabled placeholder in PR2 and used this `.prevent`
+guard; PR3 made Resend a real action with
+`@select="onResend"`, so the guard is no longer on
+Resend — but the rule still applies to any future
+disabled item.)
 
 ### Don't: re-style items via inline `style=""`
 
