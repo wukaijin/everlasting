@@ -1862,3 +1862,44 @@ PR1.5 完成。PR-A: ChatInput textarea→CodeMirror 6(IME 原生 view.composing
 ### Next Steps
 
 - None - task complete
+
+## Session 36: B2 PR3 @文件注入提示(前端)
+
+**Date**: 2026-06-17
+**Task**: B2 PR3 @文件注入提示(前端)
+**Branch**: `main`
+
+### Summary
+
+B2 PR3 落地(user message 下方 📎 已引用文件: 提示行 + DB metadata envelope 持久化 + live event 推送 + session reload 还原)。后端 at_file.rs 改返回注入清单(InjectionRecord{path, action: Injected{lines}/Degraded{file_kind}/Skipped{reason}}) + chat_loop snap 原始 content → persist → inject → update_message_metadata (envelope {injections: [...]}) + emit ChatEvent::FileInjections + wire-shape round-trip 单测。前端 InjectionRecord tagged union + streamController case 'file_injections' 按 (request_id, message_seq) 定位 user message + rehydrateMessages 解析 metadata.injections + FileInjectionsHint.vue(✓/⊘ glyphs + monospace path)。E2E 暴露 2 个 live bug 都修:(1) userMsg/assistantMsg 缺 seq 字段 → live file_injections 找不到 user message;(2) chat_loop metadata 写为 raw Vec 数组,前端 rehydrate 读 meta.injections 当成 undefined → 全部 entry 静默丢失 → 改成 {injections: [...]} envelope。3 个 spec 更新: Serde newtype 坑 + ChatEvent variant 7 处 checklist + update_message_metadata pattern。验证 cargo test --lib 552 passed + vue-tsc 0 错误。
+
+### Main Changes
+
+(后端) agent/at_file.rs +416 行, chat_loop.rs +99 行 (含 metadata envelope 修复), db/sessions.rs +36 行, llm/types.rs +126 行(含 wire-shape 测试)
+(前端) chat.ts +74 行, streamController.ts +131 行, MessageItem.vue +24 行, FileInjectionsHint.vue 新建 220 行
+(spec) llm-contract.md +89 行(Serde 坑 + ChatEvent variant test 必须), cross-layer-thinking-guide.md +93 行(ChatEvent variant checklist), database-guidelines.md +59 行(update_message_metadata pattern)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `def927d` | feat(b2): PR3 后端 — at_file 清单 + chat_loop 接入 + ChatEvent::FileInjections |
+| `b21c02a` | feat(b2): PR3 前端 — InjectionRecord type + streamController + MessageItem 渲染 |
+| `e410b67` | docs(spec): Serde newtype 坑 + ChatEvent variant checklist + update_message_metadata |
+| (archive) | chore(task): archive 06-17-b2-pr3-at-file-injection-hint |
+
+### Testing
+
+- [OK] cargo test --lib 552 passed (含 23 at_file + 2 wire-shape + 1 ChatEvent FileInjections)
+- [OK] cargo check 0 warnings
+- [OK] vue-tsc --noEmit 0 errors
+- [OK] E2E 手测: send 含 @relpath 消息 → user message 下方提示行出现 + reload 后保留
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续 B2 @文件补全 路线图后续 PR (B2 §1.2 已 3/3 落地: PR1 panel + PR1.5 token 着色 + PR2 注入 + PR3 提示; 剩余 5 项)
+- B2 完成后考虑 reload 旧 metadata 行(B2 PR3 前写入的 array 形式 metadata 不能被 rehydrate 解析)— 可选 backfill SQL
