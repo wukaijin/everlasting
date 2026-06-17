@@ -118,52 +118,62 @@ pub struct CompactResult {
 /// The estimate sums the visible text of every message (`role` +
 /// `content.to_text()`). Tool inputs and tool results are also
 /// serialized into JSON strings so they contribute to the budget.
+/// Append one message's contribution to the token-estimate buffer.
+/// Shared by [`estimate_messages_tokens`] and
+/// [`estimate_messages_tokens_iter`] (RULE-A-008, 2026-06-18 — the
+/// two used to duplicate this role + to_text + block-serialization
+/// logic verbatim; adding a new `ContentBlock` variant used to
+/// require editing both sites).
+///
+/// `role` label + visible text (`content.to_text()`) is always
+/// appended; for `Blocks` content, tool_use / tool_result / thinking
+/// payloads are stringified so a giant tool_result contributes to the
+/// budget (otherwise it'd be invisible to the estimator).
+fn push_message_tokens(buf: &mut String, m: &ChatMessage) {
+    match m.role {
+        Role::User => buf.push_str("user\n"),
+        Role::Assistant => buf.push_str("assistant\n"),
+    }
+    buf.push_str(&m.content.to_text());
+    if let MessageContent::Blocks(blocks) = &m.content {
+        for b in blocks {
+            match b {
+                ContentBlock::Text { .. } => {
+                    // already counted via to_text
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    buf.push_str(id);
+                    buf.push_str(name);
+                    buf.push_str(&input.to_string());
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
+                    buf.push_str(tool_use_id);
+                    buf.push_str(content);
+                }
+                ContentBlock::Thinking { thinking, signature } => {
+                    buf.push_str(thinking);
+                    buf.push_str(&signature);
+                }
+                ContentBlock::RedactedThinking { data } => {
+                    buf.push_str(data);
+                }
+            }
+        }
+    }
+    buf.push('\n');
+}
+
 pub async fn estimate_messages_tokens(messages: &[ChatMessage]) -> u32 {
     // Aggregate all text into a single buffer and encode once.
     // This is cheaper than per-message encoder calls (one mutex
     // acquire) and the encoding is the dominant cost.
     let mut buf = String::new();
     for m in messages {
-        match m.role {
-            Role::User => buf.push_str("user\n"),
-            Role::Assistant => buf.push_str("assistant\n"),
-        }
-        // to_text() covers plain text + Text blocks. For block
-        // messages with tool_use / tool_result / thinking, we also
-        // serialize the JSON of the full content so the budget
-        // accounts for those blocks (otherwise a giant tool_result
-        // would be invisible to the estimator).
-        buf.push_str(&m.content.to_text());
-        if let MessageContent::Blocks(blocks) = &m.content {
-            for b in blocks {
-                match b {
-                    ContentBlock::Text { .. } => {
-                        // already counted via to_text
-                    }
-                    ContentBlock::ToolUse { id, name, input } => {
-                        buf.push_str(id);
-                        buf.push_str(name);
-                        buf.push_str(&input.to_string());
-                    }
-                    ContentBlock::ToolResult {
-                        tool_use_id,
-                        content,
-                        ..
-                    } => {
-                        buf.push_str(tool_use_id);
-                        buf.push_str(content);
-                    }
-                    ContentBlock::Thinking { thinking, signature } => {
-                        buf.push_str(thinking);
-                        buf.push_str(&signature);
-                    }
-                    ContentBlock::RedactedThinking { data } => {
-                        buf.push_str(data);
-                    }
-                }
-            }
-        }
-        buf.push('\n');
+        push_message_tokens(&mut buf, m);
     }
     count_tokens(&buf).await
 }
@@ -339,37 +349,7 @@ async fn estimate_messages_tokens_iter(
         if dropped[i] {
             continue;
         }
-        match m.role {
-            Role::User => buf.push_str("user\n"),
-            Role::Assistant => buf.push_str("assistant\n"),
-        }
-        buf.push_str(&m.content.to_text());
-        if let MessageContent::Blocks(blocks) = &m.content {
-            for b in blocks {
-                match b {
-                    ContentBlock::Text { .. } => {}
-                    ContentBlock::ToolUse { id, name, input } => {
-                        buf.push_str(id);
-                        buf.push_str(name);
-                        buf.push_str(&input.to_string());
-                    }
-                    ContentBlock::ToolResult {
-                        tool_use_id, content, ..
-                    } => {
-                        buf.push_str(tool_use_id);
-                        buf.push_str(content);
-                    }
-                    ContentBlock::Thinking { thinking, signature } => {
-                        buf.push_str(thinking);
-                        buf.push_str(&signature);
-                    }
-                    ContentBlock::RedactedThinking { data } => {
-                        buf.push_str(data);
-                    }
-                }
-            }
-        }
-        buf.push('\n');
+        push_message_tokens(&mut buf, m);
     }
     count_tokens(&buf).await
 }

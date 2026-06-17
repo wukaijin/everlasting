@@ -63,7 +63,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use super::wire::{
-    chat_request_to_wire, strip_unsupported, WireBlock, WireRequest,
+    chat_request_to_wire, strip_unsupported, WireCapabilities, WireBlock, WireRequest,
 };
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::classify_error_response;
@@ -353,6 +353,32 @@ fn is_o1_family(model: &str) -> bool {
     m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
 }
 
+/// Derive the OpenAI target's [`WireCapabilities`] for the
+/// `strip_unsupported` pass.
+///
+/// RULE-D-005 (2026-06-18): previously `send` hardcoded
+/// `supports_reasoning_effort: true`, which kept historical
+/// `Reasoning` blocks alive even for non-reasoning models (e.g.
+/// gpt-4o with no `thinking_effort` configured) — polluting their
+/// context. Now derived from the configured `reasoning_effort` so
+/// the strip pass drops `Reasoning` blocks unless the model row
+/// actually opted into reasoning.
+///
+/// Why a free function taking `Option<&str>` instead of
+/// [`WireCapabilities::from_model_row`]? That needs `&ModelRow`,
+/// but [`Provider::send`]'s signature doesn't carry it; threading
+/// it through is a trait-level change out of scope here.
+/// `OpenAIConfig.reasoning_effort` is already sourced from
+/// `model_row.thinking_effort` in `build_provider`, so it carries
+/// the same signal.
+fn openai_caps(reasoning_effort: Option<&str>) -> WireCapabilities {
+    WireCapabilities {
+        supports_thinking: false,
+        supports_reasoning_effort: reasoning_effort.is_some(),
+        supports_thinking_signatures: false,
+    }
+}
+
 impl Provider for OpenAIProvider {
     fn send(
         &self,
@@ -375,28 +401,15 @@ impl Provider for OpenAIProvider {
         };
         let wire = chat_request_to_wire(req, system);
         // Cross-protocol strip: drop blocks the OpenAI target
-        // can't carry. The capabilities passed here describe
-        // the *target* (this OpenAI provider + the chosen
-        // model). For OpenAI: `supports_thinking = false`,
-        // `supports_reasoning_effort = true` if the model row
-        // had a `thinking_effort`, and signatures are never
-        // supported.
-        //
-        // NOTE: the chat command is the canonical place to
-        // thread `WireCapabilities` into the provider. For
-        // PR3 we conservatively pass the most-open
-        // capabilities (the wire layer will already drop
-        // signatures for OpenAI because the protocol is
-        // openai, and reasoning_effort is set by the
-        // provider's `send` itself if appropriate). Future
-        // PRs can pass model-row-derived caps through a
-        // trait extension; today the OpenAI adapter is
-        // permissive on input.
-        let caps = super::wire::WireCapabilities {
-            supports_thinking: false,
-            supports_reasoning_effort: true,
-            supports_thinking_signatures: false,
-        };
+        // can't carry. The capabilities describe the *target*
+        // (this OpenAI provider + the chosen model). Derived via
+        // `openai_caps` (RULE-D-005): `supports_reasoning_effort`
+        // is true only when the model row had a `thinking_effort`
+        // configured, so historical `Reasoning` blocks from a
+        // previous Anthropic session are dropped for non-reasoning
+        // OpenAI models (e.g. gpt-4o) instead of polluting their
+        // context.
+        let caps = openai_caps(self.config.reasoning_effort.as_deref());
         let wire = WireRequest {
             messages: strip_unsupported(wire.messages, &caps),
             ..wire
@@ -820,6 +833,50 @@ mod tests {
         }
     }
 
+    // ---- openai_caps (RULE-D-005) ----
+
+    #[test]
+    fn openai_caps_derives_reasoning_effort_from_config() {
+        // A model that opted into reasoning effort (o1/o3 with
+        // thinking_effort set) keeps the capability.
+        let caps = openai_caps(Some("high"));
+        assert!(!caps.supports_thinking);
+        assert!(caps.supports_reasoning_effort);
+        assert!(!caps.supports_thinking_signatures);
+
+        // A non-reasoning model (gpt-4o, no thinking_effort) must
+        // NOT claim reasoning support — otherwise strip_unsupported
+        // keeps historical Reasoning blocks and pollutes context.
+        let caps = openai_caps(None);
+        assert!(!caps.supports_reasoning_effort);
+    }
+
+    #[test]
+    fn openai_caps_strip_drops_reasoning_for_non_reasoning_model() {
+        // End-to-end of RULE-D-005: a gpt-4o provider (no
+        // reasoning_effort) must drop Reasoning blocks during strip,
+        // not keep them as the old hardcoded-true caps did.
+        let messages = vec![WireMessage::Assistant {
+            blocks: vec![
+                WireBlock::Reasoning {
+                    text: "thought".to_string(),
+                },
+                WireBlock::Text {
+                    text: "answer".to_string(),
+                    cache_control: None,
+                },
+            ],
+        }];
+        let caps = openai_caps(None);
+        let stripped = strip_unsupported(messages, &caps);
+        let WireMessage::Assistant { blocks } = &stripped[0] else {
+            panic!("expected Assistant");
+        };
+        // Reasoning dropped (non-reasoning model), only Text remains.
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0], WireBlock::Text { text, .. } if text == "answer"));
+    }
+
     // ---- endpoint() ----
 
     #[test]
@@ -903,7 +960,6 @@ mod tests {
                 content: "hello".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
@@ -924,7 +980,6 @@ mod tests {
                 content: "hi".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
@@ -946,7 +1001,6 @@ mod tests {
                 description: Some("read".to_string()),
                 input_schema: serde_json::json!({"type": "object"}),
             }],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let tools = body.get("tools").and_then(|t| t.as_array()).unwrap();
@@ -976,7 +1030,6 @@ mod tests {
                 },
             ],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
@@ -1006,7 +1059,6 @@ mod tests {
                 ],
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
@@ -1033,7 +1085,6 @@ mod tests {
                 content: "x".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         // `tools` should be absent (not present-but-empty) so
@@ -1052,7 +1103,6 @@ mod tests {
                 content: "x".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let c = OpenAIConfig {
             model: "gpt-4.1".to_string(),
@@ -1110,7 +1160,6 @@ mod tests {
                 content: "x".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let c = OpenAIConfig {
             model: "o3-mini".to_string(),
@@ -1145,7 +1194,6 @@ mod tests {
                 content: "hi".to_string(),
             }],
             tools: vec![],
-            reasoning_effort: None,
         };
         let body = OpenAIProvider::build_http_body(&wire, &cfg());
         let so = body

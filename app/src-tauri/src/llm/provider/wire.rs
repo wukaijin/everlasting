@@ -124,13 +124,6 @@ pub struct WireRequest {
     pub system: Option<String>,
     pub messages: Vec<WireMessage>,
     pub tools: Vec<WireTool>,
-    /// OpenAI-style `reasoning_effort` (e.g. "low" / "medium" / "high").
-    /// `None` means "no reasoning effort requested" — neither Anthropic
-    /// nor OpenAI will see a reasoning field. Anthropic's adaptive
-    /// thinking is signalled separately via [`crate::llm::types::ThinkingConfig`]
-    /// outside the wire layer.
-    #[allow(dead_code)] // populated by `chat_request_to_wire`; consumer reads it in OpenAI adapter
-    pub reasoning_effort: Option<String>,
 }
 
 /// One message in the conversation. Provider-agnostic — the
@@ -230,9 +223,6 @@ pub struct WireTool {
 ///   into a `WireMessage::Tool` (Anthropic's `tool_result` lives
 ///   inside a `role: "user"` message with content blocks; OpenAI's
 ///   `role: "tool"` is a separate message).
-/// - `reasoning_effort` is initialized to `None`; the caller (the
-///   provider's `send` method) sets it from
-///   `model_row.thinking_effort` if appropriate.
 pub fn chat_request_to_wire(
     req: ChatRequest,
     system: Option<String>,
@@ -257,7 +247,6 @@ pub fn chat_request_to_wire(
         system,
         messages,
         tools,
-        reasoning_effort: None,
     }
 }
 
