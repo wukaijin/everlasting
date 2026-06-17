@@ -36,6 +36,7 @@ import { createDebouncedRenderer } from "../../utils/markdown";
 import { abbreviateDuration } from "../../utils/duration";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
+import FileInjectionsHint from "./FileInjectionsHint.vue";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -195,6 +196,29 @@ const latencyRows = computed<
         >▍</span
       >
     </div>
+
+    <!--
+      B2 PR3: per-user-turn `@relpath` injection hint row.
+      Renders the agent loop's verdict for every @file
+      token the user typed in this message — text
+      injections (with line count), image/PDF/Office/
+      binary degradations, and out-of-root / missing /
+      unreadable skips. Mounted ONLY for user messages
+      (the assistant never has @ tokens) and ONLY when
+      the `injections` array is non-empty (a no-@ user
+      message leaves the field undefined; the
+      `v-if` keeps the DOM clean for the common case).
+      The component is a thin renderer — see
+      `FileInjectionsHint.vue` for the per-row shape.
+    -->
+    <FileInjectionsHint
+      v-if="
+        message.role === 'user' &&
+        message.injections &&
+        message.injections.length > 0
+      "
+      :injections="message.injections"
+    />
 
     <div v-if="message.error" class="msg__error">
       <Icon name="warn" :size="12" icon-class="msg__error-icon" />

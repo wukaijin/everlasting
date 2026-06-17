@@ -43,7 +43,12 @@ import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { useChatStore, type ChatMessage, type ErrorCategory } from "./chat";
+import {
+  useChatStore,
+  type ChatMessage,
+  type ErrorCategory,
+  type InjectionEntry,
+} from "./chat";
 
 /** Upper bound on number of sessions whose messages are kept
  *  in memory. Pinned (in-flight streaming) sessions are not
@@ -127,7 +132,18 @@ interface ChatEventPayload {
     | "redacted_thinking_delta"
     | "done"
     | "turn_complete"
-    | "error";
+    | "error"
+    // B2 PR3: per-user-turn `@relpath` injection manifest,
+    // emitted ONCE per user turn (right after `inject_at_tokens`
+    // runs on the last user message). Mirrors Rust
+    // `ChatEvent::FileInjections { request_id, message_seq,
+    // injections }`. The controller's `case "file_injections"`
+    // arm patches the matching user message's `injections`
+    // array by `request_id` + `message_seq`. The `injections`
+    // shape is the wire-format tagged union — see
+    // `InjectionEntry.action` for the `kind` discriminator
+    // rules.
+    | "file_injections";
   text?: string;
   signature?: string;
   data?: string;
@@ -154,6 +170,16 @@ interface ChatEventPayload {
   gen_ms?: number | null;
   total_ms?: number | null;
   thinking_ms?: number | null;
+  // B2 PR3: only present when `kind === "file_injections"`.
+  // `message_seq` is the seq the agent loop assigned to the
+  // user row (the per-session `next_seq` counter) — used to
+  // locate the user message on the controller side without
+  // a per-request `userMsgId` plumbing. The rehydrate path
+  // also uses seq as the message key (the user message's
+  // `id` is `${sid}-${seq}`), so this value round-trips
+  // through the DB and matches the rehydrated key.
+  message_seq?: number;
+  injections?: InjectionEntry[];
 }
 
 /** A4: 4-field token usage payload from the LLM. Mirrors Rust
@@ -210,6 +236,20 @@ interface LoadedMessage {
    *  estimate). Persisted by `update_message_latency`'s
    *  new 4th-column UPDATE — same IPC, one extra bind. */
   thinking_ms: number | null;
+  /** B2 PR3: optional per-user-turn injection manifest
+   *  JSON, written by the agent loop's `update_message_metadata`
+   *  SQL after `inject_at_tokens` produces the list. `null`
+   *  for non-user rows AND for user rows without
+   *  `@relpath` tokens. The rehydrate path parses this
+   *  into `ChatMessage.injections` so the hint row
+   *  survives a session reload. The shape is the same
+   *  wire-format tagged-union as the live `FileInjections`
+   *  event — see `InjectionEntry` / `InjectionRecord`.
+   *  Optional in the type so existing test fixtures that
+   *  don't model metadata still typecheck; the production
+   *  IPC always sends `metadata` (NULL for non-user rows
+   *  per `db::MessageRow::metadata`). */
+  metadata?: unknown;
 }
 
 interface LoadedSession {
@@ -349,6 +389,43 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     if (m.thinking_ms !== null) {
       msg.thinkingDurationMs = m.thinking_ms;
     }
+    // B2 PR3: parse the `metadata` JSON into the
+    // `injections` field. The agent loop wrote the
+    // per-user-turn injection manifest here via
+    // `update_message_metadata` (see
+    // `db::sessions::update_message_metadata`); a
+    // `null` / missing / non-array metadata is the
+    // "no @relpath tokens" case and is rendered
+    // as no hint row. The `action` object's shape
+    // is the same wire-format tagged union as
+    // the live `FileInjections` event — we
+    // narrow with the same `kind` discriminator.
+    if (m.metadata !== null && m.metadata !== undefined) {
+      const meta = m.metadata as { injections?: unknown };
+      if (Array.isArray(meta.injections)) {
+        // Defensive: skip entries that don't have
+        // the {path, action} shape — DB writes can
+        // outlive the schema. Real entries are
+        // typed via `InjectionEntry`; we just
+        // assign the parsed array directly.
+        const entries: InjectionEntry[] = [];
+        for (const r of meta.injections) {
+          if (
+            r &&
+            typeof r === "object" &&
+            typeof (r as { path?: unknown }).path === "string" &&
+            (r as { action?: unknown }).action &&
+            typeof (r as { action?: { kind?: unknown } }).action?.kind ===
+              "string"
+          ) {
+            entries.push(r as InjectionEntry);
+          }
+        }
+        if (entries.length > 0) {
+          msg.injections = entries;
+        }
+      }
+    }
     // The `seq` is plumbed through for the F5
     // `update_message_latency` IPC. The streaming path tracks
     // it on `RequestState` instead (the seq is the agent
@@ -474,6 +551,14 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     if (m.toolResults) markRaw(m.toolResults);
     if (m.thinkingBlocks) markRaw(m.thinkingBlocks);
     if (m.redactedThinkingData) markRaw(m.redactedThinkingData);
+    // B2 PR3: `injections` is also immutable post-rehydrate
+    // — the live `FileInjections` event patches the
+    // user message *during* the request, not after a
+    // reload. Marking it raw skips the deep proxy wrap
+    // for the array and its entries (the cost is small
+    // per turn but adds up for sessions with many
+    // @file mentions across many turns).
+    if (m.injections) markRaw(m.injections);
   }
   return out;
 }
@@ -947,6 +1032,48 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         useChatStore().forceFollowActive = false;
         finalizeRequest(req.requestId, req.sessionId, true);
         break;
+      case "file_injections": {
+        // B2 PR3: the agent loop emitted a per-user-turn
+        // `@relpath` injection manifest. Patch the
+        // matching user message's `injections` array so
+        // the hint row under the user bubble renders
+        // immediately (without waiting for the assistant
+        // response to surface it). The lookup is by
+        // `request_id` (active request guard — the
+        // outer `activeRequests.get(event.request_id)`
+        // above already filtered to the right request)
+        // + `message_seq` (the seq the agent loop
+        // assigned to the user row in its per-session
+        // `next_seq` counter). `msgs.find` walks the
+        // full buffer; in practice the user row sits
+        // 1-2 slots before the assistant placeholder,
+        // so the linear scan is cheap (1-3 items).
+        if (
+          typeof event.message_seq !== "number" ||
+          !Array.isArray(event.injections)
+        ) {
+          // Defensive: the Rust side always sends
+          // both fields for `file_injections`, but if
+          // a future wire change drops them, drop the
+          // event rather than corrupt the buffer.
+          break;
+        }
+        const targetSeq = event.message_seq;
+        const target = msgs.find(
+          (m) => m.role === "user" && m.seq === targetSeq,
+        );
+        if (target) {
+          target.injections = event.injections;
+        }
+        // else: could happen if the user navigated
+        // away before the agent loop got to emit the
+        // event — the session is pinned during the
+        // request so the buffer survives, but
+        // `rehydrateMessages` rebuilds it post-`done`
+        // from the DB and picks up the manifest from
+        // `messages.metadata` there.
+        break;
+      }
     }
   }
 

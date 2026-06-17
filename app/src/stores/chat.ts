@@ -110,6 +110,62 @@ export interface LatencyInfo {
   totalMs?: number;
 }
 
+/** B2 PR3: per-token `@relpath` injection verdict for one user
+ *  turn. `path` is the raw `@relpath` text (the `@` is stripped
+ *  for storage so the row reads like a relative path, matching
+ *  the placeholder wording "✓ 注入 48 行"). `action` is the
+ *  per-token outcome — Injected (text file with line count),
+ *  Degraded (image / PDF / Office / binary placeholder), or
+ *  Skipped (out-of-root / missing / unreadable).
+ *
+ *  The shape mirrors the Rust `agent::at_file::InjectionAction`
+ *  enum (see `app/src-tauri/src/agent/at_file.rs`). The
+ *  wire-format enum is `tag = "kind", rename_all = "snake_case"`,
+ *  matching the `tool_call` / `tool_result` discriminated-union
+ *  convention in `streamController.ts`.
+ *
+ *  Field naming follows the snake_case wire:
+ *  - `Injected` carries a `lines: number` field.
+ *  - `Degraded` carries a `file_kind: "image" | "pdf" | "office"
+ *    | "binary"` field (the Rust `FileKind` enum's
+ *    `rename_all = "snake_case"` makes the JSON values lowercase,
+ *    so `"image"` / `"pdf"` / `"office"` / `"binary"`).
+ *  - `Skipped` carries a `reason: "out_of_root" | "missing" |
+ *    "unreadable"` field (the Rust `SkipReason` enum's
+ *    `rename_all = "snake_case"` makes the JSON values
+ *    `out_of_root` / `missing` / `unreadable`).
+ *
+ *  The frontend maps these to the human-readable Chinese
+ *  labels in `FileInjectionsHint.vue`. An unknown variant
+ *  falls back to the raw string / "未知".
+ *
+ *  Stored in `messages.metadata` (JSON column) — the
+ *  rehydrate path parses it back here on session load. Also
+ *  pushed live via `ChatEvent::FileInjections` so the hint
+ *  row appears before the assistant's first delta. */
+export type InjectionRecord =
+  | { kind: "injected"; lines: number }
+  | {
+      kind: "degraded";
+      file_kind: "image" | "pdf" | "office" | "binary";
+    }
+  | {
+      kind: "skipped";
+      reason: "out_of_root" | "missing" | "unreadable";
+    };
+
+/** B2 PR3: the visible shape stored on the message — `path`
+ *  lives on the record wrapper so each entry is self-contained
+ *  in the hint row. Mirrors the Rust `InjectionRecord` struct
+ *  (path + action). The array is empty/undefined for user
+ *  messages that never had `@relpath` tokens, AND for
+ *  non-user messages (assistant / system) — the agent loop
+ *  only attaches the manifest to the last user turn. */
+export interface InjectionEntry {
+  path: string;
+  action: InjectionRecord;
+}
+
 /** Chat message with optional tool call/result/thinking metadata. */
 export interface ChatMessage {
   id: string;
@@ -153,6 +209,24 @@ export interface ChatMessage {
    *  `update_message_thinking` IPC, mirroring the
    *  latency-tracking pattern, if reload-survival matters. */
   thinkingDurationMs?: number;
+  /** B2 PR3: per-user-turn `@relpath` injection manifest,
+   *  parallel to `toolCalls` / `toolResults` (one message
+   *  can have BOTH tool cards AND a hint row when the
+   *  assistant decides to use tools after seeing the
+   *  injected files). Empty/missing for messages without
+   *  `@relpath` tokens. Set by:
+   *
+   *  - The streaming `streamController` on
+   *    `ChatEvent::FileInjections` (live path).
+   *  - The rehydrate path (`rehydrateMessages` in
+   *    `streamController.ts`) on session load, parsing
+   *    `MessageRow.metadata` JSON.
+   *
+   *  The MessageItem hint row renders when
+   *  `msg.role === "user" && msg.injections?.length` —
+   *  assistant rows never have `@` references and the
+   *  field stays undefined. */
+  injections?: InjectionEntry[];
 }
 
 /** Session summary shown in the sidebar. Snake_case to match PR1's
@@ -1017,17 +1091,63 @@ export const useChatStore = defineStore("chat", () => {
     // sessions and an IPC call for evicted ones.
     const msgs = await controller.ensureLoaded(sessionId);
 
+    // B2 PR3 (bug fix 2026-06-17): compute the seq the
+    // backend's `chat_loop` will assign to the user row.
+    // The agent loop's `next_seq` counter starts at
+    // `max(messages.seq) + 1` from `load_session` — the
+    // same value we read off the rehydrated `msgs` here.
+    // We stamp the user placeholder with this seq (and the
+    // assistant placeholder with `nextSeq + 1`) so the
+    // `ChatEvent::FileInjections` handler in
+    // `streamController.ts` can locate the user message by
+    // `m.seq === event.message_seq`. The rehydrated
+    // messages all carry `seq` (set in
+    // `rehydrateMessages` from `MessageRow.seq`); the
+    // pre-stamping matters for the live path because the
+    // freshly-pushed user/assistant placeholders are
+    // not yet in the DB and so have no `seq` to read back.
+    // Without this stamp, the live path silently drops
+    // every `FileInjections` event.
+    const nextSeq = msgs.reduce(
+      (acc, m) => (typeof m.seq === "number" && m.seq > acc ? m.seq : acc),
+      -1,
+    ) + 1;
+
     // F2: activate force-follow mode so the chat stays scrolled to
     // bottom for the entire duration of the stream.
     forceFollowActive.value = true;
 
     const userMsg: ChatMessage = {
       id: genId(),
+      // B2 PR3 (bug fix 2026-06-17): stamp the user message
+      // with the seq the backend's `chat_loop` will assign.
+      // The agent loop computes `next_seq = max(messages.seq)
+      // + 1` from `load_session` at startup, and that value
+      // is the seq the user row gets on `persist_turn`
+      // (line 295 of `app/src-tauri/src/agent/chat_loop.rs`).
+      // Without this, the `ChatEvent::FileInjections` handler
+      // in `streamController.ts` does `msgs.find(m => m.role
+      // === "user" && m.seq === event.message_seq)` and
+      // NEVER finds the user message (its `seq` is undefined),
+      // so the hint row under the user bubble never appears
+      // during live streaming. Reload-after-DB-persist works
+      // because `rehydrateMessages` reads `seq` from
+      // `MessageRow.seq` and stamps it on every rehydrated
+      // message — but the live path needs an explicit stamp
+      // here.
+      seq: nextSeq,
       role: "user",
       content: trimmed,
     };
     const assistantMsg: ChatMessage = {
       id: genId(),
+      // Assistant placeholder takes the next seq so
+      // `case "turn_complete"` and `case "file_injections"`
+      // both have a stable seq to key on. The agent loop
+      // bumps seq after each `persist_turn` (user row →
+      // assistant row → tool_result row), so the assistant
+      // row seq is `userSeq + 1`.
+      seq: nextSeq + 1,
       role: "assistant",
       content: "",
     };
