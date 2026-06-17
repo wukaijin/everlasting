@@ -1,0 +1,6 @@
+{"file": "docs/research/skill-system-survey.md", "reason": "本任务 research 依据: Claude allowed-tools (§3.3) / skill-command superset 同名优先级 (§5.3) / parser 升级决策 (§5.5) / MVP stretch 清单 (§6.1)"}
+{"file": ".trellis/tasks/archive/2026-06/06-18-skill-system/prd.md", "reason": "B4 MVP 基线 + Stretch 1/2 Out of Scope 记录 + 4 个已定决策 (MVP 纯 LLM 自动触发 / 独立 SkillCache / L0 独立 message / L1 tool_result)"}
+{"file": ".trellis/tasks/06-18-skill-stretches/prd.md", "reason": "当前 grill 收敛 PRD (6 决策全定): 声明性 / 手写 parser / 正文作 user message / 合并面板 / builtin 胜出+skill 覆盖 custom。实施依据。"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "Stretch 1 的 build_skill_listing_block 渲染 (tools: ...) 对照 build_banner / build_instructions_blocks 模式 (空 skip, 描述后追加)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Stretch 2 前端 TriggerMenu 路由 builtin→客户端 / custom→get_command_body / skill→get_skill_body 触发的 tool 契约参考"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Stretch 1 parser 扩展复用 B3 手写 + Stretch 2 合并 list_panel_items 复用 list_commands 模式的 reuse 判断"}

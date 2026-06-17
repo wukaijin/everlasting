@@ -1,0 +1,5 @@
+{"file": "docs/research/skill-system-survey.md", "reason": "核对实施与调研一致: 声明性 / 手写 parser / 正文作 user message / 合并面板 / 同名 builtin 胜出+skill 覆盖 custom"}
+{"file": ".trellis/tasks/06-18-skill-stretches/prd.md", "reason": "核对实施与 grill 收敛 PRD 6 决策全落地, AC 各项通过"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "核对 listing 渲染 (tools: ...) 对称 build_banner (空 skip, 描述后追加)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对 parser 复用 B3 手写 + list_panel_items 复用 list_commands 得当, 无过度复制 / 漏抽象"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "确认 DEBT 无新增 (DoD 声明 0 新增债)"}
