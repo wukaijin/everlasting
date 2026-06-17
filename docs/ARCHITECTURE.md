@@ -616,6 +616,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **关键设计**:取消**不立即终止 LLM 请求**,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
 - **`shell` 进程组杀整组**(RULE-E-002,2026-06-14):`shell` tool 的子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程,不再留孤儿。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
+- **已知偏离**(RULE-A-010,2026-06-17):当前实现单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**。MVP 简化决策:不走"取消→tool_result 回传 LLM→二次 cancel 才真终止"链路,而是"一次 cancel = 立即终止"。理由:(1) tool 取消窗口短,LLM 自我收敛窗口需要再发一轮 LLM 调用,延迟 + 成本不一定划算;(2) 单用户桌面应用场景下,误点 stop 的概率极低,二次取消 UX 增加 friction 而价值有限。完整 spec 见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + DEBT.md §RULE-A-010 (已 closed 2026-06-17 via spec 偏离声明 + ADR `docs/IMPLEMENTATION.md §4` 2026-06-17 "D3 完成")。若未来要补二次取消语义,实现路径:agent loop 的 tool 取消分支 + cancel check 之间加一个 "已 cancel 过 N 次" 状态机,N==1 时构造 synthetic `tool_result` 回填 LLM 续流,N==2 才 emit `Done("cancelled")`。
 
 #### 2.5.2 ⑩ Tool 超时回填
 

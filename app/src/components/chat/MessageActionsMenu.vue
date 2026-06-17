@@ -11,6 +11,15 @@
 // "重发当前 prompt" UX decisions, both of which are out of PR2 scope
 // per the dispatch prompt.
 //
+// D3 PR3 (2026-06-17): Resend wired to `chatStore.resendMessage`.
+// The disabled placeholder + "PR3 待实施" tooltip are gone; Resend
+// is now enabled for user messages when not editing / streaming.
+// On click: parent emits `resend`, parent component calls
+// `chatStore.resendMessage(sessionId, messageSeq, content)` which
+// (1) cancels any in-flight stream on the session, (2) re-fires
+// `chat` IPC with `resendSeq` flag, (3) the backend writes a
+// `resend_message` audit row at the user-message persist site.
+//
 // Why reka-ui DropdownMenu (not the hand-rolled popover pattern):
 //   The hand-rolled `ModelSelect` / `ModeSelect` / `TriggerMenu` pattern
 //   in `.trellis/spec/frontend/popover-pattern.md` works for chip-
@@ -31,9 +40,11 @@
 //     `tool_result` rows reference; mutating the assistant content
 //     without rewriting the dependent tool_results would produce
 //     orphan-request / orphan-result pairs and Anthropic 400s).
-//   - Resend: always disabled in PR2. The tooltip says "PR3 待实施".
-//     Backend work (new `ChatEvent::Resend` variant + audit kind)
-//     lands in PR3.
+//   - Resend (PR3 wired): enabled only when `role === "user"` AND
+//     `!isEditing` AND `!isStreaming` — same gate as Edit. Re-firing
+//     an assistant message has no defined semantics (the assistant is
+//     the response to a user prompt; if the user wants a different
+//     response, they should re-fire the user prompt instead).
 //   - Copy: always enabled. Uses `navigator.clipboard.writeText` and
 //     surfaces a "已复制" toast via `projectsStore.showToast`.
 //   - Whole trigger is disabled when `isStreaming` is true (defense
@@ -44,6 +55,8 @@
 //     `content`, `role`, `isEditing`, `isStreaming`.
 //   - `edit` emit bubbles to the parent which flips the message into
 //     edit mode (textarea + Save / Cancel).
+//   - `resend` emit bubbles to the parent which calls
+//     `chatStore.resendMessage(sessionId, messageSeq, content)`.
 //   - `copy` is handled in-place (clipboard API + toast); no bubble
 //     needed for the common case.
 
@@ -103,6 +116,13 @@ const emit = defineEmits<{
    *  textarea / Save / Cancel UI; this component only fires the
    *  intent. */
   edit: [messageSeq: number];
+  /** D3 PR3 (2026-06-17): parent should re-fire the existing
+   *  user prompt (no content mutation). The parent owns the
+   *  in-memory `messagesBySession` push + the
+   *  `chatStore.resendMessage(sessionId, messageSeq, content)`
+   *  call; this component only fires the intent with the seq
+   *  so the parent can look up the content. */
+  resend: [messageSeq: number];
 }>();
 
 const projectsStore = useProjectsStore();
@@ -115,10 +135,14 @@ const projectsStore = useProjectsStore();
 const canEdit = (): boolean =>
   props.role === "user" && !props.isEditing && !props.isStreaming;
 
-/** Resend is permanently disabled in PR2. The handler is a
- *  no-op so a future PR3 (or a stray click) cannot trigger
- *  an undefined resend path. */
-const canResend = (): boolean => false;
+/** Resend (PR3, 2026-06-17): enabled for user messages when not
+ *  editing and not streaming — same gate as Edit. The handler
+ *  fires the `resend` emit so the parent can build the full
+ *  `chatStore.resendMessage(sessionId, messageSeq, content)`
+ *  call (this component only knows the seq; the parent owns
+ *  the in-memory buffer). */
+const canResend = (): boolean =>
+  props.role === "user" && !props.isEditing && !props.isStreaming;
 
 /** Copy is always enabled. */
 const canCopy = (): boolean => true;
@@ -126,6 +150,16 @@ const canCopy = (): boolean => true;
 function onEdit() {
   if (!canEdit()) return;
   emit("edit", props.messageSeq);
+}
+
+/** D3 PR3 (2026-06-17): Resend handler. Fires the `resend`
+ *  emit with this row's seq; the parent (`MessageItem.vue`)
+ *  calls `chatStore.resendMessage(sessionId, messageSeq,
+ *  content)` to do the actual work (cancel + re-fire chat
+ *  IPC with `resendSeq` flag). */
+function onResend() {
+  if (!canResend()) return;
+  emit("resend", props.messageSeq);
 }
 
 async function onCopy() {
@@ -236,7 +270,7 @@ async function onCopy() {
             class="msg-actions__item"
             :disabled="!canResend()"
             data-testid="msg-actions-resend"
-            @select.prevent
+            @select="onResend"
           >
             <Icon
               name="refresh"
@@ -244,7 +278,10 @@ async function onCopy() {
               icon-class="msg-actions__item-icon"
             />
             <span>重发</span>
-            <span class="msg-actions__item-hint">PR3 待实施</span>
+            <span
+              v-if="role !== 'user'"
+              class="msg-actions__item-hint"
+            >仅 user 消息</span>
           </DropdownMenuItem>
 
           <DropdownMenuSeparator class="msg-actions__separator" />

@@ -103,6 +103,14 @@ pub async fn run_chat_loop(
     memory_cache: Arc<MemoryCache>,
     permission_asks: crate::agent::permissions::PermissionStore,
     token: CancellationToken,
+    // D3 PR3 (2026-06-17): resend context. When `Some(seq)`,
+    // the user-message persist site (just after this function
+    // captures `last_user_snapshot`) writes a `resend_message`
+    // audit row pointing at the original user message's seq.
+    // `None` for normal first-time sends. Best-effort (DB
+    // audit failure does NOT abort the chat — the user has
+    // already seen the assistant's new turn stream).
+    resend_seq: Option<i64>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -286,6 +294,50 @@ pub async fn run_chat_loop(
         {
             emit_persist_failure(&sink, &rid, &e);
             return;
+        }
+        // D3 PR3 (2026-06-17): if the user hit Resend (instead of
+        // Edit), the frontend passed `resend_seq` through the chat
+        // IPC. Fire the `resend_message` audit row pointing at the
+        // original user message's seq (the one the user clicked
+        // Resend on). Best-effort: a failure is logged + swallowed
+        // — audit loss is acceptable here because the user has
+        // already seen the visual confirmation (the new assistant
+        // turn is about to stream). The `content_text_preview`
+        // comes from the ORIGINAL message's content (truncated to
+        // 80 chars inside the helper), not the new send's text —
+        // they're identical because Resend re-fires the same
+        // prompt, but we use the ORIGINAL seq to keep the audit
+        // link obvious ("you re-ran this row at T").
+        //
+        // Sits AFTER persist_turn so the audit row's payload can
+        // safely reference `seq` (the original row's seq — the
+        // user message we just persisted is a NEW row with seq=N+1,
+        // not the one being re-run). The `resend_seq` is the seq
+        // of the ORIGINAL user message; the new send uses seq=N+1.
+        if let Some(original_seq) = resend_seq {
+            // Derive a short text preview from the original
+            // message's content. `MessageContent` carries
+            // `to_text()` which concatenates all text blocks
+            // (mirrors the `text` column write). We use the
+            // in-memory `msg` (which equals what just got
+            // persisted) — same text, same preview budget.
+            let preview = msg.content.to_text();
+            if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                &db,
+                &session_id,
+                original_seq,
+                &preview,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    request_id = %rid,
+                    session_id = %session_id,
+                    original_seq = original_seq,
+                    "chat_loop: record_message_resend_audit failed (non-fatal)"
+                );
+            }
         }
         // B2 PR3: snap the seq for the FileInjections event;
         // the original (un-injected) content stays in the

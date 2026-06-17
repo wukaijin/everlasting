@@ -227,6 +227,19 @@ export interface ChatMessage {
    *  assistant rows never have `@` references and the
    *  field stays undefined. */
   injections?: InjectionEntry[];
+  /** D3 PR3 (2026-06-17): per-message metadata JSON,
+   *  parsed from `MessageRow.metadata`. Currently used
+   *  for the D3 "edited" affordance — when the row has
+   *  `metadata.edited_at`, the MessageItem renders a small
+   *  "(edited)" grey label next to the bubble. Rehydrated
+   *  on session load by `rehydrateMessages` (parses the
+   *  same JSON column B2 PR3 uses for the injection
+   *  manifest). In-memory only — mutations stay on the
+   *  backend via `edit_user_message`. The shape is
+   *  loosely typed (a free-form JSON object) so future
+   *  metadata fields (e.g. `original_content` for undo)
+   *  don't require touching this interface. */
+  metadata?: Record<string, unknown>;
 }
 
 /** Session summary shown in the sidebar. Snake_case to match PR1's
@@ -1312,6 +1325,118 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
+  // D3 PR3 (2026-06-17): user message Resend — re-fire the
+  // existing user prompt (no content mutation) by re-calling
+  // `chat` with the same messages payload + a `resendSeq`
+  // flag pointing at the original user message's seq. The
+  // backend's agent loop detects the flag and writes a
+  // `resend_message` audit row at the user-message persist
+  // site (best-effort; see `app/src-tauri/src/agent/chat.rs`
+  // `chat` command signature).
+  //
+  // Diff vs `editMessage`:
+  // - No IPC `edit_user_message` call — content is unchanged.
+  // - `chat` IPC receives an extra `resendSeq` parameter (the
+  //   seq the user clicked Resend on). Backend audit fires at
+  //   persist site; otherwise the request is identical to a
+  //   normal send.
+  // - No `controller.refresh` — the in-flight stream will
+  //   stream into the same placeholder, and `finalizeRequest`
+  //   will evict the buffer + `load_session` rehydrates
+  //   including the (newly created) re-sent user message row.
+  //
+  // Stream race: same as `editMessage` — cancel any in-flight
+  // stream first. The cancel order matters: the user clicks
+  // Resend, we cancel the old stream, then we re-fire chat.
+  // If the user clicks Resend twice in quick succession, the
+  // second click cancels the first Resend's stream (which is
+  // mid-flight) and starts yet another — the second
+  // `resend_message` audit row will overwrite the first one's
+  // role (the latest is the only one the user sees anyway).
+  // -----------------------------------------------------------------------
+  async function resendMessage(
+    sessionId: string,
+    messageSeq: number,
+    contentText: string,
+  ): Promise<void> {
+    if (!sessionId) {
+      throw new Error("resendMessage: sessionId is required");
+    }
+    if (typeof messageSeq !== "number") {
+      throw new Error("resendMessage: messageSeq is required");
+    }
+    if (typeof contentText !== "string") {
+      throw new Error("resendMessage: contentText must be a string");
+    }
+    // 1. Stream race — cancel any in-flight stream on this
+    // session, mirroring `editMessage`'s defensive pattern.
+    if (sessionId === currentSessionId.value && isCurrentSessionStreaming.value) {
+      await cancel();
+    } else {
+      const rid = controller.currentRequestId(sessionId);
+      if (rid) {
+        await controller.cancel(rid);
+      }
+    }
+    // 2. Re-fire `chat` with the same messages payload + a
+    // `resendSeq` flag. We mirror `send()`'s placeholder
+    // construction (push a fresh userMsg + assistantMsg so the
+    // controller's `case "delta"` finds the assistant message
+    // to mutate), but the `resendSeq` flag tells the backend
+    // this is a re-fire (audit at the user-message persist
+    // site). The user message content is identical to the
+    // original — we're re-running the same prompt.
+    const projectId = projectsStore.currentProjectId;
+    if (!projectId) {
+      throw new Error("resendMessage: no current project");
+    }
+    const msgs = await controller.ensureLoaded(sessionId);
+    // Compute next seq for the new placeholders, same logic
+    // as `send()`. The agent loop will use `max(loaded.seq)
+    // + 1` for the actual persist, but we stamp the
+    // in-memory placeholder so the controller's
+    // `FileInjections` / `TurnComplete` events can key on it.
+    const nextSeq = msgs.reduce(
+      (acc: number, m: ChatMessage) =>
+        typeof m.seq === "number" && m.seq > acc ? m.seq : acc,
+      -1,
+    ) + 1;
+    forceFollowActive.value = true;
+    const userMsg: ChatMessage = {
+      id: genId(),
+      seq: nextSeq,
+      role: "user",
+      content: contentText,
+    };
+    const assistantMsg: ChatMessage = {
+      id: genId(),
+      seq: nextSeq + 1,
+      role: "assistant",
+      content: "",
+    };
+    msgs.push(userMsg, assistantMsg);
+    const history: ChatMessagePayload[] = msgs
+      .filter((m) => m.id !== assistantMsg.id)
+      .map((m) => ({ role: m.role, content: toPayloadContent(m) }));
+    // 3. Start the request with the `resendSeq` flag. Backend
+    // audit fires at user-message persist site; otherwise the
+    // request is identical to a normal send.
+    await controller.startRequest({
+      sessionId,
+      projectId,
+      userMsg,
+      assistantMsg,
+      history,
+      // D3 PR3 (2026-06-17): mark this request as a resend
+      // of the original user message at `messageSeq`. The
+      // backend's agent loop reads this and writes a
+      // `resend_message` audit row at the user-message
+      // persist site (best-effort).
+      resendSeq: messageSeq,
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // A2 + B7 (PR2 front-end): per-session Mode changes via the
   // `set_session_mode` Tauri command. Both the popover entry
   // (`ModeSelect.vue`) and the keyboard entry (`Shift+Tab` in
@@ -1482,5 +1607,11 @@ export const useChatStore = defineStore("chat", () => {
     // `MessageItem.vue`'s Save handler; the parent catches
     // errors and keeps the edit mode active for retry.
     editMessage,
+    // D3 PR3 (2026-06-17): re-fire an existing user message
+    // (no content mutation). Called by `MessageActionsMenu`'s
+    // `resend` emit; `MessageItem.vue` builds the
+    // `contentText` from `message.content` and the chat
+    // store fires the new stream with the `resendSeq` flag.
+    resendMessage,
   };
 });

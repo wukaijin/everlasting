@@ -425,6 +425,18 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
           msg.injections = entries;
         }
       }
+      // D3 PR3 (2026-06-17): also surface the raw metadata
+      // object on the in-memory message so MessageItem can
+      // render the "(edited)" label when `metadata.edited_at`
+      // is present. The shape is loosely typed (Record<string,
+      // unknown>) so future metadata fields don't require
+      // touching this rehydrate site. We attach the parsed
+      // object verbatim — the same JSON the agent loop
+      // persisted via `edit_user_message` (see
+      // `.trellis/spec/backend/database-guidelines.md`
+      // "Pattern: `edit_user_message`" — `metadata` shape is
+      // `{ edited_at, original_content? }`).
+      msg.metadata = meta;
     }
     // The `seq` is plumbed through for the F5
     // `update_message_latency` IPC. The streaming path tracks
@@ -1488,6 +1500,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
      *  `chat` command expects). The caller (chat.ts) builds this
      *  so it can reuse the existing `toPayloadContent` logic. */
     history: unknown[];
+    /** D3 PR3 (2026-06-17): when set, the backend treats this
+     *  stream as a Resend (re-fire of an existing user message).
+     *  The agent loop's user-message persist site writes a
+     *  `resend_message` audit row pointing at the original
+     *  user message's seq. `undefined` for normal first-time
+     *  sends. Plumbed through the `chat` IPC's `resendSeq`
+     *  parameter (Tauri auto-converts the snake_case Rust
+     *  field to camelCase JS). */
+    resendSeq?: number;
   }
 
   /** Kick off a new stream. The caller is responsible for
@@ -1552,6 +1573,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         requestId,
         sessionId: args.sessionId,
         messages: args.history,
+        // D3 PR3 (2026-06-17): pass through the resend flag.
+        // When `undefined`, the Rust side receives `None` and
+        // treats this as a normal first-time send (no audit).
+        // When a number, the agent loop fires `resend_message`
+        // audit at the user-message persist site.
+        resendSeq: args.resendSeq,
       });
     } catch (e) {
       const msgs = messagesBySession.get(args.sessionId);

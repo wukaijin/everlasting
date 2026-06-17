@@ -581,7 +581,7 @@
 - **Description**: spec 要求"取消不立即终止,把'取消'作为 tool_result 回传给 LLM 一次自我收敛机会;二次取消才真终止";当前实现单次 cancel 即 emit Done("cancelled") 终止
 - **Impact**: MVP 简化,但与 spec 不符,影响 LLM 自我收敛能力
 - **Fix**: 实现二次取消语义,或更新 spec 标"已偏离"
-- **Status**: open
+- **Status**: **closed (2026-06-17)** — D3 PR3 实施时顺手收口,方式 = **spec 偏离声明**(非实现)。spec 在 `docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释段,说明 MVP 简化决策 + 未来实现路径;DEBT 自身 Re-evaluation Log 加一行 open→closed;`docs/IMPLEMENTATION.md §4` 2026-06-17 加 D3 完成 ADR 段落,完整说明偏离理由 + 二次取消实现路径(为未来预留)。原 "Fix" 的实现路径本批次不做(理由见 ADR:tool 取消窗口短 + 二次取消 UX friction + 单用户场景误点概率低)。
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1 + `.trellis/reviews/SPEC-DRIFT.md`
 
@@ -718,6 +718,7 @@
 | 2026-06-16 | RULE-B-004 | open | **closed** | DENY_PATTERNS 全加 (?i) + 新增 find -delete/-exec 硬墙;不动 shell_trust 分级(双层架构);长选项/子shell/env 留 Tier4 兜底;+3 测试,498 pass | §收尾路径建议 |
 | 2026-06-16 | RULE-E-009 | open | **closed** | 4 处字节切片改 floor/ceil_char_boundary(对齐 diff.rs);+2 多字节测试,498 pass | §收尾路径建议 |
 | 2026-06-16 | RULE-D-003 | open | **closed** | MAX_DATA_BYTES=1MiB cap(超限 drop 余下 data)+ strip_prefix(data:) 去空格容忍无空格版;+4 测试,502 pass | §收尾路径建议 |
+| 2026-06-17 | RULE-A-010 | open | **closed** | D3 PR3 实施时收口,方式 = spec 偏离声明(非实现二次取消语义):`docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释 + `docs/IMPLEMENTATION.md §4` 2026-06-17 D3 ADR 完整说明偏离理由 + 未来实现路径(tool 取消分支 + cancel check 之间加 N 状态机)。原 "实现二次取消语义" 选项不在本批次做(MVP 简化决策:tool 取消窗口短 + 二次取消 UX friction + 单用户误点概率低) | `.trellis/tasks/06-17-d3-message-edit-resend` |
 
 ---
 

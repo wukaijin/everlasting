@@ -489,6 +489,116 @@ with `kind='edit_message'`) so the user can review changes later.
 
 ---
 
+## Pattern: `record_message_resend_audit` — user-initiated resend audit (D3 PR3, 2026-06-17)
+
+The Resend feature (D3 PR3) re-fires an existing user prompt — no
+content mutation, no cascade delete, just a fresh LLM stream over
+the same prompt. The audit row exists so the user can review
+"which prompts did I re-run at which timestamp" in the C4
+`<AuditLogModal>` alongside the EditMessage rows (D3 PR1).
+
+Unlike `edit_user_message` (which is destructive and lives inside a
+transaction), `record_message_resend_audit` is **best-effort, post-
+persist**. The agent loop's user-message persist site is the
+natural place to fire it (the user message is in the DB; we know
+its seq), but the audit failure must NOT abort the chat — the user
+has already seen the visual confirmation (the new assistant turn
+is about to stream). The helper returns `Result<(), sqlx::Error>`
+and the caller (`chat_loop.rs` user persist site) wraps it in
+`tracing::warn!` + swallow.
+
+### When to use
+
+A user-driven IPC that wants to record a "resend" event on an
+existing user message without modifying the message content or
+deleting downstream rows. The function is intentionally NOT used
+for assistant messages — there's no defined "resend" semantics
+on an assistant response (the user re-runs the user prompt that
+spawned it).
+
+### Schema impact
+
+**Zero**. The audit row re-uses the existing
+`session_audit_events` table. The `kind` column is plain TEXT; a
+new wire string (`"resend_message"`) requires no migration.
+
+### Persisted shape
+
+```jsonc
+// session_audit_events.payload_json, one row per resend click:
+{
+  "message_seq": 3,                                    // seq of the ORIGINAL user message being re-run
+  "content_text_preview": "re-run: explain the cancellation token pattern"  // first 80 chars of the user prompt
+}
+```
+
+### Implementation (`agent::permissions::record_message_resend_audit`)
+
+```rust
+// app/src-tauri/src/agent/permissions/mod.rs
+pub async fn record_message_resend_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    message_seq: i64,
+    content_text_preview: &str,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "message_seq": message_seq,
+        "content_text_preview": content_text_preview.chars().take(80).collect::<String>(),
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ResendMessage.as_str(),  // "resend_message"
+        Some(&payload_str),
+    )
+    .await
+}
+```
+
+### Tauri command wiring
+
+`record_message_resend_audit` is NOT wired as a Tauri command —
+it's called directly from `chat_loop.rs`'s user-message persist
+site (the `chat` IPC accepts an optional `resendSeq: Option<i64>`
+parameter; when `Some(seq)`, the persist site fires this helper
+after `persist_turn` succeeds). The IPC signature is
+`#[tauri::command] pub async fn chat(..., resendSeq: Option<i64>)`
+in `app/src-tauri/src/agent/chat.rs` — see the "Resend 走 chat
+IPC metadata flag, 不引入新 IPC" decision in `docs/IMPLEMENTATION.md §4`
+"D3 完成 ADR" (2026-06-17).
+
+### Permission / audit
+
+Resend is a **user-initiated direct IPC** — not an LLM tool
+invocation. The ⑨ 关 permission layer (Tier 2 deny list, Tier 3
+"始终允许" check, Tier 4 Mode interception) does **not** apply.
+The audit log captures every resend (`session_audit_events` row
+with `kind='resend_message'`) so the user can review re-run
+history later.
+
+### Diff vs `edit_user_message`
+
+| 维度 | `edit_user_message` (D3 PR1) | `record_message_resend_audit` (D3 PR3) |
+|---|---|---|
+| **Destructive?** | Yes (in-place content update + cascade delete + 3-step transaction) | No (read-only; just writes an audit row) |
+| **Transaction?** | Yes (single `sqlx::Transaction` wrapping UPDATE + DELETE + INSERT audit) | No (single audit INSERT; best-effort, non-fatal) |
+| **Caller failure mode** | On failure → rollback + `emit_persist_failure` | On failure → `tracing::warn!` + swallow |
+| **Wire string** | `"edit_message"` | `"resend_message"` |
+| **Helper location** | `db::sessions::edit_user_message` (DB layer) | `agent::permissions::record_message_resend_audit` (permissions layer, like `record_tool_executed_audit`) |
+| **Tauri command?** | Yes (`edit_user_message`) | No (called inline from `chat_loop.rs`) |
+| **Audit trigger site** | Inside the edit transaction's commit | After `persist_turn` succeeds (best-effort) |
+
+### Tests (D3 PR3, `db/tests.rs`)
+
+| Test | Asserts |
+|---|---|
+| `resend_message_audit_round_trips_via_list_audit_events` | (1) short content → `kind='resend_message'`, payload carries `message_seq` + verbatim preview; (2) 200-char content → preview truncated to 80 chars |
+| `resend_message_audit_on_deleted_session_returns_error` | Helper returns `Err(sqlx::Error::RowNotFound)` on FK violation (defensive; agent loop log-and-swallow path) |
+
+---
+
 ## Pattern: denormalized list endpoints
 
 When the UI renders a list with parent-table fields (e.g. a model picker

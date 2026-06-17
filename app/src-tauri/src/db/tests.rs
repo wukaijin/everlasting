@@ -2264,3 +2264,97 @@ async fn edit_user_message_atomic_rollback_on_db_error() {
  );
 }
 
+/// D3 PR3 (2026-06-17): the resend audit helper writes a
+/// `resend_message` row through `record_audit_event` with the
+/// expected payload shape (`message_seq` + `content_text_preview`)
+/// and round-trips through `list_audit_events`. Mirrors the
+/// `tool_executed_audit_round_trips_via_list_audit_events` test
+/// (C4 PR1, 2026-06-14) so the new variant is locked the same way:
+/// the audit-log UI can dispatch on the kind string and parse the
+/// payload without further coordination.
+#[tokio::test]
+async fn resend_message_audit_round_trips_via_list_audit_events() {
+    use crate::agent::permissions::record_message_resend_audit;
+
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Case 1: typical resend of a short user prompt.
+    record_message_resend_audit(
+        &pool,
+        &s.id,
+        3,
+        "re-run: explain the cancellation token pattern",
+    )
+    .await
+    .unwrap();
+
+    let events = list_audit_events(&pool, &s.id).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "resend_message");
+    let payload: serde_json::Value =
+        serde_json::from_str(events[0].payload_json.as_deref().unwrap()).unwrap();
+    assert_eq!(payload["message_seq"], 3);
+    assert_eq!(
+        payload["content_text_preview"],
+        "re-run: explain the cancellation token pattern"
+    );
+
+    // Case 2: long content is truncated to 80 chars (matches the
+    // edit audit preview budget).
+    let long = "a".repeat(200);
+    record_message_resend_audit(&pool, &s.id, 5, &long).await.unwrap();
+    let events = list_audit_events(&pool, &s.id).await.unwrap();
+    assert_eq!(events.len(), 2);
+    let target = "5";
+    let second = events
+        .iter()
+        .find(|e| {
+            e.kind == "resend_message"
+                && e.payload_json.as_deref().unwrap().contains(target)
+        })
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(second.payload_json.as_deref().unwrap()).unwrap();
+    let preview = payload["content_text_preview"].as_str().unwrap();
+    assert_eq!(preview.chars().count(), 80, "preview truncated to 80 chars");
+    assert!(
+        preview.chars().all(|c| c == 'a'),
+        "preview is the leading 80 a chars"
+    );
+}
+
+/// D3 PR3 (2026-06-17): the resend audit helper returns
+/// `Result<(), sqlx::Error>` like the other audit helpers; a DB
+/// write failure surfaces to the caller (the agent loop
+/// log-and-swallow path at the user-message persist site).
+/// Asserted by inserting into a deleted session (FK constraint
+/// fires; helper returns `Err`).
+#[tokio::test]
+async fn resend_message_audit_on_deleted_session_returns_error() {
+    use crate::agent::permissions::record_message_resend_audit;
+
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    delete_session(&pool, &s.id).await.unwrap();
+    let result = record_message_resend_audit(&pool, &s.id, 0, "after-delete").await;
+    assert!(result.is_err(), "audit insert must fail on missing session");
+}

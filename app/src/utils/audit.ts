@@ -31,8 +31,13 @@ export interface AuditEventRow {
    *  when two rows share the same second we expose `id DESC`
    *  at the store layer. */
   ts: string;
-  /** One of the 11 `AuditKind::as_str()` outputs (see
-   *  `agent/permissions/mod.rs`). */
+  /** One of the 13 `AuditKind::as_str()` outputs (see
+   *  `agent/permissions/mod.rs`). The two new D3 PR1/PR3
+   *  kinds — `edit_message` and `resend_message` — are
+   *  user-initiated direct IPCs (not ⑨ 关 decisions), so the
+   *  parser falls back to `kind: "raw"` for them; the UI
+   *  surfaces them via the dropdown filter + the
+   *  `labelForKind` map. */
   kind: string;
   /** Raw JSON payload (or `null`). Parse via `parseAuditPayload`. */
   payloadJson: string | null;
@@ -176,6 +181,20 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   { value: "mode_changed", label: "Mode 切换" },
   { value: "yolo_entered", label: "进入 Yolo" },
   { value: "yolo_exited", label: "退出 Yolo" },
+  // D3 PR1 (2026-06-17): user-initiated message edit (in-place
+  // content update + cascade delete of the assistant tail).
+  // Surfaces in the audit log so the user can review the
+  // edit history of a session without scrolling back through
+  // the message list. Wire string is locked by
+  // `AuditKind::EditMessage.as_str()` in the Rust side.
+  { value: "edit_message", label: "编辑消息" },
+  // D3 PR3 (2026-06-17): user-initiated message resend (re-fire
+  // an existing user prompt; no content mutation). Mirrors
+  // `edit_message` in the audit trail so the user can
+  // distinguish "you edited this prompt" from "you re-ran this
+  // prompt" when reviewing a session's history. Wire string is
+  // locked by `AuditKind::ResendMessage.as_str()`.
+  { value: "resend_message", label: "重新发送" },
 ];
 
 /** Visual family for the list row's leading icon. The renderer
@@ -190,9 +209,16 @@ export type AuditIconFamily =
   | "cancelled"
   | "executed"
   | "mode"
+  | "message-edit"
+  | "message-resend"
   | "unknown";
 
-/** Map a wire `kind` to the icon family the modal renders. */
+/** Map a wire `kind` to the icon family the modal renders.
+ *  The two D3 PR1/PR3 user-action kinds (`edit_message` /
+ *  `resend_message`) get their own families so the icon reads
+ *  "user-initiated edit/resend" instead of falling into the
+ *  generic "unknown / gray" bucket. Colors reuse the existing
+ *  tool color tokens (no new tokens added per design-tokens.md). */
 export function iconFamilyForKind(kind: string): AuditIconFamily {
   switch (kind) {
     case "tool_denied":
@@ -215,6 +241,12 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     case "yolo_entered":
     case "yolo_exited":
       return "mode";
+    // D3 PR1 (2026-06-17): user-initiated message edit.
+    case "edit_message":
+      return "message-edit";
+    // D3 PR3 (2026-06-17): user-initiated message resend.
+    case "resend_message":
+      return "message-resend";
     default:
       return "unknown";
   }

@@ -75,6 +75,19 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
       return { iconName: "check-mini", colorVar: "var(--color-tool-write)" };
     case "mode":
       return { iconName: "circle-dot", colorVar: "var(--color-tool-thinking)" };
+    // D3 PR1 (2026-06-17): user-initiated message edit.
+    // Renders a pencil icon in the accent color (the same
+    // accent the inline edit-mode row in MessageItem uses)
+    // so the user has a single visual signal for "edit"
+    // across the app.
+    case "message-edit":
+      return { iconName: "pencil", colorVar: "var(--color-accent)" };
+    // D3 PR3 (2026-06-17): user-initiated message resend.
+    // Renders a refresh icon in the accent color — same
+    // icon as the MessageActionsMenu's Resend button, so
+    // the user sees a single visual signal for "resend".
+    case "message-resend":
+      return { iconName: "refresh", colorVar: "var(--color-accent)" };
     default:
       return { iconName: "info", colorVar: "var(--color-text-muted)" };
   }

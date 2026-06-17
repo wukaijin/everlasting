@@ -1028,6 +1028,7 @@ async fn agent_loop_basic_text_only_completes() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1107,6 +1108,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1215,6 +1217,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         h.memory_cache,
         h.permission_asks,
         cancel_token,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1287,6 +1290,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1340,6 +1344,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1409,6 +1414,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1518,6 +1524,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1627,6 +1634,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1743,6 +1751,7 @@ async fn agent_loop_persist_failure_emits_error() {
         h.memory_cache,
         h.permission_asks,
         CancellationToken::new(),
+        None,
     )
     .await;
 
@@ -1863,6 +1872,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         h.memory_cache,
         h.permission_asks,
         cancel_token,
+        None,
     )
     .await;
     cancel_handle.await.unwrap();

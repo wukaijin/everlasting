@@ -64,6 +64,17 @@ pub async fn chat(
     messages: Vec<ChatMessage>,
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
+    // D3 PR3 (2026-06-17): resend context. When the user clicks
+    // Resend on an existing user message, the frontend fires
+    // `chat` again with the same content (the original user
+    // message is still in `messages`) plus this optional seq.
+    // The agent loop's user-message persist site detects the
+    // flag and writes a `resend_message` audit row (best-
+    // effort). `None` for normal first-time sends. Field
+    // name is snake_case to match the other IPC args; serde
+    // auto-converts the JS-side `resendSeq: number | null`.
+    #[allow(non_snake_case)]
+    resendSeq: Option<i64>,
 ) -> Result<(), String> {
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
@@ -201,6 +212,11 @@ pub async fn chat(
             memory_cache,
             permission_asks,
             token,
+            // D3 PR3 (2026-06-17): pass the resend context
+            // through so the user-message persist site can
+            // fire the `resend_message` audit row when set.
+            // `None` for normal sends (the common case).
+            resendSeq,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

@@ -164,6 +164,34 @@ function onEdit(messageSeq: number) {
   chatStore.editingMessageSeq = messageSeq;
 }
 
+// D3 PR3 (2026-06-17): `MessageActionsMenu`'s `resend` emit
+// handler. Re-fires the user message through the chat store,
+// which (1) cancels any in-flight stream, (2) re-fires the
+// `chat` IPC with the `resendSeq` flag, (3) the backend writes
+// a `resend_message` audit row at the user-message persist
+// site. We pass `props.message.content` as the user prompt —
+// the backend treats the resend as identical to a normal
+// send (same content, same history). On error, the
+// `chatStore.resendMessage` promise rejects and we surface a
+// toast (same pattern as `saveEdit`'s catch path).
+async function onResend(messageSeq: number) {
+  if (props.message.role !== "user") return;
+  if (isStreaming.value) return;
+  const sid = chatStore.currentSessionId;
+  if (!sid) {
+    projectsStore.showToast("重发失败: 无当前 session", "error");
+    return;
+  }
+  try {
+    await chatStore.resendMessage(sid, messageSeq, props.message.content);
+  } catch (e) {
+    projectsStore.showToast(
+      `重发失败: ${String(e)}`,
+      "error",
+    );
+  }
+}
+
 function cancelEdit() {
   chatStore.editingMessageSeq = null;
   editBuffer.value = props.message.content;
@@ -285,6 +313,37 @@ const showLatency = computed<boolean>(
     typeof props.message.latency.totalMs === "number",
 );
 
+// --- D3 PR3 (2026-06-17): "(edited)" label ----------------------------------
+// When the row's metadata carries `edited_at` (written by the
+// backend's `edit_user_message` transaction; see
+// `.trellis/spec/backend/database-guidelines.md` "Pattern:
+// `edit_user_message`"), we render a small grey "(edited)"
+// label next to the bubble. The label is intentionally short —
+// the user just needs a hint that this row's content was
+// edited (vs. an un-edited row); the precise timestamp lives
+// in the audit log (the `edit_message` audit row carries
+// `edited_at`). Both user AND assistant messages can show the
+// label (D3 PR1 in principle only allows user edits, but the
+// metadata is read generically — defensive rendering for any
+// future edit path). Hidden while the bubble is streaming
+// (the placeholder has no metadata until the row is
+// persisted) and while the row is in edit mode (the user is
+// looking at the editor, not the bubble).
+const editedAt = computed<string | null>(() => {
+  const meta = props.message.metadata;
+  if (!meta || typeof meta !== "object") return null;
+  const v = (meta as Record<string, unknown>).edited_at;
+  if (typeof v !== "string" || v.length === 0) return null;
+  return v;
+});
+
+const showEditedLabel = computed<boolean>(
+  () =>
+    editedAt.value !== null &&
+    !props.message.streaming &&
+    !isEditingThisMessage.value,
+);
+
 const latencyTotalLabel = computed<string>(() => {
   const t = props.message.latency?.totalMs;
   if (typeof t !== "number") return "—";
@@ -344,6 +403,7 @@ const latencyRows = computed<
       :is-editing="isEditingThisMessage"
       :is-streaming="isStreaming"
       @edit="onEdit"
+      @resend="onResend"
     />
 
     <ThinkingBlock
@@ -450,6 +510,27 @@ const latencyRows = computed<
       <span v-if="message.streaming" class="msg__cursor" aria-hidden="true"
         >▍</span
       >
+      <!--
+        D3 PR3 (2026-06-17): "(edited)" label. Renders
+        inline at the bottom-right of the bubble when the
+        row's metadata has `edited_at`. The label is a small
+        grey mono-text chip — visually quiet so it doesn't
+        compete with the bubble content. The `title`
+        attribute surfaces the precise edit timestamp on
+        hover for users who care to look. We keep this
+        separate from the F5 latency chip (which renders
+        BELOW the bubble in `.msg__latency`) so the two
+        never collide when both are present (assistant
+        message with both latency + edited_at).
+      -->
+      <span
+        v-if="showEditedLabel"
+        class="msg__edited"
+        :title="`最后编辑于 ${editedAt}`"
+        data-testid="msg-edited-label"
+      >
+        (edited)
+      </span>
     </div>
 
     <!--
@@ -639,6 +720,27 @@ const latencyRows = computed<
   50% {
     opacity: 0;
   }
+}
+
+/* D3 PR3 (2026-06-17): "(edited)" label. Sits inline at the
+   bottom-right of the bubble when the row's metadata has
+   `edited_at`. Visually quiet (small mono grey, no border,
+   no padding) so it doesn't compete with the bubble content
+   or the F5 latency chip below. The `margin-left: auto`
+   pushes it to the right edge of the bubble's flex column;
+   for assistant bubbles the chip stays on the bubble's
+   right side, matching the bubble's bottom-right
+   alignment convention (the F5 latency chip lives
+   separately below the bubble). */
+.msg__edited {
+  display: inline-flex;
+  align-self: flex-end;
+  margin-top: 2px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  font-style: italic;
+  user-select: none;
 }
 
 /* D3 PR2: inline edit mode (user messages only). The

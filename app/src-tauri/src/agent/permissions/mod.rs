@@ -183,6 +183,16 @@ pub enum AuditKind {
  /// `db::sessions::edit_user_message` 的事务尾部,与 cascade
  /// delete 同一个事务,失败回滚不入审计。
  EditMessage,
+ /// D3 PR3 (2026-06-17): user 在 session 内点 Resend 重发
+ /// 了一条已存在的 user message(不修改 content,只 cancel
+ /// 旧 stream + 重新 send 同一条 prompt)。payload 携带
+ /// `message_seq` / `content_text_preview`。落表点在
+ /// agent loop 接收 user message 路径,识别 metadata flag
+ /// `{ kind: "resend", message_seq }` 后,通过
+ /// `record_message_resend_audit` helper 异步落表
+ /// (best-effort,非事务内,因为 audit 缺失不影响 chat
+ /// 主流程)。
+ ResendMessage,
 }
 
 impl AuditKind {
@@ -200,6 +210,7 @@ impl AuditKind {
  Self::RequestCancelled => "request_cancelled",
  Self::ToolExecuted => "tool_executed",
  Self::EditMessage => "edit_message",
+ Self::ResendMessage => "resend_message",
  }
  }
 }
@@ -1244,6 +1255,55 @@ pub async fn record_tool_executed_audit(
     .await
 }
 
+/// D3 PR3 (2026-06-17): record a `resend_message` audit row.
+/// Mirrors [`record_tool_executed_audit`] but for the user-
+/// initiated "重发" path: the user clicks Resend on an
+/// existing user message, the frontend cancels any in-flight
+/// stream and re-fires the `chat` IPC with a metadata flag
+/// `{ kind: "resend", message_seq }`. The agent loop's user
+/// message persist site detects the flag and fires this
+/// helper, best-effort.
+///
+/// **Best-effort** (same contract as `record_audit` /
+/// `record_tool_executed_audit`): a DB write failure is logged
+/// at `warn!` and swallowed — the chat loop never sees the
+/// error and continues normally. Audit loss is acceptable
+/// here because the user has already seen the visual
+/// confirmation (the new assistant turn is streaming); the
+/// audit row is only for after-the-fact review.
+///
+/// The payload mirrors the edit audit shape (`message_seq`)
+/// but uses `content_text_preview` instead of `new_text_preview`
+/// (no content mutation — the resend path re-uses the existing
+/// message text). Truncated to 80 chars to match the edit
+/// audit's preview budget.
+///
+/// Distinct from `EditMessage`: that path is *destructive*
+/// (in-place update + cascade delete + audit inside one
+/// transaction); Resend is *additive* (re-fires the same
+/// prompt, no content change, no cascade). The two audit
+/// kinds let the user tell "you edited this prompt at X" from
+/// "you re-ran this prompt at Y" when reviewing history.
+pub async fn record_message_resend_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    message_seq: i64,
+    content_text_preview: &str,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "message_seq": message_seq,
+        "content_text_preview": content_text_preview.chars().take(80).collect::<String>(),
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::ResendMessage.as_str(),
+        Some(&payload_str),
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // ⑧a Mode check helpers — used by agent/chat.rs before every turn
 // ---------------------------------------------------------------------------
@@ -1429,6 +1489,12 @@ mod tests {
         // alongside the other variants so a future rename breaks
         // this test instead of corrupting audit rows.
         AuditKind::EditMessage,
+        // D3 PR3 (2026-06-17): user resend kind. Same wire
+        // string lock as the other variants — the DB layer
+        // (`record_message_resend_audit` helper) writes
+        // `AuditKind::ResendMessage.as_str()` verbatim; both
+        // ends of the contract must agree on this string.
+        AuditKind::ResendMessage,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -1442,6 +1508,11 @@ mod tests {
     // kind. The DB layer (`db::sessions::edit_user_message`) writes
     // `'edit_message'` verbatim — these two strings MUST agree.
     assert_eq!(AuditKind::EditMessage.as_str(), "edit_message");
+    // D3 PR3 (2026-06-17): pin the wire string for the new resend
+    // kind. The DB layer's `record_message_resend_audit` helper
+    // writes `AuditKind::ResendMessage.as_str()` verbatim — both
+    // ends of the contract must agree on this string.
+    assert_eq!(AuditKind::ResendMessage.as_str(), "resend_message");
  }
 
  // =====================================================================

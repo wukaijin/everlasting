@@ -28,6 +28,69 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-17 — D3(session 内消息编辑/重发)3 PR 闭环 + RULE-A-010 spec 偏离声明
+
+**Context**: D3 是 V2 第二档(`§2`)最后一项,DEBT 收尾建议第 3 条"D3 自然碰 A-007(error 路径 partial text)/ A-010(二次取消语义),应最后做"指明 D3 实施是顺手收口的天然窗口。本任务前 2 PR 已落地:
+- **PR1** (`308d277`):后端 `edit_user_message` Tauri command,单事务包裹 `UPDATE messages` (in-place content + metadata `edited_at`/`original_content`) + 级联 `DELETE messages WHERE seq > N` + INSERT `edit_message` audit row。零 schema 变更,纯用 B2 PR3 新加的 `messages.metadata` JSON 列。8 个集成测试覆盖 cascade delete / metadata 合并 / 原值备份 / 原子 rollback。
+- **PR2** (`114b239`):前端 `<MessageActionsMenu>`(reka-ui DropdownMenu,3 项 Edit/Resend/Copy,Resend 永久 disabled + "PR3 待实施" tooltip)+ `<MessageItem.vue>` inline edit mode(textarea + Save/Cancel + 4 层防御:`canEdit` role check + streaming 时整个 menu trigger 灰显 + editBuffer 用 local ref 显式避开 stream delta race + 编辑失败保持 edit mode active + toast)+ `chatStore.editMessage` 3 步流程(streamController.cancel → invoke IPC → controller.refresh)。
+
+PR3 收尾范围(本 ADR 锁定):
+- **Resend 按钮实质化**(从 disabled 占位 → 实际功能)
+- **"(edited)" 标签**(从 `messages.metadata.edited_at` 读取,bubble 旁小灰字渲染)
+- **`AuditKind::ResendMessage` 新增 + audit 落表**(后端 agent loop 在 user message persist 路径检测 `resendSeq` IPC flag 触发 best-effort audit)
+- **C4 `<AuditLogModal>` 暴露新 kind**(dropdown 加"编辑消息"/"重新发送" + AuditLogItem 图标 family 加 `message-edit`/`message-resend`)
+- **RULE-A-010 spec 偏离声明**(`docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离" 注释 + DEBT.md Status open→closed + Re-evaluation Log 加行)
+- **`docs/IMPLEMENTATION.md §4` D3 完成 ADR**(本条)
+- 同步:`database-guidelines.md` 加 Resend audit 模式段 + `state-management.md` 加 resendMessage + "(edited)" 标签渲染段
+
+**Decision**:
+1. **Resend 方案 A**(复用 chat IPC,前端传 `resendSeq` flag,**不引入新 IPC**):
+   - 后端 `chat` 命令签名扩展为 `pub async fn chat(..., resendSeq: Option<i64>) -> Result<(), String>`,Tauri 自动 camelCase ↔ snake_case 转换。
+   - 前端 `controller.startRequest` 接受可选 `resendSeq?: number`,`invoke("chat", { ..., resendSeq })` 透传。
+   - 后端 agent loop `run_chat_loop` 在 user message `persist_turn` 成功后检测 `resend_seq.is_some()`,调 `record_message_resend_audit(db, session_id, original_seq, &preview)` best-effort 落表(`tracing::warn!` + swallow,不 abort chat)。
+   - 复用现有 cancellation token + `session_active_request` map 做 stream race 防御(跟 `editMessage` 同构)。
+   - **否决方案 B**(新增独立 `resend_message` Tauri command):理由 — 多一条 IPC 路径跟 chat 路径重合,后端 audit 触发明确但前端路径重复(cancel + 拿 content + 调 chat_loop + 落 audit 拆 2 步)。方案 A 把 audit 触发塞到现有 persist 路径,触发点天然在 chat 流的"必须落 user message"那一行,漏触发风险 = 0。
+2. **AuditKind wire 字符串**:`"edit_message"` + `"resend_message"`,锁定在 `audit_kind_round_trip` 测试(`agent/permissions/mod.rs`)两端。
+3. **"(edited)" 标签 metadata 读取**:用现有 `messages.metadata` JSON 列(2026-06-17 B2 PR3 增),新加 `ChatMessage.metadata?: Record<string, unknown>` in-memory 字段,`rehydrateMessages` 把 JSON 对象原样 attach(不强类型,未来字段不破坏接口)。`MessageItem.vue` 读 `message.metadata?.edited_at`,无值不渲染,有值时 bublle 内右下角小灰字 `(edited)` + `title` 悬停显示精确 RFC3339 时间戳。
+4. **A-010 spec 偏离声明**:
+   - `docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离 (RULE-A-010, 2026-06-17)" 注释段,说明 MVP 简化决策 + 未来实现路径(状态机 N=1 → tool_result 回填 LLM 续流,N=2 → emit Done)。
+   - DEBT.md Status open → closed,Resolution Notes 引用 spec 偏离声明 + ADR 位置。
+   - **不实现二次取消语义**:本批次 MVP 范围内,tool 取消窗口短 + 二次取消 UX friction(用户得连按 2 次 stop)+ 单用户场景下误点 stop 概率低,价值 < 复杂度。
+5. **后端 `run_chat_loop` 签名扩展 1 个参数**:`resend_seq: Option<i64>`。9 个 `agent_loop_*` 集成测试全部加 `None,` 占位,无测试逻辑变化(只多 1 个参数,默认值 None 等价于 PR1/PR2 行为)。
+6. **PR3 不动 `chat_loop.rs` body 的核心路径**:audit helper 触发是单 if 分支(在 user message persist 成功后,~15 行),不动 cancel check、不动 tool 执行循环、不动 persist failure 路径。
+
+**Alternatives**(已否决):
+- **方案 B 独立 `resend_message` IPC**:多一条 IPC 类型 + 前端路径跟 chat 路径重合(都要 cancel + 拿 content + 调 chat loop)。否决理由:方案 A 触发点天然在 chat flow 必经路径,前端只多 1 IPC 字段。
+- **A-010 选 "实现二次取消语义"**:agent loop 工具取消分支 + cancel check 之间加状态机,N==1 构造 synthetic tool_result 回填,N==2 才 emit Done。否决理由 — 范围超出 D3 PR(独立 task),Mtime fence 引用、tool 取消窗口短、二次 UX friction 都不在本批次讨论。
+- **"(edited)" 标签用前端 Pinia 状态而非 DB 字段**:reload 后丢失。否决 — DB `metadata` 已是 source of truth,前端只读不写,前端 undo stack 单独方案不考虑(A4 假设"无 version history")。
+- **C4 审计 UI 不暴露新 kind**:用户没法 review edit/resend 历史。否决 — 与 PR1 commit message"编辑落点"承诺不符。
+- **AuditKind 用结构体变体而非字符串 wire 匹配**:现状已用字符串(`as_str()` + `record_audit_event(.., kind.as_str(), ..)`),改动会污染 `mode_changed`/`yolo_entered` 等其他 9 类,否决。
+
+**影响面**:
+- 后端 4 文件:`agent/permissions/mod.rs`(AuditKind `ResendMessage` variant + `as_str` + `record_message_resend_audit` helper + round-trip 测试断言)+ `agent/chat.rs`(`chat` IPC 加 `resendSeq: Option<i64>`)+ `agent/chat_loop.rs`(`run_chat_loop` 加 `resend_seq` 参数 + user persist 路径加 1 个 audit 触发分支)+ `agent/tests.rs`(9 个 `agent_loop_*` 测试加 `None,` 占位)。
+- 前端 5 文件:`stores/chat.ts`(`ChatMessage.metadata` 字段 + `resendMessage` 方法 + export)+ `stores/streamController.ts`(`StartRequestArgs.resendSeq?` + `invoke("chat")` 透传 + `rehydrateMessages` 解析 metadata)+ `components/chat/MessageActionsMenu.vue`(`canResend` 改 enabled gate + `resend` emit + 移除 "PR3 待实施" tooltip)+ `components/chat/MessageItem.vue`(`onResend` handler + `editedAt`/`showEditedLabel` computed + 模板渲染 + 样式)+ `utils/audit.ts`(`AUDIT_KIND_OPTIONS` 加 2 项 + `AuditIconFamily` 加 2 family + `iconFamilyForKind` switch 加 2 case)+ `components/audit/AuditLogItem.vue`(meta computed 加 2 case)。
+- DB 测试 2 文件:`db/tests.rs` 加 2 个集成测试(`resend_message_audit_round_trips_via_list_audit_events` + `resend_message_audit_on_deleted_session_returns_error`)。
+- Spec 4 文件:`backend/database-guidelines.md`(加 "Pattern: `record_message_resend_audit`" 段 + 跟 edit_user_message diff 表)+ `frontend/state-management.md`(D3 PR2 段后加 D3 PR3 子段)+ `frontend/reka-ui-usage.md`(D3 PR2 `DropdownMenu` 段后无需改 — Resend 按钮从 disabled 转 active 沿用同组件)+ `docs/ARCHITECTURE.md §2.5.1`(加 "已知偏离 (RULE-A-010, 2026-06-17)" 注释段)。
+- 文档 1 文件:`docs/IMPLEMENTATION.md §4`(本 ADR,2026-06-17 时间倒序顶部)。
+- DEBT 1 文件:`.trellis/reviews/DEBT.md`(RULE-A-010 Status open→closed + Resolution Notes + Re-evaluation Log 增行)。
+- **零 schema migration** — 用现有 `messages.metadata` JSON 列(B2 PR3 增) + `session_audit_events` 表(text column,无 schema change)。
+- **零新 ChatEvent variant** — 走方案 A 复用 chat IPC metadata flag,SSE 链路零变更。
+- **零新 IPC 类型** — `chat` 命令加 1 个可选参数,其他命令零变更。
+- **零 chat_loop.rs 业务逻辑变更** — 只加 1 个 `if let Some(original_seq) = resend_seq` 分支,不影响 cancel check / tool 执行 / persist failure / max_turns。
+
+**Verification**:
+- `cd app/src-tauri && PKG_CONFIG_PATH="..." cargo check`:0 warning。
+- `cd app/src-tauri && PKG_CONFIG_PATH="..." cargo test --lib`:562 tests pass(新增 2 个 audit 测试,9 个 agent_loop_* 集成测试签名同步加 None 占位无回归)。
+- `cd app && pnpm vue-tsc --noEmit`:0 error。
+- `cd app && pnpm build`:✓ built(2831 modules transformed)。
+
+**关联**:
+- DEBT.md §RULE-A-010 关闭(本 ADR 同步状态)。
+- D2 降档 ADR(本文件 2026-06-17 第 2 条)说明 D3 不与 D2 同 PR 的理由,本 ADR 是 D3 闭环。
+- B2 PR3 commit `e410b67`(2026-06-17)增 `update_message_metadata` helper,D3 PR1 + PR3 复用 — 无新加 helper,沿用同一 JSON 通道。
+
+---
+
 ### 2026-06-17 — D2(SQLite FTS5 全局搜索)从第二档降档到第三档 + 标注双驱动路径
 
 **Context**: 2026-06-17 user review D2 设计后明确延后,触发两点判断:

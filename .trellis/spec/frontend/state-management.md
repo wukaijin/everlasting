@@ -496,3 +496,74 @@ The `<li>` carries a `.msg--editing` class while in edit mode
 to give the row a subtle accent border + tinted background
 (analogous to `.tool-card--pending`). The user can still see
 the surrounding context but the row is clearly demarcated.
+
+#### D3 PR3 (2026-06-17): Resend pipeline + "(edited)" label
+
+The Resend pipeline is the second half of D3's user-message
+edit feature. PR1 + PR2 covered Edit (in-place content update
++ cascade delete); PR3 wires Resend (no content mutation, just
+re-fire the existing user prompt). The frontend half of PR3
+plugs into the same `<MessageActionsMenu>` PR2 built, so no
+new UI components are needed — only the disabled placeholder
+is replaced with the real handler.
+
+##### Chat store API addition
+
+`resendMessage(sessionId, messageSeq, contentText)` — bridge
+to the backend `chat` IPC with the `resendSeq` flag. The flow
+mirrors `send()` (placeholder user + assistant messages +
+`controller.startRequest`), with one difference: the
+`resendSeq` flag in the IPC arg tells the backend this is a
+re-fire of an existing prompt (the backend writes a
+`resend_message` audit row at the user-message persist site,
+no content mutation, no cascade). The `contentText` parameter
+is the original user message's `content` (verbatim — Resend
+re-runs the same prompt).
+
+The stream-race guard is identical to `editMessage`: cancel
+any in-flight stream on the session first (current-session
+fast path via `cancel()`, cross-session via
+`controller.cancel(rid)`), then fire the new stream.
+
+##### `<MessageActionsMenu>` Resend wired
+
+The PR2 placeholder (`canResend = () => false` + "PR3 待实施"
+tooltip) is replaced with `canResend = () => role === 'user'
+&& !isEditing && !isStreaming` — the same gate as Edit
+(because Resend on an assistant message has no defined
+semantics). The `resend` emit bubbles to `MessageItem.vue`,
+which calls `chatStore.resendMessage(sessionId, messageSeq,
+content)`. Failure surfaces via `projectsStore.showToast`
+(same pattern as Edit's catch path).
+
+##### "(edited)" label render
+
+D3 PR3 also surfaces the `(edited)` affordance on edited
+message rows. The render reads `message.metadata.edited_at`
+(plain string) from the in-memory `ChatMessage.metadata`
+field, which is populated by `rehydrateMessages` in
+`streamController.ts` from the `MessageRow.metadata` JSON
+column. When the field is present AND the row is not
+streaming AND not in edit mode, a small grey italic
+`(edited)` label renders inline at the bottom-right of the
+bubble (analogous to the F5 latency chip's position, but
+inside the bubble so it doesn't collide with the chip).
+Hover surfaces the precise edit timestamp via the
+`title` attribute (the audit log carries the same field
+in a structured way; the inline label is just a hint).
+
+The metadata field is intentionally a free-form
+`Record<string, unknown>` (not a discriminated union) so
+future metadata fields (e.g. `original_content` for an
+undo affordance, if a later PR adds it) don't require
+touching the `ChatMessage` interface. The rehydrate path
+parses the raw JSON object and assigns it verbatim; the
+renderer only reads the fields it cares about
+(`edited_at`). Defensive: a missing or non-string
+`edited_at` is treated as "not edited" (no label).
+
+The `(edited)` label is rendered on both user AND assistant
+messages, defensively — D3 PR1 only allows user edits in
+practice, but the render path is generic (any row with
+`metadata.edited_at` shows the label). If a future PR adds
+"edit assistant message" support, the label will Just Work.
