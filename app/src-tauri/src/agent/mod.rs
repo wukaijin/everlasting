@@ -6,6 +6,8 @@
 //! shim lives in [`crate::commands`].
 //!
 //! Submodules:
+//! - [`at_file`] — B2 PR2 `@relpath` file-content injection (text →
+//!   `read_file`-format content; image/PDF/Office/binary → placeholder).
 //! - [`chat`] — the `chat` Tauri command + the spawned agent loop
 //!   (max 50 turns, cancellation-aware).
 //! - [`provider`] — `resolve_chat_provider` + `PreFlightError`
@@ -28,6 +30,7 @@
 //! - [`tests`] — all `#[cfg(test)] mod tests` blocks previously
 //!   inlined in `lib.rs`.
 
+pub mod at_file;
 pub mod chat;
 pub mod chat_loop;
 pub mod context;

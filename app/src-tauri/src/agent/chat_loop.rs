@@ -273,6 +273,14 @@ pub async fn run_chat_loop(
         seq += 1;
     }
 
+    // B2 PR2: expand `@relpath` tokens in user messages into file
+    // content (text) or placeholder (image/PDF/Office/binary). Runs
+    // AFTER the user message is persisted (DB keeps the original
+    // `@relpath` as source of truth) and BEFORE the turn loop, so C3
+    // compaction + `provider.send` see the expanded content. A reloaded
+    // session re-expands against the current file contents.
+    crate::agent::at_file::inject_at_tokens(&mut messages, &current_ctx).await;
+
     for turn in 1..=MAX_TURNS {
         // C3 compaction (test pass-through: if messages don't exceed
         // the test's tiny context_window, dropped_count == 0 and

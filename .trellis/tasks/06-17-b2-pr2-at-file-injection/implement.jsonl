@@ -1,1 +1,7 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "docs/research/at-file-injection-coding-agents-survey.md", "reason": "6家调研定稿:降级策略(占位串)+二进制检测(扩展名黑名单+null byte+30%)+注入形态=read_file输出格式"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop架构,PR2在user message构造处接入@token解析注入"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ContentBlock/message content构造契约,注入形态与memory synthetic message同构"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "build_instructions_blocks注入参考,@token注入与之同构(可带cache_control)"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "assert_within_root越界校验,@../../etc等越界占位降级"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "坏路径/越界/二进制降级风格,不崩降级为提示"}

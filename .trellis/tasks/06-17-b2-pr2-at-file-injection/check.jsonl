@@ -1,1 +1,5 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "docs/research/at-file-injection-coding-agents-survey.md", "reason": "验证降级策略+检测算法符合6家调研定稿(占位串,非fail/非乱码)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "检查注入形态符合message content契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查降级风格(不崩/占位提示)符合规范"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查复用read_file截断+boundary(不重写第二套)"}

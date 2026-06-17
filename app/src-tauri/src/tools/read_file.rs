@@ -216,7 +216,13 @@ fn truncate_output(content: String, offset: usize, limit: usize) -> String {
 
 /// Full-file truncation path (no offset/limit). Kept for backward
 /// compatibility when reading the entire file.
-fn truncate_full_output(content: &str) -> String {
+///
+/// `pub(crate)` so the B2 PR2 `@file` injection (`agent::at_file`) can
+/// reuse the exact same 50 KB head+tail + `cat -n` line-numbering the
+/// `read_file` tool produces — injected `@relpath` content and tool
+/// output stay format-identical so the model does not see a difference
+/// between "user-fed context" and "tool result" (opencode design cue).
+pub(crate) fn truncate_full_output(content: &str) -> String {
     if content.len() <= MAX_OUTPUT_BYTES {
         return add_line_numbers(content);
     }
