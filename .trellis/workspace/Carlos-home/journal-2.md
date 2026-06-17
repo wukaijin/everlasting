@@ -46,3 +46,36 @@ cargo test --lib **569 pass**(567→569,+2 D-005 测试),cargo check **0 warning
 ### Next Steps
 
 - None - task complete。下一站候选:B6 Subagent(第三档,harness 学习价值最高,本 task 已扫清前置债)
+
+
+## Session 38: B4 Skill 系统: use_skill 虚拟 tool + 三层渐进披露
+
+**Date**: 2026-06-18
+**Task**: B4 Skill 系统: use_skill 虚拟 tool + 三层渐进披露
+**Branch**: `main`
+
+### Summary
+
+调研 Claude Code/Hermes/opencode/agentskills.io skill 方案(docs/research/skill-system-survey.md)。brainstorm 收敛 4 决策: MVP 纯 LLM 自动触发 / 加载层独立 SkillCache / L0 独立 synthetic message / L1 tool_result 回填正文。2 PR 落地: PR1 skill 加载层(复制 B3 resource_loader 模式, scan 走子目录读 SKILL.md) + PR2 agent loop 接入(use_skill 虚拟 tool + L0 清单注入 + execute_tool 加 skill_cache 参数 + run_chat_loop 加参数 + 16 处测试调用适配)。修正 BACKLOG §2 两处过时: serde_yml 废弃 + 注入消息流非 system prompt。trellis-check 修了 L0/L1 worktree 路径不对称 bug(L0 用 worktree_path 与 L1 对称)。cargo check 零 warning, cargo test --lib 588 passed。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `96b6f93` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
