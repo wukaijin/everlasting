@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-06-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1797 | Active |
+| `journal-1.md` | ~1831 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-06-17 | B2 PR1.5 输入框 token 着色(CM6 迁移) | `1ed212c`, `8e7c975` | `main` |
 | 33 | 2026-06-17 | B2 @文件补全 PR1(前端面板+后端 list_files) | `f3ac7a0` | `main` |
 | 32 | 2026-06-17 | B3 /command 命令面板 | `ac0592e`, `d57788a`, `03d3964`, `30fd7d5` | `main` |
 | 31 | 2026-06-16 | 评估 P1 债务 + 实施 D-002/E-004 + 记账 B-001/B-002 | `361336e`, `0891547`, `09634f1` | `main` |
