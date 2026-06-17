@@ -336,7 +336,7 @@
 - **Status**: **closed (2026-06-17)** — error arm 对称 cancel 路径 persist partial turn:flush thinking + 构造 assistant_blocks + `ERROR_MARKER`(`"[生成出错中断]"`,对称 `CANCELLED_MARKER`)追加 text + `persist_turn` 落库 + emit TurnComplete(seq + latency 指向 partial turn)。设计决策 A/B/C:**A** = ERROR_MARKER text 追加(非 metadata,对称 CANCELLED_MARKER 既有模式,否决 metadata `interrupted` 双表达);**B** = persist 失败 log-only(`tracing::error!`-only,对称 cancel tool_result persist 失败模式,否决 `emit_persist_failure`——error 路径已 pre-emit Error(L598),再 emit 第二个 terminal Error 会冲突,违反"单 terminal 事件"不变量);**C** = persist 成功后 emit TurnComplete(seq 指向 partial turn,跟 cancel/正常路径对称),Error + TurnComplete 并存不冲突(各自携带不相交的信息:Error="出错了" / TurnComplete="这个 seq 的 partial turn 已落库 + latency")。error 路径在 persist + TurnComplete 后 `persist_turn_cwd + touch_session + return`,**不** emit Done(Error 已是 terminal)。新增 `ERROR_MARKER` const 在 `agent/helpers.rs`(跟 `CANCELLED_MARKER` 同处)。5 新测试:`agent_loop_error_persists_partial_text` / `agent_loop_error_empty_text_uses_error_marker` / `agent_loop_error_persists_thinking_and_tool_calls` / `agent_loop_error_persist_failure_is_log_only` / `agent_loop_error_emits_turn_complete`,全 pass。
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-17-a-007-error-arm-partial-text`
-- **Closed At**: TBD(主 agent commit 后回填)
+- **Closed At**: `2dc1824`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
 ### RULE-A-008 — estimate_messages_tokens 与 _iter 版大段重复
