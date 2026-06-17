@@ -1829,3 +1829,36 @@ PR1.5 完成。PR-A: ChatInput textarea→CodeMirror 6(IME 原生 view.composing
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: B2 PR2 @文件内容注入
+
+**Date**: 2026-06-17
+**Task**: B2 PR2 @文件内容注入
+**Branch**: `main`
+
+### Summary
+
+后端 @relpath 注入文件内容(对齐 CC/opencode 等): agent/at_file.rs(@token 解析+三层二进制检测 NUL/非UTF-8/30%比例+占位降级 图片PDF/Office/二进制+无效路径保留原 token) + read_file truncate_full_output 改 pub(crate) 复用 + chat_loop 接入(persist 后 loop 前, DB 存原始 @relpath)。6 家调研 docs/research。cargo test --lib 549 passed(+23 at_file)。e2e 手测待补。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a00adbc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "docs/research/at-file-injection-coding-agents-survey.md", "reason": "降级文案/检测算法一致性参考"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent wire 契约,加 FileInjections variant"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop 接入点+持久化顺序调整"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "messages.metadata JSON 持久化"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端层入口+组件约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat store ChatMessage interface"}
