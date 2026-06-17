@@ -1,0 +1,30 @@
+{
+  "id": "p2-reasoning-caps-estimator-dedup",
+  "name": "p2-reasoning-caps-estimator-dedup",
+  "title": "fix: RULE-D-004/D-005 reasoning caps + A-008 estimator dedup",
+  "description": "B6 Subagent 前置债打包:D-005(openai caps 硬编码→config 派生)+ D-004(删 WireRequest.reasoning_effort 死字段)+ A-008(抽 push_message_tokens helper)。纯后端,零前端/DB 改动(reasoning_effort 已有 model-level 配置+持久化)。",
+  "status": "completed",
+  "dev_type": "bugfix",
+  "scope": "backend",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-06-18",
+  "completedAt": "2026-06-18",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": "87cd6cc",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "app/src-tauri/src/llm/provider/openai.rs",
+    "app/src-tauri/src/llm/provider/wire.rs",
+    "app/src-tauri/src/agent/context.rs"
+  ],
+  "notes": "",
+  "meta": {}
+}
