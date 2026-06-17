@@ -1762,3 +1762,36 @@ B3 /command 命令面板 MVP 完成(3 PR)。后端:通用 ResourceLoader(手写 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: B2 @文件补全 PR1(前端面板+后端 list_files)
+
+**Date**: 2026-06-17
+**Task**: B2 @文件补全 PR1(前端面板+后端 list_files)
+**Branch**: `main`
+
+### Summary
+
+B2 brainstorm(渐进式 PR1+PR2)+PR1 实现:前端 TriggerMenu 第二 caller(@触发+fuzzysort fuzzy prop+Tab=Enter+#row slot+palette 互斥)+后端 files::walk_files(git2 is_path_ignored+默认排除+深度/数量上限,8 单测)+list_files command。验证 vue-tsc 0 错误+cargo test --lib 526 passed+e2e 通过。实现修正:不做后端 mtime 缓存。PR1=路径提示形态(@relpath token);PR2 拆独立 task 待续。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3ac7a0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
