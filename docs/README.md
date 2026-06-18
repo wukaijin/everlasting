@@ -15,6 +15,7 @@
 | [ROADMAP.md](./ROADMAP.md) | 技术路线图(单一 source of truth) | V2 4 档分类 + 已实施粗粒度归类 + 维护承诺 | 看当前在哪一步、下一步选项、什么不做 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭、请求怎么流 | 写代码前,看"模块怎么分、调用怎么走" |
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
+| [CONTEXT.md](./CONTEXT.md) | 术语表 | A4 Token 用量统计核心术语定义(glossary) | 写/改 token 统计或 cache 逻辑前对齐术语时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + §4 决策日志(ADR 性质,只追加) | 想看"为什么这么做"的历史 ADR |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
 | [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |

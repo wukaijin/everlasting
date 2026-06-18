@@ -38,11 +38,11 @@
 
 **position bug(2026-06-14 ✅ 已解决)**:根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,**非 Tauri bug,无法绕过**),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`。RDP 双屏环境验证通过。决策档案见 [IMPLEMENTATION §4 2026-06-14](./IMPLEMENTATION.md#4-决策日志);历史见 `.trellis/tasks/archive/2026-06/06-07-6-ui-bug-markdown-sse/prd.md` 'Progress so far'
 
-**下一步候选**(详见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排)):
-- 🟢 第一档(立刻做,4 项):A4 Token 用量统计 / B5 Memory(user + project)/ C1 取消机制完整化 / D1 session 重命名 — ✅ 全部完成
-- 🟡 第二档(接着做,5 项剩):B3 /command / C4 审计日志 UI(写入已完成,只差查询 UI)/ B2 @文件补全 / D2 FTS5 / D3 session 内消息编辑
-- 🟠 第三档(缓做,7 项):B6 Subagent / B4 Skill / B9 生成式 UI / C2 循环检测 / C6 大输出截断统一 / B1 图片 / A5-A6 打磨
-- 🔴 第四档(最远远期,3 项):B8 DAG workflow / B10 飞书 IM / B11 云端同步
+**下一步候选**(详见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),以 `git log` + ROADMAP 为准):
+- 🟢 第一档(4 项)✅ 全部完成:A4 Token 用量 / B5 Memory(user+project)/ C1 取消机制 / D1 session 重命名
+- 🟡 第二档:B3 `/command` palette ✅ / C4 审计日志查询 UI ✅ / B2 @文件补全 ✅ / D3 消息编辑重发 ✅ — **仅剩 D2 FTS5 全文搜索**
+- 🟠 第三档:B4 Skill ✅(2026-06-18 落地,`skill/` 模块 + `/skill` + `use_skill` tool);余 B6 Subagent / B9 生成式 UI / C2 循环检测 / C6 大输出截断 / B1 图片 / A5-A6 打磨
+- 🔴 第四档(远期,3 项):B8 DAG workflow / B10 飞书 IM / B11 云端同步
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
 
@@ -66,26 +66,22 @@
 | 12 | [.trellis/spec/frontend/state-management.md](../.trellis/spec/frontend/state-management.md) | 改前端 store / 流式逻辑前先读(单源 streamController + chat facade 模式) |
 | 13 | [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志) | 想看"为什么这么做"的历史 ADR 决策 |
 
-**目录**:
+**目录**(完整索引见 [docs/README.md](./README.md)):
 ```
 docs/
-├── README.md                 # 索引
+├── README.md                 # 索引(全部条目)
 ├── HANDOFF.md                # 本文件
+├── ROADMAP.md                # 技术路线图(单一 source of truth)
 ├── DESIGN.md                 # 需求 + 边界
-├── ARCHITECTURE.md           # 16 关卡 + Channel Adapter
+├── ARCHITECTURE.md           # 16 关卡请求生命周期
+├── CONTEXT.md                # A4 Token 术语表(glossary)
 ├── TECH.md                   # 锁定的库
-├── IMPLEMENTATION.md         # 7 步路线图 + 决策日志
-├── BACKLOG.md                # 7 个候选功能
-├── HACKING-wsl.md            # 10 个 WSL 环境坑 + fcitx5 输入法
-├── HACKING-llm.md            # LLM 兼容层差异
-├── HACKING-markdown.md       # 前端 markdown 渲染陷阱 (marked + DOMPurify)
-├── HANDOFF.md                # 本文件
-├── _reviews/
-│   ├── REVIEW-glm-5.1.md         # 外部评审 #1
-│   └── REVIEW-deepseek-v4-pro.md # 外部评审 #2
-└── spikes/
-    ├── 001-wsl-tauri-window.md
-    └── 002-reqwest-anthropic-sse.md
+├── IMPLEMENTATION.md         # 决策档案(§1 自研 core + §4 ADR 日志)
+├── BACKLOG.md                # 候选功能技术评估
+├── HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md
+├── _reviews/                 # 设计评审快照(8 份,见 README)
+├── _archive/                 # 历史任务归档
+└── spikes/                   # 技术验证(001-004 + bug/feature 笔记)
 ```
 
 ---
@@ -177,7 +173,7 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 - **当前 branch**:`main`
 - **远端**:`git@github.com:<your-github-username>/everlasting.git`,**已同步**
 - **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
-- **当前日期**:2026-06-13
+- **当前日期**:2026-06-18
 
 ---
 

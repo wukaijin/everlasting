@@ -11,9 +11,9 @@
 - **深度 WSL 集成** — 项目放 WSL 内部,不走 `/mnt/c`
 - **多项目 / 多 session / 工作流** — 不是一次性对话,是持久工作环境
 
-## 当前状态 (2026-06-10)
+## 当前状态 (2026-06-18)
 
-权威看 `git log --oneline -20`,**路线图与下一步选项归 [docs/ROADMAP.md](./docs/ROADMAP.md)**(V2 4 档分类 + 已实施粗粒度归类,本文档不重复)。已知 issue:bug 1+2 position 在 RDP 双显示器下未完全修好。
+权威看 `git log --oneline -20`,**路线图与下一步选项归 [docs/ROADMAP.md](./docs/ROADMAP.md)**(V2 4 档分类 + 已实施粗粒度归类,本文档不重复)。position bug 已于 2026-06-14 解决(根因 Wayland 协议禁止客户端设窗口位置,WSLg 下 `setPosition()` 被合成器忽略,改用原生 `toggleMaximize()`;RDP 双屏已验证;详见 [IMPLEMENTATION §4](./docs/IMPLEMENTATION.md#4-决策日志))。
 
 ## 代码结构
 
@@ -23,8 +23,7 @@
 app/
 ├── src/             # Vue 3 前端 (8-PR3 拆 sub-components)
 ├── src-tauri/src/   # Rust 后端 (8-PR1/2 拆 state/commands/agent/db/)
-├── docs/            # 设计文档 (全中文)
-└── spikes/          # 技术验证记录
+└── docs/            # 设计文档 (全中文,spikes/ 在此目录下)
 ```
 
 ## 文档
@@ -37,7 +36,7 @@ app/
 | [docs/ROADMAP.md](./docs/ROADMAP.md) | **技术路线图(单一 source of truth)** — V2 4 档分类 + 已实施归类 + 维护承诺 |
 | [docs/DESIGN.md](./docs/DESIGN.md) | 项目能力边界 + 硬约束(明确不做) |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 系统怎么搭、16 关卡请求生命周期 |
-| [docs/TECH.md](./docs/TECH.md) | 锁定了哪些库(自研 Provider trait / rmcp / git2-rs / sqlx / nucleo 等) |
+| [docs/TECH.md](./docs/TECH.md) | 锁定了哪些库(自研 Provider trait / git2-rs / sqlx / htmd 等) |
 | [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) | 决策档案 — §1 自研 agent core 决策 + §4 ADR 决策日志(只追加) |
 | [docs/BACKLOG.md](./docs/BACKLOG.md) | 7 个候选功能的技术评估(排期归 ROADMAP) |
 

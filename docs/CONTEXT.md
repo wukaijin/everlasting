@@ -9,7 +9,7 @@
 
 ### Turn (LLM turn)
 一次 LLM HTTP 请求(Anthropic Messages API / OpenAI Chat Completions 一次 stream)。
-一个用户消息可能引发 N 次 turn(主调 + tool_use 回填),受 agent loop `MAX_TURNS`(20)限制。
+一个用户消息可能引发 N 次 turn(主调 + tool_use 回填),受 agent loop `MAX_TURNS`(50)限制。
 
 ### TokenUsage
 LLM 一次响应的 token 使用四元组(Anthropic schema 视角):

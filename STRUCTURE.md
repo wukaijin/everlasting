@@ -3,6 +3,17 @@
 > **基线**:2026-06-10 commit `0f9a167` (分支 `refactor/8-pr1-lib-rs-split` 含8-PR1+8-PR2+8-PR3+8-PR4)
 > **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` +8-PR1/2/3/4实际落地状态
 > **状态**: 这是**新文档**(Step8-PR5产物),由 CLAUDE.md §Architecture段引用
+>
+> ⚠️ **快照已滞后(2026-06-18 校注)**:下方目录树 / 命令数 / 工具数为 **2026-06-10** 快照。06-11 后持续新增,**未在下方完整反映**:
+> - 后端新增模块:`skill/`(Skill 系统 + `/skill` + `use_skill` tool)、顶层 `resource_loader.rs`(frontmatter 通用加载)/ `files.rs`
+> - 后端 `tools/` 新增 `web_fetch.rs` / `use_skill.rs`(实际 **10 个**工具,非下方"8 个")
+> - 后端 `agent/at_file.rs`(B2 @文件补全)、`llm/provider/mock.rs`、`commands/{permissions,memory,command_palette,panel,files}.rs`
+> - 前端新增 `components/audit/`(C4 审计日志查询 UI)、`components/common/`(TriggerMenu 等)
+> - 前端 stores 新增 `permissions.ts`(A2+B7 Mode edit/plan/yolo)、`audit.ts`(C4)
+> - Tauri command 实际 **54 个**(非下方"33 个")
+> - `notify` 依赖已移除(memory watcher 改 mtime fence freshness check);`rmcp` / `nucleo` 未采用(详见 docs/TECH.md)
+>
+> **结构事实以 `.trellis/spec/`(活契约)+ `git log` + 实际源码为准**。下方作为 06-10 历史快照保留,下次重大重构后整体重校。
 
 ---
 
@@ -130,7 +141,7 @@ app/src-tauri/src/
 │ ├── sessions.rs (Session CRUD + diff_worktree)
 │ ├── worktree.rs (attach/detach/delete + cancel_inflight)
 │ └── projects.rs (Project CRUD + pick_project_dir)
-├── tools/ # 内置工具 (8个)
+├── tools/ # 内置工具 (10 个:06-10 快照为 8,后加 web_fetch / use_skill)
 │ ├── mod.rs (builtin_tools + execute_tool分发)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
 │ ├── shell.rs (5min超时 +30K spill) / grep.rs / glob.rs / list_dir.rs
@@ -198,7 +209,7 @@ lib.rs (mod声明 + invoke_handler)
 
 ##5. Tauri IPC表面
 
-**总命令数**:33 个 (8-PR1拆分后)
+**总命令数**:54 个(2026-06-18 实测 `#[tauri::command]`;06-10 快照为 33,后增 `permissions` / `memory` / `command_palette` / `panel` / `files` 命令域)
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|

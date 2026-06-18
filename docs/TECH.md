@@ -16,7 +16,7 @@
 | 后端语言   | Rust 1.75+              | edition 2021                             |
 | 异步运行时 | tokio                   | Tauri 已经用 tokio                       |
 | LLM 框架   | **(未采用)** rig-core 0.38.1 | Step 3b-2 rig-core 迁移已废弃 (2026-06-09),自研 `Provider` trait + 手写 SSE 已完整支持 Anthropic / OpenAI 双 Provider,详见 §2 决策 + [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志) |
-| MCP        | **rmcp** 0.16.0         | 官方 Rust SDK,server + client            |
+| MCP        | **(已移除)** ~~rmcp 0.16.0~~ | A3 MCP 外暴露 2026-06-10 V2 重排移除,rmcp 从 Cargo.toml 删除(详见 §3) |
 | Git 操作   | **git2-rs**             | libgit2 绑定,worktree / diff / commit   |
 | 数据库     | **sqlx** + SQLite       | 编译期 SQL 检查,async 友好               |
 | 序列化     | serde + serde_json      | 标准选择                                 |
@@ -49,9 +49,9 @@
 | 图像处理 | `image` | 客户端 resize / 格式转换 | BACKLOG §1 输入层图片 |
 | HEIC 支持 | `libheif-rs` | 苹果 HEIC/HEIF 格式 | BACKLOG §1 输入层图片 |
 | 哈希 | `blake3` | 图片去重 / 缓存 key | BACKLOG §1 输入层图片 |
-| 模糊搜索 | `nucleo` | @文件补全(fzf 算法 Rust 端口) | BACKLOG §1 输入层 @文件 |
+| 模糊搜索 | ~~`nucleo`~~(未采用) | @文件补全(B2,2026-06-17 落地)改用更简实现,未引入 nucleo | BACKLOG §1 输入层 @文件 |
 | gitignore 解析 | `ignore` | 过滤项目扫描范围 | BACKLOG §1 输入层 @文件 |
-| 文件监听 | `notify` | memory / config 文件变更检测 | BACKLOG §3 Memory |
+| 文件监听 | ~~`notify`~~(已移除) | memory watcher 原用 notify,后改为 mtime fence freshness check(read_guard 防过期),notify 已从依赖删除 | BACKLOG §3 Memory |
 | YAML 解析 | 手写 parser(B3);~~`serde_yml`~~(已废弃) | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role / B3 /command |
 | TOML 解析 | `toml` | role / config 解析 | BACKLOG §4 Role |
 | 飞书 SDK | 用现有 `feishu-integration` skill | 消息收发 | BACKLOG §6 飞书 |
@@ -100,6 +100,8 @@
 **MCP 外暴露**:用 `rmcp` 起一个 MCP server,让 Claude Desktop / Cursor / 别的工具能调我们的工具
 
 **意义**:你的工具集成了以后,不仅你的 app 能用,Claude Code 也能用。这是意外的杠杆点。
+
+> ⚠️ **更新(2026-06-10 V2 重排)**:MCP 外暴露(A3)已移除——个人工具杠杆不足,Claude Desktop / Cursor 集成不在当前使用场景。`rmcp` 从 Cargo.toml 删除,`src/` 无残留引用。本节保留为历史 ADR;若未来需要外部集成,可重新引入 rmcp(0.16.0+ server + client)。
 
 ---
 
