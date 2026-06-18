@@ -23,6 +23,7 @@ pub mod list_dir;
 pub mod read_file;
 pub mod read_guard;
 pub mod shell;
+pub mod update_checklist;
 pub mod use_skill;
 pub mod web_fetch;
 pub mod write_file;
@@ -34,6 +35,7 @@ use tokio_util::sync::CancellationToken;
 use crate::llm::types::ToolDef;
 use crate::skill::loader::SkillCache;
 use crate::tools::read_guard::ReadGuard;
+use crate::tools::update_checklist::ChecklistHandle;
 
 /// All built-in tools available as of step 2 + the toolset extension.
 pub fn builtin_tools() -> Vec<ToolDef> {
@@ -47,6 +49,7 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         list_dir::definition(),
         web_fetch::definition(),
         use_skill::definition(),
+        update_checklist::definition(),
     ]
 }
 
@@ -61,10 +64,19 @@ pub fn builtin_tools() -> Vec<ToolDef> {
 ///   tool calls; LLM-supplied `working_directory` overrides are
 ///   validated against `worktree_path` and, if accepted, returned
 ///   through the [`ToolContextUpdate`] the shell tool can emit.
+/// - `checklist`: B12 per-request checklist handle. The agent loop
+///   constructs a fresh `Arc<Mutex<Vec<ChecklistItem>>>` per
+///   `run_chat_loop` call and threads it through here so the
+///   `update_checklist` tool can atomically mutate the Vec. The
+///   same handle is read every turn (after C3 compaction, before
+///   `provider.send`) to build the ephemeral checklist injection
+///   block. The handle is `Clone` (it's an `Arc`) so the existing
+///   per-turn `ToolContext` clone pattern is unaffected.
 #[derive(Debug, Clone)]
 pub struct ToolContext {
     pub worktree_path: PathBuf,
     pub cwd: PathBuf,
+    pub checklist: ChecklistHandle,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
@@ -196,6 +208,17 @@ async fn execute_tool_inner(
                 None,
             ),
         },
+        "update_checklist" => {
+            // B12: atomically replace the loop's checklist Vec via
+            // the handle threaded through `ToolContext`. The handle
+            // is per-request (one per `run_chat_loop` call); a
+            // cancelled tool execution is caught by the outer
+            // `execute_tool`'s `tokio::select!` cancel wrapper, so
+            // the loop's RULE-A-004 ordering (audit AFTER cancel
+            // check) automatically protects the checklist too.
+            let (out, is_err) = update_checklist::execute(input, &ctx.checklist).await;
+            (out, is_err, ToolContextUpdate::default(), None)
+        }
         _ => (
             format!("Unknown tool: {}", name),
             true,

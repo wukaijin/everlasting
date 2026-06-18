@@ -272,6 +272,7 @@ mod tests {
         ToolContext {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
+            checklist: crate::tools::update_checklist::new_handle(),
         }
     }
 

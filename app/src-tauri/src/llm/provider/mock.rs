@@ -97,6 +97,15 @@ pub struct MockProvider {
     script: Mutex<VecDeque<MockResponse>>,
     call_count: Arc<AtomicUsize>,
     capabilities: ProviderCapabilities,
+    /// B12 (2026-06-19): per-turn snapshot of the `messages` Vec
+    /// the agent loop passed to `send`. The agent loop constructs
+    /// a fresh request body every turn (e.g. the ephemeral
+    /// checklist injection block); capturing it here lets
+    /// integration tests assert what the provider actually saw.
+    /// Locked by `std::sync::Mutex` because the writes happen
+    /// inside the (sync) `send` impl; tests read it synchronously
+    /// after `run_chat_loop` returns.
+    sent_messages: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
 }
 
 /// One step in the mock provider's script — the response to a
@@ -141,6 +150,7 @@ impl MockProvider {
                 supports_tools: true,
                 supports_streaming: true,
             },
+            sent_messages: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -168,15 +178,32 @@ impl MockProvider {
     pub fn call_count_handle(&self) -> Arc<AtomicUsize> {
         self.call_count.clone()
     }
+
+    /// B12 (2026-06-19): snapshot of every `messages` Vec passed
+    /// to `send`, in call order. Each entry is one turn's request
+    /// body. Tests assert on this to verify the ephemeral
+    /// checklist injection block is present (and the persisted
+    /// `messages` is NOT mutated by it).
+    pub fn sent_messages(&self) -> Vec<Vec<ChatMessage>> {
+        self.sent_messages.lock().unwrap().clone()
+    }
 }
 
 impl Provider for MockProvider {
     fn send(
         &self,
         _system: Option<String>,
-        _messages: Vec<ChatMessage>,
+        messages: Vec<ChatMessage>,
         _tools: Vec<ToolDef>,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static>> {
+        // B12 (2026-06-19): capture the per-turn request body so
+        // integration tests can assert on the ephemeral checklist
+        // injection block. The clone is O(turn-messages) — cheap
+        // relative to the LLM network round-trip this mock stands
+        // in for.
+        {
+            self.sent_messages.lock().unwrap().push(messages.clone());
+        }
         // Atomically claim the next turn slot. The fetch_add is
         // the canonical "I consumed one turn" signal; the
         // call_count() reader sees the updated value the moment

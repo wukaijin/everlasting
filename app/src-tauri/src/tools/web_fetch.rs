@@ -958,6 +958,7 @@ mod tests {
         ToolContext {
             worktree_path: p.clone(),
             cwd: p,
+            checklist: crate::tools::update_checklist::new_handle(),
         }
     }
 

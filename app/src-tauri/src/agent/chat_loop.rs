@@ -216,6 +216,14 @@ pub async fn run_chat_loop(
     let turn_ctx = ToolContext {
         worktree_path: worktree_path.clone(),
         cwd: session_cwd.clone(),
+        // B12 (2026-06-19): per-request checklist handle. Constructed
+        // fresh for each `run_chat_loop` call so a new user message
+        // (or D3 resend fork) starts with an empty list. The handle
+        // is threaded through `ToolContext` so `update_checklist::execute`
+        // can atomically mutate it; the same handle is read every turn
+        // to build the ephemeral injection block (see `inject_checklist`
+        // below).
+        checklist: crate::tools::update_checklist::new_handle(),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;
@@ -535,10 +543,91 @@ pub async fn run_chat_loop(
         let mut turn_done_at: Option<Instant> = None;
         let _ = turn_send_at;
 
+        // B12 (2026-06-19): ephemeral checklist injection. Each turn,
+        // AFTER C3 compaction and BEFORE `provider.send`, if the
+        // checklist Vec is non-empty, build a synthetic user block
+        // carrying the full current list + an explicit "in progress"
+        // focus marker, and APPEND it to a CLONE of `messages`. The
+        // clone is the request body; the persisted `messages` Vec is
+        // NEVER mutated by this injection — the block is regenerated
+        // from the live Vec every turn.
+        //
+        // Why APPEND (not prepend)?
+        // - **Cache correctness (load-bearing):** the memory
+        //   instructions block lives at `messages[0]` and carries a
+        //   `cache_control: Ephemeral` breakpoint on its banner block
+        //   (see `memory/loader.rs::build_instructions_blocks`). The
+        //   breakpoint is part of Anthropic's cache key — everything
+        //   BEFORE it must be byte-identical across turns to hit. A
+        //   per-turn-mutating checklist block at position 0 would
+        //   sit IN FRONT of the memory breakpoint, busting the memory
+        //   cache every turn (50 turns × ~100 KiB of instruction
+        //   files = the exact cost explosion the B5 memory-caching
+        //   work was built to eliminate). Appending keeps the
+        //   checklist AFTER the memory breakpoint so the memory cache
+        //   window stays intact. This mirrors why the B4 skill block
+        //   was placed AFTER the memory pair (position 2), not at
+        //   the head — same cache-preservation principle.
+        // - Anthropic accepts consecutive user-role messages, so
+        //   appending a user block after the user's latest prompt is
+        //   wire-legal.
+        // - The checklist content being the LAST thing in context is
+        //   arguably better for recency: the model sees its current
+        //   todo right before generating.
+        //
+        // Why not push into `messages` (the persisted Vec)?
+        // - Replay correctness: the canonical checklist state lives
+        //   in the `update_checklist` tool_results (persisted in
+        //   history). A reload reconstructs from those tool_results;
+        //   an injection block in `messages` would be a duplicate
+        //   source of truth that drifts the moment the Vec changes.
+        // - Context window: each turn's injection is per-turn-only;
+        //   keeping it out of `messages` keeps the persisted history
+        //   lean.
+        //
+        // No `cache_control` on the checklist block itself: the block
+        // changes every turn (the LLM mutates the list), so a cache
+        // breakpoint would never hit.
+        //
+        // Empty Vec (turn 1, before any `update_checklist` call) →
+        // skip injection entirely, symmetric to memory/skill empty-
+        // skip. We use the same `messages.clone()` for `provider.send`
+        // whether or not we injected, so the non-checklist path is a
+        // single extra `.clone()` per turn (cheap relative to LLM
+        // network latency).
+        let turn_messages = {
+            let checklist_snapshot = current_ctx.checklist.lock().await.clone();
+            let mut req = messages.clone();
+            if !checklist_snapshot.is_empty() {
+                let block = crate::tools::update_checklist::render_checklist(
+                    &checklist_snapshot,
+                );
+                let text = format!(
+                    "<current-checklist>\nThis is your running progress checklist for the current task. \
+                     Items marked `[~]` are in progress; `[x]` are done; `[ ]` are pending. Use the \
+                     `update_checklist` tool to mark items done / add new items / reorder as your plan \
+                     evolves. The list is re-injected every turn so you don't lose track.\n{}\n</current-checklist>",
+                    block
+                );
+                let checklist_msg = ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Blocks(vec![ContentBlock::Text {
+                        text,
+                        cache_control: None,
+                    }]),
+                };
+                // APPEND, never prepend — see cache-correctness note
+                // above. Prepending would bust the memory cache
+                // breakpoint at messages[0].
+                req.push(checklist_msg);
+            }
+            req
+        };
+
         let turn_tool_defs = permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
         let mut stream = provider.send(
             Some(system_prompt.clone()),
-            messages.clone(),
+            turn_messages,
             turn_tool_defs,
         );
         turn_send_at = Some(Instant::now());

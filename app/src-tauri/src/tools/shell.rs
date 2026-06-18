@@ -583,6 +583,7 @@ mod tests {
         ToolContext {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
+            checklist: crate::tools::update_checklist::new_handle(),
         }
     }
 
@@ -728,6 +729,7 @@ mod tests {
         let ctx = ToolContext {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: PathBuf::from("/etc"),
+            checklist: crate::tools::update_checklist::new_handle(),
         };
         let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),
