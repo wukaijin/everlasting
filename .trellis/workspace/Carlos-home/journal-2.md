@@ -150,3 +150,52 @@ grill-with-docs 收敛 6 决策:TodoWrite 式 update_checklist tool,per-request 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: RULE-A-012 reqwest streaming 总超时改 per-chunk read_timeout + 流错误补 tracing
+
+**Date**: 2026-06-19
+**Task**: `.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing`
+**Branch**: `main`
+**Trigger**: 用户 /clear 后第一轮查询 "2026-06-18T17:56:52 chat: errored — persisting partial turn" 静默事件,常规启动 grep 无任何 WARN/ERROR,需 DB 反查定位根因
+
+### Summary
+
+双根因合并 single RULE。**A** provider reqwest `.timeout(60s)`(总 deadline,reqwest 文档明示不适合 SSE)→ `.read_timeout(60s)`(per-chunk,resets per SSE event),`anthropic.rs:209-211` + `openai.rs:424-426` 同步改,保留 `.connect_timeout(10s)`;**D** `chat_loop.rs:657` `Err(err)` 静默包装补 `tracing::warn!(request_id, turn, category=?err.category(), error=%err, "chat: LLM stream errored")`。`LlmErrorCategory` 只 derive Debug 没有 Display,故用 `?` 走 Debug(五类 variant name 行为同 Display)。
+
+行业参照调研: reqwest 文档 `async_impl/client.rs:1448-1459` 明示 "read_timeout is more appropriate for detecting stalled connections when the size isn't known beforehand";LiteLLM 默认 `timeout=600s` 区分 `httpx.Timeout(timeout=, connect=, read=, pool=)`(`litellm/llms/custom_httpx/http_handler.py:133`);Anthropic/OpenAI SDK 都暴露四阶段 `Timeout(connect=, read=, write=, pool=)`;reqwest 同款语义 —— **`timeout`(总 deadline)、`read_timeout`(per-chunk)、`connect_timeout`(握手)三独立 API**。
+
+Out of scope(留待未来,本 ADR 否决理由): 抬总超时到 600s(LiteLLM 风格)—— `read_timeout=60s` 已 cover 慢代理,真 60s 无 chunk 说明代理真死了,让用户看到错误才是对的;per-provider timeout 列(`providers` / `models` 表加列)—— DB schema 改动有迁移成本,等真有多 provider 用户被掐再上。
+
+incident 锚点: `request_id=mz8s3hqwx6rmqjswgte` / `messages.seq=37`(seq=36→37 间隔 60.403s,DB `text="[生成出错中断]"` + content thinking 在"尝试 1"中途被截,实锤 reqwest 总 deadline 60s 触发)。
+
+### Main Changes
+
+- `app/src-tauri/src/llm/provider/anthropic.rs:209-227` — reqwest client builder `.timeout(60s)` → `.read_timeout(60s)` + 注释块引 incident + reqwest 文档
+- `app/src-tauri/src/llm/provider/openai.rs:424-442` — 同上
+- `app/src-tauri/src/agent/chat_loop.rs:655-682` — per-event `Err` 分支加 `tracing::warn!` + 注释块引 RULE-A-012 + 备注 `LlmErrorCategory` 用 `?` 走 Debug 的 why
+- `.trellis/spec/backend/error-handling.md` — 新增 §RULE-A-012 (2026-06-19) 段,Pattern A (streaming HTTP client) + Pattern B (stream-error observability) + Out of scope + Cross-references
+- `docs/IMPLEMENTATION.md §4` — 新增 2026-06-19 ADR 条目,Context / Decision A&D / Alternatives rejected / 影响面 / 关联
+- `.trellis/reviews/DEBT.md` — 新增 RULE-A-012 条目(Status closed 2026-06-19,Closed At `05037ac`)+ Re-evaluation Log 加行
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `05037ac` | fix(llm): RULE-A-012 per-chunk read_timeout + stream-error tracing |
+| `bc3beb3` | docs(spec+adr+debt): RULE-A-012 spec 沉淀 + ADR + DEBT 收口 |
+| `e2980ea` | chore(task): archive 06-19-fix-llm-streaming-timeout-and-tracing |
+
+### Testing
+
+- [OK] cargo check: 0 warning 0 error(3.64s)
+- [OK] cargo check --tests: 0 warning 0 error(5.41s)
+- [OK] cargo test --lib agent::tests::agent_loop_error: **6/6 pass**(persists_partial_text / empty_text_uses_error_marker / persists_thinking_and_tool_calls / persist_failure_is_log_only / emits_turn_complete / path_emits_chat_event_error),622 总数,0 warning
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
