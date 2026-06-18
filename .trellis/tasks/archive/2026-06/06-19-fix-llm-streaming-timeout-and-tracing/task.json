@@ -1,0 +1,36 @@
+{
+  "id": "06-19-fix-llm-streaming-timeout-and-tracing",
+  "title": "LLM streaming 总超时改 per-chunk read_timeout + 流错误补 tracing",
+  "status": "in_progress",
+  "created_at": "2026-06-19",
+  "owner": "carlos",
+  "source": "incident:root-cause-debug-session-2026-06-18-17-56",
+  "scope": ["backend"],
+  "files_touched": [
+    "app/src-tauri/src/llm/provider/anthropic.rs",
+    "app/src-tauri/src/llm/provider/openai.rs",
+    "app/src-tauri/src/agent/chat_loop.rs",
+    ".trellis/spec/backend/error-handling.md",
+    "docs/IMPLEMENTATION.md",
+    ".trellis/reviews/DEBT.md"
+  ],
+  "rule_ids_touched": ["RULE-A-011 (new)"],
+  "related_incident": {
+    "timestamp": "2026-06-18T17:56:52.654362Z",
+    "request_id": "mz8s3hqwx6rmqjswgte",
+    "session_db_seq": 37,
+    "symptom": "thinking 流 60s 被 reqwest 总超时掐断,silent 落 partial turn,日志无 WARN/ERROR"
+  },
+  "fix_components": {
+    "A_provider_reqwest": {
+      "rationale": "reqwest 文档明确说 .timeout() 是 'total deadline from connect to body EOF',不适合 SSE streaming;.read_timeout() 是 per-read,读到 chunk 就重置,正是 SSE 的正确模型",
+      "files": ["app/src-tauri/src/llm/provider/anthropic.rs:209-211", "app/src-tauri/src/llm/provider/openai.rs:424-426"],
+      "change": ".timeout(60s) → .read_timeout(60s)"
+    },
+    "D_stream_error_tracing": {
+      "rationale": "chat_loop.rs:657 把 LlmError 静默包装成 ChatEvent::Error,不打 tracing,导致 silent failure,grep 不到任何线索",
+      "files": ["app/src-tauri/src/agent/chat_loop.rs:657"],
+      "change": "Err(err) 分支加 tracing::warn!(request_id, turn, category, error)"
+    }
+  }
+}
