@@ -654,10 +654,37 @@ pub async fn run_chat_loop(
                     let Some(event_result) = event_result else { break; };
                     let event = match event_result {
                         Ok(e) => e,
-                        Err(err) => ChatEvent::Error {
-                            message: err.user_message(),
-                            category: err.category(),
-                        },
+                        // RULE-A-011 (2026-06-19): previously this arm
+                        // silently wrapped `LlmError` into a
+                        // `ChatEvent::Error` with NO tracing. The
+                        // 2026-06-18 incident (`mz8s3hqwx6rmqjswgte`,
+                        // messages.seq=37) hit exactly this: the
+                        // reqwest 60s total-deadline fired mid-
+                        // thinking, the partial turn was persisted,
+                        // and the user saw a toast with no Rust-side
+                        // breadcrumb. Add `tracing::warn!` so the
+                        // next streaming failure is grep-able.
+                        // See `.trellis/spec/backend/error-handling.md`
+                        // §RULE-A-011.
+                        Err(err) => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                turn,
+                                // `LlmErrorCategory` only derives Debug
+                                // (not Display), so use `?` (Debug)
+                                // instead of `%` (Display) — produces the
+                                // same five variant names (Auth /
+                                // RateLimit / InvalidRequest / Server /
+                                // Network) for grep purposes.
+                                category = ?err.category(),
+                                error = %err,
+                                "chat: LLM stream errored"
+                            );
+                            ChatEvent::Error {
+                                message: err.user_message(),
+                                category: err.category(),
+                            }
+                        }
                     };
                     match &event {
                         ChatEvent::Start => {

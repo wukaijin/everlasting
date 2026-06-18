@@ -206,8 +206,21 @@ impl AnthropicProvider {
         let url = config.endpoint();
 
         stream! {
+            // RULE-A-011 (2026-06-19): use `read_timeout` instead of
+            // `timeout` for SSE streaming. Per reqwest docs
+            // (`async_impl/client.rs:1448-1459`), `.timeout()` is a
+            // **total deadline** from connect to body EOF — wrong
+            // for SSE where the body is unbounded and chunk rate
+            // varies (extended thinking on a 3rd-party proxy can be
+            // 60s+ before the first text delta). `.read_timeout()`
+            // is per-read, resets on each chunk — the right tool
+            // for "stalled connection when size isn't known". The
+            // 60s value stays as the upper bound on silence between
+            // chunks; a truly dead proxy will surface this quickly.
+            // See `.trellis/spec/backend/error-handling.md` §RULE-A-011
+            // and incident `mz8s3hqwx6rmqjswgte` / messages.seq=37.
             let client = match reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
+                .read_timeout(Duration::from_secs(60))
                 .connect_timeout(Duration::from_secs(10))
                 .build()
             {
