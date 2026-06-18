@@ -50,10 +50,10 @@ import type { ChecklistItem, ChecklistStatus } from "../../stores/checklist";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
-  /** The current session's checklist items. `null` hides the card
-   *  (no `update_checklist` seen this run). An empty array still
-   *  renders (the model just cleared the list). */
-  items: ChecklistItem[] | null;
+    /** The current session's checklist items. `null` hides the card
+     *  (no `update_checklist` seen this run). An empty array still
+     *  renders (the model just cleared the list). */
+    items: ChecklistItem[] | null;
 }>();
 
 /** Local UI state: expanded ⇄ minimized. Defaults to expanded so
@@ -69,16 +69,16 @@ const expanded = ref<boolean>(true);
  *  reflect the raw input rather than crash. */
 const total = computed<number>(() => props.items?.length ?? 0);
 const doneCount = computed<number>(
-  () => props.items?.filter((i) => i.status === "done").length ?? 0,
+    () => props.items?.filter((i) => i.status === "done").length ?? 0,
 );
 const inProgressCount = computed<number>(
-  () => props.items?.filter((i) => i.status === "in_progress").length ?? 0,
+    () => props.items?.filter((i) => i.status === "in_progress").length ?? 0,
 );
 
 /** Whether the run looks "complete" (all items done). Drives the
  *  green completion tint + the auto-minimize-after-a-beat UX. */
 const allDone = computed<boolean>(
-  () => total.value > 0 && doneCount.value === total.value,
+    () => total.value > 0 && doneCount.value === total.value,
 );
 
 /** Whether to show the card at all. Hidden when no checklist has
@@ -91,18 +91,18 @@ const showCard = computed<boolean>(() => props.items !== null);
  *  (e.g. all-done) do NOT auto-collapse — the user's expand/
  *  minimize choice is respected. */
 watch(
-  () => props.items !== null,
-  (nowVisible, wasVisible) => {
-    if (nowVisible && !wasVisible) {
-      expanded.value = true;
-    }
-  },
+    () => props.items !== null,
+    (nowVisible, wasVisible) => {
+        if (nowVisible && !wasVisible) {
+            expanded.value = true;
+        }
+    },
 );
 
 /** Toggle the expanded state. Wired to the header click + the
  *  minimize / expand buttons. */
 function toggleExpanded(): void {
-  expanded.value = !expanded.value;
+    expanded.value = !expanded.value;
 }
 
 /** Per-status icon name. The UI is intentionally decoupled from the
@@ -110,115 +110,124 @@ function toggleExpanded(): void {
  *  the LLM-facing layer keeps text (token-cheap, markdown-safe);
  *  this card uses icons (human affordance). See the file-top NOTE. */
 function statusIcon(status: ChecklistStatus): string {
-  switch (status) {
-    case "done":
-      return "check-mini";  // lucide Check
-    case "in_progress":
-      return "loader";  // lucide LoaderCircle; CSS checklist-spin rotates it
-    case "pending":
-    default:
-      return "circle";  // lucide Circle
-  }
+    switch (status) {
+        case "done":
+            return "check-mini"; // lucide Check
+        case "in_progress":
+            return "loader"; // lucide LoaderCircle; CSS checklist-spin rotates it
+        case "pending":
+        default:
+            return "circle"; // lucide Circle
+    }
 }
 
 /** Per-status CSS class for the row's left marker color. */
 function statusClass(status: ChecklistStatus): string {
-  switch (status) {
-    case "done":
-      return "checklist-card__marker--done";
-    case "in_progress":
-      return "checklist-card__marker--in-progress";
-    case "pending":
-    default:
-      return "checklist-card__marker--pending";
-  }
+    switch (status) {
+        case "done":
+            return "checklist-card__marker--done";
+        case "in_progress":
+            return "checklist-card__marker--in-progress";
+        case "pending":
+        default:
+            return "checklist-card__marker--pending";
+    }
 }
 </script>
 
 <template>
-  <div
-    v-if="showCard"
-    :class="[
-      'checklist-card',
-      {
-        'checklist-card--minimized': !expanded,
-        'checklist-card--all-done': allDone,
-        'checklist-card--active': inProgressCount > 0,
-      },
-    ]"
-    role="region"
-    aria-label="Agent 进度清单"
-  >
-    <!--
+    <div
+        v-if="showCard"
+        :class="[
+            'checklist-card',
+            {
+                'checklist-card--minimized': !expanded,
+                'checklist-card--all-done': allDone,
+                'checklist-card--active': inProgressCount > 0,
+            },
+        ]"
+        role="region"
+        aria-label="Agent 进度清单"
+    >
+        <!--
       Minimized floating ball. Shows `done/total` + a pulsing
       ring when an in_progress item is active. Clicking expands.
     -->
-    <button
-      v-if="!expanded"
-      type="button"
-      class="checklist-card__ball"
-      :aria-label="`展开清单(${doneCount}/${total})`"
-      :title="`展开进度清单 (${doneCount}/${total})`"
-      @click="toggleExpanded"
-    >
-      <span class="checklist-card__ball-ring" />
-      <span class="checklist-card__ball-icon">
-        <Icon name="clipboard-list" :size="14" />
-      </span>
-      <span class="checklist-card__ball-count">{{ doneCount }}/{{ total }}</span>
-    </button>
+        <button
+            v-if="!expanded"
+            type="button"
+            class="checklist-card__ball"
+            :aria-label="`展开清单(${doneCount}/${total})`"
+            :title="`展开进度清单 (${doneCount}/${total})`"
+            @click="toggleExpanded"
+        >
+            <span class="checklist-card__ball-ring" />
+            <span class="checklist-card__ball-icon">
+                <Icon name="clipboard-list" :size="14" />
+            </span>
+            <span class="checklist-card__ball-count"
+                >{{ doneCount }}/{{ total }}</span
+            >
+        </button>
 
-    <!--
+        <!--
       Expanded card. Header (title + progress + minimize button)
       above the items list. Each item is a row: status marker +
       content. The in_progress row gets the pulse animation.
     -->
-    <div v-else class="checklist-card__panel">
-      <header class="checklist-card__header">
-        <span class="checklist-card__title">
-          <Icon name="clipboard-list" :size="13" icon-class="checklist-card__title-icon" />
-          进度清单
-        </span>
-        <span
-          class="checklist-card__progress"
-          :title="`${doneCount} 已完成 / ${total} 共计`"
-        >
-          {{ doneCount }}/{{ total }}
-        </span>
-        <button
-          type="button"
-          class="checklist-card__minimize"
-          :title="'最小化'"
-          aria-label="最小化清单"
-          @click="toggleExpanded"
-        >
-          <Icon name="minus" :size="12" />
-        </button>
-      </header>
+        <div v-else class="checklist-card__panel">
+            <header class="checklist-card__header">
+                <span class="checklist-card__title">
+                    <Icon
+                        name="clipboard-list"
+                        :size="13"
+                        icon-class="checklist-card__title-icon"
+                    />
+                    进度清单
+                </span>
+                <span
+                    class="checklist-card__progress"
+                    :title="`${doneCount} 已完成 / ${total} 共计`"
+                >
+                    {{ doneCount }}/{{ total }}
+                </span>
+                <button
+                    type="button"
+                    class="checklist-card__minimize"
+                    :title="'最小化'"
+                    aria-label="最小化清单"
+                    @click="toggleExpanded"
+                >
+                    <Icon name="minus" :size="12" />
+                </button>
+            </header>
 
-      <ul v-if="total > 0" class="checklist-card__items">
-        <li
-          v-for="(item, idx) in items"
-          :key="idx"
-          :class="[
-            'checklist-card__item',
-            `checklist-card__item--${item.status}`,
-                          ]"
-        >
-          <span
-            :class="['checklist-card__marker', statusClass(item.status)]"
-            aria-hidden="true"
-          >
-            <Icon :name="statusIcon(item.status)" :size="13" />
-          </span>
-          <span class="checklist-card__content">{{ item.content }}</span>
-        </li>
-      </ul>
-      <div v-else class="checklist-card__empty">
-        清单为空
-      </div>
+            <ul v-if="total > 0" class="checklist-card__items">
+                <li
+                    v-for="(item, idx) in items"
+                    :key="idx"
+                    :class="[
+                        'checklist-card__item',
+                        `checklist-card__item--${item.status}`,
+                    ]"
+                >
+                    <span
+                        :class="[
+                            'checklist-card__marker',
+                            statusClass(item.status),
+                        ]"
+                        aria-hidden="true"
+                    >
+                        <Icon :name="statusIcon(item.status)" :size="13" />
+                    </span>
+                    <span class="checklist-card__content">{{
+                        item.content
+                    }}</span>
+                </li>
+            </ul>
+            <div v-else class="checklist-card__empty">清单为空</div>
+        </div>
     </div>
-  </div>
 </template>
 
 <style scoped>
@@ -228,250 +237,259 @@ function statusClass(status: ChecklistStatus): string {
    column). We anchor to the bottom-right, offset above the
    ChatInput bar. */
 .checklist-card {
-  position: absolute;
-  right: 16px;
-  /* Offset above the ChatInput bar. The ChatInput height is
+    position: absolute;
+    right: 20px;
+    /* Offset above the ChatInput bar. The ChatInput height is
      ~120px on a typical viewport (textarea + chips row); we
      leave 12px of breathing room. The exact value isn't load-
      bearing — the card stacks above whatever's at the bottom. */
-  bottom: 132px;
-  z-index: 50;
-  /* z-index is BELOW PermissionModal (which lives at z-index
+    bottom: 156px;
+    z-index: 50;
+    /* z-index is BELOW PermissionModal (which lives at z-index
      1000+ via Teleport to body). The card also sits below the
      scroll-to-bottom button (z-index 10 inside MessageList —
      but MessageList is in a separate stacking context so the
      card's z-index 50 wins over it; the user-perceived
      behavior is "card floats above the message list, below
      modals"). */
-  font-family: var(--font-sans);
-  color: var(--color-text-primary);
-  pointer-events: auto;
+    font-family: var(--font-sans);
+    color: var(--color-text-primary);
+    pointer-events: auto;
 }
 
 /* Expanded panel shape. */
 .checklist-card__panel {
-  width: 280px;
-  max-height: 60vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
+    width: 280px;
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-bg-border);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
 }
 
 /* All-done tint: a subtle green left border to signal "the run
    is wrapping up". The user can still minimize / expand; we
    don't auto-collapse. */
 .checklist-card--all-done .checklist-card__panel {
-  border-left: 3px solid var(--color-tool-write);
+    border-left: 3px solid var(--color-tool-write);
 }
 
 .checklist-card__header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  cursor: pointer;
-  user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-bg-border);
+    background: var(--color-bg-elevated);
+    cursor: pointer;
+    user-select: none;
 }
 
 .checklist-card__title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    min-width: 0;
 }
 
 .checklist-card__title-icon {
-  color: var(--color-text-secondary);
-  flex-shrink: 0;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
 }
 
 .checklist-card--all-done .checklist-card__title-icon {
-  color: var(--color-tool-write);
+    color: var(--color-tool-write);
 }
 
 .checklist-card__progress {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--color-text-secondary);
-  padding: 1px 6px;
-  background: var(--color-bg-app);
-  border-radius: 4px;
-  flex-shrink: 0;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+    padding: 1px 6px;
+    background: var(--color-bg-app);
+    border-radius: 4px;
+    flex-shrink: 0;
 }
 
 .checklist-card__minimize {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition:
+        background 0.1s,
+        color 0.1s;
 }
 
 .checklist-card__minimize:hover {
-  background: var(--color-bg-border);
-  color: var(--color-text-primary);
+    background: var(--color-bg-border);
+    color: var(--color-text-primary);
 }
 
 .checklist-card__items {
-  list-style: none;
-  margin: 0;
-  padding: 6px 4px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-height: 0;
+    list-style: none;
+    margin: 0;
+    padding: 6px 4px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-height: 0;
 }
 
 .checklist-card__item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--color-text-primary);
-  transition: background 0.12s;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--color-text-primary);
+    transition: background 0.12s;
 }
 
 .checklist-card__item:hover {
-  background: var(--color-bg-elevated);
+    background: var(--color-bg-elevated);
 }
 
 /* Pending items get a slightly muted treatment so the eye is
    drawn to the in_progress and done rows. */
 .checklist-card__item--pending {
-  color: var(--color-text-secondary);
+    color: var(--color-text-secondary);
 }
 
 .checklist-card__item--done .checklist-card__content {
-  text-decoration: line-through;
-  text-decoration-color: var(--color-text-muted);
-  color: var(--color-text-muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--color-text-muted);
+    color: var(--color-text-muted);
 }
 
 /* The in_progress row gets a subtle accent background so it
    stands out even before the marker pulse kicks in. */
 .checklist-card__item--in-progress {
-  background: color-mix(in srgb, var(--color-tool-shell) 8%, transparent);
+    background: color-mix(in srgb, var(--color-tool-shell) 8%, transparent);
 }
 
 .checklist-card__marker {
-  flex-shrink: 0;
-  line-height: 1.45;
-  min-width: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+    flex-shrink: 0;
+    line-height: 1.45;
+    min-width: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .checklist-card__marker--pending {
-  color: var(--color-text-muted);
+    color: var(--color-text-muted);
 }
 
 .checklist-card__marker--done {
-  color: var(--color-tool-write);
+    color: var(--color-tool-write);
 }
 
 .checklist-card__marker--in-progress {
-  color: var(--color-tool-shell);
-  /* The spin: 1s linear, infinite. The animation runs on the
+    color: var(--color-tool-shell);
+    /* The spin: 1s linear, infinite. The animation runs on the
      marker span (which wraps the refresh-arrow Icon), so the
      arrow rotates continuously, signalling "working" — the
      standard spinner affordance replacing the old text-pulse. */
-  animation: checklist-spin 1s linear infinite;
+    animation: checklist-spin 1s linear infinite;
 }
 
 @keyframes checklist-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .checklist-card__content {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
 }
 
 .checklist-card__empty {
-  padding: 12px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--color-text-muted);
+    padding: 12px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--color-text-muted);
 }
 
 /* ---- Minimized floating ball ---- */
 .checklist-card__ball {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
-  transition: transform 0.12s, background 0.12s, border-color 0.12s;
-  overflow: visible;
+    position: relative;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-bg-border);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    transition:
+        transform 0.12s,
+        background 0.12s,
+        border-color 0.12s;
+    overflow: visible;
 }
 
 .checklist-card__ball:hover {
-  background: var(--color-bg-elevated);
-  border-color: var(--color-accent);
-  transform: scale(1.06);
+    background: var(--color-bg-elevated);
+    border-color: var(--color-accent);
+    transform: scale(1.06);
 }
 
 /* The ball's content: clipboard icon on top, count below. */
 .checklist-card__ball-icon {
-  position: absolute;
-  top: 8px;
-  left: 0;
-  right: 0;
-  margin: 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
+    position: absolute;
+    top: 8px;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-secondary);
 }
 
 .checklist-card--all-done .checklist-card__ball-icon {
-  color: var(--color-tool-write);
+    color: var(--color-tool-write);
 }
 
 .checklist-card__ball-count {
-  position: absolute;
-  bottom: 6px;
-  left: 0;
-  right: 0;
-  margin: 0 auto;
-  font-size: 9px;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--color-text-muted);
-  line-height: 1;
+    position: absolute;
+    bottom: 6px;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    font-size: 9px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    line-height: 1;
 }
 
 /* Breathing ring around the ball when an in_progress item is
@@ -479,28 +497,35 @@ function statusClass(status: ChecklistStatus): string {
    ring span so we can animate opacity + scale independently
    of the ball's hover transform. */
 .checklist-card__ball-ring {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  pointer-events: none;
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    pointer-events: none;
 }
 
 .checklist-card--active .checklist-card__ball-ring {
-  border: 2px solid var(--color-tool-shell);
-  animation: checklist-breathe 2.2s ease-in-out infinite;
+    border: 2px solid var(--color-tool-shell);
+    animation: checklist-breathe 2.2s ease-in-out infinite;
 }
 
 @keyframes checklist-breathe {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 0.9; transform: scale(1.18); }
+    0%,
+    100% {
+        opacity: 0.4;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.9;
+        transform: scale(1.18);
+    }
 }
 
 /* When all done + minimized, swap the ring color to green
    for a calmer "done" cue. */
 .checklist-card--all-done.checklist-card--active .checklist-card__ball-ring,
 .checklist-card--all-done .checklist-card__ball-ring {
-  border-color: var(--color-tool-write);
-  animation: none;
-  opacity: 0.5;
+    border-color: var(--color-tool-write);
+    animation: none;
+    opacity: 0.5;
 }
 </style>
