@@ -28,6 +28,57 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-19 — RULE-A-012 reqwest streaming 超时改 per-chunk `read_timeout` + 流错误补 tracing(响应 2026-06-18 17:56 静默中断事件)
+
+**Context**: 2026-06-18 17:56:52Z 一条 session(`request_id=mz8s3hqwx6rmqjswgte`,`messages.seq=37`)的 thinking 流在 60.4s 时被静默切断,前端只看到 `[生成出错中断]` toast,Rust 日志 **零** WARN/ERROR,grep 不到任何线索,首次靠 DB 反查(`text="[生成出错中断]"` + content thinking 在"尝试 1"中途被截 + seq=36→37 间隔 = 60.403s)才定位到 `reqwest::Client::builder().timeout(Duration::from_secs(60))` 触发。两条独立但同源的根因:
+
+1. **reqwest `.timeout()` 是总 deadline**(`connect` 起算到 body EOF),不适合 SSE streaming —— 响应大小未知、chunk 间隔可变(extended thinking + 3rd-party 代理 `wukaijin.com` + `thinking_effort=high` 默认值 = 60s+ 才出首个 text delta 常见)。`anthropic.rs:210` / `openai.rs:425` 用的就是这个 API。
+2. **`chat_loop.rs:657` 把 `LlmError` 静默包成 `ChatEvent::Error`,不打 tracing** —— 整个错误通道(Network / Auth / RateLimit / Server / InvalidRequest)都不留 Rust 侧 breadcrumb。RULE-A-007(2026-06-17)只补了 "error arm 持久化 partial turn",没补 "trace the cause"。
+
+行业参照(`reqwest` 自身文档 `async_impl/client.rs:1448-1459`):**"read_timeout is more appropriate for detecting stalled connections when the size isn't known beforehand"** —— SSE 的标准定义。LiteLLM 默认 `timeout=600s` 区分 `httpx.Timeout(timeout=, connect=, read=, pool=)`(`litellm/llms/custom_httpx/http_handler.py:133`);Anthropic / OpenAI SDK 都暴露 `Timeout(connect=, read=, write=, pool=)` 四阶段配置;reqwest 同款语义:**`timeout`(总 deadline)、`read_timeout`(per-chunk)、`connect_timeout`(握手)三独立 API**。
+
+**Decision A**: provider reqwest 客户端 `.timeout(60s)` → `.read_timeout(60s)`,保留 `.connect_timeout(10s)`
+
+`anthropic.rs:209-211` / `openai.rs:424-426` 两个 site 同步改。注释块说明 reqwest 文档原文 + 引用 incident `mz8s3hqwx6rmqjswgte` / `messages.seq=37` 作为"为什么改"的可追溯锚点。**不动** `connect_timeout` —— 握手阶段就该短。
+
+**Decision D**: `chat_loop.rs:657` `Err(err) → ChatEvent::Error` 静默包装补 `tracing::warn!`
+
+```rust
+Err(err) => {
+    tracing::warn!(
+        request_id = %rid,
+        turn,
+        category = err.category(),  // LlmErrorCategory Display
+        error = %err,               // reqwest::Error / serde_json::Error / ...
+        "chat: LLM stream errored"
+    );
+    ChatEvent::Error { message: err.user_message(), category: err.category() }
+}
+```
+
+`LlmError::category()` 已 Display 五类(Auth / RateLimit / InvalidRequest / Server / Network),日志一行 grep 直接出分类。**不动** `category()` Display 也不动 `user_message()`(UI toast 文案由前端控制器决定)。
+
+**Alternatives considered & rejected**:
+
+1. **抬总超时到 600s(跟 LiteLLM 对齐)** —— 否决。`read_timeout=60s` 已能 cover 慢代理 streaming;真要触发 60s 内零 chunk 说明代理真死了,这时让用户看到错误反而是对的。抬总超时是治标,且会把"代理挂着不返回"这类死循环无意义延长。**Out of scope,留待未来**。
+2. **`providers` / `models` 表加 `request_timeout_secs` 列做 per-provider 覆盖** —— 否决本次做。当前 `read_timeout=60s` 通用,WSL + 3rd-party 代理实测够用;等真有用户被不同代理掐脖子再上,DB schema 改动有迁移成本,不该提前做。**Out of scope,见 ROADMAP 第三档预留**。
+3. **不动 D,只改 spec 标"已知观测盲点"** —— 否决。这是 1 行 `tracing::warn!` 就能解决的可观测性债,不是设计权衡(对比 RULE-A-010 是 UX 决策留待未来实现;这里是 5 行代码 + 0 风险)。
+
+**影响面**:
+
+- 代码:`llm/provider/anthropic.rs:209-227`(含注释块 + 改动)+ `llm/provider/openai.rs:424-442`(同上)+ `agent/chat_loop.rs:655-682`(per-event Err 分支加 tracing::warn! + 注释块 + 改动)。**不动** cancel 路径 / **不动** 正常 Done 路径 / **不动** 正常 Error pre-emit(`ChatEvent::Error` 仍 pre-emit 给前端,只是多了 Rust 侧 breadcrumb)。
+- Spec:`backend/error-handling.md` 加 "RULE-A-012 (2026-06-19) — reqwest per-chunk read_timeout + stream-error tracing" 段,引 incident + 改动表 + Out of scope(总超时 / per-provider 列)。
+- DEBT:`.trellis/reviews/DEBT.md` 加 RULE-A-012 条目(Status closed),Re-evaluation Log 加一行。
+- Journal:`.trellis/workspace/Carlos-home/journal-2.md` 追加 summary(同 4-stage commit 的 journal 段)。
+
+**关联**:
+
+- **RULE-A-007**(2026-06-17 closed,`error arm persist partial turn`)—— 同是 `had_error = true` 路径处理,A-007 落盘,A-012 落 trace,互补。
+- **RULE-A-006**(2026-06-15 closed,`chat_loop 单一权威`)—— 改 `chat_loop.rs:657` 1 处全生效,9 个 `agent_loop_*` 集成测试已覆盖真实 production 路径(`agents/tests.rs`)。
+- DEBT §收尾路径建议 🟡 梯队 "看到顺手修"——本次即此类。
+
+---
+
 ### 2026-06-18 — B12 Checklist(agent 自跟踪进度清单)设计决策 + 先于 B6 subagent 的排序
 
 **Context**: 用户提"想在 subagent(B6)之前加一个 task list / todo list 功能,先做哪个"。grill-with-docs session 锁定它是 **TodoWrite 式 agent 自跟踪 tool**(命名 **Checklist**;CONTEXT.md 已落术语 + 三消歧义:非 Trellis task / 非 plan mode / 非 subagent)。本 ADR 记三条核心权衡 + 排序理由,实施前定盘。

@@ -147,3 +147,91 @@ Per-event emit was the step 6 v1 implementation; the check phase caught it
 because Anthropic might split the signature across N events in a future
 schema, and a per-event emit would scatter chunks across N thinking blocks.
 See `backend/llm-contract.md` §7 Wrong vs Correct.
+
+---
+
+## RULE-A-012 (2026-06-19) — reqwest per-chunk `read_timeout` + stream-error tracing
+
+> **Incident anchor**: 2026-06-18T17:56:52.654362Z, `request_id=mz8s3hqwx6rmqjswgte`,
+> `messages.seq=37` (DB query confirms: `text="[生成出错中断]"`, partial thinking
+> in content, seq=36→37 gap = 60.403s = exact reqwest total-deadline).
+
+### Pattern A: streaming HTTP client config
+
+When building a reqwest client for **SSE / chunked streaming responses**, use
+`read_timeout` instead of `timeout`. Per the reqwest source docs
+(`async_impl/client.rs:1448-1459`):
+
+```rust
+// ❌ WRONG — `.timeout()` is a TOTAL deadline from connect to body EOF.
+//    For SSE, the body is unbounded and chunk rate varies (extended
+//    thinking on a 3rd-party proxy can be 60s+ before the first text
+//    delta). The 60s total will fire mid-stream.
+let client = reqwest::Client::builder()
+    .timeout(Duration::from_secs(60))
+    .connect_timeout(Duration::from_secs(10))
+    .build()?;
+
+// ✅ CORRECT — `.read_timeout()` is per-read, resets on each chunk.
+//    "More appropriate for detecting stalled connections when the size
+//    isn't known beforehand." (reqwest source, verbatim). The 60s value
+//    bounds silence between chunks; a truly dead proxy will surface
+//    quickly while a slow-but-alive proxy streams freely.
+let client = reqwest::Client::builder()
+    .read_timeout(Duration::from_secs(60))
+    .connect_timeout(Duration::from_secs(10))
+    .build()?;
+```
+
+Applies at: `app/src-tauri/src/llm/provider/anthropic.rs:209-227` and
+`app/src-tauri/src/llm/provider/openai.rs:424-442` (both Provider impls).
+
+### Pattern B: stream-error observability (no silent wrap)
+
+The agent loop's per-event arm wraps `LlmError` into `ChatEvent::Error` for
+the frontend to toast. **The wrap MUST also emit a `tracing::warn!`** so the
+Rust log has a breadcrumb. Otherwise the error is only visible in the UI
+until reload — exactly the situation in the 2026-06-18 incident (zero
+`WARN` / `ERROR` log lines).
+
+```rust
+// ❌ WRONG — silent wrap. User sees the toast; logs see nothing.
+Err(err) => ChatEvent::Error {
+    message: err.user_message(),
+    category: err.category(),
+},
+
+// ✅ CORRECT — log first, then wrap. The `category` field gives an
+//    immediate classifier (Auth / RateLimit / InvalidRequest / Server /
+//    Network) without needing to parse `err.user_message()`.
+Err(err) => {
+    tracing::warn!(
+        request_id = %rid,
+        turn,
+        category = err.category(),
+        error = %err,
+        "chat: LLM stream errored"
+    );
+    ChatEvent::Error {
+        message: err.user_message(),
+        category: err.category(),
+    }
+}
+```
+
+Applies at: `app/src-tauri/src/agent/chat_loop.rs:657-682` (per-event
+arm inside the `event_result = stream.next()` select! branch).
+
+### Out of scope (deliberate non-fix)
+
+| Option | Why deferred |
+|---|---|
+| Raise total `timeout` to 600s (LiteLLM-style) | `read_timeout=60s` already covers slow-but-alive streams. A 60s silence truly means dead proxy — surfacing then is correct behavior. |
+| Add `request_timeout_secs` column to `providers` / `models` tables | Premature DB schema churn. Revisit only if real users hit real per-provider timeouts. |
+
+### Cross-references
+
+- [docs/IMPLEMENTATION.md §4 2026-06-19](../../docs/IMPLEMENTATION.md#4-决策日志) — full ADR with alternatives rejected.
+- [`.trellis/reviews/DEBT.md`](../../reviews/DEBT.md) — RULE-A-012 entry.
+- [`.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing/`](../../tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing/) — task directory.
+- Related: RULE-A-007 (error arm partial-turn persistence) — same code path, complementary fix (one persists, one traces).

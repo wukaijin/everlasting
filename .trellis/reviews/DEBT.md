@@ -607,6 +607,19 @@
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
 
+### RULE-A-012 — reqwest streaming 总超时误配 + stream-error 静默包装
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/llm/provider/anthropic.rs:209-211` + `app/src-tauri/src/llm/provider/openai.rs:424-426` + `app/src-tauri/src/agent/chat_loop.rs:655-661`
+- **Description**: Provider 用 `.timeout(60s)`(reqwest 总 deadline)配置 SSE streaming,被 3rd-party 代理 + extended thinking 在 60.4s 掐断(`messages.seq=37` 实锤);同时 agent loop `stream.next()` `Err` 分支把 `LlmError` 静默包成 `ChatEvent::Error`,不打 `tracing`,导致该事件在 Rust 日志**零线索**,必须 DB 反查才能定位。
+- **Fix**: 改 A) `.timeout(60s)` → `.read_timeout(60s)`(per-chunk,resets per SSE event,reqwest 文档明示适用 SSE);D) `chat_loop.rs:657` 加 `tracing::warn!(request_id, turn, category, error, "chat: LLM stream errored")`。
+- **Status**: **closed (2026-06-19)** — incident `mz8s3hqwx6rmqjswgte` / `messages.seq=37`,fix 在 `.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing`,spec 沉淀在 `.trellis/spec/backend/error-handling.md` §RULE-A-012 + `docs/IMPLEMENTATION.md §4 2026-06-19` ADR。
+- **Owner**: carlos
+- **Closed At**: `05037ac` (fix commit);docs commit 见随后
+- **Related Task**: `.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing`
+- **Discovered In**: incident root-cause debug session 2026-06-18(用户 `/clear` 后第一轮查询)
+
 ### RULE-B-006 — AuditKind docstring "10"→"11"
 
 - **Level**: P3
@@ -733,6 +746,8 @@
 | 2026-06-18 | RULE-D-005 | open | **closed** | openai_caps() 从 config.reasoning_effort 派生 caps(替代硬编码 true);gpt-4o 无 thinking_effort → caps.supports_reasoning_effort=false → strip 丢弃历史 Reasoning 块。未直接调 from_model_row(send 签名不带 model_row,config.reasoning_effort 等价);+2 测试 | `.trellis/tasks/06-18-p2-reasoning-caps-estimator-dedup` |
 | 2026-06-18 | RULE-D-004 | open | **closed** | 删 WireRequest.reasoning_effort 死字段(OpenAI-specific 不属 wire 层;真参数走 config)+ docstring + 初始化 + 9 处测试构造 | 同上 task |
 | 2026-06-18 | RULE-A-008 | open | **closed** | 抽 push_message_tokens helper,estimate_messages_tokens 与 _iter 共用;case_1~7 回归通过 | 同上 task |
+
+| 2026-06-19 | RULE-A-012 | open | **closed** | 双根因合并 single RULE。**A** provider reqwest `.timeout(60s)`(总 deadline,reqwest 文档明示不适合 SSE)改 `.read_timeout(60s)`(per-chunk,resets per SSE event),`anthropic.rs:209-211` + `openai.rs:424-426` 同步改,保留 `.connect_timeout(10s)`;**D** `chat_loop.rs:657` `Err(err)` 静默包装补 `tracing::warn!(request_id, turn, category=?err.category(), error=%err, "chat: LLM stream errored")`(`LlmErrorCategory` 只有 Debug 没有 Display,故 `?` 走 Debug,产出五类 variant name 同 Display 行为)。incident `mz8s3hqwx6rmqjswgte` / `messages.seq=37`(seq=36→37 间隔 60.403s 实锤);fix commit `05037ac`,cargo check + 6 个 agent_loop_error_* 集成测试全 pass(622 总数,0 warning)。Out of scope:抬总超时到 600s(LiteLLM 风格)——否决,`read_timeout=60s` 已 cover 慢代理,真 60s 无 chunk 是代理死了该报错;per-provider timeout 列(`providers` / `models` 表加列)——否决本次做,DB schema 改动有迁移成本,等真有多 provider 用户被掐再上。spec 沉淀:`.trellis/spec/backend/error-handling.md` §RULE-A-012 + `docs/IMPLEMENTATION.md §4` 2026-06-19 ADR | `.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing` |
 
 ---
 
