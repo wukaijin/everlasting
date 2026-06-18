@@ -28,6 +28,51 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-18 — B12 Checklist(agent 自跟踪进度清单)设计决策 + 先于 B6 subagent 的排序
+
+**Context**: 用户提"想在 subagent(B6)之前加一个 task list / todo list 功能,先做哪个"。grill-with-docs session 锁定它是 **TodoWrite 式 agent 自跟踪 tool**(命名 **Checklist**;CONTEXT.md 已落术语 + 三消歧义:非 Trellis task / 非 plan mode / 非 subagent)。本 ADR 记三条核心权衡 + 排序理由,实施前定盘。
+
+**Decision 1 — 排序:Checklist 先于 B6 subagent**
+
+- ① **量级不对称**:Checklist ≈ 1 个 tool + 注入 hook + 1 个渲染卡;subagent 要 fork agent loop(嵌套 `run_chat_loop` + 独立 messages + 独立 token 预算)+ summary 回填 + worker UI——**动 loop 核心**。前者旁挂,后者动地基。
+- ② **学习路径依赖**:两者都要"在 turn 开头把 agent 自管状态注入 context"。Checklist 注入一张**列表**(平凡实例);subagent 注入子 agent 的 **summary + 子 context 预算**(复杂实例)。Checklist 是 subagent 那套机制的小面 warm-up,先在小面上跑通"每轮注入动态 agent-state",再上 subagent。
+- ③ **正交**:Checklist 不碰 subagent 的任何面;将来 subagent 甚至可把 checklist 项派给 worker。B6 的 roadmap 依赖(B5 Memory)已满足,**无紧迫性逼 subagent 先做**。
+
+**Decision 2 — state + 注入 + 持久化:loop-local `Vec` + 每轮 ephemeral 重发 + 无新 DB 表**
+
+- **state**:`run_chat_loop` 作用域内 `Vec<ChecklistItem>`,**per-request 生命周期**(一个 user message 的整 run),不跨 run → **无新 DB 表、无 migration**。
+- **注入**:每轮 `provider.send` 前,从 Vec 重建一份 synthetic user block(整张 list + 显式 in_progress 焦点),**append** 到**当次请求的 messages 副本**(不写回持久化 `messages`),发完即弃,下轮从最新 state 现造。**不打 `cache_control`**(每轮必变,cache 永不命中,块小成本可忽略)。空表跳过(turn 1 未调过 update)。**不塞 system prompt**——会每轮 bust system prompt cache,废掉 memory / skill 那套 `cache_control` 机制(skill 当年特意"decoupled from memory cache window"即此理,`chat_loop.rs:258-263`)。**关键:append 而非 prepend**——memory 的 `cache_control: Ephemeral` 断点在 `messages[0]` 块的 banner 上,任何在它**之前**的 per-turn 变化块(包括 prepend 的 checklist)都会 bust 该断点;append 把 checklist 放在断点之后,memory cache 窗口不受影响(trellis-check 2026-06-19 修正:原 plan 写 prepend,实施 review 发现 prepend 会 bust memory cache,改 append)。
+- **持久化 / replay**:`update_checklist` 的 tool_result(本就在 message history 里持久化)携带完整列表 → 渲染 + reload 还原的 source of truth。reload 从 **DB 全量 history** 重建;C3 compaction 是 **in-memory only**(`agent/context.rs:36` 实锤,DB 保留全部 message),故 reload 还原**永远完整**,不受 compaction 影响。
+- **cancel / 切 session**:复用现有 cancel 路径 + **RULE-A-004**(cancel 掉的 tool 不 commit tool_result,Vec 那次改动不算数)→ live Vec 与持久化 history 不打架;切回从 DB history 重建。
+
+**Decision 3 — tool 形状:单 `update_checklist` 全量替换 + 三态 + 至多一 in_progress**
+
+- **全量替换**(对齐 opencode `todowrite` / Cline),非细粒度 add/update/delete。**硬理由**:replay 要求"最后一条 tool_result == 当前态"(O(1) 还原);细粒度要重放所有 op(O(N) + deleted 项残留),直接打破 Decision 2 的 replay 设计。原子 + 幂等;token 成本可忽略(per-request + 几条短项)。
+- **item schema**:`{content, status}`,status 三态 `pending` / `in_progress` / `done`(对齐 Claude Code / opencode)。**至多一个 `in_progress`**(= agent 当前焦点指针,喂给注入的"current focus")——soft 约束,model 传多个时 tool coerce(保留最后一个、其余降 pending),不报错避免打断 loop。此约束亦让 UI 焦点动效有单一目标。
+
+**Alternatives considered & rejected**:
+
+1. **细粒度 tool(add / update / delete)**:否决,见 Decision 3——打破 replay(O(N) 重放 + 残留),状态漂移风险。
+2. **新 DB 表存 checklist**:否决——per-request 无跨 run 需求,migration 是过度设计。
+3. **checklist 塞 system prompt 每轮重建**:否决——每轮 bust system prompt cache,废掉 caching。
+4. **纯靠 tool_result history(最后一条当当前态),无 ephemeral 重发**:否决——C3 会从 **live 数组**压掉旧 tool_result,agent 进行中可能丢计划。ephemeral 重发是"进行中"的扛压路径(reload 才靠 DB history,两条独立路径,互不依赖)。
+5. **注入只发 in_progress 焦点而非整张**:否决——C3 压掉 history tool_result 后,ephemeral 块须自给自足,只发焦点会让 agent 丢非焦点项。
+
+**影响面**(规划中,未实施):
+
+- 代码(预计):`tools/` 新增 `update_checklist` + `tools/mod.rs` 注册;`agent/chat_loop.rs` 加 loop-local `Vec<ChecklistItem>` + 每轮 ephemeral 注入 seam(`compact_messages` 后、`provider.send` 前 **append** 到副本,非 prepend——见 Decision 2 cache 修正);`ToolDef` 注册;前端新 `<ChecklistCard>` 浮层组件(ChatPanel 内 `position: absolute`、最小化悬浮球、焦点项动效)+ checklist store(从 `tool:call` / `tool:result` 派生当前态)。
+- **零 DB schema 变更**(per-request + replay 走 history)。
+- spec(预计):`backend/tool-contract.md` 加 Checklist 段;`frontend/state-management.md` 加 checklist store 段。
+- CONTEXT.md:Checklist 术语已落(2026-06-18,含三消歧义)。
+- ROADMAP:§2 🟠 第三档加 B12(本日同步)。
+
+**关联**:
+
+- **B5 Memory**(`build_instructions_blocks` + `cache_control: ephemeral`)——Checklist 注入机制的原型;但 Checklist 是 run 内**动态**(memory 是 run 内**静态**),故用 ephemeral 每轮重发而非一次性头部插入。
+- **C3 compaction**(`agent/context.rs`,`in-memory only`)——保证 reload 从 DB 还原完整;进行中靠 ephemeral 重发扛压。
+- **RULE-A-004**(cancel 掉的 tool 不记 audit)——同一套保护罩住 checklist(cancel 的 update 不 commit)。
+- **B6 Subagent**——Checklist 是其"每轮注入动态 agent-state"机制的小面 warm-up;实施顺序 **Checklist → B6**。
+
 ### 2026-06-17 — RULE-A-007 error arm 对称 cancel 路径 persist partial turn
 
 **Context**: DEBT RULE-A-007(P2,Agent Loop)记录了 SSE 流中途 error 时 agent loop 行为不对称的问题:error arm 直接 `return`,**丢弃已累积的 `text_parts` / `finalized_thinking` / `tool_calls`** —— 这些 delta 已通过 `ChatEvent::Delta` 渲染给前端,但 reload 后从 DB 读不到。cancel 路径却正确地 flush + 构造 assistant_blocks + `CANCELLED_MARKER` 追加 + `persist_turn` 落库。两条 terminal 路径(except normal Done)行为不一致,是数据完整性 + UX 一致性 bug。

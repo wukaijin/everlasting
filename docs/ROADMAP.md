@@ -77,11 +77,12 @@
 | ~~B2~~ | ~@文件补全~ | ✅ 06-17 落地(PR1+PR1.5+PR2),见 §1.2 |
 | ~~D3~~ | ~session 内消息编辑 / 重发~ | ✅ 06-17 落地(PR1+PR2+PR3+follow-up),见 §1.2 |
 
-### 🟠 第三档 — 缓做(9 项)
+### 🟠 第三档 — 缓做(10 项)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | B6   | Subagent(main agent 派 worker agent,独立 context,summary 回填) | **harness 学习价值高**,依赖 B5 Memory |
+| B12  | Checklist(agent 自跟踪进度清单,TodoWrite 式 `update_checklist` tool) | **先于 B6 做**:作"每轮注入动态 agent-state"的小面 warm-up(subagent 那套注入机制的简化版);对齐 Claude Code `TaskCreate/List` / opencode `todowrite`;loop-local state + 每轮 ephemeral 重发 + 无新 DB 表;详见 [CONTEXT.md](./CONTEXT.md) + [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION.md#4-决策日志) |
 | ~~B4~~ | ~Skill 系统~ | ✅ 06-18 落地,见 §1.2 |
 | B9   | 生成式 UI(4 primitives — button / selector / diff / code_block) | 输出层扩展 |
 | C2   | 循环检测 | ⑬ 关卡实现 |

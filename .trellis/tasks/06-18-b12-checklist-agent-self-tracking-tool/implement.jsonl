@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "update_checklist tool 须符合契约:builtin_tools() 注册 / execute_tool 分发 / ⑨ 关 5-tier 权限接入(tool 走 match_kind='tool' Tier)。注册 + 加执行分支的依据,对齐 use_skill 虚拟 tool 注册模式"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 单源 pattern(production+test 共入口)。本任务最大机械改动:给 14 参签名加 checklist handle(Arc<Mutex<Vec<ChecklistItem>>>)须同步 9+ agent_loop_* 集成测试 call site,避免 faithful-port drift hazard 反模式"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "B5 注入原型(build_instructions_blocks + cache_control: ephemeral,一次性头部插入,run 内静态)。Checklist 是 run 内动态 → 每轮 ephemeral 重发(无 cache_control、不写回持久化 messages),复用同构注入 seam 但语义不同"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia checklist store:从 tool:call / tool:result 派生当前态(reload 从 history 最后一条 update_checklist tool_result 还原)。多 listener 增量更新对齐现有 streamController / chat store 模式"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse 判断:注入复用 memory 的 synthetic-block seam(但 ephemeral 重发是变体)+ tool 注册复用 use_skill 模式。指南裁定何时复制 vs 抽象;loop-local Vec 是新状态,不强行套现有 store"}
+{"file": "docs/_reviews/REVIEW-tool-comparison-2026-06-12.md", "reason": "todo 管理的业界对齐来源:TodoWrite 全量替换(opencode todowrite / Cline)vs TaskCreate/Update/List 细粒度(Claude Code)。本任务选全量替换的调研依据(§5 P2 + §3.1/§3.2)"}

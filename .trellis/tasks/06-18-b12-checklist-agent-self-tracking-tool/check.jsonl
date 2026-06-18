@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "核对 update_checklist 定义符合 builtin_tools 契约 + execute_tool 分发正确 + ⑨ 关接入 + 全量替换语义(非 append)+ 至多一 in_progress coerce 不报错"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对 chat_loop 接线未引入 faithful-port drift:14 参签名改动在单源 run_chat_loop 内,9+ agent_loop_* 测试同步;ephemeral 注入 prepend 到请求副本(不入持久化 messages)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对零 schema 变更(per-request + replay 走 history):sessions / messages 表不动,无新 migration。DoD 硬约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 cancel 一致性:cancel 打断 update_checklist 执行中途 → 不 commit tool_result(RULE-A-004 同款保护),live Vec 与持久化 history 不打架"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核对 checklist store 派生正确:从最新 tool_result 取当前态 + reload 从 history 最后一条 update 还原 + 抑制 update_checklist 的 ToolCallCard 渲染"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对跨层一致:Rust tool 替换 Vec → tool_result(持久化)→ 前端 tool:result 事件 → checklist store → ChecklistCard。端到端数据流无断点,live 路径与 reload 路径状态一致"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "check 时确认 DEBT 无新增(DoD 声明 0 新增);若发现新 RULE(如 loop 签名改动衍生)按指南登记"}
