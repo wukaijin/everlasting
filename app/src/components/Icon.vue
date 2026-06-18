@@ -54,7 +54,7 @@ import {
   BoltIcon,
   ClockIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -121,6 +121,14 @@ const map = {
   // PencilSquareIcon already in registry above); only need to
   // add the lucide clipboard-list for Plan.
   "clipboard-list": ClipboardList,
+  // B12 ChecklistCard (2026-06-19): all three status icons are
+  // lucide (project preference for the cleaner line weight on
+  // the spinner). `circle` is the empty outline for pending;
+  // `loader` is the classic spinner circle for in_progress (CSS
+  // `checklist-spin` rotates it); `check-mini` is the check
+  // mark for done.
+  "circle": Circle,
+  "loader": LoaderCircle,
 } as const;
 
 const Component = computed(() => {

@@ -11,14 +11,23 @@
 //
 // Two states:
 //   - **Expanded**: the full checklist renders — one row per item
-//     with a status marker (`[ ]` pending, `[~]` in_progress,
-//     `[x]` done). The single `in_progress` item (enforced by the
-//     store's coerce) gets a pulsing marker so the user can see
+//     with a status ICON (`circle` pending, `loader` in_progress,
+//     `check-mini` done). The single `in_progress` item (enforced by the
+//     store's coerce) gets a spinning marker so the user can see
 //     what the agent is currently working on.
 //   - **Minimized**: a small floating ball showing `done/total`
 //     (e.g. "2/5"). When an `in_progress` item is active, the ball
 //     breathes (slow pulse) so the user knows work is ongoing
 //     without expanding the card.
+//
+// NOTE on decoupling (2026-06-19): the UI uses ICONS while the
+// Rust `render_checklist` fn keeps its `[ ]`/`[~]`/`[x]` TEXT
+// markers. This is intentional — the LLM (tool_result + ephemeral
+// injection) and the human (this card) see different renderings
+// of the same status. Do NOT re-couple them: the text markers are
+// token-cheap and survive markdown round-trips for the model; the
+// icons are a human affordance. The two layers agree only on the
+// 3-state `status` enum, not its visual representation.
 //
 // Visibility:
 //   - Empty checklist (`null` from the store, meaning no
@@ -96,18 +105,19 @@ function toggleExpanded(): void {
   expanded.value = !expanded.value;
 }
 
-/** Per-status marker character. Matches the Rust `render_checklist`
- *  fn's markers (`[ ]`, `[~]`, `[x]`) so the LLM-facing tool_result
- *  and the UI stay visually consistent. */
-function statusMarker(status: ChecklistStatus): string {
+/** Per-status icon name. The UI is intentionally decoupled from the
+ *  Rust `render_checklist` fn's text markers (`[ ]`/`[~]`/`[x]`) —
+ *  the LLM-facing layer keeps text (token-cheap, markdown-safe);
+ *  this card uses icons (human affordance). See the file-top NOTE. */
+function statusIcon(status: ChecklistStatus): string {
   switch (status) {
     case "done":
-      return "[x]";
+      return "check-mini";  // lucide Check
     case "in_progress":
-      return "[~]";
+      return "loader";  // lucide LoaderCircle; CSS checklist-spin rotates it
     case "pending":
     default:
-      return "[ ]";
+      return "circle";  // lucide Circle
   }
 }
 
@@ -198,7 +208,9 @@ function statusClass(status: ChecklistStatus): string {
           <span
             :class="['checklist-card__marker', statusClass(item.status)]"
             aria-hidden="true"
-          >{{ statusMarker(item.status) }}</span>
+          >
+            <Icon :name="statusIcon(item.status)" :size="13" />
+          </span>
           <span class="checklist-card__content">{{ item.content }}</span>
         </li>
       </ul>
@@ -364,13 +376,12 @@ function statusClass(status: ChecklistStatus): string {
 }
 
 .checklist-card__marker {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
   flex-shrink: 0;
-  user-select: none;
   line-height: 1.45;
   min-width: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .checklist-card__marker--pending {
@@ -383,15 +394,16 @@ function statusClass(status: ChecklistStatus): string {
 
 .checklist-card__marker--in-progress {
   color: var(--color-tool-shell);
-  /* The pulse: 1.6s ease-in-out, infinite. The animation is
-     on the marker glyph itself (not the whole row) so the
-     user's eye is drawn to exactly the in-progress item. */
-  animation: checklist-pulse 1.6s ease-in-out infinite;
+  /* The spin: 1s linear, infinite. The animation runs on the
+     marker span (which wraps the refresh-arrow Icon), so the
+     arrow rotates continuously, signalling "working" — the
+     standard spinner affordance replacing the old text-pulse. */
+  animation: checklist-spin 1s linear infinite;
 }
 
-@keyframes checklist-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.94); }
+@keyframes checklist-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .checklist-card__content {
