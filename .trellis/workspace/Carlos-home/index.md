@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 39
-- **Last Active**: 2026-06-18
+- **Total Sessions**: 40
+- **Last Active**: 2026-06-19
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~114 | Active |
+| `journal-2.md` | ~152 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 40 | 2026-06-19 | B12 Checklist agent 自跟踪 tool (TodoWrite 式) | `a013df5`, `3cad0f9`, `1fa61b8`, `1896470`, `994db84`, `c59daaa` | `main` |
 | 39 | 2026-06-18 | B4 skill stretch: allowed-tools + /skill 入口合并面板 | `cc23c8a` | `main` |
 | 38 | 2026-06-18 | B4 Skill 系统: use_skill 虚拟 tool + 三层渐进披露 | `96b6f93` | `main` |
 | 37 | 2026-06-18 | RULE-A-007 error arm persist partial turn 修复(对称 cancel 路径) | `2dc1824`, `2f46e65` | `main` |
