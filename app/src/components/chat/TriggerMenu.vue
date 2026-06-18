@@ -117,6 +117,12 @@ const props = withDefaults(
      *  sets this; B3 (/command) leaves the default prefix behaviour
      *  unchanged. */
     fuzzy?: boolean;
+    /** When true, widen the panel up to the offset-parent's width
+     *  (the chat-input row ≈ chat panel width) so long relative
+     *  paths get more room before the left-side ellipsis truncates
+     *  them. B2 (@file) sets this; B3 (/command) keeps the default
+     *  420px cap (command names are short). */
+    wide?: boolean;
   }>(),
   {
     trigger: "/",
@@ -124,6 +130,7 @@ const props = withDefaults(
     emptyLabel: "无匹配项",
     triggerEl: null,
     fuzzy: false,
+    wide: false,
   },
 );
 
@@ -275,6 +282,7 @@ defineExpose({
       v-if="open"
       ref="root"
       class="trigger-menu"
+      :class="{ 'trigger-menu--wide': wide }"
       role="listbox"
       :aria-label="headerLabel"
     >
@@ -373,6 +381,15 @@ defineExpose({
   gap: 4px;
   font-family: var(--font-sans);
   color: var(--color-text-primary);
+}
+
+/* B2 (@file, wide=true): grow to the chat-input row width (the panel's
+   offset-parent ≈ chat panel width) so long relative paths get more
+   room before the left-side ellipsis truncates them. min-width stays
+   320px so short paths still look compact; the base rule's 420px cap
+   is overridden here. */
+.trigger-menu--wide {
+  max-width: 100%;
 }
 
 .trigger-menu__header {

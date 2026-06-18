@@ -23,8 +23,9 @@
 //     (returns true) and never reaches `submit()`.
 //   - trigger panel routing: ArrowUp / ArrowDown / Enter / Tab / Esc
 //     are routed via `Prec.highest(keymap.of([...]))` to whichever
-//     TriggerMenu (command or file) is open. `currentLineInfo()`
-//     reads `view.state.doc.lineAt(head)` instead of textarea
+//     TriggerMenu (command or file) is open. The `/` + `@` trigger
+//     geometry reads `view.state.doc.lineAt(head)` (via
+//     `currentSlashToken` / `currentAtToken`) instead of a textarea
 //     `selectionStart`.
 //   - TriggerMenu `:trigger-el` is bound to `view.dom` (the
 //     `.cm-editor` element) so click-to-reposition-caret inside CM
@@ -523,11 +524,11 @@ registerShiftTabCycle({
 //
 // The TriggerMenu is a reusable skeleton (TriggerMenu.vue); this
 // block owns the B3 + B4 Stretch 2 wiring:
-//   - detection: open the panel when the editor's CURRENT LINE
-//     starts with `/` AND the line is otherwise empty (matches
-//     Claude Code's "type / to see commands" UX). Multi-line
-//     drafts only look at the cursor's line, so `/help` on line 2
-//     of a draft still triggers.
+//   - detection: open the panel when a `/`-prefixed command-name
+//     token sits under the caret, ANYWHERE on the current line
+//     (2026-06-18: was line-start only; `/skill` now triggers
+//     mid-line too). `2026/06/18` and `a/b` are excluded by the
+//     boundary + char-class rules in `currentSlashToken`.
 //   - IME safety: CM fires `docChanged` only at composition commit,
 //     so the panel never opens mid-composition.
 //   - data source: lazy `list_panel_items` IPC the first time the
@@ -570,41 +571,88 @@ const fileItems = ref<TriggerMenuItem[]>([]);
 const fileFilter = ref("");
 let filesLoaded = false;
 
-/** The cursor's current line in the editor. Used for trigger
- *  detection (must START with `/` and be otherwise empty) and
- *  for extracting the filter text. Reads CM's `doc.lineAt(head)`,
- *  which returns `{ number, from, to, text, length }` — `text`
- *  is the line without the trailing `\n`, `from` is the line's
- *  starting doc offset. No manual `\n` split needed.
+/** Locate the `/`-trigger token under the caret, ANYWHERE on the
+ *  current line (Cursor-style — mirrors `currentAtToken` for `@`).
  *
- *  Guarded against a null view (before onMounted) by returning
- *  empty values; the trigger-panel logic treats empty input as
- *  "no trigger". */
-function currentLineInfo(): { line: string; lineStart: number } {
+ *  2026-06-18 change: the command/skill palette used to require `/`
+ *  at the start of the current line. The user asked for `/skill` to
+ *  trigger mid-line too (so it can be appended after other text),
+ *  so the `/` panel now shares the `@` panel's anywhere-on-line
+ *  geometry. The boundary + char-class rules below keep it from
+ *  firing on dates (`2026/06/18`) or inline word-slashes (`a/b`).
+ *
+ *  Rules:
+ *  - Walk left from the caret for the nearest `/`. A space stops the
+ *    walk (a `/` separated from the caret by a space is not "live").
+ *  - The char before `/` must be line-start or whitespace.
+ *  - The span `/`→caret must be command-name chars `[a-zA-Z0-9_-]`
+ *    only. A space or punctuation there means the user finished the
+ *    token → panel closes.
+ *  - `tokenEnd` extends past the caret to the first non-name char, so
+ *    selecting from the panel strips the whole typed prefix (e.g.
+ *    `/he` when picking `help`), not just up to the caret.
+ *
+ *  Same return shape as `currentAtToken` so `onCommandSelect` strips
+ *  the token via `[slashOffset, tokenEnd)` exactly like `onFileSelect`
+ *  does for `@`. */
+function currentSlashToken(): {
+  trigger: boolean;
+  filter: string;
+  slashOffset: number;
+  tokenEnd: number;
+} {
   const v = view.value;
-  if (!v) return { line: "", lineStart: 0 };
+  if (!v) return { trigger: false, filter: "", slashOffset: -1, tokenEnd: -1 };
   const head = v.state.selection.main.head;
-  const lineObj = v.state.doc.lineAt(head);
-  return { line: lineObj.text, lineStart: lineObj.from };
+  const line = v.state.doc.lineAt(head);
+  const lineText = line.text;
+  const caretCol = head - line.from;
+  // Walk left for the nearest `/` on this line.
+  let slashCol = -1;
+  for (let i = caretCol - 1; i >= 0; i--) {
+    const ch = lineText[i];
+    if (ch === " ") break;
+    if (ch === "/") {
+      slashCol = i;
+      break;
+    }
+  }
+  if (slashCol === -1) {
+    return { trigger: false, filter: "", slashOffset: -1, tokenEnd: -1 };
+  }
+  // Boundary check: char before `/` must be line-start or whitespace
+  // (defends against `2026/06/18`, `a/b`, etc.).
+  const prevCh = slashCol > 0 ? lineText[slashCol - 1] : "";
+  const prevIsBoundary = slashCol === 0 || /\s/.test(prevCh);
+  if (!prevIsBoundary) {
+    return { trigger: false, filter: "", slashOffset: -1, tokenEnd: -1 };
+  }
+  // `/`→caret must be command-name chars only.
+  const afterSlash = lineText.slice(slashCol + 1, caretCol);
+  if (afterSlash.length > 0 && !/^[a-zA-Z0-9_-]+$/.test(afterSlash)) {
+    return { trigger: false, filter: "", slashOffset: -1, tokenEnd: -1 };
+  }
+  const slashOffset = line.from + slashCol;
+  // tokenEnd = exclusive end, bounded by the first non-name char to
+  // the RIGHT of the caret (or the line end).
+  let endCol = caretCol;
+  for (let i = caretCol; i < lineText.length; i++) {
+    if (!/[a-zA-Z0-9_-]/.test(lineText[i])) {
+      endCol = i;
+      break;
+    }
+    endCol = i + 1;
+  }
+  const tokenEnd = line.from + endCol;
+  return { trigger: true, filter: afterSlash, slashOffset, tokenEnd };
 }
 
-/** True when the cursor's current line is exactly `/` optionally
- *  followed by command-name characters ([a-z0-9_-]). The "starts
- *  with `/` AND nothing else on the line beyond command chars"
- *  rule matches Claude Code: typing `/he` opens the panel filtered
- *  to `help`; typing `/hello world` (space) closes it because the
- *  line is no longer a command-name shape. */
+/** `/`-trigger detection. Delegates to `currentSlashToken` — the
+ *  panel opens whenever a live `/`-prefixed command-name token sits
+ *  under the caret, line-start OR mid-line (2026-06-18 change). */
 function detectCommandTrigger(): { trigger: boolean; filter: string } {
-  const { line } = currentLineInfo();
-  const trimmed = line.trimStart();
-  if (!trimmed.startsWith("/")) return { trigger: false, filter: "" };
-  // After the `/`, allow command-name chars only. Any space or
-  // punctuation means the user moved on from autocomplete.
-  const rest = trimmed.slice(1);
-  if (rest.length > 0 && !/^[a-zA-Z0-9_-]+$/.test(rest)) {
-    return { trigger: false, filter: "" };
-  }
-  return { trigger: true, filter: rest };
+  const { trigger, filter } = currentSlashToken();
+  return { trigger, filter };
 }
 
 /** Fetch the merged `/`-trigger panel (builtin + custom command +
@@ -697,36 +745,32 @@ function replaceDoc(newDoc: string, caret?: number): void {
  *  Three dispatch paths, picked by `item.source` (B4 Stretch 2):
  *  - `builtin` → client-side action (no LLM): `/help` reopens the
  *    panel; `/clear` clears messages; `/new` creates a session.
- *  - `command` → `get_command_body` → user message (B3 path).
- *  - `skill` → `get_skill_body` → user message (B4 Stretch 2 path,
- *    mirrors the command body expansion — zero agent-loop changes).
+ *  - `command` → `get_command_body` → sent as a user message (B3).
+ *  - `skill` → leave `/skill-name ` in the editor (NOT auto-sent,
+ *    NOT body-expanded). The user can append text and send the raw
+ *    `/skill-name ...`; the agent then loads the skill body itself via
+ *    the `use_skill` tool (L1 progressive disclosure). 2026-06-18
+ *    option 2: a skill selection is an explicit reference the agent
+ *    resolves, not a prompt the frontend expands.
  *
- *  In all three cases the `/`-prefixed token is stripped from the
- *  editor BEFORE dispatch, so selecting `clear` from the panel
- *  leaves the input empty (ready for the next message), matching
- *  Claude Code. */
+ *  builtin + command strip the `/`-token before dispatch (anywhere on
+ *  the line via `[slashOffset, tokenEnd)`); skill instead REPLACES the
+ *  typed prefix with the canonical `/skill-name ` so the editor holds
+ *  a clean reference. */
 async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
-  // Strip the `/`-prefixed command/skill token from the current line.
-  // We remove the leading `/` + the name (+ any filter chars the
-  // user had typed). Leaves any surrounding text intact (rare — the
-  // trigger only fires when the line is a bare name shape).
-  const { lineStart } = currentLineInfo();
+  // Strip the `/`-prefixed token from ANYWHERE on the current line.
+  // The token geometry comes from `currentSlashToken`; we slice the
+  // doc by `[slashOffset, tokenEnd)` so the whole typed prefix (e.g.
+  // `/he` when picking `help`) is removed, leaving surrounding text
+  // intact. Mirrors `onFileSelect`'s `@`-token strip.
+  const { slashOffset, tokenEnd } = currentSlashToken();
   const doc = input.value;
-  const beforeLine = doc.slice(0, lineStart);
-  const afterToken = doc.slice(lineStart);
-  // The user may have typed a prefix (e.g. `/he` for `help`); we
-  // remove the entire typed prefix, not just the matched name, so
-  // no leftover `lp` stays in the box after selecting `help`.
-  const tokenEnd = afterToken.search(/[\s\n]/) === -1 ? afterToken.length : afterToken.search(/[\s\n]/);
-  const newAfter = afterToken.slice(tokenEnd);
-  const newDoc = beforeLine + newAfter;
-  // Close the panel first so the dispatch side-effects (modal,
-  // invoke) don't race with a still-mounted panel.
+  const hasToken = slashOffset >= 0 && tokenEnd >= 0;
+  const beforeToken = hasToken ? doc.slice(0, slashOffset) : doc;
+  const afterToken = hasToken ? doc.slice(tokenEnd) : "";
+  // Close the panel first so the dispatch side-effects don't race
+  // with a still-mounted panel.
   closeCommandPalette();
-  replaceDoc(newDoc, beforeLine.length);
-  // Refocus + scroll the new caret into view.
-  await nextTick();
-  view.value?.focus();
 
   const sid = chatStore.currentSessionId;
 
@@ -734,14 +778,15 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   // panel item is set by the backend `list_panel_items` IPC; we
   // mirror its three-value union literally here.
   if (item.is_builtin || item.source === "builtin") {
-    // Dispatch builtin commands. None of these go to the LLM.
+    // Builtin commands don't reach the LLM. Strip the token first so
+    // the input box is clean (e.g. selecting `/clear` empties the box).
+    replaceDoc(beforeToken + afterToken, beforeToken.length);
+    await nextTick();
+    view.value?.focus();
     switch (item.name) {
       case "help":
-        // `/help` is a no-op dispatch: the panel already shows the
-        // full list when open, and there's no separate help view in
-        // PR2. Re-open the panel so the user sees the full list
-        // again (the close above was so the dispatch could run; for
-        // help we want the list visible). Filter is cleared.
+        // `/help` reopens the panel with the full list (filter
+        // cleared) — no separate help view in PR2.
         await openCommandPalette("");
         break;
       case "clear":
@@ -765,32 +810,41 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
     return;
   }
 
-  // User-invoked body fetch — same shape for commands and skills
-  // (both end up as a user message). The IPC name is the only
-  // differentiator; a `get_skill_body` for a missing skill returns
-  // `None` (same contract as `get_command_body`).
+  const isSkill = item.source === "skill";
+  if (isSkill) {
+    // 2026-06-18 (option 2): skill 选中后 textarea 只留 `/skill-name`
+    // （带一个尾空格），不展开 body、不发送。用户可追加自然语言（如
+    // `/review-pr 看下 diff`），发送原文后由 agent 通过 use_skill tool 自行
+    // 加载 skill body（L1 渐进披露，body 作 tool_result），区别于 command 的
+    // "展开即发送"。后端 build_skill_listing_block 的提示已强化：LLM 看到
+    // `/name` 显式引用会调 use_skill。
+    //
+    // 尾空格是必须的：`/name` 本身会被 currentSlashToken 重新匹配（`/` + 命令
+    // 名字符），导致选中后面板立即重开。加尾空格后光标位于空格右侧，向左找
+    // `/` 时遇空格 break → token 不再 live → 面板保持关闭。
+    const token = `/${item.name} `;
+    const inserted = beforeToken + token + afterToken;
+    replaceDoc(inserted, beforeToken.length + token.length);
+    await nextTick();
+    view.value?.focus();
+    return;
+  }
+
+  // 自定义命令：fetch body → 作 user message 发送（B3 行为；send 内部清空输入框）。
   const projectId = projectsStore.currentProjectId ?? null;
-  const ipc = item.source === "skill" ? "get_skill_body" : "get_command_body";
-  const label = item.source === "skill" ? "skill" : "命令";
   let body: string | null = null;
   try {
-    body = await invoke<string | null>(ipc, {
+    body = await invoke<string | null>("get_command_body", {
       name: item.name,
       projectId,
     });
   } catch (e) {
-    console.error(`${ipc} "/${item.name}" failed:`, e);
-    projectsStore.showToast(
-      `${label} /${item.name} 读取失败: ${String(e)}`,
-      "error",
-    );
+    console.error(`get_command_body "/${item.name}" failed:`, e);
+    projectsStore.showToast(`命令 /${item.name} 读取失败: ${String(e)}`, "error");
     return;
   }
   if (!body || !body.trim()) {
-    projectsStore.showToast(
-      `${label} /${item.name} 的模板体为空`,
-      "warn",
-    );
+    projectsStore.showToast(`命令 /${item.name} 的模板体为空`, "warn");
     return;
   }
   await chatStore.send(body);
@@ -1045,6 +1099,7 @@ function onEscKeydown() {
         header-label="文件"
         empty-label="无匹配文件"
         fuzzy
+        wide
         :trigger-el="view?.dom ?? null"
         @select="onFileSelect"
         @close="closeFilePalette"
@@ -1760,5 +1815,19 @@ function onEscKeydown() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 2026-06-18: 长相对路径看不到文件名 —— 让 <code> 在 inline-flex 父里可
+     收缩（min-width:0 + flex），并从左侧省略。direction:rtl 把 ellipsis
+     落到视觉左侧、内容右对齐，于是溢出时保留尾部文件名 + 近端目录段（如
+     `…nents/chat/ChatInput.vue`）。unicode-bidi:isolate 让纯 ASCII 路径整体
+     当 LTR run，字符顺序不变，只翻转省略方向。 */
+  min-width: 0;
+  flex: 1 1 auto;
+  direction: rtl;
+  unicode-bidi: isolate;
+}
+
+/* file-row 里的 Icon 固定不收缩，确保 file-path 吃掉所有剩余宽度去 ellipsis。 */
+.chat-input__file-row :deep(svg) {
+  flex: 0 0 auto;
 }
 </style>

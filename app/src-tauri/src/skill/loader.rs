@@ -558,7 +558,7 @@ pub fn build_skill_listing_block(infos: &[SkillInfo]) -> Vec<ContentBlock> {
   })
   .collect();
  let text = format!(
-  "<available-skills>\nThese skills are available. Call the `use_skill` tool with a skill's name when the task matches its description.\n{}\n</available-skills>",
+  "<available-skills>\nThese skills are available. Call the `use_skill` tool with a skill's name when the task matches its description. If the user's message explicitly invokes a skill by `/name` (e.g. `/review-pr`), call `use_skill` with that exact name first, then follow the loaded instructions to handle the rest of the message.\n{}\n</available-skills>",
   lines.join("\n")
  );
  vec![ContentBlock::Text {
