@@ -34,6 +34,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
 import { useStreamControllerStore } from "./streamController";
+import { useChecklistStore } from "./checklist";
 import { simplifyPath } from "../utils/path";
 
 type Role = "user" | "assistant";
@@ -781,6 +782,10 @@ export const useChatStore = defineStore("chat", () => {
     // Drop any cached diff for this session — the worktree it
     // referenced is now gone, so the diff is meaningless.
     diffCache.value.delete(sessionId);
+    // B12 Checklist (PR2 frontend, 2026-06-19): drop the
+    // session's checklist state too. The store's per-session
+    // map would otherwise retain the entry past the DB row.
+    useChecklistStore().clearSession(sessionId);
     if (currentSessionId.value === sessionId) {
       currentSessionId.value = null;
       currentCwd.value = "";
@@ -828,6 +833,10 @@ export const useChatStore = defineStore("chat", () => {
     await invoke("clear_session_messages", { sessionId });
     controller.evict(sessionId);
     diffCache.value.delete(sessionId);
+    // B12 Checklist: the cleared session has no history → no
+    // committed checklist. Drop the live state so the card
+    // hides until the next update_checklist fires.
+    useChecklistStore().clearSession(sessionId);
     // Re-seed an empty buffer so the UI re-renders immediately.
     // `ensureLoaded` will hit the (now empty) DB and produce `[]`.
     if (sessionId === currentSessionId.value) {
@@ -1115,6 +1124,16 @@ export const useChatStore = defineStore("chat", () => {
     // sessions and an IPC call for evicted ones.
     const msgs = await controller.ensureLoaded(sessionId);
 
+    // B12 Checklist (PR2 frontend, 2026-06-19): per-request
+    // lifetime — a new user message starts a fresh run with a
+    // fresh empty checklist. Mirror the backend's fresh
+    // `Vec<ChecklistItem>` in each `run_chat_loop` invocation.
+    // The controller's `reloadAfterFinalize` at the end of THIS
+    // run will re-derive from history if any update_checklist
+    // fires; for the duration of the stream the card stays
+    // hidden until the first update_checklist tool_use arrives.
+    useChecklistStore().clearForNewRun(sessionId);
+
     // B2 PR3 (bug fix 2026-06-17): compute the seq the
     // backend's `chat_loop` will assign to the user row.
     // The agent loop's `next_seq` counter starts at
@@ -1391,6 +1410,10 @@ export const useChatStore = defineStore("chat", () => {
       throw new Error("resendMessage: no current project");
     }
     const msgs = await controller.ensureLoaded(sessionId);
+    // B12 Checklist: per-request lifetime — resend starts a
+    // fresh run; drop any prior checklist state. The new run's
+    // first update_checklist will repopulate the card.
+    useChecklistStore().clearForNewRun(sessionId);
     // Compute next seq for the new placeholders, same logic
     // as `send()`. The agent loop will use `max(loaded.seq)
     // + 1` for the actual persist, but we stamp the

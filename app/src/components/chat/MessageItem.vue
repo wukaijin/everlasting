@@ -88,6 +88,22 @@ const showStreamingHint = computed<boolean>(
   () => !!props.message.streaming && !props.message.content,
 );
 
+// B12 Checklist (PR2 frontend, 2026-06-19): the
+// `update_checklist` tool is rendered as a floating
+// `<ChecklistCard>` overlay (mounted in ChatPanel), NOT as a
+// per-call ToolCallCard in the message stream. Filter the tool
+// list so the message bubble doesn't double-render the same
+// state. The `use_skill` tool has no special treatment today
+// (it renders as a normal ToolCallCard), so this is the first
+// "virtual" tool suppression in the codebase. The filter is
+// cheap (one linear pass per render); if more virtual tools
+// accumulate, extract a `VIRTUAL_TOOLS` constant set.
+const VIRTUAL_TOOLS = new Set<string>(["update_checklist"]);
+const visibleToolCalls = computed(
+  () =>
+    props.message.toolCalls?.filter((tc) => !VIRTUAL_TOOLS.has(tc.name)) ?? [],
+);
+
 // --- Streaming state ----------------------------------------------------
 // D3 PR2: the `MessageActionsMenu` greys out its trigger entirely
 // when a stream is in flight on the same session. We read the
@@ -431,11 +447,11 @@ const latencyRows = computed<
     </div>
 
     <div
-      v-if="message.toolCalls && message.toolCalls.length"
+      v-if="visibleToolCalls.length"
       class="msg__tools"
     >
       <ToolCallCard
-        v-for="tc in message.toolCalls"
+        v-for="tc in visibleToolCalls"
         :key="tc.id"
         :call="tc"
         :result="getToolResult(message, tc.id)"

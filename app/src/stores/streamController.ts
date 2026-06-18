@@ -49,6 +49,10 @@ import {
   type ErrorCategory,
   type InjectionEntry,
 } from "./chat";
+import {
+  useChecklistStore,
+  CHECKLIST_TOOL_NAME,
+} from "./checklist";
 
 /** Upper bound on number of sessions whose messages are kept
  *  in memory. Pinned (in-flight streaming) sessions are not
@@ -1098,6 +1102,21 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     if (!last || last.role !== "assistant") return;
     if (!last.toolCalls) last.toolCalls = [];
     last.toolCalls.push({ id: payload.id, name: payload.name, input: payload.input });
+    // B12 Checklist (PR2 frontend, 2026-06-19): route the
+    // `update_checklist` tool_use to the checklist store so the
+    // floating `<ChecklistCard>` overlay updates live. The store
+    // parses `input.items` and re-coerces at-most-one
+    // `in_progress` client-side (mirroring PR1's Rust coerce). We
+    // do this BEFORE the F5 timestamp stamp so the card appears
+    // immediately on the tool_use event (the LLM-side result text
+    // is purely for the LLM; the UI reads the structured input).
+    if (payload.name === CHECKLIST_TOOL_NAME) {
+      useChecklistStore().handleToolCall(
+        req.sessionId,
+        payload.name,
+        payload.input,
+      );
+    }
     // F5: capture the start timestamp for the per-tool
     // duration. The matching `tool:result` reads it, computes
     // `durationMs = now - toolStartedAt`, and writes it onto
@@ -1245,6 +1264,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // F4: notify MessageList to re-scroll after buffer replacement
     // to avoid position jitter.
     useChatStore().scrollAfterReload++;
+    // B12 Checklist (PR2 frontend, 2026-06-19): re-derive the
+    // session's current checklist from the freshly-loaded DB
+    // history. The scan finds the LAST `update_checklist`
+    // tool_use whose paired tool_result has `is_error === false`
+    // (a cancelled update gets a synthetic is_error: true result;
+    // rendering it would freeze the card on the interruption
+    // text). Drops any prior live state if no committed checklist
+    // exists in history.
+    useChecklistStore().rehydrateFromMessages(sessionId, messages);
     // F5: persist the per-message latency to the DB. The
     // rehydrated messages carry the seq on each row, so we
     // find the LAST assistant message (the one the agent
@@ -1452,6 +1480,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     if (sawAnyLatency) {
       useChatStore().accumulateLatency(sessionId, totalLatencyMs);
     }
+    // B12 Checklist (PR2 frontend, 2026-06-19): re-derive the
+    // session's checklist from the just-loaded DB history. Same
+    // scan as `reloadAfterFinalize` — the user might land on a
+    // session whose checklist was set by a prior run, and the
+    // card should reflect that history immediately.
+    useChecklistStore().rehydrateFromMessages(sessionId, messages);
     return messages;
   }
 

@@ -37,6 +37,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore, type SessionSummary } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
+import { useChecklistStore } from "../../stores/checklist";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
@@ -44,10 +45,12 @@ import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
+import ChecklistCard from "./ChecklistCard.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
+const checklistStore = useChecklistStore();
 
 const emit = defineEmits<{
   send: [text: string];
@@ -319,6 +322,21 @@ const memoryModalOpen = ref(false);
 
 const auditModalOpen = ref(false);
 
+// -----------------------------------------------------------------------
+// B12 Checklist (PR2 frontend, 2026-06-19): the current session's
+// checklist. The card reads this off the checklist store + current
+// session id. `null` hides the card (no update_checklist seen this
+// run); an empty array renders the empty placeholder. Switching
+// sessions is handled by the `currentSessionId` dependency — the
+// computed re-evaluates and the card reflects the new session's
+// checklist (or hides if none).
+// -----------------------------------------------------------------------
+const currentChecklist = computed(() => {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return null;
+  return checklistStore.getChecklist(sid);
+});
+
 watch(
   () => chatStore.currentSessionId,
   () => {
@@ -504,6 +522,18 @@ if (typeof window !== "undefined") {
           closes the modal on session switch.
         -->
     <AuditLogModal v-model:open="auditModalOpen" />
+
+    <!--
+          B12 Checklist (PR2 frontend, 2026-06-19). Floating
+          overlay anchored to the ChatPanel's bottom-right, above
+          the input bar. Reads the current session's checklist
+          from the checklist store. Hidden when no checklist
+          exists for the session (the store returns `null`).
+          z-index is below PermissionModal / modals (the card
+          uses z-index 50; modals teleport to body at z-index
+          1000+).
+        -->
+    <ChecklistCard :items="currentChecklist" />
   </section>
 </template>
 
@@ -515,6 +545,13 @@ if (typeof window !== "undefined") {
   min-height: 0;
   min-width: 0;
   background: var(--color-bg-app);
+  /* B12 Checklist (PR2 frontend): serve as the positioning
+     context for the absolute-positioned `<ChecklistCard>`
+     overlay. Without `relative`, the card's `position:
+     absolute` would resolve against the nearest positioned
+     ancestor (or the viewport), pulling the card out of the
+     ChatPanel's flow. */
+  position: relative;
 }
 
 .chat-panel__header {
