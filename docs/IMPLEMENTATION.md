@@ -58,11 +58,11 @@
 4. **纯靠 tool_result history(最后一条当当前态),无 ephemeral 重发**:否决——C3 会从 **live 数组**压掉旧 tool_result,agent 进行中可能丢计划。ephemeral 重发是"进行中"的扛压路径(reload 才靠 DB history,两条独立路径,互不依赖)。
 5. **注入只发 in_progress 焦点而非整张**:否决——C3 压掉 history tool_result 后,ephemeral 块须自给自足,只发焦点会让 agent 丢非焦点项。
 
-**影响面**(规划中,未实施):
+**影响面**(✅ 已实施 2026-06-19 — `c59daaa` docs / `994db84` PR1 后端 / `1896470` PR2 前端 / PR3 spec 沉淀):
 
-- 代码(预计):`tools/` 新增 `update_checklist` + `tools/mod.rs` 注册;`agent/chat_loop.rs` 加 loop-local `Vec<ChecklistItem>` + 每轮 ephemeral 注入 seam(`compact_messages` 后、`provider.send` 前 **append** 到副本,非 prepend——见 Decision 2 cache 修正);`ToolDef` 注册;前端新 `<ChecklistCard>` 浮层组件(ChatPanel 内 `position: absolute`、最小化悬浮球、焦点项动效)+ checklist store(从 `tool:call` / `tool:result` 派生当前态)。
+- 代码(✅ 落地):`tools/` 新增 `update_checklist` + `tools/mod.rs` 注册;`agent/chat_loop.rs` 加 loop-local `Vec<ChecklistItem>` + 每轮 ephemeral 注入 seam(`compact_messages` 后、`provider.send` 前 **append** 到副本,非 prepend——见 Decision 2 cache 修正);`ToolDef` 注册;前端新 `<ChecklistCard>` 浮层组件(ChatPanel 内 `position: absolute`、最小化悬浮球、焦点项动效)+ checklist store(从 `tool:call` / `tool:result` 派生当前态)。
 - **零 DB schema 变更**(per-request + replay 走 history)。
-- spec(预计):`backend/tool-contract.md` 加 Checklist 段;`frontend/state-management.md` 加 checklist store 段。
+- spec(✅ 落地):`backend/tool-contract.md` 加 Checklist 段;`frontend/state-management.md` 加 checklist store 段。
 - CONTEXT.md:Checklist 术语已落(2026-06-18,含三消歧义)。
 - ROADMAP:§2 🟠 第三档加 B12(本日同步)。
 

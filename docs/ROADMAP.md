@@ -57,6 +57,7 @@
 | **B2** @文件补全 | 06-17 | 输入框 `@` 触发文件补全面板(fuzzysort 模糊匹配,复用 B3 `<TriggerMenu>` 第二 caller,与 `/command` palette 互斥)+ 后端 `files::walk_files`/`list_files`(gitignore + 默认排除 + 深度/数量上限)。CodeMirror 6 着色(@file `--color-tool-read` / /command `--color-accent`)。**后端 @token 注入文件内容**(对齐 CC/opencode/Aider/Cline,非路径提示):text 复用 `read_file` 截断(50KB head+tail + cat -n)注入,图片/PDF/Office/二进制**占位降级**(纯文本通道,multimodal 留 B1,文案引导 `pdftotext`/`pandoc`),无效路径(越界/不存在/不可读)保留原 token(email 不误伤)。二进制检测三层(NUL/非UTF-8/30% 控制字符)。PR1 `f3ac7a0`(前端 @面板 + walk_files)+ PR1.5 `1ed212c`/`8e7c975`(CodeMirror 迁移 + 着色)+ PR2 `a00adbc`(后端注入 + 降级)。6 家调研见 [docs/research/at-file-injection-coding-agents-survey.md](../research/at-file-injection-coding-agents-survey.md) |
 | **D3** session 内消息编辑 / 重发 | 06-17 | PR1 后端 `edit_user_message` 单事务(in-place 改写 + cascade 截断后续 + AuditKind)+ PR2 前端 `MessageActionsMenu` + chat store `editMessage` + `MessageItem` edit mode + PR3 Resend 实质化(走 turn 边界 + agent loop 续编)+ `(edited)` 标签 + `AuditKind::ResendMessage` + RULE-A-010 spec 偏离声明 + follow-up `MessageActionsMenu` 点击无响应修复。PR1 `308d277` + PR2 `114b239` + PR3 `e747625` + follow-up `d6b6ad8` |
 | **B4** Skill 系统 | 06-18 | `use_skill` 虚拟 tool + 三层渐进披露(L0 清单独立 synthetic message 常驻 / L1 `tool_result` 回填正文 / L2 `read_file` 拉 reference),对齐 Claude Code `Skill` / Hermes `skill_view` 业界模式。加载层独立 `SkillCache`(复制 B3 `resource_loader` 模式,B3 零改动,唯一差异:skill 是 `<name>/SKILL.md` **目录**非单文件 → scan 走子目录)。frontmatter 最小集 name+description(复用 B3 手写 parser,`serde_yml` 已废弃)。修正 BACKLOG §2 两处过时(注入消息流非 system prompt)。MVP 纯 LLM 自动触发(无用户 `/skill`、无 `allowed-tools`)。调研见 [docs/research/skill-system-survey.md](../research/skill-system-survey.md),完整 PRD 走 `.trellis/tasks/06-18-skill-system/` |
+| **B12** Checklist(agent 自跟踪进度清单) | 06-19 | TodoWrite 式 `update_checklist` tool(全量替换 + 三态 `pending`/`in_progress`/`done` + 至多一 in_progress coerce)+ loop-local Vec(per-request,handle 走 `ToolContext` 不改 `run_chat_loop` 14 参签名)+ 每轮 ephemeral 注入(**append** 到请求副本,不入持久化 messages,不破坏 memory cache 断点 — trellis-check 修正原 prepend)+ 无新 DB 表(replay 从 DB history 还原,reload 按 `is_error` 过滤 cancel 合成 result)。前端 `<ChecklistCard>` ChatPanel 浮层(展开/最小化悬浮球 + 焦点动效)+ checklist store(客户端复刻 coerce)。先于 B6 subagent(注入机制小面 warm-up)。PR1 `994db84` + PR2 `1896470` + PR3 spec;决策见 [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION.md#4-决策日志),术语见 [CONTEXT.md](./CONTEXT.md) |
 
 ---
 
@@ -82,7 +83,7 @@
 | 编号 | 功能 | 备注 |
 |------|------|------|
 | B6   | Subagent(main agent 派 worker agent,独立 context,summary 回填) | **harness 学习价值高**,依赖 B5 Memory |
-| B12  | Checklist(agent 自跟踪进度清单,TodoWrite 式 `update_checklist` tool) | **先于 B6 做**:作"每轮注入动态 agent-state"的小面 warm-up(subagent 那套注入机制的简化版);对齐 Claude Code `TaskCreate/List` / opencode `todowrite`;loop-local state + 每轮 ephemeral 重发 + 无新 DB 表;详见 [CONTEXT.md](./CONTEXT.md) + [IMPLEMENTATION §4 2026-06-18](./IMPLEMENTATION.md#4-决策日志) |
+| ~~B12~~ | ~Checklist(agent 自跟踪进度清单)~ | ✅ 06-19 落地,见 §1.2 |
 | ~~B4~~ | ~Skill 系统~ | ✅ 06-18 落地,见 §1.2 |
 | B9   | 生成式 UI(4 primitives — button / selector / diff / code_block) | 输出层扩展 |
 | C2   | 循环检测 | ⑬ 关卡实现 |

@@ -567,3 +567,79 @@ messages, defensively — D3 PR1 only allows user edits in
 practice, but the render path is generic (any row with
 `metadata.edited_at` shows the label). If a future PR adds
 "edit assistant message" support, the label will Just Work.
+
+---
+
+### B12 Checklist store (2026-06-19)
+
+The frontend half of B12 (PR1 backend `update_checklist` committed `994db84`; PR2
+frontend committed `1896470`). The store derives the current checklist for display
+from the `update_checklist` tool_use **INPUT** (not the tool_result — that is rendered
+text for the LLM). Single source of truth: `useChecklistStore()` in
+`app/src/stores/checklist.ts`.
+
+#### State shape
+
+```typescript
+const checklistBySession = reactive(new Map<string, ChecklistItem[]>());
+```
+
+- **Absent key** = "no `update_checklist` seen yet this run" → the `<ChecklistCard>`
+  overlay hides.
+- **`[]` (present empty)** = "the model cleared the list" → the card renders the empty
+  state. (Distinct from absent — do NOT conflate; `getChecklist(sessionId)` returns
+  `null` for absent, `[]` for cleared.)
+
+#### Types (mirror PR1's Rust wire)
+
+```typescript
+export type ChecklistStatus = "pending" | "in_progress" | "done"; // Rust #[serde(rename_all="snake_case")]
+export interface ChecklistItem { content: string; status: ChecklistStatus }
+```
+
+#### Store API
+
+| Method | Called by | Effect |
+|---|---|---|
+| `handleToolCall(sessionId, toolName, input)` | `streamController.handleToolCall` on a `tool:call` for `update_checklist` | parse `input.items` → coerce → set as current (**live** path; does NOT wait for `tool:result`) |
+| `rehydrateFromMessages(sessionId, messages)` | `streamController.ensureLoaded` + `reloadAfterFinalize` | scan history for the last committed `update_checklist` (**reload** path) |
+| `clearForNewRun(sessionId)` | `chat.ts` `send()` + `resendMessage()` | per-request reset (mirror backend's fresh Vec each run) |
+| `clearSession(sessionId)` | `chat.ts` `deleteSession` + `clearSessionMessages` | drop on session removal |
+
+#### Client-side coerce — cross-layer mirror (load-bearing)
+
+`coerceAtMostOneInProgress` / `parseAndCoerceItems` are pure TS fns that **re-implement
+PR1's Rust `coerce_at_most_one_in_progress` / `parse_and_coerce`** line-by-line (keep last
+`in_progress` via reverse scan, demote earlier to `pending`; unknown status → `pending`;
+missing `content` → skip). Why duplicate: the live `tool:call` event carries the model's
+RAW input (pre-coerce — the Rust `execute()` body does the coerce). Rendering raw input
+would flash multiple `in_progress` items before the `tool:result` lands; client-coerce keeps
+the card consistent with the post-coerce state the LLM sees. The two deterministic coerces
+produce identical output. **A drift between the TS and Rust coerce is a cross-layer bug** —
+`trellis-check` verifies line-by-line parity; keep them in sync on any change to either side.
+
+#### Reload: `is_error` filter (RULE-A-004 contract)
+
+`findLastCommittedChecklist(messages)` scans for the LAST `update_checklist` tool_use whose
+paired tool_result has `is_error === false`. A tool_use with no result, or with
+`is_error === true` (the cancel path's synthetic "Tool execution was interrupted…" result),
+is skipped. Without this filter a cancelled update would freeze the card on the moment of
+interruption. Returns `null` when no committed checklist exists → the Map key is deleted.
+
+#### Tool-card suppression
+
+`MessageItem.vue` keeps a local `VIRTUAL_TOOLS = new Set(["update_checklist"])` and a
+`visibleToolCalls` computed that filters it out of the `ToolCallCard` stream —
+`update_checklist` is represented by the floating `<ChecklistCard>`, not a per-call card.
+The suppression is **render-only**: `toPayloadContent` still walks the raw `toolCalls` /
+`toolResults`, so the `tool_use` + `tool_result` blocks remain in the LLM-facing wire
+payload. `use_skill` is NOT in the set (it renders as a normal `ToolCallCard`). If more
+virtual tools accumulate, lift the set to a shared module.
+
+#### `<ChecklistCard>` overlay
+
+Mounted in `ChatPanel.vue` (which gained `position: relative` to anchor it). `position:
+absolute`, bottom-right offset above the input bar, `z-index: 50` (below modals, which
+Teleport to `<body>` at 1000+). Two states: expanded (full list + the single `in_progress`
+item gets a pulse/spinner) ⇄ minimized floating ball (`done/total` count, breathes when an
+`in_progress` is active). Toggle is local UI state. Empty/absent checklist → hidden.
