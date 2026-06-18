@@ -180,10 +180,10 @@ function statusClass(status: ChecklistStatus): string {
                 <span class="checklist-card__title">
                     <Icon
                         name="clipboard-list"
-                        :size="13"
+                        :size="16"
                         icon-class="checklist-card__title-icon"
                     />
-                    进度清单
+                    <span class="ml-2"> 进度清单 </span>
                 </span>
                 <span
                     class="checklist-card__progress"
@@ -218,7 +218,7 @@ function statusClass(status: ChecklistStatus): string {
                         ]"
                         aria-hidden="true"
                     >
-                        <Icon :name="statusIcon(item.status)" :size="13" />
+                        <Icon :name="statusIcon(item.status)" :size="16" />
                     </span>
                     <span class="checklist-card__content">{{
                         item.content
@@ -405,10 +405,19 @@ function statusClass(status: ChecklistStatus): string {
 
 .checklist-card__marker--in-progress {
     color: var(--color-tool-shell);
-    /* The spin: 1s linear, infinite. The animation runs on the
-     marker span (which wraps the refresh-arrow Icon), so the
-     arrow rotates continuously, signalling "working" — the
-     standard spinner affordance replacing the old text-pulse. */
+}
+
+/* The spin animation runs on the SVG ITSELF (not the marker
+   span), with `transform-box: fill-box` so the rotation pivots
+   around the SVG's own bounding-box center. Spinning the outer
+   span uses its border-box center, which can drift from the
+   icon's true geometric center (the Icon wrapper adds sub-pixel
+   geometry), making the spinner wobble / orbit off-center.
+   fill-box pins the pivot to the icon itself — steady, centered
+   rotation. */
+.checklist-card__marker--in-progress :deep(svg) {
+    transform-box: fill-box;
+    transform-origin: 50% 50%;
     animation: checklist-spin 1s linear infinite;
 }
 
