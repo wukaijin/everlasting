@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "L2 改 run_chat_loop 的 tool 执行段(chat_loop.rs:994-1089);cancel token 注册/sink/CancellationGuard 架构在此,并发路径必须保留这些不变量"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "execute_tool 签名(返回 content/is_error/ToolContextUpdate/exit_code)、cancel wrapper(tokio::select! biased)、ToolContext、tool_use+tool_result wire shape — 并发改造的直接依据"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "parallel-tool-use 协议红线:多 tool_result 必须同一 user message(否则 Claude 学会避免并行);ContentBlock::ToolResult 结构 — L2 result_blocks 打包正确性"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "cancel path / error path / persist_turn / Done 三终态语义;并发后 cancel 收集(不 break)+ RULE-A-004(audit 跳过 cancelled)必须与现有 cancel/error path 对称"}
+{"file": "docs/spikes/2026-06-19-async-parallel-tool-research.md", "reason": "三层模型 + opencode-pty 范本 + §4 工程成本(踩踏/编排/上下文合并/调试/可分性)+ §5.1 本项目 L1 校准"}
+{"file": "docs/spikes/2026-06-19-async-parallel-tool-independent-research.md", "reason": "协议层失效模式 §6.1(result 拆消息致 Claude 避免并行)/§6.2(依赖链断裂)/§6.4(超时放大取消开销)— L2 实现必须规避"}

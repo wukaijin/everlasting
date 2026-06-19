@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 20 | 健壮性 + 债务,中长期清理 |
+| P2 | 21 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **45** | 含历史 review 合并 |
+| **Total** | **46** | 含历史 review 合并 |
 
 ---
 
@@ -578,6 +578,20 @@
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 
 ---
+
+### RULE-A-013 — L2 并行 batch 的 path-outside-root 会触发并发 ask
+
+- **Level**: P2
+- **Subsystem**: Agent Loop (L2 并行 tool 执行)
+- **File**: `app/src-tauri/src/agent/chat_loop.rs::is_parallel_eligible` (line 1463) + `app/src-tauri/src/agent/permissions/mod.rs:596-614` (Path 工具 Tier 4 `ask_path`)
+- **Description**: L2 并行边界(Q2)假设"并发集合 `{read_file,grep,glob,list_dir,use_skill}` 全部静默 Allow,无 ask"。但当某个 read tool 的 `path` 解析到**仓库外**且无 `session_tool_permissions` path-glob grant 时,`permissions::check` 走 `ask_path` → emit `permission:ask`。并行 batch 里多个这样的 tool 会**并发弹多个 PermissionModal**(UX 乱)。
+- **Impact**: 概率低(LLM 通常仓库内读,并行 batch 更是 read-many-files 场景;仓库外 read 通常单发);**无数据损坏**(前端 `pendingBySession` 按 rid 索引,`PermissionStore` 内部 tokio::Mutex 串行化 HashMap 写);仅 UX 后果(多 modal 叠加)。
+- **Fix** (follow-up,任选一):
+  - (a) **推荐**:`is_parallel_eligible` 加 path-outside-root 检测(用 `projects/boundary.rs` 非失败版 `is_within_root`),任一 out-of-root read tool 拉回串行批 —— 同步函数成本低,保留"并发集合绝对 silent"不变量
+  - (b) 两阶段 check-then-execute(先串行 check 全部,全 Allow 才并行 execute)—— 复杂,改 task 结构
+- **Status**: **open (MVP 接受现状,2026-06-19)** — `chat_loop.rs:1000-1009` 注释已记录 edge case + 两方案;PRD `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/prd.md` Out of Scope 标 follow-up;架构见 `docs/ARCHITECTURE.md §2.5.9`
+- **Owner**: carlos
+- **Discovered In**: L2 PR1 trellis-check(2026-06-19)
 
 ## P3 — 轻微(文档/一致性)
 

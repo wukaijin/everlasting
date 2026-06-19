@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 loop 改造符合架构:cancel token / sink / CancellationGuard 不变量保留,并发路径不破坏现有终态语义"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 execute_tool 契约不变(签名 / cancel 语义 / wire shape),串行路径未被并发改造破坏"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 parallel-tool-use 协议:多 tool_result 仍单消息打包,result_blocks 按 tool_use 原始顺序回填"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "并发路径与串行路径的 check/audit/emit 逻辑应复用 helper,避免复制"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "emit_tool_result 流式乱序 → 前端须按 tool_use_id 匹配(非到达顺序),跨层数据流验证"}
+{"file": "docs/spikes/2026-06-19-async-parallel-tool-independent-research.md", "reason": "失效模式 §6 验证清单:result 格式 / 依赖链 / 超时取消,check 时逐条核对"}

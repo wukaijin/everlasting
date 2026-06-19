@@ -162,6 +162,32 @@ CLI 也有 `hermes -w`(在独立 worktree 里跑)专门支持并行 agent。
 
 **推荐**: 把 **L3 当作本项目的旗舰特性**评估 —— 它是 harness 工程最有学习价值的部分(任务分解 / worktree 隔离 / context 合并 / 编排),且 Everlasting 的 `git/` worktree 模块让门槛比 Hermes 当初低。L1/L2 是顺手增益,L3 是真正拉开和"同步 agent"差距的能力。
 
+### 5.1 本项目落地校准 — L1 的两个隐藏成本点(2026-06-19 评估补充)
+
+> 以下两点在本项目代码现状 + DEBT 交叉核对后发现,**§2.1 / §5 的 opencode-pty 范本未点透**。L1 立项前必须先解。
+
+**① L1 的 request-scoped 断裂点 + daemon 化强耦合**
+
+- **现状**:本项目 chat loop 是 **request-scoped** —— 前端一次 `invoke("chat")` → Rust `chat` 命令跑完整个 agent loop(`agent/chat_loop.rs`,`MAX_TURNS=50`)→ 返回,一个用户回合顶到顶。
+- **矛盾**:后台 shell 的生命周期天然**跨多个回合**(agent 在后台 `npm run build` 跑着时继续对话,或 build 在两次 `invoke` 之间完成),它塞不进单个 request 的 await 链。
+- **必需形态**:`AppState`/`SessionState` 持有**跨请求常驻态** —— `pty_sessions: HashMap<SessionId, Vec<PtySession>>` + `pending_notifications: VecDeque<SystemNotice>`,agent loop 每轮开头消费 `pending_notifications` 注入 context(对齐 §2.1 `<pty_exited>`)。这是 **mini-daemon 形态**。
+- **强耦合点**:这套会话生命周期管理(close session 时 kill 所有 pty、app 退出清理)与 [CLAUDE.md](../../CLAUDE.md) 的 **daemon 化路线**(GUI 进程与 Agent Daemon 分离,Unix socket/WebSocket IPC)**是同一命题** —— daemon 化天然承载 L1 的常驻会话。
+- **决策含义**:L1 立项前先定 daemon 化边界 —— 先做"GUI 进程内常驻"中间态(daemon 化时要重构),还是直接奔 daemon。否则写出要推翻两次的会话管理代码。**建议:L1 与 daemon 化一并规划,不单独 ship 会被推翻的中间态。**
+
+**② PTY vs 后台 Command 分叉(成本差一倍)**
+
+- §2.1 opencode-pty 是**真 PTY**(`pty_write` 可发交互输入,支持 dev server / `--watch` / 交互式 REPL),但范本未点透真 PTY 的实现重量。L1 有两条成本差一倍路径:
+
+| 路径 | 实现 | 解的痛点 | 成本 |
+|---|---|---|---|
+| **后台 `tokio::process::Command`** | spawn 子进程 + `tokio::spawn` 监听退出 + 完成注入 `<pty_exited>` | shell 120s timeout 盖不住的长任务(build/test) | **低** |
+| **真 PTY** | `portable-pty`/`rustix` pty 分配 + 主从端 + 输入写入 + 尺寸调整 | 上述 + 交互式 dev server / REPL(可 `pty_write`) | **高(翻倍)** |
+
+- 本项目 `tools/shell.rs` 当前是 `tokio::process::Command`(管道模式,**非** PTY),RULE-E-002 进程组 kill 已就位(`pty_kill` 可复用)。
+- **分阶段建议**:**L1a(后台 Command,解 timeout,低)→ L1b(真 PTY,交互式,按需)**。120s timeout 痛点 L1a 即解,交互式 dev server 是 L1b 的增量价值;不要一上来背 PTY 复杂度。
+
+> **共同含义**:L1 不是"复用 shell.rs 加个 spawn"的轻活 —— 真实门槛在会话生命周期架构(daemon 化)和 PTY 选型,不在 tool 执行本身。与 L2(改一个循环、低门槛)对比,进一步佐证推进顺序 **`L2 → L1`**。
+
 ---
 
 ## 6. 出处(context7 文档源)
