@@ -247,3 +247,61 @@ trellis-check "有条件 PASS",1 个实质问题:Q2 path-outside-root edge case(
 - [ ] RULE-A-013 follow-up:谓词加 `projects::boundary::is_within_root` 检测,任一 out-of-root read tool 拉回串行(低成本,保留"并发集合绝对 silent"不变量)
 - [ ] L1 后台 shell 立项(参考 spike §5.1:request-scoped 断裂+daemon 化耦合 / PTY vs Command 分叉,建议与 daemon 化一并规划)
 - [ ] L3 并行 subagent(锁 B6,缓做,旗舰级)
+
+
+## Session 41: L2 — 单 turn 多 tool 并发执行(只读 batch)
+
+**Date**: 2026-06-19
+**Task**: L2 — 单 turn 多 tool 并发执行(只读 batch)
+**Branch**: `main`
+
+### Summary
+
+MVP 落地 is_parallel_eligible + FuturesUnordered 并行路径(result_slots 按 tool_use index + AtomicBool cancel)。并发集合 {read_file,grep,glob,list_dir,use_skill},排除 web_fetch+写类。629 tests pass。文档 ARCHITECTURE §2.5.9/ROADMAP 移档/spike §5.1 L1 校准/DEBT RULE-A-013。
+
+### Main Changes
+
+**Trigger**: ROADMAP §2 第三档 L1/L2/L3 调研沉淀后,先做 L2(最低门槛+最高收益)。两份 spike 互补调研(opencode/Hermes + Claude Code/Cline/Aider/Goose/Continue + 协议层 parallel-tool-use + 失效模式 §6)+ L1 两隐藏成本(request-scoped 断裂+daemon 耦合 / PTY vs Command 分叉)沉淀到 spike §5.1。
+
+**核心改动**: chat_loop.rs 并行路径(`is_parallel_eligible` 纯谓词 + `FuturesUnordered` + `result_slots[i]` 按 tool_use 原始 index 回填 + `AtomicBool` 广播 cancelled)+ 串行路径逐字保留。tests.rs +470(5 新测试:分类/顺序/降级/web_fetch/cancel)。cargo test --lib 629 passed。
+
+**关键决策 Q1/Q2/Q3**:
+- Q1 并发边界:整批全 ∈ {read_file,grep,glob,list_dir,use_skill} 才并发;含任意写类/shell/update_checklist/web_fetch → 整批串行(零依赖分析、最保守)
+- Q2 web_fetch 排除:web_fetch 虽只读但 Tier4 默认 emit ask,纳入会引入并发多 modal → MVP 排除(走串行,保留逐个 ask UX)
+- Q3 FuturesUnordered:完成即 emit_tool_result(流式,匹配现状)+ 按 tool_use 原始 index 回填(LLM 上下文稳定,非偏好是技术最优)
+
+**不变量保留**: 多 tool_result 单消息打包(parallel-tool-use 红线,拆消息让 Claude 避免并行)+ RULE-A-004(cancelled 跳过 audit,AtomicBool 广播回主循环)+ execute_tool 签名未改 + 共享状态(PermissionStore/SkillCache/ReadGuard 均 Arc)并发安全 + cancel 不 break 而等所有 task 完成 + panic 传播对称。
+
+**trellis-check 有条件 PASS**: 1 实质问题(Q2 path-outside-root edge case:并发集合里 read tool path 解析到仓库外无 grant 仍会触发并发 ask)→ 接受 MVP(概率极低+无数据损坏+仅 UX 乱),记 DEBT RULE-A-013(P2,follow-up 方案 a 谓词加 boundary);3 非阻塞观察(复用:并行/串行控制流不同不抽 helper;cancel 测试弱形式:强契约由串行测试覆盖;streaming 短暂乱序:前端 streamController 按 tool_use_id 匹配安全)。
+
+**文档沉淀**:
+- docs/ARCHITECTURE.md §2.5.9 并行 tool 执行(L2)
+- docs/ROADMAP.md L2 移 §1.2 已实施 + 第三档标完成
+- docs/spikes/2026-06-19-async-parallel-tool-research.md §5.1 L1 两隐藏成本沉淀(评估增量,给后续 L1 立项)
+- .trellis/reviews/DEBT.md RULE-A-013(P2 open);P2 20→21,Total 45→46
+- .trellis/tasks/06-19-l2-parallel-readonly-tool-batch/ prd + jsonl + task
+
+**Follow-up 留痕**:
+- RULE-A-013: is_parallel_eligible 加 projects::boundary::is_within_root 检测,任一 out-of-root read tool 拉回串行
+- L1 后台 shell(参考 spike §5.1:request-scoped 断裂+daemon 化耦合 / PTY vs Command 分叉,建议与 daemon 化一并规划)
+- L3 并行 subagent(锁 B6,缓做,旗舰级)
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b1de1f9` | (see git log) |
+| `71b1836` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

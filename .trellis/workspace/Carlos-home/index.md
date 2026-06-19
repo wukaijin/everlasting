@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 40
+- **Total Sessions**: 41
 - **Last Active**: 2026-06-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~152 | Active |
+| `journal-2.md` | ~307 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-06-19 | L2 — 单 turn 多 tool 并发执行(只读 batch) | `b1de1f9`, `71b1836` | `main` |
 | 40 | 2026-06-19 | B12 Checklist agent 自跟踪 tool (TodoWrite 式) | `a013df5`, `3cad0f9`, `1fa61b8`, `1896470`, `994db84`, `c59daaa` | `main` |
 | 39 | 2026-06-18 | B4 skill stretch: allowed-tools + /skill 入口合并面板 | `cc23c8a` | `main` |
 | 38 | 2026-06-18 | B4 Skill 系统: use_skill 虚拟 tool + 三层渐进披露 | `96b6f93` | `main` |
