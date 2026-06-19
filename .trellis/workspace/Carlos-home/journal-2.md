@@ -375,3 +375,38 @@ L1a(后台 shell + 完成通知,不带 PTY)落地。BackgroundShellRegistry trai
 ### Next Steps
 
 - None - task complete
+
+
+## Session 44: system-prompt 改造：behavior_prompt + RULE-E-013 闭合
+
+**Date**: 2026-06-19
+**Task**: system-prompt 改造：behavior_prompt + RULE-E-013 闭合
+**Branch**: `main`
+
+### Summary
+
+评审 system-prompt-research §7（修订方案 B 缓存论证、纠正 TodoWrite→update_checklist）+ 归档 docs/research/ + 登记 RULE-E-013；实现 system-prompt 改造：behavior_prompt.rs(8 段, 英文+语言约束) + build_system_prompt 删硬编码工具枚举改通用表述(RULE-E-013 闭合, 比“动态生成”更治本) + assemble_system_prompt 三层组装(behavior+mode+base, cache-stable)；683 test pass；DEBT closed(f170a9b) + research §7.8 标已实施 + spec agent-loop-architecture 加 System prompt assembly 契约段
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cf1da74` | (see git log) |
+| `f170a9b` | (see git log) |
+| `33e8f1b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

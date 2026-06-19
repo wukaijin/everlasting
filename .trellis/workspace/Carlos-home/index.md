@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 43
+- **Total Sessions**: 44
 - **Last Active**: 2026-06-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~377 | Active |
+| `journal-2.md` | ~412 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 44 | 2026-06-19 | system-prompt 改造：behavior_prompt + RULE-E-013 闭合 | `cf1da74`, `f170a9b`, `33e8f1b` | `main` |
 | 43 | 2026-06-19 | L1a 后台 shell + 完成通知 | `4bfd178`, `eaa6b7e`, `aa879a7` | `main` |
 | 42 | 2026-06-19 | L2 follow-up: RULE-A-013 — is_parallel_eligible 加 path-outside-root 检测,保持并发集合 silent | `5f2c19c`,  `15ff4e2`,  `1914efb` | `main` |
 | 41 | 2026-06-19 | L2 — 单 turn 多 tool 并发执行(只读 batch) | `b1de1f9`, `71b1836` | `main` |
