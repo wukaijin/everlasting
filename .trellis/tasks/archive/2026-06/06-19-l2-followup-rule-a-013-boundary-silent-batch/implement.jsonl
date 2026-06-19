@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "L2 并行 tool 执行架构(Q1/Q2 设计,谓词语义、不变量);本次 follow-up 改 is_parallel_eligible 需保持与 §2.5.9 一致"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "is_within_root 合约(强约束 + 7 个 edge case);本次复用 boundary API,谓词需与 boundary 语义对齐"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 分类(Path / Other)与 silent-allow/Tier 4 决策;use_skill (Other) 永远 silent 不参与 path check 的依据"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 is_within_root 而非重写 path 解析逻辑;本轮不抽新 helper 沉淀到 spec,直接调用现有 boundary API"}

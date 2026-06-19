@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 §2.5.9 并行集合 silent 不变量在 path-outside-root 场景下被满足;Q2 rationale 描述需更新"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "验证谓词 path 解析与 boundary 强约束(physical path / component-wise / nonexistent)对齐"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 use_skill 与 read_file/grep/glob/list_dir 在 path 检查上的非对称处理(Other vs Path 分类)正确"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "DEBT.md RULE-A-013 收尾流程:open → closed 需记 commit hash + Closed At + Re-evaluation Log"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-013 当前 open 状态、推荐 fix 方案 a、相关文件路径;closed 时同步改本文件"}
+{"file": ".trellis/tasks/06-19-l2-parallel-readonly-tool-batch/prd.md", "reason": "L2 上轮 PRD 的 Out of Scope 标记了本 follow-up;新 doc 引用要互相对齐"}
