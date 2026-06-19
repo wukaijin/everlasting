@@ -340,3 +340,38 @@ MVP 落地 DEBT RULE-A-013 方案 a(谓词扩展 path-outside-root 检测)。is_
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: L1a 后台 shell + 完成通知
+
+**Date**: 2026-06-19
+**Task**: L1a 后台 shell + 完成通知
+**Branch**: `main`
+
+### Summary
+
+L1a(后台 shell + 完成通知,不带 PTY)落地。BackgroundShellRegistry trait(Q1 daemon 时序决策 C)+ InMemoryBackgroundShellRegistry 进程内 impl(tokio 后台 task 拥有 Child,三触发 select!)。3 tool:run_background_shell/shell_status/shell_kill(Q2 Hermes split)。agent loop 每轮 drain_notifications + APPEND user message(Q3 opencode-pty 风格,cache 安全)。复用 RULE-E-002 进程组 SIGKILL + RULE-E-001 safe_env(pub(crate))。生命周期:delete_session→kill_all_for_session;RunEvent::Exit→kill_all。session-scoped + run_background_shell Tier 4 Shell。测试 651→680(+29),0 回归。Follow-up:ShellEntry 清理 sweeper(RULE-E-012 P2)+ L1b 真 PTY + L3 并行 subagent。流程:brainstorm 7 问收敛 PRD → PR1(registry,21 tests)→ PR2 sub-agent 实现(3 tool+注入+权限+生命周期)→ DEBT 登记 → ROADMAP §1.2 移动 → archive。trellis-check sub-agent 被用户跳过(sub-agent 已自测 680 pass,主 session 独立复跑确认)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4bfd178` | (see git log) |
+| `eaa6b7e` | (see git log) |
+| `aa879a7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
