@@ -736,6 +736,232 @@ bonus. (This was caught by `trellis-check` on PR1 — the original plan said "pr
 
 ---
 
+## Scenario: dispatch_subagent tool (B6 PR1, 2026-06-19)
+
+### 1. Scope / Trigger
+
+- Trigger: main agent 在 turn N 通过 LLM `tool_use` 派一个 worker subagent 跑**独立 context**(独立 messages + 独立 token 预算 + 独立 turn 上限),完成后 worker final summary 回填为 dispatch_subagent 的 `tool_result`。对标 Claude Code Task tool / OpenHands TaskToolSet。
+- **不是普通 I/O tool** —— 是 agent 层控制流工具。注册为 `ToolDef` 供 LLM 发现 + 走 ⑨ 关权限 check,但**执行不走** `execute_tool_inner`(拿不到 `provider` / `db` / `cancellations` 等依赖),在 `chat_loop.rs` tool_use 处理循环**拦截** → 直接调 `run_subagent(deps..., input, ctx)`(REVIEW-SUBAGENT-PRD #3 核实的真实约束)。
+- ROADMAP §4.1 "B6 = Subagent(harness 学习价值高)" + ROADMAP §1.2 计划项。
+
+### 2. Signatures
+
+#### Tool declaration(`app/src-tauri/src/agent/subagent.rs::definition()`,注册进 `builtin_tools()`)
+
+```rust
+ToolDef {
+    name: "dispatch_subagent",
+    description: "Dispatch a worker subagent to run a sub-task in its own isolated context \
+                  (independent messages, independent turn budget). The worker runs to \
+                  completion (synchronous — the parent chat blocks until the worker returns). \
+                  When the worker finishes, its final summary is injected as the tool_result. \
+                  Two built-in subagents: `researcher` (read-only: read_file / grep / glob / \
+                  list_dir) and `general-purpose` (full toolset minus dispatch_subagent / \
+                  update_checklist / background-shell tools). Worker inherits parent's \
+                  permission Mode (Yolo → all-allow; Edit/Plan → writes / shells auto-denied \
+                  because the worker has no UI to surface a permission modal).",
+    input_schema: {
+      "type": "object",
+      "properties": {
+        "subagent": {"type": "string", "enum": ["researcher", "general-purpose"]},
+        "task":     {"type": "string"}
+      },
+      "required": ["subagent", "task"]
+    },
+}
+```
+
+#### `run_chat_loop` 嵌套调用(worker 路径,`chat_loop.rs:1940`)
+
+```rust
+Box::pin(run_chat_loop(
+    worker_tool_defs,                        // 1
+    provider.clone(),                        // 2
+    context_window,                          // 3
+    worker_rid,                              // 4: "{parent_rid}-sub-{seq}"
+    parent_session_id.to_string(),           // 5: 复用父 session_id
+    worker_messages,                         // 6: [memory_blocks, delegation_task]
+    worker_sink_dyn,                        // 7: SubagentBufferSink
+    db.clone(),                              // 8
+    cancellations.clone(),                   // 9: worker rid 注册(不进 session_active_request)
+    _session_active_request.clone(),         // 10: 复用父 map(不修改)
+    read_guard.clone(),                      // 11
+    memory_cache.clone(),                    // 12
+    skill_cache.clone(),                     // 13
+    permission_asks.clone(),                 // 14
+    worker_token,                            // 15
+    None,                                    // 16: resend_seq
+    background_shells.clone(),               // 17
+    Some(SUBAGENT_MAX_TURNS),                // 18: 20
+    true,                                    // 19: skip_session_active(REVIEW-SUBAGENT-PRD #2)
+    true,                                    // 20: skip_persist(worker 中间过程不进 DB)
+)).await;
+```
+
+#### `run_chat_loop` 3 个新参数(PR1a + PR1b)
+
+| # | 参数 | PR | 用途 |
+|---|---|---|---|
+| 18 | `max_turns: Option<usize>` | PR1a | worker turn 上限(None = 50 默认)。`turn_limit = max_turns.unwrap_or(MAX_TURNS)` |
+| 19 | `skip_session_active: bool` | PR1b | `CancellationGuard::drop` 时跳过 `session_active_request.remove(session_id)`。worker 传 `true` 避免误删父映射(REVIEW-SUBAGENT-PRD #2 / RULE-E-005 不破坏) |
+| 20 | `skip_persist: bool` | PR1b | run_chat_loop 函数体内 18 处 `if !skip_persist { ... }` gate 守住所有 persist 站点(persist_turn / update_message_metadata / touch_session / add_token_usage / record_*_audit / persist_turn_cwd)。worker 传 `true` 避免与父 `messages` 表 `(session_id, seq)` UNIQUE 约束冲突;worker 中间过程由 `SubagentBufferSink` transcript 捕获(PR2 落 `subagent_runs.transcript_json`) |
+
+### 3. Contracts
+
+#### Built-in `SubagentDef` registry(`subagent.rs::builtin_subagents`,OnceLock 缓存)
+
+| name | `tools` allowlist | system_prompt |
+|---|---|---|
+| `researcher` | `[read_file, grep, glob, list_dir]` | "你是只读研究子代理...Cannot edit/write/shell,不能嵌套 dispatch..." |
+| `general-purpose` | `[]`(全集减结构性禁项) | "你是通用子代理...minus dispatch_subagent / update_checklist / background-shell..." |
+
+#### `filter_tools_for_subagent(builtin_tools, def)`(`subagent.rs`)
+
+1. `def.tools.is_empty()` → 起点全集(general-purpose 模式);否则 → 起点 allowlist
+2. **`STRUCTURALLY_DISABLED` 永远 strip**(无论 allowlist 怎么写):
+   - `update_checklist`(main 进度表,worker 写会污染)
+   - `dispatch_subagent`(禁嵌套,对标 Cline)
+   - `run_background_shell` + `shell_status` + `shell_kill`(L1a session 级通知注入,worker 无 sink)
+3. 测试 `filter_strips_structurally_disabled_even_if_allowlist_lists_them` 锁定(防御未来 frontmatter 定义误开禁项)
+
+#### worker context(`subagent.rs::build_worker_messages`,`chat_loop.rs:1940` 传入)
+
+- `messages[0]` = `build_instructions_blocks(memory_cache)` synthetic user message(4 文件:User/Project × CLAUDE.md/AGENTS.md,带 `cache_control: Ephemeral`,worker **自己** cache breakpoint,与父正交)
+- (可选) `messages[1]` = synthetic assistant ack("Understood. I will follow these instructions...")—— 镜像 main loop 的 memory pair 保持 Anthropic wire user/assistant 交替
+- 末尾 `messages.push` delegation task user message(**APPEND,不 prepend**)
+
+**prompt cache 不变量**(B12 + L1a 两次踩过的坑锁死):worker `messages[0]` 与父 `messages[0]` 正交,不污染父 cache key。summary 注入主对话走 `ContentBlock::ToolResult`(天然末尾),绝不 `insert(0)`。
+
+#### `SubagentBufferSink`(`subagent.rs`,实现 `ChatEventSink` trait)
+
+- `transcript: Mutex<Vec<TranscriptEntry { kind, payload_json }>>` —— 累积 worker 的 chat-event/tool:call/tool:result,PR2 落 `subagent_runs.transcript_json`
+- `text_parts: Mutex<Vec<String>>` —— Delta 事件累积,`final_text()` 拼成 summary
+- `had_error: AtomicBool` —— `ChatEvent::Error` → true
+- `was_cancelled: AtomicBool` —— `Done{stop_reason: cancelled}` → true(`max_turns` 不算 cancel,归 Completed)
+- **不 forward 父 sink** —— 否则 main UI 被 worker 流刷屏(Claude Code 约定:中间过程对 main 隔离)
+
+#### `format_dispatch_result(status, worker_text)`(`subagent.rs`)
+
+| status | content | is_error |
+|---|---|---|
+| `Completed` | `[status: completed]\n<summary>`(空文本回退 `(worker produced no final text)`) | false |
+| `Cancelled` | `[status: cancelled]\n<text>\n\n[CANCELLED_MARKER]`(空文本退化为 `marker alone`) | true |
+| `Error` | `[status: error]\n<error text>` | true |
+
+terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `SubagentBufferSink.was_cancelled` 仍能正确捕捉,只 DB writes(cwd / touch_session)守门。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|---|---|
+| `subagent` 不在 enum | LLM 错(input schema 校验拦在前面) |
+| `lookup_subagent(name)` 返 None | 拦截点合成 `tool_result` `[status: error]\nunknown subagent`,`is_error: true`,**tool_use/tool_result 配对保持**(同 RULE-A-007) |
+| worker turn 超 `SUBAGENT_MAX_TURNS=20` | `Done{stop_reason: max_turns}` → status=Completed(soft,"ran out of budget"),summary 仍带 worker 产出 |
+| 用户 Stop 传播到 `worker_token`(child of `parent_token`) | `Done{stop_reason: cancelled}` → status=Cancelled + `CANCELLED_MARKER` |
+| worker LLM stream error | `ChatEvent::Error` → SubagentBufferSink.had_error → status=Error |
+| parent 复用 `session_id` + guard `skip_session_active=true` | worker Drop **不** evict 父 `session_active_request[parent_session_id]`(回归测试 `dispatch_subagent_guard_does_not_evict_parent_session_active`) |
+| worker 内写 messages 表(`skip_persist=true`) | 18 处 gate 全部拦下,worker 中间过程不进父 DB |
+
+### 5. Good / Base / Bad Cases
+
+**Good**:parent turn 1 LLM 派 `researcher`("找出所有引用 `dispatch_subagent` 的文件")→ researcher 跑 `read_file`/`grep`/`list_dir`(4 路径全 silent allow)→ final text "found 3 files: ..." → `format_dispatch_result(Completed, ...)` → parent 构造 `ContentBlock::ToolResult`,tool_use/tool_result 配对,parent turn 2 继续。
+
+**Base**:parent turn 1 LLM 派 `general-purpose` 改文件 + main=yolo(继承 yolo,写/shell Tier 4 bypass 早返回 Allow)→ worker 跑 `write_file` + `shell`(无 ask modal 阻塞)→ final text "已修改 3 个文件: ..." → Completed。
+
+**Bad**:parent turn 1 LLM 派 `general-purpose` + main=Edit + `write_file`(触发 Tier 4 ask)→ **当前实现 (RULE-A-014 偏离)**:`PermissionContext.is_worker` 未 thread 到嵌套 run_chat_loop → `ask_path` 顶部 `if ctx.is_worker { Deny }` 在嵌套路径不可达 → emit `permission:ask` 等 oneshot(永远等不到,worker 无 UI sink)→ **挂起直到 user Stop**。修复见 `RULE-A-014`(PR2+ follow-up,~10 行 + 1 端到端测试)。
+
+### 6. Tests Required
+
+**Unit**(`subagent.rs::tests`,~17 个):
+
+| Test | 断言 |
+|---|---|
+| `definition_has_correct_name` | `ToolDef.name == DISPATCH_TOOL_NAME` |
+| `definition_schema_requires_subagent_and_task` | `input.required` 含两字段 |
+| `definition_schema_subagent_enum_covers_two` | enum == `["researcher", "general-purpose"]` |
+| `builtin_subagents_has_two_entries` | registry 长度 2 |
+| `builtin_subagents_researcher_tool_allowlist` | researcher.tools == 4 只读件 |
+| `builtin_subagents_general_purpose_empty_allowlist` | general-purpose.tools.is_empty() |
+| `lookup_subagent_unknown_returns_none` | unknown name → None |
+| `filter_researcher_keeps_only_read_tools_and_strips_disabled` | researcher + 禁项全 strip |
+| `filter_general_purpose_keeps_full_set_minus_disabled` | general-purpose 保留写/shell,strip 禁项 |
+| `filter_strips_structurally_disabled_even_if_allowlist_lists_them` | 即便 allowlist 列了禁项也强制 strip |
+| `buffer_sink_accumulates_text_deltas` | Delta 事件累积成 summary |
+| `buffer_sink_tracks_cancelled_done` | `Done{cancelled}` → was_cancelled |
+| `buffer_sink_tracks_error_event` | `Error` → had_error |
+| `buffer_sink_records_transcript_entries` | 3 类 emit 进 transcript |
+| `format_completed_with_summary` / `_empty_text_falls_back_to_note` | Completed 两种格式 |
+| `format_cancelled_includes_marker` / `_empty_text_uses_marker_alone` | Cancelled 两种格式 |
+| `format_error_includes_status_prefix` | Error 格式 |
+
+**Integration**(`agent/tests.rs::agent_loop_dispatch_subagent_*`,4 个):
+
+| Test | 断言 |
+|---|---|
+| `dispatch_subagent_completes_and_returns_summary` | parent turn 1 dispatch_subagent tool_use → worker 跑 → summary tool_result `[status: completed]` + worker text;主对话 `phantom_worker_text == 0`(worker 中间过程**不**进父 messages) |
+| `dispatch_subagent_cancel_propagates_to_worker` | parent_token cancel → worker_token child 触发 → status=cancelled + `CANCELLED_MARKER`;tool_use/tool_result 配对保持 |
+| `dispatch_subagent_error_returns_status_error` | MockProvider stream error → status=error;tool_use/tool_result 配对保持 |
+| `dispatch_subagent_guard_does_not_evict_parent_session_active` | 用 `HangingThenCancel` worker(500ms 延迟 cancel)保住 worker 在飞,snapshot 验证父 `session_active_request[parent_session_id]` 仍正确(worker Drop 因 `skip_session_active=true` 不误删) |
+
+### 7. Wrong vs Correct —— 拦截路径(execute_tool_inner vs chat_loop loop)
+
+#### Wrong:`dispatch_subagent` 走 `execute_tool_inner`
+
+```rust
+// tools/mod.rs::execute_tool_inner
+match name {
+    "dispatch_subagent" => dispatch_subagent::execute(input, ctx, ...).await,
+    // ...
+}
+```
+
+**Why it's wrong**:`execute_tool_inner` 签名 `(name, input, ctx, guard, session_id, skill_cache, cancel)` 拿不到 `provider` / `db` / `cancellations` / `session_active_request` / `read_guard` / `memory_cache` / `permission_asks` / `background_shells`,而 `run_chat_loop` 嵌套调用需要全部(REVIEW-SUBAGENT-PRD #3 核实)。即使把它们塞进 `ToolContext`,会模糊工具层和 agent 层边界;`Box<dyn Any>` extension point hacky。
+
+#### Correct:agent loop 层拦截
+
+```rust
+// chat_loop.rs tool_use 处理循环(约 :1380)
+if tool_name == DISPATCH_TOOL_NAME {
+    // 不走 execute_tool;直接调 run_subagent(拿到全部 run_chat_loop 闭包依赖)
+    let (content, is_error, _cancel_parent, _exit_code) =
+        run_subagent(/* 全部闭包依赖 */, tool_input, ctx).await;
+    // 构造 ContentBlock::ToolResult 回填(配对)
+    result_blocks.push(ContentBlock::ToolResult { tool_use_id, content, is_error });
+    continue;
+}
+// 其他 tool 走原 execute_tool 路径
+let (out, is_err, update, exit_code) = execute_tool(name, input, ...).await;
+```
+
+### 8. Design Decisions
+
+#### Decision: 同步阻塞 MVP,异步 fan-out 留 v2 / L3
+
+- **Context**: Claude Code `background: true` 字段区分前/后台;OpenHands `DelegateTool`(并行)vs `TaskToolSet`(同步)两个独立工具。
+- **Decision**: MVP `dispatch_subagent` 同步阻塞(main 在 execute 里 await worker)。main UI 在 worker 跑期间不刷新,worker 完成后 summary 一次性回填。
+- **Why**: 与本项目 L1a background shell 的"返回 handle + 下一轮 APPEND notification"模式正交;MVP 最小结构;异步 fan-out 是 v2 / L3 增强。
+- **Future**: 加 `dispatch_subagents`(plural)并行 fan-out + 完成通知走 L1a `drain_notifications` 机制。
+
+#### Decision: tool allowlist + 结构性禁项双层过滤
+
+- **Context**: Claude Code `tools` allowlist + `disallowedTools` denylist;Cline 硬编码 6 只读件。
+- **Decision**: allowlist + `STRUCTURALLY_DISABLED` 硬编码 5 项永远 strip(无论 allowlist 怎么写)。
+- **Why**: allowlist 表达"worker 能用什么";`STRUCTURALLY_DISABLED` 表达"无论什么都不能用"(跨 subagent 类型的安全边界,防止未来 frontmatter 定义误开禁项)。`filter_strips_structurally_disabled_even_if_allowlist_lists_them` 测试锁定。
+
+#### Decision: CancellationGuard 加 `skip_session_active` 字段(不复用等价证明)
+
+- **Context**: 现有 `CancellationGuard::drop` 固定 `remove(rid) + remove(session_id)`。worker 复用 parent_session_id 时 Drop 会误删父 `session_active_request[parent_session_id]`,破坏 RULE-E-005 / `cancel_inflight_for_session`。
+- **Decision**: 加 `pub skip_session_active: bool` 字段;Drop 包 `if !skip_session_active { ... }`。production chat 传 `false`(行为不变);worker 传 `true`。
+- **Why(选 A 不选 B/C)**:A 干净,签名 `CancellationGuard { ..., skip_session_active: bool }`,B 让 worker 不创建 guard 手动管理清理脆弱(多个 cleanup site 易漏),C 用 dummy `session_active_request` map 浪费(且与真实 map 行为可能 drift)。
+
+#### Decision: `skip_persist` 守 18 处 persist 站点(worker 中间过程不进 DB)
+
+- **Context**: worker 复用 parent_session_id,直接调 `persist_turn` 会与父的 `(session_id, seq)` UNIQUE 约束冲突;worker 中间过程对父 messages 透明是核心约定。
+- **Decision**: 加第 20 参 `skip_persist: bool`,run_chat_loop 函数体内 18 处 persist 调用全部包 `if !skip_persist { ... }`(initial user / resend audit / metadata / token usage / assistant turn / cancel-synthetic / parallel+serial tool_executed_audit / tool_result / max_turns / cwd / touch_session / etc.)。
+- **Why 不在拦截点单独守门**:worker 调用 `run_chat_loop` 嵌套后,函数体本身不知道自己是 worker;把守门推到函数体内**单一权威**(对齐 RULE-A-006 单一权威),每个 persist site 一目了然。
+
+---
+
 ## Scenario: ⑨ 关 Permission Decision Layer (A2 + B7 PR1, 2026-06-13)
 
 > **Source of truth**: the 5-tier evaluation order lives in

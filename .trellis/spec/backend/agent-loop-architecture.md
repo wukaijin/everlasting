@@ -15,26 +15,55 @@
 ```rust
 #[allow(clippy::too_many_arguments)]
 pub async fn run_chat_loop(
-    tool_defs: Vec<ToolDef>,
-    provider: Arc<dyn Provider>,
-    context_window: u32,
-    rid: String,
-    session_id: String,
-    messages: Vec<ChatMessage>,
-    sink: Arc<dyn ChatEventSink>,
-    db: SqlitePool,
-    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
-    session_active_request: Arc<Mutex<HashMap<String, String>>>,
-    read_guard: ReadGuard,
-    memory_cache: Arc<MemoryCache>,
-    permission_asks: crate::agent::permissions::PermissionStore,
-    token: CancellationToken,
+    tool_defs: Vec<ToolDef>,                                                          // 1
+    provider: Arc<dyn Provider>,                                                       // 2
+    context_window: u32,                                                               // 3
+    rid: String,                                                                       // 4
+    session_id: String,                                                                // 5
+    messages: Vec<ChatMessage>,                                                        // 6
+    sink: Arc<dyn ChatEventSink>,                                                      // 7
+    db: SqlitePool,                                                                    // 8
+    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,                     // 9
+    session_active_request: Arc<Mutex<HashMap<String, String>>>,                       // 10
+    read_guard: ReadGuard,                                                             // 11
+    memory_cache: Arc<MemoryCache>,                                                    // 12
+    skill_cache: Arc<SkillCache>,                                                      // 13
+    permission_asks: crate::agent::permissions::PermissionStore,                       // 14
+    token: CancellationToken,                                                          // 15
+    // D3 PR3 (2026-06-17): resend context. When `Some(seq)`, the
+    // user-message persist site writes a `resend_message` audit row
+    // pointing at the original user message's seq. `None` for normal
+    // first-time sends. Best-effort.
+    resend_seq: Option<i64>,                                                           // 16
+    // L1a (2026-06-19): cross-request background-shell registry.
+    // Threaded into `ToolContext` so the 3 L1a tools can call into it.
+    // The agent loop itself reads it once per turn (after C3 compaction,
+    // before `provider.send`) to drain completion notifications.
+    background_shells: crate::background_shell::DefaultRegistry,                        // 17
+    // B6 PR1a (2026-06-19): worker turn cap. `None` = default 50 (MAX_TURNS).
+    // `let turn_limit = max_turns.unwrap_or(MAX_TURNS); for turn in 1..=turn_limit`.
+    // Production + 9 base tests pass `None`; the worker path passes `Some(20)`.
+    max_turns: Option<usize>,                                                          // 18
+    // B6 PR1b (2026-06-19): when `true`, `CancellationGuard::drop` skips
+    // `session_active_request.remove(session_id)`. The worker path uses this
+    // so its Drop does NOT evict the parent's `session_active_request[parent_session_id]`
+    // entry (REVIEW-SUBAGENT-PRD #2 / RULE-E-005). Production + tests pass `false`.
+    skip_session_active: bool,                                                         // 19
+    // B6 PR1b (2026-06-19): when `true`, all DB writes inside `run_chat_loop`
+    // (persist_turn / update_message_metadata / touch_session / add_token_usage /
+    // record_*_audit / persist_turn_cwd — 18 sites total) are skipped. The
+    // worker path uses this so its intermediate turns stay in-memory only
+    // (the `SubagentBufferSink` transcript captures them; PR2 persists into
+    // `subagent_runs`). Skipping also avoids the UNIQUE-constraint collision
+    // with the parent's own `persist_turn` calls — both loops would otherwise
+    // write to the same `messages` table keyed by `(session_id, seq)`.
+    skip_persist: bool,                                                                // 20
 ) { ... }
 ```
 
-### Why 14 parameters (and not a config struct)?
+### Why 20 parameters (and not a config struct)?
 
-The 14 parameters look excessive, but they are the **exact set of state pieces
+The 20 parameters look excessive, but they are the **exact set of state pieces
 the agent loop body needs**, and grouping them into a config struct would:
 
 1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
@@ -42,26 +71,46 @@ the agent loop body needs**, and grouping them into a config struct would:
 2. Add a layer of indirection without adding safety (Rust's borrow checker
    already enforces "use what you need")
 3. Obscure the 1:1 correspondence between production and test call sites
-   (the 9 `agent_loop_*` integration tests pass them in the same order, with
-   the same types — a config struct would let them diverge silently)
+   (the 31 `agent_loop_*` integration tests, including the 4 B6 worker tests,
+   pass them in the same order, with the same types — a config struct would let
+   them diverge silently)
 
 `#[allow(clippy::too_many_arguments)]` is the deliberate cost of keeping the
 dependency surface explicit. **Do not refactor this into a struct** without
-re-running the 9 integration tests + cargo check.
+re-running all 31 integration tests + cargo check.
+
+#### Evolution log (parameter count grew with new features)
+
+| Date | Count | PR / task | New param | Why |
+|---|---|---|---|---|
+| 2026-06-15 | 14 | `06-15-unify-chat-loop-dispatch` (RULE-A-006 closure) | — | baseline after production migrated through `run_chat_loop` |
+| 2026-06-17 | 15 | D3 PR3 | `resend_seq: Option<i64>` | resend audit row at user-message persist site |
+| 2026-06-19 | 17 | L1a | `background_shells: DefaultRegistry` | cross-request registry threaded into `ToolContext` + per-turn notification drain |
+| 2026-06-19 | 18 | B6 PR1a | `max_turns: Option<usize>` | worker turn cap; production + tests pass `None` |
+| 2026-06-19 | 19 | B6 PR1b | `skip_session_active: bool` | worker guard Drop skips `session_active_request.remove` |
+| 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | 18 persist-site gates inside the function body |
+
+The B6 cluster (PR1a + PR1b, adding 3 params in a single task) is the
+largest single jump. It is justified because the worker is a **structural**
+extension of the agent loop (it re-uses `run_chat_loop` recursively via
+`Box::pin`, see "Pattern: Worker Subagent" below), and the 3 params are the
+minimal surface needed to keep production + worker behavior isolated
+(session mapping cleanup + DB isolation + turn cap).
 
 ### Production + test call site parity
 
 - **Production**: `app/src-tauri/src/agent/chat.rs::chat` Tauri command's
   `tauri::async_runtime::spawn` body, after pre-flight (provider lookup +
-  cancel token registration + sink build). The call site is ~20 lines:
-  pure argument marshalling + one `.await`.
+  cancel token registration + sink build). The call site passes `None` for
+  `resend_seq` + `max_turns`, `false` for both `skip_session_active` and
+  `skip_persist` — production is never a worker.
 - **Tests**: `app/src-tauri/src/agent/tests.rs::agent_loop_basic_text_only_completes`
-  and 8 sibling tests pass a `MockProvider` + `MockEmitter` for the
+  and 30 sibling tests pass a `MockProvider` + `MockEmitter` for the
   `Arc<dyn Provider>` and `Arc<dyn ChatEventSink>` parameters. Other
   parameters are real (test DB, real `MemoryCache`, real `PermissionStore`,
   real `ReadGuard`).
 
-The 14-parameter signature is **production-ready as written** — no test-only
+The 20-parameter signature is **production-ready as written** — no test-only
 gating (no `#[cfg(test)]`), no compile-time `dead_code` allowance, no
 runtime branching on `cfg!(test)`.
 
@@ -79,7 +128,7 @@ behaves differently from tests.
 also call. One source of truth, two callers.
 
 ```rust
-// chat.rs::chat (production)
+// chat.rs::chat (production) — PR1 (B6) call site
 tauri::async_runtime::spawn(async move {
     // run_chat_loop owns its own CancellationGuard (cleans
     // cancellations + session_active_request maps on every exit
@@ -89,19 +138,29 @@ tauri::async_runtime::spawn(async move {
         tool_defs, provider, context_window,
         rid.clone(), session_id.clone(), messages,
         sink_for_spawn, db, cancellations, session_active_request,
-        read_guard, memory_cache, permission_asks, token,
+        read_guard, memory_cache, skill_cache, permission_asks, token,
+        None,                          // 16: resend_seq
+        background_shells.clone(),     // 17
+        None,                          // 18: max_turns (production uses MAX_TURNS=50)
+        false,                         // 19: skip_session_active (production chat owns the slot)
+        false,                         // 20: skip_persist (production persists normally)
     ).await;
 });
 ```
 
 ```rust
-// tests.rs (test)
+// tests.rs (test) — agent_loop_basic_text_only_completes
 run_chat_loop(
     tool_defs.clone(), mock_provider.clone(), 8000,
     rid.clone(), session_id.clone(), messages,
     mock_emitter.clone(), test_db, test_cancellations,
     test_session_active, read_guard.clone(), memory_cache.clone(),
-    permission_asks.clone(), token.clone(),
+    skill_cache.clone(), permission_asks.clone(), token.clone(),
+    None,                          // 16
+    background_shells.clone(),     // 17
+    None,                          // 18
+    false,                         // 19
+    false,                         // 20
 ).await;
 ```
 
@@ -160,12 +219,23 @@ removes are no-ops on the second call, but the redundancy is fragile
 removing, by showing both instances are byte-equal at construction:
 
 ```rust
-// Both sites construct the same struct with the same fields:
+// Both sites construct the same struct with the same fields (pre-PR1b):
 CancellationGuard {
     cancellations,                          // Arc<Mutex<HashMap<...>>>
     session_active_request,                 // Arc<Mutex<HashMap<...>>>
     request_id: rid,                        // String
     session_id,                             // String
+}
+
+// B6 PR1b (2026-06-19): the guard grew a 5th field — `skip_session_active: bool`.
+// Production + tests pass `false`; the worker path (via `run_subagent`)
+// passes `true`. See "Pattern: Worker Subagent" below for the worker context.
+CancellationGuard {
+    cancellations,
+    session_active_request,
+    request_id: rid,
+    session_id,
+    skip_session_active,                    // B6 PR1b
 }
 ```
 
@@ -173,8 +243,9 @@ CancellationGuard {
 
 ```rust
 fn drop(&mut self) {
-    // 1. cancellations.lock().remove(&self.request_id)
-    // 2. session_active_request.lock().remove(&self.session_id)
+    // 1. cancellations.lock().remove(&self.request_id)  — ALWAYS
+    // 2. if !self.skip_session_active { session_active_request.lock().remove(&self.session_id) }
+    //                                                     ^^^ B6 PR1b gate
 }
 ```
 
@@ -186,6 +257,9 @@ do the same work, with no double-fire.
 `agent_loop_cancel_in_turn_2_kills_loop` — asserts the loop is killed
 mid-turn AND the maps are cleaned (no leaked entries in
 `cancellations[rid]` or `session_active_request[session_id]`).
+**B6 PR1b regression**: `agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active` —
+asserts the worker's Drop (with `skip_session_active=true`) does NOT
+evict the parent's `session_active_request[parent_session_id]` entry.
 
 ### When to apply this pattern
 
@@ -201,6 +275,131 @@ mid-turn AND the maps are cleaned (no leaked entries in
   consolidate the side effect, not just prove equivalence
 - The struct has runtime state that differs between construction sites
   (different `Arc`s, different closures) — there's no equivalence to prove
+
+---
+
+## Pattern: Worker Subagent (B6 PR1, 2026-06-19)
+
+**Problem**: The harness needs a way for the main agent to **delegate a
+focused sub-task** to a worker agent running in an isolated context —
+independent messages, independent token budget, independent turn cap —
+without polluting the main conversation with verbose search / exploration
+output. The worker's result must come back as a single summary
+(`tool_result`), and the worker's intermediate state must stay isolated
+from the parent's session DB / cancel maps.
+
+**Solution**: Reuse `run_chat_loop` **recursively** as the worker's
+executor. The worker IS just another `run_chat_loop` invocation, but
+with 3 surgical guards (`max_turns` / `skip_session_active` / `skip_persist`)
+that keep its behavior isolated from the parent.
+
+```rust
+// agent/chat_loop.rs::run_subagent (~:1802) — the interceptor helper
+// captures the parent's run_chat_loop closure dependencies and spawns
+// the worker with the 3 isolation flags.
+Box::pin(run_chat_loop(
+    worker_tool_defs,                        // filter_tools_for_subagent(builtin, def)
+    provider.clone(),
+    context_window,
+    worker_rid,                              // "{parent_rid}-sub-{seq}"
+    parent_session_id.to_string(),           // REUSE parent's session_id for DB linkage
+    worker_messages,                         // [build_instructions_blocks, delegation_task]
+    worker_sink_dyn,                        // SubagentBufferSink (does NOT forward to parent)
+    db.clone(),
+    cancellations.clone(),                   // worker rid registered
+    _session_active_request.clone(),         // worker does NOT register (reuses parent's map)
+    read_guard.clone(),
+    memory_cache.clone(),
+    skill_cache.clone(),
+    permission_asks.clone(),
+    worker_token,                            // CHILD of parent_token — parent cancel propagates
+    None,                                    // 16: resend_seq
+    background_shells.clone(),
+    Some(SUBAGENT_MAX_TURNS),                // 18: 20 (worker turn cap)
+    true,                                    // 19: skip_session_active (worker Drop skips parent eviction)
+    true,                                    // 20: skip_persist (worker turns stay in-memory)
+)).await;
+```
+
+### Why a recursive `run_chat_loop` (vs a separate worker loop function)?
+
+The worker harness is the **same loop**: turn boundaries, C3 compaction,
+tool execution, error/cancel paths, emit, persist. Duplicating it would
+re-introduce the faithful-port drift hazard (see Pattern above). The 3
+new params are the minimal surface needed to isolate the worker from the
+parent; every other param is reused as-is.
+
+`Box::pin` breaks the async-fn recursion size-infinite Future chain
+(workers have `dispatch_subagent` stripped, so depth is bounded at 1,
+but the compiler can't prove this).
+
+### The 3 isolation flags
+
+| Flag | Value | What it prevents |
+|---|---|---|
+| `max_turns: Some(20)` | B6 PR1a | worker burning parent's token budget on a runaway loop |
+| `skip_session_active: true` | B6 PR1b | worker's `CancellationGuard::drop` evicting `session_active_request[parent_session_id]` (would break parent's `cancel_inflight_for_session` / RULE-E-005) |
+| `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; 18 function-body gates cover all persist sites |
+
+### Tool interception (NOT `execute_tool_inner`)
+
+`dispatch_subagent` is **registered** in `builtin_tools()` so the LLM
+can discover it + go through the ⑨ permission check, but its
+**execution** is intercepted in `chat_loop.rs`'s tool_use handling loop
+(at ~:1380). Why: `execute_tool_inner` signature is
+`(name, input, ctx, guard, session_id, skill_cache, cancel)` — it has no
+access to `provider` / `db` / `cancellations` / `session_active_request`
+/ `read_guard` / `memory_cache` / `permission_asks` /
+`background_shells`, all of which `run_subagent` needs (REVIEW-SUBAGENT-PRD
+#3 verified this empirically). Pushing them into `ToolContext` would
+blur the tool layer / agent layer boundary; the interception pattern
+keeps them at the agent loop layer where they naturally live.
+
+The interceptor builds a `ContentBlock::ToolResult` (with the
+`[status: completed|cancelled|error]` prefix from
+`format_dispatch_result`) and pushes it into `result_blocks` — tool_use/
+tool_result pairing is preserved (same invariant as RULE-A-007).
+
+### worker context (APPEND, never insert at 0)
+
+```rust
+// subagent.rs::build_worker_messages
+messages.push(/* synthetic user msg with build_instructions_blocks(memory_cache) */
+                /* banner carries cache_control: Ephemeral — worker's OWN breakpoint */);
+messages.push(/* optional synthetic assistant ack — keeps Anthropic wire alternation */);
+messages.push(/* delegation task user msg — APPEND, NOT prepend */);
+```
+
+**Prompt-cache invariant** (B12 + L1a both hit this trap): worker
+`messages[0]` is the worker's own cache breakpoint — independent of the
+parent's `messages[0]`. APPEND keeps the breakpoint stable. The summary
+returns to the parent as a `ContentBlock::ToolResult` (naturally at the
+end of the parent's accumulated `result_blocks`), so the parent's cache
+breakpoint is never disturbed.
+
+### When to apply this pattern
+
+- A new "control-flow tool" needs to be added to the agent loop (a tool
+  whose execution path is *not* a pure I/O function but does manipulate
+  agent-loop state). Examples that would qualify: a `delegate_to_user`
+  tool (asks the user a clarifying question mid-loop), a `spawn_parallel_workers`
+  tool (PR2+ dispatch_subagents plural).
+- A new sub-mode of `run_chat_loop` is needed (e.g., a "headless"
+  loop that doesn't go through the chat-event sink). Adding a new flag
+  + a new function-body gate is the right move; duplicating the function
+  is the anti-pattern.
+
+### When NOT to apply this pattern
+
+- The new tool's execution is a **pure I/O function** — register it in
+  `builtin_tools()` and add a `match` arm in `execute_tool_inner` like
+  every other tool. Only control-flow tools (those that need `provider` /
+  `db` / `cancellations` etc.) belong in `run_chat_loop`'s interception
+  loop.
+- The new sub-mode has **fundamentally different invariants** from
+  `run_chat_loop` (e.g., it doesn't emit `TurnComplete`, doesn't go
+  through C3). Write a separate function instead of a flag — flags
+  accumulate and obscure the code.
 
 ---
 
@@ -237,6 +436,12 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
 - User-controlled project guidance (AGENTS.md / CLAUDE.md) is delivered via
   **user-role messages** + `cache_control` (`memory/loader.rs`), not the system
   field — a layer *above* this assembly, not part of it.
+- **B6 PR1b (2026-06-19)**: the worker's system prompt is **fully replaced**
+  via `subagent::assemble_subagent_prompt(def, task)`, NOT mixed with the
+  parent's `behavior_prompt` + `mode_prefix` + `base_prompt` (Claude Code
+  convention, see research §5). The worker's permission boundary is enforced
+  at the ⑨ layer via `PermissionContext.is_worker` (and via `skip_persist`
+  / `skip_session_active` for the surrounding isolation), not via prompt text.
 
 ### When modifying the system prompt
 
@@ -264,6 +469,31 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
   **closed (2026-06-14)**. Both were originally closed by mirroring the
   fix into the faithful port; the 06-15 unification means the mirror is
   no longer needed.
+- `RULE-A-014` (B6 PR1b 2026-06-19, **open**): `PermissionContext.is_worker`
+  is set on the worker side (`_worker_permission_ctx` constructed in
+  `run_subagent`) but **not threaded into the nested `run_chat_loop` call**.
+  `run_chat_loop` internally rebuilds its own `PermissionContext { is_worker: false }`
+  from the session row. As a result, the `if ctx.is_worker { Decision::Deny }`
+  branch at the top of `ask_path` is **unreachable on the worker path**:
+  `general-purpose` + Edit/Plan mode + a write-tool that triggers Tier 4
+  ask_path / ask_shell will emit `permission:ask` → register into
+  `permission_asks` → wait for oneshot (which never comes because the
+  worker has no UI sink) → **hang until user Stop**. The Tier 4 ask
+  denial logic is unit-tested via `permissions::check` with
+  `is_worker: true` directly (decision path verified), but the end-to-end
+  worker path cannot trigger it without threading. **Fix** (~10 lines + 1
+  end-to-end test): add `is_worker: Option<bool>` as the 21st parameter
+  to `run_chat_loop`, pass `Some(true)` from `run_subagent`, have
+  `run_chat_loop` override the default `false` when `Some`. **Status**:
+  accepted as PR2+ follow-up; the trigger conditions are narrow
+  (`general-purpose` + Edit/Plan + dangerous tool), Yolo mode is
+  unaffected (Tier 4 bypass early-returns Allow), `researcher` is read-only
+  and never triggers ask.
+- `RULE-E-005` (worktree destroy await cancel): unaffected by B6 (worker
+  Drop is properly bounded by `skip_session_active=true`; the parent
+  `cancel_inflight_for_session` lookup continues to find the parent's
+  rid because `session_active_request[parent_session_id]` is preserved).
+  **Closed 2026-06-15**, remains closed under B6.
 
 If a future change forks `run_chat_loop` into `run_chat_loop_v2` (e.g.,
 for a new emission protocol), the original `run_chat_loop` **must** be
@@ -394,9 +624,18 @@ markdown rendering handles both markers uniformly.
 | `agent_loop_error_persists_thinking_and_tool_calls` | RULE-A-007: thinking + tool_use blocks accumulated before the error survive in the persisted `content` JSON |
 | `agent_loop_error_persist_failure_is_log_only` | RULE-A-007 decision B: persist failure on error path is log-only (no double-terminal Error event) |
 | `agent_loop_error_emits_turn_complete` | RULE-A-007 decision C: error path emits `TurnComplete` (seq + latency) for the partial turn, coexisting with the pre-emit Error |
+| `agent_loop_dispatch_subagent_completes_and_returns_summary` | B6 PR1b: parent turn 1 dispatch_subagent tool_use → worker runs → summary tool_result `[status: completed]`; parent's persisted messages do NOT contain the worker's intermediate text (`phantom_worker_text == 0`) |
+| `agent_loop_dispatch_subagent_cancel_propagates_to_worker` | B6 PR1b: parent_token cancel → worker_token child fires → status=cancelled + CANCELLED_MARKER; tool_use/tool_result pairing preserved |
+| `agent_loop_dispatch_subagent_error_returns_status_error` | B6 PR1b: MockProvider stream error → status=error; tool_use/tool_result pairing preserved |
+| `agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active` | B6 PR1b: `HangingThenCancel` worker + 500ms delayed cancel keeps worker in flight; snapshot verifies parent `session_active_request[parent_session_id]` is preserved (worker Drop with `skip_session_active=true` does NOT evict it) |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
 
-All 17 must pass on every change to `run_chat_loop`. If any fails, the
+All 21 must pass on every change to `run_chat_loop`. If any fails, the
 production call site in `chat.rs` is **at risk** of the same defect
 (failing the integration test means production would also fail).
+
+The 4 B6 worker tests use the same `MockProvider` + `MockEmitter`
+fixture as the existing 17 tests — no test-internal mock of the
+worker; the worker runs against the same `run_chat_loop` recursion
+that production would use, just with the 3 isolation flags set.

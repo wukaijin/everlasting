@@ -18,7 +18,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [LLM API Contract](./llm-contract.md) | Anthropic Messages API + extended thinking + SSE lifecycle + multi-provider dispatch (Anthropic/OpenAI) + test_model per-model connectivity probe + worktree/cancel + tool set | Filled (step 6, PR2-3, PR5 follow-up) |
 | [Git Diff Contract](./git-diff.md) | Workdir-vs-branch-tip FileDiff source of truth, `git --numstat` over `Patch::line_stats()`, fallback policy, numstat subprocess contract | Filled (2026-06-08, step 4 follow-up Bug 2) |
-| [Agent Loop Architecture](./agent-loop-architecture.md) | `run_chat_loop` 14-param shared entry point (production + test), CancellationGuard single-source via equivalence proof, faithful-port drift hazard anti-pattern | Filled (2026-06-15, task 06-15-unify-chat-loop-dispatch) |
+| [Agent Loop Architecture](./agent-loop-architecture.md) | `run_chat_loop` 20-param shared entry point (production + test), CancellationGuard single-source via equivalence proof, B6 worker subagent pattern (nested run_chat_loop + 18 skip_persist gates + skip_session_active), faithful-port drift hazard anti-pattern | Filled (2026-06-19, task 06-19-b6-subagent PR1) |
 
 > ℹ️ 8-PR4 cleanup (2026-06-10): 移除 3 个空骨架文件 (`directory-structure.md` / `quality-guidelines.md` / `logging-guidelines.md`) — 项目无对应填充需求,直接删除更清晰。
 
