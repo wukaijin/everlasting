@@ -92,6 +92,9 @@
 | D2   | 跨 session 全文搜索(**双驱动** 路径) | ① **用户驱动**(MVP,1 PR):UI Modal + `Cmd/Ctrl+K` 触发 + 跳到原 message ② **Agent 驱动**(增量,1 PR):`search_history` tool,LLM 决策时调;**共享 `search_messages` Tauri command**;**实施顺序:先①后②**,可只 ship ①;**降档理由(2026-06-17)**:session 积累尚浅 + B5/C3 已覆盖"当次 memory"层,价值随 session 基数增长。详见 [IMPLEMENTATION §4 2026-06-17](./IMPLEMENTATION.md#4-决策日志) |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
 | ~~A7~~ | ~~RDP 双屏 position bug 修复~~ | ✅ 06-14 落地(根因 Wayland setPosition 限制),见 §1.2 |
+| L2   | 单 turn 多 tool 并发执行(先只读 batch) | **协议就绪**:Anthropic 默认多 tool_use + 本项目 tool_result 已单消息打包(`chat_loop.rs:1133`);仅 `for await`→并发,低门槛高价值。调研见 [spikes/2026-06-19-async-parallel-tool-research.md](../spikes/2026-06-19-async-parallel-tool-research.md) + [-independent-research.md](../spikes/2026-06-19-async-parallel-tool-independent-research.md) |
+| L1   | 后台 shell + 完成通知(仿 opencode-pty `<pty_exited>`) | 解决 shell 120s timeout 盖不住的长任务;中成本,需"下一轮注入系统通知"机制;复用进程组 kill(RULE-E-002)。调研同 L2 |
+| L3   | 并行 subagent + worktree 隔离(仿 Hermes `delegate_task`) | **依赖 B6 subagent 落地**,缓做;架构预留(本项目 `git/worktree.rs` 已就位);旗舰级 harness 学习项 |
 
 ### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项)
 
