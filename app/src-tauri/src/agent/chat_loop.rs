@@ -38,9 +38,11 @@
 //!   semantic.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -992,7 +994,210 @@ pub async fn run_chat_loop(
         // `permission_asks` with a no-sender entry — the 120s
         // timeout fires and the test exits).
         let mut result_blocks: Vec<ContentBlock> = Vec::new();
-        for (id, name, input) in &tool_calls {
+        if is_parallel_eligible(&tool_calls) {
+            // ---- L2 parallel path (read-only batch) ----
+            //
+            // All tool_use blocks in this turn are in the
+            // {read_file, grep, glob, list_dir, use_skill}
+            // whitelist → run them concurrently via
+            // `FuturesUnordered`. `web_fetch` is excluded (Q2)
+            // because its Tier 4 default is `ask`, which would
+            // fire multiple concurrent `permission:ask` modals.
+            //
+            // Permission-silence caveat (Q2 design): the set is
+            // silent in the COMMON case —
+            //   - `use_skill` is `ToolKind::Other` → Tier 5
+            //     default-allow in every mode;
+            //   - path tools (`read_file`/`grep`/`glob`/
+            //     `list_dir`) hit Tier 4.1 path-grant or Tier
+            //     4.2 inside-root silent Allow in `Edit`/`Yolo`
+            //     (and in `Plan` too — `filter_tools_for_mode`
+            //     only drops write/edit/shell, so read tools
+            //     reach Tier 4 and resolve silently when the
+            //     path is inside the project root).
+            // The known EDGE CASE: a path tool whose `path`
+            // resolves OUTSIDE the project root (no
+            // `session_tool_permissions` path-glob grant) falls
+            // through to `ask_path` and emits a `permission:ask`.
+            // In a parallel batch this can fire multiple
+            // concurrent modals from the same turn. This is a
+            // low-probability case (the LLM typically reads
+            // inside-repo files in one batch); the frontend's
+            // per-session `pendingBySession` Map keys by `rid`
+            // so it does not crash, only produces overlapping
+            // modal UX. A future tightening can either (a) add
+            // `path-outside-root` read tools to the
+            // `is_parallel_eligible` exclusion, or (b) introduce
+            // a two-phase check-then-execute split. Tracked as a
+            // follow-up, not a blocker for L2 MVP.
+            //
+            // Result ordering: `result_slots` is pre-
+            // allocated to the tool_use count and each task
+            // writes its block at its OWN index. The LLM
+            // context sees tool_results in the SAME order as
+            // the tool_use blocks regardless of which task
+            // finishes first. `emit_tool_result` fires as
+            // each task completes (streaming, matching the
+            // serial path's per-iteration emit).
+            //
+            // Cancel: every task takes `token.clone()` so the
+            // execute_tool's `tokio::select!` wrapper cancels
+            // each in-flight task independently. RULE-A-004
+            // (cancelled tool skips audit) is preserved per-
+            // task: a task whose `token.is_cancelled()` is
+            // true after execute sets the shared `cancelled`
+            // flag and skips the `tool_executed` audit write.
+            // Already-completed tasks still get their audit
+            // row. The shared flag is read after the join to
+            // drive the existing cancel path.
+            let n = tool_calls.len();
+            let mut result_slots: Vec<Option<ContentBlock>> =
+                (0..n).map(|_| None).collect();
+            let cancelled_flag = Arc::new(AtomicBool::new(false));
+            let mut fu: FuturesUnordered<_> = tool_calls
+                .iter()
+                .enumerate()
+                .map(|(i, (id, name, input))| {
+                    let cancelled_flag = cancelled_flag.clone();
+                    let sink = sink.clone();
+                    let rid = rid.clone();
+                    let id = id.clone();
+                    let name = name.clone();
+                    let input = input.clone();
+                    let permission_ctx = permission_ctx.clone();
+                    let permission_asks = permission_asks.clone();
+                    let db = db.clone();
+                    let read_guard = read_guard.clone();
+                    let session_id = session_id.clone();
+                    let skill_cache = skill_cache.clone();
+                    let current_ctx = current_ctx.clone();
+                    let token = token.clone();
+                    async move {
+                        // check + execute live in the SAME task
+                        // (Q2 rationale: no ask risk in the
+                        // parallel set → no need to split into
+                        // a two-phase check-then-execute).
+                        let decision = permissions::check(
+                            &permission_ctx,
+                            &permission_asks,
+                            &db,
+                            &sink,
+                            &name,
+                            &input,
+                            &id,
+                            &token,
+                        )
+                        .await;
+                        if let Decision::Deny { reason, critical: _ } = decision {
+                            let envelope = crate::agent::helpers::tool_result_envelope(
+                                &reason,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope.clone(),
+                                is_error: true,
+                            });
+                            return Some((
+                                i,
+                                ContentBlock::ToolResult {
+                                    tool_use_id: id,
+                                    content: envelope,
+                                    is_error: true,
+                                },
+                            ));
+                        }
+
+                        let tool_exec_start = Instant::now();
+                        let (content, is_error, _update, exit_code) =
+                            crate::tools::execute_tool(
+                                &name,
+                                &input,
+                                &current_ctx,
+                                Some(&read_guard),
+                                Some(&session_id),
+                                Some(&skill_cache),
+                                token.clone(),
+                            )
+                            .await;
+                        let duration_ms = tool_exec_start.elapsed().as_millis();
+                        // RULE-A-004 (2026-06-15): a tool cancelled
+                        // mid-flight MUST NOT leave a `tool_executed`
+                        // audit row. The check + the skip are
+                        // back-to-back (no `.await` between them).
+                        // We broadcast via the shared AtomicBool so
+                        // the main loop flips its local `cancelled`
+                        // after the join and drives the existing
+                        // cancel path.
+                        if token.is_cancelled() {
+                            cancelled_flag.store(true, Ordering::SeqCst);
+                        } else if let Err(e) = permissions::record_tool_executed_audit(
+                            &db,
+                            &session_id,
+                            &name,
+                            &input,
+                            duration_ms,
+                            exit_code,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                "chat: record_tool_executed_audit failed (non-fatal)"
+                            );
+                        }
+                        // Parallel batch is read-only by
+                        // construction (is_parallel_eligible),
+                        // so `update.new_cwd` is None for every
+                        // task — no `current_ctx.cwd` mutation to
+                        // apply. (`use_skill` doesn't cd; only
+                        // `shell` does, and shell is excluded.)
+                        let envelope_str = crate::agent::helpers::tool_result_envelope(
+                            &content,
+                            &current_ctx.worktree_path,
+                        );
+                        sink.emit_tool_result(&crate::state::ToolResultPayload {
+                            request_id: rid.clone(),
+                            tool_use_id: id.clone(),
+                            content: envelope_str.clone(),
+                            is_error,
+                        });
+                        Some((
+                            i,
+                            ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content: envelope_str,
+                                is_error,
+                            },
+                        ))
+                    }
+                })
+                .collect();
+            while let Some(maybe_block) = fu.next().await {
+                if let Some((i, block)) = maybe_block {
+                    result_slots[i] = Some(block);
+                }
+            }
+            // Collapse the slots into ordered result_blocks.
+            // Every slot is Some (every task returns a block on
+            // every branch — success, deny, cancel-after-execute
+            // all emit + return a block); the only way a slot
+            // could stay None is if the task panicked, in which
+            // case `fu.next()` would have propagated the panic.
+            result_blocks = result_slots.into_iter().flatten().collect();
+            if cancelled_flag.load(Ordering::SeqCst) {
+                cancelled = true;
+            }
+        } else {
+            // ---- Serial path (write / shell / web_fetch /
+            //       update_checklist / mixed batch) ----
+            // Unchanged from pre-L2 behavior. Any batch that
+            // contains a tool outside the read-only whitelist
+            // falls back here; web_fetch is excluded from the
+            // parallel set (Q2) precisely so its Tier 4 ask can
+            // fire through the normal single-modal flow.
+            for (id, name, input) in &tool_calls {
             // Run the full 5-tier permission check (matches
             // production). Tests that want a clean
             // tool-execute-and-continue path should pre-load
@@ -1085,6 +1290,7 @@ pub async fn run_chat_loop(
             });
             if cancelled {
                 break;
+            }
             }
         }
 
@@ -1244,4 +1450,47 @@ async fn load_for_session(
     project_path: &str,
 ) -> Vec<crate::memory::MemoryLayer> {
     crate::memory::loader::load_for_session(cache, project_id, project_path).await
+}
+
+/// L2 (2026-06-19): decide whether a single turn's `tool_use`
+/// batch is eligible for concurrent execution.
+///
+/// The whole batch runs concurrently iff **every** tool_use name
+/// is in the read-only silent-allow set
+/// `{read_file, grep, glob, list_dir, use_skill}`. Any other
+/// tool (write_file / edit_file / shell / web_fetch /
+/// update_checklist / future tools) → fall back to the serial
+/// path with identical pre-L2 behavior.
+///
+/// Why a whole-batch predicate (not per-tool dispatch)?
+/// - **Q1**: zero dependency analysis. A mixed batch (read +
+///   write) is conservatively serialized. Per-tool dispatch
+///   would require a write-conflict detector (same-file
+///   read+edit, etc.) which is out of scope for MVP.
+/// - **Q2**: `web_fetch` is excluded even though it's
+///   technically read-only — its Tier 4 default is `ask`, and
+///   parallel-modal is an unsolved UX (multiple concurrent
+///   `permission:ask` events from the same turn). Letting it
+///   go serial preserves the single-modal flow.
+/// - **`update_checklist`** is excluded by Q1's "writing to
+///   agent-managed state" categorization (it mutates the per-
+///   request checklist handle); even though the mutation is
+///   atomic (Mutex), serializing keeps the audit order
+///   predictable.
+///
+/// The empty-batch case: `should_continue` is only true when
+/// `!tool_calls.is_empty()` (chat_loop.rs above), so this
+/// function is never called with an empty slice in production.
+/// Returns `false` defensively for the empty case (the serial
+/// path's `for` loop is a no-op anyway).
+pub(crate) fn is_parallel_eligible(
+    tool_calls: &[(String, String, serde_json::Value)],
+) -> bool {
+    const ELIGIBLE: &[&str] = &["read_file", "grep", "glob", "list_dir", "use_skill"];
+    if tool_calls.is_empty() {
+        return false;
+    }
+    tool_calls
+        .iter()
+        .all(|(_, name, _)| ELIGIBLE.contains(&name.as_str()))
 }
