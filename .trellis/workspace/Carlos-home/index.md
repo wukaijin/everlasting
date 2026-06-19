@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 44
-- **Last Active**: 2026-06-19
+- **Total Sessions**: 45
+- **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~412 | Active |
+| `journal-2.md` | ~446 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-06-20 | B6 Subagent PR1: dispatch_subagent + worker isolation (run_chat_loop 20-param) | `3d817d6`, `2373f2f` | `main` |
 | 44 | 2026-06-19 | system-prompt 改造：behavior_prompt + RULE-E-013 闭合 | `cf1da74`, `f170a9b`, `33e8f1b` | `main` |
 | 43 | 2026-06-19 | L1a 后台 shell + 完成通知 | `4bfd178`, `eaa6b7e`, `aa879a7` | `main` |
 | 42 | 2026-06-19 | L2 follow-up: RULE-A-013 — is_parallel_eligible 加 path-outside-root 检测,保持并发集合 silent | `5f2c19c`,  `15ff4e2`,  `1914efb` | `main` |

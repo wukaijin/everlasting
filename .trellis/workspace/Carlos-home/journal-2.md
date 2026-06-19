@@ -410,3 +410,37 @@ L1a(后台 shell + 完成通知,不带 PTY)落地。BackgroundShellRegistry trai
 ### Next Steps
 
 - None - task complete
+
+
+## Session 45: B6 Subagent PR1: dispatch_subagent + worker isolation (run_chat_loop 20-param)
+
+**Date**: 2026-06-20
+**Task**: B6 Subagent PR1: dispatch_subagent + worker isolation (run_chat_loop 20-param)
+**Branch**: `main`
+
+### Summary
+
+B6 Subagent PR1 完整收尾。Phase 1: brainstorm + 业界 subagent 调研(Claude Code/OpenHands/Cline/Cursor/Aider 5 工具 8 维度对比 + §10 Mapping)+ 9 决策 + deepseek-v4-pro 评审 6 项修订(14→17 参/CancellationGuard 双删/dispatch_subagent 拦截路径/max_turns 第 18 参/PermissionContext.is_worker/messages 顺序)全采纳。Phase 2: PR1a 基础设施 3 改(run_chat_loop max_turns + CancellationGuard.skip_session_active + PermissionContext.is_worker)+ PR1b dispatch_subagent 核心(agent/subagent.rs 885 行 SubagentDef/SubagentBufferSink/filter_tools_for_subagent/format_dispatch_result + agent loop 层拦截 + run_subagent 嵌套 18 skip_persist gate + 4 worker 集成测试)。706 tests pass / 0 新 warning。Phase 3: trellis-check PASS(11 AC + 5 不变量全 verify)+ spec 沉淀(tool-contract.md +Scenario / agent-loop-architecture.md 14→20 重写 + Worker Subagent Pattern)+ DEBT.md 登记 RULE-A-014 follow-up(嵌套 run_chat_loop is_worker 未 threaded,Edit/Plan + 写工具 ask 挂起,触发条件罕见,Yolo/researcher 不受影响)+ 2 commits。后续 PR2 subagent_runs 持久化 + PR3 前端 ToolCallCard 展开。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d817d6` | (see git log) |
+| `2373f2f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
