@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 21 | 健壮性 + 债务,中长期清理 |
+| P2 | 20 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **46** | 含历史 review 合并 |
+| **Total** | **45** | 含历史 review 合并 |
 
 ---
 
@@ -589,7 +589,9 @@
 - **Fix** (follow-up,任选一):
   - (a) **推荐**:`is_parallel_eligible` 加 path-outside-root 检测(用 `projects/boundary.rs` 非失败版 `is_within_root`),任一 out-of-root read tool 拉回串行批 —— 同步函数成本低,保留"并发集合绝对 silent"不变量
   - (b) 两阶段 check-then-execute(先串行 check 全部,全 Allow 才并行 execute)—— 复杂,改 task 结构
-- **Status**: **open (MVP 接受现状,2026-06-19)** — `chat_loop.rs:1000-1009` 注释已记录 edge case + 两方案;PRD `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/prd.md` Out of Scope 标 follow-up;架构见 `docs/ARCHITECTURE.md §2.5.9`
+- **Status**: **closed (2026-06-19)** — 采用方案 a 收口。`is_parallel_eligible` 签名加 `root: &Path`,新增 path 解析循环(absolute as-is / relative `root.join(p)`,与 `permissions/mod.rs:560-571` 镜像),委托 `projects::boundary::is_within_root`(非失败 bool 版,8 个 boundary 单测复用)。`use_skill` 跳过 path 检查(无 path arg,Tier 5 default-allow 永远 silent)。任一 path tool 的 path 解析到 root 外 → 整批拉回串行,"并发集合绝对 silent"不变量补齐。串行路径零字节改动,`permissions/mod.rs` 零字节改动(只 mirror 其 path 解析约定)。14 个老 `is_parallel_eligible` call 全部更新签名,新增 `is_parallel_eligible_boundary_silent`(6 个 path 场景)。`docs/ARCHITECTURE.md §2.5.9` 触发/判定/Q2/RULE-A-013 段重写,谓词升级为 name+path。**未采用方案 b**:两阶段 check-then-execute 改 task 结构,影响面大,与 L2 MVP"最小并行结构"目标冲突;暂不在本批规划内。
+- **Closed At**: `5f2c19c`
+- **Related Task**: `.trellis/tasks/06-19-l2-followup-rule-a-013-boundary-silent-batch`
 - **Owner**: carlos
 - **Discovered In**: L2 PR1 trellis-check(2026-06-19)
 
