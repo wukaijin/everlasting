@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 20 | 健壮性 + 债务,中长期清理 |
+| P2 | 21 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **45** | 含历史 review 合并 |
+| **Total** | **46** | 含历史 review 合并 |
 
 ---
 
@@ -576,6 +576,19 @@
 - **Status**: open
 - **Owner**: carlos
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
+
+### RULE-E-012 — background_shell 已完成 ShellEntry 永不清理
+
+- **Level**: P2
+- **Subsystem**: Tools (L1 后台 shell)
+- **File**: `app/src-tauri/src/background_shell/in_memory.rs`(`ShellEntry` HashMap,`ShellState::Done` 不剔除)
+- **Description**: 每个 `run_background_shell` start 在 `Inner.shells` 加一个 `ShellEntry`,完成后只切到 `ShellState::Done`(供 `shell_status` 回查),**永不 remove**。通知队列有 100 上限(`MAX_NOTIFICATIONS_PER_SESSION`)兜底,但 `shells` HashMap 本身无界。
+- **Impact**: 长跑进程(数天不重启)+ LLM 频繁后台任务 → 内存缓慢增长。非数据丢失/安全/正确性,纯资源效率。个人单用户场景实际风险低(app 重启即清空,HashMap 进程内不持久)。
+- **Fix**: sweeper task 定期 prune 超过 N 分钟的 `Done` entry;或 LRU 上限(如每 session 最近 50 个)。需保留"刚完成的 entry 可被 `shell_status` 回查"窗口(建议 ≥5 min,避免 LLM 收到完成通知后调 status 已 NotFound)。
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: (待开,follow-up)
+- **Discovered In**: L1 PR1 实现(2026-06-19,task `06-19-l1-shell-pty`)
 
 ---
 
