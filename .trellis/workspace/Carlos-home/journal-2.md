@@ -305,3 +305,38 @@ MVP 落地 is_parallel_eligible + FuturesUnordered 并行路径(result_slots 按
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: L2 follow-up: RULE-A-013 — is_parallel_eligible 加 path-outside-root 检测,保持并发集合 silent
+
+**Date**: 2026-06-19
+**Task**: L2 follow-up: RULE-A-013 — is_parallel_eligible 加 path-outside-root 检测,保持并发集合 silent
+**Branch**: `main`
+
+### Summary
+
+MVP 落地 DEBT RULE-A-013 方案 a(谓词扩展 path-outside-root 检测)。is_parallel_eligible 签名加 root: &Path;新增 path 解析循环(absolute as-is / relative root.join(p),镜像 permissions/mod.rs:560-571);委托 projects::boundary::is_within_root(bool 版 8 个 boundary 单测复用)。任一 path tool 的 path 解析到 root 外 → 整批拉回串行;'并发集合绝对 silent'不变量补齐。use_skill 跳过 path 检查(无 path arg,Tier 5 default-allow 永远 silent)。不变量:串行路径零字节改动,permissions/mod.rs 零字节改动(只 mirror 其 path 解析约定),并发结构(FuturesUnordered + result_slots + AtomicBool)不变。14 个老 is_parallel_eligible call 全部更新签名,batch helper 加 paths/root 参数化;新增 is_parallel_eligible_boundary_silent(6 个 path 场景:absolute in/relative in/absolute out/relative ../foo out/path tool 无 path/use_skill+path 共存)。cargo test --lib 630 passed(原 629 + 1 新 #[test] 含 6 case)。docs/ARCHITECTURE.md §2.5.9 触发/判定/Q2/RULE-A-013 收口段重写。DEBT.md RULE-A-013 closed (2026-06-19),Closed At 5f2c19c;P2 21→20,Total 46→45。3 commit:fix+arch → DEBT closed → archive。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5f2c19c` | (see git log) |
+| `15ff4e2` | (see git log) |
+| `1914efb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
