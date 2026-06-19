@@ -510,8 +510,8 @@ Custom system prompt / `.everlasting/system.md` / 模板变量方向对，但默
 
 | 优先级 | 动作 | 依据 |
 |---|---|---|
-| **P0 现在就修** | `build_system_prompt()` 补全工具清单（含 update_checklist） | 纯现状修复，不依赖任何方案 |
-| **P1 做方案 A** | 加 `behavior_prompt.rs`，修正工具名 + 调换拼接顺序 | 务实、立竿见影 |
-| **P2 拆 model_family_guidance** | 作为方案 A 增量 | 方案 B 唯一有价值子项 |
+| **P0 现在就修** | ✅ 已实施（2026-06-19，`06-19-system-prompt`）— 删除硬编码工具枚举改通用表述（PRD D2，比原「补全」更治本） | RULE-E-013 闭合 |
+| **P1 做方案 A** | ✅ 已实施（2026-06-19）— `behavior_prompt.rs`（8 段）+ 拼接顺序 `behavior+mode+base` + 语言约束（PRD D3） | 务实、立竿见影 |
+| **P2 拆 model_family_guidance** | follow-up | 方案 B 唯一有价值子项 |
 | **暂缓** | 方案 B 整体 | 概念混淆 + 已天然达成 + 反优化 |
-| **先于一切** | 定 4–6 场景 mini-eval | 让 prompt 迭代可量化 |
+| **先于一切** | 定 4–6 场景 mini-eval | 让 prompt 迭代可量化（follow-up） |

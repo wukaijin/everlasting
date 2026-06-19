@@ -597,10 +597,11 @@
 - **File**: `app/src-tauri/src/agent/system_prompt.rs:79-81`(`build_system_prompt` 硬编码工具清单)+ `app/src-tauri/src/agent/chat_loop.rs:327`(拼接)
 - **Description**: `build_system_prompt()` 文案 "You have access to tools (read_file, write_file, edit_file, shell, grep, glob, list_dir)" 是**硬编码字符串**,与 `tools::builtin_tools()` 实际注册的工具集脱钩。当前已漏列 `update_checklist`(B12)/ `web_fetch`(P1)/ `use_skill`(B4)/ `run_background_shell`·`shell_status`·`shell_kill`(L1) 共 6 个工具。每次新增 tool 都得人记得回来改这行字符串,典型漂移债。
 - **Impact**: **当前影响小** —— LLM 的工具可见性以 `ChatRequest.tools` 数组(`provider.send` 传入)为权威,system prompt 这句清单只是冗余能力声明,漏列不影响 LLM 调用这些工具。真实风险在**未来**:一旦方案 A 的 `behavior_prompt` 在文案里按具体工具名引用(如误写 "use TodoWrite"),会让模型调用不存在的工具名(system-prompt-research §7.2 已预警)。
-- **Fix**: 治本 —— 改从 `tools::builtin_tools()` 动态生成工具名清单注入 prompt(消除手动同步);治标 —— 至少在加 tool 的 spec convention 里加"同步 system prompt 清单"检查。建议前者,~15 行。
-- **Status**: open
+- **Fix**: 治本 —— **删除硬编码工具枚举,改通用表述**("tools defined in this request"),工具可见性完全交给 `tools[]`。比原登记的"动态生成"更治本(零维护 + 与 mode filter 自动一致),PRD D2 采纳;+ 新增 `assemble_system_prompt` 三层组装。
+- **Status**: **closed (2026-06-19)** — `build_system_prompt` 删 `(read_file, write_file, edit_file, shell, grep, glob, list_dir)` 枚举改 "tools defined in this request";路径相对性说明保留。回归保护 `build_system_prompt_no_hardcoded_tool_list`。
 - **Owner**: carlos
-- **Related Task**: (待开,作为 system-prompt 方案 A 的 P0 先修,见 `docs/research/system-prompt-research.md §7.8`)
+- **Closed At**: `f170a9b`
+- **Related Task**: `.trellis/tasks/06-19-system-prompt`
 - **Discovered In**: `docs/research/system-prompt-research.md §7.2`(system prompt 调研评审,2026-06-19)
 
 ---
@@ -790,6 +791,8 @@
 | 2026-06-18 | RULE-A-008 | open | **closed** | 抽 push_message_tokens helper,estimate_messages_tokens 与 _iter 共用;case_1~7 回归通过 | 同上 task |
 
 | 2026-06-19 | RULE-A-012 | open | **closed** | 双根因合并 single RULE。**A** provider reqwest `.timeout(60s)`(总 deadline,reqwest 文档明示不适合 SSE)改 `.read_timeout(60s)`(per-chunk,resets per SSE event),`anthropic.rs:209-211` + `openai.rs:424-426` 同步改,保留 `.connect_timeout(10s)`;**D** `chat_loop.rs:657` `Err(err)` 静默包装补 `tracing::warn!(request_id, turn, category=?err.category(), error=%err, "chat: LLM stream errored")`(`LlmErrorCategory` 只有 Debug 没有 Display,故 `?` 走 Debug,产出五类 variant name 同 Display 行为)。incident `mz8s3hqwx6rmqjswgte` / `messages.seq=37`(seq=36→37 间隔 60.403s 实锤);fix commit `05037ac`,cargo check + 6 个 agent_loop_error_* 集成测试全 pass(622 总数,0 warning)。Out of scope:抬总超时到 600s(LiteLLM 风格)——否决,`read_timeout=60s` 已 cover 慢代理,真 60s 无 chunk 是代理死了该报错;per-provider timeout 列(`providers` / `models` 表加列)——否决本次做,DB schema 改动有迁移成本,等真有多 provider 用户被掐再上。spec 沉淀:`.trellis/spec/backend/error-handling.md` §RULE-A-012 + `docs/IMPLEMENTATION.md §4` 2026-06-19 ADR | `.trellis/tasks/2026-06/06-19-fix-llm-streaming-timeout-and-tracing` |
+
+| 2026-06-19 | RULE-E-013 | open | **closed** | system prompt 工具清单:删除硬编码枚举改通用表述(比原"动态生成"更治本,PRD D2);`build_system_prompt_no_hardcoded_tool_list` 回归保护;随 behavior_prompt 同 task 落地 | `.trellis/tasks/06-19-system-prompt` |
 
 ---
 

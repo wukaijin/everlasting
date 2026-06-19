@@ -1,0 +1,5 @@
+{"file": "docs/research/system-prompt-research.md", "reason": "方案 A/B/C + §7 评审 + behavior_prompt 草案 + §7.8 推荐表，本 task 实现的单一 source"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "system prompt 构建/拼接在 agent loop 的位置与约定（chat_loop.rs:327 拼接点）"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "builtin_tools() 注册全集(13) + mode filter，RULE-E-013 上下文（D2 不列具体名的依据）"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "指令文件走 user message 的设计，确保 behavior_prompt(system) 与之分层不冲突"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "system 字段结构与 cache_control 机制，D4(MVP 不动 cache) 的依据"}
