@@ -2799,49 +2799,199 @@ fn messages_to_text(msgs: &[ChatMessage]) -> String {
 ///   update_checklist) in an otherwise-eligible batch → false
 /// - empty batch → false (defensive; the agent loop only calls
 ///   this on non-empty `tool_calls`)
+/// - RULE-A-013 (2026-06-19): path-outside-root read tools
+///   pull the batch back to serial. `paths` lets the test pin
+///   each tool's `path` arg (empty string = no `path` arg).
 #[test]
 fn is_parallel_eligible_classifies_correctly() {
     use crate::agent::chat_loop::is_parallel_eligible;
 
-    fn batch(names: &[&str]) -> Vec<(String, String, serde_json::Value)> {
+    /// `names[i]` is the tool name; `paths[i]` is the `path`
+    /// arg to inject (empty string = no `path` field, mirroring
+    /// a model call without a path arg). All paths are
+    /// constructed as absolute to the `root` passed in.
+    fn batch(names: &[&str], paths: &[&str], root: &std::path::Path) -> Vec<(String, String, serde_json::Value)> {
         names
             .iter()
-            .map(|n| ("x".into(), (*n).into(), serde_json::json!({})))
+            .zip(paths.iter().chain(std::iter::repeat(&"")))
+            .map(|(n, p)| {
+                let input = if p.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::json!({ "path": root.join(p).to_string_lossy() })
+                };
+                ("x".into(), (*n).into(), input)
+            })
             .collect()
     }
 
-    // All-eligible permutations of the read-only set.
-    assert!(is_parallel_eligible(&batch(&["read_file"])));
-    assert!(is_parallel_eligible(&batch(&["read_file", "grep", "glob"])));
-    assert!(is_parallel_eligible(&batch(&["list_dir", "use_skill"])));
-    assert!(is_parallel_eligible(&batch(&[
-        "read_file", "grep", "glob", "list_dir", "use_skill"
-    ])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    // All-eligible permutations of the read-only set (no paths
+    // — the path check is vacuously true).
+    assert!(is_parallel_eligible(&batch(&["read_file"], &[], root), root));
+    assert!(is_parallel_eligible(
+        &batch(&["read_file", "grep", "glob"], &[], root),
+        root
+    ));
+    assert!(is_parallel_eligible(
+        &batch(&["list_dir", "use_skill"], &[], root),
+        root
+    ));
+    assert!(is_parallel_eligible(
+        &batch(
+            &["read_file", "grep", "glob", "list_dir", "use_skill"],
+            &[],
+            root
+        ),
+        root
+    ));
 
     // Each excluded tool alone → false (so a single-tool batch
     // of an excluded tool stays serial).
-    assert!(!is_parallel_eligible(&batch(&["write_file"])));
-    assert!(!is_parallel_eligible(&batch(&["edit_file"])));
-    assert!(!is_parallel_eligible(&batch(&["shell"])));
-    assert!(!is_parallel_eligible(&batch(&["web_fetch"])));
-    assert!(!is_parallel_eligible(&batch(&["update_checklist"])));
+    assert!(!is_parallel_eligible(&batch(&["write_file"], &[], root), root));
+    assert!(!is_parallel_eligible(&batch(&["edit_file"], &[], root), root));
+    assert!(!is_parallel_eligible(&batch(&["shell"], &[], root), root));
+    assert!(!is_parallel_eligible(&batch(&["web_fetch"], &[], root), root));
+    assert!(!is_parallel_eligible(
+        &batch(&["update_checklist"], &[], root),
+        root
+    ));
 
     // Mixed: one excluded tool poisons the whole batch.
-    assert!(!is_parallel_eligible(&batch(&[
-        "read_file", "edit_file", "grep"
-    ])));
-    assert!(!is_parallel_eligible(&batch(&[
-        "read_file", "web_fetch"
-    ])));
-    assert!(!is_parallel_eligible(&batch(&[
-        "read_file", "update_checklist"
-    ])));
+    assert!(!is_parallel_eligible(
+        &batch(&["read_file", "edit_file", "grep"], &[], root),
+        root
+    ));
+    assert!(!is_parallel_eligible(
+        &batch(&["read_file", "web_fetch"], &[], root),
+        root
+    ));
+    assert!(!is_parallel_eligible(
+        &batch(&["read_file", "update_checklist"], &[], root),
+        root
+    ));
 
     // Unknown / future tool → conservatively false (serial).
-    assert!(!is_parallel_eligible(&batch(&["some_future_tool"])));
+    assert!(!is_parallel_eligible(
+        &batch(&["some_future_tool"], &[], root),
+        root
+    ));
 
     // Empty batch → false (defensive).
-    assert!(!is_parallel_eligible(&[]));
+    assert!(!is_parallel_eligible(&[], root));
+}
+
+/// RULE-A-013 (2026-06-19): `is_parallel_eligible` now also
+/// checks path-outside-root. Cases (all use a real tempdir as
+/// `root` so `is_within_root` works as in production):
+/// 1. absolute in-root path → eligible
+/// 2. relative in-root path → eligible (joined onto root)
+/// 3. absolute out-of-root path → falls back to serial
+/// 4. relative `../foo` out-of-root path → falls back to serial
+/// 5. path tool without a `path` arg → eligible (tool layer
+///    schema validation is the fallback; mirrors the
+///    permission layer's no-path convention)
+/// 6. `use_skill` + arbitrary path in same batch → eligible
+///    (`use_skill` is name-eligible and exempt from the path
+///    check, so it can ride along with a path tool that has a
+///    path arg)
+#[test]
+fn is_parallel_eligible_boundary_silent() {
+    use crate::agent::chat_loop::is_parallel_eligible;
+    use std::path::PathBuf;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    // Build an in-root file and an out-of-root sibling file so
+    // absolute and relative paths have real targets to resolve
+    // against. `is_within_root` is lexical so existence isn't
+    // strictly required, but having real files makes the test
+    // mirror production intent more clearly.
+    std::fs::write(root.join("in_root.txt"), "x").unwrap();
+    let outside_dir = tempfile::tempdir().expect("outside tempdir");
+    let outside_file: PathBuf = outside_dir.path().join("outside.txt");
+    std::fs::write(&outside_file, "x").unwrap();
+
+    // Helper to build a single-tool batch. `root` is unused
+    // (the caller resolves the path string in advance) but
+    // kept in the signature for symmetry with `batch()` above.
+    #[allow(unused_variables)]
+    fn single(
+        root: &std::path::Path,
+        name: &str,
+        path: Option<&str>,
+    ) -> Vec<(String, String, serde_json::Value)> {
+        let input = match path {
+            Some(p) => serde_json::json!({ "path": p }),
+            None => serde_json::json!({}),
+        };
+        vec![("x".into(), name.into(), input)]
+    }
+
+    // 1. absolute in-root → eligible
+    let abs_in = root.join("in_root.txt").to_string_lossy().into_owned();
+    assert!(
+        is_parallel_eligible(&single(root, "read_file", Some(&abs_in)), root),
+        "absolute in-root path should be eligible"
+    );
+
+    // 2. relative in-root → eligible (joined onto root)
+    assert!(
+        is_parallel_eligible(&single(root, "read_file", Some("in_root.txt")), root),
+        "relative in-root path should be eligible"
+    );
+
+    // 3. absolute out-of-root → NOT eligible
+    let abs_out = outside_file.to_string_lossy().into_owned();
+    assert!(
+        !is_parallel_eligible(&single(root, "read_file", Some(&abs_out)), root),
+        "absolute out-of-root path should fall back to serial"
+    );
+
+    // 4. relative `../<file>` out-of-root → NOT eligible
+    //    Build a relative path from `root` that escapes: e.g.
+    //    `../<outside_dir_basename>/outside.txt`. We don't know
+    //    the basename, so walk up one level to a tempdir
+    //    sibling and back down.
+    let rel_out = format!(
+        "../{}/{}",
+        outside_dir.path().file_name().unwrap().to_string_lossy(),
+        "outside.txt"
+    );
+    assert!(
+        !is_parallel_eligible(&single(root, "read_file", Some(&rel_out)), root),
+        "relative out-of-root path should fall back to serial"
+    );
+
+    // 5. path tool with no `path` arg → eligible (tool layer
+    //    validates; we mirror the permission layer convention)
+    assert!(
+        is_parallel_eligible(&single(root, "read_file", None), root),
+        "path tool without path arg should be eligible"
+    );
+    assert!(
+        is_parallel_eligible(&single(root, "grep", None), root),
+        "grep without path arg should be eligible"
+    );
+
+    // 6. use_skill + arbitrary path coexist → eligible.
+    //    use_skill is name-eligible and exempt from the path
+    //    check; it can ride along with a path tool that has a
+    //    valid in-root path.
+    let mixed = vec![
+        ("x".into(), "use_skill".into(), serde_json::json!({})),
+        (
+            "x".into(),
+            "read_file".into(),
+            serde_json::json!({ "path": abs_in.clone() }),
+        ),
+    ];
+    assert!(
+        is_parallel_eligible(&mixed, root),
+        "use_skill + in-root path tool should be eligible"
+    );
 }
 
 /// L2: three `read_file` tool_use blocks in one turn execute
@@ -3116,8 +3266,12 @@ async fn agent_loop_web_fetch_batch_does_not_run_parallel() {
         ("x".into(), "read_file".into(), serde_json::json!({"path": "a"})),
         ("y".into(), "web_fetch".into(), serde_json::json!({"url": "https://example.com"})),
     ];
+    // Root argument is irrelevant here: `web_fetch` is excluded
+    // by the name check (Q2) before the path check ever runs.
+    // Use a dummy tempdir for the parameter contract.
+    let dir = tempfile::tempdir().expect("tempdir");
     assert!(
-        !is_parallel_eligible(&batch),
+        !is_parallel_eligible(&batch, dir.path()),
         "web_fetch MUST exclude the batch from parallel execution (Q2)"
     );
 }

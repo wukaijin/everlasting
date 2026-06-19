@@ -763,19 +763,19 @@ CREATE INDEX idx_session_audit_events_session_ts
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
 
-- **触发**:单 turn 内 LLM 返回的**所有** tool_use ∈ `{read_file, grep, glob, list_dir, use_skill}`(纯本地只读 + 全静默 Allow)→ 并发执行;否则(含任意 write_file/edit_file/shell/update_checklist/web_fetch)→ 整批串行(行为同 L2 前)
-- **判定**:`is_parallel_eligible(&tool_calls)`(纯谓词,`chat_loop.rs:1463`)
+- **触发**:单 turn 内 LLM 返回的**所有** tool_use ∈ `{read_file, grep, glob, list_dir, use_skill}`(纯本地只读 + 全静默 Allow)**且**任一 path 工具的 `path` 解析后 ∈ project root(复用 `projects::boundary::is_within_root`)→ 并发执行;否则(含任意 write_file/edit_file/shell/update_checklist/web_fetch 或 path-outside-root)→ 整批串行(行为同 L2 前)
+- **判定**:`is_parallel_eligible(&tool_calls, &permission_ctx.cwd)`(纯谓词,`chat_loop.rs:1486+`)
 - **实现**:`FuturesUnordered`,每 task 内 `permissions::check` → `execute_tool(token.clone())` → RULE-A-004 cancel 检查 → audit → `emit_tool_result`;`result_slots[i]` 按 tool_use **原始 index** 回填(不依赖完成时序)
 - **不变量**:
   - 多 tool_result 仍**单消息打包**(parallel-tool-use 红线:拆消息会让 Claude "学会"避免并行)
   - RULE-A-004:cancelled tool 不落 `tool_executed` audit(并行下用 `AtomicBool` 广播回主循环 `cancelled` 标志)
   - 共享状态安全:并发集合无 shell(唯一改 `current_ctx.cwd` 者)→ 无 cwd 写冲突;无 edit_file(唯一写 `read_guard` 者)。`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
   - cancel:并发不 `break`,等所有 task 完成或被 cancel;`execute_tool` 内 `tokio::select!` 各 task 独立响应 cancel
-- **Q2 排除 web_fetch**:web_fetch 虽只读但 Tier4 默认 `emit ask`,纳入会引入并发多 modal 问题 → MVP 排除(走串行,保留逐个 ask UX)。→ 并发集合**全静默 Allow**(`read_file/grep/glob/list_dir`=Path ReadOnly、`use_skill`=Other default-allow),check+execute 可整体并发,无需拆两阶段
-- **已知偏离**(RULE-A-013,2026-06-19):并发集合里 **path-outside-root** 的 read tool 仍可能触发并发 ask(见 DEBT)。MVP 接受(概率低 + 无数据损坏),follow-up 方案 (a) 在谓词加 boundary 检测
+- **Q2 排除 web_fetch**:web_fetch 虽只读但 Tier4 默认 `emit ask`,纳入会引入并发多 modal 问题 → MVP 排除(走串行,保留逐个 ask UX)。
+- **RULE-A-013 收口(2026-06-19)**:谓词从"tool name 白名单"升级为"name 白名单 + path-in-root"。任一 path 工具的 `path` 解析到 project root 之外(`is_within_root` 返回 false)→ 谓词返回 false → 整批拉回串行,保留"并发集合**绝对** silent Allow"不变量;`use_skill` 无 path arg 不参与 path check(Tier 5 default-allow 永远 silent)。path 解析约定与 `permissions/mod.rs:560-571` 完全一致(absolute → as-is;relative → `root.join(p)`;None/empty → 视作 eligible,沿用 permissions 层"无 path 走 Allow"约定)。`is_within_root` 已有 8 个 boundary 单测覆盖(prefix-trap / nonexistent / empty / 等),不重复测试。详见 `DEBT.md RULE-A-013`(`Status: closed (2026-06-19)`)。
 - **流式 UI**:并行下 `emit_tool_result` 按完成时序(乱序)到达前端,但 `streamController.ts` 按 `tool_use_id` 匹配(`Map.get`),DB reload 后按 tool_use 原始顺序 → UI 正确;streaming 期间可能短暂乱序(MVP 接受,Out of Scope 不改前端)
 - **实现位置**:`app/src-tauri/src/agent/chat_loop.rs:997-1168`(并行路径)+ `1169+`(串行路径,逐字保留)
-- **调研**:[spikes/2026-06-19-async-parallel-tool-research.md](./spikes/2026-06-19-async-parallel-tool-research.md) + [-independent-research.md](./spikes/2026-06-19-async-parallel-tool-independent-research.md);完整 PRD 走 `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/`
+- **调研**:[spikes/2026-06-19-async-parallel-tool-research.md](./spikes/2026-06-19-async-parallel-tool-research.md) + [-independent-research.md](./spikes/2026-06-19-async-parallel-tool-independent-research.md);完整 PRD 走 `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/`;RULE-A-013 follow-up PRD 走 `.trellis/tasks/06-19-l2-followup-rule-a-013-boundary-silent-batch/`
 
 ---
 

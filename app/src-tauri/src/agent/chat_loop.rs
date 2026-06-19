@@ -37,7 +37,7 @@
 //!   preserve the existing Tauri command's "return immediately"
 //!   semantic.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -60,6 +60,7 @@ use crate::llm::{
     ToolDef,
 };
 use crate::memory::MemoryCache;
+use crate::projects::boundary::is_within_root;
 use crate::skill::loader::SkillCache;
 use crate::state::{ChatEventSink, ToolCallPayload};
 use crate::tools::read_guard::ReadGuard;
@@ -994,42 +995,41 @@ pub async fn run_chat_loop(
         // `permission_asks` with a no-sender entry — the 120s
         // timeout fires and the test exits).
         let mut result_blocks: Vec<ContentBlock> = Vec::new();
-        if is_parallel_eligible(&tool_calls) {
+        if is_parallel_eligible(&tool_calls, &permission_ctx.cwd) {
             // ---- L2 parallel path (read-only batch) ----
             //
             // All tool_use blocks in this turn are in the
             // {read_file, grep, glob, list_dir, use_skill}
-            // whitelist → run them concurrently via
-            // `FuturesUnordered`. `web_fetch` is excluded (Q2)
-            // because its Tier 4 default is `ask`, which would
-            // fire multiple concurrent `permission:ask` modals.
+            // whitelist AND every path tool's `path` resolves
+            // inside `permission_ctx.cwd` (= session cwd) →
+            // run them concurrently via `FuturesUnordered`.
+            // `web_fetch` is excluded (Q2) because its Tier 4
+            // default is `ask`, which would fire multiple
+            // concurrent `permission:ask` modals. Path tools
+            // with an out-of-root `path` are also excluded by
+            // the same rule (RULE-A-013 follow-up, 2026-06-19)
+            // — see `is_parallel_eligible` doc.
             //
-            // Permission-silence caveat (Q2 design): the set is
-            // silent in the COMMON case —
+            // Permission-silence invariant (Q2 design +
+            // RULE-A-013 closure): the concurrent set is
+            // ALWAYS silent in every mode —
             //   - `use_skill` is `ToolKind::Other` → Tier 5
             //     default-allow in every mode;
             //   - path tools (`read_file`/`grep`/`glob`/
-            //     `list_dir`) hit Tier 4.1 path-grant or Tier
-            //     4.2 inside-root silent Allow in `Edit`/`Yolo`
+            //     `list_dir`) with `path` inside the project
+            //     root hit Tier 4.1 path-grant or Tier 4.2
+            //     inside-root silent Allow in `Edit`/`Yolo`
             //     (and in `Plan` too — `filter_tools_for_mode`
             //     only drops write/edit/shell, so read tools
             //     reach Tier 4 and resolve silently when the
             //     path is inside the project root).
-            // The known EDGE CASE: a path tool whose `path`
-            // resolves OUTSIDE the project root (no
-            // `session_tool_permissions` path-glob grant) falls
-            // through to `ask_path` and emits a `permission:ask`.
-            // In a parallel batch this can fire multiple
-            // concurrent modals from the same turn. This is a
-            // low-probability case (the LLM typically reads
-            // inside-repo files in one batch); the frontend's
-            // per-session `pendingBySession` Map keys by `rid`
-            // so it does not crash, only produces overlapping
-            // modal UX. A future tightening can either (a) add
-            // `path-outside-root` read tools to the
-            // `is_parallel_eligible` exclusion, or (b) introduce
-            // a two-phase check-then-execute split. Tracked as a
-            // follow-up, not a blocker for L2 MVP.
+            // The `is_parallel_eligible` predicate guarantees
+            // this: a path tool with `path` outside the
+            // project root (no `session_tool_permissions`
+            // path-glob grant) is pulled back to the serial
+            // path, where the existing single-modal UX
+            // applies. See DEBT.md RULE-A-013 for the
+            // previous open issue now closed.
             //
             // Result ordering: `result_slots` is pre-
             // allocated to the tool_use count and each task
@@ -1478,6 +1478,33 @@ async fn load_for_session(
 ///   atomic (Mutex), serializing keeps the audit order
 ///   predictable.
 ///
+/// **RULE-A-013 follow-up (2026-06-19)**: in addition to the
+/// name whitelist, the predicate also rejects any path tool
+/// (`read_file` / `grep` / `glob` / `list_dir`) whose `path`
+/// argument resolves to **outside** `root`. A path tool with
+/// `path` outside the project root would fall through
+/// `permissions::check` Tier 4.1 to `ask_path` (no
+/// `session_tool_permissions` path-grant hits), and a parallel
+/// batch would emit multiple concurrent `permission:ask`
+/// modals. The fix is **plan (a)** from DEBT RULE-A-013: push
+/// the path check into the predicate so the silent-allow
+/// invariant ("the concurrent set is ALWAYS silent") is
+/// absolute, not just in the common case. `use_skill` is
+/// exempt from the path check (no `path` arg, `ToolKind::Other`
+/// → Tier 5 default-allow).
+///
+/// Path resolution mirrors `agent/permissions/mod.rs:560-571`:
+/// absolute `path` is taken as-is; relative `path` is joined
+/// onto `root` (the `permission_ctx.cwd`, which equals the
+/// session cwd at L2 batch entry — L2 is read-only, no
+/// per-batch cwd change). A missing / empty `path` is treated
+/// as eligible (the tool layer's schema validation is the
+/// fallback; mirroring the permission layer's "no path → Allow"
+/// convention). The check delegates to
+/// `projects::boundary::is_within_root` (non-failing boolean,
+/// already 8-case covered in its unit tests) — we do NOT
+/// duplicate the lexical-normalize / parent-walk logic here.
+///
 /// The empty-batch case: `should_continue` is only true when
 /// `!tool_calls.is_empty()` (chat_loop.rs above), so this
 /// function is never called with an empty slice in production.
@@ -1485,12 +1512,40 @@ async fn load_for_session(
 /// path's `for` loop is a no-op anyway).
 pub(crate) fn is_parallel_eligible(
     tool_calls: &[(String, String, serde_json::Value)],
+    root: &Path,
 ) -> bool {
-    const ELIGIBLE: &[&str] = &["read_file", "grep", "glob", "list_dir", "use_skill"];
+    /// Tool names that **always** qualify (name-only check).
+    /// `use_skill` has no `path` arg and is exempt from the
+    /// path check below.
+    const NAME_ELIGIBLE: &[&str] = &["read_file", "grep", "glob", "list_dir", "use_skill"];
+    /// Path-bearing tools that get the extra `is_within_root`
+    /// check. `use_skill` is intentionally NOT in this list.
+    const PATH_TOOLS: &[&str] = &["read_file", "grep", "glob", "list_dir"];
+
     if tool_calls.is_empty() {
         return false;
     }
-    tool_calls
-        .iter()
-        .all(|(_, name, _)| ELIGIBLE.contains(&name.as_str()))
+    for (_, name, input) in tool_calls {
+        if !NAME_ELIGIBLE.contains(&name.as_str()) {
+            return false;
+        }
+        if PATH_TOOLS.contains(&name.as_str()) {
+            // Mirror permissions/mod.rs:560-571 path resolution.
+            // None / empty path → treat as eligible (tool layer
+            // validates; permission layer also tolerates no-path).
+            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
+                if !p.is_empty() {
+                    let abs = if Path::new(p).is_absolute() {
+                        PathBuf::from(p)
+                    } else {
+                        root.join(p)
+                    };
+                    if !is_within_root(root, &abs) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
 }
