@@ -238,7 +238,11 @@ pub fn definition() -> ToolDef {
              (which itself is inside the project root).\n\n\
              Optional `timeout`: maximum execution time in milliseconds. Default: 120000 (2 min). \
              Maximum: 600000 (10 min). On timeout the command is killed and partial output \
-             is returned with a `[timeout after Nms]` marker.\n\n\
+             is returned with a `[timeout after Nms]` marker. For commands you expect to run \
+             longer (full builds, package installs, large test suites), set a larger timeout \
+             (e.g. 300000-600000) so the work is not cut off. Long-running services (dev \
+             servers, `--watch`) must still finish within the timeout, split them or poll \
+             in separate calls.\n\n\
              Outputs over 30 KB are saved to `<cwd>/.everlasting/outputs/<id>.txt`; \
              the tool returns the path plus a short preview so you can read the \
              full file with read_file.\n\n\
@@ -263,7 +267,7 @@ pub fn definition() -> ToolDef {
                 "timeout": {
                     "type": "integer",
                     "description": "Optional. Maximum execution time in milliseconds. Default: 120000 (2 min). Max: 600000 (10 min). \
-                                    On timeout the command is killed and partial output is returned."
+                                    On timeout the command is killed and partial output is returned. For long commands (full builds, installs, large test suites) set a larger value (e.g. 300000-600000)."
                 }
             },
             "required": ["command"]
@@ -601,6 +605,39 @@ mod tests {
         let schema = &definition().input_schema;
         let props = schema.get("properties").unwrap();
         assert!(props.get("working_directory").is_some());
+    }
+
+    /// The timeout description must guide the LLM to raise the
+    /// timeout for long commands (builds / installs / large test
+    /// suites) instead of silently getting cut off at the 2-minute
+    /// default. Regression guard: a copy-edit must not drop the
+    /// guidance (it is the only signal the model gets for when to
+    /// deviate from the 120s default).
+    #[test]
+    fn definition_documents_timeout_guidance() {
+        let def = definition();
+        let desc = def.description.as_deref().expect("shell has a description");
+        // Tool-level description carries the long-command guidance.
+        assert!(
+            desc.contains("300000-600000"),
+            "description should suggest a longer timeout range, got: {desc}"
+        );
+        assert!(
+            desc.contains("build") && desc.contains("install"),
+            "description should name long-command examples, got: {desc}"
+        );
+        // Schema field description mirrors the guidance.
+        let props = def.input_schema.get("properties").unwrap();
+        let timeout_field = props.get("timeout").unwrap();
+        let to_desc = timeout_field
+            .get("description")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(
+            to_desc.contains("300000-600000"),
+            "schema timeout description should suggest a longer value, got: {to_desc}"
+        );
     }
 
     #[tokio::test]
