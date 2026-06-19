@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 21 | 健壮性 + 债务,中长期清理 |
+| P2 | 22 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **46** | 含历史 review 合并 |
+| **Total** | **47** | 含历史 review 合并 |
 
 ---
 
@@ -590,6 +590,19 @@
 - **Related Task**: (待开,follow-up)
 - **Discovered In**: L1 PR1 实现(2026-06-19,task `06-19-l1-shell-pty`)
 
+### RULE-E-013 — system prompt 工具清单硬编码漂移
+
+- **Level**: P2
+- **Subsystem**: Tools
+- **File**: `app/src-tauri/src/agent/system_prompt.rs:79-81`(`build_system_prompt` 硬编码工具清单)+ `app/src-tauri/src/agent/chat_loop.rs:327`(拼接)
+- **Description**: `build_system_prompt()` 文案 "You have access to tools (read_file, write_file, edit_file, shell, grep, glob, list_dir)" 是**硬编码字符串**,与 `tools::builtin_tools()` 实际注册的工具集脱钩。当前已漏列 `update_checklist`(B12)/ `web_fetch`(P1)/ `use_skill`(B4)/ `run_background_shell`·`shell_status`·`shell_kill`(L1) 共 6 个工具。每次新增 tool 都得人记得回来改这行字符串,典型漂移债。
+- **Impact**: **当前影响小** —— LLM 的工具可见性以 `ChatRequest.tools` 数组(`provider.send` 传入)为权威,system prompt 这句清单只是冗余能力声明,漏列不影响 LLM 调用这些工具。真实风险在**未来**:一旦方案 A 的 `behavior_prompt` 在文案里按具体工具名引用(如误写 "use TodoWrite"),会让模型调用不存在的工具名(system-prompt-research §7.2 已预警)。
+- **Fix**: 治本 —— 改从 `tools::builtin_tools()` 动态生成工具名清单注入 prompt(消除手动同步);治标 —— 至少在加 tool 的 spec convention 里加"同步 system prompt 清单"检查。建议前者,~15 行。
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: (待开,作为 system-prompt 方案 A 的 P0 先修,见 `docs/research/system-prompt-research.md §7.8`)
+- **Discovered In**: `docs/research/system-prompt-research.md §7.2`(system prompt 调研评审,2026-06-19)
+
 ---
 
 ### RULE-A-013 — L2 并行 batch 的 path-outside-root 会触发并发 ask
@@ -851,5 +864,5 @@
 
 ---
 
-**最后更新**: 2026-06-18 by carlos
+**最后更新**: 2026-06-19 by carlos
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)

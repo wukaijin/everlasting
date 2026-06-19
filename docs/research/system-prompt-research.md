@@ -2,6 +2,7 @@
 
 > 调研日期：2026-06-19
 > 调研范围：Claude Code v2.0, OpenCode, Hermes Agent, Aider
+> 评审：2026-06-19（见 §7，修订了 §5 推荐路径）
 
 ---
 
@@ -458,3 +459,59 @@ pub const DEFAULT_BEHAVIOR_PROMPT: &str = "\
 | Everlasting 当前实现 | `app/src-tauri/src/agent/system_prompt.rs` |
 | Everlasting 指令文件注入 | `app/src-tauri/src/memory/loader.rs` |
 | Everlasting chat loop 拼接 | `app/src-tauri/src/agent/chat_loop.rs:254-327` |
+
+---
+
+## 7. 评审与修订（2026-06-19）
+
+> 本节为对 §4–§5 方案的评审。结论一句话：**方案 A 该做（需 4 处修正）、方案 B 不整体做（只取 `model_family_guidance` 子项）、§1.3 的 TodoWrite 断言有事实错误**。
+
+### 7.1 现状描述核实（逐行对过代码）
+
+§1.1 / §1.2 的现状描述**全部准确**：`build_system_prompt()` 简陋、拼接在 `chat_loop.rs:327`、指令文件走 user message + banner `cache_control: ephemeral`（`loader.rs:325`）、4 种 mode（`permissions/mod.rs:1321`）。地基稳。
+
+### 7.2 事实纠正：没有 TodoWrite tool（照抄方案 A 会出 bug）
+
+- §1.3 表格写「有 TodoWrite tool，但没告诉模型要用」——**错误**。实际工具是 `update_checklist`（`tools/update_checklist.rs:80`）。
+- 后果：方案 A 的 `DEFAULT_BEHAVIOR_PROMPT` 里 `Use the TodoWrite tool to plan and track complex tasks` 若照抄，模型会去调用不存在的 `todo_write` 工具而报错。
+- 附带发现的现状问题：`build_system_prompt()` 的工具列表（read_file/write_file/edit_file/shell/grep/glob/list_dir）**漏列** `update_checklist` / `web_fetch` / `use_skill` / `background_shell`。工具清单不全这件事，比 prompt 文案更值得先修。
+
+### 7.3 来源可信度
+
+§2.1 Claude Code「~500 行」来自 `x1xhlol` 社区逆向仓库（二手、易过时）。作方向参考可以，勿当权威逐字依据。
+
+### 7.4 方案 A：支持，4 个修正点
+
+1. **工具名**：`TodoWrite` → `update_checklist`（见 7.2）。
+2. **拼接顺序倒过来**：文档写 `mode_prefix + behavior_prompt + base_prompt`，但 `base_prompt` 含 session_id / cwd / head_sha（每次会变）。正确顺序是最稳定的在前：`behavior_prompt + mode_prefix + base_prompt`，利于未来上 cache。
+3. **与 `mode_prefix` 明确分层**：mode 管「权限边界」（Plan 不能写 / Yolo 跳确认），behavior 管「做事风格」。两者都涉及「是否 commit」，须在 prompt 里明确边界避免重复。
+4. **token 成本**：~200 行每轮发送，对 token-tight（C3 压缩 + MAX_TURNS 50）的项目要意识到，配合 cache_control 缓解。
+
+### 7.5 方案 B：核心卖点站不住，拆开才有价值（与 §5 的主要分歧）
+
+- **「3 层 struct = 缓存收益」是概念混淆。** 缓存收益只取决于 `cache_control` breakpoint 放哪，跟「代码分 3 个 String 字段」无关。Hermes 的 3 层是**代码组织**，不是缓存策略。
+- **「指令文件移到 system 会失去 breakpoint」——前提错误。** Anthropic 的 `cache_control` 可放在 **system / tools / messages 三处**（共 4 个 breakpoint 上限），并非「只能设在 messages 数组里」。指令文件可移到 system 字段并保留缓存。
+- **stable 复用你们已天然达成。** `system_prompt` 在 `chat_loop.rs:327`（loop 外）构建一次，turn 循环内每轮 `clone()`（line 696）——Hermes 的 "build once per session" 已经有了。
+- **唯一真有价值的子项：`model_family_guidance()`。** GLM / GPT / Gemini 的 tool-use 坚持性确实需要差异化指导。**应拆出独立做，作为方案 A 增量**，不等整个 3 层重构。
+
+**结论：方案 B 整体暂缓。** 除非做真·缓存重构（把稳定 system 内容纳入 breakpoint），否则 3 层 struct 是过度设计；指令文件留在 user message 不动（当前设计本就是已优化态）。
+
+### 7.6 方案 C：合理，优先级最低
+
+Custom system prompt / `.everlasting/system.md` / 模板变量方向对，但默认行为准则未稳定前加，只增加维护面。先调好默认，再开放覆盖。
+
+### 7.7 文档遗漏的三点
+
+1. **可测量性**：§5.1「与 LLM 对话确认改善」太主观。先定 4–6 场景 mini-eval（歧义请求 / 危险 git / 该并行没并行 / 客观性被打压），改前改后对比。
+2. **prompt injection**：AGENTS.md 已是用户可控注入面，custom system prompt 扩大攻击面，文档通篇未提防护。
+3. **语言**：默认 prompt 英文（行业惯例 OK），但中文项目应考虑显式约束「按用户语言回复」。
+
+### 7.8 修订后的推荐路径（覆盖 §5）
+
+| 优先级 | 动作 | 依据 |
+|---|---|---|
+| **P0 现在就修** | `build_system_prompt()` 补全工具清单（含 update_checklist） | 纯现状修复，不依赖任何方案 |
+| **P1 做方案 A** | 加 `behavior_prompt.rs`，修正工具名 + 调换拼接顺序 | 务实、立竿见影 |
+| **P2 拆 model_family_guidance** | 作为方案 A 增量 | 方案 B 唯一有价值子项 |
+| **暂缓** | 方案 B 整体 | 概念混淆 + 已天然达成 + 反优化 |
+| **先于一切** | 定 4–6 场景 mini-eval | 让 prompt 迭代可量化 |
