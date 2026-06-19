@@ -277,6 +277,14 @@ pub struct PermissionContext {
  pub session_id: String,
  pub mode: Mode,
  pub cwd: std::path::PathBuf,
+ /// B6 Subagent (2026-06-19, review #5): `true` when this context
+ /// belongs to a worker agent dispatched via `dispatch_subagent`.
+ /// Worker agents have no UI sink, so a Tier 4 `ask_path` /
+ /// `ask_shell` decision must collapse to `Decision::Deny`
+ /// (cannot surface a permission modal). Production chat sets
+ /// `false`; the worker path sets `true`. The collapse is wired
+ /// at the top of `ask_path`.
+ pub is_worker: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +970,49 @@ async fn ask_path(
     tool_use_id: &str,
     token: &tokio_util::sync::CancellationToken,
 ) -> Decision {
+ // B6 Subagent (2026-06-19, review #5 + PRD §Decisions 3/5): worker
+ // agents have no UI sink, so a Tier 4 `ask` would either block
+ // forever (no oneshot resolution) or surface a permission modal to
+ // the WRONG session (the parent's frontend would get a phantom ask
+ // for a tool_use the parent never emitted). Collapse to Deny here
+ // WITHOUT registering an ask / emitting `permission:ask` / writing
+ // a `tool_permission_ask` audit row — the worker's `tool_result`
+ // carries the deny reason so the worker LLM can self-correct.
+ //
+ // Yolo bypass: the Yolo tier-bypass above (line ~550 in `check`)
+ // returns `Allow` BEFORE reaching this point, so a worker under
+ // Yolo mode never enters `ask_path`. The worker under Edit / Plan
+ // mode lands here for any non-silent Tier 4 decision (path tool
+ // outside the cwd, shell SideEffect/Ask command, web_fetch
+ // without an always-allow row) and is denied. This mirrors the
+ // Claude Code "background subagent auto-deny" convention.
+ if ctx.is_worker {
+     let reason = format!(
+         "Worker subagent cannot ask for confirmation (no UI sink). \
+          Tool {} denied in {} mode.",
+         tool_name,
+         ctx.mode.as_str()
+     );
+     tracing::info!(
+         session_id = %ctx.session_id,
+         tool = %tool_name,
+         mode = %ctx.mode.as_str(),
+         "permission::check: worker auto-deny (no UI sink)"
+     );
+     let _ = record_audit(
+         db,
+         ctx,
+         AuditKind::ToolDenied,
+         tool_name,
+         tool_input,
+         Some(&reason),
+     )
+     .await;
+     return Decision::Deny {
+         reason,
+         critical: false,
+     };
+ }
  let rid = uuid::Uuid::new_v4().to_string();
  let risk = risk_for_tool(tool_name);
  let reason = build_ask_reason(tool_name, path_or_cmd, risk);

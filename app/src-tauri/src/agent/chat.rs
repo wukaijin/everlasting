@@ -230,6 +230,22 @@ pub async fn chat(
             // background processes and the agent loop can drain
             // completion notifications each turn.
             background_shells.clone(),
+            // B6 Subagent (2026-06-19, review #4): `None` keeps
+            // the default `MAX_TURNS` (50) budget for the
+            // production chat path. Worker agents (PR1b) pass
+            // `Some(20)` to bound their own turn budget.
+            None,
+            // B6 Subagent (PR1b review #2): production chat owns
+            // the session's "active request" slot, so the guard's
+            // Drop must clear it. Workers pass `true` to skip.
+            false,
+            // B6 Subagent (PR1b): production chat persists every
+            // turn normally. Workers pass `true` so their
+            // intermediate turns stay in-memory only (the
+            // SubagentBufferSink captures them; PR2 persists the
+            // transcript into `subagent_runs`). Production MUST
+            // persist — the user's turns are the source of truth.
+            false,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

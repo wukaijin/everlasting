@@ -401,6 +401,16 @@ pub struct CancellationGuard {
     pub session_active_request: Arc<Mutex<HashMap<String, String>>>,
     pub request_id: String,
     pub session_id: String,
+    /// B6 Subagent (2026-06-19, review #2 / RULE-E-005): when
+    /// `true`, Drop skips the `session_active_request.remove(...)`
+    /// step (the `cancellations.remove(...)` still runs). Worker
+    /// agents reuse the parent's `session_id` for audit/DB linkage
+    /// but their rid must NOT be the session's "active request" —
+    /// that slot belongs to the parent chat. Removing it on worker
+    /// exit would corrupt the parent's cancel-inflight semantics.
+    /// Production chat passes `false` (unchanged behavior); the
+    /// B6 worker path (PR1b) passes `true`.
+    pub skip_session_active: bool,
 }
 
 impl Drop for CancellationGuard {
@@ -409,12 +419,15 @@ impl Drop for CancellationGuard {
         let session_active_request = self.session_active_request.clone();
         let request_id = self.request_id.clone();
         let session_id = self.session_id.clone();
+        let skip_session_active = self.skip_session_active;
         tauri::async_runtime::spawn(async move {
             let mut map = cancellations.lock().await;
             map.remove(&request_id);
             drop(map);
-            let mut s2p = session_active_request.lock().await;
-            s2p.remove(&session_id);
+            if !skip_session_active {
+                let mut s2p = session_active_request.lock().await;
+                s2p.remove(&session_id);
+            }
         });
     }
 }

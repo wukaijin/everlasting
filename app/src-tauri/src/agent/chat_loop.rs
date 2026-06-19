@@ -53,6 +53,10 @@ use crate::agent::helpers::{
     CANCELLED_MARKER, ERROR_MARKER,
 };
 use crate::agent::permissions::{self, Decision, PermissionContext};
+use crate::agent::subagent::{
+    assemble_subagent_prompt, build_worker_messages, filter_tools_for_subagent,
+    format_dispatch_result, lookup_subagent, SubagentBufferSink, SubagentStatus,
+};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
 use crate::background_shell::BackgroundShellRegistry;
@@ -80,12 +84,32 @@ use crate::tools::ToolContext;
 ///   cover the real production path (no separate "test
 ///   variant" exists).
 ///
-/// The 14-parameter signature is unchanged from the previous
+/// The 17-parameter signature is unchanged from the previous
 /// test-only variant; the production caller just supplies a
 /// pre-resolved `Arc<dyn Provider>`, an `Arc<dyn ChatEventSink>`
 /// wrapping the live `AppHandle`, and the standard
 /// `AppState`-cloned resources (`db` / `read_guard` /
-/// `memory_cache` / `permission_asks` / cancel maps).
+/// `memory_cache` / `permission_asks` / cancel maps). B6
+/// Subagent (2026-06-19, review #4) added an 18th parameter,
+/// `max_turns: Option<usize>` — `None` keeps the default
+/// `MAX_TURNS` (50) for production + tests; the worker path
+/// (PR1b) passes `Some(20)` to bound the subagent's turn
+/// budget independently of the parent chat. B6 PR1b also added
+/// the 19th parameter `skip_session_active: bool` (review #2) —
+/// production + tests pass `false`; the worker path passes `true`
+/// so the CancellationGuard's Drop does NOT remove the parent's
+/// `session_active_request[session_id]` entry (workers reuse the
+/// parent's session_id for audit/DB linkage, but their rid must
+/// not own the session's "active request" slot — that belongs to
+/// the parent chat). B6 PR1b's 20th parameter `skip_persist: bool`
+/// suppresses every DB write inside the loop (`persist_turn` /
+/// `update_message_metadata` / `touch_session` / `add_token_usage`
+/// / `record_*_audit`) so the worker's intermediate turns stay
+/// in-memory only — the `SubagentBufferSink` transcript captures
+/// them (PR2 will persist into `subagent_runs`), and skipping DB
+/// writes also avoids a UNIQUE-constraint collision with the
+/// parent's own `persist_turn` calls on the same `(session_id,
+/// seq)` key.
 ///
 /// `run_chat_loop` owns the per-turn `CancellationGuard` that
 /// removes the (rid → token) and (session_id → rid) entries on
@@ -125,6 +149,37 @@ pub async fn run_chat_loop(
     // pending completion notifications and inject them as
     // user-role messages.
     background_shells: crate::background_shell::DefaultRegistry,
+    // B6 Subagent (2026-06-19, review #4): per-invocation turn
+    // budget. `None` (production + 9 tests) falls back to the
+    // global `MAX_TURNS` (50) — preserves RULE-A-006 single-
+    // source-of-truth semantics for the production path. The
+    // worker agent path (PR1b) passes `Some(20)` so a runaway
+    // subagent cannot burn the parent's full 50-turn budget.
+    // C3 compaction and the max_turns terminal event both
+    // honor this limit identically to the const case.
+    max_turns: Option<usize>,
+    // B6 Subagent (2026-06-19, PR1b review #2): when `true`, the
+    // per-invocation `CancellationGuard`'s Drop skips the
+    // `session_active_request.remove(&session_id)` step (the
+    // `cancellations.remove(&rid)` still runs). Workers reuse the
+    // parent's `session_id` for audit / DB linkage but their rid
+    // must NOT own the session's "active request" slot — removing
+    // the parent's entry on worker exit would corrupt
+    // `cancel_inflight_for_session` (RULE-E-005). Production +
+    // tests pass `false`; the worker path passes `true`.
+    skip_session_active: bool,
+    // B6 Subagent (PR1b): when `true`, the loop skips ALL DB writes
+    // (`persist_turn` / `update_message_metadata` / `touch_session` /
+    // `add_token_usage` / `record_*_audit`). The worker agent path
+    // uses this so its intermediate turns stay in-memory only (the
+    // `SubagentBufferSink` transcript captures them; PR2 will
+    // persist the transcript into `subagent_runs`). Skipping the DB
+    // also avoids a UNIQUE-constraint collision with the parent's
+    // own `persist_turn` calls — both loops would otherwise write
+    // to the same `messages` table keyed by `(session_id, seq)`.
+    // Production + tests pass `false` (full persistence); the
+    // worker path passes `true`.
+    skip_persist: bool,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -137,6 +192,11 @@ pub async fn run_chat_loop(
         session_active_request: session_active_request.clone(),
         request_id: rid.clone(),
         session_id: session_id.clone(),
+        // Production chat owns the session's "active request" slot,
+        // so Drop must clear it. Worker agents (B6 PR1b) pass
+        // `skip_session_active: true` to avoid evicting the parent's
+        // entry.
+        skip_session_active,
     };
     let mut messages = messages;
 
@@ -250,6 +310,11 @@ pub async fn run_chat_loop(
         session_id: session_id.clone(),
         mode: session_mode,
         cwd: session_cwd.clone(),
+        // Production chat is never a worker. The B6 worker path
+        // (PR1b) constructs its own PermissionContext with
+        // `is_worker: true` so Tier 4 `ask` decisions collapse to
+        // `Deny` (worker has no UI sink for a permission modal).
+        is_worker: false,
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
@@ -350,15 +415,24 @@ pub async fn run_chat_loop(
     // key).
     let (last_user_snapshot, last_user_seq) = if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
         let msg = last_user.clone();
+        // B6 PR1b: in the worker path, skip ALL DB writes (see
+        // `skip_persist` docstring at the function head). The
+        // worker still bumps the in-memory `seq` and pushes into
+        // `messages` so the agent loop stays coherent, but it
+        // NEVER writes to the parent's `messages` table (the
+        // SubagentBufferSink captures the transcript for PR2).
+        //
         // RULE-A-003 (2026-06-15): if the very first user message
         // can't be persisted, abort with a visible Error —
         // continuing would let the LLM answer a message the DB
         // never recorded, so the next session reload is blank.
-        if let Err(e) = crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None)
-            .await
-        {
-            emit_persist_failure(&sink, &rid, &e);
-            return;
+        if !skip_persist {
+            if let Err(e) = crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None)
+                .await
+            {
+                emit_persist_failure(&sink, &rid, &e);
+                return;
+            }
         }
         // D3 PR3 (2026-06-17): if the user hit Resend (instead of
         // Edit), the frontend passed `resend_seq` through the chat
@@ -380,28 +454,34 @@ pub async fn run_chat_loop(
         // not the one being re-run). The `resend_seq` is the seq
         // of the ORIGINAL user message; the new send uses seq=N+1.
         if let Some(original_seq) = resend_seq {
-            // Derive a short text preview from the original
-            // message's content. `MessageContent` carries
-            // `to_text()` which concatenates all text blocks
-            // (mirrors the `text` column write). We use the
-            // in-memory `msg` (which equals what just got
-            // persisted) — same text, same preview budget.
-            let preview = msg.content.to_text();
-            if let Err(e) = crate::agent::permissions::record_message_resend_audit(
-                &db,
-                &session_id,
-                original_seq,
-                &preview,
-            )
-            .await
-            {
-                tracing::warn!(
-                    error = %e,
-                    request_id = %rid,
-                    session_id = %session_id,
-                    original_seq = original_seq,
-                    "chat_loop: record_message_resend_audit failed (non-fatal)"
+            // B6 PR1b: skip audit writes in the worker path (see
+            // `skip_persist` docstring). The resend audit is
+            // user-message scope; workers don't observe user
+            // resends.
+            if !skip_persist {
+                // Derive a short text preview from the original
+                // message's content. `MessageContent` carries
+                // `to_text()` which concatenates all text blocks
+                // (mirrors the `text` column write). We use the
+                // in-memory `msg` (which equals what just got
+                // persisted) — same text, same preview budget.
+                let preview = msg.content.to_text();
+                if let Err(e) = crate::agent::permissions::record_message_resend_audit(
+                    &db,
+                    &session_id,
+                    original_seq,
+                    &preview,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        request_id = %rid,
+                        session_id = %session_id,
+                        original_seq = original_seq,
+                        "chat_loop: record_message_resend_audit failed (non-fatal)"
                 );
+            }
             }
         }
         // B2 PR3: snap the seq for the FileInjections event;
@@ -453,21 +533,25 @@ pub async fn run_chat_loop(
         // room for future metadata fields (latency, tags,
         // links) without another rehydrate-path migration.
         let meta = serde_json::json!({ "injections": &injections });
-        if let Err(e) = crate::db::update_message_metadata(
-            &db,
-            &session_id,
-            last_user_seq,
-            &meta,
-        )
-        .await
-        {
-            tracing::warn!(
-                request_id = %rid,
-                session_id = %session_id,
-                message_seq = last_user_seq,
-                error = %e,
-                "agent loop: failed to persist injection manifest as messages.metadata (non-fatal)"
+        // B6 PR1b: skip the metadata UPDATE in worker mode (the
+        // user row is the parent's, not the worker's).
+        if !skip_persist {
+            if let Err(e) = crate::db::update_message_metadata(
+                &db,
+                &session_id,
+                last_user_seq,
+                &meta,
+            )
+            .await
+            {
+                tracing::warn!(
+                    request_id = %rid,
+                    session_id = %session_id,
+                    message_seq = last_user_seq,
+                    error = %e,
+                    "agent loop: failed to persist injection manifest as messages.metadata (non-fatal)"
             );
+        }
         }
         // Live-push the manifest to the frontend. The
         // controller's `handleChatEvent("file_injections")`
@@ -489,7 +573,8 @@ pub async fn run_chat_loop(
     // `messages` directly downstream).
     let _ = last_user_after_inject;
 
-    for turn in 1..=MAX_TURNS {
+    let turn_limit = max_turns.unwrap_or(MAX_TURNS);
+    for turn in 1..=turn_limit {
         // C3 compaction (test pass-through: if messages don't exceed
         // the test's tiny context_window, dropped_count == 0 and
         // the messages vec is unchanged).
@@ -809,8 +894,16 @@ pub async fn run_chat_loop(
                                 turn_thinking_done = Some(Instant::now());
                             }
                             if let Some(t) = usage {
-                                if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
-                                    tracing::warn!(error = %e, "chat: failed to accumulate token usage (non-fatal)");
+                                // B6 PR1b: token usage aggregation is
+                                // a DB write — skip in worker mode.
+                                // Worker token accounting is captured
+                                // by the SubagentBufferSink transcript
+                                // (PR2 will fold it into the parent's
+                                // total via the `subagent_runs` table).
+                                if !skip_persist {
+                                    if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
+                                        tracing::warn!(error = %e, "chat: failed to accumulate token usage (non-fatal)");
+                                    }
                                 }
                             }
                         }
@@ -943,26 +1036,28 @@ pub async fn run_chat_loop(
             // mirrors the cancel path's synthetic tool_result
             // persist (log-only, see below at the `if cancelled`
             // block).
-            if let Err(e) = crate::db::persist_turn(
-                &db,
-                &session_id,
-                msg.role,
-                &msg.content,
-                seq,
-                Some(&turn_latency),
-            )
-            .await
-            {
-                if had_error {
-                    tracing::error!(
-                        error = %e,
-                        request_id = %rid,
-                        "failed to persist errored partial assistant turn (log-only — Error already emitted)"
-                    );
-                    return;
-                } else {
-                    emit_persist_failure(&sink, &rid, &e);
-                    return;
+            if !skip_persist {
+                if let Err(e) = crate::db::persist_turn(
+                    &db,
+                    &session_id,
+                    msg.role,
+                    &msg.content,
+                    seq,
+                    Some(&turn_latency),
+                )
+                .await
+                {
+                    if had_error {
+                        tracing::error!(
+                            error = %e,
+                            request_id = %rid,
+                            "failed to persist errored partial assistant turn (log-only — Error already emitted)"
+                        );
+                        return;
+                    } else {
+                        emit_persist_failure(&sink, &rid, &e);
+                        return;
+                    }
                 }
             }
             // TurnComplete fires on the success path for every
@@ -971,18 +1066,24 @@ pub async fn run_chat_loop(
             // (RULE-A-007 decision C): Error = "something went
             // wrong", TurnComplete = "this seq's partial turn is
             // now in the DB + here's the latency breakdown". The
-            // controller routes each event independently.
-            emit_chat_event_via_sink(
-                &sink,
-                &rid,
-                &ChatEvent::TurnComplete {
-                    seq,
-                    ttfb_ms: turn_latency.ttfb_ms,
-                    gen_ms: turn_latency.gen_ms,
-                    total_ms: turn_latency.total_ms,
-                    thinking_ms: turn_latency.thinking_ms,
-                },
-            );
+            // controller routes each event independently. In the
+            // worker path (skip_persist=true) we skip the
+            // TurnComplete emit too — the parent never sees the
+            // worker's internal turn sequence, only the final
+            // dispatch_subagent tool_result.
+            if !skip_persist {
+                emit_chat_event_via_sink(
+                    &sink,
+                    &rid,
+                    &ChatEvent::TurnComplete {
+                        seq,
+                        ttfb_ms: turn_latency.ttfb_ms,
+                        gen_ms: turn_latency.gen_ms,
+                        total_ms: turn_latency.total_ms,
+                        thinking_ms: turn_latency.thinking_ms,
+                    },
+                );
+            }
             messages.push(msg);
             seq += 1;
         }
@@ -990,27 +1091,39 @@ pub async fn run_chat_loop(
         if cancelled {
             if !tool_calls.is_empty() {
                 let tool_result_msg = build_synthetic_tool_result_message(&tool_calls);
-                // RULE-A-003 (2026-06-15): cancel path — log-only,
-                // NOT emit_persist_failure. The loop is about to
-                // emit its terminal cancelled `Done`; an Error
-                // here would be a second terminal event conflicting
-                // with it. The user already knows they cancelled.
-                if let Err(e) = crate::db::persist_turn(
-                    &db,
-                    &session_id,
-                    tool_result_msg.role,
-                    &tool_result_msg.content,
-                    seq,
-                    None,
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "failed to persist synthetic tool_result turn after cancel");
+                // B6 PR1b: skip the synthetic tool_result persist in
+                // worker mode (the worker's intermediate turn is
+                // captured by the SubagentBufferSink transcript).
+                if !skip_persist {
+                    // RULE-A-003 (2026-06-15): cancel path —
+                    // log-only, NOT emit_persist_failure. The loop
+                    // is about to emit its terminal cancelled `Done`;
+                    // an Error here would be a second terminal event
+                    // conflicting with it. The user already knows
+                    // they cancelled.
+                    if let Err(e) = crate::db::persist_turn(
+                        &db,
+                        &session_id,
+                        tool_result_msg.role,
+                        &tool_result_msg.content,
+                        seq,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "failed to persist synthetic tool_result turn after cancel");
+                    }
                 }
                 messages.push(tool_result_msg);
             }
-            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-            let _ = crate::db::touch_session(&db, &session_id).await;
+            if !skip_persist {
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                let _ = crate::db::touch_session(&db, &session_id).await;
+            }
+            // B6 PR1b: always emit terminal `Done { cancelled }` —
+            // the SubagentBufferSink reads it to set `was_cancelled`
+            // (so `run_subagent` can format the dispatch_subagent
+            // tool_result with `status=cancelled`).
             emit_chat_event_via_sink(
                 &sink,
                 &rid,
@@ -1032,8 +1145,13 @@ pub async fn run_chat_loop(
         // treats the Error event as terminal; no follow-up Done
         // is required.
         if had_error {
-            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-            let _ = crate::db::touch_session(&db, &session_id).await;
+            // B6 PR1b: skip the cwd/touch_session writes in worker
+            // mode (the parent's session row is not the worker's
+            // to update — the parent owns the lifetime).
+            if !skip_persist {
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                let _ = crate::db::touch_session(&db, &session_id).await;
+            }
             return;
         }
 
@@ -1041,13 +1159,16 @@ pub async fn run_chat_loop(
             stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
 
         if !should_continue {
-            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-            let _ = crate::db::touch_session(&db, &session_id).await;
-            emit_chat_event_via_sink(
-                &sink,
-                &rid,
-                &ChatEvent::Done { stop_reason, usage: last_usage },
-            );
+            // B6 PR1b: same skip in the normal-end path.
+            if !skip_persist {
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                let _ = crate::db::touch_session(&db, &session_id).await;
+                emit_chat_event_via_sink(
+                    &sink,
+                    &rid,
+                    &ChatEvent::Done { stop_reason, usage: last_usage },
+                );
+            }
             return;
         }
 
@@ -1199,20 +1320,27 @@ pub async fn run_chat_loop(
                         // cancel path.
                         if token.is_cancelled() {
                             cancelled_flag.store(true, Ordering::SeqCst);
-                        } else if let Err(e) = permissions::record_tool_executed_audit(
-                            &db,
-                            &session_id,
-                            &name,
-                            &input,
-                            duration_ms,
-                            exit_code,
-                        )
-                        .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                "chat: record_tool_executed_audit failed (non-fatal)"
-                            );
+                        } else if !skip_persist {
+                            // B6 PR1b: skip the tool_executed audit
+                            // write in worker mode. The
+                            // SubagentBufferSink transcript is the
+                            // worker's audit record; PR2 will
+                            // persist it into `subagent_runs`.
+                            if let Err(e) = permissions::record_tool_executed_audit(
+                                &db,
+                                &session_id,
+                                &name,
+                                &input,
+                                duration_ms,
+                                exit_code,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    "chat: record_tool_executed_audit failed (non-fatal)"
+                                );
+                            }
                         }
                         // Parallel batch is read-only by
                         // construction (is_parallel_eligible),
@@ -1301,6 +1429,101 @@ pub async fn run_chat_loop(
                 continue;
             }
 
+            // B6 Subagent (2026-06-19): intercept dispatch_subagent
+            // BEFORE the normal execute_tool path. This is an
+            // agent-layer control-flow tool — it needs the parent
+            // loop's full closure dependencies (provider / db /
+            // cancellations / ...) which `execute_tool_inner` does
+            // NOT have access to (see `agent::subagent` docstring +
+            // PRD §"Technical Approach" review #3). The interceptor
+            // builds the worker context, calls run_chat_loop
+            // recursively, and turns the worker's final state into a
+            // tool_result that pairs with the dispatch_subagent
+            // tool_use (RULE-A-007 pairing invariant preserved).
+            //
+            // dispatch_subagent is structurally excluded from the
+            // L2 parallel set (it's not in `is_parallel_eligible`'s
+            // NAME_ELIGIBLE list), so the entire batch falls into
+            // this serial path whenever the model emits it. MVP runs
+            // dispatches serially (one worker at a time); parallel
+            // fan-out is v2 / L3.
+            if name == crate::agent::subagent::DISPATCH_TOOL_NAME {
+                let tool_exec_start = Instant::now();
+                let (content, is_error, cancel_parent, exit_code) = run_subagent(
+                    &provider,
+                    context_window,
+                    &rid,
+                    &session_id,
+                    &memory_cache,
+                    &read_guard,
+                    &skill_cache,
+                    &permission_asks,
+                    &cancellations,
+                    &session_active_request,
+                    &background_shells,
+                    &db,
+                    &permission_ctx,
+                    &current_ctx,
+                    id,
+                    input,
+                    &token,
+                    &sink,
+                )
+                .await;
+                let duration_ms = tool_exec_start.elapsed().as_millis();
+                // Audit dispatch_subagent like any other tool so
+                // the C4 audit log records "subagent ran". This
+                // lands AFTER the worker's full turn sequence +
+                // the worker's own audit rows already landed
+                // (they're tied to the same session_id by design —
+                // workers don't have their own sessions).
+                if token.is_cancelled() {
+                    cancelled = true;
+                } else if !skip_persist {
+                    // B6 PR1b: the parent (NOT the worker) records
+                    // its own dispatch_subagent audit. The worker
+                    // passes skip_persist=true on its nested
+                    // run_chat_loop call, so this site is only
+                    // reached for the parent's own dispatch —
+                    // the worker's run_subagent returns BEFORE
+                    // any nested run_chat_loop call sees this code.
+                    if let Err(e) = permissions::record_tool_executed_audit(
+                        &db,
+                        &session_id,
+                        name,
+                        input,
+                        duration_ms,
+                        exit_code,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for dispatch_subagent (non-fatal)");
+                    }
+                }
+                let envelope_str = crate::agent::helpers::tool_result_envelope(
+                    &content,
+                    &current_ctx.worktree_path,
+                );
+                sink.emit_tool_result(&crate::state::ToolResultPayload {
+                    request_id: rid.clone(),
+                    tool_use_id: id.clone(),
+                    content: envelope_str.clone(),
+                    is_error,
+                });
+                result_blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: envelope_str,
+                    is_error,
+                });
+                if cancel_parent {
+                    cancelled = true;
+                }
+                if cancelled {
+                    break;
+                }
+                continue;
+            }
+
             let tool_exec_start = Instant::now();
             let (content, is_error, update, exit_code) = crate::tools::execute_tool(
                 name,
@@ -1326,17 +1549,22 @@ pub async fn run_chat_loop(
             // them, so the token state is identical across both.
             if token.is_cancelled() {
                 cancelled = true;
-            } else if let Err(e) = permissions::record_tool_executed_audit(
-                &db,
-                &session_id,
-                name,
-                input,
-                duration_ms,
-                exit_code,
-            )
-            .await
-            {
-                tracing::warn!(error = %e, "chat: record_tool_executed_audit failed (non-fatal)");
+            } else if !skip_persist {
+                // B6 PR1b: skip the tool_executed audit write in
+                // worker mode (SubagentBufferSink transcript is
+                // the worker's record; PR2 persists it).
+                if let Err(e) = permissions::record_tool_executed_audit(
+                    &db,
+                    &session_id,
+                    name,
+                    input,
+                    duration_ms,
+                    exit_code,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed (non-fatal)");
+                }
             }
             if let Some(new_cwd) = update.new_cwd.clone() {
                 current_ctx.cwd = new_cwd.clone();
@@ -1368,20 +1596,26 @@ pub async fn run_chat_loop(
                     role: Role::User,
                     content: MessageContent::Blocks(result_blocks),
                 };
-                // RULE-A-003 (2026-06-15): cancel path — log-only
-                // (see the synthetic tool_result site above for why
-                // this stays tracing-only instead of emit_persist_failure).
-                if let Err(e) = crate::db::persist_turn(
-                    &db,
-                    &session_id,
-                    tool_result_msg.role,
-                    &tool_result_msg.content,
-                    seq,
-                    None,
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "failed to persist cancelled tool_result turn");
+                // B6 PR1b: skip the cancelled tool_result persist
+                // in worker mode (SubagentBufferSink transcript is
+                // the worker's record).
+                if !skip_persist {
+                    // RULE-A-003 (2026-06-15): cancel path —
+                    // log-only (see the synthetic tool_result
+                    // site above for why this stays tracing-only
+                    // instead of emit_persist_failure).
+                    if let Err(e) = crate::db::persist_turn(
+                        &db,
+                        &session_id,
+                        tool_result_msg.role,
+                        &tool_result_msg.content,
+                        seq,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %e, "failed to persist cancelled tool_result turn");
+                    }
                 }
                 messages.push(tool_result_msg);
                 tracing::info!(
@@ -1390,8 +1624,14 @@ pub async fn run_chat_loop(
                     "chat_loop: cancelled during tool execution — persisted partial results"
                 );
             }
-            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-            let _ = crate::db::touch_session(&db, &session_id).await;
+            if !skip_persist {
+                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                let _ = crate::db::touch_session(&db, &session_id).await;
+            }
+            // B6 PR1b: always emit terminal `Done { cancelled }` —
+            // the SubagentBufferSink reads it to set `was_cancelled`
+            // (so `run_subagent` can format the dispatch_subagent
+            // tool_result with `status=cancelled`).
             emit_chat_event_via_sink(
                 &sink,
                 &rid,
@@ -1407,38 +1647,46 @@ pub async fn run_chat_loop(
             role: Role::User,
             content: MessageContent::Blocks(result_blocks),
         };
-        // RULE-A-003 (2026-06-15): tool_result persist failure →
-        // emit Error + abort. Previously silent + `seq += 1` drift;
-        // the next turn's LLM context would otherwise be built on a
-        // tool_result the DB never recorded.
-        if let Err(e) = crate::db::persist_turn(
-            &db,
-            &session_id,
-            tool_result_msg.role,
-            &tool_result_msg.content,
-            seq,
-            None,
-        )
-        .await
-        {
-            emit_persist_failure(&sink, &rid, &e);
-            return;
+        // B6 PR1b: skip the tool_result persist in worker mode
+        // (SubagentBufferSink transcript is the worker's record).
+        if !skip_persist {
+            // RULE-A-003 (2026-06-15): tool_result persist
+            // failure → emit Error + abort. Previously silent +
+            // `seq += 1` drift; the next turn's LLM context would
+            // otherwise be built on a tool_result the DB never
+            // recorded.
+            if let Err(e) = crate::db::persist_turn(
+                &db,
+                &session_id,
+                tool_result_msg.role,
+                &tool_result_msg.content,
+                seq,
+                None,
+            )
+            .await
+            {
+                emit_persist_failure(&sink, &rid, &e);
+                return;
+            }
         }
         messages.push(tool_result_msg);
         seq += 1;
     }
 
-    tracing::warn!(max_turns = MAX_TURNS, "agent loop: max turns reached");
-    persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
-    let _ = crate::db::touch_session(&db, &session_id).await;
-    emit_chat_event_via_sink(
-        &sink,
-        &rid,
-        &ChatEvent::Done {
-            stop_reason: Some("max_turns".to_string()),
-            usage: None,
-        },
-    );
+    tracing::warn!(max_turns = turn_limit, "agent loop: max turns reached");
+    // B6 PR1b: skip the max_turns terminal persists in worker mode.
+    if !skip_persist {
+        persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+        let _ = crate::db::touch_session(&db, &session_id).await;
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Done {
+                stop_reason: Some("max_turns".to_string()),
+                usage: None,
+            },
+        );
+    }
 }
 
 /// F5 per-turn latency helper — builds a [`crate::db::MessageLatency`]
@@ -1615,4 +1863,255 @@ pub(crate) fn is_parallel_eligible(
         }
     }
     true
+}
+
+// ---------------------------------------------------------------------------
+// B6 Subagent (2026-06-19): worker dispatch
+//
+// `run_subagent` is the interceptor helper called from the
+// serial-path tool dispatch loop when `name == "dispatch_subagent"`.
+// It owns the nested `run_chat_loop` call that drives the worker
+// agent. Because it needs the parent loop's closure dependencies
+// (`provider` / `db` / `cancellations` / ...) it lives in this
+// module rather than `agent::subagent` — the alternative would be
+// to thread 14+ parameters through a public function, which is
+// the same "too many parameters" cost `run_chat_loop` itself pays
+// (see RULE-A-006 docstring at the top of this file).
+//
+// The function returns a `(content, is_error, cancel_parent,
+// exit_code)` tuple shaped to mirror the `execute_tool` return so
+// the caller's serial-path code can treat it uniformly:
+//   - `content` = the dispatch_subagent tool_result's content
+//     string (status prefix + worker summary).
+//   - `is_error` = whether the worker exited non-successfully
+//     (cancelled / errored). The caller's serial path emits the
+//     tool_result with this flag set so the LLM sees the failure.
+//   - `cancel_parent` = whether the worker detected a parent-
+//     propagated cancel (user Stop reached the worker). When
+//     `true`, the caller's serial loop flips its local `cancelled`
+//     flag and drives the existing cancel path — the user's Stop
+//     propagates back up through the worker to the parent.
+//   - `exit_code` = always `None` (no child process spawned);
+//     matches the convention for non-shell tools.
+// ---------------------------------------------------------------------------
+
+/// Worker turn budget. Bounded independently of the parent's 50-turn
+/// limit so a runaway subagent cannot burn the parent's full budget
+/// (PRD §Decisions 8 + review #4). The worker still re-uses C3
+/// compaction, so hitting this limit on a long task degrades to
+/// compaction rather than an unbounded loop.
+const SUBAGENT_MAX_TURNS: usize = 20;
+
+#[allow(clippy::too_many_arguments)]
+async fn run_subagent(
+    provider: &Arc<dyn Provider>,
+    context_window: u32,
+    parent_rid: &str,
+    parent_session_id: &str,
+    memory_cache: &Arc<MemoryCache>,
+    read_guard: &ReadGuard,
+    skill_cache: &Arc<SkillCache>,
+    permission_asks: &crate::agent::permissions::PermissionStore,
+    cancellations: &Arc<Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    _session_active_request: &Arc<Mutex<std::collections::HashMap<String, String>>>,
+    background_shells: &crate::background_shell::DefaultRegistry,
+    db: &SqlitePool,
+    permission_ctx: &PermissionContext,
+    current_ctx: &ToolContext,
+    tool_use_id: &str,
+    input: &serde_json::Value,
+    parent_token: &CancellationToken,
+    _parent_sink: &Arc<dyn ChatEventSink>,
+) -> (String, bool, bool, Option<i32>) {
+    // Parse the LLM-supplied { subagent, task } arguments.
+    let subagent_name = input
+        .get("subagent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task = input.get("task").and_then(|v| v.as_str()).unwrap_or("");
+    let tool_use_id_owned = tool_use_id.to_string();
+
+    // Resolve the SubagentDef. Unknown name → error tool_result
+    // (keeps the tool_use/tool_result pairing invariant).
+    let Some(def) = lookup_subagent(subagent_name) else {
+        let content = format!(
+            "Unknown subagent '{}'. Available: researcher, general-purpose.",
+            subagent_name
+        );
+        return (content, true, false, None);
+    };
+    if task.trim().is_empty() {
+        let content = "Missing or empty 'task' parameter. The delegation task must be a                        non-empty string."
+            .to_string();
+        return (content, true, false, None);
+    }
+
+    // Build the worker's toolset (allowlist + structural-disabled
+    // strip). The worker's run_chat_loop call gets this filtered
+    // Vec; the parent's tool_defs is unaffected.
+    let worker_tool_defs = filter_tools_for_subagent(crate::tools::builtin_tools(), def);
+
+    // Resolve the parent session's project_id + path so the worker
+    // reads the same memory cache slots the parent uses.
+    let project_id = resolve_project_id(db, parent_session_id).await;
+    let project_path = current_ctx.worktree_path.to_string_lossy().to_string();
+
+    // Build the worker's messages: [memory_blocks (cache_control),
+    // delegation_task]. The task is APPENDed (prompt-cache invariant
+    // — see PRD §Decisions 6 + research §10.5).
+    let worker_messages =
+        build_worker_messages(memory_cache, &project_id, &project_path, task).await;
+
+    // Assemble the worker's system prompt — fully replaces the
+    // parent's behavior_prompt + mode_prefix + base_prompt layers.
+    let _worker_system_prompt = assemble_subagent_prompt(def, task);
+    // (run_chat_loop builds its own system prompt from the project /
+    // session row; the worker's replacement prompt would need to be
+    // threaded as a parameter to override the assemble_system_prompt
+    // step. For PR1b the worker gets the parent's base prompt — the
+    // worker SubagentDef's system_prompt is used for documentation
+    // only. A future PR will thread an override through. See
+    // PR1b §"Deviations".)
+
+    // Worker rid + token. The rid is registered into `cancellations`
+    // (so user Stop propagates from the parent via the shared map)
+    // but NOT into `session_active_request` — that map is
+    // session→request 1:1 and a worker entry would evict the
+    // parent's mapping, corrupting
+    // `cancel_inflight_for_session` / RULE-E-005. The
+    // CancellationGuard inside run_chat_loop is constructed with
+    // `skip_session_active: true` for the worker path so its Drop
+    // does NOT remove the parent's session_active_request entry.
+    //
+    // The rid suffix uses the tool_use_id so a future PR2
+    // transcript row can correlate back to the parent's
+    // dispatch_subagent tool_use.
+    let worker_rid = format!("{}-sub-{}", parent_rid, tool_use_id_owned);
+    let worker_token = parent_token.child_token();
+    {
+        let mut map = cancellations.lock().await;
+        map.insert(worker_rid.clone(), worker_token.clone());
+    }
+
+    // Worker PermissionContext: inherit the parent's mode (Edit /
+    // Plan / Yolo) but mark `is_worker: true` so the Tier 4 ask
+    // path collapses to Deny (worker has no UI sink).
+    let _worker_permission_ctx = PermissionContext {
+        session_id: parent_session_id.to_string(),
+        mode: permission_ctx.mode,
+        cwd: permission_ctx.cwd.clone(),
+        is_worker: true,
+    };
+    // (PermissionContext override threading is a future-PR concern;
+    // see §Deviations below. The worker's actual permission checks
+    // during its run_chat_loop use the session-row mode that
+    // run_chat_loop rebuilds internally — which equals
+    // permission_ctx.mode for the parent session. The `is_worker`
+    // override is wired into `ask_path` but run_chat_loop builds
+    // its own PermissionContext internally with `is_worker: false`.
+    // A future PR threads an `is_worker` parameter into
+    // run_chat_loop; PR1b's worker permission collapse is exercised
+    // via the permissions::check unit tests, not via the nested
+    // call.)
+
+    // SubagentBufferSink: records the worker's emits into an in-
+    // memory transcript. Does NOT forward to the parent sink — the
+    // parent's frontend only sees the dispatch_subagent tool_call /
+    // tool_result pair; the worker's stream stays isolated (Claude
+    // Code convention).
+    let worker_sink: Arc<SubagentBufferSink> = Arc::new(SubagentBufferSink::new());
+    let worker_sink_dyn: Arc<dyn ChatEventSink> = worker_sink.clone();
+
+    // Nested run_chat_loop. The worker reuses the parent's
+    // session_id for DB linkage (its turns land in the same
+    // `messages` table), but:
+    //   - `skip_session_active: true` so the guard's Drop does NOT
+    //     evict the parent's session_active_request entry.
+    //   - `max_turns: Some(SUBAGENT_MAX_TURNS)` to bound the worker's
+    //     turn budget.
+    //   - The worker_token is the parent_token's child, so a user
+    //     Stop that reaches the parent also fires the worker
+    //     (cancel propagation).
+    //
+    // Boxed: `run_subagent` → `run_chat_loop` → `run_subagent`
+    // (worker dispatches its own subagent? No — workers have
+    // `dispatch_subagent` stripped from their tools, so the
+    // recursion is bounded at depth 1). Still, the async-fn
+    // recursion is statically unbounded (the compiler cannot prove
+    // the depth-1 invariant), so `Box::pin` breaks the size-
+    // infinite Future chain. The cost is one heap allocation per
+    // worker dispatch — negligible relative to the LLM round-trip.
+    Box::pin(run_chat_loop(
+        worker_tool_defs,
+        provider.clone(),
+        context_window,
+        worker_rid.clone(),
+        parent_session_id.to_string(),
+        worker_messages,
+        worker_sink_dyn,
+        db.clone(),
+        cancellations.clone(),
+        _session_active_request.clone(),
+        read_guard.clone(),
+        memory_cache.clone(),
+        skill_cache.clone(),
+        permission_asks.clone(),
+        worker_token,
+        None,
+        background_shells.clone(),
+        Some(SUBAGENT_MAX_TURNS),
+        // B6 PR1b review #2: worker path — skip_session_active = true
+        // so the worker's guard Drop does not evict the parent's
+        // session_active_request[parent_session_id] entry.
+        true,
+        // B6 PR1b: worker path — skip_persist = true so the worker's
+        // intermediate turns stay in-memory only. The
+        // SubagentBufferSink captures them; PR2 will persist the
+        // transcript into `subagent_runs`. Without this, the worker
+        // would race the parent's persist_turn calls on the same
+        // `(session_id, seq)` key (UNIQUE collision).
+        true,
+    ))
+    .await;
+
+    // Drain the worker's accumulated state.
+    let worker_text = worker_sink.final_text();
+    let status = if worker_sink.was_cancelled() {
+        SubagentStatus::Cancelled
+    } else if worker_sink.had_error() {
+        SubagentStatus::Error
+    } else {
+        SubagentStatus::Completed
+    };
+
+    // Detect parent-driven cancel: the parent token fired while the
+    // worker was running. The worker's own cancel_done event may
+    // NOT have fired if the cancel arrived after the worker loop
+    // already returned (e.g. worker finished turn 1 cleanly, then
+    // parent cancel propagated before turn 2's select! polled).
+    // The child_token relationship makes the worker_token fire when
+    // the parent fires; check parent_token directly so the caller's
+    // serial loop flips its `cancelled` flag and drives the existing
+    // cancel path (matches the user's Stop intent).
+    let cancel_parent =
+        parent_token.is_cancelled() && status == SubagentStatus::Cancelled;
+
+    let (content, is_error) = format_dispatch_result(status, &worker_text);
+    (content, is_error, cancel_parent, None)
+}
+
+/// Resolve the project_id for a session. Best-effort DB lookup of
+/// `sessions.project_id` — the worker's memory loader needs the
+/// project_id to slot into the right MemoryCache entry.
+async fn resolve_project_id(db: &SqlitePool, session_id: &str) -> String {
+    match crate::db::load_session(db, session_id).await {
+        Ok(Some(loaded)) => loaded.session.project_id,
+        _ => {
+            tracing::warn!(
+                session_id = %session_id,
+                "run_subagent: failed to load session for project_id; falling back to empty"
+            );
+            String::new()
+        }
+    }
 }

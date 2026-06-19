@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 22 | 健壮性 + 债务,中长期清理 |
+| P2 | 23 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **47** | 含历史 review 合并 |
+| **Total** | **48** | 含历史 review 合并 |
 
 ---
 
@@ -621,6 +621,21 @@
 - **Related Task**: `.trellis/tasks/06-19-l2-followup-rule-a-013-boundary-silent-batch`
 - **Owner**: carlos
 - **Discovered In**: L2 PR1 trellis-check(2026-06-19)
+
+### RULE-A-014 — 嵌套 run_chat_loop PermissionContext.is_worker 未 threaded → Edit/Plan + 写工具 ask 挂起
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/chat_loop.rs:1895-1911`(deviation docstring)+ `:2002`(`_worker_permission_ctx` 构造)+ `:1940`(嵌套 run_chat_loop 调用)
+- **Description**: B6 PR1b 落地时 worker 路径构造了 `PermissionContext { is_worker: true }` 但未 thread 到嵌套 `run_chat_loop`;run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }`。`permissions::check` 的 `ask_path` 顶部 `if ctx.is_worker { Decision::Deny }` 逻辑在 worker 嵌套路径上**不可达**。Net effect:`general-purpose` subagent + Edit/Plan mode + 写工具(path-outside-cwd / shell SideEffect/Ask)时,Tier 4 ask 仍会 emit `permission:ask` 到 `permission_asks` map → 等 oneshot 永远等不到(worker 无 UI sink)→ **挂起直到 user Stop**。
+- **Impact**: 触发条件罕见(Yolo 走 Tier 4 bypass 不受影响;researcher 只读不触发 ask;只 general-purpose + Edit/Plan + 危险工具组合才挂起)。无数据损坏 / 安全泄漏,纯 UX 退化(agent 看起来冻住,实际是 permission:ask 等待)。
+- **Fix**: thread `is_worker: bool` 到 `run_chat_loop` 第 21 参(`Option<bool>`,None = 走 session row 默认 false);嵌套 worker 调用传 `Some(true)`;`run_chat_loop` 内部构造 PermissionContext 时读该字段;+ 端到端测试(general-purpose + Edit mode + 写工具应 deny 不挂起)。预计 ~10 行 + 1 测试。
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-19-b6-subagent`
+- **Discovered In**: 任务 PR1 trellis-check(2026-06-19) + 见 prd.md §Review 修订 #5(原本期望 is_worker 接通,但 PR1b 仅在 run_subagent 构造点设 true,未 thread 进嵌套 call)
+- **Closed At**: null
+- **Related PR**: null
 
 ## P3 — 轻微(文档/一致性)
 

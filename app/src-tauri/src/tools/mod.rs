@@ -42,6 +42,14 @@ use crate::tools::read_guard::ReadGuard;
 use crate::tools::update_checklist::ChecklistHandle;
 
 /// All built-in tools available as of step 2 + the toolset extension.
+///
+/// `dispatch_subagent` (B6, 2026-06-19) is registered here so the
+/// LLM can discover it + it goes through the ⑨ 关 permission
+/// check. Its **execution is intercepted** in `chat_loop.rs`'s
+/// tool_use dispatch loop — it is NOT routed through
+/// `tools::execute_tool` / `execute_tool_inner` (those lack
+/// access to provider / db / cancellations; see
+/// `agent::subagent` docstring + PRD §"Technical Approach").
 pub fn builtin_tools() -> Vec<ToolDef> {
     vec![
         read_file::definition(),
@@ -57,6 +65,10 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         run_background_shell::definition(),
         shell_status::definition(),
         shell_kill::definition(),
+        // B6 Subagent (2026-06-19): agent-layer control-flow tool.
+        // Execution is intercepted in chat_loop.rs; the ToolDef here
+        // is discovery-only (LLM sees it in the tools[] array).
+        crate::agent::subagent::definition(),
     ]
 }
 
