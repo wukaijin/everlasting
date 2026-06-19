@@ -123,7 +123,7 @@ impl Risk {
 /// future PR.
 pub fn risk_for_tool(tool_name: &str) -> Risk {
  match tool_name {
- "shell" => Risk::High,
+ "shell" | "run_background_shell" => Risk::High,
  "write_file" | "edit_file" => Risk::Medium,
  // `web_fetch` is Low at the risk-permission layer; its own
  // SSRF blocklist (in `tools/web_fetch.rs`) is the relevant
@@ -713,7 +713,12 @@ fn classify_tool(tool_name: &str) -> ToolKind {
  "read_file" | "write_file" | "edit_file" | "list_dir" | "grep" | "glob" => {
  ToolKind::Path
  }
- "shell" => ToolKind::Shell,
+ // L1a: `run_background_shell` runs the SAME `sh -c <command>` shape
+ // as `shell`, so the Tier 4 shell branch (kill-list + 3-tier
+ // classify_prefix + prefix grants) applies uniformly. Routing it to
+ // `ToolKind::Shell` instead of `Other` is what makes "始终允许"
+ // grants on `cargo` work for both sync and async forms.
+ "shell" | "run_background_shell" => ToolKind::Shell,
  "web_fetch" => ToolKind::WebFetch,
  _ => ToolKind::Other,
  }
@@ -1352,7 +1357,10 @@ pub fn filter_tools_for_mode(
  match mode {
  Mode::Plan => tools
  .into_iter()
- .filter(|t| !matches!(t.name.as_str(), "write_file" | "edit_file" | "shell"))
+ .filter(|t| !matches!(
+ t.name.as_str(),
+ "write_file" | "edit_file" | "shell" | "run_background_shell"
+ ))
  .collect(),
  _ => tools,
  }
@@ -1532,8 +1540,32 @@ mod tests {
  assert_eq!(super::classify_tool("grep"), super::ToolKind::Path);
  assert_eq!(super::classify_tool("glob"), super::ToolKind::Path);
  assert_eq!(super::classify_tool("shell"), super::ToolKind::Shell);
+ assert_eq!(super::classify_tool("run_background_shell"), super::ToolKind::Shell);
  assert_eq!(super::classify_tool("web_fetch"), super::ToolKind::WebFetch);
  assert_eq!(super::classify_tool("unknown_future_tool"), super::ToolKind::Other);
+ }
+
+ /// L1a (2026-06-19): `run_background_shell` is High risk (same
+ /// as `shell`). `shell_status` / `shell_kill` are Low (read-only
+ /// inspection / kill of an already-existing process; no new
+ /// code is executed).
+ #[test]
+ fn risk_for_tool_includes_background_shell_high() {
+ assert_eq!(super::risk_for_tool("run_background_shell"), super::Risk::High);
+ assert_eq!(super::risk_for_tool("shell_status"), super::Risk::Low);
+ assert_eq!(super::risk_for_tool("shell_kill"), super::Risk::Low);
+ }
+
+ /// `run_background_shell` routes through the Tier 4 Shell branch
+ /// (kill-list + classify_prefix + prefix grants), so a user's
+ /// "始终允许" grant on `cargo` works for BOTH sync `shell` and
+ /// async `run_background_shell`. This test guards the routing.
+ #[test]
+ fn classify_tool_routes_background_shell_to_shell_kind() {
+ assert_eq!(
+ super::classify_tool("run_background_shell"),
+ super::ToolKind::Shell
+ );
  }
 
  /// extract_path_arg reads the `path` key (with `cwd` /

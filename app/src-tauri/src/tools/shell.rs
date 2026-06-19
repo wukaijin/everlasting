@@ -104,6 +104,12 @@ const SAFE_ENV_VARS: &[&str] = &[
 
 /// Apply a safe-allowlist environment to `cmd`.
 ///
+/// `pub(crate)` because L1's `background_shell::in_memory` reuses
+/// the same env-allowlist rules for spawned background children —
+/// the trait + impl share `apply_safe_env` so a future
+/// safe-list change automatically applies to both sync `shell`
+/// and `run_background_shell`.
+///
 /// `env_clear()` removes every inherited variable from the parent
 /// (including `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `*_TOKEN` /
 /// `*_SECRET`). We then re-inject `PATH` (required for command
@@ -120,7 +126,7 @@ const SAFE_ENV_VARS: &[&str] = &[
 /// env isolation" (this file currently has no dedicated subsection —
 /// a new one will be added in a follow-up spec pass alongside
 /// RULE-E-002 `process_group`).
-fn apply_safe_env(cmd: &mut Command) {
+pub(crate) fn apply_safe_env(cmd: &mut Command) {
     cmd.env_clear();
     // PATH is required for command resolution. Inherit from parent
     // when present; if missing (rare), the child inherits no PATH,
@@ -588,6 +594,7 @@ mod tests {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
             checklist: crate::tools::update_checklist::new_handle(),
+            background_shells: crate::background_shell::default_registry(),
         }
     }
 
@@ -767,6 +774,7 @@ mod tests {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: PathBuf::from("/etc"),
             checklist: crate::tools::update_checklist::new_handle(),
+            background_shells: crate::background_shell::default_registry(),
         };
         let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 注入点(provider.send 之前 drain_notifications)和 §2.5 tool 执行流水线;新增 BackgroundShellRegistry 需与现有 chat_loop.rs 集成"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "ToolDef schema 格式 + input_schema + description 写作规范;新增 3 个 tool 需符合此契约"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "working_directory 强约束 + 7 个 edge case;run_background_shell 复用 assert_within_root"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "BackgroundShellError 领域类型设计 + tracing::warn! 边界规则 + anyhow 边界处理"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "session 生命周期(delete_session + RunEvent::Exit 钩子)与 worktree 的关系;后台 shell 必须随 session 一起清理"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "synthetic user message 形态(cache_control 不打) + tool_result 协议;完成通知用 user 角色注入"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 kill_and_collect + process_group(0) 而非重写;本 PR 不抽新 helper 沉淀到 spec,直接调 shell.rs 已有的"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Rust 后端 → Tauri command → 前端 Pinia store 的边界;本任务主要在 Rust,前端 UI 留 L1b"}
+{"file": "docs/spikes/2026-06-19-async-parallel-tool-research.md", "reason": "L2 调研 spike §5.1 已写透 L1 的两个隐藏成本点(daemon 耦合 + PTY vs Command);决策对齐依据"}

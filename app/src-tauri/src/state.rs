@@ -159,6 +159,21 @@ pub struct AppState {
     /// user's decision, which wakes the agent loop's
     /// `tokio::select!` arm inside `permissions::check`.
     pub permission_asks: PermissionStore,
+    /// L1a (2026-06-19): cross-request background-shell registry.
+    /// Lives in `AppState` so the agent loop, the
+    /// `run_background_shell` / `shell_status` / `shell_kill`
+    /// tools, `delete_session`, and the `RunEvent::Exit` hook all
+    /// share the same handle. The agent loop clones the `Arc`
+    /// into `ToolContext` every turn; the tools call into it from
+    /// there.
+    ///
+    /// The concrete `Arc<InMemoryBackgroundShellRegistry>` type
+    /// (vs. `Arc<dyn BackgroundShellRegistry>`) matches the
+    /// pattern used by the other cross-request handles in
+    /// `AppState` (`MemoryCache`, `SkillCache`, `ReadGuard`) —
+    /// the daemon-ization swap is a future PR that touches only
+    /// `AppState::load` (per L1 PRD Q1 decision C).
+    pub background_shells: crate::background_shell::DefaultRegistry,
 }
 
 impl AppState {
@@ -268,6 +283,15 @@ impl AppState {
             command_cache,
             skill_cache,
             permission_asks: crate::agent::permissions::new_permission_store(),
+            // L1a (2026-06-19): fresh in-memory background-shell
+            // registry. The single GUI-process impl
+            // (`InMemoryBackgroundShellRegistry`) holds a
+            // `HashMap<(session_id, shell_id), ShellEntry>` plus
+            // a per-session completion-notification queue. Lives
+            // for the process lifetime; `kill_all` is invoked
+            // from the `RunEvent::Exit` hook so app shutdown
+            // doesn't leak process groups.
+            background_shells: crate::background_shell::default_registry(),
         }
     }
 

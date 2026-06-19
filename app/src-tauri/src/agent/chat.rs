@@ -86,6 +86,12 @@ pub async fn chat(
     let memory_cache = state.memory_cache.clone();
     let skill_cache = state.skill_cache.clone();
     let permission_asks = state.permission_asks.clone();
+    // L1a (2026-06-19): clone the cross-request background-shell
+    // registry BEFORE the spawn so the move closure doesn't
+    // capture a borrowed `state`. Threaded into `run_chat_loop` so
+    // the agent loop can drain completion notifications each turn
+    // and the 3 L1a tools can call into it from `ToolContext`.
+    let background_shells = state.background_shells.clone();
     let rid = request_id;
     // The `app` clone lives on through `AppHandleSink` (built
     // below); the pre-flight error path also uses `app.emit`
@@ -219,6 +225,11 @@ pub async fn chat(
             // fire the `resend_message` audit row when set.
             // `None` for normal sends (the common case).
             resendSeq,
+            // L1a (2026-06-19): cross-request registry. Threaded
+            // through so the 3 L1a tools can start / query / kill
+            // background processes and the agent loop can drain
+            // completion notifications each turn.
+            background_shells.clone(),
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

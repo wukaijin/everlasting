@@ -25,6 +25,7 @@
 //! (Windows console subsystem on/off, env-filter defaults).
 
 mod agent;
+mod background_shell;
 mod commands;
 mod db;
 mod files;
@@ -37,6 +38,7 @@ mod skill;
 mod state;
 mod tools;
 
+use crate::background_shell::BackgroundShellRegistry;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -131,6 +133,44 @@ pub fn run() {
             // B2 @文件补全 (2026-06-17)
             commands::files::list_files,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // L1a (2026-06-19): kill every background shell on app
+        // shutdown. The shell's process-group SIGKILL is async
+        // (RULE-E-002), but the kill signals themselves fire
+        // synchronously inside `kill_all` — by the time `Exit`
+        // resolves, every spawned `sh -c <command>` has already
+        // received its SIGKILL. Any descendants (`&` / `nohup` /
+        // pipelines) are in the same process group and are reaped
+        // along with the direct child. No leak.
+        //
+        // We use `Exit` (not `ExitRequested`) because
+        // `ExitRequested` is fired DURING the close handshake and
+        // can be denied by a hook; `Exit` is the terminal
+        // "the app is going down now" signal — there's no hook
+        // between us and process termination, so cleanup is
+        // unconditional.
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state = app_handle.state::<std::sync::Arc<state::AppState>>();
+                let registry = state.background_shells.clone();
+                // `block_on` is appropriate here: the app is
+                // exiting and we need the kill signals to land
+                // BEFORE the OS starts reaping our process. The
+                // registry's `kill_all` takes the lock once,
+                // snapshots the senders, and sends — typically
+                // sub-millisecond. Any teardown race with the
+                // spawned background tasks is irrelevant: they're
+                // being killed anyway, and the OS will reap the
+                // descendants.
+                tauri::async_runtime::block_on(async move {
+                    if let Err(e) = registry.kill_all().await {
+                        tracing::warn!(
+                            error = %e,
+                            "lifecycle hook: background_shells.kill_all failed on app exit (non-fatal)"
+                        );
+                    }
+                });
+            }
+        });
 }

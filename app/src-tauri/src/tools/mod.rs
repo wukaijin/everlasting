@@ -22,7 +22,10 @@ pub mod grep;
 pub mod list_dir;
 pub mod read_file;
 pub mod read_guard;
+pub mod run_background_shell;
 pub mod shell;
+pub mod shell_kill;
+pub mod shell_status;
 pub mod update_checklist;
 pub mod use_skill;
 pub mod web_fetch;
@@ -32,6 +35,7 @@ use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::background_shell::DefaultRegistry;
 use crate::llm::types::ToolDef;
 use crate::skill::loader::SkillCache;
 use crate::tools::read_guard::ReadGuard;
@@ -50,6 +54,9 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         web_fetch::definition(),
         use_skill::definition(),
         update_checklist::definition(),
+        run_background_shell::definition(),
+        shell_status::definition(),
+        shell_kill::definition(),
     ]
 }
 
@@ -72,11 +79,28 @@ pub fn builtin_tools() -> Vec<ToolDef> {
 ///   `provider.send`) to build the ephemeral checklist injection
 ///   block. The handle is `Clone` (it's an `Arc`) so the existing
 ///   per-turn `ToolContext` clone pattern is unaffected.
-#[derive(Debug, Clone)]
+/// - `background_shells`: L1a cross-request registry handle. The
+///   `run_background_shell` / `shell_status` / `shell_kill` tools
+///   call into this handle to start / query / kill background
+///   processes whose lifetimes span multiple turns (and multiple
+///   `invoke("chat")` calls — see `.trellis/tasks/06-19-l1-shell-pty/
+///   prd.md` Q1 decision). Held as a concrete `Arc<...>` rather
+///   than `dyn` to match the codebase's pattern for the other
+///   cross-request handles (`MemoryCache`, `SkillCache`,
+///   `ReadGuard`).
+///
+/// No `Debug` derive: the registry's `Inner` carries
+/// `HashMap<_, ShellEntry>` whose fields are deliberately opaque
+/// (kill-tx oneshot senders, stdout/stderr buffers), and no
+/// current caller needs `{:?}` formatting on the whole context.
+/// Tools that need debug logging have access to the individual
+/// fields (e.g. `tracing::info!(cwd = ?ctx.cwd, ...)`).
+#[derive(Clone)]
 pub struct ToolContext {
     pub worktree_path: PathBuf,
     pub cwd: PathBuf,
     pub checklist: ChecklistHandle,
+    pub background_shells: DefaultRegistry,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
@@ -218,6 +242,27 @@ async fn execute_tool_inner(
             // check) automatically protects the checklist too.
             let (out, is_err) = update_checklist::execute(input, &ctx.checklist).await;
             (out, is_err, ToolContextUpdate::default(), None)
+        }
+        "run_background_shell" => {
+            // L1a: fire-and-forget shell. Returns immediately with
+            // a `shell_session_id` handle; the spawned task's
+            // completion notification is drained at the start of
+            // the next agent-loop turn.
+            let (out, is_err, update) =
+                run_background_shell::execute(input, ctx, session_id).await;
+            (out, is_err, update, None)
+        }
+        "shell_status" => {
+            // L1a: query a background shell's current state.
+            // Reads-only; no process exit code.
+            let (out, is_err, update) = shell_status::execute(input, ctx, session_id).await;
+            (out, is_err, update, None)
+        }
+        "shell_kill" => {
+            // L1a: SIGKILL a background shell's process group.
+            // Idempotent — killing a Done shell is a no-op success.
+            let (out, is_err, update) = shell_kill::execute(input, ctx, session_id).await;
+            (out, is_err, update, None)
         }
         _ => (
             format!("Unknown tool: {}", name),

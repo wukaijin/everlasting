@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
+use crate::background_shell::BackgroundShellRegistry;
 use crate::db;
 use crate::git;
 use crate::llm::types::MessageContent;
@@ -172,6 +173,28 @@ pub async fn delete_session(
         if !cwd.trim().is_empty() {
             crate::tools::shell::cleanup_outputs_dir(std::path::Path::new(cwd)).await;
         }
+    }
+
+    // L1a (2026-06-19): kill every background shell belonging to
+    // this chat session. Fire-and-forget — `kill_all_for_session`
+    // sends kill signals to the running senders and returns
+    // immediately; the spawned tasks do the actual teardown async
+    // (process-group SIGKILL + reaping). Not awaiting the teardown
+    // here is intentional: the delete IPC should not block on
+    // process cleanup, and a brief window of dangling process
+    // group is preferable to a hung delete button. The cancel +
+    // ReadGuard + permission-asks cleanup above already took the
+    // in-flight agent loop out of the equation.
+    if let Err(e) = state
+        .background_shells
+        .kill_all_for_session(&session_id)
+        .await
+    {
+        tracing::warn!(
+            session_id = %session_id,
+            error = %e,
+            "delete_session: background_shells.kill_all_for_session failed (non-fatal)"
+        );
     }
 
     // Step 4 follow-up: best-effort worktree + branch cleanup.

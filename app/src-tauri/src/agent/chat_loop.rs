@@ -55,6 +55,7 @@ use crate::agent::helpers::{
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
+use crate::background_shell::BackgroundShellRegistry;
 use crate::llm::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Provider, Role,
     ToolDef,
@@ -116,6 +117,14 @@ pub async fn run_chat_loop(
     // audit failure does NOT abort the chat — the user has
     // already seen the assistant's new turn stream).
     resend_seq: Option<i64>,
+    // L1a (2026-06-19): cross-request background-shell registry.
+    // Threaded into the per-turn `ToolContext` so the 3 L1a tools
+    // (`run_background_shell` / `shell_status` / `shell_kill`) can
+    // call into it. The agent loop itself reads it once per turn
+    // (after C3 compaction, before `provider.send`) to drain
+    // pending completion notifications and inject them as
+    // user-role messages.
+    background_shells: crate::background_shell::DefaultRegistry,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -227,6 +236,11 @@ pub async fn run_chat_loop(
         // to build the ephemeral injection block (see `inject_checklist`
         // below).
         checklist: crate::tools::update_checklist::new_handle(),
+        // L1a (2026-06-19): cross-request background-shell registry.
+        // Pulled from `AppState` (which owns the single in-memory
+        // impl); tools consume it from `ToolContext` so the registry
+        // isn't plumbed through every tool signature.
+        background_shells: background_shells.clone(),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;
@@ -598,6 +612,33 @@ pub async fn run_chat_loop(
         // whether or not we injected, so the non-checklist path is a
         // single extra `.clone()` per turn (cheap relative to LLM
         // network latency).
+
+        // L1a (2026-06-19): drain completion notifications from the
+        // background-shell registry. Each notification is appended
+        // as a `user`-role message at the END of the request clone
+        // (mirroring the checklist injection rule: APPEND, not
+        // prepend, so the memory cache breakpoint at `messages[0]`
+        // stays intact — see `.trellis/spec/backend/tool-contract.md`
+        // §7 "Wrong vs Correct — injection placement"). The agent
+        // loop drains ONCE per turn (not per tool_use): background
+        // tasks may complete between turns, but the queue is
+        // consumed on the next turn's request. Drained notifications
+        // are GONE from the registry (drain_notifications is
+        // destructive — see `background_shell::BackgroundShellRegistry`).
+        //
+        // Each notification produces ONE user message; the LLM tracks
+        // multiple completions more reliably when they're separated
+        // (a single merged message risks being read as a single
+        // event with garbled exit codes).
+        //
+        // Format (per L1 PRD Q3 + Q4 decisions):
+        //   `[system] 后台 shell <shell_session_id> 已完成,exit code <N>。调 shell_status(session_id="<id>") 看输出。`
+        // Notifications are kept lean — only exit code + session id;
+        // the LLM calls `shell_status` to pull stdout/stderr. Keeps
+        // the per-turn context cost bounded for builds that fan out
+        // into many background shells.
+        let background_notifications =
+            background_shells.drain_notifications(&session_id).await;
         let turn_messages = {
             let checklist_snapshot = current_ctx.checklist.lock().await.clone();
             let mut req = messages.clone();
@@ -623,6 +664,29 @@ pub async fn run_chat_loop(
                 // above. Prepending would bust the memory cache
                 // breakpoint at messages[0].
                 req.push(checklist_msg);
+            }
+            // L1a notifications: APPEND after the (optional)
+            // checklist block. Same cache-correctness rule — keep
+            // the memory breakpoint at messages[0] intact. Each
+            // notification gets ONE message so the LLM sees
+            // multiple completions as distinct events.
+            for note in &background_notifications {
+                let text = format!(
+                    "[system] 后台 shell {} 已完成,exit code {}。调 shell_status(session_id=\"{}\") 看输出。",
+                    note.shell_session_id,
+                    note.exit_code
+                        .map(|c: i32| c.to_string())
+                        .unwrap_or_else(|| "N/A".to_string()),
+                    note.shell_session_id,
+                );
+                let msg = ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Blocks(vec![ContentBlock::Text {
+                        text,
+                        cache_control: None,
+                    }]),
+                };
+                req.push(msg);
             }
             req
         };

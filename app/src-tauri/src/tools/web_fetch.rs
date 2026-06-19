@@ -959,6 +959,7 @@ mod tests {
             worktree_path: p.clone(),
             cwd: p,
             checklist: crate::tools::update_checklist::new_handle(),
+            background_shells: crate::background_shell::default_registry(),
         }
     }
 

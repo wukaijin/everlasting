@@ -928,6 +928,12 @@ struct TestHarness {
     memory_cache: Arc<MemoryCache>,
     skill_cache: Arc<SkillCache>,
     permission_asks: crate::agent::permissions::PermissionStore,
+    /// L1a (2026-06-19): cross-request background-shell registry.
+    /// Each test gets a fresh registry so concurrent tests can't
+    /// see each other's shells. Threads through `run_chat_loop`'s
+    /// new 15th parameter and is the same handle `ToolContext`
+    /// hands to the 3 L1a tools.
+    background_shells: crate::background_shell::DefaultRegistry,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
     /// loop's pre-flight canonicalizes it. See struct docstring.
@@ -983,6 +989,7 @@ async fn make_harness() -> TestHarness {
         memory_cache: MemoryCache::arc(),
         skill_cache: SkillCache::arc(),
         permission_asks: new_permission_store(),
+        background_shells: crate::background_shell::default_registry(),
         // Move the TempDir guard INTO the harness so it lives as
         // long as the harness (i.e. the whole test). Without this
         // move, `dir` drops at the end of `make_harness` and the
@@ -1040,6 +1047,7 @@ async fn agent_loop_basic_text_only_completes() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1121,6 +1129,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1204,6 +1213,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1274,6 +1284,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1384,6 +1395,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         h.permission_asks,
         cancel_token,
         None,
+        h.background_shells.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1458,6 +1470,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1513,6 +1526,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1584,6 +1598,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1695,6 +1710,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1806,6 +1822,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -1924,6 +1941,7 @@ async fn agent_loop_persist_failure_emits_error() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2046,6 +2064,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         h.permission_asks,
         cancel_token,
         None,
+        h.background_shells.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2126,6 +2145,7 @@ async fn agent_loop_error_persists_partial_text() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2189,6 +2209,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2244,6 +2265,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2333,6 +2355,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2390,6 +2413,7 @@ async fn agent_loop_error_emits_turn_complete() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2489,6 +2513,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2623,6 +2648,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -2737,6 +2763,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         h.permission_asks,
         cancel_token,
         None,
+        h.background_shells.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3072,6 +3099,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -3215,6 +3243,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         h.permission_asks,
         CancellationToken::new(),
         None,
+        h.background_shells.clone(),
     )
     .await;
 
@@ -3371,6 +3400,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         h.permission_asks,
         cancel_token,
         None,
+        h.background_shells.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3410,6 +3440,224 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         "cancelled tasks skip audit (RULE-A-004): results={} audit={} (audit MUST be <= results)",
         emitter.tool_result_count(),
         audit_count
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L1a: agent loop drains background-shell notifications and prepends
+// (technically: appends to the request clone) a user-role message
+// containing the completion text on the NEXT turn. PR2 closes the
+// round-trip from `BackgroundShellRegistry::start` → completion →
+// notification → `provider.send` request body.
+// ---------------------------------------------------------------------------
+
+/// L1a end-to-end: start a fast background shell from the harness's
+/// registry, wait for completion, then drive a 2-turn agent loop.
+/// Turn 1 emits a `tool_use(run_background_shell)` so the tool layer
+/// actually runs (proving the dispatch + ToolContext thread works);
+/// turn 2 fires after the completion notification lands in the
+/// agent-loop drain. The captured `sent_messages[1]` (turn 2's
+/// request body) MUST contain the `[system] 后台 shell ... 已完成`
+/// text — this is the wire contract the LLM sees.
+///
+/// Why this matters: the agent loop's notification drain is the only
+/// place a per-turn cross-request state gets injected into the
+/// outbound wire payload. A regression (e.g. drain moved to the
+/// wrong turn, append swapped to prepend, format string drift)
+/// silently breaks the LLM's ability to react to backgrounded
+/// commands.
+#[tokio::test]
+async fn agent_loop_drains_background_shell_notification_into_turn_2() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: emit run_background_shell tool_use. The agent
+        // loop's tool dispatch routes this through the new
+        // run_background_shell::execute, which starts a real
+        // background shell via the registry.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_bg_1".into(),
+                name: "run_background_shell".into(),
+                input: serde_json::json!({"command": "echo done-from-bg"}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: terminal text (consumed only if turn 1
+        // successfully started the shell and the notification
+        // arrived before turn 2's drain).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-bg-drain".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+    )
+    .await;
+
+    // Two turns → two `send` calls.
+    assert_eq!(mock.call_count(), 2, "tool_use must trigger a second turn");
+
+    let sent = mock.sent_messages();
+    assert_eq!(sent.len(), 2, "captured 2 turn request bodies");
+
+    // Turn 1's request body MUST NOT carry the notification block
+    // yet (the shell only completed AFTER turn 1's `provider.send`
+    // fired, and the drain runs at the start of turn 2).
+    let turn1_text = messages_to_text(&sent[0]);
+    assert!(
+        !turn1_text.contains("[system] 后台 shell"),
+        "turn 1 must NOT carry the notification (it hadn't completed yet), got: {}",
+        turn1_text
+    );
+
+    // Turn 2's request body MUST carry the notification block.
+    // The format is exact: the LLM-facing string must match so
+    // it can grep for `后台 shell ...` and call shell_status.
+    let turn2_text = messages_to_text(&sent[1]);
+    assert!(
+        turn2_text.contains("[system] 后台 shell"),
+        "turn 2 must include the drained notification, got: {}",
+        turn2_text
+    );
+    assert!(
+        turn2_text.contains("已完成"),
+        "notification carries completion marker, got: {}",
+        turn2_text
+    );
+    assert!(
+        turn2_text.contains("exit code 0"),
+        "echo succeeds with exit code 0, got: {}",
+        turn2_text
+    );
+    assert!(
+        turn2_text.contains("shell_status"),
+        "notification tells the LLM which tool to call next, got: {}",
+        turn2_text
+    );
+
+    // Persistence invariant: the ephemeral notification block is
+    // per-turn-only. The persisted `messages.content` MUST NOT
+    // contain a USER-role message whose content is a plain text
+    // block (not a tool_result block) carrying the
+    // `[system] 后台 shell` notification. The
+    // `run_background_shell` TOOL RESULT itself contains the
+    // literal `[system] 后台 shell ... 已完成...` snippet in its
+    // success message (the LLM-facing UX hint), so we walk each
+    // user-role row's content and look for a plain-text block
+    // (the notification shape) — a tool_result block is typed
+    // (`{"type":"tool_result", ...}`) and is excluded.
+    let loaded = db::load_session(&h.db, &h.session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    let mut phantom_count = 0;
+    for m in &loaded.messages {
+        if m.role != "user" {
+            continue;
+        }
+        if let Some(arr) = m.content.as_array() {
+            for block in arr {
+                let block_type = block.get("type").and_then(|t| t.as_str());
+                let has_notification = block_type == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.contains("[system] 后台 shell") && s.contains("已完成"))
+                        .unwrap_or(false);
+                if has_notification {
+                    phantom_count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        phantom_count, 0,
+        "persisted messages must NOT carry an ephemeral notification block (got {} phantom rows)",
+        phantom_count
+    );
+}
+
+/// L1a: when no background shells have completed between turns,
+/// no notification block is injected. The empty-queue path is the
+/// fast path (no extra `.clone()`, no extra push) — the L1a
+/// implementation MUST take it.
+///
+/// This is the regression guard for "always inject one notification"
+/// bugs (where the loop builds an empty list and still pays the
+/// allocation cost / produces a noop user message).
+#[tokio::test]
+async fn agent_loop_no_pending_notifications_skips_injection() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Single turn, text-only.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta {
+                text: "just chatting".into(),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-bg-empty".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+    )
+    .await;
+
+    let sent = mock.sent_messages();
+    assert_eq!(sent.len(), 1);
+    let turn1_text = messages_to_text(&sent[0]);
+    assert!(
+        !turn1_text.contains("[system] 后台 shell"),
+        "empty notification queue must skip the injection, got: {}",
+        turn1_text
     );
 }
 

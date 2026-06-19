@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证注入点位置(provider.send 之前)与 §2.5 不破坏现有 L2 并行路径;新增 user message 不能撞断 LRU cache_control 结构"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 3 个 tool 的 ToolDef(input_schema / description)与现有 shell / use_skill 同形"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "验证 run_background_shell 的 working_directory 走 assert_within_root,与 shell 一致"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 BackgroundShellError 边界正确(thiserror vs anyhow),tracing::warn! 边界"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "验证 session delete 时 kill_all_for_session 触发 + RunEvent::Exit 钩子注册到位"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 notification 作为 user message 注入时 cache_control 不打、role=user、tool_use/tool_result 配对不被破坏"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "DEBT.md 新债登记流程(若有 RULE-XXX 漏报);closed 流程 commit hash + Closed At"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "扫一遍 RULE-A/E/C 现有债,看本 PR 是否撞到或新增;如有新增需 sync 到 open 段"}
+{"file": ".trellis/tasks/06-19-l1-shell-pty/prd.md", "reason": "Acceptance Criteria 13 项逐条验证;Out of Scope 不超界(L1b/PTY 留后续)"}
+{"file": "docs/spikes/2026-06-19-async-parallel-tool-research.md", "reason": "验证 §5.1 第①②点对应决策(Q1 trait 抽象 + Q2 3 tool)落地符合 spike 建议"}

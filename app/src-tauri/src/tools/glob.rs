@@ -252,6 +252,7 @@ mod tests {
             worktree_path: tmp.path().canonicalize().unwrap(),
             cwd: tmp.path().canonicalize().unwrap(),
             checklist: crate::tools::update_checklist::new_handle(),
+            background_shells: crate::background_shell::default_registry(),
         }
     }
 
