@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/06-19-b6-subagent/prd.md", "reason": "Acceptance Criteria + Definition of Done + 不变量(APPEND / skip_session_active / tool_use 配对),检查的最高依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "RULE-A-006 单一权威(run_chat_loop 加 max_turns 第 18 参不破坏核心逻辑)+ CancellationGuard 不变量 + turn 边界,检查架构合规"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-007 tool_use/tool_result 配对 + persist 失败处理,检查 worker cancel/error 路径不破坏不变量"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 契约 + dispatch_subagent scenario + APPEND 注入规则,检查 tool 实现与 agent loop 拦截路径合规"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "agent_loop_* 集成测试覆盖要求,检查 worker 4 条路径(完成/cancel/error/guard 不误删)测试充分性"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "单源 streamController + chat facade 模式,检查 PR3 前端 ToolCard 展开 store 实现合规"}

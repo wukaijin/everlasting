@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/06-19-b6-subagent/prd.md", "reason": "需求/9 决策/3-PR 实现计划,实现的最高优先级 source of truth"}
+{"file": ".trellis/tasks/06-19-b6-subagent/research/subagent-patterns-survey.md", "reason": "业界 subagent 模式调研 + §10 Mapping(worker 嵌套 run_chat_loop / memory 加载 / summary 走 tool_result / 无 sink 时 ask→deny 的设计依据)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 17 参 rationale + RULE-A-006 单一权威(生产=测试入口)+ CancellationGuard 不变量 + C3 压缩 + turn 边界 persist,worker 嵌套调的核心约束"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 定义/注册模式 + update_checklist & L1a 的 ephemeral APPEND 注入先例(B6 worker summary 注入必须 APPEND,不 insert(0))+ dispatch_subagent 新增 scenario"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "build_instructions_blocks + cache_control:ephemeral + 4 文件加载,worker memory 注入(worker messages[0] breakpoint,与父 cache 正交)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-007 error 路径 + tool_use/tool_result 配对不变量 + persist 失败处理矩阵,worker error/cancel 回填主对话"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "Provider trait + send 签名,worker 复用父 provider 嵌套调 run_chat_loop"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "MockProvider 驱动的 agent_loop_* 集成测试模式,PR1 worker 完成/cancel/error/guard 不误删 4 条测试路径"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "subagent_runs 表 migration 模式(PR2),走现有 migrations.rs 递增约定"}
