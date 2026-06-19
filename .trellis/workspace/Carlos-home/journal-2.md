@@ -199,3 +199,51 @@ incident 锚点: `request_id=mz8s3hqwx6rmqjswgte` / `messages.seq=37`(seq=36→3
 ### Next Steps
 
 - None - task complete
+
+---
+
+## L2 — 单 turn 多 tool 并发执行(只读 batch)
+
+**Date**: 2026-06-19
+**Trigger**: ROADMAP §2 第三档 L1/L2/L3 调研沉淀后,先做 L2(最低门槛+最高收益,纯只读 batch 并发)。本轮前置:两份 spike 调研(2026-06-19 async-parallel-tool-{research,independent-research})+ L1 两隐藏成本沉淀到 spike §5.1(request-scoped 断裂+daemon 耦合 / PTY vs Command 分叉)。
+
+### Summary
+
+MVP 落地:`is_parallel_eligible` 纯谓词(batch 全 ∈ {read_file,grep,glob,list_dir,use_skill} 才并发)+ `FuturesUnordered` 并行路径(每 task 内 check→execute→RULE-A-004 cancel 检查→audit→emit,`result_slots[i]` 按 tool_use 原始 index 回填 + `AtomicBool` 广播 cancelled)。web_fetch(Q2 默认 Tier4 ask)+ 写类/shell/update_checklist 排除,走串行。不变量保留:多 tool_result 单消息打包(parallel-tool-use 红线)+ RULE-A-004(cancelled 跳过 audit)+ execute_tool 签名未改 + 共享状态(`PermissionStore`/`SkillCache`/`ReadGuard` 均 Arc)并发安全。串行路径逐字保留。
+
+trellis-check "有条件 PASS",1 个实质问题:Q2 path-outside-root edge case(并发集合里 read tool path 解析到仓库外无 grant 仍会触发并发 ask)→ 接受 MVP 现状(概率极低+无数据损坏+仅 UX 乱),记 DEBT RULE-A-013(P2,follow-up 方案 a 谓词加 boundary 检测)。
+
+行业调研(双份互补):opencode/Hermes(L1 范本 `<pty_exited>` / L2 `supports_parallel_tool_calls` / L3 `delegate_task` + worktree 隔离)+ Claude Code/Cline/Aider/Goose/Continue(协议层 parallel-tool-use 约束 + 5 家并行策略)+ 失效模式 §6.1(拆消息致 Claude 避免并行)/§6.2(依赖链)/§6.4(超时放大取消)。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/chat_loop.rs:997-1168` — 并行路径(`is_parallel_eligible` 分支 + `FuturesUnordered` + `result_slots` 按 index + `AtomicBool`);`1169+` 串行路径逐字保留;`1463` `is_parallel_eligible` 谓词
+- `app/src-tauri/src/agent/tests.rs:2803-3154` — 5 新测试(分类/顺序/降级/web_fetch/cancel)
+- `docs/ARCHITECTURE.md §2.5.9` — 并行 tool 执行(L2)架构小节
+- `docs/ROADMAP.md §1.2` — L2 移档已实施;第三档标完成
+- `docs/spikes/2026-06-19-async-parallel-tool-research.md §5.1` — L1 两隐藏成本沉淀(本轮评估增量,沉淀给后续 L1 立项)
+- `.trellis/reviews/DEBT.md` — 新增 RULE-A-013(P2 open,path-outside-root 并发 ask);P2 20→21,Total 45→46
+- `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/` — prd/implement.jsonl/check.jsonl/task.json
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b1de1f9` | feat(agent): L2 单 turn 只读 tool batch 并发执行 |
+| `71b1836` | docs(l2): ARCHITECTURE §2.5.9 + ROADMAP 移档 + DEBT A-013 + spike §5.1 |
+| `5e03e0b` | chore(task): archive 06-19-l2-parallel-readonly-tool-batch |
+
+### Testing
+
+- [OK] cargo check:0 warning 0 error
+- [OK] cargo test --lib:**629 passed** 0 failed(原 624 + 5 新 L2 测试)
+
+### Status
+
+[OK] **Completed**(MVP 落地,RULE-A-013 follow-up 记 DEBT)
+
+### Next Steps
+
+- [ ] RULE-A-013 follow-up:谓词加 `projects::boundary::is_within_root` 检测,任一 out-of-root read tool 拉回串行(低成本,保留"并发集合绝对 silent"不变量)
+- [ ] L1 后台 shell 立项(参考 spike §5.1:request-scoped 断裂+daemon 化耦合 / PTY vs Command 分叉,建议与 daemon 化一并规划)
+- [ ] L3 并行 subagent(锁 B6,缓做,旗舰级)
