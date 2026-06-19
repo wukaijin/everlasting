@@ -76,9 +76,9 @@ pub fn build_system_prompt(
     };
 
     format!(
-        "You are a coding agent. You have access to tools (read_file, write_file, \
-edit_file, shell, grep, glob, list_dir). All file paths in tool inputs are \
-relative to the session's working directory.\n\
+        "You are a coding agent. You have access to the tools defined in this \
+request. All file paths in tool inputs are relative to the session's \
+working directory.\n\
 \n\
 Session context:\n\
 - Session ID: {session_id}\n\
@@ -92,5 +92,19 @@ Session context:\n\
         project_path = project.path,
         cwd = ctx_root.display(),
         worktree_line = worktree_line,
+    )
+}
+
+/// Assemble the full system prompt from its three layers, in
+/// cache-stability order: the stable behavior guidance first, then
+/// the mode prefix, then the per-turn base prompt. Stablest layer
+/// first keeps the upstream prompt-cache prefix warm across turns.
+/// See the [`behavior_prompt`] module for the layering rationale.
+pub fn assemble_system_prompt(mode_prefix: &str, base_prompt: &str) -> String {
+    format!(
+        "{}\n\n{}\n\n{}",
+        crate::agent::behavior_prompt::DEFAULT_BEHAVIOR_PROMPT,
+        mode_prefix,
+        base_prompt,
     )
 }

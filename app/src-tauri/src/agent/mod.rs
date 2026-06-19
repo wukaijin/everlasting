@@ -8,6 +8,10 @@
 //! Submodules:
 //! - [`at_file`] — B2 PR2 `@relpath` file-content injection (text →
 //!   `read_file`-format content; image/PDF/Office/binary → placeholder).
+//! - [`behavior_prompt`] — `DEFAULT_BEHAVIOR_PROMPT`: the stable agent
+//!   behavior layer (tone / objectivity / tool usage / code conventions
+//!   / finishing / git safety / language), injected at the front of the
+//!   system prompt (`behavior_prompt + mode_prefix + base_prompt`).
 //! - [`chat`] — the `chat` Tauri command + the spawned agent loop
 //!   (max 50 turns, cancellation-aware).
 //! - [`provider`] — `resolve_chat_provider` + `PreFlightError`
@@ -31,6 +35,7 @@
 //!   inlined in `lib.rs`.
 
 pub mod at_file;
+pub mod behavior_prompt;
 pub mod chat;
 pub mod chat_loop;
 pub mod context;

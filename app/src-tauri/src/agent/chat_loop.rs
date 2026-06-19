@@ -324,7 +324,10 @@ pub async fn run_chat_loop(
         &worktree_path,
         &head_sha,
     );
-    let system_prompt = format!("{}\n\n{}", mode_prefix, base_prompt);
+    let system_prompt = crate::agent::system_prompt::assemble_system_prompt(
+        mode_prefix,
+        &base_prompt,
+    );
     let _ = &base_prompt;
 
     // Persist the most recent user message before the agent loop runs.

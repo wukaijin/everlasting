@@ -479,6 +479,103 @@ fn make_project_row(is_git_repo: bool) -> projects::ProjectRow {
 /// Step 4 follow-up Bug 3: with an active worktree the prompt
 /// names the branch (`session/<id>`), the short HEAD SHA, and
 /// the working directory (the worktree path).
+/// RULE-E-013 regression guard: `build_system_prompt` must NOT
+/// hard-code a tool-name list (the old 7-tool literal drifted and
+/// missed 6 registered tools). Tool visibility is the exclusive job
+/// of the `tools[]` array sent to the provider; the prompt only
+/// states tools are available + the path convention.
+#[test]
+fn build_system_prompt_no_hardcoded_tool_list() {
+    let session = make_session_row("reg-id", db::WorktreeState::None, None);
+    let project = make_project_row(true);
+    let prompt = build_system_prompt(
+        &session,
+        &project,
+        std::path::Path::new("/home/carlos/code/everlasting"),
+        "abc1234",
+    );
+    assert!(
+        !prompt.contains("read_file, write_file"),
+        "prompt must not hard-code a tool-name list (RULE-E-013); tool visibility is via tools[]"
+    );
+    assert!(
+        !prompt.contains("(read_file"),
+        "prompt must not open a parenthesized tool enumeration"
+    );
+    assert!(
+        prompt.contains("tools defined in this request"),
+        "prompt must use the generic capability statement instead of an inline list"
+    );
+    assert!(
+        prompt.contains("relative to the session's working directory"),
+        "prompt must keep the path-relativity note"
+    );
+}
+
+/// PR2 behavior_prompt content: covers the 8 sections + language
+/// constraint, recommends `update_checklist` (NOT TodoWrite — §7.2
+/// regression guard: the real tool is `update_checklist`).
+#[test]
+fn behavior_prompt_content_basics() {
+    let p = crate::agent::behavior_prompt::DEFAULT_BEHAVIOR_PROMPT;
+    for section in [
+        "# Tone and style",
+        "# Professional objectivity",
+        "# Task management",
+        "# Tool usage",
+        "# Code conventions",
+        "# Finishing work",
+        "# Git safety",
+        "# Language",
+    ] {
+        assert!(
+            p.contains(section),
+            "behavior_prompt must contain section {}",
+            section
+        );
+    }
+    assert!(
+        p.contains("update_checklist"),
+        "must recommend update_checklist for task tracking"
+    );
+    assert!(
+        !p.contains("TodoWrite"),
+        "must NOT reference TodoWrite (§7.2: the real tool is update_checklist)"
+    );
+    assert!(
+        p.contains("Reply in the user's language"),
+        "must include the reply-language constraint (PRD D3)"
+    );
+}
+
+/// PR2 system-prompt assembly order (cache-stability): behavior
+/// guidance, then mode prefix, then per-turn base prompt — stablest
+/// layer first so the upstream prompt-cache prefix stays warm.
+#[test]
+fn assemble_system_prompt_orders_layers_behavior_mode_base() {
+    let prompt = crate::agent::system_prompt::assemble_system_prompt(
+        "MODE_MARKER",
+        "BASE_MARKER",
+    );
+    let behavior_pos = prompt
+        .find("# Tone and style")
+        .expect("behavior section present");
+    let mode_pos = prompt.find("MODE_MARKER").expect("mode marker present");
+    let base_pos = prompt.find("BASE_MARKER").expect("base marker present");
+    assert!(
+        behavior_pos < mode_pos,
+        "behavior guidance must precede the mode prefix"
+    );
+    assert!(
+        mode_pos < base_pos,
+        "mode prefix must precede the per-turn base prompt"
+    );
+    assert!(
+        prompt.starts_with("# Tone and style"),
+        "behavior guidance must be the very first thing in the system prompt"
+    );
+}
+
 #[test]
 fn build_system_prompt_active_worktree() {
     let session = make_session_row(
