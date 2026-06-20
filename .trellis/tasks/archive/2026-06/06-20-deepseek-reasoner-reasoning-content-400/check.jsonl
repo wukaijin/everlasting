@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400/research/deepseek-reasoning-content-contract.md", "reason": "V4 reasoning_content 契约 — 验证修复后 DeepSeek-via-wukaijin 不会再 400 的理论依据"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Anthropic / OpenAI 协议契约 — 验证 reasoning_content 字段在 Anthropic 协议下是非标准扩展但 Anthropic API 接受未知字段"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "多 Provider 契约 — 验证修复只影响 AnthropicProtocol 不影响 OpenAIProtocol"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 架构 — 验证请求构造时介入的阶段正确（不影响 turn 边界 / DB 持久化）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A 系列 — 验证修复不破坏 4xx/5xx 错误分类 + warn log 行为"}
+{"file": "app/src-tauri/src/llm/provider/anthropic.rs", "reason": "核心修改文件 — 验证 apply_deepseek_reasoning_fix 实现 + chat_stream_with_tools 改动 + 新单测覆盖"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "ContentBlock::Thinking — 验证 Anthropic 序列化时 signature 字段名 + empty sig 过滤逻辑"}
+{"file": "app/src-tauri/src/llm/provider/wire.rs", "reason": "wire 层 — 验证 anthropic.rs::send 改造点对 wire_messages_to_chat_messages 重组无影响"}
+{"file": "app/src-tauri/src/llm/provider/openai.rs", "reason": "对照参考 — 验证 OpenAI 路径单测全绿（修复不外溢）"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "DEBT.md 收尾回填 — 修复 commit 后回填 hash"}

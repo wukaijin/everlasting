@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400/research/deepseek-reasoning-content-contract.md", "reason": "DeepSeek V4 thinking mode reasoning_content 多轮回传契约 — 修复的协议依据 + 旧 R1 协议对照 + opencode 社区修法"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "Anthropic / OpenAI 协议契约 + Multi-Provider 抽象 — 改 anthropic.rs 序列化时需要理解的协议 schema"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "多 Provider 抽象契约 + Provider trait + wire 层 — 改 anthropic.rs 不能破坏 OpenAI / Claude 路径"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 架构 + 16 阶段请求生命周期 — 理解请求构造在哪个阶段介入"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-011 等错误处理契约 — warn log / LlmError 分类 + 4xx/5xx 行为"}
+{"file": "app/src-tauri/src/llm/provider/anthropic.rs", "reason": "核心修改文件 — send() 入口加 apply_deepseek_reasoning_fix helper + chat_stream_with_tools 接受 serde_json::Value"}
+{"file": "app/src-tauri/src/llm/types.rs", "reason": "ContentBlock::Thinking schema (thinking + signature) — 序列化时 field 名 + 序列化为 Anthropic 标准 shape"}
+{"file": "app/src-tauri/src/llm/provider/wire.rs", "reason": "wire 层 ChatRequest ↔ WireRequest 转换 — 理解 outbound 路径以确认 anthropic.rs::send 是正确的改造点"}
+{"file": "app/src-tauri/src/llm/provider/openai.rs", "reason": "对照参考 — OpenAI 路径不动，但需确认 anthropic.rs 改动不破坏 OpenAI 单测 / wire.rs strip 逻辑"}
+{"file": "app/src-tauri/src/llm/provider/mod.rs", "reason": "build_provider 工厂 — 确认 AnthropicProtocol 模型如何构造 config，思考 config.supports_thinking 等字段是否要透传"}
