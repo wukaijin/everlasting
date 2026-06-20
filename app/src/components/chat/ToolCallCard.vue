@@ -30,7 +30,7 @@
 // `useSubagentRunsStore`) — bodies don't read stores; this card
 // owns the store and passes plain data props + a callback.
 
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import {
   useChatStore,
   type ToolCallInfo,
@@ -326,6 +326,31 @@ const workerDisplayName = computed<string>(() => {
  *  "click-before-first-event" window (which the listener can't
  *  help with since no event has fired yet). */
 const workerWaiting = ref(false);
+
+/** FT-F-003 (2026-06-20): unmount guard for the retry polling loop
+ *  below. `openSubagentDrawer`'s while loop uses `await new
+ *  Promise(r => setTimeout(r, 300))` to pace its 5 ticks — there's
+ *  no timer id to clearTimeout (it's an await loop, not a nested
+ *  setTimeout chain). When the component unmounts mid-poll (e.g.
+ *  the user switches sessions during the 1.5s window), the pending
+ *  `await` resolves on an unmounted card and the loop would
+ *  otherwise continue writing `workerWaiting` / calling
+ *  `openDrawer` on the dead instance. The guard below is checked
+ *  after every await + before every side-effect; unmount sets it
+ *  to true and the loop returns early on the next tick.
+ *
+ *  Sufficient set: `await` is the only yield point in the loop, so
+ *  unmount can only happen during a pending await. Checking
+ *  immediately after each await + before each side-effect covers
+ *  every possible unmount window with the minimum number of guards.
+ *  (immediate / afterRetry early-return branches also guard their
+ *  post-await openDrawer calls defensively — see comments inline.)
+ */
+let unmounted = false;
+onUnmounted(() => {
+  unmounted = true;
+});
+
 async function openSubagentDrawer(): Promise<void> {
   const sid = chatStore.currentSessionId;
   // Explicit type annotation: vue-tsc's narrowing on
@@ -335,6 +360,10 @@ async function openSubagentDrawer(): Promise<void> {
   const immediate: SubagentRunSummary | undefined = workerSummary.value;
   if (immediate) {
     await subagentRuns.openDrawer(immediate.id);
+    // FT-F-003: defensive guard — openDrawer is async (it awaits
+    // fetchRun), so the component can unmount during the await.
+    // Skip the (no-op) return path side-effects once unmounted.
+    if (unmounted) return;
     return;
   }
   // 2. Cache miss — show waiting UI + fire one extra fetchForSession.
@@ -343,10 +372,15 @@ async function openSubagentDrawer(): Promise<void> {
   //    resolve, so even a redundant fetch is safe.
   workerWaiting.value = true;
   if (sid) await subagentRuns.fetchForSession(sid);
+  // FT-F-003: fetchForSession is async — the component can unmount
+  // during the IPC await. Bail before writing workerWaiting /
+  // calling openDrawer on a dead card.
+  if (unmounted) return;
   const afterRetry: SubagentRunSummary | undefined = workerSummary.value;
   if (afterRetry) {
     workerWaiting.value = false;
     await subagentRuns.openDrawer(afterRetry.id);
+    if (unmounted) return;
     return;
   }
   // 3. Still miss — poll for up to 1.5s (300ms intervals, ~5 ticks).
@@ -356,11 +390,20 @@ async function openSubagentDrawer(): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < 1500) {
     await new Promise((r) => setTimeout(r, 300));
+    // FT-F-003: the await above is the primary unmount window.
+    // Bail before any side-effect — don't fetchForSession, don't
+    // read the computed, don't write workerWaiting / openDrawer.
+    if (unmounted) return;
     if (sid) await subagentRuns.fetchForSession(sid);
+    // FT-F-003: fetchForSession is itself async — re-check after
+    // it resolves so we don't act on a card that unmounted
+    // during the IPC round-trip.
+    if (unmounted) return;
     const s: SubagentRunSummary | undefined = workerSummary.value;
     if (s) {
       workerWaiting.value = false;
       await subagentRuns.openDrawer(s.id);
+      if (unmounted) return;
       return;
     }
   }
@@ -368,6 +411,10 @@ async function openSubagentDrawer(): Promise<void> {
   //    emitted its first event yet OR the DB insert failed. Let
   //    the user retry by clicking again — don't trap them in a
   //    permanent spinner.
+  // FT-F-003: re-check after the final await — if the component
+  // unmounted during the last tick's await, leave workerWaiting
+  // alone (writing it on an unmounted ref is the original bug).
+  if (unmounted) return;
   workerWaiting.value = false;
 }
 

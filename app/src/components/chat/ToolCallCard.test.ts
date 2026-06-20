@@ -359,4 +359,98 @@ describe("ToolCallCard dispatch_subagent branch", () => {
     expect(w.find(".tool-card--subagent-waiting").exists()).toBe(false);
     vi.useRealTimers();
   });
+
+  // FT-F-003 (2026-06-20): `openSubagentDrawer`'s retry polling
+  // loop uses `await new Promise(r => setTimeout(r, 300))` to pace
+  // its 5 ticks — no timer id to clearTimeout. When the component
+  // unmounts mid-poll (e.g. the user switches sessions during the
+  // 1.5s window), the pending `await` resolves on an unmounted card
+  // and the loop would otherwise continue calling `fetchForSession`
+  // + writing `workerWaiting` / calling `openDrawer` on the dead
+  // instance. This test asserts the unmounted-flag guard catches
+  // that: after unmount, advancing the fake timer past the pending
+  // 300ms tick does NOT trigger any further `fetchForSession` /
+  // `openDrawer` calls, and no Vue warning is emitted.
+  //
+  // Note (memory: subagentdrawer-banner-test-gotchas.md): fake
+  // timers also mock `Date.now()` — `vi.advanceTimersByTime` advances
+  // both `setTimeout` AND `Date.now()` in lockstep, so the
+  // `while (Date.now() - start < 1500)` condition moves forward
+  // correctly per tick (no need for `vi.setSystemTime`).
+  it("unmount during polling clears the loop (FT-F-003 unmounted guard)", async () => {
+    vi.useFakeTimers();
+    const subagentRuns = useSubagentRunsStore();
+    const chat = useChatStore();
+    chat.currentSessionId = "sess-1";
+    invokeMock.mockReset();
+    // Spy on the store methods so we can assert "not called after
+    // unmount". fetchForSession / openDrawer are real (they route
+    // through invokeMock); we spy without replacing the impl.
+    const fetchSpy = vi.spyOn(subagentRuns, "fetchForSession");
+    const openDrawerSpy = vi.spyOn(subagentRuns, "openDrawer");
+
+    // Mount-time watch fetchForSession (empty).
+    invokeMock.mockResolvedValue([]);
+
+    const w = mountDispatchCard();
+    // Baseline: mount-time eager fetch fired once (the immediate
+    // watch in ToolCallCard.vue calls fetchForSession on mount).
+    const baselineFetchCount = fetchSpy.mock.calls.length;
+
+    // Click — enters openSubagentDrawer. immediate=undefined,
+    // workerWaiting=true, first fetchForSession fires (the
+    // afterRetry branch), returns [], while loop starts, first
+    // `await setTimeout(300)` is pending.
+    await w.trigger("click");
+    await flushPromises();
+
+    // Snapshot call counts right before unmount. The click path
+    // fires 1 extra fetchForSession (the afterRetry branch); the
+    // while loop's tick 1 has NOT fired yet (still pending in the
+    // 300ms setTimeout).
+    const fetchCountBeforeUnmount = fetchSpy.mock.calls.length;
+    expect(fetchCountBeforeUnmount).toBeGreaterThan(baselineFetchCount);
+    expect(openDrawerSpy).not.toHaveBeenCalled();
+
+    // Unmount mid-poll — this is the race window FT-F-003 fixes.
+    // The pending `await setTimeout(300)` is still in flight; the
+    // onUnmounted hook sets `unmounted = true`.
+    w.unmount();
+
+    // Silence the Vue "unexpected mutation on unmounted component"
+    // warning if Vue 3.5+ still emits one (it has gotten smarter
+    // about this; capturing for AC6 evidence either way).
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Advance the fake timer past the pending 300ms tick. With the
+    // unmounted guard in place, the loop's first instruction after
+    // the await is `if (unmounted) return;` — so the loop bails
+    // WITHOUT calling fetchForSession again, WITHOUT writing
+    // workerWaiting, WITHOUT calling openDrawer.
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+
+    // Core FT-F-003 assertion: no further fetchForSession calls
+    // after unmount. (The while loop tick 1 was the only thing
+    // that would have fired one.)
+    expect(fetchSpy.mock.calls.length).toBe(fetchCountBeforeUnmount);
+    // openDrawer was never called (the cache never warmed before
+    // unmount, so no drawer trigger either way — but lock it).
+    expect(openDrawerSpy).not.toHaveBeenCalled();
+
+    // AC6 (optional): future-proof Vue-warning lock. Verified
+    // empirically (Vue 3.5.35, 2026-06-20): writing to a ref on
+    // an unmounted component does NOT emit a console.warn in this
+    // version — so this assertion trivially passes today. It is
+    // retained as a regression lock: if a future Vue upgrade
+    // re-introduces the warning (older 3.x versions did warn),
+    // this test will fail and flag the need to revisit the guard.
+    // The load-bearing assertion is the behavior check above
+    // (`fetchSpy.mock.calls.length` + `openDrawerSpy`) — that one
+    // genuinely fails when the guard is removed.
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
