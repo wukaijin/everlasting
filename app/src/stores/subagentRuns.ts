@@ -227,6 +227,18 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  `start()`, torn down by `stop()`. */
   let unlisten: UnlistenFn | null = null;
 
+  /** B6 PR3b (2026-06-20): dedup Set for the eager-fetch path in the
+   *  `subagent:event` listener. A burst of events for the same runId
+   *  (e.g. a tool_call arriving milliseconds apart from a tool_result)
+   *  must NOT fire `fetchRun` / `fetchForSession` more than once —
+   *  the IPC roundtrip is cheap but the cost adds up on a busy worker.
+   *  Non-reactive (plain Set) so per-event checks don't trigger Vue
+   *  effect re-evaluation. Lives for the lifetime of the store (not
+   *  cleared on `stop()` — the cache survives component unmount so the
+   *  dedup should too). Bounded by the number of distinct runIds seen
+   *  in this app session; not a memory concern for realistic usage. */
+  const eagerFetchedRunIds = new Set<string>();
+
   // -----------------------------------------------------------------------
   // API
   // -----------------------------------------------------------------------
@@ -364,14 +376,39 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
   }
 
   /** Mount the `subagent:event` listener. Idempotent — calling twice
-   *  replaces the prior unlisten. Mirrors permissions.ts `start()`. */
+   *  replaces the prior unlisten. Mirrors permissions.ts `start()`.
+   *
+   *  B6 PR3b (2026-06-20): the listener ALSO fires an eager-fetch
+   *  on the first event for any new runId. This fixes the
+   *  dispatch_subagent card race — see PR3b PRD §"Root cause".
+   *  Without this, the ToolCallCard's `getSummaryByToolUseId`
+   *  lookup may stay empty for the entire worker lifetime if the
+   *  initial `fetchForSession` IPC roundtrip races against the
+   *  backend's `insert_run`. By the time the first `subagent:event`
+   *  arrives, `insert_run` has definitely committed (the sink is
+   *  constructed AFTER the row insert), so the eager-fetch is
+   *  guaranteed to see the row. */
   async function start(): Promise<void> {
     if (unlisten) {
       unlisten();
       unlisten = null;
     }
     unlisten = await listen<SubagentEventPayload>("subagent:event", (event) => {
-      routeEvent(event.payload);
+      const e = event.payload;
+      routeEvent(e);
+      // Eager-fetch: warm the run-detail cache + session-summary
+      // cache the first time we see a runId. Dedup'd by the
+      // `eagerFetchedRunIds` Set so burst events don't re-fetch.
+      // `fetchRun` and `fetchForSession` are fire-and-forget here —
+      // they're independent of the routeEvent debounce path, and a
+      // failure to warm the cache just falls back to the existing
+      // ToolCallCard click-time retry (which polls fetchForSession
+      // for up to 1.5s before giving up).
+      if (!eagerFetchedRunIds.has(e.runId)) {
+        eagerFetchedRunIds.add(e.runId);
+        void fetchRun(e.runId);
+        void fetchForSession(e.sessionId);
+      }
     });
   }
 

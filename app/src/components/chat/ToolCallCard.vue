@@ -41,7 +41,7 @@ import {
   usePermissionsStore,
   type PermissionDecision,
 } from "../../stores/permissions";
-import { useSubagentRunsStore } from "../../stores/subagentRuns";
+import { useSubagentRunsStore, type SubagentRunSummary } from "../../stores/subagentRuns";
 import { isPathInRoot } from "../../utils/path";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
@@ -345,12 +345,58 @@ const workerDisplayName = computed<string>(() => {
 
 /** Click handler for the whole card when it's a dispatch_subagent.
  *  Resolves the worker's run id (from the summary) and asks the
- *  store to open the drawer. No-op if we haven't resolved the
- *  summary yet — the user can retry once the cache loads. */
+ *  store to open the drawer. Handles the B6 PR3b (2026-06-20)
+ *  race: if the cache is empty (e.g. the initial fetchForSession
+ *  raced against the backend's insert_run), the click triggers a
+ *  waiting state and polls for up to 1.5s. The store's
+ *  `subagent:event` listener bridges the same race via eager-fetch
+ *  on first event arrival; the polling here catches the
+ *  "click-before-first-event" window (which the listener can't
+ *  help with since no event has fired yet). */
+const workerWaiting = ref(false);
 async function openSubagentDrawer(): Promise<void> {
-  const summary = workerSummary.value;
-  if (!summary) return;
-  await subagentRuns.openDrawer(summary.id);
+  const sid = chatStore.currentSessionId;
+  // Explicit type annotation: vue-tsc's narrowing on
+  // ComputedRef.value through `if (immediate)` is unreliable
+  // (collapses to `never`); the annotation gives the narrowed
+  // branch a concrete type without relying on the narrowing.
+  const immediate: SubagentRunSummary | undefined = workerSummary.value;
+  if (immediate) {
+    await subagentRuns.openDrawer(immediate.id);
+    return;
+  }
+  // 2. Cache miss — show waiting UI + fire one extra fetchForSession.
+  //    Covers the case where the mount-time IPC is still in flight
+  //    OR lost the race. Pinia replaces the cache atomically on
+  //    resolve, so even a redundant fetch is safe.
+  workerWaiting.value = true;
+  if (sid) await subagentRuns.fetchForSession(sid);
+  const afterRetry: SubagentRunSummary | undefined = workerSummary.value;
+  if (afterRetry) {
+    workerWaiting.value = false;
+    await subagentRuns.openDrawer(afterRetry.id);
+    return;
+  }
+  // 3. Still miss — poll for up to 1.5s (300ms intervals, ~5 ticks).
+  //    The store's IPC listener will eager-fetch on the first
+  //    subagent:event arrival; this loop catches that + gives the
+  //    IPC roundtrip room to complete.
+  const start = Date.now();
+  while (Date.now() - start < 1500) {
+    await new Promise((r) => setTimeout(r, 300));
+    if (sid) await subagentRuns.fetchForSession(sid);
+    const s: SubagentRunSummary | undefined = workerSummary.value;
+    if (s) {
+      workerWaiting.value = false;
+      await subagentRuns.openDrawer(s.id);
+      return;
+    }
+  }
+  // 4. 1.5s elapsed without resolving. Likely the worker hasn't
+  //    emitted its first event yet OR the DB insert failed. Let
+  //    the user retry by clicking again — don't trap them in a
+  //    permanent spinner.
+  workerWaiting.value = false;
 }
 
 /** Lazy-load the session's subagent summaries the first time this
@@ -374,10 +420,14 @@ watch(
 
 <template>
   <div
-    :class="['tool-card', { 'tool-card--error': isError, 'tool-card--running': !hasResult && !isError, 'tool-card--subagent': isDispatchSubagent }]"
+    :class="[
+      'tool-card',
+      { 'tool-card--error': isError, 'tool-card--running': !hasResult && !isError, 'tool-card--subagent': isDispatchSubagent, 'tool-card--subagent-waiting': isDispatchSubagent && workerWaiting },
+    ]"
     :style="{ borderLeftColor: accent }"
     :role="isDispatchSubagent ? 'button' : undefined"
     :tabindex="isDispatchSubagent ? 0 : undefined"
+    :aria-busy="isDispatchSubagent && workerWaiting ? true : undefined"
     @click="isDispatchSubagent ? openSubagentDrawer() : undefined"
     @keydown.enter.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
     @keydown.space.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
@@ -496,7 +546,7 @@ watch(
         class="tool-card__subagent-summary"
       >{{ workerSummaryPreview }}</p>
       <p v-else class="tool-card__subagent-summary tool-card__subagent-summary--muted">
-        点击查看 worker 详情
+        {{ workerWaiting ? "等待 worker 注册…" : "点击查看 worker 详情" }}
       </p>
     </div>
 
@@ -884,6 +934,21 @@ watch(
 .tool-card--subagent:hover {
   filter: brightness(1.04);
   border-color: var(--color-accent);
+}
+
+/* B6 PR3b (2026-06-20): waiting state during the click-time race
+   resolution (1.5s max polling window — see openSubagentDrawer).
+   Overrides the default pointer cursor + hover affordance so the
+   user sees the click was registered and is being processed.
+   No new colors (per Q4 decision D4) — the existing
+   --color-bg-border keeps the card visually unchanged; only the
+   cursor + absence of hover lift signal the waiting. */
+.tool-card--subagent-waiting {
+  cursor: wait;
+}
+.tool-card--subagent-waiting:hover {
+  filter: none;
+  border-color: var(--color-bg-border);
 }
 
 .tool-card__subagent-preview {

@@ -434,4 +434,113 @@ describe("useSubagentRunsStore", () => {
     // openRunId was cleared because run-1 belonged to sess-1.
     expect(store.openRunId).toBeNull();
   });
+
+  // -------------------------------------------------------------------
+  // B6 PR3b (2026-06-20): eager-fetch on first subagent:event per runId.
+  // Race fix: when the dispatch_subagent tool_use fires, the
+  // ToolCallCard's `fetchForSession` may race against the backend's
+  // `insert_run` and return an empty list. The store's IPC listener
+  // bridges that gap by eagerly fetching both `get_subagent_run` and
+  // `list_subagent_runs_by_session` on the first event for any new
+  // runId — by then the DB row is definitely committed.
+  // -------------------------------------------------------------------
+
+  it("first subagent:event for a runId fires fetchRun + fetchForSession", async () => {
+    invokeMock.mockResolvedValueOnce(sampleRow); // for fetchRun -> get_subagent_run
+    invokeMock.mockResolvedValueOnce([sampleSummary]); // for fetchForSession -> list_subagent_runs_by_session
+    const store = useSubagentRunsStore();
+    await store.start();
+    invokeMock.mockClear();
+
+    capturedHandler!({
+      payload: {
+        runId: "run-99",
+        sessionId: "sess-1",
+        kind: "chat_event",
+        payload: { text: "hello" },
+        timestamp: "2026-06-20T10:00:00Z",
+      },
+    });
+    // Eager-fetch is fire-and-forget; let the microtasks drain.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const calledCommands = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCommands).toContain("get_subagent_run");
+    expect(calledCommands).toContain("list_subagent_runs_by_session");
+    // Both calls targeted the runId / sessionId from the event.
+    expect(invokeMock.mock.calls.find((c) => c[0] === "get_subagent_run")?.[1])
+      .toEqual({ runId: "run-99" });
+    expect(invokeMock.mock.calls.find((c) => c[0] === "list_subagent_runs_by_session")?.[1])
+      .toEqual({ sessionId: "sess-1" });
+  });
+
+  it("subsequent subagent:events for the same runId do NOT re-fetch (dedup)", async () => {
+    invokeMock.mockResolvedValueOnce(sampleRow);
+    invokeMock.mockResolvedValueOnce([sampleSummary]);
+    const store = useSubagentRunsStore();
+    await store.start();
+    invokeMock.mockClear();
+
+    // Fire a burst of 5 events for the same runId within one debounce
+    // window. Only the FIRST should trigger fetchRun + fetchForSession.
+    for (let i = 0; i < 5; i++) {
+      capturedHandler!({
+        payload: {
+          runId: "run-burst",
+          sessionId: "sess-1",
+          kind: "tool_call",
+          payload: { name: "read_file", input: { path: `/tmp/${i}` } },
+          timestamp: `t${i}`,
+        },
+      });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    const getRunCalls = invokeMock.mock.calls.filter(
+      (c) => c[0] === "get_subagent_run",
+    );
+    const listCalls = invokeMock.mock.calls.filter(
+      (c) => c[0] === "list_subagent_runs_by_session",
+    );
+    expect(getRunCalls).toHaveLength(1);
+    expect(listCalls).toHaveLength(1);
+  });
+
+  it("different runIds each fire their own eager-fetch", async () => {
+    invokeMock.mockResolvedValue(sampleRow);
+    invokeMock.mockResolvedValueOnce([sampleSummary]);
+    const store = useSubagentRunsStore();
+    await store.start();
+    invokeMock.mockClear();
+
+    capturedHandler!({
+      payload: {
+        runId: "run-A",
+        sessionId: "sess-1",
+        kind: "chat_event",
+        payload: { text: "a" },
+        timestamp: "t1",
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    capturedHandler!({
+      payload: {
+        runId: "run-B",
+        sessionId: "sess-1",
+        kind: "chat_event",
+        payload: { text: "b" },
+        timestamp: "t2",
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const getRunCalls = invokeMock.mock.calls.filter(
+      (c) => c[0] === "get_subagent_run",
+    );
+    // Two distinct runIds → two fetchRun calls (one each).
+    expect(getRunCalls).toHaveLength(2);
+    expect(getRunCalls.map((c) => (c[1] as { runId: string }).runId))
+      .toEqual(["run-A", "run-B"]);
+  });
 });

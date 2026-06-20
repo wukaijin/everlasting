@@ -261,11 +261,88 @@ describe("ToolCallCard dispatch_subagent branch", () => {
     expect(subagentRuns.openRunId).toBe("run-99");
   });
 
-  it("clicking the card is a no-op when no summary is cached yet", async () => {
+  it("clicking with no summary cached shows waiting state and falls back after timeout", async () => {
     const subagentRuns = useSubagentRunsStore();
     const w = mountDispatchCard();
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(false);
+    await w.trigger("click");
+    // The click sets workerWaiting=true synchronously and fires the
+    // first fetchForSession. invokeMock returns null (no row), so the
+    // polling loop kicks in. flushPromises resolves microtasks only
+    // (not setTimeout), so the loop stays in flight — openRunId stays
+    // null and the waiting class is applied.
+    await flushPromises();
+    expect(subagentRuns.openRunId).toBeNull();
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(true);
+    expect(w.find(".tool-card__subagent-summary").text()).toContain(
+      "等待 worker 注册",
+    );
+  });
+
+  // B6 PR3b (2026-06-20): click-time race fix. The store's
+  // subagent:event listener is what makes this work end-to-end —
+  // when the first event fires, the listener eager-fetches
+  // list_subagent_runs_by_session, warming the cache. The
+  // openSubagentDrawer retry loop picks that up. This test
+  // simulates the race resolution by having the 3rd fetchForSession
+  // call (from the polling loop's first tick) return the populated
+  // list, mimicking the eager-fetch's effect.
+  it("retry loop opens the drawer once the cache warms during the 1.5s window", async () => {
+    vi.useFakeTimers();
+    const subagentRuns = useSubagentRunsStore();
+    const chat = useChatStore();
+    chat.currentSessionId = "sess-1";
+    invokeMock.mockReset();
+    // Mount-time watch fetchForSession (empty: race lost).
+    invokeMock.mockResolvedValueOnce([]);
+    // Click handler's first fetchForSession (empty: still no row).
+    invokeMock.mockResolvedValueOnce([]);
+    // Polling tick 1's fetchForSession (POPULATED: simulates the
+    // store's eager-fetch listener firing for the first event).
+    invokeMock.mockResolvedValueOnce([
+      {
+        id: "run-warm",
+        parentSessionId: "sess-1",
+        parentRequestId: "parent-rid-sub-tooluse-dispatch",
+        subagentName: "researcher",
+        status: "running",
+        startedAt: "2026-06-20T10:00:00Z",
+        finishedAt: null,
+        tokenUsageJson: null,
+        summary: null,
+      },
+    ]);
+    // openDrawer's fetchRun (after the polling tick finds the summary).
+    invokeMock.mockResolvedValueOnce({
+      id: "run-warm",
+      parentSessionId: "sess-1",
+      parentRequestId: "parent-rid-sub-tooluse-dispatch",
+      subagentName: "researcher",
+      status: "running",
+      startedAt: "2026-06-20T10:00:00Z",
+      finishedAt: null,
+      tokenUsageJson: null,
+      summary: null,
+      transcriptJson: null,
+      transcriptTruncated: 0,
+      createdAt: "2026-06-20T10:00:00Z",
+    });
+
+    const w = mountDispatchCard();
+    // Click — first fetchForSession returns empty, enters polling loop.
     await w.trigger("click");
     await flushPromises();
     expect(subagentRuns.openRunId).toBeNull();
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(true);
+
+    // Advance past the first 300ms polling tick + drain all
+    // microtasks the callback generates. advanceTimersByTimeAsync
+    // is the async-aware variant — needed because the setTimeout
+    // callback contains awaits that generate microtasks.
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+    expect(subagentRuns.openRunId).toBe("run-warm");
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(false);
+    vi.useRealTimers();
   });
 });

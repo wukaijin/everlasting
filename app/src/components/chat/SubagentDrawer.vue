@@ -31,7 +31,7 @@
 //   - transcriptTruncated flag → "原 transcript 已截断 (head + tail)"
 //   - empty state → "Worker is starting..."
 
-import { computed, ref } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -147,6 +147,147 @@ function formatPayload(entry: TranscriptEntry): string {
     return String(entry.payload_json);
   }
 }
+
+// ---------------------------------------------------------------------------
+// B6 PR3b (2026-06-20): live duration timer + auto-scroll polish
+// ---------------------------------------------------------------------------
+
+/** 100 ms cadence for the header duration counter. Smooth enough for
+ *  the eye (10 Hz) without burning CPU. Cleared on drawer close +
+ *  component unmount (see `watch(openRunId)` + `onUnmounted`). */
+const TIMER_TICK_MS = 100;
+
+/** Scroll distance (px) from the bottom that's still considered
+ *  "at the bottom" for auto-follow purposes. Lets users scroll a
+ *  few pixels up without immediately pausing the auto-follow. */
+const SCROLL_BOTTOM_THRESHOLD_PX = 50;
+
+const nowTick = ref(Date.now());
+let tickerHandle: ReturnType<typeof setInterval> | null = null;
+
+/** Milliseconds since the run's `startedAt`. Returns 0 if the row
+ *  hasn't loaded yet (initial open window). */
+const elapsedMs = computed<number>(() => {
+  if (!run.value?.startedAt) return 0;
+  const startedMs = new Date(run.value.startedAt).getTime();
+  if (!Number.isFinite(startedMs)) return 0;
+  return Math.max(0, nowTick.value - startedMs);
+});
+
+/** Status pill text — appends a duration suffix per state:
+ *    - running → "running 8.2s" (live, updates every 100ms)
+ *    - completed → "done in 12.4s" (terminal, computed once)
+ *    - error → "failed at 4.2s" (terminal, wall-clock at error)
+ *    - cancelled → "stopped at 3.1s" (terminal, wall-clock at cancel)
+ *  Falls back to the plain label if the row hasn't loaded yet. */
+const statusDisplay = computed<{ label: string; color: string; suffix: string }>(() => {
+  const meta = STATUS_META[status.value];
+  if (!run.value?.startedAt) {
+    return { label: meta.label, color: meta.color, suffix: "" };
+  }
+  if (status.value === "running") {
+    return { label: meta.label, color: meta.color, suffix: ` ${(elapsedMs.value / 1000).toFixed(1)}s` };
+  }
+  const finishedAt = run.value.finishedAt;
+  const finishedMs = finishedAt ? new Date(finishedAt).getTime() : null;
+  if (status.value === "completed" && finishedMs !== null && Number.isFinite(finishedMs)) {
+    const durMs = Math.max(0, finishedMs - new Date(run.value.startedAt).getTime());
+    return { label: meta.label, color: meta.color, suffix: ` ${(durMs / 1000).toFixed(1)}s` };
+  }
+  if (status.value === "error") {
+    return { label: "failed", color: meta.color, suffix: ` at ${(elapsedMs.value / 1000).toFixed(1)}s` };
+  }
+  if (status.value === "cancelled") {
+    return { label: meta.label, color: meta.color, suffix: ` at ${(elapsedMs.value / 1000).toFixed(1)}s` };
+  }
+  return { label: meta.label, color: meta.color, suffix: "" };
+});
+
+watch(
+  () => store.openRunId,
+  (rid) => {
+    if (tickerHandle) {
+      clearInterval(tickerHandle);
+      tickerHandle = null;
+    }
+    if (rid) {
+      nowTick.value = Date.now();
+      tickerHandle = setInterval(() => {
+        nowTick.value = Date.now();
+      }, TIMER_TICK_MS);
+    }
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  if (tickerHandle) {
+    clearInterval(tickerHandle);
+    tickerHandle = null;
+  }
+});
+
+/** Ref to the scrollable body element. Used for auto-scroll. */
+const bodyEl = ref<HTMLElement | null>(null);
+
+/** Whether new transcript entries should auto-scroll into view.
+ *  Pauses when the user scrolls up past the threshold. */
+const autoFollow = ref<boolean>(true);
+
+/** Count of new entries that arrived while the user was scrolled
+ *  away from the bottom. Drives the floating "↓ N new" button. */
+const newCount = ref<number>(0);
+
+/** `scroll` event handler on the body. Updates `autoFollow` based
+ *  on proximity to the bottom. The `< 50px` slack means small
+ *  mouse-wheel ticks up don't immediately disable auto-follow. */
+function onBodyScroll(e: Event): void {
+  const el = e.target as HTMLElement;
+  const atBottom =
+    el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_BOTTOM_THRESHOLD_PX;
+  autoFollow.value = atBottom;
+  if (atBottom) {
+    newCount.value = 0;
+  }
+}
+
+/** Watch the rendered transcript count (NOT the full list — we
+ *  hide chat_event entries by default; `visibleTranscript` is what
+ *  the user sees). When a new entry arrives: if auto-follow is on,
+ *  scroll to bottom; otherwise increment the newCount badge. */
+watch(
+  () => visibleTranscript.value.length,
+  () => {
+    if (autoFollow.value) {
+      void nextTick(() => {
+        if (bodyEl.value) {
+          bodyEl.value.scrollTop = bodyEl.value.scrollHeight;
+        }
+      });
+    } else {
+      newCount.value += 1;
+    }
+  },
+);
+
+/** User clicked the "↗ jump to latest" header button OR the
+ *  "↓ N new" floating button. Smooth-scroll to the bottom and
+ *  re-enable auto-follow. The `scrollTo` feature check is a
+ *  defensive guard for test environments (jsdom does NOT
+ *  implement `Element.scrollTo`) — production browsers always
+ *  have it. The `scrollTop` fallback has the same end-state,
+ *  just without the smooth animation. */
+function jumpToLatest(): void {
+  if (!bodyEl.value) return;
+  const target = bodyEl.value.scrollHeight;
+  if (typeof bodyEl.value.scrollTo === "function") {
+    bodyEl.value.scrollTo({ top: target, behavior: "smooth" });
+  } else {
+    bodyEl.value.scrollTop = target;
+  }
+  autoFollow.value = true;
+  newCount.value = 0;
+}
 </script>
 
 <template>
@@ -171,11 +312,27 @@ function formatPayload(entry: TranscriptEntry): string {
             <div class="subagent-drawer__title-row">
               <span
                 class="subagent-drawer__status"
-                :style="{ color: STATUS_META[status].color, borderColor: STATUS_META[status].color }"
-              >{{ STATUS_META[status].label }}</span>
+                :style="{ color: statusDisplay.color, borderColor: statusDisplay.color }"
+                :title="`Status: ${status}`"
+              >{{ statusDisplay.label }}{{ statusDisplay.suffix }}</span>
               <span class="subagent-drawer__name">
                 {{ run?.subagentName ?? "worker" }}
               </span>
+              <!-- B6 PR3b (2026-06-20): jump-to-latest button.
+                   Shown when auto-follow is paused (either because
+                   the user scrolled up while running, OR because new
+                   events arrived while they were scrolled away).
+                   Placed in the header per Q5 decision D5. -->
+              <button
+                v-if="!autoFollow && visibleTranscript.length > 0"
+                class="subagent-drawer__jump-latest"
+                type="button"
+                :title="newCount > 0 ? `跳到最新 (${newCount} 条新事件)` : '跳到最新'"
+                aria-label="Jump to latest"
+                @click="jumpToLatest"
+              >
+                <Icon name="arrow-down" :size="14" />
+              </button>
               <DialogClose
                 class="subagent-drawer__close"
                 aria-label="Close"
@@ -215,7 +372,11 @@ function formatPayload(entry: TranscriptEntry): string {
           </div>
 
           <!-- Transcript list -->
-          <div class="subagent-drawer__body">
+          <div
+            ref="bodyEl"
+            class="subagent-drawer__body"
+            @scroll="onBodyScroll"
+          >
             <div v-if="isEmpty" class="subagent-drawer__empty">
               Worker is starting...
             </div>
@@ -233,6 +394,18 @@ function formatPayload(entry: TranscriptEntry): string {
                 <pre class="subagent-drawer__payload">{{ formatPayload(entry) }}</pre>
               </li>
             </ol>
+            <!-- B6 PR3b (2026-06-20): floating "↓ N new" button.
+                 Appears at the body's bottom-center when auto-follow
+                 is paused AND new entries arrived since the user
+                 scrolled away. Clicking jumps to the latest entry +
+                 resumes auto-follow. Hidden when autoFollow=true OR
+                 the transcript is empty. -->
+            <button
+              v-if="!autoFollow && newCount > 0"
+              class="subagent-drawer__new-events"
+              type="button"
+              @click="jumpToLatest"
+            >↓ {{ newCount }} new</button>
           </div>
         </DialogContent>
       </Transition>
@@ -344,6 +517,57 @@ function formatPayload(entry: TranscriptEntry): string {
 .subagent-drawer__close:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-elevated);
+}
+
+/* B6 PR3b (2026-06-20): jump-to-latest button in the header.
+   Matches the existing close button's footprint (padding / border-radius)
+   for visual rhythm; uses --color-accent as the hint color so the user
+   notices it without it screaming for attention. Only renders when
+   auto-follow is paused. */
+.subagent-drawer__jump-latest {
+  font: inherit;
+  font-family: var(--font-sans);
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.subagent-drawer__jump-latest:hover {
+  background: var(--color-accent);
+  color: var(--color-bg-app);
+}
+
+/* B6 PR3b (2026-06-20): floating "↓ N new" button at the body's
+   bottom-center. Sits above the scroll content; same --color-accent
+   palette as the header jump-latest button so the two feel paired. */
+.subagent-drawer__new-events {
+  position: sticky;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 8px auto 0;
+  display: block;
+  z-index: 1;
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-bg-surface);
+  color: var(--color-accent);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.subagent-drawer__new-events:hover {
+  background: var(--color-accent);
+  color: var(--color-bg-app);
 }
 
 .subagent-drawer__meta {
