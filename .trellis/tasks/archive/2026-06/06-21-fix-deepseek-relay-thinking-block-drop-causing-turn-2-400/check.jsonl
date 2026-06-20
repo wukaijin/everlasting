@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 thinking 块 wire 契约 + always-present 顶层 thinking 字段未被破坏;真 Claude 路径(非空签名块)行为不回归;纯 text+tool_use 消息不加 reasoning_content。"}
+{"file": ".trellis/tasks/archive/2026-06/06-20-deepseek-reasoner-reasoning-content-400/prd.md", "reason": "对照上次把错误契约 pin 死的两个测试(removes_empty_sig / omits_reasoning_content_when_all_empty),确认本次改为正确的'保留块 + lift reasoning_content'契约,并新增 V1/V2/V3 relay 契约 pin。"}
