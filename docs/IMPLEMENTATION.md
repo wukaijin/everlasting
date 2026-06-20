@@ -380,7 +380,7 @@ RDP 双屏验证通过(2026-06-14)。代码 `app/src/components/layout/TitleBar.
 - **反直觉 #2**:旧设计 Tier 4 Mode check 在 Tier 3 Ask 之后 → Plan + 写操作有"用户点始终允许,然后被 Mode 拒"的坏交互
 - **粒度不足**:PRD 原预留 3 种 `match_kind` schema(`tool` / `prefix` / `path`)但只 wire 了 `tool` → 用户想"信任 ~/Documents 整片"没辙
 
-re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md`](../.trellis/tasks/06-13-a2-b7-regrill-path-based/prd.md)。旧 06-12 PRD 加 Superseded 标记保留作历史档案,新实施以新 PRD 为准。
+re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md`](../.trellis/tasks/archive/2026-06/06-13-a2-b7-regrill-path-based/prd.md)。旧 06-12 PRD 加 Superseded 标记保留作历史档案,新实施以新 PRD 为准。
 
 **Decision** (10 项,re-grill session 输出):
 
@@ -426,7 +426,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
 
 ### 2026-06-18 — B4 Skill 系统(use_skill 虚拟 tool + 三层渐进披露)
 
-**Context**:第三档 B4 要把"做事方法"打包成可复用单元。前置调研([docs/research/skill-system-survey.md](../research/skill-system-survey.md),一手抓取 Claude Code / Hermes / opencode / agentskills.io)确认业界已收敛到"虚拟 tool + 渐进式披露"模式。本仓库 B3 /command 已落地 ResourceLoader,B5 memory 已有 synthetic message 注入机制。brainstorm 收敛 4 决策后 2 PR 落地。
+**Context**:第三档 B4 要把"做事方法"打包成可复用单元。前置调研([docs/research/skill-system-survey.md](research/skill-system-survey.md),一手抓取 Claude Code / Hermes / opencode / agentskills.io)确认业界已收敛到"虚拟 tool + 渐进式披露"模式。本仓库 B3 /command 已落地 ResourceLoader,B5 memory 已有 synthetic message 注入机制。brainstorm 收敛 4 决策后 2 PR 落地。
 
 **Decision**:
 1. `use_skill` 虚拟 tool(非 system prompt 全量注入),三层渐进披露:L0 清单(name+description)独立 synthetic message 常驻 → L1 模型调 `use_skill` 返回正文 → L2 reference 文件用 `read_file` 拉
@@ -653,7 +653,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
   - 🔴 第四档(最远远期,3 项):B8 / B10 / B11
   - 🗑️ 移除(3 项):A1 / A3 / C5
 
-- **依据**:完整决策矩阵 D1-D6 见 [`.trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md`](../../.trellis/tasks/06-10-v2-roadmap-and-vision-consolidation/prd.md)。
+- **依据**:完整决策矩阵 D1-D6 见 [`.trellis/tasks/archive/2026-06/06-10-v2-roadmap-and-vision-consolidation/prd.md`](../../.trellis/tasks/archive/2026-06/06-10-v2-roadmap-and-vision-consolidation/prd.md)。
 
 ### 2026-06-07 — 工具集扩展批次(edit_file / grep / glob / list_dir + ReadGuard + Bash 落盘 + cat -n)
 
@@ -736,6 +736,6 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/06-13-a2-b
 
 ### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
 
-- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
-- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
-- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](../_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
+- **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。

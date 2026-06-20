@@ -30,13 +30,13 @@
 - **决策**:Skill / Memory / Role 共用 frontmatter loader
   - **原因**:三者载体都是 Markdown + YAML,加载时机不同;统一 loader 省重复代码
 - **决策**:Agent Daemon 化(agent core 从 Tauri 进程拆出为独立 daemon)
-  - **原因**:为多 channel 接入铺路(飞书不能依赖 GUI);GUI 重启不打断长跑任务;长跑任务稳定性。详见 [ARCHITECTURE.md §4](./ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
+  - **原因**:为多 channel 接入铺路(飞书不能依赖 GUI);GUI 重启不打断长跑任务;长跑任务稳定性。详见 [ARCHITECTURE.md §4]](../../../docs/ARCHITECTURE.md#4-决策agent-daemon-化为多-channel-接入铺路)
 - **决策**:生成式 UI 走约束式(LLM 输出 JSON,前端按 type 渲染),默认关闭
-  - **原因**:自由式(LLM 生成 HTML)沙箱难做、调试难;约束式够覆盖 80% 用例。详见 [BACKLOG.md 远期（v3+）段](./BACKLOG.md#远期v3暂不评估)
+  - **原因**:自由式(LLM 生成 HTML)沙箱难做、调试难;约束式够覆盖 80% 用例。详见 [BACKLOG.md 远期（v3+）段]](../../../docs/BACKLOG.md#远期v3暂不评估)
 - **决策**:Channel Adapter 抽象(`Channel` trait,3 个实现:TauriGui / Feishu / Cli)
-  - **原因**:多入口统一接口;新增 channel 不用改 agent core;测试友好。详见 [ARCHITECTURE.md §5](./ARCHITECTURE.md#5-决策channel-adapter-抽象为多入口铺路)
+  - **原因**:多入口统一接口;新增 channel 不用改 agent core;测试友好。详见 [ARCHITECTURE.md §5]](../../../docs/ARCHITECTURE.md#5-决策channel-adapter-抽象为多入口铺路)
 - **决策**:候选功能方向锁定(7 个),但暂不排优先级
-  - **原因**:先把方向沉淀下来,实施前再按"价值/成本/依赖"评估。详见 [BACKLOG.md](./BACKLOG.md) 全章
+  - **原因**:先把方向沉淀下来,实施前再按"价值/成本/依赖"评估。详见 [BACKLOG.md]](../../../docs/BACKLOG.md) 全章
   - 方向:输入层(图/@ /command) / Skill / 多层 Memory / 多角色+多模式+编排 / 生成式 UI / 飞书 / 云端同步
 
 ### 2026-06-04 — 方案 C:VPS 自托管 daemon(远期留接口)
@@ -54,7 +54,7 @@
 - **后期展开**(v2 再说):
   - 多设备接续、配置/状态/session 列表同步、显式"工作树迁移"流程
   - 接续前置条件:必须 push 过 + 目标机器不能在跑 LLM
-  - 详见 [BACKLOG §4 跨设备（v2 候选）](./BACKLOG.md#4-跨设备v2-候选)
+  - 详见 [BACKLOG §4 跨设备（v2 候选）]](../../../docs/BACKLOG.md#4-跨设备v2-候选)
 
 ### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
 
