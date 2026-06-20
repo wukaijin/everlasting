@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 51
+- **Total Sessions**: 52
 - **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~924 | Active |
+| `journal-2.md` | ~958 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 52 | 2026-06-20 | Session 53b: FT-F-003 — workerWaiting ref unmount 清理 | `272fbe9`, `8d48306` | `main` |
 | 51 | 2026-06-20 | Session 53: FT-F-001 阶段 2 — SubagentDrawer typed-cards 重做 | `6bb5060`, `42daa3b`, `27ae574` | `main` |
 | 50 | 2026-06-20 | Session 52: FT-F-001 PR1 — ToolCallCard shared body 抽出 (硬前置) | `9b685c8`, `d433708` | `main` |
 | 49 | 2026-06-20 | Session 51 — FT-F-005 SubagentDrawer failure-reason banner | `2077caa`, `0cf2ae0`, `9e2b020` | `main` |

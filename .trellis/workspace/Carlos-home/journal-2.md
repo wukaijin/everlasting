@@ -922,3 +922,37 @@ FT-F-001 阶段 2 — SubagentDrawer 统一 JSON payload 渲染改为按 Transcr
 ### Next Steps
 
 - None - task complete
+
+
+## Session 52: Session 53b: FT-F-003 — workerWaiting ref unmount 清理
+
+**Date**: 2026-06-20
+**Task**: Session 53b: FT-F-003 — workerWaiting ref unmount 清理
+**Branch**: `main`
+
+### Summary
+
+FT-F-003 — ToolCallCard.openSubagentDrawer 的 retry while loop (await new Promise(r=>setTimeout(r,300))) 在 component unmount 时不跳出,await resolve 后继续写 unmounted workerWaiting ref + 可能 openDrawer on unmounted card。加 unmounted flag 守卫:let unmounted + onUnmounted 设 true + loop 内 8 处守卫点(每个 await 后 + 写 workerWaiting/调 openDrawer/fetchForSession 前)if(unmounted) return。unmounted 是 <script setup> per-instance 绑定无跨实例泄漏。原稿方案 A(clearTimeout)基于错误假设(Session 51 以为是嵌套 setTimeout chain,实际是 await loop 无 timer id 可 clear),Session 53 实读代码后重选 unmounted flag。新增 unmount_during_polling 回归 test(vi.useFakeTimers 推进 300ms tick),破坏性验证(临时删守卫→test fail expected 3 to be 2)证明 test 真守在守卫上。retry 策略不变(300ms/1500ms/5 tick)。279 pass(基线 278+1),vue-tsc 0 error。AC6:Vue 3.5.35 实测 unmount 后写 ref 不再 warning,warnSpy 断言调为诚实的 future-proof lock(trellis-check 修)。Phase 3.3 spec update 不更新(unmounted flag 是 Vue 3 通用 idiom,非项目特有)。剩余同源 follow-up:FT-F-002/FT-F-004。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `272fbe9` | (see git log) |
+| `8d48306` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
