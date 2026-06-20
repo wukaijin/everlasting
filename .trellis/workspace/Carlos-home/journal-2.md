@@ -632,3 +632,74 @@ DeepSeek-v4 (`deepseek-v4-flash` via wukaijin.com Anthropic Messages 端点) 多
 - **FT-F-001**: 后续 PR 评估 drawer payload 可视化重做（typed-cards：call → ToolCallCard 复用 / result → ToolResultCard / perm → PermissionCard / text → MessageItem）。先讨论 chat 主面板卡片 props interface 下沉为 shared，drawer 再消费
 - **FT-F-002**: toolTip "正在打开…" timeout 后 fallback 文案，目前 silent 回退到 `点击查看 worker 详情` 视觉上无变化；1.5s 仍 miss 时可考虑 toast 提示用户手动 retry
 - **FT-F-003**: `workerWaiting` ref 在 component unmount 时未清理（polling setTimeout 可能 fire 后写 unmounted ref）；非功能性 leak，prod 路径影响小
+
+
+## Session 50: SubagentDrawer B1+B2 hotfix
+
+**Date**: 2026-06-20
+**Task**: Session 50 handoff §3 推荐的 B1+B2 短期 hotfix 路径（无 blocker，~15-30 分钟工作量）
+**Branch**: `main`
+
+### Summary
+
+按 Session 50 handoff `/tmp/everlasting-handoff-session50-2026-06-20.md` §3 推荐的短期路径，修 SubagentDrawer 2 个 bug（1 PR + 1 docs）。`docs/HANDOFF.md` 项目级 handoff 不重复 detail，权威参考 Session 50 handoff。后端零改动，前向兼容 FT-F-001 typed-cards 重做（handoff §5 阻塞链说明）。
+
+### Changes
+
+#### B1 — `SubagentDrawer.vue:197-202` 状态时长公式
+
+- **症状**：`statusDisplay` 的 error/cancelled 分支用 `elapsedMs`（`nowTick - startedMs`）作为 suffix，worker 失败后 drawer 一直开着 → elapsed 一直涨。截图证据：worker 实际跑 11.7s（`T05:38:54 → T05:39:05`），但 drawer 头部显示 "failed at 14281.9s"（3.97 小时）。主面板 `dispatch_subagent` 卡显示正确 11.9s（`result.duration_ms`）。
+- **Fix**：所有 terminal 态（completed / error / cancelled）统一用 `finishedAt - startedAt` 冻结值（同一个 `terminalDurMs` helper 共享计算）；`running` 态保留 live ticker。~30 行改动（含注释 + dedup 重复 `finishedAt` 计算）。
+- **位置**：`app/src/components/chat/SubagentDrawer.vue`（`statusDisplay` computed + B1 注释 block）。
+
+#### B2 — `SubagentDrawer.vue:143-149` tool_result envelope 解码
+
+- **症状**：`formatPayload` 对所有 entry kind 一律 `JSON.stringify(entry.payload_json, null, 2)`。`tool_result.payload_json.content` 是 cwd envelope JSON 字符串（REQ-16，与 `ToolCallCard.vue` 的 `result.content` 同 shape），外层 stringify 把 envelope 再 stringify 一次 → 显示 `\"cwd\":\"...\"` 转义噪音和 envelope JSON 而非真实 tool output。
+- **Fix**：对 `tool_result` kind 特判：取 `payload_json.content` 字符串后调 `extractToolResultDisplay`（`utils/messageFormat.ts`）解 envelope。完全对齐 `ToolCallCard.vue:33-37` 既有行为（code reuse，零并行实现）。Non-tool_result kinds 保留旧 `JSON.stringify` 路径。~12 行改动。
+- **位置**：`app/src/components/chat/SubagentDrawer.vue`（`formatPayload` function + B2 注释 + 新增 `extractToolResultDisplay` import）。
+
+#### DEBT.md — FT-F-001 相关 hotfix 状态回填
+
+- **位置**：`.trellis/reviews/DEBT.md` FT-F-001 段尾加 **Related Hotfix (2026-06-20, Session 50)** bullet。
+- **内容**：声明 B2 已 closed by hotfix（`formatPayload` envelope 解码），FT-F-001 实施 scope 不变（typed-cards 是按 kind 路由到不同组件，本 fix 是单一 kind 内的内容净化），但 B2 具体 symptom 无需在 typed-cards refactor 时再处理；B1 与本 FT 无关，单独 hotfix 处理。
+
+### New Tests
+
+`app/src/components/chat/SubagentDrawer.test.ts` 加 3 个 regression test（覆盖 2 个 bug fix）：
+
+1. `error state shows terminal duration (finishedAt - startedAt), not the live ticker`：系统时钟 set 到 run finished 3 小时后，断言 badge 读 `"failed at 11.7s"`（不是 `"failed at 10800.0s"`）。覆盖 B1。
+2. `cancelled state shows terminal duration (finishedAt - startedAt), not the live ticker`：类似，断言 `"已停止 at 5.3s"`。覆盖 B1。
+3. `tool_result entries unwrap the cwd envelope and render the inner result text`：构造 `{ kind: "tool_result", payload_json: { content: '{"result":"actual file contents here","cwd":"/data/wt"}' } }`，断言 drawer payload 文本包含 `"actual file contents here"` 且**不包含** `\"cwd\"` 转义或 `"cwd":` 键。覆盖 B2。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c8ae47` | fix(frontend): subagent drawer terminal duration + envelope unwrap (B1+B2 hotfix) |
+| `969297d` | docs(debt): note B2 envelope fix as related hotfix to FT-F-001 |
+| `587462c` | chore: record journal |
+
+### Testing
+
+- [OK] `cd app && pnpm vitest run src/components/chat/SubagentDrawer.test.ts` → **15 passed**（12 原有 + 3 new：B1 × 2 + B2 × 1）
+- [OK] `cd app && pnpm vitest run` → **235 passed**（16 files）。4 pre-existing errors in `streamController.test.ts` 收尾期访问 `window.__TAURI_INTERNALS__`（Tauri internals 在 vitest 环境未注入），与本 fix 无关（git stash 验证 baseline 同样 4 errors + 28 passed）
+- [OK] `cd app && /usr/local/code/github/everlasting/app/node_modules/.bin/vue-tsc -p tsconfig.json --noEmit` → **EXIT=0**
+- [N/A] 项目无 ESLint 配置（`package.json` scripts 无 lint 脚本，`CLAUDE.md` 未提 lint 工具链），验证面即 vue-tsc + vitest
+- [OK] `trellis-check` skill：spec compliance / cross-layer (B. code reuse — 复用 `extractToolResultDisplay`，grep 全仓只有 `ToolCallCard.vue` + `SubagentDrawer.vue` 两个 caller，无并行实现) / same-layer consistency (B2 与 `ToolCallCard.vue:33-37` 行为对齐)
+
+### Notes
+
+- B1 + B2 共用一个 commit（handoff §3 B1+B2 一起做 段建议）—— 都在 `SubagentDrawer.vue`，scope 紧密相关
+- DEBT.md FT-F-001 加 Related Hotfix bullet 而非新建 RULE 条目：RULE 是 review finding（bug / 债），本 fix 是 主动规划的 hotfix，且对应 handoff §3 列出的已知问题，无 review 来源
+- 当前 workflow task `06-20-frontend-subagent-drawer-failed-banner`（FT-F-005）是 placeholder，未触动；走的是 handoff 推荐的 B1+B2 短期路径
+- 后端零改动：`subagent:event` wire shape / `dispatch_subagent` ToolDef / `subagent_runs` table schema 全部 lockstep，未触；前向兼容 FT-F-001 typed-cards 重做
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- **FT-F-001** typed-cards 重做（`SubagentDrawer` payload 按 kind 路由到 `ToolCallCard` / `ToolResultCard` / `PermissionCard` 等组件）：B2 已局部关闭，scope 缩到"按 kind 路由"单一目标。**仍 blocked by PR1**（handoff §5：chat 主面板卡片 props interface 下沉为 shared），需先起 PR1 task skeleton
+- **FT-F-002 / FT-F-003 / FT-F-004 / FT-F-005** placeholder：等 PR1 + FT-F-001 实施时顺次推进
+- **截图分析** 12 个 UX 改进点（handoff §4）：B1+B2 已 closed；B3-B8 由 FT-F-001 覆盖；C1+C2+C3+C5 由 FT-F-004 覆盖；D2 由 FT-F-005 覆盖

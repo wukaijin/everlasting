@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 47
+- **Total Sessions**: 48
 - **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~515 | Active |
+| `journal-2.md` | ~668 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 48 | 2026-06-20 | Session 50 — SubagentDrawer B1+B2 hotfix | `8c8ae47`, `969297d` | `main` |
 | 47 | 2026-06-20 | B6 PR3 前端 drawer + subagentRuns store（PR2 hotfix + RULE-A-016） | `1308a23`, `d12531d`, `255176d` | `main` |
 | 46 | 2026-06-20 | B6 Subagent PR2: subagent_runs 持久化 + RULE-A-014/015 闭环 | `40a6118`, `caf8e3a` | `main` |
 | 45 | 2026-06-20 | B6 Subagent PR1: dispatch_subagent + worker isolation (run_chat_loop 20-param) | `3d817d6`, `2373f2f` | `main` |
