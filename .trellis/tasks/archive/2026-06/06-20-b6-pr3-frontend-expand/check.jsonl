@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/06-20-b6-pr3-frontend-expand/prd.md", "reason": "Acceptance Criteria(AC1-AC6) + Definition of Done,检查的最高依据"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Scenario: dispatch_subagent tool §3 Contracts + §4 Validation + Scenario: subagent_runs persistence + §6 Tests Required 验证 PR2 hotfix emit 路径 + PR3a commands + PR3b drawer 是否符合 spec"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Worker Subagent Pattern + run_chat_loop 签名不变性(只加 app_handle 捕获)+ 16 skip_persist gates 不破坏 + CancellationGuard skip_session_active + Rule-A-016 修复是否闭合,检查 PR2 hotfix 是否保持架构合规"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SubagentRunSummary 投影模式 + list_runs_summary_by_session 函数是否合规 + CASCADE + audit invariant 是否被 PR2 hotfix 破坏,检查 PR3a 数据库 schema 合规"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "现有 store 模式(reka-ui/Pinia reactive/debounce/chat facade)+ 新 subagentRuns store 段沉淀是否合规,检查 PR3b 前端实现"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui Sheet/DialogContent 模式 + :deep() gotcha,检查 SubagentDrawer.vue 实现合规"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-016 closed + commit hash 是否回填 + §优先级分布 P2 22→21 / Total 47→46 是否更新"}
+{"file": "app/src-tauri/src/db/subagent_runs.rs", "reason": "现有 db module 接口(insert_run/update_run_finished/get_run/list_runs_by_session + SubagentRunRow + SubagentStatusDb),检查 PR3a 新增 SubagentRunSummary 类型 + list_runs_summary_by_session 函数是否兼容现有 API"}
