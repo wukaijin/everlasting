@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/06-20-06-20-frontend-worker-waiting-ref-leak/prd.md", "reason": "本 task prd — AC1-AC6 + Decision(unmounted flag 守卫)+ R1-R4 + 实际 await loop 代码现状;check 逐条对照(AC2 守卫点:每个 await 后 + 副作用前 / AC3 14 test 不回退 / AC6 Vue warning 实测)"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "修复验证 — onUnmounted 守卫点齐全(await 后 + 写 workerWaiting/openDrawer 前);retry 策略(300ms/1500ms/5tick)未变;immediate/afterRetry 分支未误改"}
+{"file": "app/src/components/chat/ToolCallCard.test.ts", "reason": "test 验证 — 现有 14 test 零回退;新增 unmount_during_polling 回归 test 锁定 loop 跳出 + workerWaiting 不被写 + openDrawer 不被调"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "spec 验证 — onUnmounted cleanup + unmounted flag 守卫符合 Vue 3 idiomatic"}
+{"file": "app/src/stores/subagentRuns.ts", "reason": "store 验证 — 0 改动(unmount 守卫在 component 层,store 的 fetchForSession/openDrawer 签名不变)"}

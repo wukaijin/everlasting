@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "component 生命周期约定 — onUnmounted cleanup 模式;unmounted flag 守卫符合 Vue 3 idiomatic(unmount 后不写 ref / 不触发副作用)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "ToolCallCard 不用 reka-ui,但确认本 task 不引入新依赖;unmount 守卫是纯 Vue 3 lifecycle 无 reka-ui 交互"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本 task 是同层(component 内部)修复,无跨层改动;但 retry polling 调 subagentRuns IPC(fetchForSession/openDrawer),unmount 守卫要覆盖这些 IPC 调用(unmount 后不发 IPC)"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "修复对象(328-372 行 openSubagentDrawer retry while loop);实际是 await loop 非 setTimeout chain,修法 = unmounted flag 守卫(prd Decision 段已定)"}
+{"file": "app/src/components/chat/ToolCallCard.test.ts", "reason": "现有 14 test 行为锁保持;新增 unmount_during_polling 回归 test(R4);shallow: true + setActivePinia + invokeMock 模式复用;vi.useFakeTimers 推进 300ms tick"}
