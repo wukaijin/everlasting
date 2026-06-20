@@ -956,3 +956,37 @@ FT-F-003 — ToolCallCard.openSubagentDrawer 的 retry while loop (await new Pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 53: FT-F-004 SubagentDrawer UX polish bundle (C1+C2+C3, C5 drop)
+
+**Date**: 2026-06-21
+**Task**: FT-F-004 SubagentDrawer UX polish bundle (C1+C2+C3, C5 drop)
+**Branch**: `main`
+
+### Summary
+
+Session 54: grill FT-F-004(5 Open Questions + 1 prd 过时点——FT-F-001 typed-cards 已删 prd 要改的那个 pre)→ 4 项收窄为 3 项(C5 drop)。C1 加宽 480→640 + drop overflow-x(break-all 对无空格 path 正确,改共享 ToolInputBody/OutputBody 扩 blast radius 到主区);C2 开始+结束双时刻本地 HH:MM:SS(utils/time.ts formatTime,new Date 转 local 不截 UTC 避 ~8h drift)+ clock icon;C3 filter-row 纯数字 N events + 未勾 +X chat hidden(修正 prd 反向副计数方向)+ drop 进度条(M 流式未知);C5 drop(mask 不判断 overflow + 淡化 sticky 浮钮 + drawer 已有动态提示)。trellis-check 零问题。288 pass, vue-tsc 0 error。pre-existing(非本 task):streamController.test 4 unhandled rejection(reloadAfterFinalize invoke 未 mock)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9e41594` | (see git log) |
+| `1290d6c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
