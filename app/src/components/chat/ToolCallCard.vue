@@ -327,6 +327,17 @@ const workerDisplayName = computed<string>(() => {
  *  help with since no event has fired yet). */
 const workerWaiting = ref(false);
 
+/** FT-F-002 (2026-06-21): third card state — a prior click's 1.5s
+ *  retry polling exhausted without resolving (worker never emitted
+ *  its first event / DB insert failed / IPC down). Unlike
+ *  `workerWaiting` (transient spinner during polling), this sticks
+ *  until the user clicks again (retry clears it at the top of
+ *  `openSubagentDrawer`) or the component unmounts (session switch
+ *  rebuilds the card → resets to default). Drives the "⚠ worker
+ *  未响应,点此重试" inline hint so the silent fallback to the
+ *  default visual becomes an explicit "that didn't work" signal. */
+const workerMissed = ref(false);
+
 /** FT-F-003 (2026-06-20): unmount guard for the retry polling loop
  *  below. `openSubagentDrawer`'s while loop uses `await new
  *  Promise(r => setTimeout(r, 300))` to pace its 5 ticks — there's
@@ -352,6 +363,9 @@ onUnmounted(() => {
 });
 
 async function openSubagentDrawer(): Promise<void> {
+  // FT-F-002: clear any prior missed state — this click is a fresh
+  // attempt (first open, or a retry after a previous miss).
+  workerMissed.value = false;
   const sid = chatStore.currentSessionId;
   // Explicit type annotation: vue-tsc's narrowing on
   // ComputedRef.value through `if (immediate)` is unreliable
@@ -416,6 +430,12 @@ async function openSubagentDrawer(): Promise<void> {
   // alone (writing it on an unmounted ref is the original bug).
   if (unmounted) return;
   workerWaiting.value = false;
+  // FT-F-002: 1.5s elapsed without resolving — surface an explicit
+  // "didn't work" hint instead of silently falling back to the
+  // default visual. The hint re-points the user at the retry path
+  // (clicking the card again re-enters openSubagentDrawer, which
+  // clears workerMissed at the top).
+  workerMissed.value = true;
 }
 
 /** Lazy-load the session's subagent summaries the first time this
@@ -549,9 +569,24 @@ watch(
         v-if="workerSummaryPreview"
         class="tool-card__subagent-summary"
       >{{ workerSummaryPreview }}</p>
-      <p v-else class="tool-card__subagent-summary tool-card__subagent-summary--muted">
-        {{ workerWaiting ? "等待 worker 注册…" : "点击查看 worker 详情" }}
-      </p>
+      <p
+        v-else-if="workerWaiting"
+        class="tool-card__subagent-summary tool-card__subagent-summary--muted"
+      >等待 worker 注册…</p>
+      <!-- FT-F-002 (2026-06-21): 1.5s retry exhausted without
+           resolving — explicit "didn't work" hint replacing the
+           old silent fallback to the default visual. warn icon
+           reuses the registry entry FT-F-005 introduced; the
+           --missed variant tints it as a warning. Clicking the
+           card re-enters openSubagentDrawer (retry). -->
+      <p
+        v-else-if="workerMissed"
+        class="tool-card__subagent-summary tool-card__subagent-summary--missed"
+      ><Icon name="warn" :size="11" /> worker 未响应,点此重试</p>
+      <p
+        v-else
+        class="tool-card__subagent-summary tool-card__subagent-summary--muted"
+      >点击查看 worker 详情</p>
     </div>
 
     <!--
@@ -834,5 +869,17 @@ watch(
 .tool-card__subagent-summary--muted {
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+/* FT-F-002 (2026-06-21): missed-state hint — warning tint
+   (--color-tool-shell, the same amber FT-F-005's cancelled banner
+   + permission_ask badge use, NOT error red — a miss isn't a hard
+   failure, the worker may just be slow). inline-flex aligns the
+   warn icon with the text. */
+.tool-card__subagent-summary--missed {
+  color: var(--color-tool-shell);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>

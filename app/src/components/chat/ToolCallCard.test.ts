@@ -360,6 +360,61 @@ describe("ToolCallCard dispatch_subagent branch", () => {
     vi.useRealTimers();
   });
 
+  // FT-F-002 (2026-06-21): 1.5s retry polling exhausts without the
+  // cache warming → explicit "worker 未响应,点此重试" missed hint
+  // (was: silent fallback to the default visual). Every
+  // fetchForSession returns empty so the loop never resolves.
+  // Fake-timer note (memory: subagentdrawer-banner-test-gotchas):
+  // advanceTimersByTime advances setTimeout + Date.now() in
+  // lockstep, so the `while (Date.now() - start < 1500)` guard
+  // exits correctly per tick.
+  it("shows 'worker 未响应' missed hint after 1.5s polling exhausts", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue([]); // every fetchForSession misses
+
+    const w = mountDispatchCard();
+    await w.trigger("click");
+    await flushPromises();
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(true);
+
+    // Drive 5× 300ms ticks → loop exits (Date.now() - start >= 1500)
+    // → workerMissed=true.
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+    }
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(false);
+    expect(w.find(".tool-card__subagent-summary--missed").exists()).toBe(true);
+    expect(w.find(".tool-card__subagent-summary--missed").text()).toContain(
+      "worker 未响应",
+    );
+    vi.useRealTimers();
+  });
+
+  // FT-F-002 (2026-06-21): clicking the card again clears the
+  // missed hint (openSubagentDrawer resets workerMissed at the top)
+  // and re-enters the waiting/polling state for a fresh attempt.
+  it("retry click clears the missed hint and re-enters polling", async () => {
+    vi.useFakeTimers();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue([]);
+
+    const w = mountDispatchCard();
+    await w.trigger("click");
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+    }
+    expect(w.find(".tool-card__subagent-summary--missed").exists()).toBe(true);
+
+    await w.trigger("click");
+    await flushPromises();
+    expect(w.find(".tool-card__subagent-summary--missed").exists()).toBe(false);
+    expect(w.find(".tool-card--subagent-waiting").exists()).toBe(true);
+    vi.useRealTimers();
+  });
+
   // FT-F-003 (2026-06-20): `openSubagentDrawer`'s retry polling
   // loop uses `await new Promise(r => setTimeout(r, 300))` to pace
   // its 5 ticks — no timer id to clearTimeout. When the component
