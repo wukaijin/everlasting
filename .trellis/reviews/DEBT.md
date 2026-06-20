@@ -812,14 +812,16 @@
 - **Files**: `app/src/components/chat/SubagentDrawer.vue` + `app/src/components/chat/ToolCallCard.vue` + chat 主面板卡片(`MessageItem` / `ToolCallCard` / `PermissionCard` 等)
 - **Description**: drawer 当前用**统一 `payload` 字符串**展示 worker 输出(call / result / perm / text 混在一段 JSON 字符串里,所有类型走同一渲染分支)。重做为 typed-cards:不同类型 payload 路由到对应卡片组件 —— `tool_call` → `ToolCallCard` 复用 / `tool_result` → `ToolResultCard` / `permission_ask` → `PermissionCard` / `text` → `MessageItem`。
 - **前置依赖(硬依赖,先做)**:chat 主面板卡片 props interface **下沉为 shared**(否则 drawer 复用主面板卡片会带入大量无关 prop 噪音,组件 API 不收敛,易回滚)。**Blocked by**: `.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/`(FT-F-001 PR1 硬前置,2026-06-20 Session 51 起 skeleton,planning 占位)。**PR1 已 Resolved(merged `9b685c8`,2026-06-20 Session 52)** — 3 shared body component (`ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`)抽出,decoupled data props + callback prop 模式,3 body 完全不读 store;本 FT-F-001 阶段 2 现在 **unblocked**,可起 task 走 brainstorm。
-- **Status**: open(PR1 硬前置已 closed;FT-F-001 主体 typed-cards 重做仍 open,阶段 2 现可推进)
+- **Status**: **closed**(FT-F-001 主体 typed-cards 重做已实施合并 `6bb5060`,2026-06-20 Session 53;PR1 硬前置 `9b685c8` Session 52)
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/`(FT-F-001 阶段 2,本 task)+ ~~`.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/`(FT-F-001 PR1 硬前置,已 closed `9b685c8`)~~
+- **Closed At**: `6bb5060`(FT-F-001 stage 2)+ `9b685c8`(PR1 硬前置)
+- **Related Task**: ~~`.trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/`(FT-F-001 阶段 2,已 closed `6bb5060`)~~ + ~~`.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/`(FT-F-001 PR1 硬前置,已 closed `9b685c8`)~~
 - **Decisions to revisit**:
   - ✅ 主面板卡片 props 下沉方案:D2 已决定(2026-06-20,Session 51)— 独立 PR 先做硬前置(对应 `06-20-06-20-frontend-tool-call-card-shared-body-extract/`),本 task 是阶段 2
-  - drawer scoped 样式 vs 主面板卡片共享样式的拆分边界(避免样式泄漏到主面板)
-  - 现有 12 个 `SubagentDrawer.test.ts`:typed-cards 化后保留 vs 重写
-  - 持久化层:`subagent_events.payload` 仍存原始 JSON 字符串(后端零改动),还是新加 `payload_kind` 列做类型索引
+  - ✅ drawer scoped 样式 vs 主面板卡片共享样式的拆分边界:D3 — Body 纯,outer wrapper 各起(drawer kind badge + 480px narrow,主面板 tool-card header)。AC5 校准为只验 body 一致(Session 53)
+  - ✅ 现有 `SubagentDrawer.test.ts`:D4 — 保留无关 test 零改,JSON payload test 改 findComponent 断言(Session 53 执行,25→26 test)
+  - ✅ 持久化层:D5 — 后端零改动,`subagent_events.payload` 保持原始 JSON(前端按 kind 解析)
+  - **实施教训(2026-06-20 Session 53)**:`payload_json` 内部 3 struct serde 命名不一致(PermissionAskPayload=camelCase,ToolCall/ToolResultPayload=snake_case),synthesizeAsk 原读 snake_case 导致 worker 权限卡片空白(trellis-check 抓出)。已沉淀进 `guides/cross-layer-thinking-guide.md` "Consuming Untyped Rust-serde JSON in TS" 节(`42daa3b`)
 - **Why deferred**:
   - B6 PR3b 已是 race fix + 3 polish 范围,再叠 typed-cards 重做 → scope 爆炸,review 困难
   - 卡片 props interface 跨 drawer / 主面板共享,需**先独立讨论 API 形状**,避免"做了一半发现接口不对"回滚
@@ -1044,5 +1046,5 @@
 
 ---
 
-**最后更新**: 2026-06-20 by carlos — Session 52:FT-F-001 PR1 硬前置**已实施合并**(`9b685c8`)— 3 shared body component (`ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`)抽出 + 32 新增 test(272 pass 全集)+ IMPLEMENTATION.md §4 加 2026-06-20 ADR;FT-F-001 主体 **unblocked**,阶段 2 typed-cards 重做可推进。前序 Session 51+1:skeleton 起 + Blocked by 引用 + D2 决策 mark resolved。
+**最后更新**: 2026-06-20 by carlos — Session 53:**FT-F-001 完整 closed**(`6bb5060`)— 阶段 2 typed-cards 重做实施合并,drawer 统一 JSON payload 渲染改为按 kind 路由到 ToolInputBody/ToolOutputBody/PermissionAskBody + 新做 WorkerTextTimeline;278 pass 全集,vue-tsc 0 error。trellis-check 抓出跨层 bug(synthesizeAsk 读 snake_case 但 PermissionAskPayload 实存 camelCase → worker 权限卡片空白),已修 + 沉淀进 cross-layer guide(`42daa3b`)。FT-F-001 主线(Stage 1 PR1 `9b685c8` + Stage 2 `6bb5060`)全部 closed。剩余同源 follow-up:FT-F-002 / FT-F-003 / FT-F-004(独立 task)。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
