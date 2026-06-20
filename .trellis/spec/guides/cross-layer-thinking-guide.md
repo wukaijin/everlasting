@@ -345,3 +345,66 @@ See `backend/llm-contract.md` "Scenario: Worktree State Transparency +
 LLM Cancel" for the full signatures, contracts, and validation matrix
 of the 3 new Tauri commands (`attach_worktree` / `detach_worktree` /
 `delete_worktree`).
+
+---
+
+## Consuming Untyped Rust-serde JSON in TS (2026-06-20, FT-F-001)
+
+When the TS side receives a payload typed only as `Record<string, unknown>`
+(e.g. the subagent transcript's `payload_json`), the underlying bytes are
+often the output of **several different Rust structs** serialized by serde —
+and those structs do **not** necessarily share a naming convention. The
+same JSON object can mix `snake_case` and `camelCase` keys depending on
+which struct produced it.
+
+### Why this bites
+
+Rust's default serde output is `snake_case`. A struct only becomes
+`camelCase` when it carries `#[serde(rename_all = "camelCase")]`. If you
+assume one style for a whole payload family, the struct(s) that opted
+into the other style silently produce empty/blank fields on the consumer
+side — no error, just wrong rendering.
+
+### Checklist: before parsing an untyped payload
+
+- [ ] **Don't assume a single naming style for the payload family.**
+      List every Rust struct that can land in that field and check each
+      one's `#[serde(rename_all)]` attribute individually.
+- [ ] **Default expectation is `snake_case`** (Rust native); treat
+      `camelCase` as the opt-in exception that must be verified against
+      the struct definition, not assumed.
+- [ ] **Read defensively when the source struct is ambiguous or may
+      change** — try the expected key first, fall back to the other
+      spelling, and document the actual wire shape in a docstring.
+- [ ] **Add a lock test** that asserts the defensive fallback is present,
+      so a future refactor must explicitly delete it rather than
+      silently narrowing the reader to one spelling.
+
+### Real-world example (FT-F-001 stage 2)
+
+The subagent `payload_json: Record<string, unknown>` is `serde_json::to_value(payload)` where `payload` is one of four structs — and they do **not** agree on naming:
+
+| struct | `#[serde(rename_all)]` | stored keys |
+|---|---|---|
+| `ToolCallPayload` | _(none)_ → snake_case | `tool_use_id` / `input` |
+| `ToolResultPayload` | _(none)_ → snake_case | `tool_use_id` / `is_error` |
+| `PermissionAskPayload` | `camelCase` | `sessionId` / `toolUseId` / `toolName` / `toolInput` |
+| `ChatEventPayload` (`event` flatten) | tag `kind`, snake_case variants | `kind: "start"\|"done"\|...` |
+
+The drawer's `synthesizeAsk` initially read **snake_case** keys
+(`session_id` / `tool_use_id` / `tool_name`), matching the other three
+payloads' convention. But `PermissionAskPayload` serializes to
+**camelCase** — so every field resolved to `""` / `{}` and the worker's
+permission cards rendered **blank** in the drawer. Caught by
+`trellis-check`; fixed by reading both spellings (camelCase first,
+snake_case fallback) + a lock test.
+
+### Reference
+
+- `app/src/stores/subagentRuns.ts` "Drift trap" comments (status raw
+  string; `payload_json` snake_case vs the live `subagent:event`
+  payload's camelCase) — the **same** family of trap, different axis.
+- `app/src-tauri/src/agent/permissions/mod.rs:405` — `PermissionAskPayload`
+  with `#[serde(rename_all = "camelCase")]`; contrast with
+  `app/src-tauri/src/state.rs` `ToolCallPayload` / `ToolResultPayload`
+  (no `rename_all`).
