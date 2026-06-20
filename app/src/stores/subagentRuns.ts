@@ -123,7 +123,25 @@ export interface SubagentFinishedPayload {
 /** Transcript entry as stored in `transcriptJson` (the DB storage
  *  shape). ⚠️ Drift trap 2: the Rust struct has NO `rename_all`, so
  *  the field is `payload_json` (snake_case) — distinct from the live
- *  `subagent:event` payload's `payload` (camelCase). */
+ *  `subagent:event` payload's `payload` (camelCase).
+ *
+ *  B6 PR3 redesign (2026-06-21): the `payload_json` shape carries
+ *  two new top-level fields for `tool_call` / `tool_result` entries:
+ *    - `tool_call.payload_json.tool_use_id: string` — the LLM-assigned
+ *      tool_use id (matches `ToolCallPayload::id` on the Rust side);
+ *      lets the frontend drawer pair call+result by id.
+ *    - `tool_result.payload_json.tool_use_id: string` — same id
+ *      (matches the `ToolResultPayload::tool_use_id`); the drawer's
+ *      pairing layer keys on this.
+ *    - `tool_result.payload_json.duration_ms: number` — the
+ *      wall-clock gap between the matching tool_call and this
+ *      tool_result (measured in `SubagentBufferSink`). The drawer
+ *      surfaces this in the merged card header via
+ *      `abbreviateDuration`. Pre-redesign rows (old persisted
+ *      transcripts) lack the field; the `ToolOutputBody` treats
+ *      `durationMs === undefined` as "omit duration chip" (no
+ *      visual regression).
+ *  The `permission_ask` and `chat_event` shapes are unchanged. */
 export interface TranscriptEntry {
   kind: TranscriptKind;
   payload_json: Record<string, unknown>;

@@ -49,8 +49,10 @@
 //! set the parent loop was invoked with.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -578,6 +580,19 @@ pub struct SubagentBufferSink {
     /// session_id). Each `subagent:event` payload includes this so
     /// the frontend can route events to the right session's drawer.
     session_id: String,
+    /// B6 PR3 redesign (2026-06-21): per-`tool_use_id` `Instant` of
+    /// the matching `emit_tool_call` arrival, used to measure the
+    /// wall-clock gap to the paired `emit_tool_result` so the
+    /// `tool_result` payload_json can carry a `duration_ms` field for
+    /// the frontend drawer to render per-tool latency. The map is
+    /// mutated only on the same thread that calls `record()` (the
+    /// `ChatEventSink` impl methods all route through `record()`,
+    /// which is `&self` — but since the sink lives for the duration
+    /// of a single worker invocation, no cross-thread races occur).
+    /// Entries older than the matching result (or unreachable due
+    /// to a lost tool_call event) are removed on result arrival;
+    /// see `record_tool_result` for the orphan-fallback path.
+    tool_call_received_at: StdMutex<HashMap<String, Instant>>,
 }
 
 impl SubagentBufferSink {
@@ -594,6 +609,7 @@ impl SubagentBufferSink {
             app_handle: Some(app_handle),
             run_id,
             session_id,
+            tool_call_received_at: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -611,6 +627,7 @@ impl SubagentBufferSink {
             app_handle: None,
             run_id,
             session_id,
+            tool_call_received_at: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -641,6 +658,7 @@ impl SubagentBufferSink {
             app_handle: None,
             run_id,
             session_id,
+            tool_call_received_at: StdMutex::new(HashMap::new()),
         };
         // Stash the collector on a thread-local for the duration
         // of the test; the record() method consults it. We use a
@@ -837,13 +855,128 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
     }
 
     fn emit_tool_call(&self, payload: &ToolCallPayload) {
+        // B6 PR3 redesign (2026-06-21): record the `Instant` of this
+        // tool_call so the paired `emit_tool_result` can compute the
+        // wall-clock `duration_ms`. The frontend drawer pairs the
+        // two transcript entries by `tool_use_id` and renders the
+        // duration in the merged card header (see
+        // `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style/prd.md`
+        // §"Technical Approach"). The Instant is the wall-clock now
+        // (`Instant::now()`), not the message's emit timestamp —
+        // matches the main panel's `ToolCallCard` duration contract
+        // (F5), which is "from tool_call to tool_result wall-clock".
+        let mut map = self
+            .tool_call_received_at
+            .lock()
+            .expect("SubagentBufferSink tool_call_received_at mutex poisoned");
+        map.insert(payload.id.clone(), Instant::now());
+        // Defensive cap: if a worker ever produces a runaway number
+        // of distinct tool_use_ids without results landing (e.g. an
+        // error-loop worker spamming tool_use), bound the map. The
+        // 1024 cap is generous for the 20-turn worker's realistic
+        // case (a busy tool-heavy turn produces ~5-10 distinct
+        // tool_use_ids). The eviction policy is "drop oldest entry"
+        // to keep the most recent measurements intact.
+        if map.len() > 1024 {
+            if let Some(oldest_key) = map
+                .iter()
+                .min_by_key(|(_, v)| v.elapsed())
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest_key);
+            }
+        }
+        drop(map);
         let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        self.record(TranscriptKind::ToolCall, payload_json);
+        // Inject the `tool_use_id` field at the top level of
+        // payload_json so the frontend can pair tool_call with the
+        // matching tool_result. The original `ToolCallPayload` does
+        // not serialize `id` separately (it has `request_id` and
+        // `id`, but the frontend `TranscriptEntry` projection
+        // historically only exposed `payload_json.{name,input}` for
+        // tool_call — see `subagentRuns.ts:TranscriptEntry`). Adding
+        // the field at serialization time keeps the Rust struct
+        // stable for cross-process Tauri commands (no DB migration
+        // needed — see PRD §"Cross-layer Decision Points").
+        let mut payload_obj = match payload_json {
+            serde_json::Value::Object(m) => m,
+            other => {
+                tracing::warn!(
+                    tool_use_id = %payload.id,
+                    "tool_call payload_json not an object; wrapping as-is"
+                );
+                let mut m = serde_json::Map::new();
+                m.insert("raw".into(), other);
+                m
+            }
+        };
+        payload_obj.insert("tool_use_id".into(), serde_json::Value::String(payload.id.clone()));
+        let enriched = serde_json::Value::Object(payload_obj);
+        self.record(TranscriptKind::ToolCall, enriched);
     }
 
     fn emit_tool_result(&self, payload: &ToolResultPayload) {
+        // B6 PR3 redesign (2026-06-21): look up the matching
+        // `tool_call` Instant, compute the wall-clock gap, and embed
+        // it (plus `tool_use_id`) into payload_json so the frontend
+        // drawer can render the per-tool duration on the merged
+        // card header. Orphan tool_result (no matching tool_call —
+        // possible if the IPC `subagent:event` was lost or the
+        // transcript was truncated at the 4 MiB cap) falls back to
+        // `duration_ms = 0` with a `tracing::warn!`; the entry
+        // still lands in the transcript so the user sees the result,
+        // the drawer's pairing layer treats it as a standalone
+        // "orphan result" card.
+        let mut map = self
+            .tool_call_received_at
+            .lock()
+            .expect("SubagentBufferSink tool_call_received_at mutex poisoned");
+        let duration_ms: u64 = if let Some(start) = map.remove(&payload.tool_use_id) {
+            let ms = start.elapsed().as_millis();
+            // Saturating cast — a `u128` ms value cannot realistically
+            // exceed `u64::MAX`, but the saturating cast keeps the
+            // conversion safe under any pathological clock behavior.
+            u64::try_from(ms).unwrap_or(u64::MAX)
+        } else {
+            tracing::warn!(
+                tool_use_id = %payload.tool_use_id,
+                "tool_result arrived without matching tool_call; duration_ms=0"
+            );
+            0
+        };
+        drop(map);
         let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        self.record(TranscriptKind::ToolResult, payload_json);
+        // Enrich payload_json with `tool_use_id` (top-level) +
+        // `duration_ms` so the frontend pairing layer can locate the
+        // matching call and render the duration. The Rust struct
+        // `ToolResultPayload` does not derive `tool_use_id` at the
+        // top level (it has `request_id` + `tool_use_id` as separate
+        // fields, but the original `TranscriptEntry` projection in
+        // `subagentRuns.ts` only exposed
+        // `payload_json.{content,is_error}`). Adding the field at
+        // serialization time keeps the Rust struct stable.
+        let mut payload_obj = match payload_json {
+            serde_json::Value::Object(m) => m,
+            other => {
+                tracing::warn!(
+                    tool_use_id = %payload.tool_use_id,
+                    "tool_result payload_json not an object; wrapping as-is"
+                );
+                let mut m = serde_json::Map::new();
+                m.insert("raw".into(), other);
+                m
+            }
+        };
+        payload_obj.insert(
+            "tool_use_id".into(),
+            serde_json::Value::String(payload.tool_use_id.clone()),
+        );
+        payload_obj.insert(
+            "duration_ms".into(),
+            serde_json::Value::Number(duration_ms.into()),
+        );
+        let enriched = serde_json::Value::Object(payload_obj);
+        self.record(TranscriptKind::ToolResult, enriched);
     }
 
     fn emit_permission_ask(&self, payload: PermissionAskPayload) {
@@ -1628,5 +1761,201 @@ mod tests {
         TEST_COLLECTOR.with(|c| {
             assert!(c.borrow().is_none(), "no collector armed → no IPC attempted");
         });
+    }
+
+    // ---- B6 PR3 redesign (2026-06-21): tool_use_id + duration_ms payload fields ----
+
+    /// tool_call payload_json carries a top-level `tool_use_id` field
+    /// so the frontend drawer can pair the call with the matching
+    /// result. The Rust `ToolCallPayload` already has an `id` field
+    /// (the LLM-assigned tool_use id); the redesign re-projects it
+    /// as a top-level `tool_use_id` in the stored `payload_json` for
+    /// symmetry with the `tool_result` shape.
+    #[test]
+    fn tool_call_payload_json_includes_tool_use_id() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: "rid".into(),
+            id: "toolu_42".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"path": "/foo"}),
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 1);
+        let entry = &transcript[0];
+        assert_eq!(entry.kind, TranscriptKind::ToolCall);
+        // The payload_json is an object with `tool_use_id` at the top level.
+        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        assert_eq!(
+            pj.get("tool_use_id").and_then(|v| v.as_str()),
+            Some("toolu_42"),
+            "tool_call payload_json must carry top-level tool_use_id"
+        );
+        // The original `id` field is preserved (so any consumer
+        // reading `payload_json.id` still works).
+        assert_eq!(
+            pj.get("id").and_then(|v| v.as_str()),
+            Some("toolu_42"),
+            "original `id` field preserved"
+        );
+        // The original `name` and `input` fields are still present.
+        assert_eq!(pj.get("name").and_then(|v| v.as_str()), Some("read_file"));
+        assert!(pj.get("input").is_some(), "input preserved");
+    }
+
+    /// tool_result payload_json carries a top-level `tool_use_id` +
+    /// `duration_ms` field. The `duration_ms` is the wall-clock gap
+    /// between the matching `emit_tool_call` and this
+    /// `emit_tool_result` (same sink instance). A small sleep
+    /// between the two calls yields a measurable duration.
+    #[test]
+    fn tool_result_payload_json_includes_duration_ms() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: "rid".into(),
+            id: "toolu_p".into(),
+            name: "shell".into(),
+            input: serde_json::json!({"command": "ls"}),
+        });
+        // Sleep for 5ms to ensure the duration is non-zero (avoids
+        // the <1ms-resolution flake where Instant::elapsed returns
+        // 0 on a fast machine).
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        sink.emit_tool_result(&ToolResultPayload {
+            request_id: "rid".into(),
+            tool_use_id: "toolu_p".into(),
+            content: "ok".into(),
+            is_error: false,
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 2);
+        let result_entry = &transcript[1];
+        assert_eq!(result_entry.kind, TranscriptKind::ToolResult);
+        let pj = result_entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
+        assert_eq!(
+            pj.get("tool_use_id").and_then(|v| v.as_str()),
+            Some("toolu_p"),
+            "tool_result payload_json carries top-level tool_use_id"
+        );
+        let duration = pj
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms is u64");
+        // Must be at least 5ms (we slept 5ms); a flaky CI box may
+        // add a few ms of jitter, so accept anything ≥ 4.
+        assert!(
+            duration >= 4,
+            "duration_ms must reflect wall-clock gap, got {duration}"
+        );
+        // Sanity bound: a tool_result right after a tool_call can't
+        // legitimately take >5s in a unit test; the upper bound is
+        // generous to avoid false positives on slow CI.
+        assert!(duration < 5_000, "duration_ms unreasonably large: {duration}");
+        // Original fields preserved.
+        assert_eq!(pj.get("content").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(pj.get("is_error").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    /// Orphan tool_result (no matching tool_call in this sink) is
+    /// gracefully handled: `duration_ms = 0` + the entry still
+    /// lands in the transcript. The frontend pairing layer treats
+    /// it as a standalone "orphan result" card (per PRD §"Failure /
+    /// edge cases"). A `tracing::warn!` is emitted but the test
+    /// does not assert on that (it'd require a custom subscriber).
+    #[test]
+    fn orphan_tool_result_gets_duration_ms_zero() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        // NO preceding tool_call — directly emit a tool_result.
+        sink.emit_tool_result(&ToolResultPayload {
+            request_id: "rid".into(),
+            tool_use_id: "toolu_orphan".into(),
+            content: "partial".into(),
+            is_error: false,
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 1);
+        let pj = transcript[0]
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
+        // tool_use_id still set (the result's own id), but
+        // duration_ms is 0 (no call to measure against).
+        assert_eq!(
+            pj.get("tool_use_id").and_then(|v| v.as_str()),
+            Some("toolu_orphan"),
+        );
+        assert_eq!(
+            pj.get("duration_ms").and_then(|v| v.as_u64()),
+            Some(0),
+            "orphan tool_result must have duration_ms=0"
+        );
+    }
+
+    /// Two consecutive tool_call / tool_result pairs share the
+    /// same `tool_call_received_at` map but each gets its own
+    /// independent timing (the first result removes its entry; the
+    /// second call is still tracked).
+    #[test]
+    fn consecutive_pairs_get_independent_durations() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        // First pair.
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: "rid".into(),
+            id: "toolu_a".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({}),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        sink.emit_tool_result(&ToolResultPayload {
+            request_id: "rid".into(),
+            tool_use_id: "toolu_a".into(),
+            content: "a".into(),
+            is_error: false,
+        });
+        // Second pair (longer gap).
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: "rid".into(),
+            id: "toolu_b".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({}),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(8));
+        sink.emit_tool_result(&ToolResultPayload {
+            request_id: "rid".into(),
+            tool_use_id: "toolu_b".into(),
+            content: "b".into(),
+            is_error: false,
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 4);
+        let dur_a = transcript[1]
+            .payload_json
+            .as_object()
+            .unwrap()
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap();
+        let dur_b = transcript[3]
+            .payload_json
+            .as_object()
+            .unwrap()
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap();
+        // dur_b must be > dur_a (we slept longer for the second pair).
+        // We use `>=` because the sleep timing can drift ±1ms on
+        // slow CI, and we just need to confirm "second is at least
+        // as long as first" — not strict ordering.
+        assert!(
+            dur_b >= dur_a,
+            "second pair ({dur_b}ms) should be at least as long as first ({dur_a}ms)"
+        );
+        // Both durations must be at least the sleep amount (with
+        // some slack for clock granularity).
+        assert!(dur_a >= 1, "dur_a < 1ms is implausible, got {dur_a}");
+        assert!(dur_b >= 4, "dur_b < 4ms is implausible (we slept 8ms), got {dur_b}");
     }
 }

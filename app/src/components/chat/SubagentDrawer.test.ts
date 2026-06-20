@@ -111,21 +111,24 @@ describe("SubagentDrawer", () => {
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", sampleRow);
     store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep", input: { pattern: "foo" } } },
-      { kind: "tool_result", payload_json: { content: "match" } },
+      { kind: "tool_call", payload_json: { name: "grep", input: { pattern: "foo" }, tool_use_id: "tu-1" } },
+      { kind: "tool_result", payload_json: { content: "match", is_error: false, tool_use_id: "tu-1", duration_ms: 12 } },
     ]);
     await store.openDrawer("run-1");
     await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
-    const entries = document.body.querySelectorAll(".subagent-drawer__entry");
-    expect(entries.length).toBe(2);
-    // Kind labels rendered.
-    const labels = [...document.body.querySelectorAll(".subagent-drawer__kind")].map(
-      (e) => e.textContent?.trim() ?? "",
-    );
-    expect(labels).toEqual(["call", "result"]);
+    // B6 PR3 redesign (2026-06-21): the call+result pair merges
+    // into a single `.tool-card` entry, so 2 raw transcript
+    // entries → 1 rendered card.
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    // The merged card's header shows the tool name + a status
+    // row with `done` + a duration label.
+    const card = cards[0];
+    expect(card.textContent).toContain("grep");
+    expect(card.textContent).toContain("done");
     w.unmount();
   });
 
@@ -134,7 +137,12 @@ describe("SubagentDrawer", () => {
     store.getRunCache.set("run-1", {
       ...sampleRow,
       transcriptJson: JSON.stringify([
-        { kind: "tool_call", payload_json: { name: "read_file" } },
+        // B6 PR3 redesign: the tool_call/tool_result pair merges
+        // into one card. The permission_ask stays standalone.
+        // 3 raw transcript entries → 2 rendered cards (one
+        // merged, one standalone).
+        { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
+        { kind: "tool_result", payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
         // FT-F-001 stage 2 (check phase fix 2026-06-20): the Rust
         // `PermissionAskPayload` serializes with `#[serde(rename_all =
         // "camelCase")]`, so the actual stored payload_json carries
@@ -154,8 +162,9 @@ describe("SubagentDrawer", () => {
     const w = makeDrawer();
     await flushPromises();
 
-    const entries = document.body.querySelectorAll(".subagent-drawer__entry");
-    expect(entries.length).toBe(2);
+    // 2 cards: 1 paired (read_file call+result) + 1 standalone (permission_ask).
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(2);
     w.unmount();
   });
 
@@ -163,20 +172,21 @@ describe("SubagentDrawer", () => {
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", sampleRow);
     store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep" } },
+      { kind: "tool_call", payload_json: { name: "grep", tool_use_id: "tu-1" } },
       { kind: "chat_event", payload_json: { text: "verbose delta" } },
-      { kind: "tool_result", payload_json: { content: "match" } },
+      { kind: "tool_result", payload_json: { content: "match", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
     ]);
     await store.openDrawer("run-1");
     await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
-    // Default: 2 visible (chat_event hidden).
-    let entries = document.body.querySelectorAll(".subagent-drawer__entry");
-    expect(entries.length).toBe(2);
+    // Default: 1 card (the chat_event is hidden; tool_call +
+    // tool_result are merged into a single paired card).
+    let cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
 
-    // Toggle on.
+    // Toggle on — chat_event now visible (2 cards).
     const checkbox = document.body.querySelector(
       ".subagent-drawer__toggle input",
     ) as HTMLInputElement;
@@ -184,8 +194,8 @@ describe("SubagentDrawer", () => {
     checkbox.dispatchEvent(new Event("change"));
     await flushPromises();
 
-    entries = document.body.querySelectorAll(".subagent-drawer__entry");
-    expect(entries.length).toBe(3);
+    cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(2);
     w.unmount();
   });
 
@@ -289,13 +299,20 @@ describe("SubagentDrawer", () => {
     w.unmount();
   });
 
-  it("kind badge labels cover all four TranscriptKind values", async () => {
+  it("all four TranscriptKind values render as their own card when chat events are visible", async () => {
+    // B6 PR3 redesign (2026-06-21): the old per-row `.subagent-drawer__kind`
+    // badge is gone. Each card now surfaces the kind via either the
+    // tool name (in `.tool-card__name`) for tool_call/result, the
+    // call name + "(ask collapsed)" suffix for permission_ask, or
+    // the "chat event" label for chat_event entries. This test
+    // asserts each kind produces a card with the right surface
+    // affordance.
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", sampleRow);
     store.liveTranscript.set("run-1", [
       { kind: "chat_event", payload_json: { kind: "start" } },
-      { kind: "tool_call", payload_json: { name: "x" } },
-      { kind: "tool_result", payload_json: { content: "y", is_error: false } },
+      { kind: "tool_call", payload_json: { name: "x", tool_use_id: "tu-1" } },
+      { kind: "tool_result", payload_json: { content: "y", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
       // FT-F-001 stage 2 (check phase fix 2026-06-20): permission_ask
       // routes through synthesizeAsk. The Rust PermissionAskPayload
       // serializes with camelCase, so the production-realistic fixture
@@ -320,10 +337,19 @@ describe("SubagentDrawer", () => {
     checkbox.dispatchEvent(new Event("change"));
     await flushPromises();
 
-    const labels = [...document.body.querySelectorAll(".subagent-drawer__kind")].map(
-      (e) => e.textContent?.trim() ?? "",
-    );
-    expect(labels.sort()).toEqual(["call", "chat", "perm", "result"]);
+    // 3 cards total: chat_event (1) + paired call+result (1) + permission_ask (1).
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(3);
+    // The paired card header shows the tool name.
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("x"); // tool_call name
+    expect(text).toContain("chat event"); // standalone chat_event label
+    expect(text).toContain("shell"); // permission_ask toolName
+    // The PermissionAskBody's historical note uses the phrasing
+    // "ask collapsed (worker context)" (see the body component
+    // for the exact wording). Asserting "ask collapsed" matches
+    // the existing production behavior.
+    expect(text).toContain("ask collapsed");
     w.unmount();
   });
 
@@ -988,6 +1014,284 @@ describe("SubagentDrawer", () => {
     // aggregate).
     expect(text).not.toContain("input_tokens");
     expect(text).not.toContain("output_tokens");
+    w.unmount();
+  });
+
+  // -------------------------------------------------------------------
+  // B6 PR3 redesign (2026-06-21): tool-card style entries. Each
+  // `tool_call` + `tool_result` pair merges into a single `.tool-card`
+  // matching the main panel's visual language. Covers the AC list
+  // from the prd.md §"Acceptance Criteria — Frontend":
+  //   - call+result merged into one card
+  //   - 3px left border by tool name (cyan/emerald/amber)
+  //   - tool_result duration_ms shown
+  //   - error entry turns the whole card red
+  //   - permission_ask with amber left border
+  //   - chat_event with muted left border
+  //   - pending_call within 30s shows running indicator
+  //   - orphan call past 30s falls back to standalone
+  //   - orphan result (no preceding call) shows standalone
+  // -------------------------------------------------------------------
+
+  it("paired call+result renders as a single .tool-card with the right name + duration", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "tool_call",
+        payload_json: { name: "read_file", input: { path: "/x" }, tool_use_id: "tu-1" },
+      },
+      {
+        kind: "tool_result",
+        payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 250 },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // ONE merged card, not two.
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    // Header: tool name + path + status text + duration.
+    const card = cards[0];
+    expect(card.querySelector(".tool-card__name")?.textContent).toBe("read_file");
+    expect(card.querySelector(".tool-card__path")?.textContent).toContain("/x");
+    expect(card.querySelector(".tool-card__status")?.textContent).toContain("done");
+    // Duration chip: 250ms → "0.3s" via abbreviateDuration.
+    expect(card.querySelector(".tool-card__duration")?.textContent).toBe("0.3s");
+    // Body: shared ToolInputBody + ToolOutputBody mount.
+    expect(w.findAllComponents(ToolInputBody).length).toBe(1);
+    expect(w.findAllComponents(ToolOutputBody).length).toBe(1);
+    // The input body's name prop comes from the call.
+    expect(w.findAllComponents(ToolInputBody)[0].props("name")).toBe("read_file");
+    // The output body's durationMs prop is forwarded (250).
+    expect(w.findAllComponents(ToolOutputBody)[0].props("durationMs")).toBe(250);
+    w.unmount();
+  });
+
+  it("paired card's left border color follows the tool name (read_file=cyan)", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
+      { kind: "tool_result", payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 1 } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const card = document.body.querySelector(".tool-card") as HTMLElement;
+    // Inline style is the project's mechanism for per-tool accent
+    // (no global class per tool name; the template writes
+    // borderLeftColor via the toolAccentVar helper).
+    expect(card.style.borderLeftColor).toBe("var(--color-tool-read)");
+    w.unmount();
+  });
+
+  it("paired card turns red when the tool_result reports is_error=true", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-1" } },
+      { kind: "tool_result", payload_json: { content: "boom", is_error: true, tool_use_id: "tu-1", duration_ms: 50 } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const card = document.body.querySelector(".tool-card") as HTMLElement;
+    expect(card.classList.contains("tool-card--error")).toBe(true);
+    // The status row shows the error color.
+    expect(card.querySelector(".tool-card__status")?.textContent).toContain("error");
+    // The duration chip is still rendered.
+    expect(card.querySelector(".tool-card__duration")?.textContent).toBe("0.1s");
+    w.unmount();
+  });
+
+  it("pending_call (no result within 30s) shows running… indicator on an amber card", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      // No `input` field — the test confirms the pending card
+      // suppresses the empty input body (matches the same
+      // empty-input guard the main panel's `ToolCallCard` uses
+      // per `ToolInputBody`'s `Object.keys(input).length > 0`
+      // check).
+      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-pending" } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // ONE card (the pending call), with the --running class.
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    const card = cards[0];
+    expect(card.classList.contains("tool-card--running")).toBe(true);
+    // Status row says "running…".
+    expect(card.querySelector(".tool-card__status")?.textContent?.trim()).toBe("running…");
+    // Left border is amber (--color-tool-shell).
+    expect((card as HTMLElement).style.borderLeftColor).toBe("var(--color-tool-shell)");
+    // No output body (no result yet).
+    expect(w.findAllComponents(ToolOutputBody).length).toBe(0);
+    // No input body (the call has no input fields, matches the
+    // empty-input guard). Add a second test below for the
+    // "with input" path.
+    expect(w.findAllComponents(ToolInputBody).length).toBe(0);
+    w.unmount();
+  });
+
+  it("pending_call WITH input renders the input body in the pending card", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-pending-2", input: { command: "ls" } } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // ONE card (the pending call). Input body is present because
+    // the call has `command` in its input — the user gets to see
+    // what the worker is currently working on.
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    expect(cards[0].classList.contains("tool-card--running")).toBe(true);
+    expect(w.findAllComponents(ToolInputBody).length).toBe(1);
+    expect(w.findAllComponents(ToolInputBody)[0].props("input")).toEqual({ command: "ls" });
+    w.unmount();
+  });
+
+  it("orphan tool_result (no preceding call) renders as a standalone result card", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_result", payload_json: { content: "orphan", is_error: false, tool_use_id: "tu-ghost", duration_ms: 5 } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    // No name (the result doesn't carry a `name` field, so the
+    // header falls back to a generic "tool result" label).
+    const card = cards[0];
+    expect(card.querySelector(".tool-card__name")?.textContent).toBe("tool result");
+    // Output body is present.
+    expect(w.findAllComponents(ToolOutputBody).length).toBe(1);
+    w.unmount();
+  });
+
+  it("permission_ask renders as a standalone card with amber left border", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "permission_ask",
+        payload_json: {
+          rid: "r-1",
+          sessionId: "sess-1",
+          toolUseId: "tu-1",
+          toolName: "write_file",
+          toolInput: { path: "/data/repo/src/x.ts" },
+          risk: "medium",
+          path: "/data/repo/src/x.ts",
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const card = document.body.querySelector(".tool-card") as HTMLElement;
+    expect(card).not.toBeNull();
+    // Header name shows the tool + " (ask collapsed)" suffix.
+    expect(card.querySelector(".tool-card__name")?.textContent).toContain("write_file");
+    expect(card.querySelector(".tool-card__name")?.textContent).toContain("(ask collapsed)");
+    // Left border: amber (--color-tool-shell).
+    expect(card.style.borderLeftColor).toBe("var(--color-tool-shell)");
+    // Body: PermissionAskBody in historical mode.
+    expect(w.findAllComponents(PermissionAskBody).length).toBe(1);
+    expect(w.findAllComponents(PermissionAskBody)[0].props("mode")).toBe("historical");
+    w.unmount();
+  });
+
+  it("chat_event renders as a standalone card with muted gray left border", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "chat_event", payload_json: { kind: "start" } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    // Show chat events so the card is visible.
+    const w = makeDrawer();
+    await flushPromises();
+    const checkbox = document.body.querySelector(
+      ".subagent-drawer__toggle input",
+    ) as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    await flushPromises();
+
+    const card = document.body.querySelector(".tool-card") as HTMLElement;
+    expect(card).not.toBeNull();
+    // Header name: "chat event".
+    expect(card.querySelector(".tool-card__name")?.textContent).toBe("chat event");
+    // Left border: muted gray (--color-text-muted).
+    expect(card.style.borderLeftColor).toBe("var(--color-text-muted)");
+    // Body: WorkerTextTimeline.
+    expect(w.findAllComponents(WorkerTextTimeline).length).toBe(1);
+    w.unmount();
+  });
+
+  it("a worker transcript with three paired calls + a chat_event renders as 4 cards", async () => {
+    // Realistic worker transcript: 3 tool_call+tool_result pairs +
+    // 1 chat_event. With chat events hidden, expect 3 cards
+    // (each pair merged into one). Toggle chat events on, expect
+    // 4 cards.
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
+      { kind: "tool_result", payload_json: { content: "a", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
+      { kind: "chat_event", payload_json: { kind: "delta", text: "noise" } },
+      { kind: "tool_call", payload_json: { name: "write_file", tool_use_id: "tu-2" } },
+      { kind: "tool_result", payload_json: { content: "b", is_error: false, tool_use_id: "tu-2", duration_ms: 10 } },
+      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-3" } },
+      { kind: "tool_result", payload_json: { content: "c", is_error: true, tool_use_id: "tu-3", duration_ms: 20 } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // Default (chat events hidden): 3 cards (one per pair).
+    let cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(3);
+    // The shell one is the error card.
+    const errorCards = document.body.querySelectorAll(".tool-card--error");
+    expect(errorCards.length).toBe(1);
+
+    // Toggle chat events on: 4 cards.
+    const checkbox = document.body.querySelector(
+      ".subagent-drawer__toggle input",
+    ) as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    await flushPromises();
+
+    cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(4);
     w.unmount();
   });
 });
