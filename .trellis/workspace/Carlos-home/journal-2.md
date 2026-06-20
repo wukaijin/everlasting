@@ -1230,3 +1230,116 @@ deepseek-v4-flash 经 wukaijin anthropic 中转 turn-2+ 400 根因: Anthropic→
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 39: B6 review defect A — 修 worker system_prompt dead code
+
+**Date**: 2026-06-21
+**Task**: `.trellis/tasks/06-21-fix-worker-system-prompt-dead-code`
+**Branch**: `main`
+
+### Summary
+
+B6 review `docs/review/b6-subagent-assessment.md` §2 标记的 "关键缺陷" 修复：`_worker_system_prompt = assemble_subagent_prompt(def, task)` 在 `chat_loop.rs:2052` 被丢弃（PR1b 已知 deviation），导致 worker 实际拿到 parent 的 system prompt — prompt 与权限行为矛盾，SubagentDef.system_prompt 完全 dead code。
+
+最小修复：`run_chat_loop` 加 23rd param `system_prompt_override: Option<String>`。worker 路径（`run_subagent` → 嵌套 `run_chat_loop`）传 `Some(assemble_subagent_prompt(def, task))`；parent 路径（chat 命令）传 `None`。内部加守卫：`override.is_some()` 直接使用，`None` 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`。
+
+波及面：`tests.rs` 34 处 `run_chat_loop` test caller + `chat.rs` production caller + `mock.rs` 加 `sent_systems()` side-channel（让 test 能验证 worker 实际送达 LLM 的 system prompt）。`run_chat_loop` 已有 `#[allow(clippy::too_many_arguments)]`，无 lint debt 增量。
+
+Trellis 流程：create → brainstorm (Q1-4 一气问完，4 个 Option 各 1 个 ask,PRD finalize) → jsonl 注入 4 个 spec → start → 并行 dispatch implement + drawer implement → 两个 merge 干净 → 串行 dispatch check → check agent 自动 fix 5 处 spec doc 滞后 + 1 处 b6 review 测试计数 → DEBT.md 不增项（defect A 已 closed）。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/chat_loop.rs`:run_chat_loop 22 → 23 params,内部守卫,移除 dead code + 7 行 "PR1b Deviation" 注释
+- `app/src-tauri/src/agent/chat.rs`:production caller 加 `None`
+- `app/src-tauri/src/agent/subagent.rs`:`assemble_subagent_prompt` doc comment 改 "active since 2026-06-21"
+- `app/src-tauri/src/agent/tests.rs`:34 个 test caller 加 `None`;+2 测试 (`system_prompt_override_worker_path_sends_override` + `_none_path_uses_parent_assembly`)
+- `app/src-tauri/src/llm/provider/mock.rs`:+`sent_systems: Arc<Mutex<Vec<Option<String>>>>` side-channel
+- `docs/review/b6-subagent-assessment.md` §2:defect A 标 ✅ 已修复(2026-06-21)
+- `.trellis/spec/backend/agent-loop-architecture.md` / `tool-contract.md` / `index.md`:refresh 22→23 param signature + "5 new params" table
+- `.trellis/reviews/DEBT.md`:无新增(defect A closed,无遗留债)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fadd14b` | fix(subagent): worker system_prompt override (B6 review defect A) |
+| `b1af2d8` | Merge fix(subagent): worker system_prompt override (B6 review defect A) |
+| `077d850` | fix(subagent): check-phase follow-ups (spec docs + review mark) |
+| `4d16e4c` | chore(task): archive 06-21-fix-worker-system-prompt-dead-code |
+
+### Testing
+
+- cargo test --lib **756 pass** (752 → 754 pre-existing → 756; +2 new `system_prompt_override_*` tests)
+- cargo check --lib **clean** (1 pre-existing unrelated dead_code warning in `background_shell/in_memory.rs:746 fn rt()`)
+- cargo test --lib agent_loop: 36 integration tests pass (35 → 36)
+- vue-tsc --noEmit: clean (backend-only task, no frontend changes)
+
+### Status
+
+[OK] **Completed** — implementation correct, regression covered by 2 new tests, spec docs refreshed.
+
+### Next Steps
+
+- RULE-BackSubagent-001 (P2): worker error → parent partial transcript context（独立任务待建）
+- v2 OOS：worker 模型覆盖 / context_window 覆盖 / wall-clock 超时（roadmap 第二档剩余 5 项）
+
+---
+
+## Session 40: SubagentDrawer entry 重写为 tool-card 样式 + transcript pairing
+
+**Date**: 2026-06-21
+**Task**: `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style`
+**Branch**: `main`
+
+### Summary
+
+Drawer 内每条 transcript entry 从扁平 `<kind-badge> + <body>` 重写为 `ToolCallCard` 同款 `.tool-card` 结构（3px 彩色左边框 + 单行 header + body），视觉与主面板 dispatch_subagent 卡片严格一致。call+result 配对合并为一张卡（按新加的 `tool_use_id` 字段）。
+
+后端：SubagentBufferSink 加 `tool_call_received_at: HashMap<String, Instant>`，record_tool_call 时存 Instant + 写 `tool_use_id`，record_tool_result 时查 Instant 算 `duration_ms` + 写 `tool_use_id` + `duration_ms`。Orphan tool_result fallback `duration_ms=0` + `tracing::warn!`。
+
+前端：`transcriptPairing.ts` 新文件，纯函数 `pairTranscript(entries, now, pendingFirstSeenAt)` → `BufferedTranscriptEntry[]`（paired | pending_call | standalone）。PENDING_TIMEOUT_MS = 30_000，pending call 卡 30s 后强制 flush 为 standalone + amber 边框。Drawer entry 改用 `.tool-card` 容器，3s interval 重算 bufferedTranscript（用 nowTick ref 触发 reactivity）。
+
+Trellis check agent 抓到 2 个 HIGH bug + 3 个 LOW cleanup：
+1. **HIGH**：`bufferedTranscript` computed 用了 `Date.now()` 而非 `nowTick.value`，Vue reactivity 没注册依赖，pending call 永远不会 age out。fix：传 `nowTick.value`。
+2. **HIGH**：`pairTranscript` standalone 分支 `pendingFirstSeenAt.delete(id)` 后下轮 `.set(id, now)` 重置 timer → 卡片每 30s 闪一次。fix：standalone 分支不再 delete（只 successful-pair 分支保留 delete）。
+3. LOW：冗余 `padding: 0` + `padding: 8px 12px`；unused `tool-card--orphan-call` class binding；缺 pending → standalone 端到端 test。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/subagent.rs`:SubagentBufferSink `tool_call_received_at` HashMap + 3 个 constructor init + emit_tool_call / emit_tool_result 改写 + 4 个新单测
+- `app/src/utils/transcriptPairing.ts`:**新文件** `pairTranscript` 纯函数 + BufferedTranscriptEntry union + PENDING_TIMEOUT_MS
+- `app/src/utils/transcriptPairing.test.ts`:**新文件** 18 个 vitest cases (pair / pending / orphan / chat / timeout boundary)
+- `app/src/stores/subagentRuns.ts`:TranscriptEntry doc comment 扩展 tool_use_id + duration_ms 字段
+- `app/src/components/chat/SubagentDrawer.vue`:bufferedTranscript computed + nowTick interval + entry 重写为 `.tool-card` family + CSS duplicate ~100 行（DEBT-FrontSubagent-001 跟进）
+- `app/src/components/chat/SubagentDrawer.test.ts`:3 改 + 9 新 test cases
+- `.trellis/reviews/DEBT.md`:+RULE-FrontSubagent-001 (P3, CSS dup) + RULE-FrontSubagent-002 (P3, pairTranscript 3rd-param 隐式状态)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `443667e` | feat(subagent): drawer entry tool-card style + transcript pairing |
+| `1d2c3b4` | Merge feat(subagent): drawer entry tool-card style + transcript pairing |
+| `4c97d9a` | fix(subagent): check-phase fixes for drawer pairing (2 high bugs + 3 cleanups) |
+| `2680c13` | docs(debt): record B6 review defect B + drawer check follow-ups |
+| `6e71617` | chore(task): archive 06-21-redesign-subagent-drawer-entry-as-toolcard-style |
+
+### Testing
+
+- cargo test --lib **756 pass** (+4 new subagent.rs unit tests)
+- pnpm exec vitest run: **321 pass** across 21 files (transcriptPairing 18, SubagentDrawer 38 — was 30 + 9 new − 1 retitled)
+- pnpm exec vue-tsc --noEmit: clean
+- pnpm build: clean (vite build OK)
+- 4 unhandled-rejection warnings in streamController.test.ts:pre-existing, unrelated to this change
+
+### Status
+
+[OK] **Completed** — drawer entry 与主面板 ToolCallCard 视觉一致，pairing 逻辑充分测试覆盖；check agent 抓到的 2 个 HIGH bug 已 fix + 端到端 test 加固。
+
+### Next Steps
+
+- RULE-FrontSubagent-001 (P3): 抽 `.tool-card` CSS 到全局 utility class（避免 SubagentDrawer vs ToolCallCard 双源维护）
+- RULE-FrontSubagent-002 (P3): pairTranscript third-param → composable 化（消除隐式 Map 状态）
+- v2 OOS：worker transcript summary 回传 parent context（review defect B，独立任务待建）
