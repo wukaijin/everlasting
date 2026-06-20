@@ -6038,7 +6038,7 @@ async fn system_prompt_override_worker_path_sends_override() {
 }
 
 /// Production path: when `system_prompt_override` is `None`
-/// (the production + 34 existing test path), `run_chat_loop`
+/// (the production + 35 existing test path), `run_chat_loop`
 /// sends the result of `assemble_system_prompt(mode_prefix,
 /// base_prompt)` to the LLM. This is the regression guard that
 /// the parent path is unaffected by the worker-path fix.

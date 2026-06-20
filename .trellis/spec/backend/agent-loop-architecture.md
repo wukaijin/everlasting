@@ -92,12 +92,25 @@ pub async fn run_chat_loop(
     // worker's IPC emit becomes a no-op). `AppHandle` is an `Arc`
     // internally so the clone is cheap.
     app_handle: Option<tauri::AppHandle>,                                              // 22
+    // 2026-06-21 fix (B6 review defect A): worker system prompt
+    // override. When `Some(p)`, the loop uses `p` directly as the
+    // system prompt (skipping `assemble_system_prompt(mode_prefix,
+    // base_prompt)`); when `None`, the loop builds the prompt from
+    // the project + session row. `run_subagent` (worker nested call)
+    // passes `Some(assemble_subagent_prompt(def, &task))`; the
+    // production `chat` command + 36 `agent_loop_*` integration
+    // tests pass `None` (parent path). 4 指令文件 prompt caching is
+    // unaffected — the 4 instructions live in a separate user-role
+    // synthetic message with its own `cache_control: Ephemeral`
+    // breakpoint (see `build_instructions_blocks`), independent of
+    // the system role.
+    system_prompt_override: Option<String>,                                            // 23
 ) { ... }
 ```
 
-### Why 22 parameters (and not a config struct)?
+### Why 23 parameters (and not a config struct)?
 
-The 22 parameters look excessive, but they are the **exact set of state pieces
+The 23 parameters look excessive, but they are the **exact set of state pieces
 the agent loop body needs**, and grouping them into a config struct would:
 
 1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
@@ -105,13 +118,13 @@ the agent loop body needs**, and grouping them into a config struct would:
 2. Add a layer of indirection without adding safety (Rust's borrow checker
    already enforces "use what you need")
 3. Obscure the 1:1 correspondence between production and test call sites
-   (the 35 `agent_loop_*` integration tests, including the 5 B6 worker tests
+   (the 36 `agent_loop_*` integration tests, including the 5 B6 worker tests
    and 1 B6 PR2b end-to-end test, pass them in the same order, with the same
    types — a config struct would let them diverge silently)
 
 `#[allow(clippy::too_many_arguments)]` is the deliberate cost of keeping the
 dependency surface explicit. **Do not refactor this into a struct** without
-re-running all 35 integration tests + cargo check.
+re-running all 36 integration tests + cargo check.
 
 #### Evolution log (parameter count grew with new features)
 
@@ -125,6 +138,7 @@ re-running all 35 integration tests + cargo check.
 | 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | persist-site gates inside the function body (PR1 spec: 18 sites; PR2a actual: 16 — see RULE-A-015) |
 | 2026-06-20 | 21 | B6 PR2b (RULE-A-014) | `is_worker: Option<bool>` | thread `is_worker` to nested `run_chat_loop` so Tier 4 `ask_path` / `ask_shell` collapses to `Deny` on the worker path (workers have no UI sink) |
 | 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None` |
+| 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override (pre-fix `_worker_system_prompt` was dead code; the worker silently inherited the parent's `assemble_system_prompt` output, causing prompt/permission contradictions in Edit/Plan mode); production + 36 `agent_loop_*` tests pass `None`, the worker nested call passes `Some(assemble_subagent_prompt(def, &task))` |
 
 The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
 single 2-week window) is the largest single jump. It is justified because
@@ -133,6 +147,12 @@ the worker is a **structural** extension of the agent loop (it re-uses
 below), and the 5 params are the minimal surface needed to keep
 production + worker behavior isolated (session mapping cleanup + DB
 isolation + turn cap + Tier 4 collapse without hang + IPC emit path).
+The follow-up `system_prompt_override` param (2026-06-21, B6 review defect A)
+is a one-shot fix for a dead-code bug in the worker path — it restores the
+worker to its `SubagentDef.system_prompt` after PR1b's nested call had
+silently inherited the parent's `assemble_system_prompt` output (causing
+prompt / permission contradictions in Edit/Plan mode). The 6 total B6 params
+across 5 PRs remain the minimum surface needed.
 
 ### Production + test call site parity
 
@@ -142,22 +162,26 @@ isolation + turn cap + Tier 4 collapse without hang + IPC emit path).
   `resend_seq` + `max_turns`, `false` for both `skip_session_active` and
   `skip_persist`, `Some(false)` for `is_worker` (production is never a
   worker; the explicit `Some(false)` makes the production-style default
-  obvious at the call site, matching PR2b's contract), and
+  obvious at the call site, matching PR2b's contract),
   `Some(app.clone())` for `app_handle` (PR2 hotfix: production threads a
   real `AppHandle` so the worker's `SubagentBufferSink` can emit
-  `subagent:event` to the frontend).
+  `subagent:event` to the frontend), and `None` for
+  `system_prompt_override` (production is never a worker, so the parent's
+  `assemble_system_prompt(mode_prefix, base_prompt)` path runs unchanged).
 - **Tests**: `app/src-tauri/src/agent/tests.rs::agent_loop_basic_text_only_completes`
-  and 34 sibling tests pass a `MockProvider` + `MockEmitter` for the
+  and 35 sibling tests pass a `MockProvider` + `MockEmitter` for the
   `Arc<dyn Provider>` and `Arc<dyn ChatEventSink>` parameters. Other
   parameters are real (test DB, real `MemoryCache`, real `PermissionStore`,
   real `ReadGuard`). Tests pass `Some(false)` for `is_worker` to make the
-  non-worker test surface explicit, and `None` for `app_handle` (no Tauri
+  non-worker test surface explicit, `None` for `app_handle` (no Tauri
   runtime — the worker's IPC emit path becomes a no-op; the worker's
   `SubagentBufferSink` is constructed via
   `SubagentBufferSink::new_without_app_handle` so transcript accumulation
-  still works).
+  still works), and `None` for `system_prompt_override` (the production +
+  test path runs through `assemble_system_prompt(mode_prefix,
+  base_prompt)` unchanged).
 
-The 22-parameter signature is **production-ready as written** — no test-only
+The 23-parameter signature is **production-ready as written** — no test-only
 gating (no `#[cfg(test)]`), no compile-time `dead_code` allowance, no
 runtime branching on `cfg!(test)`.
 
@@ -193,6 +217,7 @@ tauri::async_runtime::spawn(async move {
         false,                         // 20: skip_persist (production persists normally)
         Some(false),                   // 21: is_worker (production is never a worker)
         Some(app.clone()),             // 22: app_handle (production threads real AppHandle for worker subagent:event emit)
+        None,                          // 23: system_prompt_override (production is never a worker; parent assemble_system_prompt path runs unchanged)
     ).await;
 });
 ```
@@ -212,6 +237,7 @@ run_chat_loop(
     false,                         // 20
     Some(false),                   // 21
     None,                          // 22: app_handle (tests have no Tauri runtime; worker IPC emit becomes a no-op)
+    None,                          // 23: system_prompt_override (production-style caller — parent assemble_system_prompt path runs unchanged)
 ).await;
 ```
 
@@ -342,12 +368,17 @@ from the parent's session DB / cancel maps.
 **Solution**: Reuse `run_chat_loop` **recursively** as the worker's
 executor. The worker IS just another `run_chat_loop` invocation, but
 with 4 surgical guards (`max_turns` / `skip_session_active` / `skip_persist` /
-`is_worker`) that keep its behavior isolated from the parent.
+`is_worker`) that keep its behavior isolated from the parent. The 2026-06-21
+fix (B6 review defect A) adds a 5th element: `system_prompt_override: Some(p)`
+threads the worker's `SubagentDef.system_prompt` so the worker actually sees
+its role prompt instead of the parent's (the pre-fix `_worker_system_prompt`
+was dead code — see the run_chat_loop doc comment + the
+`assemble_subagent_prompt` doc comment for the full rationale).
 
 ```rust
 // agent/chat_loop.rs::run_subagent (~:1802) — the interceptor helper
 // captures the parent's run_chat_loop closure dependencies and spawns
-// the worker with the 4 isolation flags.
+// the worker with the 4 isolation flags + the system_prompt override.
 Box::pin(run_chat_loop(
     worker_tool_defs,                        // filter_tools_for_subagent(builtin, def)
     provider.clone(),
@@ -371,6 +402,7 @@ Box::pin(run_chat_loop(
     true,                                    // 20: skip_persist (worker turns stay in-memory)
     Some(true),                              // 21: is_worker (worker path → Tier 4 collapses to Deny)
     app_handle,                              // 22: forward parent AppHandle so worker's SubagentBufferSink can emit subagent:event (None in tests)
+    Some(assemble_subagent_prompt(def, &task)),  // 23: worker overrides the parent's assemble_system_prompt with its SubagentDef.system_prompt
 )).await;
 ```
 
@@ -378,15 +410,17 @@ Box::pin(run_chat_loop(
 
 The worker harness is the **same loop**: turn boundaries, C3 compaction,
 tool execution, error/cancel paths, emit, persist. Duplicating it would
-re-introduce the faithful-port drift hazard (see Pattern above). The 5
-new params are the minimal surface needed to isolate the worker from the
-parent + wire its IPC emit path; every other param is reused as-is.
+re-introduce the faithful-port drift hazard (see Pattern above). The 6
+new params (4 isolation flags + the AppHandle IPC bridge + the system_prompt
+override) are the minimal surface needed to isolate the worker from the
+parent + wire its IPC emit path + thread the worker's role prompt; every
+other param is reused as-is.
 
 `Box::pin` breaks the async-fn recursion size-infinite Future chain
 (workers have `dispatch_subagent` stripped, so depth is bounded at 1,
 but the compiler can't prove this).
 
-### The 5 isolation flags
+### The isolation flags + role-prompt override
 
 | Flag | Value | What it prevents |
 |---|---|---|
@@ -395,6 +429,7 @@ but the compiler can't prove this).
 | `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; **16** function-body gates cover all persist sites (PR1 spec said 18; PR2a RULE-A-015 corrected 2 over-broad gates) |
 | `is_worker: Some(true)` | B6 PR2b | worker's Tier 4 `ask_path` / `ask_shell` emitting `permission:ask` → register into `permission_asks` → wait for oneshot (never comes — worker has no UI sink) → **hang until user Stop** (RULE-A-014). With this flag, the Tier 4 branch sees `ctx.is_worker = true` and collapses to `Decision::Deny` immediately |
 | `app_handle: Some(parent's handle)` | B6 PR3 (PR2 hotfix) | worker's `SubagentBufferSink` would otherwise have no IPC emit path → frontend `<SubagentDrawer>` (PR3b) cannot stream the worker's transcript live (the worker would have to finish before the drawer sees anything). Forwarding the parent's `AppHandle` lets the sink emit `subagent:event` per worker emit; tests pass `None` so the emit path becomes a no-op (no Tauri runtime) |
+| `system_prompt_override: Some(assemble_subagent_prompt(def, &task))` | B6 review defect A fix (2026-06-21) | worker previously inherited the parent's `assemble_system_prompt(mode_prefix, base_prompt)` output (`SubagentDef.system_prompt` was dead code — `_worker_system_prompt` discarded at `chat_loop.rs:2052`), producing prompt / permission contradictions in Edit/Plan mode (worker told "you can write" but Tier 4 collapsed write tools to `Deny`). With this flag, the loop uses `def.system_prompt` verbatim for the worker; tests + production pass `None` so the parent's `assemble_system_prompt` path runs unchanged. 4 指令文件 prompt caching is unaffected — the 4 instructions live in a separate user-role synthetic message with its own `cache_control: Ephemeral` breakpoint, independent of the system role |
 
 ### Tool interception (NOT `execute_tool_inner`)
 
@@ -817,15 +852,17 @@ markdown rendering handles both markers uniformly.
 | `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014 + RULE-A-016: parent Edit mode + `general-purpose` worker + `write_file` to path outside `permission_ctx.cwd` → `tokio::time::timeout(15s)` wraps the worker; Tier 4 `ask_path` sees `ctx.is_worker=true` → `Decision::Deny` IMMEDIATELY (no oneshot wait, no hang); tool_result is `is_error: true` with deny reason. RULE-A-016 (closed B6 PR3a 2026-06-20): the worker's deny does NOT write a `tool_denied` row to the parent's `session_audit_events`; instead `ask_path` emits a `PermissionAskPayload` via the sink → `SubagentBufferSink::emit_permission_ask` records a `TranscriptKind::PermissionAsk` entry in the worker's transcript. The test asserts `tool_denied count == 0` in parent audit + `permission_ask count == 1` in worker transcript + audit delta ≤ 2 (only parent's `tool_allowed` + `tool_executed` for `dispatch_subagent`). |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
+| `system_prompt_override_worker_path_sends_override` | B6 review defect A fix (2026-06-21): worker path passes `Some(assemble_subagent_prompt(def, &task))` as the 23rd `system_prompt_override` parameter; `MockProvider::sent_systems()` captures the system prompt the LLM actually receives, and the test asserts it equals `SubagentDef.system_prompt` (NOT the parent's `assemble_system_prompt(mode_prefix, base_prompt)` output — which was the pre-fix bug). The negative guard `!received.contains("Yolo mode"|"Edit mode"|"Plan mode")` locks that the parent's `mode_prefix` does not leak into the worker's prompt. |
+| `system_prompt_override_none_path_uses_parent_assembly` | B6 review defect A fix (2026-06-21): regression guard that the parent path (`None` override) still goes through `assemble_system_prompt(mode_prefix, base_prompt)` unchanged — recomputes the expected prompt for the harness's project + session row and asserts the LLM received that exact string |
 
-All 26 must pass on every change to `run_chat_loop`. If any fails, the
+All 28 must pass on every change to `run_chat_loop`. If any fails, the
 production call site in `chat.rs` is **at risk** of the same defect
 (failing the integration test means production would also fail).
 
-The 5 B6 worker tests use the same `MockProvider` + `MockEmitter`
+The 5 B6 worker tests + the 2 new `system_prompt_override_*` tests use the same `MockProvider` + `MockEmitter`
 fixture as the existing 17 base tests — no test-internal mock of the
 worker; the worker runs against the same `run_chat_loop` recursion
-that production would use, just with the 4 isolation flags set.
+that production would use, just with the 5 isolation flags set.
 
 The 4 B6 PR2a + 1 PR2b tests cover the persistence + audit + RULE-A-014
 invariants on top of the PR1 worker surface. The 7 `subagent_runs::tests_*`

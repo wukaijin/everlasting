@@ -613,9 +613,10 @@ pub enum ChecklistStatus { Pending, InProgress, Done }   // wire: "pending"/"in_
 pub struct ChecklistItem { pub content: String, pub status: ChecklistStatus }
 
 /// Per-request handle. NOT a run_chat_loop parameter — it lives inside ToolContext
-/// (built once per run_chat_loop call ~chat_loop.rs:216), so run_chat_loop's 21-param
+/// (built once per run_chat_loop call ~chat_loop.rs:216), so run_chat_loop's 23-param
 /// signature is UNCHANGED by the checklist addition (no agent_loop_* test call-site
-/// sync needed; B6 PR2b already raised it from 20→21 for `is_worker: Option<bool>`).
+/// sync needed; the B6 cluster + the 2026-06-21 B6 review defect A fix raised it from
+/// 21→23 for `app_handle` + `system_prompt_override` respectively).
 pub type ChecklistHandle = Arc<Mutex<Vec<ChecklistItem>>>;
 pub fn new_handle() -> ChecklistHandle;                  // fresh empty, once per run
 ```
@@ -800,10 +801,12 @@ Box::pin(run_chat_loop(
     true,                                    // 19: skip_session_active(REVIEW-SUBAGENT-PRD #2)
     true,                                    // 20: skip_persist(worker 中间过程不进 DB)
     Some(true),                              // 21: is_worker(RULE-A-014, worker Tier 4 ask_path → Deny)
+    app_handle,                              // 22: 转发父 AppHandle,worker SubagentBufferSink 可走 subagent:event IPC(测试 None)
+    Some(assemble_subagent_prompt(def, task)), // 23: worker 覆写父 system_prompt(B6 review defect A 修复)
 )).await;
 ```
 
-#### `run_chat_loop` 4 个新参数(PR1a + PR1b + PR2b)
+#### `run_chat_loop` 5 个新参数(PR1a + PR1b + PR2b + PR3 + 06-21 fix)
 
 | # | 参数 | PR | 用途 |
 |---|---|---|---|
@@ -811,6 +814,8 @@ Box::pin(run_chat_loop(
 | 19 | `skip_session_active: bool` | PR1b | `CancellationGuard::drop` 时跳过 `session_active_request.remove(session_id)`。worker 传 `true` 避免误删父映射(REVIEW-SUBAGENT-PRD #2 / RULE-E-005 不破坏) |
 | 20 | `skip_persist: bool` | PR1b + PR2a fix | run_chat_loop 函数体内 **16 处**(PR1 spec 写 18,PR2a RULE-A-015 拆出 2 处:`add_token_usage` 应 streaming 累加进父 sessions 表,不在 messages 表 UNIQUE 范围内;terminal `Done` emit 必经 sink 才能让 `was_cancelled` 正确 catch) `if !skip_persist { ... }` gate 守住所有 persist 站点(persist_turn / update_message_metadata / touch_session / record_*_audit / persist_turn_cwd)。worker 传 `true` 避免与父 `messages` 表 `(session_id, seq)` UNIQUE 约束冲突;worker 中间过程由 `SubagentBufferSink` transcript 捕获(PR2 落 `subagent_runs.transcript_json`) |
 | 21 | `is_worker: Option<bool>` | PR2b (RULE-A-014) | worker 路径传 `Some(true)`,`run_chat_loop` 内部构造 `PermissionContext { is_worker: true }`。让 Tier 4 `ask_path` / `ask_shell` 顶部 `if ctx.is_worker { Decision::Deny }` 路径**可达** —— worker 无 UI sink 弹 modal 会挂起到 user Stop;现在立刻 Deny(`is_error: true` tool_result 回 LLM 自我纠错)。production + 35 个 `agent_loop_*` 集成测试传 `Some(false)` 显式声明非 worker;None 默认 `false`(向后兼容) |
+| 22 | `app_handle: Option<AppHandle>` | PR3 (PR2 hotfix) | 转发父 AppHandle,worker SubagentBufferSink 才能 emit `subagent:event` IPC channel(否则 PR3 drawer 看不到 worker transcript live streaming)。production 传 `Some(app.clone())`,tests 传 `None`(无 Tauri runtime,emit 路径变 no-op) |
+| 23 | `system_prompt_override: Option<String>` | 06-21 fix (B6 review defect A) | worker 路径传 `Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt` —— pre-fix `_worker_system_prompt = assemble_subagent_prompt(def, task)` 是 dead code(`chat_loop.rs:2052`),worker 实际拿到父的 `assemble_system_prompt(mode_prefix, base_prompt)` 输出,导致 prompt / permission 矛盾(Edit/Plan 模式下 worker prompt 写"可写"但 Tier 4 把写工具 collapse 到 `Deny`)。fix 后 `run_chat_loop` 内部守卫:`Some(p)` → 直接用 `p`;`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`(production + 36 tests 路径)。4 指令文件 prompt caching 不受影响(cache_control breakpoint 在 user role,跟 system 正交) |
 
 ### 3. Contracts
 
@@ -874,7 +879,7 @@ terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `Subage
 
 **Base**:parent turn 1 LLM 派 `general-purpose` 改文件 + main=yolo(继承 yolo,写/shell Tier 4 bypass 早返回 Allow)→ worker 跑 `write_file` + `shell`(无 ask modal 阻塞)→ final text "已修改 3 个文件: ..." → Completed。
 
-**Bad**:parent turn 1 LLM 派 `general-purpose` + main=Edit + `write_file`(触发 Tier 4 ask)→ **RULE-A-014 修复前(B6 PR1b)**:worker 路径构造了 `_worker_permission_ctx { is_worker: true }` 但未 thread 进嵌套 `run_chat_loop`,run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }` → `ask_path` 顶部 `if ctx.is_worker { Deny }` 在嵌套路径不可达 → emit `permission:ask` 等 oneshot(永远等不到,worker 无 UI sink)→ **挂起直到 user Stop**。**RULE-A-014 修复后(B6 PR2b)**:worker 路径传 `is_worker=Some(true)` 给嵌套 `run_chat_loop`,loop 内部 `effective_is_worker = is_worker.unwrap_or(false) = true` → `PermissionContext { is_worker: true }` 构造成功 → Tier 4 `ask_path` 顶部立即 `Decision::Deny`,无 oneshot 等待,无挂起;tool_result `is_error=true` + deny 原因回 LLM 自我纠错。**RULE-A-016 修复后(B6 PR3a 2026-06-20)**:worker deny 不再写父 `session_audit_events`(改走 sink → transcript PermissionAsk entry,见 §3 "audit 不污染父的分工")。回归测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`tokio::time::timeout(15s)` 包裹,若 PR2b 修复回退则卡 oneshot 触发 15s 超时 fail)。
+**Bad**:parent turn 1 LLM 派 `general-purpose` + main=Edit + `write_file`(触发 Tier 4 ask)→ **RULE-A-014 修复前(B6 PR1b)**:worker 路径构造了 `_worker_permission_ctx { is_worker: true }` 但未 thread 进嵌套 `run_chat_loop`,run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }` → `ask_path` 顶部 `if ctx.is_worker { Deny }` 在嵌套路径不可达 → emit `permission:ask` 等 oneshot(永远等不到,worker 无 UI sink)→ **挂起直到 user Stop**。**RULE-A-014 修复后(B6 PR2b)**:worker 路径传 `is_worker=Some(true)` 给嵌套 `run_chat_loop`,loop 内部 `effective_is_worker = is_worker.unwrap_or(false) = true` → `PermissionContext { is_worker: true }` 构造成功 → Tier 4 `ask_path` 顶部立即 `Decision::Deny`,无 oneshot 等待,无挂起;tool_result `is_error=true` + deny 原因回 LLM 自我纠错。**RULE-A-016 修复后(B6 PR3a 2026-06-20)**:worker deny 不再写父 `session_audit_events`(改走 sink → transcript PermissionAsk entry,见 §3 "audit 不污染父的分工")。回归测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`tokio::time::timeout(15s)` 包裹,若 PR2b 修复回退则卡 oneshot 触发 15s 超时 fail)。**B6 review defect A 修复后(2026-06-21)**:worker 路径额外传 `system_prompt_override=Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt`(pre-fix `_worker_system_prompt` 是 dead code)。修后 worker prompt 写"可写"时即真正可写(yolo)、写"只读"时即 read-only(researcher),prompt / 权限行为一致。
 
 ### 6. Tests Required
 
