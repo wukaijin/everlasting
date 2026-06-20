@@ -1024,3 +1024,57 @@ B6 PR3b race fix 已知缺口:ToolCallCard openSubagentDrawer 在 1.5s/5-retry p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 55: doc-trim-2026-06: 拆分/瘦身 7 篇超 600 行 md
+
+**Date**: 2026-06-21
+**Task**: doc-trim-2026-06: 拆分/瘦身 7 篇超 600 行 md
+**Branch**: `main`
+
+### Summary
+
+扫描发现项目里 7 篇 markdown 超 600 行,塞了过多已结案内容(DEBT closed 债项 / BACKLOG 已落地章节 / 错放主题 / 历史 ADR),降低日常查阅与 LLM 上下文加载成本。本次单 commit 完成瘦身:DEBT.md 硬删 ~75% closed 项,保留 9 项 open;BACKLOG.md 删 §0.5 + 已落地 §1/§2 替换为 cross-ref;HACKING-wsl.md 删坑 12(shell spillover 已在 tool-contract.md 文档化);llm-contract.md 2290→465 拆出 3 个大 scenario;database-guidelines.md / IMPLEMENTATION.md 各拆一份独立文件;agent-loop-architecture.md 仅加 cross-ref。
+
+### Main Changes
+
+- DEBT.md 1055→303 (-752): 硬删除 §P0 5 项 / §P1 12 项 closed / §P2 18 项 closed / §P3 6 项 closed / FT 全 6 项 closed / §历史合并追踪 整段,保留 9 项 open (RULE-D-001 / A-005 / A-009 / B-003 / B-006 / B-007 / C-008 / D-007 / D-008) + §Re-evaluation Log;头部加注指向 git log
+- BACKLOG.md 732→532 (-200): 删 §0.5 transition marker;§1/§2 整段替换为一行 cross-ref;§5.1 strikethrough;保留 §0/§3/§4/§5.2/§5.3/附录 A
+- HACKING-wsl.md 613→586 (-27): 删坑 12 (311-338),坑号 1-11 连续
+- agent-loop-architecture.md 829→833 (+4): RULE-A-015 + RULE-A-007 段顶部各加一行 cross-ref 指向 IMPLEMENTATION.md §4
+- database-guidelines.md 1073→811 (-262): subagent_runs (809-1073) 拆出到独立 schema 文件
+- IMPLEMENTATION.md 786→741 (-45): 2026-06-04/05 早期条目 (735-782) 归档
+- llm-contract.md 2290→465 (-1825): Latency Tracking 824L + Token Usage Tracking 574L + Per-Session Mode ⑨ 关 282L 拆出
+
+新建 5 个独立可查文件:
+- `.trellis/spec/backend/subagent-runs-schema.md` (274L, B6 PR2)
+- `.trellis/spec/archive/implementation-inception-2026-06-04-to-05.md` (60L, ARCHIVED 注释)
+- `.trellis/spec/backend/latency-tracking.md` (833L, F5)
+- `.trellis/spec/backend/token-usage-tracking.md` (580L, A4)
+- `.trellis/spec/backend/permission-layer.md` (289L, A2+B7)
+
+净瘦身: 原内容减 3111 行;新建文件加 2036 行(独立可查);项目行数净减 ~1100 行(因 DEBT/BACKLOG 硬删除部分不再备份)。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f5e70a0` | chore(docs): trim 7 over-600-line markdown files (-3111 / +2036 lines in 5 new files) |
+
+### Testing
+
+- [OK] trellis-check PASS 26/26 (open RULE 完整性 / 段落连续性 / cross-ref 链接 / 零副作用验证)
+- [OK] pre-flight grep:tool-contract.md 已有 shell spillover 文档化 (line 7/16/374)
+- [OK] post-flight wc -l:全部 12 文件行数与报告一致
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 已知遗留 (Out of Scope,后续单独任务):
+  - tool-contract.md ⑨ 关段 (1269-1619) 与新 permission-layer.md 重叠 (~350L) — 后续合并
+  - llm-contract.md Future Work (Deferred from Step6) 1381-1392 — 评估是否已过期可删
+  - 4 处 pre-existing 断链 (IMPLEMENTATION.md / archive 子目录历史链接)
+- 用户回 review 后决定是否展开上面 3 个后续
