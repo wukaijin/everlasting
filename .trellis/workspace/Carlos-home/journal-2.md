@@ -513,3 +513,49 @@ B6 PR3 三部分合一落地: (1) PR2 hotfix SubagentBufferSink 加 app_handle +
 ### Next Steps
 
 - None - task complete
+
+## Session 48: DeepSeek-Via-Anthropic-Relay reasoning_content 400 修复 (RULE-D-003)
+
+**Date**: 2026-06-20
+**Task**: `.trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400/`
+**Branch**: `main`
+
+### Summary
+
+DeepSeek-v4 (`deepseek-v4-flash` via wukaijin.com Anthropic Messages 端点) 多轮 400 根因定位 + 修复。DB 4 session 对比 + `RUST_LOG=warn` 复现 + Anthropic SSE 解析 `signature` 字段值（UUID v4 字符串，非 Anthropic 原生 base64）三重证据，定位 wukaijin.com 中转站 thin passthrough 的累积状态校验触发 400。`AnthropicProvider` 单一文件改动（450 insertions / 6 deletions）加 `apply_deepseek_reasoning_fix` 纯函数：双重策略 (A) 注入顶层 `reasoning_content` 字段（Anthropic 非标扩展） + (B) 移除 `signature: ""` 的 thinking 块。7 个新单测覆盖 R1-R4 行为，`cargo test --lib` 739 passed（含 anthropic 18 + openai 35 + wire 20，OpenAI 路径完全未触碰）。Anthropic 原生 Claude extended thinking 路径 1:1 兼容（顶层 `thinking: adaptive` 字段保留，`reasoning_content` 字段被 Anthropic 忽略）。
+
+### Main Changes
+
+- **`app/src-tauri/src/llm/provider/anthropic.rs`** (+450 / -6):
+  - 新增 `pub(crate) fn apply_deepseek_reasoning_fix(&ChatRequest) -> serde_json::Value` 纯函数
+  - `chat_stream_with_tools` 签名 `(config, req: ChatRequest)` → `(config, body: serde_json::Value)`
+  - HTTP POST `.json(&req)` → `.body(body.to_string())`
+  - `tracing::info!` log 字段（model / tools_count / has_system）从 `body` JSON 提取
+  - 7 个新单测（`deepseek_reasoning_fix_*` 前缀）: empty sig 移除 / reasoning_content 注入 / user 跳过 / 顶层 thinking 保留 / 多块拼接 / 无 thinking 不加 reasoning_content / 全部 empty 跳过
+- **`.trellis/spec/backend/llm-contract.md`**: 加 "Scenario: DeepSeek-Via-Anthropic-Relay thinking block fix (RULE-D-003)" 段（7 子段: Scope/Trigger / Root Cause / Fix Contract / Anthropic 原生路径兼容性 / Evidence DB 反推 / Tests Required / Out of Scope Follow-up）
+- **`.trellis/reviews/DEBT.md`**: 加 RULE-D-003 finding (P1 Provider)，closed 回填 8664ab6
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8664ab6` | fix(agent): DeepSeek-Via-Anthropic-Relay reasoning_content 回传 400 (RULE-D-003) |
+| `03f7602` | docs(spec): DeepSeek-Via-Anthropic-Relay 契约 + DEBT.md RULE-D-003 close 回填 8664ab6 |
+| `a6b2ac8` | chore(task): archive 06-20-deepseek-reasoner-reasoning-content-400 |
+
+### Testing
+
+- [OK] `cd app/src-tauri && PKG_CONFIG_PATH="..." cargo test --lib anthropic::` → 18 passed (11 原有 + 7 新增)
+- [OK] `cd app/src-tauri && PKG_CONFIG_PATH="..." cargo test --lib` → 739 passed; 0 failed (openai 35 / wire 20 全部不变，OpenAI 路径完全未触碰)
+- [OK] Anthropic 原生 Claude 路径 1:1 兼容（顶层 `thinking: adaptive` 字段保留，`reasoning_content` 字段被 Anthropic 忽略）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- **FT-D-001**: 调查 Anthropic 顶层 `thinking` 字段对 DeepSeek V4 后端的影响（D 方案 — 移除顶层 `thinking: adaptive` 是否会改变 400 行为；需要更直接 evidence 才能动 Claude extended thinking 路径）
+- **FT-D-002**: 调查 wukaijin.com 400 threshold 的精确机制（DB 4 session 对比表明 threshold 不稳定，需要按 relay 分类的实测数据）
+- **FT-D-003**: 评估是否需要按 relay 自动分发 capability（heuristic 或新 ModelRow 字段 `disable_reasoning_content_inject`），让 strict Anthropic relay 不接收 `reasoning_content` 顶层字段
+- 任务目录已 archive 到 `.trellis/tasks/archive/2026-06/06-20-deepseek-reasoner-reasoning-content-400/`
