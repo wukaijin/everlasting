@@ -5,18 +5,21 @@
 // projects load on mount) and the "no project active" guard before
 // delegating to the chat store.
 
-import { computed, onMounted } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../stores/chat";
 import { useConfigStore } from "../stores/config";
 import { useProjectsStore } from "../stores/projects";
 import { usePermissionsStore } from "../stores/permissions";
+import { useSubagentRunsStore } from "../stores/subagentRuns";
 import ChatPanel from "./chat/ChatPanel.vue";
 import EmptyProjectState from "./chat/EmptyProjectState.vue";
+import SubagentDrawer from "./chat/SubagentDrawer.vue";
 
 const store = useChatStore();
 const config = useConfigStore();
 const projectsStore = useProjectsStore();
 const permissionsStore = usePermissionsStore();
+const subagentRuns = useSubagentRunsStore();
 
 onMounted(async () => {
   config.load();
@@ -44,6 +47,20 @@ onMounted(async () => {
   void permissionsStore.start(
     (msg, level) => projectsStore.showToast(msg, level),
   );
+
+  // B6 PR3 (2026-06-20): mount the global `subagent:event` listener.
+  // The store routes payloads into per-runId `liveTranscript` (with
+  // a 200ms debounce) so the `<SubagentDrawer>` can stream worker
+  // progress in real-time. See `subagentRuns.ts` + the PR3 PRD.
+  void subagentRuns.start();
+});
+
+onUnmounted(() => {
+  // Best-effort teardown: flush any pending buffered events so the
+  // user doesn't lose the last batch. In practice ChatWindow lives
+  // for the whole app lifecycle, but this keeps the store reusable
+  // for hot-reload / tests.
+  subagentRuns.stop();
 });
 
 const showEmptyState = computed<boolean>(
@@ -67,6 +84,10 @@ async function onSend(text: string) {
   <div class="chat-window">
     <EmptyProjectState v-if="showEmptyState" />
     <ChatPanel v-else @send="onSend" />
+    <!-- B6 PR3: side drawer for worker subagent transcripts. Mounts
+         unconditionally so the slide-in animation can play; the
+         component itself returns null when openRunId is null. -->
+    <SubagentDrawer />
   </div>
 </template>
 

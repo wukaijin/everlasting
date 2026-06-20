@@ -41,6 +41,7 @@ import {
   usePermissionsStore,
   type PermissionDecision,
 } from "../../stores/permissions";
+import { useSubagentRunsStore } from "../../stores/subagentRuns";
 import { isPathInRoot } from "../../utils/path";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
@@ -152,6 +153,7 @@ const displayContent = computed<string | null>(() => {
 // -----------------------------------------------------------------------
 const chatStore = useChatStore();
 const permStore = usePermissionsStore();
+const subagentRuns = useSubagentRunsStore();
 const fileDiffOpen = ref(false);
 const fileDiffLoading = ref(false);
 const fileDiffError = ref<string | null>(null);
@@ -275,12 +277,110 @@ watch(hasResult, (now, was) => {
     }
   }
 });
+
+// -----------------------------------------------------------------------
+// B6 PR3 (2026-06-20): dispatch_subagent special branch. Clicking the
+// whole card opens the <SubagentDrawer> for the worker run spawned by
+// this tool_use (rather than expanding an inline transcript). The
+// drawer reads all state from the subagentRuns store; this card only
+// needs to resolve the run id and call openDrawer.
+// -----------------------------------------------------------------------
+
+/** Is this tool_use a `dispatch_subagent` invocation? */
+const isDispatchSubagent = computed<boolean>(
+  () => props.call.name === "dispatch_subagent",
+);
+
+/** The summary for the worker spawned by this tool_use. Looked up via
+ *  `subagentRuns.getSummaryByToolUseId(sessionId, call.id)`, which
+ *  matches `parentRequestId.endsWith("-sub-" + call.id)` (the backend
+ *  formats the worker rid as `"{parent_rid}-sub-{tool_use_id}"`).
+ *  `undefined` until the list cache is populated (e.g. a card that
+ *  renders before `fetchForSession` resolves). */
+const workerSummary = computed(() => {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return undefined;
+  return subagentRuns.getSummaryByToolUseId(sid, props.call.id);
+});
+
+/** Status badge for the collapsed card. Derived from the summary if
+ *  we have one; falls back to "running…" while the worker is in
+ *  flight but the row hasn't landed yet. */
+const workerStatusText = computed<string>(() => {
+  const s = workerSummary.value?.status;
+  if (!s) {
+    // No summary yet: if the card has a result, the worker is done
+    // but the cache hasn't loaded; otherwise treat as running.
+    return hasResult.value ? "done" : "running…";
+  }
+  if (s === "running") return "running…";
+  return s;
+});
+
+/** Short summary preview (≤200 chars). Pulled from the cached summary
+ *  if available; otherwise falls back to the tool_result content. */
+const workerSummaryPreview = computed<string>(() => {
+  const s = workerSummary.value?.summary;
+  if (s) return s.length > 200 ? s.slice(0, 200) + "…" : s;
+  // Fall back to the tool_result content (which carries the
+  // `[status: ...]` prefix from `format_dispatch_result`).
+  if (props.result) {
+    const display = extractToolResultDisplay(props.result.content);
+    return display.length > 200 ? display.slice(0, 200) + "…" : display;
+  }
+  return "";
+});
+
+/** Subagent name to display in the collapsed card. Prefer the cached
+ *  summary's name (post-persist canonical value); fall back to the
+ *  tool_use's raw `input.subagent` field (so the name shows even
+ *  before the row lands / when the worker is in flight). */
+const workerDisplayName = computed<string>(() => {
+  const summary = workerSummary.value;
+  if (summary?.subagentName) return summary.subagentName;
+  const input = props.call.input as { subagent?: unknown } | undefined;
+  if (input && typeof input.subagent === "string") return input.subagent;
+  return "worker";
+});
+
+/** Click handler for the whole card when it's a dispatch_subagent.
+ *  Resolves the worker's run id (from the summary) and asks the
+ *  store to open the drawer. No-op if we haven't resolved the
+ *  summary yet — the user can retry once the cache loads. */
+async function openSubagentDrawer(): Promise<void> {
+  const summary = workerSummary.value;
+  if (!summary) return;
+  await subagentRuns.openDrawer(summary.id);
+}
+
+/** Lazy-load the session's subagent summaries the first time this
+ *  card mounts as a dispatch_subagent. The chat store doesn't
+ *  pre-fetch this list (it's only needed when a dispatch_subagent
+ *  card is visible), so we trigger it here on mount. Idempotent —
+ *  the store's `fetchForSession` replaces the cache, so multiple
+ *  dispatch_subagent cards in the same session just re-fetch the
+ *  same data. */
+watch(
+  isDispatchSubagent,
+  (active) => {
+    if (!active) return;
+    const sid = chatStore.currentSessionId;
+    if (!sid) return;
+    void subagentRuns.fetchForSession(sid);
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <div
-    :class="['tool-card', { 'tool-card--error': isError, 'tool-card--running': !hasResult && !isError }]"
+    :class="['tool-card', { 'tool-card--error': isError, 'tool-card--running': !hasResult && !isError, 'tool-card--subagent': isDispatchSubagent }]"
     :style="{ borderLeftColor: accent }"
+    :role="isDispatchSubagent ? 'button' : undefined"
+    :tabindex="isDispatchSubagent ? 0 : undefined"
+    @click="isDispatchSubagent ? openSubagentDrawer() : undefined"
+    @keydown.enter.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
+    @keydown.space.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
   >
     <div class="tool-card__header">
       <div class="tool-card__title">
@@ -298,7 +398,7 @@ watch(hasResult, (now, was) => {
         >
           <Icon :name="statusIconName" :size="14" />
         </span>
-        <span>{{ statusText }}</span>
+        <span>{{ isDispatchSubagent ? workerStatusText : statusText }}</span>
         <!--
           F5: per-tool duration (next to status text). Renders
           the `durationLabel` ("…" while running, "0.3s" /
@@ -375,6 +475,32 @@ watch(hasResult, (now, was) => {
     </div>
 
     <!--
+      B6 PR3: dispatch_subagent collapsed preview. When this card is a
+      dispatch_subagent, we show a one-line status + summary preview
+      AND suppress the default input/output <details> (the user clicks
+      the card to open the drawer instead). The clickable affordance
+      is on the root .tool-card element (see template @click).
+    -->
+    <div
+      v-if="isDispatchSubagent"
+      class="tool-card__subagent-preview"
+    >
+      <div class="tool-card__subagent-meta">
+        <span class="tool-card__subagent-name">
+          {{ workerDisplayName }}
+        </span>
+        <span class="tool-card__subagent-status">{{ workerStatusText }}</span>
+      </div>
+      <p
+        v-if="workerSummaryPreview"
+        class="tool-card__subagent-summary"
+      >{{ workerSummaryPreview }}</p>
+      <p v-else class="tool-card__subagent-summary tool-card__subagent-summary--muted">
+        点击查看 worker 详情
+      </p>
+    </div>
+
+    <!--
       Per-file diff popover. Rendered only for edit_file cards
       when the user clicks the diff button. The popover is inline
       (not floating) so it scrolls with the message list; for long
@@ -399,12 +525,12 @@ watch(hasResult, (now, was) => {
       </div>
     </div>
 
-    <details v-if="call.input && Object.keys(call.input).length" class="tool-card__details">
+    <details v-if="!isDispatchSubagent && call.input && Object.keys(call.input).length" class="tool-card__details">
       <summary>input</summary>
       <pre class="tool-card__pre tool-card__pre--input">{{ formatToolInput(call) }}</pre>
     </details>
 
-    <details v-if="result" class="tool-card__details tool-card__details--output">
+    <details v-if="!isDispatchSubagent && result" class="tool-card__details tool-card__details--output">
       <summary>output · {{ outputSize }}</summary>
       <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(displayContent ?? result.content) }}</pre>
     </details>
@@ -745,5 +871,59 @@ watch(hasResult, (now, was) => {
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
   resize: vertical;
+}
+
+/* B6 PR3: dispatch_subagent collapsed card → click opens drawer.
+   The whole card is a button (role/tabindex set in template); the
+   cursor + hover affordance hint that. The preview row carries a
+   short summary; clicking anywhere on the card opens the drawer. */
+.tool-card--subagent {
+  cursor: pointer;
+  transition: filter 0.1s, border-color 0.1s;
+}
+.tool-card--subagent:hover {
+  filter: brightness(1.04);
+  border-color: var(--color-accent);
+}
+
+.tool-card__subagent-preview {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-card__subagent-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.tool-card__subagent-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.tool-card__subagent-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.tool-card__subagent-summary {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-card__subagent-summary--muted {
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 </style>

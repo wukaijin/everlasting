@@ -33,6 +33,7 @@ import {
   type PermissionAsk,
 } from "../../stores/permissions";
 import { useChatStore, type ToolCallInfo } from "../../stores/chat";
+import { useSubagentRunsStore } from "../../stores/subagentRuns";
 
 function makeCall(overrides: Partial<ToolCallInfo> = {}): ToolCallInfo {
   return {
@@ -172,5 +173,99 @@ describe("ToolCallCard inline approval", () => {
       },
     });
     expect(w.find(".tool-card__approval").exists()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B6 PR3 (2026-06-20): dispatch_subagent special branch.
+// Clicking the whole card calls `subagentRuns.openDrawer(runId)` instead of
+// expanding an inline transcript (the <SubagentDrawer> handles rendering).
+// ---------------------------------------------------------------------------
+
+describe("ToolCallCard dispatch_subagent branch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(null);
+  });
+
+  function makeDispatchCall(overrides: Partial<ToolCallInfo> = {}): ToolCallInfo {
+    return {
+      id: "tooluse-dispatch",
+      name: "dispatch_subagent",
+      input: { subagent: "researcher", task: "find files" },
+      ...overrides,
+    };
+  }
+
+  function mountDispatchCard(call: ToolCallInfo = makeDispatchCall()) {
+    const chat = useChatStore();
+    chat.currentSessionId = "sess-1";
+    return mount(ToolCallCard, { props: { call }, shallow: true });
+  }
+
+  it("renders the subagent preview row when the tool is dispatch_subagent", () => {
+    const w = mountDispatchCard();
+    expect(w.find(".tool-card--subagent").exists()).toBe(true);
+    expect(w.find(".tool-card__subagent-preview").exists()).toBe(true);
+  });
+
+  it("shows the worker subagent name from the tool_use input when no summary cached", () => {
+    const w = mountDispatchCard();
+    expect(w.find(".tool-card__subagent-name").text()).toContain("researcher");
+  });
+
+  it("hides the default input <details> when dispatch_subagent", () => {
+    const w = mountDispatchCard();
+    // The input/output <details> are suppressed for dispatch_subagent.
+    expect(w.find(".tool-card__details").exists()).toBe(false);
+  });
+
+  it("clicking the card triggers store.openDrawer when the summary is cached", async () => {
+    const chat = useChatStore();
+    const subagentRuns = useSubagentRunsStore();
+    chat.currentSessionId = "sess-1";
+    // Seed the list cache so getSummaryByToolUseId resolves.
+    subagentRuns.runSummaryBySession.set("sess-1", [
+      {
+        id: "run-99",
+        parentSessionId: "sess-1",
+        parentRequestId: "parent-rid-sub-tooluse-dispatch",
+        subagentName: "researcher",
+        status: "completed",
+        startedAt: "2026-06-20T10:00:00Z",
+        finishedAt: "2026-06-20T10:00:30Z",
+        tokenUsageJson: null,
+        summary: "found 2 files",
+      },
+    ]);
+    // Mock fetchRun so openDrawer doesn't actually try to call IPC.
+    invokeMock.mockResolvedValueOnce({
+      id: "run-99",
+      parentSessionId: "sess-1",
+      parentRequestId: "parent-rid-sub-tooluse-dispatch",
+      subagentName: "researcher",
+      status: "completed",
+      startedAt: "2026-06-20T10:00:00Z",
+      finishedAt: "2026-06-20T10:00:30Z",
+      tokenUsageJson: null,
+      summary: "found 2 files",
+      transcriptJson: null,
+      transcriptTruncated: 0,
+      createdAt: "2026-06-20T10:00:00Z",
+    });
+
+    const w = mountDispatchCard();
+    await w.trigger("click");
+    await flushPromises();
+    expect(subagentRuns.openRunId).toBe("run-99");
+  });
+
+  it("clicking the card is a no-op when no summary is cached yet", async () => {
+    const subagentRuns = useSubagentRunsStore();
+    const w = mountDispatchCard();
+    await w.trigger("click");
+    await flushPromises();
+    expect(subagentRuns.openRunId).toBeNull();
   });
 });
