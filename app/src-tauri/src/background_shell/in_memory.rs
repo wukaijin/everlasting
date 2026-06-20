@@ -83,10 +83,22 @@ struct Inner {
     notifications: HashMap<String, VecDeque<BackgroundShellNotification>>,
 }
 
+/// Per-shell state held in the registry. The fields are
+/// populated at `start()` and only a subset are read on the
+/// hot path (status / kill); the rest are reserved for the
+/// future `shell_status` enrichment (command echo, remaining
+/// runtime) and diagnostic logging — see field-level comments.
+#[allow(dead_code)] // see field-level comments; reserved fields
 struct ShellEntry {
+    /// The shell command line. Reserved for `shell_status` to
+    /// echo back to the LLM ("which command is running?").
     command: String,
     cwd: PathBuf,
     started_at: MonotonicMs,
+    /// Max runtime captured at `start()`. Reserved for
+    /// `shell_status` to surface "remaining time" alongside
+    /// `elapsed_ms`. The actual timer lives in the spawned
+    /// task via `tokio::time::sleep`.
     max_runtime_ms: u64,
     state: ShellState,
     /// `Some` while the shell is running (the spawned task still
@@ -97,10 +109,12 @@ struct ShellEntry {
     kill_tx: Option<oneshot::Sender<()>>,
 }
 
+#[allow(dead_code)] // see variant-level comments; reserved field
 enum ShellState {
     /// Process is still alive (or in the brief window between
-    /// spawn and the task's first poll). The `pid` is for
-    /// diagnostic logging only — the spawned task owns the
+    /// spawn and the task's first poll). The `pid` is reserved
+    /// for diagnostic `tracing::warn!` if the task ever fails to
+    /// reap the process group; the spawned task owns the
     /// `Child` handle for actual I/O / killing.
     Running { pid: Option<u32> },
     /// Process has exited (any reason). Carries the notification

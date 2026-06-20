@@ -194,7 +194,16 @@ pub enum BackgroundShellStatus {
 /// anyhow"). Public variants stay `#[non_exhaustive]` once we
 /// know the surface (RULE-A-007 style: don't freeze the enum
 /// until a second impl ships).
+///
+/// `WrongSession` / `InvalidCwd` / `Poisoned` are reserved for the
+/// future (cross-session status, daemonization, std-Mutex swap) —
+/// see module doc §Design. The current GUI-process impl never
+/// constructs them: session-scope is enforced by the registry key
+/// (Q7), cwd is pre-validated by `boundary::assert_within_root` in
+/// the tool layer, and we use a `tokio::sync::Mutex` (no poison).
+/// The variants stay reachable for the daemon impl.
 #[derive(Debug, Error)]
+#[allow(dead_code)] // reserved variants — see module doc §Design + doc above
 pub enum BackgroundShellError {
     #[error("background shell '{shell_session_id}' not found for session '{session_id}'")]
     NotFound {
