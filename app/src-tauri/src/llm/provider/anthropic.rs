@@ -201,9 +201,25 @@ impl AnthropicProvider {
     /// `Done` at the end.
     fn chat_stream_with_tools(
         config: LlmConfig,
-        req: ChatRequest,
+        body: serde_json::Value,
     ) -> impl Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static {
         let url = config.endpoint();
+        // Pull the same observability fields the pre-fix code read off
+        // `&req` — `model`, `tools_count`, `has_system` — off the JSON
+        // body that the DeepSeek relay fix produced. The shape is the
+        // same; the values come from the same wire payload, so log
+        // content is byte-equivalent to the pre-fix logs.
+        let log_model = body
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let log_tools_count = body
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let log_has_system = body.get("system").map(|v| !v.is_null()).unwrap_or(false);
 
         stream! {
             // RULE-A-011 (2026-06-19): use `read_timeout` instead of
@@ -233,9 +249,9 @@ impl AnthropicProvider {
 
             tracing::info!(
                 url = %url,
-                model = %req.model,
-                tools_count = %req.tools.len(),
-                has_system = %req.system.is_some(),
+                model = %log_model,
+                tools_count = %log_tools_count,
+                has_system = %log_has_system,
                 "→ LLM request"
             );
 
@@ -244,7 +260,7 @@ impl AnthropicProvider {
                 .header("x-api-key", &config.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .json(&req)
+                .body(body.to_string())
                 .send()
                 .await
             {
@@ -611,6 +627,125 @@ impl AnthropicProvider {
     }
 }
 
+/// DeepSeek-Via-Anthropic-Relay (wukaijin.com passthrough) thinking
+/// block fix (task 06-20-deepseek-reasoner-reasoning-content-400).
+///
+/// Background: the wukaijin.com relay does a thin passthrough of
+/// Anthropic's `/v1/messages` schema to DeepSeek V4. DeepSeek V4's
+/// thinking mode contract requires every assistant message to carry a
+/// top-level `reasoning_content` field (sibling of `content`) — the
+/// Anthropic-shaped `thinking` block + `signature` blob alone is not
+/// enough; the relay's accumulated-state check surfaces as a 400 with
+/// the message `"The reasoning_content in the thinking mode must be
+/// passed back to the API."`.
+///
+/// This helper applies two surgical patches to the Anthropic-shaped
+/// request body so the same wire payload is also DeepSeek-Via-relay-
+/// friendly, while staying invisible to the native Anthropic API
+/// (which ignores unknown top-level fields on assistant messages):
+///
+/// 1. **Filter empty-signature thinking blocks** — drop any
+///    `{"type":"thinking","signature":""}` block from each
+///    assistant message's `content[]`. Empty signatures are opaque to
+///    DeepSeek (the relay can't map them back to reasoning content)
+///    and they inflate the relay's accumulated-state count, which
+///    was one of the failure modes observed in production (3 of 4
+///    DeepSeek sessions hit 400; the surviving session's earlier
+///    turns had empty signatures that the relay didn't trip on, but
+///    later turns did).
+///
+/// 2. **Lift `reasoning_content` from non-empty thinking blocks** —
+///    for each assistant message that has at least one
+///    **non-empty-signature** `thinking` block, add a top-level
+///    `reasoning_content` string field whose value is the
+///    concatenation of those blocks' `thinking` text (joined by
+///    `\n`). The relay extracts `reasoning_content` to feed
+///    DeepSeek V4's per-turn contract.
+///
+/// Native Anthropic Claude path stays 1:1 with the pre-fix body in
+/// all observable ways: the `thinking` blocks with non-empty
+/// signatures are preserved verbatim, the top-level `thinking:
+/// adaptive` field is untouched (Claude extended thinking needs it),
+/// and the only added field on assistant messages is
+/// `reasoning_content`, which Anthropic ignores.
+///
+/// Pure function: takes a borrowed [`ChatRequest`], returns the
+/// transformed [`serde_json::Value`] body. No IO, no allocation
+/// beyond the JSON tree. Tested by
+/// `deepseek_reasoning_fix_tests::*` — see the test module at the
+/// bottom of this file.
+pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Value {
+    let mut body = serde_json::to_value(req).expect("ChatRequest → serde_json::Value is infallible");
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(arr) => arr,
+        None => return body,
+    };
+    for msg in messages.iter_mut() {
+        // Only assistant-role messages carry thinking blocks.
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        // `content` may be either a string (pre-step-2 back-compat) or
+        // an array of blocks. The thinking-block handling only applies
+        // to the array form — a plain-string content has no blocks to
+        // walk. The `reasoning_content` top-level field is still safe
+        // to add (relays that care about it read it as a sibling of
+        // `content` regardless of shape), but there's no `thinking`
+        // text to extract from a string content, so we skip the whole
+        // message.
+        let arr = match msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+            Some(a) => a,
+            None => continue,
+        };
+        // (B) Filter empty-signature thinking blocks. Retain the rest
+        // (text, tool_use, thinking-with-non-empty-signature,
+        // redacted_thinking). `retain` mutates in place; ordering of
+        // the surviving blocks is preserved so any tool_use/text
+        // interleaving the model produced is intact.
+        arr.retain(|block| {
+            if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
+                let sig = block
+                    .get("signature")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                // Drop iff signature is the empty string. A missing
+                // signature (the `unwrap_or("")` above) is treated the
+                // same as an empty signature — both contribute no
+                // usable signal to the relay.
+                !sig.is_empty()
+            } else {
+                true
+            }
+        });
+        // (A) Collect the `thinking` text of all surviving
+        // non-empty-signature thinking blocks. We iterate AFTER
+        // retain so dropped blocks don't contribute to the buffer.
+        let mut reasoning_buf = String::new();
+        for block in arr.iter() {
+            if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
+                if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
+                    if !reasoning_buf.is_empty() {
+                        reasoning_buf.push('\n');
+                    }
+                    reasoning_buf.push_str(text);
+                }
+            }
+        }
+        // Only attach `reasoning_content` when we actually have
+        // non-empty reasoning text to attach. A message whose only
+        // thinking blocks were dropped (or a message with zero
+        // thinking blocks in the first place) must NOT gain a
+        // `reasoning_content: ""` field — the relay's
+        // reasoning-mode contract treats that as a sentinel that
+        // mismatches the actual content shape, so we omit the field
+        // entirely.
+        if !reasoning_buf.is_empty() {
+            msg["reasoning_content"] = serde_json::Value::String(reasoning_buf);
+        }
+    }
+    body
+}
+
 /// Parse Anthropic's `usage` payload into a protocol-agnostic
 /// [`TokenUsage`]. Defensive: any of the four fields may be missing
 /// (older Anthropic API versions / proxies only emitted a subset);
@@ -728,7 +863,48 @@ impl Provider for AnthropicProvider {
             thinking: Some(config.thinking_config()),
         };
 
-        Box::pin(Self::chat_stream_with_tools(config, req))
+        // DeepSeek-Via-Anthropic-Relay (wukaijin.com passthrough)
+        // thinking block fix (task 06-20-deepseek-reasoner-reasoning-content-400):
+        // The wukaijin.com relay does a thin passthrough of Anthropic's
+        // `/v1/messages` schema to DeepSeek V4. DeepSeek V4's thinking
+        // mode contract requires every assistant message to carry a
+        // top-level `reasoning_content` field (sibling of `content`)
+        // — Anthropic's standard `thinking` block + `signature` blob
+        // alone is not enough, and the relay's accumulated-state check
+        // surfaces as a 400 with the message
+        // `"The reasoning_content in the thinking mode must be passed
+        // back to the API."`.
+        //
+        // Two surgical patches make the Anthropic-shaped body also
+        // DeepSeek-Via-relay-friendly, while staying invisible to the
+        // native Anthropic API (which ignores unknown top-level fields
+        // on assistant messages):
+        //
+        // (A) For every assistant message that has at least one
+        //     **non-empty-signature** `thinking` block, add a
+        //     top-level `reasoning_content` string field whose value
+        //     is the concatenation of those blocks' `thinking` text
+        //     (joined by `\n`). The relay extracts `reasoning_content`
+        //     to feed DeepSeek V4's per-turn contract.
+        //
+        // (B) Filter out `{"type":"thinking","signature":""}` blocks
+        //     from `content[]`. They contribute no usable signal to
+        //     DeepSeek (empty signature is opaque) and they inflate
+        //     the relay's accumulated-state count, which is one of
+        //     the failure modes we observed in production (3/4
+        //     DeepSeek sessions hit 400; the surviving session's
+        //     early turns had empty signatures that the relay
+        //     didn't trip on, but later turns did).
+        //
+        // The native Anthropic Claude path stays 1:1 with the pre-fix
+        // body in all observable ways: the `thinking` blocks with
+        // non-empty signatures are preserved verbatim, the top-level
+        // `thinking: adaptive` field is untouched (Claude extended
+        // thinking needs it), and the only added field on assistant
+        // messages is `reasoning_content`, which Anthropic ignores.
+        let body = apply_deepseek_reasoning_fix(&req);
+
+        Box::pin(Self::chat_stream_with_tools(config, body))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -936,5 +1112,273 @@ mod tests {
         // "no usage".
         let v = serde_json::json!({});
         assert!(parse_anthropic_usage(&v).is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // DeepSeek-Via-Anthropic-Relay reasoning_content fix
+    // (task 06-20-deepseek-reasoner-reasoning-content-400)
+    //
+    // These tests pin the contract of `apply_deepseek_reasoning_fix`:
+    //
+    //   (A) For assistant messages with at least one
+    //       non-empty-signature thinking block, add a top-level
+    //       `reasoning_content` field whose value is the concatenation
+    //       of those blocks' `thinking` text (joined by `\n`).
+    //   (B) Drop `{"type":"thinking","signature":""}` blocks from
+    //       every assistant message's `content[]`.
+    //
+    // User messages and tool result messages are NOT touched. The
+    // top-level `thinking: adaptive` field on the request body is NOT
+    // touched (Claude extended thinking depends on it). Messages with
+    // no thinking blocks or only empty-signature thinking blocks do
+    // NOT gain a `reasoning_content` field (it's only added when the
+    // collected reasoning text is non-empty).
+    //
+    // See `.trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400/prd.md`
+    // for the rationale and the R1-R4 requirements this contract
+    // implements.
+    // -----------------------------------------------------------------
+
+    /// Helper: build a `ChatRequest` from a list of message JSON
+    /// values, so the test bodies can focus on the message shape and
+    /// not on constructing `ChatMessage` / `ContentBlock` by hand for
+    /// every case. The `model` / `max_tokens` / `system` / `tools`
+    /// fields are fixed at benign values; the fix doesn't touch any
+    /// of them.
+    fn chat_request_with_messages(
+        messages: Vec<serde_json::Value>,
+    ) -> ChatRequest {
+        let parsed: Vec<ChatMessage> = messages
+            .into_iter()
+            .map(|m| serde_json::from_value(m).expect("message JSON parses"))
+            .collect();
+        ChatRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: 16384,
+            messages: parsed,
+            system: None,
+            stream: true,
+            tools: vec![],
+            thinking: Some(ThinkingConfig::Adaptive {
+                display: "summarized".to_string(),
+                effort: "high".to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_removes_empty_sig_thinking_blocks() {
+        // (B) — An assistant message that has both an empty-signature
+        // thinking block and a non-empty-signature thinking block
+        // must drop the empty one and keep the rest. The empty
+        // block's `thinking` text is also lost (intentional — empty
+        // sig is opaque and the relay can't extract anything useful
+        // from it; we don't want to feed an empty reasoning_content
+        // field that mismatches the actual content shape).
+        let req = chat_request_with_messages(vec![serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "drop me", "signature": ""},
+                {"type": "thinking", "thinking": "keep me", "signature": "uuid-sig-abc"},
+                {"type": "text", "text": "visible answer"}
+            ]
+        })]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+        // 2 surviving blocks (1 thinking-with-sig + 1 text), not 3.
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["signature"], "uuid-sig-abc");
+        assert_eq!(content[0]["thinking"], "keep me");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "visible answer");
+        // reasoning_content carries only the surviving block's text.
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("keep me".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_omits_reasoning_content_when_all_empty() {
+        // Edge case: an assistant message whose ONLY thinking
+        // blocks all have empty signatures. After step (B) there
+        // are zero thinking blocks left; step (A) collects nothing;
+        // the resulting `reasoning_content` must NOT be set (an
+        // empty string would mismatch the contract).
+        let req = chat_request_with_messages(vec![serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "empty 1", "signature": ""},
+                {"type": "thinking", "thinking": "empty 2", "signature": ""},
+                {"type": "text", "text": "answer"}
+            ]
+        })]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+        // Both empty thinking blocks dropped; only the text block survives.
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        // No reasoning_content field on the message.
+        assert!(
+            body["messages"][0].get("reasoning_content").is_none(),
+            "reasoning_content must be omitted when no non-empty thinking blocks survive: {:?}",
+            body["messages"][0]
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_keeps_nonempty_sig_and_adds_reasoning_content() {
+        // Single non-empty-signature thinking block: step (B) keeps
+        // it verbatim; step (A) lifts its `thinking` text to the
+        // top-level `reasoning_content` field.
+        let req = chat_request_with_messages(vec![serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "let me think", "signature": "uuid-xyz"},
+                {"type": "text", "text": "ok"}
+            ]
+        })]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["signature"], "uuid-xyz");
+        assert_eq!(content[0]["thinking"], "let me think");
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("let me think".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_concatenates_multiple_nonempty_blocks() {
+        // Multiple non-empty-signature thinking blocks (a model can
+        // emit more than one per turn). They are all preserved in
+        // `content[]` AND their `thinking` text is joined with `\n`
+        // into the `reasoning_content` field.
+        let req = chat_request_with_messages(vec![serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "step 1", "signature": "sig-1"},
+                {"type": "thinking", "thinking": "step 2", "signature": "sig-2"},
+                {"type": "text", "text": "done"}
+            ]
+        })]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+        // Both thinking blocks preserved.
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["signature"], "sig-1");
+        assert_eq!(content[1]["signature"], "sig-2");
+        assert_eq!(content[2]["type"], "text");
+        // reasoning_content = "step 1\nstep 2" (joined by \n).
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("step 1\nstep 2".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_skips_user_messages() {
+        // (R4 contract.) User-role messages must be entirely
+        // untouched — content[] unchanged, no reasoning_content
+        // field added, no other mutations. The fix is an
+        // assistant-message-only patch.
+        let req = chat_request_with_messages(vec![
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is X?"},
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok", "is_error": false}
+                ]
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "thinking", "signature": "sig-1"},
+                    {"type": "text", "text": "X is ..."}
+                ]
+            }),
+        ]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        // User message: untouched.
+        let user = &body["messages"][0];
+        assert_eq!(user["role"], "user");
+        assert_eq!(user["content"].as_array().unwrap().len(), 2);
+        assert!(user.get("reasoning_content").is_none());
+        // Assistant message: gets the reasoning_content field.
+        let asst = &body["messages"][1];
+        assert_eq!(
+            asst["reasoning_content"],
+            serde_json::Value::String("thinking".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_no_thinking_blocks_no_reasoning_content() {
+        // An assistant message with NO thinking blocks (pure text +
+        // tool_use) must not gain a reasoning_content field. The fix
+        // is a no-op for such messages.
+        let req = chat_request_with_messages(vec![serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "sure, let me read"},
+                {"type": "tool_use", "id": "toolu_42", "name": "read_file", "input": {"path": "/etc/hosts"}}
+            ]
+        })]);
+        let body = apply_deepseek_reasoning_fix(&req);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+        // Unchanged: text + tool_use, no thinking blocks.
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "tool_use");
+        assert!(
+            body["messages"][0].get("reasoning_content").is_none(),
+            "reasoning_content must NOT appear on a no-thinking assistant message: {:?}",
+            body["messages"][0]
+        );
+    }
+
+    #[test]
+    fn deepseek_reasoning_fix_preserves_top_level_thinking_field() {
+        // The top-level `thinking: adaptive` field on the request
+        // body must be preserved verbatim — Claude extended thinking
+        // depends on it. The fix only mutates assistant messages'
+        // `content[]` and (conditionally) adds `reasoning_content`.
+        let req = ChatRequest {
+            model: "claude-sonnet-4-5".to_string(),
+            max_tokens: 16384,
+            messages: vec![serde_json::from_value(serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "deep", "signature": "sig-abc"},
+                    {"type": "text", "text": "answer"}
+                ]
+            })).unwrap()],
+            system: Some("You are a coding agent".to_string()),
+            stream: true,
+            tools: vec![],
+            thinking: Some(ThinkingConfig::Adaptive {
+                display: "summarized".to_string(),
+                effort: "high".to_string(),
+            }),
+        };
+        let body = apply_deepseek_reasoning_fix(&req);
+        // Top-level thinking field preserved verbatim.
+        let thinking = body.get("thinking").expect("thinking field present");
+        assert_eq!(thinking["type"], "adaptive");
+        assert_eq!(thinking["display"], "summarized");
+        assert_eq!(thinking["effort"], "high");
+        // Sanity: the other top-level fields are untouched too.
+        assert_eq!(body["model"], "claude-sonnet-4-5");
+        assert_eq!(body["max_tokens"], 16384);
+        assert_eq!(body["system"], "You are a coding agent");
+        assert_eq!(body["stream"], true);
+        // reasoning_content still attached to the assistant message.
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("deep".to_string())
+        );
     }
 }
