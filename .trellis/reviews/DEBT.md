@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 22 | 健壮性 + 债务,中长期清理 |
+| P2 | 21 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **47** | 含历史 review 合并 |
+| **Total** | **46** | 含历史 review 合并 |
 
 ---
 
@@ -660,12 +660,12 @@
 - **Description**: B6 PR2b 实施 RULE-A-014(thread is_worker 到嵌套 run_chat_loop)后,worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny` 但 `record_audit_event(ToolDenied)` 仍写父 `session_audit_events` 表(worker 复用 parent_session_id,ask_path 的 audit 写入不区分 worker / parent)。Pre-PR2a 已存在,PR1 PR1b 实施时未察觉;PR2a 测试 `audit_not_polluted_by_worker` 场景仅触发 researcher(silent allow,不触发 Tier 4 ask)未暴露;PR2b 端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 触发后,delta = 3(parent's 2 + worker's tool_denied),与 PR2a R6/AC4 "audit 不污染父" 字面冲突。
 - **Impact**: worker 触发的 Tier 4 决策行(audit kind=ToolDenied)出现在父 session 的 audit log,污染 C4 audit log UI(用户在父 session audit 里看到 worker 的决策,混淆责任归属)。无数据丢失 / 安全,纯 audit 完整性 + UX 问题。触发条件罕见(worker + Tier 4 ask_path/ask_shell 工具),与 RULE-A-014 触发条件重叠。
 - **Fix**: ask_path 顶部 `record_audit` 写入前加 `if !ctx.is_worker { session_audit_events } else { worker transcript PermissionAsk }` 分支(~5 行)。或更统一:在 `record_audit_event` 入口检查 worker context,worker 路径改写 transcript PermissionAsk。+ 更新 `audit_not_polluted_by_worker` 测试断言从 `delta == 2` 改 `delta == 2`(worker tool_denied 改走 transcript 后,parent audit 仅 2 行)。
-- **Status**: open
+- **Status**: **closed (2026-06-20)** — B6 PR3a 顺手修。`permissions::ask_path` worker 分支(原 line 1002-1009 `record_audit(ToolDenied)`)删除 + 改 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 写 transcript `PermissionAsk` entry(PR3 drawer 可见)。新代码 ~13 行(替代原 6 行 record_audit block)。`audit_not_polluted_by_worker` 测试断言不变(delta == 2,researcher silent allow 本就不写 audit);`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 测试断言反转:parent `tool_denied` count 0(原 1)+ transcript `PermissionAsk` count 1(原 0)+ audit delta ≤ 2(原 ≤ 3)。cargo test --lib 732 pass(PR2b 726 + PR3a 6 = 2 新 db tests + 4 新 PR2 hotfix subagent tests;agent_loop_* tests 数量未变只更新断言)。0 新 warning(对比 PR2b 4 pre-existing)。
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-20-b6-pr2-subagent-persistence`
+- **Related Task**: `.trellis/tasks/06-20-b6-pr3-frontend-expand`
 - **Discovered In**: 任务 PR2b trellis-implement 报告(2026-06-20)
-- **Closed At**: null
-- **Related PR**: null
+- **Closed At**: `1308a23`
+- **Related PR**: PR3a(B6 subagent frontend-expand + RULE-A-016 close)
 
 ## P3 — 轻微(文档/一致性)
 
@@ -840,6 +840,7 @@
 | 2026-06-19 | RULE-E-013 | open | **closed** | system prompt 工具清单:删除硬编码枚举改通用表述(比原"动态生成"更治本,PRD D2);`build_system_prompt_no_hardcoded_tool_list` 回归保护;随 behavior_prompt 同 task 落地 | `.trellis/tasks/06-19-system-prompt` |
 
 | 2026-06-20 | RULE-A-014 | open | **closed** | B6 PR2b 收口。`is_worker: Option<bool>` 加为 `run_chat_loop` 第 21 参;worker 嵌套调用 `chat_loop.rs:2155` 传 `Some(true)`,run_chat_loop 内部构造 `PermissionContext` 读 `is_worker.unwrap_or(false)`;PR1b 的 dead-code `_worker_permission_ctx` 块删除;production `chat.rs:249` + 33 个 `agent_loop_*` 集成测试调用点更新 `Some(false)`。端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`/tmp/everlasting_worker_escape.txt` 路径 + Edit mode + general-purpose + write_file,`tokio::time::timeout(15s)` 包裹)验证:worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny` 无 oneshot 等待无挂起,tool_result `is_error=true` + deny 原因,1 行 `tool_denied` audit 落地,0 行 `tool_permission_ask`(ask 路径 collapse 验证)。PR2a 修 RULE-A-015 拆出 2 处 `skip_persist` gate,精确 gate 数 = 16(原 spec 18 处,Phase 3 spec commit 同步 `agent-loop-architecture.md` + `tool-contract.md`)。cargo test --lib 726 pass(PR2a 725 + PR2b 1),0 新 warning(对比 PR2a 4 pre-existing background_shell + 1 pre-existing `permission_ctx` unused)。P2 22→21,Total 47→46 | `.trellis/tasks/06-20-b6-pr2-subagent-persistence` |
+| 2026-06-20 | RULE-A-016 | open | **closed** | B6 PR3a 顺手修。`permissions::ask_path` worker 分支(原 line 1002-1009 `record_audit(ToolDenied)`)删除 + 改 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 写 transcript `PermissionAsk` entry(PR3 drawer 可见)。`audit_not_polluted_by_worker` 测试断言不变(delta == 2,researcher silent allow 本就不写 audit);`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 测试断言反转:parent `tool_denied` count 0(原 1)+ transcript `PermissionAsk` count 1(原 0)+ audit delta ≤ 2(原 ≤ 3)。cargo test --lib 732 pass(PR2b 726 + PR3a 6 = 2 新 db tests + 4 新 PR2 hotfix subagent tests;agent_loop_* tests 数量未变只更新断言)。0 新 warning(对比 PR2b 4 pre-existing)。P2 21→20,Total 46→45 | `.trellis/tasks/06-20-b6-pr3-frontend-expand` |
 
 ---
 

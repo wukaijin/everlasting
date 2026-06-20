@@ -82,12 +82,22 @@ pub async fn run_chat_loop(
     // `agent_loop_*` integration tests pass `Some(false)` to make the
     // production default explicit at the call site.
     is_worker: Option<bool>,                                                           // 21
+    // B6 PR3 (2026-06-20, PR2 hotfix): optional Tauri `AppHandle` used
+    // ONLY by `run_subagent` to construct the worker's
+    // `SubagentBufferSink` with a live IPC emit path (the
+    // `subagent:event` channel). The agent loop body itself does NOT
+    // read this parameter — only `run_subagent` does, when building
+    // the worker sink. Production passes `Some(app.clone())` from the
+    // `chat` Tauri command; tests pass `None` (no Tauri runtime, the
+    // worker's IPC emit becomes a no-op). `AppHandle` is an `Arc`
+    // internally so the clone is cheap.
+    app_handle: Option<tauri::AppHandle>,                                              // 22
 ) { ... }
 ```
 
-### Why 21 parameters (and not a config struct)?
+### Why 22 parameters (and not a config struct)?
 
-The 21 parameters look excessive, but they are the **exact set of state pieces
+The 22 parameters look excessive, but they are the **exact set of state pieces
 the agent loop body needs**, and grouping them into a config struct would:
 
 1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
@@ -114,14 +124,15 @@ re-running all 35 integration tests + cargo check.
 | 2026-06-19 | 19 | B6 PR1b | `skip_session_active: bool` | worker guard Drop skips `session_active_request.remove` |
 | 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | persist-site gates inside the function body (PR1 spec: 18 sites; PR2a actual: 16 — see RULE-A-015) |
 | 2026-06-20 | 21 | B6 PR2b (RULE-A-014) | `is_worker: Option<bool>` | thread `is_worker` to nested `run_chat_loop` so Tier 4 `ask_path` / `ask_shell` collapses to `Deny` on the worker path (workers have no UI sink) |
+| 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None` |
 
-The B6 cluster (PR1a + PR1b + PR2b, adding 4 params across 3 sub-PRs in a
+The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
 single 2-week window) is the largest single jump. It is justified because
 the worker is a **structural** extension of the agent loop (it re-uses
 `run_chat_loop` recursively via `Box::pin`, see "Pattern: Worker Subagent"
-below), and the 4 params are the minimal surface needed to keep
+below), and the 5 params are the minimal surface needed to keep
 production + worker behavior isolated (session mapping cleanup + DB
-isolation + turn cap + Tier 4 collapse without hang).
+isolation + turn cap + Tier 4 collapse without hang + IPC emit path).
 
 ### Production + test call site parity
 
@@ -131,15 +142,22 @@ isolation + turn cap + Tier 4 collapse without hang).
   `resend_seq` + `max_turns`, `false` for both `skip_session_active` and
   `skip_persist`, `Some(false)` for `is_worker` (production is never a
   worker; the explicit `Some(false)` makes the production-style default
-  obvious at the call site, matching PR2b's contract).
+  obvious at the call site, matching PR2b's contract), and
+  `Some(app.clone())` for `app_handle` (PR2 hotfix: production threads a
+  real `AppHandle` so the worker's `SubagentBufferSink` can emit
+  `subagent:event` to the frontend).
 - **Tests**: `app/src-tauri/src/agent/tests.rs::agent_loop_basic_text_only_completes`
   and 34 sibling tests pass a `MockProvider` + `MockEmitter` for the
   `Arc<dyn Provider>` and `Arc<dyn ChatEventSink>` parameters. Other
   parameters are real (test DB, real `MemoryCache`, real `PermissionStore`,
   real `ReadGuard`). Tests pass `Some(false)` for `is_worker` to make the
-  non-worker test surface explicit.
+  non-worker test surface explicit, and `None` for `app_handle` (no Tauri
+  runtime — the worker's IPC emit path becomes a no-op; the worker's
+  `SubagentBufferSink` is constructed via
+  `SubagentBufferSink::new_without_app_handle` so transcript accumulation
+  still works).
 
-The 21-parameter signature is **production-ready as written** — no test-only
+The 22-parameter signature is **production-ready as written** — no test-only
 gating (no `#[cfg(test)]`), no compile-time `dead_code` allowance, no
 runtime branching on `cfg!(test)`.
 
@@ -174,6 +192,7 @@ tauri::async_runtime::spawn(async move {
         false,                         // 19: skip_session_active (production chat owns the slot)
         false,                         // 20: skip_persist (production persists normally)
         Some(false),                   // 21: is_worker (production is never a worker)
+        Some(app.clone()),             // 22: app_handle (production threads real AppHandle for worker subagent:event emit)
     ).await;
 });
 ```
@@ -192,6 +211,7 @@ run_chat_loop(
     false,                         // 19
     false,                         // 20
     Some(false),                   // 21
+    None,                          // 22: app_handle (tests have no Tauri runtime; worker IPC emit becomes a no-op)
 ).await;
 ```
 
@@ -350,6 +370,7 @@ Box::pin(run_chat_loop(
     true,                                    // 19: skip_session_active (worker Drop skips parent eviction)
     true,                                    // 20: skip_persist (worker turns stay in-memory)
     Some(true),                              // 21: is_worker (worker path → Tier 4 collapses to Deny)
+    app_handle,                              // 22: forward parent AppHandle so worker's SubagentBufferSink can emit subagent:event (None in tests)
 )).await;
 ```
 
@@ -357,15 +378,15 @@ Box::pin(run_chat_loop(
 
 The worker harness is the **same loop**: turn boundaries, C3 compaction,
 tool execution, error/cancel paths, emit, persist. Duplicating it would
-re-introduce the faithful-port drift hazard (see Pattern above). The 4
+re-introduce the faithful-port drift hazard (see Pattern above). The 5
 new params are the minimal surface needed to isolate the worker from the
-parent; every other param is reused as-is.
+parent + wire its IPC emit path; every other param is reused as-is.
 
 `Box::pin` breaks the async-fn recursion size-infinite Future chain
 (workers have `dispatch_subagent` stripped, so depth is bounded at 1,
 but the compiler can't prove this).
 
-### The 4 isolation flags
+### The 5 isolation flags
 
 | Flag | Value | What it prevents |
 |---|---|---|
@@ -373,6 +394,7 @@ but the compiler can't prove this).
 | `skip_session_active: true` | B6 PR1b | worker's `CancellationGuard::drop` evicting `session_active_request[parent_session_id]` (would break parent's `cancel_inflight_for_session` / RULE-E-005) |
 | `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; **16** function-body gates cover all persist sites (PR1 spec said 18; PR2a RULE-A-015 corrected 2 over-broad gates) |
 | `is_worker: Some(true)` | B6 PR2b | worker's Tier 4 `ask_path` / `ask_shell` emitting `permission:ask` → register into `permission_asks` → wait for oneshot (never comes — worker has no UI sink) → **hang until user Stop** (RULE-A-014). With this flag, the Tier 4 branch sees `ctx.is_worker = true` and collapses to `Decision::Deny` immediately |
+| `app_handle: Some(parent's handle)` | B6 PR3 (PR2 hotfix) | worker's `SubagentBufferSink` would otherwise have no IPC emit path → frontend `<SubagentDrawer>` (PR3b) cannot stream the worker's transcript live (the worker would have to finish before the drawer sees anything). Forwarding the parent's `AppHandle` lets the sink emit `subagent:event` per worker emit; tests pass `None` so the emit path becomes a no-op (no Tauri runtime) |
 
 ### Tool interception (NOT `execute_tool_inner`)
 
@@ -630,24 +652,21 @@ regression guard for the "Did the gate hide a needed write?" question.
   accurate `skip_persist` site count is now **16** (not the 18 the
   PR1 spec said). See "Pattern: PR2a corrected PR1 over-broad
   skip_persist gate (RULE-A-015)" below for the design rationale.
-- `RULE-A-016` (B6 PR2b 2026-06-20, **open**): the Tier 4 `ask_path` /
-  `ask_shell` branches call `record_audit_event(ToolDenied)` (and the
-  Tier 4 `ask_path`'s collapse path) WITHOUT a worker check. With
-  PR2b's `is_worker` threading in place, a worker Tier 4 ask collapse
-  now correctly returns `Decision::Deny` — but the `record_audit_event`
-  call inside the collapse path still writes a `tool_denied` row into
-  the **parent's** `session_audit_events` table (worker reuses
-  `parent_session_id`). This pollutes the C4 audit log: a user
-  reviewing the parent session's audit would see a worker Tier 4
-  collapse that was never surfaced to the parent UI. Fix: gate the
-  collapse's `record_audit_event` on `!ctx.is_worker` (worker decisions
-  belong in the transcript's `TranscriptKind::PermissionAsk` entries,
-  not in the parent's audit log); update the
-  `audit_not_polluted_by_worker` test to assert the worker's
-  `tool_denied` row appears in `subagent_runs.transcript_json`, not in
-  `session_audit_events`. Out of scope for PR2 (the persist path is
-  correct enough for the C4 audit log to not crash; the pollution is a
-  UX/audit-integrity issue, not a correctness issue).
+- `RULE-A-016` (B6 PR3a 2026-06-20, **closed**): the Tier 4 `ask_path` /
+  `ask_shell` worker branch previously called `record_audit_event(ToolDenied)`
+  inside the `if ctx.is_worker { ... }` collapse path, landing a `tool_denied`
+  row in the **parent's** `session_audit_events` (worker reuses
+  `parent_session_id`). This polluted the C4 audit log: a user reviewing
+  the parent session's audit would see a worker Tier 4 collapse that was
+  never surfaced to the parent UI. PR3a fix: `ask_path` worker branch no
+  longer calls `record_audit_event`; instead it emits a
+  `PermissionAskPayload` via `sink.emit_permission_ask(...)` so
+  `SubagentBufferSink::emit_permission_ask` records a
+  `TranscriptKind::PermissionAsk` entry in the worker's transcript (PR3
+  drawer renders the deny). The
+  `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`
+  test now asserts `tool_denied count == 0` in parent audit +
+  transcript `PermissionAsk count == 1` + audit delta ≤ 2.
 - `RULE-E-005` (worktree destroy await cancel): unaffected by B6 (worker
   Drop is properly bounded by `skip_session_active=true`; the parent
   `cancel_inflight_for_session` lookup continues to find the parent's
@@ -791,7 +810,7 @@ markdown rendering handles both markers uniformly.
 | `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` | B6 PR2a + RULE-A-015: parent_token cancel mid-worker → `subagent_runs.status='cancelled'` + `finished_at` NOT NULL; regression: terminal `Done` emit is OUTSIDE the `skip_persist` gate (PR2a fix) so `SubagentBufferSink.was_cancelled` was reachable |
 | `agent_loop_dispatch_subagent_audit_not_polluted_by_worker` | B6 PR2a: parent + `researcher` worker (silent allow, Tier 5) → parent's `session_audit_events` only carries parent's own ⑨ decisions; worker Tier 5 decisions stay in `transcript` (NOT in `session_audit_events`) |
 | `agent_loop_dispatch_subagent_token_usage_folds_into_parent` | B6 PR2a: worker emits 2 turns of usage → parent's `sessions.input_tokens_total` and `output_tokens_total` carry the SUM (decoupled `add_token_usage` from `skip_persist` per PR2a RULE-A-015) |
-| `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014: parent Edit mode + `general-purpose` worker + `write_file` to path outside `permission_ctx.cwd` → `tokio::time::timeout(15s)` wraps the worker; Tier 4 `ask_path` sees `ctx.is_worker=true` → `Decision::Deny` IMMEDIATELY (no oneshot wait, no hang); tool_result is `is_error: true` with deny reason; parent's `session_audit_events` has 1 `tool_denied` row (RULE-A-016: this row will move to the transcript in a follow-up) |
+| `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014 + RULE-A-016: parent Edit mode + `general-purpose` worker + `write_file` to path outside `permission_ctx.cwd` → `tokio::time::timeout(15s)` wraps the worker; Tier 4 `ask_path` sees `ctx.is_worker=true` → `Decision::Deny` IMMEDIATELY (no oneshot wait, no hang); tool_result is `is_error: true` with deny reason. RULE-A-016 (closed B6 PR3a 2026-06-20): the worker's deny does NOT write a `tool_denied` row to the parent's `session_audit_events`; instead `ask_path` emits a `PermissionAskPayload` via the sink → `SubagentBufferSink::emit_permission_ask` records a `TranscriptKind::PermissionAsk` entry in the worker's transcript. The test asserts `tool_denied count == 0` in parent audit + `permission_ask count == 1` in worker transcript + audit delta ≤ 2 (only parent's `tool_allowed` + `tool_executed` for `dispatch_subagent`). |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
 

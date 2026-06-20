@@ -1000,19 +1000,21 @@ The reasoning (per B6 PR1 decision 5 + PR2 §R6):
   render the transcript with the PermissionAsk events highlighted
   (UX detail left to PR3).
 
-**Known follow-up** (RULE-A-016, open as of 2026-06-20): the Tier 4
+**Closed** (RULE-A-016, closed B6 PR3a 2026-06-20): the Tier 4
 `ask_path` / `ask_shell` collapse path (`if ctx.is_worker {
-Decision::Deny }`) still calls `record_audit_event(ToolDenied)` BEFORE
-the worker check filters it out. With PR2b's `is_worker` threading
-in place, the collapse fires correctly — but the `record_audit_event`
-call lands in the parent's `session_audit_events` because it's
-unconditional inside the collapse branch. The fix is ~5 lines in
-`permissions/mod.rs::ask_path` (gate the audit on `!ctx.is_worker`),
-and PR3 needs to extend the
-`audit_not_polluted_by_worker` test to cover the
-`general-purpose + Edit + Tier 4` scenario. PR2 leaves this for a
-follow-up; the persistence layer itself is correct, and the
-pollution is a UX / audit-integrity issue, not a correctness issue.
+Decision::Deny }`) previously called `record_audit_event(ToolDenied)`
+BEFORE the worker check filtered it out, landing in the parent's
+`session_audit_events`. The fix (PR3a) is in `permissions/mod.rs::ask_path`
+worker branch: the branch no longer calls `record_audit_event`; instead
+it emits a `PermissionAskPayload` via the sink →
+`SubagentBufferSink::emit_permission_ask` records a
+`TranscriptKind::PermissionAsk` entry in the worker's transcript
+(PR3 drawer can render the deny as part of the transcript). The
+`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`
+test was updated to assert `tool_denied count == 0` in parent audit +
+`permission_ask count == 1` in worker transcript + audit delta ≤ 2;
+`audit_not_polluted_by_worker` test assertion `delta == 2` is unchanged
+(researcher silent allow never wrote audit anyway).
 
 ### When to apply this pattern
 
@@ -1068,4 +1070,4 @@ this table pattern verbatim:
 
 ---
 
-**Last updated**: 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant).
+**Last updated**: 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).

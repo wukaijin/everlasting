@@ -643,3 +643,134 @@ absolute`, bottom-right offset above the input bar, `z-index: 50` (below modals,
 Teleport to `<body>` at 1000+). Two states: expanded (full list + the single `in_progress`
 item gets a pulse/spinner) ⇄ minimized floating ball (`done/total` count, breathes when an
 `in_progress` is active). Toggle is local UI state. Empty/absent checklist → hidden.
+
+---
+
+### subagentRuns store + SubagentDrawer (B6 PR3, 2026-06-20)
+
+The frontend half of B6 PR3 (worker subagent live transcript + drawer).
+The backend PR2 hotfix added a live `subagent:event` IPC stream (one
+emit per `SubagentBufferSink::emit_*` call) + PR3a added two Tauri
+commands for list/get. The store is the reactive wrapper that feeds
+the `<SubagentDrawer>` side panel; the `ToolCallCard` for
+`dispatch_subagent` collapses to a click-target that opens the
+drawer instead of expanding an inline transcript.
+
+Single source of truth: `useSubagentRunsStore()` in
+`app/src/stores/subagentRuns.ts`. State shape:
+
+```typescript
+const runSummaryBySession = reactive(new Map<string, SubagentRunSummary[]>());  // list cache
+const getRunCache          = reactive(new Map<string, SubagentRunRow>());        // detail cache
+const liveTranscript       = reactive(new Map<string, TranscriptEntry[]>());    // live stream (debounced)
+const openRunId            = ref<string | null>(null);                          // drawer open state
+// non-reactive (debounce stage):
+const liveTranscriptBuffer = new Map<string, TranscriptEntry[]>();
+const debounceTimers       = new Map<string, ReturnType<typeof setTimeout>>();
+```
+
+#### Store API
+
+| Method | Effect |
+|---|---|
+| `fetchForSession(sessionId)` | invoke `list_subagent_runs_by_session` → write `runSummaryBySession`. Failure log+swallow (best-effort). |
+| `fetchRun(runId)` | invoke `get_subagent_run` → write `getRunCache` + seed `liveTranscript` IF it's empty (don't overwrite in-flight streaming). |
+| `openDrawer(runId)` | set `openRunId` + `fetchRun` if uncached. |
+| `closeDrawer()` | clear `openRunId` only (caches intact for instant reopen). |
+| `getSummaryByToolUseId(sessionId, toolUseId)` | match `summary.parentRequestId.endsWith("-sub-" + toolUseId)` (backend formats worker rid as `"{parent_rid}-sub-{tool_use_id}"`). Returns `undefined` when uncached. |
+| `start()` / `stop()` | mount/teardown the `subagent:event` listener; `stop()` flushes any pending debounce buffer so the last batch isn't lost. Wired from `ChatWindow.vue` `onMounted`/`onUnmounted` (same lifecycle slot as `permissionsStore.start`). |
+
+#### IPC contract
+
+- `listen<SubagentEventPayload>("subagent:event", ...)` payload:
+  `{ runId, sessionId, kind: TranscriptKind, payload: Record<string, unknown>, timestamp }`.
+- `TranscriptKind` snake_case: `"chat_event" | "tool_call" | "tool_result" | "permission_ask"`.
+  **Must mirror the Rust `#[serde(rename_all = "snake_case")]` exactly — drift is a cross-layer bug.**
+
+#### Cross-layer drift traps (locked by tests)
+
+1. **`SubagentRunRow.status` is a raw `string`, NOT the typed enum
+   that `SubagentRunSummary.status` carries.** The Rust struct
+   behind `SubagentRunRow` does NOT derive the enum-typed status
+   (only `SubagentRunSummary` does). The store exports a
+   `coerceStatus(raw: string): SubagentStatus` helper that coerces
+   both shapes into the typed union (`"running" | "completed" |
+   "cancelled" | "error"`); unknown strings fall back to
+   `"running"` (mirrors the Rust `SubagentStatusDb::from_str_opt`
+   lenient default). Always run `Row.status` through `coerceStatus`
+   before comparing.
+2. **`TranscriptEntry` keeps snake_case `payload_json`** (the Rust
+   struct has NO `rename_all`). The live `subagent:event` payload
+   wraps the body as camelCase `payload`. The store unifies on the
+   **storage shape** internally: when the listener receives a live
+   event, it converts `event.payload` → `entry.payload_json` before
+   buffering. The drawer reads a single `TranscriptEntry[]` and
+   never has to know which source it came from. Parsing
+   `transcriptJson` (DB storage shape, from `get_subagent_run`) uses
+   `parseTranscriptJson()` which reads `payload_json`.
+
+#### 200ms debounce (self-implemented, no lodash)
+
+Live events accumulate in the non-reactive `liveTranscriptBuffer`
+(per-runId); a per-runId `setTimeout(SUBAGENT_EVENT_DEBOUNCE_MS =
+200)` flushes them into the reactive `liveTranscript`. The 200ms
+cadence keeps the drawer lively (a human-perceptible update rate)
+without re-rendering on every SSE delta (which can be 10+ per second
+during a busy worker). Tests use `vi.useFakeTimers()` to control the
+flush deterministically. `stop()` flushes any pending buffer so the
+last batch isn't lost on unmount.
+
+#### Drawer data-source priority (R6)
+
+```
+store.liveTranscript.get(openRunId)                       // 1. live stream (worker running)
+  ?? parseTranscriptJson(getRunCache.get(openRunId)?.transcriptJson)  // 2. DB cache (worker done)
+  ?? []                                                    // 3. empty state ("Worker is starting...")
+```
+
+#### `<SubagentDrawer>` UX mode
+
+Right-side fixed panel (~480px wide, full-height), slides in from
+the right (180ms transform). Click-outside / Esc / X close button
+clears `openRunId`. Header: status badge (color per status:
+running=shell amber / completed=write green / cancelled=muted /
+error=red) + subagentName + startedAt + finishedAt (if any) +
+summary (if any). Body: scrollable transcript list; per entry: kind
+badge (chat=gray / call=blue / result=green / perm=orange) +
+`JSON.stringify(payload_json, null, 2)`. Filter row: "Show chat
+events" toggle (chat_event entries default hidden — they're verbose
+LLM deltas; tool_call/tool_result/permission_ask always visible) +
+"原 transcript 已截断 (head + tail)" notice when
+`transcriptTruncated !== 0`. Empty state: "Worker is starting...".
+
+**Implementation note (reka-ui version pin)**: the PRD specified
+reka-ui `Sheet`, but reka-ui@2.9.9 (this project's pinned version
+per `reka-ui-usage.md`) does NOT ship the `Sheet` primitive. We
+compose the drawer out of the existing `Dialog*` primitives +
+side-panel CSS (fixed right + full height + slide-in transition).
+Functionally identical to a Sheet for our use case.
+
+#### Drawer vs popover-pattern.md
+
+The drawer is a **click-triggered + persistent + side-panel**
+surface. This contrasts with `popover-pattern.md`'s
+**hover-triggered + ephemeral + anchored** surfaces (tooltips,
+per-row hover menus). The two patterns don't conflict — each owns
+its own trigger / lifecycle / positioning strategy. Drawer state
+lives in `subagentRuns.openRunId`; popover state lives in the
+host component's local refs. The drawer is single-instance (opening
+run B closes run A — no nesting, per PRD Out of Scope).
+
+#### `<ToolCallCard>` dispatch_subagent branch (R7)
+
+A `dispatch_subagent` `tool_use` card collapses to a single row
+(clickable affordance on the root `.tool-card`). Clicking anywhere
+on the card calls `subagentRuns.openDrawer(runId)` (resolved via
+`getSummaryByToolUseId`); the card does NOT expand an inline
+transcript. The card also lazy-fetches
+`subagentRuns.fetchForSession(currentSessionId)` on mount (so the
+summary lookup has data to read). The default input/output
+`<details>` are suppressed for this tool — the drawer carries all
+the worker state. Lazy-fetch is idempotent (the store replaces the
+cache on every call, so multiple dispatch_subagent cards in the
+same session just re-fetch the same data).

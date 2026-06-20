@@ -871,7 +871,7 @@ terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `Subage
 
 **Base**:parent turn 1 LLM 派 `general-purpose` 改文件 + main=yolo(继承 yolo,写/shell Tier 4 bypass 早返回 Allow)→ worker 跑 `write_file` + `shell`(无 ask modal 阻塞)→ final text "已修改 3 个文件: ..." → Completed。
 
-**Bad**:parent turn 1 LLM 派 `general-purpose` + main=Edit + `write_file`(触发 Tier 4 ask)→ **RULE-A-014 修复前(B6 PR1b)**:worker 路径构造了 `_worker_permission_ctx { is_worker: true }` 但未 thread 进嵌套 `run_chat_loop`,run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }` → `ask_path` 顶部 `if ctx.is_worker { Deny }` 在嵌套路径不可达 → emit `permission:ask` 等 oneshot(永远等不到,worker 无 UI sink)→ **挂起直到 user Stop**。**RULE-A-014 修复后(B6 PR2b)**:worker 路径传 `is_worker=Some(true)` 给嵌套 `run_chat_loop`,loop 内部 `effective_is_worker = is_worker.unwrap_or(false) = true` → `PermissionContext { is_worker: true }` 构造成功 → Tier 4 `ask_path` 顶部立即 `Decision::Deny`,无 oneshot 等待,无挂起;tool_result `is_error=true` + deny 原因回 LLM 自我纠错;1 行 `tool_denied` audit 落地(RULE-A-016 后续把这条 audit 移到 transcript PermissionAsk 而非父 `session_audit_events`)。回归测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`tokio::time::timeout(15s)` 包裹,若 PR2b 修复回退则卡 oneshot 触发 15s 超时 fail)。
+**Bad**:parent turn 1 LLM 派 `general-purpose` + main=Edit + `write_file`(触发 Tier 4 ask)→ **RULE-A-014 修复前(B6 PR1b)**:worker 路径构造了 `_worker_permission_ctx { is_worker: true }` 但未 thread 进嵌套 `run_chat_loop`,run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }` → `ask_path` 顶部 `if ctx.is_worker { Deny }` 在嵌套路径不可达 → emit `permission:ask` 等 oneshot(永远等不到,worker 无 UI sink)→ **挂起直到 user Stop**。**RULE-A-014 修复后(B6 PR2b)**:worker 路径传 `is_worker=Some(true)` 给嵌套 `run_chat_loop`,loop 内部 `effective_is_worker = is_worker.unwrap_or(false) = true` → `PermissionContext { is_worker: true }` 构造成功 → Tier 4 `ask_path` 顶部立即 `Decision::Deny`,无 oneshot 等待,无挂起;tool_result `is_error=true` + deny 原因回 LLM 自我纠错。**RULE-A-016 修复后(B6 PR3a 2026-06-20)**:worker deny 不再写父 `session_audit_events`(改走 sink → transcript PermissionAsk entry,见 §3 "audit 不污染父的分工")。回归测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`tokio::time::timeout(15s)` 包裹,若 PR2b 修复回退则卡 oneshot 触发 15s 超时 fail)。
 
 ### 6. Tests Required
 
@@ -980,7 +980,7 @@ let (out, is_err, update, exit_code) = execute_tool(name, input, ...).await;
 
 ### 1. Scope / Trigger
 
-- Trigger: PR1 落地的 `SubagentBufferSink` transcript(worker chat-event / tool:call / tool:result)是**进程内 in-memory** —— 关掉 app 后 reload 主对话,worker 中间过程全丢。PR3 前端 `ToolCallCard` 展开 UI 需要持久化 transcript 才能渲染;reload-after-restart 必须仍能查;每条 worker 决策(Tier 2/3/4 collapse)需要可审计但不污染父 `session_audit_events`(审计完整性 RULE-A-016 follow-up 单独修)。
+- Trigger: PR1 落地的 `SubagentBufferSink` transcript(worker chat-event / tool:call / tool:result)是**进程内 in-memory** —— 关掉 app 后 reload 主对话,worker 中间过程全丢。PR3 前端 `ToolCallCard` 展开 UI 需要持久化 transcript 才能渲染;reload-after-restart 必须仍能查;每条 worker 决策(Tier 2/3/4 collapse)需要可审计但不污染父 `session_audit_events`(审计完整性 RULE-A-016 closed B6 PR3a 2026-06-20)。
 - Why code-spec depth: mandatory —— 涉及新表 migration / 5 个 CRUD helper / 4 MiB 截断 cap / streaming token_usage 累加(PR2a 顺手解 RULE-A-015 over-broad gate)/ parent-session CASCADE / audit 不污染父(transcript `PermissionAsk` vs `session_audit_events`)分工,每项都是可执行合约。
 - ROADMAP §1.2 B6 Subagent PR2 计划项 + DEBT.md §"子 task 编排建议" PR1+2 拆分。
 
@@ -1112,11 +1112,11 @@ pub fn truncate_transcript_for_persistence(
 - worker `run_chat_loop` 内部 turn 边界已有 `add_token_usage(db, &session_id, &turn_usage)` 调用。worker 复用 `parent_session_id`,且 PR2a 拆出 `add_token_usage_streaming` 版本(独立于 `skip_persist` gate,见 RULE-A-015)。Streaming 路径:worker 每 turn 调 `add_token_usage_streaming(pool, &parent_session_id, &turn_usage)` → 直接累加进父 `sessions.input_tokens_total` 等;**不**经过 `update_run_finished`(那里只算 worker's own `token_usage_json` 字段,作为 run-level snapshot,不是累加源)。
 - 测试 `agent_loop_dispatch_subagent_token_usage_folds_into_parent` 锁定:worker 跑 2 turn,父 session `input_tokens_total` 等于 2 turn 累加值;`subagent_runs.token_usage_json` 解码后是同一 sum(两个来源一致)。
 
-#### audit 不污染父的分工(RULE-A-016 待修,本批不闭环)
+#### audit 不污染父的分工(RULE-A-016 closed B6 PR3a 2026-06-20)
 
-- **当前 PR2 行为**:worker 路径**不**调 `record_audit_event`(由 `run_chat_loop` 函数体内的 16 个 `if !skip_persist` gate 自动实现 —— `record_*_audit` 调用在 gate 内);worker 的 ⑨ 决策存于 transcript 的 `TranscriptKind::PermissionAsk` 事件。
-- **已暴露的污染路径**(RULE-A-016 open,留 follow-up):Tier 4 `ask_path` / `ask_shell` 顶部 `if ctx.is_worker { Decision::Deny }` collapse 路径里**仍调** `record_audit_event(ToolDenied)` —— 写的是父 `session_audit_events`,因为 worker 复用 `parent_session_id` 且 `record_audit_event` 不区分 worker。PR2b 端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 触发后,父 `session_audit_events` 多 1 行 `tool_denied`(应进 transcript PermissionAsk 而非父 audit)。修复 ~5 行:在 `record_audit_event` 入口加 `if ctx.is_worker { 改写 transcript PermissionAsk }` 分支;同步更新 `audit_not_polluted_by_worker` 测试断言。
-- **当前测试**:`audit_not_polluted_by_worker` 只触发 `researcher`(silent allow / Tier 5,无 Tier 4 collapse),父 audit 仍只 2 行(父自己的 ⑨ 决策)。等 RULE-A-016 修复后再扩到 `general-purpose + Tier 4` 场景。
+- **当前行为(post-PR3a)**:worker 路径**不**调 `record_audit_event`(由 `run_chat_loop` 函数体内的 16 个 `if !skip_persist` gate 自动实现 —— `record_*_audit` 调用在 gate 内);worker 的 ⑨ 决策存于 transcript 的 `TranscriptKind::PermissionAsk` 事件。
+- **Tier 4 `ask_path` worker 分支(post-PR3a)**:`ask_path` 顶部 `if ctx.is_worker { ... }` collapse 路径**不**调 `record_audit_event`;改为 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 记录 `TranscriptKind::PermissionAsk` entry 到 worker transcript(PR3 drawer 可见)。父 `session_audit_events` 不被 worker 决策污染。
+- **测试覆盖**:`audit_not_polluted_by_worker`(researcher silent allow / Tier 5)断言父 audit `delta == 2`;`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(general-purpose + Edit + write_file 触发 Tier 4 ask_path collapse)断言父 `tool_denied count == 0` + worker transcript `PermissionAsk count == 1` + audit delta ≤ 2。两个场景都覆盖。
 
 ### 4. Validation & Error Matrix
 
@@ -1132,7 +1132,7 @@ pub fn truncate_transcript_for_persistence(
 | `list_runs_by_session` 空 session | `Ok(vec![])` |
 | 删父 session | `ON DELETE CASCADE` 同步删所有 `subagent_runs` 行;测试 `subagent_runs_cascade_delete_with_parent_session` 锁定 |
 | `status='running'` 行无 `finished_at` | 运行时(running)合法;terminal update 后 `finished_at` NOT NULL |
-| RULE-A-016 已知污染路径 | Tier 4 collapse 的 `tool_denied` 写父 `session_audit_events`(待修,见 §3) |
+| RULE-A-016 已修复(post-PR3a) | Tier 4 collapse worker 分支 emit `PermissionAskPayload` via sink → worker transcript;**不**写父 `session_audit_events`(PR3a 修复,见 §3) |
 
 ### 5. Good / Base / Bad Cases
 
@@ -1144,7 +1144,7 @@ pub fn truncate_transcript_for_persistence(
 
 **Base**(cancel 中途):parent_token 在 worker turn 2 cancel → worker_token child 触发 → SubagentBufferSink.was_cancelled=true → status=Cancelled → `update_run_finished`: status='cancelled', finished_at=NOW, summary="partial result\n\n[CANCELLED_MARKER]", transcript_json 包含 cancel 之前 2 turn 的事件 + `Done{cancelled}` terminal 事件(PR2a 修复 RULE-A-015 后 terminal Done emit 必到 sink), transcript_truncated=0。父 UI reload 后 ToolCallCard 展开看到 "cancelled at turn 2" + 中间 2 turn 的 transcript(可读性 + 可恢复性的中间态)。
 
-**Bad**(RULE-A-016 已知路径):parent turn 1 派 `general-purpose` + main=Edit + `write_file` 触 Tier 4 ask → 修复后(B6 PR2b)worker Tier 4 ask_path 立即 `Decision::Deny`(`is_worker=true` collapse),`format_dispatch_result(SubagentStatus::Error, "denied: ...")` 回 parent,tool_result `is_error=true`;但**`record_audit_event(ToolDenied)` 写进了父 `session_audit_events`**(应进 worker transcript `PermissionAsk` 而非父 audit)→ C4 audit log UI 看到这条 worker 决策污染父 session 的审计流。等 RULE-A-016 修复后,此路径正确归位到 transcript。
+**Good**(RULE-A-016 fixed B6 PR3a):parent turn 1 派 `general-purpose` + main=Edit + `write_file` 触 Tier 4 ask → worker Tier 4 ask_path 立即 `Decision::Deny`(`is_worker=true` collapse),`format_dispatch_result(SubagentStatus::Error, "denied: ...")` 回 parent,tool_result `is_error=true`;PR3a 修复后,worker 分支**不**写 `record_audit_event(ToolDenied)`,改为 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 记录 `TranscriptKind::PermissionAsk` entry 到 worker transcript → 父 `session_audit_events` 不被污染,C4 audit log UI 只看父自己的 ⑨ 决策;PR3 drawer 可见 worker 的 deny 决策(transcript 中)。
 
 **Bad**(RULE-A-015 已修但 spec 留档):如果 PR2a 没拆 `add_token_usage` 和 terminal `Done` emit 2 处 `skip_persist` gate,worker 跑完时 `subagent_runs.status` 永远='completed'(cancelled 路径也走 Completed 因为 `was_cancelled=false`,sink 没收到 terminal Done),`sessions.input_tokens_total` 永远是 parent dispatch 前的值(worker 期间的 token 没 streaming 进来)。回归测试 `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` 锁定 fix。
 
@@ -1177,7 +1177,7 @@ pub fn truncate_transcript_for_persistence(
 | `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` | parent_token cancel 中途 → status='cancelled' + finished_at NOT NULL(RULE-A-015 回归:terminal Done emit 不在 skip_persist gate) |
 | `agent_loop_dispatch_subagent_audit_not_polluted_by_worker` | researcher worker(silent allow)→ 父 session_audit_events 行数 == parent 自己的 ⑨ 决策行数(worker Tier 5 不写 audit) |
 | `agent_loop_dispatch_subagent_token_usage_folds_into_parent` | worker 跑 2 turn → 父 sessions.input_tokens_total = 2 turn 累加 + subagent_runs.token_usage_json = 同一 sum |
-| `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014:parent Edit mode + general-purpose + write_file → `tokio::time::timeout(15s)` 包裹;worker Tier 4 ask_path 立即 Decision::Deny(无 oneshot 等待,无挂起)→ tool_result is_error=true + deny 原因 + 1 行 tool_denied audit(RULE-A-016 留 follow-up)|
+| `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014 + RULE-A-016:parent Edit mode + general-purpose + write_file → `tokio::time::timeout(15s)` 包裹;worker Tier 4 ask_path 立即 Decision::Deny(无 oneshot 等待,无挂起)→ tool_result is_error=true + deny 原因;**post-PR3a** worker deny 不写父 audit,改走 sink → transcript PermissionAsk(1 entry);父 audit `tool_denied count == 0` + audit delta ≤ 2|
 
 ### 7. Wrong vs Correct
 
@@ -1240,7 +1240,7 @@ if let Decision::Deny { reason, critical: _ } = decision {
 }
 ```
 
-PR2 当前实现缺这一步(因 RULE-A-016 留 follow-up,见 §3);本段"Wrong vs Correct"留作 RULE-A-016 修复的设计参考。
+PR3a implementation matches this Correct pattern exactly (see `permissions/mod.rs::ask_path` worker branch post-PR3a): the `if ctx.is_worker { ... }` block emits a `PermissionAskPayload` via `sink.emit_permission_ask(...)` (which the `SubagentBufferSink` impl records as a `TranscriptKind::PermissionAsk` transcript entry) instead of calling `record_audit_event`. The `audit_not_polluted_by_worker` test (`delta == 2`) + the `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` test (`tool_denied count == 0` in parent audit + `permission_ask count == 1` in worker transcript + audit delta ≤ 2) lock the post-fix invariant.
 
 ### 8. Design Decisions
 
@@ -1254,7 +1254,7 @@ PR2 当前实现缺这一步(因 RULE-A-016 留 follow-up,见 §3);本段"Wrong 
 #### Decision: audit 不污染父 — worker 决策走 transcript `PermissionAsk` 而非 `session_audit_events`
 
 - **Context**:worker 复用 `parent_session_id` 是必须的(PR1 决策 5:`UNIQUE (session_id, seq)` 约束 + DB linkage 简化),但 `record_audit_event` 用 `ctx.session_id` 写入,**不分 worker / parent** → worker 的 ⑨ 决策会被审计行误写到父 `session_audit_events` 表。
-- **Decision**:worker 路径的 ⑨ 决策(Deny / ToolExecuted / PermissionAsk)**不写**父 `session_audit_events`;由 `SubagentBufferSink` 的 `transcript` 累积 `TranscriptKind::PermissionAsk` 事件,PR2 落 `subagent_runs.transcript_json`。前端 C4 audit log 查父 session 时不显示 worker 决策行(`audit_not_polluted_by_worker` 测试锁定 —— researcher silent allow 场景);RULE-A-016 修 Tier 4 collapse 路径(把 `record_audit_event(ToolDenied)` 改 `if !ctx.is_worker { record_audit_event } else { 写 transcript }`,留 follow-up)。
+- **Decision**:worker 路径的 ⑨ 决策(Deny / ToolExecuted / PermissionAsk)**不写**父 `session_audit_events`;由 `SubagentBufferSink` 的 `transcript` 累积 `TranscriptKind::PermissionAsk` 事件,PR2 落 `subagent_runs.transcript_json`。前端 C4 audit log 查父 session 时不显示 worker 决策行(`audit_not_polluted_by_worker` 测试锁定 —— researcher silent allow 场景);RULE-A-016(closed B6 PR3a 2026-06-20)已修 Tier 4 collapse 路径 —— `ask_path` worker 分支不调 `record_audit_event(ToolDenied)`,改为 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 写 transcript `PermissionAsk` entry。`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 测试断言反转:`tool_denied count == 0` in parent audit + transcript `PermissionAsk count == 1` + audit delta ≤ 2。
 - **Why 不直接给 `record_audit_event` 加 `is_worker` 参**:保持 record_audit_event 接口稳定(已 11+ 调用点),在 caller 层(if-else 写 audit / 写 transcript)显式区分;新增 `is_worker` 参会让所有 caller 多 1 个无关参数,影响面大。`if !ctx.is_worker` 入口守门是更小的 change。
 
 #### Decision: 4 MiB transcript cap(防单 worker 撑爆 DB)

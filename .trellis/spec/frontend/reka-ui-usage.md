@@ -124,6 +124,57 @@ impact.
 
 ---
 
+## Gotcha: `Sheet` does NOT exist in 2.9.9
+
+**Symptom**: `import { Sheet } from "reka-ui"` (or any
+`Sheet*` primitive — `SheetRoot` / `SheetContent` /
+`SheetOverlay` / `SheetTrigger` / `SheetClose`) fails
+the build / type-check, or imports as `undefined` and
+renders empty.
+
+**Cause**: reka-ui's `Sheet` primitive (the side-panel
+drawer — Radix's "Dialog rendered as a side panel"
+variant) is not in the 2.9.9 API; it was added in a
+later version. Same version-gap class as `TextFieldRoot`
+above: the Radix / reka-ui docs show `Sheet`, but 2.9.9
+doesn't ship it.
+
+**Fix**: compose a side-panel drawer from the existing
+`Dialog*` primitives (`DialogRoot` / `DialogPortal` /
+`DialogOverlay` / `DialogContent` / `DialogTitle` /
+`DialogClose`) + sidebar CSS
+(`position: fixed; inset-block: 0; right: 0; transform:
+translateX(...)` slide-in). The `Dialog*` set already
+provides focus trap, Esc-to-close, click-overlay-to-close
+(via `DialogOverlay`), and `data-state` for enter/exit
+animation — functionally equivalent to `Sheet` for our
+right-anchored side-panel use case.
+
+**Production instance** (2026-06-20, B6 PR3):
+`app/src/components/chat/SubagentDrawer.vue` — right-side
+drawer showing a worker subagent's live transcript.
+Composed from `Dialog*` + `.subagent-drawer__*` classes;
+open state bound to the `subagentRuns` store's `openRunId`.
+**Render `<DialogOverlay>`** — the overlay CSS is dead
+weight without it and click-outside-to-close won't work
+(this was a real bug caught in review: the CSS class was
+defined but the element wasn't mounted; overlay was
+invisible and clicks fell through).
+
+**Why not upgrade reka-ui**: the version pin is deliberate
+(see Version Pin above); upgrading risks API renames
+touching every consumer. The `Dialog*` composition satisfies
+every drawer requirement (right side panel, Esc /
+click-outside / X close, focus trap).
+
+**When to revisit**: if / when the project upgrades to a
+reka-ui version that ships `Sheet`, migrate
+`SubagentDrawer.vue` to native `Sheet*` in a follow-up.
+The accessibility + behavior contract is identical, so the
+swap is mechanical.
+
+---
+
 ## Gotcha: `<style scoped>` does NOT apply to portal children
 
 **Symptom**: a `SelectContent` (or any other reka-ui primitive
