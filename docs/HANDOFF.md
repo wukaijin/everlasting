@@ -41,7 +41,7 @@
 **下一步候选**(详见 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),以 `git log` + ROADMAP 为准):
 - 🟢 第一档(4 项)✅ 全部完成:A4 Token 用量 / B5 Memory(user+project)/ C1 取消机制 / D1 session 重命名
 - 🟡 第二档:B3 `/command` palette ✅ / C4 审计日志查询 UI ✅ / B2 @文件补全 ✅ / D3 消息编辑重发 ✅ — **仅剩 D2 FTS5 全文搜索**
-- 🟠 第三档:B4 Skill ✅(2026-06-18 落地,`skill/` 模块 + `/skill` + `use_skill` tool);余 B6 Subagent / B9 生成式 UI / C2 循环检测 / C6 大输出截断 / B1 图片 / A5-A6 打磨
+- 🟠 第三档:B4 Skill ✅(2026-06-18 落地,`skill/` 模块 + `/skill` + `use_skill` tool);**B6 Subagent 大部分完成**(2026-06-18/20 五 PR + 2 hotfix + 1 FT:dispatch_subagent + worker isolation / subagent_runs 持久化 / PR3 drawer + PR3b race fix + polish / B1+B2 drawer hotfix / FT-F-005 drawer failed banner),剩 FT-F-001 typed-cards(待 PR1 解 blocker)+ FT-F-002/003/004 placeholder;余 B9 生成式 UI / C2 循环检测 / C6 大输出截断 / B1 图片 / A5-A6 打磨
 - 🔴 第四档(远期,3 项):B8 DAG workflow / B10 飞书 IM / B11 云端同步
 
 **最近 commit**:用 `git log -1 --oneline` 查,本文档不再硬编码(容易滞后)。
@@ -173,7 +173,8 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 - **当前 branch**:`main`
 - **远端**:`git@github.com:<your-github-username>/everlasting.git`,**已同步**
 - **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
-- **当前日期**:2026-06-18
+- **当前日期**:2026-06-20
+- **最近 session 交接**:`/tmp/everlasting-handoff-session50-2026-06-20.md`(Session 50 收尾生成,Session 51 依其推荐路径修了 B1+B2;后续 session 接力时建议沿用"short-term hotfix"模式 — handoff 文档列已识别债,直接走 1 个 PR,绕过 FT 阻塞链)
 
 ---
 
