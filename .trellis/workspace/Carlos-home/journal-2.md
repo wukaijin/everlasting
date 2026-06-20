@@ -1131,3 +1131,36 @@ doc-trim-2026-06 任务 (Session 55) 留下 3 个 known leftover,本次任务合
   - 7+ 个 >600 行 markdown 文件已瘦身,本次 doc-trim + cleanup 共减 ~3450 行;还有 ARCHITECTURE.md (856L) / popover-pattern.md (854L) / reka-ui-usage.md (834L) / state-management.md (776L) / worktree-contract.md (714L) / memory.md (708L) / workflow.md (690L) 7 篇保持现状 — 若以后需进一步瘦身可独立 task
   - DEBT.md 9 项 open 仍是债项,需独立 task 关闭 RULE-D-001 (API key 加密) 等
 - 用户决定是否启动上述后续任务
+
+
+## Session 55: fix deepseek relay thinking-block drop (turn-2 400)
+
+**Date**: 2026-06-21
+**Task**: fix deepseek relay thinking-block drop (turn-2 400)
+**Branch**: `main`
+
+### Summary
+
+根因: wukaijin.com 中转站(上游 deepseek-v4-flash)要求 content[].thinking 块 + 顶层 reasoning_content 字段两者必备(签名不验证); 06-20 的 apply_deepseek_reasoning_fix 误删空签名 thinking 块, 触发 turn-2 400 "thinking must be passed back". 用真实中转站 V1/V2/V3 探针实验先验证归因(旧 fix 从现象猜的归因是错的)再改代码: 取消 retain 删块 + 把 reasoning_content lift 推广到所有 thinking 块. 重写 2 个把错误契约 pin 死的测试 + 新增 deepseek_relay_contract_v1_v2_v3 pin; spec llm-contract.md Extended Thinking 补 relay 契约/V1V2V3 表/错误矩阵/Wrong-Correct/归因实测教训. cargo test --lib 740 pass.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `55aa9f3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
