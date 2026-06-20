@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "检查:⑨ 关段已删,头部 cross-ref 正确,总行数 ~1614 (-350)"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "保留不动,289 行"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "检查:4 处断链修复 (line 383/429/656/739-741)"}
+{"file": ".trellis/spec/archive/implementation-inception-2026-06-04-to-05.md", "reason": "检查:8 处断链修复 (line 33/35/37/39/51/52/53/57)"}
