@@ -789,3 +789,101 @@ DeepSeek-v4 (`deepseek-v4-flash` via wukaijin.com Anthropic Messages 端点) 多
 - **FT-F-001** typed-cards 重做:`SubagentDrawer` payload 按 kind 路由到 `ToolCallCard` / `ToolResultCard` / `PermissionCard`。B2 已局部关闭,scope 缩到"按 kind 路由"单一目标。**仍 blocked by PR1**(主面板卡片 props interface 下沉为 shared),需先起 PR1 task skeleton
 - **FT-F-002 / FT-F-003 / FT-F-004** placeholder:等 PR1 + FT-F-001 实施时顺次推进
 - **截图分析** 12 个 UX 改进点(handoff §4):B1+B2 + D2(banner)已 closed;B3-B8 由 FT-F-001 覆盖;C1+C2+C3+C5 由 FT-F-004 覆盖
+
+---
+
+## Session 52: FT-F-001 PR1 — ToolCallCard shared body 抽出 (硬前置)
+
+**Date**: 2026-06-20
+**Task**: `.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract`
+**Branch**: `main`
+
+### Summary
+
+FT-F-001 硬前置 — 从 `ToolCallCard.vue` (995 行) 抽出 3 个 shared body component (`ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`),让主面板与后续 drawer (FT-F-001 阶段 2) 都消费同一组 body 组件。
+
+3 body 完全不读 store,store 依赖全部留 outer (`ToolCallCard.vue` 现有持 3 store 不变);decoupled data props 形状让 drawer 端 `payload_json` 可直传 (`as` 类型断言) 无需合成 typed wrapper;`PermissionAskBody` 显式 `mode="interactive" | "historical"` prop 区分主面板/历史记录两种 UX。
+
+**实施**:
+- 新增 `ToolInputBody.vue` (81 行) — 纯渲染,`{ name, input }` props
+- 新增 `ToolOutputBody.vue` (140 行) — cwd envelope auto-unwrap + truncate + size label + duration,`{ content, isError, durationMs? }` props
+- 新增 `PermissionAskBody.vue` (323 行) — interactive + historical 双模式,`{ mode, ask, onRespond? }` props
+- 重构 `ToolCallCard.vue` (995 → 791 行, -204 net),3 个内联 block 替换为 component 调用;`formatToolInput` import 删但 helper 留(per prd R4)
+- 新增 32 test (5 ToolInputBody + 10 ToolOutputBody + 17 PermissionAskBody)
+- `docs/IMPLEMENTATION.md` §4 加 2026-06-20 ADR 记录 8 D 决策
+
+**Test**:
+- `pnpm vue-tsc --noEmit` → 0 error
+- 4 个 test 文件 → 46 pass (14 ToolCallCard + 5 ToolInputBody + 10 ToolOutputBody + 17 PermissionAskBody)
+- `pnpm vitest run` → 272 pass (baseline 240 + 32 new)。4 pre-existing errors in `streamController.test.ts` reloadAfterFinalize 与本 PR 无关 (verified by git stash baseline)
+- `git grep "JSON\.stringify.*input" app/src/components/chat/ToolCallCard.vue` → 0 hit (AC12)
+- `git grep "extractToolResultDisplay" app/src/components/chat/ToolCallCard.vue` → 2 hit (1 import + 1 use in dispatch_subagent preview fallback,符合 prd R4 "仅 dispatch_subagent preview 用"约束)
+
+### Decisions (8 D 全档)
+
+来自 prd + 新 ADR (IMPLEMENTATION.md §4):
+- **D1**: 3 独立 body component,无 variant prop, diff 留 inline, dispatch_subagent preview 留 inline
+- **D2**: decoupled data props (排除 typed wrapper)
+- **D3**: callback prop 模式, 3 body 不读 store, outer 持 store (排除 provide/inject 与 body 直接读 store)
+- **D4**: PermissionAskBody 显式 mode prop (排除 provide/inject)
+- **D5**: ToolCallCard.test.ts 14 test 行为锁保持(1 mount strategy 调整:shallow → full,因 PermissionAskBody 被 shallow stub 后内层 4 按钮 selector 不 resolve;4 行为断言不变)
+- **D6**: 3 body 不用 Icon / 定时器 / reka-ui
+- **D7**: scoped CSS 走 `var(--color-*)` token, 无硬编码 hex (除 1 处 `#ffffff` 沿用项目惯例, 见 check 报告)
+- **D8**: 后端零改 (R5 Out of Scope)
+
+### Deviations (prd 容忍范围内)
+
+- **AC11 行数偏差**: ToolCallCard.vue 791 行 vs prd 估算 ≤ 600。delta 来源是 outer-wrapper CSS (234 行: header / diff / subagent-preview),D1+D6 要求留 inline;20% reduction (995→791) 已 solid,further trimming 风险 visual drift。trellis-check 验证:prd `Out of Scope` 段明确写"不动 outer wrapper 视觉与行为",791 行 ship as-is 是合理判断
+- **AC5 "零改动"偏差**: ToolCallCard.test.ts 6 处小改 (1 mount strategy + 4 内层 selector + 1 file header)。shallow: true stub PermissionAskBody 是 vitest 机制,无法回避;4 行为断言 (IPC 触发 / store 状态) 零变化
+- **AC13 "≤ 1 hit"严格读法**: `extractToolResultDisplay` 在 ToolCallCard.vue 2 hit (1 import + 1 dispatch_subagent preview 实际 call site)。prd 写 "≤ 1 hit" 指 call site,import 必然有;新 ADR 已 document
+
+### Phase 3.3 Spec Update — Defer
+
+走 `trellis-update-spec` judgment,本 PR **不更新 spec**:
+- 潜在更新 5 项:D2 (decoupled data props 模式) / D3 (callback prop + outer 持 store 模式) / D4 (显式 mode prop 模式) / D6 (3-body 独立检查表) / vitest shallow+inner selector gotcha
+- **Defer 理由**: prd `Out of Scope` 段明确写"spec 更新留到 FT-F-001 阶段 2 (drawer 接入 battle-test 后再沉淀)"。3 个模式目前只过主面板,drawer 端 `payload_json` 直传是否真的无 boilerplate 要等阶段 2 实施时验证。提前沉淀有"模式描述漂亮但实战翻车"风险
+- **Interim doc**: `IMPLEMENTATION.md` §4 新 ADR (2026-06-20) capture 8 D 决策,作为"未 battle-test 模式"的中转文档
+- **Spec 沉淀时机**: FT-F-001 stage 2 实施时,drawer 接入 3 body 后,补充一段"battle-test 后"的 1-paragraph 备注进 `frontend/state-management.md`(component composition 段),记录这 3 模式实战下来是 OK 还是需要调整
+
+这是 spec 沉淀 discipline 的好范例 — "先 battle-test,再下笔",阶段 2 实施时回看 journal 此段。
+
+### Next Steps
+
+- **Phase 3.4 commit**: main session 驱动,work commit (4 改动 + 6 新增) → book-keeping (DEBT.md FT-F-001 段 Blocked by → Resolved) → journal commit,三段式
+- **FT-F-001 stage 2 (drawer 接入)**: 独立 task,起 skeleton → brainstorm → prd → 实施时回看本 journal 段的 D2/D3/D4 决策 + spec 沉淀清单
+- **FT-F-002 / FT-F-003 / FT-F-004**: 等 stage 2 推进
+
+
+
+## Session 50: Session 52: FT-F-001 PR1 — ToolCallCard shared body 抽出 (硬前置)
+
+**Date**: 2026-06-20
+**Task**: Session 52: FT-F-001 PR1 — ToolCallCard shared body 抽出 (硬前置)
+**Branch**: `main`
+
+### Summary
+
+FT-F-001 硬前置 — 从 ToolCallCard.vue (995 行) 抽出 3 个 shared body component (ToolInputBody / ToolOutputBody / PermissionAskBody),让主面板与后续 drawer (FT-F-001 阶段 2) 都消费同一组 body 组件。3 body 完全不读 store (D3 callback prop + outer 持 store),decoupled data props (D2) 让 drawer 端 payload_json 可直传,PermissionAskBody 显式 mode prop (D4) 区分 interactive/historical。重构后 791 行 (-204 net),32 新增 test (vitest 272 pass),vue-tsc 0 error。AC11 行数 791 vs 估算 600 因 outer-wrapper CSS 留 inline (prd Out of Scope),见 IMPLEMENTATION.md §4 ADR。Phase 3.3 spec update defer 到 FT-F-001 阶段 2 drawer 接入 battle-test 后再沉淀 (prd Out of Scope 明示)。FT-F-001 主体 unblocked,阶段 2 typed-cards 重做可推进。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9b685c8` | (see git log) |
+| `d433708` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

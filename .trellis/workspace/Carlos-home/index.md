@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 49
+- **Total Sessions**: 50
 - **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~740 | Active |
+| `journal-2.md` | ~889 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 50 | 2026-06-20 | Session 52: FT-F-001 PR1 — ToolCallCard shared body 抽出 (硬前置) | `9b685c8`, `d433708` | `main` |
 | 49 | 2026-06-20 | Session 51 — FT-F-005 SubagentDrawer failure-reason banner | `2077caa`, `0cf2ae0`, `9e2b020` | `main` |
 | 48 | 2026-06-20 | Session 50 — SubagentDrawer B1+B2 hotfix | `8c8ae47`, `969297d` | `main` |
 | 47 | 2026-06-20 | B6 PR3 前端 drawer + subagentRuns store（PR2 hotfix + RULE-A-016） | `1308a23`, `d12531d`, `255176d` | `main` |
