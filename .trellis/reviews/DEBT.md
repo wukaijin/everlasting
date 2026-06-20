@@ -266,6 +266,20 @@
 - **Closed At**: `361336e`
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
+### RULE-D-003 — DeepSeek-Via-Anthropic-Relay reasoning_content 回传 400
+
+- **Level**: P1
+- **Subsystem**: Provider
+- **File**: `app/src-tauri/src/llm/provider/anthropic.rs:627-748` (`apply_deepseek_reasoning_fix`)
+- **Description**: Anthropic adapter 发请求时只发 Anthropic 标准 `thinking` block + `signature`,wukaijin.com 等中转站 thin passthrough 到 DeepSeek V4 时,DeepSeek V4 thinking mode 契约要求 assistant message 带顶层 `reasoning_content` 字段;中转站累积状态校验失败后 400 "The reasoning_content in the thinking mode must be passed back to the API"
+- **Impact**: DeepSeek-via-wukaijin 多轮对话 4 个 session 中 3 个 400(DB 验证,`session_audit_events` 时间线 + `messages.created_at` + Anthropic SSE 解析 `signature` 字段值交叉佐证),用户体验断流;e9bf6c07 session 8 turn 跑通是 user 主动结束而非修复
+- **Fix**: `apply_deepseek_reasoning_fix` 纯函数(`&ChatRequest` → `serde_json::Value`):(A) 对带 non-empty sig thinking block 的 assistant message 加顶层 `reasoning_content` 字段(Anthropic 协议非标扩展);(B) 移除 `signature: ""` 的 thinking 块;`chat_stream_with_tools` 签名从 `(config, req: ChatRequest)` 改为 `(config, body: serde_json::Value)`,`.json(&req)` 改为 `.body(body.to_string())`;7 个新单测覆盖 R1-R4 + 多块拼接
+- **Status**: **closed (2026-06-20)** — 1 文件 450 insertions,`cargo test --lib` 739 passed(anthropic 18 + openai 35 + wire 20,OpenAI 路径未触碰);Anthropic 原生 Claude 路径 1:1 兼容(`reasoning_content` 字段被忽略,顶层 `thinking: adaptive` 字段保留)
+- **Owner**: carlos
+- **Related Task**: .trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400
+- **Closed At**: `8664ab6`
+- **Discovered In**: warn log `RUST_LOG=warn` 复现 400 + DB 4 session 对比 + Anthropic SSE 解析 sig 字段值
+
 ### RULE-E-004 — glob 用 sync std::fs::read_dir 阻塞 tokio runtime
 
 - **Level**: P1
