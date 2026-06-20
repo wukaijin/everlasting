@@ -836,14 +836,16 @@
 - **Files**: `app/src/components/chat/ToolCallCard.vue`(retry polling 出口)+ UI toast / inline warning 组件(待选)
 - **Description**: `openSubagentDrawer` retry polling `1.5s / 5 次` 后**仍 cache miss** 时,目前 silent 回退到默认 `点击查看 worker 详情` 视觉(零反馈)。UX 增强:5 miss 后给用户 toast / inline warning,解释原因 + 提供手动 retry 入口。
 - **前置依赖(无)**:可独立 PR;retry polling 入口已存在
-- **Status**: open
+- **Status**: **closed (2026-06-21)**
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-toast-fallback/`
-- **Decisions to revisit**:
-  - UI 反馈形式:复用现有 toast 组件 / 新做 ToastService / inline warning
-  - 文案:暴露原因(race / network / worker 没启动)还是统一模糊文案
-  - session 级 IPC 整体挂掉时,所有 dispatch_subagent 卡片都触发 toast 的收口方案
-- **Why deferred**:
+- **Closed At**: `3bf2b99` (commit hash)
+- **Closure Note**:2026-06-21 Session 54 grill 拷问前提 + 5 Open Questions。**前提校准**:retry polling(B6 PR3b)本身已是 IPC race 吸收层,FT-F-003(unmount guard)不影响 miss 频率 —— 1.5s 后仍 miss = 真实故障(worker 没启动/IPC 挂/ID 漂移),非 race。**收窄**:drop toast 组件/ToastService/session 级 banner → 最小 inline 提示(卡片第三态)。实现:`workerMissed` ref(default/waiting/missed 三态),`openSubagentDrawer` 入口清(retry)+ miss 路径设(after FT-F-003 unmount guard);template missed 态 `<Icon name="warn"> worker 未响应,点此重试`;`--color-tool-shell` warning tint(非 error red —— miss 非硬故障);复用卡片 @click 重试(不加 button);per-card 各自反馈。文案中性不猜原因(前端无法确认 race/network/worker 没启动)。+ 2 missed test(fake-timer advance loop,引用 subagentdrawer-banner-test-gotchas memory 的 Date.now() 同步推进坑)。290 pass,vue-tsc 0 error。
+- **Decisions resolved**(原 Decisions to revisit):
+  - UI 形式:**inline**(卡片第三态,drop toast/ToastService/session banner)
+  - 文案:"worker 未响应,点此重试",**不暴露原因**(前端无法确认)
+  - session 级 IPC 挂收口:**drop**,per-card 各自反馈
+- **Why deferred**(历史):
   - 当前 silent 回退非 broken,只是"用户不知情",race fix 才是 B6 PR3b 核心
   - 缺真实 miss 频率数据(可能 race 修好后就几乎不触发,toast 反而是噪音)
 - **Related FT (同次 session)**:FT-F-001 / FT-F-003
@@ -1050,5 +1052,5 @@
 
 ---
 
-**最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-004 closed**(`9e41594`)— SubagentDrawer UX polish bundle:grill(2026-06-21)拷问 5 Open Questions + 1 prd 过时点后,4 项收窄为 3 项(C5 drop)。C1 加宽 480→640px(drop overflow-x —— break-all 对无空格 path 正确,且 prd 要改的那个 `<pre>` 已被 FT-F-001 typed-cards 删);C2 开始+结束双时刻本地 HH:MM:SS(`utils/time.ts` formatTime,`new Date(iso)` 转 local 不截 UTC 避 ~8h drift)+ clock icon;C3 filter-row 纯数字 N events + 未勾 `+X chat hidden`(修正 prd 反向副计数方向)+ drop 进度条(M 流式未知)。C5 drop(mask 不判断 overflow + 淡化 "↓ N new" sticky 浮钮 + drawer 已有 autoFollow/浮钮/jump 动态提示)。288 pass,vue-tsc 0 error。剩余同源 follow-up:FT-F-002(toast fallback)。
+**最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-002 closed**(`3bf2b99`)— SubagentDrawer 1.5s miss 后 inline 提示(原 toast fallback):grill 前提校准 —— retry polling(B6 PR3b)已是 race 吸收层,FT-F-003(unmount guard)不影响 miss 频率,1.5s miss=真实故障(worker 没启动/IPC 挂/ID 漂移)。收窄 drop toast/ToastService/session banner → 最小 inline(`workerMissed` 三态 default/waiting/missed + warn icon"worker 未响应,点此重试"+ `--color-tool-shell` warning tint + 复用卡片 @click 重试 + per-card)。miss 路径 `workerMissed=true` 在 FT-F-003 unmount guard 之后(不写 unmounted ref)。290 pass,vue-tsc 0 error。**同 Session 54 前序:FT-F-004 closed**(`9e41594`,UX polish bundle C1+C2+C3)。**FT-F family 全部 closed**(001/002/003/004/005)。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
