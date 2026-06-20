@@ -341,4 +341,99 @@ describe("SubagentDrawer", () => {
     expect(document.body.querySelector(".subagent-drawer__new-events")).toBeNull();
     w.unmount();
   });
+
+  // -------------------------------------------------------------------
+  // Session 50 hotfix (B1, 2026-06-20): terminal-state durations
+  // (error / cancelled) must use `finishedAt - startedAt`, NOT the
+  // live ticker. The bug surfaced when a failed worker was left
+  // open in the drawer — the badge kept growing past the actual
+  // run time. With the system clock 3 hours past the run, the
+  // correct terminal duration is still the frozen `finishedAt -
+  // startedAt` value, regardless of how long the drawer has been
+  // open.
+  // -------------------------------------------------------------------
+
+  it("error state shows terminal duration (finishedAt - startedAt), not the live ticker", async () => {
+    vi.useFakeTimers();
+    // System clock is 3 hours past the run. Without the fix, the
+    // badge would read "failed at 10800.0s" (nowTick - startedAt).
+    // With the fix, it reads the frozen 11.7s.
+    vi.setSystemTime(new Date("2026-06-20T13:00:11.700Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "error",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:11.700Z",
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("failed at 11.7s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("cancelled state shows terminal duration (finishedAt - startedAt), not the live ticker", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-20T13:00:05.300Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "cancelled",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:05.300Z",
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("已停止 at 5.3s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  // -------------------------------------------------------------------
+  // Session 50 hotfix (B2, 2026-06-20): tool_result entries carry the
+  // cwd envelope as a stringified JSON value in payload_json.content
+  // (REQ-16, same shape as the main panel's ToolCallCard). The drawer
+  // must unwrap the envelope and render the inner result string, NOT
+  // the double-encoded JSON with `\"cwd\":\"...\"` escape chars. This
+  // test mirrors the `extractToolResultDisplay` unit test in
+  // `utils/messageFormat.test.ts` but at the drawer level.
+  // -------------------------------------------------------------------
+
+  it("tool_result entries unwrap the cwd envelope and render the inner result text", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    const envelope = JSON.stringify({
+      result: "actual file contents here",
+      cwd: "/data/worktrees/p1/s1",
+    });
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "read_file", input: { path: "/foo" } } },
+      { kind: "tool_result", payload_json: { content: envelope } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const payloads = [...document.body.querySelectorAll(".subagent-drawer__payload")];
+    const payloadTexts = payloads.map((p) => p.textContent ?? "");
+    // The inner result string is rendered (as plain text, no JSON wrapping).
+    expect(payloadTexts.some((t) => t.trim() === "actual file contents here")).toBe(true);
+    // The envelope is NOT visible anywhere — neither the escape noise
+    // nor the bare `"cwd":` key that the old double-stringify would emit.
+    expect(payloadTexts.some((t) => t.includes("\\\"cwd\\\"") || t.includes('"cwd":'))).toBe(false);
+    // tool_call entries keep the old JSON.stringify path (different
+    // shape — no envelope).
+    expect(payloadTexts.some((t) => t.includes('"name"'))).toBe(true);
+    w.unmount();
+  });
 });

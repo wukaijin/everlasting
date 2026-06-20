@@ -42,6 +42,7 @@ import {
   DialogClose,
 } from "reka-ui";
 import Icon from "../Icon.vue";
+import { extractToolResultDisplay } from "../../utils/messageFormat";
 import {
   useSubagentRunsStore,
   coerceStatus,
@@ -139,8 +140,27 @@ const KIND_META: Record<
 };
 
 /** Format a transcript entry's `payload_json` (snake_case DB storage
- *  shape — Drift trap 2) as indented JSON. */
+ *  shape — Drift trap 2) as indented JSON.
+ *
+ *  B2 (2026-06-20): for `tool_result` entries, `payload_json.content`
+ *  is the LLM-facing cwd envelope (REQ-16 — see
+ *  `extractToolResultDisplay` in `utils/messageFormat.ts`), e.g.
+ *  `'{"result":"...","cwd":"/data/wt"}'`. The previous blanket
+ *  `JSON.stringify(payload_json, null, 2)` would re-stringify the
+ *  envelope, producing `\"cwd\":\"...\"` escape noise and rendering
+ *  the envelope JSON instead of the actual tool output. The same
+ *  envelope is unwrapped by `ToolCallCard.vue` on the main panel
+ *  (line 33-37); reusing the helper here keeps the two surfaces in
+ *  sync. Non-`tool_result` kinds (tool_call / permission_ask /
+ *  chat_event) keep the old JSON.stringify path — those don't carry
+ *  the envelope shape. */
 function formatPayload(entry: TranscriptEntry): string {
+  if (entry.kind === "tool_result") {
+    const raw = entry.payload_json?.content;
+    if (typeof raw === "string") {
+      return extractToolResultDisplay(raw);
+    }
+  }
   try {
     return JSON.stringify(entry.payload_json, null, 2);
   } catch {
@@ -179,26 +199,43 @@ const elapsedMs = computed<number>(() => {
  *    - completed → "done in 12.4s" (terminal, computed once)
  *    - error → "failed at 4.2s" (terminal, wall-clock at error)
  *    - cancelled → "stopped at 3.1s" (terminal, wall-clock at cancel)
- *  Falls back to the plain label if the row hasn't loaded yet. */
+ *  Falls back to the plain label if the row hasn't loaded yet.
+ *
+ *  B1 (2026-06-20): the error / cancelled branches previously used
+ *  `elapsedMs` (nowTick - startedMs) for the suffix, which kept
+ *  ticking after the run finished. If the drawer stayed open after
+ *  the worker failed (e.g. user reading the transcript), the badge
+ *  drifted from "failed at 11.7s" (real wall-clock) to "failed at
+ *  14281.9s" (4 hours). Fix: use `finishedAt - startedAt` for all
+ *  terminal states (same formula as `completed`), giving a frozen
+ *  duration that doesn't change while the drawer is open. The
+ *  `terminalDurMs` helper holds the shared computation; the
+ *  running branch stays on the live `elapsedMs`. */
 const statusDisplay = computed<{ label: string; color: string; suffix: string }>(() => {
   const meta = STATUS_META[status.value];
   if (!run.value?.startedAt) {
     return { label: meta.label, color: meta.color, suffix: "" };
   }
+  const startedMs = new Date(run.value.startedAt).getTime();
+  const finishedAt = run.value.finishedAt;
+  const finishedMs = finishedAt ? new Date(finishedAt).getTime() : null;
+  const terminalDurMs =
+    finishedMs !== null && Number.isFinite(finishedMs) && Number.isFinite(startedMs)
+      ? Math.max(0, finishedMs - startedMs)
+      : null;
   if (status.value === "running") {
     return { label: meta.label, color: meta.color, suffix: ` ${(elapsedMs.value / 1000).toFixed(1)}s` };
   }
-  const finishedAt = run.value.finishedAt;
-  const finishedMs = finishedAt ? new Date(finishedAt).getTime() : null;
-  if (status.value === "completed" && finishedMs !== null && Number.isFinite(finishedMs)) {
-    const durMs = Math.max(0, finishedMs - new Date(run.value.startedAt).getTime());
-    return { label: meta.label, color: meta.color, suffix: ` ${(durMs / 1000).toFixed(1)}s` };
+  if (status.value === "completed" && terminalDurMs !== null) {
+    return { label: meta.label, color: meta.color, suffix: ` ${(terminalDurMs / 1000).toFixed(1)}s` };
   }
   if (status.value === "error") {
-    return { label: "failed", color: meta.color, suffix: ` at ${(elapsedMs.value / 1000).toFixed(1)}s` };
+    const suffix = terminalDurMs !== null ? ` at ${(terminalDurMs / 1000).toFixed(1)}s` : "";
+    return { label: "failed", color: meta.color, suffix };
   }
   if (status.value === "cancelled") {
-    return { label: meta.label, color: meta.color, suffix: ` at ${(elapsedMs.value / 1000).toFixed(1)}s` };
+    const suffix = terminalDurMs !== null ? ` at ${(terminalDurMs / 1000).toFixed(1)}s` : "";
+    return { label: meta.label, color: meta.color, suffix };
   }
   return { label: meta.label, color: meta.color, suffix: "" };
 });
