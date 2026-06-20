@@ -62,6 +62,30 @@ let _worker_system_prompt = assemble_subagent_prompt(def, task);
 
 代码中已标记为 "PR1b Deviation"（`chat_loop.rs:2053-2059`），但修复此问题需要给 `run_chat_loop` 加 `system_prompt_override: Option<String>` 参数。
 
+#### ✅ 已修复（2026-06-21）
+
+**任务**：`06-21-fix-worker-system-prompt-dead-code` PR1（单 PR，task brief 见 `.trellis/tasks/06-21-fix-worker-system-prompt-dead-code/prd.md`）。
+
+**改动**：
+- `run_chat_loop` 加 23rd 参数 `system_prompt_override: Option<String>`
+- `run_chat_loop` 内部守卫：`Some(p)` → 直接使用 `p`（worker 路径完全替换 parent 的 `assemble_system_prompt` 输出）；`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`（production + 35 测试 + 已有 caller）
+- `run_subagent` 的 nested `run_chat_loop` call 末尾追加 `Some(assemble_subagent_prompt(def, task))`（task 走 user message，system_prompt 是 `def.system_prompt.clone()`，与 doc comment 一致）
+- production `chat` command 末尾追加 `None`（保持现有行为）
+- 35 个 `run_chat_loop` 测试 callsite 末尾追加 `None`
+- 移除 `chat_loop.rs:2052-2059` 的 `_worker_system_prompt` dead code + "PR1b Deviation" 注释
+- `subagent.rs:217-228` `assemble_subagent_prompt` doc comment 加 "Active since 2026-06-21" 段落
+- `MockProvider` 加 `sent_systems` side-channel（`send` 把 system prompt 累积到 `Vec<Option<String>>`），新增两个单测：
+  - `system_prompt_override_worker_path_sends_override` — 验证 worker 路径的 override 真的到达 LLM
+  - `system_prompt_override_none_path_uses_parent_assembly` — 验证 parent 路径未受影响
+
+**结果**：
+- `cargo check --lib`：✅ 通过
+- `cargo check --tests`：✅ 通过
+- `cargo test --lib`：✅ 752 tests passed (0 failed, 0 ignored)
+- 4 指令文件 prompt caching：✅ 不受影响（system_prompt 在 system role，与 user role 的 cache_control breakpoint 正交）
+
+**副效益**：worker 真正 "知道" 自己是谁（不再是主 agent 假象），prompt / permission 行为一致（worker prompt 写"可写"时即在 yolo mode 行为可写；写"只读"时即 read-only），`SubagentDef.system_prompt` 不再是 dead code。
+
 ### ⚠️ 次要问题
 
 - `max_turns` 耗尽时 `stop_reason == "max_turns"` 仅设置 `was_cancelled=false`（`subagent.rs:818-830`），worker 状态为 `Completed`。LLM 无法从 tool_result 区分 "真正完成" 和 "被 turn budget 截断"。

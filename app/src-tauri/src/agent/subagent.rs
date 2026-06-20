@@ -219,6 +219,21 @@ pub fn lookup_subagent(name: &str) -> Option<&'static SubagentDef> {
 /// the worker does NOT inherit the main system prompt (Claude Code
 /// convention). The mode-specific permission boundary is enforced
 /// at the ⑨ 关 layer, not in the prompt.
+///
+/// **Active since 2026-06-21 (B6 review defect A fix).** The
+/// `assemble_subagent_prompt(def, task)` output is now threaded
+/// as the 23rd `system_prompt_override` parameter on the
+/// `run_chat_loop` nested call (see
+/// `agent::chat_loop::run_subagent`); the loop body short-
+/// circuits the parent's `assemble_system_prompt(mode_prefix,
+/// base_prompt)` step when the override is `Some(_)`. Pre-fix
+/// the prompt was effectively dead code (the worker's
+/// `SubagentDef.system_prompt` was discarded, and the worker
+/// silently received the parent's prompt — contradicting the
+/// mode-specific permission behaviour enforced at the ⑨ 关
+/// layer). See `docs/review/b6-subagent-assessment.md` §2 +
+/// the doc comment on `run_chat_loop.system_prompt_override`
+/// for the full rationale.
 pub fn assemble_subagent_prompt(def: &SubagentDef, _task: &str) -> String {
     // The task itself is delivered as a user message (see
     // `build_worker_messages`); the system prompt is just the

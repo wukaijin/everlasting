@@ -212,6 +212,27 @@ pub async fn run_chat_loop(
     // body itself does NOT use `app_handle` — only `run_subagent`
     // does, when constructing the worker sink.
     app_handle: Option<AppHandle>,
+    // 2026-06-21 fix (B6 review defect A): the worker's
+    // `assemble_subagent_prompt(def, task)` output was previously
+    // dead code (`_worker_system_prompt` discarded at
+    // `chat_loop.rs:2052`); the worker actually inherited the
+    // parent's `assemble_system_prompt(mode_prefix, base_prompt)`
+    // output, which made `SubagentDef.system_prompt` effectively
+    // documentation-only and produced prompt/permission
+    // contradictions in Edit/Plan mode. The fix threads the
+    // worker's overridden prompt as a parameter: when `Some(p)`,
+    // the loop uses `p` directly (skipping the parent's
+    // `assemble_system_prompt` step). When `None`, the loop
+    // builds the prompt from the project + session row (the
+    // production + test path). The `run_subagent` worker
+    // nested call passes `Some(assemble_subagent_prompt(def,
+    // &task))`; the production `chat` command passes `None`.
+    // 4 指令文件 prompt caching is unaffected — the 4
+    // instructions live in a separate user-role synthetic
+    // message with its own `cache_control: Ephemeral`
+    // breakpoint (see `build_instructions_blocks`), independent
+    // of the system role.
+    system_prompt_override: Option<String>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -429,10 +450,26 @@ pub async fn run_chat_loop(
         &worktree_path,
         &head_sha,
     );
-    let system_prompt = crate::agent::system_prompt::assemble_system_prompt(
-        mode_prefix,
-        &base_prompt,
-    );
+    // 2026-06-21 fix (B6 review defect A): the worker path
+    // passes `Some(assemble_subagent_prompt(def, &task))` as the
+    // 23rd `system_prompt_override` parameter; when set, the
+    // worker's `SubagentDef.system_prompt` fully replaces the
+    // parent's `mode_prefix + base_prompt` layers (Claude Code
+    // convention — workers do NOT inherit the main system
+    // prompt). The production + 35 test path pass `None`, so
+    // the existing `assemble_system_prompt(mode_prefix,
+    // base_prompt)` call below runs unchanged. The override
+    // branch short-circuits here so the parent's mode_prefix
+    // (which would tell the worker "you can write" in Edit
+    // mode — contradictorily denied at Tier 4 by `is_worker`)
+    // never reaches the worker.
+    let system_prompt = match system_prompt_override {
+        Some(p) => p,
+        None => crate::agent::system_prompt::assemble_system_prompt(
+            mode_prefix,
+            &base_prompt,
+        ),
+    };
     let _ = &base_prompt;
 
     // Persist the most recent user message before the agent loop runs.
@@ -2049,14 +2086,11 @@ async fn run_subagent(
 
     // Assemble the worker's system prompt — fully replaces the
     // parent's behavior_prompt + mode_prefix + base_prompt layers.
-    let _worker_system_prompt = assemble_subagent_prompt(def, task);
-    // (run_chat_loop builds its own system prompt from the project /
-    // session row; the worker's replacement prompt would need to be
-    // threaded as a parameter to override the assemble_system_prompt
-    // step. For PR1b the worker gets the parent's base prompt — the
-    // worker SubagentDef's system_prompt is used for documentation
-    // only. A future PR will thread an override through. See
-    // PR1b §"Deviations".)
+    // The assembled prompt is threaded as the 23rd
+    // `system_prompt_override` argument to the nested
+    // `run_chat_loop` call below (was previously dead code
+    // discarded at this site; see `docs/review/b6-subagent-assessment.md`
+    // §2 + the doc comment on `run_chat_loop.system_prompt_override`).
 
     // Worker rid + token. The rid is registered into `cancellations`
     // (so user Stop propagates from the parent via the shared map)
@@ -2232,6 +2266,18 @@ async fn run_subagent(
         // below can still borrow `app_handle` — AppHandle is an
         // `Arc` under the hood so the clone is cheap.
         app_handle.clone(),
+        // 2026-06-21 fix (B6 review defect A): thread the
+        // worker's `SubagentDef.system_prompt` (built via
+        // `assemble_subagent_prompt` above) as the 23rd
+        // `system_prompt_override` parameter. When `Some`, the
+        // nested `run_chat_loop` uses this string directly and
+        // skips the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` step. Pre-fix the worker was getting the
+        // parent's system prompt (the worker's own prompt was
+        // dead code), causing prompt / permission contradictions
+        // in Edit/Plan mode (worker told "you can write" but
+        // Tier 4 collapsed write tools to `Deny`).
+        Some(assemble_subagent_prompt(def, task)),
     ))
     .await;
 

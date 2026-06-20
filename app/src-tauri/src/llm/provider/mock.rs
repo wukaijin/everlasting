@@ -106,6 +106,14 @@ pub struct MockProvider {
     /// inside the (sync) `send` impl; tests read it synchronously
     /// after `run_chat_loop` returns.
     sent_messages: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+    /// 2026-06-21 (B6 review defect A fix): per-turn snapshot of
+    /// the `system` prompt the agent loop passed to `send`. Tests
+    /// that exercise the `system_prompt_override` parameter on
+    /// `run_chat_loop` (the worker path) read this back to assert
+    /// the override actually reached the LLM as the system role
+    /// (vs. silently being shadowed by the parent's
+    /// `assemble_system_prompt` output, which was the pre-fix bug).
+    sent_systems: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 /// One step in the mock provider's script — the response to a
@@ -151,6 +159,7 @@ impl MockProvider {
                 supports_streaming: true,
             },
             sent_messages: Arc::new(Mutex::new(Vec::new())),
+            sent_systems: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -187,15 +196,40 @@ impl MockProvider {
     pub fn sent_messages(&self) -> Vec<Vec<ChatMessage>> {
         self.sent_messages.lock().unwrap().clone()
     }
+
+    /// 2026-06-21 (B6 review defect A fix): snapshot of every
+    /// `system` prompt passed to `send`, in call order. The
+    /// worker path's `system_prompt_override` parameter is
+    /// verified by inspecting the first entry — it should equal
+    /// the `SubagentDef.system_prompt` value (NOT the parent's
+    /// `assemble_system_prompt` output). The production path's
+    /// `None` override is verified by inspecting the first entry
+    /// — it should equal whatever
+    /// `assemble_system_prompt(mode_prefix, base_prompt)`
+    /// returns for the harness's project + session.
+    pub fn sent_systems(&self) -> Vec<Option<String>> {
+        self.sent_systems.lock().unwrap().clone()
+    }
 }
 
 impl Provider for MockProvider {
     fn send(
         &self,
-        _system: Option<String>,
+        system: Option<String>,
         messages: Vec<ChatMessage>,
         _tools: Vec<ToolDef>,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static>> {
+        // 2026-06-21 (B6 review defect A fix): capture the per-
+        // turn system prompt so tests that exercise
+        // `run_chat_loop`'s `system_prompt_override` parameter
+        // (the worker path) can assert the override actually
+        // reached the LLM as the system role. Pre-fix the
+        // override was discarded (`_worker_system_prompt` was
+        // dead code), so the parent prompt leaked into the
+        // worker; this snapshot is the regression guard.
+        {
+            self.sent_systems.lock().unwrap().push(system.clone());
+        }
         // B12 (2026-06-19): capture the per-turn request body so
         // integration tests can assert on the ephemeral checklist
         // injection block. The clone is O(turn-messages) — cheap
