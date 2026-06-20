@@ -990,3 +990,37 @@ Session 54: grill FT-F-004(5 Open Questions + 1 prd 过时点——FT-F-001 type
 ### Next Steps
 
 - None - task complete
+
+
+## Session 54: FT-F-002: ToolCallCard workerMissed inline hint after 1.5s miss
+
+**Date**: 2026-06-21
+**Task**: FT-F-002: ToolCallCard workerMissed inline hint after 1.5s miss
+**Branch**: `main`
+
+### Summary
+
+B6 PR3b race fix 已知缺口:ToolCallCard openSubagentDrawer 在 1.5s/5-retry polling 后仍 cache miss 时,silent fallback 到默认视觉无变化。本次改为 inline 文本提示("Worker detail delayed, retrying…" 风格)直接在 card 上呈现,不等 silent 也不强制 toast;通过 DEBT.md FT-F-002 收口。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3bf2b99` | (see git log) |
+| `f695408` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
