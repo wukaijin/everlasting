@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/06-20-b6-pr2-subagent-persistence/prd.md", "reason": "需求/7 Requirements/6 AC/Technical Approach 摘要/Implementation Plan(PR2a + PR2b) 完整实施的 source of truth"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Scenario: dispatch_subagent tool §3 Contracts 定义 subagent_runs schema + token_usage_json + transcript_json + summary + status 字段 + audit 不污染父机制,PR2a 直接照此实施"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Worker Subagent Pattern 段:run_subagent 接入点(chat_loop.rs:1802/1967)+ run_chat_loop 17→20 参背景 + RULE-A-014 偏离说明(PR2b 顺手修)+ 18 skip_persist gate 清单"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 模式(CREATE TABLE IF NOT EXISTS + ALTER probe + CASCADE + indexed ts)+ sqlx 测试 pool setup 约定"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-007 error arm 对称 cancel 路径 persist partial turn,PR2 update_run_finished 失败处理参考"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "MockProvider 驱动的 agent_loop_* 集成测试模式,PR2a 新测试 + PR2b RULE-A-014 端到端测试照此写"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-014 closed at commit hash 回填位置 + §优先级分布 表 P2 22→21"}

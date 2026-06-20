@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/06-20-b6-pr2-subagent-persistence/prd.md", "reason": "Acceptance Criteria(AC1-AC6) + Definition of Done,检查的最高依据"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Scenario: dispatch_subagent tool §3 Contracts + §4 Validation & Error Matrix + §6 Tests Required 验证 PR2a 持久化是否符合 spec"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Worker Subagent Pattern + run_chat_loop 签名不变性 + RULE-A-014 修复 + CancellationGuard skip_session_active 不破坏,检查 PR2b 是否保持架构合规"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新表 migration 模式 + 索引 + CASCADE 是否符合约定,检查 subagent_runs 表结构"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "RULE-A-007 持久化失败处理 + 错误路径 persist,检查 PR2a update_run_finished 失败处理"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "集成测试覆盖要求,检查 PR2a 5-6 测试 + PR2b 1 端到端测试充分性"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-A-014 是否 closed + commit hash 是否回填 + §优先级分布 是否更新"}
