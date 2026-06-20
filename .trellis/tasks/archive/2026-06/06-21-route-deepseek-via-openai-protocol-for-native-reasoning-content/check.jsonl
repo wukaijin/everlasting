@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "验证 OpenAIProvider reasoning_content 回传改动不破坏 wire 层契约(Reasoning/Signature 块、strip_unsupported、OpenAI/Anthropic 协议映射);gpt-4o/4.1 等非 reasoning 的 openai 模型不回归。"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 reasoning 契约:历史 reasoning→reasoning_content 字段、纯 text assistant→'none'、真 Claude(anthropic)路径不回归、SSE delta.reasoning_content→thinking_delta 不变。"}
