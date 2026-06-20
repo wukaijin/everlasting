@@ -23,18 +23,19 @@
 //     (if any) + summary (if any)
 //   - body: transcript list from
 //     `store.liveTranscript.get(openRunId) ?? parse(getRunCache.transcriptJson) ?? []`
-//   - per entry: kind badge (chat_event=gray / tool_call=blue /
-//     tool_result=green / permission_ask=orange) + typed-card body
-//     (FT-F-001 stage 2, 2026-06-20: tool_call→ToolInputBody /
-//     tool_result→ToolOutputBody / permission_ask→PermissionAskBody
-//     (historical) / chat_event→WorkerTextTimeline). Pre-stage-2 the
-//     body was `JSON.stringify(payload_json, null, 2)` in a `<pre>`.
+//   - per entry: B6 PR3 redesign (2026-06-21) — each entry
+//     passes through `pairTranscript()` to merge adjacent
+//     tool_call + tool_result into a single `.tool-card` matching
+//     the main panel's visual language. chat_event /
+//     permission_ask remain standalone. Call+result pairs render
+//     the same .tool-card structure (icon + name + path | status-
+//     icon + status-text + duration) used by ToolCallCard.
 //   - "Show chat events" toggle: chat_event entries default hidden;
 //     tool_call / tool_result / permission_ask always visible
 //   - transcriptTruncated flag → "原 transcript 已截断 (head + tail)"
 //   - empty state → "Worker is starting..."
 
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, reactive, ref, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -54,7 +55,6 @@ import {
   coerceStatus,
   parseTranscriptJson,
   type TranscriptEntry,
-  type TranscriptKind,
   type SubagentStatus,
 } from "../../stores/subagentRuns";
 import { useChatStore } from "../../stores/chat";
@@ -63,6 +63,13 @@ import type {
   Risk,
 } from "../../stores/permissions";
 import { formatTime } from "../../utils/time";
+import {
+  pairTranscript,
+  isErrorResult,
+  type BufferedTranscriptEntry,
+} from "../../utils/transcriptPairing";
+import { toolAccentVar, toolIcon } from "../../utils/messageFormat";
+import { abbreviateDuration } from "../../utils/duration";
 
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
@@ -103,6 +110,120 @@ function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
     reason: p.reason as string | undefined,
     path: p.path as string | undefined,
   };
+}
+
+// -----------------------------------------------------------------------
+// B6 PR3 redesign (2026-06-21): per-entry accessors for the
+// `tool-card` template. Each is a thin read-only helper that pulls
+// a field out of a `TranscriptEntry`'s `payload_json` with a
+// defensive default. The template needs to know the tool name,
+// file path, input, and output content for the header / body of
+// the rendered card; these helpers centralize the type coercions.
+// -----------------------------------------------------------------------
+
+/** Pull the tool name out of a `tool_call`'s `payload_json`. Falls
+ *  back to the result's name (for orphan results) or empty string
+ *  for non-tool entries. Defensive against missing / non-string
+ *  values (pre-redesign rows). For `permission_ask` entries, the
+ *  `PermissionAskPayload` Rust struct has `toolName` / `tool_name`
+ *  fields; we read both spellings (the PR1 `synthesizeAsk` helper
+ *  does the same — keep the two in lockstep). */
+function toolNameOf(e: TranscriptEntry): string {
+  if (e.kind === "tool_call" || e.kind === "tool_result") {
+    const n = e.payload_json?.name;
+    if (typeof n === "string" && n.length > 0) return n;
+    return "";
+  }
+  if (e.kind === "permission_ask") {
+    // permission_ask payload_json may carry either `toolName`
+    // (camelCase — production shape per the Rust
+    // `PermissionAskPayload` `#[serde(rename_all = "camelCase")])`
+    // or `tool_name` (snake_case fallback).
+    const n = e.payload_json?.toolName ?? e.payload_json?.tool_name;
+    if (typeof n === "string" && n.length > 0) return n;
+    return "";
+  }
+  return "";
+}
+
+/** Pull the file path out of a `tool_call`'s `payload_json.input.path`.
+ *  Returns null when the input has no `path` (shell, web_fetch, etc.)
+ *  or when the value is non-string. */
+function filePathOf(e: TranscriptEntry): string | null {
+  if (e.kind !== "tool_call" && e.kind !== "tool_result") return null;
+  const input = e.payload_json?.input as Record<string, unknown> | undefined;
+  if (!input) return null;
+  const p = input.path;
+  if (typeof p === "string" && p.length > 0) return p;
+  return null;
+}
+
+/** Pull the input object out of a `tool_call`'s `payload_json.input`. */
+function inputOf(e: TranscriptEntry): Record<string, unknown> | null {
+  if (e.kind !== "tool_call") return null;
+  const input = e.payload_json?.input;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    return input as Record<string, unknown>;
+  }
+  return null;
+}
+
+/** Pull the content string out of a `tool_result`'s `payload_json.content`. */
+function contentOf(e: TranscriptEntry): string {
+  if (e.kind !== "tool_result") return "";
+  const c = e.payload_json?.content;
+  return typeof c === "string" ? c : "";
+}
+
+/** Pull the `duration_ms` number out of a `tool_result`'s
+ *  `payload_json.duration_ms`. Returns undefined for pre-redesign
+ *  rows (no field) — `ToolOutputBody` treats undefined as "omit
+ *  duration chip" per its file header. */
+function durationMsOf(e: TranscriptEntry): number | undefined {
+  if (e.kind !== "tool_result") return undefined;
+  const d = e.payload_json?.duration_ms;
+  if (typeof d === "number" && Number.isFinite(d) && d >= 0) return d;
+  return undefined;
+}
+
+/** Human-readable duration label for the header. Returns "" for
+ *  pre-redesign rows (no duration). */
+function durationOf(e: TranscriptEntry): string {
+  const d = durationMsOf(e);
+  if (d === undefined) return "";
+  return abbreviateDuration(d);
+}
+
+/** Standalone-entry accent color (for the 3px left border). The
+ *  sub-kinds each have a different color so the user can scan a
+ *  long transcript at a glance: chat_event = muted gray,
+ *  permission_ask = amber, orphan tool_call = amber (matches
+ *  the pending-call color), orphan tool_result = the tool's
+ *  accent. */
+function standaloneAccent(e: TranscriptEntry): string {
+  if (e.kind === "chat_event") return "var(--color-text-muted)";
+  if (e.kind === "permission_ask") return "var(--color-tool-shell)";
+  if (e.kind === "tool_call") return "var(--color-tool-shell)";
+  if (e.kind === "tool_result") {
+    if (isErrorResult(e)) return "var(--color-tool-error)";
+    return toolAccentVar(toolNameOf(e));
+  }
+  return "var(--color-text-muted)";
+}
+
+/** Standalone-entry name to render in the header. For chat_event
+ *  and permission_ask, surface a short label. For tool_call /
+ *  tool_result, fall through to the tool name (matches the paired
+ *  card's header). */
+function standaloneName(e: TranscriptEntry): string {
+  if (e.kind === "chat_event") return "chat event";
+  if (e.kind === "permission_ask") {
+    const toolName = toolNameOf(e);
+    return toolName ? `${toolName} (ask collapsed)` : "permission ask";
+  }
+  if (e.kind === "tool_call") return toolNameOf(e) || "tool call";
+  if (e.kind === "tool_result") return toolNameOf(e) || "tool result";
+  return "";
 }
 
 /** Drawer open state — reka-ui Dialog requires a writable ref. We
@@ -159,11 +280,28 @@ const transcript = computed<TranscriptEntry[]>(() => {
  *  shows tool_call / tool_result / permission_ask by default. */
 const showChatEvents = ref(false);
 
+/** B6 PR3 redesign (2026-06-21): a non-reactive Map tracking the
+ *  first-seen timestamp of each pending tool_call so the 30s
+ *  timeout flush can age out calls across `pairTranscript`
+ *  re-invocations. Lives for the drawer's lifetime; cleared on
+ *  drawer close (the next open starts fresh). See the
+ *  `pairTranscript` docstring for the cross-invocation contract. */
+const pendingFirstSeenAt = reactive(new Map<string, number>());
+
 /** Visible transcript after applying the chat-event filter. */
 const visibleTranscript = computed<TranscriptEntry[]>(() => {
   if (showChatEvents.value) return transcript.value;
   return transcript.value.filter((e) => e.kind !== "chat_event");
 });
+
+/** B6 PR3 redesign (2026-06-21): paired / pending_call /
+ *  standalone buffer view of `visibleTranscript`. Recomputed on
+ *  every `nowTick` tick (5s cadence) so pending calls naturally
+ *  age out from `pending_call` to `standalone` even without new
+ *  transcript events arriving. */
+const bufferedTranscript = computed<BufferedTranscriptEntry[]>(() =>
+  pairTranscript(visibleTranscript.value, Date.now(), pendingFirstSeenAt),
+);
 
 /** FT-F-004 (2026-06-21): chat_event entries the default filter
  *  hides. Surfaced as a "+N chat hidden" hint next to the event
@@ -190,25 +328,19 @@ const isEmpty = computed<boolean>(
   () => transcript.value.length === 0,
 );
 
-/** Kind badge metadata — color per PRD R6 (chat_event=gray /
- *  tool_call=blue / tool_result=green / permission_ask=orange).
- *  Reuses existing CSS color tokens so the palette stays unified. */
-const KIND_META: Record<
-  TranscriptKind,
-  { label: string; color: string }
-> = {
-  chat_event: { label: "chat", color: "var(--color-text-muted)" },
-  tool_call: { label: "call", color: "var(--color-accent)" },
-  tool_result: { label: "result", color: "var(--color-tool-write)" },
-  permission_ask: { label: "perm", color: "var(--color-tool-shell)" },
-};
-
 /** FT-F-001 stage 2 (2026-06-20): the drawer no longer stringifies
  *  `payload_json` into a `<pre>` blob. Each transcript entry routes to
  *  its typed-card body component (see the `<li>` branches in the
  *  template). The old `formatPayload` + `extractToolResultDisplay`
  *  import have been removed; envelope-unwrapping + truncation now live
- *  inside `ToolOutputBody.vue` (PR1 shared body). */
+ *  inside `ToolOutputBody.vue` (PR1 shared body).
+ *
+ *  B6 PR3 redesign (2026-06-21): the old per-entry `.subagent-drawer__kind`
+ *  badge is gone (the new `.tool-card` container has a richer
+ *  status row instead). The `KIND_META` color/label constant has
+ *  been removed; the relevant color mappings are now per-sub-kind
+ *  in `standaloneAccent()` and the new template's `toolAccentVar`
+ *  lookups. */
 
 // ---------------------------------------------------------------------------
 // B6 PR3b (2026-06-20): live duration timer + auto-scroll polish
@@ -327,9 +459,20 @@ watch(
     }
     if (rid) {
       nowTick.value = Date.now();
+      // 100ms cadence drives BOTH the header duration counter
+      // AND the pairing-layer timeout flush (the buffered
+      // transcript re-runs on every nowTick tick; the 30s
+      // pending timeout advances by ~100ms per tick, which is
+      // more than enough granularity for a "未完成" card
+      // falling out of the pending window).
       tickerHandle = setInterval(() => {
         nowTick.value = Date.now();
       }, TIMER_TICK_MS);
+    } else {
+      // Drawer closed — drop the pending-call map so the next
+      // open starts fresh (a new runId won't accidentally inherit
+      // a stale "received at" from the previous run).
+      pendingFirstSeenAt.clear();
     }
   },
   { immediate: true },
@@ -367,11 +510,13 @@ function onBodyScroll(e: Event): void {
 }
 
 /** Watch the rendered transcript count (NOT the full list — we
- *  hide chat_event entries by default; `visibleTranscript` is what
- *  the user sees). When a new entry arrives: if auto-follow is on,
- *  scroll to bottom; otherwise increment the newCount badge. */
+ *  hide chat_event entries by default; `bufferedTranscript` is
+ *  what the user actually sees, since each paired call+result
+ *  collapses to a single card). When a new entry arrives: if
+ *  auto-follow is on, scroll to bottom; otherwise increment the
+ *  newCount badge. */
 watch(
-  () => visibleTranscript.value.length,
+  () => bufferedTranscript.value.length,
   () => {
     if (autoFollow.value) {
       void nextTick(() => {
@@ -543,43 +688,183 @@ function jumpToLatest(): void {
               Worker is starting...
             </div>
             <ol v-else class="subagent-drawer__list">
+              <!-- B6 PR3 redesign (2026-06-21): each entry in
+                   `bufferedTranscript` is rendered as a `.tool-card`
+                   matching the main panel's visual language. Three
+                   branches per the pairing layer's return shape:
+                     - `paired` (call + result merged): one card with
+                       header (icon + name + path | status + duration)
+                       + body (ToolInputBody + ToolOutputBody).
+                     - `pending_call`: amber-bordered card with a
+                       pulsing "未完成" indicator (still within 30s
+                       timeout).
+                     - `standalone`: chat_event (muted) /
+                       permission_ask (amber) / orphan call (amber
+                       "未完成" past timeout) / orphan result
+                       (standard). Each sub-kind keeps its own
+                       accent. -->
               <li
-                v-for="(entry, i) in visibleTranscript"
-                :key="i"
-                class="subagent-drawer__entry"
-                :class="`subagent-drawer__entry--${entry.kind}`"
+                v-for="(b, i) in bufferedTranscript"
+                :key="b.kind === 'paired' ? `pair-${b.tool_use_id}` : b.kind === 'pending_call' ? `pend-${b.tool_use_id}` : `solo-${i}`"
+                class="subagent-drawer__entry-wrapper"
               >
-                <span
-                  class="subagent-drawer__kind"
-                  :style="{ color: KIND_META[entry.kind].color, borderColor: KIND_META[entry.kind].color }"
-                >{{ KIND_META[entry.kind].label }}</span>
-
-                <!-- FT-F-001 stage 2 (2026-06-20): per-kind typed-card
-                     body. Routes by `entry.kind` to the matching shared
-                     body component (PR1's ToolInputBody / ToolOutputBody
-                     / PermissionAskBody) or this drawer's local
-                     WorkerTextTimeline. The outer wrapper (kind badge
-                     + narrow padding) stays inline per D3. -->
-                <div class="subagent-drawer__body-content">
+                <!-- PAIRED: call + result merged into one card. -->
+                <div
+                  v-if="b.kind === 'paired'"
+                  class="tool-card"
+                  :class="{
+                    'tool-card--error': isErrorResult(b.result),
+                  }"
+                  :style="{
+                    borderLeftColor: isErrorResult(b.result)
+                      ? 'var(--color-tool-error)'
+                      : toolAccentVar(toolNameOf(b.call)),
+                  }"
+                >
+                  <div class="tool-card__header">
+                    <div class="tool-card__title">
+                      <span class="tool-card__icon">
+                        <Icon :name="toolIcon(toolNameOf(b.call))" :size="14" />
+                      </span>
+                      <span class="tool-card__name">{{ toolNameOf(b.call) }}</span>
+                      <span
+                        v-if="filePathOf(b.call)"
+                        class="tool-card__path"
+                        :title="filePathOf(b.call) ?? ''"
+                      >· {{ filePathOf(b.call) }}</span>
+                    </div>
+                    <div class="tool-card__status">
+                      <span
+                        class="tool-card__status-icon"
+                        :class="{ 'tool-card__status-icon--error': isErrorResult(b.result) }"
+                      >
+                        <Icon :name="isErrorResult(b.result) ? 'x' : 'check'" :size="14" />
+                      </span>
+                      <span>{{ isErrorResult(b.result) ? 'error' : 'done' }}</span>
+                      <span class="tool-card__duration">{{ durationOf(b.result) }}</span>
+                    </div>
+                  </div>
                   <ToolInputBody
-                    v-if="entry.kind === 'tool_call'"
-                    :name="(entry.payload_json.name as string) ?? ''"
-                    :input="(entry.payload_json.input as Record<string, unknown>) ?? {}"
+                    v-if="inputOf(b.call) && Object.keys(inputOf(b.call) ?? {}).length > 0"
+                    :name="toolNameOf(b.call)"
+                    :input="inputOf(b.call) ?? {}"
                   />
                   <ToolOutputBody
-                    v-else-if="entry.kind === 'tool_result'"
-                    :content="(entry.payload_json.content as string) ?? ''"
-                    :is-error="(entry.payload_json.is_error as boolean) ?? false"
+                    :content="contentOf(b.result)"
+                    :is-error="isErrorResult(b.result)"
+                    :duration-ms="durationMsOf(b.result)"
+                  />
+                </div>
+
+                <!-- PENDING CALL: call is in flight, no result yet
+                     (within 30s timeout). Amber left-border + a
+                     pulsing icon to signal "still working". -->
+                <div
+                  v-else-if="b.kind === 'pending_call'"
+                  class="tool-card tool-card--running"
+                  :style="{ borderLeftColor: 'var(--color-tool-shell)' }"
+                >
+                  <div class="tool-card__header">
+                    <div class="tool-card__title">
+                      <span class="tool-card__icon">
+                        <Icon :name="toolIcon(toolNameOf(b.call))" :size="14" />
+                      </span>
+                      <span class="tool-card__name">{{ toolNameOf(b.call) }}</span>
+                      <span
+                        v-if="filePathOf(b.call)"
+                        class="tool-card__path"
+                        :title="filePathOf(b.call) ?? ''"
+                      >· {{ filePathOf(b.call) }}</span>
+                    </div>
+                    <div class="tool-card__status">
+                      <span class="tool-card__status-icon tool-card__status-icon--running">
+                        <Icon name="ellipsis" :size="14" />
+                      </span>
+                      <span>running…</span>
+                    </div>
+                  </div>
+                  <ToolInputBody
+                    v-if="inputOf(b.call) && Object.keys(inputOf(b.call) ?? {}).length > 0"
+                    :name="toolNameOf(b.call)"
+                    :input="inputOf(b.call) ?? {}"
+                  />
+                </div>
+
+                <!-- STANDALONE: chat_event / permission_ask / orphan
+                     call (past 30s timeout) / orphan result. Each
+                     sub-kind keeps its own accent. -->
+                <div
+                  v-else
+                  class="tool-card"
+                  :class="{
+                    'tool-card--error': isErrorResult(b.entry),
+                    'tool-card--orphan-call': b.entry.kind === 'tool_call' && !contentOf(b.entry) && !inputOf(b.entry),
+                  }"
+                  :style="{ borderLeftColor: standaloneAccent(b.entry) }"
+                >
+                  <div class="tool-card__header">
+                    <div class="tool-card__title">
+                      <span class="tool-card__icon">
+                        <Icon
+                          v-if="b.entry.kind === 'tool_call' || b.entry.kind === 'tool_result'"
+                          :name="toolIcon(toolNameOf(b.entry))"
+                          :size="14"
+                        />
+                        <Icon
+                          v-else-if="b.entry.kind === 'permission_ask'"
+                          name="shield-check"
+                          :size="14"
+                        />
+                        <Icon v-else name="chat" :size="14" />
+                      </span>
+                      <span class="tool-card__name">{{ standaloneName(b.entry) }}</span>
+                    </div>
+                    <div
+                      v-if="b.entry.kind === 'tool_result'"
+                      class="tool-card__status"
+                    >
+                      <span
+                        class="tool-card__status-icon"
+                        :class="{ 'tool-card__status-icon--error': isErrorResult(b.entry) }"
+                      >
+                        <Icon :name="isErrorResult(b.entry) ? 'x' : 'check'" :size="14" />
+                      </span>
+                      <span>{{ isErrorResult(b.entry) ? 'error' : 'done' }}</span>
+                      <span class="tool-card__duration">{{ durationOf(b.entry) }}</span>
+                    </div>
+                    <div
+                      v-else-if="b.entry.kind === 'tool_call'"
+                      class="tool-card__status"
+                    >
+                      <span
+                        class="tool-card__status-icon"
+                        style="color: var(--color-tool-shell)"
+                      >
+                        <Icon name="warn" :size="14" />
+                      </span>
+                      <span>未完成</span>
+                    </div>
+                  </div>
+                  <ToolInputBody
+                    v-if="b.entry.kind === 'tool_call' && inputOf(b.entry) && Object.keys(inputOf(b.entry) ?? {}).length > 0"
+                    :name="toolNameOf(b.entry)"
+                    :input="inputOf(b.entry) ?? {}"
+                  />
+                  <ToolOutputBody
+                    v-else-if="b.entry.kind === 'tool_result'"
+                    :content="contentOf(b.entry)"
+                    :is-error="isErrorResult(b.entry)"
+                    :duration-ms="durationMsOf(b.entry)"
                   />
                   <PermissionAskBody
-                    v-else-if="entry.kind === 'permission_ask'"
+                    v-else-if="b.entry.kind === 'permission_ask'"
                     mode="historical"
-                    :ask="synthesizeAsk(entry.payload_json)"
+                    :ask="synthesizeAsk(b.entry.payload_json)"
                     :repo-root="repoRoot"
                   />
                   <WorkerTextTimeline
-                    v-else-if="entry.kind === 'chat_event'"
-                    :events="[entry]"
+                    v-else-if="b.entry.kind === 'chat_event'"
+                    :events="[b.entry]"
                   />
                 </div>
               </li>
@@ -884,40 +1169,148 @@ function jumpToLatest(): void {
   padding: 0;
   display: flex;
   flex-direction: column;
-}
-
-.subagent-drawer__entry {
-  padding: 6px 16px;
-  display: flex;
   gap: 8px;
-  align-items: flex-start;
-  border-bottom: 1px solid var(--color-bg-border);
-}
-.subagent-drawer__entry:last-child {
-  border-bottom: 0;
+  padding: 8px 12px;
 }
 
-.subagent-drawer__kind {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border: 1px solid;
-  border-radius: 4px;
+.subagent-drawer__entry-wrapper {
+  /* Wrapper around each .tool-card entry. No visual styling itself;
+     the inner .tool-card owns the card surface. The list-level gap
+     (8px) provides visual separation between consecutive cards
+     (was: 1px border-bottom on the old per-kind rows). */
+  list-style: none;
+}
+
+/* B6 PR3 redesign (2026-06-21): duplicate of the .tool-card visual
+   contract from `ToolCallCard.vue`. The project uses plain CSS
+   (no SCSS), so we can't share the rules via @import. Instead we
+   re-declare the minimum subset here. The two definitions stay
+   lockstep manually (see the design system contract in
+   .trellis/spec/frontend/design-tokens.md §"Modal Tokens" — when
+   the tool-card primitive grows new variants, both files must
+   update).
+
+   This is the explicit "回退" path from
+   .trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style/prd.md
+   §"复用 ToolCard 样式的策略": "直接在 drawer 里 `:deep(.tool-card) { ... }`
+   复制最小子集" (the spec acknowledges the duplication as the
+   trade-off for plain-CSS toolchain).
+
+   All properties below mirror `ToolCallCard.vue` 1:1 so the
+   drawer and main panel produce visually identical cards.
+   Variables resolve via :root (the design tokens in style.css). */
+.tool-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-left: 3px solid var(--color-text-muted);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  min-width: 48px;
-  text-align: center;
+  color: var(--color-text-primary);
+  max-width: 100%;
 }
 
-/* FT-F-001 stage 2 (2026-06-20): typed-card body wrapper. Replaces the
-   old `.subagent-drawer__payload` `<pre>`. Takes the remaining width
-   next to the kind badge and lets each body component own its internal
-   layout (details/pre/timeline). `min-width: 0` is required so flex
-   children can shrink below their intrinsic width (the tool input
-   `<pre>` would otherwise force the drawer to grow horizontally). */
-.subagent-drawer__body-content {
-  flex: 1;
+.tool-card--error {
+  border-color: var(--color-tool-error);
+  background: var(--color-bg-elevated);
+}
+
+.tool-card--running {
+  border-left-color: var(--color-tool-shell);
+}
+
+.tool-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
+}
+
+.tool-card__title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tool-card__icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary);
+}
+
+.tool-card--error .tool-card__icon {
+  color: var(--color-tool-error);
+}
+
+.tool-card__name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.tool-card--error .tool-card__name {
+  color: var(--color-tool-error);
+}
+
+.tool-card__path {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.tool-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.tool-card__status-icon {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.tool-card__status-icon--running {
+  animation: tool-card-pulse 1.4s ease-in-out infinite;
+}
+
+.tool-card__status-icon--error {
+  color: var(--color-tool-error);
+}
+
+@keyframes tool-card-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.tool-card--error .tool-card__status {
+  color: var(--color-tool-error);
+}
+
+.tool-card__duration {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  user-select: none;
+}
+
+.tool-card--error .tool-card__duration {
+  color: var(--color-tool-error);
 }
 </style>
