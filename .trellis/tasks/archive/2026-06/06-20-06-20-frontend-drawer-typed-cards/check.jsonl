@@ -1,0 +1,14 @@
+{"file": ".trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/prd.md", "reason": "本 task prd — AC1-AC11 + 7 D 决策 + payload_json 字段映射表 + R1-R6 + 改动文件清单;check 阶段逐条对照(AC3 historical 文案无 denied / AC5 body 一致 outer 各自管 / AC9 基线 272 / AC10 WorkerTextTimeline 存在)"}
+{"file": ".trellis/tasks/archive/2026-06/06-20-06-20-frontend-tool-call-card-shared-body-extract/prd.md", "reason": "上游 PR1 prd — check 验证本 task 实施没回退 PR1 D 决策 + 没改 3 body component API(本 task 只消费 ToolInputBody/ToolOutputBody/PermissionAskBody,不改它们)"}
+{"file": "app/src/components/chat/SubagentDrawer.vue", "reason": "重构对象(~681 行)— check 验证 4 kind 路由正确 / outer wrapper 各起(D3)/ store 依赖加 useChatStore.currentCwd(R6)/ formatPayload 删除 / 无关 test 行为锁保持"}
+{"file": "app/src/components/chat/WorkerTextTimeline.vue", "reason": "新文件 — check 验证 props { events: TranscriptEntry[] } / 内部过滤 kind=start+done 忽略 delta / 不显示 token / scoped CSS 走 token / 不用 reka-ui"}
+{"file": "app/src/components/chat/SubagentDrawer.test.ts", "reason": "test 改写 — check 验证 JSON payload test 改为 findComponent(ToolInputBody/ToolOutputBody/PermissionAskBody/WorkerTextTimeline) 断言;无关 test(live timer/jump/auto-scroll/banner/empty/badge/filter)零改动"}
+{"file": "app/src/components/chat/ToolInputBody.vue", "reason": "PR1 组件验证 — 0 改动(本 task 只消费);check 验证 drawer 调用 :name :input props type-correct"}
+{"file": "app/src/components/chat/ToolOutputBody.vue", "reason": "PR1 组件验证 — 0 改动;check 验证 drawer 调用 :content :isError(durationsMs 不传,符合 tool_result 无 duration_ms 字段)"}
+{"file": "app/src/components/chat/PermissionAskBody.vue", "reason": "PR1 组件验证 — 0 改动;check 验证 drawer 调用 mode='historical' :ask=synthesizeAsk :repoRoot=currentCwd;historical 文案 'worker wanted ... ask collapsed' 无 denied 字样"}
+{"file": "app/src/stores/subagentRuns.ts", "reason": "store 验证 — 0 改动(R5/Out of Scope);check 验证 TranscriptEntry/TranscriptKind/KIND_META/parseTranscriptJson 未变;payload_json snake_case 解析对照 drift trap 注释"}
+{"file": "app/src/stores/permissions.ts", "reason": "类型验证 — PermissionAsk / Risk / PermissionDecision 形状未变;synthesizeAsk 合成对象 type-correct(rid/sessionId/toolUseId/toolName/toolInput/risk/reason?/path?)"}
+{"file": "app/src/stores/chat.ts", "reason": "store 验证 — 本 task 只读 currentCwd(PermissionAskBody repoRoot);check 验证无其他 chat.ts 改动"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "spec 验证 — drawer outer 持 store + body 解耦符合 composition 约定;复用 PR1 body 不引入新 store 依赖"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "spec 验证 — WorkerTextTimeline + drawer outer scoped CSS 走 var(--color-*) token,无硬编码 hex"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "spec 验证 — SubagentDrawer 现有 Dialog* 不变;WorkerTextTimeline plain div 不引入 reka-ui;:deep()/Teleport gotcha 不回归"}

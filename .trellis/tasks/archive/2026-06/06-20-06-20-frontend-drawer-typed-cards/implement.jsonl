@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "component composition 约定 — drawer outer wrapper 持 store(useChatStore.currentCwd + useSubagentRunsStore),4 typed-card body 嵌套在 outer 内;验证 body 解耦(复用 PR1 3 body 不引入新 store 依赖)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "WorkerTextTimeline.vue 新文件 + drawer outer wrapper 内联模板的 scoped CSS 必须用 var(--color-*) token,禁止硬编码 hex;timeline 状态点 / kind badge 复用现有 color token"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "PermissionAskBody historical mode UI 视觉参考 — drawer 复用 PR1 组件,确认 historical info-only 行 与现有 approval visual rhythm 协调"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "SubagentDrawer 已用 Dialog* primitive(reka-ui@2.9.9);WorkerTextTimeline 新 component 应是 plain div(不用 reka-ui),确认不引入新 reka-ui 依赖;:deep() / Teleport gotcha 参考"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本 task 核心是复用 PR1 抽出的 3 body component — 不重写 input/output/permission 渲染逻辑;FT-F-001 D1 决策的 spec 基础(何时复用 vs 重写)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "payload_json snake_case(DB/serde 形状)→ body props camelCase 映射(R6 synthesizeAsk);subagentRuns.ts:88-95 drift trap 1/2(Row.status raw string / payload_json snake_case vs live payload camelCase)需对照"}
+{"file": ".trellis/tasks/archive/2026-06/06-20-06-20-frontend-tool-call-card-shared-body-extract/prd.md", "reason": "PR1 上游 prd — D1-D8 决策 + 3 body props shape 真相源;implement 时验证不回退 PR1 D 决策(尤其 D3 body 不读 store / D7 CSS 走 token),不改 3 body API"}
