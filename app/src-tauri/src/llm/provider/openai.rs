@@ -195,7 +195,8 @@ impl OpenAIProvider {
                     msgs.push(json!({ "role": "user", "content": content }));
                 }
                 super::wire::WireMessage::Assistant { blocks } => {
-                    let (text_parts, tool_calls) = assistant_blocks_to_openai(blocks);
+                    let (text_parts, tool_calls, reasoning) =
+                        assistant_blocks_to_openai(blocks);
                     let mut msg = json!({ "role": "assistant" });
                     if !text_parts.is_empty() {
                         msg["content"] = json!(text_parts.join(""));
@@ -204,6 +205,69 @@ impl OpenAIProvider {
                     }
                     if !tool_calls.is_empty() {
                         msg["tool_calls"] = json!(tool_calls);
+                    }
+                    // RULE-D-006 (2026-06-21): DeepSeek v4 reasoning_content
+                    // round-trip. DeepSeek-v4-flash via the OpenAI protocol
+                    // surfaces the model's reasoning as a top-level
+                    // `reasoning_content` string field on each assistant
+                    // message (both in the streaming delta and the final
+                    // choice). When we send back prior assistant turns as
+                    // history, DeepSeek's contract (per AstrBot PR 7823,
+                    // and accepted — though not strictly required — by
+                    // live wukaijin probes T1/T2/T3/T4 on 2026-06-21) is:
+                    //
+                    //   - assistant WITH prior reasoning → echo the joined
+                    //     reasoning text into a top-level `reasoning_content`
+                    //     field (sibling of `content`). NOT prepended into
+                    //     the content string (the pre-PR1 code did
+                    //     `format!("[reasoning] {}", text)` — that polluted
+                    //     the visible answer and DeepSeek would re-tokenize
+                    //     the marker every turn).
+                    //   - assistant WITHOUT prior reasoning (pure text ack,
+                    //     tool_result ack, etc.) → `reasoning_content="none"`
+                    //     (literal non-empty string). AstrBot PR 7823 chose
+                    //     `"none"` because DeepSeek rejects the empty
+                    //     string `""` on its strict path; the wukaijin
+                    //     proxy accepts `""` today but the stricter shape
+                    //     is harmless and survives a proxy tightening.
+                    //
+                    // Live probes (2026-06-21, wukaijin OpenAI endpoint,
+                    // `deepseek-v4-flash`):
+                    //   T1  no field           → 200 (lenient today)
+                    //   T2  `reasoning_content:"none"` → 200
+                    //   T3  `reasoning_content:""`     → 200 (today)
+                    //   T4  multi-line reasoning_content → 200
+                    // We pick the AstrBot shape (`"none"`) for the
+                    // no-reasoning case because it's the stricter contract
+                    // and costs nothing.
+                    //
+                    // GATING (RULE-D-006a, regression guard for gpt-4o):
+                    // The field is injected ONLY when the model opted into
+                    // reasoning — `config.reasoning_effort.is_some()` OR
+                    // `is_o1_family(&config.model)`. This is the same signal
+                    // `openai_caps` (RULE-D-005) uses to decide whether the
+                    // wire strip keeps `Reasoning` blocks, so the field
+                    // injection matches what the strip pass kept.
+                    //
+                    // Why gate: vanilla OpenAI non-reasoning models (gpt-4o,
+                    // gpt-4.1, glm-4.7) are NOT contractually required to
+                    // accept `reasoning_content` (it's a provider-specific
+                    // extension field, NOT a documented OpenAI field).
+                    // OpenAI's official API is lenient today, but
+                    // `reasoning_content` is a reserved-ish name on several
+                    // OpenAI-compatible proxies — carrying it on a plain
+                    // gpt-4o request is a latent compatibility bug. For a
+                    // reasoning-capable model (o1/o3, deepseek with
+                    // reasoning_effort set), the field is expected by the
+                    // upstream and DeepSeek-v4 requires it non-empty.
+                    let is_reasoning_model = config.reasoning_effort.is_some()
+                        || is_o1_family(&config.model);
+                    if is_reasoning_model {
+                        let rc = match reasoning {
+                            Some(text) if !text.is_empty() => text,
+                            _ => "none".to_string(),
+                        };
+                        msg["reasoning_content"] = json!(rc);
                     }
                     msgs.push(msg);
                 }
@@ -275,6 +339,31 @@ impl OpenAIProvider {
         // into reasoning). For other OpenAI models the field
         // is omitted entirely, which is safe across the whole
         // model family.
+        //
+        // RULE-D-007 (2026-06-21, deepseek OpenAI route): the
+        // `reasoning_effort` field is accepted by the deepseek-v4-flash
+        // model via the wukaijin OpenAI endpoint. Live probe
+        // (2026-06-21, `POST /v1/chat/completions`, `deepseek-v4-flash`):
+        //
+        //   - `reasoning_effort:"max"`     → 200, reasoning_content present
+        //   - absent                       → 200, reasoning_content present
+        //                                       (deepseek turns reasoning on
+        //                                       by default — `reasoning_tokens`
+        //       is non-zero even without the field)
+        //   - `reasoning_effort:"minimal"` → 400 `unknown variant 'minimal',
+        //                                       expected one of 'high', 'low',
+        //                                       'medium', 'max', 'xhigh'`
+        //
+        // DeepSeek's accepted enum is `{low, medium, high, xhigh, max}` —
+        // a superset of OpenAI's `{low, medium, high}`. The everlasting
+        // `ModelRow.thinking_effort` column already uses the same vocabulary
+        // (it sources Anthropic adaptive.effort, which also allows `xhigh`
+        // /`max`), so plumbing it through verbatim is correct: a deepseek
+        // model row configured with `thinking_effort="max"` sends
+        // `reasoning_effort:"max"` → 200.
+        //
+        // No suppression needed for deepseek. The existing
+        // "emit only when set" guard stays.
         if let Some(effort) = config.reasoning_effort.as_deref() {
             if !effort.is_empty() {
                 body["reasoning_effort"] = json!(effort);
@@ -285,34 +374,46 @@ impl OpenAIProvider {
 }
 
 /// Map an assistant message's blocks to the OpenAI shape.
-/// Returns `(text_parts, tool_calls_json)` — text is the joined
-/// string of all `WireBlock::Text` blocks (Anthropic ordering is
-/// preserved within a single turn; OpenAI doesn't have an
-/// explicit "block" so we just concatenate), and `tool_calls` is
-/// the array of `{index, id, type, function}` objects.
+/// Returns `(text_parts, tool_calls_json, reasoning_content)`:
+/// - `text_parts` is the joined string of all `WireBlock::Text` blocks
+///   (Anthropic ordering is preserved within a single turn; OpenAI doesn't
+///   have an explicit "block" so we just concatenate).
+/// - `tool_calls` is the array of `{index, id, type, function}` objects.
+/// - `reasoning_content` is the joined string of all `WireBlock::Reasoning`
+///   blocks' text, joined by `\n`. `None` if the assistant message has no
+///   reasoning blocks. The caller (`build_http_body`) decides what to emit
+///   when this is `None` — for DeepSeek v4 compatibility it's `"none"`
+///   (see RULE-D-006 in `build_http_body`).
 ///
-/// Note: `Reasoning` / `Signature` / `RedactedThinking` blocks
-/// have already been mapped / dropped by the wire layer; the
-/// OpenAI parser emits them as `ChatEvent::ThinkingDelta` via
+/// Note: `Signature` / `RedactedThinking` blocks have already been
+/// mapped / dropped by the wire layer; the OpenAI parser emits
+/// `Reasoning` as `ChatEvent::ThinkingDelta` via
 /// `wire_block_to_chat_event` directly when it parses a
-/// `reasoning_content` field on an in-flight delta. This
-/// function only handles the **request-side** mapping (history
-/// being resent to OpenAI on a multi-turn conversation).
-fn assistant_blocks_to_openai(blocks: &[WireBlock]) -> (Vec<String>, Vec<Value>) {
+/// `reasoning_content` field on an in-flight delta. This function only
+/// handles the **request-side** mapping (history being resent to OpenAI
+/// on a multi-turn conversation).
+///
+/// Pre-PR1 behavior (replaced 2026-06-21): the `Reasoning` text was
+/// prepended into `text_parts` as `format!("[reasoning] {}", text)`.
+/// That polluted the visible content (the model re-tokenized the
+/// marker every turn) and didn't satisfy DeepSeek v4's
+/// `reasoning_content` round-trip contract. PR1 lifts it to a
+/// dedicated top-level field instead.
+fn assistant_blocks_to_openai(
+    blocks: &[WireBlock],
+) -> (Vec<String>, Vec<Value>, Option<String>) {
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
+    let mut reasoning_parts: Vec<String> = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
         match b {
             WireBlock::Text { text, .. } => text_parts.push(text.clone()),
             WireBlock::Reasoning { text } => {
-                // Reasoning from prior turns: prepend to the
-                // assistant content as a hidden comment so the
-                // model can see its own prior reasoning
-                // (OpenAI has no native round-trip for this;
-                // the comment-marker approach is the
-                // documented fallback for cross-protocol
-                // history).
-                text_parts.push(format!("[reasoning] {}", text));
+                // RULE-D-006: lift to top-level `reasoning_content`
+                // field (handled by the caller), NOT into content text.
+                if !text.is_empty() {
+                    reasoning_parts.push(text.clone());
+                }
             }
             WireBlock::Signature { .. } | WireBlock::RedactedThinking { .. } => {
                 // Opaque blobs that survived strip (only happens
@@ -337,7 +438,12 @@ fn assistant_blocks_to_openai(blocks: &[WireBlock]) -> (Vec<String>, Vec<Value>)
             }
         }
     }
-    (text_parts, tool_calls)
+    let reasoning = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join("\n"))
+    };
+    (text_parts, tool_calls, reasoning)
 }
 
 /// Whether `model` belongs to OpenAI's o1+ reasoning family —
@@ -846,6 +952,20 @@ mod tests {
         }
     }
 
+    /// DeepSeek-v4 config for RULE-D-006 tests. A reasoning-capable
+    /// model (reasoning_effort set) so the `reasoning_content` field
+    /// gate in `build_http_body` is open and the DeepSeek contract
+    /// pin applies. Matches the prod deepseek-v4-flash OpenAI route.
+    fn deepseek_cfg() -> OpenAIConfig {
+        OpenAIConfig {
+            base_url: "https://api.wukaijin.com".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            api_key: "sk-test".to_string(),
+            max_tokens: 16384,
+            reasoning_effort: Some("high".to_string()),
+        }
+    }
+
     // ---- openai_caps (RULE-D-005) ----
 
     #[test]
@@ -1086,6 +1206,15 @@ mod tests {
         // `arguments` is a JSON string in OpenAI's wire format.
         let args = tcs[0]["function"]["arguments"].as_str().unwrap();
         assert_eq!(args, "{\"path\":\"/etc/hosts\"}");
+        // RULE-D-006a regression guard: cfg() is gpt-4o with
+        // reasoning_effort=None → a NON-reasoning model. The
+        // `reasoning_content` field MUST be absent (not "none",
+        // not "" — the field is entirely omitted to keep the
+        // vanilla OpenAI shape). See `build_http_body` RULE-D-006a.
+        assert!(
+            m0.get("reasoning_content").is_none(),
+            "gpt-4o (non-reasoning) must not carry reasoning_content: {m0}"
+        );
     }
 
     #[test]
@@ -1337,10 +1466,11 @@ mod tests {
         };
         let stripped = strip_unsupported(wire.messages, &caps);
         // The signature-bearing Anthropic session has its
-        // signature stripped (the visible text remains,
-        // emitted as a [reasoning] comment by
-        // `assistant_blocks_to_openai` so the model has some
-        // context that reasoning happened).
+        // signature stripped. The visible text remains, and
+        // (post-PR1, RULE-D-006) the surviving `Reasoning` block
+        // is lifted into the assistant message's top-level
+        // `reasoning_content` field by `build_http_body` — see
+        // `deepseek_reasoning_content_round_trip_*` tests below.
         assert_eq!(stripped.len(), 1);
         let WireMessage::Assistant { blocks } = &stripped[0] else {
             panic!("expected Assistant")
@@ -1481,6 +1611,383 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(ev, ChatEvent::ThinkingDelta { text } if text == "thinking..."));
+    }
+
+    // ---- RULE-D-006 (2026-06-21): DeepSeek reasoning_content round-trip ----
+    //
+    // PR1 of `06-21-route-deepseek-via-openai-protocol-for-native-reasoning-content`.
+    // Pre-PR1 the OpenAI adapter prepended `Reasoning` text into the content
+    // string as `format!("[reasoning] {}", text)` (a hidden-comment marker).
+    // That polluted the visible answer every turn and didn't satisfy
+    // DeepSeek v4's `reasoning_content` field contract. PR1 lifts the
+    // reasoning text into a dedicated top-level `reasoning_content` field
+    // on the assistant message, sibling of `content`. Pure-text assistant
+    // turns (worker memory acks, plain replies) get `reasoning_content:"none"`
+    // (literal non-empty string — AstrBot PR 7823's choice for DeepSeek v4
+    // strictness; harmless on real OpenAI o1/o3 which ignore unknown fields).
+
+    #[test]
+    fn reasoning_block_becomes_reasoning_content_field() {
+        // The core PR1 invariant: a Reasoning block is lifted to the
+        // top-level `reasoning_content` field, NOT prepended into content.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::Reasoning {
+                        text: "step 1: analyze".to_string(),
+                    },
+                    WireBlock::Text {
+                        text: "the answer".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
+        assert_eq!(msgs.len(), 1);
+        let m0 = &msgs[0];
+        assert_eq!(m0["role"], "assistant");
+        // content carries ONLY the visible text — no `[reasoning]` marker.
+        assert_eq!(m0["content"], "the answer");
+        // reasoning_content carries the reasoning text verbatim.
+        assert_eq!(m0["reasoning_content"], "step 1: analyze");
+        // Negative regression guard: content must NOT contain the marker.
+        let content_str = m0["content"].as_str().unwrap();
+        assert!(
+            !content_str.contains("[reasoning]"),
+            "content must not carry the pre-PR1 marker: {content_str}"
+        );
+    }
+
+    #[test]
+    fn text_only_assistant_gets_none_reasoning_content() {
+        // Pure-text assistant (worker memory ack, plain reply): no
+        // reasoning block to lift. DeepSeek v4 still wants a non-empty
+        // `reasoning_content` field (AstrBot PR 7823 contract), so emit
+        // the literal string `"none"` — never `""`, never absent.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![WireBlock::Text {
+                    text: "Understood.".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["content"], "Understood.");
+        assert_eq!(m0["reasoning_content"], "none");
+    }
+
+    #[test]
+    fn multiple_reasoning_blocks_joined_with_newline() {
+        // The wire layer splits an Anthropic `Thinking` block into
+        // `Reasoning` + `Signature`. After strip drops the signature,
+        // multiple surviving `Reasoning` blocks (rare but possible when
+        // an assistant turn had several Thinking blocks) are joined with
+        // `\n` — matches the AstrBot PR 7823 convention and the live T4
+        // probe (multi-line reasoning_content → 200).
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::Reasoning {
+                        text: "first thought".to_string(),
+                    },
+                    WireBlock::Reasoning {
+                        text: "second thought".to_string(),
+                    },
+                    WireBlock::Text {
+                        text: "final".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["reasoning_content"], "first thought\nsecond thought");
+        assert_eq!(m0["content"], "final");
+    }
+
+    #[test]
+    fn user_message_does_not_get_reasoning_content_field() {
+        // Only assistant messages carry reasoning_content. A user
+        // message must NOT get the field — it would be semantically
+        // wrong (user messages have no reasoning) and could confuse
+        // strict upstream validators.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::User {
+                content: "hi there".to_string(),
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["role"], "user");
+        assert!(
+            m0.get("reasoning_content").is_none(),
+            "user message must not carry reasoning_content: {m0}"
+        );
+    }
+
+    #[test]
+    fn tool_message_does_not_get_reasoning_content_field() {
+        // Same invariant for `role: "tool"` results.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Tool {
+                tool_call_id: "call_1".to_string(),
+                content: "result body".to_string(),
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["role"], "tool");
+        assert!(
+            m0.get("reasoning_content").is_none(),
+            "tool message must not carry reasoning_content: {m0}"
+        );
+    }
+
+    #[test]
+    fn assistant_with_tool_use_only_gets_none_reasoning_content() {
+        // An assistant turn that issued a tool call but produced no
+        // reasoning (e.g. a deterministic tool dispatch) still needs
+        // a non-empty `reasoning_content` for DeepSeek v4 — `"none"`.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::Text {
+                        text: "reading file".to_string(),
+                        cache_control: None,
+                    },
+                    WireBlock::ToolUse {
+                        id: "call_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path": "/x"}),
+                    },
+                ],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["role"], "assistant");
+        assert_eq!(m0["content"], "reading file");
+        assert_eq!(m0["reasoning_content"], "none");
+        // tool_calls still emitted alongside reasoning_content.
+        assert_eq!(m0["tool_calls"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn gpt_4o_does_not_get_reasoning_content_field_even_with_reasoning_block() {
+        // RULE-D-006a regression guard: the `reasoning_content` field
+        // gate is based on the MODEL config (reasoning_effort /
+        // is_o1_family), NOT on whether the wire payload happens to
+        // carry a Reasoning block. On a non-reasoning OpenAI model
+        // (gpt-4o with no reasoning_effort) the field is NEVER injected,
+        // even if a Reasoning block survived into `build_http_body`
+        // (e.g. a future caller forgets to strip). This keeps the
+        // vanilla OpenAI request shape clean — `reasoning_content` is
+        // a provider-specific extension, not a documented OpenAI field,
+        // and carrying it on a gpt-4o request is a latent compat bug
+        // against proxies that reserve the name.
+        //
+        // (In normal operation `strip_unsupported` already drops the
+        // Reasoning block before this point for gpt-4o — see
+        // `openai_caps_strip_drops_reasoning_for_non_reasoning_model`.
+        // This test defends the build_http_body gate independently.)
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(), // wire.model is ignored by build_http_body
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::Reasoning {
+                        text: "sneaky reasoning that should not lift".to_string(),
+                    },
+                    WireBlock::Text {
+                        text: "answer".to_string(),
+                        cache_control: None,
+                    },
+                ],
+            }],
+            tools: vec![],
+        };
+        // cfg() = gpt-4o, reasoning_effort=None → non-reasoning model.
+        let body = OpenAIProvider::build_http_body(&wire, &cfg());
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        assert_eq!(m0["role"], "assistant");
+        // The Reasoning text MUST NOT leak into content either (the
+        // pre-PR1 `[reasoning]` marker is gone, and the field is gated
+        // off so nothing carries the text).
+        assert_eq!(m0["content"], "answer");
+        let content_str = m0["content"].as_str().unwrap();
+        assert!(
+            !content_str.contains("sneaky reasoning"),
+            "gpt-4o content must not carry reasoning text: {content_str}"
+        );
+        // The field is entirely absent — not "none", not "".
+        assert!(
+            m0.get("reasoning_content").is_none(),
+            "gpt-4o (non-reasoning) must not carry reasoning_content even with a Reasoning block: {m0}"
+        );
+    }
+
+    #[test]
+    fn o1_family_gets_reasoning_content_field_without_explicit_effort() {
+        // RULE-D-006a: an o1-family model is reasoning-capable even
+        // without an explicit reasoning_effort set (the family itself
+        // is the opt-in signal). The field gate must open for it so
+        // o1/o3 history round-trips carry `reasoning_content`.
+        let o1_cfg = OpenAIConfig {
+            base_url: "https://api.openai.com".to_string(),
+            model: "o1-mini".to_string(),
+            api_key: "sk-test".to_string(),
+            max_tokens: 16384,
+            reasoning_effort: None, // o1 family is the signal, not effort
+        };
+        let wire = WireRequest {
+            model: "o1-mini".to_string(),
+            max_tokens: Some(16384),
+            system: None,
+            messages: vec![WireMessage::Assistant {
+                blocks: vec![WireBlock::Text {
+                    text: "ok".to_string(),
+                    cache_control: None,
+                }],
+            }],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &o1_cfg);
+        let m0 = &body["messages"].as_array().unwrap()[0];
+        // No reasoning block → "none" (o1 family is reasoning-capable).
+        assert_eq!(m0["reasoning_content"], "none");
+    }
+
+    // ---- DeepSeek v4 reasoning_content contract pin ----
+    //
+    // This is the PR1 acceptance contract: every assistant message in
+    // the history that goes on the wire to a DeepSeek-v4 model MUST
+    // carry a non-empty `reasoning_content` field. Verified live
+    // (2026-06-21, wukaijin OpenAI endpoint, deepseek-v4-flash):
+    //
+    //   T1  no field            → 200 (lenient today; AstrBot says strict)
+    //   T2  `"none"`            → 200
+    //   T3  `""`                → 200 (today; AstrBot says this is rejected)
+    //   T4  multi-line non-empty → 200
+    //
+    // We pin the AstrBot/stricter shape: every assistant has a
+    // non-empty `reasoning_content`. If a future change regresses to
+    // empty/missing, this test fails before the user sees a 400.
+
+    #[test]
+    fn deepseek_reasoning_content_contract_pin_mixed_history() {
+        // Construct a realistic multi-turn DeepSeek history:
+        //   turn 1 user      — greeting
+        //   turn 2 assistant — pure text ack (worker memory ack)
+        //   turn 3 user      — real question
+        //   turn 4 assistant — full reasoning + answer
+        //   turn 5 user      — follow-up
+        // The contract: BOTH assistant turns (2 and 4) must carry
+        // non-empty `reasoning_content`. Turn 2 has no reasoning block
+        // → `"none"`. Turn 4 has reasoning → the joined text.
+        let wire = WireRequest {
+            model: "deepseek-v4-flash".to_string(),
+            max_tokens: Some(16384),
+            system: Some("You are a coding agent.".to_string()),
+            messages: vec![
+                WireMessage::User {
+                    content: "remember: project uses pnpm".to_string(),
+                },
+                WireMessage::Assistant {
+                    blocks: vec![WireBlock::Text {
+                        text: "Understood.".to_string(),
+                        cache_control: None,
+                    }],
+                },
+                WireMessage::User {
+                    content: "how do I run tests?".to_string(),
+                },
+                WireMessage::Assistant {
+                    blocks: vec![
+                        WireBlock::Reasoning {
+                            text: "user asked about tests; project uses pnpm".to_string(),
+                        },
+                        WireBlock::Text {
+                            text: "Run `pnpm test`.".to_string(),
+                            cache_control: None,
+                        },
+                    ],
+                },
+                WireMessage::User {
+                    content: "thanks".to_string(),
+                },
+            ],
+            tools: vec![],
+        };
+        let body = OpenAIProvider::build_http_body(&wire, &deepseek_cfg());
+        let msgs = body.get("messages").and_then(|m| m.as_array()).unwrap();
+        // system + 5 user/assistant turns = 6 total.
+        assert_eq!(msgs.len(), 6);
+        // System message: no reasoning_content.
+        assert_eq!(msgs[0]["role"], "system");
+        assert!(msgs[0].get("reasoning_content").is_none());
+
+        // Walk every message and assert the contract.
+        for (i, m) in msgs.iter().enumerate() {
+            let role = m["role"].as_str().unwrap();
+            match role {
+                "assistant" => {
+                    let rc = m
+                        .get("reasoning_content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| panic!("msg {i}: assistant missing reasoning_content"));
+                    assert!(
+                        !rc.is_empty(),
+                        "msg {i}: assistant reasoning_content must be non-empty (got \"\")"
+                    );
+                }
+                "user" | "system" | "tool" => {
+                    assert!(
+                        m.get("reasoning_content").is_none(),
+                        "msg {i}: {role} message must not carry reasoning_content: {m}"
+                    );
+                }
+                other => panic!("msg {i}: unexpected role {other}"),
+            }
+        }
+        // Spot-check turn 2 (the ack) is `"none"`...
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[2]["reasoning_content"], "none");
+        // ...and turn 4 (the real reasoning) is the joined text.
+        assert_eq!(msgs[4]["role"], "assistant");
+        assert_eq!(
+            msgs[4]["reasoning_content"],
+            "user asked about tests; project uses pnpm"
+        );
     }
 
     // ---- live integration test (env-gated, no hardcoded endpoint) ----

@@ -216,6 +216,36 @@ thinking blocks (joined by `\n`), guarded so a thinking-less assistant message
 > wrong and the drop produced the 06-21 turn-2 400. Run `/trellis:break-loop`
 > for the full analysis.
 
+> **ROOT FIX (06-21): route DeepSeek via OpenAI protocol, not Anthropic.**
+> The Via-Relay anthropic path above is **fundamentally unreliable** — the relay's
+> Anthropic→DeepSeek thinking translation is non-deterministic (same payload 400s
+> on one call, 200s on the next) and no client-side `thinking`/`reasoning_content`
+> shaping reliably satisfies it (V1 drop-block → `thinking must be passed back`;
+> V2 keep+field → `reasoning_content must be passed back`). The root fix: configure
+> `deepseek-v4-flash` on an **OpenAI-protocol** provider (wukaijin exposes
+> `/v1/chat/completions` too; DeepSeek is natively OpenAI). Then `reasoning_content`
+> is a native field — **no translation layer**.
+>
+> `OpenAIProvider` contract (`openai.rs` RULE-D-006, **gated to reasoning models**
+> via `reasoning_effort.is_some() || is_o1_family(&model)`):
+> - assistant carrying `Reasoning` blocks → lift to top-level `reasoning_content`
+>   field (joined `\n`), NOT prepended into `content` text.
+> - text-only assistant (worker memory ack, plain reply) → `reasoning_content: "none"`
+>   (DeepSeek v4 requires non-empty; `""` is rejected by the strict AstrBot-PR-7823
+>   contract though wukaijin today tolerates it — `"none"` is the safe choice).
+> - non-reasoning OpenAI models (gpt-4o / gpt-4.1) → field **absent** (vanilla
+>   OpenAI shape; `reasoning_content` is provider-specific and reserved-ish on
+>   some proxies, so don't pollute non-reasoning requests).
+>
+> `reasoning_effort`: DeepSeek's own enum is `{low, medium, high, xhigh, max}`
+> (superset of OpenAI o1's `{low, medium, high}`); it rejects `minimal`.
+> `ModelRow.thinking_effort` uses the same vocabulary, so OpenAIProvider passes it
+> through verbatim — no per-model suppression needed.
+>
+> `apply_deepseek_reasoning_fix` (anthropic.rs) is **retained** for native Claude
+> and other anthropic-relayed models, but is a no-op for DeepSeek once DeepSeek is
+> on the OpenAI protocol.
+
 ###4. Validation & Error Matrix
 
 | Condition | Result |
