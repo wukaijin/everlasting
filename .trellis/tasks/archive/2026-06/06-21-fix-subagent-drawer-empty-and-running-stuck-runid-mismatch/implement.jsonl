@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs schema + CRUD + SubagentBufferSink 契约的核心 spec。Bug1 改 sink run_id、Bug2 加 subagent:finished 事件都需对照此契约；且该 spec 当前未约束 subagent:event 的 runId 必须等于 DB id（这正是 Bug1 盲区），实现时需顺手补上事件契约段落。"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_subagent 在 agent loop 中的位置 + Tauri 事件 emit 上下文。新增 subagent:finished emit 需遵循现有 agent loop 事件模式（chat_loop.rs::run_subagent 的 update_run_finished 之后）。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store + Tauri listen 事件监听模式。前端 subagentRuns.ts listener 需新增 subagent:finished 分支（fetchRun + fetchForSession 刷新），遵循现有 permissions.ts / subagentRuns.ts 的 listen + unlisten 生命周期模式。"}

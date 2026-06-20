@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 (1) subagent:event 的 runId 契约已补入 spec 且与实现一致 (event.runId === DB id)；(2) 新增 subagent:finished 事件契约已文档化；(3) schema/CRUD 未被改动。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证前端 subagentRuns.ts 的新 listener 分支遵循 store 事件监听模式（listen 注册、unlisten 清理、cache 刷新幂等），与 permissions.ts 现有模式一致。"}
