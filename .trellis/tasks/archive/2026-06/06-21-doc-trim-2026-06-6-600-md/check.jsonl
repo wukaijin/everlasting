@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "检查:拆分后主文件行数 ~580,新文件 3 个 scenario 内容完整"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查:subagent_runs 拆分后主文件末尾 cross-ref 正确"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "检查:open 条目 9 条完整保留,closed 条目全删,头部指引明确"}
+{"file": "docs/BACKLOG.md", "reason": "检查:§0.5/§1/§2 已删,§5.1 strikethrough,附录 A 完整"}
+{"file": "docs/HACKING-wsl.md", "reason": "检查:坑 12 已删,坑编号连贯"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "检查:2026-06-04/05 段已迁出,头部 cross-ref 正确"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "检查:RULE-A-015/A-007 cross-ref 加在原段顶部"}

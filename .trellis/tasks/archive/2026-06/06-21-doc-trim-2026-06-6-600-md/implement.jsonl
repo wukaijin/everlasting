@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "本任务主编辑目标:拆 3 个 scenario (latency/token/permission) 出去,保留 Overview/Extended Thinking/Decisions/Common Mistakes/Anti-Patterns/DeepSeek"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "本任务编辑目标:拆 subagent_runs (809-1073) 到独立 schema 文件"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "本任务编辑目标:RULE-A-015/A-007 段加 cross-ref,不删内容"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "参考:1269-1619 行 ⑨ 关段与 llm-contract 388-670 重叠 (本任务不处理,Out of Scope);坑 12 shell spillover 实施前 grep 验证"}
+{"file": "docs/ROADMAP.md", "reason": "参考:验证 BACKLOG §1/§2 已落地项(B2/B3/B4)在 ROADMAP §1.2 的现状"}
