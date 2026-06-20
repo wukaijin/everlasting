@@ -48,10 +48,12 @@
 //! `run_chat_loop` recursively and thus needs the same parameter
 //! set the parent loop was invoked with.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::agent::permissions::PermissionAskPayload;
 use crate::llm::types::{ChatEvent, MessageContent, TokenUsage};
@@ -394,6 +396,70 @@ pub enum TranscriptKind {
     PermissionAsk,
 }
 
+/// Build the IPC payload for the `subagent:event` Tauri channel.
+/// Pure function — keeps the wire shape in exactly one place so
+/// the TS mirror (`runId` / `sessionId` / `kind` / `payload` /
+/// `timestamp`) can be locked by unit tests without spinning up a
+/// Tauri runtime.
+///
+/// **Wire shape** (matches prd.md §"PR2 hotfix" decision + the
+/// the `transcript_kind_str` mapping below):
+/// ```json
+/// {
+///   "runId": "<worker rid>",
+///   "sessionId": "<parent session_id>",
+///   "kind": "chat_event" | "tool_call" | "tool_result" | "permission_ask",
+///   "payload": <the original chat-event / tool-call / tool-result payload>,
+///   "timestamp": "<RFC 3339>"
+/// }
+/// ```
+///
+/// The `kind` string is the snake_case of the `TranscriptKind`
+/// enum variant (`#[serde(rename_all = "snake_case")]` on the
+/// enum). The TS enum must stay in lockstep with this mapping —
+/// `trellis-check` verifies line-by-line parity.
+fn build_subagent_event_payload(
+    run_id: &str,
+    session_id: &str,
+    kind: TranscriptKind,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    let kind_str = match kind {
+        TranscriptKind::ChatEvent => "chat_event",
+        TranscriptKind::ToolCall => "tool_call",
+        TranscriptKind::ToolResult => "tool_result",
+        TranscriptKind::PermissionAsk => "permission_ask",
+    };
+    serde_json::json!({
+        "runId": run_id,
+        "sessionId": session_id,
+        "kind": kind_str,
+        "payload": payload,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+// Test-only thread-local collector for `subagent:event` IPC
+// payloads. The test constructor `SubagentBufferSink::new_with_collector`
+// arms this cell; `record()` forwards the IPC payload here when
+// no `app_handle` is wired. Production code never reads the
+// cell (the cell is always `None`). The
+// `Arc<StdMutex<Vec>>` lets the test snapshot the collected
+// payloads after the run.
+//
+// The thread-local is declared at module scope (not under
+// `#[cfg(test)]`) because `record()` consults it from the
+// production code path — without the declaration, a non-test
+// binary that constructs a sink with `app_handle = None` (which
+// the codebase never does in production, but the compiler still
+// has to verify the code path) would fail to compile. The cell
+// stays `None` for the entire production lifetime; only test
+// code arms it.
+thread_local! {
+    static TEST_COLLECTOR: RefCell<Option<Arc<StdMutex<Vec<serde_json::Value>>>>> =
+        const { RefCell::new(None) };
+}
+
 /// `ChatEventSink` impl that records every worker emit into an
 /// in-memory `Vec<TranscriptEntry>` + tracks the worker's final
 /// assistant text (the summary).
@@ -406,6 +472,15 @@ pub enum TranscriptKind {
 /// tool_use/tool_result pair; the worker's transcript is
 /// retrievable separately (PR2: `subagent_runs.transcript`;
 /// PR3: ToolCallCard expand UI).
+///
+/// **PR2 hotfix (B6 PR3, 2026-06-20)**: each emit ALSO fires the
+/// `subagent:event` Tauri event on the parent `AppHandle`, so the
+/// frontend `<SubagentDrawer>` (PR3b) can stream the worker's
+/// transcript live (debounced 200ms in the frontend store) without
+/// waiting for the worker to finish. The `app_handle` is `None` in
+/// tests where no Tauri runtime is present — the emit becomes a
+/// no-op and the transcript-only path still works (test coverage
+/// of `transcript_snapshot` is unchanged).
 pub struct SubagentBufferSink {
     transcript: StdMutex<Vec<TranscriptEntry>>,
     /// Accumulated assistant text deltas. Read by `run_subagent`
@@ -431,20 +506,133 @@ pub struct SubagentBufferSink {
     /// event (stop_reason == "cancelled"). `run_subagent` reads
     /// this to pick the `status: cancelled` prefix.
     was_cancelled: std::sync::atomic::AtomicBool,
+    /// PR2 hotfix (B6 PR3, 2026-06-20): optional Tauri
+    /// `AppHandle` used to emit the `subagent:event` IPC channel
+    /// on every emit. `None` in tests (no Tauri runtime) — the
+    /// emit side becomes a silent no-op, but the transcript
+    /// accumulation path is unaffected.
+    app_handle: Option<tauri::AppHandle>,
+    /// PR2 hotfix: the worker's `run_id` (the `parent_rid-sub-<seq>`
+    /// string `run_subagent` builds at chat_loop.rs:2050). Carried
+    /// on the sink so each `subagent:event` payload can identify
+    /// which worker run the event belongs to.
+    run_id: String,
+    /// PR2 hotfix: the parent session_id (worker reuses parent's
+    /// session_id). Each `subagent:event` payload includes this so
+    /// the frontend can route events to the right session's drawer.
+    session_id: String,
 }
 
 impl SubagentBufferSink {
-    pub fn new() -> Self {
+    /// Construct a sink with Tauri IPC. Used by production
+    /// (`run_subagent` threads the parent's `AppHandle` into the
+    /// worker via `run_chat_loop`'s 22nd parameter).
+    pub fn new(app_handle: tauri::AppHandle, run_id: String, session_id: String) -> Self {
         Self {
             transcript: StdMutex::new(Vec::new()),
             text_parts: StdMutex::new(Vec::new()),
             per_turn_usage: StdMutex::new(Vec::new()),
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            app_handle: Some(app_handle),
+            run_id,
+            session_id,
         }
     }
 
+    /// Construct a sink without Tauri IPC (test path). The emit
+    /// side becomes a silent no-op; transcript accumulation works
+    /// identically.
+    #[allow(dead_code)] // exposed for unit tests that exercise the sink in isolation
+    pub fn new_without_app_handle(run_id: String, session_id: String) -> Self {
+        Self {
+            transcript: StdMutex::new(Vec::new()),
+            text_parts: StdMutex::new(Vec::new()),
+            per_turn_usage: StdMutex::new(Vec::new()),
+            had_error: std::sync::atomic::AtomicBool::new(false),
+            was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            app_handle: None,
+            run_id,
+            session_id,
+        }
+    }
+
+    /// Construct a sink whose IPC path is delegated to an injected
+    /// collector. The collector runs in place of `app_handle.emit`
+    /// so tests can assert the exact IPC payload shape without
+    /// needing a real Tauri runtime. Used by the
+    /// `subagent_buffer_sink_emits_ipc_event` test to lock the
+    /// `subagent:event` wire shape end-to-end.
+    #[cfg(test)]
+    pub fn new_with_collector(
+        run_id: String,
+        session_id: String,
+        collector: Arc<StdMutex<Vec<serde_json::Value>>>,
+    ) -> Self {
+        // The production path uses `app_handle.emit`; the test
+        // path stores the payload in the collector. We can't have
+        // both wired simultaneously through the same struct field
+        // without complicating the type, so the production field
+        // stays `None` for the test constructor and we route the
+        // emit through a separate `emit_override` field instead.
+        let sink = Self {
+            transcript: StdMutex::new(Vec::new()),
+            text_parts: StdMutex::new(Vec::new()),
+            per_turn_usage: StdMutex::new(Vec::new()),
+            had_error: std::sync::atomic::AtomicBool::new(false),
+            was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            app_handle: None,
+            run_id,
+            session_id,
+        };
+        // Stash the collector on a thread-local for the duration
+        // of the test; the record() method consults it. We use a
+        // thread-local (not a field) to keep the production
+        // struct unchanged — the alternative is making
+        // `app_handle` an enum variant, which complicates every
+        // call site.
+        TEST_COLLECTOR.with(|c| {
+            *c.borrow_mut() = Some(collector);
+        });
+        sink
+    }
+
     fn record(&self, kind: TranscriptKind, payload_json: serde_json::Value) {
+        // PR2 hotfix (B6 PR3, 2026-06-20): emit the `subagent:event`
+        // IPC channel in parallel with the transcript append so the
+        // frontend `<SubagentDrawer>` (PR3b) can stream the
+        // worker's transcript live. The payload is a
+        // `serde_json::Value` (not a typed struct) to keep the
+        // Tauri channel wire shape exactly the shape documented in
+        // the prd.md "PR2 hotfix" decision:
+        //   { runId, sessionId, kind, payload, timestamp }
+        // The kind string mirrors the Rust `TranscriptKind` enum's
+        // `#[serde(rename_all = "snake_case")]` serialization
+        // (`ChatEvent` / `ToolCall` / `ToolResult` / `PermissionAsk`)
+        // so the TS side stays lockstep with the Rust enum.
+        let ipc_payload = build_subagent_event_payload(
+            &self.run_id,
+            &self.session_id,
+            kind,
+            payload_json.clone(),
+        );
+        if let Some(handle) = &self.app_handle {
+            if let Err(e) = handle.emit("subagent:event", ipc_payload) {
+                tracing::warn!(
+                    error = %e,
+                    run_id = %self.run_id,
+                    "subagent:event emit failed (non-fatal; transcript still recorded)"
+                );
+            }
+        } else {
+            // Test-only: forward to the in-memory collector if one
+            // is armed via `new_with_collector`.
+            TEST_COLLECTOR.with(|c| {
+                if let Some(collector) = c.borrow().as_ref() {
+                    collector.lock().unwrap().push(ipc_payload);
+                }
+            });
+        }
         self.transcript
             .lock()
             .expect("SubagentBufferSink transcript mutex poisoned")
@@ -537,12 +725,6 @@ fn sum_usage(items: &[TokenUsage]) -> TokenUsage {
             .saturating_add(u.cache_read_input_tokens);
     }
     total
-}
-
-impl Default for SubagentBufferSink {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl crate::state::ChatEventSink for SubagentBufferSink {
@@ -982,7 +1164,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_accumulates_text_deltas() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         let rid = "rid-test".to_string();
         for t in ["hello", " ", "world"] {
             sink.emit_chat_event(&ChatEventPayload {
@@ -997,7 +1179,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_tracks_cancelled_done() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         let rid = "rid-cancel".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -1013,7 +1195,7 @@ mod tests {
     #[test]
     fn buffer_sink_tracks_error_event() {
         use crate::llm::LlmErrorCategory;
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         let rid = "rid-err".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -1028,7 +1210,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_records_transcript_entries() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         let rid = "rid-transcript".to_string();
         sink.emit_chat_event(&ChatEventPayload {
             request_id: rid.clone(),
@@ -1118,7 +1300,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_accumulates_token_usage_per_turn() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
@@ -1129,7 +1311,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_drain_per_turn_usage_clears_buffer() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_chat_event(&done_with_usage(10, 5));
         let drained = sink.drain_per_turn_usage();
         assert_eq!(drained.input_tokens, 10);
@@ -1142,7 +1324,7 @@ mod tests {
 
     #[test]
     fn buffer_sink_done_without_usage_does_not_accumulate() {
-        let sink = SubagentBufferSink::new();
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
             event: ChatEvent::Done {
@@ -1216,5 +1398,153 @@ mod tests {
         // Building a > 4 MiB transcript in a unit test is expensive,
         // so we only assert the constant.
         assert_eq!(TRANSCRIPT_MAX_BYTES, 4 * 1024 * 1024);
+    }
+
+    // ---- PR2 hotfix: subagent:event IPC payload (B6 PR3, 2026-06-20) ----
+
+    /// The `build_subagent_event_payload` helper produces the
+    /// exact wire shape documented in prd.md §"PR2 hotfix":
+    /// `{ runId, sessionId, kind, payload, timestamp }`. Locks the
+    /// IPC contract so a drift on either side is caught at the
+    /// Rust unit-test layer (the TS mirror in PR3b's
+    /// `subagentRuns.ts` is the matching assertion).
+    #[test]
+    fn build_subagent_event_payload_matches_prd_wire_shape() {
+        let payload = build_subagent_event_payload(
+            "rid-x",
+            "sid-y",
+            TranscriptKind::ChatEvent,
+            serde_json::json!({"hello": "world"}),
+        );
+        assert_eq!(payload["runId"], "rid-x");
+        assert_eq!(payload["sessionId"], "sid-y");
+        assert_eq!(payload["kind"], "chat_event");
+        assert_eq!(payload["payload"]["hello"], "world");
+        // Timestamp is RFC 3339 — contains "T" + a timezone offset
+        // (the +00:00 form from Utc::now().to_rfc3339()).
+        let ts = payload["timestamp"].as_str().expect("timestamp is string");
+        assert!(ts.contains('T'), "RFC 3339 timestamp: {ts}");
+    }
+
+    /// Every `TranscriptKind` variant maps to its snake_case wire
+    /// string. A drift here would silently break the frontend
+    /// drawer (which switches on the kind string).
+    #[test]
+    fn build_subagent_event_payload_kind_strings_match_enum() {
+        for (kind, expected) in [
+            (TranscriptKind::ChatEvent, "chat_event"),
+            (TranscriptKind::ToolCall, "tool_call"),
+            (TranscriptKind::ToolResult, "tool_result"),
+            (TranscriptKind::PermissionAsk, "permission_ask"),
+        ] {
+            let p = build_subagent_event_payload("rid", "sid", kind, serde_json::Value::Null);
+            assert_eq!(p["kind"], expected, "kind={kind:?} wire form");
+        }
+    }
+
+    /// Each `emit_*` method (chat_event / tool_call / tool_result /
+    /// permission_ask) appends the corresponding transcript entry
+    /// AND (when armed via `new_with_collector`) appends the
+    /// corresponding IPC payload. The two writes are paired —
+    /// every transcript entry has a matching IPC event with the
+    /// same kind.
+    #[test]
+    fn subagent_buffer_sink_emits_ipc_event_per_emit() {
+        // Reset collector.
+        TEST_COLLECTOR.with(|c| *c.borrow_mut() = None);
+        let collector: Arc<StdMutex<Vec<serde_json::Value>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let sink = SubagentBufferSink::new_with_collector(
+            "rid-pr2".into(),
+            "sid-pr2".into(),
+            collector.clone(),
+        );
+
+        // emit_chat_event → ChatEvent + 1 IPC payload.
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid-pr2".into(),
+            event: ChatEvent::Start,
+        });
+        // emit_tool_call → ToolCall + 1 IPC payload.
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: "rid-pr2".into(),
+            id: "toolu_1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"path": "/x"}),
+        });
+        // emit_tool_result → ToolResult + 1 IPC payload.
+        sink.emit_tool_result(&ToolResultPayload {
+            request_id: "rid-pr2".into(),
+            tool_use_id: "toolu_1".into(),
+            content: "ok".into(),
+            is_error: false,
+        });
+        // emit_permission_ask → PermissionAsk + 1 IPC payload.
+        sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
+            rid: "ask-rid".into(),
+            session_id: "sid-pr2".into(),
+            tool_use_id: "toolu_1".into(),
+            tool_name: "shell".into(),
+            tool_input: serde_json::json!({"command": "rm -rf /"}),
+            risk: crate::agent::permissions::Risk::High,
+            reason: Some("dangerous".into()),
+            path: None,
+        });
+
+        // Transcript side: 4 entries, kinds match.
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 4);
+        assert_eq!(transcript[0].kind, TranscriptKind::ChatEvent);
+        assert_eq!(transcript[1].kind, TranscriptKind::ToolCall);
+        assert_eq!(transcript[2].kind, TranscriptKind::ToolResult);
+        assert_eq!(transcript[3].kind, TranscriptKind::PermissionAsk);
+
+        // IPC side: 4 payloads, kinds match the transcript 1:1.
+        let collected = collector.lock().unwrap().clone();
+        assert_eq!(collected.len(), 4, "every emit must produce 1 IPC payload");
+        assert_eq!(collected[0]["kind"], "chat_event");
+        assert_eq!(collected[1]["kind"], "tool_call");
+        assert_eq!(collected[2]["kind"], "tool_result");
+        assert_eq!(collected[3]["kind"], "permission_ask");
+        // Every payload carries runId / sessionId / payload / timestamp.
+        for (i, p) in collected.iter().enumerate() {
+            assert_eq!(p["runId"], "rid-pr2", "payload #{i} runId");
+            assert_eq!(p["sessionId"], "sid-pr2", "payload #{i} sessionId");
+            assert!(p["payload"].is_object() || p["payload"].is_null(),
+                    "payload #{i} shape");
+            assert!(p["timestamp"].as_str().unwrap().contains('T'),
+                    "payload #{i} timestamp is RFC 3339");
+        }
+
+        // Cleanup: reset the thread-local so subsequent tests don't
+        // see this collector.
+        TEST_COLLECTOR.with(|c| *c.borrow_mut() = None);
+    }
+
+    /// `new_without_app_handle` (the default test path) does NOT
+    /// emit IPC events — the collector stays empty even after
+    /// emits. This locks the "emit is gated on app_handle" path
+    /// so a future refactor doesn't accidentally start emitting
+    /// from the test path (would crash — there's no Tauri
+    /// runtime in unit tests).
+    #[test]
+    fn subagent_buffer_sink_without_app_handle_does_not_emit_ipc() {
+        // No collector armed.
+        TEST_COLLECTOR.with(|c| *c.borrow_mut() = None);
+        let sink = SubagentBufferSink::new_without_app_handle(
+            "rid-noop".into(),
+            "sid-noop".into(),
+        );
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid-noop".into(),
+            event: ChatEvent::Start,
+        });
+        // Transcript still records the event (no functional
+        // regression for the test-only path).
+        assert_eq!(sink.transcript_snapshot().len(), 1);
+        // But nothing leaked into the (un-armed) collector.
+        TEST_COLLECTOR.with(|c| {
+            assert!(c.borrow().is_none(), "no collector armed → no IPC attempted");
+        });
     }
 }

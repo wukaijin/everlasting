@@ -140,6 +140,45 @@ pub struct SubagentRunRow {
 }
 
 // ---------------------------------------------------------------------------
+// SubagentRunSummary — projected read shape for list endpoints
+// ---------------------------------------------------------------------------
+
+/// B6 PR3a (2026-06-20): list-endpoint projection of
+/// `SubagentRunRow`. Excludes `transcript_json` +
+/// `transcript_truncated` so a "list all runs for this session"
+/// IPC stays cheap (transcript can be 4 MiB per run; multi-run
+/// lists would balloon the payload). PR3's frontend
+/// `subagentRuns.ts` calls `list_subagent_runs_by_session` to
+/// populate the per-session run badge; the transcript is fetched
+/// on-demand via `get_subagent_run(run_id)` when the user opens
+/// the drawer.
+///
+/// The shape mirrors the columns a UI list needs (id +
+/// identity + status + timing + token usage + summary preview)
+/// without the heavy transcript column. `status` is the typed
+/// `SubagentStatusDb` enum (not the wire string) so the
+/// frontend can render the status badge without an extra parse
+/// step — the IPC layer's `Serialize` derive projects the enum
+/// to lowercase automatically.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentRunSummary {
+    pub id: String,
+    pub parent_session_id: String,
+    pub parent_request_id: String,
+    pub subagent_name: String,
+    /// Typed enum — serializes lowercase (`running` / `completed` /
+    /// `cancelled` / `error`) matching the DB column's CHECK
+    /// constraint.
+    pub status: SubagentStatusDb,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub token_usage_json: Option<String>,
+    pub summary: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -331,6 +370,61 @@ pub async fn list_runs_by_session(
                 transcript_json: r.try_get("transcript_json")?,
                 transcript_truncated: r.try_get("transcript_truncated")?,
                 created_at: r.try_get("created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// B6 PR3a (2026-06-20): list endpoint projection. Returns the
+/// same set of rows as [`list_runs_by_session`] but as
+/// [`SubagentRunSummary`] (no `transcript_json` +
+/// `transcript_truncated` columns). Used by the PR3 frontend
+/// `list_subagent_runs_by_session` IPC; the full row is fetched
+/// on demand via `get_subagent_run(run_id)` when the user opens
+/// the drawer.
+///
+/// The status column is decoded into the typed
+/// [`SubagentStatusDb`] enum (NOT the wire string) so the
+/// frontend's `SubagentDrawer.vue` status badge can read the
+/// enum directly — `serde` re-projects it to lowercase on the
+/// wire. This is the same "lenient parse for forward-compat"
+/// pattern [`SubagentStatusDb::from_str_opt`] uses; an unknown
+/// status string falls back to `Running` (matches the column's
+/// safe-default for forward-compat strings).
+///
+/// The query SELECTs only the 9 projected columns, so a multi-
+/// run session returns a payload sized in KB (not MB) — the
+/// 4 MiB-cap'd transcript stays on the per-run detail path.
+#[allow(dead_code)]
+pub async fn list_runs_summary_by_session(
+    pool: &SqlitePool,
+    parent_session_id: &str,
+) -> Result<Vec<SubagentRunSummary>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, parent_session_id, parent_request_id, subagent_name,
+               status, started_at, finished_at, token_usage_json, summary
+        FROM subagent_runs
+        WHERE parent_session_id = ?
+        ORDER BY started_at DESC
+        "#,
+    )
+    .bind(parent_session_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            let status_str: String = r.try_get("status")?;
+            Ok(SubagentRunSummary {
+                id: r.try_get("id")?,
+                parent_session_id: r.try_get("parent_session_id")?,
+                parent_request_id: r.try_get("parent_request_id")?,
+                subagent_name: r.try_get("subagent_name")?,
+                status: SubagentStatusDb::from_str_opt(&status_str),
+                started_at: r.try_get("started_at")?,
+                finished_at: r.try_get("finished_at")?,
+                token_usage_json: r.try_get("token_usage_json")?,
+                summary: r.try_get("summary")?,
             })
         })
         .collect()

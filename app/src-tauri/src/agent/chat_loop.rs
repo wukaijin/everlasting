@@ -45,6 +45,7 @@ use std::time::Instant;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -200,6 +201,17 @@ pub async fn run_chat_loop(
     // tests pass `Some(false)` to make the production-style default
     // explicit at the call site.
     is_worker: Option<bool>,
+    // B6 PR3 (2026-06-20, PR2 hotfix + PR3a): optional Tauri
+    // `AppHandle` used by `run_subagent` to wire the worker's
+    // `SubagentBufferSink` IPC emit. Production passes
+    // `Some(app.clone())` from the `chat` Tauri command; tests
+    // pass `None` (no Tauri runtime, the worker's IPC emit path
+    // is bypassed — see `SubagentBufferSink::new_without_app_handle`).
+    // Adding this as the 22nd parameter mirrors the existing
+    // 21-parameter growth pattern (PR1a/1b/2b); the agent loop
+    // body itself does NOT use `app_handle` — only `run_subagent`
+    // does, when constructing the worker sink.
+    app_handle: Option<AppHandle>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -1529,6 +1541,13 @@ pub async fn run_chat_loop(
                     input,
                     &token,
                     &sink,
+                    // B6 PR3 (2026-06-20, PR2 hotfix): thread the
+                    // parent's AppHandle so the worker's
+                    // SubagentBufferSink can emit the `subagent:event`
+                    // IPC channel live. From the chat command's spawn
+                    // closure this is `Some(app.clone())`; from the
+                    // unit tests it's `None` (no Tauri runtime).
+                    app_handle.clone(),
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -1983,6 +2002,13 @@ async fn run_subagent(
     input: &serde_json::Value,
     parent_token: &CancellationToken,
     _parent_sink: &Arc<dyn ChatEventSink>,
+    // B6 PR3 (2026-06-20, PR2 hotfix): the parent's Tauri
+    // `AppHandle`, threaded through `run_chat_loop`'s 22nd
+    // parameter. Used to construct the worker's `SubagentBufferSink`
+    // so the worker can emit the `subagent:event` IPC channel
+    // live. `None` in unit tests (no Tauri runtime); the sink's
+    // `new_without_app_handle` constructor is used in that case.
+    app_handle: Option<AppHandle>,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -2095,11 +2121,37 @@ async fn run_subagent(
     // that documented the (now-resolved) deviation.
 
     // SubagentBufferSink: records the worker's emits into an in-
-    // memory transcript. Does NOT forward to the parent sink — the
-    // parent's frontend only sees the dispatch_subagent tool_call /
-    // tool_result pair; the worker's stream stays isolated (Claude
-    // Code convention).
-    let worker_sink: Arc<SubagentBufferSink> = Arc::new(SubagentBufferSink::new());
+    // memory transcript AND (PR2 hotfix) emits each event on the
+    // `subagent:event` Tauri IPC channel so the frontend
+    // `<SubagentDrawer>` (PR3b) can stream the transcript live.
+    // Does NOT forward to the parent sink — the parent's frontend
+    // only sees the dispatch_subagent tool_call / tool_result
+    // pair; the worker's stream stays isolated (Claude Code
+    // convention). The `app_handle` is `Some` in production (the
+    // `chat` Tauri command threads it through) and `None` in
+    // unit tests (no Tauri runtime) — the IPC emit becomes a
+    // silent no-op in the latter case, but the transcript
+    // accumulation path is unaffected.
+    //
+    // We need TWO clones of `app_handle`: one for the sink (which
+    // emits on the IPC channel) and one for the nested
+    // `run_chat_loop` call (which the worker threads forward to
+    // ITS OWN nested run_subagent call, if the worker itself
+    // dispatches a sub-subagent — out of scope in MVP, but the
+    // signature carries the parameter through anyway). The
+    // double-clone is cheap (AppHandle is `Arc<Mutex<...>>` under
+    // the hood).
+    let worker_sink: Arc<SubagentBufferSink> = match app_handle.as_ref() {
+        Some(handle) => Arc::new(SubagentBufferSink::new(
+            handle.clone(),
+            worker_rid.clone(),
+            parent_session_id.to_string(),
+        )),
+        None => Arc::new(SubagentBufferSink::new_without_app_handle(
+            worker_rid.clone(),
+            parent_session_id.to_string(),
+        )),
+    };
     let worker_sink_dyn: Arc<dyn ChatEventSink> = worker_sink.clone();
 
     // Nested run_chat_loop. The worker reuses the parent's
@@ -2161,6 +2213,10 @@ async fn run_subagent(
         // the nested call, so the override was unreachable on the
         // worker's actual permission checks.
         Some(true),
+        // B6 PR3 (2026-06-20, PR2 hotfix): forward the parent's
+        // AppHandle so the worker's SubagentBufferSink can emit the
+        // `subagent:event` IPC channel live. None in tests.
+        app_handle,
     ))
     .await;
 

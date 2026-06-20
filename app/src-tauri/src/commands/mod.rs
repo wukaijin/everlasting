@@ -31,6 +31,7 @@ pub mod permissions;
 pub mod projects;
 pub mod providers;
 pub mod sessions;
+pub mod subagent_runs;
 pub mod worktree;
 
 /// The full set of Tauri commands, used by `lib.rs::run` to
@@ -99,5 +100,11 @@ pub fn all_command_names() -> Vec<&'static str> {
         "list_session_audit_events",
         // D3 PR1 (2026-06-17): edit a user message in place.
         "edit_user_message",
+        // B6 PR3a (2026-06-20): subagent_runs list/get for the
+        // PR3 frontend `<SubagentDrawer>`. `list_*` is the cheap
+        // per-session list (no transcript); `get_*` is the
+        // per-run detail (with transcript).
+        "list_subagent_runs_by_session",
+        "get_subagent_run",
     ]
 }

@@ -986,6 +986,20 @@ async fn ask_path(
  // outside the cwd, shell SideEffect/Ask command, web_fetch
  // without an always-allow row) and is denied. This mirrors the
  // Claude Code "background subagent auto-deny" convention.
+ //
+ // **RULE-A-016 fix (B6 PR3a, 2026-06-20)**: the previous
+ // implementation wrote a `tool_denied` audit row to the parent's
+ // `session_audit_events` table here. The worker reuses
+ // `parent_session_id`, so the audit landed in the parent's audit
+ // log — polluting C4 audit reads with worker ⑨ decisions.
+ // The fix: (a) skip the `record_audit_event` call entirely on the
+ // worker path; (b) emit a `PermissionAskPayload` via the sink
+ // so the `SubagentBufferSink` records a `TranscriptKind::PermissionAsk`
+ // entry in the worker's `transcript_json` (PR3's drawer renders
+ // the deny as part of the transcript). The payload fields use the
+ // worker tool_use id (no parent rid — `parent_session_id` is
+ // reused) so the transcript entry ties back to the worker's
+ // tool_use block.
  if ctx.is_worker {
      let reason = format!(
          "Worker subagent cannot ask for confirmation (no UI sink). \
@@ -999,15 +1013,31 @@ async fn ask_path(
          mode = %ctx.mode.as_str(),
          "permission::check: worker auto-deny (no UI sink)"
      );
-     let _ = record_audit(
-         db,
-         ctx,
-         AuditKind::ToolDenied,
-         tool_name,
-         tool_input,
-         Some(&reason),
-     )
-     .await;
+     // RULE-A-016 (2026-06-20): do NOT write `session_audit_events`
+     // on the worker path. The deny lands in the worker's
+     // transcript via the sink emit below — not in the parent's
+     // audit log. (Pre-PR3a this was a `record_audit` call that
+     // polluted the parent's audit table.)
+     // Emit a transcript PermissionAsk via the sink. The
+     // `SubagentBufferSink::emit_permission_ask` impl records a
+     // `TranscriptKind::PermissionAsk` entry; the
+     // `AppHandleSink::emit_permission_ask` impl (production
+     // non-worker path is unrelated — this branch only fires for
+     // workers) also records into the chat-event stream but
+     // workers use the buffer sink so the entry stays in the
+     // worker's transcript. The rid is a synthesized UUID (the
+     // worker auto-denies without a real ask round-trip).
+     let synthetic_rid = uuid::Uuid::new_v4().to_string();
+     let _ = sink.emit_permission_ask(PermissionAskPayload {
+         rid: synthetic_rid,
+         session_id: ctx.session_id.clone(),
+         tool_use_id: tool_use_id.to_string(),
+         tool_name: tool_name.to_string(),
+         tool_input: tool_input.clone(),
+         risk: risk_for_tool(tool_name),
+         reason: Some(reason.clone()),
+         path: path_for_modal.map(|p| p.to_string()),
+     });
      return Decision::Deny {
          reason,
          critical: false,

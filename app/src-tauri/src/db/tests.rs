@@ -39,8 +39,8 @@ use super::{
  },
  permissions::{grant_tool_permission, has_tool_permission, list_audit_events, record_audit_event, update_session_mode},
  subagent_runs::{
- add_token_usage_streaming, get_run, insert_run, list_runs_by_session, update_run_finished,
- SubagentStatusDb,
+ add_token_usage_streaming, get_run, insert_run, list_runs_by_session,
+ list_runs_summary_by_session, update_run_finished, SubagentStatusDb,
  },
  types::WorktreeState,
 };
@@ -2616,4 +2616,79 @@ async fn subagent_runs_token_usage_streaming_missing_session_is_noop() {
     add_token_usage_streaming(&pool, "nonexistent-session-id", &u)
         .await
         .unwrap();
+}
+
+/// B6 PR3a (2026-06-20): `list_runs_summary_by_session` returns
+/// the projected `SubagentRunSummary` (no transcript column) for
+/// the parent session. Verifies:
+/// 1. Newest-first ordering (same as `list_runs_by_session`).
+/// 2. The typed `SubagentStatusDb::Completed` enum variant is
+///    decoded (NOT the raw wire string) — the frontend renders
+///    the status badge from the enum without an extra parse.
+/// 3. Summary field carries the worker's final_text verbatim.
+#[tokio::test]
+async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // Insert + complete 1 run with a populated transcript + summary.
+    let id = insert_run(&pool, &s.id, "rid-summary", "researcher")
+        .await
+        .unwrap();
+    let usage = TokenUsage {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    };
+    let transcript = vec![crate::agent::subagent::TranscriptEntry {
+        kind: crate::agent::subagent::TranscriptKind::ChatEvent,
+        payload_json: serde_json::json!({"text": "hello"}),
+    }];
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-06-20T00:00:00+00:00",
+        "summary text",
+        &usage,
+        &transcript,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let summaries = list_runs_summary_by_session(&pool, &s.id)
+        .await
+        .expect("list_runs_summary_by_session");
+    assert_eq!(summaries.len(), 1);
+    let sum = &summaries[0];
+    assert_eq!(sum.id, id);
+    assert_eq!(sum.subagent_name, "researcher");
+    assert_eq!(
+        sum.status,
+        SubagentStatusDb::Completed,
+        "status must be decoded to the typed enum (not the wire string)"
+    );
+    assert_eq!(sum.summary.as_deref(), Some("summary text"));
+    assert_eq!(sum.token_usage_json.as_deref(), Some(serde_json::to_string(&usage).unwrap().as_str()));
+}
+
+/// B6 PR3a (2026-06-20): `list_runs_summary_by_session` returns
+/// an empty `Vec` (NOT an error) for a session with no runs.
+#[tokio::test]
+async fn subagent_runs_list_runs_summary_by_session_empty() {
+    let pool = make_pool().await;
+    let summaries = list_runs_summary_by_session(&pool, "nonexistent-session-id")
+        .await
+        .expect("empty list, no error");
+    assert!(summaries.is_empty());
 }

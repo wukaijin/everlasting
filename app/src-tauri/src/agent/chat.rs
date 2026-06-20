@@ -254,6 +254,12 @@ pub async fn chat(
             // `PermissionContext.is_worker = false` — Tier 4 ask
             // is reachable (permission:ask modal works normally).
             Some(false),
+            // B6 PR3 (2026-06-20, PR2 hotfix): forward the
+            // `app: AppHandle` so `run_subagent` can wire the
+            // worker's `SubagentBufferSink` with a live IPC emit
+            // path (the `subagent:event` channel). The 22nd
+            // `run_chat_loop` parameter; tests pass `None`.
+            Some(app.clone()),
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

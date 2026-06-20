@@ -1163,6 +1163,8 @@ async fn agent_loop_basic_text_only_completes() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1262,6 +1264,8 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1363,6 +1367,8 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1451,6 +1457,8 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1579,6 +1587,8 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1671,6 +1681,8 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1744,6 +1756,8 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1833,6 +1847,8 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -1962,6 +1978,8 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2091,6 +2109,8 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2227,6 +2247,8 @@ async fn agent_loop_persist_failure_emits_error() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2367,6 +2389,8 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2465,6 +2489,8 @@ async fn agent_loop_error_persists_partial_text() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2546,6 +2572,8 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2619,6 +2647,8 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2726,6 +2756,8 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2801,6 +2833,8 @@ async fn agent_loop_error_emits_turn_complete() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -2918,6 +2952,8 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -3070,6 +3106,8 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -3202,6 +3240,8 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3555,6 +3595,8 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -3716,6 +3758,8 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -3890,6 +3934,8 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4024,6 +4070,8 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -4171,6 +4219,8 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // normally, the loop is not a worker). Mirrors the
         // production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -4307,6 +4357,8 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -4459,6 +4511,8 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4582,6 +4636,8 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -4823,6 +4879,8 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4929,6 +4987,8 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -5052,6 +5112,8 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
     let _ = cancel_task.await;
@@ -5163,6 +5225,8 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -5276,6 +5340,8 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // (permission:ask modal works normally, the loop is not a
         // worker). Mirrors the production chat.rs call site.
         Some(false),
+        // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
     )
     .await;
 
@@ -5453,6 +5519,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             // passes Some(true) (at chat_loop.rs:2155). Mirrors
             // the production chat.rs call site.
             Some(false),
+            // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
+            // (no Tauri runtime).
+            None,
         ),
     )
     .await;
@@ -5497,14 +5566,16 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         dispatch_result.content
     );
 
-    // CRITICAL: the worker must have written at least one
-    // `tool_denied` audit row (the auto-deny from
-    // `permissions::ask_path` line 1002-1009). This is the
-    // observable side-effect of the PR2b fix — without
-    // `is_worker=true` threaded through, the worker would have
-    // emitted a `tool_permission_ask` (modulo a hang on the
-    // oneshot), so this assertion catches a regression where
-    // the fix is silently lost.
+    // CRITICAL: the worker's `tool_denied` must NOT pollute the
+    // parent's `session_audit_events` (RULE-A-016, B6 PR3a
+    // 2026-06-20). Before the fix, the worker's Tier 4 ask_path
+    // collapse wrote a `tool_denied` row into the parent's audit
+    // table — which leaked worker ⑨ decisions into the C4 audit
+    // log UI. The fix routes the worker's deny to the
+    // `SubagentBufferSink` transcript (as a `PermissionAsk`
+    // entry) and skips the parent's audit write. This assertion
+    // confirms the worker's deny row IS NOT in the parent's
+    // audit — the regression catch.
     let audit_after =
         crate::db::permissions::list_audit_events(&h.db, &h.session_id)
             .await
@@ -5520,9 +5591,10 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         })
         .count();
     assert_eq!(
-        tool_denied_count, 1,
-        "worker must produce exactly 1 tool_denied audit row \
-         (the PR2b ask_path collapse for write_file); got audit events: {:?}",
+        tool_denied_count, 0,
+        "RULE-A-016: worker's tool_denied must NOT pollute the \
+         parent's session_audit_events (PR3a routes the deny to \
+         the worker's transcript instead); got audit events: {:?}",
         audit_after
             .iter()
             .map(|e| (e.kind.as_str(), e.payload_json.as_deref().unwrap_or("")))
@@ -5541,14 +5613,48 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
          collapse goes straight to Deny — no modal, no oneshot)"
     );
     // Sanity: the delta vs `audit_before` is bounded (parent's
-    // 2 rows for dispatch_subagent + worker's 1 tool_denied =
-    // 3). A larger delta would mean a regression elsewhere
-    // (e.g. the worker's record_tool_executed_audit leaking).
+    // 2 rows for dispatch_subagent ONLY — worker tool_denied
+    // went to transcript per RULE-A-016). A larger delta would
+    // mean a regression (e.g. the worker's record_tool_executed_audit
+    // leaking).
     let delta = audit_after.len() - audit_before.len();
     assert!(
-        delta <= 3,
-        "PR2b invariant: parent's audit log gains at most 3 rows \
-         (2 parent + 1 worker tool_denied); got delta={}",
+        delta <= 2,
+        "RULE-A-016 invariant: parent's audit log gains at most 2 \
+         rows (tool_allowed + tool_executed for dispatch_subagent); \
+         worker's tool_denied now lives in subagent_runs.transcript_json. \
+         got delta={}",
         delta
+    );
+
+    // RULE-A-016 cross-check: the worker's transcript MUST carry
+    // the deny as a `TranscriptKind::PermissionAsk` entry (this is
+    // where the worker's audit-like record lives post-PR3a).
+    // Fetch the worker's `subagent_runs` row (the most recent one
+    // for this session — there's only one in this test).
+    let runs =
+        crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+            .await
+            .expect("list_runs_by_session");
+    assert_eq!(runs.len(), 1, "exactly one subagent_runs row");
+    let run = &runs[0];
+    let transcript: Vec<crate::agent::subagent::TranscriptEntry> =
+        serde_json::from_str(run.transcript_json.as_deref().unwrap())
+            .expect("transcript_json parses as Vec<TranscriptEntry>");
+    let permission_ask_count = transcript
+        .iter()
+        .filter(|e| {
+            e.kind == crate::agent::subagent::TranscriptKind::PermissionAsk
+        })
+        .count();
+    assert_eq!(
+        permission_ask_count, 1,
+        "RULE-A-016: worker's transcript must carry exactly 1 \
+         PermissionAsk entry (the auto-deny for write_file); got \
+         transcript: {:?}",
+        transcript
+            .iter()
+            .map(|e| e.kind)
+            .collect::<Vec<_>>()
     );
 }

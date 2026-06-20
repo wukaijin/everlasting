@@ -107,6 +107,12 @@ pub fn run() {
             // cascade-delete tail + audit. UI / Resend are PR2/3
             // (the frontend re-uses `chat` IPC for the resend).
             commands::sessions::edit_user_message,
+            // B6 PR3a (2026-06-20): subagent_runs list/get IPCs for
+            // the PR3 frontend `<SubagentDrawer>`. `list_*` returns
+            // a `SubagentRunSummary` list (no transcript); `get_*`
+            // returns the full `SubagentRunRow` (with transcript).
+            commands::subagent_runs::list_subagent_runs_by_session,
+            commands::subagent_runs::get_subagent_run,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,
