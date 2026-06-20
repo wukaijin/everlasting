@@ -703,3 +703,89 @@ DeepSeek-v4 (`deepseek-v4-flash` via wukaijin.com Anthropic Messages 端点) 多
 - **FT-F-001** typed-cards 重做（`SubagentDrawer` payload 按 kind 路由到 `ToolCallCard` / `ToolResultCard` / `PermissionCard` 等组件）：B2 已局部关闭，scope 缩到"按 kind 路由"单一目标。**仍 blocked by PR1**（handoff §5：chat 主面板卡片 props interface 下沉为 shared），需先起 PR1 task skeleton
 - **FT-F-002 / FT-F-003 / FT-F-004 / FT-F-005** placeholder：等 PR1 + FT-F-001 实施时顺次推进
 - **截图分析** 12 个 UX 改进点（handoff §4）：B1+B2 已 closed；B3-B8 由 FT-F-001 覆盖；C1+C2+C3+C5 由 FT-F-004 覆盖；D2 由 FT-F-005 覆盖
+
+
+## Session 51: FT-F-005 — SubagentDrawer failure-reason banner
+
+**Date**: 2026-06-20
+**Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-failed-banner/` (FT-F-005, placeholder from Session 50)
+**Branch**: `main`
+
+### Summary
+
+完成 FT-F-005(SubagentDrawer failed state 视觉强化)。Brainstorm 答 5 项决定,后端零改动。实现 `bannerText` computed + template inline warning 横条 + BEM CSS,5 新 test。复用现有 `Icon "warn"` (ExclamationTriangleIcon 已在 registry) + `statusDisplay.suffix` (B1 时长) + design tokens。20/20 SubagentDrawer test + 240 full vitest + vue-tsc 0 error。
+
+### Decisions(2026-06-20 brainstorm 答完)
+
+| # | 决策点 | 选择 | 备注 |
+|---|---|---|---|
+| **D1** | 后端是否需加字段 | **不改** | `SubagentRunRow` 无 `errorMessage` / `cancelledBy`,但 `summary` 字段已经是错误文本(`format_dispatch_result` Error arm subagent.rs:968-976)。后端零改动。 |
+| **D2** | Banner 形态 | **A: inline warning 横条** | 红色/amber tint + 左 3px accent bar + ⚠ icon + 文案。always 展开(失败信息不该藏)。 |
+| **D3** | Cancelled 也显 banner | **是** | failed + cancelled 都显 banner(共用样式,文案不同)。 |
+| **D4** | Banner 文案来源 | **summary 字段 + 备用文案** | error 状态: `Worker exited with error: <summary truncate 80>`;空 summary fallback `Worker exited unexpectedly at X.Xs`(用 B1 的 terminalDurMs 公式)。cancelled: 通用 `Worker stopped by user at X.Xs`(不区分 user/system,out of scope)。 |
+| **D5** | Banner / badge 视觉关系 | **共存** | badge 仍显 "failed at Ns"(时间事实);banner 在 badge 下方显原因。互不覆盖。 |
+
+### Changes
+
+#### `app/src/components/chat/SubagentDrawer.vue` — banner 实施(~+85 行)
+
+- 新 computed `bannerText: { kind: "error" | "warning"; text: string } | null`:error/cancelled 状态返回 banner 文案,running/completed 返 null(banner 不渲染)
+- 复用 `statusDisplay.suffix` 拿冻结时长(banner 数字与 badge 数字一致,B1 fix 已修时长的正确性)
+- 复用 `Icon name="warn"` (ExclamationTriangleIcon,Icon.vue 已注册,无新 import)
+- 模板在 status badge row 与 startedAt 行之间插 `<div class="subagent-drawer__banner" v-if="bannerText">`(BEM,role="status" for a11y)
+- CSS `.subagent-drawer__banner` / `--error` / `--warning`,用 `--color-tool-error` (red) / `--color-tool-shell` (amber) 现有 tokens,无硬编码 hex
+- 80-char truncate inline `s.slice(0, 80) + "…"`(不重用 `truncateOutput` 因其 suffix "… (N more chars)" 干扰 banner UX)
+
+#### `app/src/components/chat/SubagentDrawer.test.ts` — 5 新 test
+
+1. `failed_drawer_shows_error_banner_with_summary_text`(AC1)
+2. `failed_drawer_falls_back_when_summary_is_empty`(AC2)
+3. `failed_drawer_truncates_long_summary`(AC3 — body 长度正好 80+1 = 81 chars + prefix 25 = 106 chars total)
+4. `cancelled_drawer_shows_stopped_banner_with_warning_color`(AC4 — `--warning` class,`--error` 不存在)
+5. `running_and_completed_drawers_do_not_render_banner`(AC5 regression guard)
+
+#### `beforeEach` 加 body cleanup 处理 reka-ui Teleport DOM leak
+
+- vue-test-utils + reka-ui `DialogContent` Teleport quirk:`w.unmount()` 不彻底清理 portal 到 body 的 dialog DOM,导致后续 test 的 `document.body.querySelector(...)` 找到上一个 test 的 banner
+- 加 `document.body.querySelectorAll(".subagent-drawer, .subagent-drawer__overlay, .subagent-drawer__banner").forEach((el) => el.remove())` 在 beforeEach
+- 调试过程发现的两个测试坑:① Icon stub textContent 不含 "⚠" 字符(是 SVG),banner.textContent 断言需 query `.subagent-drawer__banner-text` span 单独比对;② useFakeTimers 模式下 setSystemTime 影响 `Date.now()` 的所有调用包括 `run.startedAt` 的 `new Date()` 解析,所以 setup 必须 setSystemTime 到期望时刻
+
+#### `.trellis/reviews/DEBT.md` — FT-F-005 状态 open → closed
+
+- **Status**: `closed (2026-06-20)`
+- **Closed At**: `2077caa`
+- **Closure Note** 记录 5 项 brainstorm 决定 + 后端零改动 + 测试结果
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2077caa` | fix(frontend): subagent drawer failure-reason banner (FT-F-005) |
+| `0cf2ae0` | docs(debt): close FT-F-005 + record closure note |
+| `9e2b020` | chore(task): archive 06-20-06-20-frontend-subagent-drawer-failed-banner |
+
+### Testing
+
+- [OK] `cd app && pnpm vitest run src/components/chat/SubagentDrawer.test.ts` → **20 passed**(15 原有 + 5 new:B1+B2 共 3 + FT-F-005 共 5;但 journal 上次记 16 是 B6 PR3b 之前状态,实际 B1+B2 加了 3 → 15 + 5 = 20)
+- [OK] `cd app && pnpm vitest run` → **240 passed**(16 files)。4 pre-existing errors in `streamController.test.ts` 收尾期访问 `window.__TAURI_INTERNALS__`(Tauri internals 在 vitest 环境未注入),与本 fix 无关
+- [OK] `/usr/local/code/github/everlasting/app/node_modules/.bin/vue-tsc -p tsconfig.json --noEmit` → **EXIT=0**
+- [N/A] 项目无 ESLint 配置,验证面即 vue-tsc + vitest
+- [OK] `trellis-check` skill:spec compliance(复用 statusDisplay.suffix / Icon 'warn' / design tokens,无硬编码 hex)/ cross-layer(B. code reuse — 80-char truncate 不重用 `truncateOutput` 因其 suffix 风格不符 banner UX,inline slice + 注释说明理由,符合 code-reuse-thinking-guide "Don't abstract when only used once + different requirement" 原则)/ same-layer consistency(banner pattern 与 status badge 一致,共用 duration 来源)
+
+### Notes
+
+- 之前 journal 把 session 编号标成 49(add_session.py 内部计数器 vs 时间顺序),这里用 Session 51 对齐 Session 50 handoff 命名
+- Banner 与主面板 dispatch_subagent 卡片的 error 视觉相似但简化(主面板是 3px 左 border + tinted bg 全卡;banner 是 3px 左 border + ⚠ icon + 文字单行,适配 drawer 480px 窄宽)
+- FT-F-005 prd.md §Out of Scope:cancelled 不区分 user/system(后端 schema 不记录),如未来要区分需后端加 `cancelled_by` column + 新 migration(独立 task)
+- 前向兼容 FT-F-001 typed-cards 重做:banner 在 header,banner 不依赖 body 渲染;FT-F-001 实施时不需要动 banner 代码
+- 5 个 untracked task dirs (FT-F-001~004 placeholder) 仍在 working tree,Session 52+ 起 brainstorm 走完它们
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- **FT-F-001** typed-cards 重做:`SubagentDrawer` payload 按 kind 路由到 `ToolCallCard` / `ToolResultCard` / `PermissionCard`。B2 已局部关闭,scope 缩到"按 kind 路由"单一目标。**仍 blocked by PR1**(主面板卡片 props interface 下沉为 shared),需先起 PR1 task skeleton
+- **FT-F-002 / FT-F-003 / FT-F-004** placeholder:等 PR1 + FT-F-001 实施时顺次推进
+- **截图分析** 12 个 UX 改进点(handoff §4):B1+B2 + D2(banner)已 closed;B3-B8 由 FT-F-001 覆盖;C1+C2+C3+C5 由 FT-F-004 覆盖
