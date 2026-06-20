@@ -559,3 +559,76 @@ DeepSeek-v4 (`deepseek-v4-flash` via wukaijin.com Anthropic Messages 端点) 多
 - **FT-D-002**: 调查 wukaijin.com 400 threshold 的精确机制（DB 4 session 对比表明 threshold 不稳定，需要按 relay 分类的实测数据）
 - **FT-D-003**: 评估是否需要按 relay 自动分发 capability（heuristic 或新 ModelRow 字段 `disable_reasoning_content_inject`），让 strict Anthropic relay 不接收 `reasoning_content` 顶层字段
 - 任务目录已 archive 到 `.trellis/tasks/archive/2026-06/06-20-deepseek-reasoner-reasoning-content-400/`
+
+## Session 49: B6 PR3b — subagent drawer 实时打开 + 可视化 polish
+
+### TL;DR
+
+修复 `dispatch_subagent` 卡片在 worker SSE 持续期间点击无响应的 race condition；同 PR 加 4 项 drawer polish（live timer / auto-scroll / jump-to-latest / waiting 反馈）。纯前端，后端 wire shape 完全不变。
+
+### Root cause
+
+`ToolCallCard.openSubagentDrawer` 在 `workerSummary` 未命中时**静默返回**（silent no-op），UI 零反馈。
+
+时序 race：
+- t1 父 loop emit `tool:call` IPC → ToolCallCard mount → `watch(isDispatchSubagent, immediate: true)` 触发 `fetchForSession`（fire-and-forget）
+- t2 父 loop 进入 `run_subagent`
+- t3 `run_subagent::insert_run(...)` 写 subagent_runs row
+- t4 父 loop 启动 worker → SubagentBufferSink emit `subagent:event` IPC
+
+若 t1 触发的 `list_subagent_runs_by_session` IPC 在 t3 之前到达后端，list 返回空 list → 前端缓存空 list → 整段 SSE 期间不再 re-fetch → user click 永远命中不了。
+
+### Fix（方案 B — store 订阅 + eager-fetch）
+
+1. `subagentRuns.start()` 的 `subagent:event` listener 升级：遇到新 runId 立即 `fetchRun` + `fetchForSession`（`eagerFetchedRunIds` Set 去重 burst events）
+2. `ToolCallCard.openSubagentDrawer` 重写：
+   - fast path：cache 命中直接开 drawer
+   - miss 时显示 waiting 视觉态（`cursor: wait` + `等待 worker 注册…` 文案 + 不引入新颜色，Q4 决策 D4）
+   - 1.5s / 300ms 最多 5 次 polling 重试（捕获 click-before-first-event 窗口，listener eager-fetch 补不到）
+
+### Drawer polish（4 项，用户确认 scope = race + 3 polish；D5 加 jump-to-latest）
+
+- 头部 live duration timer：100ms tick，`running X.Xs` / `done in X.Xs` / `failed at X.Xs` / `已停止 at X.Xs`
+- header `↗` jump-to-latest 按钮（仅 autoFollow=false 时显示，Q5 决策 D5）
+- body 底部浮动 `↓ N new events`（仅 autoFollow=false + newCount>0）
+- 50px 滚动阈值检测，用户小幅滚动不立即暂停 auto-follow
+
+### Decisions
+
+- **D1**: scope = race fix + 3 drawer polish，typed-cards 重做独立 PR（卡片 props interface 需要先讨论）
+- **D2**: click retry = 1.5s / 300ms / 最多 5 次
+- **D3**: card 自身不加 live duration（避免主 chat 流噪音）
+- **D4**: waiting 复用 `tool-card--subagent` 样式 + `cursor: wait`，不引入新颜色 / 动画
+- **D5**: jump-to-latest 在 header，↓ N new 浮动 body 底部
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `186e500` | fix(frontend): subagent drawer race fix + live polish (B6 PR3b) |
+| `0b76593` | chore(task): archive 06-20-2026-06-20-b6-pr3b-subagent-drawer-live-open |
+
+### Testing
+
+- [OK] `cd app && pnpm vitest run src/stores/subagentRuns.test.ts` → 26 passed (23 原有 + 3 new: eager-fetch 触发 / dedup / 多 runId)
+- [OK] `cd app && pnpm vitest run src/components/chat/ToolCallCard.test.ts` → 14 passed (12 原有 + 1 改写 waiting + 1 new retry 命中)
+- [OK] `cd app && pnpm vitest run src/components/chat/SubagentDrawer.test.ts` → 12 passed (8 原有 + 4 new: running live timer / completed suffix / jump-to-latest 显示 / 点击清除 newCount)
+- [OK] `cd app && pnpm vitest run` → 232 passed (4 pre-existing errors in streamController.test.ts 收尾期访问 __TAURI_INTERNALS__，与本次无关)
+- [OK] `cd app && pnpm vue-tsc --noEmit` → 0 error
+
+### Notes
+
+- `vue-tsc` narrowing on `ComputedRef.value` through `if (immediate)` 在该上下文 collapse 到 `never`（vue-tsc 已知行为）。需显式 type annotation：`const x: SubagentRunSummary | undefined = workerSummary.value`
+- jsdom 不实现 `Element.scrollTo`，`jumpToLatest` 加 feature check fallback 到 `scrollTop = scrollHeight`
+- 后端零改动。`subagent:event` wire shape / dispatch_subagent ToolDef / subagent_runs table schema 全部 lockstep，未触
+- 任务目录已 archive 到 `.trellis/tasks/archive/2026-06/06-20-2026-06-20-b6-pr3b-subagent-drawer-live-open/`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- **FT-F-001**: 后续 PR 评估 drawer payload 可视化重做（typed-cards：call → ToolCallCard 复用 / result → ToolResultCard / perm → PermissionCard / text → MessageItem）。先讨论 chat 主面板卡片 props interface 下沉为 shared，drawer 再消费
+- **FT-F-002**: toolTip "正在打开…" timeout 后 fallback 文案，目前 silent 回退到 `点击查看 worker 详情` 视觉上无变化；1.5s 仍 miss 时可考虑 toast 提示用户手动 retry
+- **FT-F-003**: `workerWaiting` ref 在 component unmount 时未清理（polling setTimeout 可能 fire 后写 unmounted ref）；非功能性 leak，prod 路径影响小
