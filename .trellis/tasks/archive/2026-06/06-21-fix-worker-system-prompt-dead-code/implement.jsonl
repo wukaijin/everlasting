@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 22-param shared entry point, B6 worker subagent pattern (nested run_chat_loop + skip_persist + is_worker + app_handle), CancellationGuard single-source"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "SubagentBufferSink record() schema, transcript payload_json shape, tool_call/tool_result persistence"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 4 collapse for is_worker, permission decision flow"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Tool definitions + 9 scenarios, dispatch_subagent tool (B6 PR1)"}
