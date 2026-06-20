@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "Color tokens (--color-tool-write/error/shell/accent), font tokens, reusable CSS variables for tool-card styling"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui Dialog/DialogContent portal behavior, :deep() pattern, scoped CSS constraints"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store patterns, transcript pairing state design"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "SubagentBufferSink record() schema, transcript payload_json shape — drawer PR1 needs to extend tool_call/tool_result with tool_use_id + duration_ms"}
