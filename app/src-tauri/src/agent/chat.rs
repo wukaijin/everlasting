@@ -260,6 +260,18 @@ pub async fn chat(
             // path (the `subagent:event` channel). The 22nd
             // `run_chat_loop` parameter; tests pass `None`.
             Some(app.clone()),
+            // 2026-06-21 fix (B6 review defect A): production
+            // chat is never a worker, so the parent's
+            // `assemble_system_prompt(mode_prefix, base_prompt)`
+            // path runs unchanged (`None` override → the loop
+            // builds the prompt from the project + session
+            // row). The worker nested call (in `run_subagent`)
+            // passes `Some(assemble_subagent_prompt(def, &task))`
+            // to fully replace the parent's prompt with the
+            // worker's `SubagentDef.system_prompt`. See the
+            // doc comment on `run_chat_loop.system_prompt_override`
+            // for the full rationale + the review reference.
+            None,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

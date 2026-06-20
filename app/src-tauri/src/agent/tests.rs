@@ -1165,6 +1165,14 @@ async fn agent_loop_basic_text_only_completes() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -1265,6 +1273,14 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -1369,6 +1385,14 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -1458,6 +1482,14 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -1589,6 +1621,14 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1683,6 +1723,14 @@ async fn agent_loop_max_turns_emits_done_marker() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -1757,6 +1805,14 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -1848,6 +1904,14 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -1980,6 +2044,14 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -2110,6 +2182,14 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -2248,6 +2328,14 @@ async fn agent_loop_persist_failure_emits_error() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -2391,6 +2479,14 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2491,6 +2587,14 @@ async fn agent_loop_error_persists_partial_text() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -2574,6 +2678,14 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -2648,6 +2760,14 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -2758,6 +2878,14 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -2834,6 +2962,14 @@ async fn agent_loop_error_emits_turn_complete() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -2953,6 +3089,14 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -3108,6 +3252,14 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -3241,6 +3393,14 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -3597,6 +3757,14 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -3759,6 +3927,14 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -3936,6 +4112,14 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4071,6 +4255,14 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -4221,6 +4413,14 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
 
@@ -4358,6 +4558,14 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // worker). Mirrors the production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -4513,6 +4721,14 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4637,6 +4853,14 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // worker). Mirrors the production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -4881,6 +5105,14 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4988,6 +5220,14 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // worker). Mirrors the production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -5114,6 +5354,14 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
+        None,
     )
     .await;
     let _ = cancel_task.await;
@@ -5226,6 +5474,14 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // worker). Mirrors the production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -5341,6 +5597,14 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // worker). Mirrors the production chat.rs call site.
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
+        None,
+        // 2026-06-21 fix (B6 review defect A): tests pass
+        // `None` (production-style caller — not a worker,
+        // so the parent's `assemble_system_prompt(mode_prefix,
+        // base_prompt)` path runs unchanged). The worker
+        // nested call in `run_subagent` passes `Some(...)`
+        // to fully replace the parent's prompt with the
+        // worker's `SubagentDef.system_prompt`.
         None,
     )
     .await;
@@ -5522,6 +5786,14 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
             // (no Tauri runtime).
             None,
+            // 2026-06-21 fix (B6 review defect A): tests pass
+            // `None` (production-style caller — not a worker,
+            // so the parent's `assemble_system_prompt(mode_prefix,
+            // base_prompt)` path runs unchanged). The worker
+            // nested call in `run_subagent` passes `Some(...)` to
+            // fully replace the parent's prompt with the worker's
+            // `SubagentDef.system_prompt`.
+            None,
         ),
     )
     .await;
@@ -5656,5 +5928,195 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             .iter()
             .map(|e| e.kind)
             .collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2026-06-21 fix (B6 review defect A): system_prompt_override
+//
+// Pre-fix the worker path's `assemble_subagent_prompt(def, task)`
+// output was dead code (`_worker_system_prompt` discarded at
+// `chat_loop.rs:2052`); the worker actually received the parent's
+// `assemble_system_prompt(mode_prefix, base_prompt)` output, which
+// made `SubagentDef.system_prompt` effectively documentation-only
+// and produced prompt / permission contradictions in Edit/Plan
+// mode (worker told "you can write" in Edit mode but Tier 4
+// collapsed write tools to `Deny` because the worker has no UI
+// sink). The fix threads the worker's overridden prompt as the
+// 23rd `run_chat_loop` parameter. These two tests pin the
+// behavior: the override is actually used (worker path) and the
+// None case still goes through the parent's
+// `assemble_system_prompt` path (production path — the common
+// case the existing 34 tests already cover; this is a
+// targeted regression guard).
+// ---------------------------------------------------------------------------
+
+/// Worker path: when `system_prompt_override` is `Some(p)`,
+/// `run_chat_loop` sends `p` as the system prompt to the LLM,
+/// NOT the parent's `assemble_system_prompt(mode_prefix,
+/// base_prompt)` output. Verifies the worker actually receives
+/// its `SubagentDef.system_prompt` and the pre-fix dead-code
+/// regression is locked.
+#[tokio::test]
+async fn system_prompt_override_worker_path_sends_override() {
+    use crate::agent::subagent::{assemble_subagent_prompt, lookup_subagent};
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "hi".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    // The worker uses the `researcher` `SubagentDef` (read-only
+    // research subagent); its system_prompt is the one the
+    // worker path should see.
+    let def = lookup_subagent("researcher").expect("researcher is a built-in subagent");
+    let worker_prompt = assemble_subagent_prompt(def, "summarize the docs");
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-worker-override".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        // B6 PR2b: production-style caller is NOT a worker
+        // (this is the worker-path test, so the
+        // `is_worker` flag itself is `Some(false)` — the
+        // "worker-ness" is conveyed by the
+        // `system_prompt_override` param, not by `is_worker`).
+        // The `is_worker` flag governs the ⑨ 关 Tier 4
+        // collapse; the override is a separate concern.
+        Some(false),
+        None,
+        // The actual fix being tested.
+        Some(worker_prompt.clone()),
+    )
+    .await;
+
+    // The override must reach the LLM verbatim.
+    let sent = mock.sent_systems();
+    assert_eq!(sent.len(), 1, "expected exactly 1 send call");
+    let received = sent[0]
+        .as_ref()
+        .expect("worker path: system prompt must be Some, not None");
+    assert_eq!(
+        received, &worker_prompt,
+        "worker path system prompt must equal `SubagentDef.system_prompt` \
+         (the pre-fix bug was the override being dead-code-discarded and \
+         the parent's `assemble_system_prompt` output being sent instead)"
+    );
+    // Negative guard: the parent prompt would carry the mode_prefix
+    // (e.g. "You are in Yolo mode..."); the worker's prompt
+    // explicitly does NOT (Claude Code convention — workers do
+    // not inherit the main system prompt).
+    assert!(
+        !received.contains("Yolo mode") && !received.contains("Edit mode") && !received.contains("Plan mode"),
+        "worker's system prompt must NOT carry the parent's mode_prefix; \
+         the worker's `SubagentDef.system_prompt` is a fully-replacement prompt. \
+         got: {}",
+        received
+    );
+}
+
+/// Production path: when `system_prompt_override` is `None`
+/// (the production + 34 existing test path), `run_chat_loop`
+/// sends the result of `assemble_system_prompt(mode_prefix,
+/// base_prompt)` to the LLM. This is the regression guard that
+/// the parent path is unaffected by the worker-path fix.
+#[tokio::test]
+async fn system_prompt_override_none_path_uses_parent_assembly() {
+    use crate::agent::permissions::mode_system_prefix;
+    use crate::agent::system_prompt::{assemble_system_prompt, lookup_head_sha};
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta { text: "hi".into() }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-parent-override-none".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        // Production path: `None` override.
+        None,
+    )
+    .await;
+
+    // Recompute what the parent path should send. We mirror the
+    // exact steps inside `run_chat_loop` at the system-prompt
+    // site: load session + project, build base_prompt via
+    // `build_system_prompt`, prefix with `mode_system_prefix`.
+    let sent = mock.sent_systems();
+    assert_eq!(sent.len(), 1, "expected exactly 1 send call");
+    let received = sent[0]
+        .as_ref()
+        .expect("parent path: system prompt must be Some, not None");
+
+    // Re-derive the expected parent prompt for the harness's
+    // session + project.
+    let loaded =
+        db::load_session(&h.db, &h.session_id).await.expect("load_session").expect("session");
+    let project = db::get_project(&h.db, &loaded.session.project_id)
+        .await
+        .expect("get_project")
+        .expect("project");
+    let worktree_path = std::path::PathBuf::from(
+        loaded
+            .session
+            .worktree_path
+            .clone()
+            .unwrap_or_else(|| project.path.clone()),
+    );
+    let head_sha = lookup_head_sha(&worktree_path);
+    let base_prompt = build_system_prompt(&loaded.session, &project, &worktree_path, &head_sha);
+    let expected = assemble_system_prompt(mode_system_prefix(loaded.session.mode), &base_prompt);
+    assert_eq!(
+        received, &expected,
+        "parent path (override=None) must send the parent's \
+         `assemble_system_prompt(mode_prefix, base_prompt)` output; \
+         the worker-path fix must NOT regress the parent path"
     );
 }
