@@ -33,10 +33,15 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import SubagentDrawer from "./SubagentDrawer.vue";
+import ToolInputBody from "./ToolInputBody.vue";
+import ToolOutputBody from "./ToolOutputBody.vue";
+import PermissionAskBody from "./PermissionAskBody.vue";
+import WorkerTextTimeline from "./WorkerTextTimeline.vue";
 import {
   useSubagentRunsStore,
   type SubagentRunRow,
 } from "../../stores/subagentRuns";
+import { useChatStore } from "../../stores/chat";
 
 const sampleRow: SubagentRunRow = {
   id: "run-1",
@@ -130,7 +135,17 @@ describe("SubagentDrawer", () => {
       ...sampleRow,
       transcriptJson: JSON.stringify([
         { kind: "tool_call", payload_json: { name: "read_file" } },
-        { kind: "permission_ask", payload_json: { toolName: "shell" } },
+        // FT-F-001 stage 2 (check phase fix 2026-06-20): the Rust
+        // `PermissionAskPayload` serializes with `#[serde(rename_all =
+        // "camelCase")]`, so the actual stored payload_json carries
+        // `toolName` (NOT `tool_name`). `synthesizeAsk` reads both
+        // spellings defensively; the production-realistic fixture is
+        // camelCase. Provide a risk field so PermissionAskBody doesn't
+        // crash on RISK_META[undefined].
+        {
+          kind: "permission_ask",
+          payload_json: { toolName: "shell", risk: "high" },
+        },
       ]),
     });
     // liveTranscript is empty (no in-flight stream).
@@ -204,10 +219,19 @@ describe("SubagentDrawer", () => {
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", sampleRow);
     store.liveTranscript.set("run-1", [
-      { kind: "chat_event", payload_json: {} },
-      { kind: "tool_call", payload_json: {} },
-      { kind: "tool_result", payload_json: {} },
-      { kind: "permission_ask", payload_json: {} },
+      { kind: "chat_event", payload_json: { kind: "start" } },
+      { kind: "tool_call", payload_json: { name: "x" } },
+      { kind: "tool_result", payload_json: { content: "y", is_error: false } },
+      // FT-F-001 stage 2 (check phase fix 2026-06-20): permission_ask
+      // routes through synthesizeAsk. The Rust PermissionAskPayload
+      // serializes with camelCase, so the production-realistic fixture
+      // uses `toolName` (synthesizeAsk also reads snake_case fallback).
+      // Provide a risk so PermissionAskBody doesn't crash on
+      // RISK_META[undefined].
+      {
+        kind: "permission_ask",
+        payload_json: { toolName: "shell", risk: "high" },
+      },
     ]);
     await store.openDrawer("run-1");
     await flushPromises();
@@ -416,7 +440,7 @@ describe("SubagentDrawer", () => {
   // `utils/messageFormat.test.ts` but at the drawer level.
   // -------------------------------------------------------------------
 
-  it("tool_result entries unwrap the cwd envelope and render the inner result text", async () => {
+  it("tool_result entries unwrap the cwd envelope and render via ToolOutputBody", async () => {
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", sampleRow);
     const envelope = JSON.stringify({
@@ -425,23 +449,34 @@ describe("SubagentDrawer", () => {
     });
     store.liveTranscript.set("run-1", [
       { kind: "tool_call", payload_json: { name: "read_file", input: { path: "/foo" } } },
-      { kind: "tool_result", payload_json: { content: envelope } },
+      { kind: "tool_result", payload_json: { content: envelope, is_error: false } },
     ]);
     await store.openDrawer("run-1");
     await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
-    const payloads = [...document.body.querySelectorAll(".subagent-drawer__payload")];
-    const payloadTexts = payloads.map((p) => p.textContent ?? "");
-    // The inner result string is rendered (as plain text, no JSON wrapping).
-    expect(payloadTexts.some((t) => t.trim() === "actual file contents here")).toBe(true);
-    // The envelope is NOT visible anywhere — neither the escape noise
-    // nor the bare `"cwd":` key that the old double-stringify would emit.
-    expect(payloadTexts.some((t) => t.includes("\\\"cwd\\\"") || t.includes('"cwd":'))).toBe(false);
-    // tool_call entries keep the old JSON.stringify path (different
-    // shape — no envelope).
-    expect(payloadTexts.some((t) => t.includes('"name"'))).toBe(true);
+    // FT-F-001 stage 2: tool_result entries now render through the
+    // shared ToolOutputBody component (PR1). The drawer's outer wrapper
+    // no longer renders a `<pre>` blob — the body component owns the
+    // envelope-unwrap (via extractToolResultDisplay) + truncate logic.
+    const outputBodies = w.findAllComponents(ToolOutputBody);
+    expect(outputBodies.length).toBe(1);
+    // ToolOutputBody's internal `display` computed unwraps the cwd
+    // envelope (see PR1 — extractToolResultDisplay strips `{result,cwd}`).
+    // We assert the unwrapped string lands in the rendered `<pre>`.
+    const pre = outputBodies[0].find(".tool-output-body__pre");
+    expect(pre.text()).toContain("actual file contents here");
+    // The envelope is NOT visible — neither the escape noise nor the
+    // bare `"cwd":` key that the old double-stringify would emit.
+    expect(pre.text()).not.toContain("cwd");
+
+    // tool_call entries route to ToolInputBody (the name + input render
+    // through the shared body component, not as inline JSON).
+    const inputBodies = w.findAllComponents(ToolInputBody);
+    expect(inputBodies.length).toBe(1);
+    expect(inputBodies[0].props("name")).toBe("read_file");
+    expect(inputBodies[0].props("input")).toEqual({ path: "/foo" });
     w.unmount();
   });
 
@@ -611,5 +646,274 @@ describe("SubagentDrawer", () => {
 
     expect(document.body.querySelector(".subagent-drawer__banner")).toBeNull();
     w2.unmount();
+  });
+
+  // -------------------------------------------------------------------
+  // FT-F-001 stage 2 (2026-06-20): typed-card routing. Each
+  // TranscriptKind routes to its matching shared body component
+  // (PR1's ToolInputBody / ToolOutputBody / PermissionAskBody) or the
+  // drawer-local WorkerTextTimeline. Verifies AC1-AC4 at the component-
+  // instance level (findComponent instead of brittle DOM-string
+  // matching).
+  // -------------------------------------------------------------------
+
+  it("tool_call entry routes to ToolInputBody with name + input props", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "tool_call",
+        payload_json: {
+          request_id: "req-1",
+          id: "tu-1",
+          name: "grep",
+          input: { pattern: "TODO", path: "/src" },
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const bodies = w.findAllComponents(ToolInputBody);
+    expect(bodies.length).toBe(1);
+    expect(bodies[0].props("name")).toBe("grep");
+    expect(bodies[0].props("input")).toEqual({ pattern: "TODO", path: "/src" });
+    w.unmount();
+  });
+
+  it("tool_result entry routes to ToolOutputBody with content + isError props (no durationMs)", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "tool_result",
+        payload_json: {
+          request_id: "req-1",
+          tool_use_id: "tu-1",
+          content: "line 1\nline 2",
+          is_error: false,
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const bodies = w.findAllComponents(ToolOutputBody);
+    expect(bodies.length).toBe(1);
+    expect(bodies[0].props("content")).toBe("line 1\nline 2");
+    expect(bodies[0].props("isError")).toBe(false);
+    // Per R1 mapping table: tool_result payload_json has NO duration_ms
+    // field, so durationMs prop is never set (undefined). The body's
+    // summary omits the duration chip accordingly.
+    expect(bodies[0].props("durationMs")).toBeUndefined();
+    w.unmount();
+  });
+
+  it("tool_result entry with is_error=true forwards isError to ToolOutputBody", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "tool_result",
+        payload_json: { content: "boom", is_error: true },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const bodies = w.findAllComponents(ToolOutputBody);
+    expect(bodies[0].props("isError")).toBe(true);
+    // Visual: the error variant class is applied to the `<details>`.
+    expect(bodies[0].classes()).toContain("tool-output-body--error");
+    w.unmount();
+  });
+
+  it("permission_ask entry routes to PermissionAskBody in historical mode with synthesizeAsk + repoRoot", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    // Seed chatStore.currentCwd so the path badge has a repoRoot.
+    const chatStore = useChatStore();
+    chatStore.currentCwd = "/data/repo";
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "permission_ask",
+        // Check phase fix (2026-06-20): the Rust
+        // `PermissionAskPayload` carries `#[serde(rename_all =
+        // "camelCase")]` (see `app/src-tauri/src/agent/permissions/
+        // mod.rs:406`), so production `payload_json` actually has
+        // camelCase keys — `sessionId` / `toolUseId` / `toolName` /
+        // `toolInput`. The PRD's snake_case claim was wrong (only
+        // `ToolCallPayload` / `ToolResultPayload` are snake_case —
+        // they have NO `rename_all`). `synthesizeAsk` reads both
+        // spellings defensively; this fixture uses the production-
+        // realistic camelCase shape.
+        payload_json: {
+          rid: "r-1",
+          sessionId: "sess-1",
+          toolUseId: "tu-1",
+          toolName: "write_file",
+          toolInput: { path: "/data/repo/src/x.ts" },
+          risk: "medium",
+          path: "/data/repo/src/x.ts",
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const bodies = w.findAllComponents(PermissionAskBody);
+    expect(bodies.length).toBe(1);
+    expect(bodies[0].props("mode")).toBe("historical");
+    expect(bodies[0].props("repoRoot")).toBe("/data/repo");
+    const ask = bodies[0].props("ask");
+    // synthesizeAsk maps payload_json → camelCase PermissionAsk.
+    // (Reads both `toolName` (production) and `tool_name` (legacy)
+    // defensively.)
+    expect(ask.toolName).toBe("write_file");
+    expect(ask.risk).toBe("medium");
+    expect(ask.path).toBe("/data/repo/src/x.ts");
+    expect(ask.toolUseId).toBe("tu-1");
+    expect(ask.sessionId).toBe("sess-1");
+    expect(ask.rid).toBe("r-1");
+    // Historical mode: NO onRespond callback is provided (D6 — no
+    // interactive buttons in the drawer).
+    expect(bodies[0].props("onRespond")).toBeUndefined();
+    // The historical note text uses the PR1 phrasing (no "denied").
+    expect(bodies[0].text()).toContain("worker wanted write_file");
+    expect(bodies[0].text()).toContain("ask collapsed");
+    expect(bodies[0].text()).not.toContain("denied");
+    w.unmount();
+  });
+
+  // Check phase (2026-06-20): lock the snake_case fallback in
+  // `synthesizeAsk`. Production `payload_json` is camelCase (Rust
+  // `PermissionAskPayload` carries `rename_all = "camelCase"`), but
+  // `synthesizeAsk` defensively reads BOTH spellings so a future
+  // backend refactor that drops `rename_all` doesn't silently render
+  // blank permission cards. If this fallback is ever removed, the
+  // test fails — prompting an explicit decision rather than a silent
+  // regression.
+  it("synthesizeAsk also accepts snake_case payload_json (defensive fallback)", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      {
+        kind: "permission_ask",
+        payload_json: {
+          rid: "r-2",
+          session_id: "sess-2",
+          tool_use_id: "tu-2",
+          tool_name: "shell",
+          tool_input: { command: "ls" },
+          risk: "high",
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const bodies = w.findAllComponents(PermissionAskBody);
+    const ask = bodies[0].props("ask");
+    expect(ask.toolName).toBe("shell");
+    expect(ask.toolUseId).toBe("tu-2");
+    expect(ask.sessionId).toBe("sess-2");
+    expect(ask.rid).toBe("r-2");
+    expect(ask.toolInput).toEqual({ command: "ls" });
+    w.unmount();
+  });
+
+  it("chat_event entry routes to WorkerTextTimeline; start + done render as milestones, deltas ignored", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      // A start/done pair plus noise deltas — the timeline should
+      // render exactly 2 milestone rows and drop everything else.
+      {
+        kind: "chat_event",
+        payload_json: { request_id: "req-1", kind: "start" },
+      },
+      {
+        kind: "chat_event",
+        payload_json: {
+          request_id: "req-1",
+          kind: "delta",
+          text: "streaming token noise",
+        },
+      },
+      {
+        kind: "chat_event",
+        payload_json: {
+          request_id: "req-1",
+          kind: "thinking_delta",
+          text: "thinking noise",
+        },
+      },
+      {
+        kind: "chat_event",
+        payload_json: {
+          request_id: "req-1",
+          kind: "done",
+          stop_reason: "end_turn",
+          // usage present but NOT rendered per Q3 (drawer header has
+          // the aggregate).
+          usage: { input_tokens: 100, output_tokens: 50 },
+        },
+      },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // chat_event entries are hidden by default — flip the toggle so
+    // the timeline components mount.
+    const checkbox = document.body.querySelector(
+      ".subagent-drawer__toggle input",
+    ) as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    await flushPromises();
+
+    const timelines = w.findAllComponents(WorkerTextTimeline);
+    // Each chat_event transcript entry becomes its own WorkerTextTimeline
+    // (single-entry array). The component filters internally; delta/
+    // thinking_delta entries produce an empty-state `<p>` instead of
+    // milestone rows.
+    expect(timelines.length).toBe(4);
+    // The start + done timelines each render exactly one milestone row.
+    const milestoneRows = document.body.querySelectorAll(
+      ".worker-text-timeline__row",
+    );
+    expect(milestoneRows.length).toBe(2);
+    // start dot + done dot classes.
+    const rowClasses = [...milestoneRows].map((r) =>
+      [...r.classList].filter((c) =>
+        c.startsWith("worker-text-timeline__row--"),
+      ),
+    );
+    expect(rowClasses).toEqual([
+      ["worker-text-timeline__row--start"],
+      ["worker-text-timeline__row--done"],
+    ]);
+    // The done row surfaces the stop_reason inline.
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("agent 开始响应");
+    expect(text).toContain("agent 完成");
+    expect(text).toContain("end_turn");
+    // Token usage is NOT surfaced by the timeline (Q3 — header has the
+    // aggregate).
+    expect(text).not.toContain("input_tokens");
+    expect(text).not.toContain("output_tokens");
+    w.unmount();
   });
 });

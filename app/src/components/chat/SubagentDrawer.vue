@@ -24,8 +24,11 @@
 //   - body: transcript list from
 //     `store.liveTranscript.get(openRunId) ?? parse(getRunCache.transcriptJson) ?? []`
 //   - per entry: kind badge (chat_event=gray / tool_call=blue /
-//     tool_result=green / permission_ask=orange) + payload
-//     `JSON.stringify(_, null, 2)` + timestamp
+//     tool_result=green / permission_ask=orange) + typed-card body
+//     (FT-F-001 stage 2, 2026-06-20: tool_call→ToolInputBody /
+//     tool_result→ToolOutputBody / permission_ask→PermissionAskBody
+//     (historical) / chat_event→WorkerTextTimeline). Pre-stage-2 the
+//     body was `JSON.stringify(payload_json, null, 2)` in a `<pre>`.
 //   - "Show chat events" toggle: chat_event entries default hidden;
 //     tool_call / tool_result / permission_ask always visible
 //   - transcriptTruncated flag → "原 transcript 已截断 (head + tail)"
@@ -42,7 +45,10 @@ import {
   DialogClose,
 } from "reka-ui";
 import Icon from "../Icon.vue";
-import { extractToolResultDisplay } from "../../utils/messageFormat";
+import ToolInputBody from "./ToolInputBody.vue";
+import ToolOutputBody from "./ToolOutputBody.vue";
+import PermissionAskBody from "./PermissionAskBody.vue";
+import WorkerTextTimeline from "./WorkerTextTimeline.vue";
 import {
   useSubagentRunsStore,
   coerceStatus,
@@ -51,8 +57,52 @@ import {
   type TranscriptKind,
   type SubagentStatus,
 } from "../../stores/subagentRuns";
+import { useChatStore } from "../../stores/chat";
+import type {
+  PermissionAsk,
+  Risk,
+} from "../../stores/permissions";
 
 const store = useSubagentRunsStore();
+const chatStore = useChatStore();
+
+/** FT-F-001 stage 2 (2026-06-20): repo root for the historical-mode
+ *  PermissionAskBody path badge. Q2 decision — we assume the worker
+ *  runs under the same project root as the parent session's cwd (the
+ *  common case). Edge case: a worker running in a different cwd will
+ *  show an inaccurate 仓库内 / 仓库外 badge; accepted as an edge-case
+ *  tradeoff for the simpler drawer API (no per-worker cwd tracking). */
+const repoRoot = computed<string>(() => chatStore.currentCwd);
+
+/** FT-F-001 stage 2 (2026-06-20): synthesize a `PermissionAsk` from a
+ *  drawer transcript entry's `payload_json`. The body component takes
+ *  the typed `PermissionAsk` shape (camelCase), so we map field-by-
+ *  field. Rid / sessionId / toolUseId are best-effort strings here —
+ *  the historical-mode card never fires onRespond, so these IDs are
+ *  purely informational (they DO drive the path badge via `ask.path`).
+ *
+ *  Cross-layer drift note (2026-06-20 check phase): the Rust
+ *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
+ *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`), so the
+ *  stored `payload_json` actually has camelCase keys
+ *  (`sessionId` / `toolUseId` / `toolName` / `toolInput`). The PRD's
+ *  snake_case claim was wrong — `ToolCallPayload` / `ToolResultPayload`
+ *  are snake_case (no `rename_all`), but `PermissionAskPayload` is
+ *  camelCase. We read BOTH spellings defensively (camelCase first per
+ *  production reality, snake_case as fallback) so the drawer keeps
+ *  rendering correctly if either layer is ever refactored. */
+function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
+  return {
+    rid: String(p.rid ?? ""),
+    sessionId: String(p.sessionId ?? p.session_id ?? ""),
+    toolUseId: String(p.toolUseId ?? p.tool_use_id ?? ""),
+    toolName: String(p.toolName ?? p.tool_name ?? ""),
+    toolInput: (p.toolInput ?? p.tool_input ?? {}) as Record<string, unknown>,
+    risk: p.risk as Risk,
+    reason: p.reason as string | undefined,
+    path: p.path as string | undefined,
+  };
+}
 
 /** Drawer open state — reka-ui Dialog requires a writable ref. We
  *  bridge it to `store.openRunId` so the store is the single source
@@ -139,34 +189,12 @@ const KIND_META: Record<
   permission_ask: { label: "perm", color: "var(--color-tool-shell)" },
 };
 
-/** Format a transcript entry's `payload_json` (snake_case DB storage
- *  shape — Drift trap 2) as indented JSON.
- *
- *  B2 (2026-06-20): for `tool_result` entries, `payload_json.content`
- *  is the LLM-facing cwd envelope (REQ-16 — see
- *  `extractToolResultDisplay` in `utils/messageFormat.ts`), e.g.
- *  `'{"result":"...","cwd":"/data/wt"}'`. The previous blanket
- *  `JSON.stringify(payload_json, null, 2)` would re-stringify the
- *  envelope, producing `\"cwd\":\"...\"` escape noise and rendering
- *  the envelope JSON instead of the actual tool output. The same
- *  envelope is unwrapped by `ToolCallCard.vue` on the main panel
- *  (line 33-37); reusing the helper here keeps the two surfaces in
- *  sync. Non-`tool_result` kinds (tool_call / permission_ask /
- *  chat_event) keep the old JSON.stringify path — those don't carry
- *  the envelope shape. */
-function formatPayload(entry: TranscriptEntry): string {
-  if (entry.kind === "tool_result") {
-    const raw = entry.payload_json?.content;
-    if (typeof raw === "string") {
-      return extractToolResultDisplay(raw);
-    }
-  }
-  try {
-    return JSON.stringify(entry.payload_json, null, 2);
-  } catch {
-    return String(entry.payload_json);
-  }
-}
+/** FT-F-001 stage 2 (2026-06-20): the drawer no longer stringifies
+ *  `payload_json` into a `<pre>` blob. Each transcript entry routes to
+ *  its typed-card body component (see the `<li>` branches in the
+ *  template). The old `formatPayload` + `extractToolResultDisplay`
+ *  import have been removed; envelope-unwrapping + truncation now live
+ *  inside `ToolOutputBody.vue` (PR1 shared body). */
 
 // ---------------------------------------------------------------------------
 // B6 PR3b (2026-06-20): live duration timer + auto-scroll polish
@@ -484,7 +512,35 @@ function jumpToLatest(): void {
                   class="subagent-drawer__kind"
                   :style="{ color: KIND_META[entry.kind].color, borderColor: KIND_META[entry.kind].color }"
                 >{{ KIND_META[entry.kind].label }}</span>
-                <pre class="subagent-drawer__payload">{{ formatPayload(entry) }}</pre>
+
+                <!-- FT-F-001 stage 2 (2026-06-20): per-kind typed-card
+                     body. Routes by `entry.kind` to the matching shared
+                     body component (PR1's ToolInputBody / ToolOutputBody
+                     / PermissionAskBody) or this drawer's local
+                     WorkerTextTimeline. The outer wrapper (kind badge
+                     + narrow padding) stays inline per D3. -->
+                <div class="subagent-drawer__body-content">
+                  <ToolInputBody
+                    v-if="entry.kind === 'tool_call'"
+                    :name="(entry.payload_json.name as string) ?? ''"
+                    :input="(entry.payload_json.input as Record<string, unknown>) ?? {}"
+                  />
+                  <ToolOutputBody
+                    v-else-if="entry.kind === 'tool_result'"
+                    :content="(entry.payload_json.content as string) ?? ''"
+                    :is-error="(entry.payload_json.is_error as boolean) ?? false"
+                  />
+                  <PermissionAskBody
+                    v-else-if="entry.kind === 'permission_ask'"
+                    mode="historical"
+                    :ask="synthesizeAsk(entry.payload_json)"
+                    :repo-root="repoRoot"
+                  />
+                  <WorkerTextTimeline
+                    v-else-if="entry.kind === 'chat_event'"
+                    :events="[entry]"
+                  />
+                </div>
               </li>
             </ol>
             <!-- B6 PR3b (2026-06-20): floating "↓ N new" button.
@@ -787,20 +843,14 @@ function jumpToLatest(): void {
   text-align: center;
 }
 
-.subagent-drawer__payload {
-  margin: 0;
+/* FT-F-001 stage 2 (2026-06-20): typed-card body wrapper. Replaces the
+   old `.subagent-drawer__payload` `<pre>`. Takes the remaining width
+   next to the kind badge and lets each body component own its internal
+   layout (details/pre/timeline). `min-width: 0` is required so flex
+   children can shrink below their intrinsic width (the tool input
+   `<pre>` would otherwise force the drawer to grow horizontally). */
+.subagent-drawer__body-content {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  padding: 4px 6px;
-  max-height: 200px;
-  overflow-y: auto;
 }
 </style>
