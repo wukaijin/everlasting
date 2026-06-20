@@ -795,6 +795,129 @@
 
 ---
 
+## Feature Follow-ups (FT) — 已知推迟的实施项
+
+> **目的**: 跟踪 review / journal / grill 中识别的、可独立 PR 实施的增强项,避免后续 session 重复讨论"该不该做"或被遗忘
+>
+> **与 RULE-XXX 的区别**:RULE 是 review finding(bug / 债 / spec 偏离);FT 是**主动识别**的增强机会(scope 推迟到独立 PR,非漏做)
+>
+> **ID 约定**:`FT-{Subsystem}-{Seq}`,Subsystem 一字符(F=Frontend / B=Backend / D=Data / X=Cross)
+>
+> **实施流程**:开新 task `.trellis/tasks/XX-YY-ft-f-XXX-...` → 走标准 brainstorm(prd.md)→ 收口时更新本文件 Status / Closed At
+
+### FT-F-001 — SubagentDrawer payload 可视化 typed-cards 重做
+
+- **Origin**: Session 49 B6 PR3b brainstorm D1(commit `186e500`)
+- **Subsystem**: Frontend (`SubagentDrawer` + `ToolCallCard` + chat 主面板卡片)
+- **Files**: `app/src/components/chat/SubagentDrawer.vue` + `app/src/components/chat/ToolCallCard.vue` + chat 主面板卡片(`MessageItem` / `ToolCallCard` / `PermissionCard` 等)
+- **Description**: drawer 当前用**统一 `payload` 字符串**展示 worker 输出(call / result / perm / text 混在一段 JSON 字符串里,所有类型走同一渲染分支)。重做为 typed-cards:不同类型 payload 路由到对应卡片组件 —— `tool_call` → `ToolCallCard` 复用 / `tool_result` → `ToolResultCard` / `permission_ask` → `PermissionCard` / `text` → `MessageItem`。
+- **前置依赖(硬依赖,先做)**:chat 主面板卡片 props interface **下沉为 shared**(否则 drawer 复用主面板卡片会带入大量无关 prop 噪音,组件 API 不收敛,易回滚)
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/`
+- **Decisions to revisit**:
+  - 主面板卡片 props 下沉方案:独立 PR 先做 API 设计 / 还是 FT-F-001 拆两阶段提交
+  - drawer scoped 样式 vs 主面板卡片共享样式的拆分边界(避免样式泄漏到主面板)
+  - 现有 12 个 `SubagentDrawer.test.ts`:typed-cards 化后保留 vs 重写
+  - 持久化层:`subagent_events.payload` 仍存原始 JSON 字符串(后端零改动),还是新加 `payload_kind` 列做类型索引
+- **Why deferred**:
+  - B6 PR3b 已是 race fix + 3 polish 范围,再叠 typed-cards 重做 → scope 爆炸,review 困难
+  - 卡片 props interface 跨 drawer / 主面板共享,需**先独立讨论 API 形状**,避免"做了一半发现接口不对"回滚
+  - drawer 刚上线,真实使用反馈可作为 typed-cards 设计的 input(避免 over-engineering)
+- **Related FT (同次 session)**:FT-F-002 / FT-F-003(各自独立 task skeleton,见下)
+- **Related Hotfix (2026-06-20, Session 50)**:B2 — drawer tool_result payload 双重 JSON 编码(envelope 未拆)已被 hotfix 局部解决。`SubagentDrawer.formatPayload` 对 `tool_result` 特判调用 `extractToolResultDisplay`(同 `ToolCallCard.vue:33-37`),直接显示内部 result 字符串而非 envelope JSON。**剩余 typed-cards 重做空间不变**(typed-cards 是按 kind 路由到不同组件,本 fix 是单一 kind 内的内容净化),但 B2 这个具体 symptom 已 closed,FT-F-001 实施时无需再处理 envelope 双编码。B1(failed/cancelled 时间算错)与本 FT 无关,独立 hotfix 处理。
+
+### FT-F-002 — SubagentDrawer toolTip 1.5s miss 后 toast fallback
+
+- **Origin**: Session 49 B6 PR3b "Next Steps" 段(commit `186e500`)
+- **Subsystem**: Frontend (`ToolCallCard` retry polling 兜底反馈)
+- **Files**: `app/src/components/chat/ToolCallCard.vue`(retry polling 出口)+ UI toast / inline warning 组件(待选)
+- **Description**: `openSubagentDrawer` retry polling `1.5s / 5 次` 后**仍 cache miss** 时,目前 silent 回退到默认 `点击查看 worker 详情` 视觉(零反馈)。UX 增强:5 miss 后给用户 toast / inline warning,解释原因 + 提供手动 retry 入口。
+- **前置依赖(无)**:可独立 PR;retry polling 入口已存在
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-toast-fallback/`
+- **Decisions to revisit**:
+  - UI 反馈形式:复用现有 toast 组件 / 新做 ToastService / inline warning
+  - 文案:暴露原因(race / network / worker 没启动)还是统一模糊文案
+  - session 级 IPC 整体挂掉时,所有 dispatch_subagent 卡片都触发 toast 的收口方案
+- **Why deferred**:
+  - 当前 silent 回退非 broken,只是"用户不知情",race fix 才是 B6 PR3b 核心
+  - 缺真实 miss 频率数据(可能 race 修好后就几乎不触发,toast 反而是噪音)
+- **Related FT (同次 session)**:FT-F-001 / FT-F-003
+
+### FT-F-003 — `workerWaiting` ref unmount 清理
+
+- **Origin**: Session 49 B6 PR3b "Next Steps" 段(commit `186e500`,自查发现)
+- **Subsystem**: Frontend (`ToolCallCard` Vue 3 lifecycle 清理)
+- **Files**: `app/src/components/chat/ToolCallCard.vue:300-380`(`openSubagentDrawer` + retry polling 入口)
+- **Description**: retry polling `setTimeout` chain 在 component unmount 时**未清理**,可能 fire 后写 unmounted `workerWaiting` ref。Vue 3 在 unmounted ref 上写值有 console warning 噪音 + DevTools 调试误导风险。非功能性 leak,prod 路径无 user-visible 后果(5 timer × 1.5s × 几字节 = 噪声级)。
+- **前置依赖(无)**:可独立 PR,~5 行 fix
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-worker-waiting-ref-leak/`
+- **Candidate fixes**:
+  - **A**(推荐):`onUnmounted(() => clearTimeout(pollTimer))` + tracking 当前 timer id(~5 行)
+  - **B**:抽 composable `useWorkerDrawerPolling`(可测试性 ↑,但本场景单调用点,可能 over-engineering)
+  - **C**:`AbortController` 包装(与后端 fetch cancellation 一致,但本场景纯 setTimeout,Ac 略重)
+- **Decisions to revisit**:
+  - A / B / C 方案选哪个
+  - 测试覆盖范围:console 不出 warning? ghost ref 不被写? 内存不增长?
+  - Vue 3.5+ 在 unmounted ref 上写值的实际行为(待实测)
+- **Why deferred**:
+  - 非功能性 leak,prod 路径无 user-visible 后果
+  - 修法单调,但缺回归测试基线(需先确认 unmount 不会中断正常 polling 命中)
+- **Related FT (同次 session)**:FT-F-001 / FT-F-002
+
+### FT-F-004 — SubagentDrawer UX polish bundle (C1+C2+C3+C5)
+
+- **Origin**: 2026-06-20 截图分析(Session 50,user 主动提供主面板 + drawer 截图)
+- **Subsystem**: Frontend (`SubagentDrawer` 样式 / 文案微调)
+- **Files**: `app/src/components/chat/SubagentDrawer.vue`(681 行,改动预计 < 50 行)
+- **Description**: 4 项独立小 UX 优化打包:C1 宽度 480px → 640px + `<pre>` `word-break: break-all` → `overflow-x: auto`;C2 头部 finishedAt ISO8601 字符串 → `HH:MM:SS`(`formatTime` helper);C3 顶部 status badge 旁加 `N events` 计数 + 勾 chat events 时 `+ N chat`;C5 底部 scroll 渐变提示(`mask-image: linear-gradient` 仅 overflow 时生效,无 JS)
+- **前置依赖(无)**:可独立 PR;每项 ~10-30 行改动;4 项可 1 bundle PR 或 4 micro-PR
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-ux-polish/`
+- **Decisions to revisit**:
+  - C1 宽度具体值:560 / 600 / 640(推荐 640)
+  - C2 时间格式:`HH:MM:SS` 绝对 vs `X 分钟前` 相对
+  - C3 计数 vs 进度条
+  - C5 渐变方向:仅底部 vs 上下都有
+  - 打包 vs 拆 PR 策略
+- **Why deferred**:
+  - PR3b 已是 race fix + 3 polish 范围,加这 4 项 → scope 爆
+  - 缺真实使用反馈(2026-06-20 第一次截图,4 个问题 review 阶段没人提)
+  - 独立小改可独立 PR
+- **Related FT (同次 session)**:FT-F-001 / FT-F-002 / FT-F-003 / FT-F-005
+
+### FT-F-005 — SubagentDrawer failed state 视觉强化(D2)
+
+- **Origin**: 2026-06-20 截图分析(Session 50)
+- **Subsystem**: Frontend (`SubagentDrawer` 失败态视觉)
+- **Files**: `app/src/components/chat/SubagentDrawer.vue`(改动 ~50 行)+ `app/src/components/chat/SubagentDrawer.test.ts`(+1 test)
+- **Description**: drawer 在 worker `failed` / `cancelled` 时缺独立 banner 显示**失败原因**(最后一次 tool error / cancelled-by-user / 后端错误)。现状只 status badge 颜色 + summary 字段,跟 running 状态视觉差异不够,用户读不到"为什么失败"。需前端消费后端 `SubagentRunRow.errorMessage` / `cancelledBy` 字段(待查后端 `agent/subagent.rs` 是否已存)。
+- **前置依赖(可能)**:后端 `SubagentRunRow` 字段确认 —— 如果 `errorMessage` / `cancelledBy` 未存,需先开后端小 task 落字段(本 task 不能独立完成)
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-failed-banner/`
+- **Decisions to revisit**:
+  - 后端字段确认(AI 必查 `app/src-tauri/src/agent/subagent.rs`)
+  - banner 形态:inline warning 横条 / 折叠 details / 复用主面板 dispatch_subagent error 视觉
+  - cancelled 状态要不要 banner
+  - banner 文案来源:直接显示后端 `errorMessage` 字段 vs 前端从最后 transcript entry 推
+  - banner 跟 status badge 视觉关系:替代 vs 共存
+- **Why deferred**:
+  - 截图 2026-06-20 第一次真实 use case 暴露,brainstorm 阶段不可见
+  - 跟主面板 dispatch_subagent 卡片红框 error 视觉**不对齐**(主面板清晰,drawer 弱),优先级比 C1-C5 高
+  - 独立小改,~50 行
+- **Related FT (同次 session)**:FT-F-001 / FT-F-002 / FT-F-003 / FT-F-004
+- **Related bug**:
+  - B1(drawer 头部 "failed at 14281.9s" 数错,独立 hotfix,**不属本 task**)
+  - B2(双重 JSON 编码,FT-F-001 typed-cards 化时解决,或独立 hotfix)
+
+---
+
 ## 历史 review 债务合并追踪
 
 > 状态: 4 条建议中 3 条已合并入本文件 RULE-X-XXX(RULE-D-003 / RULE-A-003 / RULE-D-006),1 条升级到 RULE-A-006(集成测试,**前移**)
@@ -929,5 +1052,5 @@
 
 ---
 
-**最后更新**: 2026-06-20 by carlos
+**最后更新**: 2026-06-20 by carlos — 新增 FT-F-004 (drawer UX polish bundle) + FT-F-005 (drawer failed state banner) open entries(均从 2026-06-20 截图分析);FT-F-001 Related Task 字段回填实际 task 路径;FT-F-002 / FT-F-003 仍 open
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
