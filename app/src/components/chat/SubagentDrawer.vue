@@ -296,11 +296,24 @@ const visibleTranscript = computed<TranscriptEntry[]>(() => {
 
 /** B6 PR3 redesign (2026-06-21): paired / pending_call /
  *  standalone buffer view of `visibleTranscript`. Recomputed on
- *  every `nowTick` tick (5s cadence) so pending calls naturally
+ *  every `nowTick` tick (100ms cadence) so pending calls naturally
  *  age out from `pending_call` to `standalone` even without new
- *  transcript events arriving. */
-const bufferedTranscript = computed<BufferedTranscriptEntry[]>(() =>
-  pairTranscript(visibleTranscript.value, Date.now(), pendingFirstSeenAt),
+ *  transcript events arriving. The `nowTick.value` reference is
+ *  load-bearing: Vue's reactivity only re-runs a computed when one
+ *  of its tracked reactive deps changes, and `pairTranscript`'s
+ *  `now` argument is not a Vue ref (it's a plain `number`). Passing
+ *  `nowTick.value` registers the dep. Without this, the pending-call
+ *  timeout would never advance until a new transcript event arrived
+ *  or the chat_events toggle flipped. */
+const bufferedTranscript = computed<BufferedTranscriptEntry[]>(
+  // `nowTick.value` is the load-bearing dep — the computed would
+  // otherwise only re-evaluate on `visibleTranscript` / chat-event
+  // toggle changes. We pass `nowTick.value` (NOT `Date.now()`)
+  // into pairTranscript so the per-call timestamp is consistent
+  // with the rest of the tick's reactive read (a single tick
+  // sees one `now`). Under fake-timer tests this also makes
+  // pairTranscript's `now` argument deterministic.
+  () => pairTranscript(visibleTranscript.value, nowTick.value, pendingFirstSeenAt),
 );
 
 /** FT-F-004 (2026-06-21): chat_event entries the default filter
@@ -798,7 +811,6 @@ function jumpToLatest(): void {
                   class="tool-card"
                   :class="{
                     'tool-card--error': isErrorResult(b.entry),
-                    'tool-card--orphan-call': b.entry.kind === 'tool_call' && !contentOf(b.entry) && !inputOf(b.entry),
                   }"
                   :style="{ borderLeftColor: standaloneAccent(b.entry) }"
                 >
@@ -1166,7 +1178,6 @@ function jumpToLatest(): void {
 .subagent-drawer__list {
   list-style: none;
   margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;

@@ -165,6 +165,29 @@ describe("pairTranscript — pending call timeout", () => {
     expect(out[0].kind).toBe("standalone");
   });
 
+  it("a pending call that aged out stays standalone on subsequent invocations (no timer reset bug)", () => {
+    // B6 PR3 check-phase fix (2026-06-21): the timeout-flush branch
+    // used to call `pendingFirstSeenAt.delete(id)` then the next
+    // invocation would `set(id, now)`, effectively resetting the
+    // timer. This caused the card to flicker between standalone
+    // and pending_call every 30s. After the fix, the entry stays
+    // in the map with the original `received_at`, so subsequent
+    // invocations continue to return standalone (no flicker).
+    const entries: TranscriptEntry[] = [toolCall("toolu_stuck")];
+    const firstSeen = new Map<string, number>();
+    pairTranscript(entries, 1_000_000, firstSeen);
+    // First timeout flush — standalone.
+    const out1 = pairTranscript(entries, 1_000_000 + PENDING_TIMEOUT_MS + 100, firstSeen);
+    expect(out1[0].kind).toBe("standalone");
+    // Second invocation a moment later — should STILL be standalone
+    // (no reset back to pending_call).
+    const out2 = pairTranscript(entries, 1_000_000 + PENDING_TIMEOUT_MS + 200, firstSeen);
+    expect(out2[0].kind).toBe("standalone");
+    // A minute later — still standalone (the timer doesn't reset).
+    const out3 = pairTranscript(entries, 1_000_000 + PENDING_TIMEOUT_MS + 60_000, firstSeen);
+    expect(out3[0].kind).toBe("standalone");
+  });
+
   it("a late-arriving tool_result after the timeout still pairs if it lands first", () => {
     // Sanity: the result-arrival path takes priority over the
     // timeout flush (the result is in the entries list, the

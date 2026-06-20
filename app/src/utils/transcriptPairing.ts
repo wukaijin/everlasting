@@ -200,15 +200,22 @@ export function pairTranscript(
   // timestamp stored in `pendingFirstSeenAt`; we use that value
   // here (NOT `now`) so the age-out reflects actual elapsed
   // wall-clock time across invocations.
+  //
+  // B6 PR3 check-phase fix (2026-06-21): we do NOT delete the
+  // entry from `pendingFirstSeenAt` on the timeout flush.
+  // Previously the delete + re-set on the next call reset the
+  // timer to "now", so the standalone → pending_call transition
+  // would flicker every 30s (standalone for one tick, then
+  // back to pending_call, then standalone again 30s later).
+  // The same `tool_use_id` is never re-emitted by Anthropic in
+  // practice, so a stale entry is bounded by the number of
+  // distinct tool_use_ids ever seen in this app session —
+  // trivial memory cost. If a re-emit ever does happen, the
+  // existing entry's `received_at` is kept (the original "first
+  // seen" timestamp) so the timeout keeps ticking correctly.
   for (const p of pending.values()) {
     if (now - p.received_at >= PENDING_TIMEOUT_MS) {
       out.push({ kind: "standalone", entry: p.call });
-      // Clean up the map so a future re-emit can re-age. (If
-      // the same tool_use_id never re-appears, the entry is
-      // dead weight but bounded by the number of distinct
-      // tool_use_ids ever seen in this app session — not a
-      // memory concern.)
-      pendingFirstSeenAt.delete(p.tool_use_id);
     } else {
       out.push({ kind: "pending_call", tool_use_id: p.tool_use_id, call: p.call });
     }

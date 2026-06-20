@@ -24,6 +24,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -1293,5 +1294,58 @@ describe("SubagentDrawer", () => {
     cards = document.body.querySelectorAll(".tool-card");
     expect(cards.length).toBe(4);
     w.unmount();
+  });
+
+  // B6 PR3 check-phase fix (2026-06-21): the `bufferedTranscript`
+  // computed must depend on `nowTick.value` so pending calls age
+  // out without a new transcript event arriving. Without this
+  // dependency, the PRD's "pending → 未完成 fallback after 30s"
+  // invariant would silently regress — the card would stay
+  // pending_call forever if no new event landed.
+  it("pending_call ages out to standalone '未完成' after 30s without new events (ticker-driven flush)", async () => {
+    vi.useFakeTimers();
+    // Start at a fixed time so the test is deterministic.
+    vi.setSystemTime(new Date("2026-06-20T10:00:00.000Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      // A lone tool_call with no tool_result — pending until 30s.
+      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-timeout" } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // Immediately after mount: still pending_call (well under 30s).
+    let cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    expect(cards[0].classList.contains("tool-card--running")).toBe(true);
+
+    // Advance the clock past 30s. The 100ms ticker fires every
+    // 100ms via setInterval — the bufferedTranscript computed must
+    // re-evaluate when `nowTick.value` updates and produce a
+    // standalone "未完成" card. Per-tick advances + nextTick flush
+    // are needed because Vue's reactivity scheduler is microtask-
+    // based; a bulk advance without yielding doesn't give the
+    // computed a chance to re-run between ticks.
+    for (let i = 0; i < 31; i++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await nextTick();
+    }
+    await flushPromises();
+
+    cards = document.body.querySelectorAll(".tool-card");
+    expect(cards.length).toBe(1);
+    // No more --running class — the timeout flush moved it to
+    // standalone.
+    expect(cards[0].classList.contains("tool-card--running")).toBe(false);
+    // The "未完成" status text appears (standalone orphan tool_call).
+    expect(cards[0].querySelector(".tool-card__status")?.textContent).toContain("未完成");
+    // Left border: amber (matches standaloneAccent for orphan tool_call).
+    expect((cards[0] as HTMLElement).style.borderLeftColor).toBe("var(--color-tool-shell)");
+
+    w.unmount();
+    vi.useRealTimers();
   });
 });
