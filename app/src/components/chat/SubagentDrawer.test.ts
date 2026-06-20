@@ -189,6 +189,80 @@ describe("SubagentDrawer", () => {
     w.unmount();
   });
 
+  // --- FT-F-004 (2026-06-21): event count + hidden-chat hint (C3) ---
+
+  it("filter row shows visible event count and '+N chat hidden' hint by default", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "grep" } },
+      { kind: "chat_event", payload_json: { text: "verbose delta" } },
+      { kind: "chat_event", payload_json: { text: "more delta" } },
+      { kind: "tool_result", payload_json: { content: "match" } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // 2 visible (tool_call + tool_result); 2 chat_event hidden.
+    const count = document.body.querySelector(".subagent-drawer__event-count");
+    expect(count?.textContent ?? "").toContain("2 events");
+    expect(count?.textContent ?? "").toContain("+2 chat hidden");
+    w.unmount();
+  });
+
+  it("toggling chat events on drops the '+N chat hidden' hint and counts chat in", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow);
+    store.liveTranscript.set("run-1", [
+      { kind: "tool_call", payload_json: { name: "grep" } },
+      { kind: "chat_event", payload_json: { text: "verbose delta" } },
+      { kind: "tool_result", payload_json: { content: "match" } },
+    ]);
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    // Toggle on — chat_event now visible (3 events), hint gone.
+    const checkbox = document.body.querySelector(
+      ".subagent-drawer__toggle input",
+    ) as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    await flushPromises();
+
+    const count = document.body.querySelector(".subagent-drawer__event-count");
+    expect(count?.textContent ?? "").toContain("3 events");
+    expect(count?.textContent ?? "").not.toContain("chat hidden");
+    w.unmount();
+  });
+
+  // --- FT-F-004 (2026-06-21): header timestamps formatted as local HH:MM:SS (C2) ---
+
+  it("header meta shows local-formatted start/finish times, not raw ISO", async () => {
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", sampleRow); // startedAt/finishedAt are UTC ISO
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const meta = document.body.querySelector(".subagent-drawer__meta");
+    const text = meta?.textContent ?? "";
+    // Labels present.
+    expect(text).toContain("开始");
+    expect(text).toContain("结束");
+    // Raw ISO markers must be gone — the value was formatted.
+    expect(text).not.toContain("T");
+    expect(text).not.toContain("2026");
+    expect(text).not.toContain("+00");
+    // Both timestamps render as local HH:MM:SS.
+    expect(text.match(/\d{2}:\d{2}:\d{2}/g)?.length).toBe(2);
+    w.unmount();
+  });
+
   it("transcriptTruncated flag shows the '原 transcript 已截断' notice", async () => {
     const store = useSubagentRunsStore();
     store.getRunCache.set("run-1", { ...sampleRow, transcriptTruncated: 1 });

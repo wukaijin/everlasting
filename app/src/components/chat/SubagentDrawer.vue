@@ -62,6 +62,7 @@ import type {
   PermissionAsk,
   Risk,
 } from "../../stores/permissions";
+import { formatTime } from "../../utils/time";
 
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
@@ -163,6 +164,19 @@ const visibleTranscript = computed<TranscriptEntry[]>(() => {
   if (showChatEvents.value) return transcript.value;
   return transcript.value.filter((e) => e.kind !== "chat_event");
 });
+
+/** FT-F-004 (2026-06-21): chat_event entries the default filter
+ *  hides. Surfaced as a "+N chat hidden" hint next to the event
+ *  count in the filter row ONLY while chat events are hidden — it
+ *  nudges the user to expand. Once they tick "Show chat events",
+ *  visibleTranscript includes chat and this drops to 0, hiding the
+ *  hint. Computed as transcript.length − visibleTranscript.length
+ *  so it stays correct regardless of how the filter is expressed. */
+const hiddenChatCount = computed<number>(() =>
+  showChatEvents.value
+    ? 0
+    : transcript.value.length - visibleTranscript.value.length,
+);
 
 /** Whether the transcript was truncated at the 4 MiB cap on the
  *  backend. Drives the "原 transcript 已截断" banner. */
@@ -465,8 +479,22 @@ function jumpToLatest(): void {
               v-if="run?.startedAt"
               class="subagent-drawer__meta"
             >
-              <span>开始: {{ run.startedAt }}</span>
-              <span v-if="run.finishedAt">结束: {{ run.finishedAt }}</span>
+              <!-- FT-F-004 (2026-06-21): raw ISO8601 → local HH:MM:SS
+                   via formatTime (UTC→local conversion lives in the
+                   helper — slicing the raw string would show UTC and
+                   drift ~8h). Both timestamps keep the `clock` icon
+                   for a unified "this is a time field" affordance. -->
+              <span class="subagent-drawer__meta-time">
+                <Icon name="clock" :size="11" />
+                开始 {{ formatTime(run.startedAt) }}
+              </span>
+              <span
+                v-if="run.finishedAt"
+                class="subagent-drawer__meta-time"
+              >
+                <Icon name="clock" :size="11" />
+                结束 {{ formatTime(run.finishedAt) }}
+              </span>
             </div>
             <p
               v-if="run?.summary"
@@ -476,13 +504,26 @@ function jumpToLatest(): void {
 
           <!-- Filter row: chat-event toggle + truncated notice -->
           <div class="subagent-drawer__filter-row">
-            <label class="subagent-drawer__toggle">
-              <input
-                v-model="showChatEvents"
-                type="checkbox"
-              />
-              <span>Show chat events</span>
-            </label>
+            <div class="subagent-drawer__filter-left">
+              <label class="subagent-drawer__toggle">
+                <input
+                  v-model="showChatEvents"
+                  type="checkbox"
+                />
+                <span>Show chat events</span>
+              </label>
+              <!-- FT-F-004 (2026-06-21): event count + hidden-chat
+                   hint. visibleTranscript.length is the count the
+                   user actually sees (tool_call/result/perm by
+                   default; +chat once the toggle is on). The
+                   "+N chat hidden" suffix nudges expansion and
+                   disappears once chat events are shown. -->
+              <span class="subagent-drawer__event-count">
+                {{ visibleTranscript.length }} events<span
+                  v-if="hiddenChatCount > 0"
+                > · +{{ hiddenChatCount }} chat hidden</span>
+              </span>
+            </div>
             <span
               v-if="truncated"
               class="subagent-drawer__truncated"
@@ -596,7 +637,7 @@ function jumpToLatest(): void {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(480px, 90vw);
+  width: min(640px, 90vw);
   background: var(--color-bg-surface);
   border-left: 1px solid var(--color-bg-border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
@@ -631,7 +672,7 @@ function jumpToLatest(): void {
    runs. Two color variants (--error red + --warning amber) using
    existing design tokens per spec/design-tokens.md — no hardcoded
    hex. Left 3px accent bar + ⚠ icon + text in a single row; wraps
-   gracefully on narrow viewports (the drawer's max-width is 480px).
+   gracefully on narrow viewports (the drawer's max-width is 640px).
    Reuses `Icon name="warn"` (ExclamationTriangleIcon) already in
    the Icon.vue registry — no new icon import. */
 .subagent-drawer__banner {
@@ -759,6 +800,15 @@ function jumpToLatest(): void {
   font-family: var(--font-mono);
 }
 
+/* FT-F-004 (2026-06-21): wrapper for a clock icon + formatted
+   timestamp so the two stay vertically centered in the mono
+   meta row. Inherits color/font from __meta. */
+.subagent-drawer__meta-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
 .subagent-drawer__summary {
   margin: 0;
   font-size: 12px;
@@ -777,6 +827,23 @@ function jumpToLatest(): void {
   background: var(--color-bg-app);
   border-bottom: 1px solid var(--color-bg-border);
   font-size: 11px;
+}
+
+/* FT-F-004 (2026-06-21): groups the chat-event toggle + the event
+   count on the filter row's left side (the truncated notice stays
+   right via space-between). */
+.subagent-drawer__filter-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* FT-F-004 (2026-06-21): "N events · +X chat hidden" counter. Mono
+   font keeps the count visually distinct from the toggle label;
+   --color-text-muted so it reads as secondary metadata. */
+.subagent-drawer__event-count {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
 }
 
 .subagent-drawer__toggle {
