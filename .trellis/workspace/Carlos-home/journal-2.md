@@ -478,3 +478,38 @@ B6 Subagent PR2 完整收尾。Phase 1: brainstorm 4 决策(RULE-A-014 顺手修
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: B6 PR3 前端 drawer + subagentRuns store（PR2 hotfix + RULE-A-016）
+
+**Date**: 2026-06-20
+**Task**: B6 PR3 前端 drawer + subagentRuns store（PR2 hotfix + RULE-A-016）
+**Branch**: `main`
+
+### Summary
+
+B6 PR3 三部分合一落地: (1) PR2 hotfix SubagentBufferSink 加 app_handle + 4 emit 方法双写 transcript/subagent:event channel, run_chat_loop 第22参; (2) PR3a 后端 SubagentRunSummary + list_runs_summary_by_session + 2 Tauri commands + RULE-A-016 worker ask_path 改 emit PermissionAsk 不污染父 audit; (3) PR3b 前端 subagentRuns Pinia store(subagent:event listener + 自实现 200ms debounce) + SubagentDrawer(reka-ui Dialog* 组合, Sheet 在 2.9.9 不存在) + ToolCallCard 点击开 drawer. 跨层 wire shape 6 项 mirror 全验证(两个 drift 陷阱: coerceStatus 统一 Row.status 原始 string vs Summary typed enum, payload_json snake_case). 后端 cargo test --lib 732 pass + 前端 vitest 224 pass + vue-tsc 干净. trellis-check 修了 SubagentDrawer 缺 DialogOverlay bug. DEBT RULE-A-016 closed(回填 1308a23). spec 三层同步(后端 22参/audit invariant + 前端 store 模式/reka-ui Sheet gotcha).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1308a23` | (see git log) |
+| `d12531d` | (see git log) |
+| `255176d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
