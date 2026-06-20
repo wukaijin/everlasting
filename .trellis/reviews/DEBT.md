@@ -51,9 +51,9 @@
 |---|---|---|
 | P0 | 5 | 安全 + 数据完整性,必须尽快修复 |
 | P1 | 12 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 23 | 健壮性 + 债务,中长期清理 |
+| P2 | 22 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **48** | 含历史 review 合并 |
+| **Total** | **47** | 含历史 review 合并 |
 
 ---
 
@@ -630,10 +630,40 @@
 - **Description**: B6 PR1b 落地时 worker 路径构造了 `PermissionContext { is_worker: true }` 但未 thread 到嵌套 `run_chat_loop`;run_chat_loop 内部从 session row 重建 `PermissionContext { is_worker: false }`。`permissions::check` 的 `ask_path` 顶部 `if ctx.is_worker { Decision::Deny }` 逻辑在 worker 嵌套路径上**不可达**。Net effect:`general-purpose` subagent + Edit/Plan mode + 写工具(path-outside-cwd / shell SideEffect/Ask)时,Tier 4 ask 仍会 emit `permission:ask` 到 `permission_asks` map → 等 oneshot 永远等不到(worker 无 UI sink)→ **挂起直到 user Stop**。
 - **Impact**: 触发条件罕见(Yolo 走 Tier 4 bypass 不受影响;researcher 只读不触发 ask;只 general-purpose + Edit/Plan + 危险工具组合才挂起)。无数据损坏 / 安全泄漏,纯 UX 退化(agent 看起来冻住,实际是 permission:ask 等待)。
 - **Fix**: thread `is_worker: bool` 到 `run_chat_loop` 第 21 参(`Option<bool>`,None = 走 session row 默认 false);嵌套 worker 调用传 `Some(true)`;`run_chat_loop` 内部构造 PermissionContext 时读该字段;+ 端到端测试(general-purpose + Edit mode + 写工具应 deny 不挂起)。预计 ~10 行 + 1 测试。
+- **Status**: **closed (2026-06-20)** — B6 PR2b。`is_worker: Option<bool>` 加为 `run_chat_loop` 第 21 参;PR1b 的 dead-code `_worker_permission_ctx` 块删除;worker 嵌套调用点 `chat_loop.rs:2155` 传 `Some(true)`;`run_chat_loop` 内部构造 `PermissionContext` 时读 `is_worker.unwrap_or(false)`;production + 33 个 `agent_loop_*` 集成测试调用点更新 `Some(false)`;+ 端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`/tmp/...` 路径 + Edit mode + general-purpose + write_file,worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny`,无 oneshot 等待,无挂起;tool_result `is_error=true` + deny 原因;worker 1 行 `tool_denied` audit 落地;`tool_permission_ask` 行数=0,验证 ask 路径被 collapse)。测试包 `tokio::time::timeout(15s)`,若 PR2b 修复回退则卡 oneshot 触发 15s 超时并 fail(显式 assertion message),回归保护完整。726 tests pass(cargo test --lib),0 新 warning(对比 PR2a 4 pre-existing background_shell + 1 pre-existing `permission_ctx` unused)。skip_persist 精确 gate 数 = **16**(PR2a 修 RULE-A-015 拆出 2 处,Phase 3 spec commit 同步 `agent-loop-architecture.md` + `tool-contract.md` §"dispatch_subagent" 的 18 处描述)。
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-b6-pr2-subagent-persistence`
+- **Discovered In**: 任务 PR1 trellis-check(2026-06-19) + 见 prd.md §Review 修订 #5(原本期望 is_worker 接通,但 PR1b 仅在 run_subagent 构造点设 true,未 thread 进嵌套 call)
+- **Closed At**: PR2b commit(主 session commit 后回填)
+- **Related PR**: PR2b(B6 subagent persistence + RULE-A-014 close)
+
+### RULE-A-015 — worker path 收不到 terminal Done emit(PR1 PR1b over-broad skip_persist gate)
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/chat_loop.rs`(原 PR1 PR1b 18 处 `if !skip_persist { ... }` gate,把 terminal `emit_chat_event_via_sink(ChatEvent::Done)` 也包在内)
+- **Description**: PR1 PR1b 实施 `skip_persist` gate 时,把 `emit_chat_event_via_sink(ChatEvent::Done)` 也包在 `if !skip_persist { ... }` 内,导致 worker 路径(`skip_persist=true`)`SubagentBufferSink` 永远收不到 terminal Done 事件 → `was_cancelled` 永远 false → `format_dispatch_result` 永远走 Completed 路径 + transcript 缺终态事件。Related(同 PR):`add_token_usage` 同款 over-broad gate 拆出(token_usage 在 sessions 表不在 messages 表,本就不该 gate)。
+- **Impact**: B6 PR2 transcript 持久化无法正确工作(cancelled 状态永远报 Completed);PR1 worker 路径实际 status 错误。PR2a 实施时主动修复(terminal Done emit 拆出 gate,unconditional 走 sink)。
+- **Fix**: 已修(PR2a):terminal `Done` emit 拆出 `skip_persist` gate;`add_token_usage` 同时拆出(同源 over-broad)。测试 `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` 锁定。
+- **Status**: **closed (2026-06-20)** — B6 PR2a
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-20-b6-pr2-subagent-persistence`
+- **Discovered In**: 任务 PR2a trellis-check(2026-06-20) — transcript 持久化前置依赖排查时发现
+- **Closed At**: null
+- **Related PR**: PR2a commit(随 PR2 收尾一起)
+
+### RULE-A-016 — worker ask_path 写 session_audit_events 污染父 audit log
+
+- **Level**: P2
+- **Subsystem**: Permission
+- **File**: `app/src-tauri/src/agent/permissions/mod.rs`(ask_path 顶部 `if ctx.is_worker` collapse 后 `record_audit` 调用)
+- **Description**: B6 PR2b 实施 RULE-A-014(thread is_worker 到嵌套 run_chat_loop)后,worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny` 但 `record_audit_event(ToolDenied)` 仍写父 `session_audit_events` 表(worker 复用 parent_session_id,ask_path 的 audit 写入不区分 worker / parent)。Pre-PR2a 已存在,PR1 PR1b 实施时未察觉;PR2a 测试 `audit_not_polluted_by_worker` 场景仅触发 researcher(silent allow,不触发 Tier 4 ask)未暴露;PR2b 端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 触发后,delta = 3(parent's 2 + worker's tool_denied),与 PR2a R6/AC4 "audit 不污染父" 字面冲突。
+- **Impact**: worker 触发的 Tier 4 决策行(audit kind=ToolDenied)出现在父 session 的 audit log,污染 C4 audit log UI(用户在父 session audit 里看到 worker 的决策,混淆责任归属)。无数据丢失 / 安全,纯 audit 完整性 + UX 问题。触发条件罕见(worker + Tier 4 ask_path/ask_shell 工具),与 RULE-A-014 触发条件重叠。
+- **Fix**: ask_path 顶部 `record_audit` 写入前加 `if !ctx.is_worker { session_audit_events } else { worker transcript PermissionAsk }` 分支(~5 行)。或更统一:在 `record_audit_event` 入口检查 worker context,worker 路径改写 transcript PermissionAsk。+ 更新 `audit_not_polluted_by_worker` 测试断言从 `delta == 2` 改 `delta == 2`(worker tool_denied 改走 transcript 后,parent audit 仅 2 行)。
 - **Status**: open
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-19-b6-subagent`
-- **Discovered In**: 任务 PR1 trellis-check(2026-06-19) + 见 prd.md §Review 修订 #5(原本期望 is_worker 接通,但 PR1b 仅在 run_subagent 构造点设 true,未 thread 进嵌套 call)
+- **Related Task**: `.trellis/tasks/06-20-b6-pr2-subagent-persistence`
+- **Discovered In**: 任务 PR2b trellis-implement 报告(2026-06-20)
 - **Closed At**: null
 - **Related PR**: null
 
@@ -809,6 +839,8 @@
 
 | 2026-06-19 | RULE-E-013 | open | **closed** | system prompt 工具清单:删除硬编码枚举改通用表述(比原"动态生成"更治本,PRD D2);`build_system_prompt_no_hardcoded_tool_list` 回归保护;随 behavior_prompt 同 task 落地 | `.trellis/tasks/06-19-system-prompt` |
 
+| 2026-06-20 | RULE-A-014 | open | **closed** | B6 PR2b 收口。`is_worker: Option<bool>` 加为 `run_chat_loop` 第 21 参;worker 嵌套调用 `chat_loop.rs:2155` 传 `Some(true)`,run_chat_loop 内部构造 `PermissionContext` 读 `is_worker.unwrap_or(false)`;PR1b 的 dead-code `_worker_permission_ctx` 块删除;production `chat.rs:249` + 33 个 `agent_loop_*` 集成测试调用点更新 `Some(false)`。端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`/tmp/everlasting_worker_escape.txt` 路径 + Edit mode + general-purpose + write_file,`tokio::time::timeout(15s)` 包裹)验证:worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny` 无 oneshot 等待无挂起,tool_result `is_error=true` + deny 原因,1 行 `tool_denied` audit 落地,0 行 `tool_permission_ask`(ask 路径 collapse 验证)。PR2a 修 RULE-A-015 拆出 2 处 `skip_persist` gate,精确 gate 数 = 16(原 spec 18 处,Phase 3 spec commit 同步 `agent-loop-architecture.md` + `tool-contract.md`)。cargo test --lib 726 pass(PR2a 725 + PR2b 1),0 新 warning(对比 PR2a 4 pre-existing background_shell + 1 pre-existing `permission_ctx` unused)。P2 22→21,Total 47→46 | `.trellis/tasks/06-20-b6-pr2-subagent-persistence` |
+
 ---
 
 ## 子 task 编排建议
@@ -882,5 +914,5 @@
 
 ---
 
-**最后更新**: 2026-06-19 by carlos
+**最后更新**: 2026-06-20 by carlos
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)

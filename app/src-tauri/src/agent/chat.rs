@@ -246,6 +246,14 @@ pub async fn chat(
             // transcript into `subagent_runs`). Production MUST
             // persist — the user's turns are the source of truth.
             false,
+            // B6 Subagent PR2b (RULE-A-014, 2026-06-20): production
+            // chat is never a worker. `Some(false)` makes the
+            // production-style default explicit at the call site;
+            // inside `run_chat_loop` this falls through to the
+            // session-row mode (Edit/Plan/Yolo) with
+            // `PermissionContext.is_worker = false` — Tier 4 ask
+            // is reachable (permission:ask modal works normally).
+            Some(false),
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

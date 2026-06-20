@@ -62,6 +62,7 @@ pub mod permissions;
 pub mod projects;
 pub mod providers;
 pub mod sessions;
+pub mod subagent_runs;
 pub mod tests;
 pub mod types;
 
@@ -77,4 +78,7 @@ pub use projects::*;
 pub use providers::*;
 pub use sessions::*;
 // (tests is `#[cfg(test)]`-gated internally; nothing to re-export.)
+// `subagent_runs` is reachable as `db::subagent_runs::*` via the
+// `pub mod` declaration above; no `pub use` needed (and adding
+// one would conflict with the `pub mod subagent_runs` line).
 pub use types::*;

@@ -467,6 +467,86 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  .execute(pool)
  .await?;
 
+ // --- B6 PR2 (2026-06-20): subagent_runs persistence.
+ //
+ // Worker subagents (`dispatch_subagent` tool) accumulate their
+ // chat-events / tool calls / tool results in a `SubagentBufferSink`
+ // transcript. PR2 persists that transcript to `subagent_runs` so:
+ // (1) PR3's ToolCallCard expand UI can render what the worker
+ // did, (2) a session reload after a parent restart still shows
+ // the worker's intermediate state, (3) token-usage aggregation
+ // is auditable per-run.
+ //
+ // Schema design (follows `session_audit_events` precedent —
+ // `parent_session_id` FK CASCADE, indexed ts DESC, RFC 3339
+ // timestamps):
+ // - `id` is a nanoid (UUID v4 form, matches the rest of the DB)
+ // - `parent_session_id` FK CASCADE → `sessions(id)`; deleting a
+ //   session cleans up all its worker subagent_runs in one shot
+ //   (the CASCADE requires `PRAGMA foreign_keys = ON` which
+ //   `init_pool` sets on first connection).
+ // - `parent_request_id` = the worker rid (the
+ //   `"{parent_rid}-sub-{tool_use_id}"` string the agent loop
+ //   builds at `chat_loop.rs:1989`). NOT a FK — `cancellations`
+ //   is in-memory, not durable.
+ // - `status` is a CHECK-constrained TEXT column with 4 values
+ //   (`running` / `completed` / `cancelled` / `error`); INSERT
+ //   always sets `running`, UPDATE on worker exit sets the
+ //   terminal value. `running` rows are the "in-flight" set a
+ //   future PR could surface as "5 workers active" badges.
+ // - `started_at` is set on INSERT; `finished_at` is NULL
+ //   while running, set on UPDATE.
+ // - `token_usage_json` is a JSON-encoded `TokenUsage`
+ //   (`{ input, output, cache_creation, cache_read }`). NULL
+ //   while running; non-NULL after the worker exits.
+ // - `summary` is the worker's `final_text` plain string
+ //   (NO status prefix — the `status` column carries that
+ //   separately, so PR3's UI can render the prefix without
+ //   parsing the summary). NULL while running.
+ // - `transcript_json` is the serialized
+ //   `Vec<TranscriptEntry>` from `SubagentBufferSink`. NULL
+ //   while running; non-NULL on UPDATE. Capped at 4MB by
+ //   `truncate_transcript_for_persistence` (see
+ //   `agent/subagent.rs`); the `transcript_truncated=1` flag
+ //   signals truncation so PR3 can render a "show full" affordance
+ //   to fetch the full text from elsewhere (or document the cap).
+ sqlx::query(
+ r#"
+ CREATE TABLE IF NOT EXISTS subagent_runs (
+ id TEXT PRIMARY KEY,
+ parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+ parent_request_id TEXT NOT NULL,
+ subagent_name TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error')),
+ started_at TEXT NOT NULL,
+ finished_at TEXT,
+ token_usage_json TEXT,
+ summary TEXT,
+ transcript_json TEXT,
+ transcript_truncated INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_subagent_runs_session_started
+ ON subagent_runs(parent_session_id, started_at DESC)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_subagent_runs_request
+ ON subagent_runs(parent_request_id)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

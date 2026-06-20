@@ -84,7 +84,7 @@ use crate::tools::ToolContext;
 ///   cover the real production path (no separate "test
 ///   variant" exists).
 ///
-/// The 17-parameter signature is unchanged from the previous
+/// The 21-parameter signature is unchanged from the previous
 /// test-only variant; the production caller just supplies a
 /// pre-resolved `Arc<dyn Provider>`, an `Arc<dyn ChatEventSink>`
 /// wrapping the live `AppHandle`, and the standard
@@ -106,10 +106,18 @@ use crate::tools::ToolContext;
 /// `update_message_metadata` / `touch_session` / `add_token_usage`
 /// / `record_*_audit`) so the worker's intermediate turns stay
 /// in-memory only — the `SubagentBufferSink` transcript captures
-/// them (PR2 will persist into `subagent_runs`), and skipping DB
+/// them (PR2 persists into `subagent_runs`), and skipping DB
 /// writes also avoids a UNIQUE-constraint collision with the
 /// parent's own `persist_turn` calls on the same `(session_id,
-/// seq)` key.
+/// seq)` key. B6 PR2b (2026-06-20, RULE-A-014) added the 21st
+/// parameter `is_worker: Option<bool>` — production + tests pass
+/// `Some(false)` (default to the production-style false); the
+/// worker nested call passes `Some(true)` so the
+/// `PermissionContext` built inside the loop carries
+/// `is_worker: true`, which makes the Tier 4 `ask_path` /
+/// `ask_shell` branches collapse to `Decision::Deny` instead of
+/// emitting a `permission:ask` (workers have no UI sink — a
+/// permission modal would hang forever on the oneshot).
 ///
 /// `run_chat_loop` owns the per-turn `CancellationGuard` that
 /// removes the (rid → token) and (session_id → rid) entries on
@@ -180,6 +188,18 @@ pub async fn run_chat_loop(
     // Production + tests pass `false` (full persistence); the
     // worker path passes `true`.
     skip_persist: bool,
+    // B6 Subagent PR2b (2026-06-20, RULE-A-014): when `Some(true)`,
+    // the `PermissionContext` built inside this loop carries
+    // `is_worker: true`, which makes the Tier 4 `ask_path` /
+    // `ask_shell` branches collapse to `Decision::Deny` instead of
+    // emitting a `permission:ask` (workers have no UI sink — a
+    // permission modal would hang forever). `None` falls back to
+    // the session-row mode's natural default (production = `false`,
+    // since no parent process is a worker). The worker path passes
+    // `Some(true)`; production + 35 `agent_loop_*` integration
+    // tests pass `Some(false)` to make the production-style default
+    // explicit at the call site.
+    is_worker: Option<bool>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -306,15 +326,23 @@ pub async fn run_chat_loop(
     let mut last_cwd: Option<PathBuf> = None;
 
     let session_mode = loaded_session.session.mode;
+    // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
+    // (added as the 21st arg) threads the worker path's
+    // `PermissionContext.is_worker = true` override into the loop
+    // body. Without this, the worker's Tier 4 `ask_path` /
+    // `ask_shell` would still emit `permission:ask` → register
+    // into `permission_asks` → wait for a oneshot (which never
+    // comes because the worker has no UI sink) → hang until user
+    // Stop. With this fix, a worker Edit/Plan + 写工具 combination
+    // is denied (not hung) at Tier 4. `Some(false)` (production
+    // + tests) → `false` (production path); `Some(true)` (worker
+    // nested call) → `true` (collapse to Deny).
+    let effective_is_worker = is_worker.unwrap_or(false);
     let permission_ctx = PermissionContext {
         session_id: session_id.clone(),
         mode: session_mode,
         cwd: session_cwd.clone(),
-        // Production chat is never a worker. The B6 worker path
-        // (PR1b) constructs its own PermissionContext with
-        // `is_worker: true` so Tier 4 `ask` decisions collapse to
-        // `Deny` (worker has no UI sink for a permission modal).
-        is_worker: false,
+        is_worker: effective_is_worker,
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
@@ -894,16 +922,38 @@ pub async fn run_chat_loop(
                                 turn_thinking_done = Some(Instant::now());
                             }
                             if let Some(t) = usage {
-                                // B6 PR1b: token usage aggregation is
-                                // a DB write — skip in worker mode.
-                                // Worker token accounting is captured
-                                // by the SubagentBufferSink transcript
-                                // (PR2 will fold it into the parent's
-                                // total via the `subagent_runs` table).
-                                if !skip_persist {
-                                    if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
-                                        tracing::warn!(error = %e, "chat: failed to accumulate token usage (non-fatal)");
-                                    }
+                                // B6 PR2: token-usage accumulation is
+                                // intentionally **decoupled** from
+                                // `skip_persist`. The other 17
+                                // `skip_persist` gates guard writes to
+                                // the `messages` table (where worker +
+                                // parent would collide on the
+                                // `(session_id, seq)` UNIQUE key) and
+                                // `session_audit_events` (where the
+                                // worker path's ⑨ decisions would
+                                // pollute the parent's audit log). The
+                                // token-usage columns
+                                // (`input_tokens_total` / etc.) live
+                                // on `sessions`, not `messages`, and
+                                // the worker reuses the parent's
+                                // `session_id` (chat_loop.rs:2049), so
+                                // the worker's per-turn usage
+                                // naturally folds into the parent's
+                                // total. Pulling this out of the
+                                // `skip_persist` gate is what makes
+                                // the parent's UI see the worker
+                                // burning tokens in real time
+                                // ("streaming" accumulation).
+                                //
+                                // PR1b originally gated this under
+                                // `!skip_persist` — PR2 reverses that
+                                // decision because the worker's
+                                // session_id is the parent's, not its
+                                // own, and the gate's only purpose
+                                // was the messages-table collision
+                                // (which doesn't apply here).
+                                if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
+                                    tracing::warn!(error = %e, "chat: failed to accumulate token usage (non-fatal)");
                                 }
                             }
                         }
@@ -1159,16 +1209,27 @@ pub async fn run_chat_loop(
             stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
 
         if !should_continue {
-            // B6 PR1b: same skip in the normal-end path.
+            // B6 PR1b: skip the cwd/touch_session writes in worker
+            // mode (the parent's session row is not the worker's
+            // to update — the parent owns the lifetime).
             if !skip_persist {
                 persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                 let _ = crate::db::touch_session(&db, &session_id).await;
-                emit_chat_event_via_sink(
-                    &sink,
-                    &rid,
-                    &ChatEvent::Done { stop_reason, usage: last_usage },
-                );
             }
+            // B6 PR2: emit the terminal `Done` to the sink
+            // UNCONDITIONALLY (regardless of `skip_persist`).
+            // The worker's `SubagentBufferSink` needs the terminal
+            // `Done` in its transcript so PR3's expand UI can
+            // render the worker's stop_reason / usage correctly.
+            // PR1b bundled the emit with the persist block under
+            // `!skip_persist`; PR2 splits them because the emit
+            // is a wire-shape concern (not a DB write) and is
+            // load-bearing for the worker's transcript.
+            emit_chat_event_via_sink(
+                &sink,
+                &rid,
+                &ChatEvent::Done { stop_reason, usage: last_usage },
+            );
             return;
         }
 
@@ -1993,26 +2054,45 @@ async fn run_subagent(
         map.insert(worker_rid.clone(), worker_token.clone());
     }
 
-    // Worker PermissionContext: inherit the parent's mode (Edit /
-    // Plan / Yolo) but mark `is_worker: true` so the Tier 4 ask
-    // path collapses to Deny (worker has no UI sink).
-    let _worker_permission_ctx = PermissionContext {
-        session_id: parent_session_id.to_string(),
-        mode: permission_ctx.mode,
-        cwd: permission_ctx.cwd.clone(),
-        is_worker: true,
+    // B6 PR2: insert the worker's `running` row into
+    // `subagent_runs` BEFORE the nested `run_chat_loop` call. The
+    // returned id is the `worker_run_id` that the
+    // `update_run_finished` call (after the worker returns)
+    // targets. The insert is best-effort: a DB failure logs at
+    // `warn!` and the worker still runs (the user's dispatch
+    // experience is not gated on the audit row). A failed insert
+    // leaves `worker_run_id_opt = None`; the post-loop
+    // `update_run_finished` is then a no-op.
+    let worker_run_id_opt: Option<String> = match crate::db::subagent_runs::insert_run(
+        db,
+        parent_session_id,
+        &worker_rid,
+        subagent_name,
+    )
+    .await
+    {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                parent_session_id = %parent_session_id,
+                worker_rid = %worker_rid,
+                error = %e,
+                "run_subagent: failed to insert subagent_runs row (non-fatal; worker still runs)"
+            );
+            None
+        }
     };
-    // (PermissionContext override threading is a future-PR concern;
-    // see §Deviations below. The worker's actual permission checks
-    // during its run_chat_loop use the session-row mode that
-    // run_chat_loop rebuilds internally — which equals
-    // permission_ctx.mode for the parent session. The `is_worker`
-    // override is wired into `ask_path` but run_chat_loop builds
-    // its own PermissionContext internally with `is_worker: false`.
-    // A future PR threads an `is_worker` parameter into
-    // run_chat_loop; PR1b's worker permission collapse is exercised
-    // via the permissions::check unit tests, not via the nested
-    // call.)
+
+    // B6 PR2b (RULE-A-014, 2026-06-20): the worker's
+    // `PermissionContext.is_worker` override is now threaded via
+    // the 21st `is_worker: Option<bool>` parameter on the nested
+    // `run_chat_loop` call below (passes `Some(true)`). The
+    // pre-PR2b local `_worker_permission_ctx` constructed here
+    // (PR1b) was dead code: `run_chat_loop` rebuilds its own
+    // `PermissionContext` internally from the session row, so the
+    // local value was never consulted on the worker path. PR2b
+    // removes the local construction and the parallel comment
+    // that documented the (now-resolved) deviation.
 
     // SubagentBufferSink: records the worker's emits into an in-
     // memory transcript. Does NOT forward to the parent sink — the
@@ -2071,6 +2151,16 @@ async fn run_subagent(
         // would race the parent's persist_turn calls on the same
         // `(session_id, seq)` key (UNIQUE collision).
         true,
+        // B6 PR2b (RULE-A-014, 2026-06-20): worker path — is_worker
+        // = Some(true) so the nested run_chat_loop builds a
+        // PermissionContext with is_worker: true. This makes Tier 4
+        // ask_path / ask_shell collapse to Decision::Deny (worker
+        // has no UI sink — a permission:ask would hang forever on
+        // the oneshot). Pre-PR2b the worker path constructed
+        // `_worker_permission_ctx` here but never threaded it into
+        // the nested call, so the override was unreachable on the
+        // worker's actual permission checks.
+        Some(true),
     ))
     .await;
 
@@ -2083,6 +2173,65 @@ async fn run_subagent(
     } else {
         SubagentStatus::Completed
     };
+
+    // B6 PR2: persist the worker run to `subagent_runs`. The flow:
+    // 1. Snapshot the transcript from the sink.
+    // 2. Apply the 4 MiB cap (returns the head+tail truncated
+    //    vector + a `truncated` flag).
+    // 3. Build the terminal `TokenUsage` (sum of per-turn usage
+    //    the sink accumulated from `ChatEvent::Done { usage }`
+    //    events).
+    // 4. UPDATE the `running` row to the terminal state.
+    //
+    // **Streaming token usage** (the parent's live counter
+    // updating as the worker burns tokens) is handled by the
+    // `add_token_usage` call at chat_loop.rs:907 — which was
+    // decoupled from `skip_persist` in this same PR. The sink's
+    // per-turn accumulator is parallel: the sink still records
+    // the per-turn `TokenUsage` so `cumulative_usage()` can
+    // produce the worker-run-level total for `token_usage_json`
+    // even after the streaming path has already folded individual
+    // turn values into the parent's running total.
+    //
+    // The UPDATE is best-effort: a DB failure logs at `warn!` and
+    // continues (the dispatch_subagent tool_result is the
+    // user-visible artifact; the DB row is for PR3's expand UI and
+    // audit reads). Failing the dispatch on a DB error would mask
+    // the worker's actual outcome and could re-fire the
+    // tool_use/tool_result mismatch (RULE-A-007 invariant).
+    if let Some(worker_run_id) = worker_run_id_opt.as_ref() {
+        let transcript_snapshot = worker_sink.transcript_snapshot();
+        let (truncated_transcript, transcript_truncated) =
+            crate::agent::subagent::truncate_transcript_for_persistence(
+                transcript_snapshot,
+                crate::agent::subagent::TRANSCRIPT_MAX_BYTES,
+            );
+        let cumulative_usage = worker_sink.cumulative_usage();
+        let finished_at = chrono::Utc::now().to_rfc3339();
+        let status_db = match status {
+            SubagentStatus::Completed => crate::db::subagent_runs::SubagentStatusDb::Completed,
+            SubagentStatus::Cancelled => crate::db::subagent_runs::SubagentStatusDb::Cancelled,
+            SubagentStatus::Error => crate::db::subagent_runs::SubagentStatusDb::Error,
+        };
+        if let Err(e) = crate::db::subagent_runs::update_run_finished(
+            db,
+            worker_run_id,
+            status_db,
+            &finished_at,
+            &worker_text,
+            &cumulative_usage,
+            &truncated_transcript,
+            transcript_truncated,
+        )
+        .await
+        {
+            tracing::warn!(
+                worker_run_id = %worker_run_id,
+                error = %e,
+                "run_subagent: failed to persist subagent_runs update (non-fatal)"
+            );
+        }
+    }
 
     // Detect parent-driven cancel: the parent token fired while the
     // worker was running. The worker's own cancel_done event may

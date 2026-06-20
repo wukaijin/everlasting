@@ -38,6 +38,10 @@ use super::{
  update_session_cwd, update_session_model_id, MessageLatency,
  },
  permissions::{grant_tool_permission, has_tool_permission, list_audit_events, record_audit_event, update_session_mode},
+ subagent_runs::{
+ add_token_usage_streaming, get_run, insert_run, list_runs_by_session, update_run_finished,
+ SubagentStatusDb,
+ },
  types::WorktreeState,
 };
 
@@ -2357,4 +2361,259 @@ async fn resend_message_audit_on_deleted_session_returns_error() {
     delete_session(&pool, &s.id).await.unwrap();
     let result = record_message_resend_audit(&pool, &s.id, 0, "after-delete").await;
     assert!(result.is_err(), "audit insert must fail on missing session");
+}
+
+// ---------------------------------------------------------------------------
+// B6 PR2: subagent_runs tests
+// ---------------------------------------------------------------------------
+
+/// Insert returns a unique id and the row lands in `running`
+/// state with `finished_at` NULL, the empty `TokenUsage` JSON
+/// default, the empty transcript `[]`, and `transcript_truncated=0`.
+#[tokio::test]
+async fn subagent_runs_insert_creates_running_row() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-test", "researcher")
+        .await
+        .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.id, id);
+    assert_eq!(row.parent_session_id, s.id);
+    assert_eq!(row.parent_request_id, "rid-test");
+    assert_eq!(row.subagent_name, "researcher");
+    assert_eq!(row.status, "running");
+    assert!(row.finished_at.is_none(), "running → finished_at=NULL");
+    assert_eq!(
+        row.transcript_truncated, 0,
+        "fresh row → transcript_truncated=0"
+    );
+    assert_eq!(
+        row.transcript_json.as_deref(),
+        Some("[]"),
+        "fresh row → transcript_json=[]"
+    );
+    assert!(
+        row.token_usage_json.is_some(),
+        "fresh row → token_usage_json seeded"
+    );
+    assert!(row.summary.is_none(), "running → summary=NULL");
+    assert!(!row.started_at.is_empty());
+    assert!(!row.created_at.is_empty());
+}
+
+/// `update_run_finished` flips `status` to the terminal value,
+/// sets `finished_at`, populates `summary` + `token_usage_json`
+/// + `transcript_json`, and sets `transcript_truncated` to the
+/// caller's choice.
+#[tokio::test]
+async fn subagent_runs_update_finished_sets_status_and_fields() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-test", "general-purpose")
+        .await
+        .unwrap();
+    let usage = TokenUsage {
+        input_tokens: 1234,
+        output_tokens: 567,
+        cache_creation_input_tokens: 10,
+        cache_read_input_tokens: 20,
+    };
+    let transcript = vec![crate::agent::subagent::TranscriptEntry {
+        kind: crate::agent::subagent::TranscriptKind::ChatEvent,
+        payload_json: serde_json::json!({"hello": "world"}),
+    }];
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-06-20T00:00:00+00:00",
+        "found 3 files",
+        &usage,
+        &transcript,
+        false,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.status, "completed");
+    assert_eq!(row.finished_at.as_deref(), Some("2026-06-20T00:00:00+00:00"));
+    assert_eq!(row.summary.as_deref(), Some("found 3 files"));
+    assert_eq!(row.transcript_truncated, 0);
+    let parsed_usage: TokenUsage =
+        serde_json::from_str(row.token_usage_json.as_deref().unwrap()).unwrap();
+    assert_eq!(parsed_usage.input_tokens, 1234);
+    assert_eq!(parsed_usage.output_tokens, 567);
+    let parsed_transcript: Vec<crate::agent::subagent::TranscriptEntry> =
+        serde_json::from_str(row.transcript_json.as_deref().unwrap()).unwrap();
+    assert_eq!(parsed_transcript.len(), 1);
+}
+
+/// `transcript_truncated=true` is reflected in the column read.
+#[tokio::test]
+async fn subagent_runs_update_finished_records_truncated_flag() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-test", "researcher")
+        .await
+        .unwrap();
+    let empty = vec![];
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Error,
+        "2026-06-20T00:00:00+00:00",
+        "",
+        &TokenUsage::default(),
+        &empty,
+        true,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.status, "error");
+    assert_eq!(row.transcript_truncated, 1);
+}
+
+/// `ON DELETE CASCADE`: deleting the parent `sessions` row drops
+/// every `subagent_runs` row that references it.
+#[tokio::test]
+async fn subagent_runs_cascade_delete_with_parent_session() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher")
+        .await
+        .unwrap();
+    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose")
+        .await
+        .unwrap();
+    // Sanity: both rows are there.
+    assert!(get_run(&pool, &id1).await.unwrap().is_some());
+    assert!(get_run(&pool, &id2).await.unwrap().is_some());
+
+    delete_session(&pool, &s.id).await.unwrap();
+    // CASCADE: both rows gone.
+    assert!(get_run(&pool, &id1).await.unwrap().is_none());
+    assert!(get_run(&pool, &id2).await.unwrap().is_none());
+}
+
+/// `list_runs_by_session` returns all runs for the parent
+/// session, sorted by `started_at DESC` (newest first).
+#[tokio::test]
+async fn subagent_runs_list_by_session_orders_by_started_desc() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher")
+        .await
+        .unwrap();
+    // Tiny sleep so `started_at` advances between inserts.
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose")
+        .await
+        .unwrap();
+    let rows = list_runs_by_session(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    // Newest first → id2 (later insert) before id1.
+    assert_eq!(rows[0].id, id2);
+    assert_eq!(rows[1].id, id1);
+}
+
+/// `add_token_usage_streaming` accumulates per-turn usage into
+/// the parent session's 4 token columns. Mirrors the
+/// `add_token_usage_accumulates_across_turns` test but uses the
+/// streaming wrapper (which the PRD §"db module" requires as
+/// PR2 public API).
+#[tokio::test]
+async fn subagent_runs_token_usage_streaming_accumulates_in_parent() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let u1 = TokenUsage {
+        input_tokens: 100,
+        output_tokens: 30,
+        cache_creation_input_tokens: 5,
+        cache_read_input_tokens: 50,
+    };
+    let u2 = TokenUsage {
+        input_tokens: 200,
+        output_tokens: 40,
+        cache_creation_input_tokens: 25,
+        cache_read_input_tokens: 75,
+    };
+    add_token_usage_streaming(&pool, &s.id, &u1).await.unwrap();
+    add_token_usage_streaming(&pool, &s.id, &u2).await.unwrap();
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.input_tokens_total, Some(300));
+    assert_eq!(loaded.session.output_tokens_total, Some(70));
+    assert_eq!(loaded.session.cache_creation_total, Some(30));
+    assert_eq!(loaded.session.cache_read_total, Some(125));
+}
+
+/// `add_token_usage_streaming` on a missing parent session id is
+/// a silent no-op (matches `add_token_usage`'s contract).
+#[tokio::test]
+async fn subagent_runs_token_usage_streaming_missing_session_is_noop() {
+    let pool = make_pool().await;
+    let u = TokenUsage {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    };
+    add_token_usage_streaming(&pool, "nonexistent-session-id", &u)
+        .await
+        .unwrap();
 }

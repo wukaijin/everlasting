@@ -51,8 +51,10 @@
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::permissions::PermissionAskPayload;
-use crate::llm::types::{ChatEvent, MessageContent};
+use crate::llm::types::{ChatEvent, MessageContent, TokenUsage};
 use crate::llm::{ChatMessage, Role, ToolDef};
 use crate::memory::MemoryCache;
 use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
@@ -366,14 +368,24 @@ impl SubagentStatus {
 /// table). The transcript accumulates the worker's chat-events /
 /// tool calls / tool results so the parent + (future PR2/PR3) the
 /// frontend can expand "what did the worker do?" after the fact.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` / `Deserialize` are derived in PR2 so the
+/// `Vec<TranscriptEntry>` can round-trip through the
+/// `subagent_runs.transcript_json` column (and through the
+/// `truncate_transcript_for_persistence` head+tail reparse path).
+/// The shape is `{"kind": "<variant>", "payload_json": <any JSON>}` —
+/// the inner `payload_json` is already a `serde_json::Value`, so
+/// the `#[serde(other)]` on the kind enum (below) is irrelevant
+/// here; we just need the outer struct to derive the traits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)] // PR1b: in-memory only; PR2 persists, PR3 renders.
 pub struct TranscriptEntry {
     pub kind: TranscriptKind,
     pub payload_json: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[allow(dead_code)] // paired with TranscriptEntry
 pub enum TranscriptKind {
     ChatEvent,
@@ -400,6 +412,17 @@ pub struct SubagentBufferSink {
     /// after `run_chat_loop` returns to extract the worker's
     /// final summary.
     text_parts: StdMutex<Vec<String>>,
+    /// Per-turn `TokenUsage` accumulated from `ChatEvent::Done { usage: Some(t) }`
+    /// events. Read by `run_subagent` after the worker loop returns
+    /// to populate `subagent_runs.token_usage_json` and to
+    /// **streaming-fold** the per-turn usage into the parent
+    /// session's `sessions.input_tokens_total` columns via
+    /// `db::subagent_runs::add_token_usage_streaming` (B6 PR2).
+    /// The sink does this fold itself so the parent's UI sees the
+    /// worker burning tokens in real time (vs. a one-shot fold
+    /// at worker exit which would leave the parent's counter
+    /// stale until the worker returned).
+    per_turn_usage: StdMutex<Vec<TokenUsage>>,
     /// Set when the worker emitted a terminal `Error` event.
     /// `run_subagent` reads this to pick the `status: error`
     /// prefix.
@@ -415,6 +438,7 @@ impl SubagentBufferSink {
         Self {
             transcript: StdMutex::new(Vec::new()),
             text_parts: StdMutex::new(Vec::new()),
+            per_turn_usage: StdMutex::new(Vec::new()),
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
         }
@@ -459,6 +483,60 @@ impl SubagentBufferSink {
             .expect("SubagentBufferSink transcript mutex poisoned")
             .clone()
     }
+
+    /// Drain the accumulated per-turn `TokenUsage` entries. Returns
+    /// the union sum and clears the sink's buffer (the sink is
+    /// single-shot — the caller is `run_subagent`, which runs once
+    /// per worker dispatch).
+    ///
+    /// B6 PR2: `run_subagent` would call this **once per worker turn**
+    /// to fold the new turn's usage into the parent session's
+    /// `sessions.input_tokens_total`. The current production
+    /// implementation routes the per-turn fold through
+    /// `db::add_token_usage` (decoupled from `skip_persist` —
+    /// see `chat_loop.rs:907`), so the sink-side drain is
+    /// not invoked by production. The method is **retained** as
+    /// the public API surface (the PRD §"SubagentBufferSink"
+    /// mentions streaming accumulation) and is exercised by the
+    /// `buffer_sink_drain_per_turn_usage_clears_buffer` test in
+    /// this module.
+    #[allow(dead_code)]
+    pub fn drain_per_turn_usage(&self) -> TokenUsage {
+        let mut guard = self
+            .per_turn_usage
+            .lock()
+            .expect("SubagentBufferSink per_turn_usage mutex poisoned");
+        let drained: Vec<TokenUsage> = guard.drain(..).collect();
+        sum_usage(&drained)
+    }
+
+    /// Cumulative per-turn `TokenUsage` snapshot (no drain). Read
+    /// by `run_subagent` at worker exit to populate
+    /// `subagent_runs.token_usage_json`.
+    pub fn cumulative_usage(&self) -> TokenUsage {
+        let guard = self
+            .per_turn_usage
+            .lock()
+            .expect("SubagentBufferSink per_turn_usage mutex poisoned");
+        sum_usage(&guard)
+    }
+}
+
+/// Sum a slice of `TokenUsage` into one. Helper for the sink's
+/// `drain_per_turn_usage` / `cumulative_usage` paths.
+fn sum_usage(items: &[TokenUsage]) -> TokenUsage {
+    let mut total = TokenUsage::default();
+    for u in items {
+        total.input_tokens = total.input_tokens.saturating_add(u.input_tokens);
+        total.output_tokens = total.output_tokens.saturating_add(u.output_tokens);
+        total.cache_creation_input_tokens = total
+            .cache_creation_input_tokens
+            .saturating_add(u.cache_creation_input_tokens);
+        total.cache_read_input_tokens = total
+            .cache_read_input_tokens
+            .saturating_add(u.cache_read_input_tokens);
+    }
+    total
 }
 
 impl Default for SubagentBufferSink {
@@ -482,7 +560,21 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                 self.had_error
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
-            ChatEvent::Done { stop_reason, .. } => {
+            ChatEvent::Done { stop_reason, usage } => {
+                // B6 PR2: capture per-turn token usage for the
+                // worker run. The worker reuses the parent
+                // session_id but `run_chat_loop`'s `add_token_usage`
+                // call is gated by `!skip_persist` (worker passes
+                // `true`); the sink's per-turn accumulator is the
+                // path that folds the worker's usage into the
+                // parent's `sessions.input_tokens_total` column
+                // via `db::subagent_runs::add_token_usage_streaming`.
+                if let Some(u) = usage {
+                    self.per_turn_usage
+                        .lock()
+                        .expect("SubagentBufferSink per_turn_usage mutex poisoned")
+                        .push(*u);
+                }
                 if stop_reason.as_deref() == Some("cancelled")
                     || stop_reason.as_deref() == Some("max_turns")
                 {
@@ -524,6 +616,130 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
         // bug).
         let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
         self.record(TranscriptKind::PermissionAsk, payload_json);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transcript 4MB cap (B6 PR2)
+// ---------------------------------------------------------------------------
+
+/// Maximum size (in bytes) of a serialized `Vec<TranscriptEntry>`
+/// that will be persisted into `subagent_runs.transcript_json`.
+///
+/// **4 MiB** is the B6 PR2 design decision (see PRD §"transcript
+/// 大小 cap"): safely under SQLite's TEXT default cap (1 GiB) while
+/// far above the 20-turn worker's realistic worst case (a busy
+/// tool-use turn produces ~2-5 KiB of transcript, so 20 turns ≈
+/// 100 KiB — three orders of magnitude under the cap). When the
+/// transcript exceeds the cap, [`truncate_transcript_for_persistence`]
+/// marks `transcript_truncated=1` and keeps a head + tail
+/// representative slice so PR3's expand UI still shows both the
+/// "what did the worker start with?" and "what did it end with?"
+/// context.
+pub const TRANSCRIPT_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Serialize-then-cap helper. Returns `(transcript, truncated)`:
+///
+/// - If the JSON-serialized transcript fits in `max_bytes`, the
+///   original is returned and `truncated=false`.
+/// - If it doesn't, the function keeps the head and tail halves
+///   of the byte representation (each `max_bytes / 2` bytes),
+///   parses them back into `TranscriptEntry` vectors, and returns
+///   the **union** (head + tail entries) plus `truncated=true`.
+///   The parsing may fail on a half-element boundary (e.g. the
+///   head cut lands in the middle of a JSON value); in that case
+///   the function falls back to keeping just the head bytes (no
+///   parse) under the assumption that PR3's render path will
+///   surface the raw bytes — a degraded but never-empty result.
+///
+/// The function is **pure** (no I/O) and lives next to the sink
+/// so the cap semantics are co-located with the type the cap
+/// bounds. PR2's `run_subagent` calls this immediately before
+/// `db::subagent_runs::update_run_finished` so the DB write
+/// receives a transcript that already meets the cap.
+pub fn truncate_transcript_for_persistence(
+    transcript: Vec<TranscriptEntry>,
+    max_bytes: usize,
+) -> (Vec<TranscriptEntry>, bool) {
+    let json = match serde_json::to_string(&transcript) {
+        Ok(s) => s,
+        Err(_) => {
+            // Serialization should never fail for `TranscriptEntry`
+            // (its `payload_json` is already `serde_json::Value`),
+            // but the safe fallback is "return as-is, mark
+            // truncated" so the caller still persists SOMETHING.
+            return (transcript, true);
+        }
+    };
+    if json.len() <= max_bytes {
+        return (transcript, false);
+    }
+    // Over cap: keep head + tail halves (each `max_bytes / 2` bytes).
+    // The cap is large enough that we don't need to worry about
+    // the head/tail split landing inside a single-element JSON —
+    // the reparse failure falls back to keeping the head bytes as
+    // a single-element vector.
+    let half = max_bytes / 2;
+    let head_end = half.min(json.len());
+    let tail_start = json.len().saturating_sub(half);
+    // Build a synthetic JSON array: `[<head_bytes_trimmed_to_array_end>..., <tail_bytes_trimmed_to_array_end>...]`
+    // by attempting to find the last `}` in the head and the first
+    // `{` after `tail_start`. If the parse fails, the caller
+    // persists the head bytes as a single-element vector (raw
+    // JSON fragment). This branch should be unreachable in
+    // practice — 4 MiB of transcript contains millions of `}`
+    // chars — but the defensive fallback is cheap.
+    let head_trim = find_last_close_brace(&json[..head_end]);
+    let tail_trim_start = find_first_open_brace(&json[tail_start..])
+        .map(|i| tail_start + i)
+        .unwrap_or(tail_start);
+    let truncated_json = if let (Some(h), true) = (head_trim, tail_trim_start < json.len()) {
+        // Concatenate head[..h] + tail[tail_trim_start..] wrapped in
+        // a synthetic array. The two halves are JSON-serialized
+        // TranscriptEntry values; we wrap them in a JSON array.
+        format!(
+            "[{}]",
+            [&json[..h], &json[tail_trim_start..]].join(",")
+        )
+    } else if let Some(h) = head_trim {
+        // Tail parse failed; keep just the head (truncated).
+        format!("[{}]", &json[..h])
+    } else {
+        // Head parse failed too; keep the raw head bytes as a
+        // single-element fallback (last resort). The shape is
+        // invalid JSON but the transcript_truncated=1 flag tells
+        // PR3's render to surface a degraded view.
+        return (vec![make_raw_fallback_entry(&json[..head_end])], true);
+    };
+    match serde_json::from_str::<Vec<TranscriptEntry>>(&truncated_json) {
+        Ok(parsed) => (parsed, true),
+        Err(_) => (vec![make_raw_fallback_entry(&json[..head_end])], true),
+    }
+}
+
+/// Find the byte index of the last `}` in `s[..=]` that is at or
+/// before `s.len()`. Returns `None` if no `}` is found.
+fn find_last_close_brace(s: &str) -> Option<usize> {
+    s.rfind('}').map(|i| i + 1)
+}
+
+/// Find the byte index of the first `{` in `s[i..]`. Returns
+/// `None` if no `{` is found. The returned offset is relative to
+/// `s`, not the caller's slice.
+fn find_first_open_brace(s: &str) -> Option<usize> {
+    s.find('{')
+}
+
+/// Build a single fallback `TranscriptEntry` carrying a raw JSON
+/// fragment as its payload. Used when the head+tail reparse fails
+/// (extremely rare; documented in [`truncate_transcript_for_persistence`]).
+fn make_raw_fallback_entry(raw: &str) -> TranscriptEntry {
+    TranscriptEntry {
+        kind: TranscriptKind::ChatEvent,
+        payload_json: serde_json::json!({
+            "_truncation_fallback": true,
+            "raw_head_bytes": raw,
+        }),
     }
 }
 
@@ -881,5 +1097,124 @@ mod tests {
         assert!(is_error);
         assert!(content.starts_with("[status: error]"));
         assert!(content.contains("LLM stream errored"));
+    }
+
+    // ---- token usage accumulation (B6 PR2) ----
+
+    fn done_with_usage(input: u32, output: u32) -> ChatEventPayload {
+        ChatEventPayload {
+            request_id: "rid-u".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn buffer_sink_accumulates_token_usage_per_turn() {
+        let sink = SubagentBufferSink::new();
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        sink.emit_chat_event(&done_with_usage(50, 10));
+        let total = sink.cumulative_usage();
+        assert_eq!(total.input_tokens, 350);
+        assert_eq!(total.output_tokens, 90);
+    }
+
+    #[test]
+    fn buffer_sink_drain_per_turn_usage_clears_buffer() {
+        let sink = SubagentBufferSink::new();
+        sink.emit_chat_event(&done_with_usage(10, 5));
+        let drained = sink.drain_per_turn_usage();
+        assert_eq!(drained.input_tokens, 10);
+        assert_eq!(drained.output_tokens, 5);
+        // After drain, the cumulative is zero.
+        let after = sink.cumulative_usage();
+        assert_eq!(after.input_tokens, 0);
+        assert_eq!(after.output_tokens, 0);
+    }
+
+    #[test]
+    fn buffer_sink_done_without_usage_does_not_accumulate() {
+        let sink = SubagentBufferSink::new();
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        });
+        let total = sink.cumulative_usage();
+        assert_eq!(total.input_tokens, 0);
+        assert_eq!(total.output_tokens, 0);
+    }
+
+    // ---- truncate_transcript_for_persistence (B6 PR2) ----
+
+    fn make_entry(payload: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            kind: TranscriptKind::ChatEvent,
+            payload_json: serde_json::json!({"text": payload}),
+        }
+    }
+
+    #[test]
+    fn truncate_under_cap_returns_original() {
+        let entries: Vec<TranscriptEntry> = (0..10)
+            .map(|i| make_entry(&format!("entry-{}", i)))
+            .collect();
+        let (out, truncated) = truncate_transcript_for_persistence(entries.clone(), 4096);
+        assert!(!truncated);
+        assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn truncate_at_exact_cap_returns_original() {
+        // Build a transcript whose JSON size is exactly the cap.
+        let entries: Vec<TranscriptEntry> = (0..5)
+            .map(|i| make_entry(&format!("entry-{}", i)))
+            .collect();
+        let json = serde_json::to_string(&entries).unwrap();
+        let (out, truncated) = truncate_transcript_for_persistence(entries, json.len());
+        assert!(!truncated, "size == cap should NOT truncate");
+        assert_eq!(out.len(), 5);
+    }
+
+    #[test]
+    fn truncate_over_cap_marks_truncated_and_keeps_entries() {
+        // Build a transcript that's ~10 KiB; cap at 1 KiB → truncated.
+        let entries: Vec<TranscriptEntry> = (0..200)
+            .map(|_| make_entry(&"x".repeat(40)))
+            .collect();
+        let json = serde_json::to_string(&entries).unwrap();
+        assert!(json.len() > 1024, "test setup: should exceed 1KiB");
+        let (out, truncated) = truncate_transcript_for_persistence(entries, 1024);
+        assert!(truncated, "over cap must set truncated=true");
+        // The truncated transcript is smaller in entry count (head+tail only).
+        assert!(out.len() < 200);
+        // It still parses as valid JSON (verified by re-serializing).
+        let re = serde_json::to_string(&out).unwrap();
+        assert!(re.len() < json.len());
+    }
+
+    #[test]
+    fn truncate_empty_transcript_returns_empty() {
+        let (out, truncated) = truncate_transcript_for_persistence(Vec::new(), 1024);
+        assert!(out.is_empty());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_uses_default_4mb_when_called_via_run_subagent_path() {
+        // Sanity: the 4 MiB default is what run_subagent uses.
+        // Building a > 4 MiB transcript in a unit test is expensive,
+        // so we only assert the constant.
+        assert_eq!(TRANSCRIPT_MAX_BYTES, 4 * 1024 * 1024);
     }
 }

@@ -1,0 +1,407 @@
+//! B6 PR2 (2026-06-20): `subagent_runs` persistence.
+//!
+//! Stores per-dispatch records of worker subagents spawned via the
+//! `dispatch_subagent` tool. The worker is driven by a nested
+//! `run_chat_loop` call (B6 PR1, see `agent::chat_loop::run_subagent`)
+//! and accumulates its `SubagentBufferSink` transcript + final
+//! `TokenUsage` + final assistant text in memory. PR2 lifts those
+//! three concerns into SQLite so:
+//!
+//! 1. PR3's frontend `ToolCallCard` expand UI can render the
+//!    worker's transcript + summary without re-running the worker.
+//! 2. A session reload (after app restart) still shows the
+//!    worker's intermediate state — the in-memory sink is gone
+//!    after a reload.
+//! 3. Token-usage accounting is auditable per-run (`token_usage_json`
+//!    on the `subagent_runs` row); the parent session's
+//!    `sessions.input_tokens_total` carries the *aggregated* total
+//!    (updated by `add_token_usage_streaming` as the worker runs).
+//!
+//! # Schema
+//!
+//! The migration is in `db/migrations.rs`; columns are:
+//! - `id TEXT PRIMARY KEY` (UUID v4 nanoid).
+//! - `parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE`.
+//! - `parent_request_id TEXT NOT NULL` (worker rid; not a FK).
+//! - `subagent_name TEXT NOT NULL` (`researcher` / `general-purpose`).
+//! - `status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error'))`.
+//! - `started_at TEXT NOT NULL`, `finished_at TEXT` (NULL while running).
+//! - `token_usage_json TEXT` (JSON-encoded [`TokenUsage`]; NULL while running).
+//! - `summary TEXT` (worker's `final_text` plain string; NULL while running).
+//! - `transcript_json TEXT` (JSON-encoded `Vec<TranscriptEntry>`; NULL while running).
+//! - `transcript_truncated INTEGER NOT NULL DEFAULT 0` (1 = over 4MB cap).
+//! - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`.
+//!
+//! Indexed on `(parent_session_id, started_at DESC)` and
+//! `parent_request_id` for the PR3 list-by-session + per-request lookups.
+//!
+//! # Audit invariant
+//!
+//! **`subagent_runs` writes do NOT contaminate the parent session's
+//! `session_audit_events`.** Worker ⑨ decisions (Tier 2 / Tier 3 /
+//! Tier 4 collapse) are recorded in the transcript's
+//! `TranscriptKind::PermissionAsk` entries, not in
+//! `session_audit_events` (see `permissions::check` + the
+//! `is_worker` collapse at `ask_path`). This module never calls
+//! `record_audit_event`; the parent session's audit log remains a
+//! pure record of the parent's own ⑨ decisions.
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, Row, SqlitePool};
+use uuid::Uuid;
+
+use crate::llm::types::TokenUsage;
+
+// ---------------------------------------------------------------------------
+// SubagentStatusDb — DB-side enum for the `status` CHECK column
+// ---------------------------------------------------------------------------
+
+/// The terminal status a worker subagent exited with. Mirrors
+/// `agent::subagent::SubagentStatus` (the agent-side enum used to
+/// format the dispatch_subagent tool_result) but is a separate
+/// type because the DB layer is a different crate boundary. The
+/// two enums are kept in lockstep via [`SubagentStatusDb::from_agent`]
+/// + `as_str` so a future drift (renaming `Error` to `Failed`,
+/// etc.) is caught at the `as_str()` boundary, not by a silent
+/// enum mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubagentStatusDb {
+    Running,
+    Completed,
+    Cancelled,
+    Error,
+}
+
+impl SubagentStatusDb {
+    /// Wire form for the `status` column. CHECK-constrained to
+    /// `('running','completed','cancelled','error')` — keep this
+    /// in lockstep with the migration's CHECK expression.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Error => "error",
+        }
+    }
+
+    /// Lenient parse from a DB string. Returns `Self::Running` for
+    /// unknown values — a future binary may add new variants and an
+    /// older binary reading a newer DB should default to the
+    /// "in-flight" semantic (which is the safe fallback — the row
+    /// will be re-classified when the worker exits).
+    #[allow(dead_code)] // exposed for future PR3 list UI / C4 audit reads
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "cancelled" => Self::Cancelled,
+            "error" => Self::Error,
+            _ => Self::Running,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SubagentRunRow — read shape (SELECT * FROM subagent_runs)
+// ---------------------------------------------------------------------------
+
+/// Row shape for SELECTs against `subagent_runs`. Camel-cased
+/// on the wire to match every other `db::*Row` type that crosses
+/// the IPC boundary (Tauri 2 default behavior; verified by
+/// `backend/database-guidelines.md` "When you add a new user-managed
+/// catalog" checklist).
+///
+/// `allow(dead_code)` is set at the type level because PR2's
+/// production wire-up uses `insert_run` + `update_run_finished`
+/// + `add_token_usage_streaming`; the row struct is materialized
+/// by `get_run` + `list_runs_by_session` which are themselves
+/// PR3-API surface (frontend expand UI + C4 audit read). The
+/// `db/tests.rs` integration tests will exercise the row
+/// constructor via the `FromRow` derive.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentRunRow {
+    pub id: String,
+    pub parent_session_id: String,
+    pub parent_request_id: String,
+    pub subagent_name: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub token_usage_json: Option<String>,
+    pub summary: Option<String>,
+    pub transcript_json: Option<String>,
+    pub transcript_truncated: i64,
+    pub created_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Insert a new `running` row for a freshly-spawned worker. Returns
+/// the new row's id. `started_at` is `datetime('now')` (RFC 3339).
+/// All other optional columns are seeded with sensible defaults
+/// (empty `TokenUsage` JSON, empty transcript `[]`, `transcript_truncated=0`)
+/// so a future `SELECT * FROM subagent_runs WHERE status='running'`
+/// always sees well-formed rows.
+///
+/// Called from `agent::chat_loop::run_subagent` immediately before
+/// the nested `run_chat_loop` call. The returned id is the
+/// `worker_run_id` that PR3's expand UI fetches with [`get_run`].
+pub async fn insert_run(
+    pool: &SqlitePool,
+    parent_session_id: &str,
+    parent_request_id: &str,
+    subagent_name: &str,
+) -> Result<String, sqlx::Error> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let empty_usage = serde_json::to_string(&TokenUsage::default())
+        .unwrap_or_else(|_| "{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}".to_string());
+    sqlx::query(
+        r#"
+        INSERT INTO subagent_runs
+        (id, parent_session_id, parent_request_id, subagent_name,
+         status, started_at, finished_at, token_usage_json, summary,
+         transcript_json, transcript_truncated, created_at)
+        VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, '[]', 0, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(parent_session_id)
+    .bind(parent_request_id)
+    .bind(subagent_name)
+    .bind(&now)
+    .bind(&empty_usage)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Update a `running` row to its terminal state. Called from
+/// `run_subagent` after the nested `run_chat_loop` returns. The
+/// `transcript` Vec is the `SubagentBufferSink::transcript_snapshot()`
+/// (already capped by `truncate_transcript_for_persistence` so it
+/// fits in 4MB; the `truncated` flag carries the cap signal so
+/// PR3's UI can show a "transcript truncated" badge).
+///
+/// The `summary` is the worker's `final_text` plain string
+/// (NO status prefix — the `status` column is the source of truth
+/// for the prefix; this matches the PRD's `summary 字段语义` decision
+/// "final_text 纯文本,status 字段独立").
+///
+/// `token_usage` is the worker's final `TokenUsage` sum (across all
+/// the worker's turns). Serialized as JSON for the
+/// `token_usage_json` column.
+///
+/// `transcript` is serialized as JSON; on serialization failure
+/// (extremely unlikely for `Vec<TranscriptEntry>` — its inner
+/// `payload_json` is already a `serde_json::Value` so the wire
+/// shape round-trips), the function falls back to `"[]"` so a
+/// truncation never loses the entire transcript row.
+#[allow(clippy::too_many_arguments)]
+pub async fn update_run_finished(
+    pool: &SqlitePool,
+    id: &str,
+    status: SubagentStatusDb,
+    finished_at: &str,
+    summary: &str,
+    token_usage: &TokenUsage,
+    transcript: &[crate::agent::subagent::TranscriptEntry],
+    transcript_truncated: bool,
+) -> Result<(), sqlx::Error> {
+    let token_usage_json =
+        serde_json::to_string(token_usage).unwrap_or_else(|_| String::from("{}"));
+    let transcript_json = serde_json::to_string(transcript).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query(
+        r#"
+        UPDATE subagent_runs
+        SET status = ?,
+            finished_at = ?,
+            summary = ?,
+            token_usage_json = ?,
+            transcript_json = ?,
+            transcript_truncated = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(status.as_str())
+    .bind(finished_at)
+    .bind(summary)
+    .bind(&token_usage_json)
+    .bind(&transcript_json)
+    .bind(transcript_truncated as i64)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Look up a single `subagent_runs` row by id. Returns `None` for
+/// unknown ids. Used by PR3's frontend `ToolCallCard` expand IPC
+/// (a future `get_subagent_run` Tauri command) and by C4's audit
+/// log read path.
+///
+/// `allow(dead_code)` because PR2's production wire-up does not
+/// call this directly (no current IPC consumes it); the
+/// `db/tests.rs` integration test will exercise the read path
+/// to lock the schema.
+#[allow(dead_code)]
+pub async fn get_run(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<SubagentRunRow>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, parent_session_id, parent_request_id, subagent_name,
+               status, started_at, finished_at, token_usage_json, summary,
+               transcript_json, transcript_truncated, created_at
+        FROM subagent_runs
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        None => Ok(None),
+        Some(r) => Ok(Some(SubagentRunRow {
+            id: r.try_get("id")?,
+            parent_session_id: r.try_get("parent_session_id")?,
+            parent_request_id: r.try_get("parent_request_id")?,
+            subagent_name: r.try_get("subagent_name")?,
+            status: r.try_get("status")?,
+            started_at: r.try_get("started_at")?,
+            finished_at: r.try_get("finished_at")?,
+            token_usage_json: r.try_get("token_usage_json")?,
+            summary: r.try_get("summary")?,
+            transcript_json: r.try_get("transcript_json")?,
+            transcript_truncated: r.try_get("transcript_truncated")?,
+            created_at: r.try_get("created_at")?,
+        })),
+    }
+}
+
+/// List all `subagent_runs` for `parent_session_id`, newest first.
+/// Used by PR3's session-detail UI to render every worker
+/// dispatched by the parent. The
+/// `idx_subagent_runs_session_started(parent_session_id,
+/// started_at DESC)` index covers this query.
+///
+/// `allow(dead_code)` because PR2's production wire-up does not
+/// call this directly (no current IPC consumes it); the
+/// `db/tests.rs` integration test will exercise the read path
+/// to lock the schema.
+#[allow(dead_code)]
+pub async fn list_runs_by_session(
+    pool: &SqlitePool,
+    parent_session_id: &str,
+) -> Result<Vec<SubagentRunRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, parent_session_id, parent_request_id, subagent_name,
+               status, started_at, finished_at, token_usage_json, summary,
+               transcript_json, transcript_truncated, created_at
+        FROM subagent_runs
+        WHERE parent_session_id = ?
+        ORDER BY started_at DESC
+        "#,
+    )
+    .bind(parent_session_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(SubagentRunRow {
+                id: r.try_get("id")?,
+                parent_session_id: r.try_get("parent_session_id")?,
+                parent_request_id: r.try_get("parent_request_id")?,
+                subagent_name: r.try_get("subagent_name")?,
+                status: r.try_get("status")?,
+                started_at: r.try_get("started_at")?,
+                finished_at: r.try_get("finished_at")?,
+                token_usage_json: r.try_get("token_usage_json")?,
+                summary: r.try_get("summary")?,
+                transcript_json: r.try_get("transcript_json")?,
+                transcript_truncated: r.try_get("transcript_truncated")?,
+                created_at: r.try_get("created_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Add a worker's per-turn `TokenUsage` to the **parent session's**
+/// `sessions.input_tokens_total` / `output_tokens_total` /
+/// `cache_creation_total` / `cache_read_total` columns. Called by
+/// the worker's `SubagentBufferSink` after each worker turn (so the
+/// parent's UI sees the worker burning tokens in real time).
+///
+/// The worker's intermediate `messages` rows do NOT land in the
+/// DB (worker path uses `skip_persist=true` — see
+/// `agent::chat_loop::run_chat_loop`'s 20th parameter), so
+/// `add_token_usage` inside `run_chat_loop` is gated by
+/// `!skip_persist` and never fires for the worker. The worker's
+/// per-turn `TokenUsage` therefore has to be folded into the
+/// parent **from outside** the agent loop — that's this function's
+/// job. The fold target is the parent session's id, NOT the
+/// worker's session id (worker reuses the parent session id, so
+/// the destination column is unambiguous).
+///
+/// `parent_session_id` MUST be a valid `sessions.id`; the helper
+/// silently no-ops on missing ids (matching `add_token_usage`'s
+/// contract — see `db/sessions.rs:374-399`).
+///
+/// This is the **streaming** accumulator (vs the `update_run_finished`
+/// terminal-write to `subagent_runs.token_usage_json`, which
+/// captures the worker's final cumulative total at exit time). The
+/// two are independent: the streaming updates are for the parent
+/// UI's live token counter, the terminal write is for the audit
+/// trail.
+///
+/// **Implementation note (B6 PR2 production path)**: the current
+/// `run_subagent` implementation reuses `db::add_token_usage` (the
+/// generic helper) because the worker reuses `parent_session_id`
+/// as its `session_id` — the per-turn `add_token_usage` call at
+/// `chat_loop.rs:907` now runs unconditionally (decoupled from
+/// `skip_persist` in this PR) and naturally folds the worker's
+/// per-turn usage into the parent's running total. This function
+/// is **retained** as the public PR2 API surface (the PRD §"db
+/// module" lists it) and is exercised by `db/tests.rs`'s
+/// `add_token_usage_streaming_accumulates_in_parent` integration
+/// test. A future PR that splits worker ↔ parent session identity
+/// (e.g. daemon-ized workers with their own session row) will
+/// switch `run_subagent` to call this function instead of the
+/// generic `add_token_usage`.
+#[allow(dead_code)]
+pub async fn add_token_usage_streaming(
+    pool: &SqlitePool,
+    parent_session_id: &str,
+    usage: &TokenUsage,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE sessions
+        SET input_tokens_total = COALESCE(input_tokens_total, 0) + ?,
+            output_tokens_total = COALESCE(output_tokens_total, 0) + ?,
+            cache_creation_total = COALESCE(cache_creation_total, 0) + ?,
+            cache_read_total = COALESCE(cache_read_total, 0) + ?,
+            updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(usage.input_tokens)
+    .bind(usage.output_tokens)
+    .bind(usage.cache_creation_input_tokens)
+    .bind(usage.cache_read_input_tokens)
+    .bind(Utc::now().to_rfc3339())
+    .bind(parent_session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
