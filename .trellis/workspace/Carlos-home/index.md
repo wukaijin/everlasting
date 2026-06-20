@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 55
+- **Total Sessions**: 56
 - **Last Active**: 2026-06-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1166 | Active |
+| `journal-2.md` | ~1199 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-06-21 | route deepseek via openai protocol (native reasoning_content) | `516145b` | `main` |
 | 55 | 2026-06-21 | fix deepseek relay thinking-block drop (turn-2 400) | `55aa9f3` | `main` |
 | 54 | 2026-06-21 | FT-F-002: ToolCallCard workerMissed inline hint after 1.5s miss | `3bf2b99`, `f695408` | `main` |
 | 53 | 2026-06-21 | FT-F-004 SubagentDrawer UX polish bundle (C1+C2+C3, C5 drop) | `9e41594`, `1290d6c` | `main` |

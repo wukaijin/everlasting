@@ -1164,3 +1164,36 @@ doc-trim-2026-06 任务 (Session 55) 留下 3 个 known leftover,本次任务合
 ### Next Steps
 
 - None - task complete
+
+
+## Session 56: route deepseek via openai protocol (native reasoning_content)
+
+**Date**: 2026-06-21
+**Task**: route deepseek via openai protocol (native reasoning_content)
+**Branch**: `main`
+
+### Summary
+
+deepseek-v4-flash 经 wukaijin anthropic 中转 turn-2+ 400 根因: Anthropic→DeepSeek thinking 翻译层不可靠(V1 删块/V2 加 rc 字段都 400, 同 payload 时好时坏)。治本: deepseek 改走 OpenAI 协议(DeepSeek 原生, reasoning_content 原生字段, 无翻译层)。PR1: OpenAIProvider 历史 Reasoning 块 → message.reasoning_content 字段(非 content 文本); 纯 text assistant → 'none'(DeepSeek v4 要求非空, AstrBot PR 7823); gate 到 reasoning 模型(reasoning_effort.is_some() || is_o1_family)保护 gpt-4o/4.1 vanilla shape。reasoning_effort curl 实测 deepseek 接受 {low,medium,high,xhigh,max} 拒 minimal。9 个新测试含 gpt-4o gate 回归 + DeepSeek 契约 pin。spec llm-contract.md 加 ROOT FIX 节(OpenAI 协议正道 vs Via-Relay anthropic 不可靠)。cargo test --lib 749 pass。PR2: 用户配置 wukaijin-openai provider + 迁 deepseek model, 端到端验证通过(用户确认 '好了')。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `516145b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
