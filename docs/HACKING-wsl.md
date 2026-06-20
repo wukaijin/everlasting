@@ -308,33 +308,6 @@ Layout=
 
 ---
 
-## 坑 12:Shell tool 大输出自动落盘(2026-06-07 工具集扩展批次)
-
-> 跟 `docs/IMPLEMENTATION.md` §3 (工具集扩展) + `.trellis/spec/backend/llm-contract.md` §"Tool Set Extension" 配合读
-
-**现象**:`shell` tool 跑 `cargo build` 之类长输出命令(> 30 KiB),以前的实现是 head+tail 50KB 截断,中间 30 KiB 静默丢。LLM 看不到中间的错误/警告。
-
-**根因**:`tools/shell.rs` 旧 `truncate_output` 只返 50KB head+tail,中间 `<truncated>` 标记。
-
-**修法**(2026-06-07 已自动落地):
-- `shell.rs` 检测输出 > 30 KiB 时,落盘到 `<session_cwd>/.everlasting/outputs/<uuid>.txt`
-- tool_result 返回 `"Output saved to <path> (N bytes). First 1KB preview:\n<preview>"`
-- LLM 拿 path 调 `read_file`(已加 `cat -n` 行号 prefix)精读任意区间
-
-**用户必做**:在 project `<root>/.gitignore` 加:
-
-```gitignore
-.everlasting/
-```
-
-`outputs/<uuid>.txt` 是 LLM 落盘的工作文件,不应进 git 仓库,也不应跨 session 共享。
-
-WSL 下 `~/.everlasting/` 是 user 全局配置(跟这个无关)—— 跟 project 内的 `.everlasting/` 是两件事,别混。
-
-`delete_session` 调 `tools::shell::cleanup_outputs_dir(cwd)` best-effort 清理(失败不 cascade,用户主要意图是删 session,清不清垃圾是次要)。
-
----
-
 ## 坑 11:Tauri 2 IPC arg 默认 `rename_all = "camelCase"`
 
 **现象**:Rust 端 `async fn create_session(state: ..., project_id: String, initial_cwd: String, model: Option<String>)`,JS 端用 snake_case 调:

@@ -515,6 +515,8 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
 
 ---
 
+> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../docs/IMPLEMENTATION.md)
+
 ## Pattern: PR2a corrected PR1 over-broad `skip_persist` gate (RULE-A-015, 2026-06-20)
 
 **Problem**: PR1b (2026-06-19) introduced the `skip_persist: bool` flag
@@ -680,6 +682,8 @@ the new `v2` as the canonical entry point. Do not leave a "v1" around
 "for tests" — tests should track production.
 
 ---
+
+> 历史 ADR 详见 [IMPLEMENTATION.md §4 2026-06-17 RULE-A-007 / 2026-06-20 RULE-A-015](../../docs/IMPLEMENTATION.md)
 
 ## Pattern: Turn-boundary persist symmetry — error arm matches cancel arm (RULE-A-007, 2026-06-17)
 
