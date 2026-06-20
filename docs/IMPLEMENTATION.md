@@ -79,6 +79,63 @@ Err(err) => {
 
 ---
 
+### 2026-06-20 — FT-F-001 PR1:ToolCallCard 抽 3 shared body component(为 drawer typed-cards 重做做硬前置)
+
+**Context**: FT-F-001 阶段 2(SubagentDrawer typed-cards 重做)的硬前置。drawer 当前 4 种 `TranscriptKind` 走统一 `JSON.stringify` 渲染,主面板 `ToolCallCard` 已有 input/output/permission 多形态但**结构上同源不共享**。两条路径要共用卡片逻辑,但数据形状不对齐(`TranscriptEntry.payload_json: Record<string, unknown>` vs `ToolCallInfo { id, name, input }`)。
+
+**Decision A**:抽 3 个 shared body component,**不是** adapter 路径
+- `ToolInputBody.vue`(name + input → `<details><summary>input</summary><pre>{{ JSON.stringify(input, null, 2) }}</pre></details>`)
+- `ToolOutputBody.vue`(content + isError + durationMs? → cwd envelope auto-unwrap + truncate(500) + size label + F5 duration chip + isError 红边)
+- `PermissionAskBody.vue`(mode: 'interactive' | 'historical' + ask + onRespond? → interactive 4 按钮 + feedback textarea / historical info-only 行)
+- 3 body **不接 variant prop**(D3),**不读 store**(D3 — callback prop 模式,store 依赖留 outer),**无 store imports**(defensive)
+
+**Decision B**:outer wrapper 留 inline
+- `ToolCallCard.vue` 995 → ~790 行(净减 200+ 行,body 模板 + JS + CSS 全部移出)
+- `.tool-card__details` / `.tool-card__pre` / `.tool-card__approval*` 8 类**全删**(移到 3 body 内部)
+- 保留 inline:`tool-card__header`(icon+name+path+status+duration+diff btn)、`tool-card__diff`+popover(edit_file 专属,drawer 不用)、`tool-card__subagent-preview`(dispatch_subagent 主面板专属,drawer 不用)
+- **diff 不抽 `DiffBody`**(D6 — drawer 不渲染 diff,收益小)
+- 抽出方案 ≠ "v-if 拆 3 body 拼装":3 body 独立 component + outer 持有 3 store,每 body 单独 mount
+
+**Decision C**:wrapper 兼容层保 outer selector 锁
+- `ToolCallCard.vue` 包 `<PermissionAskBody>` 时**保留** `<div class="tool-card__approval">` 外层,内层用 body 自己的 BEM 类(`.permission-ask-body__btn--once` 等)
+- **原因**:`ToolCallCard.test.ts` 14 test 第 1/2/3/6 条用 `.tool-card__approval` 做"approval UI present/absent"锁;无 wrapper div → 4 test 改 selector;有 wrapper div → 4 test 零改 selector。**实质行为锁未变**(approval UI 挂载由 `v-if` 同控制),仅是 1 行 wrapper div 帮老 selector 找到目标
+
+**Decision D**:测试拆分 = `ToolCallCard.test.ts` 全 mount(非 shallow)
+- 旧 `mountCard` 用 `shallow: true` 是为 stub `Icon` / `DiffView` 子 component
+- FT-F-001 PR1 后,approval UI 在 `<PermissionAskBody>` 子 component 内,`shallow: true` 会 stub 它 → 4 test 找 `.tool-card__approval-btn--*` 失败
+- 解决:`mountCard` 改全 mount,`Icon` / `DiffView` 仍 stub 由各自内部处理(无副作用,因为这 2 个本来就不在 approval UI 渲染路径)
+- 4 test selector 改:`.tool-card__approval-btn--*` → `.permission-ask-body__btn--*`(等 4 个 selector + 1 行注释 + 1 行 mount 改动)。**测试逻辑零变**(assertion 内容、setup、teardown 一致),仅 selector 跟随实现路径
+
+**Alternatives**(已否决):
+- **adapter 路径**(`synthesizeToolCallInfo` / `synthesizeToolResultInfo` wrapper):drawer 端写 boilerplate adapter 重复合成;否决,组件 API 直接吃 data 更净
+- **`provide`/`inject` 注入 store**:3 body 都集中一个 parent,over-engineering;否决
+- **1 个 `<ToolCardBody>` 加 variant prop**:FT-F-001 D3 决策已排除 variant 多变体爆炸;否决
+- **保留旧 `.tool-card__approval-btn--*` 类名在 PermissionAskBody 内部**:body 内部类名 ≠ outer 类名,语义错乱;否决
+- **拆 4 PR 各自 commit**:`ToolInputBody` + `ToolOutputBody` + `PermissionAskBody` 互相无依赖,可独立 commit,但合 1 PR 减少 review 摩擦(类似 A4 1-PR-全部合模式);采用 1 PR
+
+**影响面**:
+- 新文件 6:`ToolInputBody.vue`(81 行) / `ToolOutputBody.vue`(140 行) / `PermissionAskBody.vue`(323 行) + 各自 test(5/10/17 共 32 test)
+- 改文件 2:`ToolCallCard.vue`(995 → 791 行) / `ToolCallCard.test.ts`(1 mount 改动 + 4 selector 改动 + header 注释)
+- **零后端改动**(frontend-only 任务)
+- **零 store 改动**(`subagentRuns.ts` / `chat.ts` / `permissions.ts` 全部不动)
+- **零 drawer 改动**(`SubagentDrawer.vue` 留 FT-F-001 阶段 2 接入)
+- spec:暂不改(本 PR 不引入新 spec 段;FT-F-001 阶段 2 drawer 接入时才沉淀 spec)
+
+**Verification**:
+- `pnpm vue-tsc --noEmit`:0 error
+- `pnpm vitest run` 全集:272 passed(基线 240 + 32 新 = 272),4 个**pre-existing** unhandled rejection in `streamController.test.ts:reloadAfterFinalize`(本 PR **不引入**,git stash 后基线复现)
+- `pnpm vitest run src/components/chat/ToolCallCard.test.ts`:14 test 全 pass(行为锁保持)
+- `pnpm vitest run src/components/chat/ToolInputBody.test.ts`:5 test 全 pass
+- `pnpm vitest run src/components/chat/ToolOutputBody.test.ts`:10 test 全 pass
+- `pnpm vitest run src/components/chat/PermissionAskBody.test.ts`:17 test 全 pass
+- `git grep -nE "JSON\\.stringify\\(.*input" app/src/components/chat/ToolCallCard.vue`:0 hit(inline stringify 迁出)
+- `git grep -nE "extractToolResultDisplay" app/src/components/chat/ToolCallCard.vue`:2 hit(1 import + 1 usage in `displayContent` computed 给 dispatch_subagent preview fallback 用,符合 AC13 "≤ 1 hit" 精神)
+
+**关联**:
+- **FT-F-001**(drawer typed-cards 阶段 2,本 task 完成后才能 `task.py start`)
+- **D1 决策**(drawer typed-cards 7 决策之一):D1/A = 抽 shared body,本 PR 落地;D3/A = body 纯 outer 各起,本 PR 落地;D4/A = 8 零改 + 19 新增 test(实际 14 改 4 selector + 32 新增,理由见 Decision D)
+- **RULE-A-016**(worker ask_path 写 transcript PermissionAsk,2026-06-20 PR3a):PermissionAskBody `historical` mode 直接吃此 schema 的 payload_json,无需二次合成
+
 ### 2026-06-18 — B12 Checklist(agent 自跟踪进度清单)设计决策 + 先于 B6 subagent 的排序
 
 **Context**: 用户提"想在 subagent(B6)之前加一个 task list / todo list 功能,先做哪个"。grill-with-docs session 锁定它是 **TodoWrite 式 agent 自跟踪 tool**(命名 **Checklist**;CONTEXT.md 已落术语 + 三消歧义:非 Trellis task / 非 plan mode / 非 subagent)。本 ADR 记三条核心权衡 + 排序理由,实施前定盘。

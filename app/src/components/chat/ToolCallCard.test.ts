@@ -11,9 +11,16 @@
 //      deny reason.
 //   6. Approval UI hides once a result arrives.
 //
-// Uses real Pinia stores (setActivePinia) + mocked Tauri IPC. The
-// card is shallow-mounted so child components (Icon / DiffView) don't
-// pull in their own deps.
+// FT-F-001 PR1 (2026-06-20): the inline approval block was
+// extracted into `<PermissionAskBody>`. `mountCard` was changed
+// from `shallow: true` to full mount because the approval
+// selectors (`.tool-card__approval-btn--once` etc.) now live
+// inside `PermissionAskBody`'s template — with `shallow: true`,
+// child components are stubbed and the buttons never render. The
+// outer `.tool-card__approval` wrapper class (added in
+// `ToolCallCard.vue`) preserves the "approval UI present" lock
+// for tests 1/2/3/6; the inner button-level selectors continue
+// to assert the same IPC contract on tests 4/5.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -64,7 +71,11 @@ describe("ToolCallCard inline approval", () => {
   });
 
   function mountCard(call: ToolCallInfo = makeCall()) {
-    return mount(ToolCallCard, { props: { call }, shallow: true });
+    // FT-F-001 PR1: full mount (was `shallow: true` pre-extraction).
+    // The approval UI now lives in `<PermissionAskBody>`, a child
+    // component that needs full mount to render the buttons the
+    // tests below assert on.
+    return mount(ToolCallCard, { props: { call } });
   }
 
   /** Helper: put the current session into sess-1 + arm a pending ask. */
@@ -105,7 +116,8 @@ describe("ToolCallCard inline approval", () => {
   it("clicking 仅一次 fires respond(allow_once)", async () => {
     armPending();
     const w = mountCard();
-    await w.get(".tool-card__approval-btn--once").trigger("click");
+    // FT-F-001 PR1: selector now points inside <PermissionAskBody>.
+    await w.get(".permission-ask-body__btn--once").trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: "rid-1",
@@ -117,7 +129,7 @@ describe("ToolCallCard inline approval", () => {
   it("clicking 始终允许 fires respond(allow_always)", async () => {
     armPending();
     const w = mountCard();
-    await w.get(".tool-card__approval-btn--always").trigger("click");
+    await w.get(".permission-ask-body__btn--always").trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: "rid-1",
@@ -130,7 +142,7 @@ describe("ToolCallCard inline approval", () => {
     armPending();
     const w = mountCard();
     // First --deny button is 拒绝, second is 拒绝并说明.
-    await w.findAll(".tool-card__approval-btn--deny")[0].trigger("click");
+    await w.findAll(".permission-ask-body__btn--deny")[0].trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
       rid: "rid-1",
@@ -143,14 +155,14 @@ describe("ToolCallCard inline approval", () => {
     armPending();
     const w = mountCard();
     // No textarea before opening.
-    expect(w.find(".tool-card__approval-textarea").exists()).toBe(false);
+    expect(w.find(".permission-ask-body__textarea").exists()).toBe(false);
     // Open the feedback form (second --deny button).
-    await w.findAll(".tool-card__approval-btn--deny")[1].trigger("click");
-    expect(w.find(".tool-card__approval-textarea").exists()).toBe(true);
+    await w.findAll(".permission-ask-body__btn--deny")[1].trigger("click");
+    expect(w.find(".permission-ask-body__textarea").exists()).toBe(true);
     // Type feedback + submit.
     await w.get("textarea").setValue("用 git clean 代替");
     await w
-      .get(".tool-card__approval-feedback-actions .tool-card__approval-btn--deny")
+      .get(".permission-ask-body__feedback-actions .permission-ask-body__btn--deny")
       .trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
@@ -163,6 +175,8 @@ describe("ToolCallCard inline approval", () => {
   it("hides the approval UI once a result arrives", async () => {
     armPending();
     const w = mountCard();
+    // FT-F-001 PR1: outer .tool-card__approval wrapper preserves
+    // the pre-extraction class — see ToolCallCard.vue.
     expect(w.find(".tool-card__approval").exists()).toBe(true);
     await w.setProps({
       result: {

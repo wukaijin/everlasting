@@ -21,6 +21,14 @@
 //   - done / error: "0.3s" / "1.2s" / "12.4s" via
 //     `abbreviateDuration`. The `?` cursor + the existing
 //     color-when-error treatment still apply.
+//
+// FT-F-001 PR1 (2026-06-20): the input/output `<details>` blocks
+// and the inline approval UI have been extracted into
+// `ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`
+// (shared body components). The outer wrapper keeps all store
+// dependencies (`useChatStore` / `usePermissionsStore` /
+// `useSubagentRunsStore`) — bodies don't read stores; this card
+// owns the store and passes plain data props + a callback.
 
 import { computed, ref, watch } from "vue";
 import {
@@ -30,22 +38,20 @@ import {
 } from "../../stores/chat";
 import {
   extractToolResultDisplay,
-  formatToolInput,
-  truncateOutput,
   toolAccentVar,
   toolIcon,
 } from "../../utils/messageFormat";
 import {
-  RISK_LABEL_CN,
-  RISK_META,
   usePermissionsStore,
   type PermissionDecision,
 } from "../../stores/permissions";
 import { useSubagentRunsStore, type SubagentRunSummary } from "../../stores/subagentRuns";
-import { isPathInRoot } from "../../utils/path";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
+import ToolInputBody from "./ToolInputBody.vue";
+import ToolOutputBody from "./ToolOutputBody.vue";
+import PermissionAskBody from "./PermissionAskBody.vue";
 
 const props = defineProps<{
   call: ToolCallInfo;
@@ -106,30 +112,12 @@ const statusIconName = computed<string>(() => {
   return "ellipsis";
 });
 
-/** Human-readable size of the tool result content for the <summary>
- *  hint. We use character count (not UTF-8 bytes) because tool
- *  results in this app are always text and chars read more honestly
- *  for that case. The label "chars" is omitted when the number is
- *  under 1024 (just a bare count reads fine for a few hundred
- *  characters); the suffix reappears for K/M to disambiguate.
- *
- *  Step 4 follow-up: the LLM-facing content is the cwd envelope
- *  (`{result, cwd}`), but the UI display is the unwrapped
- *  `result` string. The size hint must reflect what the user
- *  sees, so we run the content through `extractToolResultDisplay`
- *  before counting chars. */
-const outputSize = computed<string>(() => {
-  if (!props.result) return "";
-  const display = extractToolResultDisplay(props.result.content);
-  const n = display.length;
-  if (n < 1024) return `${n} chars`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K chars`;
-  return `${(n / 1024 / 1024).toFixed(1)}M chars`;
-});
-
 /** Display-only view of the tool result content. Strips the cwd
  *  envelope (see REQ-16 in prd.md) so the card shows the actual
- *  tool output, not the raw JSON. */
+ *  tool output, not the raw JSON. Used by the dispatch_subagent
+ *  preview fallback (FT-F-001 PR1 — the input/output bodies now
+ *  own their own envelope unwrapping, but the dispatch preview
+ *  still needs the unwrapped string for its 200-char summary). */
 const displayContent = computed<string | null>(() => {
   if (!props.result) return null;
   return extractToolResultDisplay(props.result.content);
@@ -150,6 +138,11 @@ const displayContent = computed<string | null>(() => {
 // back to "no changes in this session" when the file isn't in the
 // cached diff (e.g. the edit failed or was on a file the LLM
 // didn't actually change).
+//
+// FT-F-001 PR1 (D6): the diff popover stays inline — only the
+// edit_file tool uses diffs, and the drawer does not render diffs.
+// Extracting a `DiffBody` would have ~10 lines of CSS for marginal
+// reuse; not worth the extra component surface.
 // -----------------------------------------------------------------------
 const chatStore = useChatStore();
 const permStore = usePermissionsStore();
@@ -209,6 +202,14 @@ async function toggleFileDiff() {
 // <PermissionModal>). The ask is per-session; this card only renders
 // the current session's messages, so `currentCwd` IS the asking
 // session's cwd — fixing the old modal's cross-session cwd mix-up.
+//
+// FT-F-001 PR1: the inline approval block has been extracted into
+// `<PermissionAskBody mode="interactive" :ask="pendingAsk" :onRespond="respondApproval" />`.
+// The store + response handler stay here; the body just renders.
+// `repoRoot` is passed so the body can compute the in-repo /
+// out-of-repo badge against the asking session's cwd (matches the
+// pre-extraction behavior — `chatStore.currentCwd` IS the asking
+// session's cwd because this card renders the current session).
 // -----------------------------------------------------------------------
 const pendingAsk = computed(() => {
   const sid = chatStore.currentSessionId;
@@ -225,45 +226,12 @@ const isPendingApproval = computed(
   () => !hasResult.value && !!pendingAsk.value,
 );
 
-const riskMeta = computed(() =>
-  pendingAsk.value ? RISK_META[pendingAsk.value.risk] : null,
-);
-
-const showFeedback = ref(false);
-const feedback = ref("");
-
-/** In-repo / out-of-repo badge for path tools. `currentCwd` is the
- *  asking session's cwd (this card renders the current session). */
-const pathBadgeText = computed(() => {
-  const p = pendingAsk.value?.path;
-  if (!p) return "";
-  const root = chatStore.currentCwd;
-  if (!root) return "仓库外";
-  return isPathInRoot(p, root) ? "仓库内" : "仓库外";
-});
-const pathBadgeColor = computed(() =>
-  pathBadgeText.value === "仓库内"
-    ? "var(--color-tool-write)"
-    : "var(--color-tool-shell)",
-);
-
 async function respondApproval(
   decision: PermissionDecision,
   reason?: string,
 ): Promise<void> {
   if (!pendingAsk.value) return;
   await permStore.respond(pendingAsk.value.rid, decision, reason);
-  showFeedback.value = false;
-  feedback.value = "";
-}
-
-function submitDenyFeedback(): void {
-  void respondApproval("deny", feedback.value.trim() || undefined);
-}
-
-function cancelFeedback(): void {
-  showFeedback.value = false;
-  feedback.value = "";
 }
 
 /** When a result arrives the approval is resolved (allow→exec, deny,
@@ -284,6 +252,10 @@ watch(hasResult, (now, was) => {
 // this tool_use (rather than expanding an inline transcript). The
 // drawer reads all state from the subagentRuns store; this card only
 // needs to resolve the run id and call openDrawer.
+//
+// FT-F-001 PR1 (D1): the dispatch_subagent preview stays inline —
+// it's the main panel's collapsed affordance for the drawer trigger;
+// the drawer itself does not render a pre-dispatch preview.
 // -----------------------------------------------------------------------
 
 /** Is this tool_use a `dispatch_subagent` invocation? */
@@ -325,7 +297,7 @@ const workerSummaryPreview = computed<string>(() => {
   // Fall back to the tool_result content (which carries the
   // `[status: ...]` prefix from `format_dispatch_result`).
   if (props.result) {
-    const display = extractToolResultDisplay(props.result.content);
+    const display = displayContent.value ?? props.result.content;
     return display.length > 200 ? display.slice(0, 200) + "…" : display;
   }
   return "";
@@ -482,46 +454,28 @@ watch(
       backend is asking about, render the approval actions inline
       (replaces the removed global <PermissionModal>). Only shows
       while there's no result yet (isPendingApproval).
-    -->
-    <div
-      v-if="isPendingApproval && pendingAsk"
-      class="tool-card__approval"
-    >
-      <div class="tool-card__approval-head">
-        <span
-          class="tool-card__approval-dot"
-          :style="{ background: riskMeta?.iconColor }"
-        ></span>
-        <span class="tool-card__approval-title">需要权限</span>
-        <span class="tool-card__approval-risk">风险: {{ RISK_LABEL_CN[pendingAsk.risk] }}</span>
-      </div>
-      <p v-if="pendingAsk.reason" class="tool-card__approval-reason">{{ pendingAsk.reason }}</p>
-      <div v-if="pendingAsk.path" class="tool-card__approval-path">
-        <code>{{ pendingAsk.path }}</code>
-        <span
-          class="tool-card__approval-badge"
-          :style="{ color: pathBadgeColor, borderColor: pathBadgeColor }"
-        >{{ pathBadgeText }}</span>
-      </div>
 
-      <div v-if="showFeedback" class="tool-card__approval-feedback">
-        <textarea
-          v-model="feedback"
-          class="tool-card__approval-textarea"
-          rows="2"
-          placeholder="告诉 agent 为什么拒绝 / 该怎么做（可选）"
-        ></textarea>
-        <div class="tool-card__approval-feedback-actions">
-          <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="submitDenyFeedback">提交拒绝</button>
-          <button type="button" class="tool-card__approval-btn" @click="cancelFeedback">取消</button>
-        </div>
-      </div>
-      <div v-else class="tool-card__approval-actions">
-        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--once" @click="respondApproval('allow_once')">仅一次</button>
-        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--always" @click="respondApproval('allow_always')">始终允许</button>
-        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="respondApproval('deny')">拒绝</button>
-        <button type="button" class="tool-card__approval-btn tool-card__approval-btn--deny" @click="showFeedback = true">拒绝并说明</button>
-      </div>
+      FT-F-001 PR1: the inline block has been extracted into
+      `<PermissionAskBody>`. `repoRoot` is passed so the body can
+      compute the in-repo / out-of-repo badge using
+      `chatStore.currentCwd` (which IS the asking session's cwd —
+      see the cross-session cwd mix-up fix from 2026-06-16).
+
+      The outer `.tool-card__approval` wrapper class is preserved
+      for behavioral parity with the pre-extraction layout — the
+      existing `ToolCallCard.test.ts` tests check for this class
+      to detect "approval UI present / absent" (lock against
+      regressions where the body fails to mount). The wrapper
+      carries no visual styling itself; the body renders its own
+      scoped CSS.
+    -->
+    <div v-if="isPendingApproval && pendingAsk" class="tool-card__approval">
+      <PermissionAskBody
+        mode="interactive"
+        :ask="pendingAsk"
+        :on-respond="respondApproval"
+        :repo-root="chatStore.currentCwd"
+      />
     </div>
 
     <!--
@@ -530,6 +484,9 @@ watch(
       AND suppress the default input/output <details> (the user clicks
       the card to open the drawer instead). The clickable affordance
       is on the root .tool-card element (see template @click).
+
+      FT-F-001 PR1 (D1): stays inline. Drawer doesn't need a
+      pre-dispatch preview.
     -->
     <div
       v-if="isDispatchSubagent"
@@ -555,6 +512,8 @@ watch(
       when the user clicks the diff button. The popover is inline
       (not floating) so it scrolls with the message list; for long
       diffs the inner DiffView scrolls its own body.
+
+      FT-F-001 PR1 (D6): stays inline. Drawer doesn't render diffs.
     -->
     <div v-if="fileDiffOpen && showDiffButton" class="tool-card__diff">
       <div v-if="fileDiffLoading" class="tool-card__diff-loading">
@@ -575,15 +534,24 @@ watch(
       </div>
     </div>
 
-    <details v-if="!isDispatchSubagent && call.input && Object.keys(call.input).length" class="tool-card__details">
-      <summary>input</summary>
-      <pre class="tool-card__pre tool-card__pre--input">{{ formatToolInput(call) }}</pre>
-    </details>
-
-    <details v-if="!isDispatchSubagent && result" class="tool-card__details tool-card__details--output">
-      <summary>output · {{ outputSize }}</summary>
-      <pre class="tool-card__pre tool-card__pre--output">{{ truncateOutput(displayContent ?? result.content) }}</pre>
-    </details>
+    <!--
+      FT-F-001 PR1: input/output bodies are now shared components.
+      `<ToolInputBody>` auto-renders an empty-input gated block
+      (the body's `<details>` is the only element; empty input is
+      handled at the call site to match the old `Object.keys(...).length`
+      gate that suppressed the empty `<details>`).
+    -->
+    <ToolInputBody
+      v-if="!isDispatchSubagent && call.input && Object.keys(call.input).length > 0"
+      :name="call.name"
+      :input="call.input"
+    />
+    <ToolOutputBody
+      v-if="!isDispatchSubagent && result"
+      :content="result.content"
+      :is-error="result.isError"
+      :duration-ms="result.durationMs"
+    />
   </div>
 </template>
 
@@ -705,55 +673,6 @@ watch(
   color: var(--color-tool-error);
 }
 
-.tool-card__details {
-  margin-top: 6px;
-}
-
-.tool-card__details summary {
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  user-select: none;
-  list-style: none;
-}
-
-.tool-card__details summary::-webkit-details-marker {
-  display: none;
-}
-
-.tool-card__details summary::before {
-  content: "▸ ";
-  color: var(--color-text-muted);
-}
-
-.tool-card__details[open] summary::before {
-  content: "▾ ";
-}
-
-.tool-card__details summary:hover {
-  color: var(--color-text-primary);
-}
-
-.tool-card__details--output {
-  margin-top: 6px;
-}
-
-.tool-card__pre {
-  margin: 0;
-  padding: 6px 8px;
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--color-text-primary);
-  font-family: var(--font-mono);
-}
-
 /* Step 4 / PR3: per-file diff button + popover inside the
  * tool card. The button sits in the header status row; the
  * popover replaces the regular card body when open. */
@@ -799,128 +718,6 @@ watch(
 
 .tool-card__diff-error {
   color: var(--color-tool-error);
-}
-
-/* 2026-06-16 inline approval UI (replaces the global PermissionModal). */
-.tool-card__approval {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: var(--color-bg-app);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tool-card__approval-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.tool-card__approval-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.tool-card__approval-title {
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.tool-card__approval-risk {
-  color: var(--color-text-muted);
-}
-
-.tool-card__approval-reason {
-  margin: 0;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--color-text-muted);
-  line-height: 1.4;
-}
-
-.tool-card__approval-path {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.tool-card__approval-path code {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-
-.tool-card__approval-badge {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border: 1px solid;
-  border-radius: 999px;
-  font-family: var(--font-sans);
-  font-size: 10px;
-  line-height: 1.4;
-  background: color-mix(in srgb, currentColor 12%, transparent);
-}
-
-.tool-card__approval-actions,
-.tool-card__approval-feedback-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.tool-card__approval-btn {
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  transition: filter 0.1s;
-}
-
-.tool-card__approval-btn:hover {
-  filter: brightness(1.08);
-}
-
-.tool-card__approval-btn--always {
-  background: var(--color-accent);
-  color: #ffffff;
-  border-color: var(--color-accent);
-}
-
-.tool-card__approval-btn--deny {
-  color: var(--color-tool-error);
-  border-color: var(--color-tool-error);
-}
-
-.tool-card__approval-textarea {
-  width: 100%;
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  padding: 4px 6px;
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  resize: vertical;
 }
 
 /* B6 PR3: dispatch_subagent collapsed card → click opens drawer.
