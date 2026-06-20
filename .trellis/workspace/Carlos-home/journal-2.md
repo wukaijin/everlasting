@@ -444,3 +444,37 @@ B6 Subagent PR1 完整收尾。Phase 1: brainstorm + 业界 subagent 调研(Clau
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: B6 Subagent PR2: subagent_runs 持久化 + RULE-A-014/015 闭环
+
+**Date**: 2026-06-20
+**Task**: B6 Subagent PR2: subagent_runs 持久化 + RULE-A-014/015 闭环
+**Branch**: `main`
+
+### Summary
+
+B6 Subagent PR2 完整收尾。Phase 1: brainstorm 4 决策(RULE-A-014 顺手修 / 4 MiB transcript cap / final_text 纯文本 / streaming 累加)。Phase 2: PR2a 后端持久化核心(subagent_runs migration + db::subagent_runs 407 行模块 5 API + run_subagent 接入 + SubagentBufferSink 4 MiB cap + per-turn TokenUsage accumulator + 11 测试,725 pass) + PR2b RULE-A-014 修复(run_chat_loop 第 21 参 is_worker: Option<bool> + 35 调用点更新 + 端到端 general_purpose_plan_mode_write_denied 测试 + 删 PR1b dead-code _worker_permission_ctx,726 pass)。PR2a 顺手修 PR1 PR1b over-broad skip_persist gate bug (RULE-A-015, terminal Done emit + add_token_usage 拆出 18→16 gate)。DEBT.md 状态: RULE-A-014 closed (PR2b is_worker threading) + RULE-A-015 closed (PR2a over-broad gate) + 新增 RULE-A-016 open (worker ask_path audit pollution 留 ~5 行 fix follow-up)。Phase 3: trellis-check PASS + spec 沉淀 6 项(tool-contract.md 新 Scenario subagent_runs persistence 8 sections / agent-loop-architecture.md 21-param + 新 Pattern RULE-A-015 + DEBT 链接 / database-guidelines.md 新 subagent_runs 段 / index.md 3 行 / subagent.rs:687 doc typo / chat_loop.rs:87-120 docstring 头注释 17→21-param) + 2 commits (40a6118 feat + caf8e3a docs)。后续 PR3 前端 ToolCallCard 展开 list_subagent_run + spec 沉淀 + RULE-A-016 follow-up。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `40a6118` | (see git log) |
+| `caf8e3a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
