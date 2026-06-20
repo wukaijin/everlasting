@@ -1078,3 +1078,56 @@ B6 PR3b race fix 已知缺口:ToolCallCard openSubagentDrawer 在 1.5s/5-retry p
   - llm-contract.md Future Work (Deferred from Step6) 1381-1392 — 评估是否已过期可删
   - 4 处 pre-existing 断链 (IMPLEMENTATION.md / archive 子目录历史链接)
 - 用户回 review 后决定是否展开上面 3 个后续
+
+
+## Session 56: doc-cleanup-2026-06: ⑨ 关合并 + Future Work 状态 + pre-existing 断链修复
+
+**Date**: 2026-06-21
+**Task**: doc-cleanup-2026-06: ⑨ 关合并 + Future Work 状态 + pre-existing 断链修复
+**Branch**: `main`
+
+### Summary
+
+doc-trim-2026-06 任务 (Session 55) 留下 3 个 known leftover,本次任务合并处理:R1 删 tool-contract.md ⑨ 关段 (~350L),保留 permission-layer.md 作为 canonical;R2 确认 llm-contract.md Future Work (Deferred from Step6) 已被 doc-trim 自动清理,无操作;R3 修复 5 文件 11 处 pre-existing 断链(实际 11 处 markdown link,非 link 文本不计;原 trellis-check 报告 4 处,本次发现实有 5 处)。
+
+### Main Changes
+
+**R1 ⑨ 关合并**:
+- tool-contract.md 1964→1617 (-347): 删 "Scenario: ⑨ 关 Permission Decision Layer (A2+B7 PR1)" + "Scenario: Path-based Permission Layer (A2+B7 re-grill)" 两段
+- 头部标题去 "+ ⑨ 关",加 cross-ref `**⑨ 关 Permission Layer 设计合约**: [permission-layer.md](./permission-layer.md)`
+- permission-layer.md (289L) 不动,作为 ⑨ 关 canonical
+
+**R2 Future Work 状态** (无文件操作):
+- 确认 doc-trim 任务已自动清理 llm-contract.md "Future Work (Deferred from Step6)" 段
+- 本任务不二次操作
+
+**R3 断链修复** (4 文件 11 处 markdown link):
+- `docs/IMPLEMENTATION.md:383` 加 `archive/2026-06/` 路径段
+- `docs/IMPLEMENTATION.md:429` 去掉 `../` 前缀 (skill-system-survey.md)
+- `docs/IMPLEMENTATION.md:656` 加 `archive/2026-06/` 路径段
+- `docs/IMPLEMENTATION.md:739/740/741` (3 处) 去掉 `../` 前缀 (FOLLOW-UP.md)
+- `.trellis/spec/archive/implementation-inception-2026-06-04-to-05.md` (5 个 markdown link): `./ARCHITECTURE.md` / `./BACKLOG.md` 改 `../../../docs/...`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b4ef041` | chore(docs): cleanup ⑨ 关 overlap + 5 pre-existing broken links |
+
+### Testing
+
+- [OK] trellis-check PASS 20/20 (⑨ 关段已删 / 头部 cross-ref / 7 个目标文件存在 / 零副作用)
+- [OK] post-fix grep: `grep -E "\(\./(ARCHITECTURE|BACKLOG)\.md\)" archive/...md` 空,所有 link 已修
+- [OK] post-fix grep: `grep -E "\(\.\./\.\./\.trellis/tasks/[0-9]" IMPLEMENTATION.md` 空,无 archive/ 缺失的旧任务路径
+- [OK] rowcount: tool-contract.md 1617 (-347), IMPLEMENTATION.md 741 (不变), archive 60 (不变), permission-layer.md 289 (不变)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 已知问题 (后续任务评估):
+  - 7+ 个 >600 行 markdown 文件已瘦身,本次 doc-trim + cleanup 共减 ~3450 行;还有 ARCHITECTURE.md (856L) / popover-pattern.md (854L) / reka-ui-usage.md (834L) / state-management.md (776L) / worktree-contract.md (714L) / memory.md (708L) / workflow.md (690L) 7 篇保持现状 — 若以后需进一步瘦身可独立 task
+  - DEBT.md 9 项 open 仍是债项,需独立 task 关闭 RULE-D-001 (API key 加密) 等
+- 用户决定是否启动上述后续任务
