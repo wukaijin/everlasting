@@ -880,16 +880,18 @@
 - **Files**: `app/src/components/chat/SubagentDrawer.vue`(681 行,改动预计 < 50 行)
 - **Description**: 4 项独立小 UX 优化打包:C1 宽度 480px → 640px + `<pre>` `word-break: break-all` → `overflow-x: auto`;C2 头部 finishedAt ISO8601 字符串 → `HH:MM:SS`(`formatTime` helper);C3 顶部 status badge 旁加 `N events` 计数 + 勾 chat events 时 `+ N chat`;C5 底部 scroll 渐变提示(`mask-image: linear-gradient` 仅 overflow 时生效,无 JS)
 - **前置依赖(无)**:可独立 PR;每项 ~10-30 行改动;4 项可 1 bundle PR 或 4 micro-PR
-- **Status**: open
+- **Status**: **closed (2026-06-21)**
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-ux-polish/`
-- **Decisions to revisit**:
-  - C1 宽度具体值:560 / 600 / 640(推荐 640)
-  - C2 时间格式:`HH:MM:SS` 绝对 vs `X 分钟前` 相对
-  - C3 计数 vs 进度条
-  - C5 渐变方向:仅底部 vs 上下都有
-  - 打包 vs 拆 PR 策略
-- **Why deferred**:
+- **Closed At**: `9e41594` (commit hash)
+- **Closure Note**:2026-06-21 Session 54 grill 拷问 5 Open Questions + 1 prd 过时点后,4 项收窄为 3 项(C5 drop)。**C1** 只加宽 480→640px,drop overflow-x —— prd 要改的那个 `<pre>` 早被 FT-F-001 typed-cards 删了(prd 过时),且 break-all 对无空格 path 正确,改共享 ToolInputBody/OutputBody 会扩 blast radius 到主区 ToolCallCard。**C2** 开始+结束双时刻都留 + 本地时区 HH:MM:SS(`utils/time.ts` formatTime,`new Date(iso)` 转 local 不截 UTC 字符串避 ~8h drift)+ 两时刻都用已有 `clock` icon(零 registry 改动)。**C3** filter-row toggle 旁纯数字 `N events`(= visibleTranscript.length)+ 未勾时 `· +X chat hidden`(修正 prd 反向的副计数方向)+ drop 进度条(M 流式未知=完成度误导)。**C5 drop** —— mask 不判断 overflow(CSS mask 总在,短内容边缘被错误淡)+ 底部 mask 淡化 "↓ N new" sticky 浮钮 + drawer 已有 autoFollow/浮钮/jump 动态提示,mask 冗余。打包 1 bundle PR(3 项单文件同源)。+ utils/time.test.ts(6) + SubagentDrawer.test.ts(+3)。288/288 pass,vue-tsc 0 error。
+- **Decisions resolved**(原 Decisions to revisit):
+  - C1 宽度:640(prd 推荐 + grill Q1 隐含)
+  - C2 时间格式:本地 HH:MM:SS 绝对(drop 相对;与 badge 持续时长 suffix 互补不冗余)
+  - C3:纯数字 + 修正副计数方向(drop 进度条)
+  - C5:drop 整项
+  - 打包:1 bundle PR
+- **Why deferred**(历史):
   - PR3b 已是 race fix + 3 polish 范围,加这 4 项 → scope 爆
   - 缺真实使用反馈(2026-06-20 第一次截图,4 个问题 review 阶段没人提)
   - 独立小改可独立 PR
@@ -1048,5 +1050,5 @@
 
 ---
 
-**最后更新**: 2026-06-20 by carlos — Session 53:**FT-F-003 closed**(`272fbe9`)— `workerWaiting` ref unmount 清理:retry while loop(await setTimeout)加 unmounted flag 守卫(8 处,每个 await 后 + 副作用前);原稿方案 A(clearTimeout)基于错误假设(实际是 await loop 无 timer id),Session 53 重选 unmounted flag。279 pass,vue-tsc 0 error。同 session 前序:FT-F-001 完整 closed(`6bb5060`)+ cross-layer serde drift trap 沉淀(`42daa3b`)。剩余同源 follow-up:FT-F-002(toast fallback)/ FT-F-004(UX polish bundle)。
+**最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-004 closed**(`9e41594`)— SubagentDrawer UX polish bundle:grill(2026-06-21)拷问 5 Open Questions + 1 prd 过时点后,4 项收窄为 3 项(C5 drop)。C1 加宽 480→640px(drop overflow-x —— break-all 对无空格 path 正确,且 prd 要改的那个 `<pre>` 已被 FT-F-001 typed-cards 删);C2 开始+结束双时刻本地 HH:MM:SS(`utils/time.ts` formatTime,`new Date(iso)` 转 local 不截 UTC 避 ~8h drift)+ clock icon;C3 filter-row 纯数字 N events + 未勾 `+X chat hidden`(修正 prd 反向副计数方向)+ drop 进度条(M 流式未知)。C5 drop(mask 不判断 overflow + 淡化 "↓ N new" sticky 浮钮 + drawer 已有 autoFollow/浮钮/jump 动态提示)。288 pass,vue-tsc 0 error。剩余同源 follow-up:FT-F-002(toast fallback)。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
