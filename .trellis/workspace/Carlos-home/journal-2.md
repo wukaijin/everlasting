@@ -887,3 +887,38 @@ FT-F-001 硬前置 — 从 ToolCallCard.vue (995 行) 抽出 3 个 shared body c
 ### Next Steps
 
 - None - task complete
+
+
+## Session 51: Session 53: FT-F-001 阶段 2 — SubagentDrawer typed-cards 重做
+
+**Date**: 2026-06-20
+**Task**: Session 53: FT-F-001 阶段 2 — SubagentDrawer typed-cards 重做
+**Branch**: `main`
+
+### Summary
+
+FT-F-001 阶段 2 — SubagentDrawer 统一 JSON payload 渲染改为按 TranscriptKind 路由 typed-cards。复用 PR1(9b685c8)的 3 shared body(ToolInputBody/ToolOutputBody/PermissionAskBody)+ 新做 WorkerTextTimeline(chat_event start/done lifecycle,不显示 token)。drawer 加 synthesizeAsk helper(snake_case/camelCase 双读)+ chatStore.currentCwd 作 PermissionAskBody repoRoot。0 改动 PR1 body/后端/stores(只读 chat.ts)。278 pass(基线 272 + 6),vue-tsc 0 error。trellis-check 抓出严重跨层 bug:synthesizeAsk 原读 snake_case 但 PermissionAskPayload 带 #[serde(rename_all=camelCase)] 实存 camelCase,不修则 worker 权限卡片空白;已修(双读+lock test)+ 沉淀进 cross-layer-thinking-guide.md 'Consuming Untyped Rust-serde JSON in TS' 节(42daa3b)。FT-F-001 主线全部 closed(PR1 9b685c8 + stage 2 6bb5060)。prd sync PR1 实际结果:组件名/props/AC3(无denied)/AC5(body一致outer各自管)/AC9(基线272)/payload字段表/repoRoot=currentCwd决策。剩余同源 follow-up:FT-F-002/003/004(独立 task)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6bb5060` | (see git log) |
+| `42daa3b` | (see git log) |
+| `27ae574` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
