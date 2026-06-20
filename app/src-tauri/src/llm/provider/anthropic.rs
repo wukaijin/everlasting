@@ -628,46 +628,56 @@ impl AnthropicProvider {
 }
 
 /// DeepSeek-Via-Anthropic-Relay (wukaijin.com passthrough) thinking
-/// block fix (task 06-20-deepseek-reasoner-reasoning-content-400).
+/// block fix (task 06-20-deepseek-reasoner-reasoning-content-400 +
+/// follow-up 06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400).
 ///
 /// Background: the wukaijin.com relay does a thin passthrough of
-/// Anthropic's `/v1/messages` schema to DeepSeek V4. DeepSeek V4's
-/// thinking mode contract requires every assistant message to carry a
-/// top-level `reasoning_content` field (sibling of `content`) — the
-/// Anthropic-shaped `thinking` block + `signature` blob alone is not
-/// enough; the relay's accumulated-state check surfaces as a 400 with
-/// the message `"The reasoning_content in the thinking mode must be
-/// passed back to the API."`.
+/// Anthropic's `/v1/messages` schema to DeepSeek V4. The relay's
+/// thinking-mode contract (verified via V1/V2/V3 probe experiments
+/// against the real relay, see prd of
+/// `06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400`)
+/// is:
 ///
-/// This helper applies two surgical patches to the Anthropic-shaped
-/// request body so the same wire payload is also DeepSeek-Via-relay-
-/// friendly, while staying invisible to the native Anthropic API
-/// (which ignores unknown top-level fields on assistant messages):
+/// | assistant shape returned on next turn               | relay response |
+/// | --------------------------------------------------- | -------------- |
+/// | `content[].thinking` blocks dropped                | 400 `content[].thinking must be passed back` |
+/// | `content[].thinking` blocks kept, NO `reasoning_content` | 400 `reasoning_content must be passed back` |
+/// | `content[].thinking` blocks kept, WITH `reasoning_content` | **200 ✅** |
 ///
-/// 1. **Filter empty-signature thinking blocks** — drop any
-///    `{"type":"thinking","signature":""}` block from each
-///    assistant message's `content[]`. Empty signatures are opaque to
-///    DeepSeek (the relay can't map them back to reasoning content)
-///    and they inflate the relay's accumulated-state count, which
-///    was one of the failure modes observed in production (3 of 4
-///    DeepSeek sessions hit 400; the surviving session's earlier
-///    turns had empty signatures that the relay didn't trip on, but
-///    later turns did).
+/// In other words the relay requires **both** `content[].thinking`
+/// blocks **and** a top-level `reasoning_content` field, and the
+/// signature is NOT cryptographically verified (empty-signature
+/// blocks are accepted by the relay). The original task 06-20 fix
+/// dropped empty-signature thinking blocks (an unverified attribution
+/// — "empty sig inflates the relay's accumulated-state count" — that
+/// turned out to be wrong on real-relay probing) and that drop
+/// produced the new turn-2 400 `content[].thinking must be passed
+/// back`.
 ///
-/// 2. **Lift `reasoning_content` from non-empty thinking blocks** —
-///    for each assistant message that has at least one
-///    **non-empty-signature** `thinking` block, add a top-level
-///    `reasoning_content` string field whose value is the
-///    concatenation of those blocks' `thinking` text (joined by
-///    `\n`). The relay extracts `reasoning_content` to feed
-///    DeepSeek V4's per-turn contract.
+/// The corrected contract is: keep every `thinking` block verbatim
+/// (empty-signature or not), AND lift a top-level `reasoning_content`
+/// field on assistant messages whose collected `thinking` text is
+/// non-empty.
+///
+/// This helper applies that single surgical patch to the
+/// Anthropic-shaped request body so the same wire payload is also
+/// DeepSeek-Via-relay-friendly, while staying invisible to the native
+/// Anthropic API (which ignores unknown top-level fields on assistant
+/// messages):
+///
+/// **Lift `reasoning_content` from every thinking block** — for each
+/// assistant message that has at least one `thinking` block whose
+/// `thinking` text is non-empty, add a top-level `reasoning_content`
+/// string field whose value is the concatenation of **all** thinking
+/// blocks' `thinking` text (joined by `\n`). Empty-signature blocks
+/// contribute their text too (the relay doesn't verify signatures,
+/// and dropping them was the turn-2 regression).
 ///
 /// Native Anthropic Claude path stays 1:1 with the pre-fix body in
-/// all observable ways: the `thinking` blocks with non-empty
-/// signatures are preserved verbatim, the top-level `thinking:
-/// adaptive` field is untouched (Claude extended thinking needs it),
-/// and the only added field on assistant messages is
-/// `reasoning_content`, which Anthropic ignores.
+/// all observable ways: every `thinking` block is preserved verbatim,
+/// the top-level `thinking: adaptive` field is untouched (Claude
+/// extended thinking needs it), and the only added field on assistant
+/// messages is `reasoning_content`, which Anthropic ignores.
 ///
 /// Pure function: takes a borrowed [`ChatRequest`], returns the
 /// transformed [`serde_json::Value`] body. No IO, no allocation
@@ -697,29 +707,14 @@ pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Val
             Some(a) => a,
             None => continue,
         };
-        // (B) Filter empty-signature thinking blocks. Retain the rest
-        // (text, tool_use, thinking-with-non-empty-signature,
-        // redacted_thinking). `retain` mutates in place; ordering of
-        // the surviving blocks is preserved so any tool_use/text
-        // interleaving the model produced is intact.
-        arr.retain(|block| {
-            if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
-                let sig = block
-                    .get("signature")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                // Drop iff signature is the empty string. A missing
-                // signature (the `unwrap_or("")` above) is treated the
-                // same as an empty signature — both contribute no
-                // usable signal to the relay.
-                !sig.is_empty()
-            } else {
-                true
-            }
-        });
-        // (A) Collect the `thinking` text of all surviving
-        // non-empty-signature thinking blocks. We iterate AFTER
-        // retain so dropped blocks don't contribute to the buffer.
+        // (A) Collect the `thinking` text of ALL thinking blocks —
+        // empty-signature blocks INCLUDED. The wukaijin relay requires
+        // `content[].thinking` blocks AND a top-level `reasoning_content`
+        // field together (verified by V1/V2/V3 probe experiments; see
+        // the task 06-21 prd for the table). Dropping empty-signature
+        // blocks was the turn-2 regression root cause and must NOT
+        // return. The signature is not cryptographically verified by
+        // the relay, so an empty signature is not a drop signal.
         let mut reasoning_buf = String::new();
         for block in arr.iter() {
             if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
@@ -732,13 +727,15 @@ pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Val
             }
         }
         // Only attach `reasoning_content` when we actually have
-        // non-empty reasoning text to attach. A message whose only
-        // thinking blocks were dropped (or a message with zero
-        // thinking blocks in the first place) must NOT gain a
-        // `reasoning_content: ""` field — the relay's
-        // reasoning-mode contract treats that as a sentinel that
-        // mismatches the actual content shape, so we omit the field
-        // entirely.
+        // non-empty reasoning text to attach. A message with zero
+        // thinking blocks (pure text + tool_use) must NOT gain a
+        // `reasoning_content: ""` field — that would be a sentinel
+        // the relay would mismatch against the actual content shape,
+        // so we omit the field entirely. Assistant messages that DO
+        // carry thinking blocks always get the field (their collected
+        // text is non-empty by construction unless every block had an
+        // empty `thinking` string, in which case there's still nothing
+        // useful to lift).
         if !reasoning_buf.is_empty() {
             msg["reasoning_content"] = serde_json::Value::String(reasoning_buf);
         }
@@ -1116,27 +1113,38 @@ mod tests {
 
     // -----------------------------------------------------------------
     // DeepSeek-Via-Anthropic-Relay reasoning_content fix
-    // (task 06-20-deepseek-reasoner-reasoning-content-400)
+    // (task 06-20-deepseek-reasoner-reasoning-content-400 +
+    // follow-up 06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400)
     //
     // These tests pin the contract of `apply_deepseek_reasoning_fix`:
     //
-    //   (A) For assistant messages with at least one
-    //       non-empty-signature thinking block, add a top-level
+    //   (A) For assistant messages with at least one thinking block
+    //       whose `thinking` text is non-empty, add a top-level
     //       `reasoning_content` field whose value is the concatenation
-    //       of those blocks' `thinking` text (joined by `\n`).
-    //   (B) Drop `{"type":"thinking","signature":""}` blocks from
-    //       every assistant message's `content[]`.
+    //       of ALL thinking blocks' `thinking` text (joined by `\n`).
+    //       Empty-signature blocks contribute their text too.
+    //
+    // The fix does NOT drop any thinking blocks. The previous
+    // 06-20 implementation had a (B) "drop empty-signature thinking
+    // blocks" step; that was based on an unverified attribution
+    // ("empty sig inflates the relay's accumulated-state count")
+    // that turned out to be WRONG on real-relay probing — the
+    // wukaijin relay requires `content[].thinking` blocks AND a
+    // top-level `reasoning_content` field TOGETHER (signatures not
+    // verified), so dropping blocks triggered a new turn-2 400
+    // (`content[].thinking must be passed back`). See
+    // `deepseek_relay_contract_v1_v2_v3` for the pinned contract.
     //
     // User messages and tool result messages are NOT touched. The
     // top-level `thinking: adaptive` field on the request body is NOT
     // touched (Claude extended thinking depends on it). Messages with
-    // no thinking blocks or only empty-signature thinking blocks do
-    // NOT gain a `reasoning_content` field (it's only added when the
-    // collected reasoning text is non-empty).
+    // no thinking blocks (pure text + tool_use) do NOT gain a
+    // `reasoning_content` field (the collected buffer is empty and
+    // an empty `reasoning_content: ""` would mismatch the relay's
+    // content-shape contract, so the field is omitted entirely).
     //
-    // See `.trellis/tasks/06-20-deepseek-reasoner-reasoning-content-400/prd.md`
-    // for the rationale and the R1-R4 requirements this contract
-    // implements.
+    // See `.trellis/tasks/06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400/prd.md`
+    // for the V1/V2/V3 probe evidence and the corrected rationale.
     // -----------------------------------------------------------------
 
     /// Helper: build a `ChatRequest` from a list of message JSON
@@ -1167,45 +1175,57 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_reasoning_fix_removes_empty_sig_thinking_blocks() {
-        // (B) — An assistant message that has both an empty-signature
-        // thinking block and a non-empty-signature thinking block
-        // must drop the empty one and keep the rest. The empty
-        // block's `thinking` text is also lost (intentional — empty
-        // sig is opaque and the relay can't extract anything useful
-        // from it; we don't want to feed an empty reasoning_content
-        // field that mismatches the actual content shape).
+    fn deepseek_reasoning_fix_keeps_empty_sig_and_lifts_reasoning_content() {
+        // An assistant message with both an empty-signature thinking
+        // block and a non-empty-signature thinking block must KEEP
+        // BOTH blocks verbatim (the relay does not verify signatures)
+        // AND lift a top-level `reasoning_content` whose value is the
+        // `\n`-join of ALL thinking blocks' text.
+        //
+        // This is the corrected contract: the previous 06-20 fix
+        // DROPPED empty-signature blocks, which the wukaijin relay
+        // rejects as `content[].thinking must be passed back` on the
+        // next turn. Empty signatures are produced by the relay
+        // itself in streaming mode (it does not emit
+        // `signature_delta`), so persistence will land empty
+        // signatures and the fix must round-trip them intact.
         let req = chat_request_with_messages(vec![serde_json::json!({
             "role": "assistant",
             "content": [
-                {"type": "thinking", "thinking": "drop me", "signature": ""},
-                {"type": "thinking", "thinking": "keep me", "signature": "uuid-sig-abc"},
+                {"type": "thinking", "thinking": "empty sig thinking", "signature": ""},
+                {"type": "thinking", "thinking": "uuid sig thinking", "signature": "uuid-sig-abc"},
                 {"type": "text", "text": "visible answer"}
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
         let content = body["messages"][0]["content"].as_array().expect("content array");
-        // 2 surviving blocks (1 thinking-with-sig + 1 text), not 3.
-        assert_eq!(content.len(), 2);
+        // ALL 3 blocks survive (2 thinking + 1 text). No drops.
+        assert_eq!(content.len(), 3);
         assert_eq!(content[0]["type"], "thinking");
-        assert_eq!(content[0]["signature"], "uuid-sig-abc");
-        assert_eq!(content[0]["thinking"], "keep me");
-        assert_eq!(content[1]["type"], "text");
-        assert_eq!(content[1]["text"], "visible answer");
-        // reasoning_content carries only the surviving block's text.
+        assert_eq!(content[0]["signature"], "");
+        assert_eq!(content[0]["thinking"], "empty sig thinking");
+        assert_eq!(content[1]["type"], "thinking");
+        assert_eq!(content[1]["signature"], "uuid-sig-abc");
+        assert_eq!(content[1]["thinking"], "uuid sig thinking");
+        assert_eq!(content[2]["type"], "text");
+        assert_eq!(content[2]["text"], "visible answer");
+        // reasoning_content carries the text of ALL thinking blocks
+        // (empty-sig block included), joined by `\n`.
         assert_eq!(
             body["messages"][0]["reasoning_content"],
-            serde_json::Value::String("keep me".to_string())
+            serde_json::Value::String("empty sig thinking\nuuid sig thinking".to_string())
         );
     }
 
     #[test]
-    fn deepseek_reasoning_fix_omits_reasoning_content_when_all_empty() {
-        // Edge case: an assistant message whose ONLY thinking
-        // blocks all have empty signatures. After step (B) there
-        // are zero thinking blocks left; step (A) collects nothing;
-        // the resulting `reasoning_content` must NOT be set (an
-        // empty string would mismatch the contract).
+    fn deepseek_reasoning_fix_keeps_all_empty_sig_and_lifts_reasoning_content() {
+        // An assistant message whose thinking blocks ALL have empty
+        // signatures must STILL keep them all and STILL lift a
+        // top-level `reasoning_content` whose value is the `\n`-join
+        // of all their text. The previous 06-20 behavior (drop empty
+        // blocks, omit `reasoning_content`) was wrong: the relay
+        // requires the blocks AND the field together, and accepts
+        // empty signatures without verification.
         let req = chat_request_with_messages(vec![serde_json::json!({
             "role": "assistant",
             "content": [
@@ -1216,14 +1236,102 @@ mod tests {
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
         let content = body["messages"][0]["content"].as_array().expect("content array");
-        // Both empty thinking blocks dropped; only the text block survives.
-        assert_eq!(content.len(), 1);
-        assert_eq!(content[0]["type"], "text");
-        // No reasoning_content field on the message.
+        // ALL 3 blocks survive — empty signatures are NOT a drop signal.
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["signature"], "");
+        assert_eq!(content[0]["thinking"], "empty 1");
+        assert_eq!(content[1]["type"], "thinking");
+        assert_eq!(content[1]["signature"], "");
+        assert_eq!(content[1]["thinking"], "empty 2");
+        assert_eq!(content[2]["type"], "text");
+        // reasoning_content = "\n"-join of all thinking blocks' text.
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("empty 1\nempty 2".to_string())
+        );
+    }
+
+    #[test]
+    fn deepseek_relay_contract_v1_v2_v3() {
+        // PIN TEST — this test exists specifically to prevent a
+        // future regression to "drop empty-signature thinking blocks"
+        // (the original 06-20 fix that caused the turn-2 400). The
+        // wukaijin.com relay's thinking-mode contract was verified
+        // against the real relay via V1/V2/V3 probe experiments
+        // (scripts `/tmp/ds_probe/v{1,2,3}*.json` in the task prd):
+        //
+        //   V1: drop `content[].thinking` blocks
+        //       → 400 "content[].thinking must be passed back"
+        //   V2: keep `content[].thinking` blocks + add `reasoning_content`
+        //       → 200 ✅
+        //   V3: keep `content[].thinking` blocks + NO `reasoning_content`
+        //       → 400 "reasoning_content must be passed back"
+        //
+        // Conclusion: the relay requires blocks AND `reasoning_content`
+        // TOGETHER, and does NOT cryptographically verify the
+        // `signature` field (empty signatures are accepted). The
+        // correct `apply_deepseek_reasoning_fix` output for any input
+        // containing thinking blocks is V2.
+        //
+        // See `.trellis/tasks/06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400/prd.md`
+        // for the V1/V2/V3 table and the DB evidence (session
+        // `863fda30-66a1-421d-bd91-0c3a6bb9b342` seq=1 assistant
+        // has `"signature": ""`).
+
+        // Turn-2 assistant shape (DeepSeek-via-relay, empty signatures
+        // because the relay's streaming mode doesn't emit
+        // `signature_delta` — this is the realistic input shape).
+        let turn2_assistant = serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "first reasoning", "signature": ""},
+                {"type": "text", "text": "answer"}
+            ]
+        });
+
+        // Sanity check what each V variant looks like relative to the
+        // input, then assert the fix produces V2.
+        let input = chat_request_with_messages(vec![turn2_assistant]);
+        let body = apply_deepseek_reasoning_fix(&input);
+        let content = body["messages"][0]["content"].as_array().expect("content array");
+
+        // V1 invariant: NOT this — would be `content.len() == 1` with
+        // only the text block. We assert against it explicitly.
+        assert_ne!(
+            content.len(),
+            1,
+            "V1 (drop thinking blocks) must NOT happen — relay 400s with 'content[].thinking must be passed back'"
+        );
+
+        // V2 (the contract): both thinking blocks AND
+        // `reasoning_content` present.
+        assert_eq!(
+            content.len(),
+            2,
+            "V2: all content blocks preserved (thinking + text)"
+        );
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["signature"], ""); // empty sig kept as-is
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(
+            body["messages"][0]["reasoning_content"],
+            serde_json::Value::String("first reasoning".to_string()),
+            "V2: reasoning_content must be present with the lifted thinking text"
+        );
+
+        // V3 invariant: NOT this — would be `content[].thinking` blocks
+        // present but no top-level `reasoning_content`. We assert the
+        // field is present (covered above) and assert a non-null value
+        // shape explicitly so a future edit that nulls it out trips
+        // here.
         assert!(
-            body["messages"][0].get("reasoning_content").is_none(),
-            "reasoning_content must be omitted when no non-empty thinking blocks survive: {:?}",
-            body["messages"][0]
+            body["messages"][0].get("reasoning_content").is_some(),
+            "V3 (blocks kept, no reasoning_content) must NOT happen — relay 400s with 'reasoning_content must be passed back'"
+        );
+        assert!(
+            body["messages"][0]["reasoning_content"].is_string(),
+            "reasoning_content must be a non-null string, not null/sentinel"
         );
     }
 

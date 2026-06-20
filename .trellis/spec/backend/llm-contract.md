@@ -174,6 +174,48 @@ Delta types observed: `text_delta`, `input_json_delta`, `thinking_delta`, `signa
 | `LLM_MAX_TOKENS` | no | `16384` | Was `1024` before step6. |
 | `LLM_THINKING_EFFORT` | no | `high` | Adaptive thinking effort. |
 
+#### Via-Relay (wukaijin.com / DeepSeek) thinking contract
+
+When the Anthropic `/v1/messages` endpoint is fronted by the **wukaijin.com**
+relay (upstream `deepseek-v4-flash`, and any other relay that streams thinking
+text WITHOUT a real `signature_delta`), the relay enforces a **stricter**
+contract than native Anthropic. On every assistant message echoed back in a
+later turn, BOTH are required:
+
+- `content[].thinking` blocks MUST be present — **even with an empty
+  `signature`** (the relay does NOT cryptographically verify signatures).
+- a top-level `reasoning_content` string field (sibling of `content`) MUST be
+  present, carrying the concatenated `thinking` text of that message.
+
+Drop either → `400`. Verified by V1/V2/V3 probe experiments against the real
+relay (task `06-21-fix-deepseek-relay-thinking-block-drop-causing-turn-2-400`):
+
+| assistant shape returned on the next turn | relay response |
+|---|---|
+| `content[].thinking` blocks **dropped** | 400 `content[].thinking in the thinking mode must be passed back` |
+| blocks kept, **NO** `reasoning_content` | 400 `reasoning_content in the thinking mode must be passed back` |
+| blocks kept **WITH** `reasoning_content` | **200 ✅** |
+
+`apply_deepseek_reasoning_fix` (`anthropic.rs`) enforces this on the send path,
+**unconditionally for every Anthropic request** (harmless to native Claude,
+which has non-empty signatures and ignores the unknown field): it keeps every
+`thinking` block verbatim and lifts a `reasoning_content` field from ALL
+thinking blocks (joined by `\n`), guarded so a thinking-less assistant message
+(text + tool_use only) gets no field.
+
+> **Why the relay streams empty signatures**: in **streaming** mode the
+> wukaijin relay does NOT emit `signature_delta`, so the persisted
+> `ContentBlock::Thinking` ends up with `signature: ""`. (Non-streaming
+> responses carry a placeholder uuid.) The fix MUST treat empty-signature
+> blocks as keepable — dropping them was the 06-20 regression root cause.
+
+> **LESSON — attribute relay/API behavior by probe experiment, NOT by
+> inference from production symptoms.** The 06-20 fix dropped empty-signature
+> blocks based on an unverified theory ("empty sig inflates the relay's
+> accumulated-state count"); real-relay V1/V2/V3 probing proved the theory
+> wrong and the drop produced the 06-21 turn-2 400. Run `/trellis:break-loop`
+> for the full analysis.
+
 ###4. Validation & Error Matrix
 
 | Condition | Result |
@@ -186,6 +228,8 @@ Delta types observed: `text_delta`, `input_json_delta`, `thinking_delta`, `signa
 | `redacted_thinking.data` is mutated or truncated | Anthropic returns400 on the next turn. Opaque — store as-is. |
 | `thinking` block appears after a `tool_use` block in history | Anthropic rejects the order. The rehydrate path emits thinking blocks FIRST. |
 | `content_block_start` for `thinking` arrives with non-empty `thinking`/`signature` fields | Treated as the initial buffer content (defensive — Anthropic today sends empty). |
+| Via wukaijin relay: assistant message echoed back WITHOUT `content[].thinking` blocks (e.g. empty-signature blocks dropped) | 400 `content[].thinking in the thinking mode must be passed back`. Fix: `apply_deepseek_reasoning_fix` keeps ALL thinking blocks (empty-signature OK). |
+| Via wukaijin relay: assistant message echoed back WITH thinking blocks but NO top-level `reasoning_content` | 400 `reasoning_content in the thinking mode must be passed back`. Fix: `apply_deepseek_reasoning_fix` lifts `reasoning_content` from all thinking blocks. |
 
 ###5. Good / Base / Bad Cases
 
@@ -260,6 +304,42 @@ Total backend suite:57 tests pass as of step6.
  thinking stream + `<details>` collapse + session switch round-trip.
 
 ###7. Wrong vs Correct
+
+#### Wrong: drop empty-signature thinking blocks for a relay model
+
+```rust
+// BAD (06-20 regression) — the wukaijin relay requires content[].thinking
+// blocks AND reasoning_content TOGETHER; dropping the block →
+// 400 "content[].thinking in the thinking mode must be passed back".
+arr.retain(|block| {
+    if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
+        !block.get("signature").and_then(|s| s.as_str()).unwrap_or("").is_empty()
+    } else {
+        true
+    }
+});
+```
+
+#### Correct: keep every thinking block + lift `reasoning_content`
+
+```rust
+// Keep ALL thinking blocks (empty-signature OK — the relay does NOT verify
+// signatures) and lift reasoning_content from every one of them.
+let mut reasoning_buf = String::new();
+for block in arr.iter() {
+    if block.get("type").and_then(|t| t.as_str()) == Some("thinking") {
+        if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
+            if !reasoning_buf.is_empty() {
+                reasoning_buf.push('\n');
+            }
+            reasoning_buf.push_str(text);
+        }
+    }
+}
+if !reasoning_buf.is_empty() {
+    msg["reasoning_content"] = serde_json::Value::String(reasoning_buf);
+}
+```
 
 #### Wrong: emit `SignatureDelta` per `signature_delta` SSE event
 
