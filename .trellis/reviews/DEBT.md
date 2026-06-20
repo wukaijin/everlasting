@@ -169,6 +169,51 @@
 
 ---
 
+### RULE-FrontSubagent-001 — `.tool-card` CSS 重复（SubagentDrawer vs ToolCallCard）
+
+- **Level**: P3
+- **Subsystem**: Frontend Subagent
+- **File**: `app/src/components/chat/SubagentDrawer.vue:1184-1316` + `app/src/components/chat/ToolCallCard.vue:641-756`
+- **Description**: SubagentDrawer 复制了 ToolCallCard 的全套 `.tool-card*` 规则（约 100 行）。项目用纯 CSS（非 SCSS / CSS Modules），无法用 @import 共享。Drawer.vue 注释里把这条重复作为"explicit 回退路径"承认。
+- **Impact**: 当前无功能影响；下一次 `.tool-card` 视觉约定扩展时需同步改两处。
+- **Fix**: 抽到 `app/src/style.css` 的全局工具类（不需要 SCSS），或在 `app/src/components/chat/_tool-card.scss` 抽出（需要引入 SCSS）。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: B6 PR3 check phase (2026-06-21, drawer entry tool-card style + transcript pairing PR)
+- **Related Task**: `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style`
+
+---
+
+### RULE-FrontSubagent-002 — `pairTranscript` third-param 隐式状态
+
+- **Level**: P3
+- **Subsystem**: Frontend Subagent
+- **File**: `app/src/utils/transcriptPairing.ts:128-218`
+- **Description**: `pairTranscript(entries, now, pendingFirstSeenAt)` 第三个参数既是输入（共享状态）又是输出（被 `.set` / `.delete`）。功能正确但签名隐式。
+- **Impact**: 调用方必须保持同一个 Map 引用跨调用才能让 timer 推进；新调用方容易踩坑（每次新建 Map → 永远 pending）。
+- **Fix**: 抽到 `useTranscriptPairing()` composable，返回 `{ pair, pendingMap }`，或把 Map 移到 module-level 单例。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: B6 PR3 check phase (2026-06-21)
+- **Related Task**: `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style`
+
+---
+
+### RULE-BackSubagent-001 — worker error 时 parent LLM 拿不到 partial transcript context
+
+- **Level**: P2
+- **Subsystem**: Backend Subagent
+- **File**: `app/src-tauri/src/agent/subagent.rs:999` (`format_dispatch_result`, Error arm)
+- **Description**: B6 review `docs/review/b6-subagent-assessment.md` §4 defect B——worker LLM stream error 后，parent LLM 只看到 `[status: error]\n<error text>`，不知道 worker 已经执行了哪些 tool_call（可能部分文件已落地）。Parent 无法做补偿性修复。
+- **Impact**: Worker 半成功半失败的场景下，parent agent 盲目重做或放弃，无法基于 worker 已落地的 edits 继续。
+- **Fix**: 在 `format_dispatch_result` Error 分支追加 worker 已执行的 `tool_call → tool_result` 摘要（每条 ~80 chars，总长 cap ~2 KiB）。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: B6 review (2026-06-20), defect B
+- **Related Task**: 未建（独立任务）
+
+---
+
 ## 优先级分布
 
 | Level | Count | 说明 |
