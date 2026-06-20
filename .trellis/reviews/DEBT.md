@@ -895,22 +895,14 @@
 
 - **Origin**: 2026-06-20 截图分析(Session 50)
 - **Subsystem**: Frontend (`SubagentDrawer` 失败态视觉)
-- **Files**: `app/src/components/chat/SubagentDrawer.vue`(改动 ~50 行)+ `app/src/components/chat/SubagentDrawer.test.ts`(+1 test)
+- **Files**: `app/src/components/chat/SubagentDrawer.vue`(bannerText computed + template + CSS,~+85 行 / -5 行)+ `app/src/components/chat/SubagentDrawer.test.ts`(+5 test)
 - **Description**: drawer 在 worker `failed` / `cancelled` 时缺独立 banner 显示**失败原因**(最后一次 tool error / cancelled-by-user / 后端错误)。现状只 status badge 颜色 + summary 字段,跟 running 状态视觉差异不够,用户读不到"为什么失败"。需前端消费后端 `SubagentRunRow.errorMessage` / `cancelledBy` 字段(待查后端 `agent/subagent.rs` 是否已存)。
 - **前置依赖(可能)**:后端 `SubagentRunRow` 字段确认 —— 如果 `errorMessage` / `cancelledBy` 未存,需先开后端小 task 落字段(本 task 不能独立完成)
-- **Status**: open
+- **Status**: **closed (2026-06-20)**
 - **Owner**: carlos
 - **Related Task**: `.trellis/tasks/06-20-06-20-frontend-subagent-drawer-failed-banner/`
-- **Decisions to revisit**:
-  - 后端字段确认(AI 必查 `app/src-tauri/src/agent/subagent.rs`)
-  - banner 形态:inline warning 横条 / 折叠 details / 复用主面板 dispatch_subagent error 视觉
-  - cancelled 状态要不要 banner
-  - banner 文案来源:直接显示后端 `errorMessage` 字段 vs 前端从最后 transcript entry 推
-  - banner 跟 status badge 视觉关系:替代 vs 共存
-- **Why deferred**:
-  - 截图 2026-06-20 第一次真实 use case 暴露,brainstorm 阶段不可见
-  - 跟主面板 dispatch_subagent 卡片红框 error 视觉**不对齐**(主面板清晰,drawer 弱),优先级比 C1-C5 高
-  - 独立小改,~50 行
+- **Closed At**: `586d4a5` (commit hash)
+- **Closure Note**:brainstorm 答完 5 项决定(后端无字段 / A inline 横条 / cancelled 也显 / summary 字段文案 / 共存 badge)。后端零改动 — 复用现有 `summary` 字段(backend `format_dispatch_result` Error arm 直接写错误文本)作为 banner 文案,cancelled 用通用 "Worker stopped by user" 文案(scheme 不记录 user/system,out of scope)。Banner 复用 statusDisplay.suffix 时长(同 B1 修复)+ Icon `warn` (ExclamationTriangleIcon 已在 registry)。5 新 test + 16 原有 test 全过(20/20)。
 - **Related FT (同次 session)**:FT-F-001 / FT-F-002 / FT-F-003 / FT-F-004
 - **Related bug**:
   - B1(drawer 头部 "failed at 14281.9s" 数错,独立 hotfix,**不属本 task**)
