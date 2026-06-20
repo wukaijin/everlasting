@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "C1 width / C2 clock icon 颜色 / C3 计数 span 样式必须用 --color-* token,禁止硬编码 hex(项目硬约束)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "drawer 是 reka-ui Dialog primitive 组合,改 header meta 行 / filter-row 需遵守 portal + scoped styling 规则(DialogContent portal 到 body)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "C2 formatTime helper 决策:drawer 专用 inline 还是抽 utils/(现有 utils/duration.ts abbreviateDuration 是同模式参考)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend spec 索引 + pre-dev checklist,确认 C1/C2/C3 不违反既有 frontend 约定"}
