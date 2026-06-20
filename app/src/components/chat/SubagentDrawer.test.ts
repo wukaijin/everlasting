@@ -67,6 +67,14 @@ function makeDrawer() {
 describe("SubagentDrawer", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    // vue-test-utils + reka-ui Teleport quirk: `w.unmount()` removes
+    // the component root, but the dialog content (portaled to body
+    // via `DialogContent`) sometimes stays attached, leaking into
+    // the next test's `document.body.querySelector(...)` results.
+    // Belt-and-braces cleanup so each test starts with a fresh body.
+    document.body.querySelectorAll(
+      ".subagent-drawer, .subagent-drawer__overlay, .subagent-drawer__banner",
+    ).forEach((el) => el.remove());
   });
 
   it("renders nothing visible when store.openRunId is null", () => {
@@ -435,5 +443,173 @@ describe("SubagentDrawer", () => {
     // shape — no envelope).
     expect(payloadTexts.some((t) => t.includes('"name"'))).toBe(true);
     w.unmount();
+  });
+
+  // -------------------------------------------------------------------
+  // FT-F-005 (2026-06-20): failure-reason banner in the header.
+  // Covers the 4 acceptance criteria from the prd.md AC section:
+  //   - failed + summary → banner shows "Worker exited with error: <truncated>"
+  //   - failed + empty summary → banner falls back to "Worker exited unexpectedly at N.Ns"
+  //   - cancelled → banner shows "Worker stopped by user at N.Ns"
+  //   - running / completed → no banner (regression guard)
+  // -------------------------------------------------------------------
+
+  it("failed drawer shows the error banner with summary text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "error",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:11.700Z",
+      summary: "shell: timeout after 10.0s",
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const banner = document.body.querySelector(".subagent-drawer__banner");
+    expect(banner).not.toBeNull();
+    // Error variant class (red tint via --color-tool-error).
+    expect(banner?.classList.contains("subagent-drawer__banner--error")).toBe(true);
+    // Status badge (existing) AND banner (new) both render — they
+    // coexist per D5.
+    expect(document.body.querySelector(".subagent-drawer__status")?.textContent?.trim())
+      .toBe("failed at 11.7s");
+    // Icon stub renders an empty <icon-stub name="warn" /> — its
+    // textContent is empty, so banner.textContent is just the
+    // <span class="subagent-drawer__banner-text"> content (no "⚠").
+    expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
+      .toBe("Worker exited with error: shell: timeout after 10.0s");
+    // The warn icon IS present (asserted via stub attribute).
+    expect(banner?.querySelector('icon-stub[name="warn"]')).not.toBeNull();
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("failed drawer falls back to 'unexpectedly' message when summary is empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "error",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:11.700Z",
+      summary: null, // backend wrote no error text (rare but possible)
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const banner = document.body.querySelector(".subagent-drawer__banner");
+    expect(banner).not.toBeNull();
+    // Falls back to the frozen duration message — reuses the
+    // statusDisplay.suffix so the number matches the badge.
+    expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
+      .toBe("Worker exited unexpectedly at 11.7s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("failed drawer truncates summary longer than 80 chars with ellipsis", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-20T10:00:05.000Z"));
+    const store = useSubagentRunsStore();
+    const longSummary = "shell: error executing command (rc=1): " +
+      "command not found: extremely-long-tool-name-that-the-shell-could-not-locate-" +
+      "and-this-should-definitely-be-truncated-in-the-banner-because-it-is-way-over-80-chars-long";
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "error",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:05.000Z",
+      summary: longSummary,
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const banner = document.body.querySelector(".subagent-drawer__banner");
+    expect(banner).not.toBeNull();
+    const bannerText = banner?.querySelector(".subagent-drawer__banner-text")?.textContent ?? "";
+    // The displayed body is shorter than the original summary (truncated).
+    expect(bannerText.length).toBeLessThan(longSummary.length);
+    // Truncation: ends with "…" suffix.
+    expect(bannerText.endsWith("…")).toBe(true);
+    // Truncation: starts with the standard prefix.
+    expect(bannerText.startsWith("Worker exited with error: ")).toBe(true);
+    // Body portion (after prefix) is exactly 80 chars + "…" = 81 chars.
+    // Prefix length is 25 ("Worker exited with error: "), so total = 25 + 81 = 106.
+    expect(bannerText.length).toBe("Worker exited with error: ".length + 80 + 1);
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("cancelled drawer shows the stopped-by-user banner with warning color", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-20T10:00:05.300Z"));
+    const store = useSubagentRunsStore();
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "cancelled",
+      startedAt: "2026-06-20T10:00:00.000Z",
+      finishedAt: "2026-06-20T10:00:05.300Z",
+      summary: "partial work before stop",
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    const banner = document.body.querySelector(".subagent-drawer__banner");
+    expect(banner).not.toBeNull();
+    // Warning variant (amber tint via --color-tool-shell) — NOT the
+    // error red, because cancel is not a "failure" per se.
+    expect(banner?.classList.contains("subagent-drawer__banner--warning")).toBe(true);
+    expect(banner?.classList.contains("subagent-drawer__banner--error")).toBe(false);
+    // Generic text — we don't read `summary` for cancelled (it carries
+    // partial work, not a reason). Banner text omits the icon glyph
+    // because Icon is stubbed in tests; we assert against the
+    // <span class="...__banner-text"> content directly.
+    expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
+      .toBe("Worker stopped by user at 5.3s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("running and completed drawers do NOT render the failure banner", async () => {
+    const store = useSubagentRunsStore();
+    // Running state — bannerText computed returns null.
+    store.getRunCache.set("run-1", {
+      ...sampleRow,
+      status: "running",
+      finishedAt: null,
+    });
+    await store.openDrawer("run-1");
+    await flushPromises();
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector(".subagent-drawer__banner")).toBeNull();
+    w.unmount();
+
+    // Completed state — bannerText computed returns null. Use a
+    // separate store + drawer mount so we don't depend on the
+    // running-state drawer closing cleanly (reka-ui Teleport can
+    // leak DOM across in-test open/close cycles).
+    const store2 = useSubagentRunsStore();
+    store2.getRunCache.set("run-2", { ...sampleRow, status: "completed" });
+    await store2.openDrawer("run-2");
+    await flushPromises();
+    const w2 = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector(".subagent-drawer__banner")).toBeNull();
+    w2.unmount();
   });
 });

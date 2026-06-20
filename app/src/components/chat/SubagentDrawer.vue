@@ -240,6 +240,42 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
   return { label: meta.label, color: meta.color, suffix: "" };
 });
 
+/** Failure-reason banner shown in the header for terminal error /
+ *  cancelled runs (2026-06-20, FT-F-005). Returns `null` for
+ *  `running` / `completed` states (no banner) or when the row
+ *  hasn't loaded yet.
+ *
+ *  - `error` + non-empty `summary` → "Worker exited with error: <summary>",
+ *    truncated to 80 chars + "…" if longer (the `summary` field carries
+ *    the worker error text — see `agent/subagent.rs:format_dispatch_result`,
+ *    Error arm).
+ *  - `error` + empty/null `summary` → "Worker exited unexpectedly at X.Xs"
+ *    using the frozen duration from `statusDisplay.suffix` (same
+ *    `terminalDurMs` formula as the badge — see B1 hotfix).
+ *  - `cancelled` → "Worker stopped by user at X.Xs" generic message
+ *    (the schema doesn't record whether the cancel came from user
+ *    Stop vs system timeout; out of scope per FT-F-005 prd §"Out of
+ *    Scope").
+ *
+ *  Reuses `statusDisplay.suffix` for the duration string so the
+ *  banner stays consistent with the badge ("failed at 11.7s" +
+ *  "Worker exited unexpectedly at 11.7s" share the same number). */
+const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(() => {
+  if (!run.value) return null;
+  if (status.value === "error") {
+    const summary = run.value.summary;
+    if (summary && summary.length > 0) {
+      const truncated = summary.length > 80 ? summary.slice(0, 80) + "…" : summary;
+      return { kind: "error", text: `Worker exited with error: ${truncated}` };
+    }
+    return { kind: "error", text: `Worker exited unexpectedly${statusDisplay.value.suffix}` };
+  }
+  if (status.value === "cancelled") {
+    return { kind: "warning", text: `Worker stopped by user${statusDisplay.value.suffix}` };
+  }
+  return null;
+});
+
 watch(
   () => store.openRunId,
   (rid) => {
@@ -377,6 +413,26 @@ function jumpToLatest(): void {
                 <Icon name="x" :size="14" />
               </DialogClose>
             </div>
+            <!-- FT-F-005 (2026-06-20): failure-reason banner. Renders
+                 only for terminal error / cancelled states (bannerText
+                 computed returns null otherwise). Sits between the
+                 status badge row and the timestamp row so the reason
+                 reads as the natural next piece of context after
+                 "failed at Ns" / "已停止 at Ns". The banner reuses the
+                 status badge's duration suffix (statusDisplay.suffix)
+                 for consistency. -->
+            <div
+              v-if="bannerText"
+              :class="[
+                'subagent-drawer__banner',
+                `subagent-drawer__banner--${bannerText.kind}`,
+              ]"
+              role="status"
+              :aria-label="bannerText.text"
+            >
+              <Icon name="warn" :size="14" />
+              <span class="subagent-drawer__banner-text">{{ bannerText.text }}</span>
+            </div>
             <div
               v-if="run?.startedAt"
               class="subagent-drawer__meta"
@@ -512,6 +568,38 @@ function jumpToLatest(): void {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* FT-F-005 (2026-06-20): failure-reason banner. Always-visible
+   inline warning strip in the header for terminal error / cancelled
+   runs. Two color variants (--error red + --warning amber) using
+   existing design tokens per spec/design-tokens.md — no hardcoded
+   hex. Left 3px accent bar + ⚠ icon + text in a single row; wraps
+   gracefully on narrow viewports (the drawer's max-width is 480px).
+   Reuses `Icon name="warn"` (ExclamationTriangleIcon) already in
+   the Icon.vue registry — no new icon import. */
+.subagent-drawer__banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-left: 3px solid currentColor;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.4;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  word-break: break-word;
+}
+.subagent-drawer__banner--error {
+  color: var(--color-tool-error);
+}
+.subagent-drawer__banner--warning {
+  color: var(--color-tool-shell);
+}
+.subagent-drawer__banner-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .subagent-drawer__title-row {
