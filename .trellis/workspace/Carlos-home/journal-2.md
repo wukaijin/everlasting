@@ -1197,3 +1197,36 @@ deepseek-v4-flash 经 wukaijin anthropic 中转 turn-2+ 400 根因: Anthropic→
 ### Next Steps
 
 - None - task complete
+
+
+## Session 57: 修复 subagent drawer 空白 + status 卡 running（runId 错配 + 完成事件）
+
+**Date**: 2026-06-21
+**Task**: 修复 subagent drawer 空白 + status 卡 running（runId 错配 + 完成事件）
+**Branch**: `main`
+
+### Summary
+
+调查并修复 subagent drawer 两个显示 bug。Bug1(致命,drawer 空白):subagent:event 的 runId 用了 worker_rid("{parent_rid}-sub-{tool_use_id}"),但 summary.id 是 UUID(DB 主键)。前端 store 用 event.runId 当 key 存 liveTranscript/getRunCache,drawer 用 summary.id 当 openRunId 查 → key 错配 → transcript 空 + status fallback running 一直涨时间。卡片能显示 completed 是因 getSummaryByToolUseId 走 parentRequestId 后缀匹配不依赖 id。修复:sink run_id 改用 insert_run 返回的 DB id(worker_run_id),使 event.runId===summary.id。Bug2(status 卡 running):worker 终态后前端无刷新机制,getRunCache 卡 eager-fetch 时的 running snapshot。新增一次性 subagent:finished 事件(update_run_finished Ok 分支 emit,失败不 emit 避免 stale),前端 listener flushBuffer+fetchRun+fetchForSession 刷新,drawer/card 自动转终态无需轮询。改动 6 文件:chat_loop.rs(sink event_run_id+emit+Emitter import+app_handle.clone)、subagent.rs(pub(crate) build_subagent_finished_payload+runId 契约注释+wire 测试)、subagentRuns.ts(SubagentFinishedPayload+listener+stop 清理)、subagentRuns.test.ts(mock 按事件名路由+3 回归测试)、subagent-runs-schema.md(IPC event contract 段落固化 runId 必须=DB id)。验证:cargo test --lib 750 pass,vue-tsc clean,vitest 293 pass(streamController 4 个 unhandled rejection 确认为 clean main 预存问题)。trellis-check L1-L5 跨层验证全通过,AC1-5 满足,自修复 1 处 docstring typo。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f8b2623` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
