@@ -1,0 +1,18 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "component composition + Pinia 边界约定;verify outer (ToolCallCard) vs body 解耦 — body 完全不读 store,store 依赖全留 outer;沿用 facade / controller 模式"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "颜色/间距 token 表;3 body 内部 scoped CSS 必须用 var(--color-bg-elevated)/var(--color-tool-error) 等,禁止硬编码 hex"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "inline approval UI 模式参考 — PermissionAskBody 的 interactive 模式 4 按钮 + feedback textarea 沿用现有 visual rhythm"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "3 body 抽出的决策框架 — 何时该抽 shared body,何时该留 inline;FT-F-001 D3 决策的 spec 基础"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "frontend-only 任务的边界检查;store 类型(input/output/ask) 跟 drawer 消费 payload_json 之间的跨层 shape 映射逻辑(本 task 写 body 时考虑 drawer 复用性)"}
+{"file": ".trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/prd.md", "reason": "FT-F-001 上游 prd — R-HP1/R-HP2/R-HP3/R-HP4 硬前置约束 + D1-D7 7 决策;3 body 命名 + props 形状 + scope 边界都源自此处,improve 时不要回退 D 决策"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "重构对象(995 行);4 形态逻辑 (input / output / approval / diff) 散布全文件;抽出 3 body 后预计 600 行;具体改哪几段看本 prd R4 段"}
+{"file": "app/src/stores/chat.ts", "reason": "ToolCallInfo { id, name, input } / ToolResultInfo { toolUseId, content, isError, durationMs? } 类型源;body 接受 decoupled data props(D2),但 parent 调用点需读此 type 确认形状"}
+{"file": "app/src/stores/permissions.ts", "reason": "PermissionAsk 类型源 (rid, sessionId, toolUseId, toolName, toolInput, risk, reason?, path?);PermissionAskBody :ask prop 引用此 type;PermissionDecision 枚举也是 onRespond callback 入参"}
+{"file": "app/src/stores/subagentRuns.ts", "reason": "TranscriptEntry { kind, payload_json: Record<string, unknown> } 类型源;drawer 消费契约(本 task 不改 drawer,实施 body 时 shape 兼容性需对照);snake_case payload_json 跟 camelCase 之间的 drift trap 笔记(line 25-35)"}
+{"file": "app/src/utils/messageFormat.ts", "reason": "formatToolInput / extractToolResultDisplay / truncateOutput / abbreviateDuration helper 源;ToolInputBody / ToolOutputBody 内部调这些 helper;helper signature 已知稳定"}
+{"file": "app/src/components/chat/ToolCallCard.test.ts", "reason": "14 test 行为锁 — shallow: true (line 67 / 204) 仍 mock 掉新 body,本 task 零改;实施时必须保证 14 test 继续 pass(AC5);test 模式(setActivePinia + invokeMock) 复用参考"}
+{"file": "app/src/components/Icon.vue", "reason": "Icon 组件源;本 task 3 body 不用 Icon(plain div + details + pre),但确认 Icon stub 行为 (memory 坑 1) 在新 body test 中不触发"}
+{"file": "app/src/components/chat/SubagentDrawer.vue", "reason": "drawer 当前形态参考 — 抽出 body 后 drawer 接入形态预览(虽本 task 不实施 drawer,实施 body 时 props shape 需对照 drawer payload_json);line 374-409 的 统一 payload 渲染是 FT-F-001 阶段 2 要重做的"}
+{"file": "app/vitest.config.ts", "reason": "vitest 配置 — test glob (app/src/**/*.test.ts) 覆盖新 body test;mount 配置 (attachTo / global stubs);per-test setup helpers"}
+{"file": "~/.claude/projects/-usr-local-code-github-everlasting/memory/subagentdrawer-banner-test-gotchas.md", "reason": "vitest 3 坑笔记 — Icon stub textContent / reka-ui Teleport DOM leak / useFakeTimers Date 解析;本 task 实际不触发(3 body 不用 Icon/定时器/reka-ui),但作 defensive 提醒,新 test 实施时如撞坑按此修"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "决策日志位置 — 抽出完成后需在 §4 加 1 条 2026-06-20 决策(commit hash 回填);参考现有 ADR-lite 措辞风格"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "FT-F-001 段 `Blocked by` 引用本 task — 抽出完成合并后改 `Resolved (PR1 merged {hash})`;DEBT.md 的最后更新行加 commit hash"}

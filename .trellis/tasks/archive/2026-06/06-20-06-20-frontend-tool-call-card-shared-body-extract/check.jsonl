@@ -1,0 +1,23 @@
+{"file": ".trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/prd.md", "reason": "本 task prd — AC1-AC14 + 8 D 决策 + 改动文件清单;check 阶段逐条对照(AC5 = ToolCallCard 14 test 零改,AC6/7/8 = 19 新 test 全 pass,AC11 = ToolCallCard 行数 ≤ 600,AC12/13 = git grep 验证)"}
+{"file": ".trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/prd.md", "reason": "上游 FT-F-001 prd — R-HP1/R-HP2/R-HP3/R-HP4 硬前置约束 + D1-D7 7 决策;check 时验证本 task 实施没回退 D 决策(尤其是 D3 Body 纯 / D5 后端零改)"}
+{"file": "app/src/components/chat/ToolInputBody.vue", "reason": "新文件 — Props { name: string, input: Record<string, unknown> };check 验证 AC1 (Props 形状对) + body 内部不读 store (AC1) + scoped CSS 走 vars"}
+{"file": "app/src/components/chat/ToolOutputBody.vue", "reason": "新文件 — Props { content: string, isError: boolean, durationMs?: number };check 验证 AC2 + body 内部调 extractToolResultDisplay + truncateOutput + abbreviateDuration"}
+{"file": "app/src/components/chat/PermissionAskBody.vue", "reason": "新文件 — Props { mode, ask, onRespond? };check 验证 AC3 (interactive 调 onRespond,historical 不调;mode prop 显式) + onRespond 是 optional (TS 编译时强制)"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "重构后 (预计 ~600 行) — check 验证 AC4 (store 依赖零变化) + AC11 (行数 ≤ 600) + AC12/13 (git grep 0 hit) + 4 形态 (input / output / approval / subagent preview / diff) 视觉/行为锁保持"}
+{"file": "app/src/components/chat/ToolInputBody.test.ts", "reason": "新 test 文件 — 5 test (空 input / 字符串 input / 对象 input / 嵌套对象 / 空对象);check 验证 AC6 (5 test 全 pass) + 用 deep mount 验真渲染(非 shallow)"}
+{"file": "app/src/components/chat/ToolOutputBody.test.ts", "reason": "新 test 文件 — 6 test (普通 content / cwd envelope 自动拆 / truncate 长 content / isError 视觉 / durationMs 显示 / 无 result 不渲染);check 验证 AC7"}
+{"file": "app/src/components/chat/PermissionAskBody.test.ts", "reason": "新 test 文件 — 8 test (interactive: 4 按钮 / 3 决策 onRespond / 拒绝并说明 feedback / 缺 onRespond 不调;historical: info-only / 不渲染按钮 / 显示 risk / 显示 path);check 验证 AC8"}
+{"file": "app/src/components/chat/ToolCallCard.test.ts", "reason": "14 test 行为锁 — check 验证 AC5 (14 test 零改 + 全 pass);shallow: true (line 67 / 204) 仍 mock 掉新 body;setActivePinia + invokeMock 模式未变"}
+{"file": "app/src/utils/messageFormat.ts", "reason": "helper 验证 — formatToolInput / extractToolResultDisplay / truncateOutput / abbreviateDuration signature 没被 body 调用方意外修改;ToolInputBody 内部直接 JSON.stringify (per D2 + R1)"}
+{"file": "app/src/stores/chat.ts", "reason": "类型验证 — ToolCallInfo / ToolResultInfo 形状未变;check body 调用点传参 type-correct (name, input / content, isError, durationMs)"}
+{"file": "app/src/stores/permissions.ts", "reason": "类型验证 — PermissionAsk 形状未变;PermissionAskBody :ask prop + PermissionDecision enum 引用未变;respond() 行为未变 (D3 callback prop 模式 — onRespond 由 parent 调)"}
+{"file": "app/src/stores/subagentRuns.ts", "reason": "drawer store 验证 — 0 改动 (R5 / Out of Scope);check 验证本 task 没意外改 TranscriptEntry / runSummaryBySession / liveTranscript"}
+{"file": "app/src/components/chat/SubagentDrawer.vue", "reason": "drawer 验证 — 0 改动 (FT-F-001 阶段 2 才接入);check 验证本 task 没意外改 SubagentDrawer (D6 决定 diff 留 inline,D1 决定 3 body 不含 subagent preview)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "spec 验证 — body 不读 store 符合 component composition 约定;outer (ToolCallCard) 持 store 符合 facade 模式"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "spec 验证 — 3 body 内部 scoped CSS 走 var(--color-bg-elevated) / var(--color-tool-error) / var(--color-bg-border) 等,无硬编码 hex (#fff / #F00 等)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "spec 验证 — PermissionAskBody interactive 模式 4 按钮 + feedback textarea 视觉与现有 approval 保持一致 (位置 / padding / 颜色 / feedback 流程)"}
+{"file": "~/.claude/projects/-usr-local-code-github-everlasting/memory/subagentdrawer-banner-test-gotchas.md", "reason": "test 行为模式参考 — 3 坑笔记 (Icon stub / reka-ui Teleport / useFakeTimers) 在新 body test 中不触发 (D6 + D7 决定 3 body 不用 Icon / 定时器 / reka-ui),check 验新 test 不依赖这些 pattern"}
+{"file": "app/vitest.config.ts", "reason": "test config 验证 — test glob 覆盖新 body test;attachTo 配置未变(3 body 不用 document.body 挂载 — plain mount 即可)"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "决策日志验证 — §4 加 1 条 2026-06-20 shared body 抽出决策 (commit hash 回填);check 验证格式跟现有 ADR-lite 措辞一致 (Context / Decision / Consequences)"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "DEBT 状态验证 — FT-F-001 段 `Blocked by` 改 `Resolved (PR1 merged {hash})`;本 task 加 `Closed At: {commit hash}`;最后更新行加 commit hash 标注"}
+{"file": "app/src/components/Icon.vue", "reason": "Icon 组件验证 — 0 改动 (3 body 不用 Icon);check 验证 ToolCallCard.vue 仍用 Icon (header 段 + subagent preview 段) 不被意外改"}
