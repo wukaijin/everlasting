@@ -45,7 +45,7 @@ use std::time::Instant;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -2139,14 +2139,28 @@ async fn run_subagent(
     // signature carries the parameter through anyway). The
     // double-clone is cheap (AppHandle is `Arc<Mutex<...>>` under
     // the hood).
+    // Bug1 fix (2026-06-21): the sink's `run_id` becomes the
+    // `subagent:event` payload's `runId`, which the frontend store
+    // uses as the key for `liveTranscript` / `getRunCache`. It MUST
+    // equal `summary.id` (= the DB row id `worker_run_id`), NOT the
+    // human-readable `worker_rid` — otherwise the drawer opens with
+    // `openRunId = summary.id` but the transcript cache is keyed by
+    // `worker_rid`, so the drawer renders blank + stuck-on-running.
+    // `worker_run_id_opt` is `None` only when `insert_run` failed
+    // (no DB row → no summary → drawer can't open), so the
+    // `worker_rid` fallback is unreachable in practice but keeps
+    // the sink construction total.
+    let event_run_id = worker_run_id_opt
+        .clone()
+        .unwrap_or_else(|| worker_rid.clone());
     let worker_sink: Arc<SubagentBufferSink> = match app_handle.as_ref() {
         Some(handle) => Arc::new(SubagentBufferSink::new(
             handle.clone(),
-            worker_rid.clone(),
+            event_run_id.clone(),
             parent_session_id.to_string(),
         )),
         None => Arc::new(SubagentBufferSink::new_without_app_handle(
-            worker_rid.clone(),
+            event_run_id.clone(),
             parent_session_id.to_string(),
         )),
     };
@@ -2213,8 +2227,11 @@ async fn run_subagent(
         Some(true),
         // B6 PR3 (2026-06-20, PR2 hotfix): forward the parent's
         // AppHandle so the worker's SubagentBufferSink can emit the
-        // `subagent:event` IPC channel live. None in tests.
-        app_handle,
+        // `subagent:event` IPC channel live. None in tests. Cloned
+        // (not moved) so the post-loop `subagent:finished` emit
+        // below can still borrow `app_handle` — AppHandle is an
+        // `Arc` under the hood so the clone is cheap.
+        app_handle.clone(),
     ))
     .await;
 
@@ -2267,7 +2284,7 @@ async fn run_subagent(
             SubagentStatus::Cancelled => crate::db::subagent_runs::SubagentStatusDb::Cancelled,
             SubagentStatus::Error => crate::db::subagent_runs::SubagentStatusDb::Error,
         };
-        if let Err(e) = crate::db::subagent_runs::update_run_finished(
+        match crate::db::subagent_runs::update_run_finished(
             db,
             worker_run_id,
             status_db,
@@ -2279,11 +2296,42 @@ async fn run_subagent(
         )
         .await
         {
-            tracing::warn!(
-                worker_run_id = %worker_run_id,
-                error = %e,
-                "run_subagent: failed to persist subagent_runs update (non-fatal)"
-            );
+            Ok(()) => {
+                // Bug2 fix (2026-06-21): emit a one-shot
+                // `subagent:finished` terminal signal so the frontend
+                // `<SubagentDrawer>` / `<ToolCallCard>` flip from
+                // `running` to the terminal state without polling.
+                // The frontend listener refetches `get_subagent_run`
+                // (drawer: status + finishedAt + full transcript)
+                // and `list_subagent_runs_by_session` (card: status).
+                // Emitted only on the Ok arm — a DB failure leaves
+                // the row `running`, so emitting here would cache a
+                // stale `running` row as terminal. Best-effort: a
+                // Tauri emit failure is non-fatal (the dispatch
+                // tool_result is the user-visible terminal signal).
+                if let Some(handle) = app_handle.as_ref() {
+                    let payload = crate::agent::subagent::build_subagent_finished_payload(
+                        worker_run_id,
+                        parent_session_id,
+                        status_db.as_str(),
+                        &finished_at,
+                    );
+                    if let Err(e) = handle.emit("subagent:finished", payload) {
+                        tracing::warn!(
+                            worker_run_id = %worker_run_id,
+                            error = %e,
+                            "subagent:finished emit failed (non-fatal; DB row already terminal)"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    worker_run_id = %worker_run_id,
+                    error = %e,
+                    "run_subagent: failed to persist subagent_runs update (non-fatal)"
+                );
+            }
         }
     }
 

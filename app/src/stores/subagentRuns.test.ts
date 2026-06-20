@@ -29,12 +29,25 @@ let capturedHandler:
   | ((event: { payload: unknown }) => void)
   | null = null;
 let capturedUnlisten: (() => void) | null = null;
+// B6 PR3b hotfix (2026-06-21): subagent:finished terminal signal
+// listener. Separate capture so the mock can route by event name —
+// without this, the second `listen` call would overwrite
+// `capturedHandler` and break every existing subagent:event test.
+let capturedFinishedHandler:
+  | ((event: { payload: unknown }) => void)
+  | null = null;
+let capturedFinishedUnlisten: (() => void) | null = null;
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (
-    _event: string,
+    event: string,
     handler: (event: { payload: unknown }) => void,
   ) => {
+    if (event === "subagent:finished") {
+      capturedFinishedHandler = handler;
+      capturedFinishedUnlisten = vi.fn();
+      return capturedFinishedUnlisten;
+    }
     capturedHandler = handler;
     capturedUnlisten = vi.fn();
     return capturedUnlisten;
@@ -162,6 +175,8 @@ describe("useSubagentRunsStore", () => {
     invokeMock.mockResolvedValue([]);
     capturedHandler = null;
     capturedUnlisten = null;
+    capturedFinishedHandler = null;
+    capturedFinishedUnlisten = null;
     vi.useRealTimers();
   });
 
@@ -542,5 +557,91 @@ describe("useSubagentRunsStore", () => {
     expect(getRunCalls).toHaveLength(2);
     expect(getRunCalls.map((c) => (c[1] as { runId: string }).runId))
       .toEqual(["run-A", "run-B"]);
+  });
+
+  // -------------------------------------------------------------------
+  // B6 PR3b hotfix (2026-06-21): subagent:finished terminal refresh.
+  // The store listens for the one-shot terminal event emitted by
+  // run_subagent after update_run_finished commits. On receipt it
+  // flushes any buffered transcript events + refetches the run detail
+  // (drawer source) + session summary (card source) so the drawer /
+  // card flip from `running` to the terminal state without polling.
+  // -------------------------------------------------------------------
+
+  it("subagent:finished fires fetchRun + fetchForSession (terminal refresh)", async () => {
+    invokeMock.mockResolvedValue(sampleRow);
+    const store = useSubagentRunsStore();
+    await store.start();
+    expect(capturedFinishedHandler).not.toBeNull();
+    invokeMock.mockClear();
+
+    capturedFinishedHandler!({
+      payload: {
+        runId: "run-99",
+        sessionId: "sess-1",
+        status: "completed",
+        finishedAt: "2026-06-21T10:00:30Z",
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const calledCommands = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCommands).toContain("get_subagent_run");
+    expect(calledCommands).toContain("list_subagent_runs_by_session");
+    expect(invokeMock.mock.calls.find((c) => c[0] === "get_subagent_run")?.[1])
+      .toEqual({ runId: "run-99" });
+    expect(
+      invokeMock.mock.calls.find((c) => c[0] === "list_subagent_runs_by_session")?.[1],
+    ).toEqual({ sessionId: "sess-1" });
+  });
+
+  it("subagent:finished flushes buffered transcript events before refetch", async () => {
+    // The finished handler calls flushBuffer(runId) before fetchRun so
+    // liveTranscript is complete (fetchRun's seed-guard won't overwrite
+    // a non-empty liveTranscript). Fire an event into the debounce
+    // buffer, then finished — the buffer must be flushed immediately
+    // rather than waiting for the 200ms timer.
+    vi.useFakeTimers();
+    invokeMock.mockResolvedValue(sampleRow);
+    const store = useSubagentRunsStore();
+    await store.start();
+    expect(capturedHandler).not.toBeNull();
+
+    // An event sitting in the debounce buffer (timer not yet fired).
+    capturedHandler!({
+      payload: {
+        runId: "run-flush",
+        sessionId: "sess-1",
+        kind: "tool_call",
+        payload: { name: "grep", input: { pattern: "x" } },
+        timestamp: "t1",
+      },
+    });
+    expect(store.liveTranscript.get("run-flush") ?? []).toEqual([]);
+
+    // Finished arrives — flushBuffer runs synchronously inside the
+    // handler, before the fire-and-forget fetchRun.
+    capturedFinishedHandler!({
+      payload: {
+        runId: "run-flush",
+        sessionId: "sess-1",
+        status: "completed",
+        finishedAt: "t2",
+      },
+    });
+    const live = store.liveTranscript.get("run-flush") ?? [];
+    expect(live).toHaveLength(1);
+    expect(live[0].kind).toBe("tool_call");
+    expect(live[0].payload_json).toEqual({ name: "grep", input: { pattern: "x" } });
+  });
+
+  it("stop() tears down BOTH subagent:event and subagent:finished listeners", async () => {
+    const store = useSubagentRunsStore();
+    await store.start();
+    expect(capturedUnlisten).not.toBeNull();
+    expect(capturedFinishedUnlisten).not.toBeNull();
+    store.stop();
+    expect(capturedUnlisten).toHaveBeenCalled();
+    expect(capturedFinishedUnlisten).toHaveBeenCalled();
   });
 });

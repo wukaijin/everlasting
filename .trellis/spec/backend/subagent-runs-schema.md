@@ -122,6 +122,50 @@ session was deleted between dispatch and worker start. `tracing::warn!`
 + `format_dispatch_result(SubagentStatus::Error, "spawn failed")` gives
 the user a visible "couldn't start worker" signal without crashing.
 
+### IPC event contract: `subagent:event` + `subagent:finished`
+
+The worker emits TWO Tauri IPC channels from `run_subagent`, both keyed by
+the **DB row id** (`subagent_runs.id`, the UUID `insert_run` returns as
+`worker_run_id`):
+
+**`subagent:event`** — streamed live while the worker runs. One payload per
+`SubagentBufferSink::record()` (chat_event / tool_call / tool_result /
+permission_ask). Wire shape (built by `build_subagent_event_payload` in
+`agent/subagent.rs`):
+
+```json
+{ "runId": "<DB id>", "sessionId": "<parent session_id>", "kind": "<snake_case TranscriptKind>", "payload": <entry body, camelCase>, "timestamp": "<RFC 3339>" }
+```
+
+**`subagent:finished`** — one-shot terminal signal, emitted by `run_subagent`
+AFTER `update_run_finished` commits (only on the `Ok(())` arm; a DB write
+failure leaves the row `running` so emitting would cache a stale running row
+as terminal). Wire shape (built by `build_subagent_finished_payload`):
+
+```json
+{ "runId": "<DB id>", "sessionId": "<parent session_id>", "status": "completed|cancelled|error", "finishedAt": "<RFC 3339>" }
+```
+
+**`runId` contract (RULE — B6 PR3b hotfix, 2026-06-21)**: BOTH channels'
+`runId` MUST be the `subagent_runs.id` DB row id, NOT the human-readable
+`worker_rid` (`"{parent_rid}-sub-{tool_use_id}"`). The frontend
+`subagentRuns` store keys `liveTranscript` / `getRunCache` by `event.runId`,
+while `ToolCallCard` opens the drawer with `summary.id` (the same DB id). If
+the two diverge, the drawer's `transcript` / `status` computeds look up the
+wrong key and render blank + stuck-on-running — the exact bug this contract
+exists to prevent. `run_subagent` threads `worker_run_id_opt` into the
+`SubagentBufferSink` (fallback `worker_rid` only when `insert_run` failed —
+no DB row exists, drawer can't open, so the runId value is moot).
+
+The frontend `subagent:finished` listener flushes the transcript debounce
+buffer for the run + refetches `get_subagent_run` (drawer: terminal status +
+finishedAt + full transcript) and `list_subagent_runs_by_session` (card:
+status). This flips the drawer / card from `running` to the terminal state
+without polling. Distinct from `subagent:event` (a transcript-entry stream),
+`subagent:finished` carries no `kind` / `payload` / `timestamp` and is NOT a
+transcript entry — folding it into `TranscriptKind` would pollute the drawer's
+transcript rendering (the `transcript` computed would list it as an entry).
+
 ### Streaming token usage vs one-shot accumulation
 
 The `db::subagent_runs::add_token_usage_streaming` helper accumulates
@@ -271,4 +315,4 @@ this table pattern verbatim:
 
 ---
 
-**Last updated**: 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).
+**Last updated**: 2026-06-21 (IPC event contract — `runId` must be DB id + `subagent:finished` terminal signal; B6 PR3b hotfix). Previously 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).

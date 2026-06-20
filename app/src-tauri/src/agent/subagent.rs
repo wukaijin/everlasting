@@ -406,7 +406,7 @@ pub enum TranscriptKind {
 /// the `transcript_kind_str` mapping below):
 /// ```json
 /// {
-///   "runId": "<worker rid>",
+///   "runId": "<DB row id (worker_run_id) — MUST equal summary.id>",
 ///   "sessionId": "<parent session_id>",
 ///   "kind": "chat_event" | "tool_call" | "tool_result" | "permission_ask",
 ///   "payload": <the original chat-event / tool-call / tool-result payload>,
@@ -418,6 +418,18 @@ pub enum TranscriptKind {
 /// enum variant (`#[serde(rename_all = "snake_case")]` on the
 /// enum). The TS enum must stay in lockstep with this mapping —
 /// `trellis-check` verifies line-by-line parity.
+///
+/// **`runId` contract (B6 PR3b hotfix, 2026-06-21)**: `run_id` MUST
+/// be the `subagent_runs.id` DB row id (the UUID `insert_run`
+/// returns as `worker_run_id`), NOT the human-readable
+/// `worker_rid` (`"{parent_rid}-sub-{tool_use_id}"`). The frontend
+/// `subagentRuns` store keys `liveTranscript` / `getRunCache` by
+/// `event.runId`, while `ToolCallCard` opens the drawer with
+/// `summary.id` (= the same DB id). If the two diverge, the drawer's
+/// `transcript`/`status` computeds look up the wrong key and render
+/// blank + stuck-on-running. `run_subagent` threads
+/// `worker_run_id_opt` (fallback `worker_rid` only when the insert
+/// failed — no DB row exists, so the drawer can't open anyway).
 fn build_subagent_event_payload(
     run_id: &str,
     session_id: &str,
@@ -436,6 +448,51 @@ fn build_subagent_event_payload(
         "kind": kind_str,
         "payload": payload,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Build the IPC payload for the `subagent:finished` Tauri channel —
+/// a one-shot terminal signal emitted by `run_subagent` AFTER
+/// `update_run_finished` commits the run's terminal state. Distinct
+/// from `subagent:event` (which streams transcript entries while the
+/// worker runs): `subagent:finished` carries no transcript entry,
+/// only the terminal status + timestamp, so the frontend can refetch
+/// `get_subagent_run` + `list_subagent_runs_by_session` and flip the
+/// drawer / card from `running` to the terminal state without
+/// polling.
+///
+/// **Wire shape**:
+/// ```json
+/// {
+///   "runId": "<DB row id — same value subagent:event uses>",
+///   "sessionId": "<parent session_id>",
+///   "status": "completed" | "cancelled" | "error",
+///   "finishedAt": "<RFC 3339>"
+/// }
+/// ```
+///
+/// `status` is the lowercase wire form of `SubagentStatusDb::as_str`
+/// (passed in as `status_str` by the caller to keep this module free
+/// of a `db::subagent_runs` type dependency). The frontend
+/// `coerceStatus` parses it leniently (unknown → `running`, but the
+/// only emitters are the three terminal arms in `run_subagent`).
+///
+/// Emitted only on the `Ok(())` arm of `update_run_finished` — a DB
+/// write failure leaves the row `running`, so emitting `finished`
+/// would mislead the frontend into caching a stale `running` row as
+/// terminal. The emit itself is best-effort (`tracing::warn!` on
+/// failure, mirroring the `subagent:event` emit policy).
+pub(crate) fn build_subagent_finished_payload(
+    run_id: &str,
+    session_id: &str,
+    status_str: &str,
+    finished_at: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "runId": run_id,
+        "sessionId": session_id,
+        "status": status_str,
+        "finishedAt": finished_at,
     })
 }
 
@@ -1440,6 +1497,31 @@ mod tests {
             let p = build_subagent_event_payload("rid", "sid", kind, serde_json::Value::Null);
             assert_eq!(p["kind"], expected, "kind={kind:?} wire form");
         }
+    }
+
+    /// `build_subagent_finished_payload` produces the one-shot
+    /// terminal signal wire shape `{ runId, sessionId, status,
+    /// finishedAt }`. Locks the `subagent:finished` IPC contract
+    /// (the TS mirror is `SubagentFinishedPayload` in
+    /// `subagentRuns.ts`). B6 PR3b hotfix (2026-06-21).
+    #[test]
+    fn build_subagent_finished_payload_matches_wire_shape() {
+        let payload = build_subagent_finished_payload(
+            "run-uuid-123",
+            "sid-y",
+            "completed",
+            "2026-06-21T12:00:00+00:00",
+        );
+        assert_eq!(payload["runId"], "run-uuid-123");
+        assert_eq!(payload["sessionId"], "sid-y");
+        assert_eq!(payload["status"], "completed");
+        assert_eq!(payload["finishedAt"], "2026-06-21T12:00:00+00:00");
+        // No `kind` / `payload` / `timestamp` fields — this is NOT a
+        // transcript entry (distinct from subagent:event). A drift
+        // here would collide with the drawer's transcript rendering.
+        assert!(payload.get("kind").is_none());
+        assert!(payload.get("payload").is_none());
+        assert!(payload.get("timestamp").is_none());
     }
 
     /// Each `emit_*` method (chat_event / tool_call / tool_result /

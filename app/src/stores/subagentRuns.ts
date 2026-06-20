@@ -104,6 +104,22 @@ export interface SubagentEventPayload {
   timestamp: string;
 }
 
+/** One-shot `subagent:finished` IPC payload — emitted by the Rust
+ *  `run_subagent` AFTER `update_run_finished` commits the run's
+ *  terminal state. Distinct from `SubagentEventPayload` (which
+ *  streams transcript entries while the worker runs): this carries
+ *  only the terminal status + timestamp, so the frontend can refetch
+ *  `get_subagent_run` + `list_subagent_runs_by_session` and flip the
+ *  drawer / card from `running` to the terminal state without
+ *  polling. `runId` is the same DB row id `subagent:event` uses
+ *  (== `summary.id`). */
+export interface SubagentFinishedPayload {
+  runId: string;
+  sessionId: string;
+  status: string;
+  finishedAt: string;
+}
+
 /** Transcript entry as stored in `transcriptJson` (the DB storage
  *  shape). ⚠️ Drift trap 2: the Rust struct has NO `rename_all`, so
  *  the field is `payload_json` (snake_case) — distinct from the live
@@ -226,6 +242,12 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
   /** Tauri `listen` unlisten handle for `subagent:event`. Set by
    *  `start()`, torn down by `stop()`. */
   let unlisten: UnlistenFn | null = null;
+
+  /** Tauri `listen` unlisten handle for `subagent:finished`
+   *  (B6 PR3b hotfix, 2026-06-21). Separate from `unlisten` so the
+   *  two channels' lifecycles stay independent and `stop()` tears
+   *  both down. */
+  let unlistenFinished: UnlistenFn | null = null;
 
   /** B6 PR3b (2026-06-20): dedup Set for the eager-fetch path in the
    *  `subagent:event` listener. A burst of events for the same runId
@@ -410,6 +432,29 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
         void fetchForSession(e.sessionId);
       }
     });
+    // Bug2 fix (2026-06-21): listen for the one-shot terminal signal
+    // emitted by `run_subagent` after `update_run_finished` commits.
+    // On receipt, flush any buffered transcript events for the run
+    // (so `liveTranscript` is complete before `fetchRun`'s seed-guard
+    // checks it) then refetch the run detail (drawer source:
+    // terminal status + finishedAt + full transcript) + session
+    // summary (card source: status). This flips the drawer / card
+    // from `running` to the terminal state without polling. NOT
+    // dedup'd by `eagerFetchedRunIds` — the terminal signal is
+    // one-shot by definition.
+    if (unlistenFinished) {
+      unlistenFinished();
+      unlistenFinished = null;
+    }
+    unlistenFinished = await listen<SubagentFinishedPayload>(
+      "subagent:finished",
+      (event) => {
+        const f = event.payload;
+        flushBuffer(f.runId);
+        void fetchRun(f.runId);
+        void fetchForSession(f.sessionId);
+      },
+    );
   }
 
   /** Tear down the listener + flush all pending buffers + clear
@@ -419,6 +464,10 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     if (unlisten) {
       unlisten();
       unlisten = null;
+    }
+    if (unlistenFinished) {
+      unlistenFinished();
+      unlistenFinished = null;
     }
     // Flush any pending buffered events so the user doesn't lose
     // the last batch when the component unmounts.
