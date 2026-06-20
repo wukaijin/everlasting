@@ -57,13 +57,37 @@ pub async fn run_chat_loop(
     // `subagent_runs`). Skipping also avoids the UNIQUE-constraint collision
     // with the parent's own `persist_turn` calls — both loops would otherwise
     // write to the same `messages` table keyed by `(session_id, seq)`.
+    //
+    // **PR2a correction (2026-06-20, RULE-A-015)**: the 18 site count is
+    // actually 16 in the implementation as merged. PR2a fixed 2 over-broad
+    // gates that PR1b introduced: (a) `add_token_usage` — token-usage
+    // metadata belongs to the `sessions` table, not the `messages` table, so
+    // it should NOT be gated by `skip_persist` (worker must still stream its
+    // per-turn token usage into the parent's `sessions` accumulator so the
+    // parent's UI shows live total cost); (b) the terminal `Done` event
+    // emit — the `SubagentBufferSink` was the BOTH the consumer of the
+    // terminal `Done` and the data source for `transcript_snapshot()`, so
+    // gating it killed the worker's `was_cancelled` tracking. Both are
+    // now outside the gate. See "Pattern: PR2a corrected PR1 over-broad
+    // skip_persist gate (RULE-A-015)" below.
     skip_persist: bool,                                                                // 20
+    // B6 PR2b (2026-06-20, RULE-A-014): when `Some(true)`, the
+    // `PermissionContext` built inside the loop carries `is_worker: true`,
+    // which makes the Tier 4 `ask_path` / `ask_shell` branches collapse
+    // to `Decision::Deny` instead of emitting a `permission:ask` (workers
+    // have no UI sink — a permission modal would hang forever on the
+    // oneshot). `None` falls back to the session-row mode's natural
+    // default (production-style = `false`, since no parent process is a
+    // worker). The worker path passes `Some(true)`; production + 35
+    // `agent_loop_*` integration tests pass `Some(false)` to make the
+    // production default explicit at the call site.
+    is_worker: Option<bool>,                                                           // 21
 ) { ... }
 ```
 
-### Why 20 parameters (and not a config struct)?
+### Why 21 parameters (and not a config struct)?
 
-The 20 parameters look excessive, but they are the **exact set of state pieces
+The 21 parameters look excessive, but they are the **exact set of state pieces
 the agent loop body needs**, and grouping them into a config struct would:
 
 1. Hide the dependency surface (a struct named `RunChatLoopArgs` would tempt
@@ -71,13 +95,13 @@ the agent loop body needs**, and grouping them into a config struct would:
 2. Add a layer of indirection without adding safety (Rust's borrow checker
    already enforces "use what you need")
 3. Obscure the 1:1 correspondence between production and test call sites
-   (the 31 `agent_loop_*` integration tests, including the 4 B6 worker tests,
-   pass them in the same order, with the same types — a config struct would let
-   them diverge silently)
+   (the 35 `agent_loop_*` integration tests, including the 5 B6 worker tests
+   and 1 B6 PR2b end-to-end test, pass them in the same order, with the same
+   types — a config struct would let them diverge silently)
 
 `#[allow(clippy::too_many_arguments)]` is the deliberate cost of keeping the
 dependency surface explicit. **Do not refactor this into a struct** without
-re-running all 31 integration tests + cargo check.
+re-running all 35 integration tests + cargo check.
 
 #### Evolution log (parameter count grew with new features)
 
@@ -88,14 +112,16 @@ re-running all 31 integration tests + cargo check.
 | 2026-06-19 | 17 | L1a | `background_shells: DefaultRegistry` | cross-request registry threaded into `ToolContext` + per-turn notification drain |
 | 2026-06-19 | 18 | B6 PR1a | `max_turns: Option<usize>` | worker turn cap; production + tests pass `None` |
 | 2026-06-19 | 19 | B6 PR1b | `skip_session_active: bool` | worker guard Drop skips `session_active_request.remove` |
-| 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | 18 persist-site gates inside the function body |
+| 2026-06-19 | 20 | B6 PR1b | `skip_persist: bool` | persist-site gates inside the function body (PR1 spec: 18 sites; PR2a actual: 16 — see RULE-A-015) |
+| 2026-06-20 | 21 | B6 PR2b (RULE-A-014) | `is_worker: Option<bool>` | thread `is_worker` to nested `run_chat_loop` so Tier 4 `ask_path` / `ask_shell` collapses to `Deny` on the worker path (workers have no UI sink) |
 
-The B6 cluster (PR1a + PR1b, adding 3 params in a single task) is the
-largest single jump. It is justified because the worker is a **structural**
-extension of the agent loop (it re-uses `run_chat_loop` recursively via
-`Box::pin`, see "Pattern: Worker Subagent" below), and the 3 params are the
-minimal surface needed to keep production + worker behavior isolated
-(session mapping cleanup + DB isolation + turn cap).
+The B6 cluster (PR1a + PR1b + PR2b, adding 4 params across 3 sub-PRs in a
+single 2-week window) is the largest single jump. It is justified because
+the worker is a **structural** extension of the agent loop (it re-uses
+`run_chat_loop` recursively via `Box::pin`, see "Pattern: Worker Subagent"
+below), and the 4 params are the minimal surface needed to keep
+production + worker behavior isolated (session mapping cleanup + DB
+isolation + turn cap + Tier 4 collapse without hang).
 
 ### Production + test call site parity
 
@@ -103,14 +129,17 @@ minimal surface needed to keep production + worker behavior isolated
   `tauri::async_runtime::spawn` body, after pre-flight (provider lookup +
   cancel token registration + sink build). The call site passes `None` for
   `resend_seq` + `max_turns`, `false` for both `skip_session_active` and
-  `skip_persist` — production is never a worker.
+  `skip_persist`, `Some(false)` for `is_worker` (production is never a
+  worker; the explicit `Some(false)` makes the production-style default
+  obvious at the call site, matching PR2b's contract).
 - **Tests**: `app/src-tauri/src/agent/tests.rs::agent_loop_basic_text_only_completes`
-  and 30 sibling tests pass a `MockProvider` + `MockEmitter` for the
+  and 34 sibling tests pass a `MockProvider` + `MockEmitter` for the
   `Arc<dyn Provider>` and `Arc<dyn ChatEventSink>` parameters. Other
   parameters are real (test DB, real `MemoryCache`, real `PermissionStore`,
-  real `ReadGuard`).
+  real `ReadGuard`). Tests pass `Some(false)` for `is_worker` to make the
+  non-worker test surface explicit.
 
-The 20-parameter signature is **production-ready as written** — no test-only
+The 21-parameter signature is **production-ready as written** — no test-only
 gating (no `#[cfg(test)]`), no compile-time `dead_code` allowance, no
 runtime branching on `cfg!(test)`.
 
@@ -144,6 +173,7 @@ tauri::async_runtime::spawn(async move {
         None,                          // 18: max_turns (production uses MAX_TURNS=50)
         false,                         // 19: skip_session_active (production chat owns the slot)
         false,                         // 20: skip_persist (production persists normally)
+        Some(false),                   // 21: is_worker (production is never a worker)
     ).await;
 });
 ```
@@ -161,6 +191,7 @@ run_chat_loop(
     None,                          // 18
     false,                         // 19
     false,                         // 20
+    Some(false),                   // 21
 ).await;
 ```
 
@@ -290,13 +321,13 @@ from the parent's session DB / cancel maps.
 
 **Solution**: Reuse `run_chat_loop` **recursively** as the worker's
 executor. The worker IS just another `run_chat_loop` invocation, but
-with 3 surgical guards (`max_turns` / `skip_session_active` / `skip_persist`)
-that keep its behavior isolated from the parent.
+with 4 surgical guards (`max_turns` / `skip_session_active` / `skip_persist` /
+`is_worker`) that keep its behavior isolated from the parent.
 
 ```rust
 // agent/chat_loop.rs::run_subagent (~:1802) — the interceptor helper
 // captures the parent's run_chat_loop closure dependencies and spawns
-// the worker with the 3 isolation flags.
+// the worker with the 4 isolation flags.
 Box::pin(run_chat_loop(
     worker_tool_defs,                        // filter_tools_for_subagent(builtin, def)
     provider.clone(),
@@ -318,6 +349,7 @@ Box::pin(run_chat_loop(
     Some(SUBAGENT_MAX_TURNS),                // 18: 20 (worker turn cap)
     true,                                    // 19: skip_session_active (worker Drop skips parent eviction)
     true,                                    // 20: skip_persist (worker turns stay in-memory)
+    Some(true),                              // 21: is_worker (worker path → Tier 4 collapses to Deny)
 )).await;
 ```
 
@@ -325,7 +357,7 @@ Box::pin(run_chat_loop(
 
 The worker harness is the **same loop**: turn boundaries, C3 compaction,
 tool execution, error/cancel paths, emit, persist. Duplicating it would
-re-introduce the faithful-port drift hazard (see Pattern above). The 3
+re-introduce the faithful-port drift hazard (see Pattern above). The 4
 new params are the minimal surface needed to isolate the worker from the
 parent; every other param is reused as-is.
 
@@ -333,13 +365,14 @@ parent; every other param is reused as-is.
 (workers have `dispatch_subagent` stripped, so depth is bounded at 1,
 but the compiler can't prove this).
 
-### The 3 isolation flags
+### The 4 isolation flags
 
 | Flag | Value | What it prevents |
 |---|---|---|
 | `max_turns: Some(20)` | B6 PR1a | worker burning parent's token budget on a runaway loop |
 | `skip_session_active: true` | B6 PR1b | worker's `CancellationGuard::drop` evicting `session_active_request[parent_session_id]` (would break parent's `cancel_inflight_for_session` / RULE-E-005) |
-| `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; 18 function-body gates cover all persist sites |
+| `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; **16** function-body gates cover all persist sites (PR1 spec said 18; PR2a RULE-A-015 corrected 2 over-broad gates) |
+| `is_worker: Some(true)` | B6 PR2b | worker's Tier 4 `ask_path` / `ask_shell` emitting `permission:ask` → register into `permission_asks` → wait for oneshot (never comes — worker has no UI sink) → **hang until user Stop** (RULE-A-014). With this flag, the Tier 4 branch sees `ctx.is_worker = true` and collapses to `Decision::Deny` immediately |
 
 ### Tool interception (NOT `execute_tool_inner`)
 
@@ -458,6 +491,101 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
 `update_checklist`-not-`TodoWrite` invariant (system-prompt-research §7.2);
 `build_system_prompt_no_hardcoded_tool_list` pins RULE-E-013.
 
+---
+
+## Pattern: PR2a corrected PR1 over-broad `skip_persist` gate (RULE-A-015, 2026-06-20)
+
+**Problem**: PR1b (2026-06-19) introduced the `skip_persist: bool` flag
+(20th `run_chat_loop` parameter) with the spec claim "18 persist-site gates
+inside the function body". PR2a (2026-06-20) found 2 of those 18 sites
+were over-broad — they should NOT have been gated by `skip_persist`,
+because gating them broke core worker / parent invariants:
+
+1. **`add_token_usage`** — the per-turn `TokenUsage` update belongs to the
+   `sessions` table (the parent's `input_tokens_total` /
+   `output_tokens_total` counters), not the `messages` table. With
+   `skip_persist=true` gating the call, the worker could not stream its
+   per-turn usage into the parent's running total. The parent UI's
+   per-request token counter would freeze at the value the parent
+   accumulated *before* dispatching the worker — a noticeable UX
+   regression. The "skip persist" intent was "skip writes that share the
+   `(session_id, seq)` UNIQUE key with the parent"; `add_token_usage`
+   doesn't share that key, so it was the wrong gate.
+
+2. **`emit_chat_event_via_sink(ChatEvent::Done { ... })`** — the terminal
+   `Done` event drives the worker's `SubagentBufferSink.was_cancelled`
+   flip. With `skip_persist=true` gating the emit, the worker's
+   `SubagentBufferSink` would never see the terminal `Done{cancelled}` →
+   `was_cancelled` stayed `false` → `format_dispatch_result` always
+   reported `SubagentStatus::Completed` (even on a real cancel) → the
+   `subagent_runs.status` column always read `'completed'` (PR2's
+   persistence path couldn't tell cancel from completion). The "skip
+   persist" intent was "skip DB writes"; an `emit_chat_event_via_sink`
+   is a sink write, not a DB write, so it was the wrong gate.
+
+**Solution**: Both sites are now OUTSIDE the `if !skip_persist { ... }`
+gate. PR2a's actual gate count is **16**, not the 18 the PR1 spec said.
+The spec the implementation lives in (`agent-loop-architecture.md`
+"Signature" block, plus the `tool-contract.md` §"dispatch_subagent"
+entry) updates the gate count from 18 to 16 in the same commit; this
+"Pattern" section is the design rationale.
+
+### Why the original "all persist = gated" framing was wrong
+
+The PR1 spec framed `skip_persist` as a "persist site gate" — every
+`persist_*` call inside `run_chat_loop` was wrapped. The framing was
+correct as a *default* (worker should not write to the `messages` table
+that the parent owns), but the implementation was too literal: it
+captured the call shape (`persist_turn` / `update_message_metadata` /
+`add_token_usage` / `record_*_audit` / `persist_turn_cwd`) without
+distinguishing which writes shared the `(session_id, seq)` UNIQUE key
+with the parent. The two sites that didn't share the key (token
+accumulation + sink emit) were collateral damage.
+
+The right framing: **`skip_persist` is a "do not write to the
+`(session_id, seq)`-keyed `messages` table" gate, not a "do not write
+anything" gate**. PR2a re-frames the rule accordingly and the
+implementation matches.
+
+### Detection: how PR2a caught the bug
+
+PR2a's `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled`
+test (regression for RULE-A-015) ran the worker with
+`parent_token.cancel()` mid-flight, then asserted
+`subagent_runs.status == 'cancelled'`. The first run saw
+`status == 'completed'` despite the parent cancel — the bug. Tracing
+showed `SubagentBufferSink.was_cancelled` was still `false` after
+`run_chat_loop` returned, which traced back to the worker never
+receiving the terminal `Done{cancelled}` event. The terminal emit was
+inside `if !skip_persist { ... }`; the gate was too broad. The fix
+(lift the terminal emit out of the gate) is the entire PR2a RULE-A-015
+patch.
+
+### When to apply this pattern
+
+When a new "worker-isolated" flag is added to `run_chat_loop` (or any
+shared entry point with multiple call-site modes), **enumerate each
+gated site and verify it actually shares the contended key** (or
+whatever the gate is trying to protect). Defaulting to "all writes are
+the same kind" is the PR1 anti-pattern; the gate should be defined by
+the *contention invariant*, not the *call site shape*.
+
+If a future change adds another `skip_*` flag (e.g. `skip_audit`),
+audit each newly-gated site for the same "is the gate really what
+protects this site?" question. A test that exercises the worker's
+terminal path (e.g. cancel mid-flight, error mid-stream) is the
+regression guard for the "Did the gate hide a needed write?" question.
+
+### When NOT to apply
+
+- The gate is by *site shape* and the shape is *exactly* the contended
+  key (e.g. `if message_persist_key == parent_key { ... }` — then
+  shape == intent and no re-framing is needed).
+- The PR2a fix is the canonical exception, not a precedent. The PR1
+  design intent ("worker doesn't write to parent's `messages` table")
+  was right; the implementation just over-reached. Future flags should
+  default to "narrow gate, verify each site".
+
 ## DEBT.md Linkage
 
 - `RULE-A-006` (production chat.rs agent loop = test run_chat_loop): **closed (2026-06-15)**
@@ -469,26 +597,57 @@ Assembled as `behavior_prompt + "\n\n" + mode_prefix + "\n\n" + base_prompt`.
   **closed (2026-06-14)**. Both were originally closed by mirroring the
   fix into the faithful port; the 06-15 unification means the mirror is
   no longer needed.
-- `RULE-A-014` (B6 PR1b 2026-06-19, **open**): `PermissionContext.is_worker`
-  is set on the worker side (`_worker_permission_ctx` constructed in
-  `run_subagent`) but **not threaded into the nested `run_chat_loop` call**.
-  `run_chat_loop` internally rebuilds its own `PermissionContext { is_worker: false }`
-  from the session row. As a result, the `if ctx.is_worker { Decision::Deny }`
-  branch at the top of `ask_path` is **unreachable on the worker path**:
-  `general-purpose` + Edit/Plan mode + a write-tool that triggers Tier 4
-  ask_path / ask_shell will emit `permission:ask` → register into
-  `permission_asks` → wait for oneshot (which never comes because the
-  worker has no UI sink) → **hang until user Stop**. The Tier 4 ask
-  denial logic is unit-tested via `permissions::check` with
-  `is_worker: true` directly (decision path verified), but the end-to-end
-  worker path cannot trigger it without threading. **Fix** (~10 lines + 1
-  end-to-end test): add `is_worker: Option<bool>` as the 21st parameter
-  to `run_chat_loop`, pass `Some(true)` from `run_subagent`, have
-  `run_chat_loop` override the default `false` when `Some`. **Status**:
-  accepted as PR2+ follow-up; the trigger conditions are narrow
-  (`general-purpose` + Edit/Plan + dangerous tool), Yolo mode is
-  unaffected (Tier 4 bypass early-returns Allow), `researcher` is read-only
-  and never triggers ask.
+- `RULE-A-014` (B6 PR2b 2026-06-20, **closed by PR2b**): the
+  `PermissionContext.is_worker` override on the worker path is now
+  threaded into the nested `run_chat_loop` call via the 21st parameter
+  `is_worker: Option<bool>`. `run_subagent` passes `Some(true)`; the
+  loop body reads `effective_is_worker = is_worker.unwrap_or(false)`
+  and sets `PermissionContext { is_worker: effective_is_worker, ... }`.
+  The Tier 4 `ask_path` / `ask_shell` branches now see `ctx.is_worker = true`
+  and collapse to `Decision::Deny` instead of emitting `permission:ask`
+  and waiting for a oneshot that the worker has no way to receive.
+  Trigger conditions for the hang were narrow (`general-purpose` subagent
+  + Edit/Plan mode + Tier 4 ask-triggering tool); Yolo was unaffected
+  (Tier 4 bypass early-returns Allow); `researcher` was unaffected
+  (read-only, never triggers ask). Regression test:
+  `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`
+  (PR2b, `app/src-tauri/src/agent/tests.rs`) — runs the worker with
+  Edit mode + `general-purpose` + `write_file` to a path outside
+  `permission_ctx.cwd`; verifies the loop exits in <15s (would hang
+  forever on a stuck oneshot if PR2b's fix were reverted) and the
+  tool_result is `is_error: true` with a deny reason.
+- `RULE-A-015` (B6 PR2a 2026-06-20, **closed by PR2a**): PR1b's
+  `skip_persist` gate was over-broad — it covered 2 sites that should
+  NOT be gated: (a) `add_token_usage` (token-usage metadata lives on
+  the `sessions` table, not the `messages` table — the worker must
+  still stream per-turn usage into the parent's `sessions` accumulator
+  so the parent's UI shows live total cost); (b) the terminal
+  `emit_chat_event_via_sink(ChatEvent::Done)` (the `SubagentBufferSink`
+  is BOTH the consumer of the terminal `Done` and the source of
+  `transcript_snapshot()` — gating it killed the worker's
+  `was_cancelled` tracking, so the persist step would always see
+  `Completed` even on cancel). PR2a lifted both out of the gate. The
+  accurate `skip_persist` site count is now **16** (not the 18 the
+  PR1 spec said). See "Pattern: PR2a corrected PR1 over-broad
+  skip_persist gate (RULE-A-015)" below for the design rationale.
+- `RULE-A-016` (B6 PR2b 2026-06-20, **open**): the Tier 4 `ask_path` /
+  `ask_shell` branches call `record_audit_event(ToolDenied)` (and the
+  Tier 4 `ask_path`'s collapse path) WITHOUT a worker check. With
+  PR2b's `is_worker` threading in place, a worker Tier 4 ask collapse
+  now correctly returns `Decision::Deny` — but the `record_audit_event`
+  call inside the collapse path still writes a `tool_denied` row into
+  the **parent's** `session_audit_events` table (worker reuses
+  `parent_session_id`). This pollutes the C4 audit log: a user
+  reviewing the parent session's audit would see a worker Tier 4
+  collapse that was never surfaced to the parent UI. Fix: gate the
+  collapse's `record_audit_event` on `!ctx.is_worker` (worker decisions
+  belong in the transcript's `TranscriptKind::PermissionAsk` entries,
+  not in the parent's audit log); update the
+  `audit_not_polluted_by_worker` test to assert the worker's
+  `tool_denied` row appears in `subagent_runs.transcript_json`, not in
+  `session_audit_events`. Out of scope for PR2 (the persist path is
+  correct enough for the C4 audit log to not crash; the pollution is a
+  UX/audit-integrity issue, not a correctness issue).
 - `RULE-E-005` (worktree destroy await cancel): unaffected by B6 (worker
   Drop is properly bounded by `skip_session_active=true`; the parent
   `cancel_inflight_for_session` lookup continues to find the parent's
@@ -628,14 +787,25 @@ markdown rendering handles both markers uniformly.
 | `agent_loop_dispatch_subagent_cancel_propagates_to_worker` | B6 PR1b: parent_token cancel → worker_token child fires → status=cancelled + CANCELLED_MARKER; tool_use/tool_result pairing preserved |
 | `agent_loop_dispatch_subagent_error_returns_status_error` | B6 PR1b: MockProvider stream error → status=error; tool_use/tool_result pairing preserved |
 | `agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active` | B6 PR1b: `HangingThenCancel` worker + 500ms delayed cancel keeps worker in flight; snapshot verifies parent `session_active_request[parent_session_id]` is preserved (worker Drop with `skip_session_active=true` does NOT evict it) |
+| `agent_loop_dispatch_subagent_persists_subagent_run` | B6 PR2a: parent dispatches `general-purpose`; `subagent_runs` row exists with `status='completed'`, `summary` carries `final_text`, `transcript_json` non-empty, `transcript_truncated=0`; `transcript_snapshot` is not empty |
+| `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` | B6 PR2a + RULE-A-015: parent_token cancel mid-worker → `subagent_runs.status='cancelled'` + `finished_at` NOT NULL; regression: terminal `Done` emit is OUTSIDE the `skip_persist` gate (PR2a fix) so `SubagentBufferSink.was_cancelled` was reachable |
+| `agent_loop_dispatch_subagent_audit_not_polluted_by_worker` | B6 PR2a: parent + `researcher` worker (silent allow, Tier 5) → parent's `session_audit_events` only carries parent's own ⑨ decisions; worker Tier 5 decisions stay in `transcript` (NOT in `session_audit_events`) |
+| `agent_loop_dispatch_subagent_token_usage_folds_into_parent` | B6 PR2a: worker emits 2 turns of usage → parent's `sessions.input_tokens_total` and `output_tokens_total` carry the SUM (decoupled `add_token_usage` from `skip_persist` per PR2a RULE-A-015) |
+| `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014: parent Edit mode + `general-purpose` worker + `write_file` to path outside `permission_ctx.cwd` → `tokio::time::timeout(15s)` wraps the worker; Tier 4 `ask_path` sees `ctx.is_worker=true` → `Decision::Deny` IMMEDIATELY (no oneshot wait, no hang); tool_result is `is_error: true` with deny reason; parent's `session_audit_events` has 1 `tool_denied` row (RULE-A-016: this row will move to the transcript in a follow-up) |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |
 
-All 21 must pass on every change to `run_chat_loop`. If any fails, the
+All 26 must pass on every change to `run_chat_loop`. If any fails, the
 production call site in `chat.rs` is **at risk** of the same defect
 (failing the integration test means production would also fail).
 
-The 4 B6 worker tests use the same `MockProvider` + `MockEmitter`
-fixture as the existing 17 tests — no test-internal mock of the
+The 5 B6 worker tests use the same `MockProvider` + `MockEmitter`
+fixture as the existing 17 base tests — no test-internal mock of the
 worker; the worker runs against the same `run_chat_loop` recursion
-that production would use, just with the 3 isolation flags set.
+that production would use, just with the 4 isolation flags set.
+
+The 4 B6 PR2a + 1 PR2b tests cover the persistence + audit + RULE-A-014
+invariants on top of the PR1 worker surface. The 7 `subagent_runs::tests_*`
+integration tests in `db/tests.rs` cover the DB CRUD + CASCADE + 4 MiB
+cap + token-usage streaming layer separately (the persistence layer's
+own regression suite, distinct from the agent-loop layer).
