@@ -853,23 +853,25 @@
 - **Origin**: Session 49 B6 PR3b "Next Steps" 段(commit `186e500`,自查发现)
 - **Subsystem**: Frontend (`ToolCallCard` Vue 3 lifecycle 清理)
 - **Files**: `app/src/components/chat/ToolCallCard.vue:300-380`(`openSubagentDrawer` + retry polling 入口)
-- **Description**: retry polling `setTimeout` chain 在 component unmount 时**未清理**,可能 fire 后写 unmounted `workerWaiting` ref。Vue 3 在 unmounted ref 上写值有 console warning 噪音 + DevTools 调试误导风险。非功能性 leak,prod 路径无 user-visible 后果(5 timer × 1.5s × 几字节 = 噪声级)。
-- **前置依赖(无)**:可独立 PR,~5 行 fix
-- **Status**: open
+- **Description**: retry polling(`async while loop + await new Promise(r => setTimeout(r, 300))`,**非**嵌套 setTimeout chain)在 component unmount 时**未清理**,await resolve 后继续写 unmounted `workerWaiting` ref + 可能 openDrawer on unmounted card。非功能性 leak,prod 路径无 user-visible 后果。
+- **前置依赖(无)**:可独立 PR,~8 行 fix
+- **Status**: **closed**(FT-F-003 已实施合并 `272fbe9`,2026-06-20 Session 53)
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-worker-waiting-ref-leak/`
+- **Closed At**: `272fbe9`
+- **Related Task**: ~~`.trellis/tasks/06-20-06-20-frontend-worker-waiting-ref-leak/`(已 closed `272fbe9`)~~
 - **Candidate fixes**:
-  - **A**(推荐):`onUnmounted(() => clearTimeout(pollTimer))` + tracking 当前 timer id(~5 行)
-  - **B**:抽 composable `useWorkerDrawerPolling`(可测试性 ↑,但本场景单调用点,可能 over-engineering)
-  - **C**:`AbortController` 包装(与后端 fetch cancellation 一致,但本场景纯 setTimeout,Ac 略重)
+  - ~~**A**(原稿推荐):`clearTimeout(pollTimer)`~~ — **基于错误假设**(以为是嵌套 setTimeout chain,实际是 await loop,无 timer id 可 clear)。Session 53 实读代码后否决
+  - ~~**B**:抽 composable~~ — over-engineering(单调用点)
+  - ~~**C**:AbortController~~ — 跟 flag 本质一样多一层抽象
+  - **A'(实际采用,2026-06-20 Session 53)**:`let unmounted` flag + `onUnmounted(() => { unmounted = true })` + while loop 内每个 await 后 + 副作用前 `if (unmounted) return` 守卫(8 处)。最 idiomatic,匹配 await 结构
 - **Decisions to revisit**:
-  - A / B / C 方案选哪个
-  - 测试覆盖范围:console 不出 warning? ghost ref 不被写? 内存不增长?
-  - Vue 3.5+ 在 unmounted ref 上写值的实际行为(待实测)
+  - ✅ 方案:重选为 A'(unmounted flag 守卫) — clearTimeout 假设错(await loop 无 timer id),用户确认 Session 53
+  - ✅ 测试覆盖:unmount_during_polling 回归 test(loop 跳出 + fetchForSession/openDrawer 不被额外调用);破坏性验证(删守卫→test fail)证明 test 有效
+  - ✅ Vue 3.5+ 行为:实测 Vue 3.5.35 unmount 后写 ref **不再 warning**(守卫阻止了写,warnSpy 断言调为 future-proof lock)
 - **Why deferred**:
   - 非功能性 leak,prod 路径无 user-visible 后果
-  - 修法单调,但缺回归测试基线(需先确认 unmount 不会中断正常 polling 命中)
-- **Related FT (同次 session)**:FT-F-001 / FT-F-002
+  - 修法单调,但缺回归测试基线(需先确认 unmount 不会中断正常 polling 命中) — Session 53 已补回归 test
+- **Related FT (同次 session)**:FT-F-001(closed)/ FT-F-002
 
 ### FT-F-004 — SubagentDrawer UX polish bundle (C1+C2+C3+C5)
 
@@ -1046,5 +1048,5 @@
 
 ---
 
-**最后更新**: 2026-06-20 by carlos — Session 53:**FT-F-001 完整 closed**(`6bb5060`)— 阶段 2 typed-cards 重做实施合并,drawer 统一 JSON payload 渲染改为按 kind 路由到 ToolInputBody/ToolOutputBody/PermissionAskBody + 新做 WorkerTextTimeline;278 pass 全集,vue-tsc 0 error。trellis-check 抓出跨层 bug(synthesizeAsk 读 snake_case 但 PermissionAskPayload 实存 camelCase → worker 权限卡片空白),已修 + 沉淀进 cross-layer guide(`42daa3b`)。FT-F-001 主线(Stage 1 PR1 `9b685c8` + Stage 2 `6bb5060`)全部 closed。剩余同源 follow-up:FT-F-002 / FT-F-003 / FT-F-004(独立 task)。
+**最后更新**: 2026-06-20 by carlos — Session 53:**FT-F-003 closed**(`272fbe9`)— `workerWaiting` ref unmount 清理:retry while loop(await setTimeout)加 unmounted flag 守卫(8 处,每个 await 后 + 副作用前);原稿方案 A(clearTimeout)基于错误假设(实际是 await loop 无 timer id),Session 53 重选 unmounted flag。279 pass,vue-tsc 0 error。同 session 前序:FT-F-001 完整 closed(`6bb5060`)+ cross-layer serde drift trap 沉淀(`42daa3b`)。剩余同源 follow-up:FT-F-002(toast fallback)/ FT-F-004(UX polish bundle)。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
