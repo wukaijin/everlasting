@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "workerMissed ref + openSubagentDrawer 状态机(default/waiting/missed 三态)要遵守 Pinia store + 组件 ref 交互模式;miss/hit 路径的 ref 写入时序"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "missed 态 warn icon 颜色用 --color-tool-error/--color-tool-shell token(FT-F-005 banner 同款),禁止硬编码 hex"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "三态实现决策:加 workerMissed ref vs 扩 workerWaiting 为枚举;warn icon 复用 FT-F-005 已引入的 registry 项"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend spec 索引 + pre-dev checklist"}

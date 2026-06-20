@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 workerMissed 三态 ref + openSubagentDrawer 各路径(immediate/afterRetry/poll/miss)的 ref 写入正确,unmount guard(FT-F-003)未破"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "验证 missed 态 warn icon 无硬编码 hex,全用 token"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "check checklist:对照 frontend spec 索引确认无回归"}
