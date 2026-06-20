@@ -811,12 +811,12 @@
 - **Subsystem**: Frontend (`SubagentDrawer` + `ToolCallCard` + chat 主面板卡片)
 - **Files**: `app/src/components/chat/SubagentDrawer.vue` + `app/src/components/chat/ToolCallCard.vue` + chat 主面板卡片(`MessageItem` / `ToolCallCard` / `PermissionCard` 等)
 - **Description**: drawer 当前用**统一 `payload` 字符串**展示 worker 输出(call / result / perm / text 混在一段 JSON 字符串里,所有类型走同一渲染分支)。重做为 typed-cards:不同类型 payload 路由到对应卡片组件 —— `tool_call` → `ToolCallCard` 复用 / `tool_result` → `ToolResultCard` / `permission_ask` → `PermissionCard` / `text` → `MessageItem`。
-- **前置依赖(硬依赖,先做)**:chat 主面板卡片 props interface **下沉为 shared**(否则 drawer 复用主面板卡片会带入大量无关 prop 噪音,组件 API 不收敛,易回滚)
-- **Status**: open
+- **前置依赖(硬依赖,先做)**:chat 主面板卡片 props interface **下沉为 shared**(否则 drawer 复用主面板卡片会带入大量无关 prop 噪音,组件 API 不收敛,易回滚)。**Blocked by**: `.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/`(FT-F-001 PR1 硬前置,2026-06-20 Session 51 起 skeleton,planning 占位)。**PR1 已 Resolved(merged `9b685c8`,2026-06-20 Session 52)** — 3 shared body component (`ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`)抽出,decoupled data props + callback prop 模式,3 body 完全不读 store;本 FT-F-001 阶段 2 现在 **unblocked**,可起 task 走 brainstorm。
+- **Status**: open(PR1 硬前置已 closed;FT-F-001 主体 typed-cards 重做仍 open,阶段 2 现可推进)
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/`
+- **Related Task**: `.trellis/tasks/06-20-06-20-frontend-drawer-typed-cards/`(FT-F-001 阶段 2,本 task)+ ~~`.trellis/tasks/06-20-06-20-frontend-tool-call-card-shared-body-extract/`(FT-F-001 PR1 硬前置,已 closed `9b685c8`)~~
 - **Decisions to revisit**:
-  - 主面板卡片 props 下沉方案:独立 PR 先做 API 设计 / 还是 FT-F-001 拆两阶段提交
+  - ✅ 主面板卡片 props 下沉方案:D2 已决定(2026-06-20,Session 51)— 独立 PR 先做硬前置(对应 `06-20-06-20-frontend-tool-call-card-shared-body-extract/`),本 task 是阶段 2
   - drawer scoped 样式 vs 主面板卡片共享样式的拆分边界(避免样式泄漏到主面板)
   - 现有 12 个 `SubagentDrawer.test.ts`:typed-cards 化后保留 vs 重写
   - 持久化层:`subagent_events.payload` 仍存原始 JSON 字符串(后端零改动),还是新加 `payload_kind` 列做类型索引
@@ -1044,5 +1044,5 @@
 
 ---
 
-**最后更新**: 2026-06-20 by carlos — 新增 FT-F-004 (drawer UX polish bundle) + FT-F-005 (drawer failed state banner) open entries(均从 2026-06-20 截图分析);FT-F-001 Related Task 字段回填实际 task 路径;FT-F-002 / FT-F-003 仍 open
+**最后更新**: 2026-06-20 by carlos — Session 52:FT-F-001 PR1 硬前置**已实施合并**(`9b685c8`)— 3 shared body component (`ToolInputBody` / `ToolOutputBody` / `PermissionAskBody`)抽出 + 32 新增 test(272 pass 全集)+ IMPLEMENTATION.md §4 加 2026-06-20 ADR;FT-F-001 主体 **unblocked**,阶段 2 typed-cards 重做可推进。前序 Session 51+1:skeleton 起 + Blocked by 引用 + D2 决策 mark resolved。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
