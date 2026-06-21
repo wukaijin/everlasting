@@ -46,6 +46,7 @@ import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
+import WorkerAskBanner from "./WorkerAskBanner.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
@@ -443,6 +444,16 @@ if (typeof window !== "undefined") {
         >
           <Icon name="shield-check" :size="14" />
         </button>
+        <!--
+                  PR2 RULE-FrontSubagent-003 (2026-06-22): worker ask
+                  banner. Sits next to the audit button — same visual
+                  row, same session scope (reads currentSessionId).
+                  Non-blocking: clicks open the SubagentDrawer for
+                  the most-recent pending worker ask; doesn't steal
+                  focus or overlay the chat. Hidden when no worker
+                  asks are pending for this session.
+                -->
+        <WorkerAskBanner />
       </div>
     </header>
 

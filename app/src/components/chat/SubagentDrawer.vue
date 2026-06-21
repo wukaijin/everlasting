@@ -13,7 +13,7 @@
 //   </DrawerSection>
 //   <DrawerSection type="tools" :entries>       ← expanded by default
 //     <DrawerToolCallCard v-for="p in paired" :call :result />
-//     <DrawerPermissionAskCard v-for="a in asks" :ask />  ← PR6 R24: historical-only (downgraded)
+//     <DrawerPermissionAskCard v-for="a in asks" :ask :interactive />  ← PR2 RULE-FrontSubagent-003 (2026-06-22): mode-aware. `interactive = isPermissionAskLive(rid)` reconciles each transcript ask against the live permissions store (`getPendingByRid`) — live-pending → interactive Allow/Deny card; resolved/transcript-only → historical info-only body. Replaces the PR6 R24 historical-only downgrade (the 3 blockers — worker is_worker collapse, synthetic rids, no independent permission session — were all resolved by PR1/PR1.5 backend restructuring).
 //   </DrawerSection>
 //   <DrawerSection type="reply" :text>          ← expanded by default
 //     <CancelledChip v-if="cancelled" />        ← PR6 R23 (downgraded): ⊘ Cancelled · at X.Xs
@@ -63,6 +63,7 @@ import {
   type ThinkingSection,
 } from "../../stores/subagentRuns";
 import { useChatStore } from "../../stores/chat";
+import { usePermissionsStore } from "../../stores/permissions";
 import type {
   PermissionAsk,
   Risk,
@@ -83,6 +84,7 @@ import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
 
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
+const permissionsStore = usePermissionsStore();
 
 /** FT-F-001 stage 2 (2026-06-20): repo root for the historical-mode
  *  PermissionAskBody path badge. Q2 decision — we assume the worker
@@ -96,8 +98,17 @@ const repoRoot = computed<string>(() => chatStore.currentCwd);
  *  drawer transcript section's `payload_json`. The body component takes
  *  the typed `PermissionAsk` shape (camelCase), so we map field-by-
  *  field. Rid / sessionId / toolUseId are best-effort strings here —
- *  the historical-mode card never fires onRespond, so these IDs are
- *  purely informational (they DO drive the path badge via `ask.path`).
+ *  they drive the path badge via `ask.path` AND (in interactive mode)
+ *  the `permission_response` IPC routing.
+ *
+ *  PR2 RULE-FrontSubagent-003 (2026-06-22): the payload also carries
+ *  an optional `workerRunId` — set when the backend emits a LIVE
+ *  worker ask. The historical transcript entries (RULE-A-016 collapse
+ *  path pre-PR1) do NOT carry `workerRunId`, so its absence signals
+ *  a historical entry; its presence signals a real interactive ask.
+ *  The `interactive` reconciliation below uses `getPendingByRid`
+ *  (the live permissions store) instead, so the field is purely
+ *  informational — kept here for completeness / debugging.
  *
  *  Cross-layer drift note (2026-06-20 check phase): the Rust
  *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
@@ -117,6 +128,12 @@ function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
     risk: p.risk as Risk,
     reason: p.reason as string | undefined,
     path: p.path as string | undefined,
+    workerRunId:
+      typeof p.workerRunId === "string"
+        ? p.workerRunId
+        : typeof p.worker_run_id === "string"
+          ? p.worker_run_id
+          : undefined,
   };
 }
 
@@ -587,6 +604,34 @@ function jumpToLatest(): void {
 const showJumpLatest = computed<boolean>(
   () => !autoFollow.value && sections.value.length > 0,
 );
+
+/** PR2 RULE-FrontSubagent-003 (2026-06-22): reconciliation helper for
+ *  the drawer's PermissionAsk cards. For each transcript ask entry,
+ *  we check whether the same `rid` is live-pending in the permissions
+ *  store (meaning the worker is CURRENTLY awaiting the user's
+ *  decision). If so, the card renders in interactive mode (Allow /
+ *  Deny buttons); otherwise it renders in historical mode (static).
+ *
+ *  Why rid-based reconciliation (not workerRunId-based):
+ *    - The PR1 backend persists each live ask to BOTH the worker's
+ *      transcript (`subagent_runs.transcript_json`, via the sink's
+ *      emit_permission_ask hook) AND the permissions store (live
+ *      oneshot map). The transcript entry carries the SAME rid as
+ *      the live IPC payload — they're the same ask, two surfaces.
+ *    - When the user responds, the store clears the live entry; the
+ *      transcript entry stays (it's a historical record). So
+ *      "live = getPendingByRid(rid)" naturally flips from `true`
+ *      to `false` the moment the user acts.
+ *    - A future drawer open (after worker exit) starts with NO live
+ *      entries, so all cards render historical — correct behavior.
+ *
+ *  Returns `false` for empty / missing rids (defensive against
+ *  malformed payload_json — historical entries pre-PR2 may lack
+ *  rids entirely). */
+function isPermissionAskLive(rid: string): boolean {
+  if (!rid) return false;
+  return permissionsStore.getPendingByRid(rid) !== undefined;
+}
 </script>
 
 <template>
@@ -754,6 +799,7 @@ const showJumpLatest = computed<boolean>(
                       v-else
                       :ask="synthesizeAsk(e.payload_json)"
                       :repo-root="repoRoot"
+                      :interactive="isPermissionAskLive(String(e.payload_json.rid ?? ''))"
                     />
                   </template>
                 </DrawerSection>

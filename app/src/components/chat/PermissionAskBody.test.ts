@@ -250,6 +250,67 @@ describe("PermissionAskBody interactive mode", () => {
     // "Option::is_none")] contract).
     expect(w.find(".permission-ask-body__path").exists()).toBe(false);
   });
+
+  // N3 (RULE-FrontSubagent-003 check phase, 2026-06-22): the
+  // "始终允许" (allow_always) button must be hideable via the
+  // `hideAllowAlways` prop. The worker-ask path
+  // (`DrawerPermissionAskCard` derives this from `ask.workerRunId`)
+  // hides it because the backend worker AllowAlways arm treats
+  // the response as AllowOnce — persisting worker grants to
+  // `session_tool_permissions` would cross privilege boundaries.
+  // The main-chat ToolCallCard path does NOT set the prop and
+  // keeps all 4 buttons.
+  describe("hideAllowAlways prop (N3: worker asks hide 始终允许)", () => {
+    it("default (false) renders all 4 buttons including 始终允许", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk(),
+          onRespond: vi.fn(),
+          repoRoot: "/data/repo",
+          // hideAllowAlways intentionally omitted — default false.
+        },
+      });
+      expect(w.find(".permission-ask-body__btn--always").exists()).toBe(true);
+      expect(w.text()).toContain("始终允许");
+      // 4 buttons total: 仅一次 / 始终允许 / 拒绝 / 拒绝并说明.
+      expect(w.findAll(".permission-ask-body__btn").length).toBe(4);
+    });
+
+    it("hideAllowAlways=true does NOT render the 始终允许 button", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk(),
+          onRespond: vi.fn(),
+          repoRoot: "/data/repo",
+          hideAllowAlways: true,
+        },
+      });
+      expect(w.find(".permission-ask-body__btn--always").exists()).toBe(false);
+      expect(w.text()).not.toContain("始终允许");
+      // 3 buttons total: 仅一次 / 拒绝 / 拒绝并说明.
+      expect(w.findAll(".permission-ask-body__btn").length).toBe(3);
+      // The other 3 buttons still render.
+      expect(w.find(".permission-ask-body__btn--once").exists()).toBe(true);
+      expect(w.findAll(".permission-ask-body__btn--deny").length).toBe(2);
+    });
+
+    it("hideAllowAlways=true does NOT affect historical mode (no buttons either way)", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk(),
+          repoRoot: "/data/repo",
+          hideAllowAlways: true,
+        },
+      });
+      // Historical mode never renders action buttons regardless.
+      expect(w.find(".permission-ask-body__btn--always").exists()).toBe(false);
+      expect(w.find(".permission-ask-body__btn--once").exists()).toBe(false);
+      expect(w.findAll(".permission-ask-body__btn--deny").length).toBe(0);
+    });
+  });
 });
 
 describe("PermissionAskBody historical mode", () => {
@@ -264,9 +325,7 @@ describe("PermissionAskBody historical mode", () => {
     expect(w.find(".permission-ask-body__historical-note").exists()).toBe(
       true,
     );
-    expect(w.text()).toContain("worker wanted shell");
-    expect(w.text()).toContain("ask collapsed");
-    expect(w.text()).toContain("worker context");
+    expect(w.text()).toContain("worker asked for shell");
   });
 
   it("does NOT render any action buttons in historical mode", () => {

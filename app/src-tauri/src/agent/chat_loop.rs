@@ -115,10 +115,14 @@ use crate::tools::ToolContext;
 /// `Some(false)` (default to the production-style false); the
 /// worker nested call passes `Some(true)` so the
 /// `PermissionContext` built inside the loop carries
-/// `is_worker: true`, which makes the Tier 4 `ask_path` /
-/// `ask_shell` branches collapse to `Decision::Deny` instead of
-/// emitting a `permission:ask` (workers have no UI sink — a
-/// permission modal would hang forever on the oneshot).
+/// `is_worker: true`. The 2026-06-22 fix (RULE-FrontSubagent-003)
+/// added the 24th parameter `worker_run_id: Option<String>` so
+/// `ask_path` can build the worker-owned permission session id
+/// (`"worker:<worker_run_id>"`) and populate
+/// `PermissionAskPayload.worker_run_id` for frontend routing.
+/// Together these two params let worker asks enter the
+/// interactive round-trip (`register_ask` + `tokio::select!`)
+/// instead of pre-2026-06-22's auto-Deny collapse.
 ///
 /// `run_chat_loop` owns the per-turn `CancellationGuard` that
 /// removes the (rid → token) and (session_id → rid) entries on
@@ -191,15 +195,16 @@ pub async fn run_chat_loop(
     skip_persist: bool,
     // B6 Subagent PR2b (2026-06-20, RULE-A-014): when `Some(true)`,
     // the `PermissionContext` built inside this loop carries
-    // `is_worker: true`, which makes the Tier 4 `ask_path` /
-    // `ask_shell` branches collapse to `Decision::Deny` instead of
-    // emitting a `permission:ask` (workers have no UI sink — a
-    // permission modal would hang forever). `None` falls back to
-    // the session-row mode's natural default (production = `false`,
-    // since no parent process is a worker). The worker path passes
-    // `Some(true)`; production + 35 `agent_loop_*` integration
-    // tests pass `Some(false)` to make the production-style default
-    // explicit at the call site.
+    // `is_worker: true`, which gates `ask_path` into the worker's
+    // interactive round-trip branch (the 2026-06-22 fix replaced
+    // the pre-fix Tier 4 collapse-to-Deny with a `register_ask` +
+    // `tokio::select!{cancel, timeout, oneshot}` flow keyed under
+    // the worker-owned permission session id). `None` falls back
+    // to the session-row mode's natural default (production =
+    // `false`, since no parent process is a worker). The worker
+    // path passes `Some(true)`; production + 35 `agent_loop_*`
+    // integration tests pass `Some(false)` to make the
+    // production-style default explicit at the call site.
     is_worker: Option<bool>,
     // B6 PR3 (2026-06-20, PR2 hotfix + PR3a): optional Tauri
     // `AppHandle` used by `run_subagent` to wire the worker's
@@ -233,6 +238,26 @@ pub async fn run_chat_loop(
     // breakpoint (see `build_instructions_blocks`), independent
     // of the system role.
     system_prompt_override: Option<String>,
+    // 2026-06-22 (RULE-FrontSubagent-003 fix): the worker's
+    // `subagent_runs.id` (DB row UUID, NOT the human-readable
+    // `worker_rid`). Threaded into the `PermissionContext` built
+    // inside this loop so `ask_path` can:
+    //
+    // 1. Build the worker-owned permission session id
+    //    (`"worker:<worker_run_id>"`) so the oneshot map entry
+    //    does not collide with the parent's pending asks.
+    // 2. Populate `PermissionAskPayload.worker_run_id` so the
+    //    frontend `<SubagentDrawer>` routes the ask to the
+    //    correct worker row instead of the global
+    //    `<PermissionModal>`.
+    //
+    // `None` for the parent path (production chat + 35
+    // `agent_loop_*` integration tests); `Some(worker_run_id)`
+    // for the nested call inside `run_subagent` (B6 PR1a+
+    // 2026-06-22 follow-up). The companion `is_worker: Some(true)`
+    // gates the worker's `ask_path` branch — this field carries
+    // the routing key.
+    worker_run_id: Option<String>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -374,20 +399,33 @@ pub async fn run_chat_loop(
     // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
     // (added as the 21st arg) threads the worker path's
     // `PermissionContext.is_worker = true` override into the loop
-    // body. Without this, the worker's Tier 4 `ask_path` /
-    // `ask_shell` would still emit `permission:ask` → register
-    // into `permission_asks` → wait for a oneshot (which never
-    // comes because the worker has no UI sink) → hang until user
-    // Stop. With this fix, a worker Edit/Plan + 写工具 combination
-    // is denied (not hung) at Tier 4. `Some(false)` (production
-    // + tests) → `false` (production path); `Some(true)` (worker
-    // nested call) → `true` (collapse to Deny).
+    // body. The 2026-06-22 fix (RULE-FrontSubagent-003) further
+    // added `worker_run_id` (the 24th arg) so `ask_path` can route
+    // worker asks via a worker-owned permission session id
+    // (`"worker:<worker_run_id>"`) + propagate `worker_run_id`
+    // into the IPC payload for frontend routing. Pre-fix (PR2b)
+    // the worker path collapsed Tier 4 ask_path → Deny (no UI
+    // sink — would hang on oneshot); post-fix the worker enters
+    // the interactive round-trip and waits for the user. Yolo
+    // mode still bypasses the whole Tier 4 above (in `check`),
+    // so a worker under Yolo never reaches `ask_path`.
     let effective_is_worker = is_worker.unwrap_or(false);
     let permission_ctx = PermissionContext {
         session_id: session_id.clone(),
         mode: session_mode,
         cwd: session_cwd.clone(),
         is_worker: effective_is_worker,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): carry the
+        // worker_run_id through so `ask_path` can build the
+        // worker-owned permission session id and propagate the
+        // worker_run_id into `PermissionAskPayload.worker_run_id`.
+        // `None` for the parent path (production chat + tests);
+        // `Some(...)` for the worker nested call. The
+        // `effective_is_worker` gate above is the actual
+        // "is this a worker?" predicate — this field is just
+        // the routing key, used only when `effective_is_worker`
+        // is true.
+        worker_run_id: worker_run_id.clone(),
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
@@ -2333,9 +2371,21 @@ async fn run_subagent(
         // base_prompt)` step. Pre-fix the worker was getting the
         // parent's system prompt (the worker's own prompt was
         // dead code), causing prompt / permission contradictions
-        // in Edit/Plan mode (worker told "you can write" but
-        // Tier 4 collapsed write tools to `Deny`).
+        // (worker told "you can write" but `is_worker=true` made
+        // Tier 4 ask_path collapse to Deny pre-2026-06-22).
         Some(assemble_subagent_prompt(def, task)),
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): thread the
+        // worker's `subagent_runs.id` (DB row UUID) so the
+        // nested run_chat_loop can build the worker-owned
+        // permission session id and propagate `worker_run_id`
+        // into `PermissionAskPayload.worker_run_id`. `None` when
+        // `insert_run` failed (no DB row → no drawer can open →
+        // worker ask interactive would have nothing to route to;
+        // the ask_path worker branch will fall back to a logging
+        // sentinel via the unwrap_or_else in permissions::ask_path,
+        // but the practical case is "spawn failed" — the parent
+        // gets an Error tool_result anyway).
+        worker_run_id_opt.clone(),
     ))
     .await;
 

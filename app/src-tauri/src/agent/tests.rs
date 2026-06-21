@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::helpers::{
@@ -203,9 +203,13 @@ async fn cancel_inflight_for_session_cancels_token() {
         s2p.insert("s1".to_string(), "rid-1".to_string());
     }
     assert!(!token.is_cancelled());
-    let exit_rx =
-        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
-            .await;
+    let exit_rx = cancel_inflight_for_session(
+        &cancellations,
+        &session_active_request,
+        &inflight_exits,
+        "s1",
+    )
+    .await;
     assert!(
         token.is_cancelled(),
         "matching request's token should be cancelled"
@@ -238,10 +242,7 @@ async fn cancel_inflight_for_session_missing_session_is_noop() {
     )
     .await;
     // No panic, no state change. Returns None (no in-flight request).
-    assert!(
-        cancellations.lock().await.is_empty(),
-        "nothing to cancel"
-    );
+    assert!(cancellations.lock().await.is_empty(), "nothing to cancel");
     assert!(exit_rx.is_none(), "no exit signal for a missing session");
     assert!(session_active_request.lock().await.is_empty());
     assert!(inflight_exits.lock().await.is_empty());
@@ -266,9 +267,13 @@ async fn cancel_inflight_for_session_token_gone_is_noop() {
         let mut s2p = session_active_request.lock().await;
         s2p.insert("s1".to_string(), "rid-gone".to_string());
     }
-    let exit_rx =
-        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
-            .await;
+    let exit_rx = cancel_inflight_for_session(
+        &cancellations,
+        &session_active_request,
+        &inflight_exits,
+        "s1",
+    )
+    .await;
     // No panic; the function is best-effort. No token found → no
     // exit receiver either (returns None).
     assert!(exit_rx.is_none());
@@ -313,9 +318,13 @@ async fn cancel_inflight_returns_exit_signal_resolving_on_completion() {
     }
 
     // Cancel + take the exit signal.
-    let exit_rx =
-        cancel_inflight_for_session(&cancellations, &session_active_request, &inflight_exits, "s1")
-            .await;
+    let exit_rx = cancel_inflight_for_session(
+        &cancellations,
+        &session_active_request,
+        &inflight_exits,
+        "s1",
+    )
+    .await;
     assert!(token.is_cancelled(), "token should be cancelled");
     let exit_rx = exit_rx.expect("an in-flight request yields an exit signal");
     // The receiver was taken out of the map (single-consumer).
@@ -554,10 +563,7 @@ fn behavior_prompt_content_basics() {
 /// layer first so the upstream prompt-cache prefix stays warm.
 #[test]
 fn assemble_system_prompt_orders_layers_behavior_mode_base() {
-    let prompt = crate::agent::system_prompt::assemble_system_prompt(
-        "MODE_MARKER",
-        "BASE_MARKER",
-    );
+    let prompt = crate::agent::system_prompt::assemble_system_prompt("MODE_MARKER", "BASE_MARKER");
     let behavior_pos = prompt
         .find("# Tone and style")
         .expect("behavior section present");
@@ -722,7 +728,11 @@ fn synthetic_tool_result_message_mirrors_tool_calls() {
         MessageContent::Blocks(b) => b,
         MessageContent::Text(_) => panic!("synthetic message must be Blocks, not Text"),
     };
-    assert_eq!(blocks.len(), 1, "one tool_call must produce one ToolResult block");
+    assert_eq!(
+        blocks.len(),
+        1,
+        "one tool_call must produce one ToolResult block"
+    );
     match &blocks[0] {
         ContentBlock::ToolResult {
             tool_use_id,
@@ -730,7 +740,10 @@ fn synthetic_tool_result_message_mirrors_tool_calls() {
             is_error,
         } => {
             assert_eq!(tool_use_id, "toolu_abc", "tool_use_id must match");
-            assert!(is_error, "synthetic tool_result must be flagged is_error=true");
+            assert!(
+                is_error,
+                "synthetic tool_result must be flagged is_error=true"
+            );
             assert!(
                 content.contains("read_file"),
                 "content must name the tool that did not run: {:?}",
@@ -752,9 +765,21 @@ fn synthetic_tool_result_message_mirrors_tool_calls() {
 #[test]
 fn synthetic_tool_result_message_preserves_order_for_multi_call() {
     let tool_calls = vec![
-        ("id_1".to_string(), "read_file".to_string(), serde_json::json!({})),
-        ("id_2".to_string(), "edit_file".to_string(), serde_json::json!({})),
-        ("id_3".to_string(), "shell".to_string(), serde_json::json!({})),
+        (
+            "id_1".to_string(),
+            "read_file".to_string(),
+            serde_json::json!({}),
+        ),
+        (
+            "id_2".to_string(),
+            "edit_file".to_string(),
+            serde_json::json!({}),
+        ),
+        (
+            "id_3".to_string(),
+            "shell".to_string(),
+            serde_json::json!({}),
+        ),
     ];
     let msg = build_synthetic_tool_result_message(&tool_calls);
     let blocks = match &msg.content {
@@ -822,7 +847,11 @@ fn synthetic_tool_result_message_serializes_to_anthropic_wire_shape() {
         "is_error: true must serialize (the is_false skip filter only drops false)"
     );
     assert!(
-        block.get("content").and_then(|s| s.as_str()).unwrap().contains("shell"),
+        block
+            .get("content")
+            .and_then(|s| s.as_str())
+            .unwrap()
+            .contains("shell"),
         "wire content must mention the tool name"
     );
 }
@@ -975,10 +1004,7 @@ impl ChatEventSink for MockEmitter {
     fn emit_tool_result(&self, payload: &ToolResultPayload) {
         self.tool_results.lock().unwrap().push(payload.clone());
     }
-    fn emit_permission_ask(
-        &self,
-        payload: crate::agent::permissions::PermissionAskPayload,
-    ) {
+    fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
         self.permission_asks.lock().unwrap().push(payload);
     }
 }
@@ -1057,7 +1083,9 @@ async fn make_harness() -> TestHarness {
     .await
     .expect("create_project");
     // The project id is generated server-side; re-fetch.
-    let projects = db::list_projects(&pool, false).await.expect("list_projects");
+    let projects = db::list_projects(&pool, false)
+        .await
+        .expect("list_projects");
     let project_id = projects
         .iter()
         .find(|p| p.path == project_path.to_string_lossy().to_string())
@@ -1146,8 +1174,8 @@ async fn agent_loop_basic_text_only_completes() {
         CancellationToken::new(),
         None,
         h.background_shells.clone(),
-        // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // B6 Subagent (2026-06-22): max_turns = None keeps the
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1172,6 +1200,12 @@ async fn agent_loop_basic_text_only_completes() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1255,8 +1289,8 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         CancellationToken::new(),
         None,
         h.background_shells.clone(),
-        // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // B6 Subagent (2026-06-22): max_turns = None keeps the
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1281,6 +1315,12 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1340,7 +1380,9 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "applied".into() }),
+            Ok(ChatEvent::Delta {
+                text: "applied".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -1367,7 +1409,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1392,6 +1434,12 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1465,7 +1513,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1490,6 +1538,12 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1603,7 +1657,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1628,6 +1682,12 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1705,7 +1765,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1730,6 +1790,12 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1788,7 +1854,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1814,6 +1880,12 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
@@ -1821,10 +1893,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
     // and returns; we expect at least one error event in the
     // recorded events.
     assert_eq!(emitter.error_event_count(), 1, "one error event");
-    assert!(emitter
-        .chat_events()
-        .iter()
-        .any(|p| matches!(&p.event,
+    assert!(emitter.chat_events().iter().any(|p| matches!(&p.event,
             ChatEvent::Error { message, .. } if message.contains("exhausted"))));
     assert_eq!(mock.call_count(), 1);
 }
@@ -1852,7 +1921,9 @@ async fn agent_loop_c3_compaction_does_not_panic() {
     let emitter = Arc::new(MockEmitter::new());
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "after-c3".into() }),
+        Ok(ChatEvent::Delta {
+            text: "after-c3".into(),
+        }),
         Ok(ChatEvent::Done {
             stop_reason: Some("end_turn".into()),
             usage: Some(TokenUsage::default()),
@@ -1887,7 +1958,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -1912,6 +1983,12 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -1962,18 +2039,27 @@ fn mock_provider_reports_mock_protocol() {
 #[tokio::test]
 async fn mock_provider_call_count_tracks_send_calls() {
     let mock = Arc::new(MockProvider::new(vec![
-        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
-            stop_reason: Some("end_turn".into()),
-            usage: None,
-        })]),
-        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
-            stop_reason: Some("end_turn".into()),
-            usage: None,
-        })]),
-        MockResponse::Events(vec![Ok(ChatEvent::Start), Ok(ChatEvent::Done {
-            stop_reason: Some("end_turn".into()),
-            usage: None,
-        })]),
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            }),
+        ]),
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            }),
+        ]),
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: None,
+            }),
+        ]),
     ]));
     assert_eq!(mock.call_count(), 0);
     let _ = mock
@@ -1982,9 +2068,17 @@ async fn mock_provider_call_count_tracks_send_calls() {
         .await
         .len();
     assert_eq!(mock.call_count(), 1);
-    let _ = mock.send(None, vec![], vec![]).collect::<Vec<_>>().await.len();
+    let _ = mock
+        .send(None, vec![], vec![])
+        .collect::<Vec<_>>()
+        .await
+        .len();
     assert_eq!(mock.call_count(), 2);
-    let _ = mock.send(None, vec![], vec![]).collect::<Vec<_>>().await.len();
+    let _ = mock
+        .send(None, vec![], vec![])
+        .collect::<Vec<_>>()
+        .await
+        .len();
     assert_eq!(mock.call_count(), 3);
 }
 
@@ -2026,7 +2120,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2051,6 +2145,12 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2102,7 +2202,9 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
     // provider WILL be called and we'll see call_count == 1.
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "should never reach".into() }),
+        Ok(ChatEvent::Delta {
+            text: "should never reach".into(),
+        }),
         Ok(ChatEvent::Done {
             stop_reason: Some("end_turn".into()),
             usage: Some(TokenUsage::default()),
@@ -2165,7 +2267,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2190,6 +2292,12 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2285,7 +2393,9 @@ async fn agent_loop_persist_failure_emits_error() {
     // abort would surface as call_count == 1.
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "should never reach".into() }),
+        Ok(ChatEvent::Delta {
+            text: "should never reach".into(),
+        }),
         Ok(ChatEvent::Done {
             stop_reason: Some("end_turn".into()),
             usage: Some(TokenUsage::default()),
@@ -2311,7 +2421,7 @@ async fn agent_loop_persist_failure_emits_error() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2336,6 +2446,12 @@ async fn agent_loop_persist_failure_emits_error() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2461,7 +2577,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2486,6 +2602,12 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2543,7 +2665,9 @@ async fn agent_loop_error_persists_partial_text() {
     let emitter = Arc::new(MockEmitter::new());
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "partial".into() }),
+        Ok(ChatEvent::Delta {
+            text: "partial".into(),
+        }),
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
@@ -2569,7 +2693,7 @@ async fn agent_loop_error_persists_partial_text() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2594,6 +2718,12 @@ async fn agent_loop_error_persists_partial_text() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2660,7 +2790,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2685,6 +2815,12 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2712,7 +2848,9 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
         Ok(ChatEvent::ThinkingDelta { text: "hmm".into() }),
-        Ok(ChatEvent::SignatureDelta { signature: "sig".into() }),
+        Ok(ChatEvent::SignatureDelta {
+            signature: "sig".into(),
+        }),
         Ok(ChatEvent::ToolCall {
             id: "toolu_err".into(),
             name: "list_dir".into(),
@@ -2743,7 +2881,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2768,6 +2906,12 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2834,7 +2978,9 @@ async fn agent_loop_error_persist_failure_is_log_only() {
     let emitter = Arc::new(MockEmitter::new());
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "partial".into() }),
+        Ok(ChatEvent::Delta {
+            text: "partial".into(),
+        }),
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
@@ -2860,7 +3006,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2885,6 +3031,12 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -2919,7 +3071,9 @@ async fn agent_loop_error_emits_turn_complete() {
     let emitter = Arc::new(MockEmitter::new());
     let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
         Ok(ChatEvent::Start),
-        Ok(ChatEvent::Delta { text: "partial".into() }),
+        Ok(ChatEvent::Delta {
+            text: "partial".into(),
+        }),
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
@@ -2945,7 +3099,7 @@ async fn agent_loop_error_emits_turn_complete() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -2971,6 +3125,12 @@ async fn agent_loop_error_emits_turn_complete() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
@@ -2991,7 +3151,10 @@ async fn agent_loop_error_emits_turn_complete() {
         "exactly one TurnComplete expected on error path, got {}",
         turn_completes.len()
     );
-    assert_eq!(turn_completes[0], 1, "TurnComplete seq points at partial turn");
+    assert_eq!(
+        turn_completes[0], 1,
+        "TurnComplete seq points at partial turn"
+    );
 
     // And the row actually exists at that seq.
     let assistants = load_assistant_rows(&h.db, &h.session_id).await;
@@ -3072,7 +3235,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -3098,20 +3261,26 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
     // 2 turns = 2 send calls.
-    assert_eq!(
-        mock.call_count(),
-        2,
-        "tool_use must trigger a second turn"
-    );
+    assert_eq!(mock.call_count(), 2, "tool_use must trigger a second turn");
 
     // tool:result event landed in the sink — the frontend renders
     // the checklist card from this.
     let results = emitter.tool_results_snapshot();
-    assert_eq!(results.len(), 1, "exactly one tool_result for update_checklist");
+    assert_eq!(
+        results.len(),
+        1,
+        "exactly one tool_result for update_checklist"
+    );
     assert!(
         !results[0].is_error,
         "update_checklist success path must be is_error=false"
@@ -3234,7 +3403,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -3259,6 +3428,12 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -3376,7 +3551,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -3401,6 +3576,12 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -3475,7 +3656,11 @@ fn is_parallel_eligible_classifies_correctly() {
     /// arg to inject (empty string = no `path` field, mirroring
     /// a model call without a path arg). All paths are
     /// constructed as absolute to the `root` passed in.
-    fn batch(names: &[&str], paths: &[&str], root: &std::path::Path) -> Vec<(String, String, serde_json::Value)> {
+    fn batch(
+        names: &[&str],
+        paths: &[&str],
+        root: &std::path::Path,
+    ) -> Vec<(String, String, serde_json::Value)> {
         names
             .iter()
             .zip(paths.iter().chain(std::iter::repeat(&"")))
@@ -3495,7 +3680,10 @@ fn is_parallel_eligible_classifies_correctly() {
 
     // All-eligible permutations of the read-only set (no paths
     // — the path check is vacuously true).
-    assert!(is_parallel_eligible(&batch(&["read_file"], &[], root), root));
+    assert!(is_parallel_eligible(
+        &batch(&["read_file"], &[], root),
+        root
+    ));
     assert!(is_parallel_eligible(
         &batch(&["read_file", "grep", "glob"], &[], root),
         root
@@ -3515,10 +3703,19 @@ fn is_parallel_eligible_classifies_correctly() {
 
     // Each excluded tool alone → false (so a single-tool batch
     // of an excluded tool stays serial).
-    assert!(!is_parallel_eligible(&batch(&["write_file"], &[], root), root));
-    assert!(!is_parallel_eligible(&batch(&["edit_file"], &[], root), root));
+    assert!(!is_parallel_eligible(
+        &batch(&["write_file"], &[], root),
+        root
+    ));
+    assert!(!is_parallel_eligible(
+        &batch(&["edit_file"], &[], root),
+        root
+    ));
     assert!(!is_parallel_eligible(&batch(&["shell"], &[], root), root));
-    assert!(!is_parallel_eligible(&batch(&["web_fetch"], &[], root), root));
+    assert!(!is_parallel_eligible(
+        &batch(&["web_fetch"], &[], root),
+        root
+    ));
     assert!(!is_parallel_eligible(
         &batch(&["update_checklist"], &[], root),
         root
@@ -3712,7 +3909,9 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // tool_result got fed back).
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "done".into() }),
+            Ok(ChatEvent::Delta {
+                text: "done".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3739,7 +3938,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -3764,6 +3963,12 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -3795,22 +4000,23 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         .iter()
         .find(|m| {
             m.role == "user"
-                && m.content.as_array().map(|arr| {
-                    arr.iter().any(|b| {
-                        b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                && m.content
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
                     })
-                }).unwrap_or(false)
+                    .unwrap_or(false)
         })
         .expect("tool_result user message persisted");
-    let blocks = tool_result_msg
-        .content
-        .as_array()
-        .expect("content array");
+    let blocks = tool_result_msg.content.as_array().expect("content array");
     let tool_use_ids: Vec<String> = blocks
         .iter()
         .filter_map(|b| {
             if b.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                b.get("tool_use_id").and_then(|v| v.as_str()).map(String::from)
+                b.get("tool_use_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
             } else {
                 None
             }
@@ -3910,7 +4116,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -3935,6 +4141,12 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -3984,8 +4196,16 @@ async fn agent_loop_web_fetch_batch_does_not_run_parallel() {
     // not compile).
     use crate::agent::chat_loop::is_parallel_eligible;
     let batch: Vec<(String, String, serde_json::Value)> = vec![
-        ("x".into(), "read_file".into(), serde_json::json!({"path": "a"})),
-        ("y".into(), "web_fetch".into(), serde_json::json!({"url": "https://example.com"})),
+        (
+            "x".into(),
+            "read_file".into(),
+            serde_json::json!({"path": "a"}),
+        ),
+        (
+            "y".into(),
+            "web_fetch".into(),
+            serde_json::json!({"url": "https://example.com"}),
+        ),
     ];
     // Root argument is irrelevant here: `web_fetch` is excluded
     // by the name check (Q2) before the path check ever runs.
@@ -4094,7 +4314,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -4119,6 +4339,12 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -4238,7 +4464,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -4263,6 +4489,12 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -4395,7 +4627,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 Subagent (PR1b review #2): production-style caller,
@@ -4420,6 +4652,12 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -4542,7 +4780,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         h.background_shells.clone(),
         // B6 Subagent (2026-06-19): max_turns = None keeps the
-        // default MAX_TURNS (50) budget for all 9 agent_loop_*
+        // default MAX_TURNS (200) budget for all 9 agent_loop_*
         // integration tests (RULE-A-006 parity with production).
         None,
         // B6 PR1b: production-style caller → skip_session_active=false.
@@ -4567,6 +4805,12 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
@@ -4580,7 +4824,11 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
     // The dispatch_subagent tool_result carries the worker's summary
     // + the status prefix.
     let results = emitter.tool_results_snapshot();
-    assert_eq!(results.len(), 1, "exactly one dispatch_subagent tool_result");
+    assert_eq!(
+        results.len(),
+        1,
+        "exactly one dispatch_subagent tool_result"
+    );
     assert!(
         !results[0].is_error,
         "completed worker → is_error=false, got: {}",
@@ -4615,14 +4863,10 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // The tool_result content envelope echoes "found 3 files";
         // count only NON-tool_result rows that contain the worker's
         // text (those would be phantom worker leaks).
-        if !text.contains(r#""type":"tool_result""#)
-            && text.contains("found 3 files")
-        {
+        if !text.contains(r#""type":"tool_result""#) && text.contains("found 3 files") {
             phantom_worker_text += 1;
         }
-        if text.contains(r#""type":"tool_result""#)
-            && text.contains("found 3 files")
-        {
+        if text.contains(r#""type":"tool_result""#) && text.contains("found 3 files") {
             dispatch_tool_result_seen = true;
         }
     }
@@ -4729,6 +4973,12 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -4740,14 +4990,9 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         1,
         "exactly one tool_result (cancel still pairs)"
     );
+    assert!(results[0].is_error, "cancelled worker → is_error=true");
     assert!(
-        results[0].is_error,
-        "cancelled worker → is_error=true"
-    );
-    assert!(
-        results[0]
-            .content
-            .contains("[status: cancelled]"),
+        results[0].content.contains("[status: cancelled]"),
         "tool_result must carry status=cancelled prefix, got: {}",
         results[0].content
     );
@@ -4862,6 +5107,12 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
@@ -4874,10 +5125,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
 
     let results = emitter.tool_results_snapshot();
     assert_eq!(results.len(), 1, "exactly one tool_result");
-    assert!(
-        results[0].is_error,
-        "errored worker → is_error=true"
-    );
+    assert!(results[0].is_error, "errored worker → is_error=true");
     assert!(
         results[0].content.contains("[status: error]"),
         "tool_result must carry status=error prefix, got: {}",
@@ -5038,8 +5286,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         };
         // The worker's rid must be present in cancellations (it
         // registered itself). Its key is `<parent_rid>-sub-<toolu_id>`.
-        let worker_rid_suffix =
-            format!("{}-sub-toolu_dispatch_guard", parent_rid_for_snapshot);
+        let worker_rid_suffix = format!("{}-sub-toolu_dispatch_guard", parent_rid_for_snapshot);
         let worker_present = {
             let map = cancellations_clone.lock().await;
             map.contains_key(&worker_rid_suffix)
@@ -5112,6 +5359,12 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -5229,6 +5482,12 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
@@ -5236,10 +5495,9 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
     // reflects the completed state. The list_runs_by_session
     // query returns newest first — the only run is the one we
     // just dispatched.
-    let runs =
-        crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
-            .await
-            .expect("list_runs_by_session");
+    let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+        .await
+        .expect("list_runs_by_session");
     assert_eq!(runs.len(), 1, "exactly one subagent_run was persisted");
     let run = &runs[0];
     assert_eq!(run.status, "completed");
@@ -5256,11 +5514,13 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
             .expect("transcript_json parses as Vec<TranscriptEntry>");
     // Worker emitted 3 events (Start, Delta, Done) → 3 transcript entries.
     assert_eq!(transcript.len(), 3);
-    assert_eq!(transcript[0].kind, crate::agent::subagent::TranscriptKind::ChatEvent);
+    assert_eq!(
+        transcript[0].kind,
+        crate::agent::subagent::TranscriptKind::ChatEvent
+    );
     // token_usage_json must round-trip as a TokenUsage (all zeros here).
-    let usage: TokenUsage =
-        serde_json::from_str(run.token_usage_json.as_deref().unwrap())
-            .expect("token_usage_json parses as TokenUsage");
+    let usage: TokenUsage = serde_json::from_str(run.token_usage_json.as_deref().unwrap())
+        .expect("token_usage_json parses as TokenUsage");
     assert_eq!(usage.input_tokens, 0);
     assert_eq!(usage.output_tokens, 0);
     // The worker rid format is "{parent_rid}-sub-{tool_use_id}".
@@ -5362,6 +5622,12 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
     let _ = cancel_task.await;
@@ -5419,9 +5685,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ok".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -5430,9 +5694,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // Parent turn 2: final text.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ack".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ack".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -5441,10 +5703,9 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
     ]));
 
     // Snapshot the audit count BEFORE the run.
-    let audit_before =
-        crate::db::permissions::list_audit_events(&h.db, &h.session_id)
-            .await
-            .expect("list_audit_events before");
+    let audit_before = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
+        .await
+        .expect("list_audit_events before");
     let before_count = audit_before.len();
 
     run_chat_loop(
@@ -5483,13 +5744,18 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
+        None,
     )
     .await;
 
-    let audit_after =
-        crate::db::permissions::list_audit_events(&h.db, &h.session_id)
-            .await
-            .expect("list_audit_events after");
+    let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
+        .await
+        .expect("list_audit_events after");
     let after_count = audit_after.len();
     let delta = after_count - before_count;
     // Parent's 2 rows: `tool_allowed` + `tool_executed` for the
@@ -5539,9 +5805,7 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // Worker turn 1: returns a non-zero usage.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ok".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage {
@@ -5555,9 +5819,7 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // Parent turn 2: also non-zero.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ack".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ack".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage {
@@ -5605,6 +5867,12 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // nested call in `run_subagent` passes `Some(...)`
         // to fully replace the parent's prompt with the
         // worker's `SubagentDef.system_prompt`.
+        None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): tests pass
+        // `None` (production-style caller — not a worker, so
+        // the PermissionContext.worker_run_id is unused by the
+        // ask_path parent branch). The worker nested call in
+        // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
     )
     .await;
@@ -5717,8 +5985,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
             Ok(ChatEvent::Delta {
-                text: "Write denied by worker permission policy; cannot surface modal."
-                    .into(),
+                text: "Write denied by worker permission policy; cannot surface modal.".into(),
             }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
@@ -5745,17 +6012,27 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
     // the post-run delta includes 1 `tool_denied` from the worker
     // + 2 parent rows (tool_allowed + tool_executed for
     // dispatch_subagent) = 3 total.
-    let audit_before =
-        crate::db::permissions::list_audit_events(&h.db, &h.session_id)
-            .await
-            .expect("list_audit_events before");
+    let audit_before = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
+        .await
+        .expect("list_audit_events before");
 
     // Wrap the run in a `tokio::time::timeout` so a hang (the
     // pre-PR2b symptom — oneshot never resolved) is caught and
     // fails the test with a clear message instead of timing out
     // the test runner at 60s.
+    //
+    // 2026-06-22 (RULE-FrontSubagent-003 fix): the worker now
+    // enters the interactive ask round-trip instead of auto-
+    // denying synchronously. Without anyone responding, the
+    // worker waits up to 120s for the ASK_TIMEOUT to fire (the
+    // post-fix behavior). The outer timeout is therefore raised
+    // to 130s so the test completes by the natural timeout
+    // path (not by the outer kill). The test's purpose (verify
+    // the worker does NOT hang forever on the oneshot) is
+    // preserved — the worker's auto-deny after 120s IS the
+    // "no hang" guarantee the test was originally asserting.
     let run_result = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(130),
         run_chat_loop(
             vec![],
             mock.clone(),
@@ -5793,6 +6070,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             // nested call in `run_subagent` passes `Some(...)` to
             // fully replace the parent's prompt with the worker's
             // `SubagentDef.system_prompt`.
+            None,
+            // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
+            // caller — no worker context — worker_run_id is None.
             None,
         ),
     )
@@ -5833,7 +6113,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         dispatch_result.content
     );
     assert!(
-        dispatch_result.content.contains("Write denied by worker permission policy"),
+        dispatch_result
+            .content
+            .contains("Write denied by worker permission policy"),
         "tool_result must echo the worker's self-correction summary, got: {}",
         dispatch_result.content
     );
@@ -5848,10 +6130,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
     // entry) and skips the parent's audit write. This assertion
     // confirms the worker's deny row IS NOT in the parent's
     // audit — the regression catch.
-    let audit_after =
-        crate::db::permissions::list_audit_events(&h.db, &h.session_id)
-            .await
-            .expect("list_audit_events after");
+    let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
+        .await
+        .expect("list_audit_events after");
     let tool_denied_count = audit_after
         .iter()
         .filter(|e| {
@@ -5863,7 +6144,8 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         })
         .count();
     assert_eq!(
-        tool_denied_count, 0,
+        tool_denied_count,
+        0,
         "RULE-A-016: worker's tool_denied must NOT pollute the \
          parent's session_audit_events (PR3a routes the deny to \
          the worker's transcript instead); got audit events: {:?}",
@@ -5904,10 +6186,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
     // where the worker's audit-like record lives post-PR3a).
     // Fetch the worker's `subagent_runs` row (the most recent one
     // for this session — there's only one in this test).
-    let runs =
-        crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
-            .await
-            .expect("list_runs_by_session");
+    let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+        .await
+        .expect("list_runs_by_session");
     assert_eq!(runs.len(), 1, "exactly one subagent_runs row");
     let run = &runs[0];
     let transcript: Vec<crate::agent::subagent::TranscriptEntry> =
@@ -5915,19 +6196,15 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             .expect("transcript_json parses as Vec<TranscriptEntry>");
     let permission_ask_count = transcript
         .iter()
-        .filter(|e| {
-            e.kind == crate::agent::subagent::TranscriptKind::PermissionAsk
-        })
+        .filter(|e| e.kind == crate::agent::subagent::TranscriptKind::PermissionAsk)
         .count();
     assert_eq!(
-        permission_ask_count, 1,
+        permission_ask_count,
+        1,
         "RULE-A-016: worker's transcript must carry exactly 1 \
          PermissionAsk entry (the auto-deny for write_file); got \
          transcript: {:?}",
-        transcript
-            .iter()
-            .map(|e| e.kind)
-            .collect::<Vec<_>>()
+        transcript.iter().map(|e| e.kind).collect::<Vec<_>>()
     );
 }
 
@@ -6009,6 +6286,12 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         // The actual fix being tested.
         Some(worker_prompt.clone()),
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): this test
+        // exercises the worker prompt override (B6 review defect
+        // A); it's NOT a worker ask test. The
+        // `is_worker=Some(false)` already routes ask_path to the
+        // parent branch. worker_run_id stays None.
+        None,
     )
     .await;
 
@@ -6029,7 +6312,9 @@ async fn system_prompt_override_worker_path_sends_override() {
     // explicitly does NOT (Claude Code convention — workers do
     // not inherit the main system prompt).
     assert!(
-        !received.contains("Yolo mode") && !received.contains("Edit mode") && !received.contains("Plan mode"),
+        !received.contains("Yolo mode")
+            && !received.contains("Edit mode")
+            && !received.contains("Plan mode"),
         "worker's system prompt must NOT carry the parent's mode_prefix; \
          the worker's `SubagentDef.system_prompt` is a fully-replacement prompt. \
          got: {}",
@@ -6082,6 +6367,9 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         // Production path: `None` override.
         None,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
+        // caller — no worker context — worker_run_id is None.
+        None,
     )
     .await;
 
@@ -6097,8 +6385,10 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
 
     // Re-derive the expected parent prompt for the harness's
     // session + project.
-    let loaded =
-        db::load_session(&h.db, &h.session_id).await.expect("load_session").expect("session");
+    let loaded = db::load_session(&h.db, &h.session_id)
+        .await
+        .expect("load_session")
+        .expect("session");
     let project = db::get_project(&h.db, &loaded.session.project_id)
         .await
         .expect("get_project")

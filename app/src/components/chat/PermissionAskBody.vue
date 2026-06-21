@@ -54,8 +54,21 @@ const props = withDefaults(
      *  because this card renders the current session — matching
      *  the cross-session cwd mix-up fix from 2026-06-16. */
     repoRoot?: string;
+    /** When `true`, the "始终允许" (allow_always) button is NOT
+     *  rendered in interactive mode. Used by the worker-ask path
+     *  (PR2 RULE-FrontSubagent-003, 2026-06-22): the backend treats
+     *  a worker's `PermissionResponse::AllowAlways` as AllowOnce
+     *  (workers do NOT persist grants to
+     *  `session_tool_permissions` — that would cross privilege
+     *  boundaries by extending parent-session permissions from a
+     *  worker). Showing a "persist" button that doesn't actually
+     *  persist is misleading UX, so the worker-ask card hides it
+     *  and shows only "仅一次" / "拒绝" / "拒绝并说明". The
+     *  default (`false`) preserves the main-chat ToolCallCard
+     *  behavior (all 4 buttons). */
+    hideAllowAlways?: boolean;
   }>(),
-  { onRespond: undefined, repoRoot: "" },
+  { onRespond: undefined, repoRoot: "", hideAllowAlways: false },
 );
 
 const riskMeta = computed(() => RISK_META[props.ask.risk]);
@@ -164,6 +177,7 @@ function cancelFeedback(): void {
           @click="respond('allow_once')"
         >仅一次</button>
         <button
+          v-if="!hideAllowAlways"
           type="button"
           class="permission-ask-body__btn permission-ask-body__btn--always"
           @click="respond('allow_always')"
@@ -181,11 +195,17 @@ function cancelFeedback(): void {
       </div>
     </template>
 
-    <!-- Historical: info-only marker. Renders a single muted
-         line indicating the ask's outcome context (worker
-         context, ask collapsed per RULE-A-016). No buttons. -->
+    <!-- Historical: info-only marker. Renders a single muted line
+         showing the ask context. After the 2026-06-22
+         RULE-FrontSubagent-003 fix, worker asks are interactive
+         while live (the `pending` branch above renders Allow/Deny
+         buttons); this `historical` branch only renders once the
+         ask is resolved (or for pre-fix transcript entries). No
+         buttons. The transcript does not yet persist the resolve
+         outcome (N4 — known limitation, see DEBT.md), so we render
+         the neutral ask-context line. -->
     <p v-else-if="mode === 'historical'" class="permission-ask-body__historical-note">
-      worker wanted {{ ask.toolName || "this tool" }}<span v-if="ask.path"> at {{ ask.path }}</span>, ask collapsed (worker context)
+      worker asked for {{ ask.toolName || "this tool" }}<span v-if="ask.path"> at {{ ask.path }}</span><span v-if="ask.workerRunId"> · worker</span>
     </p>
   </div>
 </template>

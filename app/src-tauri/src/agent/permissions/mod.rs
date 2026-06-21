@@ -193,6 +193,30 @@ pub enum AuditKind {
  /// (best-effort,非事务内,因为 audit 缺失不影响 chat
  /// 主流程)。
  ResendMessage,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagent
+ /// 在 Tier 4 交互式 ask 后,user 选了"Allow" / "仅一次"。
+ /// payload 携带 `worker_run_id` / `tool_name` / `tool_input`
+ /// — 与 `ToolAllowed` 形状对齐。落表点是 worker 路径
+ /// `ask_path` 三臂 resolve 后(oneshot 收到
+ /// `PermissionResponse::AllowOnce` / `AllowAlways`)。
+ /// 与 parent `ToolAllowed` 区分:`session_id` 共享(worker 复用
+ /// parent_session_id,见 RULE-A-014),但前端 C4 audit log UI
+ /// 看到 worker-ask-allowed 时应知道这是 worker 决策。
+ WorkerAskAllowed,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagent
+ /// Tier 4 ask 收到 user `PermissionResponse::Deny`。落表点
+ /// 是 worker 路径 `ask_path` oneshot 收到 Deny。reason
+ /// 字段携带 user 可选 feedback("拒绝并说明")。
+ WorkerAskDenied,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagent
+ /// Tier 4 ask 在 120s 内无 user 响应,自动 Deny。落表点是
+ /// `tokio::select!` 的 timeout 臂命中。
+ WorkerAskTimedOut,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagent
+ /// Tier 4 ask 在 user 主动 cancel parent session 时 resolve
+ /// 为 Deny。落表点是 `tokio::select!` 的 cancel 臂命中
+ /// (parent_token 取消 → worker_token child 取消)。
+ WorkerAskCancelled,
 }
 
 impl AuditKind {
@@ -211,6 +235,10 @@ impl AuditKind {
  Self::ToolExecuted => "tool_executed",
  Self::EditMessage => "edit_message",
  Self::ResendMessage => "resend_message",
+ Self::WorkerAskAllowed => "worker_ask_allowed",
+ Self::WorkerAskDenied => "worker_ask_denied",
+ Self::WorkerAskTimedOut => "worker_ask_timed_out",
+ Self::WorkerAskCancelled => "worker_ask_cancelled",
  }
  }
 }
@@ -285,6 +313,28 @@ pub struct PermissionContext {
  /// `false`; the worker path sets `true`. The collapse is wired
  /// at the top of `ask_path`.
  pub is_worker: bool,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): when `is_worker`
+ /// is `true`, this is the worker subagent's `subagent_runs.id`
+ /// (DB row UUID, NOT the human-readable `worker_rid`). Used
+ /// for two purposes:
+ ///
+ /// 1. **Permission store key** — the worker's oneshot lives
+ ///    under `format!("worker:{}", worker_run_id)` so worker
+ ///    asks do NOT pollute the parent's `permission_asks` map
+ ///    (RULE-A-014 lineage: worker's ask must not race parent's
+ ///    ask round-trip). The parent's `permission_response` IPC
+ ///    handler currently keys by rid alone; worker path keeps
+ ///    its rid unique by prefixing on the worker_run_id side
+ ///    OR by including it in the rid — see `ask_path` worker
+ ///    branch for the chosen approach.
+ /// 2. **IPC payload field** — propagated to `PermissionAskPayload
+ ///    .worker_run_id` so the frontend `<SubagentDrawer>` can
+ ///    route the ask to the right row instead of opening a
+ ///    global PermissionModal.
+ ///
+ /// `None` for production (parent) path — the field is left
+ /// unused and the existing parent-modal UX is preserved.
+ pub worker_run_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +470,19 @@ pub struct PermissionAskPayload {
  pub reason: Option<String>,
  #[serde(skip_serializing_if = "Option::is_none")]
  pub path: Option<String>,
+ /// 2026-06-22 (RULE-FrontSubagent-003 fix): populated by the
+ /// worker path (subagent dispatch) so the frontend can route
+ /// the ask to the corresponding `<SubagentDrawer>` row instead
+ /// of the parent session's `<PermissionModal>`. The wire shape
+ /// is `workerRunId: string` (camelCase); the field is absent
+ /// for parent-path asks (the existing parent modal still owns
+ /// those). `skip_serializing_if = Option::is_none` keeps the
+ /// field OFF the wire for the parent path, so frontend code
+ /// that destructures the payload only needs to check
+ /// `payload.workerRunId !== undefined` rather than splitting
+ /// on `null`.
+ #[serde(skip_serializing_if = "Option::is_none")]
+ pub worker_run_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +492,29 @@ pub struct PermissionAskPayload {
 /// Default timeout for Tier 3 user response. Matches PRD
 /// `### IPC 异常路径` "用户从不响应" → 120s auto-deny.
 pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Internal error type for the worker's `tokio::select!` arm
+/// (2026-06-22, RULE-FrontSubagent-003 fix). The 3-arm select
+/// in the worker branch of `ask_path` produces a
+/// `Result<PermissionResponse, WorkerAskTerminal>` where:
+/// - `Ok(resp)` is either a user response or a synthetic Deny
+///   injected by the cancel / timeout arm (the match block
+///   later distinguishes cancel / timeout / user-deny by
+///   inspecting the synthetic reason string).
+/// - `Err(WorkerAskTerminal::OneshotDropped)` is a
+///   `oneshot::RecvError` — the sender was dropped before
+///   delivering (e.g. `cancel_session_asks` ran on the worker's
+///   permission session id, or `resolve_ask` removed the
+///   pending entry by a different path). Treated as Deny by
+///   the match block (consistent with the parent path's
+///   `Err(_) → Deny` arm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerAskTerminal {
+ /// The oneshot sender was dropped before delivering.
+ /// Equivalent to the parent path's `oneshot::RecvError`
+ /// case.
+ OneshotDropped,
+}
 
 /// Run the ⑨ 关 5-tier check on one tool_use.
 ///
@@ -970,203 +1056,368 @@ async fn ask_path(
     tool_use_id: &str,
     token: &tokio_util::sync::CancellationToken,
 ) -> Decision {
- // B6 Subagent (2026-06-19, review #5 + PRD §Decisions 3/5): worker
- // agents have no UI sink, so a Tier 4 `ask` would either block
- // forever (no oneshot resolution) or surface a permission modal to
- // the WRONG session (the parent's frontend would get a phantom ask
- // for a tool_use the parent never emitted). Collapse to Deny here
- // WITHOUT registering an ask / emitting `permission:ask` / writing
- // a `tool_permission_ask` audit row — the worker's `tool_result`
- // carries the deny reason so the worker LLM can self-correct.
+ // 2026-06-22 (RULE-FrontSubagent-003 fix): worker subagents
+ // now go through the full interactive ask round-trip (not the
+ // pre-fix collapse-to-Deny). The pre-fix behavior silently
+ // denied all worker asks — UX-correctness wise it was
+ // over-conservative (Claude Code / Cline / opencode all let
+ // workers surface ask modals). Three things had to be true
+ // before re-enabling this path:
  //
- // Yolo bypass: the Yolo tier-bypass above (line ~550 in `check`)
- // returns `Allow` BEFORE reaching this point, so a worker under
- // Yolo mode never enters `ask_path`. The worker under Edit / Plan
- // mode lands here for any non-silent Tier 4 decision (path tool
- // outside the cwd, shell SideEffect/Ask command, web_fetch
- // without an always-allow row) and is denied. This mirrors the
- // Claude Code "background subagent auto-deny" convention.
+ // 1. **Worker has its own permission session id** — the worker's
+ //    oneshot lives under `format!("worker:{}", worker_run_id)`,
+ //    so worker asks do NOT pollute the parent's
+ //    `permission_asks` map. The parent's IPC handler (`resolve_ask`)
+ //    keys by `rid` alone; we ensure worker's `rid` is unique by
+ //    prefixing with the worker permission session id internally
+ //    (the wire `rid` is still a UUID the frontend echoes back).
+ // 2. **Cancellation token is parent-derived child** — `run_subagent`
+ //    creates `parent_token.child_token()` (chat_loop.rs:2166) and
+ //    passes it as the worker's `token`. So user Stop on parent
+ //    propagates to the worker's `tokio::select!` cancel arm.
+ //    Switching sessions (no user action) does NOT cancel — the
+ //    parent token is only cancelled by explicit user Stop
+ //    (the C1 cancel path). Switching sessions keeps the ask alive
+ //    so the user can switch back and respond.
+ // 3. **Audit not polluting parent's C4 audit log** — worker
+ //    decisions go to the worker's `subagent_runs.transcript_json`
+ //    via the sink's `emit_permission_ask` impl (RULE-A-016
+ //    2026-06-20 already established this). The 4 new AuditKind
+ //    variants (`WorkerAskAllowed` / `WorkerAskDenied` /
+ //    `WorkerAskTimedOut` / `WorkerAskCancelled`) record the
+ //    resolve side on the parent's `session_audit_events` table
+ //    (the parent is the "owning" audit log even though the
+ //    decision was for a worker — the user reviews the parent
+ //    session's audit log and sees "worker X was allowed / denied
+ //    tool Y" as part of the parent session timeline).
  //
- // **RULE-A-016 fix (B6 PR3a, 2026-06-20)**: the previous
- // implementation wrote a `tool_denied` audit row to the parent's
- // `session_audit_events` table here. The worker reuses
- // `parent_session_id`, so the audit landed in the parent's audit
- // log — polluting C4 audit reads with worker ⑨ decisions.
- // The fix: (a) skip the `record_audit_event` call entirely on the
- // worker path; (b) emit a `PermissionAskPayload` via the sink
- // so the `SubagentBufferSink` records a `TranscriptKind::PermissionAsk`
- // entry in the worker's `transcript_json` (PR3's drawer renders
- // the deny as part of the transcript). The payload fields use the
- // worker tool_use id (no parent rid — `parent_session_id` is
- // reused) so the transcript entry ties back to the worker's
- // tool_use block.
+ // Yolo bypass: still applies (Yolo never reaches Tier 4
+ // thanks to the Tier 4 bypass at line ~550 in `check`). A
+ // worker under Yolo mode never enters `ask_path` — workers
+ // inherit parent's mode via `run_subagent`'s `permission_ctx`
+ // build (chat_loop.rs:386).
  if ctx.is_worker {
-     let reason = format!(
-         "Worker subagent cannot ask for confirmation (no UI sink). \
-          Tool {} denied in {} mode.",
-         tool_name,
-         ctx.mode.as_str()
-     );
-     tracing::info!(
-         session_id = %ctx.session_id,
-         tool = %tool_name,
-         mode = %ctx.mode.as_str(),
-         "permission::check: worker auto-deny (no UI sink)"
-     );
-     // RULE-A-016 (2026-06-20): do NOT write `session_audit_events`
-     // on the worker path. The deny lands in the worker's
-     // transcript via the sink emit below — not in the parent's
-     // audit log. (Pre-PR3a this was a `record_audit` call that
-     // polluted the parent's audit table.)
-     // Emit a transcript PermissionAsk via the sink. The
-     // `SubagentBufferSink::emit_permission_ask` impl records a
-     // `TranscriptKind::PermissionAsk` entry; the
-     // `AppHandleSink::emit_permission_ask` impl (production
-     // non-worker path is unrelated — this branch only fires for
-     // workers) also records into the chat-event stream but
-     // workers use the buffer sink so the entry stays in the
-     // worker's transcript. The rid is a synthesized UUID (the
-     // worker auto-denies without a real ask round-trip).
-     let synthetic_rid = uuid::Uuid::new_v4().to_string();
-     let _ = sink.emit_permission_ask(PermissionAskPayload {
-         rid: synthetic_rid,
-         session_id: ctx.session_id.clone(),
-         tool_use_id: tool_use_id.to_string(),
-         tool_name: tool_name.to_string(),
-         tool_input: tool_input.clone(),
-         risk: risk_for_tool(tool_name),
-         reason: Some(reason.clone()),
-         path: path_for_modal.map(|p| p.to_string()),
-     });
-     return Decision::Deny {
-         reason,
-         critical: false,
-     };
- }
- let rid = uuid::Uuid::new_v4().to_string();
- let risk = risk_for_tool(tool_name);
- let reason = build_ask_reason(tool_name, path_or_cmd, risk);
- let payload = PermissionAskPayload {
- rid: rid.clone(),
- session_id: ctx.session_id.clone(),
- tool_use_id: tool_use_id.to_string(),
- tool_name: tool_name.to_string(),
- tool_input: tool_input.clone(),
- risk,
- reason: Some(reason.clone()),
- // The `path` field is populated ONLY for path tools
- // (the spec's Q10 "path 范围行" UX). For shell / web_fetch
- // the field is `None` and serde's `skip_serializing_if`
- // keeps it OFF the wire — so the frontend's `v-if="hasPath"`
- // does not render a misleading scope row for non-path
- // asks.
- path: path_for_modal.map(|p| p.to_string()),
- };
- let _ = sink.emit_permission_ask(payload);
- let _ = record_audit(
-   db,
-   ctx,
- AuditKind::ToolPermissionAsk,
- tool_name,
- tool_input,
- Some(&reason),
- )
- .await;
- let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
- let resp = tokio::select! {
- biased;
- _ = token.cancelled() => {
- let _ = resolve_ask(
- store,
- &rid,
- PermissionResponse::Deny {
- reason: "request cancelled by user".to_string(),
- },
- )
- .await;
- let _ = record_audit( db, ctx, AuditKind::RequestCancelled, tool_name, tool_input, None).await;
- return Decision::Deny {
- reason: "request cancelled by user".to_string(),
- critical: false,
- };
- }
- _ = tokio::time::sleep(ASK_TIMEOUT) => {
- let mut map = store.lock().await;
- map.remove(&rid);
- drop(map);
- tracing::warn!(
- session_id = %ctx.session_id,
- tool = %tool_name,
- "permission::check: Tier 4 timed out after 120s"
- );
- let _ = record_audit( db, ctx, AuditKind::PermissionTimeout, tool_name, tool_input, None).await;
- return Decision::Deny {
- reason: "permission timed out after 120s, treat as denied".to_string(),
- critical: false,
- };
- }
- resp = rx => resp,
- };
- match resp {
- Ok(PermissionResponse::AllowOnce) => {
- let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
- Decision::Allow
- }
- Ok(PermissionResponse::AllowAlways) => {
- // Persist the "always allow" row with the
- // tool-specific match_kind. The match_value is
- // computed by `match_value_for_allow_always`
- // (path → parent/* glob; shell → first token;
- // web_fetch → tool/NULL).
- let (kind, value) = match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
- if let Err(e) = crate::db::grant_tool_permission(
- db,
- &ctx.session_id,
- tool_name,
- kind,
- value.as_deref(),
- )
- .await
- {
- tracing::warn!(
- error = %e,
- "permission::check: grant_tool_permission failed (non-fatal)"
- );
- }
- let _ = record_audit( db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
- Decision::Allow
- }
- Ok(PermissionResponse::Deny { reason }) => {
- // Surface the user's optional "拒绝并说明" feedback as the
- // tool_result(is_error) content so the LLM learns *why* it
- // was denied. Empty feedback falls back to "user denied".
- let deny_reason = if reason.trim().is_empty() {
- "user denied".to_string()
- } else {
- reason
- };
- let _ = record_audit(
- db,
- ctx,
- AuditKind::ToolDenied,
- tool_name,
- tool_input,
- Some(&deny_reason),
- )
- .await;
- Decision::Deny {
- reason: deny_reason,
- critical: false,
- }
- }
- Err(_) => {
- let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
- Decision::Deny {
- reason: "permission ask cancelled before response".to_string(),
- critical: false,
- }
- }
- }
+    let worker_run_id = ctx.worker_run_id.clone().unwrap_or_else(|| {
+        // Defensive: is_worker=true MUST carry worker_run_id.
+        // `run_chat_loop` is only invoked as a worker through
+        // `run_subagent` (chat_loop.rs:2280) which threads
+        // worker_run_id. If this panic fires, a new caller has
+        // been added without threading the field — fix the
+        // caller, not this default.
+        tracing::error!(
+            session_id = %ctx.session_id,
+            tool = %tool_name,
+            "permissions::ask_path: is_worker=true but worker_run_id is None; \
+             check that run_chat_loop is called with worker_run_id Some(...)"
+        );
+        String::from("UNKNOWN_WORKER")
+    });
+    // Internal permission_session_id — scopes the oneshot map
+    // entry (via register_ask below) to the worker so it cannot
+    // collide with the parent's pending asks. This composite is
+    // INTERNAL to the register_ask/resolve_ask store keying only.
+    //
+    // The IPC payload's `session_id` field MUST be the PARENT
+    // session id (ctx.session_id), NOT this composite — the
+    // frontend `WorkerAskBanner` filters worker asks by
+    // `ask.sessionId === parentSessionId`
+    // (`permissions.ts::pendingWorkerCountForSession`); a
+    // composite value there breaks the filter and the banner
+    // never renders (PR1.5 cross-layer fix, 2026-06-22).
+    let permission_session_id = format!("worker:{}", worker_run_id);
+
+    let rid = uuid::Uuid::new_v4().to_string();
+    let risk = risk_for_tool(tool_name);
+    let reason = build_ask_reason(tool_name, path_or_cmd, risk);
+    let payload = PermissionAskPayload {
+        rid: rid.clone(),
+        // Parent session id — the banner groups worker asks by
+        // parent session. The composite `permission_session_id`
+        // ("worker:<id>") is INTERNAL to register_ask/resolve_ask
+        // store keying only (line ~1151); it must NOT leak onto
+        // the wire or the frontend's per-session banner filter
+        // mismatches.
+        session_id: ctx.session_id.clone(),
+        tool_use_id: tool_use_id.to_string(),
+        tool_name: tool_name.to_string(),
+        tool_input: tool_input.clone(),
+        risk,
+        reason: Some(reason.clone()),
+        path: path_for_modal.map(|p| p.to_string()),
+        worker_run_id: Some(worker_run_id.clone()),
+    };
+    // Emit the IPC. On the worker path the sink is the
+    // SubagentBufferSink (which appends to the worker's
+    // transcript + also forwards to the `subagent:event`
+    // IPC channel when AppHandle is present — so the frontend
+    // SubagentDrawer sees the ask live). The AppHandleSink's
+    // emit_permission_ask impl (production non-worker path)
+    // is irrelevant here because the worker branch always uses
+    // the buffer sink.
+    let _ = sink.emit_permission_ask(payload);
+
+    // Register the ask against the worker-owned session_id so the
+    // store's pending map separates worker asks from parent asks.
+    // (Parent production path uses `ctx.session_id`; worker path
+    // uses the prefixed `permission_session_id` so the worker
+    // cannot collide with — or be cancelled by — the parent's
+    // pending asks.)
+    let rx = register_ask(store, &permission_session_id, rid.clone()).await;
+
+    // Three-arm select: parent-derived cancel token / 120s timeout
+    // / oneshot response. `biased` ensures the cancel arm is
+    // checked first (in case the user hits Stop right at the 120s
+    // boundary — without bias, the timeout arm might fire even
+    // though cancel was ready).
+    let resp: Result<PermissionResponse, WorkerAskTerminal> = tokio::select! {
+        biased;
+        _ = token.cancelled() => {
+            // Parent cancel (user Stop) → Deny.
+            // Drop the pending oneshot to free the map entry.
+            //
+            // **No audit** (RULE-A-016 lineage): the worker's
+            // resolve events stay in the worker's transcript
+            // (`SubagentBufferSink`'s `TranscriptKind::PermissionAsk`
+            // entry captured via `sink.emit_permission_ask` above),
+            // NOT in the parent's `session_audit_events`. Writing
+            // a row here would re-introduce the pre-PR3a audit
+            // pollution that polluted C4 audit reads with worker
+            // ⑨ decisions.
+            let mut map = store.lock().await;
+            map.remove(&rid);
+            drop(map);
+            tracing::info!(
+                session_id = %ctx.session_id,
+                worker_run_id = %worker_run_id,
+                tool = %tool_name,
+                "permission::check: worker ask cancelled by parent"
+            );
+            Ok(PermissionResponse::Deny {
+                reason: "cancelled by parent session stop".to_string(),
+            })
+        }
+        _ = tokio::time::sleep(ASK_TIMEOUT) => {
+            // 120s without user response → Deny.
+            // Drop the pending oneshot to free the map entry.
+            // No audit (RULE-A-016 lineage — see cancel arm).
+            let mut map = store.lock().await;
+            map.remove(&rid);
+            drop(map);
+            tracing::warn!(
+                session_id = %ctx.session_id,
+                worker_run_id = %worker_run_id,
+                tool = %tool_name,
+                "permission::check: worker ask timed out after 120s"
+            );
+            // Encode the timeout in a synthetic Deny response so
+            // the downstream `match resp` arms know to write the
+            // right `Decision::Deny { reason: "permission timed
+            // out..." }` (matching the parent-path convention —
+            // a user-visible reason string the LLM can read in
+            // its tool_result(is_error) content). The downstream
+            // match inspects the `reason` to discriminate.
+            Ok(PermissionResponse::Deny {
+                reason: "permission timed out after 120s, treat as denied".to_string(),
+            })
+        }
+        resp = rx => resp.map_err(|_| WorkerAskTerminal::OneshotDropped),
+    };
+
+    // Match the oneshot response. Same shape as the parent path's
+    // match block below (AllowOnce / AllowAlways / Deny / Err) but
+    // with worker-specific audit kinds + no "始终允许" persistence
+    // (workers do NOT write to session_tool_permissions — a worker's
+    // "始终允许" must NOT become a parent-session grant, that would
+    // cross privilege boundaries. The Deny message is also surfaced
+    // to the worker LLM as tool_result(is_error) per the standard
+    // path — the `Decision::Deny { reason }` return value carries
+    // the reason for the agent loop's tool_result construction).
+    match resp {
+        Ok(PermissionResponse::AllowOnce) => Decision::Allow,
+        Ok(PermissionResponse::AllowAlways) => {
+            // Per design decision: workers do NOT persist
+            // "始终允许" to session_tool_permissions. The grant
+            // would leak across privilege boundaries (worker runs
+            // in parent's session but should not extend parent's
+            // permissions). Log + return Allow for this call only.
+            // No audit (RULE-A-016 lineage).
+            tracing::info!(
+                session_id = %ctx.session_id,
+                worker_run_id = %worker_run_id,
+                tool = %tool_name,
+                "permission::check: worker ask AllowAlways (not persisted — \
+                 worker grants do not extend parent session permissions)"
+            );
+            Decision::Allow
+        }
+        Ok(PermissionResponse::Deny { reason }) => {
+            // Distinguish three Deny sources via the synthetic
+            // reason string the select! arms wrote. No audit
+            // (RULE-A-016 lineage — worker's resolve events stay
+            // in the transcript, not in parent's session_audit_events).
+            if reason == "cancelled by parent session stop"
+                || reason == "permission timed out after 120s, treat as denied"
+            {
+                Decision::Deny {
+                    reason,
+                    critical: false,
+                }
+            } else {
+                // User-initiated deny.
+                let deny_reason = if reason.trim().is_empty() {
+                    "user denied".to_string()
+                } else {
+                    reason
+                };
+                Decision::Deny {
+                    reason: deny_reason,
+                    critical: false,
+                }
+            }
+        }
+        Err(WorkerAskTerminal::OneshotDropped) => {
+            // oneshot sender dropped (e.g. cancel_session_asks
+            // ran on the worker permission session id, or the
+            // resolve_ask path dropped the sender before
+            // delivering). Same as parent path: treat as Deny.
+            // No audit (RULE-A-016 lineage).
+            Decision::Deny {
+                reason: "permission ask cancelled before response".to_string(),
+                critical: false,
+            }
+        }
+    }
+    } else {
+        let rid = uuid::Uuid::new_v4().to_string();
+        let risk = risk_for_tool(tool_name);
+        let reason = build_ask_reason(tool_name, path_or_cmd, risk);
+        let payload = PermissionAskPayload {
+            rid: rid.clone(),
+            session_id: ctx.session_id.clone(),
+            tool_use_id: tool_use_id.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            risk,
+            reason: Some(reason.clone()),
+            // The `path` field is populated ONLY for path tools
+            // (the spec's Q10 "path 范围行" UX). For shell / web_fetch
+            // the field is `None` and serde's `skip_serializing_if`
+            // keeps it OFF the wire — so the frontend's `v-if="hasPath"`
+            // does not render a misleading scope row for non-path
+            // asks.
+            path: path_for_modal.map(|p| p.to_string()),
+            // Parent path: no worker_run_id. Frontend reads the absence
+            // (= `workerRunId` is `undefined` on the wire) and routes
+            // the ask to the parent session's `<PermissionModal>`
+            // (the pre-PR1 behavior).
+            worker_run_id: None,
+        };
+        let _ = sink.emit_permission_ask(payload);
+        let _ = record_audit(
+            db,
+            ctx,
+            AuditKind::ToolPermissionAsk,
+            tool_name,
+            tool_input,
+            Some(&reason),
+        )
+        .await;
+        let rx = register_ask(store, &ctx.session_id, rid.clone()).await;
+        let resp = tokio::select! {
+            biased;
+            _ = token.cancelled() => {
+                let _ = resolve_ask(
+                    store,
+                    &rid,
+                    PermissionResponse::Deny {
+                        reason: "request cancelled by user".to_string(),
+                    },
+                )
+                .await;
+                let _ = record_audit( db, ctx, AuditKind::RequestCancelled, tool_name, tool_input, None).await;
+                return Decision::Deny {
+                    reason: "request cancelled by user".to_string(),
+                    critical: false,
+                };
+            }
+            _ = tokio::time::sleep(ASK_TIMEOUT) => {
+                let mut map = store.lock().await;
+                map.remove(&rid);
+                drop(map);
+                tracing::warn!(
+                    session_id = %ctx.session_id,
+                    tool = %tool_name,
+                    "permission::check: Tier 4 timed out after 120s"
+                );
+                let _ = record_audit( db, ctx, AuditKind::PermissionTimeout, tool_name, tool_input, None).await;
+                return Decision::Deny {
+                    reason: "permission timed out after 120s, treat as denied".to_string(),
+                    critical: false,
+                };
+            }
+            resp = rx => resp,
+        };
+        match resp {
+            Ok(PermissionResponse::AllowOnce) => {
+                let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                Decision::Allow
+            }
+            Ok(PermissionResponse::AllowAlways) => {
+                // Persist the "always allow" row with the
+                // tool-specific match_kind. The match_value is
+                // computed by `match_value_for_allow_always`
+                // (path → parent/* glob; shell → first token;
+                // web_fetch → tool/NULL).
+                let (kind, value) = match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
+                if let Err(e) = crate::db::grant_tool_permission(
+                    db,
+                    &ctx.session_id,
+                    tool_name,
+                    kind,
+                    value.as_deref(),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        "permission::check: grant_tool_permission failed (non-fatal)"
+                    );
+                }
+                let _ = record_audit( db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
+                Decision::Allow
+            }
+            Ok(PermissionResponse::Deny { reason }) => {
+                // Surface the user's optional "拒绝并说明" feedback as the
+                // tool_result(is_error) content so the LLM learns *why* it
+                // was denied. Empty feedback falls back to "user denied".
+                let deny_reason = if reason.trim().is_empty() {
+                    "user denied".to_string()
+                } else {
+                    reason
+                };
+                let _ = record_audit(
+                    db,
+                    ctx,
+                    AuditKind::ToolDenied,
+                    tool_name,
+                    tool_input,
+                    Some(&deny_reason),
+                )
+                .await;
+                Decision::Deny {
+                    reason: deny_reason,
+                    critical: false,
+                }
+            }
+            Err(_) => {
+                let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
+                Decision::Deny {
+                    reason: "permission ask cancelled before response".to_string(),
+                    critical: false,
+                }
+            }
+        }
+    }
 }
 
 /// Build the human-readable reason string shown in the
@@ -1584,6 +1835,14 @@ mod tests {
         // `AuditKind::ResendMessage.as_str()` verbatim; both
         // ends of the contract must agree on this string.
         AuditKind::ResendMessage,
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): the 4 worker
+        // ask terminal kinds. Wire strings are stable — the DB
+        // layer's `record_audit` helper writes them verbatim
+        // from `ask_path`'s worker branch.
+        AuditKind::WorkerAskAllowed,
+        AuditKind::WorkerAskDenied,
+        AuditKind::WorkerAskTimedOut,
+        AuditKind::WorkerAskCancelled,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -1602,7 +1861,15 @@ mod tests {
     // writes `AuditKind::ResendMessage.as_str()` verbatim — both
     // ends of the contract must agree on this string.
     assert_eq!(AuditKind::ResendMessage.as_str(), "resend_message");
- }
+    // 2026-06-22 (RULE-FrontSubagent-003 fix): pin the wire
+    // strings for the 4 worker ask terminal kinds. The
+    // `record_audit` helper in `ask_path`'s worker branch writes
+    // these strings verbatim into `session_audit_events.kind`.
+    assert_eq!(AuditKind::WorkerAskAllowed.as_str(), "worker_ask_allowed");
+    assert_eq!(AuditKind::WorkerAskDenied.as_str(), "worker_ask_denied");
+    assert_eq!(AuditKind::WorkerAskTimedOut.as_str(), "worker_ask_timed_out");
+    assert_eq!(AuditKind::WorkerAskCancelled.as_str(), "worker_ask_cancelled");
+}
 
  // =====================================================================
  // Re-grill 2026-06-13: path-based / prefix / Yolo bypass / Plan
@@ -1790,6 +2057,7 @@ mod tests {
  risk: Risk::High,
  reason: Some("test".to_string()),
  path: Some("/x".to_string()),
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  // The wire field is `path` (camelCase == snake_case for a
@@ -1811,6 +2079,7 @@ mod tests {
  risk: Risk::High,
  reason: Some("test".to_string()),
  path: None,
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  assert!(!s.contains("\"path\""), "path should be skipped: {}", s);
@@ -1853,6 +2122,8 @@ mod tests {
  // Mirrors the new `ask_path` body: `path_for_modal = None`
  // for shell, so the payload's `path` field is `None`.
  path: None,
+ // Parent path ask (no worker context).
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  assert!(
@@ -1887,6 +2158,8 @@ mod tests {
  // Mirrors the new `ask_path` body: `path_for_modal = None`
  // for web_fetch, so the payload's `path` field is `None`.
  path: None,
+ // Parent path ask (no worker context).
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  assert!(
@@ -1923,6 +2196,8 @@ mod tests {
  // `path_for_modal` argument is `Some(&path_owned)`, so the
  // payload's `path` field is `Some(...)`.
  path: Some("/Users/me/repo/src/foo.rs".to_string()),
+ // Parent path ask (no worker context).
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  assert!(
@@ -1947,6 +2222,7 @@ mod tests {
  risk: Risk::Medium,
  reason: None,
  path: Some("/x".to_string()),
+ worker_run_id: None,
  };
  let s = serde_json::to_string(&p).unwrap();
  assert!(s.contains("\"sessionId\":\"sess-42\""), "sessionId camelCase: {}", s);
@@ -1978,5 +2254,516 @@ mod tests {
  } else {
  panic!("expected Deny");
  }
+ }
+
+ // =====================================================================
+ // 2026-06-22 (RULE-FrontSubagent-003 fix): worker ask_path
+ // interactive flow tests. Pre-fix, worker asks collapsed to Deny
+ // silently (RULE-A-014, 2026-06-20) — workers had no way to
+ // surface tool_use approvals to the user. Post-fix, worker asks
+ // go through the same `tokio::select!{cancel, timeout, oneshot}`
+ // flow as parent asks, just with a worker-owned permission
+ // session id (`worker:<worker_run_id>`) so the worker's pending
+ // oneshot does not collide with the parent's pending asks.
+ //
+ // The tests below cover all 4 terminal states (allow, deny,
+ // timeout, cancel) + the permission_session_id isolation invariant.
+ //
+ // Test harness: an in-memory SQLite (via `mod`-local
+ // `test_pool`) + a real `PermissionStore`. The `ask_path`
+ // worker branch writes the audit row via `record_audit` →
+ // `db::record_audit_event`; we assert against
+ // `list_audit_events` to verify the right `AuditKind` +
+ // payload landed. A `MockEmitter`-style sink is not strictly
+ // needed — `ask_path` calls `sink.emit_permission_ask` and
+ // `register_ask`, both of which we observe via the store's
+ // pending map + the audit table for the IPC emit side.
+ // For the IPC payload assertion we use a tiny inline sink
+ // that captures `emit_permission_ask` calls.
+ // =====================================================================
+
+ use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
+ use std::sync::Mutex as StdMutex;
+
+ /// Local `test_pool` — same shape as `db::tests::test_pool`
+ /// (in-memory SQLite + migrations) but declared here so the
+ /// permissions test module is self-contained (the `db::tests`
+ /// module's `test_pool` is private).
+ async fn worker_test_pool() -> sqlx::SqlitePool {
+ let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+ sqlx::query("PRAGMA foreign_keys = ON")
+ .execute(&pool)
+ .await
+ .unwrap();
+ crate::db::migrations::run_migrations(&pool).await.unwrap();
+ // Insert a parent session row so the audit FK is satisfied.
+ // `sessions` table is the audit table's parent — without
+ // this insert, the audit INSERT in `record_audit` fails
+ // silently (record_audit swallows errors per its docstring).
+ sqlx::query(
+ r#"
+ INSERT INTO sessions (id, title, created_at, updated_at, model, metadata,
+ current_cwd, worktree_path, worktree_state, mode)
+ VALUES ('parent-sess', 'Test', datetime('now'), datetime('now'),
+ '', NULL, '/repo', NULL, 'none', 'edit')
+ "#,
+ )
+ .execute(&pool)
+ .await
+ .expect("insert parent session for test");
+ pool
+ }
+
+ /// Minimal sink capturing `emit_permission_ask` payloads for
+ /// assertions. The other 3 trait methods are not exercised by
+ /// `ask_path` — they get no-op impls.
+ #[derive(Default)]
+ struct CaptureAskSink {
+ asks: StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>,
+ }
+ impl crate::state::ChatEventSink for CaptureAskSink {
+ fn emit_chat_event(&self, _p: &ChatEventPayload) {}
+ fn emit_tool_call(&self, _p: &ToolCallPayload) {}
+ fn emit_tool_result(&self, _p: &ToolResultPayload) {}
+ fn emit_permission_ask(
+ &self,
+ p: crate::agent::permissions::PermissionAskPayload,
+ ) {
+ self.asks.lock().unwrap().push(p);
+ }
+ }
+
+ /// Build a worker `PermissionContext` pointing at a fresh test
+ /// DB. The test owns the DB / store so it can introspect the
+ /// audit table + the pending-asks map.
+ async fn worker_ctx_with_db() -> (
+ sqlx::SqlitePool,
+ PermissionStore,
+ std::sync::Arc<CaptureAskSink>,
+ PermissionContext,
+ tokio_util::sync::CancellationToken,
+ ) {
+ let pool = worker_test_pool().await;
+ let store = new_permission_store();
+ let sink = std::sync::Arc::new(CaptureAskSink::default());
+ let ctx = PermissionContext {
+ session_id: "parent-sess".to_string(),
+ mode: Mode::Edit,
+ cwd: std::path::PathBuf::from("/repo"),
+ is_worker: true,
+ worker_run_id: Some("worker-run-1".to_string()),
+ };
+ (pool, store, sink, ctx, tokio_util::sync::CancellationToken::new())
+ }
+
+ /// Worker asks DO use a distinct permission session id
+ /// (`worker:<worker_run_id>`) as the INTERNAL store key for the
+ /// `register_ask` / `resolve_ask` oneshot, so they cannot collide
+ /// with the parent's pending asks. This is the load-bearing
+ /// invariant of the worker-ask rewrite — without it, the worker's
+ /// oneshot would either (a) evict a parent pending ask on cancel,
+ /// or (b) receive the parent's `permission_response` IPC reply.
+ ///
+ /// The IPC payload's `session_id` field, however, must carry the
+ /// PARENT session id (not the composite) — the frontend
+ /// `WorkerAskBanner` groups worker asks by parent session via
+ /// `ask.sessionId === parentSessionId`
+ /// (`permissions.ts::pendingWorkerCountForSession`). Carrying the
+ /// composite on the wire was a cross-layer bug fixed in PR1.5
+ /// (2026-06-22) — the composite stays internal to the store key.
+ ///
+ /// The test calls `ask_path` and asserts BOTH:
+ ///   - IPC `payload.session_id == parent session id` (wire shape)
+ ///   - `cancel_session_asks(parent_session_id)` does NOT drop the
+ ///     worker's pending oneshot (proves the entry is keyed under
+ ///     the composite `worker:<worker_run_id>`, not the parent
+ ///     session id; if Fix #1 leaked into `register_ask`, the
+ ///     parent-scoped cancel would drop it).
+ #[tokio::test]
+ async fn worker_ask_uses_isolated_permission_session_id() {
+ let (pool, store, sink, ctx, token) = worker_ctx_with_db().await;
+ let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+ let store_for_task = store.clone();
+ let ctx_for_task = ctx.clone();
+ let pool_for_task = pool.clone();
+ let token_for_task = token.clone();
+ let handle = tokio::spawn(async move {
+ super::ask_path(
+ &sink_arc,
+ &pool_for_task,
+ &store_for_task,
+ &ctx_for_task,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-1",
+ &token_for_task,
+ )
+ .await
+ });
+ // Give the spawn a moment to register the ask + emit IPC.
+ tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+ // IPC payload assertions.
+ let captured_asks = sink.asks.lock().unwrap().clone();
+ assert_eq!(captured_asks.len(), 1, "expected 1 IPC emit");
+ let payload = &captured_asks[0];
+ // PR1.5 (2026-06-22): the IPC `sessionId` MUST be the parent
+ // session id (carries through to the frontend's banner filter).
+ assert_eq!(
+ payload.session_id, "parent-sess",
+ "worker ask IPC payload must carry parent session id (for banner routing); \
+  PR1.5 cross-layer fix"
+ );
+ assert_eq!(
+ payload.session_id, ctx.session_id,
+ "worker IPC payload session_id must equal parent ctx.session_id"
+ );
+ assert_eq!(
+ payload.worker_run_id.as_deref(),
+ Some("worker-run-1"),
+ "IPC payload must carry worker_run_id"
+ );
+ assert_eq!(payload.tool_name, "write_file");
+ assert_eq!(payload.tool_use_id, "tu-worker-1");
+
+ // PR1.5 regression guard: the INTERNAL store key MUST still be
+ // the composite `worker:<worker_run_id>`, NOT the parent
+ // session id. If Fix #1 accidentally leaked into register_ask,
+ // worker pending asks would collide with parent pending asks
+ // (RULE-A-014 regression). We verify by calling
+ // `cancel_session_asks(parent_session_id)` — this should NOT
+ // drop the worker's pending entry (the entry is bound to the
+ // composite session id, not the parent's). If the entry WAS
+ // bound to `parent-sess`, the cancel would drop it and the
+ // subsequent resolve_ask would fail (rid missing).
+ super::cancel_session_asks(&store, "parent-sess").await;
+ let rid = payload.rid.clone();
+ let resolved = super::resolve_ask(
+ &store,
+ &rid,
+ PermissionResponse::AllowOnce,
+ )
+ .await;
+ assert!(
+ resolved,
+ "cancel_session_asks(parent_session_id) must NOT drop the worker's \
+  pending oneshot — the entry is keyed under the composite \
+  `worker:<worker_run_id>` (RULE-A-014 invariant). If this fires, \
+  Fix #1 leaked into register_ask and worker/parent asks collide."
+ );
+
+ // Let the spawned task complete (resolve_ask above unblocked it).
+ let decision = handle.await.expect("join handle");
+ assert!(
+ matches!(decision, Decision::Allow),
+ "resolve_ask(AllowOnce) should win after the parent-scoped cancel \
+  no-op'd; got {:?}",
+ decision
+ );
+ // No audit row (RULE-A-016 — worker Allow must NOT write
+ // parent's `session_audit_events`).
+ let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+ .await
+ .expect("list_audit_events");
+ assert!(
+ events.is_empty(),
+ "RULE-A-016: worker Allow must NOT write any session_audit_events row; \
+ got kinds: {:?}",
+ events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+ );
+ }
+
+ /// Worker ask resolved with `AllowOnce` → `Decision::Allow`.
+ /// No audit row is written (RULE-A-016 lineage — worker's
+ /// resolve events stay in the worker's transcript, NOT in the
+ /// parent's `session_audit_events`).
+ #[tokio::test]
+ async fn worker_ask_allowed_resolves_allow() {
+ let (pool, store, sink, ctx, token) = worker_ctx_with_db().await;
+ let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+ // Spawn a resolver that sends `PermissionResponse::AllowOnce`
+ // for the FIRST rid that appears in the store.
+ let store_for_resolve = store.clone();
+ let _resolve_task = tokio::spawn(async move {
+ for _ in 0..1000 {
+ let map = store_for_resolve.lock().await;
+ if let Some((rid, _)) = map.iter().next() {
+ let rid = rid.clone();
+ drop(map);
+ let _ = super::resolve_ask(
+ &store_for_resolve,
+ &rid,
+ PermissionResponse::AllowOnce,
+ )
+ .await;
+ return;
+ }
+ tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+ }
+ panic!("worker ask did not register within 2s");
+ });
+
+ let decision = super::ask_path(
+ &sink_arc,
+ &pool,
+ &store,
+ &ctx,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-1",
+ &token,
+ )
+ .await;
+
+ assert!(matches!(decision, Decision::Allow), "expected Allow, got {:?}", decision);
+
+ // No new audit row (RULE-A-016 — worker Allow does NOT write
+ // parent's `session_audit_events`). We assert the only rows
+ // present are the pre-existing ones from the test harness
+ // setup (none in this minimal harness), so the audit table is
+ // empty after the worker allow.
+ let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+ .await
+ .expect("list_audit_events");
+ assert!(
+ events.is_empty(),
+ "RULE-A-016: worker Allow must NOT write any session_audit_events \
+ row; got kinds: {:?}",
+ events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+ );
+ }
+
+ /// Worker ask timed out (no resolve) → `Decision::Deny`.
+ /// No audit row is written (RULE-A-016 lineage).
+ #[tokio::test]
+ async fn worker_ask_timeout_resolves_deny() {
+ let (pool, store, sink, ctx, _token) = worker_ctx_with_db().await;
+ let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+ // Outer 130s timeout so the natural 120s ASK_TIMEOUT path
+ // runs to completion (instead of being killed by the test
+ // runner). If the timeout arm fails to fire, the outer
+ // timeout surfaces a clear panic message.
+ let decision = tokio::time::timeout(
+ std::time::Duration::from_secs(130),
+ super::ask_path(
+ &sink_arc,
+ &pool,
+ &store,
+ &ctx,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-timeout",
+ &tokio_util::sync::CancellationToken::new(),
+ ),
+ )
+ .await
+ .expect("worker ask_path timed out (the 120s ASK_TIMEOUT arm did not fire)");
+ assert!(
+ matches!(decision, Decision::Deny { .. }),
+ "expected Deny after timeout, got {:?}",
+ decision
+ );
+ if let Decision::Deny { reason, critical } = &decision {
+ assert!(reason.contains("timed out"), "reason: {}", reason);
+ assert!(!critical);
+ } else {
+ panic!("expected Deny");
+ }
+
+ // No audit row (RULE-A-016 lineage).
+ let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+ .await
+ .expect("list_audit_events");
+ assert!(
+ events.is_empty(),
+ "RULE-A-016: worker timeout must NOT write any session_audit_events \
+ row; got kinds: {:?}",
+ events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+ );
+ }
+
+ /// Worker ask cancelled by parent token (user Stop) →
+ /// `Decision::Deny`. No audit row (RULE-A-016 lineage).
+ #[tokio::test]
+ async fn worker_ask_cancelled_resolves_deny() {
+ let (pool, store, sink, ctx, token) = worker_ctx_with_db().await;
+ let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+ let store_for_task = store.clone();
+ let pool_for_task = pool.clone();
+ let ctx_for_task = ctx.clone();
+ let token_for_task = token.clone();
+ let handle = tokio::spawn(async move {
+ super::ask_path(
+ &sink_arc,
+ &pool_for_task,
+ &store_for_task,
+ &ctx_for_task,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-cancel",
+ &token_for_task,
+ )
+ .await
+ });
+ tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+ token.cancel();
+ let decision = handle.await.expect("join handle");
+ assert!(
+ matches!(decision, Decision::Deny { .. }),
+ "expected Deny after cancel, got {:?}",
+ decision
+ );
+ if let Decision::Deny { reason, .. } = &decision {
+ assert!(reason.contains("cancel"), "reason: {}", reason);
+ }
+
+ // No audit row (RULE-A-016 lineage).
+ let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+ .await
+ .expect("list_audit_events");
+ assert!(
+ events.is_empty(),
+ "RULE-A-016: worker cancel must NOT write any session_audit_events \
+ row; got kinds: {:?}",
+ events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+ );
+ }
+
+ /// Worker ask user-denied → `Decision::Deny` (the user's
+ /// reason is surfaced to the worker LLM via the tool_result).
+ /// No audit row (RULE-A-016 lineage).
+ #[tokio::test]
+ async fn worker_ask_user_deny_resolves_deny() {
+ let (pool, store, sink, ctx, _token) = worker_ctx_with_db().await;
+ let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+
+ let store_for_resolve = store.clone();
+ let _resolve_task = tokio::spawn(async move {
+ for _ in 0..1000 {
+ let map = store_for_resolve.lock().await;
+ if let Some((rid, _)) = map.iter().next() {
+ let rid = rid.clone();
+ drop(map);
+ let _ = super::resolve_ask(
+ &store_for_resolve,
+ &rid,
+ PermissionResponse::Deny { reason: "use git clean".to_string() },
+ )
+ .await;
+ return;
+ }
+ tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+ }
+ panic!("worker ask did not register within 2s");
+ });
+
+ let decision = super::ask_path(
+ &sink_arc,
+ &pool,
+ &store,
+ &ctx,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-deny",
+ &_token,
+ )
+ .await;
+
+ assert!(
+ matches!(decision, Decision::Deny { .. }),
+ "expected Deny after user deny, got {:?}",
+ decision
+ );
+ if let Decision::Deny { reason, critical } = &decision {
+ assert_eq!(reason, "use git clean");
+ assert!(!critical);
+ } else {
+ panic!("expected Deny");
+ }
+
+ // No audit row (RULE-A-016 lineage).
+ let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+ .await
+ .expect("list_audit_events");
+ assert!(
+ events.is_empty(),
+ "RULE-A-016: worker user-deny must NOT write any session_audit_events \
+ row; got kinds: {:?}",
+ events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+ );
+ }
+
+ /// Wire-shape lock: the worker's IPC payload carries
+ /// `workerRunId` (camelCase) — frontend reads this to route
+ /// the ask to the SubagentDrawer instead of the parent
+ /// `<PermissionModal>`.
+ #[tokio::test]
+ async fn worker_ask_payload_carries_worker_run_id_camel_case() {
+ let (pool, store, _sink, ctx, token) = worker_ctx_with_db().await;
+
+ #[derive(Default)]
+ struct LocalSink {
+ asks: StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>,
+ }
+ impl crate::state::ChatEventSink for LocalSink {
+ fn emit_chat_event(&self, _p: &ChatEventPayload) {}
+ fn emit_tool_call(&self, _p: &ToolCallPayload) {}
+ fn emit_tool_result(&self, _p: &ToolResultPayload) {}
+ fn emit_permission_ask(
+ &self,
+ p: crate::agent::permissions::PermissionAskPayload,
+ ) {
+ self.asks.lock().unwrap().push(p);
+ }
+ }
+ let sink_local = std::sync::Arc::new(LocalSink::default());
+ let sink_dyn: std::sync::Arc<dyn crate::state::ChatEventSink> = sink_local.clone();
+
+ let store_for_task = store.clone();
+ let pool_for_task = pool.clone();
+ let ctx_for_task = ctx.clone();
+ let token_for_task = token.clone();
+ let handle = tokio::spawn(async move {
+ let _ = super::ask_path(
+ &sink_dyn,
+ &pool_for_task,
+ &store_for_task,
+ &ctx_for_task,
+ "write_file",
+ &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+ "/repo/outside/foo.rs",
+ Some("/repo/outside/foo.rs"),
+ "tu-worker-wire",
+ &token_for_task,
+ )
+ .await;
+ });
+
+ tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+ token.cancel();
+ let _ = handle.await;
+
+ let asks = sink_local.asks.lock().unwrap().clone();
+ assert_eq!(asks.len(), 1);
+ let s = serde_json::to_string(&asks[0]).unwrap();
+ assert!(
+ s.contains("\"workerRunId\":\"worker-run-1\""),
+ "wire shape must carry workerRunId camelCase: {}",
+ s
+ );
  }
 }

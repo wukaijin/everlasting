@@ -69,6 +69,20 @@ const otherSessionAsk: PermissionAsk = {
   risk: "medium",
 };
 
+/** PR2 RULE-FrontSubagent-003 (2026-06-22): a WORKER ask fixture.
+ *  Same parent sessionId (`sess-1`) but carrying `workerRunId`,
+ *  which routes it to `pendingWorkerByRunId` instead of the
+ *  parent session's main-chat slot. */
+const workerAsk: PermissionAsk = {
+  rid: "rid-w1",
+  sessionId: "sess-1",
+  toolUseId: "tooluse-w1",
+  toolName: "shell",
+  toolInput: { command: "rm -rf /" },
+  risk: "critical",
+  workerRunId: "run-worker-1",
+};
+
 describe("usePermissionsStore", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -215,5 +229,96 @@ describe("usePermissionsStore", () => {
     const firstUnlisten = capturedUnlisten;
     await store.start();
     expect(firstUnlisten).toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------
+  // PR2 RULE-FrontSubagent-003 (2026-06-22): worker ask routing.
+  // Worker asks carry `workerRunId` and route to a SEPARATE map
+  // (`pendingWorkerByRunId`) so a worker ask can NEVER overwrite
+  // the parent session's own main-chat pending slot. Both can be
+  // pending simultaneously while a worker waits AND the parent
+  // agent loop is also blocked on its own ask.
+  // -----------------------------------------------------------------
+
+  describe("PR2 worker ask routing", () => {
+    it("setPending with workerRunId routes to pendingWorkerByRunId (NOT pendingBySession)", () => {
+      const store = usePermissionsStore();
+      store.setPending(workerAsk);
+      // Not in main-chat map — worker asks never pollute it.
+      expect(store.getPending("sess-1")).toBeUndefined();
+      expect(store.hasPending("sess-1")).toBe(false);
+      // IS in the worker map, keyed by workerRunId.
+      expect(store.getPendingWorker("run-worker-1")).toEqual(workerAsk);
+    });
+
+    it("setPending without workerRunId routes to pendingBySession (regression)", () => {
+      const store = usePermissionsStore();
+      store.setPending(sampleAsk);
+      // Main-chat path unchanged.
+      expect(store.getPending("sess-1")).toEqual(sampleAsk);
+      // Worker map stays empty.
+      expect(store.getPendingWorker("run-worker-1")).toBeUndefined();
+    });
+
+    it("main-chat ask and worker ask coexist without overwrite", () => {
+      const store = usePermissionsStore();
+      store.setPending(sampleAsk); // sess-1, main-chat, rid-1
+      store.setPending(workerAsk); // sess-1, worker, rid-w1
+      // Both survive — the worker ask did NOT overwrite the parent
+      // session's main-chat pending slot (the core PR2 invariant).
+      expect(store.getPending("sess-1")?.rid).toBe("rid-1");
+      expect(store.getPendingWorker("run-worker-1")?.rid).toBe("rid-w1");
+    });
+
+    it("respond clears the right map regardless of which kind", async () => {
+      const store = usePermissionsStore();
+      store.setPending(sampleAsk); // main-chat
+      store.setPending(workerAsk); // worker
+      // Responding to the main-chat ask clears ONLY the main-chat slot.
+      await store.respond("rid-1", "allow_once");
+      expect(store.getPending("sess-1")).toBeUndefined();
+      expect(store.getPendingWorker("run-worker-1")?.rid).toBe("rid-w1");
+      // Responding to the worker ask clears ONLY the worker slot.
+      await store.respond("rid-w1", "deny");
+      expect(store.getPendingWorker("run-worker-1")).toBeUndefined();
+    });
+
+    it("pendingWorkerCountForSession counts only this session's worker asks", () => {
+      const store = usePermissionsStore();
+      expect(store.pendingWorkerCountForSession("sess-1")).toBe(0);
+      store.setPending(workerAsk); // sess-1
+      // A worker ask from a DIFFERENT parent session.
+      store.setPending({
+        ...workerAsk,
+        rid: "rid-w2",
+        workerRunId: "run-worker-2",
+        sessionId: "sess-2",
+      });
+      expect(store.pendingWorkerCountForSession("sess-1")).toBe(1);
+      expect(store.pendingWorkerCountForSession("sess-2")).toBe(1);
+      expect(store.pendingWorkerRunIdsForSession("sess-1")).toEqual([
+        "run-worker-1",
+      ]);
+    });
+
+    it("getPendingByRid finds main-chat OR worker pending asks", () => {
+      const store = usePermissionsStore();
+      store.setPending(sampleAsk); // main-chat, rid-1
+      store.setPending(workerAsk); // worker, rid-w1
+      expect(store.getPendingByRid("rid-1")?.sessionId).toBe("sess-1");
+      expect(store.getPendingByRid("rid-w1")?.workerRunId).toBe(
+        "run-worker-1",
+      );
+      expect(store.getPendingByRid("rid-nonexistent")).toBeUndefined();
+    });
+
+    it("stop() clears pendingWorkerByRunId too", async () => {
+      const store = usePermissionsStore();
+      await store.start();
+      store.setPending(workerAsk);
+      store.stop();
+      expect(store.getPendingWorker("run-worker-1")).toBeUndefined();
+      expect(store.pendingWorkerCountForSession("sess-1")).toBe(0);
+    });
   });
 });

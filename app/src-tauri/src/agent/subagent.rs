@@ -1069,12 +1069,55 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
     }
 
     fn emit_permission_ask(&self, payload: PermissionAskPayload) {
-        // Worker permission asks are auto-denied by the Tier 4
-        // is_worker collapse (see `permissions::check`); this
-        // method should never be called in practice. We still
-        // record the entry for diagnosis — if it ever fires, the
-        // transcript shows the worker tried to ask (which is the
-        // bug).
+        // 2026-06-22 (RULE-FrontSubagent-003 fix): worker asks now
+        // go through the full interactive round-trip
+        // (`register_ask + tokio::select!{cancel, timeout, oneshot}`)
+        // instead of auto-denying at the Tier 4 is_worker collapse.
+        //
+        // The ask is delivered to the frontend over TWO channels:
+        //   1. `permission:ask` (emitted below when AppHandle is
+        //      present) → consumed by `usePermissionsStore` →
+        //      live pending entry (`pendingWorkerByRunId`) →
+        //      interactive Allow/Deny card in `<SubagentDrawer>`
+        //      + `<WorkerAskBanner>` counter.
+        //   2. `subagent:event` (via self.record below) →
+        //      transcript, consumed by `useSubagentRunsStore` →
+        //      historical render in the drawer (also captures
+        //      the ask when no AppHandle is wired, e.g. in unit
+        //      tests that use the test collector).
+        //
+        // Both channels carry the same rid; the drawer dedups by
+        // rid (interactive while the permissions store has it
+        // pending, historical once resolved). The dual emit is
+        // the correct separation: worker chat events stay on
+        // `subagent:event` (don't pollute the main chat), while
+        // `permission:ask` is the shared approval channel both
+        // main-chat and worker asks use.
+        //
+        // The resolve side (user Allow / Deny / timeout / cancel)
+        // does NOT write a follow-up audit row to the parent's
+        // `session_audit_events` per RULE-A-016 — the transcript
+        // is the worker's audit-like record.
+        //
+        // PR1.5 (2026-06-22): emit BEFORE `record()` so the
+        // frontend permissions store is armed before/alongside
+        // the transcript entry (avoids a render race where the
+        // transcript card appears historical before the live
+        // entry lands). Both are synchronous emits so ordering
+        // is minor, but emit-first is the safer choice.
+        if let Some(handle) = &self.app_handle {
+            if let Err(e) = handle.emit("permission:ask", payload.clone()) {
+                tracing::warn!(
+                    error = %e,
+                    run_id = %self.run_id,
+                    "permission:ask emit failed (non-fatal; transcript still recorded)"
+                );
+            }
+        }
+        // Test-only: when no app_handle is wired, the payload is
+        // still captured via the transcript record below (test
+        // collectors inspect transcript entries). The IPC emit
+        // path is exercised in integration, not unit, tests.
         let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
         self.record(TranscriptKind::PermissionAsk, payload_json);
     }
@@ -2144,6 +2187,10 @@ mod tests {
             risk: crate::agent::permissions::Risk::High,
             reason: Some("dangerous".into()),
             path: None,
+            // Test scenario is the worker's `SubagentBufferSink`
+            // (this is the buffer sink's own integration test, not
+            // a parent path ask) — leave `worker_run_id` None.
+            worker_run_id: None,
         });
 
         // Transcript side: 4 entries, kinds match.
@@ -2397,5 +2444,95 @@ mod tests {
         // some slack for clock granularity).
         assert!(dur_a >= 1, "dur_a < 1ms is implausible, got {dur_a}");
         assert!(dur_b >= 4, "dur_b < 4ms is implausible (we slept 8ms), got {dur_b}");
+    }
+
+    /// PR1.5 (2026-06-22, RULE-FrontSubagent-003 cross-layer fix):
+    /// `emit_permission_ask` produces BOTH:
+    ///   1. a `TranscriptKind::PermissionAsk` transcript entry
+    ///      (the historical record — frontend `SubagentDrawer`
+    ///      renders the card from this even after the live ask
+    ///      resolves).
+    ///   2. (when AppHandle is present) a `permission:ask` IPC
+    ///      event on the Tauri `permission:ask` channel (the
+    ///      live-pending record — frontend `usePermissionsStore`
+    ///      picks it up, routes by `workerRunId` into
+    ///      `pendingWorkerByRunId`, and the interactive card +
+    ///      `<WorkerAskBanner>` read from there).
+    ///
+    /// This unit test covers the transcript-entry side (#1) —
+    /// the side that does NOT need a Tauri runtime. The AppHandle
+    /// `permission:ask` emit (#2) needs a real Tauri runtime to
+    /// exercise (`handle.emit(...)` panics without the Tauri
+    /// globals initialized), so it is left to integration tests.
+    /// The existing `subagent_buffer_sink_emits_ipc_event_per_emit`
+    /// test (line ~2150) covers the `subagent:event` half — the
+    /// `permission:ask` channel emit is a parallel path through
+    /// `app_handle.emit` that mirrors the warn-on-error pattern.
+    ///
+    /// The payload `session_id` carries the PARENT session id
+    /// (per Fix #1 in permissions/mod.rs::ask_path — verified by
+    /// `worker_ask_uses_isolated_permission_session_id` in
+    /// permissions/mod.rs tests). This test re-asserts it here at
+    /// the sink layer so a future sink refactor can't silently
+    /// swap it for the composite.
+    #[test]
+    fn emit_permission_ask_populates_transcript_with_parent_session_id() {
+        let sink = SubagentBufferSink::new_without_app_handle(
+            "worker-rid-1".into(),
+            // Parent session id — the sink is constructed with the
+            // parent's session_id (NOT a composite). The composite
+            // "worker:<run_id>" is INTERNAL to the permission store
+            // keying only; the sink carries parent identity for
+            // `subagent:event` routing.
+            "parent-sess-1".into(),
+        );
+        sink.emit_permission_ask(crate::agent::permissions::PermissionAskPayload {
+            rid: "ask-rid-1".into(),
+            session_id: "parent-sess-1".into(),
+            tool_use_id: "toolu_w1".into(),
+            tool_name: "write_file".into(),
+            tool_input: serde_json::json!({"path": "/repo/outside/foo.rs"}),
+            risk: crate::agent::permissions::Risk::High,
+            reason: Some("requires confirmation".into()),
+            path: Some("/repo/outside/foo.rs".into()),
+            worker_run_id: Some("worker-run-1".into()),
+        });
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(
+            transcript.len(),
+            1,
+            "emit_permission_ask must produce exactly 1 transcript entry"
+        );
+        let entry = &transcript[0];
+        assert_eq!(entry.kind, TranscriptKind::PermissionAsk);
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
+        // Wire shape (camelCase via PermissionAskPayload's serde
+        // rename_all) — this is what the frontend will see when it
+        // decodes the transcript_json from subagent_runs.
+        assert_eq!(
+            pj.get("sessionId").and_then(|v| v.as_str()),
+            Some("parent-sess-1"),
+            "transcript payload must carry parent session_id (PR1.5 cross-layer fix)"
+        );
+        assert_eq!(
+            pj.get("workerRunId").and_then(|v| v.as_str()),
+            Some("worker-run-1"),
+            "transcript payload must carry workerRunId camelCase"
+        );
+        assert_eq!(
+            pj.get("rid").and_then(|v| v.as_str()),
+            Some("ask-rid-1"),
+        );
+        assert_eq!(
+            pj.get("toolName").and_then(|v| v.as_str()),
+            Some("write_file"),
+        );
+        assert_eq!(
+            pj.get("toolUseId").and_then(|v| v.as_str()),
+            Some("toolu_w1"),
+        );
     }
 }

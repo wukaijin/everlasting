@@ -49,9 +49,9 @@ pub mod thinking;
 
 /// Maximum agent loop turns before forced stop (safety limit).
 ///
-/// C3 (2026-06-12): bumped from 20 → 50. The previous 20-turn cap
+/// C3 (2026-06-22): bumped 20 → 50 → 200. The previous 20-turn cap
 /// was both the safety net AND the de-facto context-overflow guard.
 /// Post-C3, [`context::compact_messages`] handles the real overflow
-/// via token-budget trimming; the 50-turn cap is a pure fallback
+/// via token-budget trimming; the 200-turn cap is a pure fallback
 /// for pathological loops (e.g. a model stuck in a tool-cycle).
-pub const MAX_TURNS: usize = 50;
+pub const MAX_TURNS: usize = 200;

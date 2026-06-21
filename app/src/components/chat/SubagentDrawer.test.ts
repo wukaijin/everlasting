@@ -63,6 +63,7 @@ import {
   type TranscriptSection,
 } from "../../stores/subagentRuns";
 import { useChatStore } from "../../stores/chat";
+import { usePermissionsStore } from "../../stores/permissions";
 
 const sampleRow: SubagentRunRow = {
   id: "run-1",
@@ -920,8 +921,8 @@ describe("SubagentDrawer", () => {
     });
   });
 
-  describe("PR6 R24 (downgraded) — permission_ask historical-mode not regressed", () => {
-    it("DrawerPermissionAskCard still renders with auto-denied notice (historical only)", async () => {
+  describe("PR2 RULE-FrontSubagent-003 — permission_ask interactive reconciliation", () => {
+    it("renders HISTORICAL card when rid is NOT live-pending (resolved / transcript-only)", async () => {
       const store = useSubagentRunsStore();
       const chatStore = useChatStore();
       chatStore.currentCwd = "/data/repo";
@@ -929,7 +930,7 @@ describe("SubagentDrawer", () => {
         {
           kind: "PermissionAsk",
           payload_json: {
-            rid: "r-1",
+            rid: "r-historical-1",
             sessionId: "sess-1",
             toolUseId: "tu-1",
             toolName: "write_file",
@@ -945,18 +946,170 @@ describe("SubagentDrawer", () => {
 
       const cards = w.findAllComponents(DrawerPermissionAskCard);
       expect(cards.length).toBe(1);
-      // The R24 downgrade adds an explicit "worker · 自动拒绝" status
-      // pill + the auto-denied notice line. Lock both so a future
-      // revert (re-enabling interactive mode without restructuring
-      // the backend) catches in tests.
+      // PR2: rid not in the live permissions store → interactive=false.
+      expect(cards[0].props("interactive")).toBe(false);
+      // The "等待审批" status text MUST NOT render in historical mode.
       const cardEl = document.body.querySelector(".drawer-permission-ask-card");
-      expect(cardEl?.textContent).toContain("worker · 自动拒绝");
-      expect(cardEl?.querySelector(".drawer-permission-ask-card__auto-denied-note"))
-        .not.toBeNull();
-      // The 4 interactive action buttons (仅一次 / 始终允许 / 拒绝 /
-      // 拒绝并说明) MUST NOT render — the card is historical-only.
+      expect(cardEl?.textContent).not.toContain("等待审批");
+      expect(cardEl?.textContent).toContain("已记录");
+      // The 4 interactive action buttons MUST NOT render.
       expect(cardEl?.querySelector(".permission-ask-body__actions")).toBeNull();
-      expect(cardEl?.querySelector(".permission-ask-body__btn")).toBeNull();
+      w.unmount();
+    });
+
+    it("renders INTERACTIVE card with Allow/Deny buttons when rid IS live-pending", async () => {
+      const store = useSubagentRunsStore();
+      const chatStore = useChatStore();
+      const permissionsStore = usePermissionsStore();
+      chatStore.currentCwd = "/data/repo";
+      const sections: TranscriptSection[] = [
+        {
+          kind: "PermissionAsk",
+          payload_json: {
+            rid: "r-live-1",
+            sessionId: "sess-1",
+            toolUseId: "tu-live",
+            toolName: "shell",
+            toolInput: { command: "rm -rf /tmp/x" },
+            risk: "critical",
+            // N3 (2026-06-22): the transcript payload carries
+            // `workerRunId` too — the PR1.5 backend emits the same
+            // payload shape on BOTH the `permission:ask` IPC channel
+            // (live store) AND the `subagent:event` transcript
+            // channel. `DrawerPermissionAskCard` derives
+            // `hideAllowAlways` from `ask.workerRunId` (sourced from
+            // the transcript via `synthesizeAsk`), so the transcript
+            // payload MUST carry it for the button to be hidden.
+            workerRunId: "run-1",
+          },
+        },
+      ];
+      await openWith(store, {}, sections);
+      // Seed the live pending ask — simulates the PR2 backend
+      // emitting a real `permission:ask` IPC for this worker.
+      permissionsStore.setPending({
+        rid: "r-live-1",
+        sessionId: "sess-1",
+        toolUseId: "tu-live",
+        toolName: "shell",
+        toolInput: { command: "rm -rf /tmp/x" },
+        risk: "critical",
+        workerRunId: "run-1",
+      });
+
+      const w = makeDrawer();
+      await flushPromises();
+
+      const cards = w.findAllComponents(DrawerPermissionAskCard);
+      expect(cards.length).toBe(1);
+      // PR2: rid IS in the live permissions store → interactive=true.
+      expect(cards[0].props("interactive")).toBe(true);
+      const cardEl = document.body.querySelector(".drawer-permission-ask-card");
+      // Status pill flips to "等待审批".
+      expect(cardEl?.textContent).toContain("等待审批");
+      // The interactive action row renders. N3 fix (RULE-FrontSubagent-003
+      // check phase, 2026-06-22): worker asks hide the "始终允许" button
+      // (backend treats worker AllowAlways as AllowOnce — persisting a
+      // worker grant to `session_tool_permissions` would cross privilege
+      // boundaries). So a worker ask renders 3 buttons, NOT 4.
+      expect(cardEl?.querySelector(".permission-ask-body__actions"))
+        .not.toBeNull();
+      const btns = cardEl?.querySelectorAll(".permission-ask-body__btn");
+      expect(btns?.length ?? 0).toBe(3);
+      // Specifically: the "始终允许" button must NOT render for a worker ask.
+      const alwaysBtn = cardEl?.querySelector(".permission-ask-body__btn--always");
+      expect(alwaysBtn).toBeNull();
+      w.unmount();
+    });
+
+    it("N3: worker ask (workerRunId present) hides the 始终允许 button", async () => {
+      // Worker asks route through `DrawerPermissionAskCard`, which
+      // derives `hideAllowAlways` from `ask.workerRunId`. The
+      // main-chat path (no workerRunId) keeps all 4 buttons; that
+      // half of the contract is unit-tested directly in
+      // `PermissionAskBody.test.ts::hideAllowAlways prop` (no Tauri
+      // runtime needed there). This test covers the integration:
+      // drawer → card → body end-to-end for the worker case.
+      const store = useSubagentRunsStore();
+      const chatStore = useChatStore();
+      const permissionsStore = usePermissionsStore();
+      chatStore.currentCwd = "/data/repo";
+
+      const workerSections: TranscriptSection[] = [
+        {
+          kind: "PermissionAsk",
+          payload_json: {
+            rid: "r-worker-1",
+            sessionId: "sess-1",
+            toolUseId: "tu-w",
+            toolName: "write_file",
+            toolInput: { path: "/outside/x" },
+            risk: "medium",
+            workerRunId: "run-1",
+          },
+        },
+      ];
+      await openWith(store, {}, workerSections);
+      permissionsStore.setPending({
+        rid: "r-worker-1",
+        sessionId: "sess-1",
+        toolUseId: "tu-w",
+        toolName: "write_file",
+        toolInput: { path: "/outside/x" },
+        risk: "medium",
+        workerRunId: "run-1",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const workerCardEl = document.body.querySelector(".drawer-permission-ask-card");
+      // 3 buttons: 仅一次 / 拒绝 / 拒绝并说明 (no 始终允许).
+      expect(workerCardEl?.querySelectorAll(".permission-ask-body__btn").length ?? 0)
+        .toBe(3);
+      expect(workerCardEl?.querySelector(".permission-ask-body__btn--always"))
+        .toBeNull();
+      w.unmount();
+    });
+
+    it("flips from interactive to historical when the ask is resolved", async () => {
+      const store = useSubagentRunsStore();
+      const chatStore = useChatStore();
+      const permissionsStore = usePermissionsStore();
+      chatStore.currentCwd = "/data/repo";
+      const sections: TranscriptSection[] = [
+        {
+          kind: "PermissionAsk",
+          payload_json: {
+            rid: "r-flip",
+            sessionId: "sess-1",
+            toolUseId: "tu-flip",
+            toolName: "shell",
+            toolInput: { command: "ls" },
+            risk: "high",
+          },
+        },
+      ];
+      await openWith(store, {}, sections);
+      permissionsStore.setPending({
+        rid: "r-flip",
+        sessionId: "sess-1",
+        toolUseId: "tu-flip",
+        toolName: "shell",
+        toolInput: { command: "ls" },
+        risk: "high",
+        workerRunId: "run-1",
+      });
+
+      const w = makeDrawer();
+      await flushPromises();
+      let cards = w.findAllComponents(DrawerPermissionAskCard);
+      expect(cards[0].props("interactive")).toBe(true);
+
+      // User responds → store clears the slot → card flips to historical.
+      await permissionsStore.respond("r-flip", "allow_once");
+      await flushPromises();
+      cards = w.findAllComponents(DrawerPermissionAskCard);
+      expect(cards[0].props("interactive")).toBe(false);
       w.unmount();
     });
   });

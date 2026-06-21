@@ -81,6 +81,22 @@ export interface PermissionAsk {
    *  serializes with `#[serde(skip_serializing_if =
    *  "Option::is_none")]`. */
   path?: string;
+  /** Worker run id. Present ONLY for subagent worker asks (PR2 of
+   *  RULE-FrontSubagent-003, 2026-06-22). When present, the ask is
+   *  routed to the worker's drawer (not the main-chat ToolCallCard)
+   *  and keyed in `pendingWorkerByRunId` (NOT `pendingBySession`,
+   *  to avoid colliding with the parent session's own pending ask
+   *  slot — a worker ask and a parent main-chat ask can coexist
+   *  while the worker is waiting AND the parent is also waiting on
+   *  a different tool). Absent for main-chat asks.
+   *
+   *  The backend (PR1, 2026-06-22) emits worker asks from a
+   *  dedicated `permission_session_id = "worker:{workerRunId}"`
+   *  permission context, isolated from the parent's store slot.
+   *  The `permission_response` IPC routes by `rid` (unique per
+   *  ask) so this field is purely for FRONTEND routing (drawer
+   *  banner + drawer card reconciliation). */
+  workerRunId?: string;
 }
 
 /** Three-button response vocabulary. Matches the backend
@@ -149,8 +165,26 @@ export const usePermissionsStore = defineStore("permissions", () => {
    *  most one pending ask at a time, but multiple sessions can
    *  each have their own (multi-session concurrency). Replaces the
    *  old single-slot `pendingPermission` which silently dropped a
-   *  session's ask when another session's ask arrived. */
+   *  session's ask when another session's ask arrived.
+   *
+   *  NOTE (PR2 RULE-FrontSubagent-003, 2026-06-22): this map holds
+   *  MAIN-CHAT asks only. Worker asks (carrying `workerRunId`)
+   *  route to `pendingWorkerByRunId` instead — otherwise a worker
+   *  spawned by this session would overwrite the parent session's
+   *  own main-chat pending slot (both can legitimately be pending
+   *  at the same time: parent awaits its own ask WHILE a worker
+   *  it spawned also waits on a separate ask). */
   const pendingBySession = reactive(new Map<string, PermissionAsk>());
+
+  /** Pending WORKER asks keyed by `workerRunId`. Separate from
+   *  `pendingBySession` per the note above — a worker ask must
+   *  NEVER overwrite the parent session's main-chat pending slot.
+   *  The PR2 backend (2026-06-22) emits worker asks from a
+   *  dedicated `permission_session_id = "worker:{workerRunId}"`
+   *  permission context, so worker asks arrive on the wire tagged
+   *  with `workerRunId: <string>` (camelCase per Rust serde
+   *  directive) and route here. */
+  const pendingWorkerByRunId = reactive(new Map<string, PermissionAsk>());
 
   /** Active 120s timers, keyed by `rid`. Each ask times out
    *  independently (the old store shared one `timerRid` slot, so a
@@ -231,14 +265,27 @@ export const usePermissionsStore = defineStore("permissions", () => {
       clearTimer(rid);
     }
     pendingBySession.clear();
+    pendingWorkerByRunId.clear();
   }
 
-  /** Route a new ask into its session's slot. If the same session
-   *  already has a pending ask (same-session replace — the agent
-   *  loop is serial so this is the normal next-tool_use path),
-   *  clear the prior timer first so it can't fire into the new
+  /** Route a new ask into its slot. If `ask.workerRunId` is set,
+   *  the ask routes to `pendingWorkerByRunId` (drawer / banner
+   *  surface) — otherwise it routes to `pendingBySession` (main-
+   *  chat ToolCallCard surface). Within a slot, a prior ask is
+   *  replaced (same-session serial agent loop → normal next-
+   *  tool_use path; same-worker next-tool_use path). The prior
+   *  ask's timer is cleared first so it can't fire into the new
    *  ask. */
   function setPending(ask: PermissionAsk): void {
+    if (ask.workerRunId) {
+      const prev = pendingWorkerByRunId.get(ask.workerRunId);
+      if (prev) {
+        clearTimer(prev.rid);
+      }
+      pendingWorkerByRunId.set(ask.workerRunId, ask);
+      startAskTimer(ask.rid);
+      return;
+    }
     const prev = pendingBySession.get(ask.sessionId);
     if (prev) {
       clearTimer(prev.rid);
@@ -274,7 +321,13 @@ export const usePermissionsStore = defineStore("permissions", () => {
   /** Send the user's decision to the backend + clear the matching
    *  pending (looked up by `rid`) and its timer. `reason` is the
    *  optional "拒绝并说明" feedback — only sent for `"deny"`; the
-   *  backend surfaces it as the `tool_result(is_error)` content. */
+   *  backend surfaces it as the `tool_result(is_error)` content.
+   *
+   *  PR2 RULE-FrontSubagent-003 (2026-06-22): both the main-chat
+   *  pending map AND the worker pending map are scanned for the
+   *  matching `rid`. The backend routes by `rid` (unique per ask)
+   *  so the same IPC works for both kinds — we just need to clear
+   *  the right slot locally. */
   async function respond(
     rid: string,
     decision: PermissionDecision,
@@ -291,6 +344,8 @@ export const usePermissionsStore = defineStore("permissions", () => {
       console.error("usePermissionsStore.respond failed:", e);
     }
     // Clear the matching pending (looked up by rid) + its timer.
+    // Scan BOTH maps — the rid uniquely identifies the ask, so at
+    // most one of these loops will fire.
     for (const [sid, ask] of pendingBySession) {
       if (ask.rid === rid) {
         clearTimer(rid);
@@ -298,10 +353,75 @@ export const usePermissionsStore = defineStore("permissions", () => {
         break;
       }
     }
+    for (const [wid, ask] of pendingWorkerByRunId) {
+      if (ask.rid === rid) {
+        clearTimer(rid);
+        pendingWorkerByRunId.delete(wid);
+        break;
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Worker-ask accessors (PR2 RULE-FrontSubagent-003, 2026-06-22)
+  // -----------------------------------------------------------------------
+
+  /** Read the pending worker ask for a given `workerRunId` (or
+   *  `undefined` when no ask is live for that worker). The
+   *  `<DrawerPermissionAskCard>` uses this via `getPendingByRid`
+   *  to decide whether to render in interactive or historical
+   *  mode (a live pending ask → interactive; a resolved / tran-
+   *  script-only ask → historical). */
+  function getPendingWorker(workerRunId: string): PermissionAsk | undefined {
+    return pendingWorkerByRunId.get(workerRunId);
+  }
+
+  /** Look up a pending ask (main-chat OR worker) by `rid`. Used by
+   *  the drawer's reconciliation: each transcript `PermissionAsk`
+   *  entry is checked against the live pending store so the card
+   *  can flip to interactive mode the moment the live ask arrives
+   *  (and flip back to historical once resolved). Returns
+   *  `undefined` when no live pending ask matches. */
+  function getPendingByRid(rid: string): PermissionAsk | undefined {
+    for (const ask of pendingBySession.values()) {
+      if (ask.rid === rid) return ask;
+    }
+    for (const ask of pendingWorkerByRunId.values()) {
+      if (ask.rid === rid) return ask;
+    }
+    return undefined;
+  }
+
+  /** Count of live worker asks belonging to a given PARENT session.
+   *  Each worker ask carries `sessionId` = the parent session id
+   *  (the worker has no independent chat session on the frontend;
+   *  the drawer is surfaced inside the parent's ChatPanel). The
+   *  `<WorkerAskBanner>` reads this for the current session to
+   *  decide whether to render. Returns 0 when no worker asks are
+   *  live for that session. */
+  function pendingWorkerCountForSession(sessionId: string): number {
+    let n = 0;
+    for (const ask of pendingWorkerByRunId.values()) {
+      if (ask.sessionId === sessionId) n += 1;
+    }
+    return n;
+  }
+
+  /** List of `workerRunId`s whose live pending asks belong to the
+   *  given parent session. The banner click handler opens the
+   *  drawer for the first (most recent) entry. Returns an empty
+   *  array when no worker asks are live for that session. */
+  function pendingWorkerRunIdsForSession(sessionId: string): string[] {
+    const ids: string[] = [];
+    for (const [wid, ask] of pendingWorkerByRunId) {
+      if (ask.sessionId === sessionId) ids.push(wid);
+    }
+    return ids;
   }
 
   return {
     pendingBySession,
+    pendingWorkerByRunId,
     pendingSessionIds,
     // start/stop manage the listener lifecycle (App.vue mount/unmount)
     start,
@@ -311,5 +431,10 @@ export const usePermissionsStore = defineStore("permissions", () => {
     hasPending,
     clearPending,
     respond,
+    // Worker-ask accessors (PR2 RULE-FrontSubagent-003, 2026-06-22)
+    getPendingWorker,
+    getPendingByRid,
+    pendingWorkerCountForSession,
+    pendingWorkerRunIdsForSession,
   };
 });

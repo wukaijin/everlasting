@@ -272,6 +272,14 @@ pub async fn chat(
             // doc comment on `run_chat_loop.system_prompt_override`
             // for the full rationale + the review reference.
             None,
+            // 2026-06-22 (RULE-FrontSubagent-003 fix): production
+            // chat is never a worker, so `worker_run_id` is
+            // `None`. The nested `run_subagent` call passes
+            // `Some(worker_run_id_opt)` so the worker's
+            // `PermissionContext.worker_run_id` is populated and
+            // `ask_path` can route the interactive ask via the
+            // `"worker:<worker_run_id>"` permission session id.
+            None,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.
