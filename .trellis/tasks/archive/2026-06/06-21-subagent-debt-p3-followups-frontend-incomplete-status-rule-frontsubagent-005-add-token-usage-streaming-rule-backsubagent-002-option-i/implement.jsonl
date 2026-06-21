@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer section + SubagentStatus type rendering 契约 — R1 改动对齐点(STATUS_META label/color 规范)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "确认 --color-tool-warn 存在 + 用法(对齐 --color-tool-shell warning tint 视觉对称)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "subagentRuns store 的 coerceStatus fallback 行为契约 + SubagentStatus type union 同步约束 — R1 type 加 incomplete 不可破坏 store 既有 invariant"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "SubagentStatusDb 5-variant CHECK(已含 incomplete) + status prefix 文案规范(INCOMPLETE_MARKER 中文 [未完成]) — R1 前端文案对齐后端契约"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "R2 production 路径真相:chat_loop.rs:907 add_token_usage 是 per-turn fold 点(PR2 把 skip_persist gate 解耦后,worker per-turn usage 自然 fold) — 改写撒谎注释的根据"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "R2 add_token_usage 与 add_token_usage_streaming 语义边界(spec 区分两个函数的角色) — 改写注释时不混用语义"}
