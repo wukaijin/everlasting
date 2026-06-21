@@ -1595,3 +1595,94 @@ sub-agent 执行 'find ... -exec wc -l {} +' 被 Tier 2 硬 kill list 拦(danger
   - 方案② per-subagent `max_turns` 字段(用户方案未定,持续搁置)
   - 方案 C 子代理结构化外部记忆(用户方案未定,持续搁置——200+ 轮重型子代理 C3 压缩失忆风险)
   - token/wall-clock 第二道成本阀(200+ 轮重型子代理烧钱不可见的兜底,留 follow-up)
+
+
+## Session 61: Session 61: subagent P3 follow-ups (RULE-FrontSubagent-005 + RULE-BackSubagent-002 option i)
+
+**Date**: 2026-06-22
+**Task**: Session 61: subagent P3 follow-ups (RULE-FrontSubagent-005 + RULE-BackSubagent-002 option i)
+**Branch**: `main`
+
+### Summary
+
+Session 60 留的 2 条 P3 follow-up 收尾:frontend 5-variant 视觉对齐 + 4 处撒谎注释清理(option i)。+118/-33 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;DEBT P3 9→7,Total 14→12
+
+### Main Changes
+
+## Session 61: subagent P3 follow-ups — frontend incomplete 视觉 + add_token_usage_streaming 撒谎注释清理 (RULE-FrontSubagent-005 + RULE-BackSubagent-002 option i)
+
+**Date**: 2026-06-22
+**Task**: subagent P3 follow-ups (Session 60 留的 2 条债收尾)
+**Branch**: `main`
+
+### Summary
+
+Session 60(RULE-A-017 closed @ `fd7dc79`)留 2 条 P3 follow-up:**RULE-FrontSubagent-005**(frontend 5 变体 type 漏 + `coerceStatus` fallback running 致 incomplete 永久显「运行中」UX 误报) + **RULE-BackSubagent-002**(`add_token_usage_streaming` 撒谎注释三处说"streaming-fold"但函数无 production callsite,research 锁定)。本次一锅清,**用户最终确认走 option i 路线**(删注释,接受 live counter 几秒延迟,不做 option ii 真接 streaming 函数的复杂度)。
+
+### Main Changes
+
+**R1 — Frontend 5-variant 视觉对齐**(~+12 行):
+- `app/src/stores/subagentRuns.ts:65` — `SubagentStatus` type union 4→5 变体(加 `"incomplete"`)
+- 同文件 `coerceStatus` 函数显式 recognize `"incomplete"`,不再 fallback 到 `"running"`
+- `app/src/components/chat/SubagentDrawer.vue` `STATUS_META` 加 `incomplete: { label: "未完成", color: "var(--color-tool-shell)" }`(对齐 `INCOMPLETE_MARKER` [未完成] 中文文案;用现有 amber 不用 `--color-tool-warn` — design-tokens spec 显式禁为 one-off use 新增 `--color-*` token)
+- `SubagentDrawer.vue` 同步加到 `statusDisplay` (terminal wall-clock 提示) / `bannerText` (warning banner "Worker hit max_turns limit") / `isEmpty` (空 transcript 时不再显「Worker is starting...」) — 范围超出 PRD 字面 AC 但必要,避免 incomplete run UX limbo
+
+**R2 — Backend 撒谎注释清理 (option i 路线)**(~+20 行注释改写):
+- `app/src-tauri/src/agent/subagent.rs:576-598` — `per_turn_usage` 字段 docstring 改写:删「streaming-fold ... via add_token_usage_streaming」段,改指向 `db::add_token_usage` at `chat_loop.rs:1031`(PR2a 把 `skip_persist` gate 解耦后,worker 复用 `parent_session_id`,per-turn usage 自然 fold)
+- 同文件 `:879-894` — `ChatEvent::Done` arm inline 注释同步改写
+- `app/src-tauri/src/db/subagent_runs.rs:18-27` — module doc 改写 + 加 ⚠️ production-only path warning block 显式禁止 production code 走 `add_token_usage_streaming`
+- 同文件 `:139-155` — `SubagentRunRow` type doc 同步改写(DEBT 未列,inspect 阶段 bonus 发现同款谎言顺手修)
+- 保留 `subagent.rs:803-813` + `db/subagent_runs.rs:554-586` 2 处已诚实注释(删了反而误导)
+- `add_token_usage_streaming` 函数体仍 `pub`(PR2 API 表面保留,未来 worker↔parent session identity split 时用)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2eedfe2` | fix(subagent): frontend incomplete 视觉差异化 + add_token_usage_streaming 撒谎注释清理 (RULE-FrontSubagent-005 + RULE-BackSubagent-002) |
+| `41303e9` | docs: DEBT.md回填 RULE-FrontSubagent-005 + RULE-BackSubagent-002 closed (2eedfe2) |
+
+### Testing
+
+- [OK] `cargo test --lib` 782 pass / 0 fail(`PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig`)
+- [OK] `pnpm exec vitest run` 427 pass / 0 fail / 4 pre-existing errors in `streamController.test.ts` teardown(stash 验证 baseline 一致;RULE-FrontTest-001 债,非本任务)
+- [OK] `pnpm exec vue-tsc --noEmit` 0 error
+- [OK] `cargo check` 0 warning
+- [OK] lying-language audit:`grep "streaming.fold\|via .*add_token_usage_streaming"` 0 match in production paths
+- [OK] 14 处剩余 `add_token_usage_streaming` 引用全在诚实语境(retained API surface / 函数 def / 测试)
+- [OK] spec cross-check:`subagent-runs-schema.md` 5-variant CHECK + enum + wire shape 全对齐 Session 60 R2 后端落地
+
+### Status
+
+[OK] **Completed** — 2 P3 债全闭,DEBT P3 9→7,Total 14→12。设计/规格/收尾 4 段式 commit 完整(fix→docs→archive→journal)
+
+### NIT 留 follow-up
+
+- **NIT-1**: `chat_loop.rs:1019-1022` 注释里仍有「streaming」字眼(在引号内,描述 user-perception 而非函数引用)— 与 DEBT 列的 4 处谎言性质不同,非本次 scope
+- **NIT-2**: `.trellis/spec/frontend/chat.md` 不覆盖 `SubagentStatus` / `STATUS_META` / `coerceStatus` / `statusDisplay` / `bannerText` / `isEmpty`(Session 60 R2 引入的 pre-existing spec drift,本次不修)
+- 两者均无功能影响,纯债务/规范债
+
+### Next Steps
+
+- 无新 task 开。Session 60 + 61 把 B6 subagent 收尾债务 + UX 差异化全闭环
+- 下次推荐候选:ROADMAP 第三档(B9 / C2 / C6 / L3 之一)或 BackSubagent-001(P2,worker error → parent 注入 partial transcript,Defensive)
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2eedfe2` | (see git log) |
+| `41303e9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
