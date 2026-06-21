@@ -215,18 +215,34 @@
 
 ---
 
-### RULE-FrontSubagent-003 — worker permission_ask 无法 interactive(R24 降级)
+### RULE-FrontSubagent-003 — worker permission_ask 无法 interactive(R24 降级)✅ closed
 
 - **Level**: P2
 - **Subsystem**: Frontend Subagent (cross Backend Permission)
-- **File**: `app/src-tauri/src/agent/permissions/mod.rs:287,1003-1045` + `app/src-tauri/src/commands/permissions.rs:197-234` + `app/src-tauri/src/agent/subagent.rs:597` + `app/src/components/chat/DrawerPermissionAskCard.vue`
+- **File**: `app/src-tauri/src/agent/permissions/mod.rs` + `app/src-tauri/src/agent/subagent.rs` + `app/src-tauri/src/agent/chat_loop.rs` + `app/src/stores/permissions.ts` + `app/src/components/chat/DrawerPermissionAskCard.vue` + `app/src/components/chat/WorkerAskBanner.vue`
 - **Description**: SubagentDrawer 的 permission_ask 卡片只能 historical 只读,无法 Allow/Deny 交互。根因:worker 的 `PermissionContext.is_worker=true` 让 Tier 4 `ask_path`/`ask_shell` 直接 collapse `Decision::Deny`,从不 emit `permission:ask` IPC;transcript 里的 historical permission_ask 用 synthetic rid(`Uuid::new_v4()`),不在 `permission_asks` oneshot map 中,`permission:response` IPC 无法路由;worker 复用 `parent_session_id` 无独立 permission session。
 - **Impact**: worker 跑到需权限的 tool 时,用户无法在 drawer 内批准/拒绝(只能看到 historical「自动拒绝」)。
-- **Fix**: worker 独立 permission session + worker ask 事件带 `workerRunId` + Tier 4 collapse 改 emit(而非直接 Deny)。前端 `DrawerPermissionAskCard` 已预留 `mode`/`onRespond` props(PR5),后端就绪后切 interactive。
-- **Status**: open
+- **Fix**(2026-06-22 实施,见 commit `89e5ba1`):worker Tier 4 `ask_path` 改完整 `register_ask + tokio::select!{cancel, timeout, oneshot}` round-trip;`SubagentBufferSink::emit_permission_ask` 双发(`permission:ask` live 通道 + `subagent:event` transcript 通道);worker payload `session_id` = parent(banner 分组),内部 `register_ask`/`resolve_ask` key = composite `worker:{runId}`(oneshot 隔离,RULE-A-014 不回归);前端 `permissions.ts` 加 `pendingWorkerByRunId` 独立 map(避免覆盖 parent 主 chat 槽)+ drawer 按 rid 去重(interactive vs historical)+ `WorkerAskBanner` 顶部唤起。worker 卡隐藏「始终允许」(后端 AllowAlways 当 AllowOnce)。完整契约见 [permission-layer.md §5b](../spec/backend/permission-layer.md)。
+- **Status**: closed(2026-06-22)
 - **Owner**: carlos
 - **Discovered In**: redesign PR6 (2026-06-21, Explore 后端调研)
+- **Closed In**: `.trellis/tasks/06-22-06-22-worker-tool-approval-interactive`
 - **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal` (PR6 R24 降级)
+
+---
+
+### RULE-WorkerAsk-001 — worker permission_ask historical 卡片不显示 resolve outcome
+
+- **Level**: P3
+- **Subsystem**: Frontend Subagent (cross Backend DB)
+- **File**: `app/src-tauri/src/agent/subagent.rs` (`SubagentBufferSink::emit_permission_ask` transcript entry) + `app/src/components/chat/PermissionAskBody.vue` (historical 分支)
+- **Description**: RULE-FrontSubagent-003 修复后,worker ask 的 resolve(allow/deny/timeout/cancel)只通过 live `permission:ask` 通道的 rid 消失来体现(drawer 卡片从 interactive 翻 historical)。但 transcript 里只存了 ask 本身(`TranscriptKind::PermissionAsk` payload_json),**没存 resolve outcome**。所以 worker run 结束后重开 drawer,历史 ask 卡片只能显示中性的「worker asked for X」(N2 文案),无法回溯「已允许 / 已拒绝 / 已超时 / 已取消」。
+- **Impact**: UX 轻微——历史回放丢失审批结果维度。live 期间不影响(交互卡正常)。
+- **Fix**: 要么 (a) 在 `TranscriptKind` 加 `PermissionAskResolved` 条目(worker resolve 时 sink 追加,带 outcome 枚举 + rid 关联);要么 (b) 扩 `subagent_runs` schema 加 resolve 维度。前端 historical 卡按 rid 配对渲染 outcome badge。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: 06-22-worker-tool-approval-interactive trellis-check N4(2026-06-22)
+- **Related Task**: `.trellis/tasks/06-22-06-22-worker-tool-approval-interactive`
 
 ---
 

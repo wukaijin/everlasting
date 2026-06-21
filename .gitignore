@@ -16,6 +16,7 @@ build/
 .next/
 out/
 *.tsbuildinfo
+.vite/
 
 # 依赖 lock(允许提交 pnpm-lock.yaml / Cargo.lock,这两个是项目稳定性的关键,保留)
 # 但本地临时 lock 备份忽略

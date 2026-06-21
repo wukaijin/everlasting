@@ -374,6 +374,60 @@ also route through `respond(rid, "deny")` per spec Q6.
 | reka-ui DialogContent `:deep()` gotcha | 模板不用 reka-ui (手写 `<Teleport>` + `:deep()`) |
 | 120s 超时 → 自动 deny | `startAskTimer` + toast |
 
+#### Worker ask routing — dual map (added 2026-06-22, RULE-FrontSubagent-003)
+
+> Worker (subagent) asks now flow through the same `permission:ask`
+> channel as main-chat asks (backend PR1.5 dual-emits — see
+> [permission-layer.md §5b](../backend/permission-layer.md)). The
+> store must keep them in a **separate map** from main-chat asks.
+
+**Why a separate map** (`pendingWorkerByRunId`, NOT `pendingBySession`):
+
+A parent session can have its OWN main-chat ask pending (user paused on
+a parent tool_use) WHILE a worker it spawned is ALSO waiting on approval.
+If both keyed into `pendingBySession[sessionId]`, the worker ask would
+overwrite the parent's pending slot (replacement semantics) — the parent's
+modal would vanish mid-confirmation. Two maps avoid the collision:
+
+```typescript
+const pendingBySession = reactive(new Map<string, PermissionAsk>());      // main-chat (workerRunId absent)
+const pendingWorkerByRunId = reactive(new Map<string, PermissionAsk>());  // worker (workerRunId present)
+```
+
+`setPending(ask)` branches on `ask.workerRunId`:
+- present → `pendingWorkerByRunId.set(ask.workerRunId, ask)`
+- absent → `pendingBySession.set(ask.sessionId, ask)` (unchanged)
+
+`respond(rid)` scans **both** maps (rid is unique per ask, routes correctly
+regardless of origin). `stop()` clears both + their timers.
+
+**Accessors**:
+- `getPendingByRid(rid)` — scans both maps. Used by `<SubagentDrawer>`'s
+  `isPermissionAskLive(rid)` reconciliation: a transcript ask entry is
+  rendered as **interactive** (Allow/Deny) while its rid is live-pending,
+  else **historical**. Same rid appears in both the transcript (via
+  `subagent:event`) and the live store (via `permission:ask`); the drawer
+  renders exactly ONE card, mode-flipping on store state.
+- `pendingWorkerCountForSession(parentSessionId)` — counts worker asks
+  whose `sessionId === parentSessionId`. Drives `<WorkerAskBanner>`:
+  `v-if="count > 0"`. The worker ask's `sessionId` field carries the
+  **parent** session id (not the composite `worker:{runId}` — that's
+  backend-internal only), so the banner groups worker asks under their
+  parent session correctly.
+- `pendingWorkerRunIdsForSession(parentSessionId)` — the runId list;
+  banner click opens the drawer for the most-recent pending run.
+
+**Worker card hides "始终允许"**: `<DrawerPermissionAskCard>` passes
+`hideAllowAlways = !!ask.workerRunId` to `<PermissionAskBody>`. Backend
+worker `AllowAlways` is treated as `AllowOnce` (no `session_tool_permissions`
+write — workers don't persist across the permission boundary), so the button
+would be misleading. Main-chat `<PermissionModal>` still shows all 3 buttons.
+
+**No global modal for worker asks** (design lock): worker approval UI lives
+inside `<SubagentDrawer>` (interactive card) + the non-blocking
+`<WorkerAskBanner>` in `<ChatPanel>` header. Never a top-level modal —
+multi-session concurrency would race + obscure attribution.
+
 ### D3 PR2 (2026-06-17): inline message edit (user messages only)
 
 The UI half of the session message edit / resend feature

@@ -658,7 +658,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **不丢**:Thinking / RedactedThinking blocks(只随整 turn 丢,不会"丢一半";signature 对不上会 400)
 - **不丢**:当前 user message、当前 tool_result
 - **不能做**:丢 system prompt、丢 role prompt、丢所有 memory
-- **MAX_TURNS 兜底**:20 → 50(2026-06-12 C3 PR1 改;正常 token 预算会先触发,50 轮兜底覆盖极端 case)
+- **MAX_TURNS 兜底**:20 → 50 → 200(2026-06-12 C3 PR1 改 20→50;2026-06-22 再 50→200 覆盖长 worker;正常 token 预算会先触发,200 轮兜底覆盖极端 case)
 - **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护 + 优先级算法)
 - **完整 PRD**:[.trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md](./../trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md)
 - **未实施**(MVP 留口子):前端"context compressed at turn N"UI 标记(PR2)+ compressed_out DB 列(C4 覆盖)+ LLM summarization(C3-v2)

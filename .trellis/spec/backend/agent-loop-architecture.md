@@ -212,7 +212,7 @@ tauri::async_runtime::spawn(async move {
         read_guard, memory_cache, skill_cache, permission_asks, token,
         None,                          // 16: resend_seq
         background_shells.clone(),     // 17
-        None,                          // 18: max_turns (production uses MAX_TURNS=50)
+        None,                          // 18: max_turns (production uses MAX_TURNS=200; 2026-06-22 bumped 50→200)
         false,                         // 19: skip_session_active (production chat owns the slot)
         false,                         // 20: skip_persist (production persists normally)
         Some(false),                   // 21: is_worker (production is never a worker)
