@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "⑨ 关权限层 + Tier 4 ask_path 改造的核心契约；worker 分支从 collapse-to-Deny 改为完整 register_ask + tokio::select 的依据"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs 表结构 + workerRunId / parent_session_id 关系；worker 独立 permission_session_id 命名参考"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Agent Loop 16 阶段请求生命周期；run_subagent 嵌套 run_chat_loop + cancellation token 派发的位置"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "tool_use / tool_result 协议；PermissionAskPayload schema 增 workerRunId 字段的来源"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 执行分发 + Tier 1-5 决策；worker 走 Tier 4 ask_path 的边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "AuditKind 10 类枚举扩展（新增 4 类：WorkerAskAllowed/Denied/TimedOut/Cancelled）"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ChatWindow 整体布局 + PermissionModal 渲染模式；WorkerAskBanner 插入位置"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 模式 + 跨 session 单例隔离；usePermissionsStore / 新增 pendingAsk store 的依据"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "SubagentDrawer 用 reka-ui Dialog 组合 right-side panel；WorkerAskBanner 沿用 popover / dialog 模式"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "顶部 banner 紧凑 UI 模式参考（避免全局 modal）"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-FrontSubagent-003 P2 open（待关闭）+ RULE-A-014/A-016 closed（历史止血，避免复现 hang parent oneshot）"}
+{"file": "docs/ROADMAP.md", "reason": "V2 路线图第二档定位；本次实现归属"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "决策档案 + ADR 模板位置；本次 cancellation 路由决策需要 ADR"}
+{"file": ".trellis/tasks/06-22-06-22-worker-tool-approval-interactive/prd.md", "reason": "本任务 PRD（已完成 brainstorm；R1-R7 需求 + Acceptance Criteria + Out of Scope）"}

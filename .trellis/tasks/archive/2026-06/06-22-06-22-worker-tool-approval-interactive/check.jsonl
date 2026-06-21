@@ -1,0 +1,8 @@
+{"file": "app/src-tauri/src/agent/permissions/mod.rs", "reason": "cargo test --lib worker ask_path 三臂（allow / timeout / cancel）+ PermissionAskPayload workerRunId 字段单元测试"}
+{"file": "app/src-tauri/src/agent/chat_loop.rs", "reason": "cargo test --lib run_subagent 嵌套 run_chat_loop + parent cancellation token 派生 + 串行派发"}
+{"file": "app/src/components/chat/DrawerPermissionAskCard.vue", "reason": "vitest 可交互模式（mode=onRespond）+ 按 workerRunId 路由 + 计时显示"}
+{"file": "app/src/components/chat/WorkerAskBanner.vue", "reason": "vitest 显示/隐藏/点击唤起 + 跨 session 隔离 + 不抢焦点"}
+{"file": "app/src/stores/pendingAsk.ts", "reason": "vitest 按 sessionId 隔离的 pendingAsk counter；与 PermissionStore 同步"}
+{"file": "app/src/stores/audit.ts", "reason": "vitest 新增 4 个 AuditKind WorkerAskAllowed/Denied/TimedOut/Cancelled 渲染"}
+{"file": "app/src-tauri/src/commands/permissions.rs", "reason": "permission:respond IPC 新增 workerRunId 字段透传"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-FrontSubagent-003 关闭（commit hash 回填）+ 新增 RULE-WorkerAsk-* 规则（如出现新债）"}
