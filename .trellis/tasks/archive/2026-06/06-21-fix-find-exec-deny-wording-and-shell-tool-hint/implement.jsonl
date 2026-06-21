@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 2 hard kill list 契约:dangerous::is_kill_listed 的 deny 语义 + Yolo 静默拒。改文案不能破坏 deny 契约(仍拦 -exec/-execdir),且 spec 写的 '9 regex' 与代码 10 条不一致须顺手修正。"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "shell tool definition 契约:description 里的引导(timeout/output/env allowlist)是 LLM 唯一行为信号,新增 find -exec → -print0|xargs-0 引导须与既有风格一致。"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "check 阶段校验:deny 契约未破坏(regex 仍拦 -exec)、文案不再含 'per match'、spec regex 计数已对齐代码。"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check 阶段校验:shell description 引导风格与 timeout/output 一致、未遗漏 -print0|xargs-0。"}
