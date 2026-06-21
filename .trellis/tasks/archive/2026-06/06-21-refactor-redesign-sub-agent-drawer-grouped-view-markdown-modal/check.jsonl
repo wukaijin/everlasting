@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Drawer + Modal reka-ui Dialog 实现合规性:2.9.9 pin、:deep() portal、data-state theming"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "Drawer 视觉审计:无硬编码 hex / token 覆盖正确 / 字体一致"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 改造合规审计:累加式 accumulator / markRaw 包裹 / live 不跑全量"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "中文 chip + 截断 + 详情 modal 渲染正确性"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "DB schema 改动合规:加 2 列不破坏既有 wire shape / 4 MiB cap / soft-FK"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration idempotent + 新机器/已有 DB 双路径 + enum/soft-FK/cascade 模式"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "worker exit hook 改动不破坏 16 skip_persist gates / skip_session_active / system_prompt_override"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool 输入/输出契约保持 — format_dispatch_result 格式不变"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "PR6 permission_ask 交互兼容 dispatcher 上下文 — 不破坏父 session permission 流"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "error 终态提取逻辑合规 — 不漏错误信息 / 不误报非错误事件"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试规范:cargo test 覆盖 dispatch → DB 写入 / worker exit → final_text / cancelled 边界"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "chat_event SSE 路由 + subagent:event 不破坏 — 后端零改动验证"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "视觉封装可复用边界审计 — 主 panel ToolCallCard 不被牵连"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端 wire shape drift 检查 — task/finalText 列 ↔ TS 类型 ↔ drawer 消费"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "DEBT.md 写入与回填检查 — Q1-Q10 决策 + 新债项(transcriptJson 切分)格式"}

@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Drawer + MarkdownDetailModal 用 reka-ui Dialog 组合;遵守 2.9.9 pin、:deep() portal gotcha"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "Drawer 视觉与主 panel 一致 — color/font/spacing/radius token,禁硬编码 hex"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "subagentRuns store 改造 + RunAccumulator;Pinia 模式 + LRU 20 + per-session buffer"}
+{"file": ".trellis/spec/frontend/memory-ui.md", "reason": "MarkdownDetailModal reka-ui Dialog 模式直接复用 MemoryModal"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "Drawer 中文 chip / 截断文本 / markdown 渲染中文保证"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "原 subagent_runs schema + transcriptJson 字段约束,加 task/final_text 列前必读"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 写法 + subagent_runs 已建表模式 + 4 MiB cap + 兼容已有 DB"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "worker exit hook 点 + system_prompt_override 第 23 参 + 16 skip_persist gates"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool input {subagent, task} + format_dispatch_result 输出契约"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "PR6 permission_ask 中间态 Allow/Deny 按钮 + ⑨ 关 5-tier 决策"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PR6 error 终态 error message 提取 + 5 类 LlmError 错误分类"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "chat_event SSE payload 形态 + subagent:event wire shape 保持"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "DrawerThinkingBlock/DrawerToolCallCard 视觉封装,可复用边界决策审计"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端 wire shape drift 防御;task/finalText 列与 TS 类型同步"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "DEBT.md 回填 grill-me Q1-Q10 决策记录 + 写新债项(transcriptJson 切分等)"}
