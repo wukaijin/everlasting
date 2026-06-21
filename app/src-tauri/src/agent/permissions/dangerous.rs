@@ -71,11 +71,17 @@ const DENY_PATTERNS: &[(&str, &str)] = &[
  r"(?i)(^|\s)find\b.*\s-delete\b",
  "find -delete is denied: recursive delete via find",
  ),
- // find ... -exec / -execdir — find running an arbitrary command
- // per match (`find / -exec rm -rf {} ;` is rm-at-a-distance).
+ // find ... -exec / -execdir — find becomes an arbitrary-command
+ // runner. Both `{}` terminators are blocked: `\;` runs the command
+ // once per match (`find / -exec rm -rf {} \;` is rm-at-a-distance),
+ // and `+` batches all matches into one invocation — either way the
+ // regex can't tell a benign `find . -exec wc -l {} +` from a
+ // destructive one, so both are denied. The reason steers the LLM to
+ // the safe equivalent (`-print0 | xargs -0`), which also handles
+ // filenames with spaces.
  (
  r"(?i)(^|\s)find\b.*\s-exec(dir)?\b",
- "find -exec is denied: runs an arbitrary command per match",
+ "find -exec is denied: find becomes an arbitrary-command runner — use -print0 | xargs -0 instead",
  ),
 ];
 
@@ -239,6 +245,27 @@ mod tests {
  assert!(is_kill_listed("shell", &json!({"command": "find . -execdir chmod 777 {} +"})).is_some());
  // Case-insensitive find bypass.
  assert!(is_kill_listed("shell", &json!({"command": "FIND / -DELETE"})).is_some());
+ }
+
+ /// The deny reason must steer the LLM to the safe equivalent
+ /// (`-print0 | xargs -0`) so a blocked `find -exec` costs only one
+ /// round-trip instead of the LLM guessing. Regression guard against
+ /// copy-edits dropping the hint (mirrors `definition_documents_timeout_guidance`
+ /// in shell.rs). Also locks that the inaccurate "per match" wording
+ /// (which was wrong for the `+` batch form) is gone.
+ #[test]
+ fn kill_list_find_exec_reason_suggests_xargs() {
+ let reason =
+ is_kill_listed("shell", &json!({"command": "find . -exec wc -l {} +"}))
+ .expect("find -exec is denied");
+ assert!(
+ reason.contains("xargs"),
+ "deny reason should suggest xargs, got: {reason}"
+ );
+ assert!(
+ !reason.contains("per match"),
+ "deny reason must not say 'per match' (wrong for the + batch form), got: {reason}"
+ );
  }
 
  #[test]

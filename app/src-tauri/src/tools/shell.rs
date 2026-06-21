@@ -254,7 +254,11 @@ pub fn definition() -> ToolDef {
              full file with read_file.\n\n\
              Environment is restricted to a safe allowlist \
              (PATH/HOME/USER/LOGNAME/LANG/LANGUAGE/LC_ALL/TERM/TZ/TMPDIR). \
-             API keys and tokens from the agent process are NOT inherited."
+             API keys and tokens from the agent process are NOT inherited.\n\n\
+             Avoid `find -exec` / `-execdir`: they are blocked by the permission \
+             kill list (find would run an arbitrary command). To act on find's \
+             results, pipe with `-print0 | xargs -0` — e.g. `find . -name '*.ts' \
+             -print0 | xargs -0 wc -l` — which also handles filenames with spaces."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
