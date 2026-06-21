@@ -1134,6 +1134,50 @@ fn make_raw_fallback_entry(raw: &str) -> TranscriptEntry {
 // Status-prefix formatter for the dispatch_subagent tool_result
 // ---------------------------------------------------------------------------
 
+/// Format the worker's final assistant text into the prefix-stripped
+/// shape that lands in `subagent_runs.final_text` (and the drawer
+/// Reply segment). Per PRD §"worker exit hook" + R2:
+///
+/// - `status: completed` → `<summary>` (empty text → `(worker produced no final text)`)
+/// - `status: cancelled` → `<partial>\n\n[CANCELLED_MARKER]` (empty text → `[CANCELLED_MARKER]`)
+/// - `status: error`     → `<error text>` (empty text → `(no error text captured)`)
+///
+/// **The `[status: ...]\n` prefix is intentionally NOT included** —
+/// the `status` column is the source of truth for the prefix (per
+/// the existing `summary` field contract; `subagent-runs-schema.md`
+/// §3 "`update_run_finished` 行为"). The drawer reads `final_text`
+/// for the Reply segment body; the status badge is rendered from
+/// the `status` column separately.
+pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
+    match status {
+        SubagentStatus::Completed => {
+            if worker_text.is_empty() {
+                "(worker produced no final text)".to_string()
+            } else {
+                worker_text.to_string()
+            }
+        }
+        SubagentStatus::Cancelled => {
+            // Reuse the same CANCELLED_MARKER the parent loop uses
+            // for its own cancel path — keeps the wire shape
+            // consistent across parent + worker.
+            let marker = crate::agent::helpers::CANCELLED_MARKER;
+            if worker_text.is_empty() {
+                marker.to_string()
+            } else {
+                format!("{}\n\n{}", worker_text, marker)
+            }
+        }
+        SubagentStatus::Error => {
+            if worker_text.is_empty() {
+                "(no error text captured)".to_string()
+            } else {
+                worker_text.to_string()
+            }
+        }
+    }
+}
+
 /// Format the dispatch_subagent tool_result content from the
 /// worker's final state. Per PRD §"summary 回填" + research §2:
 ///
@@ -1144,41 +1188,23 @@ fn make_raw_fallback_entry(raw: &str) -> TranscriptEntry {
 /// Returns `(content, is_error)`. `is_error` is `true` for cancel
 /// and error so the LLM knows the worker did not succeed; `false`
 /// for completed.
+///
+/// Implementation note: the body content is built via
+/// [`format_final_text`] (the prefix-stripped shape) and then
+/// wrapped with `[status: <status>]\n` — single source of truth
+/// for the "what does the worker's final text look like" shape
+/// shared between `format_final_text` (DB write) and this
+/// function (tool_result wire).
 pub fn format_dispatch_result(
     status: SubagentStatus,
     worker_text: &str,
 ) -> (String, bool) {
     let prefix = format!("[status: {}]", status.as_str());
+    let body = format_final_text(status, worker_text);
     match status {
-        SubagentStatus::Completed => {
-            let content = if worker_text.is_empty() {
-                format!("{}\n(worker produced no final text)", prefix)
-            } else {
-                format!("{}\n{}", prefix, worker_text)
-            };
-            (content, false)
-        }
-        SubagentStatus::Cancelled => {
-            // Reuse the same CANCELLED_MARKER the parent loop uses
-            // for its own cancel path — keeps the wire shape
-            // consistent across parent + worker.
-            let marker = crate::agent::helpers::CANCELLED_MARKER;
-            let content = if worker_text.is_empty() {
-                format!("{}\n{}", prefix, marker)
-            } else {
-                format!("{}\n{}\n\n{}", prefix, worker_text, marker)
-            };
-            (content, true)
-        }
-        SubagentStatus::Error => {
-            let error_text = if worker_text.is_empty() {
-                "(no error text captured)"
-            } else {
-                worker_text
-            };
-            let content = format!("{}\n{}", prefix, error_text);
-            (content, true)
-        }
+        SubagentStatus::Completed => (format!("{}\n{}", prefix, body), false),
+        SubagentStatus::Cancelled => (format!("{}\n{}", prefix, body), true),
+        SubagentStatus::Error => (format!("{}\n{}", prefix, body), true),
     }
 }
 
@@ -1484,6 +1510,80 @@ mod tests {
         assert!(is_error);
         assert!(content.starts_with("[status: error]"));
         assert!(content.contains("LLM stream errored"));
+    }
+
+    // ---- format_final_text (B6 redesign PR1, 2026-06-21) ----
+
+    /// `format_final_text` returns the prefix-stripped text that
+    /// lands in `subagent_runs.final_text` and the drawer's Reply
+    /// segment. The `[status: ...]\n` prefix is **NOT** included
+    /// — the `status` column is the source of truth.
+    #[test]
+    fn format_final_text_completed_returns_plain_summary() {
+        let body = format_final_text(SubagentStatus::Completed, "found 3 files");
+        assert_eq!(body, "found 3 files");
+        assert!(
+            !body.starts_with("[status:"),
+            "no status prefix — the column carries that"
+        );
+    }
+
+    #[test]
+    fn format_final_text_completed_empty_falls_back_to_note() {
+        let body = format_final_text(SubagentStatus::Completed, "");
+        assert_eq!(body, "(worker produced no final text)");
+    }
+
+    #[test]
+    fn format_final_text_cancelled_appends_marker() {
+        let body = format_final_text(SubagentStatus::Cancelled, "partial result");
+        assert_eq!(
+            body,
+            format!(
+                "partial result\n\n{}",
+                crate::agent::helpers::CANCELLED_MARKER
+            )
+        );
+    }
+
+    #[test]
+    fn format_final_text_cancelled_empty_uses_marker_alone() {
+        let body = format_final_text(SubagentStatus::Cancelled, "");
+        assert_eq!(body, crate::agent::helpers::CANCELLED_MARKER);
+    }
+
+    #[test]
+    fn format_final_text_error_returns_plain_error_text() {
+        let body = format_final_text(SubagentStatus::Error, "LLM stream errored");
+        assert_eq!(body, "LLM stream errored");
+    }
+
+    #[test]
+    fn format_final_text_error_empty_falls_back_to_note() {
+        let body = format_final_text(SubagentStatus::Error, "");
+        assert_eq!(body, "(no error text captured)");
+    }
+
+    /// The wire format of `format_dispatch_result` (with prefix)
+    /// must equal `[status: X]\n` + `format_final_text(X, ...)` —
+    /// the two helpers are a single source of truth for the
+    /// prefix-stripped shape. Locking this prevents drift between
+    /// the tool_result wire and the `final_text` DB column.
+    #[test]
+    fn format_dispatch_result_is_prefix_plus_format_final_text() {
+        for (status, text) in [
+            (SubagentStatus::Completed, "found 3 files"),
+            (SubagentStatus::Completed, ""),
+            (SubagentStatus::Cancelled, "partial"),
+            (SubagentStatus::Cancelled, ""),
+            (SubagentStatus::Error, "stream died"),
+            (SubagentStatus::Error, ""),
+        ] {
+            let (wire, _is_err) = format_dispatch_result(status, text);
+            let body = format_final_text(status, text);
+            let expected = format!("[status: {}]\n{}", status.as_str(), body);
+            assert_eq!(wire, expected, "drift for ({:?}, {:?})", status, text);
+        }
     }
 
     // ---- token usage accumulation (B6 PR2) ----

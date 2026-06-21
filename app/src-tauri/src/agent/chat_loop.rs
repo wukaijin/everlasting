@@ -2126,6 +2126,7 @@ async fn run_subagent(
         parent_session_id,
         &worker_rid,
         subagent_name,
+        Some(task),
     )
     .await
     {
@@ -2336,6 +2337,14 @@ async fn run_subagent(
             status_db,
             &finished_at,
             &worker_text,
+            // B6 redesign PR1 (2026-06-21): the prefix-stripped
+            // final text that the drawer renders in its Reply
+            // segment. `summary` carries the same string for
+            // backward compat (the legacy wire field); `final_text`
+            // is the new consumer-facing field. Both land in
+            // distinct DB columns so legacy `summary` consumers
+            // (e.g. PR3 list-view summaries) keep working unchanged.
+            &crate::agent::subagent::format_final_text(status, &worker_text),
             &cumulative_usage,
             &truncated_transcript,
             transcript_truncated,

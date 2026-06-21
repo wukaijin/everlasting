@@ -547,6 +547,39 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  .execute(pool)
  .await?;
 
+ // --- 2026-06-21 (subagent drawer redesign PR1): task + final_text.
+ //
+ // Two new TEXT columns on `subagent_runs`. Both nullable (no
+ // DEFAULT) so pre-PR1 rows keep NULL — the UI renders NULL as
+ // "—" with the same "升级前未统计" tooltip pattern used elsewhere
+ // (mirrors A4 chat-input hint UX; mirrors F5 latency NULL
+ // handling).
+ //
+ // - `task` is the LLM's delegation prompt as supplied to
+ //   `dispatch_subagent(input.task)`. Written once at
+ //   `run_subagent` dispatch time (best-effort warn+continue on
+ //   DB failure). NULL if `insert_run` itself failed (the row
+ //   won't exist at all in that case).
+ // - `final_text` is the worker's terminal assistant text with
+ //   the `[status: ...]\n` prefix **stripped** — `status` is the
+ //   source of truth for the prefix (per the existing `summary`
+ //   field contract; `subagent_runs-schema.md` §3 "`update_run_finished`
+ //   行为"). The PRD splits `summary` (kept for backward compat
+ //   + the "summary" wire field) from `final_text` (the
+ //   drawer's `finalText` consumer-facing field).
+ //
+ // The split lets the PR2 frontend wire `final_text` → drawer
+ // Reply segment while keeping `summary` as the legacy wire
+ // field unchanged. Existing rows (`status='completed'` from
+ // pre-PR1) keep `final_text=NULL`; PR3's drawer reads
+ // `final_text` first and falls back to `summary` for legacy
+ // rows. Future maintenance can backfill if needed.
+ //
+ // Idempotent: re-running on a pre-PR1 DB brings it up to date;
+ // re-running on a post-PR1 DB is a no-op (the column exists).
+ add_subagent_runs_column_if_missing(pool, "task", "TEXT").await?;
+ add_subagent_runs_column_if_missing(pool, "final_text", "TEXT").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`
@@ -652,6 +685,27 @@ pub(crate) async fn add_messages_column_if_missing(
  .try_get(0)?;
  if exists == 0 {
  let stmt = format!("ALTER TABLE messages ADD COLUMN {} {}", column, decl);
+ sqlx::query(&stmt).execute(pool).await?;
+ }
+ Ok(())
+}
+
+/// Add a column to `subagent_runs` if it doesn't already exist.
+/// Mirrors [`add_session_column_if_missing`]. Added for the
+/// 2026-06-21 subagent-drawer redesign PR1 (`task` + `final_text`).
+pub(crate) async fn add_subagent_runs_column_if_missing(
+ pool: &SqlitePool,
+ column: &str,
+ decl: &str,
+) -> Result<(), sqlx::Error> {
+ let exists: i64 =
+ sqlx::query("SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = ?")
+ .bind(column)
+ .fetch_one(pool)
+ .await?
+ .try_get(0)?;
+ if exists == 0 {
+ let stmt = format!("ALTER TABLE subagent_runs ADD COLUMN {} {}", column, decl);
  sqlx::query(&stmt).execute(pool).await?;
  }
  Ok(())
