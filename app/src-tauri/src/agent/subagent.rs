@@ -365,11 +365,22 @@ pub fn filter_tools_for_subagent(
 
 /// The terminal status a worker exited with. Used by `run_subagent`
 /// to format the dispatch_subagent tool_result's status prefix.
+///
+/// 2026-06-21 (R2): added `Incomplete` for the `max_turns` soft-
+/// terminal path. The pre-existing 3 variants were
+/// `Completed` / `Cancelled` / `Error`. `Incomplete` is the
+/// budget-exhaustion terminal: the worker produced useful
+/// intermediate output (transcript is non-empty) but did not
+/// cleanly finish within the 200-turn budget. The DB-side enum
+/// `db::subagent_runs::SubagentStatusDb` mirrors this 4th variant
+/// in lockstep — `as_str` and `from_str_opt` must stay in
+/// lockstep across the two enums.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentStatus {
     Completed,
     Cancelled,
     Error,
+    Incomplete,
 }
 
 impl SubagentStatus {
@@ -378,6 +389,7 @@ impl SubagentStatus {
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
             Self::Error => "error",
+            Self::Incomplete => "incomplete",
         }
     }
 }
@@ -580,6 +592,15 @@ pub struct SubagentBufferSink {
     /// event (stop_reason == "cancelled"). `run_subagent` reads
     /// this to pick the `status: cancelled` prefix.
     was_cancelled: std::sync::atomic::AtomicBool,
+    /// 2026-06-21 (R2): set when the worker emitted a synthetic
+    /// terminal `Done{max_turns}` event. `run_subagent` reads
+    /// this to pick the `status: incomplete` prefix (vs.
+    /// `Completed` for the natural end_turn exit). Mutually
+    /// exclusive with `was_cancelled` and `had_error` in
+    /// practice — the agent loop's `max_turns` branch fires
+    /// when the worker exhausts its turn budget, which is not
+    /// a cancel or an error path.
+    was_incomplete: std::sync::atomic::AtomicBool,
     /// PR2 hotfix (B6 PR3, 2026-06-20): optional Tauri
     /// `AppHandle` used to emit the `subagent:event` IPC channel
     /// on every emit. `None` in tests (no Tauri runtime) — the
@@ -621,6 +642,7 @@ impl SubagentBufferSink {
             per_turn_usage: StdMutex::new(Vec::new()),
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            was_incomplete: std::sync::atomic::AtomicBool::new(false),
             app_handle: Some(app_handle),
             run_id,
             session_id,
@@ -639,6 +661,7 @@ impl SubagentBufferSink {
             per_turn_usage: StdMutex::new(Vec::new()),
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            was_incomplete: std::sync::atomic::AtomicBool::new(false),
             app_handle: None,
             run_id,
             session_id,
@@ -670,6 +693,7 @@ impl SubagentBufferSink {
             per_turn_usage: StdMutex::new(Vec::new()),
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
+            was_incomplete: std::sync::atomic::AtomicBool::new(false),
             app_handle: None,
             run_id,
             session_id,
@@ -749,6 +773,15 @@ impl SubagentBufferSink {
 
     pub fn was_cancelled(&self) -> bool {
         self.was_cancelled
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 2026-06-21 (R2): set when the worker emitted a synthetic
+    /// terminal `Done{max_turns}` event. `run_subagent` reads
+    /// this to pick the `status: incomplete` prefix (vs.
+    /// `Completed` for the natural end_turn exit).
+    pub fn was_incomplete(&self) -> bool {
+        self.was_incomplete
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -841,11 +874,26 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                 // path that folds the worker's usage into the
                 // parent's `sessions.input_tokens_total` column
                 // via `db::subagent_runs::add_token_usage_streaming`.
+                //
+                // 2026-06-21 (R3): synthetic terminals
+                // (`max_turns` / `cancelled`) are emitted with
+                // `usage = last_usage` for `max_turns` (see
+                // `chat_loop.rs:1797-1804`). The prior per-turn
+                // Done for the final turn ALREADY pushed its
+                // `usage: Some(t)` into the Vec; pushing again
+                // here would double-count the last turn. The
+                // stop_reason guard skips the push for synthetic
+                // terminals so the Vec holds exactly one entry
+                // per real per-turn Done, no more.
                 if let Some(u) = usage {
-                    self.per_turn_usage
-                        .lock()
-                        .expect("SubagentBufferSink per_turn_usage mutex poisoned")
-                        .push(*u);
+                    if stop_reason.as_deref() != Some("cancelled")
+                        && stop_reason.as_deref() != Some("max_turns")
+                    {
+                        self.per_turn_usage
+                            .lock()
+                            .expect("SubagentBufferSink per_turn_usage mutex poisoned")
+                            .push(*u);
+                    }
                 }
                 if stop_reason.as_deref() == Some("cancelled")
                     || stop_reason.as_deref() == Some("max_turns")
@@ -854,11 +902,20 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                     // — the worker did useful work but didn't
                     // cleanly finish. The summary still carries
                     // whatever it produced. Status prefix =
-                    // "completed" with a note appended; for
-                    // cancelled (user Stop propagated to worker)
-                    // we use status=cancelled.
+                    // "incomplete" with a note appended (R2
+                    // 2026-06-21); for cancelled (user Stop
+                    // propagated to worker) we use status=cancelled.
                     if stop_reason.as_deref() == Some("cancelled") {
                         self.was_cancelled
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    } else if stop_reason.as_deref() == Some("max_turns") {
+                        // 2026-06-21 (R2): distinct from
+                        // `was_cancelled` so `run_subagent`'s
+                        // status picker can distinguish the
+                        // budget-exhaustion path from the
+                        // clean-failure path. Mutually exclusive
+                        // with `was_cancelled` in practice.
+                        self.was_incomplete
                             .store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
@@ -1141,6 +1198,7 @@ fn make_raw_fallback_entry(raw: &str) -> TranscriptEntry {
 /// - `status: completed` → `<summary>` (empty text → `(worker produced no final text)`)
 /// - `status: cancelled` → `<partial>\n\n[CANCELLED_MARKER]` (empty text → `[CANCELLED_MARKER]`)
 /// - `status: error`     → `<error text>` (empty text → `(no error text captured)`)
+/// - `status: incomplete` → `<partial>\n\n[INCOMPLETE_MARKER]` (empty text → `[INCOMPLETE_MARKER]`) — 2026-06-21 (R2)
 ///
 /// **The `[status: ...]\n` prefix is intentionally NOT included** —
 /// the `status` column is the source of truth for the prefix (per
@@ -1175,6 +1233,23 @@ pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
                 worker_text.to_string()
             }
         }
+        SubagentStatus::Incomplete => {
+            // 2026-06-21 (R2): max_turns soft-terminal. The
+            // worker did useful work but did not cleanly finish
+            // within its turn budget. Mirror the Cancelled shape
+            // (suffix the marker) so the drawer's text rendering
+            // sees a consistent "summary + reason marker" pattern
+            // across both soft-terminal statuses. The marker
+            // surfaces the budget-exhaustion reason in plain text
+            // — a frontend visual differentiation is a separate
+            // follow-up (out of scope for this task).
+            let marker = crate::agent::helpers::INCOMPLETE_MARKER;
+            if worker_text.is_empty() {
+                marker.to_string()
+            } else {
+                format!("{}\n\n{}", worker_text, marker)
+            }
+        }
     }
 }
 
@@ -1184,10 +1259,15 @@ pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
 /// - `status: completed` → `[status: completed]\n<summary>`
 /// - `status: cancelled` → `[status: cancelled]\n[CANCELLED_MARKER]\n<partial>`
 /// - `status: error`     → `[status: error]\n<error text>`
+/// - `status: incomplete` → `[status: incomplete]\n[INCOMPLETE_MARKER]\n<partial>` — 2026-06-21 (R2)
 ///
 /// Returns `(content, is_error)`. `is_error` is `true` for cancel
 /// and error so the LLM knows the worker did not succeed; `false`
-/// for completed.
+/// for completed. `incomplete` is treated like `cancelled` for
+/// `is_error` purposes — the worker did not cleanly finish, so
+/// the parent LLM should treat the result as a soft failure
+/// (the worker may have produced useful partial output but
+/// should not be treated as a successful delegation).
 ///
 /// Implementation note: the body content is built via
 /// [`format_final_text`] (the prefix-stripped shape) and then
@@ -1205,6 +1285,7 @@ pub fn format_dispatch_result(
         SubagentStatus::Completed => (format!("{}\n{}", prefix, body), false),
         SubagentStatus::Cancelled => (format!("{}\n{}", prefix, body), true),
         SubagentStatus::Error => (format!("{}\n{}", prefix, body), true),
+        SubagentStatus::Incomplete => (format!("{}\n{}", prefix, body), true),
     }
 }
 
@@ -1640,6 +1721,233 @@ mod tests {
         let total = sink.cumulative_usage();
         assert_eq!(total.input_tokens, 0);
         assert_eq!(total.output_tokens, 0);
+    }
+
+    // ---- R3 (2026-06-21) max_turns terminal-patch regression tests ----
+
+    /// R3 regression: when the agent loop hits `max_turns`, the
+    /// synthetic terminal `Done{stop_reason: max_turns, usage:
+    /// last_usage}` is emitted AFTER the final per-turn `Done`
+    /// (which already pushed the final turn's usage into the
+    /// Vec). The sink must NOT push the synthetic terminal's
+    /// usage a second time (the guard skips the push when
+    /// `stop_reason` is `max_turns` / `cancelled`). End state:
+    /// `cumulative_usage() == sum of all per-turn usage` — no
+    /// double-count, no loss.
+    ///
+    /// The c27f3fd7 worker run was the real-world regression
+    /// (research/r3-token-usage-root-cause.md §1). This test
+    /// locks the fix: pre-R3 the synthetic terminal's `usage:
+    /// None` was hard-coded so the sink saw `None` and the Vec
+    /// stayed at 0; post-R3 the synthetic terminal's `usage:
+    /// last_usage` reaches the sink, but the guard correctly
+    /// skips the push so the count is exactly the per-turn sum.
+    #[test]
+    fn buffer_sink_max_turns_terminal_does_not_double_count_last_turn() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        // 3 per-turn Done events, each with a unique usage.
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        sink.emit_chat_event(&done_with_usage(50, 10));
+        // Synthetic terminal: stop_reason=max_turns, usage=t_last
+        // (== the last per-turn usage, since chat_loop's
+        // `last_usage` is updated by the per-turn Done arm).
+        // The guard must NOT push this into the Vec.
+        let t_last = TokenUsage {
+            input_tokens: 50,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        };
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("max_turns".to_string()),
+                usage: Some(t_last),
+            },
+        });
+        // The cumulative must equal the SUM of the 3 per-turn
+        // usages — the synthetic terminal contributes nothing
+        // (no double-count, no loss of the last turn's value
+        // because the per-turn Done already pushed it).
+        let total = sink.cumulative_usage();
+        assert_eq!(
+            total.input_tokens, 350,
+            "cumulative input = 100+200+50 (synthetic terminal must not double-count)"
+        );
+        assert_eq!(
+            total.output_tokens, 90,
+            "cumulative output = 50+30+10 (synthetic terminal must not double-count)"
+        );
+    }
+
+    /// R3 mirror: the cancelled path's synthetic terminal
+    /// `Done{stop_reason: cancelled, usage: None}` must NOT
+    /// affect the cumulative_usage() at all. Cancelled paths
+    /// emit `usage: None` (no `last_usage` is carried into the
+    /// cancel branch), so the guard's "skip when stop_reason is
+    /// cancelled" prevents any accidental push when a future
+    /// refactor accidentally threads `last_usage` into the
+    /// cancel branch.
+    #[test]
+    fn buffer_sink_cancelled_terminal_does_not_affect_cumulative_usage() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        // Synthetic terminal: stop_reason=cancelled, usage=None.
+        // The guard must NOT push (and there's nothing to push
+        // either).
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        });
+        // Cancelled path's cumulative must equal the 2 per-turn
+        // usages (no contribution from the synthetic terminal).
+        let total = sink.cumulative_usage();
+        assert_eq!(total.input_tokens, 300);
+        assert_eq!(total.output_tokens, 80);
+    }
+
+    /// R3 was_incomplete regression: the sink's `was_incomplete`
+    /// flag is set when the synthetic terminal `Done{max_turns}`
+    /// arrives. This is the signal `run_subagent` reads to pick
+    /// `SubagentStatus::Incomplete` (NOT `Completed`).
+    #[test]
+    fn buffer_sink_max_turns_terminal_sets_was_incomplete() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("max_turns".to_string()),
+                usage: None,
+            },
+        });
+        assert!(
+            sink.was_incomplete(),
+            "max_turns terminal must set was_incomplete=true"
+        );
+        assert!(
+            !sink.was_cancelled(),
+            "max_turns must NOT also set was_cancelled"
+        );
+        assert!(!sink.had_error(), "max_turns must NOT also set had_error");
+    }
+
+    /// R3 was_cancelled regression: the sink's `was_cancelled`
+    /// flag is set when the synthetic terminal `Done{cancelled}`
+    /// arrives. The `was_incomplete` flag must NOT be set on
+    /// the cancelled path (mutually exclusive in practice).
+    #[test]
+    fn buffer_sink_cancelled_terminal_sets_was_cancelled_only() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        });
+        assert!(
+            sink.was_cancelled(),
+            "cancelled terminal must set was_cancelled=true"
+        );
+        assert!(
+            !sink.was_incomplete(),
+            "cancelled must NOT also set was_incomplete"
+        );
+    }
+
+    /// R3 natural-completion sanity: a clean `end_turn` exit
+    /// does NOT set `was_incomplete` and does NOT set
+    /// `was_cancelled`. The natural exit uses the
+    /// `agent_loop_end_turn_completes` test path through
+    /// `run_chat_loop` (the agent loop's normal completion site
+    /// at chat_loop.rs:1277-1282). This sink-level test
+    /// documents the invariant that natural end_turn ≠
+    /// incomplete.
+    #[test]
+    fn buffer_sink_end_turn_terminal_does_not_set_incomplete_or_cancelled() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("end_turn".to_string()),
+                usage: None,
+            },
+        });
+        assert!(
+            !sink.was_incomplete(),
+            "end_turn terminal must NOT set was_incomplete"
+        );
+        assert!(
+            !sink.was_cancelled(),
+            "end_turn terminal must NOT set was_cancelled"
+        );
+    }
+
+    // ---- R2 (2026-06-21) format helpers: Incomplete ----
+
+    /// R2: `format_final_text(Incomplete, _)` mirrors the
+    /// Cancelled shape — suffix the marker for visibility.
+    #[test]
+    fn format_final_text_incomplete_appends_marker() {
+        let body = format_final_text(SubagentStatus::Incomplete, "partial result");
+        assert_eq!(
+            body,
+            format!(
+                "partial result\n\n{}",
+                crate::agent::helpers::INCOMPLETE_MARKER
+            )
+        );
+    }
+
+    /// R2: empty text + Incomplete → marker alone.
+    #[test]
+    fn format_final_text_incomplete_empty_uses_marker_alone() {
+        let body = format_final_text(SubagentStatus::Incomplete, "");
+        assert_eq!(body, crate::agent::helpers::INCOMPLETE_MARKER);
+    }
+
+    /// R2: `format_dispatch_result(Incomplete, _)` carries the
+    /// `[status: incomplete]\n` prefix and `is_error = true`
+    /// (treated like cancel for tool-result purposes — the
+    /// worker did not cleanly finish).
+    #[test]
+    fn format_incomplete_includes_status_prefix_and_is_error() {
+        let (content, is_error) =
+            format_dispatch_result(SubagentStatus::Incomplete, "partial");
+        assert!(is_error, "Incomplete must set is_error=true");
+        assert!(content.starts_with("[status: incomplete]"));
+        assert!(content.contains(crate::agent::helpers::INCOMPLETE_MARKER));
+        assert!(content.contains("partial"));
+    }
+
+    /// R2: the dispatch_result wire format must equal
+    /// `[status: incomplete]\n` + `format_final_text(Incomplete,
+    /// ...)` — single source of truth across the two helpers.
+    #[test]
+    fn format_dispatch_result_is_prefix_plus_format_final_text_includes_incomplete() {
+        for (status, text) in [
+            (SubagentStatus::Completed, "found 3 files"),
+            (SubagentStatus::Completed, ""),
+            (SubagentStatus::Cancelled, "partial"),
+            (SubagentStatus::Cancelled, ""),
+            (SubagentStatus::Error, "stream died"),
+            (SubagentStatus::Error, ""),
+            (SubagentStatus::Incomplete, "budget exhausted mid-task"),
+            (SubagentStatus::Incomplete, ""),
+        ] {
+            let (wire, _is_err) = format_dispatch_result(status, text);
+            let body = format_final_text(status, text);
+            let expected = format!("[status: {}]\n{}", status.as_str(), body);
+            assert_eq!(wire, expected, "drift for ({:?}, {:?})", status, text);
+        }
     }
 
     // ---- truncate_transcript_for_persistence (B6 PR2) ----

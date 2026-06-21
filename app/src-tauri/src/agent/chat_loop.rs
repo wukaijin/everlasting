@@ -357,6 +357,18 @@ pub async fn run_chat_loop(
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;
+    // 2026-06-21 (R3): the per-turn `last_usage` is re-declared
+    // at the top of each iteration of the `for turn in 1..=turn_limit`
+    // loop, so the synthetic `max_turns` terminal site
+    // (chat_loop.rs:1797-1820) cannot read it directly. Track
+    // the most recent value here at the function scope so the
+    // terminal site can forward it to the sink (and the sink
+    // can route it into `cumulative_usage()` exactly once, via
+    // the R3 stop_reason guard). Pre-R3 the synthetic terminal
+    // hard-coded `usage: None`, which produced the
+    // `subagent_runs.token_usage_json == 0` regression on
+    // `max_turns` exits (c27f3fd7 worker run).
+    let mut last_usage_terminal: Option<crate::llm::types::TokenUsage> = None;
 
     let session_mode = loaded_session.session.mode;
     // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
@@ -966,6 +978,21 @@ pub async fn run_chat_loop(
                         ChatEvent::Done { stop_reason: sr, usage } => {
                             stop_reason = sr.clone();
                             last_usage = usage.clone();
+                            // 2026-06-21 (R3): mirror the per-turn
+                            // `last_usage` to the function-scope
+                            // `last_usage_terminal` so the
+                            // synthetic `max_turns` terminal site
+                            // (chat_loop.rs:1797-1820) can forward
+                            // it to the sink. The sink's R3 guard
+                            // ensures the value reaches
+                            // `cumulative_usage()` exactly once
+                            // (no double-count). Pre-R3 this
+                            // mirror did not exist; the terminal
+                            // hard-coded `usage: None`, which
+                            // produced the all-zero
+                            // `subagent_runs.token_usage_json`
+                            // regression.
+                            last_usage_terminal = usage.clone();
                             turn_done_at = Some(Instant::now());
                             if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
                                 turn_thinking_done = Some(Instant::now());
@@ -1799,7 +1826,23 @@ pub async fn run_chat_loop(
             &rid,
             &ChatEvent::Done {
                 stop_reason: Some("max_turns".to_string()),
-                usage: None,
+                // 2026-06-21 (R3): thread the last turn's
+                // cumulative-per-turn usage into the synthetic
+                // terminal `Done`. Pre-R3 this site hard-coded
+                // `usage: None`, which caused the worker's
+                // `subagent_runs.token_usage_json` to be all
+                // zeros on `max_turns` exits (the
+                // `c27f3fd7-...` regression). The per-turn
+                // `Done{usage: Some(t)}` events from the
+                // provider stream were already pushed into the
+                // sink's `per_turn_usage` Vec (via
+                // `subagent.rs:835-849`); the **sink** is
+                // responsible for not double-accumulating this
+                // synthetic terminal (R3 sink guard skips the
+                // push when `stop_reason` is `max_turns` /
+                // `cancelled`). The terminal value flows to
+                // `cumulative_usage()` exactly once per turn.
+                usage: last_usage_terminal,
             },
         );
     }
@@ -2016,7 +2059,21 @@ pub(crate) fn is_parallel_eligible(
 /// (PRD §Decisions 8 + review #4). The worker still re-uses C3
 /// compaction, so hitting this limit on a long task degrades to
 /// compaction rather than an unbounded loop.
-const SUBAGENT_MAX_TURNS: usize = 20;
+///
+/// 2026-06-21 (R1): raised from 20 → 200. The original 20-turn
+/// cap was sized for the B6 PR1 demo scenarios (small focused
+/// tasks). Real `trellis-implement` runs burn 200+ tool calls
+/// (code search + edit + verify + RUSTFLAGS / cargo test cycles
+/// + DB inspection + spec re-reads), so 20 was an artificial
+/// ceiling that hard-terminated workers mid-task. The 200
+/// budget is empirically large enough for the heaviest observed
+/// `trellis-implement` run while still bounded enough that a
+/// runaway worker cannot burn the parent session's full 50-turn
+/// budget (a single worker run at 200 turns is 4× the parent
+/// budget — a real cost, but acceptable given R3's token-usage
+/// fix (this PR) makes the burn visible). Future cost gates
+/// (token / wall-clock second-stage) are explicitly deferred.
+const SUBAGENT_MAX_TURNS: usize = 200;
 
 #[allow(clippy::too_many_arguments)]
 async fn run_subagent(
@@ -2283,11 +2340,30 @@ async fn run_subagent(
     .await;
 
     // Drain the worker's accumulated state.
+    //
+    // 2026-06-21 (R2): the status picker now distinguishes
+    // `max_turns` (soft-terminal, worker burned its 200-turn
+    // budget without cleanly finishing) from `end_turn` /
+    // `tool_use` (clean completion). The `was_incomplete` flag
+    // is set by the sink's `Done{max_turns}` arm; the
+    // `was_cancelled` flag is set by the `Done{cancelled}` arm;
+    // `had_error` is set by the `Error` arm. The three are
+    // mutually exclusive in practice (the agent loop's max_turns
+    // branch is reached only when no cancel or error fired).
     let worker_text = worker_sink.final_text();
     let status = if worker_sink.was_cancelled() {
         SubagentStatus::Cancelled
     } else if worker_sink.had_error() {
         SubagentStatus::Error
+    } else if worker_sink.was_incomplete() {
+        // 2026-06-21 (R2): the `max_turns` soft-terminal path
+        // is its own status (NOT `Completed` — the worker did
+        // not cleanly finish). The DB `incomplete` row is the
+        // signal for "useful partial output, did not exhaust
+        // the task"; the `[status: incomplete]\n<partial>\n
+        // [INCOMPLETE_MARKER]` wire shape makes it visible in
+        // the parent's tool_result.
+        SubagentStatus::Incomplete
     } else {
         SubagentStatus::Completed
     };
@@ -2330,6 +2406,14 @@ async fn run_subagent(
             SubagentStatus::Completed => crate::db::subagent_runs::SubagentStatusDb::Completed,
             SubagentStatus::Cancelled => crate::db::subagent_runs::SubagentStatusDb::Cancelled,
             SubagentStatus::Error => crate::db::subagent_runs::SubagentStatusDb::Error,
+            // 2026-06-21 (R2): max_turns soft-terminal. The DB
+            // CHECK constraint was widened to include
+            // `'incomplete'` by the
+            // `widen_subagent_runs_status_check_for_incomplete`
+            // migration; the `Incomplete` variant was added to
+            // both `agent::subagent::SubagentStatus` and
+            // `db::subagent_runs::SubagentStatusDb` in lockstep.
+            SubagentStatus::Incomplete => crate::db::subagent_runs::SubagentStatusDb::Incomplete,
         };
         match crate::db::subagent_runs::update_run_finished(
             db,

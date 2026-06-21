@@ -65,6 +65,16 @@ use crate::llm::types::TokenUsage;
 /// + `as_str` so a future drift (renaming `Error` to `Failed`,
 /// etc.) is caught at the `as_str()` boundary, not by a silent
 /// enum mismatch.
+///
+/// 2026-06-21 (R2): added `Incomplete` for the `max_turns` soft-
+/// terminal path. The `widen_subagent_runs_status_check_for_incomplete`
+/// migration (db/migrations.rs) widens the `status` column's
+/// CHECK constraint to include `'incomplete'`. The two
+/// enums (`agent::subagent::SubagentStatus` and
+/// `db::subagent_runs::SubagentStatusDb`) must stay in lockstep —
+/// a new variant here requires a corresponding variant in the
+/// agent-side enum + a string mapping in both `as_str` and
+/// `from_str_opt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SubagentStatusDb {
@@ -72,18 +82,21 @@ pub enum SubagentStatusDb {
     Completed,
     Cancelled,
     Error,
+    Incomplete,
 }
 
 impl SubagentStatusDb {
     /// Wire form for the `status` column. CHECK-constrained to
-    /// `('running','completed','cancelled','error')` — keep this
-    /// in lockstep with the migration's CHECK expression.
+    /// `('running','completed','cancelled','error','incomplete')`
+    /// — keep this in lockstep with the migration's CHECK
+    /// expression.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
             Self::Error => "error",
+            Self::Incomplete => "incomplete",
         }
     }
 
@@ -99,6 +112,7 @@ impl SubagentStatusDb {
             "completed" => Self::Completed,
             "cancelled" => Self::Cancelled,
             "error" => Self::Error,
+            "incomplete" => Self::Incomplete,
             _ => Self::Running,
         }
     }

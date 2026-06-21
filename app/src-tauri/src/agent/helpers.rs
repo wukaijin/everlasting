@@ -306,6 +306,17 @@ pub const CANCELLED_MARKER: &str = "[已停止]";
 /// style so the rehydrate path can render either uniformly.
 pub const ERROR_MARKER: &str = "[生成出错中断]";
 
+/// 2026-06-21 (R2): marker for the worker's `max_turns` soft-
+/// terminal path. Mirrors `CANCELLED_MARKER`/`ERROR_MARKER` in
+/// style: bracketed text that survives DOMPurify unchanged, is
+/// locale-friendly, and renders inline in the worker's
+/// `subagent_runs.final_text` summary segment. Suffix-appended
+/// by `format_final_text(SubagentStatus::Incomplete, _)` to
+/// surface the budget-exhaustion reason in plain text (the
+/// status column carries the structured `incomplete` value;
+/// this marker is the human-readable companion).
+pub const INCOMPLETE_MARKER: &str = "[未完成]";
+
 // ---------------------------------------------------------------------------
 // Sink-based emit helpers (P1 RULE-A-006)
 //

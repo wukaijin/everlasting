@@ -2978,3 +2978,125 @@ async fn subagent_runs_migration_is_idempotent_on_pr1_columns() {
     assert_eq!(exists_task, 1, "task column present");
     assert_eq!(exists_final, 1, "final_text column present");
 }
+
+/// R2 (2026-06-21) regression: the `subagent_runs.status` column
+/// must accept `'incomplete'` (the 5th variant added by the
+/// `widen_subagent_runs_status_check_for_incomplete` migration).
+/// The CHECK constraint on the table reads
+/// `('running','completed','cancelled','error','incomplete')` after
+/// the migration runs. A pre-R2 DB has the 4-variant CHECK; the
+/// migration rebuilds the table with the wider CHECK. This test
+/// exercises the post-migration shape: a row is INSERTed with
+/// `status='running'`, then UPDATEd to `status='incomplete'` via
+/// `update_run_finished`. The CHECK must accept the value, the
+/// row must round-trip through `get_run` with the right `status`
+/// string, and `SubagentStatusDb::from_str_opt("incomplete")`
+/// must return `SubagentStatusDb::Incomplete` (lenient parse
+/// lockstep with the wire form).
+#[tokio::test]
+async fn subagent_runs_incomplete_status_round_trips() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-incomplete", "general-purpose", None)
+        .await
+        .unwrap();
+    // Mirror what `run_subagent` sends for an `Incomplete` run.
+    // The `final_text` carries the worker's partial text + the
+    // `INCOMPLETE_MARKER` (the `format_final_text(Incomplete, _)` shape).
+    let partial = "did 100 of 200 turns";
+    let final_text = format!(
+        "{}\n\n{}",
+        partial,
+        crate::agent::helpers::INCOMPLETE_MARKER
+    );
+    // Realistic cumulative usage (R3 fix path: the synthetic
+    // terminal `Done{max_turns, usage: last_usage}` arrives at
+    // the sink, the guard skips the push, and the cumulative
+    // reflects 100 turns of actual usage — not all-zero).
+    let cumulative = crate::llm::types::TokenUsage {
+        input_tokens: 12_345,
+        output_tokens: 678,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    };
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Incomplete,
+        "2026-06-21T13:00:00+00:00",
+        &final_text,
+        &final_text,
+        &cumulative,
+        &[],
+        false,
+    )
+    .await
+    .expect("update_run_finished must accept the new Incomplete variant");
+    // Round-trip: read the row back.
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(
+        row.status, "incomplete",
+        "status column carries 'incomplete' (CHECK widened by migration)"
+    );
+    assert_eq!(row.final_text.as_deref(), Some(final_text.as_str()));
+    // Cumulative usage is round-tripped verbatim (R3 fix).
+    let parsed_usage: TokenUsage =
+        serde_json::from_str(row.token_usage_json.as_deref().unwrap()).unwrap();
+    assert_eq!(parsed_usage.input_tokens, 12_345);
+    assert_eq!(parsed_usage.output_tokens, 678);
+    // Lenient parse: "incomplete" → Incomplete (forward-compat
+    // invariant for old binaries reading new DBs).
+    assert_eq!(
+        SubagentStatusDb::from_str_opt("incomplete"),
+        SubagentStatusDb::Incomplete
+    );
+    // `as_str` lockstep: the enum → string mapping is
+    // `Incomplete → "incomplete"`, matching the wire form.
+    assert_eq!(SubagentStatusDb::Incomplete.as_str(), "incomplete");
+}
+
+/// R2 migration idempotency: the
+/// `widen_subagent_runs_status_check_for_incomplete` migration
+/// must be a no-op on a second run. The probe-based guard
+/// (`sqlite_master.sql` contains `'incomplete'`) short-circuits
+/// the table-rebuild path on a re-run, so the function returns
+/// `Ok(())` and the existing rows are untouched. This is the
+/// regression guard for the migration's idempotency claim in
+/// the `widen_subagent_runs_status_check_for_incomplete`
+/// docstring.
+#[tokio::test]
+async fn subagent_runs_widen_incomplete_migration_is_idempotent() {
+    let pool = make_pool().await;
+    // First run already widened the CHECK (via `make_pool`'s
+    // `run_migrations` call). Re-run the migration directly.
+    crate::db::migrations::run_migrations(&pool)
+        .await
+        .expect("re-run is idempotent");
+    // Add a row to confirm the table still works.
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-re", "researcher", None)
+        .await
+        .unwrap();
+    assert!(
+        get_run(&pool, &id).await.unwrap().is_some(),
+        "rows survive the idempotent re-run"
+    );
+}

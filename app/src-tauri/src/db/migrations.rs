@@ -510,26 +510,21 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  //   `agent/subagent.rs`); the `transcript_truncated=1` flag
  //   signals truncation so PR3 can render a "show full" affordance
  //   to fetch the full text from elsewhere (or document the cap).
- sqlx::query(
- r#"
- CREATE TABLE IF NOT EXISTS subagent_runs (
- id TEXT PRIMARY KEY,
- parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
- parent_request_id TEXT NOT NULL,
- subagent_name TEXT NOT NULL,
- status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error')),
- started_at TEXT NOT NULL,
- finished_at TEXT,
- token_usage_json TEXT,
- summary TEXT,
- transcript_json TEXT,
- transcript_truncated INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL DEFAULT (datetime('now'))
- )
- "#,
- )
- .execute(pool)
- .await?;
+ // --- 2026-06-21 (subagent incomplete status): widen the
+ // `subagent_runs.status` CHECK constraint to include
+ // `'incomplete'`. The pre-existing constraint was set in B6 PR2
+ // (`'running','completed','cancelled','error'`). This task adds
+ // a 5th variant for the max_turns soft-terminal path
+ // (worker hit its 200-turn budget without cleanly finishing).
+ //
+ // SQLite cannot ALTER a CHECK constraint in place — the
+ // `widen_subagent_runs_status_check_for_incomplete` helper
+ // uses the table-rebuild pattern (rename, create new, copy,
+ // drop, re-index) gated on a probe of `sqlite_master.sql` for
+ // the literal `'incomplete'` so the migration is idempotent
+ // (a re-run on a dev DB that already has the widened
+ // constraint is a no-op).
+ widen_subagent_runs_status_check_for_incomplete(pool).await?;
  sqlx::query(
  r#"
  CREATE INDEX IF NOT EXISTS idx_subagent_runs_session_started
@@ -708,6 +703,130 @@ pub(crate) async fn add_subagent_runs_column_if_missing(
  let stmt = format!("ALTER TABLE subagent_runs ADD COLUMN {} {}", column, decl);
  sqlx::query(&stmt).execute(pool).await?;
  }
+ Ok(())
+}
+
+/// Widen the `subagent_runs.status` CHECK constraint to include
+/// `'incomplete'` (the 2026-06-21 max_turns soft-terminal variant).
+/// SQLite has no `ALTER TABLE ... DROP CONSTRAINT` /
+/// `ALTER TABLE ... ADD CONSTRAINT` for CHECK expressions, so the
+/// only reliable way to widen the constraint is the 12-step
+/// table-rebuild pattern:
+///
+/// 1. Rename `subagent_runs` → `subagent_runs_old`.
+/// 2. `CREATE TABLE subagent_runs (...)` with the wider CHECK.
+/// 3. `INSERT INTO subagent_runs SELECT * FROM subagent_runs_old`.
+/// 4. `DROP TABLE subagent_runs_old`.
+/// 5. Re-create the two indexes (`idx_subagent_runs_session_started` +
+///    `idx_subagent_runs_request`) — they were not transferred by
+///    the rebuild because they were attached to `_old`.
+///
+/// **Idempotency**: the function probes `sqlite_master.sql` for
+/// the literal `'incomplete'` in the `subagent_runs` CREATE
+/// statement. If it's already there, the function returns
+/// `Ok(())` without rebuilding. A re-run on a dev DB that
+/// already has the widened constraint is therefore a no-op.
+///
+/// **FK safety**: this function does NOT toggle
+/// `PRAGMA foreign_keys`. The standard 12-step pattern requires
+/// `PRAGMA foreign_keys=OFF` because the rebuild temporarily
+/// creates a window where FK references could fire (e.g. if
+/// some other table referenced `subagent_runs`). The
+/// `subagent_runs` table has NO outgoing FK references (the
+/// only FK is `parent_session_id REFERENCES sessions(id)` on
+/// the column itself, which keeps pointing at the same
+/// `sessions` rows throughout the rebuild) and NO incoming FK
+/// references (no other table references `subagent_runs`).
+/// Toggling `PRAGMA foreign_keys=OFF` is therefore unnecessary,
+/// and skipping it avoids polluting the per-connection pragma
+/// state of the test pool (which uses multiple connections —
+/// setting the pragma on one connection doesn't propagate to
+/// the others, and the test pool's `PRAGMA foreign_keys=ON` is
+/// per-connection, so a toggle on one connection can leave
+/// other connections in an inconsistent state across
+/// concurrently-running tests).
+pub(crate) async fn widen_subagent_runs_status_check_for_incomplete(
+ pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+ // Probe the live CREATE statement for the `incomplete` literal.
+ // A re-run on a dev DB that already has the widened CHECK sees
+ // the literal and short-circuits.
+ let sql_row: Option<String> = sqlx::query_scalar(
+ "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'",
+ )
+ .fetch_optional(pool)
+ .await?;
+ let already_widened = sql_row
+ .as_deref()
+ .map(|s| s.contains("'incomplete'"))
+ .unwrap_or(false);
+ if already_widened {
+ return Ok(());
+ }
+
+ // Probe failed (table missing entirely or constraint narrow).
+ // Rebuild via the table-rebuild dance. Both are no-ops when the
+ // condition doesn't apply.
+ // Step 1: rename existing.
+ sqlx::query("ALTER TABLE subagent_runs RENAME TO subagent_runs_old")
+ .execute(pool)
+ .await
+ .ok(); // benign if the table doesn't exist
+ // Step 2: create the widened table.
+ sqlx::query(
+ r#"
+ CREATE TABLE subagent_runs (
+ id TEXT PRIMARY KEY,
+ parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+ parent_request_id TEXT NOT NULL,
+ subagent_name TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error','incomplete')),
+ started_at TEXT NOT NULL,
+ finished_at TEXT,
+ token_usage_json TEXT,
+ summary TEXT,
+ transcript_json TEXT,
+ transcript_truncated INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ // Step 3: copy rows from the old table (if it exists). The
+ // SELECT * works because the new table has the same column
+ // set, only the CHECK constraint differs.
+ sqlx::query(
+ r#"
+ INSERT INTO subagent_runs
+ SELECT * FROM subagent_runs_old
+ "#,
+ )
+ .execute(pool)
+ .await
+ .ok(); // benign if the old table didn't exist
+ // Step 4: drop the old table.
+ sqlx::query("DROP TABLE subagent_runs_old")
+ .execute(pool)
+ .await
+ .ok();
+ // Step 5: re-create the two indexes.
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_subagent_runs_session_started
+ ON subagent_runs(parent_session_id, started_at DESC)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_subagent_runs_request
+ ON subagent_runs(parent_request_id)
+ "#,
+ )
+ .execute(pool)
+ .await?;
  Ok(())
 }
 
