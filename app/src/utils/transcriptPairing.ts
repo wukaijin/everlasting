@@ -13,11 +13,22 @@
 // `pairTranscript` produces a `BufferedTranscriptEntry[]` that the
 // template iterates over.
 //
+// B6 redesign PR5 (2026-06-21): the drawer was rewritten from a
+// time-ordered flat list into a 5-segment grouped view that reads
+// `TranscriptSection[]` (post-accumulator). The legacy
+// `pairTranscript` is preserved for backward compat (and any future
+// raw-list consumer); PR5 adds `pairSections` + the
+// `SectionToolPair` / `SectionPermissionAsk` / `SectionPendingCall`
+// types as the new pairing layer over sections. The two functions
+// share the 30s pending-timeout semantics so the visual transition
+// from "running…" to "未完成" is identical.
+//
 // See `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style/prd.md`
 // §"Technical Approach" for the design rationale and acceptance
 // criteria.
 
-import type { TranscriptEntry } from "../stores/subagentRuns";
+import type { TranscriptEntry, TranscriptSection } from "../stores/subagentRuns";
+import type { ToolCallInfo, ToolResultInfo } from "../stores/chat";
 
 // Re-export `TranscriptEntry` so the test file (and any other
 // downstream consumer) can import it from a single place. The
@@ -232,4 +243,209 @@ export function pairTranscript(
 export function isErrorResult(e: TranscriptEntry): boolean {
   if (e.kind !== "tool_result") return false;
   return e.payload_json?.is_error === true;
+}
+
+// =====================================================================
+// B6 redesign PR5 (2026-06-21): section-level pairing layer
+// =====================================================================
+//
+// The new drawer reads `TranscriptSection[]` from the store's
+// `liveSections` accumulator (PR2 output). Each `ToolCallSection` +
+// `ToolResultSection` pair must collapse into a single
+// `DrawerToolCallCard`, mirroring the legacy `pairTranscript`
+// semantics but consuming the post-accumulator section shape.
+//
+// The PR4 `DrawerToolCallCard` component accepts the canonical
+// `ToolCallInfo` + `ToolResultInfo` types (same shape the main
+// panel's `ToolCallCard` consumes). The pairing layer below maps
+// the snake_case `payload_json` body to these canonical types —
+// this is the load-bearing cross-layer conversion PR5 owns.
+//
+// `permission_ask` sections are NOT pairable; they pass through as
+// `SectionPermissionAsk` and the drawer renders them as a static
+// card (PR6 will add Allow/Deny buttons). `pending_call` (call
+// without matching result) stays pending within the 30s window —
+// matching the legacy `pairTranscript` invariant — and falls back
+// to a "未完成" `SectionPendingCall` after the timeout elapses.
+// However, because PR5's section-level view defaults to rendering
+// a pending call as a "running…" `DrawerToolCallCard` (with
+// `result === undefined`), the timeout flush is NOT visually
+// load-bearing here (the running card already conveys "未完成").
+// We still return the aged-out entries as `SectionPendingCall`
+// with `timedOut: true` so PR6 / future polish can distinguish
+// "still running" from "timed out without a result".
+
+/** A `ToolCallSection` + matching `ToolResultSection` collapsed
+ *  into a single card payload. `call` is the canonical
+ *  `ToolCallInfo` (camelCase) consumed directly by
+ *  `DrawerToolCallCard`. */
+export interface SectionToolPair {
+  kind: "paired";
+  toolUseId: string;
+  call: ToolCallInfo;
+  result: ToolResultInfo;
+}
+
+/** A `ToolCallSection` whose matching `ToolResultSection` hasn't
+ *  arrived yet. Rendered as a "running…" `DrawerToolCallCard`
+ *  (no `result` prop). `timedOut` flips to `true` once the 30s
+ *  window elapses (matches the legacy `pairTranscript` flush);
+ *  PR5's running card renders identically for both states, but
+ *  the flag is kept for future polish (e.g. PR6 / a "未完成"
+ *  suffix in the card header). */
+export interface SectionPendingCall {
+  kind: "pending_call";
+  toolUseId: string;
+  call: ToolCallInfo;
+  timedOut: boolean;
+}
+
+/** A `PermissionAskSection` pass-through. The drawer renders this
+ *  via `DrawerPermissionAskCard` (a static historical-mode card,
+ *  PR5 scope). PR6 will replace the static card with interactive
+ *  Allow/Deny buttons wired to the `permission:response` IPC. */
+export interface SectionPermissionAsk {
+  kind: "permission_ask";
+  payload_json: Record<string, unknown>;
+}
+
+/** Discriminated union returned by `pairSections`. The drawer's
+ *  `DrawerSection(type="tools")` template branches on `kind`. */
+export type SectionToolEntry = SectionToolPair | SectionPendingCall | SectionPermissionAsk;
+
+/** Pull `tool_use_id` out of a section's `payload_json`. Defensive:
+ *  missing or non-string field returns `undefined` so the caller
+ *  falls back to a standalone render (no match). */
+function readSectionToolUseId(p: Record<string, unknown>): string | undefined {
+  const id = p?.tool_use_id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+/** Map a `ToolCallSection.payload_json` (snake_case) to the
+ *  canonical `ToolCallInfo` (camelCase). Defensive: missing
+ *  `input` coerces to `{}` (the `DrawerToolCallCard`'s empty-input
+ *  guard treats `{}` as "no input body"). Missing `name` coerces
+ *  to `""` (the card header shows a placeholder). */
+function toToolCallInfo(p: Record<string, unknown>): ToolCallInfo {
+  const id = readSectionToolUseId(p) ?? "";
+  const name = typeof p.name === "string" ? p.name : "";
+  const rawInput = p.input;
+  const input =
+    rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
+      ? (rawInput as Record<string, unknown>)
+      : {};
+  return { id, name, input };
+}
+
+/** Map a `ToolResultSection.payload_json` (snake_case) to the
+ *  canonical `ToolResultInfo` (camelCase). Defensive: missing
+ *  `is_error` defaults to `false` (matches the Rust
+ *  `ToolResultPayload::is_error: bool` default). Missing /
+ *  non-finite `duration_ms` returns `undefined` (the
+ *  `DrawerToolCallCard`'s `durationLabel` treats `undefined` as
+ *  "omit duration chip"). */
+function toToolResultInfo(
+  toolUseId: string,
+  p: Record<string, unknown>,
+): ToolResultInfo {
+  const content = typeof p.content === "string" ? p.content : "";
+  const isError = p.is_error === true;
+  const d = p.duration_ms;
+  const durationMs =
+    typeof d === "number" && Number.isFinite(d) && d >= 0 ? d : undefined;
+  return { toolUseId, content, isError, durationMs };
+}
+
+/** Pair adjacent `ToolCallSection` + `ToolResultSection` entries
+ *  into merged `SectionToolPair` payloads. Same 30s pending-timeout
+ *  semantics as the legacy `pairTranscript`: a call that hasn't
+ *  matched by `now - received_at >= PENDING_TIMEOUT_MS` flips to
+ *  `SectionPendingCall.timedOut = true`. `permission_ask` sections
+ *  pass through as `SectionPermissionAsk`.
+ *
+ *  This is a pure function — no I/O, no mutation of the input
+ *  array. `pendingFirstSeenAt` is mutated by the function to track
+ *  first-seen timestamps across invocations (same contract as
+ *  `pairTranscript`): the caller keeps a stable Map reference so
+ *  advancing `now` can age out pending calls correctly.
+ *
+ *  Edge cases:
+ *    - Orphan `ToolResultSection` (no preceding call): the legacy
+ *      `pairTranscript` would render this as a standalone result
+ *      card. PR5's section view drops orphan results (they should
+ *      not appear in practice — every result has a matching call
+ *      in the same worker turn). If you need to surface orphans,
+ *      fall back to `pairTranscript` on the raw entry list.
+ *    - `ToolCallSection` without `tool_use_id`: dropped (defensive
+ *      — the backend always injects the id; a pre-redesign row
+ *      without it is treated as corrupt).
+ *    - `ThinkingSection` / `TextSection` / `FinalTextSection`:
+ *      skipped (they belong to the thinking / reply segments, not
+ *      the tools segment).
+ */
+export function pairSections(
+  sections: readonly TranscriptSection[],
+  now: number,
+  pendingFirstSeenAt: Map<string, number>,
+): SectionToolEntry[] {
+  const pending = new Map<string, { call: ToolCallInfo; receivedAt: number }>();
+  const out: SectionToolEntry[] = [];
+
+  for (const s of sections) {
+    if (s.kind === "ToolCall") {
+      const id = readSectionToolUseId(s.payload_json);
+      if (id === undefined) continue;
+      if (!pendingFirstSeenAt.has(id)) {
+        pendingFirstSeenAt.set(id, now);
+      }
+      pending.set(id, {
+        call: toToolCallInfo(s.payload_json),
+        receivedAt: pendingFirstSeenAt.get(id)!,
+      });
+      continue;
+    }
+    if (s.kind === "ToolResult") {
+      const id = readSectionToolUseId(s.payload_json);
+      if (id === undefined) continue;
+      const p = pending.get(id);
+      if (p) {
+        out.push({
+          kind: "paired",
+          toolUseId: id,
+          call: p.call,
+          result: toToolResultInfo(id, s.payload_json),
+        });
+        pending.delete(id);
+        pendingFirstSeenAt.delete(id);
+      }
+      // Orphan result (no preceding call): silently drop. See
+      // docstring for rationale.
+      continue;
+    }
+    if (s.kind === "PermissionAsk") {
+      out.push({ kind: "permission_ask", payload_json: s.payload_json });
+      continue;
+    }
+    // ThinkingSection / TextSection / FinalTextSection: skipped.
+    // The drawer routes those to the thinking / reply segments,
+    // not the tools segment.
+  }
+
+  // Flush remaining pending calls. Within the timeout window they
+  // stay as `SectionPendingCall` (timedOut=false); past the window
+  // they flip to timedOut=true. PR5 renders both states identically
+  // (a running `DrawerToolCallCard`), but the flag is preserved
+  // for future polish.
+  for (const [id, p] of pending) {
+    const elapsed = now - p.receivedAt;
+    const timedOut = elapsed >= PENDING_TIMEOUT_MS;
+    out.push({
+      kind: "pending_call",
+      toolUseId: id,
+      call: p.call,
+      timedOut,
+    });
+  }
+
+  return out;
 }

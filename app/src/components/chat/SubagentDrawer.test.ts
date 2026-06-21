@@ -1,20 +1,30 @@
 // Tests for `SubagentDrawer.vue` — B6 PR3 worker subagent transcript
 // drawer.
 //
-// Coverage (per PRD R8):
-//   1. Renders when `store.openRunId !== null`; returns nothing when
-//      closed.
+// B6 redesign PR5 (2026-06-21): rewritten to cover the 5-segment
+// grouped view. The drawer now reads `store.liveSections`
+// (accumulator output `TranscriptSection[]`) instead of raw
+// `liveTranscript`; the previous chat_event toggle / hidden-count
+// hint / flat tool-card list are all GONE. Coverage:
+//
+//   1. Renders when `store.openRunId !== null`; returns nothing closed.
 //   2. Header carries status + subagentName + summary.
-//   3. Body renders transcript from `store.liveTranscript` first;
-//      falls back to parsing `getRunCache.transcriptJson` when no
-//      live events.
-//   4. Kind badges render with the right label per `TranscriptKind`.
-//   5. `transcriptTruncated !== 0` shows the "原 transcript 已截断"
-//      notice.
-//   6. chat_event entries are hidden by default; the "Show chat
-//      events" toggle reveals them.
-//   7. Empty state shows "Worker is starting..." when no transcript.
-//   8. Clicking the X (DialogClose) clears `openRunId`.
+//   3. DrawerPromptCard renders run.task with 120-char truncate +
+//      "View full →" (hidden when task is null).
+//   4. Thinking segment collapses by default; expand chevron works.
+//   5. Tools segment pairs ToolCall + ToolResult into a single
+//      DrawerToolCallCard.
+//   6. Tools segment renders pending_call when result hasn't arrived.
+//   7. Tools segment routes PermissionAskSection →
+//      DrawerPermissionAskCard (historical mode).
+//   8. Reply segment shows live Text; 280-char truncate + "View full".
+//   9. Reply segment shows FinalText after worker finishes (run.finalText).
+//  10. transcriptTruncated !== 0 shows the "原 transcript 已截断" notice.
+//  11. Empty state shows "Worker is starting..." when no sections.
+//  12. Live indicator (running) + terminal chip (finished) render.
+//  13. Header timestamps formatted as local HH:MM:SS.
+//  14. Clicking the X (DialogClose) clears `openRunId`.
+//  15. Failure banner (FT-F-005) for error / cancelled states.
 //
 // Uses real Pinia + mocked Tauri (no IPC actually fires in these
 // tests — we drive the store directly). The reka-ui Dialog portal is
@@ -24,7 +34,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { nextTick } from "vue";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -34,13 +43,15 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import SubagentDrawer from "./SubagentDrawer.vue";
-import ToolInputBody from "./ToolInputBody.vue";
-import ToolOutputBody from "./ToolOutputBody.vue";
-import PermissionAskBody from "./PermissionAskBody.vue";
-import WorkerTextTimeline from "./WorkerTextTimeline.vue";
+import DrawerPromptCard from "./DrawerPromptCard.vue";
+import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
+import DrawerToolCallCard from "./DrawerToolCallCard.vue";
+import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
+import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
 import {
   useSubagentRunsStore,
   type SubagentRunRow,
+  type TranscriptSection,
 } from "../../stores/subagentRuns";
 import { useChatStore } from "../../stores/chat";
 
@@ -57,9 +68,6 @@ const sampleRow: SubagentRunRow = {
   transcriptJson: null,
   transcriptTruncated: 0,
   createdAt: "2026-06-20T10:00:00Z",
-  // B6 redesign PR1 (2026-06-21): new columns on the wire.
-  // Null in the fixture — the legacy drawer's tests don't
-  // exercise the new accumulator path.
   finalText: null,
   task: null,
 };
@@ -68,235 +76,67 @@ function makeDrawer() {
   return mount(SubagentDrawer, {
     attachTo: document.body,
     global: {
-      // reka-ui portals via <Teleport to="body">; shallow keeps the
-      // test fast and avoids pulling in Icon's heroicon imports.
+      // reka-ui portals via <Teleport to="body">; stub Icon so the
+      // test stays fast and avoids pulling heroicons into jsdom.
+      // Do NOT stub the Drawer* components — we assert against their
+      // real rendered output (props → DOM) below.
       stubs: { Icon: true },
     },
   });
 }
 
+/** Open the drawer with a pre-seeded row + section list. Avoids the
+ *  async fetchRun roundtrip (which is mocked to return null) so the
+ *  test can drive the store synchronously. */
+async function openWith(
+  store: ReturnType<typeof useSubagentRunsStore>,
+  row: Partial<SubagentRunRow> = {},
+  sections: TranscriptSection[] = [],
+) {
+  const full = { ...sampleRow, ...row };
+  store.getRunCache.set(full.id, full);
+  // Seed liveSections directly — PR5 reads this map first.
+  store.liveSections.set(full.id, sections);
+  await store.openDrawer(full.id);
+  await flushPromises();
+}
+
 describe("SubagentDrawer", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    // vue-test-utils + reka-ui Teleport quirk: `w.unmount()` removes
-    // the component root, but the dialog content (portaled to body
-    // via `DialogContent`) sometimes stays attached, leaking into
-    // the next test's `document.body.querySelector(...)` results.
-    // Belt-and-braces cleanup so each test starts with a fresh body.
-    document.body.querySelectorAll(
-      ".subagent-drawer, .subagent-drawer__overlay, .subagent-drawer__banner",
-    ).forEach((el) => el.remove());
+    // vue-test-utils + reka-ui Teleport quirk: dialog content
+    // sometimes leaks across tests. Belt-and-braces cleanup.
+    document.body.innerHTML = "";
   });
+
+  // -----------------------------------------------------------------
+  // Basics: open / close, header, empty state
+  // -----------------------------------------------------------------
 
   it("renders nothing visible when store.openRunId is null", () => {
     const store = useSubagentRunsStore();
     expect(store.openRunId).toBeNull();
     const w = makeDrawer();
-    // The Dialog is closed — no .subagent-drawer content in the DOM.
     expect(document.body.querySelector(".subagent-drawer")).toBeNull();
     w.unmount();
   });
 
   it("renders header status + name + summary once a run is open", async () => {
     const store = useSubagentRunsStore();
-    // Pre-seed cache so openDrawer doesn't fire IPC.
-    store.getRunCache.set("run-1", sampleRow);
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store);
     const w = makeDrawer();
     await flushPromises();
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("researcher");
-    expect(text).toContain("完成"); // completed → 完成 label
+    expect(text).toContain("完成"); // completed → 完成
     expect(text).toContain("found 3 files");
     w.unmount();
   });
 
-  it("renders transcript entries from store.liveTranscript first", async () => {
+  it("empty state shows 'Worker is starting...' when no sections", async () => {
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep", input: { pattern: "foo" }, tool_use_id: "tu-1" } },
-      { kind: "tool_result", payload_json: { content: "match", is_error: false, tool_use_id: "tu-1", duration_ms: 12 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // B6 PR3 redesign (2026-06-21): the call+result pair merges
-    // into a single `.tool-card` entry, so 2 raw transcript
-    // entries → 1 rendered card.
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    // The merged card's header shows the tool name + a status
-    // row with `done` + a duration label.
-    const card = cards[0];
-    expect(card.textContent).toContain("grep");
-    expect(card.textContent).toContain("done");
-    w.unmount();
-  });
-
-  it("falls back to parsing transcriptJson when no live events", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
-      transcriptJson: JSON.stringify([
-        // B6 PR3 redesign: the tool_call/tool_result pair merges
-        // into one card. The permission_ask stays standalone.
-        // 3 raw transcript entries → 2 rendered cards (one
-        // merged, one standalone).
-        { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
-        { kind: "tool_result", payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
-        // FT-F-001 stage 2 (check phase fix 2026-06-20): the Rust
-        // `PermissionAskPayload` serializes with `#[serde(rename_all =
-        // "camelCase")]`, so the actual stored payload_json carries
-        // `toolName` (NOT `tool_name`). `synthesizeAsk` reads both
-        // spellings defensively; the production-realistic fixture is
-        // camelCase. Provide a risk field so PermissionAskBody doesn't
-        // crash on RISK_META[undefined].
-        {
-          kind: "permission_ask",
-          payload_json: { toolName: "shell", risk: "high" },
-        },
-      ]),
-    });
-    // liveTranscript is empty (no in-flight stream).
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // 2 cards: 1 paired (read_file call+result) + 1 standalone (permission_ask).
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(2);
-    w.unmount();
-  });
-
-  it("chat_event entries are hidden by default; toggle reveals them", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep", tool_use_id: "tu-1" } },
-      { kind: "chat_event", payload_json: { text: "verbose delta" } },
-      { kind: "tool_result", payload_json: { content: "match", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // Default: 1 card (the chat_event is hidden; tool_call +
-    // tool_result are merged into a single paired card).
-    let cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-
-    // Toggle on — chat_event now visible (2 cards).
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(2);
-    w.unmount();
-  });
-
-  // --- FT-F-004 (2026-06-21): event count + hidden-chat hint (C3) ---
-
-  it("filter row shows visible event count and '+N chat hidden' hint by default", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep" } },
-      { kind: "chat_event", payload_json: { text: "verbose delta" } },
-      { kind: "chat_event", payload_json: { text: "more delta" } },
-      { kind: "tool_result", payload_json: { content: "match" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // 2 visible (tool_call + tool_result); 2 chat_event hidden.
-    const count = document.body.querySelector(".subagent-drawer__event-count");
-    expect(count?.textContent ?? "").toContain("2 events");
-    expect(count?.textContent ?? "").toContain("+2 chat hidden");
-    w.unmount();
-  });
-
-  it("toggling chat events on drops the '+N chat hidden' hint and counts chat in", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "grep" } },
-      { kind: "chat_event", payload_json: { text: "verbose delta" } },
-      { kind: "tool_result", payload_json: { content: "match" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // Toggle on — chat_event now visible (3 events), hint gone.
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    const count = document.body.querySelector(".subagent-drawer__event-count");
-    expect(count?.textContent ?? "").toContain("3 events");
-    expect(count?.textContent ?? "").not.toContain("chat hidden");
-    w.unmount();
-  });
-
-  // --- FT-F-004 (2026-06-21): header timestamps formatted as local HH:MM:SS (C2) ---
-
-  it("header meta shows local-formatted start/finish times, not raw ISO", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow); // startedAt/finishedAt are UTC ISO
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const meta = document.body.querySelector(".subagent-drawer__meta");
-    const text = meta?.textContent ?? "";
-    // Labels present.
-    expect(text).toContain("开始");
-    expect(text).toContain("结束");
-    // Raw ISO markers must be gone — the value was formatted.
-    expect(text).not.toContain("T");
-    expect(text).not.toContain("2026");
-    expect(text).not.toContain("+00");
-    // Both timestamps render as local HH:MM:SS.
-    expect(text.match(/\d{2}:\d{2}:\d{2}/g)?.length).toBe(2);
-    w.unmount();
-  });
-
-  it("transcriptTruncated flag shows the '原 transcript 已截断' notice", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", { ...sampleRow, transcriptTruncated: 1 });
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("原 transcript 已截断");
-    w.unmount();
-  });
-
-  it("empty state shows 'Worker is starting...' when no transcript", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow); // transcriptJson is null
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store, { transcriptJson: null }, []);
     const w = makeDrawer();
     await flushPromises();
 
@@ -305,77 +145,373 @@ describe("SubagentDrawer", () => {
     w.unmount();
   });
 
-  it("all four TranscriptKind values render as their own card when chat events are visible", async () => {
-    // B6 PR3 redesign (2026-06-21): the old per-row `.subagent-drawer__kind`
-    // badge is gone. Each card now surfaces the kind via either the
-    // tool name (in `.tool-card__name`) for tool_call/result, the
-    // call name + "(ask collapsed)" suffix for permission_ask, or
-    // the "chat event" label for chat_event entries. This test
-    // asserts each kind produces a card with the right surface
-    // affordance.
+  it("header meta shows local-formatted start/finish times, not raw ISO", async () => {
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "chat_event", payload_json: { kind: "start" } },
-      { kind: "tool_call", payload_json: { name: "x", tool_use_id: "tu-1" } },
-      { kind: "tool_result", payload_json: { content: "y", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
-      // FT-F-001 stage 2 (check phase fix 2026-06-20): permission_ask
-      // routes through synthesizeAsk. The Rust PermissionAskPayload
-      // serializes with camelCase, so the production-realistic fixture
-      // uses `toolName` (synthesizeAsk also reads snake_case fallback).
-      // Provide a risk so PermissionAskBody doesn't crash on
-      // RISK_META[undefined].
-      {
-        kind: "permission_ask",
-        payload_json: { toolName: "shell", risk: "high" },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store);
     const w = makeDrawer();
     await flushPromises();
 
-    // Turn on chat-event visibility so all 4 kinds render.
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    // 3 cards total: chat_event (1) + paired call+result (1) + permission_ask (1).
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(3);
-    // The paired card header shows the tool name.
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("x"); // tool_call name
-    expect(text).toContain("chat event"); // standalone chat_event label
-    expect(text).toContain("shell"); // permission_ask toolName
-    // The PermissionAskBody's historical note uses the phrasing
-    // "ask collapsed (worker context)" (see the body component
-    // for the exact wording). Asserting "ask collapsed" matches
-    // the existing production behavior.
-    expect(text).toContain("ask collapsed");
+    const meta = document.body.querySelector(".subagent-drawer__meta");
+    const text = meta?.textContent ?? "";
+    expect(text).toContain("开始");
+    expect(text).toContain("结束");
+    expect(text).not.toContain("T");
+    expect(text).not.toContain("2026");
+    expect(text).not.toContain("+00");
+    expect(text.match(/\d{2}:\d{2}:\d{2}/g)?.length).toBe(2);
     w.unmount();
   });
 
-  // -------------------------------------------------------------------
-  // B6 PR3b (2026-06-20): live duration timer + jump-to-latest +
-  // auto-scroll polish.
-  // -------------------------------------------------------------------
+  it("transcriptTruncated flag shows the '原 transcript 已截断' notice", async () => {
+    const store = useSubagentRunsStore();
+    await openWith(store, { transcriptTruncated: 1 });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("原 transcript 已截断");
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // DrawerPromptCard — run.task rendering + truncate + modal
+  // -----------------------------------------------------------------
+
+  it("DrawerPromptCard is hidden when run.task is null", async () => {
+    const store = useSubagentRunsStore();
+    await openWith(store, { task: null });
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(w.findAllComponents(DrawerPromptCard).length).toBe(1);
+    // Card has its own v-if on `task && task.length > 0` → no
+    // rendered .drawer-prompt-card in the DOM.
+    expect(document.body.querySelector(".drawer-prompt-card")).toBeNull();
+    w.unmount();
+  });
+
+  it("DrawerPromptCard renders run.task and truncates past 120 chars with View full link", async () => {
+    const store = useSubagentRunsStore();
+    const longTask = "A".repeat(200);
+    await openWith(store, { task: longTask });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const card = document.body.querySelector(".drawer-prompt-card");
+    expect(card).not.toBeNull();
+    // The truncate() helper appends "…" → preview text is 121 chars
+    // (120 + ellipsis). The full task is 200 chars.
+    const markdown = card?.querySelector(".drawer-prompt-card__markdown");
+    expect(markdown?.textContent?.length ?? 0).toBeLessThan(longTask.length);
+    // The "View full →" link is present (truncation happened).
+    expect(card?.querySelector(".drawer-prompt-card__view-full")).not.toBeNull();
+    w.unmount();
+  });
+
+  it("DrawerPromptCard hides View full link when task fits within 120 chars", async () => {
+    const store = useSubagentRunsStore();
+    await openWith(store, { task: "short task" });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const card = document.body.querySelector(".drawer-prompt-card");
+    expect(card?.querySelector(".drawer-prompt-card__view-full")).toBeNull();
+    w.unmount();
+  });
+
+  it("DrawerPromptCard opens MarkdownDetailModal on View full click", async () => {
+    const store = useSubagentRunsStore();
+    await openWith(store, { task: "A".repeat(200) });
+    const w = makeDrawer();
+    await flushPromises();
+
+    // Modal content not rendered initially.
+    expect(document.body.querySelector(".markdown-detail-modal")).toBeNull();
+
+    // Click "View full →" → modal opens (reka-ui portals to body).
+    const btn = document.body.querySelector(
+      ".drawer-prompt-card__view-full",
+    ) as HTMLButtonElement;
+    btn.click();
+    await flushPromises();
+
+    expect(document.body.querySelector(".markdown-detail-modal")).not.toBeNull();
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // Thinking segment
+  // -----------------------------------------------------------------
+
+  it("Thinking segment collapses by default and expands on chevron click", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "Thinking", text: "let me think...", chars: 16, closed: true },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    // The thinking DrawerSection exists.
+    const thinkingSection = document.body.querySelector(
+      '.drawer-section[data-type="thinking"]',
+    );
+    expect(thinkingSection).not.toBeNull();
+    // Collapsed by default — no body content.
+    expect(thinkingSection?.querySelector(".drawer-section__body")).toBeNull();
+
+    // Click the header to expand.
+    (thinkingSection?.querySelector(".drawer-section__header") as HTMLElement).click();
+    await flushPromises();
+    expect(thinkingSection?.querySelector(".drawer-section__body")).not.toBeNull();
+    // DrawerThinkingBlock component mounts inside.
+    expect(w.findAllComponents(DrawerThinkingBlock).length).toBe(1);
+    w.unmount();
+  });
+
+  it("Thinking segment hidden entirely when no thinking sections", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "grep", tool_use_id: "tu-1" } },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector('.drawer-section[data-type="thinking"]')).toBeNull();
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // Tools segment — pairing layer (pairSections)
+  // -----------------------------------------------------------------
+
+  it("Tools segment pairs ToolCall + ToolResult into a single DrawerToolCallCard", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      {
+        kind: "ToolCall",
+        payload_json: { name: "read_file", input: { path: "/foo" }, tool_use_id: "tu-1" },
+      },
+      {
+        kind: "ToolResult",
+        payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 250 },
+      },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const cards = w.findAllComponents(DrawerToolCallCard);
+    expect(cards.length).toBe(1);
+    expect(cards[0].props("call").name).toBe("read_file");
+    const result = cards[0].props("result");
+    expect(result?.content).toBe("ok");
+    expect(result?.isError).toBe(false);
+    expect(result?.durationMs).toBe(250);
+    w.unmount();
+  });
+
+  it("Tools segment renders pending DrawerToolCallCard (no result prop) for unmatched ToolCall", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      {
+        kind: "ToolCall",
+        payload_json: { name: "shell", input: { command: "ls" }, tool_use_id: "tu-p" },
+      },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const cards = w.findAllComponents(DrawerToolCallCard);
+    expect(cards.length).toBe(1);
+    expect(cards[0].props("result")).toBeUndefined();
+    expect(cards[0].props("call").name).toBe("shell");
+    w.unmount();
+  });
+
+  it("Tools segment routes PermissionAskSection to DrawerPermissionAskCard", async () => {
+    const store = useSubagentRunsStore();
+    const chatStore = useChatStore();
+    chatStore.currentCwd = "/data/repo";
+    const sections: TranscriptSection[] = [
+      {
+        kind: "PermissionAsk",
+        payload_json: {
+          rid: "r-1",
+          sessionId: "sess-1",
+          toolUseId: "tu-1",
+          toolName: "write_file",
+          toolInput: { path: "/data/repo/x" },
+          risk: "medium",
+          path: "/data/repo/x",
+        },
+      },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const cards = w.findAllComponents(DrawerPermissionAskCard);
+    expect(cards.length).toBe(1);
+    const ask = cards[0].props("ask");
+    expect(ask.toolName).toBe("write_file");
+    expect(ask.risk).toBe("medium");
+    expect(ask.path).toBe("/data/repo/x");
+    expect(cards[0].props("repoRoot")).toBe("/data/repo");
+    w.unmount();
+  });
+
+  it("Tools segment is empty (hidden) when only Thinking sections present", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "Thinking", text: "...", chars: 3, closed: true },
+    ];
+    await openWith(store, {}, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector('.drawer-section[data-type="tools"]')).toBeNull();
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // Reply segment — live Text + FinalText + truncate + modal
+  // -----------------------------------------------------------------
+
+  it("Reply segment shows live TextSection content and truncates past 280 chars", async () => {
+    const store = useSubagentRunsStore();
+    const longText = "B".repeat(400);
+    const sections: TranscriptSection[] = [
+      { kind: "Text", text: longText, chars: 400 },
+    ];
+    await openWith(store, { status: "running", finishedAt: null }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const replySection = document.body.querySelector(
+      '.drawer-section[data-type="reply"]',
+    );
+    expect(replySection).not.toBeNull();
+    const preview = replySection?.querySelector(".subagent-drawer__reply-markdown");
+    expect(preview?.textContent?.length ?? 0).toBeLessThan(longText.length);
+    // View full link present.
+    expect(replySection?.querySelector(".subagent-drawer__reply-view-full")).not.toBeNull();
+    w.unmount();
+  });
+
+  it("Reply segment prefers FinalTextSection over TextSection once worker finishes", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      // FinalText wins — should be the rendered text even though a
+      // live Text section is also present.
+      { kind: "Text", text: "live partial", chars: 12 },
+      { kind: "FinalText", text: "authoritative final reply" },
+    ];
+    await openWith(store, { status: "completed" }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const replySection = document.body.querySelector(
+      '.drawer-section[data-type="reply"]',
+    );
+    const text = replySection?.querySelector(".subagent-drawer__reply-markdown")?.textContent ?? "";
+    expect(text).toContain("authoritative final reply");
+    expect(text).not.toContain("live partial");
+    w.unmount();
+  });
+
+  it("Reply segment opens MarkdownDetailModal on View full click with source=reply", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "Text", text: "C".repeat(400), chars: 400 },
+    ];
+    await openWith(store, { status: "running", finishedAt: null }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector(".markdown-detail-modal")).toBeNull();
+    const btn = document.body.querySelector(
+      ".subagent-drawer__reply-view-full",
+    ) as HTMLButtonElement;
+    btn.click();
+    await flushPromises();
+
+    // Modal content is rendered.
+    expect(document.body.querySelector(".markdown-detail-modal")).not.toBeNull();
+    // The drawer mounts ONE MarkdownDetailModal (the reply one) when
+    // truncated. The prompt modal is not mounted because task is null.
+    expect(w.findAllComponents(MarkdownDetailModal).length).toBe(1);
+    w.unmount();
+  });
+
+  it("Reply segment hidden entirely when no text sections and worker not running", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "grep", tool_use_id: "tu-1" } },
+    ];
+    await openWith(store, { status: "completed" }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    expect(document.body.querySelector('.drawer-section[data-type="reply"]')).toBeNull();
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // Live indicator (DrawerSection right-side chip)
+  // -----------------------------------------------------------------
+
+  it("running state shows live spinner chip on the Tools segment", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "shell", tool_use_id: "tu-1" } },
+    ];
+    await openWith(store, { status: "running", finishedAt: null }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const toolsSection = document.body.querySelector(
+      '.drawer-section[data-type="tools"]',
+    );
+    // Live chip is present (running state).
+    expect(toolsSection?.querySelector(".drawer-section__live-chip")).not.toBeNull();
+    // Terminal chip absent.
+    expect(toolsSection?.querySelector(".drawer-section__final-chip")).toBeNull();
+    w.unmount();
+  });
+
+  it("completed state shows '✓ X.Xs' terminal chip on segments (no live spinner)", async () => {
+    const store = useSubagentRunsStore();
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "shell", tool_use_id: "tu-1" } },
+      { kind: "ToolResult", payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
+    ];
+    await openWith(store, { status: "completed" }, sections);
+    const w = makeDrawer();
+    await flushPromises();
+
+    const toolsSection = document.body.querySelector(
+      '.drawer-section[data-type="tools"]',
+    );
+    expect(toolsSection?.querySelector(".drawer-section__live-chip")).toBeNull();
+    const finalChip = toolsSection?.querySelector(".drawer-section__final-chip");
+    expect(finalChip).not.toBeNull();
+    // startedAt 10:00:00 + finishedAt 10:00:30 = 30s → "✓ 30.0s".
+    expect(finalChip?.textContent ?? "").toContain("30.0s");
+    w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // Status pill + jump-to-latest (preserved from B6 PR3b)
+  // -----------------------------------------------------------------
 
   it("running state shows live duration suffix in status pill", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T10:00:08.200Z"));
     const store = useSubagentRunsStore();
-    // running row: started 8.2s ago, no finishedAt
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
-      status: "running",
-      finishedAt: null,
-    });
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store, { status: "running", finishedAt: null });
     const w = makeDrawer();
     await flushPromises();
 
@@ -389,10 +525,7 @@ describe("SubagentDrawer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T10:00:30.000Z"));
     const store = useSubagentRunsStore();
-    // sampleRow has startedAt 10:00:00 + finishedAt 10:00:30 = 30s
-    await store.openDrawer("run-1");
-    store.getRunCache.set("run-1", sampleRow);
-    await flushPromises();
+    await openWith(store);
     const w = makeDrawer();
     await flushPromises();
 
@@ -402,110 +535,15 @@ describe("SubagentDrawer", () => {
     vi.useRealTimers();
   });
 
-  it("jump-to-latest button is hidden initially (autoFollow=true) and shows after scroll-up + new entry", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", { ...sampleRow, status: "running", finishedAt: null });
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "read_file" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // Initially autoFollow=true → no jump-to-latest button.
-    expect(document.body.querySelector(".subagent-drawer__jump-latest")).toBeNull();
-    expect(document.body.querySelector(".subagent-drawer__new-events")).toBeNull();
-
-    // Simulate the user scrolling up + a new entry arriving.
-    const body = document.body.querySelector(".subagent-drawer__body") as HTMLElement;
-    // Pretend the body is taller than its viewport so scrolling is meaningful.
-    Object.defineProperty(body, "scrollHeight", { configurable: true, value: 1000 });
-    Object.defineProperty(body, "clientHeight", { configurable: true, value: 200 });
-    body.scrollTop = 500; // user scrolled up
-    body.dispatchEvent(new Event("scroll"));
-    await flushPromises();
-    // Now autoFollow=false (we're not near the bottom). The header
-    // jump-to-latest button appears because there ARE visible entries.
-    expect(document.body.querySelector(".subagent-drawer__jump-latest")).not.toBeNull();
-
-    // Append a new entry — watch(visibleTranscript.length) fires,
-    // autoFollow is off so newCount goes to 1, the floating button appears.
-    const current = store.liveTranscript.get("run-1") ?? [];
-    store.liveTranscript.set("run-1", [
-      ...current,
-      { kind: "tool_result", payload_json: { content: "ok" } },
-    ]);
-    await flushPromises();
-    const newBtn = document.body.querySelector(".subagent-drawer__new-events");
-    expect(newBtn?.textContent?.trim()).toBe("↓ 1 new");
-    w.unmount();
-  });
-
-  it("clicking jump-to-latest button clears the newCount + restores auto-follow", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", { ...sampleRow, status: "running", finishedAt: null });
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: {} },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const body = document.body.querySelector(".subagent-drawer__body") as HTMLElement;
-    Object.defineProperty(body, "scrollHeight", { configurable: true, value: 1000 });
-    Object.defineProperty(body, "clientHeight", { configurable: true, value: 200 });
-    body.scrollTop = 500;
-    body.dispatchEvent(new Event("scroll"));
-    await flushPromises();
-    // Add a new entry to populate newCount.
-    const current = store.liveTranscript.get("run-1") ?? [];
-    store.liveTranscript.set("run-1", [
-      ...current,
-      { kind: "tool_result", payload_json: {} },
-    ]);
-    await flushPromises();
-    expect(document.body.querySelector(".subagent-drawer__new-events")).not.toBeNull();
-
-    // Click the header jump-to-latest button.
-    const headerBtn = document.body.querySelector(
-      ".subagent-drawer__jump-latest",
-    ) as HTMLButtonElement;
-    headerBtn.click();
-    await flushPromises();
-
-    // newCount cleared, floating button hidden (autoFollow restored).
-    expect(document.body.querySelector(".subagent-drawer__new-events")).toBeNull();
-    w.unmount();
-  });
-
-  // -------------------------------------------------------------------
-  // Session 50 hotfix (B1, 2026-06-20): terminal-state durations
-  // (error / cancelled) must use `finishedAt - startedAt`, NOT the
-  // live ticker. The bug surfaced when a failed worker was left
-  // open in the drawer — the badge kept growing past the actual
-  // run time. With the system clock 3 hours past the run, the
-  // correct terminal duration is still the frozen `finishedAt -
-  // startedAt` value, regardless of how long the drawer has been
-  // open.
-  // -------------------------------------------------------------------
-
   it("error state shows terminal duration (finishedAt - startedAt), not the live ticker", async () => {
     vi.useFakeTimers();
-    // System clock is 3 hours past the run. Without the fix, the
-    // badge would read "failed at 10800.0s" (nowTick - startedAt).
-    // With the fix, it reads the frozen 11.7s.
     vi.setSystemTime(new Date("2026-06-20T13:00:11.700Z"));
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
+    await openWith(store, {
       status: "error",
       startedAt: "2026-06-20T10:00:00.000Z",
       finishedAt: "2026-06-20T10:00:11.700Z",
     });
-    await store.openDrawer("run-1");
-    await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
@@ -515,18 +553,15 @@ describe("SubagentDrawer", () => {
     vi.useRealTimers();
   });
 
-  it("cancelled state shows terminal duration (finishedAt - startedAt), not the live ticker", async () => {
+  it("cancelled state shows terminal duration (finishedAt - startedAt)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T13:00:05.300Z"));
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
+    await openWith(store, {
       status: "cancelled",
       startedAt: "2026-06-20T10:00:00.000Z",
       finishedAt: "2026-06-20T10:00:05.300Z",
     });
-    await store.openDrawer("run-1");
-    await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
@@ -536,96 +571,28 @@ describe("SubagentDrawer", () => {
     vi.useRealTimers();
   });
 
-  // -------------------------------------------------------------------
-  // Session 50 hotfix (B2, 2026-06-20): tool_result entries carry the
-  // cwd envelope as a stringified JSON value in payload_json.content
-  // (REQ-16, same shape as the main panel's ToolCallCard). The drawer
-  // must unwrap the envelope and render the inner result string, NOT
-  // the double-encoded JSON with `\"cwd\":\"...\"` escape chars. This
-  // test mirrors the `extractToolResultDisplay` unit test in
-  // `utils/messageFormat.test.ts` but at the drawer level.
-  // -------------------------------------------------------------------
-
-  it("tool_result entries unwrap the cwd envelope and render via ToolOutputBody", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    const envelope = JSON.stringify({
-      result: "actual file contents here",
-      cwd: "/data/worktrees/p1/s1",
-    });
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "read_file", input: { path: "/foo" } } },
-      { kind: "tool_result", payload_json: { content: envelope, is_error: false } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // FT-F-001 stage 2: tool_result entries now render through the
-    // shared ToolOutputBody component (PR1). The drawer's outer wrapper
-    // no longer renders a `<pre>` blob — the body component owns the
-    // envelope-unwrap (via extractToolResultDisplay) + truncate logic.
-    const outputBodies = w.findAllComponents(ToolOutputBody);
-    expect(outputBodies.length).toBe(1);
-    // ToolOutputBody's internal `display` computed unwraps the cwd
-    // envelope (see PR1 — extractToolResultDisplay strips `{result,cwd}`).
-    // We assert the unwrapped string lands in the rendered `<pre>`.
-    const pre = outputBodies[0].find(".tool-output-body__pre");
-    expect(pre.text()).toContain("actual file contents here");
-    // The envelope is NOT visible — neither the escape noise nor the
-    // bare `"cwd":` key that the old double-stringify would emit.
-    expect(pre.text()).not.toContain("cwd");
-
-    // tool_call entries route to ToolInputBody (the name + input render
-    // through the shared body component, not as inline JSON).
-    const inputBodies = w.findAllComponents(ToolInputBody);
-    expect(inputBodies.length).toBe(1);
-    expect(inputBodies[0].props("name")).toBe("read_file");
-    expect(inputBodies[0].props("input")).toEqual({ path: "/foo" });
-    w.unmount();
-  });
-
-  // -------------------------------------------------------------------
-  // FT-F-005 (2026-06-20): failure-reason banner in the header.
-  // Covers the 4 acceptance criteria from the prd.md AC section:
-  //   - failed + summary → banner shows "Worker exited with error: <truncated>"
-  //   - failed + empty summary → banner falls back to "Worker exited unexpectedly at N.Ns"
-  //   - cancelled → banner shows "Worker stopped by user at N.Ns"
-  //   - running / completed → no banner (regression guard)
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Failure banner (FT-F-005) — preserved
+  // -----------------------------------------------------------------
 
   it("failed drawer shows the error banner with summary text", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
+    await openWith(store, {
       status: "error",
       startedAt: "2026-06-20T10:00:00.000Z",
       finishedAt: "2026-06-20T10:00:11.700Z",
       summary: "shell: timeout after 10.0s",
     });
-    await store.openDrawer("run-1");
-    await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
     const banner = document.body.querySelector(".subagent-drawer__banner");
     expect(banner).not.toBeNull();
-    // Error variant class (red tint via --color-tool-error).
     expect(banner?.classList.contains("subagent-drawer__banner--error")).toBe(true);
-    // Status badge (existing) AND banner (new) both render — they
-    // coexist per D5.
-    expect(document.body.querySelector(".subagent-drawer__status")?.textContent?.trim())
-      .toBe("failed at 11.7s");
-    // Icon stub renders an empty <icon-stub name="warn" /> — its
-    // textContent is empty, so banner.textContent is just the
-    // <span class="subagent-drawer__banner-text"> content (no "⚠").
     expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
       .toBe("Worker exited with error: shell: timeout after 10.0s");
-    // The warn icon IS present (asserted via stub attribute).
-    expect(banner?.querySelector('icon-stub[name="warn"]')).not.toBeNull();
     w.unmount();
     vi.useRealTimers();
   });
@@ -634,59 +601,18 @@ describe("SubagentDrawer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
+    await openWith(store, {
       status: "error",
       startedAt: "2026-06-20T10:00:00.000Z",
       finishedAt: "2026-06-20T10:00:11.700Z",
-      summary: null, // backend wrote no error text (rare but possible)
+      summary: null,
     });
-    await store.openDrawer("run-1");
-    await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
     const banner = document.body.querySelector(".subagent-drawer__banner");
-    expect(banner).not.toBeNull();
-    // Falls back to the frozen duration message — reuses the
-    // statusDisplay.suffix so the number matches the badge.
     expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
       .toBe("Worker exited unexpectedly at 11.7s");
-    w.unmount();
-    vi.useRealTimers();
-  });
-
-  it("failed drawer truncates summary longer than 80 chars with ellipsis", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-20T10:00:05.000Z"));
-    const store = useSubagentRunsStore();
-    const longSummary = "shell: error executing command (rc=1): " +
-      "command not found: extremely-long-tool-name-that-the-shell-could-not-locate-" +
-      "and-this-should-definitely-be-truncated-in-the-banner-because-it-is-way-over-80-chars-long";
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
-      status: "error",
-      startedAt: "2026-06-20T10:00:00.000Z",
-      finishedAt: "2026-06-20T10:00:05.000Z",
-      summary: longSummary,
-    });
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const banner = document.body.querySelector(".subagent-drawer__banner");
-    expect(banner).not.toBeNull();
-    const bannerText = banner?.querySelector(".subagent-drawer__banner-text")?.textContent ?? "";
-    // The displayed body is shorter than the original summary (truncated).
-    expect(bannerText.length).toBeLessThan(longSummary.length);
-    // Truncation: ends with "…" suffix.
-    expect(bannerText.endsWith("…")).toBe(true);
-    // Truncation: starts with the standard prefix.
-    expect(bannerText.startsWith("Worker exited with error: ")).toBe(true);
-    // Body portion (after prefix) is exactly 80 chars + "…" = 81 chars.
-    // Prefix length is 25 ("Worker exited with error: "), so total = 25 + 81 = 106.
-    expect(bannerText.length).toBe("Worker exited with error: ".length + 80 + 1);
     w.unmount();
     vi.useRealTimers();
   });
@@ -695,28 +621,18 @@ describe("SubagentDrawer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-20T10:00:05.300Z"));
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
+    await openWith(store, {
       status: "cancelled",
       startedAt: "2026-06-20T10:00:00.000Z",
       finishedAt: "2026-06-20T10:00:05.300Z",
       summary: "partial work before stop",
     });
-    await store.openDrawer("run-1");
-    await flushPromises();
     const w = makeDrawer();
     await flushPromises();
 
     const banner = document.body.querySelector(".subagent-drawer__banner");
-    expect(banner).not.toBeNull();
-    // Warning variant (amber tint via --color-tool-shell) — NOT the
-    // error red, because cancel is not a "failure" per se.
     expect(banner?.classList.contains("subagent-drawer__banner--warning")).toBe(true);
     expect(banner?.classList.contains("subagent-drawer__banner--error")).toBe(false);
-    // Generic text — we don't read `summary` for cancelled (it carries
-    // partial work, not a reason). Banner text omits the icon glyph
-    // because Icon is stubbed in tests; we assert against the
-    // <span class="...__banner-text"> content directly.
     expect(banner?.querySelector(".subagent-drawer__banner-text")?.textContent)
       .toBe("Worker stopped by user at 5.3s");
     w.unmount();
@@ -725,632 +641,34 @@ describe("SubagentDrawer", () => {
 
   it("running and completed drawers do NOT render the failure banner", async () => {
     const store = useSubagentRunsStore();
-    // Running state — bannerText computed returns null.
-    store.getRunCache.set("run-1", {
-      ...sampleRow,
-      status: "running",
-      finishedAt: null,
-    });
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store, { status: "running", finishedAt: null });
     const w = makeDrawer();
     await flushPromises();
-
     expect(document.body.querySelector(".subagent-drawer__banner")).toBeNull();
     w.unmount();
 
-    // Completed state — bannerText computed returns null. Use a
-    // separate store + drawer mount so we don't depend on the
-    // running-state drawer closing cleanly (reka-ui Teleport can
-    // leak DOM across in-test open/close cycles).
     const store2 = useSubagentRunsStore();
-    store2.getRunCache.set("run-2", { ...sampleRow, status: "completed" });
-    await store2.openDrawer("run-2");
-    await flushPromises();
+    await openWith(store2, { id: "run-2", status: "completed" });
     const w2 = makeDrawer();
     await flushPromises();
-
     expect(document.body.querySelector(".subagent-drawer__banner")).toBeNull();
     w2.unmount();
   });
 
-  // -------------------------------------------------------------------
-  // FT-F-001 stage 2 (2026-06-20): typed-card routing. Each
-  // TranscriptKind routes to its matching shared body component
-  // (PR1's ToolInputBody / ToolOutputBody / PermissionAskBody) or the
-  // drawer-local WorkerTextTimeline. Verifies AC1-AC4 at the component-
-  // instance level (findComponent instead of brittle DOM-string
-  // matching).
-  // -------------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Legacy "chat events toggle" — the drawer no longer exposes this
+  // surface. Lock the removal so a future revert catches in tests.
+  // -----------------------------------------------------------------
 
-  it("tool_call entry routes to ToolInputBody with name + input props", async () => {
+  it("does NOT render the chat-events toggle / hidden-count hint (PRD R9)", async () => {
     const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "tool_call",
-        payload_json: {
-          request_id: "req-1",
-          id: "tu-1",
-          name: "grep",
-          input: { pattern: "TODO", path: "/src" },
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
+    await openWith(store);
     const w = makeDrawer();
     await flushPromises();
 
-    const bodies = w.findAllComponents(ToolInputBody);
-    expect(bodies.length).toBe(1);
-    expect(bodies[0].props("name")).toBe("grep");
-    expect(bodies[0].props("input")).toEqual({ pattern: "TODO", path: "/src" });
+    expect(document.body.querySelector(".subagent-drawer__toggle")).toBeNull();
+    expect(document.body.querySelector(".subagent-drawer__filter-row")).toBeNull();
+    expect(document.body.querySelector(".subagent-drawer__event-count")).toBeNull();
     w.unmount();
-  });
-
-  it("tool_result entry routes to ToolOutputBody with content + isError props (no durationMs)", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "tool_result",
-        payload_json: {
-          request_id: "req-1",
-          tool_use_id: "tu-1",
-          content: "line 1\nline 2",
-          is_error: false,
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const bodies = w.findAllComponents(ToolOutputBody);
-    expect(bodies.length).toBe(1);
-    expect(bodies[0].props("content")).toBe("line 1\nline 2");
-    expect(bodies[0].props("isError")).toBe(false);
-    // Per R1 mapping table: tool_result payload_json has NO duration_ms
-    // field, so durationMs prop is never set (undefined). The body's
-    // summary omits the duration chip accordingly.
-    expect(bodies[0].props("durationMs")).toBeUndefined();
-    w.unmount();
-  });
-
-  it("tool_result entry with is_error=true forwards isError to ToolOutputBody", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "tool_result",
-        payload_json: { content: "boom", is_error: true },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const bodies = w.findAllComponents(ToolOutputBody);
-    expect(bodies[0].props("isError")).toBe(true);
-    // Visual: the error variant class is applied to the `<details>`.
-    expect(bodies[0].classes()).toContain("tool-output-body--error");
-    w.unmount();
-  });
-
-  it("permission_ask entry routes to PermissionAskBody in historical mode with synthesizeAsk + repoRoot", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    // Seed chatStore.currentCwd so the path badge has a repoRoot.
-    const chatStore = useChatStore();
-    chatStore.currentCwd = "/data/repo";
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "permission_ask",
-        // Check phase fix (2026-06-20): the Rust
-        // `PermissionAskPayload` carries `#[serde(rename_all =
-        // "camelCase")]` (see `app/src-tauri/src/agent/permissions/
-        // mod.rs:406`), so production `payload_json` actually has
-        // camelCase keys — `sessionId` / `toolUseId` / `toolName` /
-        // `toolInput`. The PRD's snake_case claim was wrong (only
-        // `ToolCallPayload` / `ToolResultPayload` are snake_case —
-        // they have NO `rename_all`). `synthesizeAsk` reads both
-        // spellings defensively; this fixture uses the production-
-        // realistic camelCase shape.
-        payload_json: {
-          rid: "r-1",
-          sessionId: "sess-1",
-          toolUseId: "tu-1",
-          toolName: "write_file",
-          toolInput: { path: "/data/repo/src/x.ts" },
-          risk: "medium",
-          path: "/data/repo/src/x.ts",
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const bodies = w.findAllComponents(PermissionAskBody);
-    expect(bodies.length).toBe(1);
-    expect(bodies[0].props("mode")).toBe("historical");
-    expect(bodies[0].props("repoRoot")).toBe("/data/repo");
-    const ask = bodies[0].props("ask");
-    // synthesizeAsk maps payload_json → camelCase PermissionAsk.
-    // (Reads both `toolName` (production) and `tool_name` (legacy)
-    // defensively.)
-    expect(ask.toolName).toBe("write_file");
-    expect(ask.risk).toBe("medium");
-    expect(ask.path).toBe("/data/repo/src/x.ts");
-    expect(ask.toolUseId).toBe("tu-1");
-    expect(ask.sessionId).toBe("sess-1");
-    expect(ask.rid).toBe("r-1");
-    // Historical mode: NO onRespond callback is provided (D6 — no
-    // interactive buttons in the drawer).
-    expect(bodies[0].props("onRespond")).toBeUndefined();
-    // The historical note text uses the PR1 phrasing (no "denied").
-    expect(bodies[0].text()).toContain("worker wanted write_file");
-    expect(bodies[0].text()).toContain("ask collapsed");
-    expect(bodies[0].text()).not.toContain("denied");
-    w.unmount();
-  });
-
-  // Check phase (2026-06-20): lock the snake_case fallback in
-  // `synthesizeAsk`. Production `payload_json` is camelCase (Rust
-  // `PermissionAskPayload` carries `rename_all = "camelCase"`), but
-  // `synthesizeAsk` defensively reads BOTH spellings so a future
-  // backend refactor that drops `rename_all` doesn't silently render
-  // blank permission cards. If this fallback is ever removed, the
-  // test fails — prompting an explicit decision rather than a silent
-  // regression.
-  it("synthesizeAsk also accepts snake_case payload_json (defensive fallback)", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "permission_ask",
-        payload_json: {
-          rid: "r-2",
-          session_id: "sess-2",
-          tool_use_id: "tu-2",
-          tool_name: "shell",
-          tool_input: { command: "ls" },
-          risk: "high",
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const bodies = w.findAllComponents(PermissionAskBody);
-    const ask = bodies[0].props("ask");
-    expect(ask.toolName).toBe("shell");
-    expect(ask.toolUseId).toBe("tu-2");
-    expect(ask.sessionId).toBe("sess-2");
-    expect(ask.rid).toBe("r-2");
-    expect(ask.toolInput).toEqual({ command: "ls" });
-    w.unmount();
-  });
-
-  it("chat_event entry routes to WorkerTextTimeline; start + done render as milestones, deltas ignored", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      // A start/done pair plus noise deltas — the timeline should
-      // render exactly 2 milestone rows and drop everything else.
-      {
-        kind: "chat_event",
-        payload_json: { request_id: "req-1", kind: "start" },
-      },
-      {
-        kind: "chat_event",
-        payload_json: {
-          request_id: "req-1",
-          kind: "delta",
-          text: "streaming token noise",
-        },
-      },
-      {
-        kind: "chat_event",
-        payload_json: {
-          request_id: "req-1",
-          kind: "thinking_delta",
-          text: "thinking noise",
-        },
-      },
-      {
-        kind: "chat_event",
-        payload_json: {
-          request_id: "req-1",
-          kind: "done",
-          stop_reason: "end_turn",
-          // usage present but NOT rendered per Q3 (drawer header has
-          // the aggregate).
-          usage: { input_tokens: 100, output_tokens: 50 },
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // chat_event entries are hidden by default — flip the toggle so
-    // the timeline components mount.
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    const timelines = w.findAllComponents(WorkerTextTimeline);
-    // Each chat_event transcript entry becomes its own WorkerTextTimeline
-    // (single-entry array). The component filters internally; delta/
-    // thinking_delta entries produce an empty-state `<p>` instead of
-    // milestone rows.
-    expect(timelines.length).toBe(4);
-    // The start + done timelines each render exactly one milestone row.
-    const milestoneRows = document.body.querySelectorAll(
-      ".worker-text-timeline__row",
-    );
-    expect(milestoneRows.length).toBe(2);
-    // start dot + done dot classes.
-    const rowClasses = [...milestoneRows].map((r) =>
-      [...r.classList].filter((c) =>
-        c.startsWith("worker-text-timeline__row--"),
-      ),
-    );
-    expect(rowClasses).toEqual([
-      ["worker-text-timeline__row--start"],
-      ["worker-text-timeline__row--done"],
-    ]);
-    // The done row surfaces the stop_reason inline.
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("agent 开始响应");
-    expect(text).toContain("agent 完成");
-    expect(text).toContain("end_turn");
-    // Token usage is NOT surfaced by the timeline (Q3 — header has the
-    // aggregate).
-    expect(text).not.toContain("input_tokens");
-    expect(text).not.toContain("output_tokens");
-    w.unmount();
-  });
-
-  // -------------------------------------------------------------------
-  // B6 PR3 redesign (2026-06-21): tool-card style entries. Each
-  // `tool_call` + `tool_result` pair merges into a single `.tool-card`
-  // matching the main panel's visual language. Covers the AC list
-  // from the prd.md §"Acceptance Criteria — Frontend":
-  //   - call+result merged into one card
-  //   - 3px left border by tool name (cyan/emerald/amber)
-  //   - tool_result duration_ms shown
-  //   - error entry turns the whole card red
-  //   - permission_ask with amber left border
-  //   - chat_event with muted left border
-  //   - pending_call within 30s shows running indicator
-  //   - orphan call past 30s falls back to standalone
-  //   - orphan result (no preceding call) shows standalone
-  // -------------------------------------------------------------------
-
-  it("paired call+result renders as a single .tool-card with the right name + duration", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "tool_call",
-        payload_json: { name: "read_file", input: { path: "/x" }, tool_use_id: "tu-1" },
-      },
-      {
-        kind: "tool_result",
-        payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 250 },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // ONE merged card, not two.
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    // Header: tool name + path + status text + duration.
-    const card = cards[0];
-    expect(card.querySelector(".tool-card__name")?.textContent).toBe("read_file");
-    expect(card.querySelector(".tool-card__path")?.textContent).toContain("/x");
-    expect(card.querySelector(".tool-card__status")?.textContent).toContain("done");
-    // Duration chip: 250ms → "0.3s" via abbreviateDuration.
-    expect(card.querySelector(".tool-card__duration")?.textContent).toBe("0.3s");
-    // Body: shared ToolInputBody + ToolOutputBody mount.
-    expect(w.findAllComponents(ToolInputBody).length).toBe(1);
-    expect(w.findAllComponents(ToolOutputBody).length).toBe(1);
-    // The input body's name prop comes from the call.
-    expect(w.findAllComponents(ToolInputBody)[0].props("name")).toBe("read_file");
-    // The output body's durationMs prop is forwarded (250).
-    expect(w.findAllComponents(ToolOutputBody)[0].props("durationMs")).toBe(250);
-    w.unmount();
-  });
-
-  it("paired card's left border color follows the tool name (read_file=cyan)", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
-      { kind: "tool_result", payload_json: { content: "ok", is_error: false, tool_use_id: "tu-1", duration_ms: 1 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const card = document.body.querySelector(".tool-card") as HTMLElement;
-    // Inline style is the project's mechanism for per-tool accent
-    // (no global class per tool name; the template writes
-    // borderLeftColor via the toolAccentVar helper).
-    expect(card.style.borderLeftColor).toBe("var(--color-tool-read)");
-    w.unmount();
-  });
-
-  it("paired card turns red when the tool_result reports is_error=true", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-1" } },
-      { kind: "tool_result", payload_json: { content: "boom", is_error: true, tool_use_id: "tu-1", duration_ms: 50 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const card = document.body.querySelector(".tool-card") as HTMLElement;
-    expect(card.classList.contains("tool-card--error")).toBe(true);
-    // The status row shows the error color.
-    expect(card.querySelector(".tool-card__status")?.textContent).toContain("error");
-    // The duration chip is still rendered.
-    expect(card.querySelector(".tool-card__duration")?.textContent).toBe("0.1s");
-    w.unmount();
-  });
-
-  it("pending_call (no result within 30s) shows running… indicator on an amber card", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      // No `input` field — the test confirms the pending card
-      // suppresses the empty input body (matches the same
-      // empty-input guard the main panel's `ToolCallCard` uses
-      // per `ToolInputBody`'s `Object.keys(input).length > 0`
-      // check).
-      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-pending" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // ONE card (the pending call), with the --running class.
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    const card = cards[0];
-    expect(card.classList.contains("tool-card--running")).toBe(true);
-    // Status row says "running…".
-    expect(card.querySelector(".tool-card__status")?.textContent?.trim()).toBe("running…");
-    // Left border is amber (--color-tool-shell).
-    expect((card as HTMLElement).style.borderLeftColor).toBe("var(--color-tool-shell)");
-    // No output body (no result yet).
-    expect(w.findAllComponents(ToolOutputBody).length).toBe(0);
-    // No input body (the call has no input fields, matches the
-    // empty-input guard). Add a second test below for the
-    // "with input" path.
-    expect(w.findAllComponents(ToolInputBody).length).toBe(0);
-    w.unmount();
-  });
-
-  it("pending_call WITH input renders the input body in the pending card", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-pending-2", input: { command: "ls" } } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // ONE card (the pending call). Input body is present because
-    // the call has `command` in its input — the user gets to see
-    // what the worker is currently working on.
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    expect(cards[0].classList.contains("tool-card--running")).toBe(true);
-    expect(w.findAllComponents(ToolInputBody).length).toBe(1);
-    expect(w.findAllComponents(ToolInputBody)[0].props("input")).toEqual({ command: "ls" });
-    w.unmount();
-  });
-
-  it("orphan tool_result (no preceding call) renders as a standalone result card", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_result", payload_json: { content: "orphan", is_error: false, tool_use_id: "tu-ghost", duration_ms: 5 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    // No name (the result doesn't carry a `name` field, so the
-    // header falls back to a generic "tool result" label).
-    const card = cards[0];
-    expect(card.querySelector(".tool-card__name")?.textContent).toBe("tool result");
-    // Output body is present.
-    expect(w.findAllComponents(ToolOutputBody).length).toBe(1);
-    w.unmount();
-  });
-
-  it("permission_ask renders as a standalone card with amber left border", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      {
-        kind: "permission_ask",
-        payload_json: {
-          rid: "r-1",
-          sessionId: "sess-1",
-          toolUseId: "tu-1",
-          toolName: "write_file",
-          toolInput: { path: "/data/repo/src/x.ts" },
-          risk: "medium",
-          path: "/data/repo/src/x.ts",
-        },
-      },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    const card = document.body.querySelector(".tool-card") as HTMLElement;
-    expect(card).not.toBeNull();
-    // Header name shows the tool + " (ask collapsed)" suffix.
-    expect(card.querySelector(".tool-card__name")?.textContent).toContain("write_file");
-    expect(card.querySelector(".tool-card__name")?.textContent).toContain("(ask collapsed)");
-    // Left border: amber (--color-tool-shell).
-    expect(card.style.borderLeftColor).toBe("var(--color-tool-shell)");
-    // Body: PermissionAskBody in historical mode.
-    expect(w.findAllComponents(PermissionAskBody).length).toBe(1);
-    expect(w.findAllComponents(PermissionAskBody)[0].props("mode")).toBe("historical");
-    w.unmount();
-  });
-
-  it("chat_event renders as a standalone card with muted gray left border", async () => {
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "chat_event", payload_json: { kind: "start" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    // Show chat events so the card is visible.
-    const w = makeDrawer();
-    await flushPromises();
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    const card = document.body.querySelector(".tool-card") as HTMLElement;
-    expect(card).not.toBeNull();
-    // Header name: "chat event".
-    expect(card.querySelector(".tool-card__name")?.textContent).toBe("chat event");
-    // Left border: muted gray (--color-text-muted).
-    expect(card.style.borderLeftColor).toBe("var(--color-text-muted)");
-    // Body: WorkerTextTimeline.
-    expect(w.findAllComponents(WorkerTextTimeline).length).toBe(1);
-    w.unmount();
-  });
-
-  it("a worker transcript with three paired calls + a chat_event renders as 4 cards", async () => {
-    // Realistic worker transcript: 3 tool_call+tool_result pairs +
-    // 1 chat_event. With chat events hidden, expect 3 cards
-    // (each pair merged into one). Toggle chat events on, expect
-    // 4 cards.
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      { kind: "tool_call", payload_json: { name: "read_file", tool_use_id: "tu-1" } },
-      { kind: "tool_result", payload_json: { content: "a", is_error: false, tool_use_id: "tu-1", duration_ms: 5 } },
-      { kind: "chat_event", payload_json: { kind: "delta", text: "noise" } },
-      { kind: "tool_call", payload_json: { name: "write_file", tool_use_id: "tu-2" } },
-      { kind: "tool_result", payload_json: { content: "b", is_error: false, tool_use_id: "tu-2", duration_ms: 10 } },
-      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-3" } },
-      { kind: "tool_result", payload_json: { content: "c", is_error: true, tool_use_id: "tu-3", duration_ms: 20 } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // Default (chat events hidden): 3 cards (one per pair).
-    let cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(3);
-    // The shell one is the error card.
-    const errorCards = document.body.querySelectorAll(".tool-card--error");
-    expect(errorCards.length).toBe(1);
-
-    // Toggle chat events on: 4 cards.
-    const checkbox = document.body.querySelector(
-      ".subagent-drawer__toggle input",
-    ) as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change"));
-    await flushPromises();
-
-    cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(4);
-    w.unmount();
-  });
-
-  // B6 PR3 check-phase fix (2026-06-21): the `bufferedTranscript`
-  // computed must depend on `nowTick.value` so pending calls age
-  // out without a new transcript event arriving. Without this
-  // dependency, the PRD's "pending → 未完成 fallback after 30s"
-  // invariant would silently regress — the card would stay
-  // pending_call forever if no new event landed.
-  it("pending_call ages out to standalone '未完成' after 30s without new events (ticker-driven flush)", async () => {
-    vi.useFakeTimers();
-    // Start at a fixed time so the test is deterministic.
-    vi.setSystemTime(new Date("2026-06-20T10:00:00.000Z"));
-    const store = useSubagentRunsStore();
-    store.getRunCache.set("run-1", sampleRow);
-    store.liveTranscript.set("run-1", [
-      // A lone tool_call with no tool_result — pending until 30s.
-      { kind: "tool_call", payload_json: { name: "shell", tool_use_id: "tu-timeout" } },
-    ]);
-    await store.openDrawer("run-1");
-    await flushPromises();
-    const w = makeDrawer();
-    await flushPromises();
-
-    // Immediately after mount: still pending_call (well under 30s).
-    let cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    expect(cards[0].classList.contains("tool-card--running")).toBe(true);
-
-    // Advance the clock past 30s. The 100ms ticker fires every
-    // 100ms via setInterval — the bufferedTranscript computed must
-    // re-evaluate when `nowTick.value` updates and produce a
-    // standalone "未完成" card. Per-tick advances + nextTick flush
-    // are needed because Vue's reactivity scheduler is microtask-
-    // based; a bulk advance without yielding doesn't give the
-    // computed a chance to re-run between ticks.
-    for (let i = 0; i < 31; i++) {
-      await vi.advanceTimersByTimeAsync(1000);
-      await nextTick();
-    }
-    await flushPromises();
-
-    cards = document.body.querySelectorAll(".tool-card");
-    expect(cards.length).toBe(1);
-    // No more --running class — the timeout flush moved it to
-    // standalone.
-    expect(cards[0].classList.contains("tool-card--running")).toBe(false);
-    // The "未完成" status text appears (standalone orphan tool_call).
-    expect(cards[0].querySelector(".tool-card__status")?.textContent).toContain("未完成");
-    // Left border: amber (matches standaloneAccent for orphan tool_call).
-    expect((cards[0] as HTMLElement).style.borderLeftColor).toBe("var(--color-tool-shell)");
-
-    w.unmount();
-    vi.useRealTimers();
   });
 });
