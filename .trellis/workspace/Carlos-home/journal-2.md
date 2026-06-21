@@ -1538,3 +1538,60 @@ sub-agent 执行 'find ... -exec wc -l {} +' 被 Tier 2 硬 kill list 拦(danger
 ### Next Steps
 
 - None - task complete
+
+**Date**: 2026-06-21
+**Task**: subagent: MAX_TURNS 提至 200 + worker token 统计修复 + incomplete 终止状态 (RULE-A-017 closed)
+**Branch**: `main`
+
+### Summary
+
+三件事一锅出(用户最终确认走"最小闭环"范围)。**R1** `SUBAGENT_MAX_TURNS` 20→200 撑重型实施子代理(trellis-implement 级 200+ 工具调用场景);**R2** max_turns 软终止从 `Completed` 改记 `Incomplete` + DB CHECK 5-variant + `INCOMPLETE_MARKER` `[未完成]`,不再误报成功;**R3** research 锁定 `chat_loop.rs:1797-1804` max_turns 终端合成 `Done` 硬编码 `usage: None` 丢 `last_usage` 是 `c27f3fd7` token 全 0 的根因,加 `last_usage_terminal` mirror + sink `stop_reason` guard(`max_turns`/`cancelled` 不 push `per_turn_usage`)防双累。**Out of scope**(per 用户最终确认):方案② per-subagent `max_turns` 字段 + 方案 C 子代理结构化外部记忆 + 前端 drawer incomplete 视觉 + token/wall-clock 第二道成本阀。Research 阶段 bonus 发现 `add_token_usage_streaming` 文档撒谎(无 production callsite)→ 留 RULE-BackSubagent-002 follow-up。**四段式收尾**:fix→docs(spec+debt)→archive→journal。
+
+### Main Changes
+
+**Code (6 files):**
+- `app/src-tauri/src/agent/chat_loop.rs:2076` — `SUBAGENT_MAX_TURNS: 20 → 200`
+- `app/src-tauri/src/agent/chat_loop.rs:980-995` — `last_usage_terminal` function-scope mirror(per-turn `last_usage` 不外溢到 terminal,所以镜像)
+- `app/src-tauri/src/agent/chat_loop.rs:1845` — max_turns 终端 `Done` 改转发 `last_usage_terminal`(原 `usage: None`)
+- `app/src-tauri/src/agent/subagent.rs` — `SubagentStatus::Incomplete` 变体 + sink `was_incomplete` 字段 + `Done` arm 加 stop_reason guard + `format_final_text`/`format_dispatch_result` Incomplete 分支(9 sink 测试)
+- `app/src-tauri/src/agent/helpers.rs` — `INCOMPLETE_MARKER` const `"[未完成]"`(对齐 `CANCELLED_MARKER`/`ERROR_MARKER` 中文风格)
+- `app/src-tauri/src/db/migrations.rs:748-833` — `widen_subagent_runs_status_check_for_incomplete` helper(idempotent via `sqlite_master` probe,**去掉**标准 12 步 table-rebuild 的 `PRAGMA foreign_keys=OFF/ON` toggle——`subagent_runs` 无入站 FK,只有出站到 `sessions.id`,toggle 会污染测试 pool 并行执行下的 per-connection state,导致 `delete_provider_cascades_to_models` 等测试间歇性失败)
+- `app/src-tauri/src/db/subagent_runs.rs` — `SubagentStatusDb::Incomplete` 变体 + `as_str`/`from_str_opt`
+
+**Spec (3 drift fixes):**
+- `.trellis/spec/backend/agent-loop-architecture.md` — 3 处 `MAX_TURNS=20` → 200(worker path 注释 / flag table / inline 标号)
+- `.trellis/spec/backend/tool-contract.md` — 2 处 + `format_dispatch_result` 表加 Incomplete 行(content + is_error=true)
+- `.trellis/spec/backend/subagent-runs-schema.md` — CHECK 4→5 + wire shape 3→4 + count 4→5 全部对齐
+
+**DEBT:**
+- `RULE-A-017` **closed** @ `fd7dc79` (P2, max_turns terminal 丢 last_usage 修复)
+- `RULE-BackSubagent-002` **open** (P3, add_token_usage_streaming 文档撒谎——二选一:删注释 OR 在 `chat_loop.rs:1004` per-turn Done handler 真接上)
+- `RULE-FrontSubagent-005` **open** (P3, frontend `SubagentStatus` type 缺 `'incomplete'` → drawer `coerceStatus` fallback 到 `"running"` 永久显「运行中」,UX 误报与 R2 想解决的"误报成功"对称)
+- Re-evaluation Log 加 A-017 closure 行;优先级 P3 7→9,Total 12→14
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fd7dc79` | fix(subagent): raise MAX_TURNS to 200 + max_turns→Incomplete + token usage fix (RULE-A-017) |
+| `acf2a0a` | docs: backend spec drift fix + DEBT.md回填 RULE-A-017 (closed @ fd7dc79) |
+| `fb2c38e` | chore(task): archive 06-21-subagent-max-turns-200-worker-token-incomplete |
+
+### Testing
+
+- [OK] cargo test --lib 782 pass / 0 fail(771 旧 + 11 新) — `PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig`(WSL env)
+- [OK] 11 新测试覆盖 R2 接线(8) + R3 stop_reason guard 防双累(1) + R3 DB migration idempotent(2)
+- [OK] Pre-existing flaky `agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active` 在单独跑 + 全量跑都 pass(check 阶段已验证)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 候选 follow-up tasks(均已落 DEBT.md,未建独立 task):
+  - `add_token_usage_streaming` 文档撒谎清理(RULE-BackSubagent-002, P3)
+  - frontend drawer incomplete 视觉差异化(RULE-FrontSubagent-005, P3)
+  - 方案② per-subagent `max_turns` 字段(用户方案未定,持续搁置)
+  - 方案 C 子代理结构化外部记忆(用户方案未定,持续搁置——200+ 轮重型子代理 C3 压缩失忆风险)
+  - token/wall-clock 第二道成本阀(200+ 轮重型子代理烧钱不可见的兜底,留 follow-up)
