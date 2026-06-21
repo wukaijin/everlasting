@@ -575,14 +575,26 @@ pub struct SubagentBufferSink {
     text_parts: StdMutex<Vec<String>>,
     /// Per-turn `TokenUsage` accumulated from `ChatEvent::Done { usage: Some(t) }`
     /// events. Read by `run_subagent` after the worker loop returns
-    /// to populate `subagent_runs.token_usage_json` and to
-    /// **streaming-fold** the per-turn usage into the parent
-    /// session's `sessions.input_tokens_total` columns via
-    /// `db::subagent_runs::add_token_usage_streaming` (B6 PR2).
-    /// The sink does this fold itself so the parent's UI sees the
-    /// worker burning tokens in real time (vs. a one-shot fold
-    /// at worker exit which would leave the parent's counter
-    /// stale until the worker returned).
+    /// to populate `subagent_runs.token_usage_json`.
+    ///
+    /// **Per-turn fold into parent's `sessions.input_tokens_total`**:
+    /// does NOT happen here — `add_token_usage_streaming` is
+    /// `#[allow(dead_code)]` (no production callsite; only exercised
+    /// by `db/tests.rs::add_token_usage_streaming_accumulates_in_parent`).
+    /// The real production fold goes through `db::add_token_usage`
+    /// at `chat_loop.rs:1031` (decoupled from `skip_persist` in
+    /// B6 PR2a per RULE-A-015 — the worker reuses
+    /// `parent_session_id`, so the parent's `add_token_usage` call
+    /// accumulates the worker's per-turn usage into the parent's
+    /// `sessions.*_total` columns naturally). The parent's UI sees
+    /// the counter update on the worker's terminal `Done` event,
+    /// with a few seconds of lag (acceptable per
+    /// `RULE-BackSubagent-002` option i).
+    ///
+    /// `drain_per_turn_usage` (which would invoke the streaming
+    /// fold) is retained as the public API surface for a future
+    /// worker↔parent session identity split (see the helper's
+    /// own doc for details).
     per_turn_usage: StdMutex<Vec<TokenUsage>>,
     /// Set when the worker emitted a terminal `Error` event.
     /// `run_subagent` reads this to pick the `status: error`
@@ -867,13 +879,18 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
             }
             ChatEvent::Done { stop_reason, usage } => {
                 // B6 PR2: capture per-turn token usage for the
-                // worker run. The worker reuses the parent
-                // session_id but `run_chat_loop`'s `add_token_usage`
-                // call is gated by `!skip_persist` (worker passes
-                // `true`); the sink's per-turn accumulator is the
-                // path that folds the worker's usage into the
-                // parent's `sessions.input_tokens_total` column
-                // via `db::subagent_runs::add_token_usage_streaming`.
+                // worker run's `subagent_runs.token_usage_json`.
+                // The worker reuses `parent_session_id` and
+                // `run_chat_loop`'s `db::add_token_usage` call at
+                // `chat_loop.rs:1031` is OUTSIDE the `skip_persist`
+                // gate (decoupled in PR2a per RULE-A-015), so the
+                // parent's `sessions.*_total` columns accumulate
+                // the worker's per-turn usage naturally. The sink
+                // does NOT stream-fold via
+                // `add_token_usage_streaming` — that helper has no
+                // production callsite (only `db/tests.rs`). Per-turn
+                // lag is a few seconds; accepted per
+                // RULE-BackSubagent-002 option i.
                 //
                 // 2026-06-21 (R3): synthetic terminals
                 // (`max_turns` / `cancelled`) are emitted with

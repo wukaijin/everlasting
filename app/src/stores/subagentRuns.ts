@@ -61,8 +61,17 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 // -----------------------------------------------------------------------
 
 /** Worker run status. Mirrors `SubagentStatusDb`
- *  `#[serde(rename_all = "lowercase")]`. */
-export type SubagentStatus = "running" | "completed" | "cancelled" | "error";
+ *  `#[serde(rename_all = "lowercase")]`. The wire enum has 5
+ *  variants (added `incomplete` in Session 60 R2 / 2026-06-21 for
+ *  the `max_turns` soft-cap terminal state); the previous 4-value
+ *  union was a frontend-only oversight — see
+ *  RULE-FrontSubagent-005 in `.trellis/reviews/DEBT.md`. */
+export type SubagentStatus =
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "error"
+  | "incomplete";
 
 /** `TranscriptKind` — mirrors the Rust enum's
  *  `#[serde(rename_all = "snake_case")]` wire values. Used both as
@@ -318,13 +327,18 @@ export type ChatEventInnerKind =
 /** Coerce a raw status string (from `SubagentRunRow.status` or a
  *  malformed `SubagentRunSummary.status`) into the typed union.
  *  Unknown strings fall back to `"running"` (matches the Rust
- *  `SubagentStatusDb::from_str_opt` lenient-parse default). */
+ *  `SubagentStatusDb::from_str_opt` lenient-parse default). The
+ *  5-variant union (incl. `"incomplete"`) mirrors the backend
+ *  `SubagentStatusDb` enum (Session 60 R2, 2026-06-21); missing
+ *  it here previously caused incomplete runs to render as
+ *  "运行中" forever (RULE-FrontSubagent-005). */
 export function coerceStatus(raw: string): SubagentStatus {
   if (
     raw === "running" ||
     raw === "completed" ||
     raw === "cancelled" ||
-    raw === "error"
+    raw === "error" ||
+    raw === "incomplete"
   ) {
     return raw;
   }

@@ -15,7 +15,16 @@
 //! 3. Token-usage accounting is auditable per-run (`token_usage_json`
 //!    on the `subagent_runs` row); the parent session's
 //!    `sessions.input_tokens_total` carries the *aggregated* total
-//!    (updated by `add_token_usage_streaming` as the worker runs).
+//!    (updated by `db::add_token_usage` at `chat_loop.rs:1031`
+//!    as the worker runs — see RULE-A-015 + RULE-BackSubagent-002
+//!    option i; `add_token_usage_streaming` is retained as the
+//!    PR2 API surface but has no production callsite).
+//!
+//! ⚠️ **Production-only path**: production code paths MUST go
+//! through `db::add_token_usage` (decoupled from `skip_persist`),
+//! NOT through `add_token_usage_streaming`. The streaming helper
+//! is a future-API surface for a worker↔parent session identity
+//! split (see its doc for context).
 //!
 //! # Schema
 //!
@@ -130,11 +139,20 @@ impl SubagentStatusDb {
 ///
 /// `allow(dead_code)` is set at the type level because PR2's
 /// production wire-up uses `insert_run` + `update_run_finished`
-/// + `add_token_usage_streaming`; the row struct is materialized
-/// by `get_run` + `list_runs_by_session` which are themselves
-/// PR3-API surface (frontend expand UI + C4 audit read). The
-/// `db/tests.rs` integration tests will exercise the row
-/// constructor via the `FromRow` derive.
+/// for the `subagent_runs` writes; per-turn token-usage fold
+/// goes through `db::add_token_usage` at `chat_loop.rs:1031`
+/// (decoupled from `skip_persist` in PR2a per RULE-A-015 — the
+/// worker reuses `parent_session_id`, so the parent's
+/// `add_token_usage` call naturally accumulates the worker's
+/// per-turn usage). `add_token_usage_streaming` is retained as
+/// the PR2 API surface for a future worker↔parent session
+/// identity split, exercised by
+/// `db/tests.rs::add_token_usage_streaming_accumulates_in_parent`.
+/// The row struct is materialized by `get_run` +
+/// `list_runs_by_session` which are themselves PR3-API surface
+/// (frontend expand UI + C4 audit read). The `db/tests.rs`
+/// integration tests exercise the row constructor via the
+/// `FromRow` derive.
 ///
 /// 2026-06-21 (subagent drawer redesign PR1): two new nullable
 /// TEXT columns — `task` (the LLM's delegation prompt written at

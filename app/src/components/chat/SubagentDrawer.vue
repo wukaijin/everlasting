@@ -152,6 +152,17 @@ const STATUS_META: Record<
   completed: { label: "完成", color: "var(--color-tool-write)" },
   cancelled: { label: "已停止", color: "var(--color-text-muted)" },
   error: { label: "出错", color: "var(--color-tool-error)" },
+  // Session 60 R2 (2026-06-21): `incomplete` is the `max_turns`
+  // soft-cap terminal state (worker hit the turn limit mid-task
+  // and exited with a partial summary). Mirrors the backend
+  // `INCOMPLETE_MARKER` ([未完成]) text prefix; visually reuses
+  // `--color-tool-shell` (amber) as the warning tint — design
+  // tokens intentionally has no `--color-tool-warn` (see
+  // `design-tokens.md` "Don't add a new `--color-*` token for a
+  // one-off use"), and `--color-tool-shell` already carries the
+  // "extra caution" connotation (per the re-grill 2026-06-13 PR2
+  // precedent for the in-repo/out-of-repo badges).
+  incomplete: { label: "未完成", color: "var(--color-tool-shell)" },
 };
 
 // ---------------------------------------------------------------------------
@@ -263,15 +274,24 @@ const truncated = computed<boolean>(() => {
  *  PR6 (2026-06-21): terminal `cancelled` / `error` states with no
  *  transcript sections still need the Reply / Error card surfaces
  *  (cancelled chip + error card), so `isEmpty` returns `false` for
- *  those states even when `sections.value` is empty. The "Worker is
- *  starting..." placeholder is for `running` only — a terminal state
- *  with no sections means the worker died before producing anything,
- *  not that it's about to start. */
+ *  those states even when `sections.value` is empty. Session 60 R2
+ *  added `incomplete` to the terminal set — a `max_turns` soft-cap
+ *  exit with a partial transcript still needs the "未完成" chip /
+ *  Reply segment to render rather than the "Worker is starting..."
+ *  placeholder. The "Worker is starting..." placeholder is for
+ *  `running` only — a terminal state with no sections means the
+ *  worker died (or was capped) before producing anything, not that
+ *  it's about to start. */
 const isEmpty = computed<boolean>(() => {
   if (sections.value.length > 0) return false;
-  // Cancelled / error: render the empty segment shells so the
-  // cancelled chip (R23) + error card (R25) are visible.
-  return status.value !== "cancelled" && status.value !== "error";
+  // Cancelled / error / incomplete: render the empty segment
+  // shells so the per-state chip (R23 / R25) + the Reply segment
+  // are visible. `incomplete` joined the set in Session 60 R2.
+  return (
+    status.value !== "cancelled" &&
+    status.value !== "error" &&
+    status.value !== "incomplete"
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -317,6 +337,8 @@ const terminalDurMs = computed<number | null>(() => {
  *    - completed → "done in 12.4s" (terminal, computed once)
  *    - error → "failed at 4.2s" (terminal, wall-clock at error)
  *    - cancelled → "stopped at 3.1s" (terminal, wall-clock at cancel)
+ *    - incomplete → "incomplete at X.Xs" (terminal, wall-clock at
+ *      the max_turns soft-cap exit — symmetric to error / cancelled)
  *  Falls back to the plain label if the row hasn't loaded yet.
  *
  *  B1 (2026-06-20): the error / cancelled branches previously used
@@ -346,13 +368,24 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
     const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
+  if (status.value === "incomplete") {
+    // Symmetric with cancelled: terminal wall-clock at the
+    // max_turns soft-cap exit. Label uses the meta label
+    // ("未完成") rather than the english "failed" / "stopped"
+    // form to match the chip text the user reads in STATUS_META.
+    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
+    return { label: meta.label, color: meta.color, suffix };
+  }
   return { label: meta.label, color: meta.color, suffix: "" };
 });
 
 /** Failure-reason banner shown in the header for terminal error /
  *  cancelled runs (2026-06-20, FT-F-005). Returns `null` for
  *  `running` / `completed` states (no banner) or when the row
- *  hasn't loaded yet. */
+ *  hasn't loaded yet. Session 60 R2 added `incomplete` to the
+ *  warning set — `max_turns` soft-cap is non-fatal (the worker
+ *  returned a partial summary), but the user deserves a banner
+ *  explaining why the output looks truncated. */
 const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(() => {
   if (!run.value) return null;
   if (status.value === "error") {
@@ -365,6 +398,9 @@ const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(
   }
   if (status.value === "cancelled") {
     return { kind: "warning", text: `Worker stopped by user${statusDisplay.value.suffix}` };
+  }
+  if (status.value === "incomplete") {
+    return { kind: "warning", text: `Worker hit max_turns limit${statusDisplay.value.suffix}` };
   }
   return null;
 });
