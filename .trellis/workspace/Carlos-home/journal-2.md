@@ -1409,3 +1409,62 @@ PR2 of subagent-drawer redesign (task `06-21-refactor-redesign-sub-agent-drawer-
 - 死代码清理(`chatEventSignature` / `appendFinalText` / `closeTextSegment`):若后续 PR 不接 consumer,可批量删
 - check agent 提示的 PR6 pending-asks 跟踪:新 PermissionAsk vs 已答 PermissionAsk 区分,可能需要单独 Map(非 liveSections 维度)
 
+## Session 42: B6 subagent-drawer redesign PR3 — MarkdownDetailModal + useTruncate
+
+PR3 of subagent-drawer redesign。无前置依赖(per PRD §Implementation Plan),ship 两个**通用可复用**构建块,PR5 消费:
+
+### Done
+
+- `app/src/components/common/MarkdownDetailModal.vue`:**reka-ui Dialog* 6-piece 模态**,mirrors 既有 `MemoryModal.vue` / `SettingsModal.vue` 模式(DialogRoot + Portal + Overlay + Content + Title + Close)。Props:`{ open, title, markdown, source?: 'prompt' | 'reply' | 'worker' }`。`source` 驱动 header chip + 语义 tool-color token。z-index 2000/2001(在 drawer 的 1000 之上),body 滚动 (max-height + overflow-y: auto),关闭触发器:Esc / X / overlay pointerdown-outside
+- `app/src/utils/useTruncate.ts`:纯 markdown-aware 字符串截断函数(`truncate(text, maxChars, suffix?)`)。**单次 O(N) 线性扫描**,track 两个 backtick 状态:fence (>=3 个) + inline (1 个)。边界落在 code region 内 → backtrack 到 opener;只有 safe boundary 是 index 0 时 → hard cut 兜底(避免退化解无限循环)。默认 suffix `…` (U+2026)。Default budget 文档化在 file header:`task`=120 / `finalText`=280
+- 放置约定:**`use*` 前缀放 `app/src/utils/`**(跟 `useKeyboard.ts` 同目录),**不是** `app/src/composables/`。函数本身是纯函数(无 reactivity),无需包成 Vue composable
+- `MarkdownDetailModal.test.ts` + `useTruncate.test.ts`:43 个新 vitest case
+
+### Algorithm Decision: Linear Scan, NOT Regex
+
+- Markdown grammar 是 context-sensitive(链接含 `[`,code 含 backtick,fence 可在 list item 内)— regex 解析要么 over-trim (false positive on `[` in code) 要么 under-trim (false negative on `>3` backticks)
+- 单次线性 scan + 显式 backtick-run state 是 simplest correct approach
+- 性能契约:100k chars + embedded fences <50ms(locked by test)。PR5 实际输入 `finalText` <2k / `task` <500 远低于压测 ceiling
+- 链接 (`[text](url)`) 允许被截断 — 只有 fenced / inline code region 享 "push to safe boundary" 待遇(简单 heuristic,够用)
+
+### Test Gotchas (mirrors Session 51+ memory)
+
+- `Icon` stub `textContent` 不含字符(SVG not text)— 断言走 `querySelector('.markdown-detail-modal__title-text')` 而非 `textContent` includes
+- reka-ui `DialogContent` Teleport DOM leak 跨 test — `beforeEach` 必须 `.markdown-detail-modal` + `.markdown-detail-modal__overlay` 从 `document.body` 移除
+
+### Spec Update
+
+- `.trellis/spec/frontend/state-management.md` 新增 "subagentRuns PR3 reusable pieces" 章节 (+96):模态挂载点(app level,非 drawer 内)+ useTruncate 算法 + Common Mistake (regex 警告) + test gotchas + default budget 表
+
+### Risk Flags for PR5
+
+- `MarkdownDetailSource` type 已 export,PR5 `source="prompt" | "reply"` 时导入用 type-safety。`source="worker"` 预留未来,PR5 不接
+- 模态 mount at chat-panel 或 App level,**不要** mount 在 drawer 内 — drawer 的 v-if 关闭会 unmount 子树,modal portal 的 lifecycle 跟 drawer 不同
+- 280/120 budget 是 file header docstring,PR5 直接用字面量;若后续发现 280/120 调优,改 PR5 即可,useTruncate 自己无需常量化
+
+### Git Commit
+
+| Hash | Message |
+|------|---------|
+| `a39ad00` | feat(subagent-drawer PR3): MarkdownDetailModal + useTruncate |
+
+### Testing
+
+- `pnpm exec vue-tsc --noEmit`: **0 errors**
+- `pnpm exec vitest run`: **21 files / 375 pass** (+43 new:23 useTruncate + 20 MarkdownDetailModal)
+- `pnpm exec vitest run app/src/utils/useTruncate.test.ts`: 23/23 (7ms)
+- `pnpm exec vitest run app/src/components/common/MarkdownDetailModal.test.ts`: 20/20 (362ms)
+- `pnpm build`: production build OK(只有 pre-existing vueuse annotation warnings + 731KB bundle size warning)
+- 100k chars + embedded fences:<50ms perf 断言 pass
+
+### Status
+
+[OK] **PR3 landed** — 通用可复用组件层就位,无 subagent-drawer-specific 耦合。PR5 可直接 mount + import。`SubagentDrawer.vue` 仍保留旧 chat_event 暴露 + 平铺布局(per PR5 任务)。
+
+### Next Steps
+
+- **PR4** (~200 行,无依赖):`DrawerThinkingBlock.vue` / `DrawerToolCallCard.vue` props 化子组件,内部复用主 panel `ThinkingBlock` / `ToolCallCard` 视觉原语(R6 决策:**抽视觉子组件,不改主 panel**)。`MessageItem.vue` / `ToolCallCard.vue` 主路径 0 改动
+- **PR5** (依赖 PR2/3/4):SubagentDrawer 5 段分组折叠重写;现在 `liveSections` + `MarkdownDetailModal` + `useTruncate` 三个 PR 的产物都是 PR5 消费者
+- **PR6**:边界态 + spec/frontend/chat.md + ROADMAP/DEBT 回填
+- 死代码:`chatEventSignature` / `appendFinalText` / `closeTextSegment` 若后续不接 consumer,批量删
+
