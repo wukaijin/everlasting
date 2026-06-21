@@ -42,7 +42,7 @@ pub async fn run_chat_loop(
     background_shells: crate::background_shell::DefaultRegistry,                        // 17
     // B6 PR1a (2026-06-19): worker turn cap. `None` = default 50 (MAX_TURNS).
     // `let turn_limit = max_turns.unwrap_or(MAX_TURNS); for turn in 1..=turn_limit`.
-    // Production + 9 base tests pass `None`; the worker path passes `Some(20)`.
+    // Production + 9 base tests pass `None`; the worker path passes `Some(SUBAGENT_MAX_TURNS)` (= `Some(200)`).
     max_turns: Option<usize>,                                                          // 18
     // B6 PR1b (2026-06-19): when `true`, `CancellationGuard::drop` skips
     // `session_active_request.remove(session_id)`. The worker path uses this
@@ -397,7 +397,7 @@ Box::pin(run_chat_loop(
     worker_token,                            // CHILD of parent_token — parent cancel propagates
     None,                                    // 16: resend_seq
     background_shells.clone(),
-    Some(SUBAGENT_MAX_TURNS),                // 18: 20 (worker turn cap)
+    Some(SUBAGENT_MAX_TURNS),                // 18: 200 (worker turn cap; raised 20→200 by 06-21 task)
     true,                                    // 19: skip_session_active (worker Drop skips parent eviction)
     true,                                    // 20: skip_persist (worker turns stay in-memory)
     Some(true),                              // 21: is_worker (worker path → Tier 4 collapses to Deny)
@@ -424,7 +424,7 @@ but the compiler can't prove this).
 
 | Flag | Value | What it prevents |
 |---|---|---|
-| `max_turns: Some(20)` | B6 PR1a | worker burning parent's token budget on a runaway loop |
+| `max_turns: Some(200)` | B6 PR1a (raised 20→200 by 06-21 task) | worker burning parent's token budget on a runaway loop |
 | `skip_session_active: true` | B6 PR1b | worker's `CancellationGuard::drop` evicting `session_active_request[parent_session_id]` (would break parent's `cancel_inflight_for_session` / RULE-E-005) |
 | `skip_persist: true` | B6 PR1b | worker writing to the shared `messages` table with the same `(session_id, seq)` UNIQUE constraint as the parent; **16** function-body gates cover all persist sites (PR1 spec said 18; PR2a RULE-A-015 corrected 2 over-broad gates) |
 | `is_worker: Some(true)` | B6 PR2b | worker's Tier 4 `ask_path` / `ask_shell` emitting `permission:ask` → register into `permission_asks` → wait for oneshot (never comes — worker has no UI sink) → **hang until user Stop** (RULE-A-014). With this flag, the Tier 4 branch sees `ctx.is_worker = true` and collapses to `Decision::Deny` immediately |

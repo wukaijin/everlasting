@@ -797,7 +797,7 @@ Box::pin(run_chat_loop(
     worker_token,                            // 15
     None,                                    // 16: resend_seq
     background_shells.clone(),               // 17
-    Some(SUBAGENT_MAX_TURNS),                // 18: 20
+    Some(SUBAGENT_MAX_TURNS),                // 18: 200
     true,                                    // 19: skip_session_active(REVIEW-SUBAGENT-PRD #2)
     true,                                    // 20: skip_persist(worker 中间过程不进 DB)
     Some(true),                              // 21: is_worker(RULE-A-014, worker Tier 4 ask_path → Deny)
@@ -857,6 +857,7 @@ Box::pin(run_chat_loop(
 |---|---|---|
 | `Completed` | `[status: completed]\n<summary>`(空文本回退 `(worker produced no final text)`) | false |
 | `Cancelled` | `[status: cancelled]\n<text>\n\n[CANCELLED_MARKER]`(空文本退化为 `marker alone`) | true |
+| `Incomplete` | `[status: incomplete]\n<text>\n\n[INCOMPLETE_MARKER]`(`[未完成]`,空文本退化为 `marker alone`) | true |
 | `Error` | `[status: error]\n<error text>` | true |
 
 terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `SubagentBufferSink.was_cancelled` 仍能正确捕捉,只 DB writes(cwd / touch_session)守门。
@@ -867,7 +868,7 @@ terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `Subage
 |---|---|
 | `subagent` 不在 enum | LLM 错(input schema 校验拦在前面) |
 | `lookup_subagent(name)` 返 None | 拦截点合成 `tool_result` `[status: error]\nunknown subagent`,`is_error: true`,**tool_use/tool_result 配对保持**(同 RULE-A-007) |
-| worker turn 超 `SUBAGENT_MAX_TURNS=20` | `Done{stop_reason: max_turns}` → status=Completed(soft,"ran out of budget"),summary 仍带 worker 产出 |
+| worker turn 超 `SUBAGENT_MAX_TURNS=200` | `Done{stop_reason: max_turns}` → status=**Incomplete**(soft,"ran out of budget"),summary 仍带 worker 产出 + `INCOMPLETE_MARKER` `[未完成]` 标记(R2: 06-21 task 把 max_turns 终止从 Completed 改为 Incomplete) |
 | 用户 Stop 传播到 `worker_token`(child of `parent_token`) | `Done{stop_reason: cancelled}` → status=Cancelled + `CANCELLED_MARKER` |
 | worker LLM stream error | `ChatEvent::Error` → SubagentBufferSink.had_error → status=Error |
 | parent 复用 `session_id` + guard `skip_session_active=true` | worker Drop **不** evict 父 `session_active_request[parent_session_id]`(回归测试 `dispatch_subagent_guard_does_not_evict_parent_session_active`) |

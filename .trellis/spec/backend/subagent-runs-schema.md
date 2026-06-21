@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
     parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     parent_request_id TEXT NOT NULL,                                -- worker rid (NOT a FK; cancellations in-memory)
     subagent_name TEXT NOT NULL,                                    -- 'researcher' | 'general-purpose'
-    status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error')),
+    status TEXT NOT NULL CHECK(status IN ('running','completed','cancelled','error','incomplete')),
     started_at TEXT NOT NULL,                                       -- RFC 3339, set on INSERT
     finished_at TEXT,                                               -- NULL = running, set on UPDATE
     token_usage_json TEXT,                                          -- JSON TokenUsage { input / output / cache_creation / cache_read }
@@ -67,8 +67,8 @@ characteristics fall out naturally:
   is a deliberate **soft-FK-style** column (no constraint, but the
   value is meaningful for cross-referencing cancellation/audit rows
   when the request is in flight).
-- **`status` is a CHECK-constrained TEXT column** with 4 wire values
-  (`running` / `completed` / `cancelled` / `error`). The Rust enum
+- **`status` is a CHECK-constrained TEXT column** with 5 wire values
+  (`running` / `completed` / `cancelled` / `error` / `incomplete`). The Rust enum
   `db::subagent_runs::SubagentStatusDb` has matching `as_str()` and
   lenient `from_str_opt()`. The CHECK constraint catches typos at INSERT
   time; the Rust enum catches forward-compat drift (unknown strings fall
@@ -143,7 +143,7 @@ failure leaves the row `running` so emitting would cache a stale running row
 as terminal). Wire shape (built by `build_subagent_finished_payload`):
 
 ```json
-{ "runId": "<DB id>", "sessionId": "<parent session_id>", "status": "completed|cancelled|error", "finishedAt": "<RFC 3339>" }
+{ "runId": "<DB id>", "sessionId": "<parent session_id>", "status": "completed|cancelled|error|incomplete", "finishedAt": "<RFC 3339>" }
 ```
 
 **`runId` contract (RULE — B6 PR3b hotfix, 2026-06-21)**: BOTH channels'

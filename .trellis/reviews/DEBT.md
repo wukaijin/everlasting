@@ -102,6 +102,22 @@
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
 
 
+### RULE-A-017 — max_turns 终端合成 Done 丢 last_usage
+
+- **Level**: P2
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/chat_loop.rs:1797-1804`(原 `usage: None` 硬编码)
+- **Description**: `max_turns` 终端合成 `Done` 硬编码 `usage: None` 而不转发 `last_usage`,导致 `subagent_runs.token_usage_json` 在 max_turns 终止场景下全 0。同 model_id 的 researcher 正常完成 run 有 170879 token 证明 provider 解析正常,排除 (b)/(c) 嫌疑;research 锁定根因为 (a) max_turns 终端路径。
+- **Impact**: max_turns 终止的 worker 子代理成本不可见;200+ 轮重型实施子代理场景下用户看不到已烧的 token
+- **Fix**: `chat_loop.rs` 加 `last_usage_terminal` mirror + max_turns 终端 `Done` 转发 `last_usage_terminal`;`subagent.rs` sink `Done` arm 加 stop_reason guard(`max_turns`/`cancelled` 不 push `per_turn_usage`)防双累
+- **Status**: closed
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete`
+- **Discovered In**: `research/r3-token-usage-root-cause.md` §Verdict (this task, 2026-06-21)
+- **Closed At**: `fd7dc79fa50514d0be6c65a11636524d4d37fc4e`
+- **Related PR**: null
+
+
 ## P3 — 轻微(文档/一致性) [5 items]
 
 ### RULE-B-006 — AuditKind docstring "10"→"11"
@@ -227,6 +243,22 @@
 - **Discovered In**: redesign PR6 (2026-06-21, Explore 调研)
 - **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal` (PR6 R23 降级)
 
+
+### RULE-FrontSubagent-005 — frontend `SubagentStatus` type 缺 'incomplete',drawer 误显「运行中」
+
+- **Level**: P3
+- **Subsystem**: Frontend Subagent (cross Backend DB)
+- **File**: `app/src/stores/subagentRuns.ts:65` (`SubagentStatus` type) + `app/src/components/chat/SubagentDrawer.vue` (`coerceStatus` + `STATUS_META`)
+- **Description**: R2 在 backend 加了 `incomplete` status(`SubagentStatusDb::Incomplete`),但 frontend `SubagentStatus` type 仍是 4 值;`coerceStatus` 对 unknown 字符串 fallback 到 `"running"`,导致 `incomplete` run 在 drawer 里**永久**显「运行中」(`STATUS_META["running"]`)。本次 R2 显式决定不做前端视觉差异化(靠 `final_text` 文案提示),故作为 follow-up debt。
+- **Impact**: 用户看到「运行中」但实际 worker 已 max_turns 终止 + DB 状态是 incomplete;UX 误报与 R2 想解决的"误报成功"对称。
+- **Fix**: `subagentRuns.ts` `SubagentStatus` type 加 `"incomplete"`;`SubagentDrawer.vue` `STATUS_META` 加 `{ label: "未完成", color: "var(--color-tool-warn)" }`(对齐 `CANCELLED_MARKER` / `INCOMPLETE_MARKER` 的中文文案)。
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete`
+- **Discovered In**: trellis-check PASS-WITH-NITS nit #5 (2026-06-21)
+- **Closed At**: null
+- **Related PR**: null
+
 ---
 
 ### RULE-FrontTest-001 — streamController.test.ts 4 个 pre-existing unhandled rejection
@@ -257,6 +289,22 @@
 - **Discovered In**: B6 review (2026-06-20), defect B
 - **Related Task**: 未建（独立任务）
 
+
+### RULE-BackSubagent-002 — `add_token_usage_streaming` 文档撒谎（无 production callsite）
+
+- **Level**: P3
+- **Subsystem**: Backend Subagent
+- **File**: `app/src-tauri/src/agent/subagent.rs:567-569,838-843` + `app/src-tauri/src/db/subagent_runs.rs:18,554`
+- **Description**: 注释/docstring 描述 worker per-turn usage 通过 `add_token_usage_streaming` streaming fold 进 `sessions.input_tokens_total` 列,但该函数**没有 production callsite**（只在 `db/tests.rs` 测试里被调）。research 阶段查证发现。R3 max_turns 修复后 per-run JSON 已正确,但 parent session live counter 仍有几秒延迟（因为 `db::add_token_usage` 走 `chat_loop.rs:1004` 非 streaming fold）。
+- **Impact**: 低——parent UI counter 比 worker `subagent_runs.token_usage_json` 慢几秒,功能不影响。
+- **Fix**: 二选一——(i) 删 `subagent.rs:567-569,838-843` + `db/subagent_runs.rs:18` 撒谎注释,接受 live counter 不 streaming;或 (ii) 在 `chat_loop.rs:1004` per-turn `Done` handler 调 `add_token_usage_streaming` 真接上去。
+- **Status**: open
+- **Owner**: carlos
+- **Related Task**: `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete`
+- **Discovered In**: `research/r3-token-usage-root-cause.md` §3 (2026-06-21)
+- **Closed At**: null
+- **Related PR**: null
+
 ---
 
 ## 优先级分布
@@ -266,8 +314,8 @@
 | P0 | 0 | 全部 closed(详见 §Re-evaluation Log + git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
 | P2 | 4 | 健壮性 + 债务,中长期清理 |
-| P3 | 7 | 文档 + 一致性,可延后 |
-| **Total** | **12** | 当前 open items |
+| P3 | 9 | 文档 + 一致性,可延后(2026-06-21: +RULE-BackSubagent-002 / +RULE-FrontSubagent-005) |
+| **Total** | **14** | 当前 open items |
 
 ---
 
@@ -336,6 +384,8 @@
 
 | 2026-06-20 | RULE-A-014 | open | **closed** | B6 PR2b 收口。`is_worker: Option<bool>` 加为 `run_chat_loop` 第 21 参;worker 嵌套调用 `chat_loop.rs:2155` 传 `Some(true)`,run_chat_loop 内部构造 `PermissionContext` 读 `is_worker.unwrap_or(false)`;PR1b 的 dead-code `_worker_permission_ctx` 块删除;production `chat.rs:249` + 33 个 `agent_loop_*` 集成测试调用点更新 `Some(false)`。端到端测试 `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied`(`/tmp/everlasting_worker_escape.txt` 路径 + Edit mode + general-purpose + write_file,`tokio::time::timeout(15s)` 包裹)验证:worker Tier 4 ask_path 收到 `is_worker=true` → 立即 `Decision::Deny` 无 oneshot 等待无挂起,tool_result `is_error=true` + deny 原因,1 行 `tool_denied` audit 落地,0 行 `tool_permission_ask`(ask 路径 collapse 验证)。PR2a 修 RULE-A-015 拆出 2 处 `skip_persist` gate,精确 gate 数 = 16(原 spec 18 处,Phase 3 spec commit 同步 `agent-loop-architecture.md` + `tool-contract.md`)。cargo test --lib 726 pass(PR2a 725 + PR2b 1),0 新 warning(对比 PR2a 4 pre-existing background_shell + 1 pre-existing `permission_ctx` unused)。P2 22→21,Total 47→46 | `.trellis/tasks/06-20-b6-pr2-subagent-persistence` |
 | 2026-06-20 | RULE-A-016 | open | **closed** | B6 PR3a 顺手修。`permissions::ask_path` worker 分支(原 line 1002-1009 `record_audit(ToolDenied)`)删除 + 改 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 写 transcript `PermissionAsk` entry(PR3 drawer 可见)。`audit_not_polluted_by_worker` 测试断言不变(delta == 2,researcher silent allow 本就不写 audit);`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 测试断言反转:parent `tool_denied` count 0(原 1)+ transcript `PermissionAsk` count 1(原 0)+ audit delta ≤ 2(原 ≤ 3)。cargo test --lib 732 pass(PR2b 726 + PR3a 6 = 2 新 db tests + 4 新 PR2 hotfix subagent tests;agent_loop_* tests 数量未变只更新断言)。0 新 warning(对比 PR2b 4 pre-existing)。P2 21→20,Total 46→45 | `.trellis/tasks/06-20-b6-pr3-frontend-expand` |
+
+| 2026-06-21 | RULE-A-017 | open | **closed** | `chat_loop.rs:1797-1804` max_turns 终端合成 `Done` 改 forward `last_usage_terminal`(原硬编码 `None`);`subagent.rs:835-849` sink `Done` arm 加 stop_reason guard(`max_turns`/`cancelled` 不 push `per_turn_usage`)防双累;同时 R1 把 `SUBAGENT_MAX_TURNS` 20→200,R2 加 `SubagentStatus::Incomplete` + DB migration 5-variant status CHECK + `INCOMPLETE_MARKER` `[未完成]`。11 新测试(9 sink-level + 2 db-level),782 cargo test --lib pass(771 旧 + 11 新)。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete` |
 
 ---
 
@@ -411,5 +461,6 @@
 ---
 
 **最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-002 closed**(`3bf2b99`)— SubagentDrawer 1.5s miss 后 inline 提示(原 toast fallback):grill 前提校准 —— retry polling(B6 PR3b)已是 race 吸收层,FT-F-003(unmount guard)不影响 miss 频率,1.5s miss=真实故障(worker 没启动/IPC 挂/ID 漂移)。收窄 drop toast/ToastService/session banner → 最小 inline(`workerMissed` 三态 default/waiting/missed + warn icon"worker 未响应,点此重试"+ `--color-tool-shell` warning tint + 复用卡片 @click 重试 + per-card)。miss 路径 `workerMissed=true` 在 FT-F-003 unmount guard 之后(不写 unmounted ref)。290 pass,vue-tsc 0 error。**同 Session 54 前序:FT-F-004 closed**(`9e41594`,UX polish bundle C1+C2+C3)。**FT-F family 全部 closed**(001/002/003/004/005)。
+**最后更新**: 2026-06-21 by carlos — Session 56:**RULE-A-017 closed**(`fd7dc79`)+ **RULE-BackSubagent-002 open** + **RULE-FrontSubagent-005 open**:`subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token 统计修复` 收尾。R1 `SUBAGENT_MAX_TURNS` 20→200 支撑重型实施子代理(trellis-implement 级 200+ 工具调用);R2 max_turns 软终止改记 `incomplete` + DB CHECK 5-variant + `INCOMPLETE_MARKER` `[未完成]`,不再误报 completed;R3 research 锁定 max_turns 终端合成 `Done` 硬编码 `usage: None` 丢 `last_usage` 是 `c27f3fd7` token=0 根因,加 `last_usage_terminal` mirror + sink stop_reason guard 防双累。11 新测试(9 sink + 2 db),782 cargo test --lib pass(771 旧 + 11 新),0 warning。DEBT 12→14(RULE-A-017 closed 不计数 + BackSubagent-002 / FrontSubagent-005 open +1 P3 each)。spec 同步 3 个 backend spec(`agent-loop-architecture.md` 3 处 `MAX_TURNS=20` → 200,`tool-contract.md` 2 处 + `format_dispatch_result` 加 Incomplete 行,`subagent-runs-schema.md` CHECK + wire shape + count 全部 5 值)。Bonus debt 两条:`add_token_usage_streaming` 文档撒谎(删注释 OR 真接上);frontend `SubagentStatus` 没渲染 incomplete 视觉(drawer 永久显「运行中」)。
 **最后更新**: 2026-06-21 by carlos — Session 55(redesign 收尾):subagent-drawer 重构 PR1-6 完成。DEBT 新增 RULE-FrontSubagent-003(worker permission_ask 无法 interactive,P2)/004(cancelled 无 turn 数据,P3)/RULE-FrontTest-001(streamController 4 pre-existing unhandled rejection,P3);更新 001(CSS 重复位置迁移到 DrawerToolCallCard/DrawerPermissionAskCard)/002(范围扩 pairSections)。grill-me Q1-Q10 决策见上 §subagent-drawer redesign 决策索引。PR1-6 commits: 86a81b2/6e077b3/a39ad00/e66001e/3db2be2/d9f999f。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
