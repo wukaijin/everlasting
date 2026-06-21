@@ -16,10 +16,13 @@ import { describe, it, expect } from "vitest";
 
 import {
   pairTranscript,
+  pairSections,
   PENDING_TIMEOUT_MS,
   isErrorResult,
   type TranscriptEntry,
+  type SectionToolEntry,
 } from "./transcriptPairing";
+import type { TranscriptSection } from "../stores/subagentRuns";
 
 // ---------------------------------------------------------------------
 // Fixture helpers
@@ -308,5 +311,199 @@ describe("isErrorResult", () => {
     expect(isErrorResult(toolCall("x"))).toBe(false);
     expect(isErrorResult(chatEvent("hi"))).toBe(false);
     expect(isErrorResult(permissionAsk("shell"))).toBe(false);
+  });
+});
+
+// =====================================================================
+// B6 redesign PR5 (2026-06-21): pairSections — section-level pairing
+// =====================================================================
+//
+// Covers the new section-based pairing layer the drawer's Tools
+// segment consumes. Each test seeds a `TranscriptSection[]`
+// (post-accumulator shape) and asserts the paired / pending /
+// permission_ask entries come out with the right mapping to the
+// canonical `ToolCallInfo` / `ToolResultInfo` types the
+// `DrawerToolCallCard` consumes.
+
+function toolCallSection(id: string, name = "read_file", input: unknown = { path: "/foo" }): TranscriptSection {
+  return {
+    kind: "ToolCall",
+    payload_json: { name, input, tool_use_id: id },
+  };
+}
+
+function toolResultSection(
+  id: string,
+  content = "ok",
+  isError = false,
+  durationMs = 42,
+): TranscriptSection {
+  return {
+    kind: "ToolResult",
+    payload_json: {
+      tool_use_id: id,
+      content,
+      is_error: isError,
+      duration_ms: durationMs,
+    },
+  };
+}
+
+function permissionAskSection(toolName: string): TranscriptSection {
+  return {
+    kind: "PermissionAsk",
+    payload_json: { toolName, risk: "high" },
+  };
+}
+
+function thinkingSection(text: string): TranscriptSection {
+  return { kind: "Thinking", text, chars: text.length, closed: true };
+}
+
+function textSection(text: string): TranscriptSection {
+  return { kind: "Text", text, chars: text.length };
+}
+
+describe("pairSections — section-level pairing", () => {
+  it("collapses a ToolCall + ToolResult pair into a single paired entry with canonical ToolCallInfo/ToolResultInfo", () => {
+    const sections: TranscriptSection[] = [
+      toolCallSection("tu_1", "grep", { pattern: "foo" }),
+      toolResultSection("tu_1", "matches: 3", false, 123),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("paired");
+    if (out[0].kind !== "paired") throw new Error("expected paired");
+    // Snake_case payload_json → camelCase ToolCallInfo.
+    expect(out[0].call.id).toBe("tu_1");
+    expect(out[0].call.name).toBe("grep");
+    expect(out[0].call.input).toEqual({ pattern: "foo" });
+    // Snake_case payload_json → camelCase ToolResultInfo.
+    expect(out[0].result.toolUseId).toBe("tu_1");
+    expect(out[0].result.content).toBe("matches: 3");
+    expect(out[0].result.isError).toBe(false);
+    expect(out[0].result.durationMs).toBe(123);
+  });
+
+  it("emits a pending_call entry when a ToolCall has no matching result", () => {
+    const sections: TranscriptSection[] = [
+      toolCallSection("tu_p", "shell", { command: "ls" }),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind !== "pending_call") throw new Error("expected pending_call");
+    expect(out[0].call.name).toBe("shell");
+    expect(out[0].timedOut).toBe(false);
+  });
+
+  it("flips pending_call.timedOut to true once 30s elapse without a result", () => {
+    const sections: TranscriptSection[] = [
+      toolCallSection("tu_p"),
+    ];
+    const firstSeen = new Map<string, number>();
+    // First call: received_at = 1_000_000.
+    let out = pairSections(sections, 1_000_000, firstSeen);
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind !== "pending_call") throw new Error("expected pending_call");
+    expect(out[0].timedOut).toBe(false);
+
+    // Advance the clock past 30s. Same Map carries the first-seen.
+    out = pairSections(sections, 1_000_000 + PENDING_TIMEOUT_MS + 1, firstSeen);
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind !== "pending_call") throw new Error("expected pending_call");
+    expect(out[0].timedOut).toBe(true);
+  });
+
+  it("passes PermissionAskSection through as SectionPermissionAsk", () => {
+    const sections: TranscriptSection[] = [permissionAskSection("write_file")];
+    const out = pairSections(sections, 1_000_000, new Map());
+
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].payload_json.toolName).toBe("write_file");
+  });
+
+  it("drops orphan ToolResultSection (no preceding call) silently", () => {
+    const sections: TranscriptSection[] = [
+      toolResultSection("tu_ghost", "orphan content"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(0);
+  });
+
+  it("drops ToolCallSection without tool_use_id (defensive against malformed payload)", () => {
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "grep" } },
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(0);
+  });
+
+  it("skips Thinking / Text sections (they belong to other segments)", () => {
+    const sections: TranscriptSection[] = [
+      thinkingSection("thoughts"),
+      textSection("reply text"),
+      toolCallSection("tu_1"),
+      toolResultSection("tu_1"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("paired");
+  });
+
+  it("coerces missing input to {} so DrawerToolCallCard's empty-input guard works", () => {
+    const sections: TranscriptSection[] = [
+      { kind: "ToolCall", payload_json: { name: "shell", tool_use_id: "tu_x" } },
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind !== "pending_call") throw new Error("expected pending_call");
+    expect(out[0].call.input).toEqual({});
+  });
+
+  it("coerces missing durationMs to undefined (omit-duration contract for pre-F5 rows)", () => {
+    const sections: TranscriptSection[] = [
+      toolCallSection("tu_1"),
+      // No duration_ms field — pre-redesign row.
+      {
+        kind: "ToolResult",
+        payload_json: { tool_use_id: "tu_1", content: "ok", is_error: false },
+      },
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out[0].kind).toBe("paired");
+    if (out[0].kind !== "paired") throw new Error("expected paired");
+    expect(out[0].result.durationMs).toBeUndefined();
+  });
+
+  it("preserves call ordering across multiple concurrent calls + results", () => {
+    const sections: TranscriptSection[] = [
+      toolCallSection("tu_1", "read_file"),
+      toolCallSection("tu_2", "grep"),
+      toolResultSection("tu_1", "a"),
+      toolResultSection("tu_2", "b"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(2);
+    expect(out[0].kind).toBe("paired");
+    expect(out[1].kind).toBe("paired");
+    if (out[0].kind !== "paired" || out[1].kind !== "paired") {
+      throw new Error("expected both paired");
+    }
+    // Pair order = result arrival order.
+    expect(out[0].toolUseId).toBe("tu_1");
+    expect(out[1].toolUseId).toBe("tu_2");
+  });
+
+  it("returns SectionToolEntry[] type-narrow discriminant (compile-time check)", () => {
+    // This is a compile-time guard: if the discriminated union
+    // breaks, TS will error here. Runtime is trivial.
+    const sections: TranscriptSection[] = [toolCallSection("tu_1")];
+    const out: SectionToolEntry[] = pairSections(sections, 1_000_000, new Map());
+    expect(out.length).toBeGreaterThan(0);
   });
 });

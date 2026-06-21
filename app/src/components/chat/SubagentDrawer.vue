@@ -2,6 +2,32 @@
 // SubagentDrawer — B6 PR3 right-side drawer for worker subagent
 // transcripts (R6).
 //
+// B6 redesign PR5 (2026-06-21): rewritten from a time-ordered flat
+// transcript list into a 5-segment grouped view:
+//
+//   <DrawerHeader>          ← status badge + name + duration + failure banner + timestamps
+//   <DrawerPromptCard>      ← run.task (parent LLM's prompt), 120-char truncate + "View full →"
+//   <ErrorCard>             ← PR6 R25: status=error detailed card (transcriptJson → finalText → summary fallback)
+//   <DrawerSection type="thinking" :entries>    ← collapsed by default (PRD R16)
+//     <DrawerThinkingBlock v-for="s in entries" :section="s" />
+//   </DrawerSection>
+//   <DrawerSection type="tools" :entries>       ← expanded by default
+//     <DrawerToolCallCard v-for="p in paired" :call :result />
+//     <DrawerPermissionAskCard v-for="a in asks" :ask />  ← PR6 R24: historical-only (downgraded)
+//   </DrawerSection>
+//   <DrawerSection type="reply" :text>          ← expanded by default
+//     <CancelledChip v-if="cancelled" />        ← PR6 R23 (downgraded): ⊘ Cancelled · at X.Xs
+//     <DrawerReplyBody :text (live Text or FinalText) + 280-char truncate + "View full →">
+//   </DrawerSection>
+//
+// Data source: `store.liveSections.get(openRunId)` — the PR2
+// accumulator's `TranscriptSection[]` output. The previous flat
+// `transcript` (raw `TranscriptEntry[]`) and the
+// `showChatEvents` toggle / `hiddenChatCount` / filter row are
+// GONE (PRD R9: the verbose chat_event delta stream is collapsed
+// into the Thinking / Text segments by the accumulator and is no
+// longer exposed).
+//
 // Implementation note (reka-ui version pin): the PRD specified
 // reka-ui `Sheet`, but reka-ui@2.9.9 (this project's pinned version
 // per `reka-ui-usage.md`) does NOT ship the `Sheet` primitive —
@@ -16,24 +42,6 @@
 // `DialogContent` portals to body, so our scoped CSS uses Vue 3.5's
 // preserved `data-v-*` attribute selector (same approach
 // `AuditLogModal.vue` + `MemoryModal.vue` take).
-//
-// UX summary (mirrors PRD R6 + AC5):
-//   - open state bound to `store.openRunId !== null`
-//   - header: status badge + subagentName + startedAt + finishedAt
-//     (if any) + summary (if any)
-//   - body: transcript list from
-//     `store.liveTranscript.get(openRunId) ?? parse(getRunCache.transcriptJson) ?? []`
-//   - per entry: B6 PR3 redesign (2026-06-21) — each entry
-//     passes through `pairTranscript()` to merge adjacent
-//     tool_call + tool_result into a single `.tool-card` matching
-//     the main panel's visual language. chat_event /
-//     permission_ask remain standalone. Call+result pairs render
-//     the same .tool-card structure (icon + name + path | status-
-//     icon + status-text + duration) used by ToolCallCard.
-//   - "Show chat events" toggle: chat_event entries default hidden;
-//     tool_call / tool_result / permission_ask always visible
-//   - transcriptTruncated flag → "原 transcript 已截断 (head + tail)"
-//   - empty state → "Worker is starting..."
 
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from "vue";
 import {
@@ -46,16 +54,13 @@ import {
   DialogClose,
 } from "reka-ui";
 import Icon from "../Icon.vue";
-import ToolInputBody from "./ToolInputBody.vue";
-import ToolOutputBody from "./ToolOutputBody.vue";
-import PermissionAskBody from "./PermissionAskBody.vue";
-import WorkerTextTimeline from "./WorkerTextTimeline.vue";
 import {
   useSubagentRunsStore,
   coerceStatus,
   parseTranscriptJson,
-  type TranscriptEntry,
   type SubagentStatus,
+  type TranscriptSection,
+  type ThinkingSection,
 } from "../../stores/subagentRuns";
 import { useChatStore } from "../../stores/chat";
 import type {
@@ -64,12 +69,17 @@ import type {
 } from "../../stores/permissions";
 import { formatTime } from "../../utils/time";
 import {
-  pairTranscript,
-  isErrorResult,
-  type BufferedTranscriptEntry,
+  pairSections,
+  type SectionToolEntry,
 } from "../../utils/transcriptPairing";
-import { toolAccentVar, toolIcon } from "../../utils/messageFormat";
-import { abbreviateDuration } from "../../utils/duration";
+import { truncate } from "../../utils/useTruncate";
+import { renderMarkdown } from "../../utils/markdown";
+import DrawerSection from "./DrawerSection.vue";
+import DrawerPromptCard from "./DrawerPromptCard.vue";
+import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
+import DrawerToolCallCard from "./DrawerToolCallCard.vue";
+import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
+import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
 
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
@@ -83,7 +93,7 @@ const chatStore = useChatStore();
 const repoRoot = computed<string>(() => chatStore.currentCwd);
 
 /** FT-F-001 stage 2 (2026-06-20): synthesize a `PermissionAsk` from a
- *  drawer transcript entry's `payload_json`. The body component takes
+ *  drawer transcript section's `payload_json`. The body component takes
  *  the typed `PermissionAsk` shape (camelCase), so we map field-by-
  *  field. Rid / sessionId / toolUseId are best-effort strings here —
  *  the historical-mode card never fires onRespond, so these IDs are
@@ -93,12 +103,10 @@ const repoRoot = computed<string>(() => chatStore.currentCwd);
  *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
  *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`), so the
  *  stored `payload_json` actually has camelCase keys
- *  (`sessionId` / `toolUseId` / `toolName` / `toolInput`). The PRD's
- *  snake_case claim was wrong — `ToolCallPayload` / `ToolResultPayload`
- *  are snake_case (no `rename_all`), but `PermissionAskPayload` is
- *  camelCase. We read BOTH spellings defensively (camelCase first per
- *  production reality, snake_case as fallback) so the drawer keeps
- *  rendering correctly if either layer is ever refactored. */
+ *  (`sessionId` / `toolUseId` / `toolName` / `toolInput`). We read
+ *  BOTH spellings defensively (camelCase first per production
+ *  reality, snake_case as fallback) so the drawer keeps rendering
+ *  correctly if either layer is ever refactored. */
 function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
   return {
     rid: String(p.rid ?? ""),
@@ -110,120 +118,6 @@ function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
     reason: p.reason as string | undefined,
     path: p.path as string | undefined,
   };
-}
-
-// -----------------------------------------------------------------------
-// B6 PR3 redesign (2026-06-21): per-entry accessors for the
-// `tool-card` template. Each is a thin read-only helper that pulls
-// a field out of a `TranscriptEntry`'s `payload_json` with a
-// defensive default. The template needs to know the tool name,
-// file path, input, and output content for the header / body of
-// the rendered card; these helpers centralize the type coercions.
-// -----------------------------------------------------------------------
-
-/** Pull the tool name out of a `tool_call`'s `payload_json`. Falls
- *  back to the result's name (for orphan results) or empty string
- *  for non-tool entries. Defensive against missing / non-string
- *  values (pre-redesign rows). For `permission_ask` entries, the
- *  `PermissionAskPayload` Rust struct has `toolName` / `tool_name`
- *  fields; we read both spellings (the PR1 `synthesizeAsk` helper
- *  does the same — keep the two in lockstep). */
-function toolNameOf(e: TranscriptEntry): string {
-  if (e.kind === "tool_call" || e.kind === "tool_result") {
-    const n = e.payload_json?.name;
-    if (typeof n === "string" && n.length > 0) return n;
-    return "";
-  }
-  if (e.kind === "permission_ask") {
-    // permission_ask payload_json may carry either `toolName`
-    // (camelCase — production shape per the Rust
-    // `PermissionAskPayload` `#[serde(rename_all = "camelCase")])`
-    // or `tool_name` (snake_case fallback).
-    const n = e.payload_json?.toolName ?? e.payload_json?.tool_name;
-    if (typeof n === "string" && n.length > 0) return n;
-    return "";
-  }
-  return "";
-}
-
-/** Pull the file path out of a `tool_call`'s `payload_json.input.path`.
- *  Returns null when the input has no `path` (shell, web_fetch, etc.)
- *  or when the value is non-string. */
-function filePathOf(e: TranscriptEntry): string | null {
-  if (e.kind !== "tool_call" && e.kind !== "tool_result") return null;
-  const input = e.payload_json?.input as Record<string, unknown> | undefined;
-  if (!input) return null;
-  const p = input.path;
-  if (typeof p === "string" && p.length > 0) return p;
-  return null;
-}
-
-/** Pull the input object out of a `tool_call`'s `payload_json.input`. */
-function inputOf(e: TranscriptEntry): Record<string, unknown> | null {
-  if (e.kind !== "tool_call") return null;
-  const input = e.payload_json?.input;
-  if (input && typeof input === "object" && !Array.isArray(input)) {
-    return input as Record<string, unknown>;
-  }
-  return null;
-}
-
-/** Pull the content string out of a `tool_result`'s `payload_json.content`. */
-function contentOf(e: TranscriptEntry): string {
-  if (e.kind !== "tool_result") return "";
-  const c = e.payload_json?.content;
-  return typeof c === "string" ? c : "";
-}
-
-/** Pull the `duration_ms` number out of a `tool_result`'s
- *  `payload_json.duration_ms`. Returns undefined for pre-redesign
- *  rows (no field) — `ToolOutputBody` treats undefined as "omit
- *  duration chip" per its file header. */
-function durationMsOf(e: TranscriptEntry): number | undefined {
-  if (e.kind !== "tool_result") return undefined;
-  const d = e.payload_json?.duration_ms;
-  if (typeof d === "number" && Number.isFinite(d) && d >= 0) return d;
-  return undefined;
-}
-
-/** Human-readable duration label for the header. Returns "" for
- *  pre-redesign rows (no duration). */
-function durationOf(e: TranscriptEntry): string {
-  const d = durationMsOf(e);
-  if (d === undefined) return "";
-  return abbreviateDuration(d);
-}
-
-/** Standalone-entry accent color (for the 3px left border). The
- *  sub-kinds each have a different color so the user can scan a
- *  long transcript at a glance: chat_event = muted gray,
- *  permission_ask = amber, orphan tool_call = amber (matches
- *  the pending-call color), orphan tool_result = the tool's
- *  accent. */
-function standaloneAccent(e: TranscriptEntry): string {
-  if (e.kind === "chat_event") return "var(--color-text-muted)";
-  if (e.kind === "permission_ask") return "var(--color-tool-shell)";
-  if (e.kind === "tool_call") return "var(--color-tool-shell)";
-  if (e.kind === "tool_result") {
-    if (isErrorResult(e)) return "var(--color-tool-error)";
-    return toolAccentVar(toolNameOf(e));
-  }
-  return "var(--color-text-muted)";
-}
-
-/** Standalone-entry name to render in the header. For chat_event
- *  and permission_ask, surface a short label. For tool_call /
- *  tool_result, fall through to the tool name (matches the paired
- *  card's header). */
-function standaloneName(e: TranscriptEntry): string {
-  if (e.kind === "chat_event") return "chat event";
-  if (e.kind === "permission_ask") {
-    const toolName = toolNameOf(e);
-    return toolName ? `${toolName} (ask collapsed)` : "permission ask";
-  }
-  if (e.kind === "tool_call") return toolNameOf(e) || "tool call";
-  if (e.kind === "tool_result") return toolNameOf(e) || "tool result";
-  return "";
 }
 
 /** Drawer open state — reka-ui Dialog requires a writable ref. We
@@ -260,74 +154,97 @@ const STATUS_META: Record<
   error: { label: "出错", color: "var(--color-tool-error)" },
 };
 
-/** Transcript list for the drawer body. Priority per R6:
- *    1. `store.liveTranscript.get(openRunId)` (live stream)
- *    2. `parse(run.transcriptJson)` (DB cache from fetchRun)
- *    3. `[]`
- *  Both branches return `TranscriptEntry[]` (snake_case
- *  `payload_json`). */
-const transcript = computed<TranscriptEntry[]>(() => {
+// ---------------------------------------------------------------------------
+// B6 redesign PR5 (2026-06-21): section-based data source.
+// ---------------------------------------------------------------------------
+
+/** Section list for the drawer body. Reads `store.liveSections`
+ *  (the PR2 accumulator's `TranscriptSection[]` output). Empty
+ *  during the brief window between `openDrawer` and `fetchRun`
+ *  resolving — the drawer shows the "Worker is starting..."
+ *  empty state in that window. */
+const sections = computed<TranscriptSection[]>(() => {
   const rid = store.openRunId;
   if (!rid) return [];
-  const live = store.liveTranscript.get(rid);
-  if (live && live.length > 0) return live;
-  const cached = run.value?.transcriptJson;
-  return cached ? parseTranscriptJson(cached) : [];
+  return store.liveSections.get(rid) ?? [];
 });
 
-/** Whether to render chat_event entries. Defaults to `false` per
- *  PRD decision #2 — the drawer hides the verbose delta stream and
- *  shows tool_call / tool_result / permission_ask by default. */
-const showChatEvents = ref(false);
+/** Thinking-segment entries (one per Anthropic thinking block). */
+const thinkingSections = computed<ThinkingSection[]>(() =>
+  sections.value.filter(
+    (s): s is ThinkingSection => s.kind === "Thinking",
+  ),
+);
 
-/** B6 PR3 redesign (2026-06-21): a non-reactive Map tracking the
- *  first-seen timestamp of each pending tool_call so the 30s
- *  timeout flush can age out calls across `pairTranscript`
- *  re-invocations. Lives for the drawer's lifetime; cleared on
- *  drawer close (the next open starts fresh). See the
- *  `pairTranscript` docstring for the cross-invocation contract. */
+/** B6 PR3 redesign pending-timeout tracking. Same non-reactive Map
+ *  pattern as the previous flat-list implementation — keys are
+ *  `tool_use_id` strings, values are wall-clock `received_at` ms.
+ *  Cleared on drawer close (the next open starts fresh). The 100ms
+ *  `nowTick` ticker drives the age-out across re-invocations. */
 const pendingFirstSeenAt = reactive(new Map<string, number>());
 
-/** Visible transcript after applying the chat-event filter. */
-const visibleTranscript = computed<TranscriptEntry[]>(() => {
-  if (showChatEvents.value) return transcript.value;
-  return transcript.value.filter((e) => e.kind !== "chat_event");
+/** Tools segment entries: `pairSections` output (paired / pending /
+ *  permission_ask). Recomputed on every `nowTick` tick (100ms) so
+ *  pending calls naturally age out without a new section arriving.
+ *  The `nowTick.value` reference is load-bearing — Vue's reactivity
+ *  only re-runs a computed when one of its tracked reactive deps
+ *  changes; `pairSections`'s `now` argument is a plain number. */
+const toolEntries = computed<SectionToolEntry[]>(
+  // `nowTick.value` is the load-bearing dep — the computed would
+  // otherwise only re-evaluate on `sections` changes.
+  () => pairSections(sections.value, nowTick.value, pendingFirstSeenAt),
+);
+
+/** Reply segment text.
+ *
+ *  - Live phase (worker running): the accumulator's `TextSection`
+ *    carries whatever the LLM has streamed so far (the live text
+ *    segment may span multiple Text sections — we concatenate them
+ *    in arrival order).
+ *  - Finished phase (`subagent:finished` → fetchRun →
+ *    rebuildFromCache): the accumulator's `FinalTextSection`
+ *    carries the authoritative `run.finalText` (PR1 column, with
+ *    the `[status: ...]\n` prefix already stripped). Prefer this
+ *    over any live Text when both are present (the rebuild drops
+ *    live text per PR2's `rebuildFromCache`).
+ *  - Empty string when no text section exists yet (the reply
+ *    segment shows the empty-state placeholder). */
+const replyText = computed<string>(() => {
+  let live = "";
+  let final: string | null = null;
+  for (const s of sections.value) {
+    if (s.kind === "Text") {
+      live += s.text;
+    } else if (s.kind === "FinalText") {
+      // FinalText wins — once the worker finishes, the
+      // accumulator appends a single FinalText section with the
+      // authoritative text. Take it and stop reading Text
+      // sections (they were live-only).
+      final = s.text;
+      break;
+    }
+  }
+  return final ?? live;
 });
 
-/** B6 PR3 redesign (2026-06-21): paired / pending_call /
- *  standalone buffer view of `visibleTranscript`. Recomputed on
- *  every `nowTick` tick (100ms cadence) so pending calls naturally
- *  age out from `pending_call` to `standalone` even without new
- *  transcript events arriving. The `nowTick.value` reference is
- *  load-bearing: Vue's reactivity only re-runs a computed when one
- *  of its tracked reactive deps changes, and `pairTranscript`'s
- *  `now` argument is not a Vue ref (it's a plain `number`). Passing
- *  `nowTick.value` registers the dep. Without this, the pending-call
- *  timeout would never advance until a new transcript event arrived
- *  or the chat_events toggle flipped. */
-const bufferedTranscript = computed<BufferedTranscriptEntry[]>(
-  // `nowTick.value` is the load-bearing dep — the computed would
-  // otherwise only re-evaluate on `visibleTranscript` / chat-event
-  // toggle changes. We pass `nowTick.value` (NOT `Date.now()`)
-  // into pairTranscript so the per-call timestamp is consistent
-  // with the rest of the tick's reactive read (a single tick
-  // sees one `now`). Under fake-timer tests this also makes
-  // pairTranscript's `now` argument deterministic.
-  () => pairTranscript(visibleTranscript.value, nowTick.value, pendingFirstSeenAt),
+/** Reply-segment truncation budget per PRD R13. */
+const REPLY_MAX_CHARS = 280;
+
+const replyPreview = computed<string>(() =>
+  replyText.value.length === 0
+    ? ""
+    : truncate(replyText.value, REPLY_MAX_CHARS),
 );
 
-/** FT-F-004 (2026-06-21): chat_event entries the default filter
- *  hides. Surfaced as a "+N chat hidden" hint next to the event
- *  count in the filter row ONLY while chat events are hidden — it
- *  nudges the user to expand. Once they tick "Show chat events",
- *  visibleTranscript includes chat and this drops to 0, hiding the
- *  hint. Computed as transcript.length − visibleTranscript.length
- *  so it stays correct regardless of how the filter is expressed. */
-const hiddenChatCount = computed<number>(() =>
-  showChatEvents.value
-    ? 0
-    : transcript.value.length - visibleTranscript.value.length,
+const replyIsTruncated = computed<boolean>(
+  () => replyText.value.length > replyPreview.value.length,
 );
+
+const replyPreviewHtml = computed<string>(() =>
+  renderMarkdown(replyPreview.value),
+);
+
+const replyModalOpen = ref<boolean>(false);
 
 /** Whether the transcript was truncated at the 4 MiB cap on the
  *  backend. Drives the "原 transcript 已截断" banner. */
@@ -336,24 +253,26 @@ const truncated = computed<boolean>(() => {
   return (run.value.transcriptTruncated ?? 0) !== 0;
 });
 
-/** Empty state: worker just started, no transcript yet. */
-const isEmpty = computed<boolean>(
-  () => transcript.value.length === 0,
-);
-
-/** FT-F-001 stage 2 (2026-06-20): the drawer no longer stringifies
- *  `payload_json` into a `<pre>` blob. Each transcript entry routes to
- *  its typed-card body component (see the `<li>` branches in the
- *  template). The old `formatPayload` + `extractToolResultDisplay`
- *  import have been removed; envelope-unwrapping + truncation now live
- *  inside `ToolOutputBody.vue` (PR1 shared body).
+/** Empty state: worker just started, no transcript sections yet.
+ *  The DrawerPromptCard renders independently (reads `run.task`),
+ *  so the user sees the prompt + "Worker is starting..." side-by-side
+ *  during the brief window between dispatch and the first
+ *  accumulator publish. Once sections arrive, the thinking / tools /
+ *  reply segments replace the placeholder.
  *
- *  B6 PR3 redesign (2026-06-21): the old per-entry `.subagent-drawer__kind`
- *  badge is gone (the new `.tool-card` container has a richer
- *  status row instead). The `KIND_META` color/label constant has
- *  been removed; the relevant color mappings are now per-sub-kind
- *  in `standaloneAccent()` and the new template's `toolAccentVar`
- *  lookups. */
+ *  PR6 (2026-06-21): terminal `cancelled` / `error` states with no
+ *  transcript sections still need the Reply / Error card surfaces
+ *  (cancelled chip + error card), so `isEmpty` returns `false` for
+ *  those states even when `sections.value` is empty. The "Worker is
+ *  starting..." placeholder is for `running` only — a terminal state
+ *  with no sections means the worker died before producing anything,
+ *  not that it's about to start. */
+const isEmpty = computed<boolean>(() => {
+  if (sections.value.length > 0) return false;
+  // Cancelled / error: render the empty segment shells so the
+  // cancelled chip (R23) + error card (R25) are visible.
+  return status.value !== "cancelled" && status.value !== "error";
+});
 
 // ---------------------------------------------------------------------------
 // B6 PR3b (2026-06-20): live duration timer + auto-scroll polish
@@ -381,6 +300,18 @@ const elapsedMs = computed<number>(() => {
   return Math.max(0, nowTick.value - startedMs);
 });
 
+/** Terminal duration (frozen once the worker finishes). `null` when
+ *  the run is still in flight OR the row hasn't loaded yet. Drives
+ *  the per-segment "✓ Completed · X.Xs" chip via DrawerSection's
+ *  `finalDurationMs` prop. */
+const terminalDurMs = computed<number | null>(() => {
+  if (!run.value?.startedAt || !run.value?.finishedAt) return null;
+  const startedMs = new Date(run.value.startedAt).getTime();
+  const finishedMs = new Date(run.value.finishedAt).getTime();
+  if (!Number.isFinite(startedMs) || !Number.isFinite(finishedMs)) return null;
+  return Math.max(0, finishedMs - startedMs);
+});
+
 /** Status pill text — appends a duration suffix per state:
  *    - running → "running 8.2s" (live, updates every 100ms)
  *    - completed → "done in 12.4s" (terminal, computed once)
@@ -395,33 +326,24 @@ const elapsedMs = computed<number>(() => {
  *  drifted from "failed at 11.7s" (real wall-clock) to "failed at
  *  14281.9s" (4 hours). Fix: use `finishedAt - startedAt` for all
  *  terminal states (same formula as `completed`), giving a frozen
- *  duration that doesn't change while the drawer is open. The
- *  `terminalDurMs` helper holds the shared computation; the
- *  running branch stays on the live `elapsedMs`. */
+ *  duration that doesn't change while the drawer is open. */
 const statusDisplay = computed<{ label: string; color: string; suffix: string }>(() => {
   const meta = STATUS_META[status.value];
   if (!run.value?.startedAt) {
     return { label: meta.label, color: meta.color, suffix: "" };
   }
-  const startedMs = new Date(run.value.startedAt).getTime();
-  const finishedAt = run.value.finishedAt;
-  const finishedMs = finishedAt ? new Date(finishedAt).getTime() : null;
-  const terminalDurMs =
-    finishedMs !== null && Number.isFinite(finishedMs) && Number.isFinite(startedMs)
-      ? Math.max(0, finishedMs - startedMs)
-      : null;
   if (status.value === "running") {
     return { label: meta.label, color: meta.color, suffix: ` ${(elapsedMs.value / 1000).toFixed(1)}s` };
   }
-  if (status.value === "completed" && terminalDurMs !== null) {
-    return { label: meta.label, color: meta.color, suffix: ` ${(terminalDurMs / 1000).toFixed(1)}s` };
+  if (status.value === "completed" && terminalDurMs.value !== null) {
+    return { label: meta.label, color: meta.color, suffix: ` ${(terminalDurMs.value / 1000).toFixed(1)}s` };
   }
   if (status.value === "error") {
-    const suffix = terminalDurMs !== null ? ` at ${(terminalDurMs / 1000).toFixed(1)}s` : "";
+    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
     return { label: "failed", color: meta.color, suffix };
   }
   if (status.value === "cancelled") {
-    const suffix = terminalDurMs !== null ? ` at ${(terminalDurMs / 1000).toFixed(1)}s` : "";
+    const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
   return { label: meta.label, color: meta.color, suffix: "" };
@@ -430,23 +352,7 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
 /** Failure-reason banner shown in the header for terminal error /
  *  cancelled runs (2026-06-20, FT-F-005). Returns `null` for
  *  `running` / `completed` states (no banner) or when the row
- *  hasn't loaded yet.
- *
- *  - `error` + non-empty `summary` → "Worker exited with error: <summary>",
- *    truncated to 80 chars + "…" if longer (the `summary` field carries
- *    the worker error text — see `agent/subagent.rs:format_dispatch_result`,
- *    Error arm).
- *  - `error` + empty/null `summary` → "Worker exited unexpectedly at X.Xs"
- *    using the frozen duration from `statusDisplay.suffix` (same
- *    `terminalDurMs` formula as the badge — see B1 hotfix).
- *  - `cancelled` → "Worker stopped by user at X.Xs" generic message
- *    (the schema doesn't record whether the cancel came from user
- *    Stop vs system timeout; out of scope per FT-F-005 prd §"Out of
- *    Scope").
- *
- *  Reuses `statusDisplay.suffix` for the duration string so the
- *  banner stays consistent with the badge ("failed at 11.7s" +
- *  "Worker exited unexpectedly at 11.7s" share the same number). */
+ *  hasn't loaded yet. */
 const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(() => {
   if (!run.value) return null;
   if (status.value === "error") {
@@ -463,6 +369,96 @@ const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(
   return null;
 });
 
+/** Whether the worker is still running (drives the live indicators
+ *  on each DrawerSection + autoFollow reactivity). */
+const isRunning = computed<boolean>(() => status.value === "running");
+
+/** PR6 (2026-06-21) R25: error terminal state — extract the worker's
+ *  error message for the ❌ error card rendered below DrawerPromptCard.
+ *
+ *  WHY THIS IS A SEPARATE COMPUTED (not read from `sections`):
+ *  the accumulator's `routeChatEvent` switch DROPs the `error` inner
+ *  kind (`stores/subagentRuns.ts` `case "error": return;` — terminal
+ *  signal, no text contribution). So the error message is NOT in the
+ *  `sections` / `replyText` stream. We re-parse `run.transcriptJson`
+ *  directly to find the error event's payload.
+ *
+ *  Extraction priority (4-level fallback chain — each level loosens
+ *  the source):
+ *    1. Parse `run.transcriptJson`, walk from the END backwards, find
+ *       the last entry with `kind === "chat_event"` whose inner
+ *       `payload_json.kind === "error"`. Read `payload_json.message`.
+ *       (The Rust `ChatEvent::Error` carries `{ message, category }`
+ *       per `llm/types.rs:407-410`; the inner kind is serialized as
+ *       `"error"` via the snake_case `tag = "kind"` serde attribute.)
+ *    2. Fall back to `run.finalText` — the backend's
+ *       `format_final_text(status="error", worker_text)` returns the
+ *       worker_text verbatim when no explicit error message exists
+ *       (`subagent.rs:1151-1178`), so `finalText` carries the same
+ *       payload in the no-error-event case.
+ *    3. Fall back to `run.summary` (PR5's bannerText already uses
+ *       this for the header — the ❌ card reuses it as a last-resort
+ *       detail).
+ *    4. Final fallback: the canned "(no error text captured)" string
+ *       so the card never renders an empty body.
+ *
+ *  Returns `null` when `status !== "error"` (the card is hidden via
+ *  `v-if` anyway, but `null` makes the computed self-documenting). */
+const errorMessage = computed<string | null>(() => {
+  if (status.value !== "error" || !run.value) return null;
+
+  // Level 1: scan transcriptJson from the end for the last error event.
+  const raw = run.value.transcriptJson;
+  if (raw) {
+    try {
+      const entries = parseTranscriptJson(raw);
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const e = entries[i];
+        if (e.kind !== "chat_event") continue;
+        const inner = e.payload_json.kind;
+        if (inner !== "error") continue;
+        const msg = e.payload_json.message;
+        if (typeof msg === "string" && msg.length > 0) return msg;
+      }
+    } catch {
+      // parseTranscriptJson already swallows JSON errors internally
+      // and returns []; the try/catch here is belt-and-braces in case
+      // a future refactor introduces a throwing code path.
+    }
+  }
+
+  // Level 2: finalText (backend's format_final_text output for
+  // status=error carries the worker_text).
+  if (run.value.finalText && run.value.finalText.length > 0) {
+    return run.value.finalText;
+  }
+
+  // Level 3: summary (also used by the header banner).
+  if (run.value.summary && run.value.summary.length > 0) {
+    return run.value.summary;
+  }
+
+  // Level 4: canned fallback.
+  return "(no error text captured)";
+});
+
+/** PR6 (2026-06-21) R23 (downgraded): cancelled terminal state — the
+ *  Reply segment replaces its body with a `⊘ Cancelled · at X.Xs`
+ *  chip. PRD R23 originally specified "at turn N" but the
+ *  `subagent_runs` schema has no turn column (only started_at /
+ *  finished_at + the new task / final_text from PR1); turn N is not
+ *  reliably inferable from the transcript (the cancel Done event may
+ *  be missing). The downgrade uses the wall-clock terminal duration
+ *  (`terminalDurMs`) instead — same source as the header status pill.
+ *
+ *  Returns the formatted duration suffix (e.g. "at 5.3s") or `null`
+ *  when the run is not cancelled or the duration is unavailable. */
+const cancelledSuffix = computed<string | null>(() => {
+  if (status.value !== "cancelled") return null;
+  if (terminalDurMs.value === null) return null;
+  return `at ${(terminalDurMs.value / 1000).toFixed(1)}s`;
+});
+
 watch(
   () => store.openRunId,
   (rid) => {
@@ -472,12 +468,8 @@ watch(
     }
     if (rid) {
       nowTick.value = Date.now();
-      // 100ms cadence drives BOTH the header duration counter
-      // AND the pairing-layer timeout flush (the buffered
-      // transcript re-runs on every nowTick tick; the 30s
-      // pending timeout advances by ~100ms per tick, which is
-      // more than enough granularity for a "未完成" card
-      // falling out of the pending window).
+      // 100ms cadence drives BOTH the header duration counter AND
+      // the section-level pairing timeout flush.
       tickerHandle = setInterval(() => {
         nowTick.value = Date.now();
       }, TIMER_TICK_MS);
@@ -510,8 +502,7 @@ const autoFollow = ref<boolean>(true);
 const newCount = ref<number>(0);
 
 /** `scroll` event handler on the body. Updates `autoFollow` based
- *  on proximity to the bottom. The `< 50px` slack means small
- *  mouse-wheel ticks up don't immediately disable auto-follow. */
+ *  on proximity to the bottom. */
 function onBodyScroll(e: Event): void {
   const el = e.target as HTMLElement;
   const atBottom =
@@ -522,14 +513,11 @@ function onBodyScroll(e: Event): void {
   }
 }
 
-/** Watch the rendered transcript count (NOT the full list — we
- *  hide chat_event entries by default; `bufferedTranscript` is
- *  what the user actually sees, since each paired call+result
- *  collapses to a single card). When a new entry arrives: if
- *  auto-follow is on, scroll to bottom; otherwise increment the
- *  newCount badge. */
+/** Watch the rendered tool-entry count (the most dynamic segment
+ *  during a worker run). When a new entry arrives: if auto-follow
+ *  is on, scroll to bottom; otherwise increment the newCount badge. */
 watch(
-  () => bufferedTranscript.value.length,
+  () => toolEntries.value.length + thinkingSections.value.length + (replyText.value.length > 0 ? 1 : 0),
   () => {
     if (autoFollow.value) {
       void nextTick(() => {
@@ -544,12 +532,7 @@ watch(
 );
 
 /** User clicked the "↗ jump to latest" header button OR the
- *  "↓ N new" floating button. Smooth-scroll to the bottom and
- *  re-enable auto-follow. The `scrollTo` feature check is a
- *  defensive guard for test environments (jsdom does NOT
- *  implement `Element.scrollTo`) — production browsers always
- *  have it. The `scrollTop` fallback has the same end-state,
- *  just without the smooth animation. */
+ *  "↓ N new" floating button. */
 function jumpToLatest(): void {
   if (!bodyEl.value) return;
   const target = bodyEl.value.scrollHeight;
@@ -561,6 +544,13 @@ function jumpToLatest(): void {
   autoFollow.value = true;
   newCount.value = 0;
 }
+
+/** Whether to render the header jump-to-latest button. Mirrors the
+ *  pre-redesign gate: visible only when autoFollow is off AND there
+ *  is something to scroll to (sections non-empty). */
+const showJumpLatest = computed<boolean>(
+  () => !autoFollow.value && sections.value.length > 0,
+);
 </script>
 
 <template>
@@ -591,13 +581,8 @@ function jumpToLatest(): void {
               <span class="subagent-drawer__name">
                 {{ run?.subagentName ?? "worker" }}
               </span>
-              <!-- B6 PR3b (2026-06-20): jump-to-latest button.
-                   Shown when auto-follow is paused (either because
-                   the user scrolled up while running, OR because new
-                   events arrived while they were scrolled away).
-                   Placed in the header per Q5 decision D5. -->
               <button
-                v-if="!autoFollow && visibleTranscript.length > 0"
+                v-if="showJumpLatest"
                 class="subagent-drawer__jump-latest"
                 type="button"
                 :title="newCount > 0 ? `跳到最新 (${newCount} 条新事件)` : '跳到最新'"
@@ -613,14 +598,6 @@ function jumpToLatest(): void {
                 <Icon name="x" :size="14" />
               </DialogClose>
             </div>
-            <!-- FT-F-005 (2026-06-20): failure-reason banner. Renders
-                 only for terminal error / cancelled states (bannerText
-                 computed returns null otherwise). Sits between the
-                 status badge row and the timestamp row so the reason
-                 reads as the natural next piece of context after
-                 "failed at Ns" / "已停止 at Ns". The banner reuses the
-                 status badge's duration suffix (statusDisplay.suffix)
-                 for consistency. -->
             <div
               v-if="bannerText"
               :class="[
@@ -637,11 +614,6 @@ function jumpToLatest(): void {
               v-if="run?.startedAt"
               class="subagent-drawer__meta"
             >
-              <!-- FT-F-004 (2026-06-21): raw ISO8601 → local HH:MM:SS
-                   via formatTime (UTC→local conversion lives in the
-                   helper — slicing the raw string would show UTC and
-                   drift ~8h). Both timestamps keep the `clock` icon
-                   for a unified "this is a time field" affordance. -->
               <span class="subagent-drawer__meta-time">
                 <Icon name="clock" :size="11" />
                 开始 {{ formatTime(run.startedAt) }}
@@ -658,30 +630,6 @@ function jumpToLatest(): void {
               v-if="run?.summary"
               class="subagent-drawer__summary"
             >{{ run.summary }}</p>
-          </header>
-
-          <!-- Filter row: chat-event toggle + truncated notice -->
-          <div class="subagent-drawer__filter-row">
-            <div class="subagent-drawer__filter-left">
-              <label class="subagent-drawer__toggle">
-                <input
-                  v-model="showChatEvents"
-                  type="checkbox"
-                />
-                <span>Show chat events</span>
-              </label>
-              <!-- FT-F-004 (2026-06-21): event count + hidden-chat
-                   hint. visibleTranscript.length is the count the
-                   user actually sees (tool_call/result/perm by
-                   default; +chat once the toggle is on). The
-                   "+N chat hidden" suffix nudges expansion and
-                   disappears once chat events are shown. -->
-              <span class="subagent-drawer__event-count">
-                {{ visibleTranscript.length }} events<span
-                  v-if="hiddenChatCount > 0"
-                > · +{{ hiddenChatCount }} chat hidden</span>
-              </span>
-            </div>
             <span
               v-if="truncated"
               class="subagent-drawer__truncated"
@@ -689,204 +637,142 @@ function jumpToLatest(): void {
             >
               原 transcript 已截断 (head + tail)
             </span>
-          </div>
+          </header>
 
-          <!-- Transcript list -->
+          <!-- Body: 5-segment grouped view -->
           <div
             ref="bodyEl"
             class="subagent-drawer__body"
             @scroll="onBodyScroll"
           >
-            <div v-if="isEmpty" class="subagent-drawer__empty">
-              Worker is starting...
-            </div>
-            <ol v-else class="subagent-drawer__list">
-              <!-- B6 PR3 redesign (2026-06-21): each entry in
-                   `bufferedTranscript` is rendered as a `.tool-card`
-                   matching the main panel's visual language. Three
-                   branches per the pairing layer's return shape:
-                     - `paired` (call + result merged): one card with
-                       header (icon + name + path | status + duration)
-                       + body (ToolInputBody + ToolOutputBody).
-                     - `pending_call`: amber-bordered card with a
-                       pulsing "未完成" indicator (still within 30s
-                       timeout).
-                     - `standalone`: chat_event (muted) /
-                       permission_ask (amber) / orphan call (amber
-                       "未完成" past timeout) / orphan result
-                       (standard). Each sub-kind keeps its own
-                       accent. -->
-              <li
-                v-for="(b, i) in bufferedTranscript"
-                :key="b.kind === 'paired' ? `pair-${b.tool_use_id}` : b.kind === 'pending_call' ? `pend-${b.tool_use_id}` : `solo-${i}`"
-                class="subagent-drawer__entry-wrapper"
+            <div class="subagent-drawer__segments">
+              <!-- Prompt card (always-expanded, hidden when task is null).
+                   Rendered OUTSIDE the isEmpty gate so a freshly-dispatched
+                   worker (sections still empty) surfaces its prompt
+                   immediately rather than flashing "Worker is
+                   starting..." with the prompt hidden. -->
+              <DrawerPromptCard :task="run?.task ?? null" />
+
+              <!-- PR6 R25: error terminal state — detailed error card
+                   below the prompt. The header banner (FT-F-005)
+                   shows an 80-char summary line; this card shows the
+                   full error message (errorMessage computed falls
+                   back through transcriptJson → finalText → summary →
+                   canned). Hidden unless status === 'error'. -->
+              <div
+                v-if="status === 'error' && errorMessage !== null"
+                class="subagent-drawer__error-card"
+                role="alert"
               >
-                <!-- PAIRED: call + result merged into one card. -->
-                <div
-                  v-if="b.kind === 'paired'"
-                  class="tool-card"
-                  :class="{
-                    'tool-card--error': isErrorResult(b.result),
-                  }"
-                  :style="{
-                    borderLeftColor: isErrorResult(b.result)
-                      ? 'var(--color-tool-error)'
-                      : toolAccentVar(toolNameOf(b.call)),
-                  }"
-                >
-                  <div class="tool-card__header">
-                    <div class="tool-card__title">
-                      <span class="tool-card__icon">
-                        <Icon :name="toolIcon(toolNameOf(b.call))" :size="14" />
-                      </span>
-                      <span class="tool-card__name">{{ toolNameOf(b.call) }}</span>
-                      <span
-                        v-if="filePathOf(b.call)"
-                        class="tool-card__path"
-                        :title="filePathOf(b.call) ?? ''"
-                      >· {{ filePathOf(b.call) }}</span>
-                    </div>
-                    <div class="tool-card__status">
-                      <span
-                        class="tool-card__status-icon"
-                        :class="{ 'tool-card__status-icon--error': isErrorResult(b.result) }"
-                      >
-                        <Icon :name="isErrorResult(b.result) ? 'x' : 'check'" :size="14" />
-                      </span>
-                      <span>{{ isErrorResult(b.result) ? 'error' : 'done' }}</span>
-                      <span class="tool-card__duration">{{ durationOf(b.result) }}</span>
-                    </div>
-                  </div>
-                  <ToolInputBody
-                    v-if="inputOf(b.call) && Object.keys(inputOf(b.call) ?? {}).length > 0"
-                    :name="toolNameOf(b.call)"
-                    :input="inputOf(b.call) ?? {}"
-                  />
-                  <ToolOutputBody
-                    :content="contentOf(b.result)"
-                    :is-error="isErrorResult(b.result)"
-                    :duration-ms="durationMsOf(b.result)"
-                  />
+                <div class="subagent-drawer__error-header">
+                  <span class="subagent-drawer__error-icon">
+                    <Icon name="shield-x" :size="14" />
+                  </span>
+                  <span class="subagent-drawer__error-title">Worker error</span>
                 </div>
+                <p class="subagent-drawer__error-message">{{ errorMessage }}</p>
+              </div>
 
-                <!-- PENDING CALL: call is in flight, no result yet
-                     (within 30s timeout). Amber left-border + a
-                     pulsing icon to signal "still working". -->
-                <div
-                  v-else-if="b.kind === 'pending_call'"
-                  class="tool-card tool-card--running"
-                  :style="{ borderLeftColor: 'var(--color-tool-shell)' }"
+              <div v-if="isEmpty" class="subagent-drawer__empty">
+                Worker is starting...
+              </div>
+              <template v-else>
+                <!-- Thinking segment (collapsed by default per PRD R16). -->
+                <DrawerSection
+                  v-if="thinkingSections.length > 0"
+                  type="thinking"
+                  :entry-count="thinkingSections.reduce((acc, s) => acc + s.chars, 0)"
+                  :live="isRunning"
+                  :elapsed-ms="elapsedMs"
+                  :final-duration-ms="!isRunning ? terminalDurMs ?? undefined : undefined"
+                  :default-open="false"
                 >
-                  <div class="tool-card__header">
-                    <div class="tool-card__title">
-                      <span class="tool-card__icon">
-                        <Icon :name="toolIcon(toolNameOf(b.call))" :size="14" />
-                      </span>
-                      <span class="tool-card__name">{{ toolNameOf(b.call) }}</span>
-                      <span
-                        v-if="filePathOf(b.call)"
-                        class="tool-card__path"
-                        :title="filePathOf(b.call) ?? ''"
-                      >· {{ filePathOf(b.call) }}</span>
-                    </div>
-                    <div class="tool-card__status">
-                      <span class="tool-card__status-icon tool-card__status-icon--running">
-                        <Icon name="ellipsis" :size="14" />
-                      </span>
-                      <span>running…</span>
-                    </div>
-                  </div>
-                  <ToolInputBody
-                    v-if="inputOf(b.call) && Object.keys(inputOf(b.call) ?? {}).length > 0"
-                    :name="toolNameOf(b.call)"
-                    :input="inputOf(b.call) ?? {}"
+                  <DrawerThinkingBlock
+                    v-for="(s, i) in thinkingSections"
+                    :key="`thinking-${i}`"
+                    :section="s"
+                    :show-streaming-hint="isRunning ? undefined : false"
                   />
-                </div>
+                </DrawerSection>
 
-                <!-- STANDALONE: chat_event / permission_ask / orphan
-                     call (past 30s timeout) / orphan result. Each
-                     sub-kind keeps its own accent. -->
-                <div
-                  v-else
-                  class="tool-card"
-                  :class="{
-                    'tool-card--error': isErrorResult(b.entry),
-                  }"
-                  :style="{ borderLeftColor: standaloneAccent(b.entry) }"
+                <!-- Tools segment (expanded by default). -->
+                <DrawerSection
+                  v-if="toolEntries.length > 0"
+                  type="tools"
+                  :entry-count="toolEntries.length"
+                  :live="isRunning"
+                  :elapsed-ms="elapsedMs"
+                  :final-duration-ms="!isRunning ? terminalDurMs ?? undefined : undefined"
                 >
-                  <div class="tool-card__header">
-                    <div class="tool-card__title">
-                      <span class="tool-card__icon">
-                        <Icon
-                          v-if="b.entry.kind === 'tool_call' || b.entry.kind === 'tool_result'"
-                          :name="toolIcon(toolNameOf(b.entry))"
-                          :size="14"
-                        />
-                        <Icon
-                          v-else-if="b.entry.kind === 'permission_ask'"
-                          name="shield-check"
-                          :size="14"
-                        />
-                        <Icon v-else name="chat" :size="14" />
-                      </span>
-                      <span class="tool-card__name">{{ standaloneName(b.entry) }}</span>
-                    </div>
-                    <div
-                      v-if="b.entry.kind === 'tool_result'"
-                      class="tool-card__status"
-                    >
-                      <span
-                        class="tool-card__status-icon"
-                        :class="{ 'tool-card__status-icon--error': isErrorResult(b.entry) }"
-                      >
-                        <Icon :name="isErrorResult(b.entry) ? 'x' : 'check'" :size="14" />
-                      </span>
-                      <span>{{ isErrorResult(b.entry) ? 'error' : 'done' }}</span>
-                      <span class="tool-card__duration">{{ durationOf(b.entry) }}</span>
-                    </div>
-                    <div
-                      v-else-if="b.entry.kind === 'tool_call'"
-                      class="tool-card__status"
-                    >
-                      <span
-                        class="tool-card__status-icon"
-                        style="color: var(--color-tool-shell)"
-                      >
-                        <Icon name="warn" :size="14" />
-                      </span>
-                      <span>未完成</span>
-                    </div>
+                  <template v-for="(e, i) in toolEntries" :key="`tool-${i}`">
+                    <DrawerToolCallCard
+                      v-if="e.kind === 'paired'"
+                      :call="e.call"
+                      :result="e.result"
+                    />
+                    <DrawerToolCallCard
+                      v-else-if="e.kind === 'pending_call'"
+                      :call="e.call"
+                    />
+                    <DrawerPermissionAskCard
+                      v-else
+                      :ask="synthesizeAsk(e.payload_json)"
+                      :repo-root="repoRoot"
+                    />
+                  </template>
+                </DrawerSection>
+
+                <!-- Reply segment (expanded by default).
+                     PR6 R23 (downgraded): cancelled state shows a
+                     `⊘ Cancelled · at X.Xs` chip at the top of the
+                     reply body. If worker replyText also exists
+                     (worker produced output before being stopped),
+                     the reply body renders BELOW the chip so the user
+                     can still inspect the partial output. If
+                     replyText is empty, only the chip renders. -->
+                <DrawerSection
+                  v-if="replyText.length > 0 || isRunning || status === 'cancelled'"
+                  type="reply"
+                  :entry-count="replyText.length > 0 || status === 'cancelled' ? 1 : 0"
+                  :live="isRunning"
+                  :elapsed-ms="elapsedMs"
+                  :final-duration-ms="!isRunning ? terminalDurMs ?? undefined : undefined"
+                >
+                  <!-- PR6 R23: cancelled chip (replaces empty reply body). -->
+                  <div
+                    v-if="status === 'cancelled' && cancelledSuffix !== null"
+                    class="subagent-drawer__reply-cancelled"
+                    role="status"
+                  >
+                    <Icon name="x" :size="12" />
+                    <span>⊘ Cancelled · {{ cancelledSuffix }}</span>
                   </div>
-                  <ToolInputBody
-                    v-if="b.entry.kind === 'tool_call' && inputOf(b.entry) && Object.keys(inputOf(b.entry) ?? {}).length > 0"
-                    :name="toolNameOf(b.entry)"
-                    :input="inputOf(b.entry) ?? {}"
+                  <div v-if="replyText.length > 0" class="subagent-drawer__reply-body">
+                    <div class="subagent-drawer__reply-markdown" v-html="replyPreviewHtml" />
+                    <button
+                      v-if="replyIsTruncated"
+                      type="button"
+                      class="subagent-drawer__reply-view-full"
+                      @click="replyModalOpen = true"
+                    >
+                      View full →
+                    </button>
+                  </div>
+                  <div
+                    v-else-if="status !== 'cancelled'"
+                    class="subagent-drawer__reply-empty"
+                  >
+                    Worker has not produced a reply yet.
+                  </div>
+                  <MarkdownDetailModal
+                    v-model:open="replyModalOpen"
+                    title="Final Reply"
+                    :markdown="replyText"
+                    source="reply"
                   />
-                  <ToolOutputBody
-                    v-else-if="b.entry.kind === 'tool_result'"
-                    :content="contentOf(b.entry)"
-                    :is-error="isErrorResult(b.entry)"
-                    :duration-ms="durationMsOf(b.entry)"
-                  />
-                  <PermissionAskBody
-                    v-else-if="b.entry.kind === 'permission_ask'"
-                    mode="historical"
-                    :ask="synthesizeAsk(b.entry.payload_json)"
-                    :repo-root="repoRoot"
-                  />
-                  <WorkerTextTimeline
-                    v-else-if="b.entry.kind === 'chat_event'"
-                    :events="[b.entry]"
-                  />
-                </div>
-              </li>
-            </ol>
-            <!-- B6 PR3b (2026-06-20): floating "↓ N new" button.
-                 Appears at the body's bottom-center when auto-follow
-                 is paused AND new entries arrived since the user
-                 scrolled away. Clicking jumps to the latest entry +
-                 resumes auto-follow. Hidden when autoFollow=true OR
-                 the transcript is empty. -->
+                </DrawerSection>
+              </template>
+            </div>
             <button
               v-if="!autoFollow && newCount > 0"
               class="subagent-drawer__new-events"
@@ -905,9 +791,7 @@ function jumpToLatest(): void {
    `:deep()` selector via Vue 3.5's preserved `data-v-*` attribute
    is unnecessary here — the portal children are still children of
    THIS component's render tree (reka-ui portals via Vue's own
-   <Teleport>, which preserves the parent chain for styling). If
-   theming breaks in a future reka-ui upgrade, fall back to the
-   `:deep()` pattern used by AuditLogModal. */
+   <Teleport>, which preserves the parent chain for styling). */
 
 .subagent-drawer__sr-title,
 .subagent-drawer__sr-desc {
@@ -964,14 +848,6 @@ function jumpToLatest(): void {
   gap: 6px;
 }
 
-/* FT-F-005 (2026-06-20): failure-reason banner. Always-visible
-   inline warning strip in the header for terminal error / cancelled
-   runs. Two color variants (--error red + --warning amber) using
-   existing design tokens per spec/design-tokens.md — no hardcoded
-   hex. Left 3px accent bar + ⚠ icon + text in a single row; wraps
-   gracefully on narrow viewports (the drawer's max-width is 640px).
-   Reuses `Icon name="warn"` (ExclamationTriangleIcon) already in
-   the Icon.vue registry — no new icon import. */
 .subagent-drawer__banner {
   display: flex;
   align-items: flex-start;
@@ -1038,11 +914,6 @@ function jumpToLatest(): void {
   background: var(--color-bg-elevated);
 }
 
-/* B6 PR3b (2026-06-20): jump-to-latest button in the header.
-   Matches the existing close button's footprint (padding / border-radius)
-   for visual rhythm; uses --color-accent as the hint color so the user
-   notices it without it screaming for attention. Only renders when
-   auto-follow is paused. */
 .subagent-drawer__jump-latest {
   font: inherit;
   font-family: var(--font-sans);
@@ -1061,9 +932,6 @@ function jumpToLatest(): void {
   color: var(--color-bg-app);
 }
 
-/* B6 PR3b (2026-06-20): floating "↓ N new" button at the body's
-   bottom-center. Sits above the scroll content; same --color-accent
-   palette as the header jump-latest button so the two feel paired. */
 .subagent-drawer__new-events {
   position: sticky;
   bottom: 8px;
@@ -1097,9 +965,6 @@ function jumpToLatest(): void {
   font-family: var(--font-mono);
 }
 
-/* FT-F-004 (2026-06-21): wrapper for a clock icon + formatted
-   timestamp so the two stay vertically centered in the mono
-   meta row. Inherits color/font from __meta. */
 .subagent-drawer__meta-time {
   display: inline-flex;
   align-items: center;
@@ -1115,57 +980,17 @@ function jumpToLatest(): void {
   overflow-y: auto;
 }
 
-.subagent-drawer__filter-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 16px;
-  background: var(--color-bg-app);
-  border-bottom: 1px solid var(--color-bg-border);
-  font-size: 11px;
-}
-
-/* FT-F-004 (2026-06-21): groups the chat-event toggle + the event
-   count on the filter row's left side (the truncated notice stays
-   right via space-between). */
-.subagent-drawer__filter-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-/* FT-F-004 (2026-06-21): "N events · +X chat hidden" counter. Mono
-   font keeps the count visually distinct from the toggle label;
-   --color-text-muted so it reads as secondary metadata. */
-.subagent-drawer__event-count {
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-
-.subagent-drawer__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  user-select: none;
-  color: var(--color-text-secondary);
-}
-
-.subagent-drawer__toggle input {
-  margin: 0;
-}
-
 .subagent-drawer__truncated {
   color: var(--color-tool-shell);
   font-size: 10px;
   cursor: help;
+  font-family: var(--font-mono);
 }
 
 .subagent-drawer__body {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 8px 12px;
 }
 
 .subagent-drawer__empty {
@@ -1175,153 +1000,150 @@ function jumpToLatest(): void {
   font-size: 12px;
 }
 
-.subagent-drawer__list {
-  list-style: none;
-  margin: 0;
+.subagent-drawer__segments {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 0;
 }
 
-.subagent-drawer__entry-wrapper {
-  /* Wrapper around each .tool-card entry. No visual styling itself;
-     the inner .tool-card owns the card surface. The list-level gap
-     (8px) provides visual separation between consecutive cards
-     (was: 1px border-bottom on the old per-kind rows). */
-  list-style: none;
+/* Reply segment body — markdown + "View full →" affordance. Mirrors
+   DrawerPromptCard's preview layout but with reply-specific
+   truncation budget (280 chars per PRD R13). */
+.subagent-drawer__reply-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-/* B6 PR3 redesign (2026-06-21): duplicate of the .tool-card visual
-   contract from `ToolCallCard.vue`. The project uses plain CSS
-   (no SCSS), so we can't share the rules via @import. Instead we
-   re-declare the minimum subset here. The two definitions stay
-   lockstep manually (see the design system contract in
-   .trellis/spec/frontend/design-tokens.md §"Modal Tokens" — when
-   the tool-card primitive grows new variants, both files must
-   update).
+.subagent-drawer__reply-markdown {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  max-height: 320px;
+  overflow-y: auto;
+}
 
-   This is the explicit "回退" path from
-   .trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style/prd.md
-   §"复用 ToolCard 样式的策略": "直接在 drawer 里 `:deep(.tool-card) { ... }`
-   复制最小子集" (the spec acknowledges the duplication as the
-   trade-off for plain-CSS toolchain).
+.subagent-drawer__reply-markdown :deep(p) {
+  margin: 0 0 8px 0;
+}
 
-   All properties below mirror `ToolCallCard.vue` 1:1 so the
-   drawer and main panel produce visually identical cards.
-   Variables resolve via :root (the design tokens in style.css). */
-.tool-card {
+.subagent-drawer__reply-markdown :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.subagent-drawer__reply-markdown :deep(code) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-bg-elevated);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.subagent-drawer__reply-markdown :deep(pre) {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.subagent-drawer__reply-markdown :deep(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.subagent-drawer__reply-view-full {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.subagent-drawer__reply-view-full:hover {
+  text-decoration: underline;
+}
+
+.subagent-drawer__reply-empty {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* PR6 R25: error card chrome. Red 3px left border (--color-tool-error)
+   per design-tokens convention; matches PermissionModal --critical /
+   YoloConfirmModal visual language for "extreme risk" surfaces. */
+.subagent-drawer__error-card {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-left: 3px solid var(--color-text-muted);
+  border-left: 3px solid var(--color-tool-error);
   border-radius: 6px;
   padding: 8px 12px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--color-text-primary);
-  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.tool-card--error {
-  border-color: var(--color-tool-error);
-  background: var(--color-bg-elevated);
-}
-
-.tool-card--running {
-  border-left-color: var(--color-tool-shell);
-}
-
-.tool-card__header {
+.subagent-drawer__error-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.tool-card__title {
-  display: inline-flex;
-  align-items: baseline;
   gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.tool-card__icon {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-secondary);
-}
-
-.tool-card--error .tool-card__icon {
-  color: var(--color-tool-error);
-}
-
-.tool-card__name {
+  font-family: var(--font-sans);
+  font-size: 12px;
   font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.tool-card--error .tool-card__name {
   color: var(--color-tool-error);
 }
 
-.tool-card__path {
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-.tool-card__status {
+.subagent-drawer__error-icon {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
-.tool-card__status-icon {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.tool-card__status-icon--running {
-  animation: tool-card-pulse 1.4s ease-in-out infinite;
-}
-
-.tool-card__status-icon--error {
+.subagent-drawer__error-title {
   color: var(--color-tool-error);
 }
 
-@keyframes tool-card-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.tool-card--error .tool-card__status {
-  color: var(--color-tool-error);
-}
-
-.tool-card__duration {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 2px;
-  font-size: 11px;
+.subagent-drawer__error-message {
+  margin: 0;
   font-family: var(--font-mono);
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  user-select: none;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
-.tool-card--error .tool-card__duration {
-  color: var(--color-tool-error);
+/* PR6 R23 (downgraded): cancelled-state chip inside the Reply segment.
+   Amber-tinted to match the header banner--warning color (the worker
+   was stopped by the user, not by an error). Hidden when the run is
+   not cancelled — the v-if in the template handles the gate. */
+.subagent-drawer__reply-cancelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-tool-shell) 10%, transparent);
+  color: var(--color-tool-shell);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  align-self: flex-start;
+  margin-bottom: 6px;
+}
+
+.subagent-drawer__reply-cancelled svg {
+  flex-shrink: 0;
 }
 </style>

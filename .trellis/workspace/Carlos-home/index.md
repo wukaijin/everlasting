@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 57
+- **Total Sessions**: 58
 - **Last Active**: 2026-06-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1232 | Active |
+| `journal-2.md` | ~1506 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-06-21 | subagent-drawer redesign PR4-6 + 任务收尾 | `e66001e`, `3db2be2`, `d9f999f`, `393098c` | `refactor/redesign-sub-agent-drawer` |
 | 57 | 2026-06-21 | 修复 subagent drawer 空白 + status 卡 running（runId 错配 + 完成事件） | `f8b2623` | `main` |
 | 56 | 2026-06-21 | route deepseek via openai protocol (native reasoning_content) | `516145b` | `main` |
 | 55 | 2026-06-21 | fix deepseek relay thinking-block drop (turn-2 400) | `55aa9f3` | `main` |

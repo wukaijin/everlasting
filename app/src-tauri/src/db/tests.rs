@@ -2383,7 +2383,7 @@ async fn subagent_runs_insert_creates_running_row() {
     )
     .await
     .unwrap();
-    let id = insert_run(&pool, &s.id, "rid-test", "researcher")
+    let id = insert_run(&pool, &s.id, "rid-test", "researcher", None)
         .await
         .unwrap();
     let row = get_run(&pool, &id).await.unwrap().expect("row exists");
@@ -2407,6 +2407,8 @@ async fn subagent_runs_insert_creates_running_row() {
         "fresh row → token_usage_json seeded"
     );
     assert!(row.summary.is_none(), "running → summary=NULL");
+    assert!(row.task.is_none(), "task=None at insert → column NULL");
+    assert!(row.final_text.is_none(), "running → final_text=NULL");
     assert!(!row.started_at.is_empty());
     assert!(!row.created_at.is_empty());
 }
@@ -2428,7 +2430,7 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
     )
     .await
     .unwrap();
-    let id = insert_run(&pool, &s.id, "rid-test", "general-purpose")
+    let id = insert_run(&pool, &s.id, "rid-test", "general-purpose", None)
         .await
         .unwrap();
     let usage = TokenUsage {
@@ -2447,6 +2449,7 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
         SubagentStatusDb::Completed,
         "2026-06-20T00:00:00+00:00",
         "found 3 files",
+        "found 3 files",
         &usage,
         &transcript,
         false,
@@ -2457,6 +2460,11 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
     assert_eq!(row.status, "completed");
     assert_eq!(row.finished_at.as_deref(), Some("2026-06-20T00:00:00+00:00"));
     assert_eq!(row.summary.as_deref(), Some("found 3 files"));
+    assert_eq!(
+        row.final_text.as_deref(),
+        Some("found 3 files"),
+        "final_text column reflects the same final assistant text"
+    );
     assert_eq!(row.transcript_truncated, 0);
     let parsed_usage: TokenUsage =
         serde_json::from_str(row.token_usage_json.as_deref().unwrap()).unwrap();
@@ -2481,7 +2489,7 @@ async fn subagent_runs_update_finished_records_truncated_flag() {
     )
     .await
     .unwrap();
-    let id = insert_run(&pool, &s.id, "rid-test", "researcher")
+    let id = insert_run(&pool, &s.id, "rid-test", "researcher", None)
         .await
         .unwrap();
     let empty = vec![];
@@ -2490,6 +2498,7 @@ async fn subagent_runs_update_finished_records_truncated_flag() {
         &id,
         SubagentStatusDb::Error,
         "2026-06-20T00:00:00+00:00",
+        "",
         "",
         &TokenUsage::default(),
         &empty,
@@ -2517,10 +2526,10 @@ async fn subagent_runs_cascade_delete_with_parent_session() {
     )
     .await
     .unwrap();
-    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher")
+    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher", None)
         .await
         .unwrap();
-    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose")
+    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose", None)
         .await
         .unwrap();
     // Sanity: both rows are there.
@@ -2548,12 +2557,12 @@ async fn subagent_runs_list_by_session_orders_by_started_desc() {
     )
     .await
     .unwrap();
-    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher")
+    let id1 = insert_run(&pool, &s.id, "rid-1", "researcher", None)
         .await
         .unwrap();
     // Tiny sleep so `started_at` advances between inserts.
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose")
+    let id2 = insert_run(&pool, &s.id, "rid-2", "general-purpose", None)
         .await
         .unwrap();
     let rows = list_runs_by_session(&pool, &s.id).await.unwrap();
@@ -2640,7 +2649,7 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
     .await
     .unwrap();
     // Insert + complete 1 run with a populated transcript + summary.
-    let id = insert_run(&pool, &s.id, "rid-summary", "researcher")
+    let id = insert_run(&pool, &s.id, "rid-summary", "researcher", None)
         .await
         .unwrap();
     let usage = TokenUsage {
@@ -2658,6 +2667,7 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         &id,
         SubagentStatusDb::Completed,
         "2026-06-20T00:00:00+00:00",
+        "summary text",
         "summary text",
         &usage,
         &transcript,
@@ -2679,6 +2689,15 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         "status must be decoded to the typed enum (not the wire string)"
     );
     assert_eq!(sum.summary.as_deref(), Some("summary text"));
+    assert_eq!(
+        sum.final_text.as_deref(),
+        Some("summary text"),
+        "final_text projected into summary"
+    );
+    assert!(
+        sum.task.is_none(),
+        "task=None at insert → column NULL, projected as None"
+    );
     assert_eq!(sum.token_usage_json.as_deref(), Some(serde_json::to_string(&usage).unwrap().as_str()));
 }
 
@@ -2691,4 +2710,271 @@ async fn subagent_runs_list_runs_summary_by_session_empty() {
         .await
         .expect("empty list, no error");
     assert!(summaries.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// B6 redesign PR1 (2026-06-21): task + final_text columns
+// ---------------------------------------------------------------------------
+
+/// `insert_run` with `task = Some(...)` writes the task verbatim
+/// into the `task` column. The drawer reads this as the prompt
+/// card header — the prompt must land on the row the moment
+/// `insert_run` returns so the user can open the drawer mid-
+/// worker (before `update_run_finished` fires).
+#[tokio::test]
+async fn subagent_runs_insert_writes_task_column() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let task_text = "find all files that mention dispatch_subagent";
+    let id = insert_run(&pool, &s.id, "rid-task", "researcher", Some(task_text))
+        .await
+        .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.task.as_deref(), Some(task_text));
+    // task is non-NULL but the worker hasn't run yet → summary +
+    // final_text are still NULL.
+    assert!(row.summary.is_none());
+    assert!(row.final_text.is_none());
+    assert!(row.finished_at.is_none(), "still running");
+}
+
+/// `insert_run` with `task = None` leaves the column NULL. Mirrors
+/// the legacy pre-PR1 behavior — pre-existing test callers pass
+/// `None` so the migration remains backward-compatible.
+#[tokio::test]
+async fn subagent_runs_insert_with_none_task_leaves_column_null() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-no-task", "researcher", None)
+        .await
+        .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert!(row.task.is_none());
+}
+
+/// `update_run_finished` with `final_text` writes the column
+/// verbatim — the caller is responsible for pre-stripping the
+/// `[status: ...]\n` prefix (via
+/// `crate::agent::subagent::format_final_text`). This test
+/// exercises the storage-layer contract: the column carries
+/// whatever string the caller passes.
+#[tokio::test]
+async fn subagent_runs_update_finished_writes_final_text_column() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-ft", "general-purpose", Some("do the thing"))
+        .await
+        .unwrap();
+    // Caller passes the prefix-stripped final_text (per the
+    // run_subagent contract: format_final_text is invoked at the
+    // call site, not inside update_run_finished).
+    let stripped = "the worker finished and reported X";
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-06-21T12:00:00+00:00",
+        stripped, // summary (legacy wire field)
+        stripped, // final_text (drawer Reply segment)
+        &TokenUsage::default(),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.summary.as_deref(), Some(stripped));
+    assert_eq!(row.final_text.as_deref(), Some(stripped));
+    // task (written at insert) is preserved through the update.
+    assert_eq!(row.task.as_deref(), Some("do the thing"));
+    // final_text is independent of summary at the column level —
+    // a future PR could store different shapes per column (e.g.
+    // status-prefixed summary for the wire, prefix-stripped
+    // final_text for the UI).
+}
+
+/// Cancelled run: `final_text` carries the worker's partial text
+/// plus the `[已停止]` marker (the format `format_final_text`
+/// produces for `Cancelled` + non-empty worker_text). The status
+/// column carries `cancelled` independently.
+#[tokio::test]
+async fn subagent_runs_update_finished_cancelled_status_and_marker() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-cancel", "researcher", None)
+        .await
+        .unwrap();
+    // Mirror what run_subagent sends for a cancelled run with
+    // partial worker text.
+    let final_text = format!(
+        "partial analysis\n\n{}",
+        crate::agent::helpers::CANCELLED_MARKER
+    );
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Cancelled,
+        "2026-06-21T12:00:00+00:00",
+        &final_text,
+        &final_text,
+        &TokenUsage::default(),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.status, "cancelled");
+    assert!(row.finished_at.is_some());
+    assert_eq!(row.final_text.as_deref(), Some(final_text.as_str()));
+    assert!(row
+        .final_text
+        .as_deref()
+        .unwrap()
+        .contains(crate::agent::helpers::CANCELLED_MARKER));
+}
+
+/// Error run: `final_text` carries the error message verbatim
+/// (the `format_final_text` shape for `Error`). The `status`
+/// column carries `error` independently — the drawer renders
+/// the status badge from the column.
+#[tokio::test]
+async fn subagent_runs_update_finished_error_status_and_text() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-error", "general-purpose", None)
+        .await
+        .unwrap();
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Error,
+        "2026-06-21T12:00:00+00:00",
+        "LLM stream errored",
+        "LLM stream errored",
+        &TokenUsage::default(),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &id).await.unwrap().expect("row exists");
+    assert_eq!(row.status, "error");
+    assert_eq!(row.final_text.as_deref(), Some("LLM stream errored"));
+}
+
+/// `list_runs_by_session` returns rows with `task` + `final_text`
+/// populated (no column is dropped on the list path — the
+/// projected shape still carries the new fields).
+#[tokio::test]
+async fn subagent_runs_list_returns_task_and_final_text() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-list", "researcher", Some("prompt here"))
+        .await
+        .unwrap();
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-06-21T12:00:00+00:00",
+        "found 5 files",
+        "found 5 files",
+        &TokenUsage::default(),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
+    let rows = list_runs_by_session(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].task.as_deref(), Some("prompt here"));
+    assert_eq!(rows[0].final_text.as_deref(), Some("found 5 files"));
+}
+
+/// Migration idempotency: re-running the migration on a pre-PR1
+/// DB brings it up to date; re-running on a post-PR1 DB is a
+/// no-op. This is the regression guard for the
+/// `add_subagent_runs_column_if_missing` helper (analogous to
+/// the existing `add_session_column_if_missing` smoke tests).
+#[tokio::test]
+async fn subagent_runs_migration_is_idempotent_on_pr1_columns() {
+    let pool = make_pool().await;
+    // First run (above via `make_pool`) already added `task` +
+    // `final_text`. Re-run the migration — must NOT error.
+    crate::db::migrations::run_migrations(&pool)
+        .await
+        .expect("migration re-run is idempotent");
+    // Columns are still there.
+    let exists_task: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = 'task'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+    let exists_final: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = 'final_text'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .try_get(0)
+    .unwrap();
+    assert_eq!(exists_task, 1, "task column present");
+    assert_eq!(exists_final, 1, "final_text column present");
 }

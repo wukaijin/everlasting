@@ -121,6 +121,15 @@ impl SubagentStatusDb {
 /// PR3-API surface (frontend expand UI + C4 audit read). The
 /// `db/tests.rs` integration tests will exercise the row
 /// constructor via the `FromRow` derive.
+///
+/// 2026-06-21 (subagent drawer redesign PR1): two new nullable
+/// TEXT columns — `task` (the LLM's delegation prompt written at
+/// dispatch time) and `final_text` (the worker's terminal
+/// assistant text with the `[status: ...]\n` prefix stripped,
+/// written at worker exit). Both NULL for pre-PR1 rows; the
+/// frontend drawer falls back to `summary` when `final_text` is
+/// NULL (legacy compat) and renders `task` as the prompt card
+/// header.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +143,18 @@ pub struct SubagentRunRow {
     pub finished_at: Option<String>,
     pub token_usage_json: Option<String>,
     pub summary: Option<String>,
+    /// B6 redesign PR1 (2026-06-21): worker's final assistant text
+    /// with `[status: ...]\n` prefix stripped. The `status` column
+    /// carries the prefix independently — this field is the pure
+    /// summary text, suitable for direct display in the drawer's
+    /// Reply segment. `serde(rename_all = "camelCase")` projects
+    /// to `finalText` on the wire.
+    pub final_text: Option<String>,
+    /// B6 redesign PR1 (2026-06-21): the LLM's delegation prompt
+    /// at dispatch time (`input.task` of `dispatch_subagent`). The
+    /// drawer's prompt card renders this verbatim (with a length
+    /// truncation). NULL if the row pre-dates PR1 (legacy row).
+    pub task: Option<String>,
     pub transcript_json: Option<String>,
     pub transcript_truncated: i64,
     pub created_at: String,
@@ -160,6 +181,12 @@ pub struct SubagentRunRow {
 /// frontend can render the status badge without an extra parse
 /// step — the IPC layer's `Serialize` derive projects the enum
 /// to lowercase automatically.
+///
+/// 2026-06-21 (B6 redesign PR1): the projection also includes
+/// `task` + `final_text` so the drawer's list view can render
+/// the prompt + Reply segment without a separate per-run IPC
+/// (the heavy transcript is still excluded — list IPC stays
+/// KB-scale, not MB-scale).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -176,6 +203,11 @@ pub struct SubagentRunSummary {
     pub finished_at: Option<String>,
     pub token_usage_json: Option<String>,
     pub summary: Option<String>,
+    /// B6 redesign PR1 (2026-06-21): final assistant text (with
+    /// `[status: ...]\n` prefix stripped).
+    pub final_text: Option<String>,
+    /// B6 redesign PR1 (2026-06-21): LLM's delegation prompt.
+    pub task: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -192,11 +224,20 @@ pub struct SubagentRunSummary {
 /// Called from `agent::chat_loop::run_subagent` immediately before
 /// the nested `run_chat_loop` call. The returned id is the
 /// `worker_run_id` that PR3's expand UI fetches with [`get_run`].
+///
+/// `task` is the LLM's delegation prompt (`input.task` of
+/// `dispatch_subagent`). Written inline so the prompt is on the
+/// row the moment `insert_run` returns — this matters for the
+/// drawer: the user can open the drawer mid-worker (before
+/// `update_run_finished` fires) and see the prompt card. `None`
+/// for callers without a prompt (e.g. tests); pre-PR1 callers
+/// pass `None` and the column stays NULL (legacy compat).
 pub async fn insert_run(
     pool: &SqlitePool,
     parent_session_id: &str,
     parent_request_id: &str,
     subagent_name: &str,
+    task: Option<&str>,
 ) -> Result<String, sqlx::Error> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -207,8 +248,8 @@ pub async fn insert_run(
         INSERT INTO subagent_runs
         (id, parent_session_id, parent_request_id, subagent_name,
          status, started_at, finished_at, token_usage_json, summary,
-         transcript_json, transcript_truncated, created_at)
-        VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, '[]', 0, ?)
+         task, final_text, transcript_json, transcript_truncated, created_at)
+        VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, ?, NULL, '[]', 0, ?)
         "#,
     )
     .bind(&id)
@@ -217,6 +258,7 @@ pub async fn insert_run(
     .bind(subagent_name)
     .bind(&now)
     .bind(&empty_usage)
+    .bind(task)
     .bind(&now)
     .execute(pool)
     .await?;
@@ -233,7 +275,19 @@ pub async fn insert_run(
 /// The `summary` is the worker's `final_text` plain string
 /// (NO status prefix — the `status` column is the source of truth
 /// for the prefix; this matches the PRD's `summary 字段语义` decision
-/// "final_text 纯文本,status 字段独立").
+/// "final_text 纯文本,status 字段独立"). The `summary` field is the
+/// **legacy wire field** — pre-PR1 callers wrote it, post-PR1
+/// callers continue to write it for backward compat.
+///
+/// `final_text` is the same content as `summary` after
+/// `format_dispatch_result`'s `[status: ...]\n` prefix is
+/// stripped (PR1, 2026-06-21). The two fields intentionally
+/// carry the same string for completed runs; for cancelled
+/// runs `final_text` is `worker_text + "\n\n[CANCELLED_MARKER]"`
+/// (with the prefix stripped from the wrapper), and for error
+/// runs it's the error message. The drawer reads `final_text`
+/// as the Reply segment; legacy rows without `final_text` fall
+/// back to `summary` (the drawer's defensive read order).
 ///
 /// `token_usage` is the worker's final `TokenUsage` sum (across all
 /// the worker's turns). Serialized as JSON for the
@@ -251,6 +305,7 @@ pub async fn update_run_finished(
     status: SubagentStatusDb,
     finished_at: &str,
     summary: &str,
+    final_text: &str,
     token_usage: &TokenUsage,
     transcript: &[crate::agent::subagent::TranscriptEntry],
     transcript_truncated: bool,
@@ -264,6 +319,7 @@ pub async fn update_run_finished(
         SET status = ?,
             finished_at = ?,
             summary = ?,
+            final_text = ?,
             token_usage_json = ?,
             transcript_json = ?,
             transcript_truncated = ?
@@ -273,6 +329,7 @@ pub async fn update_run_finished(
     .bind(status.as_str())
     .bind(finished_at)
     .bind(summary)
+    .bind(final_text)
     .bind(&token_usage_json)
     .bind(&transcript_json)
     .bind(transcript_truncated as i64)
@@ -291,6 +348,15 @@ pub async fn update_run_finished(
 /// call this directly (no current IPC consumes it); the
 /// `db/tests.rs` integration test will exercise the read path
 /// to lock the schema.
+///
+/// 2026-06-21 (B6 redesign PR1): SELECT + row mapping expanded
+/// with `task` + `final_text` (the two new nullable TEXT
+/// columns). Pre-PR1 rows have NULL for both; the row mapping
+/// uses `try_get` so older databases still load (defensive
+/// against pre-PR1 deployments — the migration adds the
+/// columns but a snapshot taken mid-migration could in
+/// principle race; `try_get` on a NULL TEXT returns `Ok(None)`
+/// either way).
 #[allow(dead_code)]
 pub async fn get_run(
     pool: &SqlitePool,
@@ -300,7 +366,8 @@ pub async fn get_run(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               transcript_json, transcript_truncated, created_at
+               final_text, task, transcript_json, transcript_truncated,
+               created_at
         FROM subagent_runs
         WHERE id = ?
         "#,
@@ -320,6 +387,8 @@ pub async fn get_run(
             finished_at: r.try_get("finished_at")?,
             token_usage_json: r.try_get("token_usage_json")?,
             summary: r.try_get("summary")?,
+            final_text: r.try_get("final_text")?,
+            task: r.try_get("task")?,
             transcript_json: r.try_get("transcript_json")?,
             transcript_truncated: r.try_get("transcript_truncated")?,
             created_at: r.try_get("created_at")?,
@@ -337,6 +406,9 @@ pub async fn get_run(
 /// call this directly (no current IPC consumes it); the
 /// `db/tests.rs` integration test will exercise the read path
 /// to lock the schema.
+///
+/// 2026-06-21 (B6 redesign PR1): SELECT + row mapping expanded
+/// with `task` + `final_text` (same rationale as `get_run`).
 #[allow(dead_code)]
 pub async fn list_runs_by_session(
     pool: &SqlitePool,
@@ -346,7 +418,8 @@ pub async fn list_runs_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               transcript_json, transcript_truncated, created_at
+               final_text, task, transcript_json, transcript_truncated,
+               created_at
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -367,6 +440,8 @@ pub async fn list_runs_by_session(
                 finished_at: r.try_get("finished_at")?,
                 token_usage_json: r.try_get("token_usage_json")?,
                 summary: r.try_get("summary")?,
+                final_text: r.try_get("final_text")?,
+                task: r.try_get("task")?,
                 transcript_json: r.try_get("transcript_json")?,
                 transcript_truncated: r.try_get("transcript_truncated")?,
                 created_at: r.try_get("created_at")?,
@@ -403,7 +478,8 @@ pub async fn list_runs_summary_by_session(
     let rows = sqlx::query(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
-               status, started_at, finished_at, token_usage_json, summary
+               status, started_at, finished_at, token_usage_json, summary,
+               final_text, task
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -425,6 +501,8 @@ pub async fn list_runs_summary_by_session(
                 finished_at: r.try_get("finished_at")?,
                 token_usage_json: r.try_get("token_usage_json")?,
                 summary: r.try_get("summary")?,
+                final_text: r.try_get("final_text")?,
+                task: r.try_get("task")?,
             })
         })
         .collect()

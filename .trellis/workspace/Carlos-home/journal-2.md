@@ -1343,3 +1343,164 @@ Trellis check agent 抓到 2 个 HIGH bug + 3 个 LOW cleanup：
 - RULE-FrontSubagent-001 (P3): 抽 `.tool-card` CSS 到全局 utility class（避免 SubagentDrawer vs ToolCallCard 双源维护）
 - RULE-FrontSubagent-002 (P3): pairTranscript third-param → composable 化（消除隐式 Map 状态）
 - v2 OOS：worker transcript summary 回传 parent context（review defect B，独立任务待建）
+
+## Session 41: B6 subagent-drawer redesign PR2 — RunAccumulator
+
+PR2 of subagent-drawer redesign (task `06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`)。PR1 (`86a81b2`) 已落 DB 列 `task` + `final_text`；PR2 落地前端 store 累加器层。
+
+### Done
+
+- `app/src/stores/subagentRuns.ts`:**RunAccumulator 类**新增 (777 行) — 每 runId 持 1 个 thinkingSegment + 1 个 textSegment,O(1) 累加,markRaw 包裹原始 events
+- 新类型族:`TranscriptSection` discriminated union (6 kind: Thinking / Text / FinalText / ToolCall / ToolResult / PermissionAsk) — 取代 `liveTranscript: Map<runId, TranscriptEntry[]>` 的 UI surface,改用 `liveSections: Map<runId, TranscriptSection[]>`
+- `routeEvent` 改走 accumulator `feed()` 路径;`chat_event` 按 `payload_json.kind` (Anthropic SSE inner discriminator) 分发:thinking_delta / delta / signature_delta / redacted_thinking_delta
+- `fetchRun` 落 `acc.rebuildFromCache(row.transcriptJson, row.finalText)` 走线性 walk 替换内存 transcript(worker finished 路径)
+- `rebuildFromCache` 末位 append `FinalText` 段(从 PR1 `final_text` 列取)
+- 3 个 fixture-only 改动:`SubagentRunSummary` / `SubagentRunRow` 加 `task` / `finalText` 字段(镜像 PR1 后端 wire shape);`SubagentDrawer.test.ts` / `ToolCallCard.test.ts` / `subagentRuns.test.ts` 的 fixture 同步
+
+### Bug Found by check Agent (R20 invariant)
+
+- **`feed()` pre-fix 是 O(N²)**:每条 event 都 `[...this.rawEventsShallow.value, entry]`(数组 spread)。20k events 测出来 1317ms(单测构造 perf),违反 R20 "O(1) per event, does not rebuild the array" + AC "20000 events 冷启动 <500ms"(若套到 live path)
+- **Fix**:`feed()` 不再动 `rawEventsShallow.value`(移出 live path);`rawEvents` 只由 `rebuildFromCache` 写(冷路径,实际 AC 适用);20k live feed = **1.5ms** (880x);20k rebuild = **13.6ms** (PRD 500ms ceiling 的 36x headroom)
+- **markRaw lock test 同步改**:改用 `rebuildFromCache` 种数据(原来用 `feed` 种),`__v_skip` 断言仍真
+- **教训**:`rawEvents` 是 test-only handle,不是 runtime buffer;如果未来 test 要检视 live 原始流,种数据走 `rebuildFromCache` 而非 `feed`
+
+### Cross-Layer Drift Trap 3 (NEW)
+
+`chat_event.payload_json.kind` (Anthropic SSE inner discriminator) — switch 必须 exhaustive(Anthropic 加新 SSE event type 但 switch 不更 = 静默数据丢失 bug)。Drift trap 1 (status) + 2 (payload_json vs payload camelCase) 保留。
+
+### Dead Code (flag for cleanup, not blocking)
+
+- `chatEventSignature` export:未来 "verify thinking-block signature on rehydrate" 用;当前无 caller,留作 public API
+- `appendFinalText` / `closeTextSegment` export:未来 streaming final text 到 Text 段用;当前 `finalText` 走 `rebuildFromCache` 一次性写,无 live path
+- 跟未来 PR 配套;若未来 PR 不落地,再批量删
+
+### Spec Update
+
+- `.trellis/spec/frontend/state-management.md` 新增 "subagentRuns RunAccumulator (B6 redesign PR2, 2026-06-21)" 章节,239 行:TranscriptSection 6 kind + RunAccumulator API + chat_event discriminator 矩阵 + R20/R21/R22 invariants + O(N²) cautionary tale + dead code flag + perf contract
+
+### Git Commit
+
+| Hash | Message |
+|------|---------|
+| `6e077b3` | feat(subagent-drawer PR2): RunAccumulator + delete chat_event exposure |
+
+### Testing
+
+- `pnpm exec vue-tsc --noEmit`: **0 errors**
+- `pnpm exec vitest run`: **21 files / 332 pass** (+11 new accumulator tests:4 wire kind pass-through + 5 segment accumulator + 1 markRaw lock + 1 20k perf benchmark)
+- `pnpm exec vitest run src/stores/subagentRuns.test.ts`: 40/40 (29 old + 11 new)
+- `pnpm exec vitest run src/components/chat/SubagentDrawer.test.ts`: 39/39 (fixture only, no logic change)
+- `pnpm exec vitest run src/components/chat/ToolCallCard.test.ts`: 17/17 (fixture only)
+- 20k events `rebuildFromCache` 冷启动:**13.6ms** (PRD ceiling 500ms, 36x headroom)
+- 20k events `feed()` live 累加:1.5ms (post-fix from 1317ms O(N²))
+- markRaw lock test:`__v_skip === true` 验证
+- streamController.test.ts 4 unhandled-rejection:pre-existing(PR1-only 状态复测同样),与本 PR 无关
+
+### Status
+
+[OK] **PR2 landed** — RunAccumulator 累加器层就位,chat_event 暴露删除(per R9 精神;drawer 视觉 toggle 删是 PR5 任务),SubagentDrawer.vue 视觉重写(5 段 header/prompt/thinking/tools/reply)留给 PR5。
+
+### Next Steps (per PRD §Implementation Plan)
+
+- **PR3** (~120 行):`MarkdownDetailModal.vue` (reka-ui DialogRoot) + `useTruncate` composable,无依赖,可与 PR2 串行
+- **PR4** (~200 行):`DrawerThinkingBlock.vue` / `DrawerToolCallCard.vue` props 化子组件,内部复用主 panel `ThinkingBlock` / `ToolCallCard` 视觉原语,主路径 0 改动
+- **PR5** (~400 行):SubagentDrawer 5 段分组折叠重写,默认 Thinking 折叠 / Tools + Reply 展开,live spinner,替换 `liveTranscript` → `liveSections` 消费,**依赖 PR2/3/4**
+- **PR6** (~150 行 + docs):边界态 (cancelled / permission_ask / error) + spec/frontend/chat.md 新章节 + ROADMAP + DEBT.md 回填 grill-me 决策(Q1-Q10)
+- 死代码清理(`chatEventSignature` / `appendFinalText` / `closeTextSegment`):若后续 PR 不接 consumer,可批量删
+- check agent 提示的 PR6 pending-asks 跟踪:新 PermissionAsk vs 已答 PermissionAsk 区分,可能需要单独 Map(非 liveSections 维度)
+
+## Session 42: B6 subagent-drawer redesign PR3 — MarkdownDetailModal + useTruncate
+
+PR3 of subagent-drawer redesign。无前置依赖(per PRD §Implementation Plan),ship 两个**通用可复用**构建块,PR5 消费:
+
+### Done
+
+- `app/src/components/common/MarkdownDetailModal.vue`:**reka-ui Dialog* 6-piece 模态**,mirrors 既有 `MemoryModal.vue` / `SettingsModal.vue` 模式(DialogRoot + Portal + Overlay + Content + Title + Close)。Props:`{ open, title, markdown, source?: 'prompt' | 'reply' | 'worker' }`。`source` 驱动 header chip + 语义 tool-color token。z-index 2000/2001(在 drawer 的 1000 之上),body 滚动 (max-height + overflow-y: auto),关闭触发器:Esc / X / overlay pointerdown-outside
+- `app/src/utils/useTruncate.ts`:纯 markdown-aware 字符串截断函数(`truncate(text, maxChars, suffix?)`)。**单次 O(N) 线性扫描**,track 两个 backtick 状态:fence (>=3 个) + inline (1 个)。边界落在 code region 内 → backtrack 到 opener;只有 safe boundary 是 index 0 时 → hard cut 兜底(避免退化解无限循环)。默认 suffix `…` (U+2026)。Default budget 文档化在 file header:`task`=120 / `finalText`=280
+- 放置约定:**`use*` 前缀放 `app/src/utils/`**(跟 `useKeyboard.ts` 同目录),**不是** `app/src/composables/`。函数本身是纯函数(无 reactivity),无需包成 Vue composable
+- `MarkdownDetailModal.test.ts` + `useTruncate.test.ts`:43 个新 vitest case
+
+### Algorithm Decision: Linear Scan, NOT Regex
+
+- Markdown grammar 是 context-sensitive(链接含 `[`,code 含 backtick,fence 可在 list item 内)— regex 解析要么 over-trim (false positive on `[` in code) 要么 under-trim (false negative on `>3` backticks)
+- 单次线性 scan + 显式 backtick-run state 是 simplest correct approach
+- 性能契约:100k chars + embedded fences <50ms(locked by test)。PR5 实际输入 `finalText` <2k / `task` <500 远低于压测 ceiling
+- 链接 (`[text](url)`) 允许被截断 — 只有 fenced / inline code region 享 "push to safe boundary" 待遇(简单 heuristic,够用)
+
+### Test Gotchas (mirrors Session 51+ memory)
+
+- `Icon` stub `textContent` 不含字符(SVG not text)— 断言走 `querySelector('.markdown-detail-modal__title-text')` 而非 `textContent` includes
+- reka-ui `DialogContent` Teleport DOM leak 跨 test — `beforeEach` 必须 `.markdown-detail-modal` + `.markdown-detail-modal__overlay` 从 `document.body` 移除
+
+### Spec Update
+
+- `.trellis/spec/frontend/state-management.md` 新增 "subagentRuns PR3 reusable pieces" 章节 (+96):模态挂载点(app level,非 drawer 内)+ useTruncate 算法 + Common Mistake (regex 警告) + test gotchas + default budget 表
+
+### Risk Flags for PR5
+
+- `MarkdownDetailSource` type 已 export,PR5 `source="prompt" | "reply"` 时导入用 type-safety。`source="worker"` 预留未来,PR5 不接
+- 模态 mount at chat-panel 或 App level,**不要** mount 在 drawer 内 — drawer 的 v-if 关闭会 unmount 子树,modal portal 的 lifecycle 跟 drawer 不同
+- 280/120 budget 是 file header docstring,PR5 直接用字面量;若后续发现 280/120 调优,改 PR5 即可,useTruncate 自己无需常量化
+
+### Git Commit
+
+| Hash | Message |
+|------|---------|
+| `a39ad00` | feat(subagent-drawer PR3): MarkdownDetailModal + useTruncate |
+
+### Testing
+
+- `pnpm exec vue-tsc --noEmit`: **0 errors**
+- `pnpm exec vitest run`: **21 files / 375 pass** (+43 new:23 useTruncate + 20 MarkdownDetailModal)
+- `pnpm exec vitest run app/src/utils/useTruncate.test.ts`: 23/23 (7ms)
+- `pnpm exec vitest run app/src/components/common/MarkdownDetailModal.test.ts`: 20/20 (362ms)
+- `pnpm build`: production build OK(只有 pre-existing vueuse annotation warnings + 731KB bundle size warning)
+- 100k chars + embedded fences:<50ms perf 断言 pass
+
+### Status
+
+[OK] **PR3 landed** — 通用可复用组件层就位,无 subagent-drawer-specific 耦合。PR5 可直接 mount + import。`SubagentDrawer.vue` 仍保留旧 chat_event 暴露 + 平铺布局(per PR5 任务)。
+
+### Next Steps
+
+- **PR4** (~200 行,无依赖):`DrawerThinkingBlock.vue` / `DrawerToolCallCard.vue` props 化子组件,内部复用主 panel `ThinkingBlock` / `ToolCallCard` 视觉原语(R6 决策:**抽视觉子组件,不改主 panel**)。`MessageItem.vue` / `ToolCallCard.vue` 主路径 0 改动
+- **PR5** (依赖 PR2/3/4):SubagentDrawer 5 段分组折叠重写;现在 `liveSections` + `MarkdownDetailModal` + `useTruncate` 三个 PR 的产物都是 PR5 消费者
+- **PR6**:边界态 + spec/frontend/chat.md + ROADMAP/DEBT 回填
+- 死代码:`chatEventSignature` / `appendFinalText` / `closeTextSegment` 若后续不接 consumer,批量删
+
+
+
+## Session 58: subagent-drawer redesign PR4-6 + 任务收尾
+
+**Date**: 2026-06-21
+**Task**: subagent-drawer redesign PR4-6 + 任务收尾
+**Branch**: `refactor/redesign-sub-agent-drawer`
+
+### Summary
+
+PR4 Drawer 视觉子组件(DrawerThinkingBlock/DrawerToolCallCard,复用视觉不 wrap store 耦合的 ToolCallCard)+ PR5 5 段分组折叠重写(accumulator liveSections 数据源 + pairSections section 级配对 snake→camel + 删 chat_event 暴露)+ PR6 边界态(R25 error 4级fallback / R23 cancelled 降级 wall-clock / R24 permission_ask 降级 historical,2 降级因后端 worker is_worker 架构限制)。每 PR 过 trellis-implement→check,主路径(PR1-5/后端/store)跨 PR 0 改动,20k events benchmark 13.4ms(<500ms AC)。新建 .trellis/spec/frontend/chat.md。收尾:DEBT 回填(003/004/FrontTest-001 + grill-me Q1-Q10 决策索引)+ ROADMAP B6 标记完成 + archive。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e66001e` | (see git log) |
+| `3db2be2` | (see git log) |
+| `d9f999f` | (see git log) |
+| `393098c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
