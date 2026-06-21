@@ -138,7 +138,7 @@ re-grill 锁定 10 决策,把决策层重构:
 
 ```
 Tier 1. Hooks           (MVP no-op)
-Tier 2. Deny rules      (硬 kill list,shell 9 个 regex,Yolo 走 — 静默拒)
+Tier 2. Deny rules      (硬 kill list,shell 10 个 regex,Yolo 走 — 静默拒)
 Tier 3. Mode check      (Plan 拦截 write/edit/shell,text 错,不发 modal)
 Tier 4. Path / Prefix / External policy
        ├─ Path 工具:is_within_root → 查 session_tool_permissions
@@ -160,7 +160,7 @@ Tier 6. Audit           (写 session_audit_events)
 | "始终允许"持久化 | 只 `tool` | **3 种 match_kind: tool + path-glob + prefix** |
 | shell 策略 | 总是 Tier 3 | **白名单/asklist/未知 三档**(prefix 解析) |
 | Yolo × 仓库外 | 走 Tier 3 modal | **silent**(Yolo bypass Tier 4) |
-| Tier 2 kill list | 9 regex | **不变** |
+| Tier 2 kill list | 9 regex → 10 regex | **不变**(RULE-B-004 加 find -delete/-exec 后 10 条) |
 | `PermissionAskPayload` | rid + tool + input + risk + reason | + **`path: Option<String>`** (新, `skip_serializing_if`) |
 | `Risk` 字段 | 4 档 | 不变(4 档,UI 视觉) |
 
