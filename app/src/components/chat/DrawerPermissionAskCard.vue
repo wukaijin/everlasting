@@ -1,11 +1,44 @@
 <script setup lang="ts">
 // DrawerPermissionAskCard — drawer-side permission-ask card.
 //
-// PR5 of the subagent-drawer redesign (2026-06-21). Per PRD R24:
-// the drawer renders `PermissionAskSection` entries as static
-// historical-mode cards (PR5 scope). PR6 will replace this with
-// interactive Allow / Deny buttons wired to the `permission:response`
-// IPC.
+// PR5 of the subagent-drawer redesign (2026-06-21). Renders
+// `PermissionAskSection` entries as static historical-mode cards.
+//
+// PR6 (2026-06-21) — R24 DOWNGRADE: historical-mode ONLY.
+//
+// The PRD's R24 originally specified interactive Allow / Deny buttons
+// wired to the `permission:response` IPC. After Explore-agent
+// investigation this is NOT possible without backend restructuring:
+//
+//   - Worker's `PermissionContext.is_worker = true` (see
+//     `app/src-tauri/src/agent/permissions/mod.rs:287`). When the
+//     worker Tier 4 `ask_path` / `ask_shell` branch fires, the worker
+//     context causes an immediate `Decision::Deny` collapse — the
+//     worker NEVER emits a `permission:ask` IPC for path / shell
+//     tools (`mod.rs:1003-1045`).
+//   - For the cases that DO surface here (historical `permission_ask`
+//     transcript entries from RULE-A-016 / FT-A-016 PR3a — worker
+//     wanted a path/shell tool, the collapse was logged to transcript
+//     instead of parent audit), the entries carry synthetic rids
+//     (`uuid::Uuid::new_v4()`) that are NOT registered in any
+//     `permission_asks: PermissionStore` oneshot map. The
+//     `permission_response` IPC handler (`commands/permissions.rs:197-234`)
+//     cannot route a response back to the worker.
+//   - Worker reuses `parent_session_id` (`agent/subagent.rs:597`) with
+//     no independent permission session — an interactive response
+//     would have no receiver.
+//
+// Future implementation path (TODO — tracked in DEBT.md R24):
+//   - Give workers an independent permission session (own session_id
+//     in the permission store, own oneshot map entries).
+//   - Surface worker `permission:ask` events to the frontend with a
+//     `workerRunId` field so the drawer can correlate them.
+//   - Change the worker Tier 4 `ask_path` / `ask_shell` collapse to
+//     actually emit (not deny) when the worker has a UI-side receiver.
+//
+// Until then, this card is historical-only. The user sees the
+// collapsed-ask context but CANNOT approve / deny from the drawer —
+// the worker has already auto-denied by the time the card renders.
 //
 // Why a dedicated wrapper (not just inlining `PermissionAskBody` in
 // the drawer):
@@ -58,10 +91,10 @@ const headerName = computed<string>(() => props.ask.toolName || "permission ask"
           <Icon name="shield-check" :size="14" />
         </span>
         <span class="drawer-permission-ask-card__name">{{ headerName }}</span>
-        <span class="drawer-permission-ask-card__suffix">(ask collapsed)</span>
+        <span class="drawer-permission-ask-card__suffix">权限询问</span>
       </div>
       <div class="drawer-permission-ask-card__status">
-        <span>历史</span>
+        <span>worker · 自动拒绝</span>
       </div>
     </div>
     <PermissionAskBody
@@ -69,6 +102,15 @@ const headerName = computed<string>(() => props.ask.toolName || "permission ask"
       :ask="ask"
       :repo-root="repoRoot"
     />
+    <!-- PR6 R24 downgrade notice: make it visually explicit that this
+         card is historical-only. The worker context auto-denies the
+         ask at the permission layer (RULE-A-016 / FT-A-016 PR3a
+         collapse); the user cannot approve / deny from the drawer.
+         See file header for the full R24 downgrade rationale + the
+         TODO for the future interactive path. -->
+    <p class="drawer-permission-ask-card__auto-denied-note">
+      worker context · ask collapsed · 自动拒绝（不可交互）
+    </p>
   </div>
 </template>
 
@@ -134,5 +176,20 @@ const headerName = computed<string>(() => props.ask.toolName || "permission ask"
   font-size: 11px;
   color: var(--color-text-muted);
   flex-shrink: 0;
+}
+
+/* PR6 R24: explicit "auto-denied · not interactive" notice below the
+   historical body. Amber tint to signal the worker-context collapse
+   (matches the card's left-border accent). */
+.drawer-permission-ask-card__auto-denied-note {
+  margin: 6px 0 0 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-tool-shell) 10%, transparent);
+  color: var(--color-tool-shell);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.4;
+  font-style: italic;
 }
 </style>

@@ -26,6 +26,15 @@
 //  14. Clicking the X (DialogClose) clears `openRunId`.
 //  15. Failure banner (FT-F-005) for error / cancelled states.
 //
+// PR6 (2026-06-21) additions — 3 boundary states:
+//  16. Error card (R25): status=error renders ❌ card with message
+//      extracted via the 4-level fallback (transcriptJson last error
+//      event → finalText → summary → canned).
+//  17. Cancelled chip (R23 downgraded): status=cancelled renders
+//      `⊘ Cancelled · at X.Xs` chip at the top of the Reply segment.
+//  18. PermissionAsk historical-mode not regressed by R24 downgrade
+//      (card still renders; auto-denied notice is present).
+//
 // Uses real Pinia + mocked Tauri (no IPC actually fires in these
 // tests — we drive the store directly). The reka-ui Dialog portal is
 // not jsdom-friendly (it uses <Teleport to="body">), so we rely on
@@ -670,5 +679,285 @@ describe("SubagentDrawer", () => {
     expect(document.body.querySelector(".subagent-drawer__filter-row")).toBeNull();
     expect(document.body.querySelector(".subagent-drawer__event-count")).toBeNull();
     w.unmount();
+  });
+
+  // -----------------------------------------------------------------
+  // PR6 (2026-06-21) — boundary states: error / cancelled / permission_ask
+  // -----------------------------------------------------------------
+
+  describe("PR6 R25 — error card (status=error)", () => {
+    it("renders the error card when status=error", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      await openWith(store, {
+        status: "error",
+        startedAt: "2026-06-20T10:00:00.000Z",
+        finishedAt: "2026-06-20T10:00:11.700Z",
+        summary: "boom",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const card = document.body.querySelector(".subagent-drawer__error-card");
+      expect(card).not.toBeNull();
+      // Header carries the "Worker error" title + shield-x icon.
+      expect(card?.querySelector(".subagent-drawer__error-title")?.textContent)
+        .toBe("Worker error");
+      // Message body is present (fallback chain hit level 3 = summary).
+      expect(card?.querySelector(".subagent-drawer__error-message")?.textContent)
+        .toBe("boom");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("error message prefers transcriptJson last chat_event/error entry (level 1)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      // transcriptJson with an inner error event — the LAST chat_event
+      // in the array carries kind="error" + message. Earlier events
+      // are non-error (delta) and MUST be skipped by the reverse scan.
+      const transcriptJson = JSON.stringify([
+        { kind: "chat_event", payload_json: { kind: "delta", text: "partial..." } },
+        { kind: "tool_call", payload_json: { name: "grep", tool_use_id: "tu-1" } },
+        { kind: "chat_event", payload_json: { kind: "error", message: "LLM stream timeout after 30s" } },
+      ]);
+      await openWith(store, {
+        status: "error",
+        transcriptJson,
+        finalText: "fallback final text",
+        summary: "fallback summary",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const msg = document.body.querySelector(".subagent-drawer__error-message")?.textContent;
+      // Level 1 wins — the transcriptJson error message is used, not
+      // finalText or summary.
+      expect(msg).toBe("LLM stream timeout after 30s");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("error message falls back to finalText when transcriptJson has no error event (level 2)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      // transcriptJson with NO inner error event — fallback to finalText.
+      const transcriptJson = JSON.stringify([
+        { kind: "chat_event", payload_json: { kind: "delta", text: "partial..." } },
+      ]);
+      await openWith(store, {
+        status: "error",
+        transcriptJson,
+        finalText: "worker exited with stderr output",
+        summary: "summary-not-used-here",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const msg = document.body.querySelector(".subagent-drawer__error-message")?.textContent;
+      expect(msg).toBe("worker exited with stderr output");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("error message falls back to summary when finalText is null (level 3)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      await openWith(store, {
+        status: "error",
+        transcriptJson: null,
+        finalText: null,
+        summary: "only summary available",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const msg = document.body.querySelector(".subagent-drawer__error-message")?.textContent;
+      expect(msg).toBe("only summary available");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("error message falls back to canned string when all sources empty (level 4)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      await openWith(store, {
+        status: "error",
+        transcriptJson: null,
+        finalText: null,
+        summary: null,
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const msg = document.body.querySelector(".subagent-drawer__error-message")?.textContent;
+      expect(msg).toBe("(no error text captured)");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("does NOT render the error card when status is not error", async () => {
+      const store = useSubagentRunsStore();
+      await openWith(store, { status: "completed" });
+      const w = makeDrawer();
+      await flushPromises();
+      expect(document.body.querySelector(".subagent-drawer__error-card")).toBeNull();
+      w.unmount();
+    });
+
+    it("ignores non-error chat_event entries when scanning for the error message", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:11.700Z"));
+      const store = useSubagentRunsStore();
+      // An error-like message appears in a DELTA event's text — this
+      // is NOT an error event (kind=delta) and MUST be skipped. The
+      // fallback chain should continue to finalText.
+      const transcriptJson = JSON.stringify([
+        { kind: "chat_event", payload_json: { kind: "delta", text: "Error: something failed" } },
+      ]);
+      await openWith(store, {
+        status: "error",
+        transcriptJson,
+        finalText: "real final text",
+        summary: null,
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const msg = document.body.querySelector(".subagent-drawer__error-message")?.textContent;
+      // The delta's "Error: something failed" must NOT win — only
+      // inner kind=error counts. finalText is the winner here.
+      expect(msg).toBe("real final text");
+      w.unmount();
+      vi.useRealTimers();
+    });
+  });
+
+  describe("PR6 R23 (downgraded) — cancelled chip in Reply segment", () => {
+    it("renders ⊘ Cancelled chip with terminal duration when status=cancelled", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:05.300Z"));
+      const store = useSubagentRunsStore();
+      await openWith(store, {
+        status: "cancelled",
+        startedAt: "2026-06-20T10:00:00.000Z",
+        finishedAt: "2026-06-20T10:00:05.300Z",
+      });
+      const w = makeDrawer();
+      await flushPromises();
+
+      const chip = document.body.querySelector(".subagent-drawer__reply-cancelled");
+      expect(chip).not.toBeNull();
+      // 5.3s = (5300ms / 1000).toFixed(1)
+      expect(chip?.textContent).toContain("⊘ Cancelled");
+      expect(chip?.textContent).toContain("at 5.3s");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("cancelled chip renders even when replyText is empty (segment visibility)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:05.300Z"));
+      const store = useSubagentRunsStore();
+      // No sections → replyText empty. The Reply segment MUST still
+      // render because the template's v-if includes status === 'cancelled'.
+      await openWith(store, {
+        status: "cancelled",
+        startedAt: "2026-06-20T10:00:00.000Z",
+        finishedAt: "2026-06-20T10:00:05.300Z",
+      }, []);
+      const w = makeDrawer();
+      await flushPromises();
+
+      expect(document.body.querySelector('.drawer-section[data-type="reply"]')).not.toBeNull();
+      expect(document.body.querySelector(".subagent-drawer__reply-cancelled")).not.toBeNull();
+      // No reply body (empty) and no "Worker has not produced a reply"
+      // placeholder (cancelled gate suppresses it).
+      expect(document.body.querySelector(".subagent-drawer__reply-body")).toBeNull();
+      expect(document.body.querySelector(".subagent-drawer__reply-empty")).toBeNull();
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("cancelled chip renders ABOVE reply body when worker produced text before stop", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-20T10:00:05.300Z"));
+      const store = useSubagentRunsStore();
+      const sections: TranscriptSection[] = [
+        { kind: "Text", text: "partial reply before stop", chars: 25 },
+      ];
+      await openWith(store, {
+        status: "cancelled",
+        startedAt: "2026-06-20T10:00:00.000Z",
+        finishedAt: "2026-06-20T10:00:05.300Z",
+      }, sections);
+      const w = makeDrawer();
+      await flushPromises();
+
+      // BOTH the cancelled chip and the reply body render (PR6
+      // implementation choice: chip + preserved reply so user can
+      // inspect the worker's partial output).
+      expect(document.body.querySelector(".subagent-drawer__reply-cancelled")).not.toBeNull();
+      const replyBody = document.body.querySelector(".subagent-drawer__reply-body");
+      expect(replyBody).not.toBeNull();
+      expect(replyBody?.textContent).toContain("partial reply before stop");
+      w.unmount();
+      vi.useRealTimers();
+    });
+
+    it("does NOT render cancelled chip when status is not cancelled", async () => {
+      const store = useSubagentRunsStore();
+      await openWith(store, { status: "completed" });
+      const w = makeDrawer();
+      await flushPromises();
+      expect(document.body.querySelector(".subagent-drawer__reply-cancelled")).toBeNull();
+      w.unmount();
+    });
+  });
+
+  describe("PR6 R24 (downgraded) — permission_ask historical-mode not regressed", () => {
+    it("DrawerPermissionAskCard still renders with auto-denied notice (historical only)", async () => {
+      const store = useSubagentRunsStore();
+      const chatStore = useChatStore();
+      chatStore.currentCwd = "/data/repo";
+      const sections: TranscriptSection[] = [
+        {
+          kind: "PermissionAsk",
+          payload_json: {
+            rid: "r-1",
+            sessionId: "sess-1",
+            toolUseId: "tu-1",
+            toolName: "write_file",
+            toolInput: { path: "/data/repo/x" },
+            risk: "medium",
+            path: "/data/repo/x",
+          },
+        },
+      ];
+      await openWith(store, {}, sections);
+      const w = makeDrawer();
+      await flushPromises();
+
+      const cards = w.findAllComponents(DrawerPermissionAskCard);
+      expect(cards.length).toBe(1);
+      // The R24 downgrade adds an explicit "worker · 自动拒绝" status
+      // pill + the auto-denied notice line. Lock both so a future
+      // revert (re-enabling interactive mode without restructuring
+      // the backend) catches in tests.
+      const cardEl = document.body.querySelector(".drawer-permission-ask-card");
+      expect(cardEl?.textContent).toContain("worker · 自动拒绝");
+      expect(cardEl?.querySelector(".drawer-permission-ask-card__auto-denied-note"))
+        .not.toBeNull();
+      // The 4 interactive action buttons (仅一次 / 始终允许 / 拒绝 /
+      // 拒绝并说明) MUST NOT render — the card is historical-only.
+      expect(cardEl?.querySelector(".permission-ask-body__actions")).toBeNull();
+      expect(cardEl?.querySelector(".permission-ask-body__btn")).toBeNull();
+      w.unmount();
+    });
   });
 });

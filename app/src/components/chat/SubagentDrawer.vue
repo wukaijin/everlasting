@@ -7,14 +7,16 @@
 //
 //   <DrawerHeader>          ← status badge + name + duration + failure banner + timestamps
 //   <DrawerPromptCard>      ← run.task (parent LLM's prompt), 120-char truncate + "View full →"
+//   <ErrorCard>             ← PR6 R25: status=error detailed card (transcriptJson → finalText → summary fallback)
 //   <DrawerSection type="thinking" :entries>    ← collapsed by default (PRD R16)
 //     <DrawerThinkingBlock v-for="s in entries" :section="s" />
 //   </DrawerSection>
 //   <DrawerSection type="tools" :entries>       ← expanded by default
 //     <DrawerToolCallCard v-for="p in paired" :call :result />
-//     <DrawerPermissionAskCard v-for="a in asks" :ask />
+//     <DrawerPermissionAskCard v-for="a in asks" :ask />  ← PR6 R24: historical-only (downgraded)
 //   </DrawerSection>
 //   <DrawerSection type="reply" :text>          ← expanded by default
+//     <CancelledChip v-if="cancelled" />        ← PR6 R23 (downgraded): ⊘ Cancelled · at X.Xs
 //     <DrawerReplyBody :text (live Text or FinalText) + 280-char truncate + "View full →">
 //   </DrawerSection>
 //
@@ -55,6 +57,7 @@ import Icon from "../Icon.vue";
 import {
   useSubagentRunsStore,
   coerceStatus,
+  parseTranscriptJson,
   type SubagentStatus,
   type TranscriptSection,
   type ThinkingSection,
@@ -255,8 +258,21 @@ const truncated = computed<boolean>(() => {
  *  so the user sees the prompt + "Worker is starting..." side-by-side
  *  during the brief window between dispatch and the first
  *  accumulator publish. Once sections arrive, the thinking / tools /
- *  reply segments replace the placeholder. */
-const isEmpty = computed<boolean>(() => sections.value.length === 0);
+ *  reply segments replace the placeholder.
+ *
+ *  PR6 (2026-06-21): terminal `cancelled` / `error` states with no
+ *  transcript sections still need the Reply / Error card surfaces
+ *  (cancelled chip + error card), so `isEmpty` returns `false` for
+ *  those states even when `sections.value` is empty. The "Worker is
+ *  starting..." placeholder is for `running` only — a terminal state
+ *  with no sections means the worker died before producing anything,
+ *  not that it's about to start. */
+const isEmpty = computed<boolean>(() => {
+  if (sections.value.length > 0) return false;
+  // Cancelled / error: render the empty segment shells so the
+  // cancelled chip (R23) + error card (R25) are visible.
+  return status.value !== "cancelled" && status.value !== "error";
+});
 
 // ---------------------------------------------------------------------------
 // B6 PR3b (2026-06-20): live duration timer + auto-scroll polish
@@ -356,6 +372,92 @@ const bannerText = computed<{ kind: "error" | "warning"; text: string } | null>(
 /** Whether the worker is still running (drives the live indicators
  *  on each DrawerSection + autoFollow reactivity). */
 const isRunning = computed<boolean>(() => status.value === "running");
+
+/** PR6 (2026-06-21) R25: error terminal state — extract the worker's
+ *  error message for the ❌ error card rendered below DrawerPromptCard.
+ *
+ *  WHY THIS IS A SEPARATE COMPUTED (not read from `sections`):
+ *  the accumulator's `routeChatEvent` switch DROPs the `error` inner
+ *  kind (`stores/subagentRuns.ts` `case "error": return;` — terminal
+ *  signal, no text contribution). So the error message is NOT in the
+ *  `sections` / `replyText` stream. We re-parse `run.transcriptJson`
+ *  directly to find the error event's payload.
+ *
+ *  Extraction priority (4-level fallback chain — each level loosens
+ *  the source):
+ *    1. Parse `run.transcriptJson`, walk from the END backwards, find
+ *       the last entry with `kind === "chat_event"` whose inner
+ *       `payload_json.kind === "error"`. Read `payload_json.message`.
+ *       (The Rust `ChatEvent::Error` carries `{ message, category }`
+ *       per `llm/types.rs:407-410`; the inner kind is serialized as
+ *       `"error"` via the snake_case `tag = "kind"` serde attribute.)
+ *    2. Fall back to `run.finalText` — the backend's
+ *       `format_final_text(status="error", worker_text)` returns the
+ *       worker_text verbatim when no explicit error message exists
+ *       (`subagent.rs:1151-1178`), so `finalText` carries the same
+ *       payload in the no-error-event case.
+ *    3. Fall back to `run.summary` (PR5's bannerText already uses
+ *       this for the header — the ❌ card reuses it as a last-resort
+ *       detail).
+ *    4. Final fallback: the canned "(no error text captured)" string
+ *       so the card never renders an empty body.
+ *
+ *  Returns `null` when `status !== "error"` (the card is hidden via
+ *  `v-if` anyway, but `null` makes the computed self-documenting). */
+const errorMessage = computed<string | null>(() => {
+  if (status.value !== "error" || !run.value) return null;
+
+  // Level 1: scan transcriptJson from the end for the last error event.
+  const raw = run.value.transcriptJson;
+  if (raw) {
+    try {
+      const entries = parseTranscriptJson(raw);
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const e = entries[i];
+        if (e.kind !== "chat_event") continue;
+        const inner = e.payload_json.kind;
+        if (inner !== "error") continue;
+        const msg = e.payload_json.message;
+        if (typeof msg === "string" && msg.length > 0) return msg;
+      }
+    } catch {
+      // parseTranscriptJson already swallows JSON errors internally
+      // and returns []; the try/catch here is belt-and-braces in case
+      // a future refactor introduces a throwing code path.
+    }
+  }
+
+  // Level 2: finalText (backend's format_final_text output for
+  // status=error carries the worker_text).
+  if (run.value.finalText && run.value.finalText.length > 0) {
+    return run.value.finalText;
+  }
+
+  // Level 3: summary (also used by the header banner).
+  if (run.value.summary && run.value.summary.length > 0) {
+    return run.value.summary;
+  }
+
+  // Level 4: canned fallback.
+  return "(no error text captured)";
+});
+
+/** PR6 (2026-06-21) R23 (downgraded): cancelled terminal state — the
+ *  Reply segment replaces its body with a `⊘ Cancelled · at X.Xs`
+ *  chip. PRD R23 originally specified "at turn N" but the
+ *  `subagent_runs` schema has no turn column (only started_at /
+ *  finished_at + the new task / final_text from PR1); turn N is not
+ *  reliably inferable from the transcript (the cancel Done event may
+ *  be missing). The downgrade uses the wall-clock terminal duration
+ *  (`terminalDurMs`) instead — same source as the header status pill.
+ *
+ *  Returns the formatted duration suffix (e.g. "at 5.3s") or `null`
+ *  when the run is not cancelled or the duration is unavailable. */
+const cancelledSuffix = computed<string | null>(() => {
+  if (status.value !== "cancelled") return null;
+  if (terminalDurMs.value === null) return null;
+  return `at ${(terminalDurMs.value / 1000).toFixed(1)}s`;
+});
 
 watch(
   () => store.openRunId,
@@ -551,6 +653,26 @@ const showJumpLatest = computed<boolean>(
                    starting..." with the prompt hidden. -->
               <DrawerPromptCard :task="run?.task ?? null" />
 
+              <!-- PR6 R25: error terminal state — detailed error card
+                   below the prompt. The header banner (FT-F-005)
+                   shows an 80-char summary line; this card shows the
+                   full error message (errorMessage computed falls
+                   back through transcriptJson → finalText → summary →
+                   canned). Hidden unless status === 'error'. -->
+              <div
+                v-if="status === 'error' && errorMessage !== null"
+                class="subagent-drawer__error-card"
+                role="alert"
+              >
+                <div class="subagent-drawer__error-header">
+                  <span class="subagent-drawer__error-icon">
+                    <Icon name="shield-x" :size="14" />
+                  </span>
+                  <span class="subagent-drawer__error-title">Worker error</span>
+                </div>
+                <p class="subagent-drawer__error-message">{{ errorMessage }}</p>
+              </div>
+
               <div v-if="isEmpty" class="subagent-drawer__empty">
                 Worker is starting...
               </div>
@@ -600,15 +722,31 @@ const showJumpLatest = computed<boolean>(
                   </template>
                 </DrawerSection>
 
-                <!-- Reply segment (expanded by default). -->
+                <!-- Reply segment (expanded by default).
+                     PR6 R23 (downgraded): cancelled state shows a
+                     `⊘ Cancelled · at X.Xs` chip at the top of the
+                     reply body. If worker replyText also exists
+                     (worker produced output before being stopped),
+                     the reply body renders BELOW the chip so the user
+                     can still inspect the partial output. If
+                     replyText is empty, only the chip renders. -->
                 <DrawerSection
-                  v-if="replyText.length > 0 || isRunning"
+                  v-if="replyText.length > 0 || isRunning || status === 'cancelled'"
                   type="reply"
-                  :entry-count="replyText.length > 0 ? 1 : 0"
+                  :entry-count="replyText.length > 0 || status === 'cancelled' ? 1 : 0"
                   :live="isRunning"
                   :elapsed-ms="elapsedMs"
                   :final-duration-ms="!isRunning ? terminalDurMs ?? undefined : undefined"
                 >
+                  <!-- PR6 R23: cancelled chip (replaces empty reply body). -->
+                  <div
+                    v-if="status === 'cancelled' && cancelledSuffix !== null"
+                    class="subagent-drawer__reply-cancelled"
+                    role="status"
+                  >
+                    <Icon name="x" :size="12" />
+                    <span>⊘ Cancelled · {{ cancelledSuffix }}</span>
+                  </div>
                   <div v-if="replyText.length > 0" class="subagent-drawer__reply-body">
                     <div class="subagent-drawer__reply-markdown" v-html="replyPreviewHtml" />
                     <button
@@ -620,7 +758,10 @@ const showJumpLatest = computed<boolean>(
                       View full →
                     </button>
                   </div>
-                  <div v-else class="subagent-drawer__reply-empty">
+                  <div
+                    v-else-if="status !== 'cancelled'"
+                    class="subagent-drawer__reply-empty"
+                  >
                     Worker has not produced a reply yet.
                   </div>
                   <MarkdownDetailModal
@@ -935,5 +1076,74 @@ const showJumpLatest = computed<boolean>(
   font-size: 12px;
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+/* PR6 R25: error card chrome. Red 3px left border (--color-tool-error)
+   per design-tokens convention; matches PermissionModal --critical /
+   YoloConfirmModal visual language for "extreme risk" surfaces. */
+.subagent-drawer__error-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-bg-border);
+  border-left: 3px solid var(--color-tool-error);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagent-drawer__error-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-tool-error);
+}
+
+.subagent-drawer__error-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.subagent-drawer__error-title {
+  color: var(--color-tool-error);
+}
+
+.subagent-drawer__error-message {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* PR6 R23 (downgraded): cancelled-state chip inside the Reply segment.
+   Amber-tinted to match the header banner--warning color (the worker
+   was stopped by the user, not by an error). Hidden when the run is
+   not cancelled — the v-if in the template handles the gate. */
+.subagent-drawer__reply-cancelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-tool-shell) 10%, transparent);
+  color: var(--color-tool-shell);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  align-self: flex-start;
+  margin-bottom: 6px;
+}
+
+.subagent-drawer__reply-cancelled svg {
+  flex-shrink: 0;
 }
 </style>
