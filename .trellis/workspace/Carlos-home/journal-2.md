@@ -1468,3 +1468,39 @@ PR3 of subagent-drawer redesign。无前置依赖(per PRD §Implementation Plan)
 - **PR6**:边界态 + spec/frontend/chat.md + ROADMAP/DEBT 回填
 - 死代码:`chatEventSignature` / `appendFinalText` / `closeTextSegment` 若后续不接 consumer,批量删
 
+
+
+## Session 58: subagent-drawer redesign PR4-6 + 任务收尾
+
+**Date**: 2026-06-21
+**Task**: subagent-drawer redesign PR4-6 + 任务收尾
+**Branch**: `refactor/redesign-sub-agent-drawer`
+
+### Summary
+
+PR4 Drawer 视觉子组件(DrawerThinkingBlock/DrawerToolCallCard,复用视觉不 wrap store 耦合的 ToolCallCard)+ PR5 5 段分组折叠重写(accumulator liveSections 数据源 + pairSections section 级配对 snake→camel + 删 chat_event 暴露)+ PR6 边界态(R25 error 4级fallback / R23 cancelled 降级 wall-clock / R24 permission_ask 降级 historical,2 降级因后端 worker is_worker 架构限制)。每 PR 过 trellis-implement→check,主路径(PR1-5/后端/store)跨 PR 0 改动,20k events benchmark 13.4ms(<500ms AC)。新建 .trellis/spec/frontend/chat.md。收尾:DEBT 回填(003/004/FrontTest-001 + grill-me Q1-Q10 决策索引)+ ROADMAP B6 标记完成 + archive。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e66001e` | (see git log) |
+| `3db2be2` | (see git log) |
+| `d9f999f` | (see git log) |
+| `393098c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
