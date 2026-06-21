@@ -169,33 +169,78 @@
 
 ---
 
-### RULE-FrontSubagent-001 — `.tool-card` CSS 重复（SubagentDrawer vs ToolCallCard）
+### RULE-FrontSubagent-001 — `.tool-card` / `.drawer-tool-card` header CSS 重复
 
 - **Level**: P3
 - **Subsystem**: Frontend Subagent
-- **File**: `app/src/components/chat/SubagentDrawer.vue:1184-1316` + `app/src/components/chat/ToolCallCard.vue:641-756`
-- **Description**: SubagentDrawer 复制了 ToolCallCard 的全套 `.tool-card*` 规则（约 100 行）。项目用纯 CSS（非 SCSS / CSS Modules），无法用 @import 共享。Drawer.vue 注释里把这条重复作为"explicit 回退路径"承认。
-- **Impact**: 当前无功能影响；下一次 `.tool-card` 视觉约定扩展时需同步改两处。
-- **Fix**: 抽到 `app/src/style.css` 的全局工具类（不需要 SCSS），或在 `app/src/components/chat/_tool-card.scss` 抽出（需要引入 SCSS）。
-- **Status**: open
+- **File**: `app/src/components/chat/DrawerToolCallCard.vue:196-320` + `app/src/components/chat/DrawerPermissionAskCard.vue:75-138` + `app/src/components/chat/ToolCallCard.vue:641-756`
+- **Description**: PR5 redesign 后 SubagentDrawer 不再内联 `.tool-card` CSS(改 5 段分组布局);但 PR4 `DrawerToolCallCard` + PR6 `DrawerPermissionAskCard` 各自重声明了 header CSS(1:1 镜像 ToolCallCard,各 ~50-60 行)。项目纯 CSS 无法 @import 共享。组件头注释把重复作为 PR4「主路径 0 改动」约束下的显式取舍。
+- **Impact**: 当前无功能影响;`.tool-card` header 视觉约定扩展时需同步改 3 处。
+- **Fix**: 抽 `ToolCallHeader.vue` 共享组件(需同时改 ToolCallCard 本体——PR4 时违反主路径 0 改动约束故推迟,redesign 收尾后可做);或抽 `app/src/style.css` 全局工具类。
+- **Status**: open (updated 2026-06-21 PR4/PR5/PR6:位置从 SubagentDrawer 迁移到 DrawerToolCallCard/DrawerPermissionAskCard)
 - **Owner**: carlos
-- **Discovered In**: B6 PR3 check phase (2026-06-21, drawer entry tool-card style + transcript pairing PR)
-- **Related Task**: `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style`
+- **Discovered In**: B6 PR3 check phase → updated redesign PR4/PR5/PR6
+- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`
 
 ---
 
-### RULE-FrontSubagent-002 — `pairTranscript` third-param 隐式状态
+### RULE-FrontSubagent-002 — `pairTranscript` / `pairSections` third-param 隐式状态
 
 - **Level**: P3
 - **Subsystem**: Frontend Subagent
-- **File**: `app/src/utils/transcriptPairing.ts:128-218`
-- **Description**: `pairTranscript(entries, now, pendingFirstSeenAt)` 第三个参数既是输入（共享状态）又是输出（被 `.set` / `.delete`）。功能正确但签名隐式。
-- **Impact**: 调用方必须保持同一个 Map 引用跨调用才能让 timer 推进；新调用方容易踩坑（每次新建 Map → 永远 pending）。
-- **Fix**: 抽到 `useTranscriptPairing()` composable，返回 `{ pair, pendingMap }`，或把 Map 移到 module-level 单例。
+- **File**: `app/src/utils/transcriptPairing.ts:128-225` (`pairTranscript`) + `pairSections` (PR5 新增,同模式)
+- **Description**: `pairTranscript(entries, now, pendingFirstSeenAt)` / `pairSections(sections, now, pendingFirstSeenAt)` 第三个参数既是输入(共享状态)又是输出(被 `.set`/`.delete`)。功能正确但签名隐式。PR5 新增 `pairSections` 复用同模式,债范围扩大。
+- **Impact**: 调用方必须保持同一 Map 引用跨调用才能让 30s timeout timer 推进;新调用方易踩坑(每次新建 Map → 永远 pending)。
+- **Fix**: 抽 `useTranscriptPairing()` composable 返回 `{ pair, pendingMap }`,或 Map 移 module-level 单例。
+- **Status**: open (updated 2026-06-21 PR5:范围扩到 pairSections)
+- **Owner**: carlos
+- **Discovered In**: B6 PR3 check phase → updated redesign PR5
+- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`
+
+---
+
+### RULE-FrontSubagent-003 — worker permission_ask 无法 interactive(R24 降级)
+
+- **Level**: P2
+- **Subsystem**: Frontend Subagent (cross Backend Permission)
+- **File**: `app/src-tauri/src/agent/permissions/mod.rs:287,1003-1045` + `app/src-tauri/src/commands/permissions.rs:197-234` + `app/src-tauri/src/agent/subagent.rs:597` + `app/src/components/chat/DrawerPermissionAskCard.vue`
+- **Description**: SubagentDrawer 的 permission_ask 卡片只能 historical 只读,无法 Allow/Deny 交互。根因:worker 的 `PermissionContext.is_worker=true` 让 Tier 4 `ask_path`/`ask_shell` 直接 collapse `Decision::Deny`,从不 emit `permission:ask` IPC;transcript 里的 historical permission_ask 用 synthetic rid(`Uuid::new_v4()`),不在 `permission_asks` oneshot map 中,`permission:response` IPC 无法路由;worker 复用 `parent_session_id` 无独立 permission session。
+- **Impact**: worker 跑到需权限的 tool 时,用户无法在 drawer 内批准/拒绝(只能看到 historical「自动拒绝」)。
+- **Fix**: worker 独立 permission session + worker ask 事件带 `workerRunId` + Tier 4 collapse 改 emit(而非直接 Deny)。前端 `DrawerPermissionAskCard` 已预留 `mode`/`onRespond` props(PR5),后端就绪后切 interactive。
 - **Status**: open
 - **Owner**: carlos
-- **Discovered In**: B6 PR3 check phase (2026-06-21)
-- **Related Task**: `.trellis/tasks/06-21-redesign-subagent-drawer-entry-as-toolcard-style`
+- **Discovered In**: redesign PR6 (2026-06-21, Explore 后端调研)
+- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal` (PR6 R24 降级)
+
+---
+
+### RULE-FrontSubagent-004 — cancelled 终态无 turn 数据(R23 降级)
+
+- **Level**: P3
+- **Subsystem**: Frontend Subagent (cross Backend DB)
+- **File**: `app/src-tauri/src/db/migrations.rs:515-528` (subagent_runs schema) + `app/src/components/chat/SubagentDrawer.vue` (cancelled chip)
+- **Description**: PRD R23 字面要求 cancelled 终态 Reply 段显示「⊘ Cancelled · at turn N」,但 `subagent_runs` 表无 turn 列(只有 started_at/finished_at + PR1 的 task/final_text),`SUBAGENT_MAX_TURNS=20` 是常量不持久化实际 turn。PR6 用 wall-clock `terminalDurMs` 降级显示「at X.Xs」。
+- **Impact**: UX 轻微——用户看到耗时而非 turn 进度,语义略弱但不影响功能。
+- **Fix**: subagent_runs 加 `turn_count` 列 + worker agent loop 持久化实际执行 turn;前端 cancelled chip 改读 turn_count。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: redesign PR6 (2026-06-21, Explore 调研)
+- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal` (PR6 R23 降级)
+
+---
+
+### RULE-FrontTest-001 — streamController.test.ts 4 个 pre-existing unhandled rejection
+
+- **Level**: P3
+- **Subsystem**: Frontend Test
+- **File**: `app/src/stores/streamController.test.ts` (reloadAfterFinalize path) + `app/src/stores/streamController.ts:1256`
+- **Description**: `reloadAfterFinalize` 内 `invoke("list_sessions")` 走真实 `window.__TAURI_INTERNALS__.invoke`,但该 test file 没在 `__TAURI_INTERNALS__` 上 mock invoke,导致 4 个 unhandled promise rejection。tests 本身全 pass(rejection 异步、测试结束才浮出),但 `Errors: 4` 给全量 vitest run 噪音。
+- **Impact**: 当前不影响测试通过;未来 Vitest 升级可能把 unhandled rejection 变硬 fail。
+- **Fix**: 该 file `beforeEach` 加 `vi.stubGlobal("__TAURI_INTERNALS__", { invoke: vi.fn() })` 或补 mock。
+- **Status**: open
+- **Owner**: carlos
+- **Discovered In**: redesign PR4-6 check phase (2026-06-21, 多次 vitest run 出现,与 subagent-drawer 无关)
+- **Related Task**: null (独立测试债)
 
 ---
 
@@ -220,9 +265,29 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 §Re-evaluation Log + git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 3 | 健壮性 + 债务,中长期清理 |
-| P3 | 5 | 文档 + 一致性,可延后 |
-| **Total** | **9** | 当前 open items |
+| P2 | 4 | 健壮性 + 债务,中长期清理 |
+| P3 | 7 | 文档 + 一致性,可延后 |
+| **Total** | **12** | 当前 open items |
+
+---
+
+## subagent-drawer redesign 决策索引 (2026-06-21, Session 55)
+
+> grill-me Q1-Q10 关键决策(grill-me session 40,记录于 `journal-2.md`)已落地于 `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal/prd.md §Decision (ADR-lite)`(Decision 1/2/3)。本段仅索引决策产生的 open 债项(降级项);已实施决策详见 prd.md + `.trellis/spec/frontend/chat.md`。
+
+| Grill Q | 决策结论 | 落地状态 / 债项 |
+|---|---|---|
+| Q1 数据层 | subagent_runs 加 task/final_text 列 | ✅ PR1 实施 |
+| Q2 渲染 | 共享视觉原语,不整体复用 MessageItem | ✅ PR4/PR5 实施(见 chat.md Design Decision) |
+| Q3 chat_event | 前端 accumulator 聚合(后端零改动) | ✅ PR2 实施 |
+| Q4 Modal | 通用 MarkdownDetailModal | ✅ PR3 实施 |
+| Q5 5 段布局 | 分组折叠,默认展开 Tools+Reply | ✅ PR5 实施 |
+| Q6 live | 段级 live 指示器 | ✅ PR5 实施 |
+| Q7 transcriptJson | 存原始 event,前端聚合 | ✅ PR2 实施 |
+| Q8 accumulator 性能 | 累加式 + markRaw + live 不全量 | ✅ PR2 实施(20k events 13.4ms 实测 <500ms AC) |
+| Q9 permission_ask | drawer 交互 | ⚠️ **降级** → RULE-FrontSubagent-003(worker is_worker 架构限制) |
+| Q10 out of scope | 后端聚合 / 多 drawer / 折叠持久化等 | ✅ 明确不做 |
+| R23 cancelled | (边界态)turn N | ⚠️ **降级** → RULE-FrontSubagent-004(无 turn 列) |
 
 ---
 
@@ -346,4 +411,5 @@
 ---
 
 **最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-002 closed**(`3bf2b99`)— SubagentDrawer 1.5s miss 后 inline 提示(原 toast fallback):grill 前提校准 —— retry polling(B6 PR3b)已是 race 吸收层,FT-F-003(unmount guard)不影响 miss 频率,1.5s miss=真实故障(worker 没启动/IPC 挂/ID 漂移)。收窄 drop toast/ToastService/session banner → 最小 inline(`workerMissed` 三态 default/waiting/missed + warn icon"worker 未响应,点此重试"+ `--color-tool-shell` warning tint + 复用卡片 @click 重试 + per-card)。miss 路径 `workerMissed=true` 在 FT-F-003 unmount guard 之后(不写 unmounted ref)。290 pass,vue-tsc 0 error。**同 Session 54 前序:FT-F-004 closed**(`9e41594`,UX polish bundle C1+C2+C3)。**FT-F family 全部 closed**(001/002/003/004/005)。
+**最后更新**: 2026-06-21 by carlos — Session 55(redesign 收尾):subagent-drawer 重构 PR1-6 完成。DEBT 新增 RULE-FrontSubagent-003(worker permission_ask 无法 interactive,P2)/004(cancelled 无 turn 数据,P3)/RULE-FrontTest-001(streamController 4 pre-existing unhandled rejection,P3);更新 001(CSS 重复位置迁移到 DrawerToolCallCard/DrawerPermissionAskCard)/002(范围扩 pairSections)。grill-me Q1-Q10 决策见上 §subagent-drawer redesign 决策索引。PR1-6 commits: 86a81b2/6e077b3/a39ad00/e66001e/3db2be2/d9f999f。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
