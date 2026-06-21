@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs 表 schema + SubagentStatus enum + status CHECK 约束 + update_run_finished 契约 — R2 骨架(incomplete 状态) + R3a token 落库的目标表"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "token usage tracking 契约 + per_turn_usage 累加 + add_token_usage_streaming — R3a 落库语义"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop 架构 + max_turns Done 语义(usage=None 根因) + SUBAGENT_MAX_TURNS threading — R1 + R2 接线"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 写法 — 给 status CHECK 加新值 'incomplete'"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "provider usage 解析契约 — R3b 调研方向(为何 general-purpose 全程没采到 usage)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent::Done 契约 + usage 字段语义 — R3 root cause 上下文(max_turns Done usage=None)"}

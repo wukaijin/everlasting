@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 status CHECK 含 'incomplete' + update_run_finished 契约保留"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验证 token 累加契约在 max_turns 路径也成立(R3a)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 migration 幂等 + 已有 dev.everlasting.db 可升级"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 SUBAGENT_MAX_TURNS == 200 + max_turns 终止 status=incomplete"}
