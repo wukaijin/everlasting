@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 59
+- **Total Sessions**: 60
 - **Last Active**: 2026-06-21
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1540 | Active |
+| `journal-2.md` | ~1631 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 60 | 2026-06-21 | subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token fix (RULE-A-017 closed) | `fd7dc79`, `acf2a0a` | `main` |
 | 59 | 2026-06-21 | fix find -exec deny 文案 + shell tool 引导 + spec 计数对齐 | `32201e3`, `7cb72fa` | `main` |
 | 58 | 2026-06-21 | subagent-drawer redesign PR4-6 + 任务收尾 | `e66001e`, `3db2be2`, `d9f999f`, `393098c` | `refactor/redesign-sub-agent-drawer` |
 | 57 | 2026-06-21 | 修复 subagent drawer 空白 + status 卡 running（runId 错配 + 完成事件） | `f8b2623` | `main` |
