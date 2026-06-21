@@ -774,3 +774,242 @@ summary lookup has data to read). The default input/output
 the worker state. Lazy-fetch is idempotent (the store replaces the
 cache on every call, so multiple dispatch_subagent cards in the
 same session just re-fetch the same data).
+
+---
+
+### subagentRuns RunAccumulator (B6 redesign PR2, 2026-06-21)
+
+The frontend half of the B6 subagent-drawer redesign. PR1 (`86a81b2`)
+added the DB columns `task` + `final_text` on `subagent_runs`; PR2
+(this section) replaces the raw `liveTranscript: Map<runId,
+TranscriptEntry[]>` surface with a **per-runId `RunAccumulator`**
+that collapses the noisy `chat_event` SSE delta stream into a
+denormalized `liveSections: Map<runId, TranscriptSection[]>` for
+the drawer to render. The visual rewrite of `<SubagentDrawer>` into
+the 5-segment grouped view is **PR5** — PR2 is the data layer only;
+the drawer still reads `liveTranscript` for now and the visual
+consumer migration is a follow-up.
+
+#### Why an accumulator (not just `transcript: Ref<TranscriptEntry[]>`)
+
+The worker can emit 200+ chat_event SSE chunks per second during a
+busy turn. Storing every chunk as its own `TranscriptEntry` is both
+verbose (the drawer has to filter them out via the `showChatEvents`
+toggle) and a perf liability (Vue deep-proxies each object).
+Collapsing the chunk stream into one or two `Thinking` / `Text`
+segments (one per content block) cuts the drawer's render set by
+~100x and matches the main panel's mental model (the main panel
+already aggregates `chat_event` deltas into `ChatMessage.text[]` and
+`thinkingBlocks[]`; the drawer was the odd one out exposing raw
+chunks).
+
+#### `TranscriptSection` discriminated union (replaces raw `TranscriptEntry` for UI)
+
+```typescript
+// 6 section kinds — the drawer's render surface. tool_call /
+// tool_result / permission_ask are renamed in PR5's visual layer
+// (the rename is render-only — wire shapes stay snake_case).
+export type TranscriptSectionKind =
+  | "Thinking"   // collapsed chat_event thinking_delta (Anthropic SSE)
+  | "Text"       // collapsed chat_event delta (text)
+  | "FinalText"  // terminal text from subagent_runs.final_text (PR1 column)
+  | "ToolCall"
+  | "ToolResult"
+  | "PermissionAsk";
+
+export interface TranscriptSection {
+  kind: TranscriptSectionKind;
+  // Free-form body — schema varies per kind. Drawing from the
+  // original TranscriptEntry.payload_json shape (snake_case) for
+  // tool_call/tool_result/permission_ask; a flat text string for
+  // Thinking/Text/FinalText.
+  body: string | Record<string, unknown>;
+  // Live phase only — flags redacted thinking blocks (🔒 marker).
+  redacted?: boolean;
+  // Live phase only — char counter for the section header chip.
+  chars?: number;
+}
+```
+
+The accumulator keeps `transcript: ShallowRef<TranscriptSection[]>`
+as the source of truth for its runId; the store exposes this as
+`liveSections.set(runId, acc.transcript.value)` on debounce flush.
+Drawer reads `store.liveSections.get(openRunId)` (PR5 migration;
+PR2 still exposes `liveTranscript` for backward compat).
+
+#### `RunAccumulator` class API
+
+```typescript
+class RunAccumulator {
+  private thinkingSegment: TextSegment | null = null;
+  private textSegment: TextSegment | null = null;
+  private rawEventsShallow: ShallowRef<ChatEventPayload[]> =
+    shallowRef(markRaw([]));  // R21 — see below
+  readonly transcript: ShallowRef<TranscriptSection[]>;
+
+  /** Live phase — called per SSE event (debounced 200ms upstream).
+   *  O(1) per call: route into the active thinking or text segment
+   *  and mutate its fields. Never rebuilds the array. */
+  feed(entry: TranscriptEntry): void { ... }
+
+  /** Worker finished path — replaces the in-memory transcript with
+   *  the authoritative DB-cached version. Linear walk over the
+   *  parsed JSON. Called from fetchRun() after the IPC resolves. */
+  rebuildFromCache(transcriptJson: string | null,
+                   finalText: string | null): void { ... }
+}
+```
+
+A `Map<runId, RunAccumulator>` lives on the store
+(`accumulators`). `clearSession()` drops the entries (paired with
+`liveSections.delete(runId)` + the existing debounce buffer +
+timers cleanup).
+
+#### chat_event discriminator (drift trap 3 — NEW)
+
+`chat_event` is the wire-level catch-all for LLM streaming chunks.
+The accumulator inspects `payload_json.kind` (Anthropic SSE inner
+discriminator) to route into the right section. **The switch must
+be exhaustive** — adding a new Anthropic SSE event type without
+updating this switch is a silent data-loss bug.
+
+| `payload_json.kind` (Anthropic SSE) | Section mutation |
+|---|---|
+| `"thinking_delta"` | append `text` to `thinkingSegment.text`; bump `chars` |
+| `"signature_delta"` | set `thinkingSegment.signature` (closes the block — next `delta` or `tool_call` flushes it) |
+| `"redacted_thinking_delta"` | mark `thinkingSegment.redacted = true`, render 🔒 |
+| `"delta"` (regular text) | append to `textSegment.text`; bump `chars` |
+| `"start"` / `"done"` / `"error"` | dropped (control events) |
+| anything else | logged + dropped (defensive — see Common Mistake below) |
+
+`signature_delta` flushes the thinking segment by pushing the
+current `thinkingSegment` into `transcript.value` and nulling the
+field. The same flush happens implicitly when a `tool_call` or
+non-thinking `chat_event` arrives after a thinking block.
+
+The accumulator reads `payload_json.kind` after `routeEvent` has
+already translated the live camelCase `payload` to the storage
+snake_case `payload_json` — see `wire-shape-contract.md` §"Transcript
+Entry" and the B6 PR3 drift trap 2 above. **Don't skip the
+translation** — `routeChatEvent` will not find `kind` on a
+camelCase object and silently drop every event.
+
+#### R20 invariant: live feed is O(1) per event
+
+`feed()` must NOT rebuild `transcript.value` on every call. The
+correct pattern is to mutate the active segment's fields in place
+and push a new section object only when the segment *closes*
+(signature_delta → flush; tool_call arrival → flush text segment;
+new thinking block start → flush prior text). Vue reactivity on
+`ShallowRef` will pick up the mutation via the inner field
+accessors, not via array reallocation.
+
+##### Common Mistake: O(N²) array spread on every feed (pre-PR2 fix)
+
+The first PR2 implementation did:
+
+```typescript
+// BAD — O(N) per event, O(N²) cumulative
+feed(entry: TranscriptEntry): void {
+  this.rawEventsShallow.value =
+    markRaw([...this.rawEventsShallow.value, entry]);
+  // ... route into segment ...
+}
+```
+
+For 20k events this measured **1317ms** in a synthetic perf test —
+violating the AC "20000 events transcript 冷启动 <500ms" ceiling
+when the same pattern is applied to the live path. Fixed by
+removing the spread entirely from the live path: `rawEvents` is
+populated only by `rebuildFromCache` (the cold-cache fetch path,
+which is the actual AC ceiling — measured 13.6ms for 20k).
+Post-fix: 20k live events = 1.5ms (880x improvement).
+
+The lesson: **`rawEvents` is a test-only handle, not a runtime
+buffer.** If you need to inspect the live raw stream in a test,
+seed via `rebuildFromCache` instead of `feed()`. The markRaw lock
+test (`__v_skip` symbol assertion) was updated accordingly — it's
+still real, just reached via the cold path.
+
+#### R21 invariant: raw events wrapped in `markRaw()`
+
+`rawEventsShallow` is initialized as `shallowRef(markRaw([]))`.
+Vue's `__v_skip` symbol is set on the **array root** when
+`markRaw` is applied — that's what stops proxy creation on the
+root. The inner `TranscriptEntry` objects inside the array are
+NOT deep-marked (and don't need to be — they're read-only data).
+The test `rawEvents wraps in markRaw` asserts
+`(rawEvents as any).__v_skip === true`; if a refactor accidentally
+drops the `markRaw`, this test catches it.
+
+#### R22 invariant: live = mutate segments, finished = full rebuild
+
+```
+subagent:finished (IPC)
+  └→ flushBuffer(runId)              # commit any 200ms-debounced events
+  └→ fetchRun(runId)                 # get_subagent_run → getRunCache
+       └→ acc.rebuildFromCache(      # linear walk over authoritative
+            row.transcriptJson,       # transcriptJson + final_text
+            row.finalText)            # from PR1's column
+            └→ liveSections.set(runId, acc.transcript.value)  # replace
+```
+
+`rebuildFromCache` parses `transcriptJson` (snake_case
+`payload_json`) via `parseTranscriptJson()`, walks the entries
+once, and assembles a fresh `TranscriptSection[]`. It also appends
+a `FinalText` section from `row.finalText` (the PR1 column) when
+non-null. The `publishAccumulator` helper then writes
+`acc.transcript.value` into `liveSections`, which is the surface
+the drawer (and eventually PR5's visual layer) reads.
+
+`fetchRun` is the only entry point that calls
+`rebuildFromCache`. The live `subagent:event` listener never does
+— it calls `acc.feed()` only.
+
+#### Performance contract (locked by test)
+
+`app/src/stores/subagentRuns.test.ts` has a
+`rebuilds 20k events in <500ms` benchmark that:
+1. Generates 20k synthetic `chat_event` deltas + tool_call/result
+   pairs (realistic mix).
+2. Calls `acc.rebuildFromCache(jsonString, null)`.
+3. Asserts the elapsed `performance.now()` is `< 500`.
+
+Measured post-fix: **13.6ms** (36x headroom). The same test does
+NOT exercise `feed()` in a 20k loop — feed is per-event and
+debounced 200ms upstream, so 20k feeds are spread across 100s of
+wall time and never bunch up. If a future change adds a bulk
+`feedMany()` method, add a 20k benchmark for it too.
+
+#### Dead code (flag for cleanup, not blocking)
+
+The PR2 commit exports `chatEventSignature`, `appendFinalText`,
+and `closeTextSegment` from `RunAccumulator` for future flows:
+
+- `chatEventSignature` — will be used by a future "verify
+  thinking-block signature on rehydrate" feature (mirrors main
+  panel's signature-check on outbound payload). Currently unused.
+- `appendFinalText` / `closeTextSegment` — will be used when
+  streaming final text into the `Text` segment as the worker
+  emits its terminal reply (today, `finalText` is set wholesale
+  via `rebuildFromCache` from the DB column — no live path).
+  Currently unused.
+
+A future PR can either land consumers for these or remove the
+exports. Keep them until then — they encode the intended public
+API of the accumulator even if no caller exists yet.
+
+---
+
+### Per-Pin store lifecycle + worker transition (planned, PR5 / PR6)
+
+`runAccumulator` instances and the `liveSections` Map entries
+must be cleared when the parent session is deleted, when the
+worker is detached (worktree transition), and on `chat-mode`
+switch (so a stale runId from a previous session doesn't bleed
+into a new chat). `clearSession()` handles the first case (paired
+with `accumulators.delete(runId)` + `liveSections.delete(runId)`).
+Worktree transitions and chat-mode switches are PR5 / PR6
+concerns — flag here so the next reviewer doesn't miss them.
+
+---

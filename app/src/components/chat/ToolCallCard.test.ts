@@ -251,6 +251,9 @@ describe("ToolCallCard dispatch_subagent branch", () => {
         finishedAt: "2026-06-20T10:00:30Z",
         tokenUsageJson: null,
         summary: "found 2 files",
+        // B6 redesign PR1: nullable for legacy rows.
+        task: null,
+        finalText: null,
       },
     ]);
     // Mock fetchRun so openDrawer doesn't actually try to call IPC.

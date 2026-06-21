@@ -57,6 +57,11 @@ const sampleRow: SubagentRunRow = {
   transcriptJson: null,
   transcriptTruncated: 0,
   createdAt: "2026-06-20T10:00:00Z",
+  // B6 redesign PR1 (2026-06-21): new columns on the wire.
+  // Null in the fixture — the legacy drawer's tests don't
+  // exercise the new accumulator path.
+  finalText: null,
+  task: null,
 };
 
 function makeDrawer() {
