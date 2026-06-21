@@ -1013,3 +1013,99 @@ Worktree transitions and chat-mode switches are PR5 / PR6
 concerns — flag here so the next reviewer doesn't miss them.
 
 ---
+
+### subagentRuns PR3 reusable pieces (B6 redesign PR3, 2026-06-21)
+
+PR3 ships two **independent, generic** building blocks that PR5
+consumes but are not subagent-drawer-specific. They live under
+`app/src/components/common/` and `app/src/utils/` (the project's
+`use*-prefix-in-utils/` convention — `useKeyboard.ts` precedent —
+NOT a separate `composables/` directory).
+
+#### `MarkdownDetailModal.vue` (reka-ui 6-piece pattern)
+
+```typescript
+// app/src/components/common/MarkdownDetailModal.vue
+interface Props {
+  open: boolean;             // v-model:open
+  title: string;
+  markdown: string;          // full body — no truncation here
+  source?: 'prompt' | 'reply' | 'worker' | null;  // header chip hint
+}
+```
+
+6 reka-ui primitives + 1 `Icon` chip + `renderMarkdown()` body,
+mirrors the existing `MemoryModal.vue` / `SettingsModal.vue`
+pattern. `<style scoped>` requires `:deep(...)` selectors for
+`DialogContent`'s portaled children (the `:deep()` gotcha from
+`reka-ui-usage.md` applies). z-index 2000/2001 — above the
+drawer's 1000 so the modal stacks correctly when both are open.
+`source="worker"` is reserved for a future drawer surface
+(PR5 only needs `prompt` + `reply`).
+
+**Mount at chat-panel or App level, not inside the drawer** —
+the drawer's v-if remounts the subtree on close, and the
+modal's portal outlives the drawer anyway. PR5 will route the
+`:open` ref through a Pinia slot (or co-locate with the
+drawer's `openRunId`).
+
+#### `useTruncate.ts` (pure markdown-safe truncation)
+
+```typescript
+// app/src/utils/useTruncate.ts — pure function, not a composable
+export function truncate(
+  text: string,
+  maxChars: number,
+  suffix: string = "…",  // single Unicode ellipsis (U+2026)
+): string;
+```
+
+Single linear O(N) scan tracking two backtick states: a fence
+toggled by runs of `>= 3` backticks, and an inline toggled by
+runs of exactly 1 backtick. If the cut boundary lands inside
+an open code region, backtrack to the most recent opener; fall
+back to a hard cut at `maxChars` when the only safe boundary is
+index 0 (prevents infinite-loop on degenerate input like a
+string of backticks). Links (`[text](url)`) are allowed to be
+cut at the boundary — only fenced / inline code regions get
+the "push to safe boundary" treatment.
+
+**Default budgets** (documented in file header, PR5 should not
+need to dig into the implementation to find them):
+
+| Source | `maxChars` | Suffix |
+|---|---|---|
+| `task` (worker prompt) | 120 | `…` |
+| `finalText` (worker reply) | 280 | `…` |
+
+The function is exported as a plain function — not wrapped in
+`ref` / not a Vue composable. Pure transforms don't need
+reactivity. Callers can wrap if they want; most won't.
+
+**Common Mistake**: don't try to regex-parse markdown for
+boundary detection. Markdown's grammar is context-sensitive
+(links contain `[`, code contains backticks, fences can be
+inside list items, etc.); regex would either over-trim
+(false positives on `[` in code) or under-trim (false
+negatives on `>3` backticks). The single linear scan with
+explicit backtick-run state is the simplest correct approach.
+
+**Performance contract** (locked by test): 100k chars + embedded
+fences complete in <50ms. PR5's realistic input (`finalText`
+typically <2k, `task` typically <500) is far below the stress
+ceiling. If a future caller needs to truncate a megabyte of
+markdown, the algorithm is still O(N) — no quadratic
+backtracking.
+
+#### Test gotchas (from memory)
+
+- `Icon` stub has empty `textContent` (the rendered `<icon-stub
+  name="..." />` is an SVG, not text). Assert on the inner
+  `.markdown-detail-modal__title-text` span, not on the
+  wrapper's `textContent` includes.
+- reka-ui `DialogContent` portals to body; `wrapper.unmount()`
+  doesn't clean up the portal. `beforeEach` must remove
+  `.markdown-detail-modal` + `.markdown-detail-modal__overlay`
+  from `document.body` to prevent cross-test leak.
+
+---
