@@ -252,11 +252,11 @@
 - **Description**: R2 在 backend 加了 `incomplete` status(`SubagentStatusDb::Incomplete`),但 frontend `SubagentStatus` type 仍是 4 值;`coerceStatus` 对 unknown 字符串 fallback 到 `"running"`,导致 `incomplete` run 在 drawer 里**永久**显「运行中」(`STATUS_META["running"]`)。本次 R2 显式决定不做前端视觉差异化(靠 `final_text` 文案提示),故作为 follow-up debt。
 - **Impact**: 用户看到「运行中」但实际 worker 已 max_turns 终止 + DB 状态是 incomplete;UX 误报与 R2 想解决的"误报成功"对称。
 - **Fix**: `subagentRuns.ts` `SubagentStatus` type 加 `"incomplete"`;`SubagentDrawer.vue` `STATUS_META` 加 `{ label: "未完成", color: "var(--color-tool-warn)" }`(对齐 `CANCELLED_MARKER` / `INCOMPLETE_MARKER` 的中文文案)。
-- **Status**: open
+- **Status**: closed
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete`
+- **Related Task**: `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i`
 - **Discovered In**: trellis-check PASS-WITH-NITS nit #5 (2026-06-21)
-- **Closed At**: null
+- **Closed At**: `2eedfe2`
 - **Related PR**: null
 
 ---
@@ -298,11 +298,11 @@
 - **Description**: 注释/docstring 描述 worker per-turn usage 通过 `add_token_usage_streaming` streaming fold 进 `sessions.input_tokens_total` 列,但该函数**没有 production callsite**（只在 `db/tests.rs` 测试里被调）。research 阶段查证发现。R3 max_turns 修复后 per-run JSON 已正确,但 parent session live counter 仍有几秒延迟（因为 `db::add_token_usage` 走 `chat_loop.rs:1004` 非 streaming fold）。
 - **Impact**: 低——parent UI counter 比 worker `subagent_runs.token_usage_json` 慢几秒,功能不影响。
 - **Fix**: 二选一——(i) 删 `subagent.rs:567-569,838-843` + `db/subagent_runs.rs:18` 撒谎注释,接受 live counter 不 streaming;或 (ii) 在 `chat_loop.rs:1004` per-turn `Done` handler 调 `add_token_usage_streaming` 真接上去。
-- **Status**: open
+- **Status**: closed
 - **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete`
+- **Related Task**: `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i`
 - **Discovered In**: `research/r3-token-usage-root-cause.md` §3 (2026-06-21)
-- **Closed At**: null
+- **Closed At**: `2eedfe2`
 - **Related PR**: null
 
 ---
@@ -314,8 +314,8 @@
 | P0 | 0 | 全部 closed(详见 §Re-evaluation Log + git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
 | P2 | 4 | 健壮性 + 债务,中长期清理 |
-| P3 | 9 | 文档 + 一致性,可延后(2026-06-21: +RULE-BackSubagent-002 / +RULE-FrontSubagent-005) |
-| **Total** | **14** | 当前 open items |
+| P3 | 7 | 文档 + 一致性,可延后(2026-06-22: -RULE-FrontSubagent-005 / -RULE-BackSubagent-002 via 2eedfe2) |
+| **Total** | **12** | 当前 open items |
 
 ---
 
@@ -386,6 +386,9 @@
 | 2026-06-20 | RULE-A-016 | open | **closed** | B6 PR3a 顺手修。`permissions::ask_path` worker 分支(原 line 1002-1009 `record_audit(ToolDenied)`)删除 + 改 emit `PermissionAskPayload` via sink → `SubagentBufferSink::emit_permission_ask` 写 transcript `PermissionAsk` entry(PR3 drawer 可见)。`audit_not_polluted_by_worker` 测试断言不变(delta == 2,researcher silent allow 本就不写 audit);`agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` 测试断言反转:parent `tool_denied` count 0(原 1)+ transcript `PermissionAsk` count 1(原 0)+ audit delta ≤ 2(原 ≤ 3)。cargo test --lib 732 pass(PR2b 726 + PR3a 6 = 2 新 db tests + 4 新 PR2 hotfix subagent tests;agent_loop_* tests 数量未变只更新断言)。0 新 warning(对比 PR2b 4 pre-existing)。P2 21→20,Total 46→45 | `.trellis/tasks/06-20-b6-pr3-frontend-expand` |
 
 | 2026-06-21 | RULE-A-017 | open | **closed** | `chat_loop.rs:1797-1804` max_turns 终端合成 `Done` 改 forward `last_usage_terminal`(原硬编码 `None`);`subagent.rs:835-849` sink `Done` arm 加 stop_reason guard(`max_turns`/`cancelled` 不 push `per_turn_usage`)防双累;同时 R1 把 `SUBAGENT_MAX_TURNS` 20→200,R2 加 `SubagentStatus::Incomplete` + DB migration 5-variant status CHECK + `INCOMPLETE_MARKER` `[未完成]`。11 新测试(9 sink-level + 2 db-level),782 cargo test --lib pass(771 旧 + 11 新)。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-max-turns-200-worker-token-incomplete` |
+
+| 2026-06-22 | RULE-FrontSubagent-005 | open | **closed** | frontend `SubagentStatus` type union 4→5 加 `"incomplete"` + `coerceStatus` 显式 recognize;`SubagentDrawer.vue` `STATUS_META` 加 `incomplete: { label: "未完成", color: "var(--color-tool-shell)" }`(用现有 amber 不用 --color-tool-warn:design-tokens spec 显式禁为 one-off use 新增 --color-* token);`statusDisplay` / `bannerText` / `isEmpty` 同步加 incomplete 分支(避免 incomplete run 在空 transcript 时显「Worker is starting...」误报 / 缺 banner / 缺 terminal 状态语义)。范围扩大超出 PRD 字面 AC 但必要(对称 Session 60 R2 解决「误报成功」的初衷)。+118/-33 总计 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;4 pre-existing errors in streamController.test.ts(RULE-FrontTest-001 债,stash 验证 baseline 一致)。NIT-1 `chat_loop.rs:1019-1022` 引号内"streaming" 描述未修(非 DEBT 范围);NIT-2 chat.md spec 不覆盖 SubagentStatus / STATUS_META 状态语义(Session 60 R2 引入的 pre-existing spec drift,本次不修)。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i` |
+| 2026-06-22 | RULE-BackSubagent-002 | open | **closed** | option i 路线,改写 4 处撒谎注释(DEBT 列的 3 处 + inspect 阶段 bonus 1 处):`subagent.rs:576-598` per_turn_usage 字段 docstring + `:879-894` ChatEvent::Done arm inline 注释 + `db/subagent_runs.rs:18-27` module doc(含 ⚠️ production-only path warning block,显式禁止 production code 走 add_token_usage_streaming)+ `:139-155` SubagentRunRow type doc。全部改写为指向 `chat_loop.rs:1031 db::add_token_usage` production 路径(PR2a 把 skip_persist gate 解耦后,worker 复用 parent_session_id,per-turn usage 自然 fold,见 RULE-A-015)。保留 `subagent.rs:803-813` + `db/subagent_runs.rs:554-586` 2 处已诚实注释 + `add_token_usage_streaming` 函数体仍 `pub`(PR2 API 表面保留,未来 worker↔parent session identity split 时用)。DEBT 行号 567-569/838-843 已 drift 实际在 576-586/870-876;DEBT 文件 path 漏列 `db/subagent_runs.rs:139-155` 一处(本 task 顺手修)。lying-language grep 0 match in production paths。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i` |
 
 ---
 
@@ -463,4 +466,5 @@
 **最后更新**: 2026-06-21 by carlos — Session 54:**FT-F-002 closed**(`3bf2b99`)— SubagentDrawer 1.5s miss 后 inline 提示(原 toast fallback):grill 前提校准 —— retry polling(B6 PR3b)已是 race 吸收层,FT-F-003(unmount guard)不影响 miss 频率,1.5s miss=真实故障(worker 没启动/IPC 挂/ID 漂移)。收窄 drop toast/ToastService/session banner → 最小 inline(`workerMissed` 三态 default/waiting/missed + warn icon"worker 未响应,点此重试"+ `--color-tool-shell` warning tint + 复用卡片 @click 重试 + per-card)。miss 路径 `workerMissed=true` 在 FT-F-003 unmount guard 之后(不写 unmounted ref)。290 pass,vue-tsc 0 error。**同 Session 54 前序:FT-F-004 closed**(`9e41594`,UX polish bundle C1+C2+C3)。**FT-F family 全部 closed**(001/002/003/004/005)。
 **最后更新**: 2026-06-21 by carlos — Session 56:**RULE-A-017 closed**(`fd7dc79`)+ **RULE-BackSubagent-002 open** + **RULE-FrontSubagent-005 open**:`subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token 统计修复` 收尾。R1 `SUBAGENT_MAX_TURNS` 20→200 支撑重型实施子代理(trellis-implement 级 200+ 工具调用);R2 max_turns 软终止改记 `incomplete` + DB CHECK 5-variant + `INCOMPLETE_MARKER` `[未完成]`,不再误报 completed;R3 research 锁定 max_turns 终端合成 `Done` 硬编码 `usage: None` 丢 `last_usage` 是 `c27f3fd7` token=0 根因,加 `last_usage_terminal` mirror + sink stop_reason guard 防双累。11 新测试(9 sink + 2 db),782 cargo test --lib pass(771 旧 + 11 新),0 warning。DEBT 12→14(RULE-A-017 closed 不计数 + BackSubagent-002 / FrontSubagent-005 open +1 P3 each)。spec 同步 3 个 backend spec(`agent-loop-architecture.md` 3 处 `MAX_TURNS=20` → 200,`tool-contract.md` 2 处 + `format_dispatch_result` 加 Incomplete 行,`subagent-runs-schema.md` CHECK + wire shape + count 全部 5 值)。Bonus debt 两条:`add_token_usage_streaming` 文档撒谎(删注释 OR 真接上);frontend `SubagentStatus` 没渲染 incomplete 视觉(drawer 永久显「运行中」)。
 **最后更新**: 2026-06-21 by carlos — Session 55(redesign 收尾):subagent-drawer 重构 PR1-6 完成。DEBT 新增 RULE-FrontSubagent-003(worker permission_ask 无法 interactive,P2)/004(cancelled 无 turn 数据,P3)/RULE-FrontTest-001(streamController 4 pre-existing unhandled rejection,P3);更新 001(CSS 重复位置迁移到 DrawerToolCallCard/DrawerPermissionAskCard)/002(范围扩 pairSections)。grill-me Q1-Q10 决策见上 §subagent-drawer redesign 决策索引。PR1-6 commits: 86a81b2/6e077b3/a39ad00/e66001e/3db2be2/d9f999f。
+**最后更新**: 2026-06-22 by carlos — Session 61(Session 60 收尾 follow-up task):**RULE-FrontSubagent-005 closed**(`2eedfe2`)+ **RULE-BackSubagent-002 closed**(`2eedfe2`)。R1 frontend `SubagentStatus` type union 4→5 加 `incomplete` + `coerceStatus` 显式 recognize + `SubagentDrawer.vue` `STATUS_META` / `statusDisplay` / `bannerText` / `isEmpty` 同步加 incomplete 分支(范围超出 PRD 字面 AC 但必要,避免 incomplete run 在空 transcript 时 UX limbo)。color token drift: PRD AC 提 `--color-tool-warn` 不存在 → 改用 `--color-tool-shell`(amber #f59e0b;design-tokens spec 显式列其作 warning tint 等价物 + 禁为 one-off use 新增 --color-*)。R2 option i(删注释,4 处:DEBT 列 3 处 + inspect 阶段 bonus 1 处)改写撒谎注释指向 `chat_loop.rs:1031 db::add_token_usage` 真 production 路径(PR2a 把 skip_persist gate 解耦,worker 复用 parent_session_id,per-turn usage 自然 fold — 见 RULE-A-015);`db/subagent_runs.rs:18` module doc 加 ⚠️ production-only path warning block 防止未来 dev 误接。+118/-33 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;4 pre-existing errors in streamController.test.ts(RULE-FrontTest-001 债,baseline 一致)。DEBT P3 9→7,Total 14→12。NIT(留 follow-up): `chat_loop.rs:1019-1022` 引号内"streaming"描述(非 DEBT 范围);chat.md spec 不覆盖 SubagentStatus / STATUS_META(Session 60 R2 pre-existing spec drift)。Spec 同步:无新行为需 spec 化,纯 P3 收面。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
