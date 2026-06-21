@@ -1686,3 +1686,80 @@ Session 60(RULE-A-017 closed @ `fd7dc79`)留 2 条 P3 follow-up:**RULE-FrontSuba
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 62: worker tool approval interactive (RULE-FrontSubagent-003 P2 修复)
+
+**Date**: 2026-06-22
+**Task**: `06-22-06-22-worker-tool-approval-interactive`
+**Branch**: `main`
+
+### Summary
+
+修复 RULE-FrontSubagent-003(P2 open):subagent worker 的 tool_use 审批
+从「自动拒绝」(RULE-A-014 止血)升级为真正交互式 round-trip。
+drawer 内嵌可交互 Allow/Deny 卡 + ChatPanel 顶部非全局 banner 唤起;
+不引入全局 modal(多 session 竞态 + 区分困难,用户锁死)。
+parent 串行派发 worker;切 session 保留 ask,主动 cancel 才取消。
+
+实施拆 PR1(后端)+ PR1.5(跨层 IPC 修复)+ PR2(前端)。
+trellis-check 在 PR2 抓到 BLOCKING 跨层 bug(B1):worker 用
+SubagentBufferSink 不发 permission:ask IPC → 前端 UI 死代码。
+PR1.5 双发修掉。
+
+### Main Changes
+
+**后端**(permissions/mod.rs + subagent.rs + chat_loop.rs):
+- worker Tier 4 ask_path 从 collapse-to-Deny 改完整
+  `register_ask + tokio::select!{cancel, timeout(120s), oneshot}`
+- SubagentBufferSink::emit_permission_ask 双发:
+  `permission:ask`(live,permissions store)+ `subagent:event`(transcript)
+- worker payload session_id = parent(banner 分组);内部
+  register_ask/resolve_ask key = composite `worker:{runId}`(oneshot 隔离)
+- PermissionAskPayload / PermissionContext 加 worker_run_id
+- AuditKind 加 4 个 WorkerAsk* 变体(forward-compat,无 writer,RULE-A-016)
+- MAX_TURNS 50→200(用户改动,覆盖长 worker)
+
+**前端**(permissions.ts + 3 组件 + 新 banner):
+- permissions.ts 加 pendingWorkerByRunId 独立 map(避免覆盖 parent 槽)
+- DrawerPermissionAskCard mode-aware:rid live → interactive;else historical
+- SubagentDrawer 按 rid 去重(transcript + live 同 rid,一张卡)
+- PermissionAskBody worker 卡隐藏「始终允许」(AllowAlways 当 AllowOnce)
+- 新增 WorkerAskBanner(ChatPanel header,非全局 modal)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `89e5ba1` | fix(subagent): worker tool approval interactive (RULE-FrontSubagent-003) |
+| `48789e7` | docs(debt): close RULE-FrontSubagent-003 + 跨层契约 spec + MAX_TURNS 同步 |
+| (auto) | chore(task): archive 06-22-06-22-worker-tool-approval-interactive |
+
+### Testing
+
+- [OK] `cargo test --lib`:789 passed(0 fail)
+- [OK] `pnpm vitest run`:446 passed(4 个 streamController unhandled
+  rejection 是 RULE-FrontTest-001 既有 baseline,非本任务)
+- [OK] `pnpm vue-tsc --noEmit`:0 error
+- [OK] `cargo check`:0 warning
+- [OK] 跨层契约 trellis-check:PASS(B1 RESOLVED,N1+N3 修)
+
+### Status
+
+[OK] **Completed** — RULE-FrontSubagent-003(P2)闭。DEBT 新增
+RULE-WorkerAsk-001(P3,historical 卡不显示 resolve outcome)。
+跨层契约 B1 教训写入 permission-layer.md §5b Wrong/Correct。
+
+### 关键教训
+
+**B1 跨层 emit**:PR1 只做 permission store 逻辑(register_ask + select),
+没接 IPC emit(SubagentBufferSink 只写 transcript)。单测全绿是因为
+它们直接调 setPending() 绕过 IPC——测了存储逻辑,没测线上传输契约。
+两端各自绿 ≠ 整体绿。跨层契约改动必须端到端 trace 证明 wire 通了。
+
+### Next Steps
+
+- 无新 task。Session 62 闭环 RULE-FrontSubagent-003
+- 下次候选:BackSubagent-001(P2,worker error → parent 注入 partial
+  transcript)/ RULE-WorkerAsk-001(P3,historical outcome)/ ROADMAP 第三档
