@@ -1763,3 +1763,48 @@ RULE-WorkerAsk-001(P3,historical 卡不显示 resolve outcome)。
 - 无新 task。Session 62 闭环 RULE-FrontSubagent-003
 - 下次候选:BackSubagent-001(P2,worker error → parent 注入 partial
   transcript)/ RULE-WorkerAsk-001(P3,historical outcome)/ ROADMAP 第三档
+
+---
+
+## Session 63 — RULE-BackSubagent-001: worker partial transcript (2026-06-22)
+
+接 Session 62 Next Steps 指定的候选(BackSubagent-001 P2)。worker 非正常终态
+(Error/Cancelled/Incomplete)时 parent LLM 此前只看到 `[status: error]<error
+text>`,不知道 worker 已执行哪些 tool_call → 无法补偿修复(B6 review defect B)。
+
+brainstorm 四问(Q1 作用范围 / Q2 摘要形状 / Q3 wire vs DB / Q4 cap 截断)→
+统一三态 + name+key_param+ok/failed/? + 只进 wire 不进 DB + 2 KiB head+tail。
+
+PR1 `summarize_worker_tool_actions` 纯函数(tool_call/tool_result 按 tool_use_id
+配对 + per-tool key_param 提取代表参数 + head+tail cap + (N actions omitted)
+计数)+10 单测;PR2 `format_dispatch_result` 加 `partial_actions: Option<&str>`
+三态 append `Worker partial actions:` 段 +3 单测 +1 集成(worker 执行 read_file
+后 error → parent tool_result 含摘要)。803 cargo test --lib pass,prod 0 warning。
+spec 同步 tool-contract.md wire 表 + Tests + agent-loop-architecture.md 补全 4 态。
+
+### Status
+
+[OK] **Completed** — RULE-BackSubagent-001(P2)闭。DEBT P2 4→3,Total 12→11。
+四段式 commit: fix `89d3ffd` + docs(debt) `ec1993e` + archive + journal。
+
+### 关键教训
+
+**wire/DB 出口分家**:`format_dispatch_result`(wire,parent LLM)与 `format_final_text`
+(DB final_text,drawer Reply)原本 body 同源。本任务让 wire 在非 completed 三态
+append 摘要段,DB 不动——两者消费者不同(LLM 需补偿信息 vs drawer 已有完整 Tools
+段),内容分家合理。代价是解耦两个函数,但避免 drawer 信息冗余。
+
+**DEBT finding 推荐/实施前要 verify 现状**:BackSubagent-001 写于 06-20,行号
+`subagent.rs:999` 已 drift 到 1338,且 Incomplete 状态 06-21 才引入(finding 时
+不存在)。推荐前 grep 确认代码点仍在 + 评估是否需扩范围(本任务从只 Error 扩到
+三态,Incomplete 重型 worker 场景需求最强)。
+
+**orphan tool_call 标 `?`**:worker 中途 error 时最后一个 tool_call 可能还没配对
+result(执行中/未完成)。摘要用三态 ok/failed/? 而非二态,`?` 表达"结果未知"比
+强行标 failed 更准(parent 不会误以为该 tool 失败而重试一个其实可能成功的)。
+
+### Next Steps
+
+- 无新 task。Session 63 闭环 RULE-BackSubagent-001
+- 下次候选:RULE-WorkerAsk-001(P3,historical outcome)/ 卫生债批量(A-009/B-003/
+  B-006/D-007/D-008)/ RULE-D-001(P1 API key,需 WSL 威胁模型决策)/ ROADMAP 第三档
