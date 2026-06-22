@@ -1841,3 +1841,106 @@ PR1 worker permission_ask resolve outcome 走新 TranscriptKind::PermissionAskRe
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 65 — 修复关闭项目后无法重新打开(RULE-FrontProj-001)
+
+**Date**: 2026-06-23
+**Task**: `06-23-create-project-already-exists`
+**Branch**: `main`
+
+### Summary
+
+修用户反馈的关闭项目后无法重新打开 bug。根因:`addProject()` 路径检查只覆盖
+`projects.value`(visible),用户隐藏项目后重新添加同路径 → 撞 backend
+`create_project` SQLite UNIQUE 约束 → 误报 `a project with path '...' already
+exists`。UI 唯一「重新打开」入口 `EmptyProjectState` 只在 `currentProjectId===null`
+时挂载,多项目场景完全无入口。
+
+三处修补(同 fix commit `1b5e34e`):
+
+1. **核心**:`addProject()` 命中 `hiddenProjects` 路径 → 调既有 `unhideProject(id)`
+   (内部已 load + focus) + toast「已重新打开」,不再撞 UNIQUE。`unhideProject`
+   签名改 `Promise<boolean>`(成功/失败),失败时不冒假成功 toast。
+2. **EmptyProjectState** `onMounted` 自动 `loadHiddenProjects`,首屏直显
+   「最近隐藏的项目」列表,无需点「查看最近隐藏的项目」兜底按钮。
+3. **AppHeader HiddenProjectsMenu**(reka-ui `DropdownMenu`):多项目场景主 UI
+   直接显示 archive 图标 + count badge,popover 列 hidden projects + per-row
+   「重新打开」按钮。**事件只绑按钮不绑整行**(用户反馈);**`:deep()` 解决
+   `<style scoped>` + `<Teleport>` 坑**(spec `reka-ui-usage.md` §Gotcha),
+   否则 popover 无背景色/边框,裸文本浮在 body 上。
+
+后端零改动:`unhide_project` IPC 已存在且 `lib.rs:127` 注册,`db/projects.rs:271-279`
+SQL `UPDATE projects SET hidden = 0, updated_at = ? WHERE id = ?` 直接复用。
+
+测试:`projects.test.ts` 新增 8 case 覆盖 addProject 5 分支(visible/hidden/new/
+cancel/dialog-fail)+ unhideProject 返回值;vitest 475/0(含 4 pre-existing
+RULE-FrontTest-001 streamController baseline 噪音,与本任务无关),vue-tsc 0 error,
+cargo test --lib 813/0/0(无回归),cargo check 0 warning。
+
+### Main Changes
+
+**前端 store**(`app/src/stores/projects.ts`):
+- `addProject()` 加 hidden 路径分支:lazy `loadHiddenProjects` 兜底 → visible
+  命中 focus → hidden 命中 unhide → 全新 create_project
+- `unhideProject` 返回 `Promise<boolean>`(成功/失败)
+- 复用既有 `unhideProject` 内部 IPC + reload + focus 流程
+
+**前端 UI**(`app/src/components/HiddenProjectsMenu.vue` 新增 +
+`EmptyProjectState.vue` + `AppHeader.vue` 改):
+- `EmptyProjectState` onMounted 自动 load
+- `HiddenProjectsMenu` reka-ui DropdownMenu 触发(archive icon + count badge),
+  popover 内列 hidden projects + 「重新打开」按钮
+- 事件只绑按钮:`@click` on `<button>` only,**不**绑 `DropdownMenuItem`
+- `:deep()` 穿透 scoped + portal 隔离
+
+**spec 引用**:`.trellis/spec/frontend/reka-ui-usage.md` §"Gotcha: <style scoped>
+does NOT apply to portal children" — 这次踩坑再次印证 spec 价值,新增 `HiddenProjectsMenu`
+时第一时间用 `:deep()`。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b5e34e` | fix(projects): addProject 命中 hidden 路径自动 unhide + 主 UI 暴露 HiddenProjectsMenu |
+| `2f92fc9` | docs(debt): close RULE-FrontProj-001 (1b5e34e) — addProject hidden 路径修复 |
+| `02f0ee7` | (auto) chore(task): archive 06-23-create-project-already-exists |
+
+### Testing
+
+- [OK] `cargo test --lib` 813 pass / 0 fail(`PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig`)
+- [OK] `pnpm exec vitest run` 475 pass / 4 pre-existing errors in `streamController.test.ts` teardown(RULE-FrontTest-001 baseline,与本任务无关)
+- [OK] `pnpm exec vue-tsc --noEmit` 0 error
+- [OK] `cargo check` 0 warning
+- [OK] 新增 `projects.test.ts` 8 case 全 pass(visible/hidden/new/cancel/dialog-fail/lazy-load + unhideProject 返回值)
+
+### Status
+
+[OK] **Completed** — RULE-FrontProj-001 P3 闭。DEBT Total 9 → 9(闭环不计入 open),P3 +1 新增即闭环。
+四段式 commit 完整(fix → docs → archive → journal)。
+
+### 关键教训
+
+**scoped + Teleport 永远第一坑**:reka-ui 任何 `*Portal` 都要 `:deep()`。
+我第一版 HiddenProjectsMenu 没用 `:deep()` → 用户一打开就反馈"没有背景色"。
+spec `reka-ui-usage.md` §Gotcha 已写明,但写代码时还是漏掉——下次写 reka-ui
+portal 子组件第一时间套 `:deep()`,不要等用户反馈。
+
+**用户反馈驱动验证优先于自测**:vitest + vue-tsc + cargo 全 pass,但视觉/交互
+bug 单测测不出来(纯函数 store 测试不覆盖 Vue Teleport DOM 行为)。
+这种 UX 边界**用户实测**是唯一可靠信号,自测再自信也得让用户看一眼。
+
+**事件绑定语义影响 UX**:DropdownMenuItem 默认 `@select` 整行触发,但用户
+期望"事件只绑定到按钮"——list row 是 layout,按钮是 affordance。
+这种"哪部分可点"的隐式约定项目内要统一,目前 codebase 没有先例,
+`MessageActionsMenu` 用的是 item-as-button 模式(`as-child` 把 button 当 item)
+与本组件 list-of-button 模式不同。follow-up 可考虑抽出 list-row-button 通用
+组件,但本次不抽(scope 控住)。
+
+### Next Steps
+
+- 无新 task。Session 65 闭环 RULE-FrontProj-001
+- 下次候选:ROADMAP 第三档(B9 / C2 / C6 / L3 之一)/ RULE-FrontTest-001(P3,streamController
+  unhandled rejection,4 个 pre-existing baseline 噪音收尾)/ RULE-D-001(P1 API key
+  encryption,需 WSL 威胁模型决策)/ 卫生债批量(A-009/B-003/B-006/D-007/D-008)
