@@ -1169,6 +1169,11 @@ async fn ask_path(
     // checked first (in case the user hits Stop right at the 120s
     // boundary — without bias, the timeout arm might fire even
     // though cancel was ready).
+    //
+    // Each arm also encodes the RULE-WorkerAsk-001 outcome wire
+    // string (`"allow"` / `"deny"` / `"timeout"` / `"cancel"`) so
+    // the post-`match` resolve-emit can route correctly. The
+    // outcome strings are DEBT-locked four-state.
     let resp: Result<PermissionResponse, WorkerAskTerminal> = tokio::select! {
         biased;
         _ = token.cancelled() => {
@@ -1192,6 +1197,11 @@ async fn ask_path(
                 tool = %tool_name,
                 "permission::check: worker ask cancelled by parent"
             );
+            // RULE-WorkerAsk-001: record the cancel outcome on the
+            // worker's transcript so the drawer can surface
+            // 「⊘ 已取消」 on the historical card after the worker
+            // exits. Transcript-only (no IPC dual emit).
+            sink.emit_permission_ask_resolved(&rid, "cancel");
             Ok(PermissionResponse::Deny {
                 reason: "cancelled by parent session stop".to_string(),
             })
@@ -1209,6 +1219,10 @@ async fn ask_path(
                 tool = %tool_name,
                 "permission::check: worker ask timed out after 120s"
             );
+            // RULE-WorkerAsk-001: record the timeout outcome on
+            // the worker's transcript so the drawer can surface
+            // 「⏱ 已超时」 on the historical card.
+            sink.emit_permission_ask_resolved(&rid, "timeout");
             // Encode the timeout in a synthetic Deny response so
             // the downstream `match resp` arms know to write the
             // right `Decision::Deny { reason: "permission timed
@@ -1232,8 +1246,19 @@ async fn ask_path(
     // to the worker LLM as tool_result(is_error) per the standard
     // path — the `Decision::Deny { reason }` return value carries
     // the reason for the agent loop's tool_result construction).
+    //
+    // RULE-WorkerAsk-001: the oneshot arm (the path NOT already
+    // handled by the cancel / timeout select arms above) records
+    // its outcome here — allow / deny / cancel (OneshotDropped).
+    // The cancel / timeout arms already recorded their outcomes
+    // inside the select body (they had the outcome context handy
+    // at that point); we skip re-recording here for those paths.
     match resp {
-        Ok(PermissionResponse::AllowOnce) => Decision::Allow,
+        Ok(PermissionResponse::AllowOnce) => {
+            // RULE-WorkerAsk-001: user-approved (AllowOnce).
+            sink.emit_permission_ask_resolved(&rid, "allow");
+            Decision::Allow
+        }
         Ok(PermissionResponse::AllowAlways) => {
             // Per design decision: workers do NOT persist
             // "始终允许" to session_tool_permissions. The grant
@@ -1241,6 +1266,11 @@ async fn ask_path(
             // in parent's session but should not extend parent's
             // permissions). Log + return Allow for this call only.
             // No audit (RULE-A-016 lineage).
+            //
+            // RULE-WorkerAsk-001: worker AllowAlways is treated as
+            // AllowOnce (Session 62 invariant); the outcome wire
+            // string is `"allow"` either way.
+            sink.emit_permission_ask_resolved(&rid, "allow");
             tracing::info!(
                 session_id = %ctx.session_id,
                 worker_run_id = %worker_run_id,
@@ -1255,15 +1285,24 @@ async fn ask_path(
             // reason string the select! arms wrote. No audit
             // (RULE-A-016 lineage — worker's resolve events stay
             // in the transcript, not in parent's session_audit_events).
+            //
+            // RULE-WorkerAsk-001: the cancel / timeout select arms
+            // already recorded their outcome strings ("cancel" /
+            // "timeout") inside the select body — we skip re-
+            // recording here. Only the user-initiated Deny path
+            // records its outcome ("deny") at this layer.
             if reason == "cancelled by parent session stop"
                 || reason == "permission timed out after 120s, treat as denied"
             {
+                // Outcome already recorded in the select arm.
                 Decision::Deny {
                     reason,
                     critical: false,
                 }
             } else {
-                // User-initiated deny.
+                // User-initiated deny — record the "deny" outcome
+                // for the historical card 「✗ 已拒绝」 badge.
+                sink.emit_permission_ask_resolved(&rid, "deny");
                 let deny_reason = if reason.trim().is_empty() {
                     "user denied".to_string()
                 } else {
@@ -1281,6 +1320,13 @@ async fn ask_path(
             // resolve_ask path dropped the sender before
             // delivering). Same as parent path: treat as Deny.
             // No audit (RULE-A-016 lineage).
+            //
+            // RULE-WorkerAsk-001: sender-dropped is effectively a
+            // cancellation (the receiver will never get a real
+            // response). Record the "cancel" outcome wire string
+            // — same visual treatment as parent-stop on the
+            // historical card.
+            sink.emit_permission_ask_resolved(&rid, "cancel");
             Decision::Deny {
                 reason: "permission ask cancelled before response".to_string(),
                 critical: false,

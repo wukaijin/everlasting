@@ -2453,6 +2453,7 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
         &usage,
         &transcript,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2503,6 +2504,7 @@ async fn subagent_runs_update_finished_records_truncated_flag() {
         &TokenUsage::default(),
         &empty,
         true,
+        None,
     )
     .await
     .unwrap();
@@ -2672,6 +2674,7 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         &usage,
         &transcript,
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2806,6 +2809,7 @@ async fn subagent_runs_update_finished_writes_final_text_column() {
         &TokenUsage::default(),
         &[],
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2856,6 +2860,7 @@ async fn subagent_runs_update_finished_cancelled_status_and_marker() {
         &TokenUsage::default(),
         &[],
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2900,6 +2905,7 @@ async fn subagent_runs_update_finished_error_status_and_text() {
         &TokenUsage::default(),
         &[],
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2937,6 +2943,7 @@ async fn subagent_runs_list_returns_task_and_final_text() {
         &TokenUsage::default(),
         &[],
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2977,6 +2984,138 @@ async fn subagent_runs_migration_is_idempotent_on_pr1_columns() {
     .unwrap();
     assert_eq!(exists_task, 1, "task column present");
     assert_eq!(exists_final, 1, "final_text column present");
+}
+
+/// 2026-06-22 (RULE-FrontSubagent-004) migration idempotency: the
+/// `turn_count` column is added by `add_subagent_runs_column_if_missing`
+/// and a re-run is a no-op. Mirrors the PR1 idempotency test on
+/// `task` / `final_text`.
+#[tokio::test]
+async fn subagent_runs_migration_adds_turn_count_column_idempotently() {
+    let pool = make_pool().await;
+    // First run (via make_pool) already added `turn_count`. Re-run
+    // the migration — must NOT error.
+    crate::db::migrations::run_migrations(&pool)
+        .await
+        .expect("migration re-run is idempotent on turn_count");
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = 'turn_count'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+    assert_eq!(exists, 1, "turn_count column present after re-run");
+}
+
+/// 2026-06-22 (RULE-FrontSubagent-004) round-trip: `update_run_finished`
+/// with `turn_count: Some(N)` writes the value to the `turn_count`
+/// column; `get_run` + `list_runs_by_session` +
+/// `list_runs_summary_by_session` all read it back unchanged. Also
+/// covers the legacy `None` path: a row whose `update_run_finished`
+/// passes `None` keeps NULL turn_count (the drawer degrades to the
+/// wall-clock suffix for those rows).
+#[tokio::test]
+async fn subagent_runs_update_finished_round_trips_turn_count() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Row 1: realistic cancelled run, 7 turns executed.
+    let id_cancelled = insert_run(&pool, &s.id, "rid-turn-cancel", "general-purpose", None)
+        .await
+        .unwrap();
+    update_run_finished(
+        &pool,
+        &id_cancelled,
+        SubagentStatusDb::Cancelled,
+        "2026-06-22T10:00:00+00:00",
+        "partial",
+        "partial",
+        &TokenUsage::default(),
+        &[],
+        false,
+        Some(7),
+    )
+    .await
+    .unwrap();
+
+    // Row 2: legacy caller passes `None` (pre-PR2 callers or when
+    // the count is unknown). Column stays NULL.
+    let id_legacy = insert_run(&pool, &s.id, "rid-turn-legacy", "researcher", None)
+        .await
+        .unwrap();
+    update_run_finished(
+        &pool,
+        &id_legacy,
+        SubagentStatusDb::Completed,
+        "2026-06-22T10:05:00+00:00",
+        "done",
+        "done",
+        &TokenUsage::default(),
+        &[],
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // get_run: round-trips both Some and None.
+    let row_cancelled = get_run(&pool, &id_cancelled)
+        .await
+        .unwrap()
+        .expect("cancelled row exists");
+    assert_eq!(row_cancelled.turn_count, Some(7));
+    let row_legacy = get_run(&pool, &id_legacy)
+        .await
+        .unwrap()
+        .expect("legacy row exists");
+    assert_eq!(row_legacy.turn_count, None, "legacy row keeps NULL");
+
+    // list_runs_by_session: full row projection carries turn_count.
+    let rows = list_runs_by_session(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    // Newest-first ordering: cancelled (10:00) < legacy (10:05)? No —
+    // DESC by started_at, so the SECOND insert (later started_at)
+    // comes first. Both started ~now; order between the two is
+    // determined by `started_at` which is set at insert_run. Find
+    // each by id to be robust against ordering.
+    let listed_cancelled = rows
+        .iter()
+        .find(|r| r.id == id_cancelled)
+        .expect("cancelled row in list");
+    assert_eq!(listed_cancelled.turn_count, Some(7));
+    let listed_legacy = rows
+        .iter()
+        .find(|r| r.id == id_legacy)
+        .expect("legacy row in list");
+    assert_eq!(listed_legacy.turn_count, None);
+
+    // list_runs_summary_by_session: summary projection carries
+    // turn_count too (single-i64 column is cheap; included so the
+    // card / drawer can both read it).
+    let summaries = list_runs_summary_by_session(&pool, &s.id)
+        .await
+        .unwrap();
+    assert_eq!(summaries.len(), 2);
+    let summary_cancelled = summaries
+        .iter()
+        .find(|r| r.id == id_cancelled)
+        .expect("cancelled summary");
+    assert_eq!(summary_cancelled.turn_count, Some(7));
+    let summary_legacy = summaries
+        .iter()
+        .find(|r| r.id == id_legacy)
+        .expect("legacy summary");
+    assert_eq!(summary_legacy.turn_count, None);
 }
 
 /// R2 (2026-06-21) regression: the `subagent_runs.status` column
@@ -3038,6 +3177,7 @@ async fn subagent_runs_incomplete_status_round_trips() {
         &cumulative,
         &[],
         false,
+        None,
     )
     .await
     .expect("update_run_finished must accept the new Incomplete variant");

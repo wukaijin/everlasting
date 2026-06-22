@@ -87,8 +87,21 @@ const props = withDefaults(
      *  safe for callers that don't perform the reconciliation (e.g.
      *  test mounts that only care about historical rendering). */
     interactive?: boolean;
+    /** 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of the
+     *  worker's ask, surfaced by `pairSections` when it pairs a
+     *  matching `PermissionAskResolved` transcript entry (matched
+     *  by `rid`). `undefined` when:
+     *    - The ask is live-pending (no resolved entry yet).
+     *    - The transcript is from a pre-this-task run (no resolved
+     *      entries persisted).
+     *    - The resolved entry's `rid` does not match any ask
+     *      (defensive — should not happen in practice).
+     *  Passed through to `PermissionAskBody.outcome` for the
+     *  historical card's outcome badge render. The interactive
+     *  mode ignores this (live cards don't show a resolve badge). */
+    outcome?: "allow" | "deny" | "timeout" | "cancel";
   }>(),
-  { interactive: false },
+  { interactive: false, outcome: undefined },
 );
 
 // Wire the IPC respond path. The drawer owns the store dependency
@@ -170,6 +183,7 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
       :repo-root="repoRoot"
       :hide-allow-always="hideAllowAlways"
       :on-respond="interactive ? onRespond : undefined"
+      :outcome="outcome"
     />
   </div>
 </template>

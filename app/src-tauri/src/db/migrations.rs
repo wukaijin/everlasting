@@ -575,6 +575,30 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  add_subagent_runs_column_if_missing(pool, "task", "TEXT").await?;
  add_subagent_runs_column_if_missing(pool, "final_text", "TEXT").await?;
 
+ // --- 2026-06-22 (RULE-FrontSubagent-004): turn_count column.
+ //
+ // One new nullable INTEGER column on `subagent_runs`: the actual
+ // number of completed LLM turn iterations the worker executed
+ // before reaching its terminal state (completed / cancelled /
+ // error / incomplete). NULL on pre-PR2 rows (the column didn't
+ // exist); the drawer degrades to the wall-clock suffix for those
+ // legacy rows (AC: "stopped at X.Xs" for NULL turn_count).
+ //
+ // - Nullable (no DEFAULT) — pre-PR2 rows keep NULL and the UI
+ //   falls back to wall-clock. The production chat.rs / run_subagent
+ //   path writes `Some(turns)` on every post-PR2 terminal UPDATE.
+ // - `INTEGER` matches the project's convention for numeric
+ //   columns (sqlx derives `i64` on read; the Row struct maps it
+ //   to `Option<i64>`). NOT a boolean; NOT a TEXT enum.
+ // - Not the SUBAGENT_MAX_TURNS=200 constant — that's the budget
+ //   ceiling; `turn_count` is how many turns were actually
+ //   executed (which may be < 200 on clean completion / cancel /
+ //   error, or == 200 on the incomplete soft-cap exit).
+ //
+ // Idempotent: re-running on a pre-PR2 DB brings it up to date;
+ // re-running on a post-PR2 DB is a no-op (the column exists).
+ add_subagent_runs_column_if_missing(pool, "turn_count", "INTEGER").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

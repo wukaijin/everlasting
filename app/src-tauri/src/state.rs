@@ -506,6 +506,18 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// `MockEmitter` records it so the test can assert
     /// "Tier 4 was triggered" without a live UI.
     fn emit_permission_ask(&self, payload: PermissionAskPayload);
+    /// Emit a `PermissionAskResolved` transcript entry recording
+    /// the outcome of a worker's `PermissionAsk`
+    /// (RULE-WorkerAsk-001, 2026-06-22). Called by `ask_path`'s
+    /// worker branch AFTER its `tokio::select!` returns its
+    /// outcome. **Transcript-only** — the default no-op impl is
+    /// correct for every sink EXCEPT `SubagentBufferSink`, which
+    /// overrides it to record a `TranscriptKind
+    /// ::PermissionAskResolved` entry into the worker's
+    /// transcript (for historical-replay rendering in the drawer).
+    /// `AppHandleSink` and the test `MockEmitter` use the default
+    /// no-op (no parent-side audit / IPC for worker resolve).
+    fn emit_permission_ask_resolved(&self, _rid: &str, _outcome: &str) {}
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in

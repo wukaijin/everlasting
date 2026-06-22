@@ -77,12 +77,21 @@ export type SubagentStatus =
  *  `#[serde(rename_all = "snake_case")]` wire values. Used both as
  *  the `kind` field on `SubagentEventPayload` (live stream) AND as
  *  the `kind` field on `TranscriptEntry` (transcriptJson DB storage
- *  shape). */
+ *  shape).
+ *
+ *  2026-06-22 (RULE-WorkerAsk-001): added `"permission_ask_resolved"`
+ *  for the 5th Rust variant. The entry carries `{ rid, outcome }`
+ *  where `outcome ∈ {"allow", "deny", "timeout", "cancel"}`. The
+ *  drawer pairs this entry to the matching `permission_ask` entry
+ *  by `rid` and surfaces the outcome as a badge on the historical
+ *  card. Pre-this-task transcripts (no resolved entries) render the
+ *  neutral ask card unchanged (backward compat). */
 export type TranscriptKind =
   | "chat_event"
   | "tool_call"
   | "tool_result"
-  | "permission_ask";
+  | "permission_ask"
+  | "permission_ask_resolved";
 
 /** `list_subagent_runs_by_session` array element. The Rust struct
  *  carries `#[serde(rename_all = "camelCase")]`; `status` is a
@@ -104,6 +113,12 @@ export interface SubagentRunSummary {
   summary: string | null;
   task: string | null;
   finalText: string | null;
+  /** 2026-06-22 (RULE-FrontSubagent-004): actual completed turn
+   *  count the worker executed before reaching terminal state.
+   *  Null on pre-PR2 rows (drawer degrades to wall-clock suffix
+   *  for cancelled / incomplete). Cheap single-i64 column so it's
+   *  included in the summary projection. */
+  turnCount: number | null;
 }
 
 /** `get_subagent_run` return. The Rust struct carries
@@ -139,6 +154,13 @@ export interface SubagentRunRow {
   // pre-PR1 rows. The drawer's PromptCard header
   // (PR5) truncates this to 120 chars + "View full →".
   task: string | null;
+  // 2026-06-22 (RULE-FrontSubagent-004): actual
+  // completed turn count at worker exit. Null on
+  // pre-PR2 rows; the drawer's statusDisplay degrades
+  // to wall-clock suffix when null. Read by the
+  // cancelled / incomplete branches only (completed
+  // still uses wall-clock).
+  turnCount: number | null;
 }
 
 /** Live `subagent:event` IPC payload. camelCase via the Rust
@@ -283,23 +305,59 @@ export interface ToolResultSection {
 /** Pass-through for `permission_ask`. The drawer's historical
  *  mode (already shipped) renders these as static cards; the
  *  PR6 interactive allow/deny path is independent of the
- *  accumulator. */
+ *  accumulator.
+ *
+ *  2026-06-22 (RULE-WorkerAsk-001): carries an optional `outcome`
+ *  field populated by the pairing layer when a matching
+ *  `PermissionAskResolved` section is found (matched by `rid`).
+ *  When present, the historical card renders the outcome badge
+ *  (✓ 已允许 / ✗ 已拒绝 / ⏱ 已超时 / ⊘ 已取消); when absent
+ *  (no matching resolved entry — old transcript / live-pending),
+ *  the card renders the neutral ask-context line. */
 export interface PermissionAskSection {
   kind: "PermissionAsk";
+  payload_json: Record<string, unknown>;
+  /** Resolve outcome surfaced by the pairing layer. One of
+   *  `"allow"` / `"deny"` / `"timeout"` / `"cancel"` or
+   *  `undefined` (no matching resolved entry — pre-this-task
+   *  transcript or live-pending ask). */
+  outcome?: PermissionAskOutcome;
+}
+
+/** Resolve outcome wire string for a worker's `PermissionAsk`.
+ *  Mirrors the Rust `ask_path` worker branch's four-state
+ *  outcome (DEBT-locked). */
+export type PermissionAskOutcome = "allow" | "deny" | "timeout" | "cancel";
+
+/** Pass-through for `permission_ask_resolved`. Consumed by the
+ *  pairing layer (`pairSections`) to attach an `outcome` to the
+ *  matching `PermissionAskSection`. Never rendered as a standalone
+ *  card (the drawer drops it from the visible list after
+ *  pairing). */
+export interface PermissionAskResolvedSection {
+  kind: "PermissionAskResolved";
   payload_json: Record<string, unknown>;
 }
 
 /** Discriminated union for the drawer's section list. The
  *  drawer's `liveSections` computed iterates over
  *  `TranscriptSection[]` and branches on `kind` to choose
- *  the right `DrawerSection` slot. */
+ *  the right `DrawerSection` slot.
+ *
+ *  2026-06-22 (RULE-WorkerAsk-001): added `PermissionAskResolved`
+ *  variant — carried through the accumulator so the pairing layer
+ *  can attach an `outcome` to the matching `PermissionAsk` card.
+ *  The drawer's `DrawerSection(type="tools")` template does NOT
+ *  render this section directly; `pairSections` consumes it and
+ *  drops it from the visible list after pairing. */
 export type TranscriptSection =
   | ThinkingSection
   | TextSection
   | FinalTextSection
   | ToolCallSection
   | ToolResultSection
-  | PermissionAskSection;
+  | PermissionAskSection
+  | PermissionAskResolvedSection;
 
 /** Type of the inner `kind` field of a `chat_event` payload.
  *  Mirrors the Rust `ChatEvent` enum's
@@ -366,11 +424,16 @@ export function parseTranscriptJson(
     const e = entry as { kind?: unknown; payload_json?: unknown };
     if (typeof e.kind !== "string") continue;
     // Lenient kind coercion — mirrors `TranscriptKind` wire values.
+    // 2026-06-22 (RULE-WorkerAsk-001): added `permission_ask_resolved`
+    // so historical transcripts with the new resolve entries parse
+    // correctly (older code would have dropped them, hiding the
+    // outcome badge data from the drawer).
     if (
       e.kind !== "chat_event" &&
       e.kind !== "tool_call" &&
       e.kind !== "tool_result" &&
-      e.kind !== "permission_ask"
+      e.kind !== "permission_ask" &&
+      e.kind !== "permission_ask_resolved"
     ) {
       continue;
     }
@@ -570,6 +633,21 @@ export class RunAccumulator {
     if (entry.kind === "permission_ask") {
       this.appendSection({
         kind: "PermissionAsk",
+        payload_json: entry.payload_json,
+      });
+      return;
+    }
+    if (entry.kind === "permission_ask_resolved") {
+      // 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of a
+      // worker's PermissionAsk. Pass-through as a
+      // `PermissionAskResolvedSection` so the pairing layer
+      // (`pairSections`) can match it by `rid` to the corresponding
+      // `PermissionAskSection` and attach an `outcome` for the
+      // historical card's outcome badge. The drawer's Tools
+      // segment template does NOT render this section directly —
+      // `pairSections` consumes + drops it after pairing.
+      this.appendSection({
+        kind: "PermissionAskResolved",
         payload_json: entry.payload_json,
       });
       return;
@@ -869,6 +947,16 @@ function buildSectionsFromRaw(
     }
     if (entry.kind === "permission_ask") {
       out.push({ kind: "PermissionAsk", payload_json: entry.payload_json });
+      continue;
+    }
+    if (entry.kind === "permission_ask_resolved") {
+      // 2026-06-22 (RULE-WorkerAsk-001): pass-through for the
+      // pairing layer. Same shape as the live `feed` path — the
+      // drawer's Tools template does NOT render this section.
+      out.push({
+        kind: "PermissionAskResolved",
+        payload_json: entry.payload_json,
+      });
       continue;
     }
   }

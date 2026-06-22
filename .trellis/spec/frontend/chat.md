@@ -99,17 +99,22 @@ pairSections(sections: TranscriptSection[], now: number, pendingFirstSeenAt: Map
 
 > **Gotcha**：discriminator 必须**双 `===` 严格**（outer `chat_event` + inner `error`），**不能**用 `.includes("error")` / `.indexOf` —— delta 事件 text 可能含 "Error:" 字样但不是 error inner kind。有专门测试 lock。
 
-#### R23 cancelled（降级 wall-clock）
+#### R23 cancelled（now 显示 turn，已 resolved）
 
-Reply 段顶部 `⊘ Cancelled · at X.Xs` chip，用 `terminalDurMs`（wall-clock = `finishedAt - startedAt`）。`cancelled && replyText 空` → 只 chip；`cancelled && replyText 非空` → chip 在上 + reply 在下（保留 worker 中断前输出）。
+Reply 段顶部 `⊘ Cancelled · at turn N` chip,优先读 `run.turnCount`(非 null 时);`turnCount === null`(pre-PR2 老行)降级显 wall-clock `at X.Xs`(`terminalDurMs = finishedAt - startedAt`)。`cancelled && replyText 空` → 只 chip;`cancelled && replyText 非空` → chip 在上 + reply 在下(保留 worker 中断前输出)。
 
-> **已知限制（DEBT）**：PRD R23 字面是 "at turn N"，但 `subagent_runs` **无 turn 列**（schema 只有 started_at/finished_at + PR1 的 task/final_text，`db/migrations.rs:515`），`SUBAGENT_MAX_TURNS=20` 是常量不持久化。用 wall-clock 降级。未来加 turn 列 + worker 持久化实际 turn 后可改回 turn N。DEBT 见 `.trellis/reviews/DEBT.md`。
+> **Resolved 2026-06-22 (RULE-FrontSubagent-004)**:PRD R23 字面 "at turn N" 已实现 —— `subagent_runs` 加 `turn_count INTEGER` 列(幂等 `add_subagent_runs_column_if_missing`),`SubagentBufferSink::turns_completed()` 在真实 per-turn `Done` 时 `fetch_add(1)`(`stop_reason != "cancelled"` && `!= "max_turns"` 守卫,合成 terminal 不 increment),`run_subagent` 终态 `update_run_finished(..., Some(turns))` 写入。DEBT 见 `.trellis/reviews/DEBT.md` RULE-FrontSubagent-004(已 close via `06-22-subagent-drawer-historical-ask-outcome-and-cancelled-turn-count` task)。
 
-#### R24 permission_ask（降级 historical）
+#### R24 permission_ask（live interactive + historical outcome badge）
 
-`DrawerPermissionAskCard` 保持 `mode="historical"`（只读，视觉「worker · 自动拒绝」+ auto-denied note）。
+`<DrawerPermissionAskCard>` 模式由 `isPermissionAskLive(rid)` 协调:
+- **Live (pending)**:transcript `PermissionAsk` entry + `usePermissionsStore.pendingWorkerByRunId` 还有这个 rid → `interactive = true` → `<PermissionAskBody mode="interactive" hideAllowAlways>`(隐藏「始终允许」,worker 端 AllowAlways 当 AllowOnce,避免跨权限边界)
+- **Historical (resolved)**:permissions store rid 移除 + transcript 里有配对的 `PermissionAskResolved` entry → `interactive = false` → `<PermissionAskBody mode="historical" :outcome>` → 显 ✓已允许 / ✗已拒绝 / ⏱已超时 / ⊘已取消 badge
 
-> **已知限制（DEBT）**：worker 的 `PermissionContext.is_worker=true`（`permissions/mod.rs:287`）让 Tier 4 `ask_path`/`ask_shell` 直接 collapse `Decision::Deny`（`mod.rs:1003-1045`），**从不 emit `permission:ask` IPC**；transcript 里的 historical permission_ask 用 synthetic rid（`Uuid::new_v4()`），不在 `permission_asks` oneshot map 中，`permission:response` IPC 无法路由（`commands/permissions.rs:197-234`）；worker 复用 `parent_session_id`（`subagent.rs:597`）无独立 permission session。未来需 worker 独立 permission session + worker ask 事件带 workerRunId + Tier 4 collapse 改 emit 才能 interactive。DEBT 见 `.trellis/reviews/DEBT.md`。
+> **已 evolved 2026-06-22 (RULE-FrontSubagent-003 + RULE-WorkerAsk-001)**:原 R24 "已知限制(DEBT)" 描述的 worker Tier 4 collapse + synthetic rid + 父复用 session_id 三个 blocker **全部解决**:
+> - Session 62 `89e5ba1` (RULE-FrontSubagent-003):worker Tier 4 `ask_path` 改完整 `register_ask + tokio::select!{cancel, timeout, oneshot}` round-trip(不再 collapse to auto-Deny);oneshot key 改 composite `worker:{runId}` 隔离(避免覆盖 parent 主 chat 槽)
+> - Session 63 (RULE-WorkerAsk-001):worker ask resolve outcome 写 transcript `PermissionAskResolved` entry;`pairSections` 按 `rid` 配对;`<PermissionAskBody>` historical 分支显 outcome badge
+> - DEBT 见 `.trellis/reviews/DEBT.md` RULE-FrontSubagent-003(closed `89e5ba1`)+ RULE-WorkerAsk-001(closed via `06-22-...task`)
 
 ### Common Mistakes
 

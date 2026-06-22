@@ -38,6 +38,12 @@
 //! - `token_usage_json TEXT` (JSON-encoded [`TokenUsage`]; NULL while running).
 //! - `summary TEXT` (worker's `final_text` plain string; NULL while running).
 //! - `transcript_json TEXT` (JSON-encoded `Vec<TranscriptEntry>`; NULL while running).
+//! - `task TEXT` (2026-06-21 PR1, LLM's delegation prompt).
+//! - `final_text TEXT` (2026-06-21 PR1, prefix-stripped worker reply).
+//! - `turn_count INTEGER` (2026-06-22 RULE-FrontSubagent-004, actual
+//!   completed turn iterations the worker executed before reaching
+//!   terminal state; NULL on pre-PR2 rows — drawer degrades to
+//!   wall-clock suffix for those legacy rows).
 //! - `transcript_truncated INTEGER NOT NULL DEFAULT 0` (1 = over 4MB cap).
 //! - `created_at TEXT NOT NULL DEFAULT (datetime('now'))`.
 //!
@@ -187,6 +193,18 @@ pub struct SubagentRunRow {
     /// drawer's prompt card renders this verbatim (with a length
     /// truncation). NULL if the row pre-dates PR1 (legacy row).
     pub task: Option<String>,
+    /// 2026-06-22 (RULE-FrontSubagent-004): the actual number of
+    /// completed LLM turn iterations the worker executed before
+    /// reaching its terminal state. Counted by `SubagentBufferSink`
+    /// (one increment per real per-turn `Done` event — synthetic
+    /// `cancelled` / `max_turns` terminals do NOT increment; the
+    /// counter is always the real turn count at exit). NULL on
+    /// pre-PR2 rows (column added by `add_subagent_runs_column_if_missing`);
+    /// the drawer's `statusDisplay` degrades to the wall-clock
+    /// "stopped at X.Xs" / "incomplete at X.Xs" suffix when NULL.
+    /// `serde(rename_all = "camelCase")` projects to `turnCount`
+    /// on the wire.
+    pub turn_count: Option<i64>,
     pub transcript_json: Option<String>,
     pub transcript_truncated: i64,
     pub created_at: String,
@@ -240,6 +258,12 @@ pub struct SubagentRunSummary {
     pub final_text: Option<String>,
     /// B6 redesign PR1 (2026-06-21): LLM's delegation prompt.
     pub task: Option<String>,
+    /// 2026-06-22 (RULE-FrontSubagent-004): actual completed turn
+    /// count the worker executed before reaching terminal state.
+    /// NULL on pre-PR2 rows. Cheap single-i64 column so it's
+    /// included in the summary projection (no transcript bloat);
+    /// the card / drawer can both read it without a second IPC.
+    pub turn_count: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +354,15 @@ pub async fn insert_run(
 /// `payload_json` is already a `serde_json::Value` so the wire
 /// shape round-trips), the function falls back to `"[]"` so a
 /// truncation never loses the entire transcript row.
+///
+/// 2026-06-22 (RULE-FrontSubagent-004): `turn_count` is the actual
+/// number of completed LLM turn iterations the worker executed
+/// before reaching its terminal state. Counted by
+/// `SubagentBufferSink` (one increment per real per-turn `Done`;
+/// synthetic `cancelled` / `max_turns` terminals do NOT increment).
+/// Pass `None` for pre-PR2 callers or when the count is unknown —
+/// the column stays NULL and the drawer degrades to wall-clock.
+/// Production `run_subagent` always passes `Some(turns)`.
 #[allow(clippy::too_many_arguments)]
 pub async fn update_run_finished(
     pool: &SqlitePool,
@@ -341,6 +374,7 @@ pub async fn update_run_finished(
     token_usage: &TokenUsage,
     transcript: &[crate::agent::subagent::TranscriptEntry],
     transcript_truncated: bool,
+    turn_count: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     let token_usage_json =
         serde_json::to_string(token_usage).unwrap_or_else(|_| String::from("{}"));
@@ -354,7 +388,8 @@ pub async fn update_run_finished(
             final_text = ?,
             token_usage_json = ?,
             transcript_json = ?,
-            transcript_truncated = ?
+            transcript_truncated = ?,
+            turn_count = ?
         WHERE id = ?
         "#,
     )
@@ -365,6 +400,7 @@ pub async fn update_run_finished(
     .bind(&token_usage_json)
     .bind(&transcript_json)
     .bind(transcript_truncated as i64)
+    .bind(turn_count)
     .bind(id)
     .execute(pool)
     .await?;
@@ -398,7 +434,7 @@ pub async fn get_run(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, transcript_json, transcript_truncated,
+               final_text, task, turn_count, transcript_json, transcript_truncated,
                created_at
         FROM subagent_runs
         WHERE id = ?
@@ -421,6 +457,7 @@ pub async fn get_run(
             summary: r.try_get("summary")?,
             final_text: r.try_get("final_text")?,
             task: r.try_get("task")?,
+            turn_count: r.try_get("turn_count")?,
             transcript_json: r.try_get("transcript_json")?,
             transcript_truncated: r.try_get("transcript_truncated")?,
             created_at: r.try_get("created_at")?,
@@ -450,7 +487,7 @@ pub async fn list_runs_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, transcript_json, transcript_truncated,
+               final_text, task, turn_count, transcript_json, transcript_truncated,
                created_at
         FROM subagent_runs
         WHERE parent_session_id = ?
@@ -474,6 +511,7 @@ pub async fn list_runs_by_session(
                 summary: r.try_get("summary")?,
                 final_text: r.try_get("final_text")?,
                 task: r.try_get("task")?,
+                turn_count: r.try_get("turn_count")?,
                 transcript_json: r.try_get("transcript_json")?,
                 transcript_truncated: r.try_get("transcript_truncated")?,
                 created_at: r.try_get("created_at")?,
@@ -511,7 +549,7 @@ pub async fn list_runs_summary_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task
+               final_text, task, turn_count
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -535,6 +573,7 @@ pub async fn list_runs_summary_by_session(
                 summary: r.try_get("summary")?,
                 final_text: r.try_get("final_text")?,
                 task: r.try_get("task")?,
+                turn_count: r.try_get("turn_count")?,
             })
         })
         .collect()

@@ -738,8 +738,9 @@ const debounceTimers       = new Map<string, ReturnType<typeof setTimeout>>();
 
 - `listen<SubagentEventPayload>("subagent:event", ...)` payload:
   `{ runId, sessionId, kind: TranscriptKind, payload: Record<string, unknown>, timestamp }`.
-- `TranscriptKind` snake_case: `"chat_event" | "tool_call" | "tool_result" | "permission_ask"`.
+- `TranscriptKind` snake_case: `"chat_event" | "tool_call" | "tool_result" | "permission_ask" | "permission_ask_resolved"`.
   **Must mirror the Rust `#[serde(rename_all = "snake_case")]` exactly — drift is a cross-layer bug.**
+  - `permission_ask_resolved` (2026-06-22, RULE-WorkerAsk-001) is a **pass-through** kind in the live stream — the store never renders it as a standalone section; `pairSections` (PR5 reducer) pre-scans these entries into a `Map<rid, outcome>` and surfaces `outcome` on the matching `PermissionAskSection`. Resolved entries themselves are dropped from the section list (consumed by pairing).
 
 #### Cross-layer drift traps (locked by tests)
 
@@ -860,28 +861,38 @@ chunks).
 #### `TranscriptSection` discriminated union (replaces raw `TranscriptEntry` for UI)
 
 ```typescript
-// 6 section kinds — the drawer's render surface. tool_call /
+// 7 section kinds — the drawer's render surface. tool_call /
 // tool_result / permission_ask are renamed in PR5's visual layer
 // (the rename is render-only — wire shapes stay snake_case).
+// `PermissionAskResolved` is a pass-through kind: emitted by the
+// sink (RULE-WorkerAsk-001) and consumed by pairSections — never
+// rendered as a standalone card.
 export type TranscriptSectionKind =
-  | "Thinking"   // collapsed chat_event thinking_delta (Anthropic SSE)
-  | "Text"       // collapsed chat_event delta (text)
-  | "FinalText"  // terminal text from subagent_runs.final_text (PR1 column)
+  | "Thinking"            // collapsed chat_event thinking_delta (Anthropic SSE)
+  | "Text"                // collapsed chat_event delta (text)
+  | "FinalText"           // terminal text from subagent_runs.final_text (PR1 column)
   | "ToolCall"
   | "ToolResult"
-  | "PermissionAsk";
+  | "PermissionAsk"       // carries optional `outcome` from paired PermissionAskResolved
+  | "PermissionAskResolved"; // pass-through; consumed by pairSections pairing
+
+export type PermissionAskOutcome = "allow" | "deny" | "timeout" | "cancel";
 
 export interface TranscriptSection {
   kind: TranscriptSectionKind;
   // Free-form body — schema varies per kind. Drawing from the
   // original TranscriptEntry.payload_json shape (snake_case) for
   // tool_call/tool_result/permission_ask; a flat text string for
-  // Thinking/Text/FinalText.
+  // Thinking/Text/FinalText. `PermissionAskResolved` carries
+  // `{ rid, outcome }` (the pairing input).
   body: string | Record<string, unknown>;
   // Live phase only — flags redacted thinking blocks (🔒 marker).
   redacted?: boolean;
   // Live phase only — char counter for the section header chip.
   chars?: number;
+  // PermissionAsk only — set by pairSections when a paired
+  // PermissionAskResolved entry is found (same `rid`).
+  outcome?: PermissionAskOutcome;
 }
 ```
 

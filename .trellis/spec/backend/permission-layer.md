@@ -341,7 +341,7 @@ session_id: ctx.session_id.clone(), // parent
 trace 证明 wire 真的通了(emit → listen → store → render)。两端各自
 绿 ≠ 整体绿。
 
-#### Audit note
+#### Audit note + outcome transcript entry (2026-06-22)
 
 worker ask 的 resolve 端**不写** `session_audit_events`(RULE-A-016:
 worker 决策不污染 parent C4 审计)。transcript(`subagent_runs.transcript_json`)
@@ -349,6 +349,8 @@ worker 决策不污染 parent C4 审计)。transcript(`subagent_runs.transcript_
 AuditKind 变体已加到 enum(forward-compat + round-trip test),但无 writer——
 未来若要"parent 审计里看到 worker 活动",应新增独立 `subagent_audit_events` 表,
 而非写 parent 表。
+
+**Post-2026-06-22 (RULE-WorkerAsk-001) — `TranscriptKind::PermissionAskResolved` entry**:worker `ask_path` `tokio::select!{cancel, timeout, oneshot}` 返回后,`SubagentBufferSink::emit_permission_ask_resolved(rid, outcome)` 追加一个 `PermissionAskResolved` entry,`payload_json = { rid, outcome }`,outcome ∈ `{"allow","deny","timeout","cancel"}`(worker `AllowAlways` 当 `AllowOnce` 统一 `"allow"`;`OneshotDropped` → `"cancel"`;`timeout` / `cancel` 臂的合成 Deny 走 `tokio::select!` 体内部 emit,oneshot 臂的 Allow/Deny 走 match-arm 路径 emit,reason-based skip 防双累)。这是 **transcript-only** —— 不双发 `permission:ask` IPC(live 期间交互卡消失已由 permissions store rid removal 驱动,Session 62 `89e5ba1` 行为不变);不进父 `session_audit_events`(同 RULE-A-016 隔离原则);不进 `subagent_audit_events`(尚未存在的未来表)。`ChatEventSink` trait `emit_permission_ask_resolved` **默认 no-op**,仅 `SubagentBufferSink` override(避免 `Arc<dyn>` downcast,`AppHandleSink` / 测试 sink 零改动继承默认 —— 同 trait-default-no-op 模式可推广到未来 sink-only 合约)。前端 `pairSections` 按 `rid` 配对 → `PermissionAskBody.vue` historical 分支显 ✓/✗/⏱/⊘ outcome badge;pre-fix 老 transcript 降级中性。
 
 ### 6. Audit (`session_audit_events`) — 10 类 AuditKind
 

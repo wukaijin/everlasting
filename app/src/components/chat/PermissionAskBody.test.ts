@@ -389,4 +389,140 @@ describe("PermissionAskBody historical mode", () => {
     expect(w.find(".permission-ask-body__path").exists()).toBe(true);
     expect(w.find(".permission-ask-body__badge").text()).toBe("仓库内");
   });
+
+  // ----------------------------------------------------------------
+  // 2026-06-22 (RULE-WorkerAsk-001): outcome badge in historical mode
+  // ----------------------------------------------------------------
+  //
+  // When the `outcome` prop is present, the historical card renders
+  // an outcome badge (✓ 已允许 / ✗ 已拒绝 / ⏱ 已超时 / ⊘ 已取消)
+  // above the neutral ask-context line. When absent (no matching
+  // resolved transcript entry — pre-this-task transcripts or
+  // live-pending asks), the card renders the neutral line only
+  // (backward compat).
+
+  describe("outcome badge (RULE-WorkerAsk-001)", () => {
+    it("renders the ✓ 已允许 badge when outcome='allow'", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk({ toolName: "write_file" }),
+          repoRoot: "/data/repo",
+          outcome: "allow",
+        },
+      });
+      const badge = w.find(".permission-ask-body__outcome-badge");
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toBe("✓ 已允许");
+      // The neutral ask-context line still renders below the badge.
+      expect(w.text()).toContain("worker asked for write_file");
+    });
+
+    it("renders the ✗ 已拒绝 badge when outcome='deny'", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk(),
+          repoRoot: "/data/repo",
+          outcome: "deny",
+        },
+      });
+      const badge = w.find(".permission-ask-body__outcome-badge");
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toBe("✗ 已拒绝");
+    });
+
+    it("renders the ⏱ 已超时 badge when outcome='timeout'", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk(),
+          repoRoot: "/data/repo",
+          outcome: "timeout",
+        },
+      });
+      const badge = w.find(".permission-ask-body__outcome-badge");
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toBe("⏱ 已超时");
+    });
+
+    it("renders the ⊘ 已取消 badge when outcome='cancel'", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk(),
+          repoRoot: "/data/repo",
+          outcome: "cancel",
+        },
+      });
+      const badge = w.find(".permission-ask-body__outcome-badge");
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toBe("⊘ 已取消");
+    });
+
+    it("does NOT render the badge when outcome is undefined (backward compat)", () => {
+      // Pre-this-task transcript (no resolved entries) → ask card
+      // renders with outcome === undefined → neutral ask-context
+      // line only, NO outcome badge. Critical for backward compat.
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "historical",
+          ask: makeAsk(),
+          repoRoot: "/data/repo",
+          // outcome intentionally omitted.
+        },
+      });
+      expect(w.find(".permission-ask-body__outcome-badge").exists()).toBe(false);
+      // The neutral ask-context line still renders.
+      expect(w.find(".permission-ask-body__historical-note").exists()).toBe(true);
+    });
+
+    it("does NOT render the badge in interactive mode (outcome is historical-only)", () => {
+      // The outcome badge is ONLY for historical cards (resolved
+      // asks). Interactive cards are live-pending — no outcome
+      // yet. Even if the prop is passed, interactive mode should
+      // not render the badge (defensive — a caller shouldn't have
+      // to remember to clear the prop when flipping to interactive).
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk(),
+          onRespond: vi.fn(),
+          repoRoot: "/data/repo",
+          outcome: "allow",
+        },
+      });
+      expect(w.find(".permission-ask-body__outcome-badge").exists()).toBe(false);
+    });
+
+    it("binds the outcome color token to the badge style (per-outcome)", () => {
+      // Sanity: each outcome maps to its documented color token.
+      // allow → --color-tool-write (emerald).
+      // deny  → --color-tool-error (red).
+      // timeout / cancel → --color-text-muted (neutral).
+      const cases: Array<{
+        outcome: "allow" | "deny" | "timeout" | "cancel";
+        expectedColor: string;
+      }> = [
+        { outcome: "allow", expectedColor: "var(--color-tool-write)" },
+        { outcome: "deny", expectedColor: "var(--color-tool-error)" },
+        { outcome: "timeout", expectedColor: "var(--color-text-muted)" },
+        { outcome: "cancel", expectedColor: "var(--color-text-muted)" },
+      ];
+      for (const { outcome, expectedColor } of cases) {
+        const w = mount(PermissionAskBody, {
+          props: {
+            mode: "historical",
+            ask: makeAsk(),
+            repoRoot: "/data/repo",
+            outcome,
+          },
+        });
+        const badge = w.get(".permission-ask-body__outcome-badge");
+        const style = badge.attributes("style") ?? "";
+        expect(style).toContain(`color: ${expectedColor}`);
+        expect(style).toContain(`border-color: ${expectedColor}`);
+      }
+    });
+  });
 });

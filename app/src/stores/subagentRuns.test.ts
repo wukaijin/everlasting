@@ -85,6 +85,9 @@ const sampleSummary: SubagentRunSummary = {
   // the redesign tests use a separate fixture with values.
   task: null,
   finalText: null,
+  // 2026-06-22 (RULE-FrontSubagent-004): nullable for legacy rows;
+  // null exercises the wall-clock degrade path in statusDisplay.
+  turnCount: null,
 };
 
 // NOTE: SubagentRunRow.status is a raw `string` (Drift trap 1) — NOT
@@ -113,6 +116,8 @@ const sampleRow: SubagentRunRow = {
   // B6 redesign PR1 (2026-06-21): new columns on the wire.
   task: null,
   finalText: null,
+  // 2026-06-22 (RULE-FrontSubagent-004): null on legacy rows.
+  turnCount: null,
 };
 
 // -----------------------------------------------------------------------

@@ -254,6 +254,8 @@ describe("ToolCallCard dispatch_subagent branch", () => {
         // B6 redesign PR1: nullable for legacy rows.
         task: null,
         finalText: null,
+        // 2026-06-22 (RULE-FrontSubagent-004): nullable for legacy rows.
+        turnCount: null,
       },
     ]);
     // Mock fetchRun so openDrawer doesn't actually try to call IPC.
@@ -327,6 +329,7 @@ describe("ToolCallCard dispatch_subagent branch", () => {
         finishedAt: null,
         tokenUsageJson: null,
         summary: null,
+        turnCount: null,
       },
     ]);
     // openDrawer's fetchRun (after the polling tick finds the summary).

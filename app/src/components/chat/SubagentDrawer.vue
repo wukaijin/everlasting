@@ -353,9 +353,12 @@ const terminalDurMs = computed<number | null>(() => {
  *    - running → "running 8.2s" (live, updates every 100ms)
  *    - completed → "done in 12.4s" (terminal, computed once)
  *    - error → "failed at 4.2s" (terminal, wall-clock at error)
- *    - cancelled → "stopped at 3.1s" (terminal, wall-clock at cancel)
- *    - incomplete → "incomplete at X.Xs" (terminal, wall-clock at
- *      the max_turns soft-cap exit — symmetric to error / cancelled)
+ *    - cancelled → "stopped at turn N" (terminal, turn-based when
+ *      turn_count present; legacy NULL degrades to "stopped at X.Xs"
+ *      wall-clock) — RULE-FrontSubagent-004 (2026-06-22)
+ *    - incomplete → "incomplete at turn N" (terminal, turn-based
+ *      when turn_count present; legacy NULL degrades to
+ *      "incomplete at X.Xs" wall-clock) — RULE-FrontSubagent-004
  *  Falls back to the plain label if the row hasn't loaded yet.
  *
  *  B1 (2026-06-20): the error / cancelled branches previously used
@@ -365,7 +368,19 @@ const terminalDurMs = computed<number | null>(() => {
  *  drifted from "failed at 11.7s" (real wall-clock) to "failed at
  *  14281.9s" (4 hours). Fix: use `finishedAt - startedAt` for all
  *  terminal states (same formula as `completed`), giving a frozen
- *  duration that doesn't change while the drawer is open. */
+ *  duration that doesn't change while the drawer is open.
+ *
+ *  2026-06-22 (RULE-FrontSubagent-004): cancelled + incomplete now
+ *  prefer the turn-based suffix ("at turn N") when `turnCount` is
+ *  non-null. PRD R23 字面是 "at turn N" — this lands the turn-count
+ *  data PR2 of this task added to `subagent_runs`. Pre-PR2 legacy
+ *  rows (turnCount null) degrade to the wall-clock suffix for
+ *  backward compat. `completed` is UNCHANGED (still wall-clock):
+ *  user-confirmed scope; completed runs measure latency, not turn
+ *  progress (a 1-turn completed run that took 30s is "done in 30s",
+ *  not "done at turn 1"). `error` is also UNCHANGED — error exits
+ *  have less stable turn semantics (the error may fire mid-turn
+ *  before the per-turn Done increments the counter). */
 const statusDisplay = computed<{ label: string; color: string; suffix: string }>(() => {
   const meta = STATUS_META[status.value];
   if (!run.value?.startedAt) {
@@ -382,14 +397,24 @@ const statusDisplay = computed<{ label: string; color: string; suffix: string }>
     return { label: "failed", color: meta.color, suffix };
   }
   if (status.value === "cancelled") {
+    // Prefer turn-based suffix when turnCount is present (PR2 R4);
+    // null (legacy pre-PR2 rows) degrades to wall-clock.
+    if (run.value.turnCount !== null && run.value.turnCount !== undefined) {
+      return { label: meta.label, color: meta.color, suffix: ` at turn ${run.value.turnCount}` };
+    }
     const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
   if (status.value === "incomplete") {
-    // Symmetric with cancelled: terminal wall-clock at the
-    // max_turns soft-cap exit. Label uses the meta label
+    // Symmetric with cancelled: prefer turn-based suffix when
+    // turnCount present (the natural unit for max_turns — "ran
+    // out of budget at turn 200" reads better than "at 142.7s");
+    // null degrades to wall-clock. Label uses the meta label
     // ("未完成") rather than the english "failed" / "stopped"
     // form to match the chip text the user reads in STATUS_META.
+    if (run.value.turnCount !== null && run.value.turnCount !== undefined) {
+      return { label: meta.label, color: meta.color, suffix: ` at turn ${run.value.turnCount}` };
+    }
     const suffix = terminalDurMs.value !== null ? ` at ${(terminalDurMs.value / 1000).toFixed(1)}s` : "";
     return { label: meta.label, color: meta.color, suffix };
   }
@@ -800,6 +825,7 @@ function isPermissionAskLive(rid: string): boolean {
                       :ask="synthesizeAsk(e.payload_json)"
                       :repo-root="repoRoot"
                       :interactive="isPermissionAskLive(String(e.payload_json.rid ?? ''))"
+                      :outcome="e.outcome"
                     />
                   </template>
                 </DrawerSection>

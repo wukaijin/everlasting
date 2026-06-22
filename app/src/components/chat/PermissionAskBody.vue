@@ -67,11 +67,55 @@ const props = withDefaults(
      *  default (`false`) preserves the main-chat ToolCallCard
      *  behavior (all 4 buttons). */
     hideAllowAlways?: boolean;
+    /** 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of a
+     *  worker's ask. Only rendered in historical mode (interactive
+     *  cards are live-pending — no outcome yet). Surfaced by
+     *  `pairSections` when it pairs a matching
+     *  `PermissionAskResolved` transcript entry by `rid`.
+     *  `undefined` → render the neutral ask-context line
+     *  (backward compat with pre-this-task transcripts). */
+    outcome?: "allow" | "deny" | "timeout" | "cancel";
   }>(),
-  { onRespond: undefined, repoRoot: "", hideAllowAlways: false },
+  {
+    onRespond: undefined,
+    repoRoot: "",
+    hideAllowAlways: false,
+    outcome: undefined,
+  },
 );
 
 const riskMeta = computed(() => RISK_META[props.ask.risk]);
+
+/** 2026-06-22 (RULE-WorkerAsk-001): outcome metadata for the
+ *  historical card's outcome badge. Drives the Chinese label
+ *  + the color token used for the badge text + border.
+ *
+ *  Color token reuse (per design-tokens spec — no one-off
+ *  `--color-*` tokens):
+ *    - allow  → `--color-tool-write` (emerald — same as
+ *               `write_file` success / "仓库内" badge).
+ *    - deny   → `--color-tool-error` (red — standard error).
+ *    - timeout / cancel → `--color-text-muted` (neutral muted —
+ *               these are soft-terminal states the user did not
+ *               actively choose; muted avoids implying user
+ *               intent).
+ */
+const OUTCOME_META: Record<
+  "allow" | "deny" | "timeout" | "cancel",
+  { label: string; color: string }
+> = {
+  allow: { label: "✓ 已允许", color: "var(--color-tool-write)" },
+  deny: { label: "✗ 已拒绝", color: "var(--color-tool-error)" },
+  timeout: { label: "⏱ 已超时", color: "var(--color-text-muted)" },
+  cancel: { label: "⊘ 已取消", color: "var(--color-text-muted)" },
+};
+
+/** Outcome metadata for the current `outcome` prop. `null` when
+ *  `outcome` is `undefined` (no resolved entry) — the historical
+ *  branch falls back to the neutral ask-context line. */
+const outcomeMeta = computed(() =>
+  props.outcome ? OUTCOME_META[props.outcome] : null,
+);
 
 /** Badge text for the path range row. Mirrors the inline
  *  `pathBadgeText` logic in `ToolCallCard.vue` — `仓库内` if
@@ -201,12 +245,27 @@ function cancelFeedback(): void {
          while live (the `pending` branch above renders Allow/Deny
          buttons); this `historical` branch only renders once the
          ask is resolved (or for pre-fix transcript entries). No
-         buttons. The transcript does not yet persist the resolve
-         outcome (N4 — known limitation, see DEBT.md), so we render
-         the neutral ask-context line. -->
-    <p v-else-if="mode === 'historical'" class="permission-ask-body__historical-note">
-      worker asked for {{ ask.toolName || "this tool" }}<span v-if="ask.path"> at {{ ask.path }}</span><span v-if="ask.workerRunId"> · worker</span>
-    </p>
+         buttons.
+
+         2026-06-22 (RULE-WorkerAsk-001): when an `outcome` prop is
+         present (the pairing layer found a matching
+         `PermissionAskResolved` transcript entry by rid), the
+         historical branch renders an outcome badge
+         (✓ 已允许 / ✗ 已拒绝 / ⏱ 已超时 / ⊘ 已取消) above the
+         ask-context line. When `outcome` is absent (no resolved
+         entry — pre-this-task transcript or a rare rid mismatch),
+         the branch falls back to the neutral ask-context line
+         (backward compat). -->
+    <template v-else-if="mode === 'historical'">
+      <span
+        v-if="outcomeMeta"
+        class="permission-ask-body__outcome-badge"
+        :style="{ color: outcomeMeta.color, borderColor: outcomeMeta.color }"
+      >{{ outcomeMeta.label }}</span>
+      <p class="permission-ask-body__historical-note">
+        worker asked for {{ ask.toolName || "this tool" }}<span v-if="ask.path"> at {{ ask.path }}</span><span v-if="ask.workerRunId"> · worker</span>
+      </p>
+    </template>
   </div>
 </template>
 
@@ -339,5 +398,24 @@ function cancelFeedback(): void {
   color: var(--color-text-muted);
   font-style: italic;
   line-height: 1.4;
+}
+
+/* 2026-06-22 (RULE-WorkerAsk-001): outcome badge for the
+ * historical card. Mirrors the `.permission-ask-body__badge`
+ * pill style used for the path range badge — same padding,
+ * border-radius, background mix — so the visual language stays
+ * consistent inside the card. The badge color is bound inline
+ * via :style (per-outcome color token); the CSS here only
+ * defines the shared chrome. */
+.permission-ask-body__outcome-badge {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 </style>

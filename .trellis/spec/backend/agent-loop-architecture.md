@@ -495,6 +495,16 @@ breakpoint is never disturbed.
   through C3). Write a separate function instead of a flag — flags
   accumulate and obscure the code.
 
+### Worker ask resolve outcome + turn counting (RULE-WorkerAsk-001 + RULE-FrontSubagent-004, 2026-06-22)
+
+Two transcript-related contracts that the worker `SubagentBufferSink` is now responsible for. Both are transcript-only (no IPC, no audit) and survive into the persisted `subagent_runs.transcript_json` + `turn_count` columns.
+
+**1. Ask resolve outcome → `TranscriptKind::PermissionAskResolved` entry.** The `ask_path` worker branch in `permissions/mod.rs` runs `tokio::select!{cancel, timeout, oneshot}`; after the select returns, the sink records a `PermissionAskResolved` entry with `payload_json = { rid, outcome }`. Outcome is one of `"allow" | "deny" | "timeout" | "cancel"` (worker `AllowAlways` collapses to `"allow"` per Session 62; `OneshotDropped` → `"cancel"`). Surface via `SubagentBufferSink::emit_permission_ask_resolved(&self, rid, outcome)`, the only override of `ChatEventSink`'s trait default no-op — keeps `AppHandleSink` and all test sinks compiling unchanged (no `Arc<dyn>` downcast needed). Why transcript-only: live interaction card flip is already driven by `usePermissionsStore` rid removal (Session 62 `89e5ba1`), so a second `permission:ask` IPC on resolve would be redundant + risk re-arming the live card. The `PermissionAsk` + `PermissionAskResolved` pair in the transcript gives historical replay the full decision + outcome in one place.
+
+**2. Real per-turn `Done` count → `subagent_runs.turn_count`.** `SubagentBufferSink::turns_completed() -> u64` is a `fetch_add(1)` in the `Done` event arm **only when `stop_reason` is NOT `Some("cancelled")` and NOT `Some("max_turns")`**. This is the "synthetic terminal" exclusion: real per-turn `Done` events (LLM finished a turn normally) increment; the synthetic `Done { stop_reason: Some("cancelled") }` and `Done { stop_reason: Some("max_turns") }` terminals emitted by `chat_loop.rs` (~:1820, ~:1866) do NOT. Net effect: `turn_count` at terminal write time is always the **real** count of completed LLM iterations, never inflated by the synthetic end-of-run signal. `run_subagent` threads `Some(worker_sink.turns_completed() as i64)` into `update_run_finished(..., turn_count)`; the column is nullable (no DEFAULT) so pre-PR2 rows keep NULL and the drawer's `statusDisplay` falls back to `terminalDurMs` (wall-clock) for legacy rows. The same `stop_reason` guard also protects the existing `per_turn_usage` push, so `turn_count` and `token_usage_json` stay in 1:1 lockstep (regression-protected by `subagent_runs_update_finished_round_trips_turn_count`).
+
+**Why both are sink-level, not chat_loop-level.** The sink already owns the per-event record pathway (chat_event / tool_call / tool_result / permission_ask); adding `emit_permission_ask_resolved` + the `Done` counter to the same struct keeps the transcript the single source of truth and avoids threading new state through `run_chat_loop`'s 23-param signature. The trait-default no-op for `emit_permission_ask_resolved` is the template for any future sink-side contract that doesn't apply to the main chat (`AppHandleSink` — no transcript — inherits the no-op for free).
+
 ---
 
 ## System prompt assembly (3-layer, cache-stable)

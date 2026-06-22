@@ -423,6 +423,21 @@ pub enum TranscriptKind {
     ToolCall,
     ToolResult,
     PermissionAsk,
+    /// 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of a
+    /// worker's `PermissionAsk`. Emitted by `SubagentBufferSink
+    /// ::emit_permission_ask_resolved` AFTER the `ask_path` worker
+    /// branch's `tokio::select!` returns its outcome. The entry
+    /// carries `{ rid, outcome }` where `outcome ∈ {"allow", "deny",
+    /// "timeout", "cancel"}`. The frontend pairs this entry to the
+    /// matching `PermissionAsk` transcript entry by `rid` and
+    /// surfaces the outcome as a badge on the historical card.
+    ///
+    /// **Transcript-only** (NOT dual-emitted on `permission:ask`
+    /// IPC) — the live interaction card's disappearance is already
+    /// driven by the permissions store removing the pending entry
+    /// on resolve. This entry is the historical-replay record for
+    /// when the drawer is reopened after the worker exits.
+    PermissionAskResolved,
 }
 
 /// Build the IPC payload for the `subagent:event` Tauri channel.
@@ -470,6 +485,7 @@ fn build_subagent_event_payload(
         TranscriptKind::ToolCall => "tool_call",
         TranscriptKind::ToolResult => "tool_result",
         TranscriptKind::PermissionAsk => "permission_ask",
+        TranscriptKind::PermissionAskResolved => "permission_ask_resolved",
     };
     serde_json::json!({
         "runId": run_id,
@@ -613,6 +629,19 @@ pub struct SubagentBufferSink {
     /// when the worker exhausts its turn budget, which is not
     /// a cancel or an error path.
     was_incomplete: std::sync::atomic::AtomicBool,
+    /// 2026-06-22 (RULE-FrontSubagent-004): count of REAL per-turn
+    /// `Done` events the worker received. Incremented once per
+    /// completed LLM turn iteration (the natural per-turn Done
+    /// carrying that turn's `usage`). Synthetic terminals
+    /// (`cancelled` / `max_turns`) do NOT increment — the counter
+    /// always reflects the actual turn count at worker exit, even
+    /// when the exit was triggered by the soft-cap or cancel. Read
+    /// by `run_subagent` after the worker loop returns to populate
+    /// `subagent_runs.turn_count` via `update_run_finished`.
+    /// Matches the `per_turn_usage` push guard (the same real-Done
+    /// discriminator) so the two stay 1:1: turns_completed.len() ==
+    /// per_turn_usage.len() at exit.
+    turns_completed: std::sync::atomic::AtomicU64,
     /// PR2 hotfix (B6 PR3, 2026-06-20): optional Tauri
     /// `AppHandle` used to emit the `subagent:event` IPC channel
     /// on every emit. `None` in tests (no Tauri runtime) — the
@@ -655,6 +684,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: Some(app_handle),
             run_id,
             session_id,
@@ -674,6 +704,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: None,
             run_id,
             session_id,
@@ -706,6 +737,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: None,
             run_id,
             session_id,
@@ -794,6 +826,17 @@ impl SubagentBufferSink {
     /// `Completed` for the natural end_turn exit).
     pub fn was_incomplete(&self) -> bool {
         self.was_incomplete
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 2026-06-22 (RULE-FrontSubagent-004): actual completed LLM
+    /// turn count at worker exit. Incremented once per REAL per-turn
+    /// `Done` (same discriminator as the `per_turn_usage` push —
+    /// synthetic `cancelled` / `max_turns` terminals do NOT
+    /// increment). `run_subagent` reads this to populate
+    /// `subagent_runs.turn_count` via `update_run_finished`.
+    pub fn turns_completed(&self) -> u64 {
+        self.turns_completed
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -910,6 +953,20 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                             .lock()
                             .expect("SubagentBufferSink per_turn_usage mutex poisoned")
                             .push(*u);
+                        // 2026-06-22 (RULE-FrontSubagent-004):
+                        // increment the turn counter on the SAME
+                        // discriminator as the `per_turn_usage`
+                        // push so the two stay 1:1
+                        // (turns_completed() == per_turn_usage.len()
+                        // at worker exit). Synthetic terminals
+                        // (cancelled / max_turns) do NOT increment
+                        // because they reuse the prior turn's
+                        // usage (would double-count). The counter
+                        // thus always reflects the actual count of
+                        // real per-turn Dones — even when the
+                        // worker exited via the soft-cap or cancel.
+                        self.turns_completed
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
                 if stop_reason.as_deref() == Some("cancelled")
@@ -1120,6 +1177,69 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
         // path is exercised in integration, not unit, tests.
         let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
         self.record(TranscriptKind::PermissionAsk, payload_json);
+    }
+
+    /// 2026-06-22 (RULE-WorkerAsk-001): trait override of
+    /// `ChatEventSink::emit_permission_ask_resolved`. Records the
+    /// worker's `PermissionAsk` resolve outcome as a
+    /// `PermissionAskResolved` transcript entry. Called by
+    /// `ask_path`'s worker branch AFTER its `tokio::select!` arm
+    /// returns its outcome.
+    ///
+    /// **Transcript-only** (no dual IPC emit). The live
+    /// interaction card's disappearance is driven by the
+    /// permissions store removing the pending entry on resolve
+    /// (Session 62 `89e5ba1`). This transcript entry is the
+    /// **historical-replay record** — when the user reopens the
+    /// drawer after the worker exits, the frontend pairs this
+    /// entry to the matching ask by `rid` and surfaces the
+    /// outcome as a badge on the card.
+    ///
+    /// **No audit** (RULE-A-016): worker resolve events stay in
+    /// the transcript, NOT in `session_audit_events`.
+    ///
+    /// `outcome` is one of `"allow"` / `"deny"` / `"timeout"` /
+    /// `"cancel"` (DEBT-locked four-state wire). The caller
+    /// (`ask_path` worker branch) maps its `tokio::select!` arm
+    /// to the appropriate outcome string before calling this.
+    fn emit_permission_ask_resolved(&self, rid: &str, outcome: &str) {
+        self.record_permission_ask_resolved(rid, outcome);
+    }
+}
+
+impl SubagentBufferSink {
+    /// 2026-06-22 (RULE-WorkerAsk-001): record the resolve outcome of
+    /// a worker's `PermissionAsk` as a `PermissionAskResolved`
+    /// transcript entry. Called by `ask_path`'s worker branch AFTER
+    /// the `tokio::select!{cancel, timeout, rx}` returns its outcome.
+    ///
+    /// **Transcript-only** (no dual IPC emit). The live interaction
+    /// card's disappearance is driven by the permissions store
+    /// removing the pending entry on resolve (Session 62 `89e5ba1`).
+    /// This transcript entry is the **historical-replay record** —
+    /// when the user reopens the drawer after the worker exits, the
+    /// frontend pairs this entry to the matching ask by `rid` and
+    /// surfaces the outcome as a badge on the card.
+    ///
+    /// **No audit** (RULE-A-016): worker resolve events stay in the
+    /// transcript, NOT in `session_audit_events`. Same invariant as
+    /// `emit_permission_ask`.
+    ///
+    /// `outcome` is one of `"allow"` / `"deny"` / `"timeout"` /
+    /// `"cancel"` (DEBT-locked four-state wire). The caller
+    /// (`ask_path` worker branch) maps its `tokio::select!` arm to
+    /// the appropriate outcome string before calling this.
+    ///
+    /// This is the inner helper (free function) invoked by the
+    /// trait override `emit_permission_ask_resolved` above + by
+    /// tests that want to exercise the recording path directly
+    /// without going through the trait dispatch.
+    pub(crate) fn record_permission_ask_resolved(&self, rid: &str, outcome: &str) {
+        let payload_json = serde_json::json!({
+            "rid": rid,
+            "outcome": outcome,
+        });
+        self.record(TranscriptKind::PermissionAskResolved, payload_json);
     }
 }
 
@@ -2124,6 +2244,113 @@ mod tests {
         assert_eq!(total.output_tokens, 80);
     }
 
+    /// 2026-06-22 (RULE-FrontSubagent-004): `turns_completed()` is
+    /// incremented exactly once per REAL per-turn Done — the SAME
+    /// discriminator `per_turn_usage` uses (so the two stay 1:1:
+    /// turns_completed == per_turn_usage.len() at exit). Synthetic
+    /// `cancelled` / `max_turns` terminals do NOT increment the
+    /// counter (matches the per_turn_usage guard).
+    ///
+    /// This test exercises all three exit shapes:
+    /// (a) Clean end_turn: 3 per-turn Dones (each `done_with_usage`
+    ///     uses `stop_reason: end_turn`) → turns_completed == 3.
+    /// (b) Cancelled mid-flight: 2 per-turn Dones + 1 synthetic
+    ///     cancelled terminal → turns_completed == 2 (synthetic
+    ///     does NOT bump).
+    /// (c) max_turns soft-cap: 200 per-turn Dones + 1 synthetic
+    ///     max_turns terminal → turns_completed == 200 (synthetic
+    ///     does NOT bump).
+    /// The counter always reflects the real turn count at exit,
+    /// even on soft-cap / cancel — which is exactly what the
+    /// drawer's "stopped at turn N" / "incomplete at turn N"
+    /// suffix needs.
+    #[test]
+    fn buffer_sink_turns_completed_tracks_real_per_turn_dones() {
+        // (a) Clean end_turn: 3 per-turn Dones (each done_with_usage
+        // emission IS a real per-turn Done — the natural stop event
+        // for that turn carries that turn's usage; the loop does NOT
+        // emit a separate terminal Done after end_turn).
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        sink.emit_chat_event(&done_with_usage(50, 10));
+        assert_eq!(
+            sink.turns_completed(),
+            3,
+            "3 real per-turn Dones → counter == 3"
+        );
+
+        // (b) Cancelled: 2 per-turn Dones + 1 synthetic cancelled.
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        });
+        assert_eq!(
+            sink.turns_completed(),
+            2,
+            "cancelled synthetic terminal must NOT increment"
+        );
+
+        // (c) max_turns: 200 per-turn Dones + 1 synthetic max_turns.
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        for _ in 0..200 {
+            sink.emit_chat_event(&done_with_usage(100, 50));
+        }
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("max_turns".to_string()),
+                usage: Some(TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                }),
+            },
+        });
+        assert_eq!(
+            sink.turns_completed(),
+            200,
+            "max_turns synthetic terminal must NOT increment (counter == real turn budget)"
+        );
+    }
+
+    /// 2026-06-22 (RULE-FrontSubagent-004): `turns_completed()` and
+    /// `per_turn_usage` stay 1:1 — the SAME discriminator guards
+    /// both, so a worker that emits N real per-turn Dones always
+    /// has turns_completed == per_turn_usage.len() at exit. This is
+    /// the cross-field invariant the drawer's "stopped at turn N"
+    /// suffix relies on (N must equal the per-turn usage count the
+    /// token_usage_json field is built from).
+    #[test]
+    fn buffer_sink_turns_completed_equals_per_turn_usage_len() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        // 3 real per-turn Dones + 1 cancelled synthetic.
+        sink.emit_chat_event(&done_with_usage(100, 50));
+        sink.emit_chat_event(&done_with_usage(200, 30));
+        sink.emit_chat_event(&done_with_usage(50, 10));
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid".to_string(),
+            event: ChatEvent::Done {
+                stop_reason: Some("cancelled".to_string()),
+                usage: None,
+            },
+        });
+        assert_eq!(sink.turns_completed(), 3);
+        // cumulative_usage reads per_turn_usage — its existence +
+        // non-zero value implies per_turn_usage.len() == 3. The two
+        // counts match (cross-field invariant).
+        let total = sink.cumulative_usage();
+        assert_eq!(total.input_tokens, 350);
+        assert_eq!(total.output_tokens, 90);
+    }
+
     /// R3 was_incomplete regression: the sink's `was_incomplete`
     /// flag is set when the synthetic terminal `Done{max_turns}`
     /// arrives. This is the signal `run_subagent` reads to pick
@@ -2578,6 +2805,10 @@ mod tests {
             (TranscriptKind::ToolCall, "tool_call"),
             (TranscriptKind::ToolResult, "tool_result"),
             (TranscriptKind::PermissionAsk, "permission_ask"),
+            // 2026-06-22 (RULE-WorkerAsk-001): 5th variant — the
+            // resolve outcome of a worker ask. Historical-replay
+            // record only (no dual IPC emit).
+            (TranscriptKind::PermissionAskResolved, "permission_ask_resolved"),
         ] {
             let p = build_subagent_event_payload("rid", "sid", kind, serde_json::Value::Null);
             assert_eq!(p["kind"], expected, "kind={kind:?} wire form");
@@ -3002,6 +3233,170 @@ mod tests {
         assert_eq!(
             pj.get("toolUseId").and_then(|v| v.as_str()),
             Some("toolu_w1"),
+        );
+    }
+
+    // ---- emit_permission_ask_resolved (RULE-WorkerAsk-001, 2026-06-22) ----
+    //
+    // The worker's `PermissionAsk` resolve outcome is recorded as a
+    // `TranscriptKind::PermissionAskResolved` transcript entry. The
+    // entry carries `{ rid, outcome }` where `outcome` is one of
+    // `"allow"` / `"deny"` / `"timeout"` / `"cancel"` (DEBT-locked
+    // four-state wire). The frontend pairs this entry to the matching
+    // ask transcript entry by `rid` and surfaces the outcome as a
+    // badge on the historical card.
+    //
+    // These tests assert each of the four outcomes produces exactly
+    // one transcript entry with the correct `{ rid, outcome }` shape.
+
+    /// Helper: build a sink + emit a resolved entry, return the
+    /// captured transcript snapshot. The rid + outcome are what the
+    /// `ask_path` worker branch would pass at each select arm.
+    fn sink_with_resolved(rid: &str, outcome: &str) -> Vec<TranscriptEntry> {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_permission_ask_resolved(rid, outcome);
+        sink.transcript_snapshot()
+    }
+
+    #[test]
+    fn emit_permission_ask_resolved_allow_records_entry() {
+        let transcript = sink_with_resolved("ask-rid-allow", "allow");
+        assert_eq!(
+            transcript.len(),
+            1,
+            "emit_permission_ask_resolved must produce exactly 1 transcript entry"
+        );
+        let entry = &transcript[0];
+        assert_eq!(
+            entry.kind,
+            TranscriptKind::PermissionAskResolved,
+            "kind must be PermissionAskResolved"
+        );
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
+        assert_eq!(
+            pj.get("rid").and_then(|v| v.as_str()),
+            Some("ask-rid-allow"),
+            "rid must match the input"
+        );
+        assert_eq!(
+            pj.get("outcome").and_then(|v| v.as_str()),
+            Some("allow"),
+            "outcome must be 'allow' for AllowOnce/AllowAlways arm"
+        );
+    }
+
+    #[test]
+    fn emit_permission_ask_resolved_deny_records_entry() {
+        let transcript = sink_with_resolved("ask-rid-deny", "deny");
+        assert_eq!(transcript.len(), 1);
+        let entry = &transcript[0];
+        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
+        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        assert_eq!(pj.get("rid").and_then(|v| v.as_str()), Some("ask-rid-deny"));
+        assert_eq!(
+            pj.get("outcome").and_then(|v| v.as_str()),
+            Some("deny"),
+            "outcome must be 'deny' for user-initiated Deny arm"
+        );
+    }
+
+    #[test]
+    fn emit_permission_ask_resolved_timeout_records_entry() {
+        let transcript = sink_with_resolved("ask-rid-timeout", "timeout");
+        assert_eq!(transcript.len(), 1);
+        let entry = &transcript[0];
+        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
+        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        assert_eq!(
+            pj.get("rid").and_then(|v| v.as_str()),
+            Some("ask-rid-timeout"),
+        );
+        assert_eq!(
+            pj.get("outcome").and_then(|v| v.as_str()),
+            Some("timeout"),
+            "outcome must be 'timeout' for the 120s ASK_TIMEOUT arm"
+        );
+    }
+
+    #[test]
+    fn emit_permission_ask_resolved_cancel_records_entry() {
+        let transcript = sink_with_resolved("ask-rid-cancel", "cancel");
+        assert_eq!(transcript.len(), 1);
+        let entry = &transcript[0];
+        assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
+        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        assert_eq!(
+            pj.get("rid").and_then(|v| v.as_str()),
+            Some("ask-rid-cancel"),
+        );
+        assert_eq!(
+            pj.get("outcome").and_then(|v| v.as_str()),
+            Some("cancel"),
+            "outcome must be 'cancel' for parent-token cancel arm"
+        );
+    }
+
+    /// The trait default (`fn emit_permission_ask_resolved(&self, _,
+    /// _) {}`) is a no-op for sinks that do NOT override it. The
+    /// production `AppHandleSink` and the test `MockEmitter` use the
+    /// default; only `SubagentBufferSink` records the transcript
+    /// entry. This test locks the contract: the default does NOT
+    /// panic / error / write anything (the override is what makes
+    /// the entry land).
+    #[test]
+    fn emit_permission_ask_resolved_default_is_noop_on_non_buffer_sink() {
+        // The `SubagentBufferSink` itself can be exercised via the
+        // trait dispatch (which routes to the override). We can't
+        // easily construct an `AppHandleSink` without a Tauri
+        // runtime, so this test uses a minimal sink that inherits
+        // the default. The shape matches `MockEmitter` /
+        // `CaptureAskSink`'s trait impl (which all leave the method
+        // un-overridden → default no-op).
+        struct NoopSink;
+        impl crate::state::ChatEventSink for NoopSink {
+            fn emit_chat_event(&self, _: &ChatEventPayload) {}
+            fn emit_tool_call(&self, _: &ToolCallPayload) {}
+            fn emit_tool_result(&self, _: &ToolResultPayload) {}
+            fn emit_permission_ask(&self, _: PermissionAskPayload) {}
+            // emit_permission_ask_resolved: default no-op.
+        }
+        let sink = NoopSink;
+        // Must not panic.
+        sink.emit_permission_ask_resolved("rid", "allow");
+        sink.emit_permission_ask_resolved("rid", "deny");
+        sink.emit_permission_ask_resolved("rid", "timeout");
+        sink.emit_permission_ask_resolved("rid", "cancel");
+        // No state to assert on — the default is a no-op by
+        // construction. The test's value is "it compiles + runs
+        // without panicking" (a regression here would mean the
+        // trait method signature changed without updating all impl
+        // sites).
+    }
+
+    /// Multiple outcomes for the same rid (e.g. a re-ask scenario)
+    /// produce multiple transcript entries — the sink does NOT
+    /// deduplicate by rid. Each call is a fresh entry so the
+    /// frontend pairing layer can walk them in order. (In practice
+    /// a rid is unique per ask, but the sink stays total.)
+    #[test]
+    fn emit_permission_ask_resolved_multiple_outcomes_for_same_rid() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        sink.emit_permission_ask_resolved("same-rid", "allow");
+        sink.emit_permission_ask_resolved("same-rid", "deny");
+        let transcript = sink.transcript_snapshot();
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[0].kind, TranscriptKind::PermissionAskResolved);
+        assert_eq!(transcript[1].kind, TranscriptKind::PermissionAskResolved);
+        assert_eq!(
+            transcript[0].payload_json.get("outcome").and_then(|v| v.as_str()),
+            Some("allow"),
+        );
+        assert_eq!(
+            transcript[1].payload_json.get("outcome").and_then(|v| v.as_str()),
+            Some("deny"),
         );
     }
 }

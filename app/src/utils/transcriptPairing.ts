@@ -303,10 +303,23 @@ export interface SectionPendingCall {
 /** A `PermissionAskSection` pass-through. The drawer renders this
  *  via `DrawerPermissionAskCard` (a static historical-mode card,
  *  PR5 scope). PR6 will replace the static card with interactive
- *  Allow/Deny buttons wired to the `permission:response` IPC. */
+ *  Allow/Deny buttons wired to the `permission:response` IPC.
+ *
+ *  2026-06-22 (RULE-WorkerAsk-001): `outcome` carries the resolve
+ *  outcome of the worker's ask, populated by `pairSections` when
+ *  it finds a matching `PermissionAskResolved` section (matched by
+ *  `rid`). When present, the historical card renders an outcome
+ *  badge (✓ 已允许 / ✗ 已拒绝 / ⏱ 已超时 / ⊘ 已取消); when
+ *  absent (no matching resolved entry — pre-this-task transcript
+ *  or live-pending ask), the card renders the neutral ask-context
+ *  line (backward compat). */
 export interface SectionPermissionAsk {
   kind: "permission_ask";
   payload_json: Record<string, unknown>;
+  /** Resolve outcome — one of `"allow"` / `"deny"` / `"timeout"` /
+   *  `"cancel"` (DEBT-locked four-state wire) or `undefined` when
+   *  no matching resolved entry was found in the transcript. */
+  outcome?: "allow" | "deny" | "timeout" | "cancel";
 }
 
 /** Discriminated union returned by `pairSections`. The drawer's
@@ -391,6 +404,29 @@ export function pairSections(
   const pending = new Map<string, { call: ToolCallInfo; receivedAt: number }>();
   const out: SectionToolEntry[] = [];
 
+  // 2026-06-22 (RULE-WorkerAsk-001): pre-scan for
+  // `PermissionAskResolved` sections so we can attach an `outcome`
+  // to each matching `PermissionAsk` by `rid`. The resolved entry
+  // is emitted AFTER the ask in transcript order (the worker's
+  // `ask_path` resolves AFTER emitting the ask), so a pre-scan
+  // (vs an interleaved scan) handles both orderings correctly and
+  // keeps the main loop simple. The map carries the LAST outcome
+  // for a given rid (defensive — in practice a rid is unique per
+  // ask, but last-write-wins is safe if a re-ask ever produces a
+  // duplicate rid).
+  const resolvedOutcomes = new Map<string, "allow" | "deny" | "timeout" | "cancel">();
+  for (const s of sections) {
+    if (s.kind !== "PermissionAskResolved") continue;
+    const rid = typeof s.payload_json?.rid === "string" ? s.payload_json.rid : undefined;
+    const outcome =
+      typeof s.payload_json?.outcome === "string"
+        ? (s.payload_json.outcome as "allow" | "deny" | "timeout" | "cancel")
+        : undefined;
+    if (rid && outcome) {
+      resolvedOutcomes.set(rid, outcome);
+    }
+  }
+
   for (const s of sections) {
     if (s.kind === "ToolCall") {
       const id = readSectionToolUseId(s.payload_json);
@@ -423,7 +459,26 @@ export function pairSections(
       continue;
     }
     if (s.kind === "PermissionAsk") {
-      out.push({ kind: "permission_ask", payload_json: s.payload_json });
+      // RULE-WorkerAsk-001: look up the resolve outcome by `rid`
+      // (the PermissionAskPayload's rid field — camelCase per the
+      // Rust serde rename_all, with snake_case defensive fallback
+      // matching the drawer's `synthesizeAsk` helper).
+      const rid =
+        typeof s.payload_json?.rid === "string"
+          ? s.payload_json.rid
+          : undefined;
+      const outcome = rid ? resolvedOutcomes.get(rid) : undefined;
+      out.push({
+        kind: "permission_ask",
+        payload_json: s.payload_json,
+        outcome,
+      });
+      continue;
+    }
+    if (s.kind === "PermissionAskResolved") {
+      // Consumed by the pre-scan above. Drop from the output —
+      // the drawer never renders this section directly; the
+      // outcome is surfaced on the matching ask card instead.
       continue;
     }
     // ThinkingSection / TextSection / FinalTextSection: skipped.

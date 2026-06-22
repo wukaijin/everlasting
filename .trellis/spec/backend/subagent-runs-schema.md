@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
     summary TEXT,                                                   -- final_text 纯文本 (NO status prefix; status 字段独立)
     transcript_json TEXT,                                           -- JSON Vec<TranscriptEntry> after 4 MiB cap
     transcript_truncated INTEGER NOT NULL DEFAULT 0,                -- 1 = over 4 MiB cap
+    turn_count INTEGER,                                             -- 2026-06-22 (RULE-FrontSubagent-004): actual completed LLM turn iterations the worker executed before reaching terminal state (completed/cancelled/error/incomplete). NULL on pre-PR2 rows; drawer degrades to wall-clock "at X.Xs" suffix for legacy rows.
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_session_started
@@ -77,6 +78,23 @@ characteristics fall out naturally:
   `created_at`), set via `Utc::now().to_rfc3339()`. Consistent with
   every other table in the project — no Unix-epoch integers, no SQL
   `DATETIME` type (SQLite has no native datetime).
+- **`turn_count` (2026-06-22, RULE-FrontSubagent-004)**: nullable INTEGER
+  carrying the **actual** completed LLM turn iterations the worker
+  executed before reaching terminal state (`completed` / `cancelled` /
+  `error` / `incomplete`). NOT the `SUBAGENT_MAX_TURNS=200` constant
+  (that's the budget ceiling; `turn_count` is the real count at exit —
+  may be < 200 on clean completion / cancel / error, or == 200 on the
+  `incomplete` soft-cap exit). Sourced from
+  `SubagentBufferSink::turns_completed()` (real per-turn `Done`
+  increment; synthetic `cancelled` / `max_turns` terminal events do
+  NOT increment — the counter is always the real turn count at exit).
+  Pre-PR2 rows keep `NULL`; the drawer's `statusDisplay` checks
+  `turnCount !== null && turnCount !== undefined` and falls back to
+  the wall-clock `terminalDurMs` suffix for legacy rows (backward
+  compat). Idempotent migration via the existing
+  `add_subagent_runs_column_if_missing` helper (no DEFAULT, so legacy
+  rows preserve NULL). Wire: `#[serde(rename_all = "camelCase")]`
+  projects to `turnCount` on the JS side.
 
 ### Indexing
 

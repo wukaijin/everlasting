@@ -80,6 +80,10 @@ const sampleRow: SubagentRunRow = {
   createdAt: "2026-06-20T10:00:00Z",
   finalText: null,
   task: null,
+  // 2026-06-22 (RULE-FrontSubagent-004): null = legacy row; tests
+  // that exercise the turn-based suffix pass `turnCount: <number>`
+  // explicitly via `openWith`'s Partial override.
+  turnCount: null,
 };
 
 function makeDrawer() {
@@ -577,6 +581,114 @@ describe("SubagentDrawer", () => {
 
     const statusEl = document.body.querySelector(".subagent-drawer__status");
     expect(statusEl?.textContent?.trim()).toBe("已停止 at 5.3s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  // -----------------------------------------------------------------
+  // PR2 R4 (RULE-FrontSubagent-004, 2026-06-22): turn_count column
+  // drives the "at turn N" suffix for cancelled + incomplete.
+  // Legacy NULL degrades to wall-clock (covered by the test directly
+  // above + the existing incomplete implicit wall-clock path).
+  // -----------------------------------------------------------------
+
+  it("cancelled state with turnCount shows 'at turn N' suffix (RULE-FrontSubagent-004)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-22T10:00:05.300Z"));
+    const store = useSubagentRunsStore();
+    await openWith(store, {
+      status: "cancelled",
+      startedAt: "2026-06-22T10:00:00.000Z",
+      finishedAt: "2026-06-22T10:00:05.300Z",
+      turnCount: 7,
+    });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("已停止 at turn 7");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("cancelled state with turnCount=null degrades to wall-clock suffix (legacy row)", async () => {
+    // Same as the pre-PR2 test above — explicit regression guard
+    // for the backward-compat path. Legacy rows have NULL turn_count.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-22T10:00:05.300Z"));
+    const store = useSubagentRunsStore();
+    await openWith(store, {
+      status: "cancelled",
+      startedAt: "2026-06-22T10:00:00.000Z",
+      finishedAt: "2026-06-22T10:00:05.300Z",
+      turnCount: null,
+    });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("已停止 at 5.3s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("incomplete state with turnCount shows 'at turn N' suffix (RULE-FrontSubagent-004)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-22T10:02:30.000Z"));
+    const store = useSubagentRunsStore();
+    await openWith(store, {
+      status: "incomplete",
+      startedAt: "2026-06-22T10:00:00.000Z",
+      finishedAt: "2026-06-22T10:02:30.000Z",
+      // Realistic max_turns terminal: worker burned its full 200-turn
+      // budget (SUBAGENT_MAX_TURNS=200 raised by Session 60 R1).
+      turnCount: 200,
+    });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("未完成 at turn 200");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("incomplete state with turnCount=null degrades to wall-clock suffix (legacy row)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-22T10:02:30.000Z"));
+    const store = useSubagentRunsStore();
+    await openWith(store, {
+      status: "incomplete",
+      startedAt: "2026-06-22T10:00:00.000Z",
+      finishedAt: "2026-06-22T10:02:30.000Z",
+      turnCount: null,
+    });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("未完成 at 150.0s");
+    w.unmount();
+    vi.useRealTimers();
+  });
+
+  it("completed state is UNCHANGED by turnCount (still wall-clock — user-confirmed scope)", async () => {
+    // Completed runs measure latency, not turn progress. Even when
+    // turnCount is present the suffix stays "done in X.Xs".
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-22T10:00:30.000Z"));
+    const store = useSubagentRunsStore();
+    await openWith(store, {
+      status: "completed",
+      startedAt: "2026-06-22T10:00:00.000Z",
+      finishedAt: "2026-06-22T10:00:30.000Z",
+      turnCount: 3,
+    });
+    const w = makeDrawer();
+    await flushPromises();
+
+    const statusEl = document.body.querySelector(".subagent-drawer__status");
+    expect(statusEl?.textContent?.trim()).toBe("完成 30.0s");
     w.unmount();
     vi.useRealTimers();
   });

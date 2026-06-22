@@ -349,10 +349,26 @@ function toolResultSection(
   };
 }
 
-function permissionAskSection(toolName: string): TranscriptSection {
+function permissionAskSection(toolName: string, rid?: string): TranscriptSection {
+  const payload: Record<string, unknown> = { toolName, risk: "high" };
+  if (rid !== undefined) payload.rid = rid;
   return {
     kind: "PermissionAsk",
-    payload_json: { toolName, risk: "high" },
+    payload_json: payload,
+  };
+}
+
+/** 2026-06-22 (RULE-WorkerAsk-001): helper to build a
+ * `PermissionAskResolvedSection` with the canonical
+ * `{ rid, outcome }` payload shape. Mirrors what the Rust
+ * `SubagentBufferSink::emit_permission_ask_resolved` produces. */
+function permissionAskResolvedSection(
+  rid: string,
+  outcome: "allow" | "deny" | "timeout" | "cancel",
+): TranscriptSection {
+  return {
+    kind: "PermissionAskResolved",
+    payload_json: { rid, outcome },
   };
 }
 
@@ -417,7 +433,13 @@ describe("pairSections — section-level pairing", () => {
     expect(out[0].timedOut).toBe(true);
   });
 
-  it("passes PermissionAskSection through as SectionPermissionAsk", () => {
+  it("passes PermissionAskSection through as SectionPermissionAsk (no outcome when no resolved entry)", () => {
+    // 2026-06-22 (RULE-WorkerAsk-001): when no matching
+    // `PermissionAskResolved` section exists, the ask passes
+    // through unchanged (outcome === undefined). This is the
+    // backward-compat path — pre-this-task transcripts have no
+    // resolved entries, so historical cards render the neutral
+    // ask-context line.
     const sections: TranscriptSection[] = [permissionAskSection("write_file")];
     const out = pairSections(sections, 1_000_000, new Map());
 
@@ -425,6 +447,7 @@ describe("pairSections — section-level pairing", () => {
     expect(out[0].kind).toBe("permission_ask");
     if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
     expect(out[0].payload_json.toolName).toBe("write_file");
+    expect(out[0].outcome).toBeUndefined();
   });
 
   it("drops orphan ToolResultSection (no preceding call) silently", () => {
@@ -505,5 +528,168 @@ describe("pairSections — section-level pairing", () => {
     const sections: TranscriptSection[] = [toolCallSection("tu_1")];
     const out: SectionToolEntry[] = pairSections(sections, 1_000_000, new Map());
     expect(out.length).toBeGreaterThan(0);
+  });
+
+  // ====================================================================
+  // 2026-06-22 (RULE-WorkerAsk-001): permission_ask_resolved pairing
+  // ====================================================================
+  //
+  // The new `PermissionAskResolvedSection` carries `{ rid, outcome }`.
+  // `pairSections` pairs it with the matching `PermissionAskSection`
+  // by `rid` and surfaces the `outcome` onto the ask card. The
+  // resolved section itself is dropped from the output (it is
+  // consumed by the pairing layer — the drawer never renders it
+  // directly).
+
+  it("surfaces outcome on PermissionAsk when matching resolved section exists (by rid)", () => {
+    // The canonical case: ask arrives first, resolve arrives
+    // after (the worker's `ask_path` resolves AFTER emitting the
+    // ask). `pairSections` should attach the outcome to the ask.
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-allow-1"),
+      permissionAskResolvedSection("rid-allow-1", "allow"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBe("allow");
+  });
+
+  it("surfaces each of the four outcomes correctly", () => {
+    // One test per outcome wire string (DEBT-locked four-state).
+    for (const outcome of ["allow", "deny", "timeout", "cancel"] as const) {
+      const sections: TranscriptSection[] = [
+        permissionAskSection("shell", `rid-${outcome}`),
+        permissionAskResolvedSection(`rid-${outcome}`, outcome),
+      ];
+      const out = pairSections(sections, 1_000_000, new Map());
+      expect(out).toHaveLength(1);
+      expect(out[0].kind).toBe("permission_ask");
+      if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+      expect(out[0].outcome).toBe(outcome);
+    }
+  });
+
+  it("does NOT surface outcome when no matching resolved section exists (backward compat)", () => {
+    // Pre-this-task transcript (no resolved entries) → ask card
+    // renders with outcome === undefined → neutral ask-context
+    // line (no outcome badge). Critical for backward compat —
+    // old transcripts must not crash or render a misleading badge.
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-old-1"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBeUndefined();
+  });
+
+  it("does NOT surface outcome when rid does not match (defensive)", () => {
+    // A resolved entry with a rid that does not match any ask
+    // (should not happen in practice — the backend emits the
+    // resolved entry with the SAME rid as the ask — but the
+    // pairing layer is defensive). The unmatched ask renders
+    // without an outcome; the orphan resolved entry is dropped.
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-ask-A"),
+      permissionAskResolvedSection("rid-ask-OTHER", "allow"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBeUndefined();
+  });
+
+  it("drops PermissionAskResolvedSection from the output (consumed by pairing)", () => {
+    // The resolved section is NEVER rendered directly — it is
+    // consumed by the pairing layer. Even when there's no
+    // matching ask (orphan resolved), the resolved section is
+    // dropped from the output (the drawer's Tools template would
+    // otherwise render a noise card between the ask and the next
+    // tool_call).
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-1"),
+      permissionAskResolvedSection("rid-1", "deny"),
+      toolCallSection("tu_after", "read_file"),
+      toolResultSection("tu_after"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    // Expected: 1 ask (with outcome) + 1 paired tool = 2 entries.
+    // The resolved section is NOT in the output.
+    expect(out).toHaveLength(2);
+    expect(out[0].kind).toBe("permission_ask");
+    expect(out[1].kind).toBe("paired");
+  });
+
+  it("pairs multiple asks with their respective resolved entries (independent rids)", () => {
+    // Two asks, two resolves, each pair matched by its own rid.
+    // Order in output = order of asks in the input (asks are
+    // emitted in transcript order; the resolved entries are
+    // matched by rid, not by position).
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-A"),
+      permissionAskSection("shell", "rid-B"),
+      permissionAskResolvedSection("rid-B", "deny"),
+      permissionAskResolvedSection("rid-A", "allow"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(2);
+    expect(out[0].kind).toBe("permission_ask");
+    expect(out[1].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask" || out[1].kind !== "permission_ask") {
+      throw new Error("expected both permission_ask");
+    }
+    // The order follows the input ask order (rid-A first, rid-B second).
+    expect(out[0].payload_json.rid).toBe("rid-A");
+    expect(out[0].outcome).toBe("allow");
+    expect(out[1].payload_json.rid).toBe("rid-B");
+    expect(out[1].outcome).toBe("deny");
+  });
+
+  it("handles resolved entry arriving BEFORE the ask (defensive ordering)", () => {
+    // The canonical order is ask → resolved (the worker emits the
+    // resolved AFTER the ask). But a pre-scan (vs interleaved)
+    // makes the pairing layer robust to either ordering — if a
+    // future refactor ever emits the resolved first, the ask
+    // still picks up its outcome.
+    const sections: TranscriptSection[] = [
+      permissionAskResolvedSection("rid-X", "timeout"),
+      permissionAskSection("write_file", "rid-X"),
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBe("timeout");
+  });
+
+  it("defensive: malformed resolved payload (missing rid) is dropped silently", () => {
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-good"),
+      // Malformed: missing rid.
+      { kind: "PermissionAskResolved", payload_json: { outcome: "allow" } },
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBeUndefined();
+  });
+
+  it("defensive: malformed resolved payload (missing outcome) is dropped silently", () => {
+    const sections: TranscriptSection[] = [
+      permissionAskSection("write_file", "rid-good"),
+      // Malformed: missing outcome.
+      { kind: "PermissionAskResolved", payload_json: { rid: "rid-good" } },
+    ];
+    const out = pairSections(sections, 1_000_000, new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("permission_ask");
+    if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
+    expect(out[0].outcome).toBeUndefined();
   });
 });

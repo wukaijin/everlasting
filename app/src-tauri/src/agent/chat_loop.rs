@@ -2482,6 +2482,16 @@ async fn run_subagent(
             &cumulative_usage,
             &truncated_transcript,
             transcript_truncated,
+            // 2026-06-22 (RULE-FrontSubagent-004): thread the actual
+            // completed turn count so the drawer's `statusDisplay`
+            // can render "stopped at turn N" / "incomplete at turn N"
+            // for the cancelled / incomplete terminal states.
+            // Completed runs also carry the count (harmless; the
+            // drawer only reads it for cancelled + incomplete).
+            // The counter is the sink's REAL per-turn Done count
+            // (synthetic cancelled / max_turns terminals don't
+            // increment — see `SubagentBufferSink::turns_completed`).
+            Some(worker_sink.turns_completed() as i64),
         )
         .await
         {
