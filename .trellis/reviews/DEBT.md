@@ -292,18 +292,20 @@
 
 ---
 
-### RULE-BackSubagent-001 — worker error 时 parent LLM 拿不到 partial transcript context
+### RULE-BackSubagent-001 — worker error 时 parent LLM 拿不到 partial transcript context ✅ closed
 
 - **Level**: P2
 - **Subsystem**: Backend Subagent
-- **File**: `app/src-tauri/src/agent/subagent.rs:999` (`format_dispatch_result`, Error arm)
+- **File**: `app/src-tauri/src/agent/subagent.rs` (`format_dispatch_result` + `summarize_worker_tool_actions`) + `app/src-tauri/src/agent/chat_loop.rs:2539` (接线)
 - **Description**: B6 review `docs/review/b6-subagent-assessment.md` §4 defect B——worker LLM stream error 后，parent LLM 只看到 `[status: error]\n<error text>`，不知道 worker 已经执行了哪些 tool_call（可能部分文件已落地）。Parent 无法做补偿性修复。
 - **Impact**: Worker 半成功半失败的场景下，parent agent 盲目重做或放弃，无法基于 worker 已落地的 edits 继续。
-- **Fix**: 在 `format_dispatch_result` Error 分支追加 worker 已执行的 `tool_call → tool_result` 摘要（每条 ~80 chars，总长 cap ~2 KiB）。
-- **Status**: open
+- **Fix**(2026-06-22 实施,见 commit `89d3ffd`):PR1 新增 `summarize_worker_tool_actions(transcript)` 纯函数(tool_call/tool_result 按 `tool_use_id` 配对 ok/failed/? + per-tool key_param 提取代表参数 + 2 KiB head+tail cap + `(N actions omitted)` 计数);PR2 `format_dispatch_result` 加 `partial_actions: Option<&str>` 参数,非 completed 三态(Error/Cancelled/Incomplete)append `Worker partial actions:` 段(`chat_loop.rs:2539` 接线,Completed/空摘要传 None)。摘要只进 tool_result wire,不进 `final_text`(drawer 已有 Tools 段,`format_final_text` 不变)。DEBT 原字面只点 Error,扩到三态(Incomplete 引入于本 finding 之后,重型 worker max_turns 场景需求最强)。完整契约见 [tool-contract.md §dispatch_subagent](../spec/backend/tool-contract.md)。
+- **Status**: closed(2026-06-22)
 - **Owner**: carlos
 - **Discovered In**: B6 review (2026-06-20), defect B
-- **Related Task**: 未建（独立任务）
+- **Closed In**: `.trellis/tasks/06-22-backsubagent-001-worker-error-partial-transcript`
+- **Closed At**: `89d3ffd`
+- **Related PR**: null(个人项目)
 
 
 ### RULE-BackSubagent-002 — `add_token_usage_streaming` 文档撒谎（无 production callsite）
@@ -329,9 +331,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 §Re-evaluation Log + git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 4 | 健壮性 + 债务,中长期清理 |
+| P2 | 3 | 健壮性 + 债务,中长期清理(2026-06-22: -RULE-BackSubagent-001 via 89d3ffd) |
 | P3 | 7 | 文档 + 一致性,可延后(2026-06-22: -RULE-FrontSubagent-005 / -RULE-BackSubagent-002 via 2eedfe2) |
-| **Total** | **12** | 当前 open items |
+| **Total** | **11** | 当前 open items |
 
 ---
 
@@ -405,6 +407,7 @@
 
 | 2026-06-22 | RULE-FrontSubagent-005 | open | **closed** | frontend `SubagentStatus` type union 4→5 加 `"incomplete"` + `coerceStatus` 显式 recognize;`SubagentDrawer.vue` `STATUS_META` 加 `incomplete: { label: "未完成", color: "var(--color-tool-shell)" }`(用现有 amber 不用 --color-tool-warn:design-tokens spec 显式禁为 one-off use 新增 --color-* token);`statusDisplay` / `bannerText` / `isEmpty` 同步加 incomplete 分支(避免 incomplete run 在空 transcript 时显「Worker is starting...」误报 / 缺 banner / 缺 terminal 状态语义)。范围扩大超出 PRD 字面 AC 但必要(对称 Session 60 R2 解决「误报成功」的初衷)。+118/-33 总计 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;4 pre-existing errors in streamController.test.ts(RULE-FrontTest-001 债,stash 验证 baseline 一致)。NIT-1 `chat_loop.rs:1019-1022` 引号内"streaming" 描述未修(非 DEBT 范围);NIT-2 chat.md spec 不覆盖 SubagentStatus / STATUS_META 状态语义(Session 60 R2 引入的 pre-existing spec drift,本次不修)。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i` |
 | 2026-06-22 | RULE-BackSubagent-002 | open | **closed** | option i 路线,改写 4 处撒谎注释(DEBT 列的 3 处 + inspect 阶段 bonus 1 处):`subagent.rs:576-598` per_turn_usage 字段 docstring + `:879-894` ChatEvent::Done arm inline 注释 + `db/subagent_runs.rs:18-27` module doc(含 ⚠️ production-only path warning block,显式禁止 production code 走 add_token_usage_streaming)+ `:139-155` SubagentRunRow type doc。全部改写为指向 `chat_loop.rs:1031 db::add_token_usage` production 路径(PR2a 把 skip_persist gate 解耦后,worker 复用 parent_session_id,per-turn usage 自然 fold,见 RULE-A-015)。保留 `subagent.rs:803-813` + `db/subagent_runs.rs:554-586` 2 处已诚实注释 + `add_token_usage_streaming` 函数体仍 `pub`(PR2 API 表面保留,未来 worker↔parent session identity split 时用)。DEBT 行号 567-569/838-843 已 drift 实际在 576-586/870-876;DEBT 文件 path 漏列 `db/subagent_runs.rs:139-155` 一处(本 task 顺手修)。lying-language grep 0 match in production paths。个人项目无 PR URL | `.trellis/tasks/06-21-subagent-debt-p3-followups-frontend-incomplete-status-rule-frontsubagent-005-add-token-usage-streaming-rule-backsubagent-002-option-i` |
+| 2026-06-22 | RULE-BackSubagent-001 | open | **closed** | PR1 新增 `summarize_worker_tool_actions(transcript)` 纯函数(tool_call/tool_result 按 `tool_use_id` 配对 ok/failed/? + per-tool key_param 提取代表参数 + 2 KiB head+tail cap + `(N actions omitted)` 计数;chat_event/permission_ask 跳过)。PR2 `format_dispatch_result` 加 `partial_actions: Option<&str>` 参数,非 completed 三态(Error/Cancelled/Incomplete)append `Worker partial actions:` 段;`chat_loop.rs:2539` 接线(Completed/空摘要传 None)。摘要只进 tool_result wire,不进 `final_text`(drawer 已有 Tools 段,`format_final_text` 不变)。DEBT 原字面只点 Error,扩到三态(Incomplete 引入于本 finding 之后,重型 worker max_turns 场景需求最强)。spec 同步 tool-contract.md wire 表 + Tests + agent-loop-architecture.md。+10 单测(PR1)+ 3 单测 + 1 集成(PR2);803 cargo test --lib pass,prod cargo check 0 warning。个人项目无 PR URL | `.trellis/tasks/06-22-backsubagent-001-worker-error-partial-transcript` |
 
 ---
 
@@ -483,4 +486,5 @@
 **最后更新**: 2026-06-21 by carlos — Session 56:**RULE-A-017 closed**(`fd7dc79`)+ **RULE-BackSubagent-002 open** + **RULE-FrontSubagent-005 open**:`subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token 统计修复` 收尾。R1 `SUBAGENT_MAX_TURNS` 20→200 支撑重型实施子代理(trellis-implement 级 200+ 工具调用);R2 max_turns 软终止改记 `incomplete` + DB CHECK 5-variant + `INCOMPLETE_MARKER` `[未完成]`,不再误报 completed;R3 research 锁定 max_turns 终端合成 `Done` 硬编码 `usage: None` 丢 `last_usage` 是 `c27f3fd7` token=0 根因,加 `last_usage_terminal` mirror + sink stop_reason guard 防双累。11 新测试(9 sink + 2 db),782 cargo test --lib pass(771 旧 + 11 新),0 warning。DEBT 12→14(RULE-A-017 closed 不计数 + BackSubagent-002 / FrontSubagent-005 open +1 P3 each)。spec 同步 3 个 backend spec(`agent-loop-architecture.md` 3 处 `MAX_TURNS=20` → 200,`tool-contract.md` 2 处 + `format_dispatch_result` 加 Incomplete 行,`subagent-runs-schema.md` CHECK + wire shape + count 全部 5 值)。Bonus debt 两条:`add_token_usage_streaming` 文档撒谎(删注释 OR 真接上);frontend `SubagentStatus` 没渲染 incomplete 视觉(drawer 永久显「运行中」)。
 **最后更新**: 2026-06-21 by carlos — Session 55(redesign 收尾):subagent-drawer 重构 PR1-6 完成。DEBT 新增 RULE-FrontSubagent-003(worker permission_ask 无法 interactive,P2)/004(cancelled 无 turn 数据,P3)/RULE-FrontTest-001(streamController 4 pre-existing unhandled rejection,P3);更新 001(CSS 重复位置迁移到 DrawerToolCallCard/DrawerPermissionAskCard)/002(范围扩 pairSections)。grill-me Q1-Q10 决策见上 §subagent-drawer redesign 决策索引。PR1-6 commits: 86a81b2/6e077b3/a39ad00/e66001e/3db2be2/d9f999f。
 **最后更新**: 2026-06-22 by carlos — Session 61(Session 60 收尾 follow-up task):**RULE-FrontSubagent-005 closed**(`2eedfe2`)+ **RULE-BackSubagent-002 closed**(`2eedfe2`)。R1 frontend `SubagentStatus` type union 4→5 加 `incomplete` + `coerceStatus` 显式 recognize + `SubagentDrawer.vue` `STATUS_META` / `statusDisplay` / `bannerText` / `isEmpty` 同步加 incomplete 分支(范围超出 PRD 字面 AC 但必要,避免 incomplete run 在空 transcript 时 UX limbo)。color token drift: PRD AC 提 `--color-tool-warn` 不存在 → 改用 `--color-tool-shell`(amber #f59e0b;design-tokens spec 显式列其作 warning tint 等价物 + 禁为 one-off use 新增 --color-*)。R2 option i(删注释,4 处:DEBT 列 3 处 + inspect 阶段 bonus 1 处)改写撒谎注释指向 `chat_loop.rs:1031 db::add_token_usage` 真 production 路径(PR2a 把 skip_persist gate 解耦,worker 复用 parent_session_id,per-turn usage 自然 fold — 见 RULE-A-015);`db/subagent_runs.rs:18` module doc 加 ⚠️ production-only path warning block 防止未来 dev 误接。+118/-33 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;4 pre-existing errors in streamController.test.ts(RULE-FrontTest-001 债,baseline 一致)。DEBT P3 9→7,Total 14→12。NIT(留 follow-up): `chat_loop.rs:1019-1022` 引号内"streaming"描述(非 DEBT 范围);chat.md spec 不覆盖 SubagentStatus / STATUS_META(Session 60 R2 pre-existing spec drift)。Spec 同步:无新行为需 spec 化,纯 P3 收面。
+**最后更新**: 2026-06-22 by carlos — Session 62:**RULE-BackSubagent-001 closed**(`89d3ffd`)。worker 非正常终态(Error/Cancelled/Incomplete)时 parent LLM 拿不到已执行 tool 摘要(B6 review defect B)→ PR1 `summarize_worker_tool_actions` 纯函数(tool_call/tool_result 按 `tool_use_id` 配对 ok/failed/? + per-tool key_param 提取代表参数 + 2 KiB head+tail cap + `(N actions omitted)` 计数)+ PR2 `format_dispatch_result` 加 `partial_actions: Option<&str>` 三态 append `Worker partial actions:` 段(`chat_loop.rs:2539` 接线,Completed/空摘要传 None)。摘要只进 wire 不进 `final_text`(drawer 已有 Tools 段,`format_final_text` 不变 → wire/DB 出口分家)。DEBT 原字面只点 Error,扩到三态(Incomplete 引入于 finding 之后,重型 worker max_turns 场景需求最强)。+10 单测(PR1)+ 3 单测 + 1 集成(PR2);803 cargo test --lib pass,prod cargo check 0 warning。spec 同步 tool-contract.md wire 表 + Tests + agent-loop-architecture.md 补全 4 态。DEBT P2 4→3,Total 12→11。四段式 commit: fix `89d3ffd` + docs(debt) + archive + journal。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
