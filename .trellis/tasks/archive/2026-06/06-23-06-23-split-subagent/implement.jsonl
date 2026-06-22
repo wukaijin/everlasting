@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "subagent dispatch/registry/Status 在 agent loop 中的定位；mod.rs 保留 dispatch 契约不可变"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "TranscriptEntry 序列化 + truncate_transcript_for_persistence 落 subagent_runs 表的 wire 契约；transcript.rs/truncate_summary.rs 不得改 shape"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent ToolDef + SubagentDef 注册契约（definition/DISPATCH_TOOL_NAME）"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "filter_tools_for_subagent + STRUCTURALLY_DISABLED allowlist 与权限层边界"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "mod tests 拆分后各文件 #[cfg(test)] 组织与命名约定"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "SubagentBufferSink per_turn_usage / sum_usage 累积契约"}
+{"file": ".trellis/spec/backend/latency-tracking.md", "reason": "sink 内 tool_call_received_at latency 字段契约"}

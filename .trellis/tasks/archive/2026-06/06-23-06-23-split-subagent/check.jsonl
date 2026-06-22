@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 TranscriptEntry→DB wire shape 未变（truncate_transcript_for_persistence 往返）"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验证 per_turn_usage 累积无回归"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "§max_turns 终端 token：sink Done arm 的 per_turn_usage guard 必须原样保留，不可回归"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证测试覆盖未丢、mod tests 组织合规"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 filter_tools_for_subagent allowlist 行为不变"}
