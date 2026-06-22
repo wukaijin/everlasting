@@ -132,6 +132,22 @@
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
 
 
+### RULE-FrontProj-001 — 关闭项目后无法重新打开(addProject 撞 SQLite UNIQUE) ✅ closed
+
+- **Level**: P2 → P3(实际 UX 而非数据丢失)
+- **Subsystem**: Frontend Project Store
+- **File**: `app/src/stores/projects.ts:147-190`(`addProject`) + `app/src/components/chat/EmptyProjectState.vue`(`currentProjectId===null` 才挂) + `app/src/components/layout/AppHeader.vue`(无主 UI 入口)
+- **Description**: 关闭项目(`hide_project` 设 `hidden=1`)后,UI 唯一可见的「重新打开」入口是 `EmptyProjectState`,但**只在 `currentProjectId === null` 时挂载**;多项目用户隐藏单个后,主 UI(ChatPanel)完全无入口。被隐藏的项目数据完整保留在 DB,用户无法在 UI 上恢复。唯一兜底路径是 `+ 添加项目` → 选同路径 → 但 `addProject()` 只查 `projects.value`(visible),**漏检 `hiddenProjects.value`** → 后端 `create_project` 撞 SQLite `projects.path` UNIQUE 约束 → 误报 `a project with path '...' already exists`。用户体感:"无法重新打开"。
+- **Impact**: UX 阻断——关闭项目后用户失去恢复路径,误以为是数据丢失/系统 bug,信任成本高。
+- **Fix**(2026-06-23 实施,见 commit `1b5e34e`):三处修补(`addProject` 命中 hidden 路径 → 调既有 `unhideProject(id)` + toast「已重新打开」,不再撞 UNIQUE;`unhideProject` 签名改 `Promise<boolean>` 失败时不冒假成功 toast;`EmptyProjectState.vue` `onMounted` 自动 `loadHiddenProjects` 首屏直显列表,无需点「查看最近隐藏的项目」兜底按钮;`AppHeader.vue` 引入 `HiddenProjectsMenu`(reka-ui `DropdownMenu`,**`:deep()` 解决 `<style scoped>` + portal 坑**——见 `.trellis/spec/frontend/reka-ui-usage.md` §"Gotcha: <style scoped> does NOT apply to portal children"),多项目场景主 UI 直接显 archive 图标 + count badge + popover 列表「重新打开」按钮,**事件只绑按钮不绑整行**(用户反馈)。后端零改动(`unhide_project` IPC 已存在且 `lib.rs:127` 注册)。`projects.test.ts` 新增 8 case 全 pass(vitest 475/0 含 4 pre-existing RULE-FrontTest-001 baseline,vue-tsc 0 error,cargo test --lib 813/0/0,cargo check 0 warning)。
+- **Status**: closed(2026-06-23)
+- **Owner**: carlos
+- **Discovered In**: 用户反馈(2026-06-23 报错 `添加项目失败:create_project failed: ... already exists`)
+- **Closed In**: `.trellis/tasks/06-23-create-project-already-exists`
+- **Closed At**: `1b5e34e`
+- **Related PR**: null(个人项目)
+
+
 ### RULE-B-007 — Background Mode 仍空壳
 
 - **Level**: P3
