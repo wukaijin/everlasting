@@ -28,6 +28,7 @@
 import { useStreamControllerStore } from "../../stores/streamController";
 import TitleBar from "./TitleBar.vue";
 import ProjectTabs from "../ProjectTabs.vue";
+import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
 
 const streamController = useStreamControllerStore();
 </script>
@@ -36,6 +37,11 @@ const streamController = useStreamControllerStore();
   <header class="app-header">
     <TitleBar>
       <ProjectTabs :streaming-project-ids="streamController.streamingProjectIds" />
+      <!-- RULE-FrontProj-001 fix: surfaces a "已隐藏项目" entry
+           in the main UI (not just the empty state). Mounts only
+           when at least one hidden project exists; the menu itself
+           loads the list on mount. -->
+      <HiddenProjectsMenu />
     </TitleBar>
   </header>
 </template>

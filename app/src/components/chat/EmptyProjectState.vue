@@ -8,11 +8,26 @@
 // above the title, and a more prominent primary button (Prussian
 // blue, larger). The hidden-projects section is now a compact,
 // two-column list (name + path) with subtle dividers.
+//
+// RULE-FrontProj-001 fix: auto-load hidden projects on mount so the
+// "最近隐藏的项目" list shows up immediately instead of forcing the
+// user to click "查看最近隐藏的项目" first.
 
+import { onMounted } from "vue";
 import { useProjectsStore } from "../../stores/projects";
 import Icon from "../Icon.vue";
 
 const projectsStore = useProjectsStore();
+
+onMounted(async () => {
+  // Best-effort load; if the IPC fails the user can still click
+  // the fallback "查看最近隐藏的项目" button below to retry.
+  try {
+    await projectsStore.loadHiddenProjects();
+  } catch {
+    // Silent — the fallback button remains usable.
+  }
+});
 
 async function onAdd() {
   await projectsStore.addProject();
@@ -23,6 +38,8 @@ async function onUnhide(id: string) {
 }
 
 async function onLoadHidden() {
+  // Kept as a fallback for the "hiddenProjects.length === 0" branch
+  // (i.e. the IPC failed on mount and the user wants to retry).
   await projectsStore.loadHiddenProjects();
 }
 </script>

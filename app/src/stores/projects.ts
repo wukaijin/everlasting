@@ -143,7 +143,14 @@ export const useProjectsStore = defineStore("projects", () => {
   /** Open the native folder picker and (on success) register the chosen
    *  directory as a new project. Returns the created (or already
    *  existing) project, or `null` if the user cancelled or the picker
-   *  failed. */
+   *  failed.
+   *
+   *  If the picked path matches an already-hidden project (data is
+   *  preserved, just hidden from the tab bar), we auto-unhide it
+   *  instead of erroring. The previous behaviour would hit the
+   *  backend `create_project` SQLite UNIQUE constraint and surface a
+   *  misleading "already exists" toast — see fix for the "关闭项目后
+   *  无法重新打开" bug (RULE-FrontProj-001). */
   async function addProject(): Promise<ProjectInfo | null> {
     let picked: string | null = null;
     let pickError: string | null = null;
@@ -167,13 +174,40 @@ export const useProjectsStore = defineStore("projects", () => {
       return null;
     }
 
-    // Picked a path — check if a project with this path already
-    // exists. If so, focus it instead of re-adding.
-    const existing = projects.value.find((p) => p.path === picked);
-    if (existing) {
-      currentProjectId.value = existing.id;
-      showToast(`项目已存在: ${existing.name}`, "info");
-      return existing;
+    // Picked a path — check the visible projects first. If the
+    // project is already open, just focus it. The lazy `loadHidden`
+    // call below is needed because the user may be reopening a
+    // project they previously closed; without it, a path that only
+    // exists in `hiddenProjects.value = []` would fall through to
+    // `create_project` and hit UNIQUE.
+    if (hiddenProjects.value.length === 0) {
+      await loadHiddenProjects();
+    }
+
+    const visible = projects.value.find((p) => p.path === picked);
+    if (visible) {
+      currentProjectId.value = visible.id;
+      showToast(`项目已存在: ${visible.name}`, "info");
+      return visible;
+    }
+
+    // Hidden-project reopen path: un-hide and focus the existing row
+    // instead of trying to re-create it (which would fail with
+    // UNIQUE on `projects.path`). `unhideProject` already does the
+    // full IPC + reload + focus sequence.
+    const hidden = hiddenProjects.value.find((p) => p.path === picked);
+    if (hidden) {
+      const ok = await unhideProject(hidden.id);
+      if (!ok) return null;
+      // unhideProject already focused the project; surface a
+      // success toast (it only toasts on failure).
+      showToast(`已重新打开: ${hidden.name}`, "info");
+      // Re-resolve the now-visible row so the returned `path` field
+      // matches the freshly unhidden project (hiddenProjects has
+      // already been reloaded inside unhideProject).
+      return (
+        projects.value.find((p) => p.id === hidden.id) ?? hidden
+      );
     }
 
     try {
@@ -214,18 +248,28 @@ export const useProjectsStore = defineStore("projects", () => {
     }
   }
 
-  async function unhideProject(id: string): Promise<void> {
+  /** Un-hide a previously closed project. Returns `true` on success,
+   *  `false` if the IPC threw (a "重新打开项目失败" toast is surfaced
+   *  in that case). The freshly unhidden project is auto-focused
+   *  via `currentProjectId` so the caller does not need to do it.
+   *
+   *  Returns a boolean (rather than just `void`) so that
+   *  `addProject`'s hidden-path branch can avoid showing a
+   *  misleading "已重新打开" toast on failure — see the
+   *  RULE-FrontProj-001 fix. */
+  async function unhideProject(id: string): Promise<boolean> {
     try {
       await invoke("unhide_project", { id });
     } catch (e) {
       showToast(`重新打开项目失败: ${String(e)}`, "error");
-      return;
+      return false;
     }
     await loadHiddenProjects();
     await loadProjects();
     // Auto-focus the freshly unhidden project.
     const fresh = projects.value.find((p) => p.id === id);
     if (fresh) currentProjectId.value = fresh.id;
+    return true;
   }
 
   async function renameProject(id: string, name: string): Promise<void> {
