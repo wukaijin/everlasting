@@ -1,0 +1,8 @@
+{"file": "app/src/stores/projects.ts", "reason": "AC 对照 — Fix 1 5 case(visible/hidden/new/cancel/dialog-fail)+ 不回归 create_project 路径"}
+{"file": "app/src/components/chat/EmptyProjectState.vue", "reason": "AC 对照 — Fix 2 onMounted 加载触发,hiddenProjects 首屏非空"}
+{"file": "app/src/components/layout/AppHeader.vue", "reason": "AC 对照 — Fix 3 HiddenProjectsMenu 在 + 按钮前可见,badge 显数量"}
+{"file": "app/src/components/HiddenProjectsMenu.vue", "reason": "AC 对照 — popover 列 hidden projects + per-row 重新打开按钮,复用 unhideProject"}
+{"file": "app/src/stores/projects.test.ts", "reason": "AC 对照 — vitest 5 case 全 pass;spy invoke 验证调用顺序(create_project 不被 hidden 命中路径调)"}
+{"file": "app/src-tauri/src/db/projects.rs", "reason": "AC 对照 — 不回归(create_project UNIQUE 报错语义不变;hide_project/unhide_project 不变)"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "AC 对照 — Fix 3 已实施则 close,留 follow-up 则登记"}
+{"file": "app/src/components/chat/WorkerAskBanner.vue", "reason": "风格一致性参考 — reka-ui DropdownMenu 触发 + popover 渲染"}

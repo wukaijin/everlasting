@@ -1,0 +1,10 @@
+{"file": "app/src/stores/projects.ts", "reason": "Fix 1: addProject() 加 hidden 路径检查 + 自动 unhide(主修复);R4 单测目标"}
+{"file": "app/src/components/chat/EmptyProjectState.vue", "reason": "Fix 2: onMounted 自动 loadHiddenProjects"}
+{"file": "app/src/components/layout/AppHeader.vue", "reason": "Fix 3: 引入 HiddenProjectsMenu(主 UI 入口)"}
+{"file": "app/src/components/HiddenProjectsMenu.vue", "reason": "Fix 3: 新增 popover 组件(reka-ui DropdownMenu)"}
+{"file": "app/src/stores/projects.test.ts", "reason": "R4: 新增 addProject 单测(visible/hidden/new/cancel/dialog-fail 5 case)"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "回归债登记入口(RULE-FrontProj-001 — 隐藏项目无主 UI 入口,若 Fix 3 留 follow-up)"}
+{"file": "docs/_archive/2026-06-3b-1/PROPOSAL-project-binding-and-top-tabs.md", "reason": "项目隐藏机制原始设计 — 确认 hidden=1 soft-delete 语义"}
+{"file": "app/src-tauri/src/db/projects.rs", "reason": "create_project UNIQUE 报错位置 + hide/unhide SQL(只读不改)"}
+{"file": "app/src/components/chat/ChatWindow.vue", "reason": "showEmptyState 条件(currentProjectId===null)只读不改"}
+{"file": "app/src/components/chat/SubagentDrawer.vue", "reason": "reka-ui DropdownMenu 风格参考(reka-ui 库项目内已用)"}
