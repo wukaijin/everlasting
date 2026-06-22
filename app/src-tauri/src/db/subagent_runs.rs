@@ -2,7 +2,7 @@
 //!
 //! Stores per-dispatch records of worker subagents spawned via the
 //! `dispatch_subagent` tool. The worker is driven by a nested
-//! `run_chat_loop` call (B6 PR1, see `agent::chat_loop::run_subagent`)
+//! `run_chat_loop` call (B6 PR1, see `agent::subagent::dispatch::run_subagent`)
 //! and accumulates its `SubagentBufferSink` transcript + final
 //! `TokenUsage` + final assistant text in memory. PR2 lifts those
 //! three concerns into SQLite so:
@@ -277,7 +277,7 @@ pub struct SubagentRunSummary {
 /// so a future `SELECT * FROM subagent_runs WHERE status='running'`
 /// always sees well-formed rows.
 ///
-/// Called from `agent::chat_loop::run_subagent` immediately before
+/// Called from `agent::subagent::dispatch::run_subagent` immediately before
 /// the nested `run_chat_loop` call. The returned id is the
 /// `worker_run_id` that PR3's expand UI fetches with [`get_run`].
 ///

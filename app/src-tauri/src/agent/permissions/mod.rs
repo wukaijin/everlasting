@@ -1100,7 +1100,7 @@ async fn ask_path(
     let worker_run_id = ctx.worker_run_id.clone().unwrap_or_else(|| {
         // Defensive: is_worker=true MUST carry worker_run_id.
         // `run_chat_loop` is only invoked as a worker through
-        // `run_subagent` (chat_loop.rs:2280) which threads
+        // `run_subagent` (subagent/dispatch.rs) which threads
         // worker_run_id. If this panic fires, a new caller has
         // been added without threading the field — fix the
         // caller, not this default.

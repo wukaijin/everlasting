@@ -129,7 +129,7 @@ pub struct SubagentBufferSink {
     /// accumulation path is unaffected.
     app_handle: Option<tauri::AppHandle>,
     /// PR2 hotfix: the worker's `run_id` (the `parent_rid-sub-<seq>`
-    /// string `run_subagent` builds at chat_loop.rs:2050). Carried
+    /// string `run_subagent` builds at subagent/dispatch.rs). Carried
     /// on the sink so each `subagent:event` payload can identify
     /// which worker run the event belongs to.
     run_id: String,

@@ -43,10 +43,10 @@
 //! filtering, and `SubagentBufferSink` all have well-scoped unit
 //! tests; keeping them out of `chat_loop.rs` lets the loop stay
 //! focused on turn orchestration. The `run_subagent` helper
-//! itself lives in `chat_loop.rs` because it captures
-//! `run_chat_loop`'s closure dependencies — the helper calls
+//! itself lives in the [`dispatch`] submodule — it captures
+//! `run_chat_loop`'s closure dependencies (the helper calls
 //! `run_chat_loop` recursively and thus needs the same parameter
-//! set the parent loop was invoked with.
+//! set the parent loop was invoked with).
 //!
 //! # Submodules (2026-06-23 split)
 //!
@@ -75,6 +75,7 @@ use crate::memory::MemoryCache;
 mod sink;
 mod transcript;
 mod truncate_summary;
+pub(crate) mod dispatch;
 
 pub use sink::SubagentBufferSink;
 pub use transcript::TranscriptEntry;
@@ -98,7 +99,7 @@ pub use truncate_summary::{
 /// the ⑨ 关 permission check. The **execution path is
 /// intercepted** in `chat_loop.rs`'s tool dispatch — this ToolDef
 /// is discovery-only; the actual `run_subagent` call is in
-/// `chat_loop.rs` (see PRD §"Technical Approach" and review #3).
+/// [`dispatch::run_subagent`] (see PRD §"Technical Approach" and review #3).
 pub fn definition() -> ToolDef {
     ToolDef {
         name: "dispatch_subagent".to_string(),
@@ -252,7 +253,7 @@ pub fn lookup_subagent(name: &str) -> Option<&'static SubagentDef> {
 /// `assemble_subagent_prompt(def, task)` output is now threaded
 /// as the 23rd `system_prompt_override` parameter on the
 /// `run_chat_loop` nested call (see
-/// `agent::chat_loop::run_subagent`); the loop body short-
+/// `agent::subagent::dispatch::run_subagent`); the loop body short-
 /// circuits the parent's `assemble_system_prompt(mode_prefix,
 /// base_prompt)` step when the override is `Some(_)`. Pre-fix
 /// the prompt was effectively dead code (the worker's
