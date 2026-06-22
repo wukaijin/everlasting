@@ -25,7 +25,7 @@
 // the user message at render time.
 
 import { computed } from "vue";
-import type { InjectionEntry } from "../../stores/chat";
+import type { InjectionEntry } from "../../stores/chat.types";
 
 const props = defineProps<{
   injections: InjectionEntry[];

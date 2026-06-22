@@ -39,7 +39,7 @@
 // for a worker transcript segment.
 
 import { computed } from "vue";
-import type { ThinkingBlockInfo } from "../../stores/chat";
+import type { ThinkingBlockInfo } from "../../stores/chat.types";
 import type { ThinkingSection } from "../../stores/subagentRuns";
 import ThinkingBlock from "./ThinkingBlock.vue";
 

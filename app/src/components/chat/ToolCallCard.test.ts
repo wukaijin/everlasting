@@ -39,7 +39,8 @@ import {
   usePermissionsStore,
   type PermissionAsk,
 } from "../../stores/permissions";
-import { useChatStore, type ToolCallInfo } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import type { ToolCallInfo } from "../../stores/chat.types";
 import { useSubagentRunsStore } from "../../stores/subagentRuns";
 
 function makeCall(overrides: Partial<ToolCallInfo> = {}): ToolCallInfo {

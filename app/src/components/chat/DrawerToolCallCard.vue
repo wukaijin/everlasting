@@ -56,7 +56,7 @@
 // build them via the transcript pairing layer without reshaping.
 
 import { computed } from "vue";
-import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat";
+import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat.types";
 import {
   toolAccentVar,
   toolIcon,

@@ -43,12 +43,12 @@ import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import {
-  useChatStore,
-  type ChatMessage,
-  type ErrorCategory,
-  type InjectionEntry,
-} from "./chat";
+import { useChatStore } from "./chat";
+import type {
+  ChatMessage,
+  ErrorCategory,
+  InjectionEntry,
+} from "./chat.types";
 import {
   useChecklistStore,
   CHECKLIST_TOOL_NAME,

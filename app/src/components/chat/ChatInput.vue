@@ -97,7 +97,8 @@ import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 // (skill token is pre-staged for B4). See chatInputTokens.ts for the
 // regex boundaries + IME-safety rationale.
 import { tokenHighlightPlugin } from "./chatInputTokens";
-import { useChatStore, MODE_CYCLE, type SessionMode } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import { MODE_CYCLE, type SessionMode } from "../../stores/chat.types";
 import { useModelsStore } from "../../stores/models";
 import { useProjectsStore } from "../../stores/projects";
 import { abbreviateTokens, tokenUsageLevel, type TokenUsageLevel } from "../../utils/tokenUsage";

@@ -43,7 +43,7 @@ import {
   TooltipContent,
   TooltipArrow,
 } from "reka-ui";
-import type { ChatMessage } from "../../stores/chat";
+import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";

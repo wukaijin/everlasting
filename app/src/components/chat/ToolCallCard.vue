@@ -31,11 +31,11 @@
 // owns the store and passes plain data props + a callback.
 
 import { computed, onUnmounted, ref, watch } from "vue";
-import {
-  useChatStore,
-  type ToolCallInfo,
-  type ToolResultInfo,
-} from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import type {
+  ToolCallInfo,
+  ToolResultInfo,
+} from "../../stores/chat.types";
 import {
   extractToolResultDisplay,
   toolAccentVar,
@@ -151,7 +151,7 @@ const fileDiffOpen = ref(false);
 const fileDiffLoading = ref(false);
 const fileDiffError = ref<string | null>(null);
 
-const fileDiff = computed<import("../../stores/chat").FileDiff | null>(() => {
+const fileDiff = computed<import("../../stores/chat.types").FileDiff | null>(() => {
   const sid = chatStore.currentSessionId;
   if (!sid || !filePath.value) return null;
   return chatStore.getFileDiff(sid, filePath.value);

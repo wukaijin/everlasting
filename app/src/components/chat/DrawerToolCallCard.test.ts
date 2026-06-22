@@ -31,7 +31,7 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import DrawerToolCallCard from "./DrawerToolCallCard.vue";
-import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat";
+import type { ToolCallInfo, ToolResultInfo } from "../../stores/chat.types";
 
 function makeCall(overrides: Partial<ToolCallInfo> = {}): ToolCallInfo {
   return {

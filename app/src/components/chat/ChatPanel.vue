@@ -35,7 +35,8 @@
 // and delegates the chip + diff UI to the new components.
 
 import { computed, onUnmounted, ref, watch } from "vue";
-import { useChatStore, type SessionSummary } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import MessageList from "./MessageList.vue";

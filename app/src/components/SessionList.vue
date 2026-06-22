@@ -9,7 +9,8 @@
 // tint on inactive cards.
 
 import { computed, nextTick, ref } from "vue";
-import { useChatStore, type SessionSummary } from "../stores/chat";
+import { useChatStore } from "../stores/chat";
+import type { SessionSummary } from "../stores/chat.types";
 import { useProjectsStore } from "../stores/projects";
 import { useStreamControllerStore } from "../stores/streamController";
 import { usePermissionsStore } from "../stores/permissions";

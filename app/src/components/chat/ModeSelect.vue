@@ -34,7 +34,8 @@
 
 import { computed, onUnmounted, ref } from "vue";
 
-import { useChatStore, type SessionMode } from "../../stores/chat";
+import { useChatStore } from "../../stores/chat";
+import type { SessionMode } from "../../stores/chat.types";
 import Icon from "../Icon.vue";
 import YoloConfirmModal from "./YoloConfirmModal.vue";
 

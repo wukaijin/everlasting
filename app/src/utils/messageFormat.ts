@@ -7,7 +7,7 @@ import type {
   ToolCallInfo,
   ToolResultInfo,
   ThinkingBlockInfo,
-} from "../stores/chat";
+} from "../stores/chat.types";
 
 /** Pretty-print a tool call's input for display in the card. */
 export function formatToolInput(tc: ToolCallInfo): string {

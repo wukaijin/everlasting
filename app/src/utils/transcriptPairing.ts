@@ -28,7 +28,7 @@
 // criteria.
 
 import type { TranscriptEntry, TranscriptSection } from "../stores/subagentRuns";
-import type { ToolCallInfo, ToolResultInfo } from "../stores/chat";
+import type { ToolCallInfo, ToolResultInfo } from "../stores/chat.types";
 
 // Re-export `TranscriptEntry` so the test file (and any other
 // downstream consumer) can import it from a single place. The

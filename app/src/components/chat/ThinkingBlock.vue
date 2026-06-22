@@ -27,7 +27,7 @@
 //     elements stuck together.
 
 import { computed } from "vue";
-import type { ThinkingBlockInfo } from "../../stores/chat";
+import type { ThinkingBlockInfo } from "../../stores/chat.types";
 import { thinkingDisplayText } from "../../utils/messageFormat";
 import { abbreviateDuration } from "../../utils/duration";
 import Icon from "../Icon.vue";
