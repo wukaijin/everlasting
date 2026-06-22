@@ -238,11 +238,13 @@
 - **File**: `app/src-tauri/src/agent/subagent.rs` (`SubagentBufferSink::emit_permission_ask` transcript entry) + `app/src/components/chat/PermissionAskBody.vue` (historical 分支)
 - **Description**: RULE-FrontSubagent-003 修复后,worker ask 的 resolve(allow/deny/timeout/cancel)只通过 live `permission:ask` 通道的 rid 消失来体现(drawer 卡片从 interactive 翻 historical)。但 transcript 里只存了 ask 本身(`TranscriptKind::PermissionAsk` payload_json),**没存 resolve outcome**。所以 worker run 结束后重开 drawer,历史 ask 卡片只能显示中性的「worker asked for X」(N2 文案),无法回溯「已允许 / 已拒绝 / 已超时 / 已取消」。
 - **Impact**: UX 轻微——历史回放丢失审批结果维度。live 期间不影响(交互卡正常)。
-- **Fix**: 要么 (a) 在 `TranscriptKind` 加 `PermissionAskResolved` 条目(worker resolve 时 sink 追加,带 outcome 枚举 + rid 关联);要么 (b) 扩 `subagent_runs` schema 加 resolve 维度。前端 historical 卡按 rid 配对渲染 outcome badge。
-- **Status**: open
+- **Fix**: PR1 新增 `TranscriptKind::PermissionAskResolved` 第 5 变体(snake_case wire `"permission_ask_resolved"`,现有 `#[serde(rename_all)]` 自动处理) + `SubagentBufferSink::emit_permission_ask_resolved(&self, rid, outcome)` 方法(`ChatEventSink` trait 默认 no-op 仅 sink override,零 `Arc<dyn>` downcast 跨模块耦合,`AppHandleSink` + 测试 sink 零改动继承默认) + `ask_path` worker 分支 `tokio::select!{cancel, timeout, oneshot}` 返回后四态接线(oneshot `AllowOnce`/`AllowAlways` → `"allow"`;`Deny` → `"deny"`;timeout 臂 → `"timeout"`;cancel 臂/`OneshotDropped` → `"cancel"`)。`payload_json = { rid, outcome }` 只进 transcript,不双发 IPC(live 卡消失由 permissions store rid removal 驱动,Session 62 行为不变)。前端 `pairSections` 按 `rid` 预扫 resolved → `PermissionAskSection.outcome` 透传 → `<PermissionAskBody>` historical 分支显 ✓已允许/✗已拒绝/⏱已超时/⊘已取消 badge(色 token 复用 `--color-tool-write`/`--color-tool-error`/`--color-text-muted`)。pre-fix 老 transcript(无 `PermissionAskResolved`)降级中性,不 crash。
+- **Status**: closed(2026-06-23)
 - **Owner**: carlos
 - **Discovered In**: 06-22-worker-tool-approval-interactive trellis-check N4(2026-06-22)
-- **Related Task**: `.trellis/tasks/06-22-06-22-worker-tool-approval-interactive`
+- **Closed In**: `.trellis/tasks/06-22-subagent-drawer-historical-ask-outcome-and-cancelled-turn-count`
+- **Closed At**: `928e131`
+- **Related PR**: null(个人项目)
 
 ---
 
@@ -253,11 +255,13 @@
 - **File**: `app/src-tauri/src/db/migrations.rs:515-528` (subagent_runs schema) + `app/src/components/chat/SubagentDrawer.vue` (cancelled chip)
 - **Description**: PRD R23 字面要求 cancelled 终态 Reply 段显示「⊘ Cancelled · at turn N」,但 `subagent_runs` 表无 turn 列(只有 started_at/finished_at + PR1 的 task/final_text),`SUBAGENT_MAX_TURNS=20` 是常量不持久化实际 turn。PR6 用 wall-clock `terminalDurMs` 降级显示「at X.Xs」。
 - **Impact**: UX 轻微——用户看到耗时而非 turn 进度,语义略弱但不影响功能。
-- **Fix**: subagent_runs 加 `turn_count` 列 + worker agent loop 持久化实际执行 turn;前端 cancelled chip 改读 turn_count。
-- **Status**: open
+- **Fix**: PR2 `subagent_runs` 加 `turn_count INTEGER` 列(幂等 `add_subagent_runs_column_if_missing`,nullable 无 DEFAULT 向后兼容) + `SubagentBufferSink::turns_completed() -> u64`(`fetch_add(1)` 仅在 `stop_reason != Some("cancelled") && != Some("max_turns")` 守卫下,合成 terminal 不 increment,保证 cancelled 显真实执行 turn) + `run_subagent` 终态 `update_run_finished(..., Some(turns as i64))` 写入(8th 参数) + `<SubagentDrawer>` `statusDisplay` cancelled + incomplete 分支读 `run.value.turnCount !== null` 优先显 "at turn N",NULL 降级 wall-clock `at X.Xs`(`terminalDurMs`)。pre-PR2 老行(`turn_count` NULL)显 wall-clock,向后兼容。`turn_count` 与 `token_usage_json` 走同一 `stop_reason` 守卫,1:1 lockstep 锁定(regression test `subagent_runs_update_finished_round_trips_turn_count`)。
+- **Status**: closed(2026-06-23)
 - **Owner**: carlos
 - **Discovered In**: redesign PR6 (2026-06-21, Explore 调研)
-- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal` (PR6 R23 降级)
+- **Closed In**: `.trellis/tasks/06-22-subagent-drawer-historical-ask-outcome-and-cancelled-turn-count`
+- **Closed At**: `928e131`
+- **Related PR**: null(个人项目)
 
 
 ### RULE-FrontSubagent-005 — frontend `SubagentStatus` type 缺 'incomplete',drawer 误显「运行中」
@@ -332,8 +336,8 @@
 | P0 | 0 | 全部 closed(详见 §Re-evaluation Log + git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
 | P2 | 3 | 健壮性 + 债务,中长期清理(2026-06-22: -RULE-BackSubagent-001 via 89d3ffd) |
-| P3 | 7 | 文档 + 一致性,可延后(2026-06-22: -RULE-FrontSubagent-005 / -RULE-BackSubagent-002 via 2eedfe2) |
-| **Total** | **11** | 当前 open items |
+| P3 | 5 | 文档 + 一致性,可延后(2026-06-23: -RULE-WorkerAsk-001 / -RULE-FrontSubagent-004 via 928e131) |
+| **Total** | **9** | 当前 open items |
 
 ---
 
@@ -487,4 +491,5 @@
 **最后更新**: 2026-06-21 by carlos — Session 55(redesign 收尾):subagent-drawer 重构 PR1-6 完成。DEBT 新增 RULE-FrontSubagent-003(worker permission_ask 无法 interactive,P2)/004(cancelled 无 turn 数据,P3)/RULE-FrontTest-001(streamController 4 pre-existing unhandled rejection,P3);更新 001(CSS 重复位置迁移到 DrawerToolCallCard/DrawerPermissionAskCard)/002(范围扩 pairSections)。grill-me Q1-Q10 决策见上 §subagent-drawer redesign 决策索引。PR1-6 commits: 86a81b2/6e077b3/a39ad00/e66001e/3db2be2/d9f999f。
 **最后更新**: 2026-06-22 by carlos — Session 61(Session 60 收尾 follow-up task):**RULE-FrontSubagent-005 closed**(`2eedfe2`)+ **RULE-BackSubagent-002 closed**(`2eedfe2`)。R1 frontend `SubagentStatus` type union 4→5 加 `incomplete` + `coerceStatus` 显式 recognize + `SubagentDrawer.vue` `STATUS_META` / `statusDisplay` / `bannerText` / `isEmpty` 同步加 incomplete 分支(范围超出 PRD 字面 AC 但必要,避免 incomplete run 在空 transcript 时 UX limbo)。color token drift: PRD AC 提 `--color-tool-warn` 不存在 → 改用 `--color-tool-shell`(amber #f59e0b;design-tokens spec 显式列其作 warning tint 等价物 + 禁为 one-off use 新增 --color-*)。R2 option i(删注释,4 处:DEBT 列 3 处 + inspect 阶段 bonus 1 处)改写撒谎注释指向 `chat_loop.rs:1031 db::add_token_usage` 真 production 路径(PR2a 把 skip_persist gate 解耦,worker 复用 parent_session_id,per-turn usage 自然 fold — 见 RULE-A-015);`db/subagent_runs.rs:18` module doc 加 ⚠️ production-only path warning block 防止未来 dev 误接。+118/-33 4 文件;782 cargo / 427 vitest / 0 vue-tsc / 0 warning;4 pre-existing errors in streamController.test.ts(RULE-FrontTest-001 债,baseline 一致)。DEBT P3 9→7,Total 14→12。NIT(留 follow-up): `chat_loop.rs:1019-1022` 引号内"streaming"描述(非 DEBT 范围);chat.md spec 不覆盖 SubagentStatus / STATUS_META(Session 60 R2 pre-existing spec drift)。Spec 同步:无新行为需 spec 化,纯 P3 收面。
 **最后更新**: 2026-06-22 by carlos — Session 62:**RULE-BackSubagent-001 closed**(`89d3ffd`)。worker 非正常终态(Error/Cancelled/Incomplete)时 parent LLM 拿不到已执行 tool 摘要(B6 review defect B)→ PR1 `summarize_worker_tool_actions` 纯函数(tool_call/tool_result 按 `tool_use_id` 配对 ok/failed/? + per-tool key_param 提取代表参数 + 2 KiB head+tail cap + `(N actions omitted)` 计数)+ PR2 `format_dispatch_result` 加 `partial_actions: Option<&str>` 三态 append `Worker partial actions:` 段(`chat_loop.rs:2539` 接线,Completed/空摘要传 None)。摘要只进 wire 不进 `final_text`(drawer 已有 Tools 段,`format_final_text` 不变 → wire/DB 出口分家)。DEBT 原字面只点 Error,扩到三态(Incomplete 引入于 finding 之后,重型 worker max_turns 场景需求最强)。+10 单测(PR1)+ 3 单测 + 1 集成(PR2);803 cargo test --lib pass,prod cargo check 0 warning。spec 同步 tool-contract.md wire 表 + Tests + agent-loop-architecture.md 补全 4 态。DEBT P2 4→3,Total 12→11。四段式 commit: fix `89d3ffd` + docs(debt) + archive + journal。
+**最后更新**: 2026-06-23 by carlos — Session 64:**RULE-WorkerAsk-001 closed** + **RULE-FrontSubagent-004 closed**(`928e131`)— subagent drawer historical 回放补两个丢失维度。PR1 worker permission_ask resolve outcome 走新 `TranscriptKind::PermissionAskResolved` 第 5 变体(snake_case wire + `ChatEventSink` trait 默认 no-op 仅 `SubagentBufferSink` override,零 `Arc<dyn>` downcast 跨模块耦合)+ `ask_path` worker 分支 `tokio::select!` 四态接线 + 前端 `pairSections` 按 rid 配对 outcome 到 `PermissionAskSection` + `PermissionAskBody` historical 分支显 ✓已允许/✗已拒绝/⏱已超时/⊘已取消 badge(色 token 复用 `--color-tool-*`)。PR2 `subagent_runs` 加 `turn_count INTEGER` 列(幂等 migration,nullable 向后兼容)+ `SubagentBufferSink::turns_completed()` 真实 per-turn `Done` 自增(synthetic cancel/max_turns terminal 不 increment,1:1 lockstep 与 `per_turn_usage`)+ `run_subagent` 终态 `update_run_finished(..., Some(turns))` 写入 + `SubagentDrawer` statusDisplay cancelled + incomplete 优先读 `turnCount` 显 "at turn N",NULL 降级 wall-clock。23 文件改动(17 code + 6 spec),+1462/-45;cargo 813/0/0(was 803),vitest 467 pass / 4 pre-existing streamController(RULE-FrontTest-001 baseline),vue-tsc 0 error,0 新 warning。trellis-check PASS verdict。spec 同步:subagent-runs-schema.md + tool-contract.md §TranscriptKind wire + §audit 决策 + agent-loop-architecture.md §"Worker ask resolve outcome + turn counting" 新 subsection + permission-layer.md §5b Audit note 扩展 outcome transcript entry + chat.md R23 RESOLVED + R24 evolved(原降级三 blocker 全部解决)+ state-management.md `TranscriptKind` 4→5 + `TranscriptSectionKind` 6→7 + `outcome?` 字段。DEBT P3 7→5,Total 11→9。NIT(refactor 机会,follow-up,非 blocker):4-state outcome union literal 在 `utils/transcriptPairing.ts:322/417/423` + `components/PermissionAskBody.vue:77/104` + `components/DrawerPermissionAskCard.vue:102` + tests 重复未导入规范 `PermissionAskOutcome` type(从 `stores/subagentRuns.ts:330` 导出),5th outcome 加时 drift 风险。四段式 commit:fix `928e131` + docs(debt) + archive + journal。
 **下个 review**: REVIEW-XXX-2026-XX-XX(待定)
