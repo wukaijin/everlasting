@@ -7,8 +7,8 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-2.md`
-- **Total Sessions**: 62
+- **Active File**: `journal-3.md`
+- **Total Sessions**: 63
 - **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1843 | Active |
+| `journal-3.md` | ~40 | Active |
+| `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 63 | 2026-06-23 | Session 67 — 拆分 subagent.rs → subagent/ 目录（mod/sink/transcript/truncate_summary） | `a6cd89f` | `main` |
 | 62 | 2026-06-23 | Session 64 — RULE-WorkerAsk-001 + RULE-FrontSubagent-004 subagent drawer historical dimensions | `928e131` | `main` |
 | 61 | 2026-06-22 | Session 61: subagent P3 follow-ups (RULE-FrontSubagent-005 + RULE-BackSubagent-002 option i) | `2eedfe2`, `41303e9` | `main` |
 | 60 | 2026-06-21 | subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token fix (RULE-A-017 closed) | `fd7dc79`, `acf2a0a` | `main` |
