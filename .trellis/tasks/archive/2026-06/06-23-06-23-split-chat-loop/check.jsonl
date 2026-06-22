@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 run_subagent 落 DB 的 wire shape(insert_run/update_run_finished/transcript 截断)未变"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验证 sink cumulative_usage→terminal token_usage 累积无回归"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "run_subagent 相关债(SUBAGENT_MAX_TURNS=200 / skip_session_active / is_worker 路径)原样保留不可回归"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证 dispatch_subagent 间接测试覆盖未丢、cargo test --lib 全绿"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 worker is_worker=true 权限路径行为不变"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证跨模块循环依赖(run_chat_loop↔run_subagent)调用路径正确、无悬空引用"}

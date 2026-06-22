@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_subagent 在 agent loop serial-path dispatch 中的定位;搬到 dispatch.rs 后 run_chat_loop→run_subagent 调用契约不可变"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "run_subagent 落 subagent_runs 表(insert_run/update_run_finished)+transcript 截断 wire 契约;搬运后 shape 不可变"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool_use/tool_result 配对 + run_subagent 返回 (content,is_error,cancel_parent,exit_code) tuple 契约"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker is_worker=Some(true) 路径 + run_subagent 第 21 参语义;权限行为不可变"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "run_subagent 无独立单测,间接覆盖走 run_chat_loop+mock;搬运后 #[cfg(test)] 组织不可丢覆盖"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "run_subagent 读 sink cumulative_usage 落 terminal token_usage;累积契约不可变"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨模块(run_chat_loop↔run_subagent)循环依赖验证清单"}
