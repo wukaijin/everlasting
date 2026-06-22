@@ -1,0 +1,5 @@
+{"file": "app/src-tauri/src/agent/subagent.rs", "reason": "cargo test --lib summarize_worker_tool_actions 单测（配对 ok/failed/? + head+tail cap + per-tool key_param）+ format_dispatch_result partial_actions 参数回归（现有 format_final_text_* / format_dispatch_result_* 测试不破）"}
+{"file": "app/src-tauri/src/agent/chat_loop.rs", "reason": "run_subagent 调用点（2539）接线 + worker error/cancel/incomplete 集成测试断言 parent dispatch_subagent tool_result 含摘要段；Completed 不含"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "agent_loop_* 集成测试模式 + cargo test --lib（PKG_CONFIG_PATH）+ mock provider 注入 error 的测试约定"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "DEBT RULE-BackSubagent-001 close 规则（commit hash 回填 + Status 不可逆）+ 四段式 commit（fix→docs(debt)→archive→journal）"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-BackSubagent-001 关闭（commit hash 回填到 Closed At）+ 优先级分布表更新（P2 4→3，Total 12→11）"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "format_dispatch_result wire shape + worker run_subagent 嵌套 run_chat_loop 路径 + status 三态决定（had_error→Error / was_cancelled→Cancelled / was_incomplete→Incomplete）+ SubagentBufferSink transcript 累积位置；本任务核心实现依据"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool_result wire shape（[status: X]\\n body）+ Scenario: dispatch_subagent tool；parent LLM 消费的 tool_result content 格式契约"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "TranscriptEntry / TranscriptKind 4 值 + tool_call/tool_result payload_json shape（name/input/is_error/tool_use_id 配对键）+ transcript_snapshot 数据结构；summarize_worker_tool_actions 配对与 cap 的数据依据"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 truncate_transcript_for_persistence 的 head+tail cap 模式（2 KiB 截断）+ format_final_text 不动原则（出口分家，避免重复造轮子）"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-BackSubagent-001 原始 finding（B6 review defect B）+ 关闭流程；P2 open 债定位"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "ADR 模板位置；format_final_text / format_dispatch_result 解耦决策（wire 内容 > DB 内容）需 ADR 记录"}
+{"file": ".trellis/tasks/06-22-backsubagent-001-worker-error-partial-transcript/prd.md", "reason": "本任务 PRD（R1-R4 需求 + Acceptance Criteria + Technical Approach + Implementation Plan PR1-3）"}
