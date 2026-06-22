@@ -851,7 +851,7 @@ Box::pin(run_chat_loop(
 - `was_cancelled: AtomicBool` —— `Done{stop_reason: cancelled}` → true(`max_turns` 不算 cancel,归 Completed)
 - **不 forward 父 sink** —— 否则 main UI 被 worker 流刷屏(Claude Code 约定:中间过程对 main 隔离)
 
-#### `format_dispatch_result(status, worker_text)`(`subagent.rs`)
+#### `format_dispatch_result(status, worker_text, partial_actions)`(`subagent.rs`)
 
 | status | content | is_error |
 |---|---|---|
@@ -859,6 +859,8 @@ Box::pin(run_chat_loop(
 | `Cancelled` | `[status: cancelled]\n<text>\n\n[CANCELLED_MARKER]`(空文本退化为 `marker alone`) | true |
 | `Incomplete` | `[status: incomplete]\n<text>\n\n[INCOMPLETE_MARKER]`(`[未完成]`,空文本退化为 `marker alone`) | true |
 | `Error` | `[status: error]\n<error text>` | true |
+
+**RULE-BackSubagent-001 (2026-06-22)**:`partial_actions: Option<&str>` 对**非 completed 三态**(Cancelled / Incomplete / Error)在 body 之后 append `\n\nWorker partial actions:\n<summary>` 段,让 parent LLM 看到 worker 已执行的 tool_call 摘要(`- {name}({key_param}): ok|failed|?`),做补偿修复(跳过已落地 write/edit、重试 failed tool)。摘要由 `summarize_worker_tool_actions(transcript_snapshot)` 构建(tool_call/tool_result 按 `tool_use_id` 配对,orphan tool_call 标 `?`;`chat_event`/`permission_ask` 跳过;2 KiB head+tail cap,超限 `(N actions omitted)` 计数)。`Completed` 传 `None`;空摘要(worker 未执行任何 tool_call)也传 `None`,不产生空标题。摘要**只进 tool_result wire**(parent LLM 消费),**不进** `subagent_runs.final_text`(drawer 已有完整 Tools 段,避免冗余 —— `format_final_text` 不变)。
 
 terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `SubagentBufferSink.was_cancelled` 仍能正确捕捉,只 DB writes(cwd / touch_session)守门。
 
@@ -905,14 +907,17 @@ terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `Subage
 | `format_completed_with_summary` / `_empty_text_falls_back_to_note` | Completed 两种格式 |
 | `format_cancelled_includes_marker` / `_empty_text_uses_marker_alone` | Cancelled 两种格式 |
 | `format_error_includes_status_prefix` | Error 格式 |
+| `format_dispatch_result_appends_partial_actions_when_some` / `_none_..._no_section` / `_empty_..._no_section` | RULE-BackSubagent-001:`Some`(非空) append `Worker partial actions:` 段;`None` / `Some("")` 不 append |
+| `summarize_*`(pairs/key_param/unknown/skips/order/under_cap/head_tail/empty/no_tool_calls) + `key_param_truncates_long_values` | summarize 配对 ok/failed/? + per-tool key_param + head+tail cap + 跳过非 tool kind + 多字节截断 |
 
-**Integration**(`agent/tests.rs::agent_loop_dispatch_subagent_*`,4 个):
+**Integration**(`agent/tests.rs::agent_loop_dispatch_subagent_*`,5 个):
 
 | Test | 断言 |
 |---|---|
 | `dispatch_subagent_completes_and_returns_summary` | parent turn 1 dispatch_subagent tool_use → worker 跑 → summary tool_result `[status: completed]` + worker text;主对话 `phantom_worker_text == 0`(worker 中间过程**不**进父 messages) |
 | `dispatch_subagent_cancel_propagates_to_worker` | parent_token cancel → worker_token child 触发 → status=cancelled + `CANCELLED_MARKER`;tool_use/tool_result 配对保持 |
 | `dispatch_subagent_error_returns_status_error` | MockProvider stream error → status=error;tool_use/tool_result 配对保持 |
+| `dispatch_subagent_error_includes_partial_transcript_summary` | RULE-BackSubagent-001:worker 先执行 `read_file` 再 stream error → status=error + tool_result content 含 `Worker partial actions:` 段 + `read_file(` 摘要行 |
 | `dispatch_subagent_guard_does_not_evict_parent_session_active` | 用 `HangingThenCancel` worker(500ms 延迟 cancel)保住 worker 在飞,snapshot 验证父 `session_active_request[parent_session_id]` 仍正确(worker Drop 因 `skip_session_active=true` 不误删) |
 
 ### 7. Wrong vs Correct —— 拦截路径(execute_tool_inner vs chat_loop loop)

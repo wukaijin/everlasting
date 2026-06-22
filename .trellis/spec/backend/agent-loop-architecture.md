@@ -446,9 +446,13 @@ blur the tool layer / agent layer boundary; the interception pattern
 keeps them at the agent loop layer where they naturally live.
 
 The interceptor builds a `ContentBlock::ToolResult` (with the
-`[status: completed|cancelled|error]` prefix from
+`[status: completed|cancelled|error|incomplete]` prefix from
 `format_dispatch_result`) and pushes it into `result_blocks` — tool_use/
-tool_result pairing is preserved (same invariant as RULE-A-007).
+tool_result pairing is preserved (same invariant as RULE-A-007). For
+non-completed terminal states, `format_dispatch_result` also appends a
+`Worker partial actions:` summary of the worker's executed tool_calls so
+the parent can do compensatory repair (RULE-BackSubagent-001, 2026-06-22;
+wire shape + 2 KiB head+tail cap in `tool-contract.md` §dispatch_subagent).
 
 ### worker context (APPEND, never insert at 0)
 

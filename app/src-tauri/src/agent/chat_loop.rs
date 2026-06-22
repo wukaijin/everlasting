@@ -2536,7 +2536,26 @@ async fn run_subagent(
     let cancel_parent =
         parent_token.is_cancelled() && status == SubagentStatus::Cancelled;
 
-    let (content, is_error) = format_dispatch_result(status, &worker_text);
+    // RULE-BackSubagent-001 (PR2): for non-completed terminal states,
+    // summarize the worker's executed tool_calls so the parent LLM can
+    // do compensatory repair (skip already-landed writes, retry failed
+    // tools). Completed gets `None`; an empty summary (worker executed
+    // no tool_calls before exiting) also gets `None` so no empty
+    // "Worker partial actions:" header lands in the tool_result.
+    let partial_actions = if matches!(status, SubagentStatus::Completed) {
+        None
+    } else {
+        let summary = crate::agent::subagent::summarize_worker_tool_actions(
+            &worker_sink.transcript_snapshot(),
+        );
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary)
+        }
+    };
+    let (content, is_error) =
+        format_dispatch_result(status, &worker_text, partial_actions.as_deref());
     (content, is_error, cancel_parent, None)
 }
 

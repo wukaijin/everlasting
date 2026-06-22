@@ -1321,6 +1321,15 @@ pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
 /// - `status: error`     → `[status: error]\n<error text>`
 /// - `status: incomplete` → `[status: incomplete]\n[INCOMPLETE_MARKER]\n<partial>` — 2026-06-21 (R2)
 ///
+/// **RULE-BackSubagent-001 (PR2)**: for non-completed terminal states,
+/// `partial_actions: Some(non-empty)` appends a `Worker partial
+/// actions:\n<summary>` section after the body so the parent LLM can
+/// do compensatory repair (skip already-landed writes, retry failed
+/// tools). The caller passes `None` for Completed and for empty
+/// summaries. The summary is NOT written to `subagent_runs.final_text`
+/// — the drawer already renders the full transcript in its Tools
+/// segment, so the DB body (`format_final_text`) stays unchanged.
+///
 /// Returns `(content, is_error)`. `is_error` is `true` for cancel
 /// and error so the LLM knows the worker did not succeed; `false`
 /// for completed. `incomplete` is treated like `cancelled` for
@@ -1338,15 +1347,229 @@ pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
 pub fn format_dispatch_result(
     status: SubagentStatus,
     worker_text: &str,
+    partial_actions: Option<&str>,
 ) -> (String, bool) {
     let prefix = format!("[status: {}]", status.as_str());
     let body = format_final_text(status, worker_text);
-    match status {
-        SubagentStatus::Completed => (format!("{}\n{}", prefix, body), false),
-        SubagentStatus::Cancelled => (format!("{}\n{}", prefix, body), true),
-        SubagentStatus::Error => (format!("{}\n{}", prefix, body), true),
-        SubagentStatus::Incomplete => (format!("{}\n{}", prefix, body), true),
+    let is_error = !matches!(status, SubagentStatus::Completed);
+    let content = match partial_actions {
+        // RULE-BackSubagent-001: non-completed terminal states append a
+        // compact summary of the worker's executed tool_calls. The
+        // caller guarantees `None` for Completed; the empty-guard keeps
+        // the function total if an empty summary slips through.
+        Some(actions) if !actions.is_empty() => {
+            format!("{}\n{}\n\nWorker partial actions:\n{}", prefix, body, actions)
+        }
+        _ => format!("{}\n{}", prefix, body),
+    };
+    (content, is_error)
+}
+
+// ---------------------------------------------------------------------------
+// RULE-BackSubagent-001: worker partial-transcript summary
+//
+// When a worker exits in a non-completed state (Error / Cancelled /
+// Incomplete-max_turns), the parent LLM previously saw only
+// `[status: error]\n<error text>` — blind to which tool_calls the
+// worker had already executed (and which had landed on disk). This
+// block builds a compact summary of those actions so the parent can
+// do compensatory repair (skip already-landed writes, retry failed
+// tools). Wired into `format_dispatch_result`'s `partial_actions`
+// parameter in PR2.
+// ---------------------------------------------------------------------------
+
+/// Maximum byte size of the worker partial-actions summary appended
+/// to a non-completed `dispatch_subagent` tool_result. ~25-50 tool
+/// actions fit at ~40-80 chars/line. Sized to inform the parent
+/// LLM's compensatory repair decisions without bloating the
+/// tool_result content.
+pub const PARTIAL_ACTIONS_MAX_BYTES: usize = 2 * 1024;
+
+/// Extract the single most representative input parameter for a tool
+/// call — the argument that most identifies "what the tool operated
+/// on" (`path` for file/dir tools, `pattern` for search, `command`
+/// for shell, `url` for web_fetch, `skill_name` for use_skill).
+/// Returns an empty string for tools without a representative
+/// parameter (e.g. `update_checklist`) or when the field is absent /
+/// non-string. Long values are truncated so a single line can't blow
+/// the cap.
+fn key_param_for_tool(name: &str, input: &serde_json::Value) -> String {
+    let field = match name {
+        "read_file" | "write_file" | "edit_file" | "list_dir" => "path",
+        "grep" | "glob" => "pattern",
+        "shell" => "command",
+        "web_fetch" => "url",
+        "use_skill" => "skill_name",
+        _ => return String::new(),
+    };
+    let val = match input.get(field).and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return String::new(),
+    };
+    truncate_chars(val, 60)
+}
+
+/// Truncate `s` to at most `max_chars` Unicode scalar values,
+/// appending "..." if truncated. Operates on chars (not bytes) to
+/// respect multi-byte boundaries (CJK content — see RULE-E-009
+/// `floor_char_boundary` convention used elsewhere in the crate).
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
     }
+    let kept: String = s.chars().take(max_chars).collect();
+    format!("{}...", kept)
+}
+
+/// Build a human-readable summary of the worker's executed tool
+/// actions from its transcript snapshot, for inclusion in a non-
+/// completed `dispatch_subagent` tool_result (RULE-BackSubagent-001).
+///
+/// Each `tool_call` transcript entry is paired with its `tool_result`
+/// by `tool_use_id`:
+/// - paired result with `is_error=false` → `ok`
+/// - paired result with `is_error=true`  → `failed`
+/// - no paired result (worker exited mid-execution) → `?`
+///
+/// `chat_event` and `permission_ask` entries are skipped (not
+/// relevant to the parent's compensatory repair decisions). Lines
+/// appear in transcript (chronological) order.
+///
+/// The summary is capped at [`PARTIAL_ACTIONS_MAX_BYTES`] using a
+/// head+tail strategy: when the full summary would exceed the cap,
+/// the longest affordable head + tail are kept with a
+/// `... (K actions omitted) ...` marker between them (the parent
+/// still sees the earliest actions — what files the worker created —
+/// and the latest — its state right before exit). Returns an empty
+/// string when the worker executed no tool calls (the caller treats
+/// empty as "do not append the section").
+pub fn summarize_worker_tool_actions(transcript: &[TranscriptEntry]) -> String {
+    // Collect tool_result outcomes keyed by tool_use_id.
+    let mut results: HashMap<&str, bool> = HashMap::new();
+    for entry in transcript {
+        if entry.kind != TranscriptKind::ToolResult {
+            continue;
+        }
+        if let Some(id) = entry
+            .payload_json
+            .get("tool_use_id")
+            .and_then(|v| v.as_str())
+        {
+            let is_error = entry
+                .payload_json
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            results.insert(id, is_error);
+        }
+    }
+
+    // Build one line per tool_call, in transcript order.
+    let mut lines: Vec<String> = Vec::new();
+    for entry in transcript {
+        if entry.kind != TranscriptKind::ToolCall {
+            continue;
+        }
+        let name = entry
+            .payload_json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let input = entry
+            .payload_json
+            .get("input")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let id = entry
+            .payload_json
+            .get("tool_use_id")
+            .and_then(|v| v.as_str());
+        let key_param = key_param_for_tool(name, &input);
+        let status = match id.and_then(|i| results.get(i).copied()) {
+            Some(false) => "ok",
+            Some(true) => "failed",
+            None => "?",
+        };
+        let line = if key_param.is_empty() {
+            format!("- {}: {}", name, status)
+        } else {
+            format!("- {}({}): {}", name, key_param, status)
+        };
+        lines.push(line);
+    }
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    apply_head_tail_cap(lines, PARTIAL_ACTIONS_MAX_BYTES)
+}
+
+/// Cap a list of summary lines to `max_bytes` using a head+tail
+/// split. When the joined lines fit, they are returned as-is.
+/// Otherwise the longest affordable head prefix + tail suffix are
+/// kept, with a `... (K actions omitted) ...` marker between them.
+///
+/// Proven to stay strictly `<= max_bytes`: head + tail byte costs
+/// each ≤ `half`, and the marker is bounded by the reserved
+/// `marker_overhead`, so the reassembled output is `max - 5` at most.
+fn apply_head_tail_cap(lines: Vec<String>, max_bytes: usize) -> String {
+    let full = lines.join("\n");
+    if full.len() <= max_bytes {
+        return full;
+    }
+
+    // Reserve room for the omission marker. Worst-case marker length:
+    // "... (NNNNNN actions omitted) ...\n" ≈ 36 bytes. Using 40 keeps
+    // the reassembled result strictly <= max_bytes.
+    let marker_overhead = 40;
+    let usable = max_bytes.saturating_sub(marker_overhead);
+    let half = usable / 2;
+
+    // Greedy head: longest prefix whose byte cost (line + newline) ≤ half.
+    let mut head_end = 0usize;
+    let mut head_bytes = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        let cost = line.len() + 1;
+        if head_bytes + cost > half {
+            break;
+        }
+        head_bytes += cost;
+        head_end = i + 1;
+    }
+
+    // Greedy tail: longest suffix whose cost ≤ half, starting strictly
+    // after head_end (no overlap).
+    let mut tail_start = lines.len();
+    let mut tail_bytes = 0usize;
+    for i in (head_end..lines.len()).rev() {
+        let cost = lines[i].len() + 1;
+        if tail_bytes + cost > half {
+            break;
+        }
+        tail_bytes += cost;
+        tail_start = i;
+    }
+
+    let tail_count = lines.len() - tail_start;
+    let omitted = lines.len() - head_end - tail_count;
+
+    let mut out = String::new();
+    for line in &lines[..head_end] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if omitted > 0 {
+        out.push_str(&format!("... ({} actions omitted) ...\n", omitted));
+    }
+    for line in &lines[tail_start..] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1612,7 +1835,7 @@ mod tests {
     #[test]
     fn format_completed_with_summary() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Completed, "found 3 files");
+            format_dispatch_result(SubagentStatus::Completed, "found 3 files", None);
         assert!(!is_error);
         assert!(content.starts_with("[status: completed]"));
         assert!(content.contains("found 3 files"));
@@ -1621,7 +1844,7 @@ mod tests {
     #[test]
     fn format_completed_with_empty_text_falls_back_to_note() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Completed, "");
+            format_dispatch_result(SubagentStatus::Completed, "", None);
         assert!(!is_error);
         assert!(content.contains("worker produced no final text"));
     }
@@ -1629,7 +1852,7 @@ mod tests {
     #[test]
     fn format_cancelled_includes_marker() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Cancelled, "partial");
+            format_dispatch_result(SubagentStatus::Cancelled, "partial", None);
         assert!(is_error);
         assert!(content.starts_with("[status: cancelled]"));
         assert!(content.contains(crate::agent::helpers::CANCELLED_MARKER));
@@ -1639,7 +1862,7 @@ mod tests {
     #[test]
     fn format_cancelled_empty_text_uses_marker_alone() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Cancelled, "");
+            format_dispatch_result(SubagentStatus::Cancelled, "", None);
         assert!(is_error);
         assert!(content.contains(crate::agent::helpers::CANCELLED_MARKER));
     }
@@ -1647,10 +1870,40 @@ mod tests {
     #[test]
     fn format_error_includes_status_prefix() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Error, "LLM stream errored");
+            format_dispatch_result(SubagentStatus::Error, "LLM stream errored", None);
         assert!(is_error);
         assert!(content.starts_with("[status: error]"));
         assert!(content.contains("LLM stream errored"));
+    }
+
+    #[test]
+    fn format_dispatch_result_appends_partial_actions_when_some() {
+        // Non-completed + Some(non-empty) → body + "Worker partial actions:" section.
+        let actions = "- write_file(a.rs): ok\n- grep(X): failed";
+        let (content, is_error) =
+            format_dispatch_result(SubagentStatus::Error, "stream died", Some(actions));
+        assert!(is_error);
+        assert!(content.starts_with("[status: error]\n"));
+        assert!(content.contains("stream died"));
+        assert!(
+            content.contains("Worker partial actions:\n- write_file(a.rs): ok\n- grep(X): failed"),
+            "missing partial actions section: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn format_dispatch_result_none_partial_actions_has_no_section() {
+        // None → no section (regression guard for the existing shape).
+        let (content, _) = format_dispatch_result(SubagentStatus::Error, "stream died", None);
+        assert!(!content.contains("Worker partial actions"));
+    }
+
+    #[test]
+    fn format_dispatch_result_empty_partial_actions_has_no_section() {
+        // Some("") → empty-guard skips the section (no bare header).
+        let (content, _) = format_dispatch_result(SubagentStatus::Error, "stream died", Some(""));
+        assert!(!content.contains("Worker partial actions"));
     }
 
     // ---- format_final_text (B6 redesign PR1, 2026-06-21) ----
@@ -1720,7 +1973,7 @@ mod tests {
             (SubagentStatus::Error, "stream died"),
             (SubagentStatus::Error, ""),
         ] {
-            let (wire, _is_err) = format_dispatch_result(status, text);
+            let (wire, _is_err) = format_dispatch_result(status, text, None);
             let body = format_final_text(status, text);
             let expected = format!("[status: {}]\n{}", status.as_str(), body);
             assert_eq!(wire, expected, "drift for ({:?}, {:?})", status, text);
@@ -1981,7 +2234,7 @@ mod tests {
     #[test]
     fn format_incomplete_includes_status_prefix_and_is_error() {
         let (content, is_error) =
-            format_dispatch_result(SubagentStatus::Incomplete, "partial");
+            format_dispatch_result(SubagentStatus::Incomplete, "partial", None);
         assert!(is_error, "Incomplete must set is_error=true");
         assert!(content.starts_with("[status: incomplete]"));
         assert!(content.contains(crate::agent::helpers::INCOMPLETE_MARKER));
@@ -2003,11 +2256,227 @@ mod tests {
             (SubagentStatus::Incomplete, "budget exhausted mid-task"),
             (SubagentStatus::Incomplete, ""),
         ] {
-            let (wire, _is_err) = format_dispatch_result(status, text);
+            let (wire, _is_err) = format_dispatch_result(status, text, None);
             let body = format_final_text(status, text);
             let expected = format!("[status: {}]\n{}", status.as_str(), body);
             assert_eq!(wire, expected, "drift for ({:?}, {:?})", status, text);
         }
+    }
+
+    // ---- summarize_worker_tool_actions (RULE-BackSubagent-001) ----
+
+    fn tc_entry(tool_use_id: &str, name: &str, input: serde_json::Value) -> TranscriptEntry {
+        TranscriptEntry {
+            kind: TranscriptKind::ToolCall,
+            payload_json: serde_json::json!({
+                "name": name,
+                "input": input,
+                "tool_use_id": tool_use_id,
+                "id": tool_use_id,
+                "request_id": "req",
+            }),
+        }
+    }
+
+    fn tr_entry(tool_use_id: &str, is_error: bool) -> TranscriptEntry {
+        TranscriptEntry {
+            kind: TranscriptKind::ToolResult,
+            payload_json: serde_json::json!({
+                "tool_use_id": tool_use_id,
+                "is_error": is_error,
+                "content": "result body",
+                "request_id": "req",
+            }),
+        }
+    }
+
+    #[test]
+    fn summarize_empty_transcript_returns_empty() {
+        assert_eq!(summarize_worker_tool_actions(&[]), "");
+    }
+
+    #[test]
+    fn summarize_no_tool_calls_returns_empty() {
+        // chat_event + permission_ask only — no tool_call lines.
+        let transcript = vec![
+            TranscriptEntry {
+                kind: TranscriptKind::ChatEvent,
+                payload_json: serde_json::json!({"text": "thinking"}),
+            },
+            TranscriptEntry {
+                kind: TranscriptKind::PermissionAsk,
+                payload_json: serde_json::json!({"tool": "write_file"}),
+            },
+        ];
+        assert_eq!(summarize_worker_tool_actions(&transcript), "");
+    }
+
+    #[test]
+    fn summarize_pairs_ok_failed_orphan() {
+        // tc-1 → paired ok, tc-2 → paired failed, tc-3 → orphan (no result).
+        let transcript = vec![
+            tc_entry("tc-1", "write_file", serde_json::json!({"path": "a.rs"})),
+            tr_entry("tc-1", false),
+            tc_entry("tc-2", "shell", serde_json::json!({"command": "npm test"})),
+            tr_entry("tc-2", true),
+            tc_entry("tc-3", "read_file", serde_json::json!({"path": "b.rs"})),
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert_eq!(
+            out,
+            "- write_file(a.rs): ok\n\
+             - shell(npm test): failed\n\
+             - read_file(b.rs): ?"
+        );
+    }
+
+    #[test]
+    fn summarize_key_param_per_tool() {
+        // One tool_call per known tool name, each paired ok, verifying
+        // the representative field is extracted correctly.
+        let transcript = vec![
+            tc_entry("t-read", "read_file", serde_json::json!({"path": "r.rs"})),
+            tr_entry("t-read", false),
+            tc_entry("t-write", "write_file", serde_json::json!({"path": "w.rs", "content": "x"})),
+            tr_entry("t-write", false),
+            tc_entry("t-edit", "edit_file", serde_json::json!({"path": "e.rs"})),
+            tr_entry("t-edit", false),
+            tc_entry("t-list", "list_dir", serde_json::json!({"path": "d"})),
+            tr_entry("t-list", false),
+            tc_entry("t-grep", "grep", serde_json::json!({"pattern": "TODO", "path": "d"})),
+            tr_entry("t-grep", false),
+            tc_entry("t-glob", "glob", serde_json::json!({"pattern": "**/*.rs"})),
+            tr_entry("t-glob", false),
+            tc_entry("t-shell", "shell", serde_json::json!({"command": "ls"})),
+            tr_entry("t-shell", false),
+            tc_entry("t-web", "web_fetch", serde_json::json!({"url": "https://x"})),
+            tr_entry("t-web", false),
+            tc_entry("t-skill", "use_skill", serde_json::json!({"skill_name": "code-review"})),
+            tr_entry("t-skill", false),
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert!(out.contains("- read_file(r.rs): ok"), "read_file path: {}", out);
+        assert!(out.contains("- write_file(w.rs): ok"), "write_file path: {}", out);
+        assert!(out.contains("- edit_file(e.rs): ok"), "edit_file path: {}", out);
+        assert!(out.contains("- list_dir(d): ok"), "list_dir path: {}", out);
+        assert!(out.contains("- grep(TODO): ok"), "grep pattern: {}", out);
+        assert!(out.contains("- glob(**/*.rs): ok"), "glob pattern: {}", out);
+        assert!(out.contains("- shell(ls): ok"), "shell command: {}", out);
+        assert!(out.contains("- web_fetch(https://x): ok"), "web_fetch url: {}", out);
+        assert!(out.contains("- use_skill(code-review): ok"), "use_skill skill_name: {}", out);
+    }
+
+    #[test]
+    fn summarize_unknown_tool_no_param() {
+        // A tool name outside the key_param map → no parenthesized param.
+        let transcript = vec![
+            tc_entry("u-1", "update_checklist", serde_json::json!({"items": []})),
+            tr_entry("u-1", false),
+            tc_entry("u-2", "mystery_tool", serde_json::json!({"x": 1})),
+            tr_entry("u-2", false),
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert!(out.contains("- update_checklist: ok"), "no param: {}", out);
+        assert!(out.contains("- mystery_tool: ok"), "unknown tool: {}", out);
+        assert!(!out.contains("update_checklist("), "no parens for update_checklist: {}", out);
+    }
+
+    #[test]
+    fn summarize_skips_chat_event_and_permission_ask_interleaved() {
+        // Non-tool kinds interleaved between tool_calls must not appear.
+        let transcript = vec![
+            TranscriptEntry {
+                kind: TranscriptKind::ChatEvent,
+                payload_json: serde_json::json!({"text": "planning"}),
+            },
+            tc_entry("i-1", "write_file", serde_json::json!({"path": "a.rs"})),
+            tr_entry("i-1", false),
+            TranscriptEntry {
+                kind: TranscriptKind::PermissionAsk,
+                payload_json: serde_json::json!({"tool": "shell"}),
+            },
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert_eq!(out, "- write_file(a.rs): ok");
+    }
+
+    #[test]
+    fn summarize_preserves_transcript_order() {
+        // tool_calls appear in the order they were emitted, NOT grouped by id.
+        let transcript = vec![
+            tc_entry("o-1", "read_file", serde_json::json!({"path": "first.rs"})),
+            tc_entry("o-2", "read_file", serde_json::json!({"path": "second.rs"})),
+            tc_entry("o-3", "read_file", serde_json::json!({"path": "third.rs"})),
+            tr_entry("o-1", false),
+            tr_entry("o-2", false),
+            tr_entry("o-3", false),
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert_eq!(
+            out,
+            "- read_file(first.rs): ok\n\
+             - read_file(second.rs): ok\n\
+             - read_file(third.rs): ok"
+        );
+    }
+
+    #[test]
+    fn key_param_truncates_long_values() {
+        let long = "x".repeat(200);
+        assert_eq!(
+            key_param_for_tool("shell", &serde_json::json!({"command": long})),
+            format!("{}...", "x".repeat(60))
+        );
+        // Multi-byte safe: CJK counts as chars not bytes.
+        let cjk = "文".repeat(80);
+        assert_eq!(
+            key_param_for_tool("write_file", &serde_json::json!({"path": cjk})),
+            format!("{}...", "文".repeat(60))
+        );
+    }
+
+    #[test]
+    fn summarize_under_cap_has_no_omission_marker() {
+        // A handful of short tool calls stays well under 2 KiB.
+        let transcript = vec![
+            tc_entry("c-1", "read_file", serde_json::json!({"path": "a.rs"})),
+            tr_entry("c-1", false),
+            tc_entry("c-2", "grep", serde_json::json!({"pattern": "X"})),
+            tr_entry("c-2", false),
+        ];
+        let out = summarize_worker_tool_actions(&transcript);
+        assert!(!out.contains("actions omitted"), "no marker under cap: {}", out);
+    }
+
+    #[test]
+    fn summarize_head_tail_cap_when_over_budget() {
+        // 60 orphan tool_calls (~50 chars each ≈ 3000 bytes) > 2 KiB cap.
+        // Orphans (no result) keep each line short and deterministic.
+        let transcript: Vec<TranscriptEntry> = (0..60)
+            .map(|i| {
+                tc_entry(
+                    &format!("tc-{}", i),
+                    "write_file",
+                    serde_json::json!({"path": format!("app/src/deeply/nested/file-{}.rs", i)}),
+                )
+            })
+            .collect();
+        let out = summarize_worker_tool_actions(&transcript);
+
+        // Strictly within cap.
+        assert!(
+            out.len() <= PARTIAL_ACTIONS_MAX_BYTES,
+            "output {} > cap {}",
+            out.len(),
+            PARTIAL_ACTIONS_MAX_BYTES
+        );
+        // Marker present with a positive omitted count.
+        assert!(out.contains("actions omitted"), "missing marker: {}", out);
+        // Head (earliest) + tail (latest) actions survive.
+        assert!(out.contains("file-0.rs"), "head dropped: {}", out);
+        assert!(out.contains("file-59.rs"), "tail dropped: {}", out);
+        // A middle action was dropped (proves the cap actually trimmed).
+        assert!(!out.contains("file-30.rs"), "middle not dropped: {}", out);
     }
 
     // ---- truncate_transcript_for_persistence (B6 PR2) ----

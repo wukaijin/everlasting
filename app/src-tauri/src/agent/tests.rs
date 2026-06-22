@@ -5149,6 +5149,141 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
     );
 }
 
+/// RULE-BackSubagent-001 (PR2): when a worker errors AFTER executing
+/// some tool_calls, the parent's `dispatch_subagent` tool_result must
+/// carry a `Worker partial actions:` summary so the parent LLM can do
+/// compensatory repair (see that `read_file` already ran before
+/// deciding what to retry / skip).
+///
+/// Mock script:
+/// - Parent turn 1: dispatch_subagent tool_use.
+/// - Worker turn 1: read_file tool_use → loop executes it, landing a
+///   tool_call + tool_result in the worker's SubagentBufferSink
+///   transcript.
+/// - Worker turn 2: stream errors mid-turn → worker exits Error.
+/// - Parent turn 2: final text.
+///
+/// The worker transcript now has one tool_call + paired tool_result, so
+/// `summarize_worker_tool_actions` produces a non-empty summary and
+/// `format_dispatch_result` appends the `Worker partial actions:`
+/// section to the parent's tool_result content.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary() {
+    use crate::llm::error::LlmError;
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Parent turn 1: dispatch_subagent tool_use.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_dispatch_partial".into(),
+                name: "dispatch_subagent".into(),
+                input: serde_json::json!({
+                    "subagent": "general-purpose",
+                    "task": "read a file, then the upstream will error"
+                }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Worker turn 1: read_file tool_use. The loop executes it,
+        // emitting a tool_call + tool_result into the worker transcript.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_worker_read".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({ "path": "nonexistent-worker-file.rs" }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Worker turn 2: stream errors mid-turn → worker exits Error.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta {
+                text: "analyzing".into(),
+            }),
+            Err(LlmError::Server {
+                status: 503,
+                message: "worker upstream failed".into(),
+            }),
+        ]),
+        // Parent turn 2: final text.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta {
+                text: "ok noting the worker did some work before erroring".into(),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-dispatch-partial".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
+    assert_eq!(
+        mock.call_count(),
+        4,
+        "worker ran a tool turn before erroring"
+    );
+
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 1, "exactly one tool_result (dispatch_subagent)");
+    assert!(results[0].is_error, "errored worker → is_error=true");
+    assert!(
+        results[0].content.contains("[status: error]"),
+        "tool_result must carry status=error prefix, got: {}",
+        results[0].content
+    );
+    // RULE-BackSubagent-001: the parent must see the worker's executed
+    // tool_call in the partial-actions summary section.
+    assert!(
+        results[0].content.contains("Worker partial actions:"),
+        "tool_result must carry partial actions section, got: {}",
+        results[0].content
+    );
+    assert!(
+        results[0].content.contains("read_file("),
+        "summary must list the executed read_file call, got: {}",
+        results[0].content
+    );
+}
+
 /// Worker guard does NOT evict the parent's session_active_request
 /// entry. This is the PR1a `skip_session_active` regression guard
 /// called out in the PR1b task brief.
