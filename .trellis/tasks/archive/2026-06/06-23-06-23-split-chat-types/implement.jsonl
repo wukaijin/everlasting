@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Documents Pinia store conventions, the chat facade structure, and the existing chat.ts ↔ streamController.ts split. Implementation must not break the facade pattern or accidentally import store body from types module."}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "Chat component patterns + chat store API surface. The 14 exported types are the public contract consumed by ChatPanel / MessageItem / ChatInput / SubagentDrawer — split must keep names + shapes identical."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec index — orientation for which other guidelines might apply (e.g. naming conventions, type-safety rules)."}
