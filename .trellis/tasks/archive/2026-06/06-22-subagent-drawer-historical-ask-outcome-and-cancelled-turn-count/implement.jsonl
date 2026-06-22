@@ -1,0 +1,9 @@
+{"file": ".trellis/reviews/DEBT.md", "reason": "RULE-WorkerAsk-001 + RULE-FrontSubagent-004 原文 — AC 与 Fix 方案来源(worker ask historical outcome 缺失 / cancelled 无 turn 数据)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "transcript wire 表 — 加 PermissionAskResolved kind(第 5 变体);dispatch_subagent 契约(PR2 partial_actions 同文件)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "worker ask_path outcome 记录点(select 返回后)+ turn boundary 计数不变量 + 测试表"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "turn_count 列 + update_run_finished 签名 + status CHECK(5 值)"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker ask resolve 四态契约(Session 62 §5b — worker:{runId} oneshot key + AllowAlways 当 AllowOnce)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 幂等模式(add_subagent_runs_column_if_missing + nullable 向后兼容)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer / PermissionAskBody / pairSections 视觉契约(historical badge 加 outcome)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "subagentRuns store 改动前必读(单源模式 + TranscriptEntryKind union 扩展)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "outcome badge 色 token 约束(禁 one-off 新增 --color-*;用现有 --color-tool-*)"}

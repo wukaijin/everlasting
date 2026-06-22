@@ -1,0 +1,9 @@
+{"file": ".trellis/reviews/DEBT.md", "reason": "AC 对照 — RULE-WorkerAsk-001 四态 outcome(allow/deny/timeout/cancel)各显对应 badge + RULE-FrontSubagent-004 cancelled/incomplete 显 turn"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "transcript wire 契约对照 — permission_ask_resolved kind + 测试表 parity(trellis-check 逐行校验)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "不变量对照 — outcome 记录不破坏 RULE-A-016(transcript 是 worker 审计,不写 session_audit_events)+ turn 计数 + 测试表"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "schema 对照 — turn_count nullable + 5-variant status CHECK 不回归"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker ask 四态契约验证 — AllowAlways→allow 统一 + oneshot key 隔离不回归 RULE-A-014"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "migration 幂等 + 向后兼容验证(老行 NULL 降级,重跑 no-op)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "drawer 视觉契约对照 — historical outcome badge + cancelled/incomplete turn 显示"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "色 token 约束验证 — 无 one-off 新 token,复用现有 --color-tool-*"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "store 模式对照 — TranscriptEntryKind union 扩展不破坏单源 streamController"}
