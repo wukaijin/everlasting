@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 61
-- **Last Active**: 2026-06-22
+- **Total Sessions**: 62
+- **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1688 | Active |
+| `journal-2.md` | ~1843 | Active |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 62 | 2026-06-23 | Session 64 — RULE-WorkerAsk-001 + RULE-FrontSubagent-004 subagent drawer historical dimensions | `928e131` | `main` |
 | 61 | 2026-06-22 | Session 61: subagent P3 follow-ups (RULE-FrontSubagent-005 + RULE-BackSubagent-002 option i) | `2eedfe2`, `41303e9` | `main` |
 | 60 | 2026-06-21 | subagent: MAX_TURNS 20→200 + max_turns→Incomplete + worker token fix (RULE-A-017 closed) | `fd7dc79`, `acf2a0a` | `main` |
 | 59 | 2026-06-21 | fix find -exec deny 文案 + shell tool 引导 + spec 计数对齐 | `32201e3`, `7cb72fa` | `main` |
