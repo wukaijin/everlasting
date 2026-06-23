@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "权限层契约 — 拆分须保持 5-tier Tier 顺序不可变、AuditKind serde 落 DB、PermissionAskPayload camelCase wire、对外 pub API 不变(check/record_*/new_permission_store/mode_system_prefix/filter_tools_for_mode)、worker ask composite-key 隔离"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "permissions 在 agent loop 中的被调用点 — 确认 re-export 后 agent/chat_loop 等调用路径不变"}

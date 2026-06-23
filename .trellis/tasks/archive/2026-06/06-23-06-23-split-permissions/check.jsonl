@@ -1,0 +1,1 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验收对照 — 对外 pub API 集合不变、AuditKind serde/DB 落表未破坏、5-tier Tier 顺序零改动、worker ask composite-key 隔离语义保持"}
