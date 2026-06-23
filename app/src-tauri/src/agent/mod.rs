@@ -31,8 +31,11 @@
 //!   `persist_turn_cwd`, `emit_chat_event`, and the
 //!   `cancel_inflight_for_session` helper shared with the
 //!   worktree commands.
-//! - [`tests`] — all `#[cfg(test)] mod tests` blocks previously
-//!   inlined in `lib.rs`.
+//! - test suite (split 2026-06-23 out of a single `tests.rs`):
+//!   [`tests_common`] (shared `TestHarness`/`MockEmitter`/`make_harness`
+//!   helpers) + domain files [`tests_cancellation`] /
+//!   [`tests_envelope`] / [`tests_prompts`] / [`tests_agent_loop`]
+//!   / [`tests_subagent`].
 
 pub mod at_file;
 pub mod behavior_prompt;
@@ -44,7 +47,12 @@ pub mod permissions;
 pub mod provider;
 pub mod subagent;
 pub mod system_prompt;
-pub mod tests;
+pub mod tests_agent_loop;
+pub mod tests_cancellation;
+pub mod tests_common;
+pub mod tests_envelope;
+pub mod tests_prompts;
+pub mod tests_subagent;
 pub mod thinking;
 
 /// Maximum agent loop turns before forced stop (safety limit).
