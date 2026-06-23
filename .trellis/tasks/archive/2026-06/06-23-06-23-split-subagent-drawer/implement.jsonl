@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer 专章:5 段布局、isEmpty gate、Header/ErrorCard 与 sibling 关系,本次 split 必须保持与 spec 一致。"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Drawer 用 Dialog* primitives;reka-ui 2.9.9 没有 Sheet,Header 内的 DialogClose / DialogTitle 是 primitive 直挂,不要做额外包装。"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "status badge 用 --color-tool-* 系列 token + color-mix 配色;Header / ErrorCard scoped CSS 必须走 var() 而非硬编码。"}
