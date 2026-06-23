@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "#![cfg(test)] 模块组织 + 命名约定;6 文件拆分后各 #[cfg(test)] 合规"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent_loop_* 62 测试覆盖契约;拆分后测试数不可丢"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "dispatch_subagent 10 测试的 DB wire 断言;搬运后断言不变"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool_use/tool_result 配对 + dispatch_subagent tool 契约(测试覆盖)"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker permission 测试(is_worker 路径)覆盖不变"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨文件 helper 共享(common.rs pub(crate) + use super)验证清单"}

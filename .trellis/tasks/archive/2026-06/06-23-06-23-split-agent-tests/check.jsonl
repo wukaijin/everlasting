@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证 6 文件 #[cfg(test)] 组织合规 + 测试命名未变"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 62 测试覆盖未丢、cargo test --lib 813 全绿"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "TestHarness _tempdir lifetime invariant 等相关债原样保留"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 dispatch_subagent 测试 DB 断言无回归"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 helper 共享(use super::tests_common)无悬空引用"}
