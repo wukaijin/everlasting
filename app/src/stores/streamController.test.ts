@@ -1349,3 +1349,45 @@ describe("streamController — F5 thinking-phase timing (Thought for X.Xs header
     expect(assistant.thinkingDurationMs).toBe(1_400);
   });
 });
+
+// REGRESSION (2026-06-24, commit ce25783): `getMessages` must be a
+// PURE READ — no observable mutation of `messagesBySession`. It used
+// to do an "LRU touch" (`delete(k); set(k, v)`) on every read to move
+// the accessed session to MRU. But the `messages` /
+// `currentSessionLatencyTurns` computeds call `getMessages` inside
+// their getter, so mutating the reactive Map there recursively
+// re-invalidated the computed → Vue's "Maximum recursive updates
+// exceeded" guard fired on every event and the scheduler dropped the
+// DOM update. Symptom: streaming deltas never rendered until a
+// session switch forced a full array replacement. The touch now lives
+// in the non-computed callers (`ensureLoaded` / `startRequest`).
+// These tests lock that contract so a future revert is caught. See
+// `.trellis/spec/frontend/state-management.md`
+// "RULE: computed getters must not mutate their own tracked deps".
+describe("getMessages — pure read (regression: computed mutate-own-deps recursion)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("does NOT change messagesBySession iteration order (no delete+set touch)", () => {
+    const stream = useStreamControllerStore();
+    stream.putMessages("session-a", [], false);
+    stream.putMessages("session-b", [], false);
+    stream.putMessages("session-c", [], false);
+    const before = [...stream.messagesBySession.keys()];
+    // Read the OLDEST entry repeatedly. The old touch (delete + set)
+    // would move it to the MRU end, changing the iteration order to
+    // ["session-b","session-c","session-a"].
+    stream.getMessages("session-a");
+    stream.getMessages("session-a");
+    const after = [...stream.messagesBySession.keys()];
+    expect(after).toEqual(before);
+  });
+
+  it("returns the stored array reference verbatim (no rebuild)", () => {
+    const stream = useStreamControllerStore();
+    stream.putMessages("session-a", [], false);
+    const stored = stream.messagesBySession.get("session-a");
+    expect(stream.getMessages("session-a")).toBe(stored);
+  });
+});

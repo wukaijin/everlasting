@@ -163,6 +163,54 @@ plain `Set<string>` (no `.value`). The `Set` itself is recomputed on every
 `activeRequests` mutation; the `v-if` binding on the session card flips
 automatically. No manual triggers needed.
 
+### RULE: computed getters must not mutate their own tracked deps
+
+A Vue `computed` re-runs whenever any reactive value it **read** on its
+last run changes. If the getter also **writes** one of those same values,
+it recursively re-invalidates itself. Vue's scheduler catches this after
+100 iterations ("Maximum recursive updates exceeded") and **silently
+drops the update** — or, when each re-render is expensive (large lists /
+big strings), the runaway re-renders OOM the webview and the window
+dies. Both failure modes are brutal to debug because the data is correct;
+only the DOM update is lost.
+
+Two real instances shipped and were fixed on 2026-06-24 (commit
+`ce25783`):
+
+1. **`streamController.getMessages`** did an "LRU touch"
+   (`messagesBySession.delete(k); .set(k, v)`) on every read. The
+   `messages` and `currentSessionLatencyTurns` computeds call it inside
+   their getter → every streaming event re-triggered the recursion →
+   deltas never rendered until a session switch forced a full array
+   replacement.
+   **Fix:** `getMessages` is a pure read; the touch moved to the
+   non-computed callers (`ensureLoaded`, `startRequest`). Locked by a
+   regression test in `streamController.test.ts`
+   ("getMessages — pure read").
+
+2. **`SubagentDrawer.pendingFirstSeenAt`** was a `reactive(new Map())`
+   passed into `pairSections(...)` inside the `toolEntries` computed.
+   `pairSections` does `.set/.delete/.get` on it → same recursion,
+   amplified by a 100 ms `nowTick` + a worker emitting many sections →
+   every tick re-rendered every `DrawerToolCallCard` (including huge
+   tool_result content) until the webview OOM'd.
+   **Fix:** plain `new Map()` — its accumulation state doesn't need
+   Vue tracking (the computed already re-runs on `nowTick`).
+
+**Rule of thumb:** a function called from a `computed` getter must be a
+**pure read** of the reactive state it touches. Any write side-effect
+(LRU touch, caching into a reactive collection, counter bump) belongs in
+a `watch` / `watchEffect` / plain async function — never in the getter.
+For per-key accumulation maps that a pure helper mutates, use a plain
+`Map` (or `shallowRef` / `markRaw`); reserve `reactive(new Map())` for
+maps the template subscribes to directly.
+
+Note: store-level `reactive(new Map())` (`tokenUsageBySession`,
+`liveTranscript`, `runSummaryBySession`, ...) is **fine** — those are
+mutated by event handlers / actions, not from inside a computed getter.
+The bug is specifically *mutating a reactive Map from within a computed
+that reads it*.
+
 ### Worktree transition invalidation (added 2026-06-08, step 4 follow-up)
 
 After any worktree state change (`attachWorktree` / `detachWorktree` /
