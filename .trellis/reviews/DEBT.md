@@ -54,20 +54,9 @@
 
 > **本文件仅记录当前 open 债项**。已 closed 条目不在此保留;通过 git log 追溯。
 
-## P1 — 重要(正确性 + 资源) [1 items]
+## P1 — 重要(正确性 + 资源) [0 items]
 
-### RULE-D-001 — API key 明文存储
-
-- **Level**: P1
-- **Subsystem**: Provider
-- **File**: `app/src-tauri/src/db/migrations.rs:240` + `commands/providers.rs:38-42` + `db/providers.rs:62-82`
-- **Description**: `api_key TEXT NOT NULL DEFAULT ''` 原样写读返回 IPC;`app_data_dir` 权限 0700 非绝对边界
-- **Impact**: DB 文件泄露=全部 provider key 泄露
-- **Fix**: keyring crate(macOS Keychain / Windows Credential Vault / Linux Secret Service)或应用层对称加密
-- **Owner**: carlos
-- **Related Task**: 待开 `06-14-p1-api-key-encryption`
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
-
+_无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 
 ## P3 — 轻微(文档/一致性) [8 items]
 
@@ -176,10 +165,10 @@
 | Level | Count | 说明 |
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
-| P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
+| P1 | 0 | 全部 closed(详见 git log) |
 | P2 | 0 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **9** | 当前 open items |
+| **Total** | **8** | 当前 open items |
 
 ---
 
