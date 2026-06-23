@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 3 文件拆分遵循 facade 模式 + chat.types.ts 先例:types 为纯公开契约,store 是 UI-facing facade。检查无 store ↔ runAccumulator 循环 import。"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证抽离的 types 未偏离后端 wire 契约 —— SubagentStatus 5 variant(含 incomplete)/payload_json snake_case/ChatEvent inner kind 等 drift trap 逐项核对。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层依赖验证清单 —— 确认 store → runAccumulator → types 单向依赖无循环;parseTranscriptJson 归属 runAccumulator 的决策正确打破了潜在 store↔runAccumulator 循环。"}
