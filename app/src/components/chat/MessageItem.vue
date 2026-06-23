@@ -35,25 +35,18 @@
 //   against mid-stream edits racing the LLM).
 
 import { computed, ref, watch, onUnmounted } from "vue";
-import {
-  TooltipProvider,
-  TooltipRoot,
-  TooltipTrigger,
-  TooltipPortal,
-  TooltipContent,
-  TooltipArrow,
-} from "reka-ui";
 import type { ChatMessage } from "../../stores/chat.types";
 import { useChatStore } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { getToolResult } from "../../utils/messageFormat";
 import { createDebouncedRenderer } from "../../utils/markdown";
-import { abbreviateDuration } from "../../utils/duration";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
+import MessageItemEdit from "./MessageItemEdit.vue";
+import MessageItemFooter from "./MessageItemFooter.vue";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -131,65 +124,75 @@ const isStreaming = computed<boolean>(() => {
 // row can be in edit mode at a time (opening a second one closes
 // the first). The `isEditingThisMessage` computed derives the
 // boolean for the current row.
+//
+// The actual edit UI (textarea + Save / Cancel / inline error)
+// lives in `<MessageItemEdit>` (2026-06-23 split). This parent
+// keeps three roles:
+//   1. `isEditingThisMessage` computed: read-only check used by
+//      the v-if gate + the v-bind into the child.
+//   2. `editSaving` ref: tracks the in-flight `editMessage` IPC.
+//      Passed to the child as the `saving` prop so the Save
+//      button can flip to "保存中..." and disable Cancel.
+//   3. Three handler functions (`handleSave` / `handleCancel` /
+//      `handleResend`): own the store interactions
+//      (`chatStore.editMessage` / `chatStore.resendMessage` /
+//      `chatStore.editingMessageSeq = null`) and surface
+//      toasts on failure. The child only emits intents.
 const isEditingThisMessage = computed<boolean>(
   () =>
     chatStore.editingMessageSeq !== null &&
     chatStore.editingMessageSeq === props.message.seq,
 );
 
-// Local textarea buffer. The ref starts with the message's
-// current `content` on edit-mode entry and is reset on cancel
-// / save-success. We deliberately do NOT bind `v-model` directly
-// to `props.message.content` because (a) the prop is read-only
-// from the parent's perspective (we don't want to mutate the
-// store's reactive ChatMessage from the textarea handler), and
-// (b) the controller's `done` / `error` / `delta` handlers
-// also mutate the in-memory message's `content` — a live
-// v-model would race the streaming text append. The local
-// ref + explicit commit on Save sidesteps both.
-const editBuffer = ref<string>(props.message.content);
-const isSaving = ref<boolean>(false);
+/** True while the `editMessage` IPC is in flight. Disables
+ *  the child editor's Save / Cancel buttons and flips the
+ *  Save label to "保存中...". Reset to false on success
+ *  (edit mode closes) and on failure (caught in the IPC
+ *  promise, see `handleSave`). */
+const editSaving = ref<boolean>(false);
+
+/** Inline error message shown above the Save / Cancel row
+ *  by `<MessageItemEdit>`. Set when the `editMessage` IPC
+ *  rejects; cleared on the next edit-mode entry (the
+ *  parent flips it to null when `isEditingThisMessage`
+ *  flips to true). */
 const editError = ref<string | null>(null);
 
-// Watch the seq → content transition: when the user opens
-// edit mode for THIS message, seed the buffer with the current
-// `content`. We watch the message's `content` (not just the
-// editing flag) so a streaming turn that ends mid-edit still
-// re-seeds the buffer with the final content (otherwise the
-// textarea would show stale text from before the stream
-// completed). The same watcher also resets `editError` so a
-// fresh edit session doesn't carry over the previous error.
 watch(
-  () => [chatStore.editingMessageSeq, props.message.content] as const,
-  ([newSeq, newContent]) => {
-    if (newSeq === props.message.seq) {
-      editBuffer.value = newContent;
+  () => isEditingThisMessage.value,
+  (now) => {
+    if (now) {
+      // Fresh edit session: clear any stale error from
+      // the previous attempt. The save-in-flight flag
+      // can't be stale (a previous save would have closed
+      // edit mode on success or routed through the catch
+      // on failure).
       editError.value = null;
     }
   },
   { immediate: true },
 );
 
-// `MessageActionsMenu`'s `edit` emit handler. Routes to the
-// chat store so the editing-message-seq flips to this row's
-// seq; the local `isEditingThisMessage` then re-evaluates and
-// the textarea renders.
+/** `MessageActionsMenu`'s `edit` emit handler. Routes to the
+ *  chat store so the editing-message-seq flips to this row's
+ *  seq; the local `isEditingThisMessage` then re-evaluates and
+ *  the textarea renders. */
 function onEdit(messageSeq: number) {
   if (props.message.role !== "user") return;
   if (isStreaming.value) return;
   chatStore.editingMessageSeq = messageSeq;
 }
 
-// D3 PR3 (2026-06-17): `MessageActionsMenu`'s `resend` emit
-// handler. Re-fires the user message through the chat store,
-// which (1) cancels any in-flight stream, (2) re-fires the
-// `chat` IPC with the `resendSeq` flag, (3) the backend writes
-// a `resend_message` audit row at the user-message persist
-// site. We pass `props.message.content` as the user prompt —
-// the backend treats the resend as identical to a normal
-// send (same content, same history). On error, the
-// `chatStore.resendMessage` promise rejects and we surface a
-// toast (same pattern as `saveEdit`'s catch path).
+/** D3 PR3 (2026-06-17): `MessageActionsMenu`'s `resend` emit
+ *  handler. Re-fires the user message through the chat store,
+ *  which (1) cancels any in-flight stream, (2) re-fires the
+ *  `chat` IPC with the `resendSeq` flag, (3) the backend writes
+ *  a `resend_message` audit row at the user-message persist
+ *  site. We pass `props.message.content` as the user prompt —
+ *  the backend treats the resend as identical to a normal
+ *  send (same content, same history). On error, the
+ *  `chatStore.resendMessage` promise rejects and we surface a
+ *  toast (same pattern as `handleSave`'s catch path). */
 async function onResend(messageSeq: number) {
   if (props.message.role !== "user") return;
   if (isStreaming.value) return;
@@ -208,45 +211,35 @@ async function onResend(messageSeq: number) {
   }
 }
 
-function cancelEdit() {
-  chatStore.editingMessageSeq = null;
-  editBuffer.value = props.message.content;
-  editError.value = null;
-}
-
-async function saveEdit() {
+/** `<MessageItemEdit>`'s `save` emit handler. Called with
+ *  the trimmed textarea content. Cancels any in-flight
+ *  stream, fires the backend `edit_user_message` IPC, then
+ *  refreshes the in-memory buffer. On success, closes
+ *  edit mode; on failure, surfaces an inline error + a
+ *  toast and keeps edit mode active for retry. */
+async function handleSave(trimmed: string) {
   if (!props.message.seq) {
     editError.value = "消息缺少 seq,无法编辑";
     return;
   }
-  if (isSaving.value) return;
-  const trimmed = editBuffer.value.trim();
-  if (trimmed.length === 0) {
-    editError.value = "内容不能为空";
+  if (editSaving.value) return;
+  // The session id we send must be the one this message
+  // belongs to. The store's `currentSessionId` is the user's
+  // *current* session — for a rehydrated message this is
+  // always the same value (MessageList only renders messages
+  // for the active session), so this is correct. Defensive:
+  // if the user somehow triggers edit on a message from a
+  // different session (shouldn't happen, the menu is per-
+  // message in the active list), the IPC would error with
+  // "session not found" and the catch path surfaces it.
+  const sid = chatStore.currentSessionId;
+  if (!sid) {
+    editError.value = "editMessage: no current session";
     return;
   }
-  if (trimmed === props.message.content) {
-    // No-op: same content as before. Close the edit mode so
-    // the user doesn't see a textarea that's stuck open.
-    cancelEdit();
-    return;
-  }
-  isSaving.value = true;
+  editSaving.value = true;
   editError.value = null;
   try {
-    // The session id we send must be the one this message
-    // belongs to. The store's `currentSessionId` is the user's
-    // *current* session — for a rehydrated message this is
-    // always the same value (MessageList only renders messages
-    // for the active session), so this is correct. Defensive:
-    // if the user somehow triggers edit on a message from a
-    // different session (shouldn't happen, the menu is per-
-    // message in the active list), the IPC would error with
-    // "session not found" and the catch path surfaces it.
-    const sid = chatStore.currentSessionId;
-    if (!sid) {
-      throw new Error("editMessage: no current session");
-    }
     await chatStore.editMessage(sid, props.message.seq, trimmed);
     // Refresh succeeded. The controller's `refresh` has
     // already replaced the in-memory buffer; we close the
@@ -266,30 +259,71 @@ async function saveEdit() {
       "error",
     );
   } finally {
-    isSaving.value = false;
+    editSaving.value = false;
+  }
+}
+
+/** `<MessageItemEdit>`'s `cancel` emit handler. Closes
+ *  edit mode without saving. Also covers the child-side
+ *  "same-content no-op" path (the child emits `cancel`
+ *  when the trimmed buffer equals `props.message.content`,
+ *  so the user doesn't see a textarea stuck open). */
+function handleCancel() {
+  chatStore.editingMessageSeq = null;
+  editError.value = null;
+}
+
+/** `<MessageItemEdit>`'s `resend` emit handler. Re-fires
+ *  the user prompt through the chat store. The child
+ *  currently does not render a Resend button (the user
+ *  has to go through the `<MessageActionsMenu>` to get
+ *  there), but the prop+emit is exposed for any future
+ *  flow that wants to surface Resend from the editor. */
+async function handleResend() {
+  if (props.message.role !== "user") return;
+  if (isStreaming.value) return;
+  const sid = chatStore.currentSessionId;
+  if (!sid) {
+    projectsStore.showToast("重发失败: 无当前 session", "error");
+    return;
+  }
+  if (!props.message.seq) {
+    projectsStore.showToast("重发失败: 消息缺少 seq", "error");
+    return;
+  }
+  try {
+    await chatStore.resendMessage(sid, props.message.seq, props.message.content);
+  } catch (e) {
+    projectsStore.showToast(
+      `重发失败: ${String(e)}`,
+      "error",
+    );
   }
 }
 
 // --- Markdown pipeline ----------------------------------------------------
-// `displayContent` is a thin pass-through to `message.content`. The
-// leading-whitespace trim that PR7 put here now lives inside
-// `renderMarkdown()` (see `app/src/utils/markdown.ts`) so the rendering
-// layer owns its own input policy. We keep the named computed because
-// (a) the watch below needs a stable dependency reference, and (b) it
-// documents intent at the call site ("this is the text we render").
-// `editingThisMessage` is read-only here — the markdown pipeline
-// pauses while the textarea is open (we don't want a streaming
-// delta to clobber the user's edits). The watcher on
-// `displayContent` re-schedules on cancel / save so the final
-// bubble renders the new content.
-const displayContent = computed<string>(() =>
-  isEditingThisMessage.value ? "" : props.message.content,
-);
-
+// `createDebouncedRenderer` collapses the SSE delta stream into
+// one render per 50ms quiet window; the `flush()` on stream end
+// renders the final frame immediately so the user doesn't see
+// a 50ms gap between the last delta and the rendered terminal
+// state. The watcher drives the pipeline off `message.content`.
+//
+// Note: there is no `displayContent` gate here. The pre-split
+// `displayContent` computed returned `""` while the row was in
+// edit mode, on the theory that a streaming delta could clobber
+// the textarea via the markdown render path. The bubble
+// template's `v-if="showBubble"` already removes the
+// `v-html="rendered"` element when the row is in edit mode
+// (the `<MessageItemEdit>` block is the v-if alternative), so
+// the markdown output has nowhere to render — the gate is
+// redundant. The watcher watches the raw content directly and
+// the only side-effect of a streaming delta mid-edit is one
+// wasted `schedule()` call (debounced to 50ms, no-op because
+// the bubble is unmounted).
 const { rendered, schedule, flush, dispose } = createDebouncedRenderer(50);
 
 watch(
-  displayContent,
+  () => props.message.content,
   (next) => {
     schedule(next);
   },
@@ -309,25 +343,6 @@ watch(
 onUnmounted(() => {
   dispose();
 });
-
-// --- F5 latency footer -----------------------------------------------------
-// Renders the bottom-right of the assistant bubble with a 1-decimal
-// abbreviation of `totalMs` (e.g. "3.2s"). Hover surfaces the three-
-// line breakdown (TTFB / 生成 / 端到端). The trigger is the chip
-// itself; the tooltip content is a small block with the three rows.
-// The display is hidden for:
-//   - user-role messages (only assistant turns have a latency)
-//   - messages without a `latency` object (pre-F5 rows; UI shows
-//     "—" in place of the chip)
-//   - messages mid-stream (`streaming` true; the chip is in flux
-//     and the user is reading the bubble, not the footer)
-const showLatency = computed<boolean>(
-  () =>
-    props.message.role === "assistant" &&
-    !props.message.streaming &&
-    !!props.message.latency &&
-    typeof props.message.latency.totalMs === "number",
-);
 
 // --- D3 PR3 (2026-06-17): "(edited)" label ----------------------------------
 // When the row's metadata carries `edited_at` (written by the
@@ -359,34 +374,6 @@ const showEditedLabel = computed<boolean>(
     !props.message.streaming &&
     !isEditingThisMessage.value,
 );
-
-const latencyTotalLabel = computed<string>(() => {
-  const t = props.message.latency?.totalMs;
-  if (typeof t !== "number") return "—";
-  return abbreviateDuration(t);
-});
-
-// The three lines shown in the hover tooltip. Each is omitted (and
-// the row hidden) when the value is undefined — the cancel / error
-// path leaves ttfbMs / genMs null while totalMs is set, and the UI
-// shows only the available rows.
-const latencyRows = computed<
-  Array<{ label: string; value: string }>
->(() => {
-  const lat = props.message.latency;
-  if (!lat) return [];
-  const rows: Array<{ label: string; value: string }> = [];
-  if (typeof lat.ttfbMs === "number") {
-    rows.push({ label: "TTFB", value: abbreviateDuration(lat.ttfbMs) });
-  }
-  if (typeof lat.genMs === "number") {
-    rows.push({ label: "生成", value: abbreviateDuration(lat.genMs) });
-  }
-  if (typeof lat.totalMs === "number") {
-    rows.push({ label: "端到端", value: abbreviateDuration(lat.totalMs) });
-  }
-  return rows;
-});
 </script>
 
 <template>
@@ -459,63 +446,36 @@ const latencyRows = computed<
     </div>
 
     <!--
-      D3 PR2: inline edit mode for user messages. The bubble
-      (markdown render) is hidden and replaced with a <textarea>
-      + Save / Cancel buttons. The textarea is autosize-shaped
-      (2-20 rows, follows width). Save fires the chat store's
-      `editMessage`, which cancels any in-flight stream, calls
-      the backend `edit_user_message` IPC, then refreshes the
-      in-memory buffer. Failure keeps the edit mode active and
-      shows an inline error + toast.
+      D3 PR2 (2026-06-17): inline edit mode for user messages.
+      2026-06-23 split: the editor UI lives in
+      `<MessageItemEdit>` — this parent only handles the
+      v-if gate, the store-orchestrating handlers
+      (`handleSave` / `handleCancel` / `handleResend`),
+      and the IPC state machine (`editSaving` /
+      `editError`). The child is a pure presentation layer
+      that emits `save(trimmed)` / `cancel` / `resend`;
+      no Pinia store import.
 
-      The edit-mode branch is mutually exclusive with the
-      streaming branch (the menu trigger is disabled when
-      streaming, so the user can't open edit during a stream),
-      but the v-if checks both `isEditingThisMessage` AND the
-      absence of streaming as a defensive guard.
+      The edit-mode branch is mutually exclusive with
+      the streaming branch (the menu trigger is disabled
+      when streaming, so the user can't open edit during
+      a stream), but the v-if checks both
+      `isEditingThisMessage` AND the absence of streaming
+      as a defensive guard.
     -->
-    <div
+    <MessageItemEdit
       v-if="isEditingThisMessage && !isStreaming && message.role === 'user'"
-      class="msg__editor"
-    >
-      <textarea
-        v-model="editBuffer"
-        class="msg__editor-textarea"
-        rows="3"
-        :aria-label="`编辑消息 seq ${message.seq}`"
-        :disabled="isSaving"
-        data-testid="msg-editor-textarea"
-      />
-      <div
-        v-if="editError"
-        class="msg__editor-error"
-        role="alert"
-        data-testid="msg-editor-error"
-      >
-        <Icon name="warn" :size="12" icon-class="msg__editor-error-icon" />
-        {{ editError }}
-      </div>
-      <div class="msg__editor-actions">
-        <button
-          type="button"
-          class="msg__editor-btn msg__editor-btn--cancel"
-          :disabled="isSaving"
-          data-testid="msg-editor-cancel"
-          @click="cancelEdit"
-        >
-          取消
-        </button>
-        <button
-          type="button"
-          class="msg__editor-btn msg__editor-btn--save"
-          :disabled="isSaving || editBuffer.trim().length === 0"
-          data-testid="msg-editor-save"
-          @click="saveEdit"
-        >
-          {{ isSaving ? "保存中..." : "保存" }}
-        </button>
-      </div>
-    </div>
+      :seq="message.seq ?? 0"
+      :content="message.content"
+      :is-streaming="isStreaming"
+      :current-session-id="chatStore.currentSessionId"
+      :is-editing-this-message="isEditingThisMessage"
+      :saving="editSaving"
+      :error-message="editError"
+      @save="handleSave"
+      @cancel="handleCancel"
+      @resend="handleResend"
+    />
 
     <div v-else-if="showBubble" class="msg__bubble">
       <span
@@ -572,45 +532,25 @@ const latencyRows = computed<
       :injections="message.injections"
     />
 
-    <div v-if="message.error" class="msg__error">
-      <Icon name="warn" :size="12" icon-class="msg__error-icon" />
-      {{ message.error.message }}
-    </div>
-
     <!--
-      F5 (LLM Latency Tracking): per-message latency chip. Renders
-      the bottom-right of the assistant bubble (the bubble is
-      a `max-width: 75%` flex column; the chip is right-aligned
-      via `align-self: flex-end`). The chip shows the total
-      time in seconds (one decimal) and a hover tooltip breaks
-      it down into TTFB / 生成 / 端到端. Pre-F5 / cancel-mid-TTFB
-      / no-delta-arrived rows render "—" (handled by the
-      `latencyTotalLabel` computed and the conditional
-      `v-if="latencyRows.length"`).
+      2026-06-23 split: error row + F5 latency chip extracted
+      into `<MessageItemFooter>`. Per the task's ADR-2
+      decision, the (edited) label stays in the parent
+      (inside the bubble div) — it is visually distinct
+      from the error / latency chips that hang below the
+      bubble, and it shares a flex column with the bubble
+      text. The footer only handles error + latency.
+
+      The parent passes the raw `error` / `latency` from
+      the ChatMessage and the streaming flag (the footer
+      reads them through the same v-if gate as before).
     -->
-    <TooltipProvider v-if="showLatency">
-      <TooltipRoot :delay-duration="150">
-        <TooltipTrigger as-child>
-          <span class="msg__latency">{{ latencyTotalLabel }}</span>
-        </TooltipTrigger>
-        <TooltipPortal>
-          <TooltipContent
-            class="msg__latency-tooltip"
-            :side-offset="4"
-          >
-            <div
-              v-for="row in latencyRows"
-              :key="row.label"
-              class="msg__latency-tooltip-row"
-            >
-              <span>{{ row.label }}</span>
-              <span>{{ row.value }}</span>
-            </div>
-            <TooltipArrow class="msg__latency-tooltip-arrow" :size="6" />
-          </TooltipContent>
-        </TooltipPortal>
-      </TooltipRoot>
-    </TooltipProvider>
+    <MessageItemFooter
+      :role="message.role"
+      :streaming="!!message.streaming"
+      :latency="message.latency"
+      :error="message.error"
+    />
   </li>
 </template>
 
@@ -757,210 +697,6 @@ const latencyRows = computed<
   color: var(--color-text-muted);
   font-style: italic;
   user-select: none;
-}
-
-/* D3 PR2: inline edit mode (user messages only). The
-   bubble is replaced with a <textarea> + Save / Cancel.
-   The textarea visually echoes the bubble's padding /
-   radius so the edit-mode "row" feels like an in-place
-   mutation of the bubble, not a totally different UI. */
-.msg__editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 60%, var(--color-bg-border));
-  background: var(--color-bg-elevated);
-  /* `max-width: 100%` so the editor never overflows the
-     parent <li> (which is itself `max-width: 75%`); the
-     75% cap comes from the .msg rule. */
-  max-width: 100%;
-  margin-top: 4px;
-  margin-bottom: 4px;
-}
-
-.msg__editor-textarea {
-  width: 100%;
-  min-height: 60px;
-  max-height: 320px;
-  padding: 6px 8px;
-  background: var(--color-bg);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-  transition: border-color 0.12s, box-shadow 0.12s;
-  box-sizing: border-box;
-}
-
-.msg__editor-textarea:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
-}
-
-.msg__editor-textarea:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.msg__editor-error {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--color-tool-error);
-  background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-  border-radius: 4px;
-  padding: 4px 8px;
-}
-
-.msg__editor-error-icon {
-  flex-shrink: 0;
-}
-
-.msg__editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.msg__editor-btn {
-  padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  font-family: inherit;
-  border: 1px solid var(--color-bg-border);
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
-}
-
-.msg__editor-btn:hover:not(:disabled) {
-  background: var(--color-bg-surface);
-  border-color: var(--color-text-muted);
-}
-
-.msg__editor-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.msg__editor-btn--save {
-  background: var(--color-accent);
-  color: #ffffff;
-  border-color: var(--color-accent);
-}
-
-.msg__editor-btn--save:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 85%, #000);
-  border-color: color-mix(in srgb, var(--color-accent) 85%, #000);
-}
-
-.msg__editor-btn--save:disabled {
-  background: color-mix(in srgb, var(--color-accent) 50%, transparent);
-  border-color: transparent;
-  color: #ffffff;
-}
-
-.msg__error {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 0 14px;
-  font-size: 12px;
-  color: var(--color-tool-error);
-}
-
-.msg__error-icon {
-  flex-shrink: 0;
-}
-
-/* F5 (LLM Latency Tracking): per-message latency chip. Sits
-   at the bottom-right of the assistant bubble. The chip
-   itself is the TooltipTrigger; the tooltip content is the
-   three-row breakdown (TTFB / 生成 / 端到端).
-
-   Visual decisions:
-   - 11px mono font to match the existing density (token
-     usage chip in ChatInput uses the same).
-   - 0.5px muted color so it doesn't fight the bubble for
-     attention — the user sees it on glance but isn't
-     pulled in.
-   - Right-aligned via `align-self: flex-end` (the parent
-     `li.msg` is `display: flex; flex-direction: column`,
-     so the chip is the rightmost element of the bubble
-     column). */
-.msg__latency {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-end;
-  margin-top: 4px;
-  padding: 0 6px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  color: var(--color-text-muted);
-  cursor: help;
-  border-radius: 4px;
-  user-select: none;
-}
-
-.msg__latency:hover {
-  color: var(--color-text-secondary);
-}
-
-/* Tooltip content (reka-ui `TooltipContent` portal to body
-   — must use :deep() per `.trellis/spec/frontend/reka-ui-usage.md`
-   gotcha). The popover floats above the chip (default
-   side is "top"). 11px mono, single-column row layout. */
-:deep(.msg__latency-tooltip) {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  padding: 6px 10px;
-  min-width: 140px;
-  z-index: 3000;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--color-text-primary);
-  animation: msg-latency-tooltip-enter 150ms ease-out;
-}
-
-:deep(.msg__latency-tooltip-row) {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 1px 0;
-}
-
-:deep(.msg__latency-tooltip-row span:first-child) {
-  color: var(--color-text-secondary);
-}
-
-:deep(.msg__latency-tooltip-arrow) {
-  fill: var(--color-bg-surface);
-  stroke: var(--color-bg-border);
-}
-
-@keyframes msg-latency-tooltip-enter {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* Markdown content (v-html). The HTML lives in a child tree without
