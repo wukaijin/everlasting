@@ -4,7 +4,9 @@
 //! - `ContentBlock` for structured message content (text / tool_use / tool_result)
 //! - `MessageContent` with custom Serde to accept both plain string and block array
 //! - `ToolDef` for declaring tools in the request
-//! - `ChatEvent` gains `ToolCall` and `ToolResult` variants
+//! - `ChatEvent` gains the `ToolCall` variant (tool results are pushed on the
+//!   independent `tool:result` IPC channel via `ToolResultPayload`, not as
+//!   `ChatEvent` variants — see `state::ChatEventSink::emit_tool_result`)
 //!
 //! Step 6 (this task) adds extended thinking support:
 //! - `ContentBlock::Thinking` and `ContentBlock::RedactedThinking` (Anthropic
@@ -352,14 +354,6 @@ pub enum ChatEvent {
         id: String,
         name: String,
         input: serde_json::Value,
-    },
-    /// Tool execution completed. Emitted on the independent `tool:result`
-    /// event channel. Not constructed in SSE parsing — only in the agent loop.
-    #[allow(dead_code)]
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        is_error: bool,
     },
     /// Stream finished cleanly. Includes Anthropic `stop_reason` if present.
     /// `usage` is the A4 token-usage payload (normalized across protocols

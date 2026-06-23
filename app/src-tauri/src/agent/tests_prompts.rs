@@ -284,6 +284,124 @@ fn build_system_prompt_non_git_project() {
 }
 
 // ---------------------------------------------------------------------------
+// P2 RULE-A-005 (2026-06-24): head_sha refresh after commit
+// ---------------------------------------------------------------------------
+//
+// Pre-fix: `lookup_head_sha` was a one-shot at chat_loop.rs:492
+// (pre-fix line), so the 50-turn loop sent a stale SHA on turn 2+
+// even after a tool call committed. Post-fix: `head_sha` is refreshed
+// at the start of every turn (see chat_loop.rs:732-744 in
+// `for turn in 1..=turn_limit`). This test pins the contract
+// `lookup_head_sha` + `build_system_prompt` together so the
+// refresh-pipeline is exercised end-to-end:
+//
+//   1. Spin up a temp git repo with commit A → record short SHA-1.
+//   2. Commit B on top → record short SHA-2.
+//   3. Assert the post-fix refresh path produces SHA-2 in a freshly
+//      computed `build_system_prompt` output (i.e. a turn 4 prompt
+//      built AFTER the second commit sees SHA-2, not SHA-1).
+//
+// We don't run `run_chat_loop` here — the `lookup_head_sha` ↔
+// `build_system_prompt` glue is the testable surface, and the
+// `for turn` loop in `run_chat_loop` is the (uncovered-by-this-test)
+// caller. The integration-level rule is covered by
+// `tests_subagent::system_prompt_override_*` (which exercises the
+// `None` path that drives the per-turn refresh).
+#[test]
+fn head_sha_refresh_after_commit_updates_system_prompt() {
+    use crate::agent::system_prompt::{build_system_prompt, lookup_head_sha};
+    use git2::Repository;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = Repository::init(tmp.path()).expect("init repo");
+
+    // Commit A: write a file + commit on `main`.
+    let sig = git2::Signature::now("test", "test@example.com").unwrap();
+    {
+        let mut index = repo.index().expect("index");
+        std::fs::write(tmp.path().join("README.md"), "first commit\n").unwrap();
+        index
+            .add_path(std::path::Path::new("README.md"))
+            .expect("add README");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("find tree");
+        // First commit has no parents.
+        let _ = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "initial commit",
+                &tree,
+                &[],
+            )
+            .expect("commit A");
+    }
+    let sha_1 = lookup_head_sha(tmp.path());
+    assert_ne!(
+        sha_1, "not a git repo",
+        "first commit must produce a real SHA, not the placeholder"
+    );
+    assert_ne!(
+        sha_1, "no commits yet",
+        "first commit must produce a real SHA, not the placeholder"
+    );
+
+    // Commit B: amend the file + commit on top.
+    {
+        let head = repo.head().expect("head").peel_to_commit().expect("peel");
+        let mut index = repo.index().expect("index");
+        std::fs::write(tmp.path().join("README.md"), "second commit\n").unwrap();
+        index
+            .add_path(std::path::Path::new("README.md"))
+            .expect("add README");
+        index.write().expect("write index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("find tree");
+        let _ = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "second commit",
+                &tree,
+                &[&head],
+            )
+            .expect("commit B");
+    }
+    let sha_2 = lookup_head_sha(tmp.path());
+    assert_ne!(
+        sha_1, sha_2,
+        "second commit must produce a different SHA; otherwise the refresh is a no-op"
+    );
+
+    // Build a system_prompt the way chat_loop.rs would AFTER the
+    // per-turn refresh. It must reflect SHA-2 (the new HEAD), not
+    // SHA-1 (the pre-refresh stale value).
+    let session = make_session_row(
+        "rule-a005",
+        db::WorktreeState::Active,
+        Some(tmp.path().to_str().unwrap()),
+    );
+    let mut project = make_project_row(true);
+    project.path = tmp.path().to_string_lossy().to_string();
+    let prompt_after_refresh =
+        build_system_prompt(&session, &project, tmp.path(), &sha_2);
+    assert!(
+        prompt_after_refresh.contains(&format!("HEAD {}", sha_2)),
+        "post-refresh system_prompt must carry SHA-2 ({}) — the per-turn \
+         refresh path is what makes the LLM see the latest commit",
+        sha_2
+    );
+    assert!(
+        !prompt_after_refresh.contains(&format!("HEAD {}", sha_1)),
+        "post-refresh system_prompt must NOT carry the stale SHA-1 ({})",
+        sha_1
+    );
+}
+
+// ---------------------------------------------------------------------------
 // build_synthetic_tool_result_message (BUG FIX: 2013 tool_use orphan)
 // ---------------------------------------------------------------------------
 

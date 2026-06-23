@@ -486,37 +486,45 @@ pub async fn run_chat_loop(
         );
     }
 
-    // System prompt is required even in tests; we build a minimal
-    // one with empty session metadata. The real builder requires
-    // a ProjectRow + SessionRow; tests can use the real ones.
-    let head_sha = crate::agent::system_prompt::lookup_head_sha(&worktree_path);
-    let base_prompt = crate::agent::system_prompt::build_system_prompt(
-        &loaded_session.session,
-        &project,
-        &worktree_path,
-        &head_sha,
-    );
-    // 2026-06-21 fix (B6 review defect A): the worker path
-    // passes `Some(assemble_subagent_prompt(def, &task))` as the
-    // 23rd `system_prompt_override` parameter; when set, the
-    // worker's `SubagentDef.system_prompt` fully replaces the
-    // parent's `mode_prefix + base_prompt` layers (Claude Code
-    // convention — workers do NOT inherit the main system
-    // prompt). The production + 35 test path pass `None`, so
-    // the existing `assemble_system_prompt(mode_prefix,
-    // base_prompt)` call below runs unchanged. The override
-    // branch short-circuits here so the parent's mode_prefix
-    // (which would tell the worker "you can write" in Edit
-    // mode — contradictorily denied at Tier 4 by `is_worker`)
-    // never reaches the worker.
-    let system_prompt = match system_prompt_override {
-        Some(p) => p,
-        None => crate::agent::system_prompt::assemble_system_prompt(
-            mode_prefix,
-            &base_prompt,
-        ),
+    // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
+    // `head_sha` is now MUTABLE and refreshed at the start of every
+    // turn (before `provider.send`) so the LLM sees the current HEAD
+    // after a mid-session commit. Pre-fix: `head_sha` was a one-shot
+    // `let` at chat_loop.rs:492 — the 50-turn loop sent a stale SHA
+    // for every turn after turn 1, drifting the LLM's mental model of
+    // the repo state. The cost is one extra `lookup_head_sha` (libgit2
+    // `Repository::open` + `head().peel_to_commit()`) per turn —
+    // negligible relative to LLM network latency.
+    //
+    // Cache-correctness (RULE-A-005 invariant, verified in
+    // prd §6.1): the head_sha field lives inside `build_system_prompt`
+    // output, which is fed into the provider's **system** role string.
+    // The 4 instruction files (User/Project × CLAUDE.md/AGENTS.md)
+    // are injected as a SEPARATE user-role synthetic message via
+    // `memory::loader::build_instructions_blocks` and carry their own
+    // `cache_control: Ephemeral` breakpoint — independent of the
+    // system role. So a per-turn system-prompt mutation does NOT
+    // bust the memory cache. The 4 instruction blocks stay cache-hot
+    // across the 50-turn loop.
+    let mut head_sha = crate::agent::system_prompt::lookup_head_sha(&worktree_path);
+    // The 2026-06-21 B6 review defect A fix (the worker's
+    // `SubagentDef.system_prompt` override via the 23rd parameter)
+    // short-circuits below — when `Some(p)`, the worker uses `p`
+    // directly and never calls `assemble_system_prompt` or
+    // `build_system_prompt`. The production + 35 test path passes
+    // `None`, so this branch runs on every parent turn.
+    let mut system_prompt = match system_prompt_override {
+        Some(ref p) => p.clone(),
+        None => {
+            let base_prompt = crate::agent::system_prompt::build_system_prompt(
+                &loaded_session.session,
+                &project,
+                &worktree_path,
+                &head_sha,
+            );
+            crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt)
+        }
     };
-    let _ = &base_prompt;
 
     // Persist the most recent user message before the agent loop runs.
     //
@@ -698,6 +706,42 @@ pub async fn run_chat_loop(
 
     let turn_limit = max_turns.unwrap_or(MAX_TURNS);
     for turn in 1..=turn_limit {
+        // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
+        // refresh `head_sha` + rebuild `system_prompt` at the start of
+        // EVERY turn. The LLM only consumes `system_prompt` once per
+        // turn (at `provider.send`), so refreshing at turn entry is
+        // equivalent to "after every tool execute" — the next
+        // `provider.send` (this turn, or the next turn's) sees the
+        // current HEAD. Pre-fix: `head_sha` was a one-shot `let` at
+        // chat_loop.rs:492 (pre-fix line number), so the LLM saw a
+        // stale SHA on turn 2+ even after a tool call committed. The
+        // `system_prompt_override` worker path is unchanged: when the
+        // 23rd param is `Some(p)`, the worker's
+        // `SubagentDef.system_prompt` is the canonical prompt and the
+        // parent's per-turn rebuild is skipped (workers don't observe
+        // the parent's HEAD anyway — the worker's own lookup is
+        // handled inside its nested `run_chat_loop` invocation).
+        //
+        // Cost: 1 extra `lookup_head_sha` per turn (libgit2
+        // `Repository::open` + `head().peel_to_commit()` —
+        // sub-millisecond for a local repo, negligible relative to
+        // LLM network latency). Memory cache is NOT busted — the
+        // instructions blocks live in a separate user-role synthetic
+        // message with their own `cache_control: Ephemeral`
+        // breakpoint (see prd §6.1 + the `build_instructions_blocks`
+        // docstring in `memory/loader.rs`).
+        if system_prompt_override.as_ref().is_none() {
+            head_sha = crate::agent::system_prompt::lookup_head_sha(&worktree_path);
+            let base_prompt = crate::agent::system_prompt::build_system_prompt(
+                &loaded_session.session,
+                &project,
+                &worktree_path,
+                &head_sha,
+            );
+            system_prompt =
+                crate::agent::system_prompt::assemble_system_prompt(mode_prefix, &base_prompt);
+        }
+
         // C3 compaction (test pass-through: if messages don't exceed
         // the test's tiny context_window, dropped_count == 0 and
         // the messages vec is unchanged).
@@ -764,12 +808,10 @@ pub async fn run_chat_loop(
             }
         }
 
-        let mut turn_send_at: Option<Instant> = None;
         let mut turn_first_delta_at: Option<Instant> = None;
         let mut turn_thinking_start: Option<Instant> = None;
         let mut turn_thinking_done: Option<Instant> = None;
         let mut turn_done_at: Option<Instant> = None;
-        let _ = turn_send_at;
 
         // B12 (2026-06-19): ephemeral checklist injection. Each turn,
         // AFTER C3 compaction and BEFORE `provider.send`, if the
@@ -908,7 +950,16 @@ pub async fn run_chat_loop(
             turn_messages,
             turn_tool_defs,
         );
-        turn_send_at = Some(Instant::now());
+        // P2 RULE-A-009 (2026-06-24, fix 2b of 3 P2 open rules):
+        // declare + initialize `turn_send_at` here (where it's first
+        // written) instead of carrying a dead `None` initial value at
+        // the top of the loop body that needed a `let _ =` suppressor
+        // (pre-fix line 816). The other 4 `turn_*_at` vars
+        // (first_delta / thinking_start / thinking_done / done_at)
+        // stay declared at the top because they're conditionally
+        // assigned in event-handler arms and the `None` default is
+        // load-bearing for the `is_none()` checks.
+        let turn_send_at = Some(Instant::now());
 
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -1074,7 +1125,6 @@ pub async fn run_chat_loop(
                             emit_chat_event_via_sink(&sink, &rid, &event);
                             had_error = true;
                         }
-                        ChatEvent::ToolResult { .. } => {}
                         ChatEvent::TurnComplete { .. } => {
                             tracing::warn!(request_id = %rid, "chat: unexpected TurnComplete in LLM stream");
                         }

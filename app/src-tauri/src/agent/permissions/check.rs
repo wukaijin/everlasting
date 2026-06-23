@@ -405,24 +405,15 @@ pub(crate) fn sqlite_glob_match(pattern: &str, text: &str) -> bool {
                     continue;
                 }
                 b'?' => {
-                    // Single char; `*` rule: `?` does NOT cross `/`.
+                    // Single char; sqlite GLOB `?` does NOT cross `/`.
+                    // We just hit a `/` — the backtrack-on-`*` block
+                    // that the original 2026-06-14 code carried here
+                    // was unreachable (the inner `if tbytes[ti] == b'/'`
+                    // check was guaranteed-true by the outer one above,
+                    // so the `if let Some(sp) = star_pi` branch never
+                    // fired — see DEBT.md RULE-B-003, closed 2026-06-24).
+                    // Fail directly.
                     if tbytes[ti] == b'/' {
-                        // Can't match — backtrack on `*` if any.
-                        if let Some(sp) = star_pi {
-                            // Skip one char via the previous `*`.
-                            // BUT: sqlite GLOB `*` doesn't cross `/`, so
-                            // if we just consumed a `/` we cannot
-                            // continue matching with `*`. Reset to
-                            // failure.
-                            if tbytes[ti] == b'/' {
-                                // Star matches don't cross `/` — fail.
-                                return false;
-                            }
-                            pi = sp;
-                            ti = star_ti + 1;
-                            star_ti += 1;
-                            continue;
-                        }
                         return false;
                     }
                     pi += 1;
