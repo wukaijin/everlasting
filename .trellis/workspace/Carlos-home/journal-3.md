@@ -266,3 +266,42 @@ db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_te
 ### Next Steps
 
 - None - task complete
+
+
+## Session 67: fix build warnings (rust unused re-exports + vite onwarn + chunk size)
+
+**Date**: 2026-06-23
+**Task**: fix build warnings (rust unused re-exports + vite onwarn + chunk size)
+**Branch**: `main`
+
+### Summary
+
+清掉 pnpm build + cargo check 输出的 7 条 warning:
+
+- cargo 端 4 条 unused_imports:删 2 个真没外部消费的 re-export(ASK_TIMEOUT / PendingAsk);3 个 test-only 消费(AuditKind / register_ask / Risk+risk_for_tool)加 #[allow(unused_imports)](tests_*.rs 和 subagent/sink.rs 的 #[cfg(test)] mod tests 走 flat 路径)
+- vite 端 2 条 @vueuse/core PURE 注释位置 warning:vite.config.ts 加 onwarn 过滤
+- vite 端 1 条 chunk size 提示:chunkSizeWarningLimit 800 + follow-up TODO(留 manualChunks 给单独任务)
+
+验证:cargo check 0 warning / cargo test --lib 813 passed / pnpm build 0 warning。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eca8b6b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

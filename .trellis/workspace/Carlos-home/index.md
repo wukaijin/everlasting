@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 66
+- **Total Sessions**: 67
 - **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~268 | Active |
+| `journal-3.md` | ~307 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 67 | 2026-06-23 | fix build warnings (rust unused re-exports + vite onwarn + chunk size) | `eca8b6b` | `main` |
 | 66 | 2026-06-23 | Session 71: 拆分 ChatInput.vue — chatInputCodeMirror composable + LatencyPopover + HintRow | `d46e223`, `115d299` | `main` |
 | 65 | 2026-06-23 | Split db/tests.rs into 6 SQL-domain files | `3edb597` | `main` |
 | 64 | 2026-06-23 | 拆分 SubagentDrawer.vue — Header + ErrorCard 子组件 | `53165e1`, `851fe45` | `main` |
