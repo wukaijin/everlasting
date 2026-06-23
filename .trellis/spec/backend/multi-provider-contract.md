@@ -537,10 +537,12 @@ regression net.
 PR2 must not regress the step4 follow-up tool envelope
 (`{"result": "<content>", "cwd": "<worktree_path>"}`). The
 envelope is applied in `agent::chat::chat` at the agent-loop
-boundary, NOT inside the provider. The provider returns
-`ChatEvent::ToolResult { content: <raw string>, ... }` and the
-chat command wraps it via `tool_result_envelope(...)` before
-emitting `tool:result` and persisting the `ContentBlock::ToolResult`.
+boundary, NOT inside the provider. The tool returns the raw
+string; the chat command wraps it via `tool_result_envelope(...)` before
+emitting on the `tool:result` IPC channel (via `ChatEventSink::emit_tool_result`)
+and persisting the `ContentBlock::ToolResult`. There is no
+`ChatEvent::ToolResult` variant — that was a never-implemented
+stale design that was removed 2026-06-24 (see DEBT RULE-A-009 修 2c).
 The pre-existing `tool_result_envelope_round_trip` test in
 `agent::helpers::tests` continues to lock this.
 

@@ -611,7 +611,7 @@ pub async fn execute(...) -> Result<String, GitError> { ... }
 
 // agent::chat::chat at the agent-loop boundary
 let wire = tool_result_envelope(output, &ctx.worktree_path);
-emit(ChatEvent::ToolResult { content: wire, ... });
+emit_tool_result(&ctx, wire); // emits on the `tool:result` IPC channel (state.rs ChatEventSink trait)
 persist(ContentBlock::ToolResult { content: wire, ... });
 ```
 
