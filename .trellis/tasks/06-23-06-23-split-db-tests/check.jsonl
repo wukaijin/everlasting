@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对拆分后测试仍按 db 模块的 SQL schema 编写;无 schema 破坏"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对拆分后测试断言错误处理路径(silent noop / cascade / Err)与原一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨文件 helper 共享验证清单(test_pool 复制决策需文档化)"}

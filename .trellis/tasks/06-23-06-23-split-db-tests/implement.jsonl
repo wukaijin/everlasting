@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQL 模式 + migrations 约定;拆分后各测试文件仍走原 db 函数,需保持 SQL schema 一致"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 索引,概览 db/memory/llm/error-handling 等模块 spec"}

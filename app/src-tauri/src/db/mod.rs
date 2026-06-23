@@ -56,14 +56,19 @@
 //! without any caller change.
 
 pub mod config;
+pub mod messages_tests;
 pub mod migrations;
 pub mod models;
 pub mod permissions;
+pub mod permissions_tests;
 pub mod projects;
+pub mod projects_tests;
 pub mod providers;
+pub mod providers_tests;
 pub mod sessions;
+pub mod sessions_tests;
 pub mod subagent_runs;
-pub mod tests;
+pub mod subagent_runs_tests;
 pub mod types;
 
 // Re-export every public item from the submodules so callers can
