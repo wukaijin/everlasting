@@ -1419,14 +1419,18 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  the session isn't in the cache (caller should then call
    *  `ensureLoaded` to populate it). */
   function getMessages(sessionId: string): ChatMessage[] | undefined {
-    const v = messagesBySession.get(sessionId);
-    if (v) {
-      // Touch: delete + re-set to move to MRU end of the
-      // reactive Map's iteration order.
-      messagesBySession.delete(sessionId);
-      messagesBySession.set(sessionId, v);
-    }
-    return v;
+    // PURE READ — do not mutate `messagesBySession` here. This function
+    // is called from Vue computeds (`chat.ts` `messages` and
+    // `currentSessionLatencyTurns`). The old "LRU touch" (delete +
+    // re-set) made those computeds mutate a reactive Map inside their
+    // own getter, recursively re-invalidating themselves → Vue's
+    // "Maximum recursive updates exceeded" guard fired on every event
+    // and the scheduler dropped the DOM update, so streaming deltas
+    // never rendered until a full array replacement (session switch)
+    // forced re-evaluation. The touch now lives in the non-computed
+    // callers (`ensureLoaded`, `startRequest`), which are safe to
+    // mutate.
+    return messagesBySession.get(sessionId);
   }
 
   /** Make sure `sessionId` is in the cache. If it's already
@@ -1435,7 +1439,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  from the DB and seeds the cache. */
   async function ensureLoaded(sessionId: string): Promise<ChatMessage[]> {
     const existing = getMessages(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      // Touch LRU (move to MRU) — relocated here from `getMessages`
+      // so the Vue computeds that read messages can stay pure (see
+      // `getMessages` for the recursive-update rationale). This is a
+      // plain async function, not a computed, so mutating the Map is
+      // safe.
+      messagesBySession.delete(sessionId);
+      messagesBySession.set(sessionId, existing);
+      return existing;
+    }
     const loaded = await invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
@@ -1486,7 +1499,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // session whose checklist was set by a prior run, and the
     // card should reflect that history immediately.
     useChecklistStore().rehydrateFromMessages(sessionId, messages);
-    return messages;
+    // Return the reactive proxy, NOT the plain `messages` array. Callers
+    // like `chat.ts` `send` / `resendMessage` push user/assistant
+    // placeholders into the returned reference; pushing into the plain
+    // array bypasses the proxy's set trap and never triggers Vue's
+    // reactivity — so the new message (and every subsequent delta) failed
+    // to render until a full array replacement (session switch) forced
+    // `messages` to re-evaluate. `getMessages` returns the proxy that
+    // `putMessages` just stored (reactive(messages)); the plain `messages`
+    // above stays the read-side input for the seeding loops.
+    return getMessages(sessionId)!;
   }
 
   /** Explicit eviction. Used on session delete so the cache

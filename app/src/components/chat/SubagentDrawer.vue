@@ -16,7 +16,7 @@
 // reka-ui note: 2.9.9 has no `Sheet` primitive; we compose the drawer
 // from `Dialog*` + sidebar CSS. See `.trellis/spec/frontend/reka-ui-usage.md`.
 
-import { computed, nextTick, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import {
   DialogRoot,
   DialogPortal,
@@ -169,12 +169,27 @@ const thinkingSections = computed<ThinkingSection[]>(() =>
   ),
 );
 
-/** B6 PR3 redesign pending-timeout tracking. Same non-reactive Map
- *  pattern as the previous flat-list implementation — keys are
- *  `tool_use_id` strings, values are wall-clock `received_at` ms.
- *  Cleared on drawer close (the next open starts fresh). The 100ms
- *  `nowTick` ticker drives the age-out across re-invocations. */
-const pendingFirstSeenAt = reactive(new Map<string, number>());
+/** B6 PR3 redesign pending-timeout tracking. PLAIN Map (NOT
+ *  reactive) — keys are `tool_use_id` strings, values are wall-clock
+ *  `received_at` ms. Cleared on drawer close (the next open starts
+ *  fresh). The 100ms `nowTick` ticker drives the age-out across
+ *  re-invocations.
+ *
+ *  Why non-reactive: `pairSections` mutates this Map (`.set` /
+ *  `.delete` / `.get`) inside the `toolEntries` computed below. A
+ *  reactive Map made that computed mutate its own tracked dependency
+ *  on every eval → recursive re-invalidation (same bug class as
+ *  streamController's old `getMessages` LRU touch). Combined with the
+ *  100ms `nowTick` + a worker emitting many sections (e.g. a glob
+ *  over a large tree), each tick kicked off a 100× recursive
+ *  re-evaluation that re-rendered every DrawerToolCallCard —
+ *  including possibly-huge tool_result content — until the webview
+ *  OOM'd and the window died. A plain Map means `pairSections`'s
+ *  reads / writes don't trigger Vue, so `toolEntries` re-runs only on
+ *  real `sections` / `nowTick` changes. The first-seen timestamps
+ *  still persist across calls (same Map instance) and clear on
+ *  close. */
+const pendingFirstSeenAt = new Map<string, number>();
 
 /** Tools segment entries: `pairSections` output (paired / pending /
  *  permission_ask). Recomputed on every `nowTick` tick (100ms) so
