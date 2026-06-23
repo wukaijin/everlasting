@@ -1,0 +1,2 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "check 时验证 ⑨ 关权限层 5-tier 决策路径未破 — 删 re-export 不应影响 check.rs / audit.rs / store.rs 内部 super:: 路径,也不影响测试用 crate::agent::permissions::AuditKind / Risk 短路径"}
