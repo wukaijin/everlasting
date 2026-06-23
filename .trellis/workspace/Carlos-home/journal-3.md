@@ -199,3 +199,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 65: Split db/tests.rs into 6 SQL-domain files
+
+**Date**: 2026-06-23
+**Task**: Split db/tests.rs into 6 SQL-domain files
+**Branch**: `main`
+
+### Summary
+
+db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_tests (10) / sessions_tests (33, 物理拼 2 段) / providers_tests (11) / permissions_tests (11) / messages_tests (10) / subagent_runs_tests (20)。mod.rs 删 pub mod tests; → 6 个 pub mod tests_<name>;。每文件 #![cfg(test)] 文件级 inner attribute,use 块按域收敛。ADR-lite: 无 common.rs (test_pool 复制 6 份, 8 行/份); D3 edit_user_message 归 messages_tests (主表是 messages, audit 副作用由 permissions 覆盖)。零行为变更验证: cargo test --lib 813 passed (95 db + 718 baseline 不变), cargo build --tests 0 新增 warning (7 个 pre-existing 全在 agent/permissions + background_shell)。参考样板: 06-23-split-agent-tests (PRD + 6 平铺 tests_*.rs 模式)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3edb597` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
