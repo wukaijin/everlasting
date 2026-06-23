@@ -12,24 +12,26 @@ worker subagent 的右侧 drawer。reka-ui `Dialog*` 组合实现（@2.9.9 无 `
 
 | 文件 | 职责 |
 |---|---|
-| `app/src/components/chat/SubagentDrawer.vue` | 顶层容器 + 5 段组装 + header + 边界态 |
+| `app/src/components/chat/SubagentDrawer.vue` | 顶层容器 + 5 段编排 + ticker + scroll 编排 + 边界态（~1000 行） |
+| `app/src/components/chat/SubagentDrawerHeader.vue` | header 子组件：status badge + name + close + banner + meta + summary + truncated（无 jump-latest） |
+| `app/src/components/chat/SubagentDrawerErrorCard.vue` | R25 ❌ 错误卡：v-if `status==='error'`、4 级 fallback 的 `errorMessage` |
 | `app/src/components/chat/DrawerSection.vue` | 通用折叠容器（thinking/tools/reply 共用），折叠态 lazy render |
 | `app/src/components/chat/DrawerPromptCard.vue` | `run.task` prompt 卡片（120 截断 + View full） |
 | `app/src/components/chat/DrawerThinkingBlock.vue` | `ThinkingSection` → 共享 `ThinkingBlock` 适配器 |
 | `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片（复用 ToolInputBody/ToolOutputBody，**不 wrap ToolCallCard**） |
-| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片（historical only） |
+| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片（live interactive + historical outcome badge） |
 | `app/src/utils/transcriptPairing.ts` | `pairSections` section 级配对（snake→camel） |
 | `app/src/stores/subagentRuns.ts` | `RunAccumulator` + `liveSections` Map + `TranscriptSection` 类型 |
 
 ### 5 段布局
 
 ```
-DrawerHeader        (status pill + name + duration + FT-F-005 failure banner + timestamps)
-DrawerPromptCard    (run.task, 120 截断, null 则隐藏)
-❌ ErrorCard        (v-if status==='error', prompt 下方, R25)
-DrawerSection type="thinking"  (默认折叠, DrawerThinkingBlock × N)
-DrawerSection type="tools"     (默认展开, DrawerToolCallCard + DrawerPermissionAskCard)
-DrawerSection type="reply"     (默认展开, live Text / FinalText, 280 截断)
+<SubagentDrawerHeader>          ← 独立组件：status pill + name + close + banner + meta + summary + truncated
+<SubagentDrawerErrorCard>       ← 独立组件（R25）：v-if status==='error'，prompt 下方
+<DrawerPromptCard>              ← run.task, 120 截断, null 则隐藏
+<DrawerSection type="thinking"> ← 默认折叠, DrawerThinkingBlock × N
+<DrawerSection type="tools">    ← 默认展开, DrawerToolCallCard + DrawerPermissionAskCard
+<DrawerSection type="reply">    ← 默认展开, live Text / FinalText, 280 截断
 ```
 
 `isEmpty` gate：`sections.length === 0 && status !== 'cancelled' && status !== 'error'` 时显示 "Worker is starting..."。cancelled/error 即使空 transcript 也放开 gate（让 chip/card 渲染）。
@@ -67,6 +69,24 @@ subagent:finished → fetchRun → rebuildFromCache(transcriptJson, finalText)
 
 **CSS 复用**：`DrawerToolCallCard` 的 `.drawer-tool-card*` 1:1 镜像 `.tool-card*`（class 改名避 scoped 碰撞，0 hex，全 design token）。**不**抽 `ToolCallHeader.vue` 共享组件——PRD Risk 表锁「主 panel ToolCallCard 本体 0 改动」，抽取会触犯此约束。
 
+### Design Decision: Header / ErrorCard 子组件 + jump-latest 下移 body（split refactor 2026-06-23）
+
+**Context**：`SubagentDrawer.vue` 长到 1257 行（header template + error card + 5 段编排 + ticker + scroll 编排 + 跨层 drift 注释），需要拆分降复杂度。header 模板里原本挂了一个 `↗` "跳到最新" 按钮（`jumpToLatest`），但它的 visible 条件 `!autoFollow && sections.length > 0` + click handler 全部依赖 body 状态（`autoFollow` / `newCount` / `bodyEl` / `onBodyScroll`）。
+
+**Decision**：拆出 2 个纯展示子组件 + 1 个 cross-cut 移位：
+- `SubagentDrawerHeader.vue`（5 prop: `run` / `status` / `statusDisplay` / `bannerText` / `truncated`，**无 emit**，无 cross-cut）—— 仅渲染 status badge / name / close / banner / meta / summary / truncated
+- `SubagentDrawerErrorCard.vue`（1 prop: `errorMessage`，**无 emit**）—— R25 详细错误卡
+- **`jumpToLatest` 按钮从 header 搬到 body 顶部 sticky**（A 方案，2026-06-23 与用户确认）—— 按钮 visible 条件 + handler 与 body scroll 编排自然耦合，下移后零 cross-cut
+
+**Why A over B/C**：
+- (B) Header 保留按钮 + body emit `autoFollow`/`newCount` 上行 → 2 个 emit + Header 多 2 个 prop，多余耦合
+- (C) Header 接 `autoFollow` / `sectionsCount` 作为 prop → main drawer 要 expose 状态，同样耦合
+- (A) Header 完全解耦，只读 prop；body 顶部 sticky 按钮（与现有 `.subagent-drawer__new-events` 同 sticky 模式）保留全部 UX——"↓ N new" 提示本就在 body 底部，按钮在 body 顶部对称放置
+
+**测试 0 修改**：1225 行 `SubagentDrawer.test.ts` 不动作为 DOM 等价性硬约束（类名 / 文本 / 嵌套结构 1:1 保留）—— 拆分只动 component 边界，不动 user-visible 结构。
+
+**Extensibility**：未来想把 Header / ErrorCard 移到独立 subpackage、或加 `<DrawerHeaderAction>` slot、或 body 顶部 sticky 区做更多 affordance（"pause auto-follow" 等），A 方案 0 重构成本。
+
 ### Convention: section 级配对（pairSections）
 
 ```ts
@@ -88,7 +108,7 @@ pairSections(sections: TranscriptSection[], now: number, pendingFirstSeenAt: Map
 
 #### R25 error（必做）
 
-`v-if status==='error'`，❌ card 在 DrawerPromptCard 下方（复用 `.drawer-tool-card` chrome + `--color-tool-error` 3px 左 border + `shield-x` icon）。`errorMessage` computed **4 级 fallback**：
+`v-if status==='error'`，❌ card 在 DrawerPromptCard 下方，独立组件 `SubagentDrawerErrorCard.vue` 接 `errorMessage: string` 单 prop。chrome：复用 `.drawer-tool-card` chrome + `--color-tool-error` 3px 左 border + `shield-x` icon。`errorMessage` computed（留在 main drawer）**4 级 fallback**：
 
 1. `parseTranscriptJson(run.transcriptJson)` **反向扫描**末位 `kind==='chat_event'` 且 inner `payload_json.kind==='error'`，读 `payload_json.message`（对应 Rust `ChatEvent::Error { message, category }`，`llm/types.rs:407`）
 2. `run.finalText`（error 时 `format_final_text` 返回 worker_text verbatim）
