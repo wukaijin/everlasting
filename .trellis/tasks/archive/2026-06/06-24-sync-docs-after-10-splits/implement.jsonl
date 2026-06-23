@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "本任务主目标之一:同步 split 后的文件清单 + 加 (拆分自 X) 标注"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "本任务主目标之一:同步 agent/subagent/ 目录 + permissions/ask.rs 等路径引用"}
