@@ -49,9 +49,13 @@ pub async fn update_provider(
     protocol: String,
     display_name: String,
     base_url: String,
-    api_key: String,
+    // RULE-D-001 (2026-06-24): `None` = 保持原 key (留空覆盖 UX);
+    // `Some(v)` = 加密覆盖. 前端编辑 provider 时 apiKey input 留空
+    // 传 undefined → Tauri 反序列化为 `None`.
+    api_key: Option<String>,
 ) -> Result<Option<db::ProviderRow>, String> {
-    let row = db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, &api_key)
+    let row =
+        db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, api_key.as_deref())
         .await
         .map_err(|e| format!("update_provider failed: {}", e))?;
     state.rebuild_catalog().await;

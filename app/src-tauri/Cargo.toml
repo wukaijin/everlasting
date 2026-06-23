@@ -72,6 +72,19 @@ htmd = "0.5"
 libc = "0.2"
 regex = "1"
 
+# RULE-D-001 (P1 API key 加密, 2026-06-24): AES-256-GCM + HKDF(machine-id).
+# 见 .trellis/tasks/06-24-p1-api-key-encryption/research/app-layer-encryption-rust.md
+# - aes-gcm 0.10: RustCrypto AEAD, aead/rand_core trait re-export, OsRng 走
+#   getrandom(WSL 原生可用). 不单列 aead/rand_core/getrandom(由 aes-gcm re-export).
+# - hkdf 0.12 + sha2 0.10: 从 machine-id 派生 32B master key (Hkdf<Sha256>).
+# - machine-uid 0.6: 跨平台取 /etc/machine-id / IOPlatformUUID / MachineGuid.
+# - base64 0.22: blob(VERSION||nonce||ct||tag) ↔ SQLite TEXT 编码.
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+machine-uid = "0.6"
+base64 = "0.22"
+
 [dev-dependencies]
 tempfile = "3"
 # Mock HTTP server for `web_fetch` integration tests. Spin up a

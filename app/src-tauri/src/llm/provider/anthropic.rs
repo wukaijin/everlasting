@@ -1029,6 +1029,7 @@ mod tests {
             display_name: "Anthropic 官方".to_string(),
             base_url: "https://api.anthropic.com".to_string(),
             api_key: "sk-test".to_string(),
+            has_key: true,
             created_at: "2026-06-09T00:00:00Z".to_string(),
             updated_at: "2026-06-09T00:00:00Z".to_string(),
         };

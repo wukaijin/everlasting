@@ -69,7 +69,7 @@ async fn update_provider_on_missing_id_returns_none() {
  "openai",
  "ghost",
  "https://example.com",
- "sk-ghost",
+ Some("sk-ghost"),
  )
  .await
  .unwrap();
@@ -326,4 +326,80 @@ async fn delete_provider_cascade_does_not_touch_unrelated_models() {
  let remaining = list_models(&pool).await.unwrap();
  assert!(!remaining.iter().any(|mwp| mwp.model.id == m1.id));
  assert!(remaining.iter().any(|mwp| mwp.model.id == m2.id));
+}
+
+// ---------------------------------------------------------------------------
+// RULE-D-001 (2026-06-24): api_key 加密存储测试
+//
+// 验证 AC: DB 不存明文 / list_providers 解密往返 / 明文迁移幂等.
+// 加解密原语 (roundtrip / AAD / tamper) 单测在 `crypto::tests`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn api_key_is_encrypted_not_plaintext_in_db() {
+ let pool = make_pool().await;
+ let p = create_provider(
+ &pool,
+ "anthropic",
+ "Enc test",
+ "https://a.example.com",
+ "sk-secret-123",
+ )
+ .await
+ .unwrap();
+ // Legacy `api_key` 列必须为空 (新行从未写明文); `api_key_enc`
+ // 必须非空且不含明文.
+ let row: (String, String) =
+ sqlx::query_as("SELECT api_key, api_key_enc FROM providers WHERE id = ?")
+ .bind(&p.id)
+ .fetch_one(&pool)
+ .await
+ .unwrap();
+ assert_eq!(row.0, "", "legacy api_key column must be empty");
+ assert!(!row.1.is_empty(), "api_key_enc must hold ciphertext");
+ assert!(
+ !row.1.contains("sk-secret-123"),
+ "ciphertext must not leak plaintext"
+ );
+ // list_providers 解密往返.
+ let listed = list_providers(&pool).await.unwrap();
+ let got = listed.iter().find(|r| r.id == p.id).expect("provider listed");
+ assert_eq!(got.api_key, "sk-secret-123");
+ assert!(got.has_key);
+}
+
+#[tokio::test]
+async fn plaintext_api_key_migration_is_idempotent() {
+ let pool = make_pool().await;
+ // 模拟旧版明文行: api_key 明文, key_migrated_at NULL, api_key_enc 空.
+ sqlx::query(
+ "INSERT INTO providers \
+ (id, protocol, display_name, base_url, api_key, api_key_enc, created_at, updated_at) \
+ VALUES ('migrate-1', 'anthropic', 'M', 'https://x.example.com', 'sk-plain', '', \
+ '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+ )
+ .execute(&pool)
+ .await
+ .unwrap();
+ // 迁移: run_migrations 幂等 (列已存在, 迁移函数处理明文行).
+ run_migrations(&pool).await.unwrap();
+ let row: (String, String, Option<String>) = sqlx::query_as(
+ "SELECT api_key, api_key_enc, key_migrated_at FROM providers WHERE id = 'migrate-1'",
+ )
+ .fetch_one(&pool)
+ .await
+ .unwrap();
+ assert_eq!(row.0, "", "plaintext migrated away");
+ assert!(!row.1.is_empty(), "ciphertext written");
+ assert!(row.2.is_some(), "sentinel set");
+ let first_enc = row.1;
+ // 第二次迁移: 幂等, 明文列仍空, 密文不变 (无重复加密).
+ run_migrations(&pool).await.unwrap();
+ let row2: (String, String) =
+ sqlx::query_as("SELECT api_key, api_key_enc FROM providers WHERE id = 'migrate-1'")
+ .fetch_one(&pool)
+ .await
+ .unwrap();
+ assert_eq!(row2.0, "", "still empty after 2nd migration");
+ assert_eq!(row2.1, first_enc, "ciphertext unchanged (idempotent)");
 }

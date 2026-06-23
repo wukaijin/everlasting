@@ -339,9 +339,18 @@ async fn lookup_provider_for_session(
     // Pre-flight: empty api_key still applies on the catalog
     // path (the catalog might have been built with an empty
     // key if the user just saved Settings).
+    //
+    // RULE-D-001: 区分"未填 key"(has_key=false) vs "解密失败"
+    // (has_key=true 但明文空, 机器变化), 文案不同.
     if provider_row.api_key.is_empty() {
-        return Err(PreFlightError::EmptyApiKey {
-            provider_display_name: provider_row.display_name.clone(),
+        return Err(if provider_row.has_key {
+            PreFlightError::DecryptFailed {
+                provider_display_name: provider_row.display_name.clone(),
+            }
+        } else {
+            PreFlightError::EmptyApiKey {
+                provider_display_name: provider_row.display_name.clone(),
+            }
         });
     }
 

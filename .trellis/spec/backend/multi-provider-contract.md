@@ -40,7 +40,11 @@ pub struct ProviderRow {
  pub protocol: String, // "anthropic" | "openai" (TEXT, not enum, for forward-compat)
  pub display_name: String, // user-facing label
  pub base_url: String,
+ // RULE-D-001 (2026-06-24): 解密后的明文, 内部消费 (build_provider / catalog).
+ // `#[serde(skip)]` 切断 IPC 明文回传 —— 前端只见 hasKey.
+ #[serde(skip)]
  pub api_key: String,
+ pub has_key: bool, // api_key_enc 非空, 与能否解密无关
  pub created_at: String, // RFC3339
  pub updated_at: String,
 }
@@ -74,7 +78,9 @@ CREATE TABLE providers (
  protocol TEXT NOT NULL,
  display_name TEXT NOT NULL,
  base_url TEXT NOT NULL,
- api_key TEXT NOT NULL DEFAULT '',
+ api_key TEXT NOT NULL DEFAULT '', -- RULE-D-001: 旧明文列, 迁移后置空保留 (SQLite < 3.35 无 DROP COLUMN)
+ api_key_enc TEXT NOT NULL DEFAULT '', -- RULE-D-001: base64(VERSION||nonce||ct||tag), AES-256-GCM + HKDF(machine-id), AAD = provider id
+ key_migrated_at TEXT, -- RULE-D-001: 迁移哨兵 (RFC3339), NULL = 未迁移
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
 );
@@ -112,9 +118,9 @@ fallback when `model_id` is NULL or dangling. See "Soft FK pattern" in
 
 | Command | Args (Rust) | Returns |
 |---|---|---|
-| `list_providers` | — | `Vec<ProviderRow>` |
-| `add_provider` | `protocol, display_name, base_url, api_key` | `ProviderRow` |
-| `update_provider` | `id, protocol, display_name, base_url, api_key` | `Option<ProviderRow>` |
+| `list_providers` | — | `Vec<ProviderRow>` (RULE-D-001: 不含明文 apiKey, 只 hasKey) |
+| `add_provider` | `protocol, display_name, base_url, api_key` (明文入参, 后端加密存 api_key_enc) | `ProviderRow` |
+| `update_provider` | `id, protocol, display_name, base_url, api_key: Option<String>` (None=保持原 key 留空覆盖, Some=加密覆盖) | `Option<ProviderRow>` |
 | `delete_provider` | `id` | `bool` (cascades to models) |
 | `list_models` | — | `Vec<ModelWithProvider>` |
 | `add_model` | `provider_id, model_name, display_name, max_tokens?, thinking_effort?, supports_thinking, context_window` | `ModelRow` |
@@ -131,7 +137,7 @@ fallback when `model_id` is NULL or dangling. See "Soft FK pattern" in
 // list_providers response
 [
  { "id": "uuid", "protocol": "anthropic", "displayName": "Anthropic官方",
- "baseUrl": "https://api.anthropic.com", "apiKey": "sk-...",
+ "baseUrl": "https://api.anthropic.com", "hasKey": true, // RULE-D-001: 不回传明文 apiKey (字段 serde(skip))
  "createdAt": "...", "updatedAt": "... }
 ]
 

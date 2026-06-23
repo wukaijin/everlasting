@@ -65,13 +65,13 @@ const deleteConfirmId = ref<string | null>(null);
  *  form isn't mid-save. The pre-PR5 gate also required
  *  `testPassed` — that gate is gone now that the Test button
  *  moved to ModelsTab. */
-const canSave = computed(
-  () =>
-    form.displayName.trim() !== "" &&
-    form.baseUrl.trim() !== "" &&
-    form.apiKey.trim() !== "" &&
-    !saving.value,
-);
+const canSave = computed(() => {
+  if (saving.value) return false;
+  if (!form.displayName.trim() || !form.baseUrl.trim()) return false;
+  // RULE-D-001: add 模式 apiKey 必填; edit 模式留空 = 保持原 key.
+  if (mode.value === "add" && !form.apiKey.trim()) return false;
+  return true;
+});
 
 // --- Actions -------------------------------------------------------------
 
@@ -95,7 +95,8 @@ function startEdit(p: ProviderRow) {
   form.protocol = p.protocol;
   form.displayName = p.displayName;
   form.baseUrl = p.baseUrl;
-  form.apiKey = p.apiKey;
+  // RULE-D-001: 编辑不回填明文 key (前端不持有明文); 留空 = 保持原 key.
+  form.apiKey = "";
   showApiKey.value = false;
 }
 
@@ -116,12 +117,13 @@ async function save() {
         form.apiKey,
       );
     } else if (mode.value === "edit" && editId.value) {
+      // RULE-D-001: apiKey 空串 → undefined (保持原 key); 非空 → 覆盖.
       await providersStore.update(
         editId.value,
         form.protocol,
         form.displayName,
         form.baseUrl,
-        form.apiKey,
+        form.apiKey.trim() || undefined,
       );
     }
     // Models may have changed (provider cascade) — reload.
@@ -148,11 +150,10 @@ async function confirmDelete() {
   }
 }
 
-/** Mask the api_key for display: show first 6 chars + "****". */
-function maskApiKey(key: string): string {
-  if (!key) return "(未设置)";
-  if (key.length <= 8) return "****";
-  return key.slice(0, 6) + "****";
+/** RULE-D-001: 前端只知 key 是否设置 (hasKey), 不持有明文, 故无法 mask
+ *  明文 — 显示加密状态. */
+function keyStatusLabel(hasKey: boolean): string {
+  return hasKey ? "已加密保存" : "未设置";
 }
 
 /** Protocol badge color. */
@@ -194,7 +195,7 @@ function protocolBadgeClass(protocol: string): string {
           <span class="providers-tab__url">{{ p.baseUrl }}</span>
           <span class="providers-tab__key-hint">
             <Icon name="key" :size="11" />
-            {{ maskApiKey(p.apiKey) }}
+            {{ keyStatusLabel(p.hasKey) }}
           </span>
         </div>
         <div class="providers-tab__row-actions">
@@ -280,7 +281,7 @@ function protocolBadgeClass(protocol: string): string {
             v-model="form.apiKey"
             :type="showApiKey ? 'text' : 'password'"
             class="providers-tab__input"
-            placeholder="sk-..."
+            :placeholder="mode === 'edit' ? '留空保持不变, 输入新值则覆盖' : 'sk-...'"
           />
           <button
             type="button"

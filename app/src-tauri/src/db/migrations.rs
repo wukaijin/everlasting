@@ -644,6 +644,21 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  .execute(pool)
  .await?;
 
+ // --- RULE-D-001 (P1 API key 加密, 2026-06-24).
+ //
+ // provider api_key 不再明文存 DB. 两列:
+ // - `api_key_enc TEXT NOT NULL DEFAULT ''`: base64(VERSION||nonce||ct||tag),
+ //   AES-256-GCM + HKDF(machine-id) 派生 master key, AAD = provider id.
+ //   空串 = 未设置 key.
+ // - `key_migrated_at TEXT`: 迁移完成哨兵(RFC3339). NULL = 未迁移(仍需
+ //   从旧 `api_key` 明文列迁移).
+ //
+ // 旧 `api_key TEXT` 列保留(SQLite < 3.35 无 DROP COLUMN, 留空列无成本),
+ // 迁移后 UPDATE 为 ''. 见 `migrate_provider_api_keys_to_encrypted`.
+ add_provider_column_if_missing(pool, "api_key_enc", "TEXT NOT NULL DEFAULT ''").await?;
+ add_provider_column_if_missing(pool, "key_migrated_at", "TEXT").await?;
+ migrate_provider_api_keys_to_encrypted(pool).await?;
+
  Ok(())
 }
 
@@ -685,6 +700,98 @@ pub(crate) async fn add_project_column_if_missing(
  if exists == 0 {
  let stmt = format!("ALTER TABLE projects ADD COLUMN {} {}", column, decl);
  sqlx::query(&stmt).execute(pool).await?;
+ }
+ Ok(())
+}
+
+/// Add a column to `providers` if it doesn't already exist. Mirrors
+/// [`add_session_column_if_missing`]. Added for RULE-D-001 (`api_key_enc` /
+/// `key_migrated_at`, 2026-06-24).
+pub(crate) async fn add_provider_column_if_missing(
+ pool: &SqlitePool,
+ column: &str,
+ decl: &str,
+) -> Result<(), sqlx::Error> {
+ let exists: i64 =
+ sqlx::query("SELECT COUNT(*) FROM pragma_table_info('providers') WHERE name = ?")
+ .bind(column)
+ .fetch_one(pool)
+ .await?
+ .try_get(0)?;
+ if exists == 0 {
+ let stmt = format!("ALTER TABLE providers ADD COLUMN {} {}", column, decl);
+ sqlx::query(&stmt).execute(pool).await?;
+ }
+ Ok(())
+}
+
+/// RULE-D-001 (2026-06-24): one-shot idempotent migration of provider
+/// api_keys from plaintext (`providers.api_key`) to encrypted
+/// (`providers.api_key_enc`).
+///
+/// For every row with `api_key <> '' AND key_migrated_at IS NULL`:
+/// read the plaintext, `crypto::encrypt(.., aad = provider id)` it,
+/// write the ciphertext to `api_key_enc`, blank the old `api_key`
+/// column, and stamp `key_migrated_at`. The `WHERE` clause makes it
+/// idempotent — re-running on a fully-migrated DB is a no-op, and a
+/// mid-migration crash leaves partially-migrated rows that resume on
+/// the next startup (each row's UPDATE is its own transaction).
+///
+/// If `derive_master_key` fails (e.g. `/etc/machine-id` unreadable)
+/// we log + return early WITHOUT blanking any plaintext — secrets
+/// stay recoverable and the migration retries next boot. Per-row
+/// encrypt failures likewise skip the row (kept plaintext) and retry.
+async fn migrate_provider_api_keys_to_encrypted(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+ let master_key = match crate::crypto::derive_master_key() {
+ Ok(k) => k,
+ Err(e) => {
+ tracing::warn!(
+ error = %e,
+ "api_key migration: derive master key failed; keeping plaintext, will retry next startup"
+ );
+ return Ok(());
+ }
+ };
+ let rows = sqlx::query(
+ r#"
+ SELECT id, api_key FROM providers
+ WHERE api_key <> '' AND key_migrated_at IS NULL
+ "#,
+ )
+ .fetch_all(pool)
+ .await?;
+ let now = Utc::now().to_rfc3339();
+ let mut migrated = 0usize;
+ for row in rows {
+ let id: String = row.try_get("id")?;
+ let plain: String = row.try_get("api_key")?;
+ match crate::crypto::encrypt(&master_key, &plain, &id) {
+ Ok(enc) => {
+ sqlx::query(
+ r#"
+ UPDATE providers
+ SET api_key_enc = ?, api_key = '', key_migrated_at = ?
+ WHERE id = ?
+ "#,
+ )
+ .bind(&enc)
+ .bind(&now)
+ .bind(&id)
+ .execute(pool)
+ .await?;
+ migrated += 1;
+ }
+ Err(e) => {
+ tracing::warn!(
+ provider_id = %id,
+ error = %e,
+ "api_key migration: encrypt failed; skipping row (will retry next startup)"
+ );
+ }
+ }
+ }
+ if migrated > 0 {
+ tracing::info!(migrated, "provider api_keys encrypted (RULE-D-001 migration)");
  }
  Ok(())
 }

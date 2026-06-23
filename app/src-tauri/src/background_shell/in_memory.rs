@@ -743,6 +743,7 @@ mod tests {
     /// multi-thread runtime (needed for `block_in_place`-style
     /// tasks if we ever introduce them; today we don't, but
     /// pinning to multi-thread matches production).
+    #[allow(dead_code)] // 预留 helper, 当前无 async test 使用 (L1a)
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()

@@ -45,6 +45,10 @@ pub enum PreFlightError {
     /// The chosen provider's `api_key` is empty. PRD Q2 #1:
     /// "请到 Settings 填 {provider_display_name} 的 api_key".
     EmptyApiKey { provider_display_name: String },
+    /// RULE-D-001 (2026-06-24): `api_key_enc` 存在(has_key=true)但解密
+    /// 失败 —— 通常是机器环境变化(`/etc/machine-id` 重置)导致旧密文
+    /// 解不开. 引导用户到 Settings 重新粘贴 key.
+    DecryptFailed { provider_display_name: String },
     /// The dispatch in `build_provider` refused the protocol
     /// (e.g. `openai` not implemented yet, or an unknown protocol
     /// string from a forward-compat DB write).
@@ -72,6 +76,15 @@ impl PreFlightError {
                     provider_display_name
                 ),
                 LlmErrorCategory::Auth,
+            ),
+            PreFlightError::DecryptFailed {
+                provider_display_name,
+            } => (
+                format!(
+                    "{} 的 api_key 解不开(可能机器环境变化),请到 Settings 重新粘贴",
+                    provider_display_name
+                ),
+                LlmErrorCategory::InvalidRequest,
             ),
             PreFlightError::BuildFailed(e) => (
                 format!("无法构造 LLM provider: {}", e),
@@ -144,9 +157,18 @@ pub async fn resolve_chat_provider(
     //    succeed (it doesn't check), but the resulting
     //    `LlmConfig` would 401 on the first request. Better to
     //    reject here with a clear message.
+    //
+    //    RULE-D-001: 区分两种"明文为空" —— has_key=false 是"没填 key",
+    //    has_key=true 但 api_key 空是"解密失败"(机器变化), 文案不同.
     if provider_row.api_key.is_empty() {
-        return Err(PreFlightError::EmptyApiKey {
-            provider_display_name: provider_row.display_name.clone(),
+        return Err(if provider_row.has_key {
+            PreFlightError::DecryptFailed {
+                provider_display_name: provider_row.display_name.clone(),
+            }
+        } else {
+            PreFlightError::EmptyApiKey {
+                provider_display_name: provider_row.display_name.clone(),
+            }
         });
     }
 

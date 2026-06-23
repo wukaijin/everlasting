@@ -10,7 +10,9 @@ export interface ProviderRow {
   protocol: string; // "anthropic" | "openai"
   displayName: string;
   baseUrl: string;
-  apiKey: string;
+  /** RULE-D-001 (2026-06-24): 是否已设置 api_key. 后端不再回传明文 key
+   *  (ProviderRow.api_key `#[serde(skip)]`), 前端只知"有没有". */
+  hasKey: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -43,21 +45,19 @@ export const useProvidersStore = defineStore("providers", () => {
     return row;
   }
 
-  /** Update an existing provider. Refreshes the in-memory entry on success. */
+  /** Update an existing provider. Refreshes the in-memory entry on success.
+   *  RULE-D-001: apiKey 留空(undefined)=保持原 key; 传值=覆盖.
+   *  undefined 时省略 apiKey 字段 → Rust `Option<String>` = None. */
   async function update(
     id: string,
     protocol: string,
     displayName: string,
     baseUrl: string,
-    apiKey: string,
+    apiKey?: string,
   ) {
-    const row = await invoke<ProviderRow | null>("update_provider", {
-      id,
-      protocol,
-      displayName,
-      baseUrl,
-      apiKey,
-    });
+    const payload: Record<string, string> = { id, protocol, displayName, baseUrl };
+    if (apiKey && apiKey.trim()) payload.apiKey = apiKey.trim();
+    const row = await invoke<ProviderRow | null>("update_provider", payload);
     if (row) {
       const idx = providers.value.findIndex((p) => p.id === id);
       if (idx >= 0) providers.value[idx] = row;

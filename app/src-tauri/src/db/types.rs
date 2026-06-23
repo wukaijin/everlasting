@@ -79,7 +79,14 @@ pub struct ProviderRow {
  pub protocol: String,
  pub display_name: String,
  pub base_url: String,
+ /// 解密后的明文 api_key (内部消费: `build_provider` / catalog 构造).
+ /// RULE-D-001 (2026-06-24): `#[serde(skip)]` 切断 IPC 明文回传 ——
+ /// 前端只见 [`ProviderRow::has_key`], 永不持有明文 key.
+ #[serde(skip)]
  pub api_key: String,
+ /// 是否设置了 api_key (基于 `api_key_enc` 非空, 与能否解密无关).
+ /// 机器变化导致解密失败时 `api_key` 为空但 `has_key = true`.
+ pub has_key: bool,
  pub created_at: String,
  pub updated_at: String,
 }

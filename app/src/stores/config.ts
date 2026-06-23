@@ -52,15 +52,15 @@ export const useConfigStore = defineStore("config", () => {
     return provider?.baseUrl ?? "";
   });
 
-  /** True when a default model exists AND its provider has a non-empty
-   *  api_key. Drives the Settings tab's "(api key 未设置)" hint and
-   *  the warn styling. */
+  /** True when a default model exists AND its provider has an api_key
+   *  set (hasKey). Drives the Settings tab's "(api key 未设置)" hint
+   *  and the warn styling. RULE-D-001: 后端只回传 hasKey 布尔. */
   const configured = computed<boolean>(() => {
     const modelsStore = useModelsStore();
     const dm = modelsStore.defaultModel;
     if (!dm) return false;
     const provider = useProvidersStore().byId(dm.providerId);
-    return !!provider?.apiKey;
+    return !!provider?.hasKey;
   });
 
   function readLastActive(): string | null {

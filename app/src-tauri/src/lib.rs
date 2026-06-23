@@ -27,6 +27,7 @@
 mod agent;
 mod background_shell;
 mod commands;
+mod crypto;
 mod db;
 mod files;
 mod git;
