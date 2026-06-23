@@ -739,3 +739,17 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
 - **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
 - **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
+
+### 2026-06-24 — RULE-D-001 provider api_key 加密存储(P1 安全债收口)
+
+- **决策**:provider api_key 用 AES-256-GCM + HKDF(machine-id) 派生 master key 加密存储(AAD=provider id 绑定,防 DB 内挪用),否决 keyring(WSL 实测无 secret service daemon 开箱不可用)+ stronghold(过度工程)
+  - **原因**:三方 research 交叉验证——keyring 在 WSL 主环境实测不可用(gnome-keyring/libsecret/secret-service 全未装;keyutils kernel 后端重启即丢,不适合长期凭证);业界同类(Codex CLI/Claude Code/Aider/Continue)默认明文文件/env var,加密已超主流;应用层加密精准命中"防 DB 文件泄露"威胁模型 + WSL 零摩擦 + 5 直接依赖
+  - **依据**:[`.trellis/tasks/archive/2026-06/06-24-p1-api-key-encryption/research/`](../../.trellis/tasks/archive/2026-06/06-24-p1-api-key-encryption/research/) 三份(keyring-wsl-availability / industry-api-key-storage / app-layer-encryption-rust)
+  - **后果**:机器绑定固有性质——`wsl --unregister`/重装重置 `/etc/machine-id` 旧密文不可解,靠 `PreFlightError::DecryptFailed` 兜底友好提示重粘(不防本机 root/进程内存,Out of Scope)
+- **决策**:前端永不持有明文 api_key —— `ProviderRow.api_key` 加 `#[serde(skip)]` 切断 IPC,`list_providers` 改返 `hasKey` 布尔;Settings 编辑留空覆盖(`None`=保持/`Some`=覆盖)+ 加密状态徽标
+  - **原因**:彻底切断前端持明文路径,RULE-D-001 收益最大化;secret 输入业界标准 UX
+  - **依据**:[`.trellis/spec/backend/multi-provider-contract.md`](../.trellis/spec/backend/multi-provider-contract.md) ProviderRow wire
+- **决策**:加密改动原子合一个大 PR(db migration + 运行时解密 + IPC + 前端),不分拆
+  - **原因**:四者强耦合——db 写密文后,运行时解密 + IPC 不返明文 + 前端留空覆盖必须同改,否则中间态双重加密(前端回填密文→再加密)或 chat 用密文发请求
+  - **commit**:`576b2f4`(fix)+ `30a5eaf`(docs debt)
+- **测试**:crypto roundtrip/empty/tamper/aad_mismatch/unknown_version/distinct_nonces (6) + db api_key_is_encrypted_not_plaintext/plaintext_migration_is_idempotent (2);`cargo test --lib` 822 passed 0 warning;vitest 518 passed;vue-tsc 0 error
