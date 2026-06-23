@@ -1,47 +1,20 @@
 <script setup lang="ts">
-// SubagentDrawer — B6 PR3 right-side drawer for worker subagent
-// transcripts (R6).
+// SubagentDrawer — right-side drawer for worker subagent transcripts.
 //
-// B6 redesign PR5 (2026-06-21): rewritten from a time-ordered flat
-// transcript list into a 5-segment grouped view:
+// 5-segment grouped view (B6 redesign, 2026-06-21):
+//   <SubagentDrawerHeader>      ← status badge + name + duration + banner
+//   <DrawerPromptCard>          ← run.task (parent LLM prompt, 120-char truncate)
+//   <SubagentDrawerErrorCard>   ← R25: status=error detailed card (PR6, split 2026-06-23)
+//   <DrawerSection type="thinking">  ← collapsed by default
+//   <DrawerSection type="tools">     ← expanded by default
+//   <DrawerSection type="reply">     ← expanded by default
 //
-//   <DrawerHeader>          ← status badge + name + duration + failure banner + timestamps
-//   <DrawerPromptCard>      ← run.task (parent LLM's prompt), 120-char truncate + "View full →"
-//   <ErrorCard>             ← PR6 R25: status=error detailed card (transcriptJson → finalText → summary fallback)
-//   <DrawerSection type="thinking" :entries>    ← collapsed by default (PRD R16)
-//     <DrawerThinkingBlock v-for="s in entries" :section="s" />
-//   </DrawerSection>
-//   <DrawerSection type="tools" :entries>       ← expanded by default
-//     <DrawerToolCallCard v-for="p in paired" :call :result />
-//     <DrawerPermissionAskCard v-for="a in asks" :ask :interactive />  ← PR2 RULE-FrontSubagent-003 (2026-06-22): mode-aware. `interactive = isPermissionAskLive(rid)` reconciles each transcript ask against the live permissions store (`getPendingByRid`) — live-pending → interactive Allow/Deny card; resolved/transcript-only → historical info-only body. Replaces the PR6 R24 historical-only downgrade (the 3 blockers — worker is_worker collapse, synthetic rids, no independent permission session — were all resolved by PR1/PR1.5 backend restructuring).
-//   </DrawerSection>
-//   <DrawerSection type="reply" :text>          ← expanded by default
-//     <CancelledChip v-if="cancelled" />        ← PR6 R23 (downgraded): ⊘ Cancelled · at X.Xs
-//     <DrawerReplyBody :text (live Text or FinalText) + 280-char truncate + "View full →">
-//   </DrawerSection>
+// Data source: `store.liveSections.get(openRunId)` — the accumulator's
+// `TranscriptSection[]` output. The previous flat `transcript` +
+// `showChatEvents` toggle + filter row are GONE (PRD R9).
 //
-// Data source: `store.liveSections.get(openRunId)` — the PR2
-// accumulator's `TranscriptSection[]` output. The previous flat
-// `transcript` (raw `TranscriptEntry[]`) and the
-// `showChatEvents` toggle / `hiddenChatCount` / filter row are
-// GONE (PRD R9: the verbose chat_event delta stream is collapsed
-// into the Thinking / Text segments by the accumulator and is no
-// longer exposed).
-//
-// Implementation note (reka-ui version pin): the PRD specified
-// reka-ui `Sheet`, but reka-ui@2.9.9 (this project's pinned version
-// per `reka-ui-usage.md`) does NOT ship the `Sheet` primitive —
-// only `Dialog` / `AlertDialog` / `Popover`. Rather than upgrade
-// the version pin (out of scope), we compose the drawer out of the
-// existing `Dialog*` primitives and theme the `DialogContent` as a
-// right-side panel via CSS (fixed right + full height + slide-in
-// transition). The result is functionally identical to a Sheet for
-// our use case (right-anchored side panel, click-backdrop-to-close,
-// Esc-to-close, focus trap, scroll lock). The reka-ui `:deep()`
-// gotcha documented in `reka-ui-usage.md` still applies — the
-// `DialogContent` portals to body, so our scoped CSS uses Vue 3.5's
-// preserved `data-v-*` attribute selector (same approach
-// `AuditLogModal.vue` + `MemoryModal.vue` take).
+// reka-ui note: 2.9.9 has no `Sheet` primitive; we compose the drawer
+// from `Dialog*` + sidebar CSS. See `.trellis/spec/frontend/reka-ui-usage.md`.
 
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from "vue";
 import {
@@ -51,7 +24,6 @@ import {
   DialogContent,
   DialogTitle,
   DialogDescription,
-  DialogClose,
 } from "reka-ui";
 import Icon from "../Icon.vue";
 import { useSubagentRunsStore, coerceStatus } from "../../stores/subagentRuns";
@@ -67,7 +39,6 @@ import type {
   PermissionAsk,
   Risk,
 } from "../../stores/permissions";
-import { formatTime } from "../../utils/time";
 import {
   pairSections,
   type SectionToolEntry,
@@ -79,6 +50,8 @@ import DrawerPromptCard from "./DrawerPromptCard.vue";
 import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
 import DrawerToolCallCard from "./DrawerToolCallCard.vue";
 import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
+import SubagentDrawerHeader from "./SubagentDrawerHeader.vue";
+import SubagentDrawerErrorCard from "./SubagentDrawerErrorCard.vue";
 import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
 
 const store = useSubagentRunsStore();
@@ -95,28 +68,21 @@ const repoRoot = computed<string>(() => chatStore.currentCwd);
 
 /** FT-F-001 stage 2 (2026-06-20): synthesize a `PermissionAsk` from a
  *  drawer transcript section's `payload_json`. The body component takes
- *  the typed `PermissionAsk` shape (camelCase), so we map field-by-
- *  field. Rid / sessionId / toolUseId are best-effort strings here —
- *  they drive the path badge via `ask.path` AND (in interactive mode)
- *  the `permission_response` IPC routing.
+ *  the typed `PermissionAsk` shape (camelCase), so we map field-by-field.
  *
  *  PR2 RULE-FrontSubagent-003 (2026-06-22): the payload also carries
  *  an optional `workerRunId` — set when the backend emits a LIVE
- *  worker ask. The historical transcript entries (RULE-A-016 collapse
- *  path pre-PR1) do NOT carry `workerRunId`, so its absence signals
- *  a historical entry; its presence signals a real interactive ask.
- *  The `interactive` reconciliation below uses `getPendingByRid`
- *  (the live permissions store) instead, so the field is purely
- *  informational — kept here for completeness / debugging.
+ *  worker ask. Historical transcript entries (RULE-A-016 collapse path
+ *  pre-PR1) do NOT carry it. The `interactive` reconciliation below
+ *  uses `getPendingByRid` (the live permissions store) instead, so the
+ *  field is purely informational.
  *
  *  Cross-layer drift note (2026-06-20 check phase): the Rust
  *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
  *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`), so the
- *  stored `payload_json` actually has camelCase keys
- *  (`sessionId` / `toolUseId` / `toolName` / `toolInput`). We read
- *  BOTH spellings defensively (camelCase first per production
- *  reality, snake_case as fallback) so the drawer keeps rendering
- *  correctly if either layer is ever refactored. */
+ *  stored `payload_json` actually has camelCase keys. We read BOTH
+ *  spellings defensively (camelCase first per production reality,
+ *  snake_case as fallback). */
 function synthesizeAsk(p: Record<string, unknown>): PermissionAsk {
   return {
     rid: String(p.rid ?? ""),
@@ -455,32 +421,19 @@ const isRunning = computed<boolean>(() => status.value === "running");
  *
  *  WHY THIS IS A SEPARATE COMPUTED (not read from `sections`):
  *  the accumulator's `routeChatEvent` switch DROPs the `error` inner
- *  kind (`stores/subagentRuns.ts` `case "error": return;` — terminal
- *  signal, no text contribution). So the error message is NOT in the
- *  `sections` / `replyText` stream. We re-parse `run.transcriptJson`
- *  directly to find the error event's payload.
+ *  kind (`case "error": return;` — terminal signal, no text contribution).
+ *  So the error message is NOT in the `sections` / `replyText` stream.
+ *  We re-parse `run.transcriptJson` directly to find it.
  *
- *  Extraction priority (4-level fallback chain — each level loosens
- *  the source):
- *    1. Parse `run.transcriptJson`, walk from the END backwards, find
- *       the last entry with `kind === "chat_event"` whose inner
- *       `payload_json.kind === "error"`. Read `payload_json.message`.
- *       (The Rust `ChatEvent::Error` carries `{ message, category }`
- *       per `llm/types.rs:407-410`; the inner kind is serialized as
- *       `"error"` via the snake_case `tag = "kind"` serde attribute.)
- *    2. Fall back to `run.finalText` — the backend's
- *       `format_final_text(status="error", worker_text)` returns the
- *       worker_text verbatim when no explicit error message exists
- *       (`subagent.rs:1151-1178`), so `finalText` carries the same
- *       payload in the no-error-event case.
- *    3. Fall back to `run.summary` (PR5's bannerText already uses
- *       this for the header — the ❌ card reuses it as a last-resort
- *       detail).
- *    4. Final fallback: the canned "(no error text captured)" string
- *       so the card never renders an empty body.
- *
- *  Returns `null` when `status !== "error"` (the card is hidden via
- *  `v-if` anyway, but `null` makes the computed self-documenting). */
+ *  Extraction priority (4-level fallback chain — see R25 in
+ *  `.trellis/spec/frontend/chat.md`):
+ *    1. transcriptJson reverse-scan for the last chat_event with
+ *       inner kind="error" → payload_json.message
+ *    2. run.finalText (backend's `format_final_text` carries the
+ *       worker_text verbatim when no explicit error event exists)
+ *    3. run.summary (last-resort)
+ *    4. canned "(no error text captured)"
+ *  Returns `null` when `status !== "error"`. */
 const errorMessage = computed<string | null>(() => {
   if (status.value !== "error" || !run.value) return null;
 
@@ -522,11 +475,8 @@ const errorMessage = computed<string | null>(() => {
 /** PR6 (2026-06-21) R23 (downgraded): cancelled terminal state — the
  *  Reply segment replaces its body with a `⊘ Cancelled · at X.Xs`
  *  chip. PRD R23 originally specified "at turn N" but the
- *  `subagent_runs` schema has no turn column (only started_at /
- *  finished_at + the new task / final_text from PR1); turn N is not
- *  reliably inferable from the transcript (the cancel Done event may
- *  be missing). The downgrade uses the wall-clock terminal duration
- *  (`terminalDurMs`) instead — same source as the header status pill.
+ *  `subagent_runs` schema has no turn column pre-PR2; the downgrade
+ *  uses the wall-clock terminal duration (`terminalDurMs`) instead.
  *
  *  Returns the formatted duration suffix (e.g. "at 5.3s") or `null`
  *  when the run is not cancelled or the duration is unavailable. */
@@ -632,22 +582,15 @@ const showJumpLatest = computed<boolean>(
 /** PR2 RULE-FrontSubagent-003 (2026-06-22): reconciliation helper for
  *  the drawer's PermissionAsk cards. For each transcript ask entry,
  *  we check whether the same `rid` is live-pending in the permissions
- *  store (meaning the worker is CURRENTLY awaiting the user's
- *  decision). If so, the card renders in interactive mode (Allow /
- *  Deny buttons); otherwise it renders in historical mode (static).
+ *  store. If so, the card renders in interactive mode (Allow / Deny
+ *  buttons); otherwise it renders in historical mode (static).
  *
- *  Why rid-based reconciliation (not workerRunId-based):
- *    - The PR1 backend persists each live ask to BOTH the worker's
- *      transcript (`subagent_runs.transcript_json`, via the sink's
- *      emit_permission_ask hook) AND the permissions store (live
- *      oneshot map). The transcript entry carries the SAME rid as
- *      the live IPC payload — they're the same ask, two surfaces.
- *    - When the user responds, the store clears the live entry; the
- *      transcript entry stays (it's a historical record). So
- *      "live = getPendingByRid(rid)" naturally flips from `true`
- *      to `false` the moment the user acts.
- *    - A future drawer open (after worker exit) starts with NO live
- *      entries, so all cards render historical — correct behavior.
+ *  Why rid-based reconciliation: the PR1 backend persists each live
+ *  ask to BOTH the worker's transcript AND the permissions store
+ *  with the SAME rid — they're the same ask, two surfaces. When the
+ *  user responds, the store clears the live entry; the transcript
+ *  entry stays as a historical record. So "live = getPendingByRid(rid)"
+ *  naturally flips from `true` to `false` the moment the user acts.
  *
  *  Returns `false` for empty / missing rids (defensive against
  *  malformed payload_json — historical entries pre-PR2 may lack
@@ -675,74 +618,23 @@ function isPermissionAskLive(rid: string): boolean {
             Live transcript of the worker subagent run.
           </DialogDescription>
 
-          <!-- Header: status + name + timestamps + summary -->
-          <header class="subagent-drawer__header">
-            <div class="subagent-drawer__title-row">
-              <span
-                class="subagent-drawer__status"
-                :style="{ color: statusDisplay.color, borderColor: statusDisplay.color }"
-                :title="`Status: ${status}`"
-              >{{ statusDisplay.label }}{{ statusDisplay.suffix }}</span>
-              <span class="subagent-drawer__name">
-                {{ run?.subagentName ?? "worker" }}
-              </span>
-              <button
-                v-if="showJumpLatest"
-                class="subagent-drawer__jump-latest"
-                type="button"
-                :title="newCount > 0 ? `跳到最新 (${newCount} 条新事件)` : '跳到最新'"
-                aria-label="Jump to latest"
-                @click="jumpToLatest"
-              >
-                <Icon name="arrow-down" :size="14" />
-              </button>
-              <DialogClose
-                class="subagent-drawer__close"
-                aria-label="Close"
-              >
-                <Icon name="x" :size="14" />
-              </DialogClose>
-            </div>
-            <div
-              v-if="bannerText"
-              :class="[
-                'subagent-drawer__banner',
-                `subagent-drawer__banner--${bannerText.kind}`,
-              ]"
-              role="status"
-              :aria-label="bannerText.text"
-            >
-              <Icon name="warn" :size="14" />
-              <span class="subagent-drawer__banner-text">{{ bannerText.text }}</span>
-            </div>
-            <div
-              v-if="run?.startedAt"
-              class="subagent-drawer__meta"
-            >
-              <span class="subagent-drawer__meta-time">
-                <Icon name="clock" :size="11" />
-                开始 {{ formatTime(run.startedAt) }}
-              </span>
-              <span
-                v-if="run.finishedAt"
-                class="subagent-drawer__meta-time"
-              >
-                <Icon name="clock" :size="11" />
-                结束 {{ formatTime(run.finishedAt) }}
-              </span>
-            </div>
-            <p
-              v-if="run?.summary"
-              class="subagent-drawer__summary"
-            >{{ run.summary }}</p>
-            <span
-              v-if="truncated"
-              class="subagent-drawer__truncated"
-              title="原 transcript 超过 4 MiB,backend 已截断保留 head + tail"
-            >
-              原 transcript 已截断 (head + tail)
-            </span>
-          </header>
+          <!-- Header: status + name + timestamps + summary.
+               Split out into <SubagentDrawerHeader> (2026-06-23,
+               PRD 06-23-06-23-split-subagent-drawer). Header is a
+               pure-presentation child — it receives the run row,
+               the typed status, the pre-computed statusDisplay /
+               bannerText, and the `truncated` flag. No store reads,
+               no ticker, no scroll orchestration. The `↗ jump to
+               latest` button moved out of the header to the body
+               top (its visible + click handler depend on body's
+               autoFollow / newCount / bodyEl state). -->
+          <SubagentDrawerHeader
+            :run="run"
+            :status="status"
+            :status-display="statusDisplay"
+            :banner-text="bannerText"
+            :truncated="truncated"
+          />
 
           <!-- Body: 5-segment grouped view -->
           <div
@@ -750,6 +642,16 @@ function isPermissionAskLive(rid: string): boolean {
             class="subagent-drawer__body"
             @scroll="onBodyScroll"
           >
+            <button
+              v-if="showJumpLatest"
+              class="subagent-drawer__jump-latest"
+              type="button"
+              :title="newCount > 0 ? `跳到最新 (${newCount} 条新事件)` : '跳到最新'"
+              aria-label="Jump to latest"
+              @click="jumpToLatest"
+            >
+              <Icon name="arrow-down" :size="14" />
+            </button>
             <div class="subagent-drawer__segments">
               <!-- Prompt card (always-expanded, hidden when task is null).
                    Rendered OUTSIDE the isEmpty gate so a freshly-dispatched
@@ -763,20 +665,13 @@ function isPermissionAskLive(rid: string): boolean {
                    shows an 80-char summary line; this card shows the
                    full error message (errorMessage computed falls
                    back through transcriptJson → finalText → summary →
-                   canned). Hidden unless status === 'error'. -->
-              <div
+                   canned). Hidden unless status === 'error'. Split
+                   into <SubagentDrawerErrorCard> (2026-06-23, PRD
+                   06-23-06-23-split-subagent-drawer). -->
+              <SubagentDrawerErrorCard
                 v-if="status === 'error' && errorMessage !== null"
-                class="subagent-drawer__error-card"
-                role="alert"
-              >
-                <div class="subagent-drawer__error-header">
-                  <span class="subagent-drawer__error-icon">
-                    <Icon name="shield-x" :size="14" />
-                  </span>
-                  <span class="subagent-drawer__error-title">Worker error</span>
-                </div>
-                <p class="subagent-drawer__error-message">{{ errorMessage }}</p>
-              </div>
+                :error-message="errorMessage"
+              />
 
               <div v-if="isEmpty" class="subagent-drawer__empty">
                 Worker is starting...
@@ -899,7 +794,6 @@ function isPermissionAskLive(rid: string): boolean {
    is unnecessary here — the portal children are still children of
    THIS component's render tree (reka-ui portals via Vue's own
    <Teleport>, which preserves the parent chain for styling). */
-
 .subagent-drawer__sr-title,
 .subagent-drawer__sr-desc {
   position: absolute;
@@ -947,80 +841,6 @@ function isPermissionAskLive(rid: string): boolean {
   opacity: 0;
 }
 
-.subagent-drawer__header {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-bg-border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.subagent-drawer__banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  border-left: 3px solid currentColor;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  line-height: 1.4;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  word-break: break-word;
-}
-.subagent-drawer__banner--error {
-  color: var(--color-tool-error);
-}
-.subagent-drawer__banner--warning {
-  color: var(--color-tool-shell);
-}
-.subagent-drawer__banner-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.subagent-drawer__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.subagent-drawer__status {
-  padding: 2px 8px;
-  border: 1px solid;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-}
-
-.subagent-drawer__name {
-  font-weight: 600;
-  font-size: 13px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-drawer__close {
-  font: inherit;
-  font-family: var(--font-sans);
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-}
-.subagent-drawer__close:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-elevated);
-}
-
 .subagent-drawer__jump-latest {
   font: inherit;
   font-family: var(--font-sans);
@@ -1062,36 +882,6 @@ function isPermissionAskLive(rid: string): boolean {
 .subagent-drawer__new-events:hover {
   background: var(--color-accent);
   color: var(--color-bg-app);
-}
-
-.subagent-drawer__meta {
-  display: flex;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-}
-
-.subagent-drawer__meta-time {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.subagent-drawer__summary {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  max-height: 100px;
-  overflow-y: auto;
-}
-
-.subagent-drawer__truncated {
-  color: var(--color-tool-shell);
-  font-size: 10px;
-  cursor: help;
-  font-family: var(--font-mono);
 }
 
 .subagent-drawer__body {
@@ -1183,52 +973,6 @@ function isPermissionAskLive(rid: string): boolean {
   font-size: 12px;
   color: var(--color-text-muted);
   font-style: italic;
-}
-
-/* PR6 R25: error card chrome. Red 3px left border (--color-tool-error)
-   per design-tokens convention; matches PermissionModal --critical /
-   YoloConfirmModal visual language for "extreme risk" surfaces. */
-.subagent-drawer__error-card {
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-bg-border);
-  border-left: 3px solid var(--color-tool-error);
-  border-radius: 6px;
-  padding: 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.subagent-drawer__error-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-tool-error);
-}
-
-.subagent-drawer__error-icon {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.subagent-drawer__error-title {
-  color: var(--color-tool-error);
-}
-
-.subagent-drawer__error-message {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--color-text-primary);
-  word-break: break-word;
-  white-space: pre-wrap;
-  max-height: 240px;
-  overflow-y: auto;
 }
 
 /* PR6 R23 (downgraded): cancelled-state chip inside the Reply segment.
