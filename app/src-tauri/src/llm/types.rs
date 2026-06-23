@@ -206,7 +206,7 @@ pub struct ToolDef {
 impl ToolDef {
     /// Test-only constructor: builds a `ToolDef` with a name
     /// and a default empty `input_schema`. Used by
-    /// `agent::permissions::tests::filter_tools_for_mode_*`
+    /// `agent::permissions::tests_mode::filter_tools_for_mode_*`
     /// to construct minimal tool lists without going through
     /// the real `tools::builtin_tools()` registry (which would
     /// require `AppState` context).
