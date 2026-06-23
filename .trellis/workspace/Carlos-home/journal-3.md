@@ -305,3 +305,58 @@ db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_te
 ### Next Steps
 
 - None - task complete
+
+## Session 68: 同步代码地图 + 文档引用(10 个文件 split 之后的漂移修复)
+
+**Date**: 2026-06-24
+**Task**: `.trellis/tasks/06-24-sync-docs-after-10-splits`
+**Branch**: `main`
+
+### Summary
+
+2026-06-23/24 连续完成 10 个大型文件 split 后,代码地图 / spec / 决策档案 / 源码注释系统性漂移。本任务把 6 个文档 + 5 处源码注释全部回填到 split 后真实路径 + 旧路径加 (拆分自 X, 2026-06-23) 标注(保留原路径作 git blame 锚点)。**零行为变更**,纯文档 + 注释维护。
+
+**漂移面 9 类盘点**(用户 confirm 修 1-7,跳 8-9 历史快照):
+
+- **类 1-2** 严重(新人入门文档):STRUCTURE.md 06-10 快照顶部校注认滞后 + §2/§3 文件树缺 6 个新组件 + 1 新目录;CLAUDE.md Architecture 段缺 6+ 新文件
+- **类 3-4** 中(spec 漂移):chat.md 文件清单 4 处缺新文件;subagent-runs-schema.md 5 处旧路径
+- **类 5-6** 中(决策档案):IMPLEMENTATION.md 20+ 处 + ARCHITECTURE.md 3-4 处
+- **类 7** 中(开发者注释):5 处源码内 `permissions/mod.rs` / `chat_loop.rs::run_subagent` 等
+- **类 8-9** 跳过:spikes/reviews/archive 历史快照(保留当时语义)
+
+**用户 confirm 决策**:全量修类 1-7;旧路径保留 + 标注(拆分自 X, 2026-06-23)格式(不直接重写为新行号,git blame 仍可定位)。
+
+**改动量**:
+- 11 个文档 + 源文件:`STRUCTURE.md`(94/33)+ `CLAUDE.md`(26/8)+ `chat.md`(31)+ `subagent-runs-schema.md`(24)+ `IMPLEMENTATION.md`(24)+ `ARCHITECTURE.md`(8)+ 5 个源码注释(各 1 行)
+- 4 段式 commit(commit 1 docs(map+spec) 4 文件 / commit 2 docs(adr) 2 文件 / commit 3 docs(src) 5 源文件 / commit 4 chore(task) archive)
+- 0 行为变更,0 新 RULE,DEBT.md 维持 12 项 open 状态
+
+**关键验证**:`pnpm vue-tsc --noEmit` 0 error / `cargo check` 1.01s 0 error。
+
+**Pruning decision**:
+- ModeSelect.vue:30 (Shift+Tab 引用 ChatInput.vue via useKeyboard)已 grep 验证仍正确(useKeyboard 没动,未搬到 chatInputCodeMirror composable),无需改
+- prd §3.7 列的 7 处源注释,实际 1 处是错的(Shift+Tab 没搬),剩 5 处真要改
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e5b5bec` | docs(map+spec): 同步 10 个文件 split 后的代码地图与 spec 引用 |
+| `d79917d` | docs(adr): 同步 10 个 split 后的决策档案路径与行号 |
+| `55f3be9` | docs(src): 在 5 处源码注释加 (拆分自 X, 2026-06-23) 标注 |
+| (auto) | chore(task): archive 06-24-sync-docs-after-10-splits |
+
+### Testing
+
+- [OK] `pnpm vue-tsc --noEmit` 0 error
+- [OK] `PKG_CONFIG_PATH=... cargo check` 0 error(1.01s)
+- [OK] `git diff --stat` 11 文件, 188 insertions / 81 deletions
+- [OK] 0 新 RULE,DEBT.md 维持 12 项 open 状态
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
