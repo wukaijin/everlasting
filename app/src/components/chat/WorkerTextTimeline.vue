@@ -33,7 +33,7 @@
 // drawer's 480px width.
 
 import { computed } from "vue";
-import type { TranscriptEntry } from "../../stores/subagentRuns";
+import type { TranscriptEntry } from "../../stores/subagentRuns.types";
 
 /** A lifecycle milestone extracted from the chat_event stream. */
 interface Milestone {

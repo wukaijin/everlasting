@@ -54,18 +54,16 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
+import { useSubagentRunsStore, coerceStatus } from "./subagentRuns";
+import { RunAccumulator, parseTranscriptJson } from "./runAccumulator";
 import {
-  useSubagentRunsStore,
-  coerceStatus,
-  parseTranscriptJson,
   SUBAGENT_EVENT_DEBOUNCE_MS,
-  RunAccumulator,
   type SubagentRunSummary,
   type SubagentRunRow,
   type SubagentEventPayload,
   type ThinkingSection,
   type TextSection,
-} from "./subagentRuns";
+} from "./subagentRuns.types";
 
 // -----------------------------------------------------------------------
 // Fixtures

@@ -22,7 +22,7 @@ import {
   type TranscriptEntry,
   type SectionToolEntry,
 } from "./transcriptPairing";
-import type { TranscriptSection } from "../stores/subagentRuns";
+import type { TranscriptSection } from "../stores/subagentRuns.types";
 
 // ---------------------------------------------------------------------
 // Fixture helpers

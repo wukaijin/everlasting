@@ -54,14 +54,13 @@ import {
   DialogClose,
 } from "reka-ui";
 import Icon from "../Icon.vue";
-import {
-  useSubagentRunsStore,
-  coerceStatus,
-  parseTranscriptJson,
-  type SubagentStatus,
-  type TranscriptSection,
-  type ThinkingSection,
-} from "../../stores/subagentRuns";
+import { useSubagentRunsStore, coerceStatus } from "../../stores/subagentRuns";
+import { parseTranscriptJson } from "../../stores/runAccumulator";
+import type {
+  SubagentStatus,
+  TranscriptSection,
+  ThinkingSection,
+} from "../../stores/subagentRuns.types";
 import { useChatStore } from "../../stores/chat";
 import { usePermissionsStore } from "../../stores/permissions";
 import type {

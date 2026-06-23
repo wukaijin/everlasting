@@ -26,7 +26,7 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
-import type { ThinkingSection } from "../../stores/subagentRuns";
+import type { ThinkingSection } from "../../stores/subagentRuns.types";
 
 function makeSection(overrides: Partial<ThinkingSection> = {}): ThinkingSection {
   return {

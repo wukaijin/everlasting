@@ -7,7 +7,7 @@
 // call + result as two separate cards — visually noisy and
 // inconsistent with the main panel.
 //
-// Layered on top of `TranscriptEntry` (from `stores/subagentRuns.ts`);
+// Layered on top of `TranscriptEntry` (from `stores/subagentRuns.types.ts`);
 // the drawer's `transcript` computed reads the raw entries from
 // `store.liveTranscript` / `run.transcriptJson`, then this module's
 // `pairTranscript` produces a `BufferedTranscriptEntry[]` that the
@@ -27,7 +27,7 @@
 // §"Technical Approach" for the design rationale and acceptance
 // criteria.
 
-import type { TranscriptEntry, TranscriptSection } from "../stores/subagentRuns";
+import type { TranscriptEntry, TranscriptSection } from "../stores/subagentRuns.types";
 import type { ToolCallInfo, ToolResultInfo } from "../stores/chat.types";
 
 // Re-export `TranscriptEntry` so the test file (and any other
@@ -35,7 +35,7 @@ import type { ToolCallInfo, ToolResultInfo } from "../stores/chat.types";
 // store remains the canonical source; this re-export exists
 // only for the convenience of the pairing-layer test and
 // future call sites that already pull from `transcriptPairing`.
-export type { TranscriptEntry } from "../stores/subagentRuns";
+export type { TranscriptEntry } from "../stores/subagentRuns.types";
 
 /** A `tool_call` transcript entry waiting for its `tool_result`
  *  pair. Tracks the wall-clock `received_at` (ms since epoch) so

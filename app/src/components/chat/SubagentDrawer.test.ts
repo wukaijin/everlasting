@@ -57,11 +57,8 @@ import DrawerThinkingBlock from "./DrawerThinkingBlock.vue";
 import DrawerToolCallCard from "./DrawerToolCallCard.vue";
 import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
 import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
-import {
-  useSubagentRunsStore,
-  type SubagentRunRow,
-  type TranscriptSection,
-} from "../../stores/subagentRuns";
+import { useSubagentRunsStore } from "../../stores/subagentRuns";
+import type { SubagentRunRow, TranscriptSection } from "../../stores/subagentRuns.types";
 import { useChatStore } from "../../stores/chat";
 import { usePermissionsStore } from "../../stores/permissions";
 

@@ -40,7 +40,7 @@
 
 import { computed } from "vue";
 import type { ThinkingBlockInfo } from "../../stores/chat.types";
-import type { ThinkingSection } from "../../stores/subagentRuns";
+import type { ThinkingSection } from "../../stores/subagentRuns.types";
 import ThinkingBlock from "./ThinkingBlock.vue";
 
 const props = withDefaults(

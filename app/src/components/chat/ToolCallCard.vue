@@ -45,7 +45,8 @@ import {
   usePermissionsStore,
   type PermissionDecision,
 } from "../../stores/permissions";
-import { useSubagentRunsStore, type SubagentRunSummary } from "../../stores/subagentRuns";
+import { useSubagentRunsStore } from "../../stores/subagentRuns";
+import type { SubagentRunSummary } from "../../stores/subagentRuns.types";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
