@@ -87,6 +87,66 @@ subagent:finished → fetchRun → rebuildFromCache(transcriptJson, finalText)
 
 **Extensibility**：未来想把 Header / ErrorCard 移到独立 subpackage、或加 `<DrawerHeaderAction>` slot、或 body 顶部 sticky 区做更多 affordance（"pause auto-follow" 等），A 方案 0 重构成本。
 
+### Design Decision: ChatInput split — composable + LatencyPopover + HintRow（split refactor 2026-06-23）
+
+**Context**：`ChatInput.vue` 长到 1834 行，承载 4 个独立关注点（CM 6 宿主 + `/` `@` 触发器检测 + LLM 累计耗时 popover + 底部 hint row 编排）。需要拆分降复杂度，同时公共 API（`sending` / `placeholder` + emit `send` / `stop`）必须不变（`ChatPanel.vue` 零修改）。
+
+**Decision**：拆出 1 个 composable + 2 个纯展示子组件：
+
+- **`app/src/utils/chatInputCodeMirror.ts` composable**（~564 行，0 store import）—— 封装 CM 6 生命周期 + keymap + IME + 触发器检测（`currentSlashToken` / `currentAtToken` / `detectCommandTrigger` / `detectFileTrigger` / `syncCommandPalette` / `syncFilePalette` / `closeCommandPalette` / `closeFilePalette` / `replaceDoc` / `submit`）。内部管理 `commandPaletteOpen` / `commandItems` / `commandFilter` / `filePaletteOpen` / `fileItems` / `fileFilter` + `commandsLoaded` / `filesLoaded` flags。父组件只通过 `opts.commandItemsSource?` / `opts.fileItemsSource?` 回调拉取最新 items（**单向回调 + panel state 内置**，避免双向 watch stale state）。dispatch handler（`onCommandSelect` / `onFileSelect`）留在主组件（碰 Tauri `invoke` + `chatStore.send`，不能进 composable）。
+- **`ChatInputLatencyPopover.vue`**（~365 行，0 store import，0 emit）—— 自包含 chip + popover + open state + `onDocumentClick` + Esc + Transition。严格遵循 `popover-pattern.md`（root ref / typeof document SSR guard / `onUnmounted` 清理）。HintRow 只 `<ChatInputLatencyPopover :total-ms :turns />` 一行 embed。
+- **`ChatInputHintRow.vue`**（~251 行，0 store import，0 emit）—— embed `<ChatInputLatencyPopover>` + token reka-ui Tooltip（4 行 breakdown + "升级前未统计" fallback）+ `<ModelSelect>`。reka-ui TooltipPortal `:deep(.chat-input__token-tooltip*)` 选择器全部 wrap 在 scoped CSS 内（避免 portal DOM 逃逸）。
+
+**关键 ADR**：
+
+- **ADR-1 composable 范围 = B 方案（完整）** —— 收 CM host + keymap + IME + 触发器检测；**dispatch handler 留主组件**（碰 Tauri + store，不能进 composable）；**0 store import**（composable 可独立测试 + 未来 AppShell Cmd+K 复用）。主组件从 1834 → 712 行（-61%）。
+- **ADR-2 composable ↔ 主组件面板状态通信 = 单向回调 + panel 状态内置** —— composable 内部管 panel state，父只传 source 回调（`commandItemsSource?: () => TriggerMenuItem[]` / `fileItemsSource?: () => TriggerMenuItem[]`）。避免双向 watch 的 stale state 风险。
+- **ADR-3 Latency 拆分 = A 方案（自包含 chip+popover）** —— chip 与 popover 共享 root ref + open state + onDocumentClick listener，不能拆开。LatencyPopover ~365 行（CSS 占大头），超任务描述「80 行」但用户已 confirm。
+
+**Composable 接口形状**（锁定）：
+```ts
+export function useChatInputCodeMirror(opts: {
+  host: Ref<HTMLDivElement | null>;
+  sending: Ref<boolean>;
+  placeholder: Ref<string | undefined>;
+  onSubmit: () => void;
+  commandItemsSource?: () => TriggerMenuItem[];
+  fileItemsSource?: () => TriggerMenuItem[];
+}): {
+  view: ShallowRef<EditorView | null>;
+  input: Ref<string>;
+  replaceDoc: (newDoc: string, caret?: number) => void;
+  currentSlashToken: () => { line, from, to, slashOffset, tokenEnd } | null;
+  currentAtToken: () => { line, from, to, atOffset, tokenEnd } | null;
+  detectCommandTrigger: () => { trigger: boolean; filter: string };
+  detectFileTrigger: () => { trigger: boolean; filter: string };
+  syncCommandPalette: () => void;
+  syncFilePalette: () => void;
+  closeCommandPalette: () => void;
+  closeFilePalette: () => void;
+  submit: () => boolean;
+  commandMenuRef: Ref<InstanceType<typeof TriggerMenu> | null>;
+  fileMenuRef: Ref<InstanceType<typeof TriggerMenu> | null>;
+  commandPaletteOpen: Ref<boolean>;
+  commandItems: Ref<TriggerMenuItem[]>;
+  commandFilter: Ref<string>;
+  filePaletteOpen: Ref<boolean>;
+  fileItems: Ref<TriggerMenuItem[]>;
+  fileFilter: Ref<string>;
+}
+```
+
+**生命周期安全**：
+- composable onMounted: 创建 EditorState + EditorView 挂到 `host.value`
+- composable onUnmounted: `view.value?.destroy(); view.value = null;`
+- watch(sending): `editableCompartment.reconfigure([EditorView.editable.of(!sending.value)])`
+- watch(placeholder): `placeholderCompartment.reconfigure([cmPlaceholder(placeholder.value ?? "")])`
+- IME: `submit()` 检查 `view.composing` → true 时拦截；否则调 `opts.onSubmit()`
+
+**测试 0 修改**（既有 ChatInput 测试 = 0，所以天然满足）。**可选新增**：`ChatInputLatencyPopover.test.ts`（chip 渲染 / open-close / outside-click / Esc / empty state）+ `chatInputCodeMirror.test.ts`（composable 单元测：currentSlashToken / currentAtToken / detect* / submit 拦截）—— 留 follow-up。
+
+**Extensibility**：未来 Composable 可直接复用给 AppShell Cmd+K / 其他输入框（0 store import + 触发器检测可配置触发字符）。
+
 ### Convention: section 级配对（pairSections）
 
 ```ts
