@@ -51,7 +51,7 @@ onMounted(async () => {
   // B6 PR3 (2026-06-20): mount the global `subagent:event` listener.
   // The store routes payloads into per-runId `liveTranscript` (with
   // a 200ms debounce) so the `<SubagentDrawer>` can stream worker
-  // progress in real-time. See `subagentRuns.ts` + the PR3 PRD.
+  // progress in real-time. See `subagentRuns.ts`(拆分自 1416 行,2026-06-23 拆为 types + runAccumulator + store 三文件) + the PR3 PRD.
   void subagentRuns.start();
 });
 

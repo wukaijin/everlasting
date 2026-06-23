@@ -79,7 +79,7 @@ const repoRoot = computed<string>(() => chatStore.currentCwd);
  *
  *  Cross-layer drift note (2026-06-20 check phase): the Rust
  *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
- *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`), so the
+ *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`,拆分自 mod.rs,2026-06-23 拆为 8 模块,ask_path 落 `permissions/ask.rs`), so the
  *  stored `payload_json` actually has camelCase keys. We read BOTH
  *  spellings defensively (camelCase first per production reality,
  *  snake_case as fallback). */

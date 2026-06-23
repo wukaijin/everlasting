@@ -7,7 +7,7 @@
 // (ThinkingBlock / ToolCallCard-rendered-by-ToolInputBody+ToolOutputBody)
 // but maintains its OWN data→view rendering path. This wrapper is
 // the adapter between the drawer's accumulator output
-// (`ThinkingSection`, from `stores/subagentRuns.ts`) and the main
+// (`ThinkingSection`, from `stores/subagentRuns.ts`,拆分自 subagentRuns.ts,2026-06-23 拆 types + RunAccumulator,类型落 `stores/subagentRuns.types.ts`) and the main
 // panel's `ThinkingBlock` props (`blocks: ThinkingBlockInfo[]`).
 //
 // Why a wrapper instead of mounting `<ThinkingBlock>` directly from

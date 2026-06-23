@@ -285,7 +285,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
   /** Find the summary for a worker run by the dispatch_subagent
    *  tool_use's `id`. The backend formats the worker's rid as
    *  `"{parent_rid}-sub-{tool_use_id}"` (see
-   *  `chat_loop.rs::run_subagent`), so we match summaries whose
+   *  `chat_loop.rs::run_subagent`,拆分自 chat_loop.rs,2026-06-23 抽至 `agent/subagent/dispatch.rs::run_subagent`), so we match summaries whose
    *  `parentRequestId` ends with `"-sub-" + toolUseId`. Returns
    *  `undefined` when no worker for this tool_use has been
    *  dispatched yet (e.g. the lookup ran before `fetchForSession`
