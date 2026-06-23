@@ -69,45 +69,6 @@
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 
-## P2 — 中等(健壮性 + 债务) [3 items]
-
-### RULE-A-005 — head_sha spawn 前查一次 50 轮不刷新
-
-- **Level**: P2 (**P1 降级**)
-- **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat_loop.rs:509`(`let mut head_sha = lookup_head_sha(...)` 一次性初始化,旧 chat.rs:362/528 在 06-23 split 后漂移) + `:732-744`(每轮 refresh 入口,新加 2026-06-24)
-- **Description**: spawn 前一次性;每轮 clone 同一 system_prompt
-- **Impact**: agent 在 turn 3 commit 后,turn 4 system_prompt 的 HEAD SHA 与 `git log` 不一致,LLM 认知漂移(原 P1,meta-review 降 P2)
-- **Fix**: 每 N 轮或每次 tool 执行后刷新
-- **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-24-p2-batch-3-rules`
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
-
-
-### RULE-A-009 — 死代码抑制噪音
-
-- **Level**: P2
-- **Subsystem**: Agent Loop
-- **File**: `app/src-tauri/src/agent/chat_loop.rs:962`(`turn_send_at` 原 519 行 `let _ = &base_prompt;` 抑制器,旧 chat.rs:432/512 在 06-23 split 后漂移) + `app/src-tauri/src/llm/types.rs`(`ChatEvent::ToolResult` 变体已删,2026-06-24;旧 types.rs:357 同位置)
-- **Description**: `let _ = &base_prompt;` / `let _ = turn_send_at;` 警告抑制死代码;`ChatEvent::ToolResult` 变体从不构造
-- **Fix**: 删除未用变量和构造路径
-- **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-24-p2-batch-3-rules`
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.1
-
-
-### RULE-B-003 — sqlite_glob_match 的 ? 分支 dead code
-
-- **Level**: P2
-- **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/check.rs:386`(`sqlite_glob_match` 定义) + `:407-417`(`?` 分支简化后,2026-06-24;line 386 漂移无变化,只是死分支已清)
-- **Description**: 内层 `if tbytes[ti] == b'/'` 永远 true(外层已判),`return false` 必达
-- **Fix**: 删除冗余分支
-- **Owner**: carlos
-- **Related Task**: `.trellis/tasks/06-24-p2-batch-3-rules`
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
-
-
 ## P3 — 轻微(文档/一致性) [8 items]
 
 ### RULE-B-006 — AuditKind docstring "10"→"11"
@@ -216,9 +177,9 @@
 |---|---|---|
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 1 | 正确性 + 资源,影响功能或可靠性 |
-| P2 | 3 | 健壮性 + 债务,中长期清理 |
+| P2 | 0 | 健壮性 + 债务,中长期清理 |
 | P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **12** | 当前 open items |
+| **Total** | **9** | 当前 open items |
 
 ---
 
