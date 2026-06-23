@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 67
-- **Last Active**: 2026-06-23
+- **Total Sessions**: 68
+- **Last Active**: 2026-06-24
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~307 | Active |
+| `journal-3.md` | ~397 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 68 | 2026-06-24 | Session 68: 同步代码地图 + 文档引用(10 个 split 漂移修复) | `e5b5bec`, `d79917d`, `55f3be9` | `main` |
 | 67 | 2026-06-23 | fix build warnings (rust unused re-exports + vite onwarn + chunk size) | `eca8b6b` | `main` |
 | 66 | 2026-06-23 | Session 71: 拆分 ChatInput.vue — chatInputCodeMirror composable + LatencyPopover + HintRow | `d46e223`, `115d299` | `main` |
 | 65 | 2026-06-23 | Split db/tests.rs into 6 SQL-domain files | `3edb597` | `main` |

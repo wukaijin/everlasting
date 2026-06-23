@@ -360,3 +360,38 @@ db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_te
 ### Next Steps
 
 - None - task complete
+
+
+## Session 68: Session 68: 同步代码地图 + 文档引用(10 个 split 漂移修复)
+
+**Date**: 2026-06-24
+**Task**: Session 68: 同步代码地图 + 文档引用(10 个 split 漂移修复)
+**Branch**: `main`
+
+### Summary
+
+2026-06-23/24 连续 10 个文件 split 后,代码地图 / spec / 决策档案 / 源码注释系统性漂移。本任务把 6 个文档 + 5 处源码注释全部回填到 split 后真实路径 + 旧路径加 (拆分自 X, 2026-06-23) 标注。零行为变更,纯文档 + 注释维护。改动量:11 文件,188 insertions / 81 deletions,4 段式 commit。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e5b5bec` | (see git log) |
+| `d79917d` | (see git log) |
+| `55f3be9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
