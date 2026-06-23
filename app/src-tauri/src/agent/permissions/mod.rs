@@ -94,10 +94,31 @@ pub mod tests_ask;
 // Re-export — keeps the `permissions::<item>` short path stable for
 // external callers (`state.rs` / `chat_loop.rs` / `commands/*` /
 // `subagent/sink.rs` etc. all reach these via the flat path).
-pub use ask::ASK_TIMEOUT;
+//
+// `ASK_TIMEOUT` / `PendingAsk` are intentionally NOT re-exported
+// here — they are only consumed inside the `permissions` submodule
+// via `super::ask::ASK_TIMEOUT` / `super::store::PendingAsk`.
+// Re-exporting them surfaces a `unused_imports` warning with no
+// external payoff (the short path is never used outside the
+// submodule).
+//
+// `AuditKind` / `Risk` / `risk_for_tool` / `register_ask` are
+// re-exported ONLY for the test suites (`tests_audit.rs` /
+// `tests_types.rs` / `tests_check.rs` / `tests_store.rs` and
+// `subagent/sink.rs` `#[cfg(test)] mod tests`). Lib code reaches
+// them through `super::audit::AuditKind` /
+// `super::types::{Risk, risk_for_tool}` /
+// `super::store::register_ask` — but the test files use the flat
+// `crate::agent::permissions::Xxx` path. The
+// `#[allow(unused_imports)]` here silences the `cargo check` warning
+// (which doesn't compile the test files) without losing the
+// short-path re-export that tests need.
+#[allow(unused_imports)]
 pub use audit::{record_message_resend_audit, record_tool_executed_audit, AuditKind};
 pub use check::check;
 pub use mode::{filter_tools_for_mode, mode_system_prefix};
 pub use payload::PermissionAskPayload;
-pub use store::{cancel_session_asks, new_permission_store, register_ask, resolve_ask, PendingAsk, PermissionStore};
+#[allow(unused_imports)]
+pub use store::{cancel_session_asks, new_permission_store, register_ask, resolve_ask, PermissionStore};
+#[allow(unused_imports)]
 pub use types::{risk_for_tool, Decision, PermissionContext, PermissionResponse, Risk};
