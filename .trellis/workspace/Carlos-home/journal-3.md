@@ -454,3 +454,51 @@ DEBT.md 3 条 P2 open 债一次性批量收口,0 行为变更,7 文件 landed(5 
 - **Follow-up (留新 task)**:`06-24-delete-3-closed-rules` — PR merge 后从 DEBT.md 删 3 条 RULE(A-005/A-009/B-003),按 DEBT.md invariant"本文件 = open 集合"。
 - **Follow-up (留新 task)**:`06-24-audit-stale-specs` — check L5 同时扫到的其他 P3 文档漂移(DEBT.md 8 条 P3 也有 5+ 处 file:line 漂移待同步),Session 68 同步任务只扫了源码注释和主 spec,没扫 DEBT RULE 引用 + 其他 backend spec。
 - **下一任务候选**:P1 `RULE-D-001 API key 加密`(唯一 P1,4-6h)/ 路线图第三档任一(B9/C2/C6/B1/D2)/ 上述 2 个 follow-up 之一。
+
+---
+
+## Session 70: P1 RULE-D-001 — provider api_key 加密存储
+
+**Date**: 2026-06-24
+**Task**: `.trellis/tasks/archive/2026-06/06-24-p1-api-key-encryption`
+**Branch**: `main`
+
+### Summary
+
+唯一 P1 安全债 RULE-D-001 收口:provider api_key 不再明文存 SQLite + 不再明文经 IPC 回传前端。方案 AES-256-GCM + HKDF(machine-id) 派生 master key,AAD=provider id。brainstorm 三方 research 收敛(keyring 在 WSL 实测开箱不可用被否;业界同类 Codex/Claude Code/Aider/Continue 默认明文文件或 env var;应用层加密精准命中"防 DB 泄露"威胁模型 + WSL 零摩擦)。2 ADR(选型纯加密 MVP + 前端不持明文 key)。Expansion 纳入 AAD 关联数据 + Settings 加密徽标。
+
+### Main Changes
+
+- `app/src-tauri/src/crypto.rs`(新,~190 行):AES-256-GCM + HKDF(machine-id),encrypt/decrypt 带 AAD(provider id 绑定,防 DB 内挪用),6 单测(roundtrip/empty/tamper/aad_mismatch/unknown_version/distinct_nonces)
+- `app/src-tauri/src/db/migrations.rs`:+`add_provider_column_if_missing` + 两列(`api_key_enc`/`key_migrated_at`)+ 启动幂等迁移 `migrate_provider_api_keys_to_encrypted`(WHERE key_migrated_at IS NULL 幂等;derive 失败不阻断保留明文重试)
+- `app/src-tauri/src/db/providers.rs`:重写 CRUD — create/update 加密写 api_key_enc,list/get 解密填 ProviderRow.api_key(内部消费),update 改 Option(留空覆盖语义),decrypt_api_key_or_empty 降级空串 + warn
+- `app/src-tauri/src/db/types.rs`:ProviderRow.api_key `#[serde(skip)]` 切断 IPC 明文回传 + 新增 has_key 字段
+- `app/src-tauri/src/agent/{provider,chat}.rs`:pre-flight 区分 EmptyApiKey(has_key=false) vs DecryptFailed(has_key=true 明文空,机器变化)文案不同;PreFlightError +DecryptFailed 变体
+- `app/src-tauri/src/commands/providers.rs`:update_provider api_key 改 Option<String>(None=保持/Some=覆盖)
+- 前端 `stores/{providers,config}.ts` + `ProvidersTab.vue`:ProviderRow apiKey→hasKey,编辑留空覆盖(undefined 省略字段→Rust None)+ 加密状态徽标 + 动态 placeholder("留空保持不变,输入新值则覆盖")
+- `.trellis/spec/backend/multi-provider-contract.md`:ProviderRow wire(struct serde skip + hasKey)+ schema(api_key_enc/key_migrated_at)+ IPC table(update Option)同步
+- `background_shell/in_memory.rs`:顺手 `#[allow(dead_code)]` rt helper(pre-existing warning,达成 DoD 0 warning)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `576b2f4` | fix(security): encrypt provider api_key at rest (RULE-D-001) |
+| `30a5eaf` | docs(debt): close RULE-D-001 (api_key encrypted at rest) |
+| (auto) | chore(task): archive 06-24-p1-api-key-encryption |
+
+### Testing
+
+- [OK] `cargo test --lib` **822 passed; 0 failed**(820 基线 + 2 新:api_key_is_encrypted_not_plaintext_in_db + plaintext_api_key_migration_is_idempotent)
+- [OK] `cargo test --lib` **0 warning**(rt allow 消除 pre-existing)
+- [OK] crypto 6 单测 + db 加密往返/迁移幂等全过
+- [OK] `vue-tsc --noEmit` 0 error
+- [OK] `vitest run` 518 passed(4 pre-existing unhandled rejection = DEBT RULE-FrontTest-001,与本任务无关)
+
+### Status
+
+[OK] **Completed** — RULE-D-001 闭。DEBT 9 → 8 open(P1: 1→0)。威胁模型:防 DB 文件泄露(无 machine-id 解不开);不防本机 root/进程内存(Out of Scope)。机器绑定固有性质:`wsl --unregister`/重装重置 machine-id 旧密文不可解,靠 DecryptFailed 兜底友好提示重粘。
+
+### Next Steps
+
+- 下一任务候选:DEBT 8 条全 P3(文档/一致性),或 ROADMAP 第三档(D2 全文搜索 / C2 循环检测 / C6 截断统一 / B1 图片 / B9 生成式 UI / L3 并行 subagent)。
