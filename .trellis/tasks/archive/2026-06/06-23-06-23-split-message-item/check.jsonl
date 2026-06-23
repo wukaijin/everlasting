@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Verify ADR-1: grep 两个子组件文件,确认无 useChatStore/useProjectsStore import;chatStore 调用全部留在 MessageItem.vue。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify ADR-4 markdown 闸门删除后无 cross-layer drift:Vue render → watcher → createDebouncedRenderer → rendered ref → bubble v-html 链路仍闭环,edit 模式下 bubble v-if unmount 拦截有效。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify 无 copy-paste 工具逻辑:abbreviateDuration 已被 utils/duration.ts 覆盖,MessageItemFooter 必须 import 现有 helper,不要重新写 toFixed 逻辑。"}
+{"file": ".trellis/tasks/archive/2026-06/06-23-06-23-split-chat-types/prd.md", "reason": "Precedent check: 与既有拆分任务的 PRD 结构 + DoD 覆盖度对齐,确认本任务没有遗漏 DoD 项。"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "Verify MessageItem 公共 API 不变:MessageList.vue 仍按 message prop 调用;testid 全保留;视觉零回归。"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "Verify deep selector 迁移正确:4 条 msg__latency-tooltip 规则搬到 MessageItemFooter scoped CSS 后仍能命中 TooltipContent portal body。"}

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store conventions — ADR-1 锁定:子组件不 import store,props-only,parent 编排 editMessage/resendMessage/showToast。"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "Chat 组件模式 — MessageItem 既有 props shape `{ message: ChatMessage }`；父编排约定与 MessageActionsMenu.vue 同款。"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "Popover / Tooltip pattern — latency chip 用 Tooltip 作 hover affordance,已有 chip-attached pattern 约定。"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec 索引 — 实施前快速过一遍相关章节,避免漏掉约定。"}
+{"file": ".trellis/tasks/archive/2026-06/06-23-06-23-split-chat-types/prd.md", "reason": "拆分 precedent — PRD 结构 + ADR-lite 写法 + DoD 测试覆盖标准,本任务直接复用其骨架。"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui deep-selector portal gotcha — MessageItemFooter 含 TooltipProvider/TooltipContent，portal 到 body，4 条 msg__latency-tooltip 规则需 deep 才能命中。"}
