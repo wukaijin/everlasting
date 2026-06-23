@@ -35,7 +35,7 @@
 **Context**: 2026-06-18 17:56:52Z 一条 session(`request_id=mz8s3hqwx6rmqjswgte`,`messages.seq=37`)的 thinking 流在 60.4s 时被静默切断,前端只看到 `[生成出错中断]` toast,Rust 日志 **零** WARN/ERROR,grep 不到任何线索,首次靠 DB 反查(`text="[生成出错中断]"` + content thinking 在"尝试 1"中途被截 + seq=36→37 间隔 = 60.403s)才定位到 `reqwest::Client::builder().timeout(Duration::from_secs(60))` 触发。两条独立但同源的根因:
 
 1. **reqwest `.timeout()` 是总 deadline**(`connect` 起算到 body EOF),不适合 SSE streaming —— 响应大小未知、chunk 间隔可变(extended thinking + 3rd-party 代理 `wukaijin.com` + `thinking_effort=high` 默认值 = 60s+ 才出首个 text delta 常见)。`anthropic.rs:210` / `openai.rs:425` 用的就是这个 API。
-2. **`chat_loop.rs:657` 把 `LlmError` 静默包成 `ChatEvent::Error`,不打 tracing** —— 整个错误通道(Network / Auth / RateLimit / Server / InvalidRequest)都不留 Rust 侧 breadcrumb。RULE-A-007(2026-06-17)只补了 "error arm 持久化 partial turn",没补 "trace the cause"。
+2. **`chat_loop.rs:657`**(拆分自 `chat_loop.rs`,2026-06-23 抽 `run_subagent` 至 `subagent/dispatch.rs` 后行号下移 ~522 → 实际 `agent/chat_loop.rs:~135`)**`LlmError` 静默包成 `ChatEvent::Error`,不打 tracing** —— 整个错误通道(Network / Auth / RateLimit / Server / InvalidRequest)都不留 Rust 侧 breadcrumb。RULE-A-007(2026-06-17)只补了 "error arm 持久化 partial turn",没补 "trace the cause"。
 
 行业参照(`reqwest` 自身文档 `async_impl/client.rs:1448-1459`):**"read_timeout is more appropriate for detecting stalled connections when the size isn't known beforehand"** —— SSE 的标准定义。LiteLLM 默认 `timeout=600s` 区分 `httpx.Timeout(timeout=, connect=, read=, pool=)`(`litellm/llms/custom_httpx/http_handler.py:133`);Anthropic / OpenAI SDK 都暴露 `Timeout(connect=, read=, write=, pool=)` 四阶段配置;reqwest 同款语义:**`timeout`(总 deadline)、`read_timeout`(per-chunk)、`connect_timeout`(握手)三独立 API**。
 
@@ -76,7 +76,7 @@ Err(err) => {
 **关联**:
 
 - **RULE-A-007**(2026-06-17 closed,`error arm persist partial turn`)—— 同是 `had_error = true` 路径处理,A-007 落盘,A-012 落 trace,互补。
-- **RULE-A-006**(2026-06-15 closed,`chat_loop 单一权威`)—— 改 `chat_loop.rs:657` 1 处全生效,9 个 `agent_loop_*` 集成测试已覆盖真实 production 路径(`agents/tests.rs`)。
+- **RULE-A-006**(2026-06-15 closed,`chat_loop 单一权威`)—— 改 `chat_loop.rs:657`(拆分自 `chat_loop.rs`,2026-06-23 抽 `run_subagent` 后行号下移 ~522)1 处全生效,9 个 `agent_loop_*` 集成测试已覆盖真实 production 路径(`agents/tests.rs` → 现 `agent/tests_*.rs`,2026-06-23 拆为 5 域 + `tests_common.rs`)。
 - DEBT §收尾路径建议 🟡 梯队 "看到顺手修"——本次即此类。
 
 ---
@@ -248,7 +248,7 @@ PR3 收尾范围(本 ADR 锁定):
    - 后端 agent loop `run_chat_loop` 在 user message `persist_turn` 成功后检测 `resend_seq.is_some()`,调 `record_message_resend_audit(db, session_id, original_seq, &preview)` best-effort 落表(`tracing::warn!` + swallow,不 abort chat)。
    - 复用现有 cancellation token + `session_active_request` map 做 stream race 防御(跟 `editMessage` 同构)。
    - **否决方案 B**(新增独立 `resend_message` Tauri command):理由 — 多一条 IPC 路径跟 chat 路径重合,后端 audit 触发明确但前端路径重复(cancel + 拿 content + 调 chat_loop + 落 audit 拆 2 步)。方案 A 把 audit 触发塞到现有 persist 路径,触发点天然在 chat 流的"必须落 user message"那一行,漏触发风险 = 0。
-2. **AuditKind wire 字符串**:`"edit_message"` + `"resend_message"`,锁定在 `audit_kind_round_trip` 测试(`agent/permissions/mod.rs`)两端。
+2. **AuditKind wire 字符串**:`"edit_message"` + `"resend_message"`,锁定在 `audit_kind_round_trip` 测试(`agent/permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)`)两端。
 3. **"(edited)" 标签 metadata 读取**:用现有 `messages.metadata` JSON 列(2026-06-17 B2 PR3 增),新加 `ChatMessage.metadata?: Record<string, unknown>` in-memory 字段,`rehydrateMessages` 把 JSON 对象原样 attach(不强类型,未来字段不破坏接口)。`MessageItem.vue` 读 `message.metadata?.edited_at`,无值不渲染,有值时 bublle 内右下角小灰字 `(edited)` + `title` 悬停显示精确 RFC3339 时间戳。
 4. **A-010 spec 偏离声明**:
    - `docs/ARCHITECTURE.md §2.5.1` 加 "已知偏离 (RULE-A-010, 2026-06-17)" 注释段,说明 MVP 简化决策 + 未来实现路径(状态机 N=1 → tool_result 回填 LLM 续流,N=2 → emit Done)。
@@ -265,9 +265,9 @@ PR3 收尾范围(本 ADR 锁定):
 - **AuditKind 用结构体变体而非字符串 wire 匹配**:现状已用字符串(`as_str()` + `record_audit_event(.., kind.as_str(), ..)`),改动会污染 `mode_changed`/`yolo_entered` 等其他 9 类,否决。
 
 **影响面**:
-- 后端 4 文件:`agent/permissions/mod.rs`(AuditKind `ResendMessage` variant + `as_str` + `record_message_resend_audit` helper + round-trip 测试断言)+ `agent/chat.rs`(`chat` IPC 加 `resendSeq: Option<i64>`)+ `agent/chat_loop.rs`(`run_chat_loop` 加 `resend_seq` 参数 + user persist 路径加 1 个 audit 触发分支)+ `agent/tests.rs`(9 个 `agent_loop_*` 测试加 `None,` 占位)。
+- 后端 4 文件:`agent/permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)`(AuditKind `ResendMessage` variant + `as_str` + `record_message_resend_audit` helper + round-trip 测试断言)+ `agent/chat.rs`(`chat` IPC 加 `resendSeq: Option<i64>`)+ `agent/chat_loop.rs`(`run_chat_loop` 加 `resend_seq` 参数 + user persist 路径加 1 个 audit 触发分支)+ `agent/tests.rs(拆分自 tests.rs,2026-06-23 拆为 5 域 tests_*.rs + tests_common.rs)`(9 个 `agent_loop_*` 测试加 `None,` 占位)。
 - 前端 5 文件:`stores/chat.ts`(`ChatMessage.metadata` 字段 + `resendMessage` 方法 + export)+ `stores/streamController.ts`(`StartRequestArgs.resendSeq?` + `invoke("chat")` 透传 + `rehydrateMessages` 解析 metadata)+ `components/chat/MessageActionsMenu.vue`(`canResend` 改 enabled gate + `resend` emit + 移除 "PR3 待实施" tooltip)+ `components/chat/MessageItem.vue`(`onResend` handler + `editedAt`/`showEditedLabel` computed + 模板渲染 + 样式)+ `utils/audit.ts`(`AUDIT_KIND_OPTIONS` 加 2 项 + `AuditIconFamily` 加 2 family + `iconFamilyForKind` switch 加 2 case)+ `components/audit/AuditLogItem.vue`(meta computed 加 2 case)。
-- DB 测试 2 文件:`db/tests.rs` 加 2 个集成测试(`resend_message_audit_round_trips_via_list_audit_events` + `resend_message_audit_on_deleted_session_returns_error`)。
+- DB 测试 2 文件:`db/tests.rs(拆分自 tests.rs,2026-06-23 拆为 6 个 *_tests.rs)` 加 2 个集成测试(`resend_message_audit_round_trips_via_list_audit_events` + `resend_message_audit_on_deleted_session_returns_error`)。
 - Spec 4 文件:`backend/database-guidelines.md`(加 "Pattern: `record_message_resend_audit`" 段 + 跟 edit_user_message diff 表)+ `frontend/state-management.md`(D3 PR2 段后加 D3 PR3 子段)+ `frontend/reka-ui-usage.md`(D3 PR2 `DropdownMenu` 段后无需改 — Resend 按钮从 disabled 转 active 沿用同组件)+ `docs/ARCHITECTURE.md §2.5.1`(加 "已知偏离 (RULE-A-010, 2026-06-17)" 注释段)。
 - 文档 1 文件:`docs/IMPLEMENTATION.md §4`(本 ADR,2026-06-17 时间倒序顶部)。
 - DEBT 1 文件:`.trellis/reviews/DEBT.md`(RULE-A-010 Status open→closed + Resolution Notes + Re-evaluation Log 增行)。
@@ -327,7 +327,7 @@ PR3 收尾范围(本 ADR 锁定):
 
 **关键不变量**:`tool:call`(chat_loop L423)必先于 `permission:ask`(ask_path)发出——前端收到审批事件时目标 ToolCallCard 已渲染,`toolUseId` 匹配成立;同 session 的 `check()` 串行 await(同 session 最多一个 pending),跨 session 才并发,正好匹配 per-session 分区。
 
-**影响面**:后端 3 文件(`permissions/mod.rs` enum/payload/签名/分支 + `commands/permissions.rs` IPC + `chat_loop.rs` 传 tool_use_id);前端 `permissions.ts` store 重写 + `permissions.test.ts` + `ToolCallCard.vue`/`.test.ts` 审批态 + `SessionList.vue` badge,删 `PermissionModal.vue`/`.test.ts`,`ChatPanel.vue`/`ChatWindow.vue` 引用清理;spec `.trellis/spec/backend/tool-contract.md` §4 permission:ask IPC 同步。测试:后端 68 lib 测试全绿(含 sessionId/toolUseId camelCase + Deny reason 2 个新测试);前端 vitest 全绿(含 permissions 多 session 共存/respond 按 rid 精确清除 + ToolCallCard 审批态 8 测试)。
+**影响面**:后端 3 文件(`permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)` enum/payload/签名/分支 + `commands/permissions.rs` IPC + `chat_loop.rs` 传 tool_use_id);前端 `permissions.ts` store 重写 + `permissions.test.ts` + `ToolCallCard.vue`/`.test.ts` 审批态 + `SessionList.vue` badge,删 `PermissionModal.vue`/`.test.ts`,`ChatPanel.vue`/`ChatWindow.vue` 引用清理;spec `.trellis/spec/backend/tool-contract.md` §4 permission:ask IPC 同步。测试:后端 68 lib 测试全绿(含 sessionId/toolUseId camelCase + Deny reason 2 个新测试);前端 vitest 全绿(含 permissions 多 session 共存/respond 按 rid 精确清除 + ToolCallCard 审批态 8 测试)。
 
 ### 2026-06-14 — shell 权限三档分类(ReadOnly/SideEffect/Ask)+ plan 模式只读放行 + 复杂命令弹窗兜底
 
@@ -408,7 +408,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 
 **影响范围**:
 - Backend 新模块:`projects/boundary.rs::is_within_root`(从 `assert_within_root` 抽出);`agent/permissions/shell_trust.rs` 新文件(~120 行,白名单 + asklist 2 张 const 表 + classify_prefix 函数)
-- Backend 改:`agent/permissions/mod.rs::check` 大改(5 tier 重排,按 tool 类型分派 Tier 4,~200 行净增);`commands/permissions.rs::permission_response` 写 match_kind 按 tool 类型自动选;`db/sessions.rs::grant_tool_permission` 维持(3 种 match_kind schema 已有,match_value 规范化)
+- Backend 改:`agent/permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)::check` 大改(5 tier 重排,按 tool 类型分派 Tier 4,~200 行净增);`commands/permissions.rs::permission_response` 写 match_kind 按 tool 类型自动选;`db/sessions.rs::grant_tool_permission` 维持(3 种 match_kind schema 已有,match_value 规范化)
 - Backend 不动:`agent/permissions/dangerous.rs`(9 个 regex 不动);`mode_system_prefix` / `filter_tools_for_mode`(维持)
 - Frontend 改:`components/chat/PermissionModal.vue` 加 path 范围行(仓库内 emerald / 仓库外 amber);`stores/permissions.ts::PermissionAsk` type 加 `path?: string`
 - Spec 改:`.trellis/spec/backend/{tool-contract,project-cwd-boundary,llm-contract,error-handling,database-guidelines}.md` + `.trellis/spec/frontend/{state-management,popover-pattern,design-tokens,reka-ui-usage}.md`
@@ -419,7 +419,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 **Commit 拆分计划**:
 - Commit 1:boundary::is_within_root + ADR(本 ADR)
 - Commit 2:agent/permissions/shell_trust.rs 新模块 + 27 PR1 测试重写
-- Commit 3:agent/permissions/mod.rs::check 大改(5 tier 重排)
+- Commit 3:agent/permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)::check 大改(5 tier 重排)
 - Commit 4:commands/permissions.rs::permission_response + db/sessions.rs::grant_tool_permission 3 match_kind 全 wire
 - Commit 5:spec 同步(5 文件)+ ARCHITECTURE §2.2 ⑨ 改写
 - Commit 6:PermissionModal.vue path 范围行 + permissions.ts type + 8 新 vitest
@@ -443,7 +443,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 
 **影响范围**:
 - Backend:`skill/{mod,loader}.rs`(新,加载层 + `build_skill_listing_block`);`tools/use_skill.rs`(新,虚拟 tool definition + execute);`tools/mod.rs`(`execute_tool` 加 `skill_cache` 参数 + `use_skill` 分发 + `builtin_tools` 注册);`agent/chat_loop.rs`(`run_chat_loop` 加 `skill_cache` 参数 + L0 清单注入 + execute_tool 传参);`agent/chat.rs`(传 `skill_cache`);`state.rs`(`skill_cache` 字段)
-- 测试:`skill/loader.rs` 17 单测 + `agent/tests.rs` 2 集成(`use_skill` body 加载 / 未知 skill 报错)+ 16 处 `run_chat_loop` 调用加 `skill_cache` 实参。`cargo test --lib` 588/588 pass
+- 测试:`skill/loader.rs` 17 单测 + `agent/tests.rs(拆分自 tests.rs,2026-06-23 拆为 5 域 tests_*.rs + tests_common.rs)` 2 集成(`use_skill` body 加载 / 未知 skill 报错)+ 16 处 `run_chat_loop` 调用加 `skill_cache` 实参。`cargo test --lib` 588/588 pass
 - 文档:docs/research/skill-system-survey.md(前置调研)+ ROADMAP §1.2 B4 + ARCHITECTURE ⑩ use_skill 占位更新
 
 **修正 BACKLOG §2 两处过时**:① 选型 `serde_yml` → 手写 parser(B3 已废弃);② "注入 system prompt" → "注入消息流"
@@ -468,7 +468,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **保留 wire alias**('chat' / 'review' 字符串兼容):考虑过。决定不保留 — 单机 desktop app,无跨版本兼容需求,alias 长期是技术债
 
 **影响范围**:
-- Backend:`db/types.rs` Mode enum + `as_str` + `from_str_opt`;`db/migrations.rs` v5 改默认 + v6 backfill;`commands/permissions.rs` parse;`agent/permissions/mod.rs` Tier 4 + `mode_system_prefix` + `filter_tools_for_mode`;`db/sessions.rs` 默认;`db/tests.rs` + `agent/tests.rs` 测试 fixture
+- Backend:`db/types.rs` Mode enum + `as_str` + `from_str_opt`;`db/migrations.rs` v5 改默认 + v6 backfill;`commands/permissions.rs` parse;`agent/permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块)` Tier 4 + `mode_system_prefix` + `filter_tools_for_mode`;`db/sessions.rs` 默认;`db/tests.rs(拆分自 tests.rs,2026-06-23 拆为 6 个 *_tests.rs)` + `agent/tests.rs(拆分自 tests.rs,2026-06-23 拆为 5 域 tests_*.rs + tests_common.rs)` 测试 fixture
 - Frontend:`Icon.vue` 加 ClipboardList;`stores/chat.ts` SessionMode + MODE_CYCLE;`components/chat/ModeSelect.vue` 选项 + 注释;`components/chat/ChatInput.vue` 注释 + 默认值;`stores/chatMode.test.ts` + `ModeSelect.test.ts` 断言
 - Spec:`.trellis/spec/backend/{llm-contract,tool-contract,project-cwd-boundary}.md` + `.trellis/spec/frontend/{state-management,popover-pattern,design-tokens}.md` + `docs/ARCHITECTURE.md` §2.2 ⑨ / §2.5.8 ⑯
 
@@ -502,7 +502,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:backend `ChatEvent::TurnComplete` payload 已带 `thinking_ms`(从 `turn_thinking_done - turn_thinking_start` `Instant` 对算),前端再算就是双源;前端 `last.thinkingDurationMs` 仅由 `case "turn_complete"` 写(per-turn)
   - **依据**:后端 commit 2 `agent/chat.rs:434-510` 的 4 个 close boundary 已经设了 `turn_thinking_done`;前端的 4 个 close site 是冗余
   - **后果**:`case "done"` / `case "error"` 不再写 `last.thinkingDurationMs`(turn_complete 已写);`error` 路径的 `last.thinkingDurationMs` 保持 undefined(语义:errored turn 没入库,也没 thinking duration 可显示)
-- **沉淀**:`.trellis/spec/backend/llm-contract.md`(删除 32 行 + 新增 68 行 `### Per-Turn Tracking` 子段);`app/src-tauri/src/llm/types.rs`(新 `ChatEvent::TurnComplete` variant,+32 行);`app/src-tauri/src/agent/chat.rs`(5 个 per-turn `Instant` locals + `build_turn_latency` helper + per-turn `persist_turn` 4 列 INSERT + per-turn `TurnComplete` emit,+260 行);`app/src/stores/streamController.ts`(`RequestState` 重构 + `ChatEventPayload` 加 `turn_complete` kind + 新 `case "turn_complete"` handler + `reloadAfterFinalize` 改 for-of N 次 IPC,+296 -188 行);`app/src/stores/streamController.test.ts`(改写 3 个 F5 thinking-phase timing 测试 + 新增 1 个 3-turn 测试);`app/src-tauri/src/db/tests.rs`(新增 1 个 `persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn`)
+- **沉淀**:`.trellis/spec/backend/llm-contract.md`(删除 32 行 + 新增 68 行 `### Per-Turn Tracking` 子段);`app/src-tauri/src/llm/types.rs`(新 `ChatEvent::TurnComplete` variant,+32 行);`app/src-tauri/src/agent/chat.rs`(5 个 per-turn `Instant` locals + `build_turn_latency` helper + per-turn `persist_turn` 4 列 INSERT + per-turn `TurnComplete` emit,+260 行);`app/src/stores/streamController.ts`(`RequestState` 重构 + `ChatEventPayload` 加 `turn_complete` kind + 新 `case "turn_complete"` handler + `reloadAfterFinalize` 改 for-of N 次 IPC,+296 -188 行);`app/src/stores/streamController.test.ts`(改写 3 个 F5 thinking-phase timing 测试 + 新增 1 个 3-turn 测试);`app/src-tauri/src/db/tests.rs(拆分自 tests.rs,2026-06-23 拆为 6 个 *_tests.rs)`(新增 1 个 `persist_turn_with_per_turn_latency_writes_4_columns_for_each_turn`)
 - **测试**:318 cargo lib tests(原 317 + 1 新 4 列 3-turn INSERT 测试)全过;92 vitest(原 89 + 3 改写 + 1 新增 3-turn - 1 改写时合并 = 净增 3 = 92,具体见 streamController.test.ts 的 28 tests);vue-tsc / pnpm build 干净
 
 ### 2026-06-11 — F5 LLM 耗时统计(per-message 三段 + per-tool duration + session 累计)
@@ -531,7 +531,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:R1-R8 互相耦合(前端计时 → IPC → DB 列写 → rehydrate 路径 → UI 渲染 → spec 沉淀 → 决策日志,任一环节缺失,中间态都不能跑测试);grill 阶段已锁死所有 design(ADR-lite 2 个决策点);A4 1-PR 模式已验证可行
   - **依据**:`.trellis/tasks/06-11-f5-llm/prd.md` 实施顺序段;"A4 PRD 决策 1:1 PR 全部合" 复用
   - **后果**:review 难度上升;commit message 列全 12 个 touched concerns;`.trellis/spec/backend/llm-contract.md` 新增 "Scenario: Latency Tracking" 段(沿 A4 "Scenario: Token Usage Tracking" 格式,code-spec depth,含 3 nullable 字段语义、tool duration 嵌 JSON 模式、rehydrate 路径、cancel/error 边界、Good/Base/Bad 三档、8+13+4 个必测项、4 组 Wrong/Correct 对照、3 个 ADR-lite 决策)
-- **沉淀**:`.trellis/spec/backend/llm-contract.md` 新增 "Scenario: Latency Tracking" 段;`app/src/utils/duration.ts` 新文件 + `.test.ts`(6 个新测试);`app/src/stores/streamController.test.ts` 新增 F5 段(7 个新测试);`app/src-tauri/src/db/tests.rs` 新增 F5 段(8 个新测试)
+- **沉淀**:`.trellis/spec/backend/llm-contract.md` 新增 "Scenario: Latency Tracking" 段;`app/src/utils/duration.ts` 新文件 + `.test.ts`(6 个新测试);`app/src/stores/streamController.test.ts` 新增 F5 段(7 个新测试);`app/src-tauri/src/db/tests.rs(拆分自 tests.rs,2026-06-23 拆为 6 个 *_tests.rs)` 新增 F5 段(8 个新测试)
 - **测试**:317 cargo(原 285 + F5 新 32 = db 8 + agent 0 改动 + ... 净增 8 + 24) = 实际 317(原 285 + 8 F5 db 测试 + 24 个其他 = 总 317,数字是 cargo test 跑出的实际值),82 vitest(原 76 + F5 6 duration 测试)全过,pnpm build 干净
 
 ### 2026-06-11 — B5 Memory 注入位置重构:system_prompt 拼装 → synthetic user message + cache_control
