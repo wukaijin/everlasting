@@ -70,3 +70,37 @@
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 69: 拆分 subagentRuns.ts → types + runAccumulator + store
+
+**Date**: 2026-06-23
+**Task**: 拆分 subagentRuns.ts — 抽 RunAccumulator + types（06-23-06-23-split-subagent-runs, P2）
+**Branch**: `main`
+
+### Summary
+
+1416 行 subagentRuns.ts 按关注点拆 3 文件：subagentRuns.types.ts（~360L，全部 type/interface + `SUBAGENT_EVENT_DEBOUNCE_MS` const，纯 TS 无运行时依赖）/ runAccumulator.ts（~530L，`RunAccumulator` class + `parseTranscriptJson` + `buildSectionsFromRaw` + chatEventInnerKind/Text/Signature 解析族）/ subagentRuns.ts（~540L，留 `coerceStatus` + `useSubagentRunsStore`）。import 惯例严格遵循 `chat.types.ts` 先例（split-chat-types）：外部 type import 改 `stores/subagentRuns.types`，`RunAccumulator`/`parseTranscriptJson` 改 `stores/runAccumulator`，不用 `export *` re-export 保 public API。
+
+关键决策：`parseTranscriptJson` 跟 `RunAccumulator` 走 runAccumulator.ts（修正 task description 原说"留 store + parsers"）——`RunAccumulator.rebuildFromCache`(798) 依赖 `parseTranscriptJson`，若后者留 store 会形成 store↔accumulator ES module 循环依赖。最终依赖单向：`subagentRuns.ts → runAccumulator.ts → subagentRuns.types.ts`。`chatEventSignature` 跟兄弟函数同族走 runAccumulator（本文件未用但语义连贯）；`coerceStatus` 留 store（独立，store 内无真实调用，纯 export 给 Drawer 显示层）。
+
+11 外部文件 import 路径更新（ChatWindow/WorkerAskBanner/ToolCallCard 的 store import 不变；DrawerThinkingBlock.vue+test / WorkerTextTimeline / transcriptPairing.ts+test 的 type → `.types`；SubagentDrawer.vue+test + subagentRuns.test.ts 拆 3 源）。subagentRuns.ts 头注释加 File layout 段 + 修正 `RouteAccumulator` 错别字指向 runAccumulator。
+
+验证：vue-tsc --noEmit 0 error；vitest 475 pass（subagent 相关 6 文件 161/161，0 error，含 RunAccumulator 20k 事件 rebuildFromCache 14.8ms 性能测试）；pnpm build 绿（2877 modules 6.15s）。4 pre-existing streamController.test.ts unhandled rejection（RULE-FrontTest-001 Tauri invoke mock baseline，streamController 未触碰，与拆分无关）。DEBT RULE-FrontSubagent-005 file ref 更新（`SubagentStatus` `subagentRuns.ts:65` → `subagentRuns.types.ts`）+ Session 64 NIT `PermissionAskOutcome` 来源同步迁 types.ts（NIT 本身——重复 literal 未 import 规范 type——仍 open follow-up）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b1c2a3d` | refactor(stores): split subagentRuns.ts into types + runAccumulator + store |
+| `9123c55` | docs(debt): update RULE-FrontSubagent-005 file ref after subagentRuns split |
+| `30912ff` | chore(task): archive 06-23-06-23-split-subagent-runs |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
