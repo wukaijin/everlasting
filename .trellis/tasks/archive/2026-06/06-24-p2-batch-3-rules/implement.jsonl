@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend 总览(spec 入口,sub-agent 必读)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent/chat_loop.rs 直接相关:23-param 入口 + B6 worker pattern + system_prompt_override 第 23 参(B6 review defect A 修复,影响修 2a 死代码上下文判断)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent 变体定义在 llm/types.rs,修 2c 删 ToolResult 变体前需查"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "3 条 P2 open 债源(A-005/A-009/B-003)及 file ref 漂移同步依据"}

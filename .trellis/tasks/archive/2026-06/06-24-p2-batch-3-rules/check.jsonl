@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend 总览(check 必读)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "影响跨模块一致性(check 评估:删 ChatEvent 变体是否影响 wire/provider/match 路径)"}
