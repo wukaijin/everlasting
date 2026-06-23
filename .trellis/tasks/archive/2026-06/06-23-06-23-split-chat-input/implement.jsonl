@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "LatencyPopover 直接对应 hand-rolled popover 模式(root ref / toggle / outside-click / Esc / Transition)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "HintRow token Tooltip 用 reka-ui TooltipRoot/TooltipContent + portal :deep() gotcha(scoped CSS 跨 portal)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer 子组件拆分先例(Header/ErrorCard 纯展示,主组件 orchestrator),借鉴 ADR 模式"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "ChatInput 主组件用 chatStore/modelsStore/projectsStore 三 store + streamController + facade 模式"}
