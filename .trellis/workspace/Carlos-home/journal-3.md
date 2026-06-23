@@ -104,3 +104,64 @@
 ### Next Steps
 
 - None - task complete
+
+## Session 70: 拆分 MessageItem.vue → MessageItemEdit + MessageItemFooter
+
+**Date**: 2026-06-23
+**Task**: Session 70 — 拆分 MessageItem.vue — edit mode + footer
+**Branch**: `main` (用户选 Option 2 直接落 main,跳过 feature branch)
+
+### Goal
+
+`components/chat/MessageItem.vue` 1099 行 3 个独立 UI 模式(streaming / edit / static)+ 3 个 UI 段(bubble / tool cards / footer)。拆出 2 个状态自包含子组件,主组件降为 ~770 行 orchestrator。
+
+### Decision (ADR-lite,4 项)
+
+- **ADR-1 API 形状 = Option A**:子组件纯展示,parent 编排 store 调用;`MessageItemEdit` 接 `seq/content/isStreaming/currentSessionId/isEditingThisMessage`,emit `save(trimmed)/cancel/resend`;`MessageItemFooter` 接 `role/streaming/latency/error`,无 emit;**两个新组件文件 0 个 store import**。与 `MessageActionsMenu.vue` 既有约定一致。
+- **ADR-2 `(edited)` 标签位置 = 留 bubble 内**:`MessageItemFooter.vue` 只装 error + latency,testid `msg-edited-label` 不动,视觉零回归。
+- **ADR-3 测试覆盖 = 两个组件都加完整 vitest**:`MessageItemEdit.test.ts` (21 测试,save/cancel/resend/trim/empty/same-content no-op/editError 渲染/disabled 态/streaming 守卫) + `MessageItemFooter.test.ts` (20 测试,role × streaming × latency × error 条件渲染矩阵 + latency tooltip 行数 + abbreviateDuration 集成)。无 mock store,纯 props + emit。
+- **ADR-4 markdown 闸门 = 删除 `displayContent` computed**:bubble `v-if` 已保证 edit 模式时 bubble 卸载,markdown 输出无渲染点,gate 冗余;watcher 直接监听 `props.message.content`,2 行简化。
+
+### 实施
+
+抽 `MessageItemEdit.vue` (309 行,props-only + emits):主组件外移 D3 PR2 inline edit 状态机(`editBuffer`/`isSaving`/`editError` refs + watch + `onEdit`/`onResend`/`cancelEdit`/`saveEdit` 4 函数),父组件保留 `handleSave`/`handleCancel`/`handleResend` 3 个函数做 store 编排;`.msg__editor*` CSS 整段物理迁移,类名零修改。
+
+抽 `MessageItemFooter.vue` (270 行,纯展示):把 F5 latency chip(`TooltipProvider` 6 件套 + `abbreviateDuration` import)+ error footer(`.msg__error`)外移;`.msg__latency*` + `:deep(.msg__latency-tooltip*)` 4 条规则跟着走;`(edited)` 标签按 ADR-2 留主组件。
+
+新增 41 个 vitest 测试 + reka-ui `Tooltip` portal 跨 test DOM leak 防御(`afterEach` 手动 remove `document.body` 残留 `.msg__latency-tooltip` portal 节点,参 memory `subagentdrawer-banner-test-gotchas.md` 提示)。
+
+### 行数偏差披露
+
+| 文件 | 实际 | PRD 估 | 偏差 | 原因 |
+|---|---|---|---|---|
+| `MessageItem.vue` | **835** | ~770 / AC ≤800 | **+35** (超 AC) | 新增 ADR-lite 文档注释(handlers + 子组件调用点) |
+| `MessageItemEdit.vue` | 309 | ~180 | +129 | props/emits JSDoc + 4 handler 文档 |
+| `MessageItemFooter.vue` | 270 | ~120 | +150 | latency tooltip `:deep()` 4 条 + props JSDoc |
+
+差额全是文档注释(serve as ADR-locked 解释),非死代码。后续 follow-up 可选 trim 文档 / 或调整 AC 行数上限。
+
+### 验证
+
+- [OK] `pnpm exec vue-tsc --noEmit` 0 error
+- [OK] `pnpm exec vitest run app/src/components/chat/MessageItemEdit.test.ts app/src/components/chat/MessageItemFooter.test.ts` — 41/41 pass (1.45s)
+- [OK] `pnpm build` 0 error (2883 modules, 743 KB JS / 158 KB CSS)
+- [OK] ADR 独立 grep 验证:`grep useChatStore MessageItemEdit.vue` + `grep useChatStore MessageItemFooter.vue` 双双空(ADR-1);`grep displayContent MessageItem.vue` 0 匹配(ADR-4);`(edited)` 标签 + 4 editor testid 全部 grep 在位(ADR-2 + 零回归)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2fd53d0` | refactor(chat): extract MessageItemEdit + MessageItemFooter from MessageItem.vue |
+| `ee5a2b8` | chore(task): archive 06-23-06-23-split-message-item |
+
+### Status
+
+[OK] **Completed** — 06-23-split-message-item P3 闭。MessageItem.vue 1099 → 835 行(-264 / -24%)。跳过 docs(debt)(DEBT.md 无 MessageItem.vue 相关 open RULE 项);跳过 docs(spec)(state-management.md §"MessageItem.vue edit mode" 段描述被搬走的 `local editBuffer` / `displayContent`,留 follow-up)。
+
+### Next Steps
+
+- **NIT (follow-up)**: `spec/frontend/state-management.md:517 §MessageItem.vue edit mode` 段描述旧的 `local editBuffer: Ref<string>` + `displayContent` 闸门,实际已搬到 `MessageItemEdit.vue` / 删除。下次 spec sync task 顺手更新。
+- **NIT (follow-up)**: `MessageItem.vue` 835 vs PRD AC ≤800 (+35) —— 可选 trim ADR-lite 文档注释或放宽 AC 到 ≤850。
+- **NIT (follow-up)**: `MessageItemEdit.vue` 309 行 vs PRD 估 ~180;`MessageItemFooter.vue` 270 行 vs PRD 估 ~120 —— 差额为 props/emits JSDoc + handler 文档,可后续收紧。
+- **NIT (follow-up)**: `MessageItemEdit.vue` 的 `resend` emit 定义但当前不渲染按钮(Resend 入口在 `MessageActionsMenu` 同 D3 PR3 行为),留作 PR5+ 编辑器内联 Resend 按钮扩展点。
+- 下一任务候选:P0 `split-chat-input` (CodeMirror composable + latency popover) / P3 `split-subagent-drawer` / P3 `split-db/tests.rs`。
