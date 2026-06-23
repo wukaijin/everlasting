@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "验证 IPC wire 变更(hasKey/Option apiKey)是否符合 provider 契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 migration(api_key_enc+key_migrated_at)是否符合 DB 规范 + 幂等回填"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证解密失败降级 + 友好提示符合错误处理规范"}
+{"file": ".trellis/tasks/06-24-p1-api-key-encryption/research/app-layer-encryption-rust.md", "reason": "验证加密模块(AAD 绑定 provider id / 密文格式 / master key 派生)符合研究方案"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证前端 ProviderRow type + store 改动符合状态管理规范"}

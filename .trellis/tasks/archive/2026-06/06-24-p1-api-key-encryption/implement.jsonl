@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/06-24-p1-api-key-encryption/research/app-layer-encryption-rust.md", "reason": "crypto.rs 加密模块设计骨架:crate 选型(aes-gcm/hkdf/sha2/machine-uid/base64)+ master key 派生 + 密文格式(VERSION||nonce||ct||tag)+ 迁移步骤 + roundtrip/empty/tamper 单测示例。PR1-2 核心"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB migration 规范:add_*_column_if_missing + 幂等 UPDATE 回填模式(migrations.rs:654-690 参考)。PR2 迁移实现必看"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "ProviderRow/api_key wire 契约,含 list_providers/add_provider/update_provider IPC 形态。PR2-4 改 wire 必看"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "provider 解析与 IPC 形态,resolve_chat_provider 用 key 的契约。PR3-4"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "test_model IPC 取 provider.api_key 发请求的契约。PR3 解密接通 test_model 必看"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "PreFlightError / 错误降级中文用户消息规范。PR3 解密失败兜底友好提示对照"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "providers store + ProviderRow TS type 形态。PR4 前端 type 改 apiKey→hasKey + store update 必看"}
+{"file": ".trellis/tasks/06-24-p1-api-key-encryption/research/keyring-wsl-availability.md", "reason": "决策依据:keyring 在 WSL 实测不可用 → 选 machine-id 加密的 why,理解方案取舍"}
