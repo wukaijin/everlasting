@@ -94,7 +94,7 @@
 
 - **Level**: P2
 - **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/mod.rs:766-783`
+- **File**: `app/src-tauri/src/agent/permissions/check.rs:386`(`sqlite_glob_match`,`?` 分支 dead code;拆分自 `mod.rs` 2026-06-23)
 - **Description**: 内层 `if tbytes[ti] == b'/'` 永远 true(外层已判),`return false` 必达
 - **Fix**: 删除冗余分支
 - **Status**: open
@@ -124,7 +124,7 @@
 
 - **Level**: P3
 - **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/mod.rs:140` vs `:152-179`
+- **File**: `app/src-tauri/src/agent/permissions/audit.rs:21` vs `:33`(docstring 写"10 variants"实际已 17;拆分自 `mod.rs` 2026-06-23)
 - **Description**: docstring 写"10 variants"实际 11(`ToolExecuted` C4 新增未更新 doc)
 - **Fix**: 更新 docstring
 - **Status**: open
@@ -152,7 +152,7 @@
 
 - **Level**: P3
 - **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/types.rs:193` + `mod.rs:1214`
+- **File**: `app/src-tauri/src/agent/permissions/mode.rs:26-28`(`mode_system_prefix` 的 `Mode::Background` 占位字符串;拆分自 `mod.rs` 2026-06-23)
 - **Description**: `#[allow(dead_code)]`,`mode_system_prefix` 占位字符串
 - **Impact**: UI 已移除,enum 保留预留
 - **Fix**: 路线图评估移除 or 保留
