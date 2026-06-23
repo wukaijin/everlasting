@@ -48,10 +48,11 @@ RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 
 ```
 app/
-├── src/                    # Vue 3 前端 (8-PR3 拆分后)
+├── src/                    # Vue 3 前端 (8-PR3 拆分后;06-23 续拆 3 组件 + 1 composable + 3 store 模块)
 │   ├── components/
 │   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo
-│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView 等
+│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer 等
+│   │   │                   # (06-23 拆:MessageItemEdit/Footer + SubagentDrawerHeader/ErrorCard + ChatInputLatencyPopover/HintRow)
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
 │   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
 │   │   ├── audit/          # C4 审计日志查询 UI (AuditLogModal / AuditLogItem)
@@ -60,13 +61,18 @@ app/
 │   │   ├── SessionList.vue / ProjectTabs.vue / Icon.vue
 │   ├── stores/             # Pinia stores
 │   │   ├── chat.ts         # facade: sessions 列表 + currentSessionId + currentCwd + CRUD 委托
+│   │   ├── chat.types.ts   # (06-23 拆)~310 行纯类型 + 强绑定 const(MODE_CYCLE 等)
 │   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests (8-PR3 拆分)
+│   │   ├── subagentRuns.ts # (06-23 拆)store 主体 + coerceStatus(~547 行)
+│   │   ├── subagentRuns.types.ts # (06-23 拆)~354 行
+│   │   ├── runAccumulator.ts # (06-23 拆)~537 行 RunAccumulator + parseTranscriptJson
 │   │   ├── config.ts / models.ts / providers.ts / projects.ts
 │   │   ├── memory.ts       # memory/指令文件 UI 状态
 │   │   ├── permissions.ts   # A2+B7 权限 / Mode (edit/plan/yolo) 状态
-│   │   └── audit.ts         # C4 审计日志查询 store
-│   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard
-├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后)
+│   │   ├── audit.ts         # C4 审计日志查询 store
+│   │   └── checklist.ts     # B12 agent 自跟踪 checklist store
+│   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror (06-23 拆 composable)
+├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后;06-23 续拆 subagent/ + chat_loop + tests)
 │   └── src/
 │       ├── lib.rs          # Tauri 入口(纯 init + 命令注册)
 │       ├── state.rs        # AppState 共享状态
@@ -75,7 +81,8 @@ app/
 │       ├── files.rs        # 文件操作辅助
 │       ├── db/             # SQLite 持久化(8-PR2 拆分, CRUD 函数分散到子模块)
 │       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
-│       │   ├── providers.rs / projects.rs / sessions.rs / tests.rs
+│       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs
+│       │   ├── tests.rs    # (06-23 拆)6 个 `*_tests.rs` 按 SQL 域(无 common,test_pool 6 份复制)
 │       ├── llm/            # LLM 客户端模块 + 自研 Provider trait
 │       │   ├── provider/   # Provider trait + AnthropicProvider + OpenAIProvider + wire.rs + mock.rs
 │       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析
@@ -83,9 +90,19 @@ app/
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
 │       ├── memory/         # Memory/指令文件系统(4 文件加载 + cache_control 注入)
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
-│       ├── agent/          # Agent Loop(8-PR1 拆分,含 at_file.rs @文件补全 / MAX_TURNS 50)
+│       ├── agent/          # Agent Loop(8-PR1 拆分;06-23 续拆 subagent/ + chat_loop + tests)
+│       │   ├── chat.rs / chat_loop.rs  # (06-23 抽 run_subagent 后)主循环 ~2064 行
+│       │   ├── subagent/   # (06-23 拆 4 文件 + dispatch.rs)
+│       │   │   ├── mod.rs / sink.rs / transcript.rs / truncate_summary.rs
+│       │   │   └── dispatch.rs  # (06-23 抽自 chat_loop.rs)run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
+│       │   ├── permissions/  # (06-23 拆 mod.rs → 8 模块 + 6 tests_*.rs)
+│       │   │   ├── mod.rs (纯 re-exports) / types.rs / store.rs / payload.rs
+│       │   │   ├── mode.rs / audit.rs / check.rs / ask.rs
+│       │   │   ├── dangerous.rs / shell_trust.rs (sibling 不动)
+│       │   │   └── tests_*.rs (6 个 + tests_common.rs)
+│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
-│       ├── commands/       # Tauri commands(8-PR1 拆分: sessions/projects/config/cancel/providers/worktree/memory 等)
+│       ├── commands/       # Tauri commands(8-PR1 拆分: sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs 等)
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
 │       └── tools/          # Tool 定义与执行
@@ -93,6 +110,7 @@ app/
 │           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs / shell.rs
 │           ├── web_fetch.rs   # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
 │           ├── use_skill.rs   # Skill 调用 tool
+│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```

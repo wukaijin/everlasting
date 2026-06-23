@@ -1,19 +1,12 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-06-10 commit `0f9a167` (分支 `refactor/8-pr1-lib-rs-split` 含8-PR1+8-PR2+8-PR3+8-PR4)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` +8-PR1/2/3/4实际落地状态
-> **状态**: 这是**新文档**(Step8-PR5产物),由 CLAUDE.md §Architecture段引用
+> **基线**:2026-06-24 commit `7f2553b`(包含 8-PR1/2/3/4 + 10 个文件 split:chat-types / subagent / chat-loop / agent-tests / permissions / subagent-runs / message-item / subagent-drawer / db-tests / chat-input)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split
+> **状态**: 由 CLAUDE.md §Architecture段引用
 >
-> ⚠️ **快照已滞后(2026-06-18 校注)**:下方目录树 / 命令数 / 工具数为 **2026-06-10** 快照。06-11 后持续新增,**未在下方完整反映**:
-> - 后端新增模块:`skill/`(Skill 系统 + `/skill` + `use_skill` tool)、顶层 `resource_loader.rs`(frontmatter 通用加载)/ `files.rs`
-> - 后端 `tools/` 新增 `web_fetch.rs` / `use_skill.rs`(实际 **10 个**工具,非下方"8 个")
-> - 后端 `agent/at_file.rs`(B2 @文件补全)、`llm/provider/mock.rs`、`commands/{permissions,memory,command_palette,panel,files}.rs`
-> - 前端新增 `components/audit/`(C4 审计日志查询 UI)、`components/common/`(TriggerMenu 等)
-> - 前端 stores 新增 `permissions.ts`(A2+B7 Mode edit/plan/yolo)、`audit.ts`(C4)
-> - Tauri command 实际 **54 个**(非下方"33 个")
-> - `notify` 依赖已移除(memory watcher 改 mtime fence freshness check);`rmcp` / `nucleo` 未采用(详见 docs/TECH.md)
+> **2026-06-24 同步**:10 个 split 已全部合 main,本文件目录树 / §2/§3 / §5/§6 / §9 已重校反映 split 后真实文件结构。下次重大重构后再次校准。
 >
-> **结构事实以 `.trellis/spec/`(活契约)+ `git log` + 实际源码为准**。下方作为 06-10 历史快照保留,下次重大重构后整体重校。
+> **历史快照标注约定**:本任务对 split 前路径保留 + 加 (拆分自 X, 2026-06-23/24) 标注,git blame 可追溯。
 
 ---
 
@@ -67,11 +60,21 @@ app/src/
 │ ├── ProjectTabs.vue #顶部项目 tab栏
 │ ├── SessionList.vue #侧边栏 session列表
 │ ├── Icon.vue # 图标 wrapper
-│ ├── chat/ # (8-PR3拆分后)
+│ ├── chat/ # (8-PR3拆分后;06-23 续拆 3 组件 + 1 composable)
 │ │ ├── ChatPanel.vue # ★容器(523 行,957→523)
-│ │ ├── ChatInput.vue / MessageList.vue / MessageItem.vue
+│ │ ├── ChatInput.vue # (06-23 拆)1834→~712 行,留 props/emits + 提交编排
+│ │ ├── ChatInputLatencyPopover.vue # ★ NEW (06-23 拆,自包含 chip+popover)
+│ │ ├── ChatInputHintRow.vue # ★ NEW (06-23 拆,token tooltip + ModelSelect)
+│ │ ├── chatInputTokens.ts # CodeMirror token highlight plugin(不动)
+│ │ ├── MessageList.vue
+│ │ ├── MessageItem.vue # (06-23 拆)1099→~770 行
+│ │ ├── MessageItemEdit.vue # ★ NEW (06-23 拆,~180 行)
+│ │ ├── MessageItemFooter.vue # ★ NEW (06-23 拆,~120 行,error+latency)
 │ │ ├── ThinkingBlock.vue / ToolCallCard.vue / ModelSelect.vue
 │ │ ├── DiffView.vue / DeleteWorktreeConfirm.vue / EmptyProjectState.vue
+│ │ ├── SubagentDrawer.vue # (06-23 拆)1257→~900 行
+│ │ ├── SubagentDrawerHeader.vue # ★ NEW (06-23 拆,~250 行)
+│ │ ├── SubagentDrawerErrorCard.vue # ★ NEW (06-23 拆,~100 行,R25 错误卡)
 │ │ ├── WorktreeChip.vue # ★ NEW (8-PR3拆出)
 │ │ └── DiffModal.vue # ★ NEW (8-PR3拆出)
 │ ├── settings/ # (8-PR3拆分后)
@@ -84,13 +87,20 @@ app/src/
 │ ├── AppShell.vue / AppHeader.vue / AppLogo.vue
 │ ├── Sidebar.vue / TitleBar.vue
 ├── stores/ # Pinia状态
-│ ├── chat.ts # facade: sessions + currentSessionId + currentCwd + CRUD委托
+│ ├── chat.ts # (06-23 拆)facade: sessions + currentSessionId + currentCwd + CRUD委托
+│ ├── chat.types.ts # ★ NEW (06-23 拆,~310 行纯类型 + 强绑定 const)
 │ ├── streamController.ts # ★ SSE 单源 + LRU20 + activeRequests (8-PR3拆)
 │ ├── streamController.test.ts
+│ ├── subagentRuns.ts # (06-23 拆)store 主体,留 coerceStatus
+│ ├── subagentRuns.types.ts # ★ NEW (06-23 拆,~354 行)
+│ ├── runAccumulator.ts # ★ NEW (06-23 拆,~537 行 RunAccumulator + parseTranscriptJson)
 │ ├── config.ts / projects.ts / models.ts / providers.ts
-└── utils/ # (Opus §4.2漏看,8-PR4阶段补)
+│ └── permissions.ts / audit.ts / memory.ts / checklist.ts
+└── utils/ # (Opus §4.2漏看,8-PR4阶段补;06-23 加 chatInputCodeMirror)
  ├── lru.ts + .test.ts / markdown.ts + .test.ts
  ├── messageFormat.ts + .test.ts / path.ts + .test.ts
+ ├── chatInputCodeMirror.ts # ★ NEW (06-23 拆,~564 行 CM 6 composable,0 store import)
+ └── duration.ts / tokenUsage.ts / audit.ts / colorTag.ts / useKeyboard.ts
 ```
 
 **关键组件依赖**:
@@ -120,49 +130,84 @@ app/src-tauri/src/
 ├── main.rs # Windows子系统入口 + init_tracing (8-PR1提取)
 ├── lib.rs # ★入口(94 行,3195→94,纯 mod声明 + invoke_handler)
 ├── state.rs # ★ NEW (8-PR1) — AppState + CancellationGuard + ProviderCatalog
-├── db/ # ★ NEW (8-PR2) — 原 db.rs 删除
+├── db/ # ★ NEW (8-PR2;06-23 拆 tests.rs → 6 文件)
 │ ├── mod.rs / types.rs / migrations.rs
 │ ├── projects.rs / sessions.rs / providers.rs / models.rs / config.rs
-│ └── tests.rs
+│ ├── subagent_runs.rs / permissions.rs
+│ ├── projects_tests.rs / sessions_tests.rs / providers_tests.rs # ★ (06-23 拆,无 common,test_pool 6 份复制)
+│ ├── permissions_tests.rs / messages_tests.rs / subagent_runs_tests.rs
 ├── llm/
 │ ├── mod.rs / client.rs (BlockState状态机) / sse.rs / error.rs / types.rs
 │ └── provider/ # 多 provider (06-08/09引入)
 │ ├── mod.rs (Provider trait + build_provider工厂)
-│ ├── anthropic.rs / openai.rs
+│ ├── anthropic.rs / openai.rs / mock.rs
 │ └── wire.rs # WireMessage中间层(1109 行,高内聚不拆)
-├── agent/ # ★ NEW (8-PR1) — Agent Loop主逻辑
-│ ├── mod.rs / chat.rs (Agent Loop)
+├── agent/ # ★ NEW (8-PR1;06-23/24 拆 subagent/ + chat_loop + tests)
+│ ├── mod.rs
+│ ├── chat.rs # Agent Loop entry(IPC 入口)
+│ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
+│ ├── subagent/ # ★ NEW (06-23 拆 4 文件,06-23/24 续拆 dispatch)
+│ │ ├── mod.rs # 类型 + helpers(lookup / assemble / filter / build_messages)
+│ │ ├── sink.rs # SubagentBufferSink (1450 行)
+│ │ ├── transcript.rs # transcript 类型 (219 行)
+│ │ ├── truncate_summary.rs # 4 MiB cap + format_dispatch_result (910 行)
+│ │ └── dispatch.rs # ★ (06-23 抽自 chat_loop.rs)~520 行 run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
 │ ├── provider.rs (resolve_chat_provider + PreFlightError)
-│ ├── system_prompt.rs / thinking.rs / helpers.rs
-│ └── tests.rs
+│ ├── system_prompt.rs / thinking.rs / helpers.rs / behavior_prompt.rs
+│ ├── at_file.rs # B2 @文件补全
+│ ├── context.rs # C3 context 压缩
+│ ├── permissions/ # ★ (06-23 拆 mod.rs → 8 模块 + 6 测试文件)
+│ │ ├── mod.rs # 纯 re-exports(原 2814 → ~50 行)
+│ │ ├── types.rs # Risk / Decision / AuditKind / WorkerAskTerminal + PermissionContext/Response/PendingAsk/ToolKind
+│ │ ├── store.rs # PermissionStore + register/resolve/cancel
+│ │ ├── payload.rs # PermissionAskPayload + ASK_TIMEOUT
+│ │ ├── mode.rs # mode_system_prefix + filter_tools_for_mode
+│ │ ├── audit.rs # AuditKind 17 variant + 3 record 函数
+│ │ ├── check.rs # check 主函数 + classify + grant checks
+│ │ ├── ask.rs # ask_path + build_ask_reason
+│ │ ├── dangerous.rs / shell_trust.rs # sibling(原拆分前已存在)
+│ │ ├── tests_common.rs # (06-23 拆)CaptureAskSink/worker_ctx_with_db/LocalSink
+│ │ ├── tests_check.rs / tests_ask.rs / tests_audit.rs
+│ │ └── tests_store.rs / tests_payload.rs / tests_types.rs / tests_mode.rs
+│ ├── tests_common.rs / tests_cancellation.rs / tests_envelope.rs # ★ (06-23 拆 tests.rs → 6 文件)
+│ ├── tests_prompts.rs / tests_agent_loop.rs / tests_subagent.rs
 ├── commands/ # ★ NEW (8-PR1) — Tauri commands按域拆
 │ ├── mod.rs / cancel.rs / config.rs
 │ ├── providers.rs (Provider/Model CRUD + test_provider + test_model)
 │ ├── sessions.rs (Session CRUD + diff_worktree)
 │ ├── worktree.rs (attach/detach/delete + cancel_inflight)
-│ └── projects.rs (Project CRUD + pick_project_dir)
-├── tools/ # 内置工具 (10 个:06-10 快照为 8,后加 web_fetch / use_skill)
+│ ├── projects.rs (Project CRUD + pick_project_dir)
+│ ├── permissions.rs / memory.rs / command_palette.rs / panel.rs / files.rs / subagent_runs.rs
+├── tools/ # 内置工具 (10 个:read_file / write_file / edit_file / shell / grep / glob / list_dir / web_fetch / use_skill / update_checklist)
 │ ├── mod.rs (builtin_tools + execute_tool分发)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
 │ ├── shell.rs (5min超时 +30K spill) / grep.rs / glob.rs / list_dir.rs
+│ ├── web_fetch.rs # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
+│ ├── use_skill.rs # Skill 调用 tool(B4)
 │ └── read_guard.rs (session隔离读权限,edit_file前置)
+├── skill/ # B4 Skill 系统
+│ ├── mod.rs / loader.rs (SkillCache + 17 单测)
+├── memory/ # B5 Memory 指令文件系统
+│ ├── mod.rs / loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
 ├── git/
 │ ├── mod.rs / worktree.rs (745L) / diff.rs (git --numstat) / error.rs
 └── projects/
  ├── mod.rs / types.rs / store.rs / detector.rs / boundary.rs
 ```
 
-**模块依赖图**(单向):
+**模块依赖图**(单向,06-24 反映 10 个 split 后):
 ```
 lib.rs (mod声明 + invoke_handler)
  ├── main.rs (entry + init_tracing)
  ├── state (共享状态 + Cancellation)
- ├── db/* (CRUD by域)
+ ├── db/* (CRUD by域 + 6 tests_*.rs)
  ├── llm/provider::* → llm::client (BlockState) → types/sse/error
- ├── agent::* (chat + provider + system_prompt + thinking + helpers)
+ ├── agent::* (chat + chat_loop + subagent/* + provider + system_prompt + thinking + helpers + permissions/* + 6 tests_*.rs)
  │ →引用 llm::provider + tools + db
- ├── commands::* (IPC分发) → agent + db + git + projects
+ ├── commands::* (IPC分发,10 个域) → agent + db + git + projects
  ├── tools/* → read_guard
+ ├── skill/* → loader
+ ├── memory/* → loader
  ├── git/* (worktree + diff)
  └── projects/* (types + store + detector + boundary)
 ```
@@ -209,7 +254,7 @@ lib.rs (mod声明 + invoke_handler)
 
 ##5. Tauri IPC表面
 
-**总命令数**:54 个(2026-06-18 实测 `#[tauri::command]`;06-10 快照为 33,后增 `permissions` / `memory` / `command_palette` / `panel` / `files` 命令域)
+**总命令数**:~60 个(2026-06-24 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 续增 subagent_runs + checklist + memory 等)
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -225,6 +270,14 @@ lib.rs (mod声明 + invoke_handler)
 | Worktree |4 | `commands/worktree.rs` (attach/detach/delete + cancel_inflight) |
 | Project CRUD |7 | `commands/projects.rs` |
 | Project pick |1 | `commands/projects.rs` (pick_project_dir) |
+| Permission |2 | `commands/permissions.rs` (permission_response + 读路径) |
+| Memory |1 | `commands/memory.rs` (load_for_session 缓存) |
+| Command palette |1 | `commands/command_palette.rs` (list_panel_items) |
+| Panel / File |2 | `commands/{panel,files}.rs` |
+| Subagent runs |5 | `commands/subagent_runs.rs` (get_subagent_run + list_runs_by_session + list_runs_summary_by_session + …) |
+| Audit (C4) |1 | `commands/audit.rs` (list_audit_events) |
+| Checklist (B12) |1 | `commands/checklist.rs`(随 B12) |
+| Files |1 | `commands/files.rs` (list_files 供 @ 触发) |
 
 **IPC命名**: Rust snake_case → Tauri2自动 camelCase转换给前端。
 
@@ -234,25 +287,31 @@ lib.rs (mod声明 + invoke_handler)
 
 **位置**: `app/src-tauri/src/db/mod.rs::run_migrations`
 
-**7 张表**:
+**8 张核心表**(2026-06-24 现状;原 06-10 快照 7 张 → 06-13 加 `session_audit_events` + `session_tool_permissions` + 06-20 B6 PR2 加 `subagent_runs`):
 
 | 表 | 主键 |关键字段 |
 |----|------|---------|
 | `projects` | `id` (UUID) | `path` / `name` / `is_git_repo` / `git_remote` / `git_branch` / `is_hidden` |
 | `sessions` | `id` (UUID) | `project_id` (FK) / `title` / `model_id` (FK, nullable) / `worktree_path` / `worktree_state` / `current_cwd` / `created_at` / `updated_at` |
-| `messages` | `id` | `session_id` (FK) / `role` / `content` (JSON) / `tool_use` (JSON) / `tool_result` (JSON) / `thinking_blocks` (JSON) / `created_at` |
+| `messages` | `id` | `session_id` (FK) / `role` / `content` (JSON) / `tool_use` (JSON) / `tool_result` (JSON) / `thinking_blocks` (JSON) / `metadata` (JSON, B2 PR3 加:含 `edited_at` / `original_content` 等 D3 字段) / `ttfb_ms` / `gen_ms` / `total_ms` (F5 latency 三列) / `thinking_ms` (F5) / `created_at` |
 | `providers` | `id` | `name` / `protocol` / `base_url` / `api_key` / `enabled` |
 | `models` | `id` | `provider_id` (FK) / `name` / `model_id` / `max_tokens` / `enabled` |
 | `app_config` | `key` | `value` (JSON) |
+| `session_audit_events` | `id` | `session_id` (FK, ON DELETE CASCADE) / `kind` (AuditKind 17 variant wire string) / `tool_use_id?` / `path?` / `match_kind?` / `match_value?` / `mode?` / `risk?` / `ts` (RFC3339) |
+| `session_tool_permissions` | `id` | `session_id` (FK) / `tool_name` / `match_kind` (`tool` / `prefix` / `path`) / `match_value` / `granted_at` |
+| `subagent_runs` | `id` (UUID) | `parent_session_id` (FK, ON DELETE CASCADE) / `parent_request_id` (TEXT, soft FK) / `subagent_name` / `status` (CHECK 5 值) / `started_at` / `finished_at?` / `token_usage_json?` / `summary?` / `transcript_json?` / `transcript_truncated` / `turn_count?`(RULE-FrontSubagent-004 加) / `created_at` |
 
 **索引**:
 ```sql
 CREATE INDEX idx_sessions_project_id ON sessions(project_id);
 CREATE INDEX idx_messages_session_id ON messages(session_id);
 CREATE INDEX idx_models_provider_id ON models(provider_id);
+CREATE INDEX idx_subagent_runs_session_started ON subagent_runs(parent_session_id, started_at DESC);
+CREATE INDEX idx_subagent_runs_request ON subagent_runs(parent_request_id);
+CREATE INDEX idx_session_audit_events_session_ts ON session_audit_events(session_id, ts DESC);
 ```
 
-**外键**: `PRAGMA foreign_keys = ON`。`sessions.model_id` 是软 FK (无 `REFERENCES`),允许删除 model 不级联 (Opus D决策)。
+**外键**: `PRAGMA foreign_keys = ON`。`sessions.model_id` 是软 FK (无 `REFERENCES`),允许删除 model 不级联 (Opus D决策)。`subagent_runs.parent_session_id` 是硬 FK + CASCADE,B6 PR2 决定(详见 `.trellis/spec/backend/subagent-runs-schema.md`)。
 
 ---
 
@@ -364,6 +423,8 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
  → emit('tool:result') → 前端 ToolCallCard显示结果
  →构造 tool_result 回填 LLM →下一轮 Agent Loop
 ```
+
+**Tool 路径检查**:`agent/permissions/check.rs::is_within_root`(`is_parallel_eligible` 谓词的 path-in-root 分支,`chat_loop.rs` 内,2026-06-19 RULE-A-013 收口后从纯 name 白名单升级为 name + path-in-root 双校验;路径解析约定 `absolute → as-is / relative → root.join(p) / None → eligible` 与 `agent/permissions/check.rs:560-571` 完全一致)
 
 ---
 

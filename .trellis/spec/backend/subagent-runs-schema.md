@@ -59,11 +59,14 @@ characteristics fall out naturally:
   CASCADE`** — deleting a session cleans up all its worker
   `subagent_runs` in one shot. The `PRAGMA foreign_keys = ON` setting
   (per-connection; `init_pool` enables it on first use) is **required**
-  for the cascade to fire. Cascade test in `db/tests.rs`:
+  for the cascade to fire. Cascade test in `db/subagent_runs_tests.rs`
+  (拆分自 `db/tests.rs`,2026-06-23 按 SQL 域拆为 6 个 `*_tests.rs`):
   `subagent_runs_cascade_delete_with_parent_session`.
 - **`parent_request_id` is a TEXT NOT NULL with NO FK** — it carries
   the worker rid (the `"{parent_rid}-sub-{seq}"` string the agent loop
-  builds at `chat_loop.rs:1989`). The rid is **not durable** (the
+  builds at `agent/subagent/dispatch.rs`,拆分自 `chat_loop.rs:1989` 当年的位置,
+  2026-06-23 run_subagent 抽离 chat_loop 主循环至 `subagent/dispatch.rs`)。
+  The rid is **not durable** (the
   `cancellations` map is in-memory), so a hard FK would be wrong. This
   is a deliberate **soft-FK-style** column (no constraint, but the
   value is meaningful for cross-referencing cancellation/audit rows
@@ -149,7 +152,8 @@ the **DB row id** (`subagent_runs.id`, the UUID `insert_run` returns as
 **`subagent:event`** — streamed live while the worker runs. One payload per
 `SubagentBufferSink::record()` (chat_event / tool_call / tool_result /
 permission_ask). Wire shape (built by `build_subagent_event_payload` in
-`agent/subagent.rs`):
+`agent/subagent/transcript.rs`,原 `agent/subagent.rs` 整文件已拆为
+`agent/subagent/{mod,sink,transcript,truncate_summary,dispatch}.rs` 5 文件,2026-06-23 完成):
 
 ```json
 { "runId": "<DB id>", "sessionId": "<parent session_id>", "kind": "<snake_case TranscriptKind>", "payload": <entry body, camelCase>, "timestamp": "<RFC 3339>" }
@@ -217,8 +221,9 @@ makes the contract obvious at the call site (`run_subagent` calls
 — high enough that a runaway worker could store 100s of MB of
 transcript per row, multiplying with concurrent workers to threaten
 DB size and slow reloads. The 4 MiB cap (`TRANSCRIPT_MAX_BYTES` in
-`agent/subagent.rs::truncate_transcript_for_persistence`) is applied
-**at the write boundary** in `run_subagent`:
+`agent/subagent/truncate_summary.rs::truncate_transcript_for_persistence`,
+拆分自原 `agent/subagent.rs`,2026-06-23 整文件拆为 5 文件时分配到 truncate_summary.rs)
+is applied **at the write boundary** in `run_subagent`:
 
 1. Worker exits → `worker_sink.transcript_snapshot()` returns
    `Vec<TranscriptEntry>`.
@@ -267,7 +272,9 @@ The reasoning (per B6 PR1 decision 5 + PR2 §R6):
 `ask_path` / `ask_shell` collapse path (`if ctx.is_worker {
 Decision::Deny }`) previously called `record_audit_event(ToolDenied)`
 BEFORE the worker check filtered it out, landing in the parent's
-`session_audit_events`. The fix (PR3a) is in `permissions/mod.rs::ask_path`
+`session_audit_events`. The fix (PR3a) is in
+`agent/permissions/ask.rs::ask_path` (拆分自原 `permissions/mod.rs`,2026-06-23
+mod.rs 拆为 8 模块,ask_path + build_ask_reason 落 ask.rs)
 worker branch: the branch no longer calls `record_audit_event`; instead
 it emits a `PermissionAskPayload` via the sink →
 `SubagentBufferSink::emit_permission_ask` records a
@@ -313,8 +320,9 @@ this table pattern verbatim:
 - [x] **Indexed by `(parent_session_id, child_ts DESC)`** for the
       list-by-parent query (mirrors `idx_session_audit_events_session_ts`).
 - [x] **At least one happy-path + one CASCADE + one cap / payload
-      test per CRUD function** (7 tests in `db/tests.rs` for
-      PR2a; same density recommended for future child-context
+      test per CRUD function** (7 tests in `db/subagent_runs_tests.rs` for
+      PR2a, 拆分自 `db/tests.rs`,2026-06-23 按 SQL 域拆为 6 个 `*_tests.rs`;
+      same density recommended for future child-context
       features).
 
 ### When NOT to apply this pattern

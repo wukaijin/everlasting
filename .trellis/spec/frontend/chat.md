@@ -12,16 +12,25 @@ worker subagent 的右侧 drawer。reka-ui `Dialog*` 组合实现（@2.9.9 无 `
 
 | 文件 | 职责 |
 |---|---|
-| `app/src/components/chat/SubagentDrawer.vue` | 顶层容器 + 5 段编排 + ticker + scroll 编排 + 边界态（~1000 行） |
-| `app/src/components/chat/SubagentDrawerHeader.vue` | header 子组件：status badge + name + close + banner + meta + summary + truncated（无 jump-latest） |
-| `app/src/components/chat/SubagentDrawerErrorCard.vue` | R25 ❌ 错误卡：v-if `status==='error'`、4 级 fallback 的 `errorMessage` |
-| `app/src/components/chat/DrawerSection.vue` | 通用折叠容器（thinking/tools/reply 共用），折叠态 lazy render |
-| `app/src/components/chat/DrawerPromptCard.vue` | `run.task` prompt 卡片（120 截断 + View full） |
+| `app/src/components/chat/SubagentDrawer.vue` | 顶层容器 + 5 段编排 + ticker + scroll 编排 + 边界态(06-23 拆后 ~900 行,拆分自 1257 行) |
+| `app/src/components/chat/SubagentDrawerHeader.vue` | ★ (06-23 拆)header 子组件:status badge + name + close + banner + meta + summary + truncated(无 jump-latest,跳转按钮下移 body) |
+| `app/src/components/chat/SubagentDrawerErrorCard.vue` | ★ (06-23 拆)R25 ❌ 错误卡:v-if `status==='error'`、4 级 fallback 的 `errorMessage` |
+| `app/src/components/chat/ChatInput.vue` | 主输入框(06-23 拆后 ~712 行,拆分自 1834 行;留 props/emits + 提交编排 + ModeSelect) |
+| `app/src/components/chat/ChatInputLatencyPopover.vue` | ★ (06-23 拆)自包含 chip + popover + open state + onDocumentClick + Esc + Transition(0 store import) |
+| `app/src/components/chat/ChatInputHintRow.vue` | ★ (06-23 拆)embed `<ChatInputLatencyPopover>` + token reka-ui Tooltip + `<ModelSelect>` |
+| `app/src/utils/chatInputCodeMirror.ts` | ★ (06-23 拆)composable:~564 行,封装 CM 6 生命周期 + keymap + IME + 触发器检测(0 store import) |
+| `app/src/components/chat/DrawerSection.vue` | 通用折叠容器(thinking/tools/reply 共用),折叠态 lazy render |
+| `app/src/components/chat/DrawerPromptCard.vue` | `run.task` prompt 卡片(120 截断 + View full) |
 | `app/src/components/chat/DrawerThinkingBlock.vue` | `ThinkingSection` → 共享 `ThinkingBlock` 适配器 |
-| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片（复用 ToolInputBody/ToolOutputBody，**不 wrap ToolCallCard**） |
-| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片（live interactive + historical outcome badge） |
-| `app/src/utils/transcriptPairing.ts` | `pairSections` section 级配对（snake→camel） |
-| `app/src/stores/subagentRuns.ts` | `RunAccumulator` + `liveSections` Map + `TranscriptSection` 类型 |
+| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**) |
+| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(live interactive + historical outcome badge) |
+| `app/src/components/chat/MessageItem.vue` | 主消息项(06-23 拆后 ~770 行,拆分自 1099 行) |
+| `app/src/components/chat/MessageItemEdit.vue` | ★ (06-23 拆)user 消息 inline edit 模式(textarea + Save/Cancel + inline error) |
+| `app/src/components/chat/MessageItemFooter.vue` | ★ (06-23 拆)assistant/user 通用底部两联(error footer + F5 latency chip) |
+| `app/src/utils/transcriptPairing.ts` | `pairSections` section 级配对(snake→camel) |
+| `app/src/stores/subagentRuns.ts` | store 主体 + `coerceStatus`(06-23 拆后 ~547 行) |
+| `app/src/stores/subagentRuns.types.ts` | ★ (06-23 拆)~354 行类型 + `SUBAGENT_EVENT_DEBOUNCE_MS` |
+| `app/src/stores/runAccumulator.ts` | ★ (06-23 拆)~537 行 `RunAccumulator` + `parseTranscriptJson`(打破循环依赖唯一解) |
 
 ### 5 段布局
 
@@ -71,7 +80,7 @@ subagent:finished → fetchRun → rebuildFromCache(transcriptJson, finalText)
 
 ### Design Decision: Header / ErrorCard 子组件 + jump-latest 下移 body（split refactor 2026-06-23）
 
-**Context**：`SubagentDrawer.vue` 长到 1257 行（header template + error card + 5 段编排 + ticker + scroll 编排 + 跨层 drift 注释），需要拆分降复杂度。header 模板里原本挂了一个 `↗` "跳到最新" 按钮（`jumpToLatest`），但它的 visible 条件 `!autoFollow && sections.length > 0` + click handler 全部依赖 body 状态（`autoFollow` / `newCount` / `bodyEl` / `onBodyScroll`）。
+**Context**：`SubagentDrawer.vue` 长到 1257 行(header template + error card + 5 段编排 + ticker + scroll 编排 + 跨层 drift 注释),需要拆分降复杂度(header template 里原本挂了一个 `↗` "跳到最新" 按钮(`jumpToLatest`),但它的 visible 条件 `!autoFollow && sections.length > 0` + click handler 全部依赖 body 状态(`autoFollow` / `newCount` / `bodyEl` / `onBodyScroll`))。**2026-06-23 拆分完成**:主文件缩到 ~900 行,新出 `SubagentDrawerHeader.vue` (~250 行) + `SubagentDrawerErrorCard.vue` (~100 行),jump-latest 按钮按 A 方案下移 body 顶部 sticky。
 
 **Decision**：拆出 2 个纯展示子组件 + 1 个 cross-cut 移位：
 - `SubagentDrawerHeader.vue`（5 prop: `run` / `status` / `statusDisplay` / `bannerText` / `truncated`，**无 emit**，无 cross-cut）—— 仅渲染 status badge / name / close / banner / meta / summary / truncated
@@ -89,7 +98,7 @@ subagent:finished → fetchRun → rebuildFromCache(transcriptJson, finalText)
 
 ### Design Decision: ChatInput split — composable + LatencyPopover + HintRow（split refactor 2026-06-23）
 
-**Context**：`ChatInput.vue` 长到 1834 行，承载 4 个独立关注点（CM 6 宿主 + `/` `@` 触发器检测 + LLM 累计耗时 popover + 底部 hint row 编排）。需要拆分降复杂度，同时公共 API（`sending` / `placeholder` + emit `send` / `stop`）必须不变（`ChatPanel.vue` 零修改）。
+**Context**：`ChatInput.vue` 长到 1834 行,承载 4 个独立关注点(CM 6 宿主 + `/` `@` 触发器检测 + LLM 累计耗时 popover + 底部 hint row 编排),需要拆分降复杂度,同时公共 API(`sending` / `placeholder` + emit `send` / `stop`)必须不变(`ChatPanel.vue` 零修改)。**2026-06-23 拆分完成**:主文件缩到 ~712 行,新出 `ChatInputLatencyPopover.vue` (~365 行) + `ChatInputHintRow.vue` (~251 行) + `app/src/utils/chatInputCodeMirror.ts` composable (~564 行)。
 
 **Decision**：拆出 1 个 composable + 2 个纯展示子组件：
 
