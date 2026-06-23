@@ -165,3 +165,37 @@
 - **NIT (follow-up)**: `MessageItemEdit.vue` 309 行 vs PRD 估 ~180;`MessageItemFooter.vue` 270 行 vs PRD 估 ~120 —— 差额为 props/emits JSDoc + handler 文档,可后续收紧。
 - **NIT (follow-up)**: `MessageItemEdit.vue` 的 `resend` emit 定义但当前不渲染按钮(Resend 入口在 `MessageActionsMenu` 同 D3 PR3 行为),留作 PR5+ 编辑器内联 Resend 按钮扩展点。
 - 下一任务候选:P0 `split-chat-input` (CodeMirror composable + latency popover) / P3 `split-subagent-drawer` / P3 `split-db/tests.rs`。
+
+
+## Session 64: 拆分 SubagentDrawer.vue — Header + ErrorCard 子组件
+
+**Date**: 2026-06-23
+**Task**: 拆分 SubagentDrawer.vue — Header + ErrorCard 子组件
+**Branch**: `main`
+
+### Summary
+
+把 1257 行的 SubagentDrawer 拆为编排器 (~1000 行) + Header (244 行) + ErrorCard (90 行)。采用 A 方案把 jump-latest 从 header 顶部下移到 body 顶部 sticky,Header 只接 5 个 prop (run/status/statusDisplay/bannerText/truncated) 无 emit。test 1225 行零修改通过,vue-tsc 0 错误,行数踩到 PRD ±50 抖动上限。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `53165e1` | (see git log) |
+| `851fe45` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
