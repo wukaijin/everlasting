@@ -232,3 +232,37 @@ db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_te
 ### Next Steps
 
 - None - task complete
+
+
+## Session 66: Session 71: 拆分 ChatInput.vue — chatInputCodeMirror composable + LatencyPopover + HintRow
+
+**Date**: 2026-06-23
+**Task**: Session 71: 拆分 ChatInput.vue — chatInputCodeMirror composable + LatencyPopover + HintRow
+**Branch**: `main`
+
+### Summary
+
+1834 行 ChatInput.vue 拆 4 单元。主组件 → 712 行(-61%)。新增 app/src/utils/chatInputCodeMirror.ts(CM 6 composable,0 store import + 内部 panel state + 单向 source 回调,ADR-1/2)+ app/src/components/chat/ChatInputLatencyPopover.vue(自包含 chip+popover,遵循 popover-pattern.md,ADR-3 A 方案)+ app/src/components/chat/ChatInputHintRow.vue(3 chip 聚合,reka-ui Tooltip :deep() 保留)。公共 API 不变(ChatPanel.vue 0 修改),所有 gate 绿(vue-tsc 0/vitest 516/516/build 绿)。docs(chat-spec) 加 ChatInput split section 记新 composable pattern。Composable 可独立测试 + 留 AppShell Cmd+K 复用 follow-up;可选新增 2 .test.ts 留 follow-up。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d46e223` | (see git log) |
+| `115d299` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

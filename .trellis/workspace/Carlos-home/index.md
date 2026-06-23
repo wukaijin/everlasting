@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 65
+- **Total Sessions**: 66
 - **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~234 | Active |
+| `journal-3.md` | ~268 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 66 | 2026-06-23 | Session 71: 拆分 ChatInput.vue — chatInputCodeMirror composable + LatencyPopover + HintRow | `d46e223`, `115d299` | `main` |
 | 65 | 2026-06-23 | Split db/tests.rs into 6 SQL-domain files | `3edb597` | `main` |
 | 64 | 2026-06-23 | 拆分 SubagentDrawer.vue — Header + ErrorCard 子组件 | `53165e1`, `851fe45` | `main` |
 | 63 | 2026-06-23 | Session 67 — 拆分 subagent.rs → subagent/ 目录（mod/sink/transcript/truncate_summary） | `a6cd89f` | `main` |
