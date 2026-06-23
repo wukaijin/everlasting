@@ -395,3 +395,62 @@ db/tests.rs (3242 行 / 95 集成测试) 按 SQL 域拆成 6 文件: projects_te
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 69: P2 batch: 清 3 条 open 债(A-005 / A-009 / B-003)
+
+**Date**: 2026-06-24
+**Task**: `.trellis/tasks/06-24-p2-batch-3-rules`
+**Branch**: `main`
+
+### Summary
+
+DEBT.md 3 条 P2 open 债一次性批量收口,0 行为变更,7 文件 landed(5 源码 + 1 DEBT.md + 2 spec)。1 新测试 + 1 死代码变体删 + 2 stale spec 修订 + DEBT.md 3 条 file ref 同步。
+
+**3 处代码修复**:
+- **RULE-A-005** head_sha 50 轮不刷新 → `chat_loop.rs` 改为 `let mut head_sha: String`,主循环 50 轮 `for turn in 1..=turn_limit` 入口重新 `lookup_head_sha` + 重建 `build_system_prompt` + `assemble_system_prompt`,`system_prompt` 也改 `mut` 支持 reassign。B6 worker 路径(`system_prompt_override = Some(p)` 第 23 参)走短路,worker 不重新查。成本:1 sub-毫秒 libgit2 + 1 字符串拼接 per turn。**关键风险已验:不破 memory cache**——`memory/loader.rs::build_instructions_blocks` 的 cache_control 块在 system_prompt 之前独立 user message,改 head_sha 不影响 cache key。
+- **RULE-A-009** 死代码抑制噪音 3 处:(a) `let _ = &base_prompt;` 删(`base_prompt` 在 `assemble_system_prompt` 真用,无 warning);(b) `let mut turn_send_at = None;` + `let _ = turn_send_at;` 合并成 `let turn_send_at = Some(Instant::now());`(消除 dead initial value);(c) `ChatEvent::ToolResult { .. } => {}` match arm 删 + `llm/types.rs:357` 变体定义删 + 模块 docstring 同步更新。全 crate grep 0 构造点,选 **选项 X**(彻底删变体,与 DEBT 描述对齐);`ContentBlock::ToolResult`(消息块,wire.rs 大量用)与 `TranscriptKind::ToolResult`(subagent transcript)是不同 enum,不受影响。
+- **RULE-B-003** `sqlite_glob_match` `?` 分支 dead block 简化:`permissions/check.rs:386-430` 从 18 行简化到 8 行,删 `if let Some(sp) = star_pi` 内层(411-425),直接 `return false;`(`?` 不跨 `/` 行为不变)。
+
+**DEBT.md file ref 同步**(06-23/24 10 split 后漂移):3 条 P2 File: 字段全部更新到 post-split 真实路径 + 加 Related Task 字段指向本任务。RULE 本身未删(per prd §8,merge 后 follow-up 删)。
+
+**2 stale spec 修订**(check L5 finding,本任务一并修,user confirm):(a) `worktree-contract.md:614` 删 `emit(ChatEvent::ToolResult { ... })` 行,改为 `emit_tool_result(&ctx, wire)` + 注释指 `tool:result` IPC 通道;(b) `multi-provider-contract.md:541` 整段重写,删除"provider returns `ChatEvent::ToolResult`"的错误描述,加 "There is no `ChatEvent::ToolResult` variant — removed 2026-06-24 (DEBT RULE-A-009 修 2c)" 说明。
+
+**prd §3.1 + §6.4 wording drift 自修正**(任务私有,不入仓):实施时发现 §3.1 修 1 写"每次 tool 后 refresh"实际代码"每 turn 入口 refresh"(语义等价,LLM 每 turn 在 `provider.send` 前 consume system_prompt);§6.4 选型从"倾向 `&mut String` 借用"改为"owned String reassign"。prd 全文已对齐实施。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/chat_loop.rs`:+~50 行(head_sha refresh loop 接入 + 修 2a/2b/2c)
+- `app/src-tauri/src/agent/llm/types.rs`:删 `ChatEvent::ToolResult` 变体 + 模块 docstring 同步
+- `app/src-tauri/src/agent/permissions/check.rs`:? 分支简化 -10 行
+- `app/src-tauri/src/agent/tests_prompts.rs`:+118 行 T1 新测试(`head_sha_refresh_after_commit_updates_system_prompt`,真 `git2::Repository::init` + 2 commits,断言 `build_system_prompt` 反映新 SHA)
+- `.trellis/reviews/DEBT.md`:3 条 P2 File: 字段 + Related Task 字段
+- `.trellis/spec/backend/worktree-contract.md`:614 行 emit 模式修正
+- `.trellis/spec/backend/multi-provider-contract.md`:541 段 provider 描述重写
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (4 段式:fix→docs(spec+debt)→archive→journal) | (TBD post-user-confirm) |
+
+### Testing
+
+- [OK] `cargo check --all-targets` 0 error,0 新 warning(1 pre-existing `rt` warning in `background_shell/in_memory.rs:746` 无关)
+- [OK] `cargo test --lib` **814 passed; 0 failed**(813 基线 + 1 新 T1)
+- [OK] `cargo test --lib head_sha_refresh` T1 单独 pass
+- [OK] `cargo test --lib sqlite_glob` 4 passed(?/`*`/literal/empty 行为不变)
+- [OK] `pnpm exec vue-tsc --noEmit` 0 error(零前端改动)
+- [OK] 跨层 L1-L4 验证 `ChatEvent::ToolResult` 删 0 影响(wire.rs / provider/* / sink.rs / frontend 全部 grep 0 hit;`ContentBlock::ToolResult` + `TranscriptKind::ToolResult` 不同 enum 不受影响)
+- [OK] check sub-agent 0 issues found;2 个 prd wording drift 已自修正(任务私有)
+
+### Status
+
+[OK] **Completed** — 06-24-p2-batch-3-rules 闭。DEBT 12 → 9 open(P2 3 条 RULE **本任务未删**,per prd §8,等 PR merge 后 follow-up 删;merge 触发由 archive commit 后 chat 决定何时执行,或新开 doc-only task)。
+
+### Next Steps
+
+- **Follow-up (留新 task)**:`06-24-delete-3-closed-rules` — PR merge 后从 DEBT.md 删 3 条 RULE(A-005/A-009/B-003),按 DEBT.md invariant"本文件 = open 集合"。
+- **Follow-up (留新 task)**:`06-24-audit-stale-specs` — check L5 同时扫到的其他 P3 文档漂移(DEBT.md 8 条 P3 也有 5+ 处 file:line 漂移待同步),Session 68 同步任务只扫了源码注释和主 spec,没扫 DEBT RULE 引用 + 其他 backend spec。
+- **下一任务候选**:P1 `RULE-D-001 API key 加密`(唯一 P1,4-6h)/ 路线图第三档任一(B9/C2/C6/B1/D2)/ 上述 2 个 follow-up 之一。
