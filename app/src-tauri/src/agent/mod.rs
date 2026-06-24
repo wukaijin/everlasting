@@ -31,6 +31,11 @@
 //!   `persist_turn_cwd`, `emit_chat_event`, and the
 //!   `cancel_inflight_for_session` helper shared with the
 //!   worktree commands.
+//! - [`loop_detection`] — C2 ⑬ loop detection (anti death-loop):
+//!   two-level scheme (exact-signature hard trigger + Jaccard soft
+//!   hint) that catches the model stuck repeating a tool call before
+//!   the `MAX_TURNS` backstop; pure functions wired into
+//!   `run_chat_loop` (PR2).
 //! - test suite (split 2026-06-23 out of a single `tests.rs`):
 //!   [`tests_common`] (shared `TestHarness`/`MockEmitter`/`make_harness`
 //!   helpers) + domain files [`tests_cancellation`] /
@@ -43,6 +48,7 @@ pub mod chat;
 pub mod chat_loop;
 pub mod context;
 pub mod helpers;
+pub mod loop_detection;
 pub mod permissions;
 pub mod provider;
 pub mod subagent;

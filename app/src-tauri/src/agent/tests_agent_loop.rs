@@ -3584,3 +3584,191 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
 // shape; for the "happy" test it's a normal events vec.
 // ===========================================================================
 
+// ===========================================================================
+// ⑬ C2 loop detection — HardLoop hint injected into the result message
+// ===========================================================================
+//
+// Three consecutive turns of the identical `list_dir {path: "."}` trip
+// Level 1 (exact-signature run of 3). The hint must surface as a Text
+// block prepended to turn 3's tool_result message, which turn 4's
+// `send` therefore sees. Action is SOFT per §2.5.4: the tool still
+// executes (one `tool:result` per turn) and the loop is NOT terminated
+// by the hit (turn 4 runs normally and ends via end_turn).
+#[tokio::test]
+async fn agent_loop_loop_detection_injects_hard_hint() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+
+    // One scripted tool_use turn, reused three times with fresh ids.
+    let list_dir_turn = |id: &str| {
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: id.into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ])
+    };
+    let mock = Arc::new(MockProvider::new(vec![
+        list_dir_turn("toolu_1"),
+        list_dir_turn("toolu_2"),
+        list_dir_turn("toolu_3"),
+        // Turn 4: text-only — proves loop detection did not kill the loop.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "done".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-loop".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,        // max_turns (default MAX_TURNS)
+        false,       // skip_session_active
+        false,       // skip_persist
+        Some(false), // is_worker (production-style)
+        None,        // app_handle
+        None,        // system_prompt_override
+        None,        // worker_run_id
+    )
+    .await;
+
+    // All 4 turns ran — the hint is soft and never terminates.
+    assert_eq!(
+        mock.call_count(),
+        4,
+        "loop detection is soft — all 4 turns must run"
+    );
+    // Each list_dir turn emits exactly one tool:result (3 total).
+    assert_eq!(emitter.tool_result_count(), 3);
+
+    // The hint lands in turn 3's tool_result message, which turn 4's
+    // send receives. Hunt every Text block across turn 4's messages.
+    let sent = mock.sent_messages();
+    let turn4 = sent.last().expect("turn 4 send must be recorded");
+    let hint_found = turn4.iter().any(|m| {
+        matches!(&m.content, MessageContent::Blocks(blocks)
+            if blocks.iter().any(|b| matches!(b,
+                ContentBlock::Text { text, .. } if text.contains("loop detected"))))
+    });
+    assert!(
+        hint_found,
+        "turn-3 HardLoop hint must be injected as a Text block seen by turn 4"
+    );
+}
+
+// ===========================================================================
+// ⑬ C2 loop detection — no hint when calls are NOT repetitive
+// ===========================================================================
+//
+// Two distinct tool_use turns (different tools / args) must NOT trip
+// the detector: no hint Text block appears in any turn's result.
+#[tokio::test]
+async fn agent_loop_loop_detection_silent_when_not_repetitive() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: list_dir
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_1".into(),
+                name: "list_dir".into(),
+                input: serde_json::json!({"path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: glob (different tool → different signature)
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_2".into(),
+                name: "glob".into(),
+                input: serde_json::json!({"pattern": "*.rs", "path": "."}),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 3: text-only
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "done".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-no-loop".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(mock.call_count(), 3);
+    // No hint anywhere across all sends.
+    let any_hint = mock
+        .sent_messages()
+        .iter()
+        .flatten()
+        .any(|m| {
+            matches!(&m.content, MessageContent::Blocks(blocks)
+                if blocks.iter().any(|b| matches!(b,
+                    ContentBlock::Text { text, .. } if text.contains("loop detected"))))
+        });
+    assert!(!any_hint, "distinct tool calls must not trigger a loop hint");
+}
+

@@ -56,6 +56,8 @@ use crate::agent::helpers::{
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
+use crate::agent::loop_detection;
+use std::collections::VecDeque;
 use crate::background_shell::BackgroundShellRegistry;
 use crate::llm::{
     ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Provider, Role,
@@ -703,6 +705,14 @@ pub async fn run_chat_loop(
     // returned clone is not needed (the chat loop iterates
     // `messages` directly downstream).
     let _ = last_user_after_inject;
+
+    // ⑬ loop detection (C2): sliding window of recent tool calls,
+    // checked once per turn after tool_calls are collected. Declared
+    // OUTSIDE the turn loop so it accumulates across turns — and
+    // since B6 worker subagents reuse `run_chat_loop`, the worker
+    // inherits detection too (with its own shorter max_turns budget).
+    let mut loop_window: VecDeque<loop_detection::ToolCall> =
+        VecDeque::with_capacity(loop_detection::SOFT_WINDOW);
 
     let turn_limit = max_turns.unwrap_or(MAX_TURNS);
     for turn in 1..=turn_limit {
@@ -1403,6 +1413,28 @@ pub async fn run_chat_loop(
         // permission denial can pre-populate
         // `permission_asks` with a no-sender entry — the 120s
         // timeout fires and the test exits).
+        // ⑬ loop detection (C2): feed this turn's tool_calls into the
+        // sliding window, then run the two-level detector. On a hit we
+        // keep a hint string to prepend to the result message (soft —
+        // we never skip execution and never terminate; MAX_TURNS stays
+        // the hard backstop). Per §2.5.8 this is tracing-only, no
+        // AuditKind row.
+        for (_id, name, input) in &tool_calls {
+            loop_window.push_back(loop_detection::ToolCall::new(
+                name.clone(),
+                input.clone(),
+            ));
+        }
+        while loop_window.len() > loop_detection::SOFT_WINDOW {
+            loop_window.pop_front();
+        }
+        let loop_verdict =
+            loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
+        let loop_hint: Option<String> = loop_verdict.hint_text();
+        if loop_hint.is_some() {
+            tracing::warn!(verdict = ?loop_verdict, "agent loop ⑬: loop detected (soft hint)");
+        }
+
         let mut result_blocks: Vec<ContentBlock> = Vec::new();
         if is_parallel_eligible(&tool_calls, &permission_ctx.cwd) {
             // ---- L2 parallel path (read-only batch) ----
@@ -1814,6 +1846,20 @@ pub async fn run_chat_loop(
                 break;
             }
             }
+        }
+
+        // ⑬ loop detection (C2): if this turn tripped the detector,
+        // prepend the hint as a Text block so the LLM sees it ahead of
+        // the tool_results next turn. Soft nudge only — execution was
+        // NOT skipped and the loop is NOT terminated.
+        if let Some(hint) = &loop_hint {
+            result_blocks.insert(
+                0,
+                ContentBlock::Text {
+                    text: format!("⚠️  {}\n", hint),
+                    cache_control: None,
+                },
+            );
         }
 
         if cancelled {
