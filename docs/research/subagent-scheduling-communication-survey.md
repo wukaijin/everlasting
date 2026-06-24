@@ -237,6 +237,13 @@ Lead（当前 session）→ spawn teammates
 
 ## 3. Hermes（Nous Research）— 最成熟的并行 fan-out
 
+> **⚠️ ERRATA（2026-06-24 源码核实裁定）**: 本节有 2 处事实错误,已在抓取 `NousResearch/hermes-agent` `tools/delegate_tool.py` 源码后裁定,选型以本裁定为准:
+> 1. **Hermes 默认同步阻塞**,不是"不阻塞父 agent"。`background` 参数默认 `False`（前台阻塞,父 agent 等所有 child 完成）;只有显式 `background=true` 才异步返回 `{"status":"dispatched"}` 让父 agent 继续。源码 `delegate_tool.py:2120` + `async_delegation.py:263` 注释 "results block"。
+> 2. **并发上限默认 3,不是 30**。`_DEFAULT_MAX_CONCURRENT_CHILDREN = 3`（`delegate_tool.py:132`）。下方 yaml 的 `30` 是示例值,易误读为默认。批超限**硬拒**（返回 tool_error,`:2174-2180`,不截断不排队）。`max_spawn_depth` 默认也是 **1**（`MAX_DEPTH=1`,`:139`,默认禁嵌套;下方 `2` 同为示例值）。
+> 3. **结论**:Hermes 的"并行"是 `ThreadPoolExecutor` 内部把 N 个 child 跑满、**父 agent 仍阻塞等齐**——这正是 Everlasting L3a 该抄的形态（父 turn 阻塞 + 内部 fan-out）,不是"父 agent 不阻塞"。
+>
+> **2026-06-24 L3a 范围决策**:L3a 限定**只读 worker 并发**（researcher/探索类）,worktree 隔离留 L3b（带写 worker 才需要）。本文 §6.1 方案 A 建议的"并发 + worktree"已被范围决策收窄为"并发只读、不含 worktree"。
+
 > 信息源：2026-06-19 调研 + hermes-agent.nousresearch.com 文档
 
 ### 3.1 delegate_task — 并行 fan-out
@@ -252,13 +259,13 @@ delegate_task(tasks=[
 配置：
 ```yaml
 delegation:
-  max_concurrent_children: 30   # 并发批大小
-  max_spawn_depth: 2            # 委派层级(最大 3)
+  max_concurrent_children: 30   # 示例值;源码默认 3(见 §3 ERRATA),可配高
+  max_spawn_depth: 2            # 示例值;源码默认 1(禁嵌套),可配高
 ```
 
 | 属性 | 表现 |
 |------|------|
-| 是否阻塞 | ❌ 不阻塞（父 agent 在子运行时继续） |
+| 是否阻塞 | ⚠️ **默认同步阻塞**（父 agent 等所有 child 完成）;`background=true` 才不阻塞（见 §3 ERRATA,本文原文误为"不阻塞"） |
 | 并发机制 | 配置并发上限,子 agent 并行独立运行 |
 | 子→父实时流 | ❌ 只拿最终结果 |
 | 子↔子通信 | ❌ 无 |
@@ -287,7 +294,7 @@ kanban_create(
 
 | 维度 | Hermes | Everlasting 当前 |
 |------|--------|-----------------|
-| 并发数 | 可配到 30 | 单 worker 串行 |
+| 并发数 | 源码默认 3（可配高,示例常写 30;见 §3 ERRATA） | 单 worker 串行 |
 | Worktree 隔离 | 强制要求 | ✅ 已有模块(`git/worktree.rs`) |
 | 任务依赖图 | Kanban + parents | ❌ 无 |
 | 结果合并 | synthesis 步骤 | format_dispatch_result |
