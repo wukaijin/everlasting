@@ -58,7 +58,7 @@
 
 _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 
-## P3 — 轻微(文档/一致性) [4 items]
+## P3 — 轻微(文档/一致性) [2 items]
 
 ### RULE-B-007 — Background Mode 仍空壳
 
@@ -84,32 +84,6 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 - **Discovered In**: REVIEW-b5-memory-grill-2026-06-10 + REVIEW-agent-loop-full-audit-2026-06-14 §2.3
 
 
-### RULE-FrontSubagent-001 — `.tool-card` / `.drawer-tool-card` header CSS 重复
-
-- **Level**: P3
-- **Subsystem**: Frontend Subagent
-- **File**: `app/src/components/chat/DrawerToolCallCard.vue:196-320` + `app/src/components/chat/DrawerPermissionAskCard.vue:75-138` + `app/src/components/chat/ToolCallCard.vue:641-756`
-- **Description**: PR5 redesign 后 SubagentDrawer 不再内联 `.tool-card` CSS(改 5 段分组布局);但 PR4 `DrawerToolCallCard` + PR6 `DrawerPermissionAskCard` 各自重声明了 header CSS(1:1 镜像 ToolCallCard,各 ~50-60 行)。项目纯 CSS 无法 @import 共享。组件头注释把重复作为 PR4「主路径 0 改动」约束下的显式取舍。
-- **Impact**: 当前无功能影响;`.tool-card` header 视觉约定扩展时需同步改 3 处。
-- **Fix**: 抽 `ToolCallHeader.vue` 共享组件(需同时改 ToolCallCard 本体——PR4 时违反主路径 0 改动约束故推迟,redesign 收尾后可做);或抽 `app/src/style.css` 全局工具类。
-- **Owner**: carlos
-- **Discovered In**: B6 PR3 check phase → updated redesign PR4/PR5/PR6
-- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`
-
-
-### RULE-FrontSubagent-002 — `pairTranscript` / `pairSections` third-param 隐式状态
-
-- **Level**: P3
-- **Subsystem**: Frontend Subagent
-- **File**: `app/src/utils/transcriptPairing.ts:128-225` (`pairTranscript`) + `pairSections` (PR5 新增,同模式)
-- **Description**: `pairTranscript(entries, now, pendingFirstSeenAt)` / `pairSections(sections, now, pendingFirstSeenAt)` 第三个参数既是输入(共享状态)又是输出(被 `.set`/`.delete`)。功能正确但签名隐式。PR5 新增 `pairSections` 复用同模式,债范围扩大。
-- **Impact**: 调用方必须保持同一 Map 引用跨调用才能让 30s timeout timer 推进;新调用方易踩坑(每次新建 Map → 永远 pending)。
-- **Fix**: 抽 `useTranscriptPairing()` composable 返回 `{ pair, pendingMap }`,或 Map 移 module-level 单例。
-- **Owner**: carlos
-- **Discovered In**: B6 PR3 check phase → updated redesign PR5
-- **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`
-
-
 ---
 
 ## 优先级分布
@@ -119,8 +93,8 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(详见 git log) |
 | P2 | 0 | 健壮性 + 债务,中长期清理 |
-| P3 | 4 | 文档 + 一致性,可延后 |
-| **Total** | **4** | 当前 open items |
+| P3 | 2 | 文档 + 一致性,可延后 |
+| **Total** | **2** | 当前 open items |
 
 ---
 
