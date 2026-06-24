@@ -785,3 +785,18 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:tiktoken 是 `async` + 持 `tokio::sync::Mutex`(进热路径)+ cl100k_base 切碎 CJK + subword 噪音;Jaccard 粗粒度判定不需要 BPE 精度,word-level 更稳;两套 token 概念物理隔离
 - **决策**:不落 AuditKind 表(§2.5.8 已定),只 `tracing::warn!`;前端不新增组件(Q2 决策),hint 仅以 tool_result message 内 Text block 呈现
 - **测试**:`loop_detection` 31 单测(detect L1/L2 + signature_of 6 tool + tokenize + jaccard 边界)+ `tests_agent_loop` 2 集成测试(HardLoop hint 注入 turn 4 messages / 非循环不误报);`cargo test --lib` 855 passed 0 warning
+
+### 2026-06-25 — L3c subagent 联网(worker web_fetch,第三档收口)
+
+- **决策**:**最小 MVP** —— 仅改第 1+2 层(researcher `SubagentDef.tools` + `READONLY_TOOL_ALLOWLIST` 各加 `web_fetch`),第 3 层(worker 权限)**零改动**
+  - **原因**:基线验证推翻种子 PRD 第 3 层假设。PRD 种子写"worker `is_worker=true` 调 web_fetch → ask_path → 塌缩 Deny",这是 **2026-06-20 PR2b 的旧行为**,已被 **2026-06-22 RULE-FrontSubagent-003 fix** 推翻 —— worker ask 现走 `WorkerAskBanner` round-trip(`ask.rs:124` biased select:parent cancel / 120s timeout / oneshot)。L3a 验证时 worker 报"无 web_fetch"纯粹是第 1+2 层把工具从 toolset 剥掉,worker 根本没机会触发 ask
+  - **关键发现 —— "父 session grant 继承"天然已工作**:worker `PermissionContext.session_id` = `parent_session_id`(`dispatch.rs:314` 传 parent_session_id → `chat_loop.rs:411` PermissionContext.session_id),而 `check.rs:257` `check_tool_grant(db, &ctx.session_id, "web_fetch")` 查 `session_tool_permissions` 该 session 的 grant → worker web_fetch **已天然继承父 session grant**(父授权过 web_fetch → 自动 Allow 零 banner;无 grant → 弹 WorkerAskBanner)。第 3 层无需新代码
+- **决策**:并发 banner UX 接受现状,不引入 silent allow / worker AllowAlways 持久化
+  - **原因**:并发 N worker 各 web_fetch,父 session 无 grant 时弹 N banner(worker AllowAlways 不持久化——`ask.rs:267-273` 有意设计,防跨权限边界)。Workaround:用户预先在主对话对 web_fetch 点"始终允许"让所有 worker 继承。silent allow / 持久化 / 配额各自需独立安全 grill,作为 follow-up
+- **决策**:`READONLY_TOOL_ALLOWLIST` 加 web_fetch 不波及 L2 单 turn 并发
+  - **原因**:`READONLY_TOOL_ALLOWLIST` 只被 `filter_tools_readonly` 引用(仅 `dispatch.rs:157` force_readonly 并发路径调用);L2 用独立谓词 `is_parallel_eligible`(`chat_loop.rs:1439`),不引用本常量。web_fetch 是只读网络 op、`Risk::Low`、SSRF 已防护,符合"只读并发"语义(无本地副作用,N 个独立 GET 无共享状态竞争)
+- **决策**:顺手修正 worker ask 过时描述(L3a 遗留文档债)
+  - **范围**:`mod.rs` `dispatch_subagent` ToolDef.description(**LLM-facing**,原"worker has no UI...auto-denied"会让主 agent 不派 worker 做需工具任务,直接损害本 task 的可用性)+ `dispatch.rs:339` 注释 + `tool-contract.md` 第 21 参/is_worker 注释/description block(原"collapse to Deny"与 permission-layer.md §5b 矛盾)。纯文档/注释/prompt,**零行为改动**(行为早已是 WorkerAskBanner)
+  - **残留**(未纳入本 PR):`permissions/types.rs:144` is_worker 字段 doc + `tests_subagent.rs:1363/1669` 测试注释同款过时,留作关联文档债后续清理
+- **测试**:`mod.rs` 2 处(researcher allowlist + filter 加 web_fetch keep 断言)+ `tests_subagent.rs` `l3a_filter_tools_readonly_keeps_only_four_read_tools` 改名 `_five_` + len 5 + required 加 web_fetch + forbidden 去 web_fetch;`cargo test --lib` **864 passed 0 failed**
+- **沉淀**:`.trellis/spec/backend/tool-contract.md`(web_fetch §1 加 subagent 可用性 + 第 21 参/is_worker/description 过时描述修正 + researcher 表格);`app/src-tauri/src/agent/subagent/mod.rs`(researcher tools+prompt+description + READONLY_TOOL_ALLOWLIST + 注释);`dispatch.rs:339` 注释

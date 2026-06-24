@@ -111,12 +111,13 @@ pub fn definition() -> ToolDef {
              the tool_result of this call. Use this for focused sub-tasks that \
              would otherwise pollute the main conversation context with verbose \
              search / exploration output. Two built-in subagents are available: \
-             `researcher` (read-only: read_file / grep / glob / list_dir) and \
-             `general-purpose` (full toolset minus dispatch_subagent / \
-             update_checklist / background-shell tools). The worker inherits the \
-             parent's permission Mode (Yolo → all-allow; Edit/Plan → writes / \
-             shells auto-denied because the worker has no UI to surface a \
-             permission modal)."
+             `researcher` (read-only: read_file / grep / glob / list_dir / \
+             web_fetch) and `general-purpose` (full toolset minus dispatch_subagent \
+             / update_checklist / background-shell tools). The worker inherits the \
+             parent's permission Mode: Yolo → all-allow; Edit/Plan → a tool that \
+             needs confirmation (writes, shells, web_fetch without a prior grant) \
+             surfaces a `WorkerAskBanner` in the parent's UI for the user to \
+             allow/deny (120s timeout denies)."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -185,13 +186,15 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
         vec![
             SubagentDef {
                 name: "researcher",
-                description: "Read-only research subagent. Can read files, grep, glob, and list \
-                              directories but cannot edit, write, or run shells. Use for \
-                              focused code exploration where the verbose search output would \
-                              otherwise pollute the main conversation.",
+                description: "Read-only research subagent. Can read files, grep, glob, list \
+                              directories, and fetch web pages, but cannot edit, write, or run \
+                              shells. Use for focused code exploration or web research where \
+                              the verbose search output would otherwise pollute the main \
+                              conversation.",
                 system_prompt: "You are a read-only research subagent dispatched by the main \
                                 agent to investigate a focused question. You have access to \
-                                `read_file`, `grep`, `glob`, and `list_dir` — use them to \
+                                `read_file`, `grep`, `glob`, `list_dir`, and `web_fetch` — use \
+                                them to \
                                 answer the task as completely as you can. You CANNOT edit, \
                                 write, or run shell commands, and you CANNOT dispatch further \
                                 subagents (no nesting). When you have gathered enough, write a \
@@ -202,7 +205,7 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                                 and does not need your intermediate tool logs.\n\nReply in the \
                                 user's language."
                     .to_string(),
-                tools: &["read_file", "grep", "glob", "list_dir"],
+                tools: &["read_file", "grep", "glob", "list_dir", "web_fetch"],
             },
             SubagentDef {
                 name: "general-purpose",
@@ -387,33 +390,43 @@ pub fn filter_tools_for_subagent(
 }
 
 /// Tool names permitted in the **read-only** worker toolset (L3a,
-/// 2026-06-24). This is the **runtime-forced read-only layer**
-/// (the 2nd of 3 — see L3a PRD "只读保证三层"): when multiple
-/// workers run concurrently in a pure dispatch batch, the
-/// concurrent branch forces every worker's toolset down to just
-/// these 4 read-only tools regardless of its `SubagentDef`
-/// allowlist. For `researcher` this is a no-op (its
-/// `SubagentDef.tools` is already exactly these 4); for
-/// `general-purpose` it strips write/edit/shell/web_fetch/etc.
-/// The safety baseline is still the `is_worker: true` permission
-/// layer (`ask_path`/`ask_shell` collapse to `Deny` for workers,
-/// 3rd layer) — `filter_tools_readonly` is defense-in-depth that
-/// keeps the concurrent branch's tool discovery surface aligned
-/// with its read-only contract so the LLM never even sees a
-/// write tool in the concurrent path.
-pub const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir"];
+/// 2026-06-24; `web_fetch` added 2026-06-25, task
+/// 06-25-subagent-web-access). This is the **runtime-forced
+/// read-only layer** (the 2nd of 3 — see L3a PRD "只读保证三层"):
+/// when multiple workers run concurrently in a pure dispatch
+/// batch, the concurrent branch forces every worker's toolset
+/// down to just these 5 read-only tools regardless of its
+/// `SubagentDef` allowlist. For `researcher` this is a no-op (its
+/// `SubagentDef.tools` is already exactly these 5); for
+/// `general-purpose` it strips write/edit/shell/etc. (`web_fetch`
+/// is kept — it is a read-only network op, `Risk::Low`, and
+/// SSRF-guarded in `tools/web_fetch.rs`; a worker's `web_fetch`
+/// still goes through the Tier 4 permission check, inheriting the
+/// parent session's `web_fetch` grant or surfacing a
+/// `WorkerAskBanner`). The safety baseline is still the
+/// `is_worker: true` permission layer (worker asks route through
+/// `WorkerAskBanner` since the 2026-06-22 RULE-FrontSubagent-003
+/// fix — they no longer collapse to `Deny`; 3rd layer) —
+/// `filter_tools_readonly` is defense-in-depth that keeps the
+/// concurrent branch's tool discovery surface aligned with its
+/// read-only contract so the LLM never even sees a write tool in
+/// the concurrent path.
+pub const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
 
 /// Force a worker's toolset down to read-only tools only (L3a,
 /// 2026-06-24). Applied by the concurrent dispatch branch in
 /// `chat_loop.rs` AFTER `filter_tools_for_subagent` so the
-/// concurrent batch's workers can never see a write / shell /
-/// web tool. Mirrors the `STRUCTURALLY_DISABLED` filter pattern
-/// (same `.filter(|t| allowlist.contains(t.name))` shape).
+/// concurrent batch's workers can never see a write or shell tool
+/// (`web_fetch` is kept — read-only network op, see
+/// `READONLY_TOOL_ALLOWLIST`). Mirrors the `STRUCTURALLY_DISABLED`
+/// filter pattern (same `.filter(|t| allowlist.contains(t.name))`
+/// shape).
 ///
 /// `researcher` is unaffected (its allowlist is already exactly
 /// `READONLY_TOOL_ALLOWLIST`); `general-purpose` is downgraded
-/// from its full-minus-disabled set to just the 4 read-only
-/// tools. Returns a fresh `Vec<ToolDef>` (consumes the input).
+/// from its full-minus-disabled set to just the 5 read-only tools
+/// (incl. `web_fetch`). Returns a fresh `Vec<ToolDef>` (consumes
+/// the input).
 pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef> {
     tools
         .into_iter()
@@ -503,7 +516,7 @@ mod tests {
     #[test]
     fn builtin_subagents_researcher_tool_allowlist() {
         let r = lookup_subagent("researcher").expect("researcher exists");
-        assert_eq!(r.tools, &["read_file", "grep", "glob", "list_dir"]);
+        assert_eq!(r.tools, &["read_file", "grep", "glob", "list_dir", "web_fetch"]);
     }
 
     #[test]
@@ -556,6 +569,8 @@ mod tests {
         assert!(names.contains(&"grep".to_string()));
         assert!(names.contains(&"glob".to_string()));
         assert!(names.contains(&"list_dir".to_string()));
+        // web_fetch is now in the researcher allowlist (06-25-subagent-web-access).
+        assert!(names.contains(&"web_fetch".to_string()));
         // Read-only — no writes.
         assert!(!names.contains(&"write_file".to_string()));
         assert!(!names.contains(&"edit_file".to_string()));

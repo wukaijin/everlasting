@@ -1905,23 +1905,26 @@ async fn run_loop(
 }
 
 /// `filter_tools_readonly` (L3a unit guard): when applied to the
-/// full `builtin_tools()` set, the result contains exactly the 4
-/// read-only tools and nothing else. This is the 2nd layer of the
-/// 3-layer read-only guarantee; the unit test pins the function
-/// directly so a future tool added to `builtin_tools()` does NOT
-/// silently leak into the concurrent worker toolset.
+/// full `builtin_tools()` set, the result contains exactly the 5
+/// read-only tools (read_file / grep / glob / list_dir / web_fetch)
+/// and nothing else. This is the 2nd layer of the 3-layer read-only
+/// guarantee; the unit test pins the function directly so a future
+/// tool added to `builtin_tools()` does NOT silently leak into the
+/// concurrent worker toolset. (`web_fetch` joined the read-only set
+/// on 2026-06-25, task 06-25-subagent-web-access — it is a read-only
+/// network op with its own SSRF guard in `tools/web_fetch.rs`.)
 #[test]
-fn l3a_filter_tools_readonly_keeps_only_four_read_tools() {
+fn l3a_filter_tools_readonly_keeps_only_five_read_tools() {
     let all = crate::tools::builtin_tools();
     let filtered = filter_tools_readonly(all);
     let names: Vec<String> = filtered.iter().map(|t| t.name.clone()).collect();
     assert_eq!(
         names.len(),
-        4,
-        "exactly 4 read-only tools, got: {:?}",
+        5,
+        "exactly 5 read-only tools, got: {:?}",
         names
     );
-    for required in &["read_file", "grep", "glob", "list_dir"] {
+    for required in &["read_file", "grep", "glob", "list_dir", "web_fetch"] {
         assert!(
             names.iter().any(|n| n == required),
             "filter must keep {}, got: {:?}",
@@ -1933,7 +1936,6 @@ fn l3a_filter_tools_readonly_keeps_only_four_read_tools() {
         "write_file",
         "edit_file",
         "shell",
-        "web_fetch",
         "dispatch_subagent",
         "update_checklist",
     ] {
@@ -2316,7 +2318,7 @@ async fn l3a_pure_batch_over_limit_hard_rejects_all() {
 
 /// L3a AC2: `general-purpose` worker in the concurrent branch is
 /// forced read-only. The worker's tool discovery surface is reduced
-/// to the 4 read-only tools via `filter_tools_readonly` (the 2nd
+/// to the 5 read-only tools (incl. `web_fetch`) via `filter_tools_readonly` (the 2nd
 /// layer of the 3-layer guarantee). This is a behavior assertion:
 /// the worker's LLM turn produces a tool_use for `write_file`, but
 /// `write_file` is NOT in the worker's tool list — the worker's LLM

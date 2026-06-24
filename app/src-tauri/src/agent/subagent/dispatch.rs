@@ -338,10 +338,18 @@ pub(crate) async fn run_subagent(
         true,
         // B6 PR2b (RULE-A-014, 2026-06-20): worker path — is_worker
         // = Some(true) so the nested run_chat_loop builds a
-        // PermissionContext with is_worker: true. This makes Tier 4
-        // ask_path / ask_shell collapse to Decision::Deny (worker
-        // has no UI sink — a permission:ask would hang forever on
-        // the oneshot). Pre-PR2b the worker path constructed
+        // PermissionContext with is_worker: true. Pre-2026-06-22
+        // (RULE-FrontSubagent-003) this collapsed Tier 4
+        // ask_path / ask_shell to Decision::Deny (the worker had no
+        // UI sink — a permission:ask would hang forever on the
+        // oneshot); since 2026-06-22 worker asks route through the
+        // `WorkerAskBanner` round-trip (see permission-layer.md §5b
+        // — biased select over parent cancel / 120s timeout /
+        // oneshot response). The `is_worker` flag now mainly scopes
+        // the ask's internal session key (`"worker:{run_id}"`) and
+        // stops a worker `AllowAlways` from persisting into the
+        // parent's `session_tool_permissions` (cross-privilege
+        // boundary). Pre-PR2b the worker path constructed
         // `_worker_permission_ctx` here but never threaded it into
         // the nested call, so the override was unreachable on the
         // worker's actual permission checks.

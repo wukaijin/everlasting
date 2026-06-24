@@ -411,6 +411,16 @@ as markdown (default) for the LLM to consume.
 first one in this project) and the SSRF threat model is materially different
 from a pure-filesystem tool. The IP-block list, attribution prefix, and
 body-size cap are all security/longevity decisions, not nice-to-haves.
+- Subagent availability (2026-06-25, task `06-25-subagent-web-access`):
+  `web_fetch` is in both the `researcher` `SubagentDef.tools` allowlist
+  and the concurrent-worker `READONLY_TOOL_ALLOWLIST`, so `researcher`
+  workers AND concurrent `general-purpose` workers can fetch. A worker's
+  `web_fetch` hits the same Tier 4 check (`check.rs` `WebFetch` branch):
+  the worker's `PermissionContext.session_id` is the **parent** session
+  id, so `check_tool_grant` inherits the parent session's `web_fetch`
+  grant → auto-Allow (zero banner); no grant → surfaces a
+  `WorkerAskBanner` (worker `AllowAlways` does NOT persist — see
+  permission-layer.md §5b).
 
 ###2. Signatures
 
@@ -761,10 +771,12 @@ ToolDef {
                   completion (synchronous — the parent chat blocks until the worker returns). \
                   When the worker finishes, its final summary is injected as the tool_result. \
                   Two built-in subagents: `researcher` (read-only: read_file / grep / glob / \
-                  list_dir) and `general-purpose` (full toolset minus dispatch_subagent / \
-                  update_checklist / background-shell tools). Worker inherits parent's \
-                  permission Mode (Yolo → all-allow; Edit/Plan → writes / shells auto-denied \
-                  because the worker has no UI to surface a permission modal).",
+                  list_dir / web_fetch) and `general-purpose` (full toolset minus \
+                  dispatch_subagent / update_checklist / background-shell tools). Worker \
+                  inherits parent's permission Mode: Yolo → all-allow; Edit/Plan → a tool \
+                  needing confirmation (writes, shells, web_fetch without a prior grant) \
+                  surfaces a `WorkerAskBanner` in the parent's UI for allow/deny (120s \
+                  timeout denies; since 2026-06-22 RULE-FrontSubagent-003).",
     input_schema: {
       "type": "object",
       "properties": {
@@ -800,7 +812,7 @@ Box::pin(run_chat_loop(
     Some(SUBAGENT_MAX_TURNS),                // 18: 200
     true,                                    // 19: skip_session_active(REVIEW-SUBAGENT-PRD #2)
     true,                                    // 20: skip_persist(worker 中间过程不进 DB)
-    Some(true),                              // 21: is_worker(RULE-A-014, worker Tier 4 ask_path → Deny)
+    Some(true),                              // 21: is_worker(RULE-A-014; worker asks route via WorkerAskBanner since 2026-06-22)
     app_handle,                              // 22: 转发父 AppHandle,worker SubagentBufferSink 可走 subagent:event IPC(测试 None)
     Some(assemble_subagent_prompt(def, task)), // 23: worker 覆写父 system_prompt(B6 review defect A 修复)
 )).await;
@@ -813,9 +825,9 @@ Box::pin(run_chat_loop(
 | 18 | `max_turns: Option<usize>` | PR1a | worker turn 上限(None = 50 默认)。`turn_limit = max_turns.unwrap_or(MAX_TURNS)` |
 | 19 | `skip_session_active: bool` | PR1b | `CancellationGuard::drop` 时跳过 `session_active_request.remove(session_id)`。worker 传 `true` 避免误删父映射(REVIEW-SUBAGENT-PRD #2 / RULE-E-005 不破坏) |
 | 20 | `skip_persist: bool` | PR1b + PR2a fix | run_chat_loop 函数体内 **16 处**(PR1 spec 写 18,PR2a RULE-A-015 拆出 2 处:`add_token_usage` 应 streaming 累加进父 sessions 表,不在 messages 表 UNIQUE 范围内;terminal `Done` emit 必经 sink 才能让 `was_cancelled` 正确 catch) `if !skip_persist { ... }` gate 守住所有 persist 站点(persist_turn / update_message_metadata / touch_session / record_*_audit / persist_turn_cwd)。worker 传 `true` 避免与父 `messages` 表 `(session_id, seq)` UNIQUE 约束冲突;worker 中间过程由 `SubagentBufferSink` transcript 捕获(PR2 落 `subagent_runs.transcript_json`) |
-| 21 | `is_worker: Option<bool>` | PR2b (RULE-A-014) | worker 路径传 `Some(true)`,`run_chat_loop` 内部构造 `PermissionContext { is_worker: true }`。让 Tier 4 `ask_path` / `ask_shell` 顶部 `if ctx.is_worker { Decision::Deny }` 路径**可达** —— worker 无 UI sink 弹 modal 会挂起到 user Stop;现在立刻 Deny(`is_error: true` tool_result 回 LLM 自我纠错)。production + 35 个 `agent_loop_*` 集成测试传 `Some(false)` 显式声明非 worker;None 默认 `false`(向后兼容) |
+| 21 | `is_worker: Option<bool>` | PR2b (RULE-A-014) | worker 路径传 `Some(true)`,`run_chat_loop` 内部构造 `PermissionContext { is_worker: true }`。Pre-2026-06-22 让 Tier 4 `ask_path`/`ask_shell` 顶部 `if ctx.is_worker { Decision::Deny }` 立刻拒绝(worker 无 UI sink,弹 modal 会挂起到 user Stop);**2026-06-22 RULE-FrontSubagent-003 后** worker ask 走 `WorkerAskBanner` round-trip(见 permission-layer.md §5b:biased select over parent cancel / 120s timeout / oneshot),`is_worker` 现主要用于 (a) ask 内部 session key `"worker:{run_id}"` 隔离 + (b) 阻止 worker `AllowAlways` 持久化进父 `session_tool_permissions`(跨权限边界)。production + 35 个 `agent_loop_*` 集成测试传 `Some(false)` 显式声明非 worker;None 默认 `false`(向后兼容) |
 | 22 | `app_handle: Option<AppHandle>` | PR3 (PR2 hotfix) | 转发父 AppHandle,worker SubagentBufferSink 才能 emit `subagent:event` IPC channel(否则 PR3 drawer 看不到 worker transcript live streaming)。production 传 `Some(app.clone())`,tests 传 `None`(无 Tauri runtime,emit 路径变 no-op) |
-| 23 | `system_prompt_override: Option<String>` | 06-21 fix (B6 review defect A) | worker 路径传 `Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt` —— pre-fix `_worker_system_prompt = assemble_subagent_prompt(def, task)` 是 dead code(`chat_loop.rs:2052`),worker 实际拿到父的 `assemble_system_prompt(mode_prefix, base_prompt)` 输出,导致 prompt / permission 矛盾(Edit/Plan 模式下 worker prompt 写"可写"但 Tier 4 把写工具 collapse 到 `Deny`)。fix 后 `run_chat_loop` 内部守卫:`Some(p)` → 直接用 `p`;`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`(production + 36 tests 路径)。4 指令文件 prompt caching 不受影响(cache_control breakpoint 在 user role,跟 system 正交) |
+| 23 | `system_prompt_override: Option<String>` | 06-21 fix (B6 review defect A) | worker 路径传 `Some(assemble_subagent_prompt(def, task))`,让 worker 真正使用 `SubagentDef.system_prompt` —— pre-fix `_worker_system_prompt = assemble_subagent_prompt(def, task)` 是 dead code(`chat_loop.rs:2052`),worker 实际拿到父的 `assemble_system_prompt(mode_prefix, base_prompt)` 输出,导致 prompt / permission 矛盾(pre-2026-06-22 Edit/Plan 模式下 worker prompt 写"可写"但 Tier 4 把写工具 collapse 到 `Deny`;2026-06-22 后写工具走 `WorkerAskBanner`)。fix 后 `run_chat_loop` 内部守卫:`Some(p)` → 直接用 `p`;`None` → 走原有 `assemble_system_prompt(mode_prefix, base_prompt)`(production + 36 tests 路径)。4 指令文件 prompt caching 不受影响(cache_control breakpoint 在 user role,跟 system 正交) |
 
 ### 3. Contracts
 
@@ -823,7 +835,7 @@ Box::pin(run_chat_loop(
 
 | name | `tools` allowlist | system_prompt |
 |---|---|---|
-| `researcher` | `[read_file, grep, glob, list_dir]` | "你是只读研究子代理...Cannot edit/write/shell,不能嵌套 dispatch..." |
+| `researcher` | `[read_file, grep, glob, list_dir, web_fetch]` | "你是只读研究子代理...Cannot edit/write/shell,不能嵌套 dispatch...(06-25 起含 web_fetch)" |
 | `general-purpose` | `[]`(全集减结构性禁项) | "你是通用子代理...minus dispatch_subagent / update_checklist / background-shell..." |
 
 #### `filter_tools_for_subagent(builtin_tools, def)`(`subagent.rs`)
