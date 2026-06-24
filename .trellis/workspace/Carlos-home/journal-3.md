@@ -537,3 +537,36 @@ L3a 收尾:PR1 后端纯批 FuturesUnordered 并发(复用 L2 模板)+ force_rea
 ### Next Steps
 
 - None - task complete
+
+
+## Session 70: L3c subagent web access (worker web_fetch)
+
+**Date**: 2026-06-25
+**Task**: L3c subagent web access (worker web_fetch)
+**Branch**: `main`
+
+### Summary
+
+L3c subagent 联网落地。基线验证推翻种子 PRD 第 3 层假设: worker ask 2026-06-22 已走 WorkerAskBanner, 且 worker ctx.session_id=父 session 使父 grant 继承天然工作, 故任务缩小为 researcher SubagentDef.tools + READONLY_TOOL_ALLOWLIST 各加 web_fetch (第 3 层零改动)。顺带修 LLM-facing dispatch_subagent description 过时 worker-no-UI 描述 + tool-contract/dispatch 同款过时注释。cargo test 864 passed。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b0ecee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
