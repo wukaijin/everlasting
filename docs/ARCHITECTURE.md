@@ -638,12 +638,15 @@ agent loop 结束(text-only response or max_turns reached):
 - **不能只用 head**:tail 通常包含 stack trace / 错误尾部,丢掉就丢诊断
 - **实现位置**:⑩ 末尾、⑫ 之前
 
-#### 2.5.4 ⑬ 循环检测阈值
+#### 2.5.4 ⑬ 循环检测阈值(C2 已实施 2026-06-24)
 
-- **不能严格相等**:LLM 输出有非确定性,严格 `hash(arg) == hash(prev_arg)` 几乎不命中
-- **建议算法**:滑动窗口内 **N=5 次 tool call**,用 **token-set 相似度** (Jaccard) > 0.9 判定近重复
-- **命中后**:emit `warning:loop_detected`,LLM 收到 `tool_result = "loop detected, please reconsider"`,**不强制打断**(让 LLM 有机会说明为什么)
-- **实现位置**:⑬ 关卡内,需 LLM 端做相似度计算,不能纯 hash
+- **分级触发**(取代早期单一 `Jaccard > 0.9` —— 单一阈值无法适配短/长 input):
+  - **Level 1 精确签名硬触发**(`HARD_WINDOW=3`):窗口内连续 3 次归一化签名完全相同 → 零误报抓真死循环(read/grep/shell 同输入)。per-tool 签名:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,**`edit_file`=path+old_string**(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
+  - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5`/`SOFT_THRESHOLD=0.85`):窗口内 ≥2 对 token-set Jaccard > 0.85 → 容忍近重复(主要是 shell 长命令)
+- **token 切分**:纯 Rust `split_whitespace` + trim 首尾标点(CLI flag `--` 剥离、路径保留),**不复用** `memory::tokens::count_tokens`(tiktoken:async Mutex + CJK 切碎 + subword 噪音)
+- **命中动作(软,§2.5.4「不强制打断」原意)**:两层都 `tracing::warn!` + 把 hint 文本作为 `ContentBlock::Text` 插到 result message 的 `result_blocks[0]`,LLM 下一轮在 tool_results 前看到提示;**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表(见 §2.5.8)
+- **实现位置**:`app/src-tauri/src/agent/loop_detection.rs`(纯函数 `detect` / `LoopVerdict` / `signature_of`)+ `chat_loop.rs` ⑬ 关卡(tool_calls 收集后更新窗口 + detect;result_blocks 构造后注入 hint)。worker nested run_chat_loop 自动继承
+- **完整 PRD**:[`.trellis/tasks/06-24-c2-loop-detection/prd.md`](../../.trellis/tasks/06-24-c2-loop-detection/prd.md) + 调研 [`research/similarity-algorithm-and-tokenizer.md`](../../.trellis/tasks/06-24-c2-loop-detection/research/similarity-algorithm-and-tokenizer.md)
 
 #### 2.5.5 ⑤ Context 超限降级(C3 MVP,2026-06-12 落地,**已实施**)
 
@@ -684,7 +687,7 @@ agent loop 结束(text-only response or max_turns reached):
 **每次记录**:
 - ⑨ 权限决策(10 类 `AuditKind` 枚举,见下)
 - ⑩ tool 执行(C4 PR1, 2026-06-14 落表:tool_name, tool_input, duration_ms, exit_code — `record_tool_executed_audit` 在 agent loop tool 执行完成处写)
-- ⑬ 循环检测触发次数(只 `tracing::info!`,**未落表** — 收益低,C4 OOS)
+- ⑬ 循环检测触发(只 `tracing::warn!`,**未落表** — 收益低,C4 OOS;**C2 已实施 2026-06-24**,见 §2.5.4)
 - ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出;**未落表** — daemon 化前是单 client,无路由可记)
 
 **存储**:`session_audit_events` 表(SQLite),schema:

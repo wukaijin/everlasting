@@ -753,3 +753,16 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:四者强耦合——db 写密文后,运行时解密 + IPC 不返明文 + 前端留空覆盖必须同改,否则中间态双重加密(前端回填密文→再加密)或 chat 用密文发请求
   - **commit**:`576b2f4`(fix)+ `30a5eaf`(docs debt)
 - **测试**:crypto roundtrip/empty/tamper/aad_mismatch/unknown_version/distinct_nonces (6) + db api_key_is_encrypted_not_plaintext/plaintext_migration_is_idempotent (2);`cargo test --lib` 822 passed 0 warning;vitest 518 passed;vue-tsc 0 error
+
+### 2026-06-24 — C2 agent loop ⑬ 循环检测(第三档收口)
+
+- **决策**:**分级触发**(L1 精确签名硬触发 `HARD_WINDOW=3` + L2 Jaccard 软提示 `SOFT_WINDOW=5`/`SOFT_THRESHOLD=0.85`),取代架构原文单一 `Jaccard > 0.9`
+  - **原因**:调研 [`similarity-algorithm-and-tokenizer.md`](../../.trellis/tasks/06-24-c2-loop-detection/research/similarity-algorithm-and-tokenizer.md) 指出单一阈值无法适配短/长 input —— `read_file` 只 1 个 path token 时 Jaccard 抖到 0.5 漏判,`shell` 长命令改 flag 仍 >0.9 误报;L1 精确签名对最高频死循环(read/grep/shell 同输入)零误报,L2 Jaccard 兜底近重复
+- **决策**:命中动作选 **Approach A 两层软提示,无硬打断** —— hint 作为 `ContentBlock::Text` 插到 result message 的 `result_blocks[0]`,LLM 下一轮看到提示;不跳过执行、不终止 loop,MAX_TURNS=200 仍是硬兜底
+  - **原因**:符合架构 §2.5.4「不强制打断」原意;无状态机最小侵入 `run_chat_loop`;与 RULE-A-010 cancel「一次即终止」MVP 简化风格一致;Approach B 升级硬打断留 follow-up(若线上观测到「软提示后仍循环」高频再上)
+- **决策**:`edit_file` 签名**含 old_string**(非 research caveat #3 说的「不含」)
+  - **原因**:research caveat #3 逻辑反向 —— 不含 old_string 恰让正当的同文件多块编辑签名相同→误判 loop;含 old_string 才让同文件不同块编辑保持区分,同时仍抓「反复失败同一 old_string」的真死循环
+- **决策**:token 切分用纯 Rust `split_whitespace` + trim 首尾标点,**不复用** `memory::tokens::count_tokens`(tiktoken)
+  - **原因**:tiktoken 是 `async` + 持 `tokio::sync::Mutex`(进热路径)+ cl100k_base 切碎 CJK + subword 噪音;Jaccard 粗粒度判定不需要 BPE 精度,word-level 更稳;两套 token 概念物理隔离
+- **决策**:不落 AuditKind 表(§2.5.8 已定),只 `tracing::warn!`;前端不新增组件(Q2 决策),hint 仅以 tool_result message 内 Text block 呈现
+- **测试**:`loop_detection` 31 单测(detect L1/L2 + signature_of 6 tool + tokenize + jaccard 边界)+ `tests_agent_loop` 2 集成测试(HardLoop hint 注入 turn 4 messages / 非循环不误报);`cargo test --lib` 855 passed 0 warning
