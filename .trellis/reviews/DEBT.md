@@ -58,18 +58,7 @@
 
 _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 
-## P3 — 轻微(文档/一致性) [8 items]
-
-### RULE-B-006 — AuditKind docstring "10"→"11"
-
-- **Level**: P3
-- **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/audit.rs:21` vs `:33`(docstring 写"10 variants"实际已 17;拆分自 `mod.rs` 2026-06-23)
-- **Description**: docstring 写"10 variants"实际 11(`ToolExecuted` C4 新增未更新 doc)
-- **Fix**: 更新 docstring
-- **Owner**: carlos
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
-
+## P3 — 轻微(文档/一致性) [4 items]
 
 ### RULE-B-007 — Background Mode 仍空壳
 
@@ -93,30 +82,6 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 - **Fix**: 决定硬前置 or 维持当前
 - **Owner**: carlos
 - **Discovered In**: REVIEW-b5-memory-grill-2026-06-10 + REVIEW-agent-loop-full-audit-2026-06-14 §2.3
-
-
-### RULE-D-007 — OpenAI 多 tool_call index 缺失默认 0
-
-- **Level**: P3
-- **Subsystem**: Provider
-- **File**: `app/src-tauri/src/llm/provider/openai.rs:593-597`
-- **Description**: `unwrap_or(0)`,两个无 index tool_call 都映射 index 0,后者覆盖前者
-- **Impact**: 官方 API 总带 index,第三方兼容层风险
-- **Fix**: index 缺失报错而非默认
-- **Owner**: carlos
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
-
-
-### RULE-D-008 — parse_anthropic_usage 全零判 None 假设
-
-- **Level**: P3
-- **Subsystem**: Provider
-- **File**: `app/src-tauri/src/llm/provider/anthropic.rs:617-627`
-- **Description**: 全零判 None
-- **Impact**: 极低,真实响应 input 永远 >0
-- **Fix**: 防御性编程,改 None if not_present
-- **Owner**: carlos
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.4
 
 
 ### RULE-FrontSubagent-001 — `.tool-card` / `.drawer-tool-card` header CSS 重复
@@ -145,19 +110,6 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 - **Related Task**: `.trellis/tasks/06-21-refactor-redesign-sub-agent-drawer-grouped-view-markdown-modal`
 
 
-### RULE-FrontTest-001 — streamController.test.ts 4 个 pre-existing unhandled rejection
-
-- **Level**: P3
-- **Subsystem**: Frontend Test
-- **File**: `app/src/stores/streamController.test.ts` (reloadAfterFinalize path) + `app/src/stores/streamController.ts:1256`
-- **Description**: `reloadAfterFinalize` 内 `invoke("list_sessions")` 走真实 `window.__TAURI_INTERNALS__.invoke`,但该 test file 没在 `__TAURI_INTERNALS__` 上 mock invoke,导致 4 个 unhandled promise rejection。tests 本身全 pass(rejection 异步、测试结束才浮出),但 `Errors: 4` 给全量 vitest run 噪音。
-- **Impact**: 当前不影响测试通过;未来 Vitest 升级可能把 unhandled rejection 变硬 fail。
-- **Fix**: 该 file `beforeEach` 加 `vi.stubGlobal("__TAURI_INTERNALS__", { invoke: vi.fn() })` 或补 mock。
-- **Owner**: carlos
-- **Discovered In**: redesign PR4-6 check phase (2026-06-21, 多次 vitest run 出现,与 subagent-drawer 无关)
-- **Related Task**: null (独立测试债)
-
-
 ---
 
 ## 优先级分布
@@ -167,8 +119,8 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(详见 git log) |
 | P2 | 0 | 健壮性 + 债务,中长期清理 |
-| P3 | 8 | 文档 + 一致性,可延后 |
-| **Total** | **8** | 当前 open items |
+| P3 | 4 | 文档 + 一致性,可延后 |
+| **Total** | **4** | 当前 open items |
 
 ---
 
