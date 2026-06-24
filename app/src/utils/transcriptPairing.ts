@@ -504,3 +504,62 @@ export function pairSections(
 
   return out;
 }
+
+// =====================================================================
+// useTranscriptPairing — 状态封装的 pairing composable
+// (RULE-FrontSubagent-002, 2026-06-25)
+// =====================================================================
+//
+// `pairTranscript` / `pairSections` 的第三参 `pendingFirstSeenAt: Map` 既是
+// 输入又是输出（被 `.set` / `.delete`），调用方必须跨调用保持同一引用，
+// 否则 30s pending timeout 永不推进（新调用方每次 `new Map()` → 永远
+// pending）。本 composable 把 Map 封进闭包，调用方拿到已绑定的 pair
+// 函数 + reset，不再直接碰 Map 生命周期 —— 签名清晰化，新调用方无法
+// 踩"忘传 / 传新 Map"的坑。
+//
+// **plain Map 约束（load-bearing）**：Map 必须是非响应式 plain Map。
+// reactive Map 会让 SubagentDrawer 的 `toolEntries` computed 在
+// `pairSections` 内部 `.set` / `.delete` 时触发自身依赖 → 递归
+// re-invalidation → 100ms nowTick × 大量 sections → 100× 递归 re-eval
+// → webview OOM 崩溃（已踩过并修复，见 `SubagentDrawer.vue` 注释）。
+// 故本 composable 内部用 `new Map()`，**不**暴露响应式引用。
+//
+// `now` 仍由调用方传（SubagentDrawer 的 100ms `nowTick` ticker 驱动
+// age-out）—— `now` 是外部推进源，不属于 pairing 内部状态。
+//
+// 纯函数 `pairTranscript` / `pairSections` 保留（测试 30+ 处依赖 + 未来
+// raw-list consumer）；composable 是薄包装层。
+
+/** 状态封装的 transcript pairing。每个调用方实例拥有独立的 pending
+ *  Map（实例隔离，跨 run / 跨 session 不串扰）。返回的 pair 函数签名
+ *  收窄为 `(data, now)` —— 不再暴露 Map。
+ *
+ *  典型用法（SubagentDrawer）：
+ *  ```ts
+ *  const { pairSections, reset } = useTranscriptPairing();
+ *  const toolEntries = computed(() => pairSections(sections.value, nowTick.value));
+ *  // watch openRunId: 切 run / 关闭时 reset() 清状态
+ *  ``` */
+export function useTranscriptPairing() {
+  // plain Map —— 非响应式，避免 computed 递归 re-invalidation（OOM bug，
+  // 见上）。实例级（每次 useTranscriptPairing() 调用新建），不跨实例共享。
+  const pendingFirstSeenAt = new Map<string, number>();
+  return {
+    /** 配对 raw `TranscriptEntry[]`（legacy 路径 / 未来 raw-list consumer）。
+     *  now = 当前 wall-clock ms（通常 `Date.now()`）。 */
+    pairEntries: (
+      entries: readonly TranscriptEntry[],
+      now: number,
+    ): BufferedTranscriptEntry[] => pairTranscript(entries, now, pendingFirstSeenAt),
+    /** 配对 `TranscriptSection[]`（drawer 主路径）。now = 当前 wall-clock ms。 */
+    pairSections: (
+      sections: readonly TranscriptSection[],
+      now: number,
+    ): SectionToolEntry[] => pairSections(sections, now, pendingFirstSeenAt),
+    /** 清空 pending Map —— 切 run / drawer 关闭时调，防下一个 run 继承
+     *  stale first-seen 时间戳。 */
+    reset: (): void => {
+      pendingFirstSeenAt.clear();
+    },
+  };
+}

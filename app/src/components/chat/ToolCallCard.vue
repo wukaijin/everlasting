@@ -50,6 +50,7 @@ import type { SubagentRunSummary } from "../../stores/subagentRuns.types";
 import { abbreviateDuration } from "../../utils/duration";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
+import ToolCallHeader from "./ToolCallHeader.vue";
 import ToolInputBody from "./ToolInputBody.vue";
 import ToolOutputBody from "./ToolOutputBody.vue";
 import PermissionAskBody from "./PermissionAskBody.vue";
@@ -472,34 +473,17 @@ watch(
     @keydown.enter.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
     @keydown.space.prevent="isDispatchSubagent ? openSubagentDrawer() : undefined"
   >
-    <div class="tool-card__header">
-      <div class="tool-card__title">
-        <span class="tool-card__icon">
-          <Icon :name="toolIcon(call.name)" :size="14" />
-        </span>
-        <span class="tool-card__name">{{ call.name }}</span>
-        <span v-if="filePath" class="tool-card__path" :title="filePath">
-          · {{ filePath }}
-        </span>
-      </div>
-      <div class="tool-card__status">
-        <span
-          :class="['tool-card__status-icon', { 'tool-card__status-icon--running': !hasResult && !isError }]"
-        >
-          <Icon :name="statusIconName" :size="14" />
-        </span>
-        <span>{{ isDispatchSubagent ? workerStatusText : statusText }}</span>
-        <!--
-          F5: per-tool duration (next to status text). Renders
-          the `durationLabel` ("…" while running, "0.3s" /
-          "1.2s" after done; empty for pre-F5 rows). The
-          separate `<span>` (vs. concatenating into statusText)
-          keeps the `?` cursor / color theming on the status
-          text untouched — the duration is its own visual
-          element with its own muted color and a slight
-          left margin to avoid the icon-glyph crowding.
-        -->
-        <span v-if="durationLabel" class="tool-card__duration">{{ durationLabel }}</span>
+    <ToolCallHeader
+      :icon-name="toolIcon(call.name)"
+      :name="call.name"
+      :file-path="filePath"
+      :status-text="isDispatchSubagent ? workerStatusText : statusText"
+      :status-icon-name="statusIconName"
+      :duration-label="durationLabel"
+      :is-error="isError"
+      :is-running="!hasResult && !isError"
+    >
+      <template #status-extra>
         <button
           v-if="showDiffButton"
           type="button"
@@ -511,11 +495,11 @@ watch(
           "
           @click="toggleFileDiff"
         >
-            <Icon :name="fileDiffOpen ? 'chevron-down' : 'chevron-right'" :size="12" />
-            diff
+          <Icon :name="fileDiffOpen ? 'chevron-down' : 'chevron-right'" :size="12" />
+          diff
         </button>
-      </div>
-    </div>
+      </template>
+    </ToolCallHeader>
 
     <!--
       2026-06-16 inline approval: when this tool_use is the one the
@@ -660,101 +644,9 @@ watch(
   border-left-color: var(--color-tool-shell);
 }
 
-.tool-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.tool-card__title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.tool-card__icon {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-secondary);
-}
-
-.tool-card--error .tool-card__icon {
-  color: var(--color-tool-error);
-}
-
-.tool-card__name {
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.tool-card--error .tool-card__name {
-  color: var(--color-tool-error);
-}
-
-.tool-card__path {
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-.tool-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
-.tool-card__status-icon {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.tool-card__status-icon--running {
-  animation: tool-card-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes tool-card-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.tool-card--error .tool-card__status {
-  color: var(--color-tool-error);
-}
-
-/* F5 (LLM Latency Tracking): per-tool duration display. Renders
-   the "0.3s" / "…" label inside the existing `tool-card__status`
-   row, right after the status text. Mono font matches the rest
-   of the status row; the slightly-elevated color is a hint
-   that this is a measured value, not part of the status
-   label itself. */
-.tool-card__duration {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 2px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  user-select: none;
-}
-
-.tool-card--error .tool-card__duration {
-  color: var(--color-tool-error);
-}
+/* header markup + CSS 已抽到 `<ToolCallHeader>` (RULE-FrontSubagent-001,
+   2026-06-25)。本组件保留 card 容器 + error/running/subagent 容器变体 +
+   diff-btn / diff popover / approval / dispatch preview 等非 header 规则。 */
 
 /* Step 4 / PR3: per-file diff button + popover inside the
  * tool card. The button sits in the header status row; the

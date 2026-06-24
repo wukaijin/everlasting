@@ -40,7 +40,7 @@ import type {
   Risk,
 } from "../../stores/permissions";
 import {
-  pairSections,
+  useTranscriptPairing,
   type SectionToolEntry,
 } from "../../utils/transcriptPairing";
 import { truncate } from "../../utils/useTruncate";
@@ -169,27 +169,24 @@ const thinkingSections = computed<ThinkingSection[]>(() =>
   ),
 );
 
-/** B6 PR3 redesign pending-timeout tracking. PLAIN Map (NOT
- *  reactive) — keys are `tool_use_id` strings, values are wall-clock
- *  `received_at` ms. Cleared on drawer close (the next open starts
- *  fresh). The 100ms `nowTick` ticker drives the age-out across
- *  re-invocations.
+/** B6 PR3 redesign pending-timeout tracking. RULE-FrontSubagent-002
+ *  (2026-06-25): 改用 `useTranscriptPairing()` composable —— pending
+ *  first-seen Map 封进 composable 闭包（实例级，切 run 时 reset 清空），
+ *  调用方不再直接持 Map。两参签名 `pairToolSections(sections, now)`
+ *  收窄，新调用方无法踩"忘传 / 传新 Map → 30s timeout 永不推进"的坑。
  *
- *  Why non-reactive: `pairSections` mutates this Map (`.set` /
- *  `.delete` / `.get`) inside the `toolEntries` computed below. A
- *  reactive Map made that computed mutate its own tracked dependency
- *  on every eval → recursive re-invalidation (same bug class as
- *  streamController's old `getMessages` LRU touch). Combined with the
- *  100ms `nowTick` + a worker emitting many sections (e.g. a glob
- *  over a large tree), each tick kicked off a 100× recursive
- *  re-evaluation that re-rendered every DrawerToolCallCard —
- *  including possibly-huge tool_result content — until the webview
- *  OOM'd and the window died. A plain Map means `pairSections`'s
- *  reads / writes don't trigger Vue, so `toolEntries` re-runs only on
- *  real `sections` / `nowTick` changes. The first-seen timestamps
- *  still persist across calls (same Map instance) and clear on
- *  close. */
-const pendingFirstSeenAt = new Map<string, number>();
+ *  **plain Map 是 load-bearing 约束**（composable 内部持 plain Map，不
+ *  暴露响应式引用）：reactive Map 会让下面 `toolEntries` computed 在
+ *  pairing 内部 `.set` / `.delete` / `.get` 时触发自身依赖 → 递归
+ *  re-invalidation（同 streamController 旧 `getMessages` LRU touch bug
+ *  类）。100ms `nowTick` + worker 发大量 sections（如 glob 大树）时，每
+ *  tick 触发 100× 递归 re-eval，重渲每个 DrawerToolCallCard（含可能的
+ *  巨型 tool_result content）→ webview OOM 崩溃。plain Map 让 reads /
+ *  writes 不触发 Vue，`toolEntries` 只在 `sections` / `nowTick` 真变化
+ *  时 re-run；first-seen 时间戳仍跨调用持久（同一 Map 实例），关闭时
+ *  reset。完整根因 + 实例隔离见 `transcriptPairing.ts`
+ *  `useTranscriptPairing` 注释。 */
+const { pairSections: pairToolSections, reset: resetPairing } = useTranscriptPairing();
 
 /** Tools segment entries: `pairSections` output (paired / pending /
  *  permission_ask). Recomputed on every `nowTick` tick (100ms) so
@@ -200,7 +197,7 @@ const pendingFirstSeenAt = new Map<string, number>();
 const toolEntries = computed<SectionToolEntry[]>(
   // `nowTick.value` is the load-bearing dep — the computed would
   // otherwise only re-evaluate on `sections` changes.
-  () => pairSections(sections.value, nowTick.value, pendingFirstSeenAt),
+  () => pairToolSections(sections.value, nowTick.value),
 );
 
 /** Reply segment text.
@@ -519,7 +516,7 @@ watch(
       // Drawer closed — drop the pending-call map so the next
       // open starts fresh (a new runId won't accidentally inherit
       // a stale "received at" from the previous run).
-      pendingFirstSeenAt.clear();
+      resetPairing();
     }
   },
   { immediate: true },

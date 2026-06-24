@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   pairTranscript,
   pairSections,
+  useTranscriptPairing,
   PENDING_TIMEOUT_MS,
   isErrorResult,
   type TranscriptEntry,
@@ -691,5 +692,106 @@ describe("pairSections — section-level pairing", () => {
     expect(out[0].kind).toBe("permission_ask");
     if (out[0].kind !== "permission_ask") throw new Error("expected permission_ask");
     expect(out[0].outcome).toBeUndefined();
+  });
+});
+
+// ======================================================================
+// useTranscriptPairing — composable 封装 pending Map
+// (RULE-FrontSubagent-002, 2026-06-25)
+// ======================================================================
+// 验证 composable 把 pending Map 封进闭包: 调用方不再传第三参 Map, 但
+// 30s timeout 仍跨调用推进 (债的核心 —— 旧签名若新调用方每次传 new Map(),
+// receivedAt 永远 = 当前 now → 永远 pending)。另验 reset() 清状态 + 实例隔离。
+
+describe("useTranscriptPairing — composable 封装 pending Map (RULE-FrontSubagent-002)", () => {
+  it("pairSections 跨调用共享同一 Map → 30s timeout 推进 (不重置 receivedAt)", () => {
+    // 债的核心: 旧签名第三参若每次传 new Map(), receivedAt 永远 = 当前 now
+    // → 永远 pending。composable 闭包持同一 Map → receivedAt 锁定首次见时。
+    const { pairSections } = useTranscriptPairing();
+    const call = [toolCallSection("call_1")];
+
+    // 第一次 (now=T): 未配对 → pending, 未超时
+    const out1 = pairSections(call, 1_000_000);
+    expect(out1).toHaveLength(1);
+    expect(out1[0].kind).toBe("pending_call");
+    if (out1[0].kind === "pending_call") expect(out1[0].timedOut).toBe(false);
+
+    // 第二次 (now=T+30s+1, 无新 section): 同一 Map → timedOut=true
+    const out2 = pairSections(call, 1_000_000 + PENDING_TIMEOUT_MS + 1);
+    expect(out2).toHaveLength(1);
+    expect(out2[0].kind).toBe("pending_call");
+    if (out2[0].kind === "pending_call") expect(out2[0].timedOut).toBe(true);
+  });
+
+  it("reset() 清空 Map → 下次调用 receivedAt 重置 (不再继承旧时间戳)", () => {
+    const { pairSections, reset } = useTranscriptPairing();
+    const call = [toolCallSection("call_1")];
+
+    pairSections(call, 1_000_000); // first-seen 记录为 T
+    reset(); // 清空
+
+    // reset 后用同 now 再调 → receivedAt 重置为 now → 未超时
+    const out = pairSections(call, 1_000_000);
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind === "pending_call") expect(out[0].timedOut).toBe(false);
+  });
+
+  it("配对成功后 pending Map 清除 → 同 id 复用不继承上次时间戳", () => {
+    const { pairSections } = useTranscriptPairing();
+    // call + result 配对成功 (pairSections 命中时 delete(id))
+    const paired = pairSections(
+      [toolCallSection("c1"), toolResultSection("c1")],
+      1_000_000,
+    );
+    expect(paired).toHaveLength(1);
+    expect(paired[0].kind).toBe("paired");
+
+    // 同 id 新 call, now 已远超 30s —— Map 已清 → first-seen 重置 → 未超时
+    const out = pairSections(
+      [toolCallSection("c1")],
+      1_000_000 + PENDING_TIMEOUT_MS + 100,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("pending_call");
+    if (out[0].kind === "pending_call") expect(out[0].timedOut).toBe(false);
+  });
+
+  it("实例隔离: 两实例 first-seen Map 独立 (a.reset 不影响 b)", () => {
+    // 注意 pairSections 的 pending 是每次调用 local 重建 —— 跨调用持久的
+    // 是 pendingFirstSeenAt 里的 first-seen 时间戳, 不是"记住消失的 call"。
+    // 故每次调用都要带 ToolCall section 才能 flush 出 pending_call。
+    const a = useTranscriptPairing();
+    const b = useTranscriptPairing();
+
+    // a, b 都在 T 见 c1 (各自实例记 first-seen)
+    a.pairSections([toolCallSection("c1")], 1_000_000);
+    b.pairSections([toolCallSection("c1")], 1_000_000);
+
+    a.reset(); // 只清 a 的 Map
+
+    // b 不受影响: b 的 c1 first-seen 仍 = T → T+31s 超时
+    const outB = b.pairSections([toolCallSection("c1")], 1_000_000 + PENDING_TIMEOUT_MS + 1);
+    expect(outB).toHaveLength(1);
+    expect(outB[0].kind).toBe("pending_call");
+    if (outB[0].kind === "pending_call") expect(outB[0].timedOut).toBe(true);
+
+    // a reset 后 c1 first-seen 重置为现在 → 未超时
+    const outA = a.pairSections([toolCallSection("c1")], 1_000_000 + PENDING_TIMEOUT_MS + 1);
+    expect(outA).toHaveLength(1);
+    expect(outA[0].kind).toBe("pending_call");
+    if (outA[0].kind === "pending_call") expect(outA[0].timedOut).toBe(false);
+  });
+
+  it("pairEntries (legacy raw-entry 路径) 同样跨调用持久 → aged out 成 standalone", () => {
+    const { pairEntries } = useTranscriptPairing();
+    const call = [toolCall("pending_only")];
+
+    const out1 = pairEntries(call, 1_000_000);
+    expect(out1[0].kind).toBe("pending_call");
+
+    // pairTranscript (legacy) 超时 → standalone (区别于 pairSections 的 timedOut)
+    const out2 = pairEntries(call, 1_000_000 + PENDING_TIMEOUT_MS + 1);
+    expect(out2[0].kind).toBe("standalone");
   });
 });

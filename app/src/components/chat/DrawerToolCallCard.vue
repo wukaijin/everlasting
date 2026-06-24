@@ -30,26 +30,13 @@
 //         not render worker diffs; PR6 only adds permission_ask
 //         handling)
 //
-//   So this wrapper re-implements the HEADER markup + scoped CSS
-//   (reusing design tokens, no hex copies) and mounts the ALREADY-
-//   EXTRACTED pure-props body components (`ToolInputBody` /
-//   `ToolOutputBody` — FT-F-001 PR1, 2026-06-20). The header CSS
-//   block below intentionally mirrors `ToolCallCard.vue`'s
-//   `.tool-card*` rules; the visual is identical, the CSS is
-//   duplicated by design (see "Why not extract ToolCallHeader.vue"
-//   note below).
-//
-// Why not extract a shared `ToolCallHeader.vue` to kill the CSS
-// duplication:
-//   The Risk table in the PRD locks "PR4 只抽不改动主 panel
-//   ToolCallCard 本体" — extracting a header component would
-//   touch `ToolCallCard.vue` (replace its inline header with the
-//   new shared component), violating the main-path-0-touch
-//   guarantee. The right time to extract is a follow-up that
-//   also consolidates the diff/approval/dispatch branches; that's
-//   out of PR4's scope. For now: duplicate CSS, single source of
-//   truth for tokens (via `--color-*` CSS vars), and a clear
-//   comment block so a future refactor knows where to look.
+// RULE-FrontSubagent-001 (2026-06-25): header markup + CSS 抽到共享
+//   `<ToolCallHeader>` —— redesign PR1-6 收尾后,原 PR4「主 panel
+//   ToolCallCard 本体 0 改动」约束解除,故可抽(推翻 chat.md 旧决策)。
+//   本 wrapper 仍只复用 0-store 的纯展示子组件:ToolCallHeader(header)
+//   + ToolInputBody / ToolOutputBody(FT-F-001 PR1,body)。card 容器
+//   chrome(背景 / 边框 / 3px left bar / padding)保留在本组件 scoped CSS;
+//   header 内文字颜色由 ToolCallHeader 的 isError / isRunning prop 自治。
 //
 // Props are the canonical `ToolCallInfo` + optional `ToolResultInfo`
 // (same types `ToolCallCard` consumes) so PR5's DrawerSection can
@@ -62,7 +49,7 @@ import {
   toolIcon,
 } from "../../utils/messageFormat";
 import { abbreviateDuration } from "../../utils/duration";
-import Icon from "../Icon.vue";
+import ToolCallHeader from "./ToolCallHeader.vue";
 import ToolInputBody from "./ToolInputBody.vue";
 import ToolOutputBody from "./ToolOutputBody.vue";
 
@@ -131,8 +118,8 @@ const statusIconName = computed<string>(() => {
     Root class is `.drawer-tool-card` (distinct from the main panel's
     `.tool-card`) so the scoped CSS below doesn't collide with
     `ToolCallCard.vue`'s selectors if both ever render in the same
-    subtree. The CSS rules mirror `.tool-card*` 1:1 (same tokens,
-    same box model) so the visual matches.
+    subtree. The card chrome (container + error/running variants) is
+    kept here; the header markup + CSS lives in `<ToolCallHeader>`.
   -->
   <div
     :class="[
@@ -144,31 +131,16 @@ const statusIconName = computed<string>(() => {
     ]"
     :style="{ borderLeftColor: accent }"
   >
-    <div class="drawer-tool-card__header">
-      <div class="drawer-tool-card__title">
-        <span class="drawer-tool-card__icon">
-          <Icon :name="toolIcon(call.name)" :size="14" />
-        </span>
-        <span class="drawer-tool-card__name">{{ call.name }}</span>
-        <span v-if="filePath" class="drawer-tool-card__path" :title="filePath">
-          · {{ filePath }}
-        </span>
-      </div>
-      <div class="drawer-tool-card__status">
-        <span
-          :class="[
-            'drawer-tool-card__status-icon',
-            { 'drawer-tool-card__status-icon--running': !hasResult && !isError },
-          ]"
-        >
-          <Icon :name="statusIconName" :size="14" />
-        </span>
-        <span>{{ statusText }}</span>
-        <span v-if="durationLabel" class="drawer-tool-card__duration">{{
-          durationLabel
-        }}</span>
-      </div>
-    </div>
+    <ToolCallHeader
+      :icon-name="toolIcon(call.name)"
+      :name="call.name"
+      :file-path="filePath"
+      :status-text="statusText"
+      :status-icon-name="statusIconName"
+      :duration-label="durationLabel"
+      :is-error="isError"
+      :is-running="!hasResult && !isError"
+    />
 
     <!--
       Reusing the already-extracted pure-props body components
@@ -194,11 +166,11 @@ const statusIconName = computed<string>(() => {
 </template>
 
 <style scoped>
-/* Mirrors `ToolCallCard.vue` `.tool-card*` 1:1. The class name is
-   renamed (`.drawer-tool-card*`) to avoid scoped-CSS collisions;
-   the rule bodies are identical and reference the same design
-   tokens. See the file header for why a shared `ToolCallHeader.vue`
-   extraction is deferred to a follow-up. */
+/* Card 容器 chrome。header markup + CSS 已抽到 `<ToolCallHeader>`
+   (RULE-FrontSubagent-001, 2026-06-25);本组件只保留 card 容器
+   (背景 / 边框 / 3px left bar / padding / 字体) + error/running
+   容器变体(控制 card 边框/背景;header 内文字颜色由 ToolCallHeader
+   的 isError / isRunning prop 自治)。0 hex,全 design token。 */
 
 .drawer-tool-card {
   background: var(--color-bg-surface);
@@ -219,102 +191,5 @@ const statusIconName = computed<string>(() => {
 
 .drawer-tool-card--running {
   border-left-color: var(--color-tool-shell);
-}
-
-.drawer-tool-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.drawer-tool-card__title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.drawer-tool-card__icon {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-secondary);
-}
-
-.drawer-tool-card--error .drawer-tool-card__icon {
-  color: var(--color-tool-error);
-}
-
-.drawer-tool-card__name {
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.drawer-tool-card--error .drawer-tool-card__name {
-  color: var(--color-tool-error);
-}
-
-.drawer-tool-card__path {
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-.drawer-tool-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
-.drawer-tool-card__status-icon {
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.drawer-tool-card__status-icon--running {
-  animation: drawer-tool-card-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes drawer-tool-card-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-.drawer-tool-card--error .drawer-tool-card__status {
-  color: var(--color-tool-error);
-}
-
-/* F5 per-tool duration — identical to `.tool-card__duration` in
-   the main panel. */
-.drawer-tool-card__duration {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 2px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--color-text-secondary);
-  font-weight: 500;
-  user-select: none;
-}
-
-.drawer-tool-card--error .drawer-tool-card__duration {
-  color: var(--color-tool-error);
 }
 </style>

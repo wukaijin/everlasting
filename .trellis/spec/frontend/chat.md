@@ -22,8 +22,9 @@ worker subagent 的右侧 drawer。reka-ui `Dialog*` 组合实现（@2.9.9 无 `
 | `app/src/components/chat/DrawerSection.vue` | 通用折叠容器(thinking/tools/reply 共用),折叠态 lazy render |
 | `app/src/components/chat/DrawerPromptCard.vue` | `run.task` prompt 卡片(120 截断 + View full) |
 | `app/src/components/chat/DrawerThinkingBlock.vue` | `ThinkingSection` → 共享 `ThinkingBlock` 适配器 |
-| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**) |
-| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(live interactive + historical outcome badge) |
+| `app/src/components/chat/DrawerToolCallCard.vue` | tool call 卡片(复用 ToolCallHeader + ToolInputBody/ToolOutputBody,**不 wrap ToolCallCard**) |
+| `app/src/components/chat/DrawerPermissionAskCard.vue` | permission ask 卡片(复用 ToolCallHeader + PermissionAskBody,live interactive + historical outcome badge) |
+| `app/src/components/chat/ToolCallHeader.vue` | ★ (RULE-FrontSubagent-001, 2026-06-25) 共享 tool-card header(纯展示,0 store);ToolCallCard / DrawerToolCallCard / DrawerPermissionAskCard 三处复用,props 驱动差异(filePath/suffix/statusIconName/durationLabel/isError/isRunning/statusVariant) + `#status-extra` slot(ToolCallCard diff-btn) |
 | `app/src/components/chat/MessageItem.vue` | 主消息项(06-23 拆后 ~770 行,拆分自 1099 行) |
 | `app/src/components/chat/MessageItemEdit.vue` | ★ (06-23 拆)user 消息 inline edit 模式(textarea + Save/Cancel + inline error) |
 | `app/src/components/chat/MessageItemFooter.vue` | ★ (06-23 拆)assistant/user 通用底部两联(error footer + F5 latency chip) |
@@ -76,7 +77,7 @@ subagent:finished → fetchRun → rebuildFromCache(transcriptJson, finalText)
 
 **Why not wrap ToolCallCard**：drawer 渲染 worker transcript，wrap `ToolCallCard` 会把父 session store 上下文带进 worker 渲染：(a) permission ask mis-resolve（worker ask 不挂父 session）、(b) dispatch_subagent 递归开 drawer、(c) diff popover 依赖父 worktree。违反 PRD R7「不耦合 ChatMessage 数据结构」。
 
-**CSS 复用**：`DrawerToolCallCard` 的 `.drawer-tool-card*` 1:1 镜像 `.tool-card*`（class 改名避 scoped 碰撞，0 hex，全 design token）。**不**抽 `ToolCallHeader.vue` 共享组件——PRD Risk 表锁「主 panel ToolCallCard 本体 0 改动」，抽取会触犯此约束。
+**CSS 复用（RULE-FrontSubagent-001, 2026-06-25 更新）**：原 `DrawerToolCallCard` / `DrawerPermissionAskCard` 的 header CSS 1:1 镜像 `ToolCallCard` 的 `.tool-card*`(class 改名避 scoped 碰撞)。**现已抽 `<ToolCallHeader>` 共享组件** —— redesign PR1-6 收尾后,原 PR4「主 panel ToolCallCard 本体 0 改动」约束解除,三处 header markup + CSS 合并为单一来源(**推翻本节旧决策**「不抽 ToolCallHeader.vue」)。card 容器 chrome(背景/边框/3px left bar/`--error`/`--running` 容器变体)仍各自保留;header 内 error/running 颜色改 ToolCallHeader 的 `isError`/`isRunning` prop 驱动(不再靠 card root 后代选择器)。ToolCallCard 的 diff-btn 走 `#status-extra` slot —— slot 内容带父 scope id,`.tool-card__diff-btn` CSS 留 ToolCallCard scoped 仍命中。DrawerPermissionAskCard 的 interactive status accent 由 `statusVariant="accent"` prop 驱动;header 与 body 的 4px gap 用 `:deep(.tool-call-header)` 注入。
 
 ### Design Decision: Header / ErrorCard 子组件 + jump-latest 下移 body（split refactor 2026-06-23）
 
@@ -167,6 +168,7 @@ pairSections(sections: TranscriptSection[], now: number, pendingFirstSeenAt: Map
 - snake→camel 转换：`tool_use_id→id`（ToolCallInfo）/ `tool_use_id→toolUseId, is_error→isError, duration_ms→durationMs`（ToolResultInfo）
 - 30s pending timeout（`PENDING_TIMEOUT_MS`），跨调用持久化 via `pendingFirstSeenAt` Map（drawer 100ms nowTick ticker 驱动 age-out）
 - 旧 `pairTranscript`（raw `TranscriptEntry[]` 输入）保留向后兼容，**新代码用 `pairSections`**
+- **RULE-FrontSubagent-002 (2026-06-25)**：第三参 `pendingFirstSeenAt` Map 既是输入又是输出(被 `.set`/`.delete`),签名隐式 —— 新调用方易踩「忘传/传新 Map → 30s timeout 永不推进」。改用 `useTranscriptPairing()` composable 封装:闭包持 plain Map(非响应式,避免 `toolEntries` computed 在 pairing 内部 `.set`/`.delete` 触发自身依赖 → 递归 re-invalidation → 100ms nowTick × 大量 sections → webview OOM 崩溃,**plain Map 是 load-bearing 约束**),返回 `{ pairEntries, pairSections, reset }`。SubagentDrawer 用 `pairToolSections(sections, now)` 两参签名 + 切 run `reset()`。纯函数 pairTranscript/pairSections 保留(测试 30+ 处 + raw-list consumer)。
 
 ### Modal / 截断复用
 

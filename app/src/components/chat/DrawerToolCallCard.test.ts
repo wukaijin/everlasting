@@ -24,9 +24,15 @@
 //      break immediately.
 //   9. Error variant: red left bar, error-tinted name + status.
 //
-// Icon stub note: this component renders `<Icon>` in the header
-// (tool icon + status icon). We stub `Icon` for the same reason
-// as the ThinkingBlock tests.
+// Icon stub note: `<ToolCallHeader>` (shared header, 2026-06-25)
+// renders `<Icon>` (tool icon + status icon). We stub `Icon` for
+// the same reason as the ThinkingBlock tests.
+//
+// RULE-FrontSubagent-001 (2026-06-25): header markup + CSS 抽到共享
+// `<ToolCallHeader>`,故 header 元素的 class 从 `.drawer-tool-card__*`
+// 改查 `.tool-call-header__*` (Vue Test Utils find 穿透子组件 DOM)。
+// card 容器变体 (.drawer-tool-card / --error / --running) 仍在本组件,
+// accent / body / 0-store lock / tokens 断言不变。
 
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -63,14 +69,14 @@ function mountCard(props: { call: ToolCallInfo; result?: ToolResultInfo }) {
 describe("DrawerToolCallCard — header rendering", () => {
   it("renders the tool name in the header", () => {
     const w = mountCard({ call: makeCall({ name: "grep" }) });
-    expect(w.find(".drawer-tool-card__name").text()).toBe("grep");
+    expect(w.find(".tool-call-header__name").text()).toBe("grep");
   });
 
   it("renders the file path when input.path is a non-empty string", () => {
     const w = mountCard({
       call: makeCall({ input: { path: "/repo/src/foo.ts" } }),
     });
-    const path = w.find(".drawer-tool-card__path");
+    const path = w.find(".tool-call-header__path");
     expect(path.exists()).toBe(true);
     expect(path.text()).toContain("/repo/src/foo.ts");
   });
@@ -82,27 +88,27 @@ describe("DrawerToolCallCard — header rendering", () => {
         input: { command: "ls -la" },
       }),
     });
-    expect(w.find(".drawer-tool-card__path").exists()).toBe(false);
+    expect(w.find(".tool-call-header__path").exists()).toBe(false);
   });
 
   it("does NOT render the path row when input.path is empty string", () => {
     const w = mountCard({
       call: makeCall({ input: { path: "" } }),
     });
-    expect(w.find(".drawer-tool-card__path").exists()).toBe(false);
+    expect(w.find(".tool-call-header__path").exists()).toBe(false);
   });
 });
 
 describe("DrawerToolCallCard — status row", () => {
   it("shows 'running…' status text while no result is present", () => {
     const w = mountCard({ call: makeCall() });
-    const status = w.find(".drawer-tool-card__status");
+    const status = w.find(".tool-call-header__status");
     expect(status.text()).toContain("running…");
   });
 
   it("shows 'done' status text when a non-error result is present", () => {
     const w = mountCard({ call: makeCall(), result: makeResult() });
-    const status = w.find(".drawer-tool-card__status");
+    const status = w.find(".tool-call-header__status");
     expect(status.text()).toContain("done");
   });
 
@@ -111,7 +117,7 @@ describe("DrawerToolCallCard — status row", () => {
       call: makeCall(),
       result: makeResult({ isError: true, content: "exit 1" }),
     });
-    const status = w.find(".drawer-tool-card__status");
+    const status = w.find(".tool-call-header__status");
     expect(status.text()).toContain("error");
   });
 
@@ -137,7 +143,7 @@ describe("DrawerToolCallCard — status row", () => {
 describe("DrawerToolCallCard — duration chip", () => {
   it("renders '…' duration while running (no result)", () => {
     const w = mountCard({ call: makeCall() });
-    expect(w.find(".drawer-tool-card__duration").text()).toBe("…");
+    expect(w.find(".tool-call-header__duration").text()).toBe("…");
   });
 
   it("renders the abbreviated duration when result.durationMs is set", () => {
@@ -146,7 +152,7 @@ describe("DrawerToolCallCard — duration chip", () => {
       result: makeResult({ durationMs: 1234 }),
     });
     // 1234ms → "1.2s" via abbreviateDuration.
-    expect(w.find(".drawer-tool-card__duration").text()).toBe("1.2s");
+    expect(w.find(".tool-call-header__duration").text()).toBe("1.2s");
   });
 
   it("renders minute-scale duration in the 'Mm Ss' format", () => {
@@ -154,7 +160,7 @@ describe("DrawerToolCallCard — duration chip", () => {
       call: makeCall(),
       result: makeResult({ durationMs: 83500 }), // 1m 23.5s
     });
-    expect(w.find(".drawer-tool-card__duration").text()).toBe("1m 23.5s");
+    expect(w.find(".tool-call-header__duration").text()).toBe("1m 23.5s");
   });
 
   it("omits the duration span when result is present but durationMs is undefined", () => {
@@ -162,7 +168,7 @@ describe("DrawerToolCallCard — duration chip", () => {
       call: makeCall(),
       result: makeResult({ durationMs: undefined }),
     });
-    expect(w.find(".drawer-tool-card__duration").exists()).toBe(false);
+    expect(w.find(".tool-call-header__duration").exists()).toBe(false);
   });
 });
 

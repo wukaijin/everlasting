@@ -11,33 +11,13 @@
 //   - PR5 of the subagent-drawer redesign (2026-06-21): introduced as
 //     historical-only.
 //   - PR6 R24 (2026-06-21): DOWNGRADE to historical-only. Three
-//     blockers were identified at the time:
-//       (a) Worker's `PermissionContext.is_worker = true` caused an
-//           immediate `Decision::Deny` collapse — the worker NEVER
-//           emitted a `permission:ask` IPC for path / shell tools.
-//       (b) Historical transcript entries carried synthetic rids
-//           (`uuid::Uuid::new_v4()`) NOT registered in the
-//           `permission_asks: PermissionStore` oneshot map — the
-//           `permission_response` IPC could not route a response.
-//       (c) Worker reused `parent_session_id` with no independent
-//           permission session — an interactive response would have
-//           no receiver.
-//   - PR2 of RULE-FrontSubagent-003 (2026-06-22): the PR1 backend
-//     restructuring resolves ALL three blockers:
-//       (a) Worker now emits REAL `permission:ask` IPC events (the
-//           Tier 4 collapse path was changed to emit-then-await
-//           instead of deny-immediately when the worker has an
-//           independent permission session).
-//       (b) Worker asks carry REAL rids (registered in a dedicated
-//           `"worker:{workerRunId}"` permission session in the
-//           backend's `PermissionStore`); the rid routes correctly
-//           via the existing `permission_response` IPC.
-//       (c) Worker has an independent permission session, isolated
-//           from the parent's slot.
-//     This file flips back to interactive mode for LIVE asks. The
-//     `interactive` prop is driven by the parent drawer's
-//     reconciliation: `getPendingByRid(ask.rid)` decides whether
-//     the card renders buttons or a static historical body.
+//     blockers were identified at the time (worker deny-collapse /
+//     synthetic rids / parent session reuse) — all resolved by PR1 of
+//     RULE-FrontSubagent-003 (2026-06-22).
+//   - PR2 of RULE-FrontSubagent-003 (2026-06-22): flipped back to
+//     interactive mode for LIVE asks. The `interactive` prop is driven
+//     by the parent drawer's reconciliation:
+//     `getPendingByRid(ask.rid)` decides buttons vs static body.
 //
 // Why a dedicated wrapper (not just inlining `PermissionAskBody` in
 // the drawer):
@@ -50,6 +30,13 @@
 //     `DrawerThinkingBlock` (sibling files in `components/chat/`)
 //     makes the drawer's data → view path easy to audit.
 //
+// RULE-FrontSubagent-001 (2026-06-25): header markup + CSS 抽到共享
+//   `<ToolCallHeader>` —— 本组件传 iconName="shield-check" + suffix=
+//   "权限询问" + statusVariant(interactive 时 accent 强调) 复用同一
+//   header。card chrome(amber border + 容器)保留本组件;interactive 的
+//   accent 边框/底色是 card 容器变体,header status 的 accent 色由
+//   ToolCallHeader statusVariant prop 自治。
+//
 // `synthesizeAsk` lives in the drawer (the parent) and is passed
 // down as a typed `PermissionAsk`. The mapping from the wire
 // `payload_json` (camelCase per Rust `PermissionAskPayload`'s
@@ -57,7 +44,7 @@
 // fallback) is documented in the drawer's `synthesizeAsk` docstring.
 
 import { computed } from "vue";
-import Icon from "../Icon.vue";
+import ToolCallHeader from "./ToolCallHeader.vue";
 import PermissionAskBody from "./PermissionAskBody.vue";
 import {
   usePermissionsStore,
@@ -89,16 +76,11 @@ const props = withDefaults(
     interactive?: boolean;
     /** 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of the
      *  worker's ask, surfaced by `pairSections` when it pairs a
-     *  matching `PermissionAskResolved` transcript entry (matched
-     *  by `rid`). `undefined` when:
-     *    - The ask is live-pending (no resolved entry yet).
-     *    - The transcript is from a pre-this-task run (no resolved
-     *      entries persisted).
-     *    - The resolved entry's `rid` does not match any ask
-     *      (defensive — should not happen in practice).
+     *  matching `PermissionAskResolved` transcript entry (matched by
+     *  `rid`). `undefined` when no matching resolved entry was found.
      *  Passed through to `PermissionAskBody.outcome` for the
-     *  historical card's outcome badge render. The interactive
-     *  mode ignores this (live cards don't show a resolve badge). */
+     *  historical card's outcome badge render. The interactive mode
+     *  ignores this (live cards don't show a resolve badge). */
     outcome?: "allow" | "deny" | "timeout" | "cancel";
   }>(),
   { interactive: false, outcome: undefined },
@@ -110,10 +92,7 @@ const props = withDefaults(
 // the store directly, because:
 //   - The rid is already on `props.ask.rid` (no parent lookup needed).
 //   - The main-chat `ToolCallCard` also calls `permissionsStore
-//     .respond` directly from the card (see `ToolCallCard.vue`'s
-//     approval buttons) — symmetric pattern.
-// Emitting to the parent would just forward the call one level up
-// without adding any value.
+//     .respond` directly from the card — symmetric pattern.
 const permissionsStore = usePermissionsStore();
 
 /** Header name. Prefer the tool name; fall back to "permission ask"
@@ -142,9 +121,8 @@ const bodyMode = computed<"interactive" | "historical">(() =>
  *  `session_tool_permissions` (would cross privilege boundaries
  *  by extending parent-session permissions from a worker). So
  *  showing a "persist" button that doesn't actually persist is
- *  misleading UX. The main-chat ToolCallCard path does NOT set
- *  this and keeps all 4 buttons. Derived from `ask.workerRunId`
- *  (present = worker ask; absent = main-chat ask). */
+ *  misleading UX. Derived from `ask.workerRunId` (present = worker
+ *  ask; absent = main-chat ask). */
 const hideAllowAlways = computed<boolean>(() => !!props.ask.workerRunId);
 
 /** The `onRespond` callback. Only attached in interactive mode —
@@ -165,18 +143,13 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
     :class="{ 'drawer-permission-ask-card--interactive': interactive }"
     :style="{ borderLeftColor: 'var(--color-tool-shell)' }"
   >
-    <div class="drawer-permission-ask-card__header">
-      <div class="drawer-permission-ask-card__title">
-        <span class="drawer-permission-ask-card__icon">
-          <Icon name="shield-check" :size="14" />
-        </span>
-        <span class="drawer-permission-ask-card__name">{{ headerName }}</span>
-        <span class="drawer-permission-ask-card__suffix">权限询问</span>
-      </div>
-      <div class="drawer-permission-ask-card__status">
-        <span>{{ statusText }}</span>
-      </div>
-    </div>
+    <ToolCallHeader
+      icon-name="shield-check"
+      :name="headerName"
+      suffix="权限询问"
+      :status-text="statusText"
+      :status-variant="interactive ? 'accent' : 'default'"
+    />
     <PermissionAskBody
       :mode="bodyMode"
       :ask="ask"
@@ -189,11 +162,12 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
 </template>
 
 <style scoped>
-/* Mirrors `DrawerToolCallCard.vue`'s `.drawer-tool-card*` rules 1:1
-   (same tokens, same box model). The class name is distinct
-   (`.drawer-permission-ask-card*`) to avoid scoped-CSS collisions
-   and to signal the card variant (amber left border regardless of
-   tool name — permission asks always read as "extra caution"). */
+/* Card 容器 chrome。header markup + CSS 已抽到 `<ToolCallHeader>`
+   (RULE-FrontSubagent-001, 2026-06-25);本组件保留 card 容器(amber
+   border-left 恒表"额外谨慎") + interactive 容器变体(accent border-left +
+   底色 tint)。interactive 的 header status accent 色由 ToolCallHeader 的
+   statusVariant="accent" prop 自治,不靠 card 后代选择器。0 hex,全 token。
+   header 与下方 body 的 4px gap 用 :deep 注入 ToolCallHeader root。 */
 
 .drawer-permission-ask-card {
   background: var(--color-bg-surface);
@@ -216,55 +190,10 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
   background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-surface));
 }
 
-.drawer-permission-ask-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
+/* header 与下方 PermissionAskBody 的 4px gap。header 在 ToolCallHeader
+   子组件内,用 :deep 跨 scoped 边界注入 margin-bottom(原
+   `.drawer-permission-ask-card__header { margin-bottom: 4px }` 迁移)。 */
+.drawer-permission-ask-card :deep(.tool-call-header) {
   margin-bottom: 4px;
-}
-
-.drawer-permission-ask-card__title {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.drawer-permission-ask-card__icon {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-tool-shell);
-}
-
-.drawer-permission-ask-card__name {
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.drawer-permission-ask-card__suffix {
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.drawer-permission-ask-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
-/* Interactive status pill gets the accent color so the user's eye
-   is drawn to "waiting on you" cards. Historical status stays muted. */
-.drawer-permission-ask-card--interactive .drawer-permission-ask-card__status {
-  color: var(--color-accent);
-  font-weight: 600;
 }
 </style>
