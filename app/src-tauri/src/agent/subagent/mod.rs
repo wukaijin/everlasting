@@ -386,6 +386,41 @@ pub fn filter_tools_for_subagent(
         .collect()
 }
 
+/// Tool names permitted in the **read-only** worker toolset (L3a,
+/// 2026-06-24). This is the **runtime-forced read-only layer**
+/// (the 2nd of 3 — see L3a PRD "只读保证三层"): when multiple
+/// workers run concurrently in a pure dispatch batch, the
+/// concurrent branch forces every worker's toolset down to just
+/// these 4 read-only tools regardless of its `SubagentDef`
+/// allowlist. For `researcher` this is a no-op (its
+/// `SubagentDef.tools` is already exactly these 4); for
+/// `general-purpose` it strips write/edit/shell/web_fetch/etc.
+/// The safety baseline is still the `is_worker: true` permission
+/// layer (`ask_path`/`ask_shell` collapse to `Deny` for workers,
+/// 3rd layer) — `filter_tools_readonly` is defense-in-depth that
+/// keeps the concurrent branch's tool discovery surface aligned
+/// with its read-only contract so the LLM never even sees a
+/// write tool in the concurrent path.
+pub const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir"];
+
+/// Force a worker's toolset down to read-only tools only (L3a,
+/// 2026-06-24). Applied by the concurrent dispatch branch in
+/// `chat_loop.rs` AFTER `filter_tools_for_subagent` so the
+/// concurrent batch's workers can never see a write / shell /
+/// web tool. Mirrors the `STRUCTURALLY_DISABLED` filter pattern
+/// (same `.filter(|t| allowlist.contains(t.name))` shape).
+///
+/// `researcher` is unaffected (its allowlist is already exactly
+/// `READONLY_TOOL_ALLOWLIST`); `general-purpose` is downgraded
+/// from its full-minus-disabled set to just the 4 read-only
+/// tools. Returns a fresh `Vec<ToolDef>` (consumes the input).
+pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef> {
+    tools
+        .into_iter()
+        .filter(|t| READONLY_TOOL_ALLOWLIST.contains(&t.name.as_str()))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // SubagentStatus
 // ---------------------------------------------------------------------------

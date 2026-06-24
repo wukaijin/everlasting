@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop 结构 + L2 并行路径(1439-1639)/serial path(1640)，PR1 并发分支照搬 L2 FuturesUnordered 模板的架构依据"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "is_worker=true Tier4 ask 塌缩 Deny + 只读工具低 Tier，理解只读保证三层 + permission:ask 竞态为何消解"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "add_token_usage 原子增量 SQL(col=COALESCE(col,0)+?)，并发 worker 折 token 不丢的依据"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "worker row 持久化 schema，并发 N worker 各自 worker_rid/row 不冲突"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "cargo test + PKG_CONFIG_PATH 约定 + Rust 单测写法"}
+{"file": "docs/research/subagent-communication-survey.md", "reason": "4 项目并发模型对照 + Phase 1 建议(FuturesUnordered + DELEGATION_MAX_CONCURRENT_CHILDREN 硬拒)"}
+{"file": "docs/research/subagent-scheduling-communication-survey.md", "reason": "Hermes 源码核实(默认同步/并发3/硬拒/depth1) + CC Agent tool 并发模型"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证并发分支符合 chat_loop 架构 + serial/parallel path 语义一致"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证只读剥写 + is_worker Deny 兜底正确，无并发 ask 泄漏"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "验证并发 token 归集无丢失(原子增量)"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证并发 worker 持久化正确，无 row 冲突"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证测试覆盖完整 + cargo test --lib 通过"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验证复用 L2 FuturesUnordered 模板而非重复造并发框架"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "PR2 前端 N 并发展示的跨层数据流校验"}

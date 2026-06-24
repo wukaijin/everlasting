@@ -1628,3 +1628,162 @@ The trait still exists as the type-erased interface the future
 daemon impl will satisfy, but the production wiring holds the
 concrete impl — exactly the pattern every other cross-request
 handle in `AppState` uses.
+
+## Scenario: Concurrent dispatch_subagent batch (L3a, 2026-06-24)
+
+### 1. Scope / Trigger
+
+- Trigger: L3a — the parent LLM emits **≥2 `dispatch_subagent` tool_use in one turn** (a "pure
+  dispatch batch") and expects them to run concurrently, the parent turn blocking until all complete.
+  Aligns with Hermes default-foreground `delegate_task` (ThreadPoolExecutor fan-out, parent blocks)
+  and Claude Code `Agent` (multiple `Agent` tool_use run concurrently per turn). Replaces the B6 MVP
+  serial "one worker at a time" path (chat_loop.rs ~:1697 self-ack "parallel fan-out is v2 / L3").
+- Why code-spec depth: mandatory — first **multi-worker concurrent** control-flow path. The batch
+  classifier, the read-only enforcement, the hard-reject limit, and the order-preservation contract
+  are all executable. Critically, the **3 race conditions** (permission:ask / token usage /
+  cancellations) are provably dissolved by the existing architecture in the read-only scope — that
+  proof is itself a load-bearing contract future edits must not violate (full derivation in
+  `agent-loop-architecture.md §"Pattern: Concurrent readonly dispatch"`).
+
+### 2. Signatures
+
+#### Batch classifier (chat_loop.rs)
+
+```rust
+enum DispatchBatch { Serial, OverLimit { count: usize, max_concurrent: usize }, Concurrent { count: usize } }
+fn classify_dispatch_batch(tool_calls: &[(String, String, Value)]) -> DispatchBatch;
+//   d = count(name == DISPATCH_TOOL_NAME); o = count(everything else)
+//   d == 0                       → Serial   (not a dispatch batch; L2 read-only path handles it upstream)
+//   d >= 2 && o == 0 && d <= MAX → Concurrent { d }
+//   d >  MAX                     → OverLimit { d, MAX }
+//   else (d == 1 || o > 0)       → Serial   (single dispatch, or mixed batch → existing serial loop)
+```
+
+#### Read-only enforcement (subagent/mod.rs)
+
+```rust
+const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir"];
+pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef>;   // mirrors STRUCTURALLY_DISABLED pattern
+
+// run_subagent gained a trailing param:
+pub(crate) async fn run_subagent(/* …existing params… */, force_readonly: bool)
+    -> (String, /* is_error */ bool, /* cancel_parent */ bool, Option<i32>);
+//   force_readonly == true  → apply filter_tools_readonly AFTER filter_tools_for_subagent
+//   force_readonly == false → unchanged (serial path keeps B6 behavior)
+```
+
+#### Concurrency primitive
+
+`FuturesUnordered` + `result_slots: Vec<Option<ContentBlock>>` (pre-allocated to N, each task writes
+its own index) + `Arc<AtomicBool>` shared `cancelled_flag` — **structurally mirrored from the L2
+read-only-batch parallel path** (chat_loop.rs ~:1439-1639); the only per-task difference is the body
+calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
+
+### 3. Contracts
+
+- **Pure-batch gate**: only `d >= 2 && o == 0` enters the concurrent branch. A mixed batch
+  (`dispatch_subagent` + `read_file` in the same turn) falls through to the serial path unchanged.
+- **Order preservation**: `tool_result` blocks re-collapse into `result_blocks` in **tool_use
+  order** via `result_slots[i]`, NOT completion order. Streaming `emit_tool_result` fires in
+  completion order (frontend UX); the LLM context sees tool_results in tool_use order (matches L2).
+- **Read-only guarantee — 3 layers**: (1) `SubagentDef` allowlist (`researcher` = the 4 read tools;
+  `general-purpose` = empty = full set); (2) **runtime strip** (L3a): concurrent branch passes
+  `force_readonly=true` → keeps only `[read_file, grep, glob, list_dir]` — `researcher` no-op,
+  `general-purpose` downgraded; (3) `is_worker: true` (B6 PR2b, pre-existing safety floor): even if
+  a write tool slipped through, the worker's Tier 4 `ask` collapses to `Decision::Deny`.
+- **Hard reject on over-limit** (Hermes alignment): `d > DELEGATION_MAX_CONCURRENT_CHILDREN` → every
+  `dispatch_subagent` returns an `is_error: true` tool_result ("exceeded concurrent delegation
+  limit"); **0 workers spawn** (no truncation, no queueing, no partial execution).
+- **Cancel aggregation**: `cancelled_flag` set by any task whose worker returned `cancel_parent=true`
+  (parent Stop reached it) OR detected `token.is_cancelled()`; after the join, the main loop flips
+  its local `cancelled`.
+- **`run_subagent` single source of truth**: L3a adds the `force_readonly` param (4-line filter)
+  rather than duplicating the ~450-line function — duplication is the faithful-port drift hazard
+  (`agent-loop-architecture.md §"Anti-pattern: faithful port as a drift hazard"`). Serial call site
+  passes `false`; B6 single-dispatch behavior byte-for-byte unchanged.
+
+#### Environment keys
+
+| Key | Default | Purpose |
+|---|---|---|
+| `DELEGATION_MAX_CONCURRENT_CHILDREN` | `3` | max concurrent workers per dispatch batch; mirrors Hermes `_DEFAULT_MAX_CONCURRENT_CHILDREN`. Read per-call (no cache) so tests can override in-process. Non-integer / missing → falls back to 3. |
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Pure batch, d=3 (≤ limit) | 3 workers spawn concurrently; 3 tool_results in tool_use order |
+| Pure batch, d=4 (> limit 3) | 4 tool_results all `is_error: true`; 0 workers spawn |
+| Mixed batch (dispatch + read_file) | Falls to serial path; serial loop runs dispatch (B6) + read_file in order |
+| Single dispatch (d=1) | Serial path (B6 behavior, `force_readonly=false`) — unchanged |
+| `general-purpose` in concurrent branch | worker toolset stripped to 4 read tools; writes impossible |
+| Parent Stop mid-batch | `parent_token` fires → all N `child_token()` fire → all workers cancelled; `cancel_parent` aggregated |
+| One worker errors, others succeed | each returns its own `(content, is_error, …)`; tool_results carry per-worker `[status: …]` prefix independently |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: parent emits 3 `dispatch_subagent{researcher, …}` for 3 topics → 3 workers run
+  concurrently (wall-clock ≈ max(single), not sum) → 3 tool_results in tool_use order.
+- **Base**: parent emits 3 dispatch but one is `general-purpose` → all 3 still concurrent; the
+  `general-purpose` worker is silently downgraded to read-only (its writes would be Deny'd anyway).
+- **Bad (anti-pattern the gate prevents)**: parent emits 5 dispatch (> limit 3) hoping to fan out →
+  hard-rejected, 0 spawn, parent told to reduce count or raise the env limit. No silent truncation
+  (which would make the parent think 3 ran when it sent 5).
+
+### 6. Tests Required
+
+Backend (`cargo test --lib`, `agent/tests_subagent.rs`):
+
+| Test | Asserts |
+|---|---|
+| `l3a_filter_tools_readonly_keeps_only_four_read_tools` | unit: allowlist keeps 4 read tools, strips writes incl. `dispatch_subagent` (anti-nesting pin) |
+| `l3a_classify_dispatch_batch_branches_correctly` | unit: all 3 branches (Serial/OverLimit/Concurrent) classified by (d, o) |
+| `l3a_pure_batch_of_three_dispatches_runs_concurrently` | AC1/6: 3 workers, tool_use order preserved (asserted via persisted DB messages) |
+| `l3a_pure_batch_over_limit_hard_rejects_all` | AC3: 4 dispatch → all tool_error, 0 workers (call_count, runs empty) |
+| `l3a_concurrent_general_purpose_workers_complete_readonly` | AC2: general-purpose in concurrent branch stripped to read-only |
+| `l3a_concurrent_cancel_propagates_to_all_workers` | AC4: parent cancel → 3 cancelled tool_results + 3 cancelled runs + parent Done{cancelled} |
+| `l3a_concurrent_token_usage_folds_into_parent` | AC5: 3 workers' usage folds into parent `sessions.*_total` (atomic increment invariant) |
+| `l3a_mixed_batch_falls_through_to_serial_path` | AC7: dispatch + read_file → serial path |
+| `l3a_single_dispatch_runs_serial_path_unchanged` | regression: d=1 → B6 serial behavior, `force_readonly=false` |
+
+### 7. Wrong vs Correct — concurrency race handling
+
+#### Wrong: add explicit locks / channels for the 3 race points
+
+```rust
+// BAD — re-inventing concurrency control the existing architecture already provides.
+let permit = Arc::new(Semaphore::new(MAX));   // ← the batch size IS the gate (hard-reject handles over-limit)
+let ask_mutex = Arc::new(Mutex::new(()));     // ← worker is_worker=true collapses ask to Deny; no concurrent ask exists
+let usage_mutex = Arc::new(Mutex::new(()));   // ← add_token_usage is col = COALESCE(col,0)+? atomic SQL; no read-modify-write
+```
+
+The 3 race points are **dissolved by scope**, not by new synchronization (full derivation in
+`agent-loop-architecture.md §"Race dissolution by scope"`):
+1. `permission:ask` — worker `is_worker=true` → Tier 4 `ask` → `Decision::Deny` (no oneshot wait);
+   read tools are low-Tier silent-allow. **No concurrent interactive ask can occur.**
+2. `token usage` — `add_token_usage` / `add_token_usage_streaming` are `col = COALESCE(col,0) + ?`
+   atomic increment; SQLite's single-writer lock serializes. **No lost updates.**
+3. `cancellations` — each worker registers a unique `worker_rid = "{parent_rid}-sub-{tool_use_id}"`;
+   `worker_token = parent_token.child_token()` × N → parent cancel fires all children. **Free fan-out.**
+
+#### Correct: reuse the existing architecture + the L2 parallel template
+
+```rust
+// GOOD — the concurrent branch is the L2 read-only-batch path with run_subagent(force_readonly=true)
+// in place of execute_tool. No new locks; the read-only scope IS the safety argument.
+let result_slots: Vec<Option<ContentBlock>> = (0..n).map(|_| None).collect();
+let cancelled_flag = Arc::new(AtomicBool::new(false));
+let mut fu: FuturesUnordered<_> = dispatches.enumerate().map(|(i, (id, input))| async move {
+    let (content, is_error, cancel_parent, _) =
+        run_subagent(/* …shared-ref deps… */, /*force_readonly=*/ true).await;
+    if cancel_parent { cancelled_flag.store(true, Ordering::SeqCst); }
+    Some((i, ContentBlock::ToolResult { tool_use_id: id, content, is_error }))
+}).collect();
+while let Some(Some((i, block))) = fu.next().await { result_slots[i] = Some(block); }
+let result_blocks = result_slots.into_iter().flatten().collect();
+```
+
+> **Invariant to preserve on any future edit**: if the concurrent branch is ever widened to allow
+> write-capable workers (L3b + worktree), the race-dissolution proof above **breaks** — at minimum,
+> `permission:ask` (now a real concurrent interactive modal) and token-usage contention must be
+> re-evaluated. Do NOT lift the read-only strip without worktree + re-deriving the safety argument.

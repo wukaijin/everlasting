@@ -1645,6 +1645,249 @@ pub async fn run_chat_loop(
             // falls back here; web_fetch is excluded from the
             // parallel set (Q2) precisely so its Tier 4 ask can
             // fire through the normal single-modal flow.
+            //
+            // L3a (2026-06-24): before the regular serial `for`
+            // loop, classify the batch for the concurrent
+            // dispatch_subagent path. A **pure** batch of ≥2
+            // dispatch_subagent tool_uses (no other tools mixed
+            // in) within `DELEGATION_MAX_CONCURRENT_CHILDREN`
+            // (env, default 3) runs concurrently via
+            // `FuturesUnordered` (each worker forced read-only).
+            // A pure batch OVER the limit is hard-rejected (every
+            // tool_use gets a tool_error tool_result — no
+            // truncation, no queuing, mirrors Hermes). Anything
+            // else (single dispatch, or a mixed batch) falls
+            // through to the regular serial `for` loop unchanged.
+            let dispatch_batch = classify_dispatch_batch(
+                &tool_calls,
+                delegation_max_concurrent_children(),
+            );
+            match dispatch_batch {
+                DispatchBatch::OverLimit {
+                    count,
+                    max_concurrent,
+                } => {
+                    // Hard reject: every dispatch_subagent tool_use
+                    // gets a tool_error tool_result. None execute.
+                    // The LLM sees N uniform failure signals + a
+                    // hint to re-plan (reduce the batch or split).
+                    tracing::warn!(
+                        count,
+                        max_concurrent,
+                        "L3a: pure dispatch batch over concurrent limit — hard rejecting all"
+                    );
+                    for (id, _name, _input) in &tool_calls {
+                        let reject_content = format!(
+                            "Concurrent dispatch limit reached: {count} dispatch_subagent \
+                             calls in one turn exceeds the limit of {max_concurrent}. Reduce \
+                             the number of concurrent subagents per turn (dispatch fewer at \
+                             once, or split across turns), or raise the limit via the \
+                             DELEGATION_MAX_CONCURRENT_CHILDREN environment variable. No \
+                             subagents were dispatched."
+                        );
+                        let envelope_str = crate::agent::helpers::tool_result_envelope(
+                            &reject_content,
+                            &current_ctx.worktree_path,
+                        );
+                        sink.emit_tool_result(&crate::state::ToolResultPayload {
+                            request_id: rid.clone(),
+                            tool_use_id: id.clone(),
+                            content: envelope_str.clone(),
+                            is_error: true,
+                        });
+                        result_blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: envelope_str,
+                            is_error: true,
+                        });
+                    }
+                }
+                DispatchBatch::Concurrent { count: _ } => {
+                    // ---- L3a concurrent dispatch path (pure
+                    //      dispatch_subagent batch, ≥2 workers) ----
+                    //
+                    // Mirror the L2 parallel-read path's structure
+                    // (FuturesUnordered + result_slots[i] + shared
+                    // cancelled flag), but each task runs
+                    // `run_subagent` (with `force_readonly = true`)
+                    // instead of `execute_tool`. Every worker is
+                    // forced read-only regardless of its
+                    // SubagentDef (the 2nd layer of the 3-layer
+                    // read-only guarantee).
+                    //
+                    // Permission: every dispatch_subagent tool_use
+                    // goes through the existing ⑨ check BEFORE the
+                    // task is spawned (mirrors the serial path's
+                    // pre-execute permission check). A Deny short-
+                    // circuits into a tool_result tool_use pairing
+                    // without spawning the worker.
+                    //
+                    // Cancel: each task takes `token.clone()`; the
+                    // worker's nested run_chat_loop sees the parent
+                    // cancel via `parent_token.child_token()` (the
+                    // existing fan-out mechanism). The shared
+                    // `cancelled_flag` is set if any worker
+                    // returned `cancel_parent = true` (parent-
+                    // propagated cancel detected).
+                    //
+                    // Audit: each successful worker dispatch
+                    // records its own `tool_executed` audit row
+                    // (same as the serial path's
+                    // `record_tool_executed_audit` call). Cancelled
+                    // workers skip the audit (RULE-A-004).
+                    //
+                    // Result ordering: `result_slots[i]` is pre-
+                    // allocated to the tool_use count; each task
+                    // writes at its OWN index so the LLM context
+                    // sees tool_results in tool_use order regardless
+                    // of completion order. `emit_tool_result` fires
+                    // as each task completes (streaming).
+                    let n = tool_calls.len();
+                    let mut result_slots: Vec<Option<ContentBlock>> =
+                        (0..n).map(|_| None).collect();
+                    let cancelled_flag = Arc::new(AtomicBool::new(false));
+                    let mut fu: FuturesUnordered<_> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (id, name, input))| {
+                            let sink = sink.clone();
+                            let rid = rid.clone();
+                            let id = id.clone();
+                            let name = name.clone();
+                            let input = input.clone();
+                            let permission_ctx = permission_ctx.clone();
+                            let permission_asks = permission_asks.clone();
+                            let db = db.clone();
+                            let session_id = session_id.clone();
+                            let token = token.clone();
+                            let provider = provider.clone();
+                            let memory_cache = memory_cache.clone();
+                            let read_guard = read_guard.clone();
+                            let skill_cache = skill_cache.clone();
+                            let cancellations = cancellations.clone();
+                            let session_active_request = session_active_request.clone();
+                            let background_shells = background_shells.clone();
+                            let current_ctx = current_ctx.clone();
+                            let app_handle = app_handle.clone();
+                            let skip_persist = skip_persist;
+                            let cancelled_flag = cancelled_flag.clone();
+                            async move {
+                                // Pre-execute ⑨ permission check
+                                // (mirrors the serial path's
+                                // permissions::check before execute).
+                                let decision = permissions::check(
+                                    &permission_ctx,
+                                    &permission_asks,
+                                    &db,
+                                    &sink,
+                                    &name,
+                                    &input,
+                                    &id,
+                                    &token,
+                                )
+                                .await;
+                                if let Decision::Deny { reason, critical: _ } = decision {
+                                    let envelope = crate::agent::helpers::tool_result_envelope(
+                                        &reason,
+                                        &current_ctx.worktree_path,
+                                    );
+                                    sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                        request_id: rid.clone(),
+                                        tool_use_id: id.clone(),
+                                        content: envelope.clone(),
+                                        is_error: true,
+                                    });
+                                    return Some((
+                                        i,
+                                        ContentBlock::ToolResult {
+                                            tool_use_id: id,
+                                            content: envelope,
+                                            is_error: true,
+                                        },
+                                    ));
+                                }
+
+                                let tool_exec_start = Instant::now();
+                                let (content, is_error, cancel_parent, exit_code) =
+                                    crate::agent::subagent::dispatch::run_subagent(
+                                        &provider,
+                                        context_window,
+                                        &rid,
+                                        &session_id,
+                                        &memory_cache,
+                                        &read_guard,
+                                        &skill_cache,
+                                        &permission_asks,
+                                        &cancellations,
+                                        &session_active_request,
+                                        &background_shells,
+                                        &db,
+                                        &current_ctx,
+                                        &id,
+                                        &input,
+                                        &token,
+                                        &sink,
+                                        app_handle.clone(),
+                                        // L3a (2026-06-24): concurrent
+                                        // branch forces read-only.
+                                        true,
+                                    )
+                                    .await;
+                                let duration_ms = tool_exec_start.elapsed().as_millis();
+                                // RULE-A-004 + audit (same shape as
+                                // the serial dispatch path).
+                                if token.is_cancelled() || cancel_parent {
+                                    cancelled_flag.store(true, Ordering::SeqCst);
+                                } else if !skip_persist {
+                                    if let Err(e) = permissions::record_tool_executed_audit(
+                                        &db,
+                                        &session_id,
+                                        &name,
+                                        &input,
+                                        duration_ms,
+                                        exit_code,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "L3a concurrent dispatch: record_tool_executed_audit failed (non-fatal)"
+                                        );
+                                    }
+                                }
+                                let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                    &content,
+                                    &current_ctx.worktree_path,
+                                );
+                                sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                    request_id: rid.clone(),
+                                    tool_use_id: id.clone(),
+                                    content: envelope_str.clone(),
+                                    is_error,
+                                });
+                                Some((
+                                    i,
+                                    ContentBlock::ToolResult {
+                                        tool_use_id: id,
+                                        content: envelope_str,
+                                        is_error,
+                                    },
+                                ))
+                            }
+                        })
+                        .collect();
+                    while let Some(maybe_block) = fu.next().await {
+                        if let Some((i, block)) = maybe_block {
+                            result_slots[i] = Some(block);
+                        }
+                    }
+                    result_blocks = result_slots.into_iter().flatten().collect();
+                    if cancelled_flag.load(Ordering::SeqCst) {
+                        cancelled = true;
+                    }
+                }
+                DispatchBatch::Serial => {
+                    // Regular serial path (existing behavior, unchanged).
             for (id, name, input) in &tool_calls {
             // Run the full 5-tier permission check (matches
             // production). Tests that want a clean
@@ -1727,6 +1970,12 @@ pub async fn run_chat_loop(
                     // closure this is `Some(app.clone())`; from the
                     // unit tests it's `None` (no Tauri runtime).
                     app_handle.clone(),
+                    // L3a (2026-06-24): serial path keeps the
+                    // worker's full toolset (write/shell/web for
+                    // general-purpose), gated by `is_worker: true`
+                    // at the ⑨ permission layer. The concurrent
+                    // branch below passes `true` to force read-only.
+                    false,
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -1846,6 +2095,8 @@ pub async fn run_chat_loop(
                 break;
             }
             }
+                } // close DispatchBatch::Serial => { … }
+            } // close match dispatch_batch
         }
 
         // ⑬ loop detection (C2): if this turn tripped the detector,
@@ -2152,5 +2403,104 @@ pub(crate) fn is_parallel_eligible(
         }
     }
     true
+}
+
+// ---------------------------------------------------------------------------
+// L3a (2026-06-24): concurrent dispatch_subagent batch
+// ---------------------------------------------------------------------------
+
+/// L3a (2026-06-24): maximum number of `dispatch_subagent` workers
+/// allowed to run **concurrently** in a single parent turn. Sourced
+/// from the `DELEGATION_MAX_CONCURRENT_CHILDREN` env var; defaults
+/// to **3** (mirrors Hermes `_DEFAULT_MAX_CONCURRENT_CHILDREN`).
+/// Batches with strictly more than this many dispatches are
+/// **hard-rejected** (every dispatch_subagent tool_use returns a
+/// `tool_error` tool_result — no truncation, no queuing) so the
+/// LLM sees a uniform failure signal and can re-plan (reduce the
+/// batch or split across turns).
+///
+/// Read once per call (no caching) — tests that override the env
+/// var via `std::env::set_var` in the same process see the new
+/// value on the next batch. `cargo test` runs each test in the
+/// same process, so a test that sets the env var MUST unset it
+/// (or use a local override via `classify_dispatch_batch` /
+/// direct constant in the test).
+pub(crate) fn delegation_max_concurrent_children() -> usize {
+    match std::env::var("DELEGATION_MAX_CONCURRENT_CHILDREN") {
+        Ok(v) => v
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN),
+        Err(_) => DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN,
+    }
+}
+
+/// The default for `DELEGATION_MAX_CONCURRENT_CHILDREN` when the
+/// env var is unset or unparseable. Mirrors Hermes' default of 3
+/// (`_DEFAULT_MAX_CONCURRENT_CHILDREN`). Kept as a `pub(crate)`
+/// const so tests can assert against it without depending on the
+/// env-var read.
+pub(crate) const DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN: usize = 3;
+
+/// Outcome of classifying a turn's tool_calls batch for the L3a
+/// concurrent dispatch path. Computed by [`classify_dispatch_batch`]
+/// at the entry of the serial-path branch.
+#[derive(Debug)]
+pub(crate) enum DispatchBatch {
+    /// Fewer than 2 dispatch_subagent tool_uses, OR the batch is a
+    /// mix (dispatch + non-dispatch). Falls through to the regular
+    /// serial `for` loop unchanged (existing behavior preserved).
+    Serial,
+    /// A pure batch of `count` dispatch_subagent tool_uses that
+    /// exceeds `max_concurrent`. The caller MUST reject the entire
+    /// batch with a `tool_error` tool_result for each tool_use
+    /// (hard reject, no truncation, no queuing — mirrors Hermes).
+    OverLimit { count: usize, max_concurrent: usize },
+    /// A pure batch of dispatch_subagent tool_uses, all within
+    /// the limit. The caller runs them concurrently via
+    /// `FuturesUnordered` (each worker forced read-only).
+    /// `count` is kept on the variant for debug logging + future
+    /// telemetry even though the concurrent branch reads
+    /// `tool_calls.len()` directly.
+    Concurrent { #[allow(dead_code)] count: usize },
+}
+
+/// Classify a turn's `tool_calls` for the L3a concurrent
+/// dispatch path. Counts `dispatch_subagent` tool_uses vs other
+/// tool_uses:
+/// - `d >= 2 && other == 0 && d <= max` → [`DispatchBatch::Concurrent`]
+/// - `d > max` (pure batch over limit) → [`DispatchBatch::OverLimit`]
+/// - anything else (`d <= 1` OR `other > 0`) → [`DispatchBatch::Serial`]
+///
+/// `max_concurrent` is read from [`delegation_max_concurrent_children`]
+/// (env-driven, default 3).
+pub(crate) fn classify_dispatch_batch(
+    tool_calls: &[(String, String, serde_json::Value)],
+    max_concurrent: usize,
+) -> DispatchBatch {
+    let dispatch_name = crate::agent::subagent::DISPATCH_TOOL_NAME;
+    let mut dispatch_count = 0usize;
+    let mut other_count = 0usize;
+    for (_, name, _) in tool_calls {
+        if name == dispatch_name {
+            dispatch_count += 1;
+        } else {
+            other_count += 1;
+        }
+    }
+    if dispatch_count >= 2 && other_count == 0 {
+        if dispatch_count > max_concurrent {
+            DispatchBatch::OverLimit {
+                count: dispatch_count,
+                max_concurrent,
+            }
+        } else {
+            DispatchBatch::Concurrent {
+                count: dispatch_count,
+            }
+        }
+    } else {
+        DispatchBatch::Serial
+    }
 }
 

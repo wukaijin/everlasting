@@ -505,6 +505,81 @@ Two transcript-related contracts that the worker `SubagentBufferSink` is now res
 
 **Why both are sink-level, not chat_loop-level.** The sink already owns the per-event record pathway (chat_event / tool_call / tool_result / permission_ask); adding `emit_permission_ask_resolved` + the `Done` counter to the same struct keeps the transcript the single source of truth and avoids threading new state through `run_chat_loop`'s 23-param signature. The trait-default no-op for `emit_permission_ask_resolved` is the template for any future sink-side contract that doesn't apply to the main chat (`AppHandleSink` — no transcript — inherits the no-op for free).
 
+## Pattern: Concurrent readonly dispatch (L3a, 2026-06-24)
+
+**Problem**: The B6 `Worker Subagent` pattern above dispatches **one worker at a time** — the
+parent turn blocks on a single `run_subagent().await`. When the parent LLM wants to research
+multiple independent directions in parallel, serial fan-out costs `sum(worker_i)` wall-clock
+instead of `max(worker_i)`. The fix is concurrent fan-out, but only **safely** — without worktree
+isolation (deferred to L3b), N workers writing the same cwd would race.
+
+**Solution**: Add a concurrent branch to the serial-path tool dispatch, **reusing the L2 read-only
+batch parallel path's structure verbatim** (`FuturesUnordered` + `result_slots[i]` +
+`Arc<AtomicBool>`), scoped to **read-only workers** so no shared-state write race can occur. The
+branch is gated by a pure-function classifier so the existing serial path is byte-for-byte
+unchanged for single dispatches and mixed batches (the B6 MVP path this Pattern supersedes).
+
+```rust
+// chat_loop.rs serial-path entry — classify before the existing `for` loop
+match classify_dispatch_batch(&tool_calls) {
+    DispatchBatch::Concurrent { count }         => { /* FuturesUnordered: N × run_subagent(force_readonly=true) */ }
+    DispatchBatch::OverLimit { count, max_concurrent } => { /* hard-reject: all tool_error, 0 spawn */ }
+    DispatchBatch::Serial                       => { /* existing serial `for` loop — UNCHANGED */ }
+}
+```
+
+### Why mirror the L2 path (vs a new concurrency construct)
+
+The L2 read-only-batch parallel path (`chat_loop.rs` ~:1439-1639) already solved exactly this shape:
+order-preserving `result_slots`, shared `AtomicBool` cancel aggregation, per-task permission check +
+RULE-A-004 audit-skip, streaming `emit_tool_result`. L3a swaps only the per-task body
+(`run_subagent(force_readonly=true)` instead of `execute_tool`). Writing a new construct would
+re-introduce the **faithful-port drift hazard** (see the "Anti-pattern" Pattern above) — two
+parallel dispatch loops that must stay in sync on ordering / cancel / audit semantics.
+
+### `run_subagent` gains `force_readonly: bool` (not a wrapper)
+
+The PRD said "run_subagent body unchanged"; the implementation added a trailing `force_readonly`
+param (a 4-line `filter_tools_readonly` application after `filter_tools_for_subagent`) rather than
+a wrapper function. Rationale: `run_subagent` is already the concurrency-safe shared-ref async fn
+the concurrent branch calls N times — a wrapper would either re-pass all 18+ params (drift hazard)
+or duplicate the body (~450 lines). The param keeps a single source of truth; the serial call site
+passes `false` so B6 single-dispatch behavior is unchanged (regression-pinned by
+`l3a_single_dispatch_runs_serial_path_unchanged`).
+
+### Race dissolution by scope (the load-bearing argument)
+
+Three race conditions that look scary for concurrent workers are **provably dissolved by the
+read-only scope** — no synchronization code is needed, and this is the contract future edits must
+not silently violate:
+
+| Race | Why it cannot occur in the read-only scope |
+|---|---|
+| `permission:ask` contention | worker `is_worker=true` (B6 PR2b) collapses Tier 4 `ask` → `Decision::Deny` (no oneshot wait); read tools (`read_file`/`grep`/`glob`/`list_dir`) are low-Tier silent-allow. No concurrent interactive modal can fire. |
+| `token usage` lost update | `add_token_usage` / `add_token_usage_streaming` are `col = COALESCE(col,0) + ?` atomic increment (single statement, no read-modify-write); SQLite's single-writer lock serializes N concurrent folds. |
+| `cancellations` fan-out | each worker registers a unique `worker_rid = "{parent_rid}-sub-{tool_use_id}"` (tool_use_id unique per batch); `worker_token = parent_token.child_token()` × N → one parent cancel fires all children. |
+
+Also verified concurrency-safe (shared state, not races): each worker's `SubagentBufferSink` is
+`new()`'d independently inside `run_subagent` (no shared sink); the parent sink
+(`AppHandleSink` / test `MockEmitter`) is thread-safe; `PermissionContext` is pure data cloned
+per task.
+
+### When to apply this pattern
+
+- The parent genuinely benefits from **parallel independent read-only work** (multi-topic research,
+  multi-file exploration) — the LLM emits pure dispatch batches naturally for this.
+- You want concurrency **without** the worktree/daemon machinery (L3b+) — the read-only scope is
+  the cheaper safety argument.
+
+### When NOT to apply this pattern
+
+- Workers need to **write** files → the race-dissolution proof breaks (`permission:ask` becomes a
+  real concurrent modal; cwd write races). That is **L3b** (worktree isolation per worker) — do NOT
+  lift `force_readonly` without worktree + re-deriving the safety argument above.
+- You need the parent to stay **responsive** during dispatch (background, non-blocking parent turn)
+  → that's the daemon-ization track (L3b+); this pattern still blocks the parent turn until all
+  workers join.
+
 ---
 
 ## System prompt assembly (3-layer, cache-stable)

@@ -24,9 +24,9 @@ use crate::tools::ToolContext;
 
 use super::{
     assemble_subagent_prompt, build_subagent_finished_payload, build_worker_messages,
-    filter_tools_for_subagent, format_dispatch_result, format_final_text, lookup_subagent,
-    summarize_worker_tool_actions, truncate_transcript_for_persistence, SubagentBufferSink,
-    SubagentStatus, TRANSCRIPT_MAX_BYTES,
+    filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result, format_final_text,
+    lookup_subagent, summarize_worker_tool_actions, truncate_transcript_for_persistence,
+    SubagentBufferSink, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -107,6 +107,17 @@ pub(crate) async fn run_subagent(
     // live. `None` in unit tests (no Tauri runtime); the sink's
     // `new_without_app_handle` constructor is used in that case.
     app_handle: Option<AppHandle>,
+    // L3a (2026-06-24): when `true`, the worker's toolset is
+    // additionally forced down to read-only tools
+    // (`filter_tools_readonly`) on top of `filter_tools_for_subagent`.
+    // Used by the concurrent dispatch branch in `chat_loop.rs`
+    // (pure dispatch batch, ≥2 workers running in parallel). The
+    // serial path (single dispatch or mixed batch) passes `false`
+    // — `general-purpose` in the serial path keeps its full
+    // write/shell/web toolset (gated by `is_worker: true` at the
+    // ⑨ permission layer). This is the 2nd layer of the 3-layer
+    // read-only guarantee (PRD §"只读保证三层").
+    force_readonly: bool,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -135,6 +146,18 @@ pub(crate) async fn run_subagent(
     // strip). The worker's run_chat_loop call gets this filtered
     // Vec; the parent's tool_defs is unaffected.
     let worker_tool_defs = filter_tools_for_subagent(crate::tools::builtin_tools(), def);
+    // L3a (2026-06-24): concurrent dispatch branch forces the
+    // worker's toolset down to read-only tools. The serial path
+    // passes `force_readonly = false` so `general-purpose` in
+    // the serial path keeps its full write/shell/web toolset
+    // (gated by `is_worker: true` at the ⑨ permission layer).
+    // For `researcher` this is a no-op (its allowlist is already
+    // exactly the 4 read-only tools).
+    let worker_tool_defs = if force_readonly {
+        filter_tools_readonly(worker_tool_defs)
+    } else {
+        worker_tool_defs
+    };
 
     // Resolve the parent session's project_id + path so the worker
     // reads the same memory cache slots the parent uses.
