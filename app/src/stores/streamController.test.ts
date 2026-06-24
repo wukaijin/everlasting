@@ -19,11 +19,27 @@
 //
 // The tests below lock both invariants.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { setActivePinia, createPinia, storeToRefs } from "pinia";
 import { effectScope, nextTick, watch } from "vue";
 import { rehydrateMessages, useStreamControllerStore } from "./streamController";
 import { useChatStore } from "./chat";
+
+// RULE-FrontTest-001 (2026-06-25): `reloadAfterFinalize` fires
+// `invoke("load_session")` + `invoke("update_message_latency")` as
+// fire-and-forget follow-ups after a request finalizes
+// (`streamController.ts:1234` `void reloadAfterFinalize(...)`). These
+// tests drive the store via injected SSE events, not the real Tauri
+// bridge, so without a stub the floating promises reject with "Cannot
+// read 'invoke' of undefined" — 4 unhandled rejections that pass today
+// (rejection is async, surfaces after the test ends) but would
+// hard-fail under a stricter Vitest. `unstubGlobals` defaults to
+// false, so one file-level `beforeAll` covers every test below.
+beforeAll(() => {
+  vi.stubGlobal("__TAURI_INTERNALS__", {
+    invoke: vi.fn().mockResolvedValue(null),
+  });
+});
 
 // `rehydrateMessages` consumes the shape `LoadedMessage[]` from
 // `db::load_session`'s `messages` field. The interface is private

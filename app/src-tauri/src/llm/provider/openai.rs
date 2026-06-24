@@ -747,38 +747,7 @@ impl Provider for OpenAIProvider {
                                 {
                                     tracing::debug!(tool_calls = %serde_json::to_string(tcs).unwrap_or_default(), "▶ openai: tool_calls delta");
                                     for tc in tcs {
-                                        let idx = tc
-                                            .get("index")
-                                            .and_then(|i| i.as_u64())
-                                            .unwrap_or(0)
-                                            as u32;
-                                        let entry = tool_call_state
-                                            .entry(idx)
-                                            .or_insert_with(ToolCallBuf::default);
-                                        if let Some(id) =
-                                            tc.get("id").and_then(|s| s.as_str())
-                                        {
-                                            if !id.is_empty() {
-                                                entry.id = id.to_string();
-                                            }
-                                        }
-                                        if let Some(name) = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|s| s.as_str())
-                                            .or_else(|| tc.get("name").and_then(|s| s.as_str()))
-                                        {
-                                            if !name.is_empty() {
-                                                entry.name = name.to_string();
-                                            }
-                                        }
-                                        if let Some(args) = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("arguments"))
-                                            .and_then(|s| s.as_str())
-                                        {
-                                            entry.args_buf.push_str(args);
-                                        }
+                                        accumulate_tool_call_delta(&mut tool_call_state, tc);
                                     }
                                 }
                             }
@@ -842,6 +811,54 @@ struct ToolCallBuf {
     id: String,
     name: String,
     args_buf: String,
+}
+
+/// Accumulate one OpenAI `tool_calls` delta (`tc`) into the
+/// per-index assembly map. OpenAI streams a tool call as a
+/// sequence of deltas all keyed by the same `index`; we merge the
+/// `id` / `function.name` / `function.arguments` fragments into a
+/// single [`ToolCallBuf`] per index.
+///
+/// RULE-D-007 (2026-06-25): the official OpenAI API always emits
+/// `index` on every tool_call delta. Some third-party
+/// OpenAI-compatible proxies omit it — previously we fell back to
+/// `0`, which made two index-less tool calls collide on key `0`
+/// (the second overwrote the first's id/name and concatenated
+/// arguments onto its `args_buf`). Now an index-less delta is
+/// warned + skipped: the official API is unaffected, and a
+/// misbehaving proxy drops the call rather than corrupting another.
+fn accumulate_tool_call_delta(state: &mut HashMap<u32, ToolCallBuf>, tc: &Value) {
+    let Some(idx) = tc.get("index").and_then(|i| i.as_u64()) else {
+        tracing::warn!(
+            tc = %serde_json::to_string(tc).unwrap_or_default(),
+            "openai: tool_call delta missing `index`, skipping (third-party proxy?)"
+        );
+        return;
+    };
+    let idx = idx as u32;
+    let entry = state.entry(idx).or_insert_with(ToolCallBuf::default);
+    if let Some(id) = tc.get("id").and_then(|s| s.as_str()) {
+        if !id.is_empty() {
+            entry.id = id.to_string();
+        }
+    }
+    if let Some(name) = tc
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|s| s.as_str())
+        .or_else(|| tc.get("name").and_then(|s| s.as_str()))
+    {
+        if !name.is_empty() {
+            entry.name = name.to_string();
+        }
+    }
+    if let Some(args) = tc
+        .get("function")
+        .and_then(|f| f.get("arguments"))
+        .and_then(|s| s.as_str())
+    {
+        entry.args_buf.push_str(args);
+    }
 }
 
 /// Build the `ChatEvent::ToolCall` for one fully-assembled tool
@@ -1590,6 +1607,51 @@ mod tests {
             }
             other => panic!("expected ToolCall, got {:?}", other),
         }
+    }
+
+    // ---- accumulate_tool_call_delta (RULE-D-007) ----
+
+    #[test]
+    fn accumulate_tool_call_delta_skips_delta_missing_index() {
+        // RULE-D-007: a tool_call delta without `index` is skipped
+        // rather than falling back to key 0 (which would collide
+        // with a real index-0 tool call and corrupt it).
+        let mut state: HashMap<u32, ToolCallBuf> = HashMap::new();
+        // first delta carries index 0
+        accumulate_tool_call_delta(
+            &mut state,
+            &serde_json::json!({"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"path\":"}}),
+        );
+        // second delta omits index (the bug surface)
+        accumulate_tool_call_delta(
+            &mut state,
+            &serde_json::json!({"id":"call_b","function":{"name":"write_file","arguments":"\"x\""}}),
+        );
+        // only idx 0 present; second delta dropped, not collided
+        assert_eq!(state.len(), 1, "index-less delta must not create an entry");
+        let buf = &state[&0];
+        assert_eq!(buf.id, "call_a");
+        assert_eq!(buf.name, "read_file");
+        assert_eq!(buf.args_buf, "{\"path\":");
+    }
+
+    #[test]
+    fn accumulate_tool_call_delta_merges_same_index_fragments() {
+        // Regression guard: the normal OpenAI contract — many deltas
+        // sharing one `index` — still merges into one buffer.
+        let mut state: HashMap<u32, ToolCallBuf> = HashMap::new();
+        accumulate_tool_call_delta(
+            &mut state,
+            &serde_json::json!({"index":1,"function":{"name":"grep","arguments":"{\"a\":"}}),
+        );
+        accumulate_tool_call_delta(
+            &mut state,
+            &serde_json::json!({"index":1,"id":"call_1","function":{"arguments":"\"b\"}"}}),
+        );
+        let buf = &state[&1];
+        assert_eq!(buf.id, "call_1");
+        assert_eq!(buf.name, "grep");
+        assert_eq!(buf.args_buf, "{\"a\":\"b\"}");
     }
 
     // ---- wire_block_to_chat_event path coverage ----

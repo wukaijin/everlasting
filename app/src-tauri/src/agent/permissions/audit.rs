@@ -18,7 +18,8 @@ use super::types::PermissionContext;
 // ---------------------------------------------------------------------------
 
 /// Audit event kinds. Serialized lowercase (matches DB column).
-/// 10 variants — see PRD `## A2 后端` "审计 `kind` 枚举" section.
+/// 17 variants — see the module-level docstring above (variant count
+/// grouped by domain) + PRD `## A2 后端` "审计 `kind` 枚举" section.
 ///
 /// `ModeChanged` / `YoloEntered` / `YoloExited` are written
 /// directly by the `set_session_mode` Tauri command via
