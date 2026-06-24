@@ -502,3 +502,38 @@ DEBT.md 3 条 P2 open 债一次性批量收口,0 行为变更,7 文件 landed(5 
 ### Next Steps
 
 - 下一任务候选:DEBT 8 条全 P3(文档/一致性),或 ROADMAP 第三档(D2 全文搜索 / C2 循环检测 / C6 截断统一 / B1 图片 / B9 生成式 UI / L3 并行 subagent)。
+
+
+## Session 69: L3a subagent 并发（只读 worker fan-out）
+
+**Date**: 2026-06-25
+**Task**: L3a subagent 并发（只读 worker fan-out）
+**Branch**: `main`
+
+### Summary
+
+L3a 收尾:PR1 后端纯批 FuturesUnordered 并发(复用 L2 模板)+ force_readonly 运行时剥写 + env DELEGATION_MAX_CONCURRENT_CHILDREN 默认3硬拒;3 竞态点(permission:ask is_worker Deny / token 原子增量 / cancel child_token fan-out)只读范围消解,零并发控制代码;864 测试绿;spec(tool-contract 7节 Scenario + agent-loop Pattern)更新;前端 store 按 runId 天然 N concurrent(PR2 跳过);2 份 research + Hermes 源码核实(默认同步/并发3/硬拒/depth1,纠正 scheduling-survey 2 处事实错误);验证发现 worker 三层不能联网拆独立 task 06-25-subagent-web-access
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8e28e9` | (see git log) |
+| `d77e7fc` | (see git log) |
+| `0ce90b7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
