@@ -612,3 +612,52 @@ L3c subagent 联网落地。基线验证推翻种子 PRD 第 3 层假设: worker
 
 - None - task complete
 - 剩余 4 条 DEBT: B-007/C-008 (决策类, 需路线图评估) + FrontSubagent-001/002 (前端重构, 拆独立 task)
+
+
+## Session 72: 前端重构清债 FrontSubagent-001/002 (ToolCallHeader + useTranscriptPairing)
+
+**Date**: 2026-06-25
+**Task**: 06-25-debt-frontsubagent-refactor (archived → archive/2026-06/)
+**Branch**: `main`
+
+### Summary
+
+清 DEBT 前端重构两条 P3 债, 4→2 open。**PR1 (002)** 抽 `useTranscriptPairing()` composable 封装 pairTranscript/pairSections 第三参 `pendingFirstSeenAt` Map —— 闭包持 plain Map 返回 `{pairEntries, pairSections, reset}`, SubagentDrawer 改两参签名 + `reset()`。plain Map 是 load-bearing 约束 (reactive Map 会让 `toolEntries` computed 在 pairing 内部 `.set`/`.delete` 触发自身依赖 → 递归 re-invalidation → 100ms nowTick × 大量 sections → webview OOM 崩溃, 已踩过并修复), composable 内部保留 plain Map。纯函数 pairTranscript/pairSections 保留 (测试 30+ 处 + raw-list consumer)。**PR2 (001)** 抽 `ToolCallHeader.vue` 共享组件 —— redesign PR1-6 收尾后 PR4「主 panel ToolCallCard 本体 0 改动」约束解除, 推翻 chat.md:79 旧决策; ToolCallCard / DrawerToolCallCard / DrawerPermissionAskCard 三处 header markup+CSS 合并单一来源 (净 -164 行)。error/running 颜色改 `isError`/`isRunning` prop 驱动 (不再靠 card root 后代选择器); ToolCallCard diff-btn 走 `#status-extra` slot (slot 内容带父 scope id, `.tool-card__diff-btn` CSS 留 ToolCallCard scoped 仍命中); permission interactive 用 `statusVariant="accent"` prop; header-body 4px gap 用 `:deep(.tool-call-header)` 注入。DrawerToolCallCard.test.ts 14 处 class 名迁移 (`drawer-tool-card__*` → `tool-call-header__*`), card 变体/accent/body/store-lock/tokens 断言不变。
+
+stale task 清理: session current task 原指向 `06-24-debt-remove-3-closed-rules` (目录不存在, session-fallback 残留), 本 task `task.py start` 覆盖。
+
+### Main Changes
+
+- `transcriptPairing.ts`: + `useTranscriptPairing()` composable (闭包 plain Map + reset) — RULE-FrontSubagent-002
+- `SubagentDrawer.vue`: 删 module-level Map, 改 `{pairToolSections, resetPairing} = useTranscriptPairing()`, computed 两参签名, watch openRunId `resetPairing()` — RULE-FrontSubagent-002
+- `ToolCallHeader.vue` (新, ~210 行): 共享 header (props iconName/name/filePath?/suffix?/statusText/statusIconName?/durationLabel?/isError?/isRunning?/statusVariant? + `#status-extra` slot), 内置全 header CSS 单一来源 — RULE-FrontSubagent-001
+- `ToolCallCard.vue`: header 换 ToolCallHeader + diff-btn 走 slot, 删 ~95 行 header CSS (保留容器/Approval/diff popover/dispatch preview)
+- `DrawerToolCallCard.vue`: header 换 ToolCallHeader (无 slot), 删 ~95 行 header CSS (保留容器 + error/running 变体)
+- `DrawerPermissionAskCard.vue`: header 换 ToolCallHeader (suffix + statusVariant accent), 删 ~50 行 header CSS (保留容器 + interactive 变体, `:deep` margin 4px)
+- `DrawerToolCallCard.test.ts`: 14 处 class 名迁移 + RULE 说明注释
+- `transcriptPairing.test.ts`: +5 composable 单测 (跨调用 timeout 推进 / reset 清空 / 配对后 Map 清 / 实例隔离 / pairEntries legacy)
+- `chat.md`: 推翻 :79「不抽 ToolCallHeader」决策 + 文件清单加 ToolCallHeader + pairSections Convention 加 composable 说明
+- `DEBT.md`: 删 FrontSubagent-001/002, P3 4→2
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `47c0ca9` | refactor(chat): extract ToolCallHeader + useTranscriptPairing composable |
+| `61bb742` | docs(debt): close RULE-FrontSubagent-001/002 (4->2 open) |
+| (auto) `3a5fb5d` | chore(task): archive 06-25-debt-frontsubagent-refactor |
+
+### Testing
+
+- [OK] pnpm vitest run: 29 files / 523 tests passed (+5 composable, 原 518)
+- [OK] vue-tsc --noEmit: 0 error
+- [OK] DrawerToolCallCard 28 tests (class 迁移后全绿) / ToolCallCard 17 / SubagentDrawer 50
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+- 剩余 2 条 DEBT: B-007 (Background Mode 空壳) / C-008 (AGENTS.md 物理顺序) —— 均决策类, 需路线图评估保留/移除
