@@ -30,6 +30,25 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-25 — L3a subagent 并发(只读 worker fan-out):竞态消解 + 范围决策 + worker 联网拆分
+
+**Context**: L3a 把 B6 单 worker 串行 dispatch 升级为并发 fan-out。拆自原 L3 子项 1(2026-06-24),L3b(worktree 隔离)另行。Plan 阶段先做行业调研(2 份 research 文档,源码核实 Hermes `delegate_task` 默认同步阻塞/并发3/硬拒/depth1,纠正 scheduling-survey 2 处事实错误:"不阻塞"应为默认阻塞、"30"应为默认3)。
+
+**决策**:
+1. **范围:只读 worker 并发**(researcher/探索类),worktree 留 L3b —— 带写 worker 并发需隔离,不在 L3a。
+2. **并发模型:父 turn 阻塞 + 内部 fan-out**(`FuturesUnordered` 复用 L2 只读 batch 模板),非"父 agent 不阻塞"(那是 daemon 化,L3b+)。
+3. **只读保证 = 运行时强制剥写**(`force_readonly` 保留 read/grep/glob/list_dir),不靠语义层限类型 —— 与 `STRUCTURALLY_DISABLED` "不信任定义"哲学一致,且为 L3b(去剥写+worktree)留扩展;安全底线仍由 is_worker Deny 兜底。
+4. **竞态三处只读范围消解**(auto-context 查源码裁定,核心洞察):permission:ask(worker is_worker=true → Tier4 ask 塌缩 Deny,只读工具低 Tier)/ token(`add_token_usage` `col=COALESCE(col,0)+?` 原子增量,SQLite 单写锁)/ cancellations(`parent_token.child_token()` × N + 各 worker_rid 注册,父 cancel 一次 fan-out 全部)—— **零并发控制代码**,并发安全"免费"。
+5. **上限 3 硬拒**(env `DELEGATION_MAX_CONCURRENT_CHILDREN`,对齐 Hermes),不截断不排队。
+6. **MVP 只优化纯 dispatch 批**(≥2 全 dispatch),混批走原 serial。
+7. `run_subagent` 加 `force_readonly: bool` 参数(非 wrapper) —— 比 copy ~450 行函数更符合 code-reuse(避免 faithful-port drift hazard),serial 传 false 保护 B6(回归测试 `l3a_single_dispatch_runs_serial_path_unchanged` pin)。
+
+**Consequences**: 实现大幅收窄(serial path 加并发分支 + 一个 `filter_tools_readonly` 函数,`run_subagent` 体不动);864 测试绿(9 l3a 集成 + 2 单测);前端 store 按 runId 天然支持 N concurrent(PR2 实质满足,无需改造)。
+
+**验证发现 + 拆分**: 2026-06-25 手动验证(并发 3 researcher 搜外部项目更新)暴露 **worker 三层不能联网**(researcher 设计无 web_fetch + `force_readonly` 剥 web_fetch + worker is_worker 对 web_fetch 无授权→ask→Deny)。"subagent 联网"是独立工具/权限配置域,**非 L3a bug**(L3a 正确实现"本地只读并发",范围决策=只读不含联网),拆 task `06-25-subagent-web-access`。
+
+**关联**: spec `.trellis/spec/backend/tool-contract.md` §"Concurrent dispatch_subagent batch"(7节含 race dissolution Wrong/Correct) + `agent-loop-architecture.md` §"Pattern: Concurrent readonly dispatch"(race dissolution 表 + when/when-not);PRD `.trellis/tasks/06-24-l3a-readonly-concurrent/`;research `docs/research/subagent-{communication,scheduling-communication}-survey.md`。
+
 ### 2026-06-19 — RULE-A-012 reqwest streaming 超时改 per-chunk `read_timeout` + 流错误补 tracing(响应 2026-06-18 17:56 静默中断事件)
 
 **Context**: 2026-06-18 17:56:52Z 一条 session(`request_id=mz8s3hqwx6rmqjswgte`,`messages.seq=37`)的 thinking 流在 60.4s 时被静默切断,前端只看到 `[生成出错中断]` toast,Rust 日志 **零** WARN/ERROR,grep 不到任何线索,首次靠 DB 反查(`text="[生成出错中断]"` + content thinking 在"尝试 1"中途被截 + seq=36→37 间隔 = 60.403s)才定位到 `reqwest::Client::builder().timeout(Duration::from_secs(60))` 触发。两条独立但同源的根因:
