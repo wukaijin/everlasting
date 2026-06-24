@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "RULE-D-007 改 OpenAI tool_call index 解析，需对齐 OpenAI wire shape 契约"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "RULE-D-007 新增 openai 单测 + RULE-FrontTest-001 改前端 test mock，对齐测试模型约束"}

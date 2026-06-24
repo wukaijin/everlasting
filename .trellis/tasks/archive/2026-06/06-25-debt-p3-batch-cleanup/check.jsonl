@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "校验 RULE-D-007 OpenAI 解析改动不破坏 wire 契约"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "校验 RULE-B-006 audit docstring 与 permission-layer AuditKind 契约一致"}
