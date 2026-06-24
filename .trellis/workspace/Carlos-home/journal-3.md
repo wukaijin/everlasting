@@ -570,3 +570,45 @@ L3c subagent 联网落地。基线验证推翻种子 PRD 第 3 层假设: worker
 ### Next Steps
 
 - None - task complete
+
+
+## Session 71: 清理 DEBT P3 批次 (docstring + OpenAI tool_call index + test unhandled rejection)
+
+**Date**: 2026-06-25
+**Task**: 06-25-debt-p3-batch-cleanup (archived → archive/2026-06/)
+**Branch**: `main`
+
+### Summary
+
+清 DEBT P3 批次, 8→4 open。3 条带真实风险的 finding 修复 (B-006 docstring 自相矛盾 / D-007 OpenAI tool_call index 缺失错乱覆盖 / FrontTest-001 test 4 个 unhandled rejection), 1 条 (D-008 parse_anthropic_usage 全零判 None) 保留现状并从 DEBT 移除——注释已充分辩护, DEBT 的 Fix 方向反而改语义。D-007 实施时调整策略: 抽 `accumulate_tool_call_delta()` 纯函数替代 send() 内 7 层嵌套循环, 既修 bug 又可单测 (无需搭 mock HTTP 基础设施) + 降嵌套到 4 层, 优于 PRD 原计划的流式单测。FrontTest-001 用文件级 beforeAll stub (vitest 默认 unstubGlobals:false 一次覆盖) 优于 PRD 原计划的 beforeEach。
+
+### Main Changes
+
+- `audit.rs:21` docstring "10"→"17" variants (与模块头 :4 一致; 17 = Tool 5 + Permission 3 + Mode 3 + Message 2 + Worker 4) — RULE-B-006
+- `openai.rs`: 抽 `accumulate_tool_call_delta(state, tc)` 纯函数; index 缺失 `let-else` warn+skip 替代 `unwrap_or(0)` (后者让两个无 index tool_call 落 key 0 互相覆盖); +2 单测 (skip 行为 + same-index merge 回归) — RULE-D-007
+- `streamController.test.ts`: 文件级 `beforeAll` stub `__TAURI_INTERNALS__` 消 4 unhandled rejection (reloadAfterFinalize fire-and-forget invoke) — RULE-FrontTest-001
+- `DEBT.md`: 删 4 条 (B-006/D-007/D-008/FrontTest-001), 优先级分布表 8→4
+- `anthropic.rs:762` 全零判 None 保留现状 (D-008, 注释 :763-771 即 rationale)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9d2a27` | fix(debt): close RULE-B-006/D-007/FrontTest-001 P3 batch |
+| `2a89a3c` | docs(debt): close B-006/D-007/D-008/FrontTest-001 (8->4 open) |
+| (auto) | chore(task): archive 06-25-debt-p3-batch-cleanup |
+
+### Testing
+
+- [OK] cargo test --lib: 866 passed (864 + 新增 2), 0 warning
+- [OK] pnpm vitest run: 29 files / 518 tests passed, 全量 Errors 行消失 (原 `Errors 4 errors`)
+- [OK] vue-tsc --noEmit: 类型通过 (无输出)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+- 剩余 4 条 DEBT: B-007/C-008 (决策类, 需路线图评估) + FrontSubagent-001/002 (前端重构, 拆独立 task)
