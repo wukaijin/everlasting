@@ -785,3 +785,37 @@ F1 per-project last session 记忆(localStorage 键 everlasting.lastSession_{pro
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: C2 agent loop ⑬ loop detection
+
+**Date**: 2026-06-24
+**Task**: C2 agent loop ⑬ loop detection
+**Branch**: `main`
+
+### Summary
+
+C2 agent loop ⑬ 循环检测第三档收口。架构预留关卡落地：分级触发(L1 精确签名 N=3 + L2 Jaccard 0.85 软提示)取代原文单一 0.9 阈值;命中仅 hint 注入 result_blocks[0],不打断 loop,MAX_TURNS=200 兜底。edit_file 签名含 old_string + token 纯 Rust split_whitespace 独立(两处对 research 的偏离已记 PRD/ADR/ARCHITECTURE,逻辑反向:不含 old_string 反让正当多块编辑误判 loop)。新模块 agent/loop_detection.rs(纯函数 detect/LoopVerdict/signature_of/tokenize_for_jaccard/jaccard)+ 31 单测;chat_loop ⑬ 关卡接入(turn 循环外 VecDeque 窗口跨 turn 累积,worker nested run_chat_loop 自动继承);tests_agent_loop.rs 加 2 集成测试(HardLoop hint 注入 turn 4 messages 可见 / 非循环不误报)。cargo test --lib 855 passed 0 failed 0 warning;trellis-check PASS L1-L5 跨层无回归(C3 compaction/wire/B6 worker/cache/B12/L1a 全保持)。commit: feat(agent) a35b157 + docs(roadmap+arch+impl) ef3477d。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a35b157` | (see git log) |
+| `ef3477d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-06-16
+- **Total Sessions**: 18
+- **Last Active**: 2026-06-24
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~787 | Active |
+| `journal-1.md` | ~821 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-06-24 | C2 agent loop ⑬ loop detection | `a35b157`, `ef3477d` | `main` |
 | 17 | 2026-06-16 | 内联审批卡片改造 (06-16) | `b3c6961` | `main` |
 | 16 | 2026-06-15 | P1 RULE-A-003 + RULE-A-004: persist emit Error + audit cancel order | `d8ee7d9`, `220185a` | `main` |
 | 15 | 2026-06-12 | C3 Context 压缩 + Token 预算管理 (P2) | `5e7f948` | `main` |
