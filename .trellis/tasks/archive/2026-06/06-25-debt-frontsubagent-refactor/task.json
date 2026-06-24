@@ -1,0 +1,32 @@
+{
+  "id": "06-25-debt-frontsubagent-refactor",
+  "name": "06-25-debt-frontsubagent-refactor",
+  "title": "前端重构清债 — FrontSubagent-001 (tool-card header CSS 重复) + FrontSubagent-002 (pairing Map 隐式状态)",
+  "description": "抽 ToolCallHeader 共享组件消 tool-card header CSS 三处 1:1 重复 + useTranscriptPairing composable 消 pairSections/pairTranscript 第三参 Map 隐式状态。redesign 收尾后约束解除,推翻 chat.md:79 旧决策。",
+  "status": "completed",
+  "dev_type": "frontend",
+  "scope": null,
+  "package": null,
+  "priority": "P3",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-06-25",
+  "completedAt": "2026-06-25",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "app/src/utils/transcriptPairing.ts",
+    "app/src/components/chat/SubagentDrawer.vue",
+    "app/src/components/chat/ToolCallCard.vue",
+    "app/src/components/chat/DrawerToolCallCard.vue",
+    "app/src/components/chat/DrawerPermissionAskCard.vue"
+  ],
+  "notes": "PR1=002 composable (低风险), PR2=001 ToolCallHeader (中风险, 视觉验证). stale task 06-24-debt-remove-3-closed-rules 目录不存在, start 本 task 覆盖 session active。",
+  "meta": {}
+}
