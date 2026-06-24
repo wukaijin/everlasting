@@ -99,7 +99,8 @@
 | ~~A7~~ | ~~RDP 双屏 position bug 修复~~ | ✅ 06-14 落地(根因 Wayland setPosition 限制),见 §1.2 |
 | ~~L2~~ | ~单 turn 多 tool 并发执行(只读 batch)~ | ✅ 06-19 落地(`is_parallel_eligible` + FuturesUnordered,并发集合排除 web_fetch + 写类;path-outside-root edge case 记 RULE-A-013),见 §1.2 |
 | ~~L1~~ | ~后台 shell + 完成通知(仿 opencode-pty `<pty_exited>`)~ | ✅ 06-19 落地(L1a:`BackgroundShellRegistry` trait + 3 tool + APPEND 注入,复用 RULE-E-002/E-001;PTY 留 L1b),见 §1.2 |
-| L3   | 并行 subagent + worktree 隔离(仿 Hermes `delegate_task`) | **依赖 B6 subagent 落地**,缓做;架构预留(本项目 `git/worktree.rs` 已就位);旗舰级 harness 学习项 |
+| L3a  | subagent 并发 + 不阻塞 | 拆自原 L3 子项 1(2026-06-24);**依赖 B6 落地**;现有同步 + 单 worker 串行架构(`chat_loop.rs:1697-1702` self-ack "MVP runs dispatches serially... parallel fan-out is v2 / L3")非终态;**Plan 阶段先做行业 subagent 通讯机制调研**(CC Task / Hermes `delegate_task` / OpenHands subagent / LangGraph `Send` 等),出 research 文档 + 推荐方案后再设计并发模型 |
+| L3b  | worktree 隔离 + 仿 Hermes `delegate_task` | 拆自原 L3 子项 2(2026-06-24);依赖 L3a;`git/worktree.rs` 已就位;旗舰级 harness 学习项 |
 
 ### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项)
 
