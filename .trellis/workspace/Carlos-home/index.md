@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 70
-- **Last Active**: 2026-06-25
+- **Total Sessions**: 71
+- **Last Active**: 2026-06-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~572 | Active |
+| `journal-3.md` | ~697 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 71 | 2026-06-26 | L3d subagent frontmatter loader 实施 | `bb7dfe6`, `a9f1f63` | `main` |
 | 70 | 2026-06-25 | L3c subagent web access (worker web_fetch) | `0b0ecee` | `main` |
 | 69 | 2026-06-25 | L3a subagent 并发（只读 worker fan-out） | `b8e28e9`, `d77e7fc`, `0ce90b7` | `main` |
 | 68 | 2026-06-24 | Session 68: 同步代码地图 + 文档引用(10 个 split 漂移修复) | `e5b5bec`, `d79917d`, `55f3be9` | `main` |

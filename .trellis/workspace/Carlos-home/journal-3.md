@@ -661,3 +661,37 @@ stale task 清理: session current task 原指向 `06-24-debt-remove-3-closed-ru
 
 - None - task complete
 - 剩余 2 条 DEBT: B-007 (Background Mode 空壳) / C-008 (AGENTS.md 物理顺序) —— 均决策类, 需路线图评估保留/移除
+
+
+## Session 71: L3d subagent frontmatter loader 实施
+
+**Date**: 2026-06-26
+**Task**: L3d subagent frontmatter loader 实施
+**Branch**: `main`
+
+### Summary
+
+三 PR 落地:PR1 SubagentDef owned 化(纯重构)、PR2 loader.rs+SubagentCache(B3 同款 mtime fence,project>user>builtin 优先级,tools 可选继承 builtin)、PR3 dispatch_subagent 从 builtin_tools() 启动快照拆出改每 turn definition_with_cache 动态拼 enum+source tag。4 决策:砍 reload 用 mtime fence / tools 可选继承 / SubagentDef 全 owned / model warn-ignored。3 修订:R1 user 路径 ~/.config/everlasting/agents、R2 复用 Skill inline-array parser(非 B3)、R3 删 YAML fail-fast 伪命题。PR3 check 抓修 1 个 BLOCKING 安全洞(worker 防嵌套靠 effective_is_worker gate,filter 退为 defense-in-depth)。cargo test --lib 909 绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bb7dfe6` | (see git log) |
+| `a9f1f63` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
