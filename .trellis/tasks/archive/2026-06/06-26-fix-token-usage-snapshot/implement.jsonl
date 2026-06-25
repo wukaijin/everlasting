@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "A4 token usage 跨层契约，核心改写对象(snapshot语义+context_input_tokens字段)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "skip_persist gate 守卫模式(:578/:1395/:1636) + RULE-A-015 reversal(:61-72/:644-780 + :940 folds_into_parent测试)"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "RULE-A-015段(:210-216) + add_token_usage_streaming dead-code(:20)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB migration 复用 add_session_column_if_missing 模式"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "Anthropic vs OpenAI usage 归一化(context_input_tokens 跨provider填值)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 改造模式(reactive Map + computed + IPC)"}
