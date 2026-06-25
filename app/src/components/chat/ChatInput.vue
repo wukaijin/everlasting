@@ -153,7 +153,10 @@ const currentModelContextWindow = computed<number>(() => {
 const usageLevel = computed<TokenUsageLevel | null>(() => {
   const u = chatStore.currentSessionTokenUsage;
   if (!u) return null;
-  const pct = u.input_tokens / currentModelContextWindow.value;
+  // 2026-06-26 snapshot fix: use the cross-provider-normalized
+  // `context_input_tokens` (Anthropic: input+cc+cr; OpenAI:
+  // prompt_tokens) as the "% of context_window" numerator.
+  const pct = u.context_input_tokens / currentModelContextWindow.value;
   return tokenUsageLevel(pct);
 });
 

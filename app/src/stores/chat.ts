@@ -145,25 +145,17 @@ export const useChatStore = defineStore("chat", () => {
     },
   );
 
-  /** Add a per-turn usage report to the running session total.
-   *  Called by `streamController.handleChatEvent` on every
-   *  `done` event that carries a `usage` payload. Add-or-init
-   *  semantics: a first call seeds from 0; subsequent calls
-   *  add field-wise. */
-  function accumulateTokenUsage(
+  /** 2026-06-26 (token-usage snapshot fix): OVERWRITE the
+   *  per-session last-turn usage snapshot with this turn's
+   *  `usage`. Called by `streamController.handleChatEvent` on
+   *  every `done` event that carries a `usage` payload. Snapshot
+   *  semantics: the value reflects the LLM's LAST request (not a
+   *  running total) — matching Anthropic's statusline convention. */
+  function setLastTurnUsage(
     sessionId: string,
     usage: SessionTokenUsage,
   ): void {
-    const existing = tokenUsageBySession.get(sessionId);
-    if (!existing) {
-      tokenUsageBySession.set(sessionId, { ...usage });
-    } else {
-      existing.input_tokens += usage.input_tokens;
-      existing.output_tokens += usage.output_tokens;
-      existing.cache_creation_input_tokens +=
-        usage.cache_creation_input_tokens;
-      existing.cache_read_input_tokens += usage.cache_read_input_tokens;
-    }
+    tokenUsageBySession.set(sessionId, { ...usage });
   }
 
   // -----------------------------------------------------------------------
@@ -386,20 +378,21 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     await loadSessions(newId);
-    // A4: seed the per-session token usage map from the
-    // SessionSummary so the ChatInput hint area renders
-    // the right number on a fresh page reload (without this,
-    // the user would see "—" until they sent another turn).
+    // 2026-06-26 snapshot fix: seed the per-session token usage
+    // map from the SessionSummary's LAST-TURN snapshot (NOT the
+    // legacy cumulative `*_total`). The判定 field is
+    // `last_context_input_tokens` (the cross-provider-normalized
+    // numerator) — if it's NULL, the session has no snapshot
+    // (pre-snapshot legacy row or fresh session before first
+    // turn) and the ChatInput hint renders "—".
     for (const s of sessions.value) {
-      if (
-        s.input_tokens_total !== null &&
-        s.output_tokens_total !== null
-      ) {
+      if (s.last_context_input_tokens !== null) {
         tokenUsageBySession.set(s.id, {
-          input_tokens: s.input_tokens_total,
-          output_tokens: s.output_tokens_total,
-          cache_creation_input_tokens: s.cache_creation_total ?? 0,
-          cache_read_input_tokens: s.cache_read_total ?? 0,
+          input_tokens: s.last_input_tokens ?? 0,
+          output_tokens: s.last_output_tokens ?? 0,
+          cache_creation_input_tokens: s.last_cache_creation ?? 0,
+          cache_read_input_tokens: s.last_cache_read ?? 0,
+          context_input_tokens: s.last_context_input_tokens,
         });
       }
     }
@@ -1356,9 +1349,11 @@ export const useChatStore = defineStore("chat", () => {
     getDiff,
     getFileDiff,
     invalidateDiff,
-    // A4: hook called by streamController.handleChatEvent on
-    // every `done` event that carries a usage payload.
-    accumulateTokenUsage,
+    // 2026-06-26 snapshot fix: hook called by
+    // streamController.handleChatEvent on every `done` event
+    // that carries a usage payload. OVERWRITES the per-session
+    // last-turn snapshot.
+    setLastTurnUsage,
     // F5: hook called by streamController.handleChatEvent on
     // every `done` event that resolved a `totalMs`. Adds the
     // per-turn `totalMs` to the running session total.

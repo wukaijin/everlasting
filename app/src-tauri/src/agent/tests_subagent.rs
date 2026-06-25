@@ -1269,16 +1269,16 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
     );
 }
 
-/// Streaming token usage (R5 / AC2): the worker's per-turn
-/// `TokenUsage` folds into the parent session's
-/// `input_tokens_total` / `output_tokens_total` in real time.
-/// This is the PR2 decoupled `add_token_usage` path — the
-/// worker reuses parent_session_id + the
-/// `if !skip_persist` gate is removed from the `Done` handler
-/// in this PR, so the worker's `add_token_usage` calls
-/// accumulate into the parent's running total.
+/// Worker token isolation (2026-06-26 reversal of RULE-A-015/PR2a):
+/// the worker's per-turn `TokenUsage` does NOT fold into the parent
+/// session's `last_*` snapshot columns. The snapshot fix moved
+/// `update_last_turn_usage` BACK inside the `!skip_persist` gate
+/// at `chat_loop.rs`, so worker turns (which run with
+/// `skip_persist=true`) don't touch the parent's snapshot. Worker
+/// token usage stays isolated in `subagent_runs.token_usage_json`
+/// (written at worker exit by `dispatch.rs::run_subagent`).
 #[tokio::test]
-async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
+async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
     let h = make_harness().await;
     let emitter = Arc::new(MockEmitter::new());
     let mock = Arc::new(MockProvider::new(vec![
@@ -1299,10 +1299,13 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
                     output_tokens: 5,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: 10,
                 }),
             }),
         ]),
-        // Worker turn 1: returns a non-zero usage.
+        // Worker turn 1: returns a non-zero usage. This MUST NOT
+        // land in the parent's `last_*` snapshot (skip_persist=true
+        // on the worker path).
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
             Ok(ChatEvent::Delta { text: "ok".into() }),
@@ -1313,10 +1316,12 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
                     output_tokens: 50,
                     cache_creation_input_tokens: 7,
                     cache_read_input_tokens: 11,
+                    context_input_tokens: 118,
                 }),
             }),
         ]),
-        // Parent turn 2: also non-zero.
+        // Parent turn 2: this is the LAST parent turn — its usage
+        // is what the parent's `last_*` snapshot should carry.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
             Ok(ChatEvent::Delta { text: "ack".into() }),
@@ -1327,6 +1332,7 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
                     output_tokens: 8,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: 20,
                 }),
             }),
         ]),
@@ -1378,35 +1384,51 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
     )
     .await;
 
-    // The parent's session should have accumulated:
-    //   parent_t1: in=10, out=5
-    //   worker_t1: in=100, out=50, cc=7, cr=11 (worker reuses parent session)
-    //   parent_t2: in=20, out=8
-    // Total: in=130, out=63, cc=7, cr=11
+    // The parent's session snapshot should reflect ONLY the last
+    // PARENT turn (parent_t2: in=20, out=8). The worker's turn
+    // (in=100, cc=7, cr=11) MUST NOT appear here — worker token
+    // usage stays isolated in `subagent_runs.token_usage_json`.
     let loaded = db::load_session(&h.db, &h.session_id)
         .await
         .expect("load_session")
         .expect("session exists");
     let s = &loaded.session;
     assert_eq!(
-        s.input_tokens_total,
-        Some(130),
-        "parent + worker input tokens should accumulate"
+        s.last_context_input_tokens,
+        Some(20),
+        "parent snapshot should reflect only parent_t2 (the last parent turn), not the worker"
+    );
+    assert_eq!(s.last_input_tokens, Some(20));
+    assert_eq!(s.last_output_tokens, Some(8));
+    assert_eq!(s.last_cache_creation, Some(0));
+    assert_eq!(s.last_cache_read, Some(0));
+
+    // The worker's usage MUST be in subagent_runs.token_usage_json.
+    let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+        .await
+        .expect("list_runs_by_session");
+    assert_eq!(runs.len(), 1, "exactly 1 worker run persisted");
+    let run = &runs[0];
+    let usage_json = run
+        .token_usage_json
+        .as_ref()
+        .expect("token_usage_json is populated at worker exit");
+    let v: serde_json::Value = serde_json::from_str(usage_json).expect("valid JSON");
+    assert_eq!(v.get("input_tokens").and_then(|x| x.as_i64()), Some(100));
+    assert_eq!(v.get("output_tokens").and_then(|x| x.as_i64()), Some(50));
+    assert_eq!(
+        v.get("cache_creation_input_tokens").and_then(|x| x.as_i64()),
+        Some(7)
     );
     assert_eq!(
-        s.output_tokens_total,
-        Some(63),
-        "parent + worker output tokens should accumulate"
+        v.get("cache_read_input_tokens").and_then(|x| x.as_i64()),
+        Some(11)
     );
+    // The worker's `context_input_tokens` (input+cc+cr=118) is
+    // serialized through `cumulative_usage` → `token_usage_json`.
     assert_eq!(
-        s.cache_creation_total,
-        Some(7),
-        "worker cache_creation should land in parent"
-    );
-    assert_eq!(
-        s.cache_read_total,
-        Some(11),
-        "worker cache_read should land in parent"
+        v.get("context_input_tokens").and_then(|x| x.as_i64()),
+        Some(118)
     );
 }
 
@@ -2595,12 +2617,14 @@ async fn l3a_concurrent_cancel_propagates_to_all_workers() {
     assert_eq!(cancelled_count, 3, "all 3 runs cancelled");
 }
 
-/// L3a AC5: concurrent workers' token usage folds into the parent
-/// session's `sessions.*_total`. All 3 workers carry the same
-/// non-zero usage (so the test doesn't depend on which worker got
-/// which slot). The total = parent_t1 + 3×worker + parent_t2.
+/// L3a worker token isolation (2026-06-26 reversal of RULE-A-015/PR2a):
+/// 3 concurrent workers' token usage does NOT fold into the parent
+/// session's `last_*` snapshot. The snapshot fix gates
+/// `update_last_turn_usage` back under `!skip_persist`, so worker
+/// turns don't touch the parent's snapshot. Worker usage stays in
+/// each worker's `subagent_runs.token_usage_json`.
 #[tokio::test(flavor = "multi_thread")]
-async fn l3a_concurrent_token_usage_folds_into_parent() {
+async fn l3a_concurrent_token_usage_does_not_fold_into_parent() {
     let h = make_harness().await;
     let emitter = Arc::new(MockEmitter::new());
     let worker_usage = TokenUsage {
@@ -2608,6 +2632,7 @@ async fn l3a_concurrent_token_usage_folds_into_parent() {
         output_tokens: 25,
         cache_creation_input_tokens: 3,
         cache_read_input_tokens: 7,
+        context_input_tokens: 60,
     };
     let mock = Arc::new(MockProvider::new(vec![
         // Parent turn 1: 3 dispatches.
@@ -2641,6 +2666,7 @@ async fn l3a_concurrent_token_usage_folds_into_parent() {
                     output_tokens: 5,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: 10,
                 }),
             }),
         ]),
@@ -2669,7 +2695,8 @@ async fn l3a_concurrent_token_usage_folds_into_parent() {
                 usage: Some(worker_usage),
             }),
         ]),
-        // Parent turn 2.
+        // Parent turn 2 — the LAST parent turn. Its usage is what
+        // the parent's `last_*` snapshot should carry.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
             Ok(ChatEvent::Delta { text: "ack".into() }),
@@ -2680,6 +2707,7 @@ async fn l3a_concurrent_token_usage_folds_into_parent() {
                     output_tokens: 8,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: 20,
                 }),
             }),
         ]),
@@ -2695,42 +2723,41 @@ async fn l3a_concurrent_token_usage_folds_into_parent() {
     )
     .await;
 
-    // Expected totals (col = COALESCE(col, 0) + ? atomic increments;
-    // SQLite serializes writes so no update is lost even under
-    // concurrency):
-    //   parent_t1: in=10, out=5
-    //   3 workers: in=3*50=150, out=3*25=75, cc=3*3=9, cr=3*7=21
-    //   parent_t2: in=20, out=8
-    //   total:    in=180, out=88, cc=9, cr=21
+    // Parent's snapshot should reflect ONLY parent_t2 (the last
+    // parent turn). The 3 concurrent worker turns (each in=50)
+    // MUST NOT land here — worker isolation per the 2026-06-26
+    // snapshot fix.
     let loaded = db::load_session(&h.db, &h.session_id)
         .await
         .expect("load_session")
         .expect("session exists");
     let s = &loaded.session;
     assert_eq!(
-        s.input_tokens_total,
-        Some(180),
-        "3 concurrent workers + 2 parent turns input tokens, got: {:?}",
-        s.input_tokens_total
+        s.last_context_input_tokens,
+        Some(20),
+        "parent snapshot reflects only the last parent turn, got: {:?}",
+        s.last_context_input_tokens
     );
-    assert_eq!(
-        s.output_tokens_total,
-        Some(88),
-        "output tokens, got: {:?}",
-        s.output_tokens_total
-    );
-    assert_eq!(
-        s.cache_creation_total,
-        Some(9),
-        "cache_creation, got: {:?}",
-        s.cache_creation_total
-    );
-    assert_eq!(
-        s.cache_read_total,
-        Some(21),
-        "cache_read, got: {:?}",
-        s.cache_read_total
-    );
+    assert_eq!(s.last_input_tokens, Some(20));
+    assert_eq!(s.last_output_tokens, Some(8));
+    assert_eq!(s.last_cache_creation, Some(0));
+    assert_eq!(s.last_cache_read, Some(0));
+
+    // Each of the 3 worker runs should carry its own usage in
+    // `subagent_runs.token_usage_json`.
+    let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
+        .await
+        .expect("list_runs_by_session");
+    assert_eq!(runs.len(), 3, "3 worker runs persisted");
+    for run in &runs {
+        let usage_json = run
+            .token_usage_json
+            .as_ref()
+            .expect("token_usage_json populated");
+        let v: serde_json::Value = serde_json::from_str(usage_json).expect("valid JSON");
+        assert_eq!(v.get("input_tokens").and_then(|x| x.as_i64()), Some(50));
+        assert_eq!(v.get("output_tokens").and_then(|x| x.as_i64()), Some(25));
+    }
 }
 
 /// L3a AC7 + single-dispatch regression: a mixed batch

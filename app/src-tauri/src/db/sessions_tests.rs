@@ -26,10 +26,10 @@ use super::{
     projects::create_project,
     providers::create_provider,
     sessions::{
-        add_token_usage, create_session, delete_messages_by_session, delete_session,
+        create_session, delete_messages_by_session, delete_session,
         find_message_id_by_seq, insert_system_event, list_sessions, load_session, persist_turn,
-        record_tool_duration, set_worktree_state, touch_session, update_message_latency,
-        update_session_cwd, update_session_model_id, MessageLatency,
+        record_tool_duration, set_worktree_state, touch_session, update_last_turn_usage,
+        update_message_latency, update_session_cwd, update_session_model_id, MessageLatency,
     },
     types::WorktreeState,
 };
@@ -477,105 +477,76 @@ async fn load_session_includes_model_id() {
 
 
 #[tokio::test]
-async fn add_token_usage_first_turn_initializes_columns() {
- // A pre-A4 session has all 4 columns NULL. The first
- // `add_token_usage` call must initialize them from 0 (the
- // SQL `COALESCE(col, 0) + ?` pattern) rather than NULL +
- // value = NULL.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert!(loaded.session.input_tokens_total.is_none());
- assert!(loaded.session.output_tokens_total.is_none());
- assert!(loaded.session.cache_creation_total.is_none());
- assert!(loaded.session.cache_read_total.is_none());
+async fn update_last_turn_usage_overwrites_not_accumulates() {
+    // 2026-06-26 snapshot fix: `update_last_turn_usage` OVERWRITES
+    // the `last_*` columns (vs the legacy `add_token_usage` which
+    // accumulated into `*_total`). Two consecutive calls should
+    // leave the row with the SECOND call's values, not the sum.
+    let pool = make_pool().await;
+    let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    // Pre-snapshot: all five `last_*` columns are NULL.
+    assert!(loaded.session.last_context_input_tokens.is_none());
+    assert!(loaded.session.last_input_tokens.is_none());
+    assert!(loaded.session.last_output_tokens.is_none());
+    assert!(loaded.session.last_cache_creation.is_none());
+    assert!(loaded.session.last_cache_read.is_none());
 
- let u = TokenUsage {
- input_tokens: 100,
- output_tokens: 50,
- cache_creation_input_tokens: 10,
- cache_read_input_tokens: 20,
- };
- add_token_usage(&pool, &s.id, &u).await.unwrap();
+    let u1 = TokenUsage {
+        input_tokens: 100,
+        output_tokens: 30,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 50,
+        context_input_tokens: 150,
+    };
+    let u2 = TokenUsage {
+        input_tokens: 200,
+        output_tokens: 40,
+        cache_creation_input_tokens: 25,
+        cache_read_input_tokens: 75,
+        context_input_tokens: 300,
+    };
+    update_last_turn_usage(&pool, &s.id, &u1).await.unwrap();
+    update_last_turn_usage(&pool, &s.id, &u2).await.unwrap();
 
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.input_tokens_total, Some(100));
- assert_eq!(loaded.session.output_tokens_total, Some(50));
- assert_eq!(loaded.session.cache_creation_total, Some(10));
- assert_eq!(loaded.session.cache_read_total, Some(20));
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    let s = &loaded.session;
+    // Snapshot semantics: the row carries the SECOND call's values.
+    assert_eq!(s.last_context_input_tokens, Some(300));
+    assert_eq!(s.last_input_tokens, Some(200));
+    assert_eq!(s.last_output_tokens, Some(40));
+    assert_eq!(s.last_cache_creation, Some(25));
+    assert_eq!(s.last_cache_read, Some(75));
 }
 
 #[tokio::test]
-async fn add_token_usage_accumulates_across_turns() {
- // A4 PRD decision 2: per-session 累积 (single SQL UPDATE
- // per turn). Verify that two consecutive calls add up
- // rather than overwrite.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- let u1 = TokenUsage {
- input_tokens: 100,
- output_tokens: 30,
- cache_creation_input_tokens: 0,
- cache_read_input_tokens: 50,
- };
- let u2 = TokenUsage {
- input_tokens: 200,
- output_tokens: 40,
- cache_creation_input_tokens: 25,
- cache_read_input_tokens: 75,
- };
- add_token_usage(&pool, &s.id, &u1).await.unwrap();
- add_token_usage(&pool, &s.id, &u2).await.unwrap();
+async fn list_sessions_includes_last_turn_columns() {
+    // The 2026-06-26 snapshot columns are in the SessionSummary
+    // shape too, so the SessionList (sidebar) can read them
+    // without a per-session IPC round-trip. Verify the SELECT
+    // carries them through.
+    let pool = make_pool().await;
+    let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
+        .await
+        .unwrap();
+    let u = TokenUsage {
+        input_tokens: 500,
+        output_tokens: 100,
+        cache_creation_input_tokens: 50,
+        cache_read_input_tokens: 200,
+        context_input_tokens: 750,
+    };
+    update_last_turn_usage(&pool, &s.id, &u).await.unwrap();
 
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.input_tokens_total, Some(300));
- assert_eq!(loaded.session.output_tokens_total, Some(70));
- assert_eq!(loaded.session.cache_creation_total, Some(25));
- assert_eq!(loaded.session.cache_read_total, Some(125));
-}
-
-#[tokio::test]
-async fn add_token_usage_on_missing_session_is_noop() {
- // UPDATE with a non-matching id matches 0 rows; the
- // function returns Ok(()) and doesn't error.
- let pool = make_pool().await;
- let u = TokenUsage {
- input_tokens: 10,
- output_tokens: 5,
- cache_creation_input_tokens: 0,
- cache_read_input_tokens: 0,
- };
- add_token_usage(&pool, "nonexistent-session-id", &u).await.unwrap();
-}
-
-#[tokio::test]
-async fn list_sessions_includes_token_columns() {
- // The A4 columns are in the SessionSummary shape too,
- // so the SessionList (sidebar) can read them without
- // a per-session IPC round-trip. Verify the SELECT
- // carries them through.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- let u = TokenUsage {
- input_tokens: 500,
- output_tokens: 100,
- cache_creation_input_tokens: 50,
- cache_read_input_tokens: 200,
- };
- add_token_usage(&pool, &s.id, &u).await.unwrap();
-
- let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
- let found = list.iter().find(|x| x.id == s.id).expect("session in list");
- assert_eq!(found.input_tokens_total, Some(500));
- assert_eq!(found.output_tokens_total, Some(100));
- assert_eq!(found.cache_creation_total, Some(50));
- assert_eq!(found.cache_read_total, Some(200));
+    let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
+    let found = list.iter().find(|x| x.id == s.id).expect("session in list");
+    assert_eq!(found.last_context_input_tokens, Some(750));
+    assert_eq!(found.last_input_tokens, Some(500));
+    assert_eq!(found.last_output_tokens, Some(100));
+    assert_eq!(found.last_cache_creation, Some(50));
+    assert_eq!(found.last_cache_read, Some(200));
 }
 
 // ---------------------------------------------------------------------------

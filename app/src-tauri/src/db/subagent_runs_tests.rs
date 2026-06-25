@@ -17,9 +17,9 @@ use crate::projects::DEFAULT_PROJECT_ID;
 
 use super::{
     migrations::run_migrations,
-    sessions::{create_session, delete_session, load_session},
+    sessions::{create_session, delete_session},
     subagent_runs::{
-        add_token_usage_streaming, get_run, insert_run, list_runs_by_session,
+        get_run, insert_run, list_runs_by_session,
         list_runs_summary_by_session, update_run_finished, SubagentStatusDb,
     },
 };
@@ -113,6 +113,7 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
         output_tokens: 567,
         cache_creation_input_tokens: 10,
         cache_read_input_tokens: 20,
+        context_input_tokens: 1264,
     };
     let transcript = vec![crate::agent::subagent::TranscriptEntry {
         kind: crate::agent::subagent::TranscriptKind::ChatEvent,
@@ -249,61 +250,6 @@ async fn subagent_runs_list_by_session_orders_by_started_desc() {
     assert_eq!(rows[1].id, id1);
 }
 
-/// `add_token_usage_streaming` accumulates per-turn usage into
-/// the parent session's 4 token columns. Mirrors the
-/// `add_token_usage_accumulates_across_turns` test but uses the
-/// streaming wrapper (which the PRD §"db module" requires as
-/// PR2 public API).
-#[tokio::test]
-async fn subagent_runs_token_usage_streaming_accumulates_in_parent() {
-    let pool = make_pool().await;
-    let s = create_session(
-        &pool,
-        &Uuid::new_v4().to_string(),
-        DEFAULT_PROJECT_ID,
-        "/tmp",
-        "GLM-4.7",
-        None,
-    )
-    .await
-    .unwrap();
-    let u1 = TokenUsage {
-        input_tokens: 100,
-        output_tokens: 30,
-        cache_creation_input_tokens: 5,
-        cache_read_input_tokens: 50,
-    };
-    let u2 = TokenUsage {
-        input_tokens: 200,
-        output_tokens: 40,
-        cache_creation_input_tokens: 25,
-        cache_read_input_tokens: 75,
-    };
-    add_token_usage_streaming(&pool, &s.id, &u1).await.unwrap();
-    add_token_usage_streaming(&pool, &s.id, &u2).await.unwrap();
-    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
-    assert_eq!(loaded.session.input_tokens_total, Some(300));
-    assert_eq!(loaded.session.output_tokens_total, Some(70));
-    assert_eq!(loaded.session.cache_creation_total, Some(30));
-    assert_eq!(loaded.session.cache_read_total, Some(125));
-}
-
-/// `add_token_usage_streaming` on a missing parent session id is
-/// a silent no-op (matches `add_token_usage`'s contract).
-#[tokio::test]
-async fn subagent_runs_token_usage_streaming_missing_session_is_noop() {
-    let pool = make_pool().await;
-    let u = TokenUsage {
-        input_tokens: 10,
-        output_tokens: 5,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-    };
-    add_token_usage_streaming(&pool, "nonexistent-session-id", &u)
-        .await
-        .unwrap();
-}
-
 /// B6 PR3a (2026-06-20): `list_runs_summary_by_session` returns
 /// the projected `SubagentRunSummary` (no transcript column) for
 /// the parent session. Verifies:
@@ -334,6 +280,7 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         output_tokens: 5,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        context_input_tokens: 10,
     };
     let transcript = vec![crate::agent::subagent::TranscriptEntry {
         kind: crate::agent::subagent::TranscriptKind::ChatEvent,
@@ -841,6 +788,7 @@ async fn subagent_runs_incomplete_status_round_trips() {
         output_tokens: 678,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        context_input_tokens: 12_345,
     };
     update_run_finished(
         &pool,

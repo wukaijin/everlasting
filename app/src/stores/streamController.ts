@@ -197,6 +197,14 @@ interface TokenUsagePayload {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  /**
+   * 2026-06-26 snapshot fix: cross-provider-normalized total input
+   * for this request (Anthropic: input+cc+cr; OpenAI: prompt_tokens).
+   * The canonical "% of context_window" numerator. Optional for
+   * backward-compat with older backends that pre-date the field —
+   * `setLastTurnUsage` falls back to the sum of the 4 fields.
+   */
+  context_input_tokens?: number;
 }
 
 interface ToolCallPayload {
@@ -969,12 +977,31 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (last.toolResults) markRaw(last.toolResults);
         if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
         if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
-        // A4 (Token Usage Tracking): per-turn usage report
-        // arrives on the `done` event. Hand the payload off to
-        // the chat store which owns the per-session running
-        // totals (rendered by ChatInput.vue's hint area).
+        // 2026-06-26 snapshot fix: per-turn usage report arrives
+        // on the `done` event. Hand the payload off to the chat
+        // store which owns the per-session LAST-TURN snapshot
+        // (rendered by ChatInput.vue's hint area). Snapshot
+        // semantics: OVERWRITE (not accumulate).
         if (event.usage) {
-          useChatStore().accumulateTokenUsage(req.sessionId, event.usage);
+          // 2026-06-26 snapshot fix: build a complete
+          // `SessionTokenUsage`. `context_input_tokens` is
+          // optional on the wire (legacy backends) — fall back to
+          // `input + cache_creation + cache_read` (the Anthropic
+          // normalization). For OpenAI sources the backend already
+          // sends the field (= prompt_tokens), so the fallback is
+          // only hit on the legacy wire shape.
+          const u = event.usage;
+          useChatStore().setLastTurnUsage(req.sessionId, {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_creation_input_tokens: u.cache_creation_input_tokens,
+            cache_read_input_tokens: u.cache_read_input_tokens,
+            context_input_tokens:
+              u.context_input_tokens ??
+              u.input_tokens +
+                u.cache_creation_input_tokens +
+                u.cache_read_input_tokens,
+          });
         }
         // F2: reset force-follow mode when the stream finishes.
         useChatStore().forceFollowActive = false;

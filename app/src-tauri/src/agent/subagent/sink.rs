@@ -73,24 +73,22 @@ pub struct SubagentBufferSink {
     /// events. Read by `run_subagent` after the worker loop returns
     /// to populate `subagent_runs.token_usage_json`.
     ///
-    /// **Per-turn fold into parent's `sessions.input_tokens_total`**:
-    /// does NOT happen here — `add_token_usage_streaming` is
-    /// `#[allow(dead_code)]` (no production callsite; only exercised
-    /// by `db/tests.rs::add_token_usage_streaming_accumulates_in_parent`).
-    /// The real production fold goes through `db::add_token_usage`
-    /// at `chat_loop.rs:1031` (decoupled from `skip_persist` in
-    /// B6 PR2a per RULE-A-015 — the worker reuses
-    /// `parent_session_id`, so the parent's `add_token_usage` call
-    /// accumulates the worker's per-turn usage into the parent's
-    /// `sessions.*_total` columns naturally). The parent's UI sees
-    /// the counter update on the worker's terminal `Done` event,
-    /// with a few seconds of lag (acceptable per
-    /// `RULE-BackSubagent-002` option i).
+    /// **Worker isolation (2026-06-26 reversal of RULE-A-015/PR2a)**:
+    /// the parent session's `last_*` snapshot columns are NOT
+    /// updated by the worker. PR2a pulled `add_token_usage` OUT of
+    /// the `!skip_persist` gate so the worker's per-turn usage
+    /// streamed into the parent's cumulative total — the 2026-06-26
+    /// snapshot fix reverses this: `update_last_turn_usage` is BACK
+    /// inside the gate, so the worker's per-turn usage stays
+    /// isolated in this `per_turn_usage` buffer + the eventual
+    /// `subagent_runs.token_usage_json` write (worker token usage
+    /// visible to the parent only via `<SubagentDrawer>`, not via
+    /// the parent's ChatInput hint).
     ///
-    /// `drain_per_turn_usage` (which would invoke the streaming
-    /// fold) is retained as the public API surface for a future
-    /// worker↔parent session identity split (see the helper's
-    /// own doc for details).
+    /// `drain_per_turn_usage` (the legacy streaming-fold surface)
+    /// is retained as `#[allow(dead_code)]` for the future
+    /// worker↔parent session identity split (see the helper's own
+    /// doc). It has no production callsite.
     per_turn_usage: StdMutex<Vec<TokenUsage>>,
     /// Set when the worker emitted a terminal `Error` event.
     /// `run_subagent` reads this to pick the `status: error`
@@ -335,15 +333,13 @@ impl SubagentBufferSink {
     /// single-shot — the caller is `run_subagent`, which runs once
     /// per worker dispatch).
     ///
-    /// B6 PR2: `run_subagent` would call this **once per worker turn**
-    /// to fold the new turn's usage into the parent session's
-    /// `sessions.input_tokens_total`. The current production
-    /// implementation routes the per-turn fold through
-    /// `db::add_token_usage` (decoupled from `skip_persist` —
-    /// see `chat_loop.rs:907`), so the sink-side drain is
-    /// not invoked by production. The method is **retained** as
-    /// the public API surface (the PRD §"SubagentBufferSink"
-    /// mentions streaming accumulation) and is exercised by the
+    /// B6 PR2: this was the intended per-turn fold surface for the
+    /// parent session's `sessions.input_tokens_total`. The 2026-06-26
+    /// snapshot fix isolates worker token usage from the parent's
+    /// snapshot entirely (reversal of RULE-A-015/PR2a), so this
+    /// method has NO production callsite. It is **retained** as
+    /// `#[allow(dead_code)]` API surface for a future worker↔parent
+    /// session identity split and is exercised by the
     /// `buffer_sink_drain_per_turn_usage_clears_buffer` test in
     /// this module.
     #[allow(dead_code)]
@@ -381,6 +377,14 @@ fn sum_usage(items: &[TokenUsage]) -> TokenUsage {
         total.cache_read_input_tokens = total
             .cache_read_input_tokens
             .saturating_add(u.cache_read_input_tokens);
+        // 2026-06-26 snapshot fix: sum the normalized field too.
+        // (Worker context_input_tokens is per-turn; the cumulative
+        // is the worker's TOTAL context pressure across all its
+        // turns — used for `subagent_runs.token_usage_json`, not
+        // for the parent UI hint.)
+        total.context_input_tokens = total
+            .context_input_tokens
+            .saturating_add(u.context_input_tokens);
     }
     total
 }
@@ -401,19 +405,18 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
             ChatEvent::Done { stop_reason, usage } => {
-                // B6 PR2: capture per-turn token usage for the
-                // worker run's `subagent_runs.token_usage_json`.
-                // The worker reuses `parent_session_id` and
-                // `run_chat_loop`'s `db::add_token_usage` call at
-                // `chat_loop.rs:1031` is OUTSIDE the `skip_persist`
-                // gate (decoupled in PR2a per RULE-A-015), so the
-                // parent's `sessions.*_total` columns accumulate
-                // the worker's per-turn usage naturally. The sink
-                // does NOT stream-fold via
-                // `add_token_usage_streaming` — that helper has no
-                // production callsite (only `db/tests.rs`). Per-turn
-                // lag is a few seconds; accepted per
-                // RULE-BackSubagent-002 option i.
+                // Capture per-turn token usage for the worker run's
+                // `subagent_runs.token_usage_json` (written at worker
+                // exit by `dispatch.rs::run_subagent`).
+                //
+                // 2026-06-26 (RULE-A-015 reversal): the parent's
+                // `sessions.last_*` snapshot is NO LONGER updated
+                // by the worker. `update_last_turn_usage` is back
+                // inside the `!skip_persist` gate at `chat_loop.rs`,
+                // so worker turns (which run with `skip_persist=true`)
+                // don't touch the parent's snapshot. Worker token
+                // usage stays isolated in `per_turn_usage` here +
+                // the eventual `token_usage_json` write.
                 //
                 // 2026-06-21 (R3): synthetic terminals
                 // (`max_turns` / `cancelled`) are emitted with
@@ -740,6 +743,7 @@ mod tests {
                     output_tokens: output,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: input,
                 }),
             },
         }
@@ -883,6 +887,7 @@ mod tests {
             output_tokens: 10,
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
+            context_input_tokens: 50,
         };
         sink.emit_chat_event(&ChatEventPayload {
             request_id: "rid".to_string(),
@@ -963,6 +968,7 @@ mod tests {
                     output_tokens: 50,
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
+                    context_input_tokens: 100,
                 }),
             },
         });

@@ -67,16 +67,29 @@ export interface ThinkingBlockInfo {
   signature: string;
 }
 
-/** A4 (Token Usage Tracking): per-session cumulative token usage.
- *  Mirrors Rust `llm::types::TokenUsage` (snake_case) and the four
- *  `*_total` columns in the `sessions` table. All four fields are
- *  `null` for sessions that have never sent a message (pre-A4
- *  rows, fresh sessions before their first LLM turn). */
+/** 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+ *  token usage snapshot (NOT cumulative). Mirrors Rust
+ *  `llm::types::TokenUsage` (snake_case) and the five `last_*`
+ *  columns in the `sessions` table. `currentSessionTokenUsage` is
+ *  `null` for sessions that have never sent a message
+ *  (pre-snapshot rows, fresh sessions before their first LLM
+ *  turn).
+ *
+ *  `context_input_tokens` is the cross-provider-normalized total
+ *  input — the canonical numerator the ChatInput hint uses for
+ *  "% of context_window" (Anthropic: input+cc+cr; OpenAI:
+ *  prompt_tokens). The other four fields are the provider-native
+ *  breakdowns rendered in the tooltip detail rows.
+ *
+ *  The legacy `*_total` cumulative fields (frozen, no longer
+ *  written by production code) remain on `SessionSummary` for
+ *  non-destructive migration but are not read by the UI. */
 export interface SessionTokenUsage {
   input_tokens: number;
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  context_input_tokens: number;
 }
 
 /** F5 (LLM Latency Tracking): per-message latency breakdown
@@ -259,13 +272,25 @@ export interface SessionSummary {
   /** A4 (Token Usage Tracking): cumulative per-session token
    *  totals as of the last LLM turn. `null` for pre-A4
    *  sessions (the migration is non-destructive, so legacy
-   *  rows keep NULL until their first post-upgrade turn). The
-   *  ChatInput hint reads these to render the
-   *  "14.2K · 7% / 200K" line. */
+   *  rows keep NULL until their first post-upgrade turn).
+   *  FROZEN 2026-06-26 (snapshot fix): no longer written by
+   *  production code; kept for non-destructive migration.
+   *  The ChatInput hint reads `last_*` instead. */
   input_tokens_total: number | null;
   output_tokens_total: number | null;
   cache_creation_total: number | null;
   cache_read_total: number | null;
+  /** 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+   *  token usage snapshot (NOT cumulative). The ChatInput hint
+   *  reads `last_context_input_tokens` for the "% of
+   *  context_window" line; the tooltip detail reads the four
+   *  provider-native breakdowns. All five are `null` on
+   *  pre-snapshot sessions (the migration is non-destructive). */
+  last_context_input_tokens: number | null;
+  last_input_tokens: number | null;
+  last_output_tokens: number | null;
+  last_cache_creation: number | null;
+  last_cache_read: number | null;
   /** D1 (Color Tag): palette index 0-7, null = no mark. */
   color_tag: number | null;
   /** A2 + B7 (Permission system + per-session Mode, 2026-06-13;

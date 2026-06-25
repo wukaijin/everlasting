@@ -472,15 +472,17 @@ pub(crate) async fn run_subagent(
     //    events).
     // 4. UPDATE the `running` row to the terminal state.
     //
-    // **Streaming token usage** (the parent's live counter
-    // updating as the worker burns tokens) is handled by the
-    // `add_token_usage` call at chat_loop.rs:907 — which was
-    // decoupled from `skip_persist` in this same PR. The sink's
-    // per-turn accumulator is parallel: the sink still records
-    // the per-turn `TokenUsage` so `cumulative_usage()` can
-    // produce the worker-run-level total for `token_usage_json`
-    // even after the streaming path has already folded individual
-    // turn values into the parent's running total.
+    // **Worker token isolation** (2026-06-26 reversal of
+    // RULE-A-015/PR2a): the parent's `sessions.last_*` snapshot
+    // is NOT updated by the worker. `update_last_turn_usage` is
+    // back inside the `!skip_persist` gate at `chat_loop.rs`, so
+    // worker turns (which run with `skip_persist=true`) don't
+    // touch the parent's snapshot. The sink's per-turn
+    // accumulator is the ONLY path by which the worker's
+    // `TokenUsage` reaches disk — `cumulative_usage()` produces
+    // the worker-run-level total for `token_usage_json`, written
+    // here. Worker token usage is visible to the parent only via
+    // `<SubagentDrawer>`.
     //
     // The UPDATE is best-effort: a DB failure logs at `warn!` and
     // continues (the dispatch_subagent tool_result is the

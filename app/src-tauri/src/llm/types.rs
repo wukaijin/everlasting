@@ -314,12 +314,28 @@ pub struct ChatRequest {
 /// could not) report usage — typically cancel, network drop, or
 /// pre-usage error. The agent loop treats `None` as "skip the
 /// accumulation write" and logs at `info!`.
+/// 2026-06-26 (token-usage snapshot fix): `context_input_tokens` is
+/// the cross-provider-normalized "total input for this request" —
+/// the single canonical numerator the frontend uses for the
+/// "context usage %" hint. Provider mapping:
+/// - Anthropic: `input_tokens + cache_creation_input_tokens +
+///   cache_read_input_tokens` (Anthropic's `input_tokens` excludes
+///   cache reads/creations; the true context footprint is the sum).
+/// - OpenAI: `prompt_tokens` (already inclusive of
+///   `cached_tokens`; OpenAI does not split cache creation out, so
+///   no addition is needed — adding `cache_read` would double-count).
+///
+/// `#[serde(default)]` is required so that legacy
+/// `subagent_runs.token_usage_json` rows written before this field
+/// existed (4-field shape) still deserialize cleanly (`default = 0`).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_creation_input_tokens: u32,
     pub cache_read_input_tokens: u32,
+    #[serde(default)]
+    pub context_input_tokens: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +838,7 @@ mod tests {
             output_tokens: 50,
             cache_creation_input_tokens: 10,
             cache_read_input_tokens: 20,
+            context_input_tokens: 130,
         };
         let json = serde_json::to_string(&u).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -834,6 +851,15 @@ mod tests {
         assert_eq!(
             v.get("cache_read_input_tokens"),
             Some(&serde_json::json!(20))
+        );
+        // 2026-06-26 snapshot fix: the new `context_input_tokens`
+        // field MUST serialize as snake_case (no rename attribute
+        // on the struct, but lock the contract explicitly since
+        // the field is the canonical frontend "% of context_window"
+        // numerator — a rename here would silently break the UI).
+        assert_eq!(
+            v.get("context_input_tokens"),
+            Some(&serde_json::json!(130))
         );
     }
 
@@ -849,6 +875,35 @@ mod tests {
         assert_eq!(u.output_tokens, 0);
         assert_eq!(u.cache_creation_input_tokens, 0);
         assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.context_input_tokens, 0);
+    }
+
+    #[test]
+    fn token_usage_deserializes_legacy_4_field_json_with_default_context() {
+        // 2026-06-26 snapshot fix (PRD decision D6): legacy
+        // `subagent_runs.token_usage_json` rows written before the
+        // `context_input_tokens` field existed carry only the four
+        // original fields. The `#[serde(default)]` attribute on
+        // `context_input_tokens` MUST make this deserialize cleanly
+        // (defaulting to 0) rather than erroring — otherwise a
+        // single pre-snapshot worker row would break
+        // `SubagentDrawer`'s expand UI on every page load.
+        let legacy_json = r#"{
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 20
+        }"#;
+        let u: TokenUsage = serde_json::from_str(legacy_json)
+            .expect("legacy 4-field JSON must deserialize (#[serde(default)] on context_input_tokens)");
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_creation_input_tokens, 10);
+        assert_eq!(u.cache_read_input_tokens, 20);
+        assert_eq!(
+            u.context_input_tokens, 0,
+            "missing field defaults to 0 (not an error)"
+        );
     }
 
     #[test]
@@ -872,6 +927,7 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_input_tokens: 0,
                 cache_read_input_tokens: 25,
+                context_input_tokens: 125,
             }),
         };
         let json = serde_json::to_string(&ev).unwrap();

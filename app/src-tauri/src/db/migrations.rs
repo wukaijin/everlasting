@@ -324,6 +324,35 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  add_session_column_if_missing(pool, "cache_creation_total", "INTEGER").await?;
  add_session_column_if_missing(pool, "cache_read_total", "INTEGER").await?;
 
+ // --- 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+ // snapshot columns.
+ //
+ // Five nullable INTEGER columns. Nullable (no DEFAULT) so
+ // pre-snapshot sessions keep NULL — the frontend renders NULL
+ // as "—" (the "升级前未统计" fallback). The agent loop OVERWRITES
+ // these on every LLM turn Done via `update_last_turn_usage`
+ // (single `UPDATE col = ?`, NOT `col = col + ?` — the value is
+ // a per-request snapshot, not a cumulative sum).
+ //
+ // Replaces the A4 cumulative-accumulator model. The four
+ // `*_total` columns above are FROZEN — kept in the schema for
+ // non-destructive migration but no longer written by production
+ // code; they remain readable for legacy UIs / debt cleanup.
+ //
+ // Field semantics (mirror `llm::types::TokenUsage`):
+ // - `last_context_input_tokens`: cross-provider-normalized total
+ //   input (Anthropic: input+cc+cr; OpenAI: prompt_tokens). This
+ //   is the field the frontend ChatInput hint uses as the "% of
+ //   context_window" numerator.
+ // - `last_input_tokens` / `last_output_tokens` /
+ //   `last_cache_creation` / `last_cache_read`: the four
+ //   provider-native breakdowns (the "tooltip" detail rows).
+ add_session_column_if_missing(pool, "last_context_input_tokens", "INTEGER").await?;
+ add_session_column_if_missing(pool, "last_input_tokens", "INTEGER").await?;
+ add_session_column_if_missing(pool, "last_output_tokens", "INTEGER").await?;
+ add_session_column_if_missing(pool, "last_cache_creation", "INTEGER").await?;
+ add_session_column_if_missing(pool, "last_cache_read", "INTEGER").await?;
+
  // --- D1 (Session Rename + Color Tag): per-session color mark.
  // Nullable INTEGER, 0-7 = palette index, NULL = no mark.
  add_session_column_if_missing(pool, "color_tag", "INTEGER").await?;

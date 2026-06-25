@@ -13,18 +13,16 @@
 //!    worker's intermediate state — the in-memory sink is gone
 //!    after a reload.
 //! 3. Token-usage accounting is auditable per-run (`token_usage_json`
-//!    on the `subagent_runs` row); the parent session's
-//!    `sessions.input_tokens_total` carries the *aggregated* total
-//!    (updated by `db::add_token_usage` at `chat_loop.rs:1031`
-//!    as the worker runs — see RULE-A-015 + RULE-BackSubagent-002
-//!    option i; `add_token_usage_streaming` is retained as the
-//!    PR2 API surface but has no production callsite).
+//!    on the `subagent_runs` row). The parent session's
+//!    `sessions.last_*` snapshot is NOT updated by the worker
+//!    (2026-06-26 reversal of RULE-A-015/PR2a: `update_last_turn_usage`
+//!    is back inside the `!skip_persist` gate, so worker turns do
+//!    not overwrite the parent's snapshot). Worker token usage is
+//!    isolated to this table; the parent UI sees it only via
+//!    `<SubagentDrawer>`.
 //!
-//! ⚠️ **Production-only path**: production code paths MUST go
-//! through `db::add_token_usage` (decoupled from `skip_persist`),
-//! NOT through `add_token_usage_streaming`. The streaming helper
-//! is a future-API surface for a worker↔parent session identity
-//! split (see its doc for context).
+//! The legacy `add_token_usage_streaming` helper was REMOVED in the
+//! 2026-06-26 snapshot fix (it had no production callsite).
 //!
 //! # Schema
 //!
@@ -145,15 +143,13 @@ impl SubagentStatusDb {
 ///
 /// `allow(dead_code)` is set at the type level because PR2's
 /// production wire-up uses `insert_run` + `update_run_finished`
-/// for the `subagent_runs` writes; per-turn token-usage fold
-/// goes through `db::add_token_usage` at `chat_loop.rs:1031`
-/// (decoupled from `skip_persist` in PR2a per RULE-A-015 — the
-/// worker reuses `parent_session_id`, so the parent's
-/// `add_token_usage` call naturally accumulates the worker's
-/// per-turn usage). `add_token_usage_streaming` is retained as
-/// the PR2 API surface for a future worker↔parent session
-/// identity split, exercised by
-/// `db/tests.rs::add_token_usage_streaming_accumulates_in_parent`.
+/// for the `subagent_runs` writes. The 2026-06-26 snapshot fix
+/// isolates worker token usage to this table only — the parent's
+/// `sessions.last_*` snapshot is NOT updated by the worker
+/// (`update_last_turn_usage` is back inside the `!skip_persist`
+/// gate, reversal of RULE-A-015/PR2a). The legacy
+/// `add_token_usage_streaming` helper was REMOVED (no production
+/// callsite).
 /// The row struct is materialized by `get_run` +
 /// `list_runs_by_session` which are themselves PR3-API surface
 /// (frontend expand UI + C4 audit read). The `db/tests.rs`
@@ -579,72 +575,3 @@ pub async fn list_runs_summary_by_session(
         .collect()
 }
 
-/// Add a worker's per-turn `TokenUsage` to the **parent session's**
-/// `sessions.input_tokens_total` / `output_tokens_total` /
-/// `cache_creation_total` / `cache_read_total` columns. Called by
-/// the worker's `SubagentBufferSink` after each worker turn (so the
-/// parent's UI sees the worker burning tokens in real time).
-///
-/// The worker's intermediate `messages` rows do NOT land in the
-/// DB (worker path uses `skip_persist=true` — see
-/// `agent::chat_loop::run_chat_loop`'s 20th parameter), so
-/// `add_token_usage` inside `run_chat_loop` is gated by
-/// `!skip_persist` and never fires for the worker. The worker's
-/// per-turn `TokenUsage` therefore has to be folded into the
-/// parent **from outside** the agent loop — that's this function's
-/// job. The fold target is the parent session's id, NOT the
-/// worker's session id (worker reuses the parent session id, so
-/// the destination column is unambiguous).
-///
-/// `parent_session_id` MUST be a valid `sessions.id`; the helper
-/// silently no-ops on missing ids (matching `add_token_usage`'s
-/// contract — see `db/sessions.rs:374-399`).
-///
-/// This is the **streaming** accumulator (vs the `update_run_finished`
-/// terminal-write to `subagent_runs.token_usage_json`, which
-/// captures the worker's final cumulative total at exit time). The
-/// two are independent: the streaming updates are for the parent
-/// UI's live token counter, the terminal write is for the audit
-/// trail.
-///
-/// **Implementation note (B6 PR2 production path)**: the current
-/// `run_subagent` implementation reuses `db::add_token_usage` (the
-/// generic helper) because the worker reuses `parent_session_id`
-/// as its `session_id` — the per-turn `add_token_usage` call at
-/// `chat_loop.rs:907` now runs unconditionally (decoupled from
-/// `skip_persist` in this PR) and naturally folds the worker's
-/// per-turn usage into the parent's running total. This function
-/// is **retained** as the public PR2 API surface (the PRD §"db
-/// module" lists it) and is exercised by `db/tests.rs`'s
-/// `add_token_usage_streaming_accumulates_in_parent` integration
-/// test. A future PR that splits worker ↔ parent session identity
-/// (e.g. daemon-ized workers with their own session row) will
-/// switch `run_subagent` to call this function instead of the
-/// generic `add_token_usage`.
-#[allow(dead_code)]
-pub async fn add_token_usage_streaming(
-    pool: &SqlitePool,
-    parent_session_id: &str,
-    usage: &TokenUsage,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        UPDATE sessions
-        SET input_tokens_total = COALESCE(input_tokens_total, 0) + ?,
-            output_tokens_total = COALESCE(output_tokens_total, 0) + ?,
-            cache_creation_total = COALESCE(cache_creation_total, 0) + ?,
-            cache_read_total = COALESCE(cache_read_total, 0) + ?,
-            updated_at = ?
-        WHERE id = ?
-        "#,
-    )
-    .bind(usage.input_tokens)
-    .bind(usage.output_tokens)
-    .bind(usage.cache_creation_input_tokens)
-    .bind(usage.cache_read_input_tokens)
-    .bind(Utc::now().to_rfc3339())
-    .bind(parent_session_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}

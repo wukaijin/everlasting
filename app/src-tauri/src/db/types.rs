@@ -259,6 +259,23 @@ pub struct SessionRow {
  pub output_tokens_total: Option<i64>,
  pub cache_creation_total: Option<i64>,
  pub cache_read_total: Option<i64>,
+ /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+ /// token usage snapshot. Overwritten on every LLM turn Done
+ /// (NOT cumulative). `last_context_input_tokens` is the
+ /// cross-provider-normalized numerator the frontend hint uses
+ /// for the "% of context_window" line; the other four are the
+ /// provider-native breakdowns for the tooltip detail rows. All
+ /// five are NULL on pre-snapshot sessions (the migration is
+ /// non-destructive).
+ ///
+ /// The four `*_total` fields above are FROZEN (kept for legacy
+ /// reads / non-destructive migration; no longer written by
+ /// production code).
+ pub last_context_input_tokens: Option<i64>,
+ pub last_input_tokens: Option<i64>,
+ pub last_output_tokens: Option<i64>,
+ pub last_cache_creation: Option<i64>,
+ pub last_cache_read: Option<i64>,
  /// D1 (Color Tag): palette index 0-7, NULL = no mark.
  pub color_tag: Option<i32>,
  /// A2 + B7 (Permission system + per-session Mode, 2026-06-13):
@@ -287,6 +304,16 @@ pub struct SessionSummary {
  pub output_tokens_total: Option<i64>,
  pub cache_creation_total: Option<i64>,
  pub cache_read_total: Option<i64>,
+ /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+ /// snapshot. See `SessionRow::last_*` for field semantics. The
+ /// sidebar / hint area read `last_context_input_tokens` to
+ /// render "% of context_window" (NULL → "—"). `*_total` above
+ /// is FROZEN (kept for non-destructive migration).
+ pub last_context_input_tokens: Option<i64>,
+ pub last_input_tokens: Option<i64>,
+ pub last_output_tokens: Option<i64>,
+ pub last_cache_creation: Option<i64>,
+ pub last_cache_read: Option<i64>,
  /// D1 (Color Tag): palette index 0-7, NULL = no mark.
  pub color_tag: Option<i32>,
  /// A2 + B7: per-session Mode (see `SessionRow::mode`). The

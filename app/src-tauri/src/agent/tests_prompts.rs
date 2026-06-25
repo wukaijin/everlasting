@@ -36,6 +36,11 @@ fn make_session_row(
         output_tokens_total: None,
         cache_creation_total: None,
         cache_read_total: None,
+        last_context_input_tokens: None,
+        last_input_tokens: None,
+        last_output_tokens: None,
+        last_cache_creation: None,
+        last_cache_read: None,
         color_tag: None,
         mode: db::Mode::Edit,
     }

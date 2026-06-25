@@ -775,6 +775,13 @@ fn parse_anthropic_usage(v: &serde_json::Value) -> Option<TokenUsage> {
         output_tokens: output.min(u32::MAX as u64) as u32,
         cache_creation_input_tokens: cache_creation.min(u32::MAX as u64) as u32,
         cache_read_input_tokens: cache_read.min(u32::MAX as u64) as u32,
+        // 2026-06-26 snapshot fix: cross-provider normalized
+        // "total input for this request". Anthropic's
+        // `input_tokens` EXCLUDES cache reads/creations (it's the
+        // uncached-input billable line), so the true context
+        // footprint is the sum of all three. The u64 sum is
+        // saturated to `u32::MAX` to match the field type.
+        context_input_tokens: (input + cache_creation + cache_read).min(u32::MAX as u64) as u32,
     })
 }
 
@@ -1069,6 +1076,11 @@ mod tests {
         assert_eq!(u.output_tokens, 56);
         assert_eq!(u.cache_creation_input_tokens, 100);
         assert_eq!(u.cache_read_input_tokens, 200);
+        // 2026-06-26 snapshot fix: context_input_tokens = input +
+        // cache_creation + cache_read (Anthropic's input_tokens
+        // EXCLUDES cache reads/creations; the true context footprint
+        // is the sum). 1234 + 100 + 200 = 1534.
+        assert_eq!(u.context_input_tokens, 1534);
     }
 
     #[test]
@@ -1085,6 +1097,8 @@ mod tests {
         assert_eq!(u.output_tokens, 7);
         assert_eq!(u.cache_creation_input_tokens, 0);
         assert_eq!(u.cache_read_input_tokens, 0);
+        // 42 + 0 + 0 = 42.
+        assert_eq!(u.context_input_tokens, 42);
     }
 
     #[test]

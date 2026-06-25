@@ -71,6 +71,11 @@ pub async fn create_session(
  output_tokens_total: None,
  cache_creation_total: None,
  cache_read_total: None,
+ last_context_input_tokens: None,
+ last_input_tokens: None,
+ last_output_tokens: None,
+ last_cache_creation: None,
+ last_cache_read: None,
  color_tag: None,
  mode: crate::db::Mode::Edit,
  })
@@ -89,6 +94,8 @@ pub async fn list_sessions(
  s.model_id,
  s.input_tokens_total, s.output_tokens_total,
  s.cache_creation_total, s.cache_read_total,
+ s.last_context_input_tokens, s.last_input_tokens,
+ s.last_output_tokens, s.last_cache_creation, s.last_cache_read,
  s.color_tag, s.mode,
  COALESCE(
  (SELECT text FROM messages m
@@ -132,6 +139,11 @@ pub async fn list_sessions(
  output_tokens_total: r.try_get("output_tokens_total")?,
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
+ last_context_input_tokens: r.try_get("last_context_input_tokens")?,
+ last_input_tokens: r.try_get("last_input_tokens")?,
+ last_output_tokens: r.try_get("last_output_tokens")?,
+ last_cache_creation: r.try_get("last_cache_creation")?,
+ last_cache_read: r.try_get("last_cache_read")?,
  color_tag,
  mode: crate::db::Mode::from_str_opt(&mode_str),
  })
@@ -151,6 +163,8 @@ pub async fn load_session(
  worktree_path, worktree_state, last_worktree_path, model_id,
  input_tokens_total, output_tokens_total,
  cache_creation_total, cache_read_total,
+ last_context_input_tokens, last_input_tokens,
+ last_output_tokens, last_cache_creation, last_cache_read,
  color_tag, mode
  FROM sessions
  WHERE id = ?
@@ -180,6 +194,11 @@ pub async fn load_session(
  output_tokens_total: r.try_get("output_tokens_total")?,
  cache_creation_total: r.try_get("cache_creation_total")?,
  cache_read_total: r.try_get("cache_read_total")?,
+ last_context_input_tokens: r.try_get("last_context_input_tokens")?,
+ last_input_tokens: r.try_get("last_input_tokens")?,
+ last_output_tokens: r.try_get("last_output_tokens")?,
+ last_cache_creation: r.try_get("last_cache_creation")?,
+ last_cache_read: r.try_get("last_cache_read")?,
  color_tag: r.try_get("color_tag")?,
  mode: crate::db::Mode::from_str_opt(&mode_str),
  }
@@ -351,51 +370,58 @@ pub async fn update_session_model_id(
 }
 
 // ---------------------------------------------------------------------------
-// A4: per-session token usage accumulation
+// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN snapshot
 // ---------------------------------------------------------------------------
 
-/// Accumulate one turn's [`TokenUsage`] into the session's per-column
-/// totals. Single SQL UPDATE, additive on the existing column
-/// values; a session that has N LLM turns ends up with the
-/// column-wise sum.
+/// OVERWRITE the per-session `last_*` snapshot columns with this
+/// turn's [`TokenUsage`]. Replaces the A4 cumulative accumulator
+/// `add_token_usage` (which was `col = COALESCE(col, 0) + ?` per
+/// turn). Snapshot semantics: the value reflects the LLM's LAST
+/// request, not the running session total — the frontend ChatInput
+/// hint renders this as "X · Y% / context_window" so the user sees
+/// the live context pressure (matching Anthropic's statusline
+/// convention; same shape as `sanztheo/claude-code-statusline`).
 ///
-/// All four totals are updated in one statement so the row stays
-/// consistent (a partial write — input but not output, etc — would
-/// be a subtle bug visible as "input climbed but output didn't").
-/// NULL columns are treated as 0 by SQLite's `+` operator, so a
-/// pre-A4 session's first turn starts the counters from 0
-/// (subsequent UI loads show the running total, not "—").
+/// Worker isolation (2026-06-26 reversal of RULE-A-015/PR2a): the
+/// agent loop's caller gates this call behind `if !skip_persist`
+/// again. The worker path reuses the parent's `session_id`, so
+/// leaving the gate off (per PR2a) would let every worker turn
+/// OVERWRITE the parent's snapshot with worker numbers — the
+/// parent UI would oscillate between parent-turn and worker-turn
+/// values, and on a multi-worker dispatch the last-writer-wins
+/// outcome would be arbitrary. Worker token usage stays isolated
+/// in `subagent_runs.token_usage_json` (written at worker exit by
+/// `dispatch.rs`).
 ///
-/// The chat command calls this once per `ChatEvent::Done` with
-/// `usage: Some(t)`. Cancel / error / network drop paths pass
-/// `usage: None`; the chat command skips the call entirely in
-/// that case (no `add_token_usage(_, _)` invocation). See
-/// `agent::chat::chat` for the call site.
-pub async fn add_token_usage(
- pool: &SqlitePool,
- session_id: &str,
- usage: &TokenUsage,
+/// Silent no-op on a missing `session_id` (matches the legacy
+/// `add_token_usage` contract — `UPDATE` matches 0 rows, no error).
+pub async fn update_last_turn_usage(
+    pool: &SqlitePool,
+    session_id: &str,
+    usage: &TokenUsage,
 ) -> Result<(), sqlx::Error> {
- sqlx::query(
- r#"
- UPDATE sessions
- SET input_tokens_total = COALESCE(input_tokens_total, 0) + ?,
- output_tokens_total = COALESCE(output_tokens_total, 0) + ?,
- cache_creation_total = COALESCE(cache_creation_total, 0) + ?,
- cache_read_total = COALESCE(cache_read_total, 0) + ?,
- updated_at = ?
- WHERE id = ?
- "#,
- )
- .bind(usage.input_tokens)
- .bind(usage.output_tokens)
- .bind(usage.cache_creation_input_tokens)
- .bind(usage.cache_read_input_tokens)
- .bind(Utc::now().to_rfc3339())
- .bind(session_id)
- .execute(pool)
- .await?;
- Ok(())
+    sqlx::query(
+        r#"
+        UPDATE sessions
+        SET last_context_input_tokens = ?,
+            last_input_tokens = ?,
+            last_output_tokens = ?,
+            last_cache_creation = ?,
+            last_cache_read = ?,
+            updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(usage.context_input_tokens as i64)
+    .bind(usage.input_tokens as i64)
+    .bind(usage.output_tokens as i64)
+    .bind(usage.cache_creation_input_tokens as i64)
+    .bind(usage.cache_read_input_tokens as i64)
+    .bind(Utc::now().to_rfc3339())
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

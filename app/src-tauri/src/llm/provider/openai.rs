@@ -940,6 +940,13 @@ fn parse_openai_usage(v: &Value) -> Option<TokenUsage> {
         output_tokens: output.min(u32::MAX as u64) as u32,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: cache_read.min(u32::MAX as u64) as u32,
+        // 2026-06-26 snapshot fix: cross-provider normalized
+        // "total input for this request". OpenAI's
+        // `prompt_tokens` is ALREADY inclusive of
+        // `cached_tokens` (it's the full prompt length), so the
+        // context footprint is just `input`. Do NOT add
+        // `cache_read` here — that would double-count.
+        context_input_tokens: input.min(u32::MAX as u64) as u32,
     })
 }
 
@@ -1381,6 +1388,11 @@ mod tests {
         // normalized schema still requires a value (0).
         assert_eq!(u.cache_creation_input_tokens, 0);
         assert_eq!(u.cache_read_input_tokens, 50);
+        // 2026-06-26 snapshot fix: context_input_tokens = prompt_tokens
+        // (= input). OpenAI's prompt_tokens is ALREADY inclusive of
+        // cached_tokens, so adding cache_read here would double-count.
+        // Verified: 200 (NOT 200 + 50 = 250).
+        assert_eq!(u.context_input_tokens, 200);
     }
 
     #[test]
@@ -1398,6 +1410,7 @@ mod tests {
         assert_eq!(u.input_tokens, 50);
         assert_eq!(u.output_tokens, 10);
         assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.context_input_tokens, 50);
     }
 
     #[test]

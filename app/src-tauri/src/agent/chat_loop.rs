@@ -102,8 +102,9 @@ use crate::tools::ToolContext;
 /// not own the session's "active request" slot — that belongs to
 /// the parent chat). B6 PR1b's 20th parameter `skip_persist: bool`
 /// suppresses every DB write inside the loop (`persist_turn` /
-/// `update_message_metadata` / `touch_session` / `add_token_usage`
-/// / `record_*_audit`) so the worker's intermediate turns stay
+/// `update_message_metadata` / `touch_session` /
+/// `update_last_turn_usage` / `record_*_audit`) so the worker's
+/// intermediate turns stay
 /// in-memory only — the `SubagentBufferSink` transcript captures
 /// them (PR2 persists into `subagent_runs`), and skipping DB
 /// writes also avoids a UNIQUE-constraint collision with the
@@ -181,7 +182,7 @@ pub async fn run_chat_loop(
     skip_session_active: bool,
     // B6 Subagent (PR1b): when `true`, the loop skips ALL DB writes
     // (`persist_turn` / `update_message_metadata` / `touch_session` /
-    // `add_token_usage` / `record_*_audit`). The worker agent path
+    // `update_last_turn_usage` / `record_*_audit`). The worker agent path
     // uses this so its intermediate turns stay in-memory only (the
     // `SubagentBufferSink` transcript captures them; PR2 will
     // persist the transcript into `subagent_runs`). Skipping the DB
@@ -1147,38 +1148,43 @@ pub async fn run_chat_loop(
                                 turn_thinking_done = Some(Instant::now());
                             }
                             if let Some(t) = usage {
-                                // B6 PR2: token-usage accumulation is
-                                // intentionally **decoupled** from
-                                // `skip_persist`. The other 17
-                                // `skip_persist` gates guard writes to
-                                // the `messages` table (where worker +
-                                // parent would collide on the
-                                // `(session_id, seq)` UNIQUE key) and
-                                // `session_audit_events` (where the
-                                // worker path's ⑨ decisions would
-                                // pollute the parent's audit log). The
-                                // token-usage columns
-                                // (`input_tokens_total` / etc.) live
-                                // on `sessions`, not `messages`, and
-                                // the worker reuses the parent's
-                                // `session_id` (chat_loop.rs:2049), so
-                                // the worker's per-turn usage
-                                // naturally folds into the parent's
-                                // total. Pulling this out of the
-                                // `skip_persist` gate is what makes
-                                // the parent's UI see the worker
-                                // burning tokens in real time
-                                // ("streaming" accumulation).
+                                // 2026-06-26 (token-usage snapshot fix +
+                                // RULE-A-015 reversal): the per-turn
+                                // `update_last_turn_usage` is now BACK
+                                // inside the `!skip_persist` gate.
                                 //
                                 // PR1b originally gated this under
-                                // `!skip_persist` — PR2 reverses that
-                                // decision because the worker's
-                                // session_id is the parent's, not its
-                                // own, and the gate's only purpose
-                                // was the messages-table collision
-                                // (which doesn't apply here).
-                                if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
-                                    tracing::warn!(error = %e, "chat: failed to accumulate token usage (non-fatal)");
+                                // `!skip_persist`. PR2a (RULE-A-015)
+                                // pulled it OUT, citing "token-usage
+                                // metadata lives on `sessions`, not
+                                // `messages`, so the worker should
+                                // still stream its per-turn usage into
+                                // the parent's accumulator." That was
+                                // correct under the A4 cumulative
+                                // model — the worker's tokens added to
+                                // the parent's running total.
+                                //
+                                // The snapshot model reverses this.
+                                // `update_last_turn_usage` OVERWRITES
+                                // the parent's `last_*` columns (not
+                                // accumulates). If the worker (which
+                                // reuses the parent's `session_id` —
+                                // see dispatch.rs) ran unguarded, every
+                                // worker turn would OVERWRITE the
+                                // parent's snapshot with worker
+                                // numbers. The parent UI would
+                                // oscillate between parent-turn and
+                                // worker-turn values; on a multi-worker
+                                // dispatch the last-writer-wins
+                                // outcome would be arbitrary. Worker
+                                // token usage stays isolated in
+                                // `subagent_runs.token_usage_json`
+                                // (written at worker exit by
+                                // `dispatch.rs::run_subagent`).
+                                if !skip_persist {
+                                    if let Err(e) = crate::db::update_last_turn_usage(&db, &session_id, t).await {
+                                        tracing::warn!(error = %e, "chat: failed to update last-turn token usage (non-fatal)");
+                                    }
                                 }
                             }
                         }

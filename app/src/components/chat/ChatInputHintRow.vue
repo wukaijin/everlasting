@@ -101,13 +101,13 @@ defineProps<{
             }"
           >
             <template v-if="tokenUsage">
-              {{ abbreviateTokens(tokenUsage.input_tokens) }}
+              {{ abbreviateTokens(tokenUsage.context_input_tokens) }}
               ·
               {{
                 Math.min(
                   100,
                   Math.round(
-                    (tokenUsage.input_tokens / contextWindow) * 100,
+                    (tokenUsage.context_input_tokens / contextWindow) * 100,
                   ),
                 )
               }}% / {{ abbreviateTokens(contextWindow) }}
