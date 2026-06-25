@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 71
+- **Total Sessions**: 72
 - **Last Active**: 2026-06-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~697 | Active |
+| `journal-3.md` | ~730 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 72 | 2026-06-26 | 修复 TokenUsage 上下文占用统计(快照语义+worker隔离) | `25f134a` | `main` |
 | 71 | 2026-06-26 | L3d subagent frontmatter loader 实施 | `bb7dfe6`, `a9f1f63` | `main` |
 | 70 | 2026-06-25 | L3c subagent web access (worker web_fetch) | `0b0ecee` | `main` |
 | 69 | 2026-06-25 | L3a subagent 并发（只读 worker fan-out） | `b8e28e9`, `d77e7fc`, `0ce90b7` | `main` |

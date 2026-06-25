@@ -695,3 +695,36 @@ stale task 清理: session current task 原指向 `06-24-debt-remove-3-closed-ru
 ### Next Steps
 
 - None - task complete
+
+
+## Session 72: 修复 TokenUsage 上下文占用统计(快照语义+worker隔离)
+
+**Date**: 2026-06-26
+**Task**: 修复 TokenUsage 上下文占用统计(快照语义+worker隔离)
+**Branch**: `main`
+
+### Summary
+
+ChatInput 上下文占用 % 爆表 1.7M/100%(session 631362ab 仅 4 消息)。根因三层:① add_token_usage 逐turn累加非快照 ② worker token 故意 decouple skip_persist gate 灌进父 session(RULE-A-015/PR2a) ③ 跨provider口径不一塞同字段。修:TokenUsage 加归一化 context_input_tokens(Anthropic=input+cc+cr/OpenAI=prompt_tokens)+sessions 5个last_*覆盖写列+update_last_turn_usage;chat_loop 关回 !skip_persist gate 隔离 worker(reversal RULE-A-015 item a);删 add_token_usage+dead-code add_token_usage_streaming;前端 setLastTurnUsage 覆盖写+ChatInput 分子改 context_input_tokens。C3 压缩(estimate_messages_tokens)独立不动。cargo test --lib 907 / vitest 523 / vue-tsc 0 err。commits: 25f134a fix + 3b24b99 docs(spec) + dc2f408 archive
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `25f134a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
