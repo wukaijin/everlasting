@@ -173,8 +173,7 @@ cd app/src-tauri && cargo test    # 跑 Rust 单元测试
 - **当前 branch**:`main`
 - **远端**:`git@github.com:<your-github-username>/everlasting.git`,**已同步**
 - **最近 commit hash**:见 `git log -1 --oneline`(本文档不再硬编码,容易滞后)
-- **当前日期**:2026-06-20
-- **最近 session 交接**:`/tmp/everlasting-handoff-session50-2026-06-20.md`(Session 50 收尾生成,Session 51 依其推荐路径修了 B1+B2;后续 session 接力时建议沿用"short-term hotfix"模式 — handoff 文档列已识别债,直接走 1 个 PR,绕过 FT 阻塞链)
+- **当前日期**:见 `date +%F`(本文档不再硬编码,容易滞后)
 
 ---
 

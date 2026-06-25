@@ -17,6 +17,9 @@
 
 ### 1.1 MVP 主体(原 7 步路线图)
 
+<details>
+<summary>8 项里程碑(全部 ✅)— 点击展开</summary>
+
 | 阶段    | 里程碑 | 状态 |
 |---------|--------|------|
 | MVP     | 步骤 1:Tauri 2 + Vue 3 + Rust 骨架,LLM 流式对话 | ✅ |
@@ -29,6 +32,7 @@
 | 跨阶段  | 步骤 8:代码重构(5 PR — lib.rs / db.rs / 前端 sub-components / 文档 / STRUCTURE.md) | ✅ |
 
 > 步骤 3b-2(完整三栏 UI + rig-core 迁移)已废弃,详见 [IMPLEMENTATION §4 决策日志 2026-06-09](./IMPLEMENTATION.md#4-决策日志)。
+</details>
 
 ### 1.2 路线图外完成
 
@@ -85,25 +89,18 @@
 | ~~B2~~ | ~@文件补全~ | ✅ 06-17 落地(PR1+PR1.5+PR2),见 §1.2 |
 | ~~D3~~ | ~session 内消息编辑 / 重发~ | ✅ 06-17 落地(PR1+PR2+PR3+follow-up),见 §1.2 |
 
-### 🟠 第三档 — 缓做(10 项)
+### 🟠 第三档 — 缓做(active 项)
 
 | 编号 | 功能 | 备注 |
 |------|------|------|
-| ~~B6~~ | ~Subagent(main agent 派 worker agent,独立 context,summary 回填)~ | ✅ 06-20/21 落地(dispatch_subagent + worker + subagent_runs 持久化 + SubagentDrawer redesign 5 段分组 + 边界态,2 降级债记 DEBT),见 §1.2 |
-| ~~B12~~ | ~Checklist(agent 自跟踪进度清单)~ | ✅ 06-19 落地,见 §1.2 |
-| ~~B4~~ | ~Skill 系统~ | ✅ 06-18 落地,见 §1.2 |
 | B9   | 生成式 UI(4 primitives — button / selector / diff / code_block) | 输出层扩展 |
-| ~~C2~~ | ~循环检测~ | ✅ 06-24 落地(分级触发 + 软提示 hint 注入),见 §1.2 |
 | C6   | 大输出截断统一 | ⑩ ⑫ 边界处统一处理 |
 | B1   | 图片支持(multimodal) | 输入层扩展 |
-| D2   | 跨 session 全文搜索(**双驱动** 路径) | ① **用户驱动**(MVP,1 PR):UI Modal + `Cmd/Ctrl+K` 触发 + 跳到原 message ② **Agent 驱动**(增量,1 PR):`search_history` tool,LLM 决策时调;**共享 `search_messages` Tauri command**;**实施顺序:先①后②**,可只 ship ①;**降档理由(2026-06-17)**:session 积累尚浅 + B5/C3 已覆盖"当次 memory"层,价值随 session 基数增长。详见 [IMPLEMENTATION §4 2026-06-17](./IMPLEMENTATION.md#4-决策日志) |
+| D2   | 跨 session 全文搜索(双驱动) | ① 用户驱动(MVP,1 PR)+ ② Agent 驱动(`search_history` tool);共享 `search_messages`;先①后②;降档理由(2026-06-17):session 积累尚浅 + B5/C3 已覆盖"当次 memory"层。详见 [IMPLEMENTATION §4 2026-06-17](./IMPLEMENTATION.md#4-决策日志) |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
-| ~~A7~~ | ~~RDP 双屏 position bug 修复~~ | ✅ 06-14 落地(根因 Wayland setPosition 限制),见 §1.2 |
-| ~~L2~~ | ~单 turn 多 tool 并发执行(只读 batch)~ | ✅ 06-19 落地(`is_parallel_eligible` + FuturesUnordered,并发集合排除 web_fetch + 写类;path-outside-root edge case 记 RULE-A-013),见 §1.2 |
-| ~~L1~~ | ~后台 shell + 完成通知(仿 opencode-pty `<pty_exited>`)~ | ✅ 06-19 落地(L1a:`BackgroundShellRegistry` trait + 3 tool + APPEND 注入,复用 RULE-E-002/E-001;PTY 留 L1b),见 §1.2 |
-| ~~L3a~~ | ~subagent 并发 + 不阻塞(只读 worker fan-out)~ | ✅ 06-24/25 落地(PR1:纯 dispatch 批 `FuturesUnordered` 并发复用 L2 模板 + `force_readonly` 运行时剥写 + env 上限3硬拒;3 竞态点只读范围消解零并发控制;前端 store 天然 N concurrent),见 §1.2;**worker 联网(web_fetch)拆独立 task** `06-25-subagent-web-access`(06-25 已落地,见 L3c) |
 | L3b  | worktree 隔离 + 仿 Hermes `delegate_task` | 拆自原 L3 子项 2(2026-06-24);依赖 L3a;`git/worktree.rs` 已就位;旗舰级 harness 学习项 |
-| ~~L3c~~ | ~subagent 联网(worker web_fetch)~ | ✅ 06-25 落地(researcher `SubagentDef.tools` + `READONLY_TOOL_ALLOWLIST` 各加 web_fetch;**第 3 层零改动**——基线验证发现 worker ask 2026-06-22 已走 WorkerAskBanner + `ctx.session_id`=父 session 使父 grant 继承天然工作,推翻"is_worker Deny"前提;LLM-facing dispatch_subagent description 顺手修正),见 [IMPLEMENTATION §4 2026-06-25](./IMPLEMENTATION.md#4-决策日志) |
+
+> **已完成的 9 项**(B6 / B12 / B4 / C2 / A7 / L2 / L1 / L3a / L3c)已从第三档移到 §1.2 已实施列表。
 
 ### 🔴 第四档 — 最远远期(app 主体完善之后)(3 项)
 

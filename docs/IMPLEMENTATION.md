@@ -308,30 +308,6 @@ PR3 收尾范围(本 ADR 锁定):
 
 ---
 
-### 2026-06-17 — D2(SQLite FTS5 全局搜索)从第二档降档到第三档 + 标注双驱动路径
-
-**Context**: 2026-06-17 user review D2 设计后明确延后,触发两点判断:
-- **痛点不足**:用户当前 session 积累尚浅(数十量级),B5 Memory 指令系统(写)+ C3 Context 压缩(当次 session 内管理)已覆盖"当次 memory"层;D2 价值 = "跨 session 找回过去对话",依赖 session 基数到一定量(类比 Notion / VSCode 全文搜索"用了就回不去"前提是积累)
-- **双驱动价值大于单驱动**:用户 modal(`Cmd/Ctrl+K`)+ agent tool(`search_history` LLM 决策时调)共享同一个 `search_messages` Tauri command,实现成本几乎不翻倍,但**让 LLM 主动挖过去对话**比"用户自己搜再问 agent"更接近 Claude Code 那种"agent 知道过去"的体验
-
-**Decision**: D2 从 ROADMAP §2 第二档移到 §2 第三档(缓做),描述补"双驱动路径 + 实施顺序",**保留后端 `search_messages` Tauri command 形态预想**(不破坏未来增量实施路径,未来可单独按双驱动范围重新评估排期)。**D3(session 内消息编辑/重发)按原排期仍留第二档**——DEBT 收尾建议第 3 条"D3 自然碰 A-007(error 路径 partial text)/ A-010(二次取消语义),应最后做",降档会跟该建议冲突,本批次没动这两条债,降档理由不充分。
-
-**双驱动路径**(作为 D2 未来实施时的预设范围,降低"开新 task 时重新讨论"成本):
-- **① 用户驱动**(MVP,~150-200 行,1 PR 闭环):后端 `messages_fts` 虚拟表(FTS5,unicode61)+ `search_messages(query, project_id?, limit) -> Vec<MessageSearchHit>` Tauri command(query 长度硬卡防 LIKE abuse);前端顶栏搜索图标 + `Cmd/Ctrl+K` 触发 Modal,结果列表显示 `session_title` + `project_name` + 高亮 hit 片段 + 点开跳到 message 并 scroll into view
-- **② Agent 驱动**(增量,~100 行,1 PR 闭环):`search_history(query)` tool 接 ② 既有 tool 注册表,LLM description 写清"用过去 session 的 message 内容回答用户关于'上次怎么 X'的问题";**共享** `search_messages` Tauri command;permission Tier 1 只读白名单;`allowed-tools` 默认不挂(LLM 看不到自动不可调,需用户显式开,防滥用)
-- **实施顺序**:先 ① 后 ②;**① 可独立 ship**,② 是 ① 的复用增量,非并行(避免 ② 提前 share 搜索基础设施时 ① UI 还没定)
-- **CJK 鲁棒性**:① 第一版用 `unicode61` tokenize + 前端分词提示;jieba-rs / trigram 等 CJK 优化放 D2-v2(不在 D2 范围)
-
-**反向触发**(拉回第二档的条件):session 基数到 50+ / 用户多次表达"想找回过去对话" / B5/C3 层出现"需跨 session 引用"的需求。
-
-**Alternatives**(已否决):
-- **降到第四档(最远远期)**:跟 daemon 化(B10 飞书)/ 云端同步(B11)等同档,但 D2 实现复杂度极低(DB 索引 + Tauri command + UI,~200-300 行),不与 daemon 化同等量级,第三档更准
-- **保持第二档不动**:用户明确延后,违背 user 决定
-- **D2 + D3 一起降档**:D3 是 V2 第二档里仅剩的 1 项,降档会让第二档提前"伪清零";且 DEBT 建议 D3 与 A-007/A-010 同步,本批次没动这两条债,D3 降档理由不充分
-- **只做用户驱动(砍掉双驱动设计)**:用户体验上"用户搜 + 喂给 agent"比"agent 自动搜"多一轮交互,落差明显;双驱动后端零增量、前端仅多 1 tool 注册 + permission 配置,几乎零成本
-
-**影响面**: 仅 ROADMAP §2 表格行移动 + 描述补充;无代码 / spec / test 变更。DEBT.md §"按 ROADMAP 里程碑的收尾契机"B2/B3/D2 行同步修正为"B2/B3(D2 暂缓)"。**未开新 task**——按 user 决定延后,等触发条件出现时再 `trellis-brainstorm` 起新 task。
-
 ### 2026-06-16 — 审批内联到 ToolCallCard + 按 session 分区 + 拒绝并反馈(取代全局 PermissionModal)
 
 **Context**: 全局单例 `<PermissionModal>`(挂 ChatPanel,Teleport to body,状态为 `usePermissionsStore.pendingPermission` 单槽 ref)在多 session 并发审批时三连问题:① `setPending` 直接覆盖旧 pending 且不对旧 rid respond,旧 ask 留在后端 oneshot store 跑满 120s 超时 → `Decision::Deny`,该 session agent loop 卡 120s(用户感知"没问我就处理了",实际是超时拒);② payload `PermissionAskPayload` 不带 sessionId,modal 文案写死"当前项目"、path badge 用 `chatStore.currentCwd`(用户当前看的 session),跨 session 时指鹿为马;③ `deny` reason 写死 `"user denied"`,LLM 不知为何被拒、无法纠错。
@@ -370,27 +346,6 @@ PR3 收尾范围(本 ADR 锁定):
 - **pipe 保留首 token 现状(只降级 &&/;)**:`git log \| bash` 仍误放 Allow,否决。
 
 **影响面**:后端内聚,3 文件(`shell_trust.rs` 重写 + `mod.rs` Tier 3/4 + `db/permissions.rs` 注释);前端(`permissions.ts`/`PermissionModal.vue`)不动(只认 `permission:ask` payload,与 `ShellTrust` 枚举解耦)。452 lib 测试全绿(含 18 个 `classify_*` 新测试覆盖三档/git 子命令/结构降级)。代码 `app/src-tauri/src/agent/permissions/{shell_trust.rs,mod.rs}`;spec `.trellis/spec/backend/tool-contract.md` "Scenario: Path-based Permission" 同步更新。
-
-### 2026-06-14 — TitleBar maximize 改用原生 toggleMaximize()(position bug 根因 = Wayland setPosition 限制)
-
-**Context**: session 15(2026-06-07)留的 TODO(bug-position):RDP 双显示器下点最大化,窗口"grow rightward"而非贴 host 主屏左上角。跨多 session 试过 setSize/setPosition 顺序互换、cursorPosition 定位,均失败。06-14 重新排查定位根因。
-
-**根因(关键)**:**不是 Tauri bug,是 Wayland 协议根本限制**。Wayland 安全模型禁止客户端设置窗口位置——position 由合成器决定。WSLg 用 Weston(Wayland 合成器),`setPosition()` 被合成器**静默忽略**。影响所有 toolkit(GTK/Qt/SDL/Tauri),Tauri issue #14913 / Weston / Qt 社区均证实。故"先 setPosition 移到 monitor 左上角再 setSize 铺满"在 WSLg 下**协议层面就不可能**——setPosition 被忽略,setSize 让窗口从原位向右下生长,正是报告现象。
-
-**Decision**:放弃"应用控制位置 + 手动铺满整屏(含任务栏)"的非标准 maximize,全平台统一 `win.toggleMaximize()`:
-- 合成器/WM 原生 maximize,position 由系统决定 → Wayland/X11/Win/macOS 位置都正确
-- 自定义 title bar 保留(maximize ≠ fullscreen)
-- toggle 语义自动还原到最大化前状态
-- `isMaximized` 从"比对 outerSize vs monitor.size"启发式 → 直接 `win.isMaximized()`(权威)
-- 代价:铺满 work area 而非整屏(WSLg/RDP 虚拟屏通常无任务栏,= 整屏);还原尊重用户拖动过的大小而非强制 1440×900(改善)
-
-**Alternatives**(已否决):
-- **手动 setSize+setPosition 铺满**:Wayland 下 setPosition 被忽略,失败(根因)
-- **`setFullscreen(true)`**:位置对,但 fullscreen 隐藏自定义 title bar,看不见 min/max/close,只能 Esc 退出 → 体验不可接受
-- **平台分流(WSLg→toggleMaximize,其他→手动)**:`platform()` 只返回 `linux`,无法精确区分 Wayland/X11,增加复杂度 + 误判
-- **保持现状不修**:原生 toggleMaximize 几乎零代价且更标准,无理由不修
-
-RDP 双屏验证通过(2026-06-14)。代码 `app/src/components/layout/TitleBar.vue`;A7 出第三档进 §1.2。
 
 ### 2026-06-13 — A2+B7 Re-grill: path-based 模型 + Tier 重排(Mode 提前)+ 3 match_kind 全 wire
 
@@ -695,7 +650,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **沉淀**:`.trellis/spec/backend/llm-contract.md` 新增 §"Scenario: Tool Set Extension" 段(7 sections code-spec depth,含错误矩阵 + Good/Base/Bad + 24 个必测项 + Wrong/Correct 对照)
 - **Out of Scope 守住** (13 条):`hashline_edit` / `MultiEdit` / `LSP` / `WebFetch` / `WebSearch` / damage-control 路径规则 / Bash `cat|head|sed` 等价 read / `replace_all` preview / 前端 tool card 改造 / `read_file` PDF / binary 检测 / `read_many_files` / grep `output_mode=json` —— 全部 0 命中
 
-### 2026-06-07 — 6 UI/状态 bug 修复 + streamController 状态架构重构
+### 2026-06-07 — streamController 状态架构重构(6 UI/状态 bug 同期修复)
 
 - **决策**:抽 `useStreamControllerStore()` 独立 Pinia store 作为 in-flight SSE 流的**单一来源**,`useChatStore()` 改 thin facade
   - **原因**:旧设计把 messages / `streamingSessionId` / `currentRequestId` / SSE listener 全放 `useChatStore()`,session 切换时会丢 streaming message + 漏 `done` event 处理(red dot + stop button + `sending` 卡死)
@@ -704,59 +659,28 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **沉淀**:`.trellis/spec/frontend/state-management.md` 新增 §"Stream Controller Pattern"
   - **测试**:12 个 LRU 单测 + 36 vitest + 103 cargo 全过
   - **commit**:`abde429` + spec `bf9b35b`
-- **决策**:顶栏窗口控制 bug 1+2(尺寸 + 位置)的 size 部分通过 Tauri 2 capabilities 补全权限修好
-  - **原因**:`setSize` 之前静默失败是 Tauri 2 默认 deny(没在 `capabilities/default.json` 声明);补 `set-size` / `set-position` / `outer-size` / `outer-position` / `current-monitor` 等 11 个权限
-  - **已知 issue**(当时):position 部分在 RDP 双显示器场景下未完全修好(窗口 grow rightward 而非贴 host 主屏左上角),TODO 跟踪,候选 `setFullscreen(true)` 兜底 — **[2026-06-14 ✅ 已解决]**:根因 = Wayland 禁止客户端 setPosition(非 Tauri bug,不可绕过),改原生 `toggleMaximize()`,详见 §4 2026-06-14 ADR
-  - **commit**:`bd5ea7b`
-- **决策**:Markdown 表格 td/th border 改用 `--color-bg-border-strong: #3B475A`
-  - **原因**:dark mode 下原 `--color-bg-border: #1E2530` 跟气泡底色 `#1A2030` 只差 4 亮度单位,看不清
-  - **commit**:`bd5ea7b`
-- **决策**:顶栏 minimize 按钮改用 `MinusIcon`(替换原 ✕ 图标)
-  - **原因**:icon 跟功能不对应(bug 3);补 `Icon.vue` heroicons 注册
-  - **commit**:`bd5ea7b`
-- **决策**:顶栏 logo 加 `padding-right: 12px`,跟 tab 区拉开间距(bug 4)
+- **决策**:顶栏窗口控制补 Tauri 2 capabilities(`set-size` / `set-position` / `outer-size` / `outer-position` / `current-monitor` 等 11 个权限)
+  - **原因**:`setSize` 之前静默失败是 Tauri 2 默认 deny(没在 `capabilities/default.json` 声明)
+  - **遗留**:position 部分在 RDP 双显示器场景下未完全修好(窗口 grow rightward 而非贴 host 主屏左上角)→ **[2026-06-14 ✅ 解决]**:根因 = Wayland 协议禁止客户端 setPosition(非 Tauri bug,不可绕过),改原生 `toggleMaximize()`,详见 2026-06-14 ADR
   - **commit**:`bd5ea7b`
 
-### 2026-06-06 — 字体栈调整 + spike-005 follow-up 7 PR 合并
+### 2026-06-06 — 字体栈调整 + `projects.git_branch` 启动 batch backfill
 
 - **决策**:Dark theme 下中文字体栈首位改 HarmonyOS Sans SC,子集打包嵌入(3500 常用字 + ASCII + 标点,woff2 + brotli → 472 KB)
   - **原因**:Noto Sans CJK SC 在 dark theme 下笔画粗细不均,影响阅读
   - **沉淀**:`.trellis/spec/frontend/cjk-fonts.md`(系统字体兜底局限、3500 字覆盖率、Vite+Tauri 资源链路、license 合规三处声明 pattern)
   - **commit**:`aabb9fa` + docs follow-up `d1d51cf` / `adf4ed6`
-- **决策**:spike-005 后续 7 PR 合并为单个 commit,代表"MVP 基础体验可上桌"的状态点
-  - **覆盖范围**:UI 紧凑 header (`801fb8a`) + git_branch 显示 + 启动 batch backfill(`7ce3209` 推翻 PR2 懒探测决策) + pwd `~/` 简化数据通路 (`ef7cea8`) + write_file tracing + LLM cancel 机制 + markdown 渲染 (marked v18 + DOMPurify + vitest 基础架构) + 首行空白修复
-  - **commit**:`401396b`
 - **决策**:`projects.git_branch` 用启动时 batch backfill,不再用 PR2 的"打开 project tab 时懒探测"
   - **原因**:老项目(无 git_branch 字段)开了 tab 才能看到分支,首屏体验差;启动 batch 一次扫所有项目,DB 落库
   - **commit**:`7ce3209`
 
-### 2026-06-05 — 路线图状态校对(步骤 3a 完成、步骤 3b 暂缓、extended thinking 路线图外完成)
-
-- **决策**:步骤 3b(多项目 + UI 三栏 + Rig 迁移)**暂缓**,优先做 Anthropic extended thinking 支持
-  - **原因**:thinking 功能跟正在落地的 LLM 工作流强相关,延后做返工成本高;3b 是 UI / 多项目重构,可以后做不影响其他步骤
-- **决策**:extended thinking 单列为"路线图外完成",不挤占现有步骤编号
-  - **原因**:保护 7 步路线图原结构,避免重新编号引发的级联引用更新
-- **已知 issue(不修)**:commit `05671f5` 标题误用"步骤 6 — ..."字样,实际不对应 §2.7 步骤 6(MCP + 多 Provider)。**不改 commit message**(git 历史不动);路线图 §3 表格、ARCHITECTURE §2.4 实施映射表里都加注释说明语义偏差
-- **决策**:HANDOFF / CLAUDE.md / IMPLEMENTATION / DESIGN / ARCHITECTURE / README 所有"当前进度"段落统一校准到本日 git log 真实状态
-  - **原因**:HANDOFF 停留在 2026-06-04 步骤 3a 前夕,跟实际偏差过大,新 session 读完会做错假设
-
 ### 2026-06-04 — 路线图重构(步骤 1 完成后审视)
 
-- **决策**:删除原步骤 5(WSL 验证),8 步合并为 7 步
-  - **原因**:spike-001 已通过,步骤 1 也在 WSL 内完成,原步骤 5 是空壳
-- **决策**:拆原步骤 3 为 3a(SQLite + session 持久化)和 3b(多项目 + UI + rig-core)
-  - **原因**:原步骤 3 包含 4 件独立大事,任何一件卡住整个步骤都交付不了
-- **决策**:事件协议用混合模式(高频 payload 判别 + 低频独立事件名)
-  - **原因**:兼顾流式 token 性能和低频事件可 filter 性
-- **决策**:SQLite 不提前到步骤 2,保持步骤 3a
-  - **原因**:步骤 2 专注 agent loop 核心学习,加 SQLite 会膨胀范围
-- **决策**:步骤 2 继续手写 reqwest,步骤 3b 才切 rig-core
-  - **原因**:手写 agent loop 是核心学习价值,"先学再依赖"
+> 📦 **已归档到 [`docs/_archive/2026-06-04-roadmap-restructure.md`](_archive/2026-06-04-roadmap-restructure.md)**。本节历史路线图重构决策(8 步合并 7 步 / 步骤 3 拆 3a+3b / 事件协议混合模式 / SQLite 排期 / 步骤 2 继续手写 reqwest)由 ROADMAP.md V2 重排 ADR 取代,只读不改。
 
 ### 2026-06-05 — 步骤 3b-1 follow-up 沉淀 (FU-1/2/3 项目决策)
 
-- **FU-1 · cwd 简化为 `~/`**：3b-1 起 `ToolContext.cwd` 默认值从 `std::env::current_dir()` 改为 `~/`（`dirs::home_dir()`）。理由：LLM 工具调用产生的相对路径在跨 session 时能稳定解析。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
-- **FU-2 · TS interface 字段 snake_case → camelCase**：Tauri 2 IPC 默认 `rename_all = "camelCase"`，前端 TypeScript interface 字段必须用 camelCase，**不要**在 TS 侧再写 snake_case 类型（如 `initialCwd` 不要写成 `initial_cwd`）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
+完整 FU 项(FU-1 cwd `~/` / FU-2 TS interface camelCase / FU-3 pick_project_dir reka-ui 改写)与决策理由沉淀在 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md);本 ADR 仅留状态索引,FU 内容不重复。
 - **FU-3 · `pick_project_dir` 用 reka-ui 渲染 dialog**：Tauri command 不再负责弹原生 dialog，统一改为前端用 reka-ui 的 `Dialog` 组件（后端只暴露 path 校验）。详见 [`docs/_archive/2026-06-3b-1/FOLLOW-UP.md`](_archive/2026-06-3b-1/FOLLOW-UP.md)。
 
 ### 2026-06-24 — RULE-D-001 provider api_key 加密存储(P1 安全债收口)

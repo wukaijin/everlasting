@@ -613,10 +613,10 @@ agent loop 结束(text-only response or max_turns reached):
 
 - **触发场景**:用户在 LLM 流式输出中点 stop,或 long-running tool 内中断
 - **位置**:② Tauri IPC 之后立刻建 `CancellationToken`;⑩ tool 执行内 `tokio::select!` 监听
-- **关键设计**:取消**不立即终止 LLM 请求**,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
-- **`shell` 进程组杀整组**(RULE-E-002,2026-06-14):`shell` tool 的子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程,不再留孤儿。Windows 留 P2
+- **关键设计**:取消不立即终止 LLM 请求,而是把"取消"事件本身作为 tool_result 回传(给 LLM 一次自我收敛的机会);只有用户二次取消才真终止
+- **`shell` 进程组杀整组**:`shell` tool 子进程以 `process_group(0)` 启动,PGID == sh PID;cancel / timeout 时 `kill(-pgid, SIGKILL)` 杀整组,清理 `&` / 管道 / `nohup` 产生的孙子进程。Windows 留 P2
 - **缺失后果**:用户按 stop 没反应 → 跑光了 token 还在跑 → 信任崩塌
-- **已知偏离**(RULE-A-010,2026-06-17):当前实现单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**。MVP 简化决策:不走"取消→tool_result 回传 LLM→二次 cancel 才真终止"链路,而是"一次 cancel = 立即终止"。理由:(1) tool 取消窗口短,LLM 自我收敛窗口需要再发一轮 LLM 调用,延迟 + 成本不一定划算;(2) 单用户桌面应用场景下,误点 stop 的概率极低,二次取消 UX 增加 friction 而价值有限。完整 spec 见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + DEBT.md §RULE-A-010 (已 closed 2026-06-17 via spec 偏离声明 + ADR `docs/IMPLEMENTATION.md §4` 2026-06-17 "D3 完成")。若未来要补二次取消语义,实现路径:agent loop 的 tool 取消分支 + cancel check 之间加一个 "已 cancel 过 N 次" 状态机,N==1 时构造 synthetic `tool_result` 回填 LLM 续流,N==2 才 emit `Done("cancelled")`。
+- **当前实现**:MVP 简化决策——单次 cancel 即 emit `Done("cancelled")` 终止,**未实现"二次取消才真终止"语义**;完整 spec + 二次取消实现路径见 `docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md` §2.1 + [IMPLEMENTATION §4 2026-06-17 ADR](./IMPLEMENTATION.md#4-决策日志)(RULE-A-010 已 closed 2026-06-17 via spec 偏离声明)
 
 #### 2.5.2 ⑩ Tool 超时回填
 
@@ -640,33 +640,26 @@ agent loop 结束(text-only response or max_turns reached):
 
 #### 2.5.4 ⑬ 循环检测阈值(C2 已实施 2026-06-24)
 
-- **分级触发**(取代早期单一 `Jaccard > 0.9` —— 单一阈值无法适配短/长 input):
-  - **Level 1 精确签名硬触发**(`HARD_WINDOW=3`):窗口内连续 3 次归一化签名完全相同 → 零误报抓真死循环(read/grep/shell 同输入)。per-tool 签名:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,**`edit_file`=path+old_string**(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
-  - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5`/`SOFT_THRESHOLD=0.85`):窗口内 ≥2 对 token-set Jaccard > 0.85 → 容忍近重复(主要是 shell 长命令)
-- **token 切分**:纯 Rust `split_whitespace` + trim 首尾标点(CLI flag `--` 剥离、路径保留),**不复用** `memory::tokens::count_tokens`(tiktoken:async Mutex + CJK 切碎 + subword 噪音)
-- **命中动作(软,§2.5.4「不强制打断」原意)**:两层都 `tracing::warn!` + 把 hint 文本作为 `ContentBlock::Text` 插到 result message 的 `result_blocks[0]`,LLM 下一轮在 tool_results 前看到提示;**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表(见 §2.5.8)
-- **实现位置**:`app/src-tauri/src/agent/loop_detection.rs`(纯函数 `detect` / `LoopVerdict` / `signature_of`)+ `chat_loop.rs` ⑬ 关卡(tool_calls 收集后更新窗口 + detect;result_blocks 构造后注入 hint)。worker nested run_chat_loop 自动继承
-- **完整 PRD**:[`.trellis/tasks/06-24-c2-loop-detection/prd.md`](../../.trellis/tasks/06-24-c2-loop-detection/prd.md) + 调研 [`research/similarity-algorithm-and-tokenizer.md`](../../.trellis/tasks/06-24-c2-loop-detection/research/similarity-algorithm-and-tokenizer.md)
+- **分级触发**(取代早期单一 `Jaccard > 0.9`,单一阈值无法适配短/长 input):
+  - **Level 1 精确签名硬触发**(`HARD_WINDOW=3`):连续 3 次归一化签名完全相同 → 零误报抓真死循环
+  - **Level 2 Jaccard 软提示**(`SOFT_WINDOW=5` / `SOFT_THRESHOLD=0.85`):≥2 对 token-set Jaccard > 0.85 → 容忍近重复
+- **per-tool 签名**:`read_file`/`write_file`/`list_dir`=path,`grep`/`glob`=pattern+path,`edit_file`=path+old_string(含 old_string 才不误判正当的同文件多块编辑),`shell`/`run_background_shell`=command,其余 fallback `name+canonical(input)`
+- **命中动作(软)**:两层都 `tracing::warn!` + 把 hint 文本插入 result message,**不跳过执行、不终止 loop**,MAX_TURNS=200 仍是硬兜底。无 AuditKind 落表
+- **完整设计 + 调研**:详见 [IMPLEMENTATION §4 2026-06-24 ADR](./IMPLEMENTATION.md#4-决策日志)
 
 #### 2.5.5 ⑤ Context 超限降级(C3 MVP,2026-06-12 落地,**已实施**)
 
 - **触发**:总 token > `context_window * 0.80`(MVP 阈值,留 0.20 余量给 tiktoken cl100k_base 1-2% 漂移)
-- **保护顺序**(先保护什么):
-  1. **不动**:`system_prompt` + `role.system_prompt` + 4 层 Memory 合成段(B5 `memory_synthetic` + `assistant_ack` 永远不被裁剪)
+- **保护顺序**:
+  1. **不动**:`system_prompt` + `role.system_prompt` + 4 层 Memory 合成段
   2. **优先丢**:runtime tool_result(从最老 turn 开始丢)
   3. **次优丢**:老 user / assistant turn(从最老开始丢)
   4. **裁剪目标**:降到 `context_window * 0.50`
-  5. **未来手段**(未实施):LLM 摘要中间消息(贵且慢,留给 C3-v2)
-- **配对保护**:`assistant(tool_use)` + `user(tool_result)` 必须成对丢,避免 API 400
-- **不丢**:Thinking / RedactedThinking blocks(只随整 turn 丢,不会"丢一半";signature 对不上会 400)
-- **不丢**:当前 user message、当前 tool_result
-- **不能做**:丢 system prompt、丢 role prompt、丢所有 memory
-- **MAX_TURNS 兜底**:20 → 50 → 200(2026-06-12 C3 PR1 改 20→50;2026-06-22 再 50→200 覆盖长 worker;正常 token 预算会先触发,200 轮兜底覆盖极端 case)
-- **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护 + 优先级算法)
-- **完整 PRD**:[.trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md](./../trellis/tasks/archive/2026-06/06-12-c3-context-token/prd.md)
-- **未实施**(MVP 留口子):前端"context compressed at turn N"UI 标记(PR2)+ compressed_out DB 列(C4 覆盖)+ LLM summarization(C3-v2)
-- **BUG 修复(2026-06-14,RULE-A-001 + RULE-A-002)**:① `group_droppable_turns` 的 orphan 分支改 skip(隐式保护 tool_use-bearing assistant),不再 singleton drop 留下孤立 tool_use/tool_result(撞 Anthropic 400);② `CompactResult` 加 `degradation: DegradationKind`,全 droppable 丢完仍超窗时返回 `StillOver { tokens_after, target }`,agent loop(chat.rs + chat_loop.rs 副本同步)emit `ChatEvent::Error { InvalidRequest }` + 早返回,不静默发超窗 prompt 撞 `prompt is too long`。详见 [DEBT.md](./../trellis/reviews/DEBT.md) RULE-A-001/002。
-- **Agent loop body 统一(2026-06-15,RULE-A-006 闭环)**:`chat` Tauri 命令的 spawn 闭包体改为单次 `chat_loop::run_chat_loop(...)` 调用,production 与 test 共享同一函数体(无副本)。所有四个 emit 通道(chat-event / tool:call / tool:result / permission:ask)统一走 `dyn ChatEventSink` trait(生产接 `AppHandleSink`,测试接 `MockEmitter`)。9 个 `agent_loop_*` 集成测试现覆盖 production 真实路径,改 agent loop body = 改 1 处,无 drift hazard。详见 [DEBT.md](./../trellis/reviews/DEBT.md) RULE-A-006。
+- **不变量**:`assistant(tool_use)` + `user(tool_result)` 必须成对丢(API 400 红线);Thinking / RedactedThinking blocks 只能随整 turn 丢;当前 user message、当前 tool_result 不丢
+- **不能做**:丢 system prompt / role prompt / 所有 memory
+- **MAX_TURNS 兜底**:200(从 20 → 50 → 200 演进,详见 ADR)
+- **实现位置**:`app/src-tauri/src/agent/context.rs`(`estimate_messages_tokens` + `compact_messages` + 配对保护)
+- **完整设计 + BUG 修复历史**:详见 [IMPLEMENTATION §4 2026-06-12/14/15 ADR](./IMPLEMENTATION.md#4-决策日志)(RULE-A-001/002/006 已闭环)
 
 #### 2.5.6 Session 切换的并发态
 
@@ -684,101 +677,24 @@ agent loop 结束(text-only response or max_turns reached):
 
 #### 2.5.8 ⑯ 审计日志(A2 + B7 PR1 + C4 PR1/PR2 落地,2026-06-13/14,**已实施**)
 
-**每次记录**:
-- ⑨ 权限决策(10 类 `AuditKind` 枚举,见下)
-- ⑩ tool 执行(C4 PR1, 2026-06-14 落表:tool_name, tool_input, duration_ms, exit_code — `record_tool_executed_audit` 在 agent loop tool 执行完成处写)
-- ⑬ 循环检测触发(只 `tracing::warn!`,**未落表** — 收益低,C4 OOS;**C2 已实施 2026-06-24**,见 §2.5.4)
-- ⑮ channel 路由(从哪个 channel 进,从哪个 channel 出;**未落表** — daemon 化前是单 client,无路由可记)
-
-**存储**:`session_audit_events` 表(SQLite),schema:
-```sql
-CREATE TABLE session_audit_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    ts TEXT NOT NULL DEFAULT (datetime('now')),
-    kind TEXT NOT NULL,           -- AuditKind 字符串
-    payload_json TEXT,            -- 统一 JSON 结构
-    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-);
-CREATE INDEX idx_session_audit_events_session_ts
-    ON session_audit_events(session_id, ts DESC);
-```
-
-**11 类 AuditKind**(`agent::permissions::AuditKind`,C4 PR1 加 `ToolExecuted`):
-| Kind | 触发条件 |
-|---|---|
-| `tool_denied` | Tier 2 命中 + Tier 3 user deny + Tier 3 sender dropped |
-| `tool_allowed` | Tier 3 AllowOnce / Tier 3 "始终允许" 命中 / Tier 5 默认 |
-| `tool_permission_ask` | Tier 3 emit `permission:ask` |
-| `permission_granted` | Tier 3 "始终允许" → 写 `session_tool_permissions` |
-| `permission_timeout` | Tier 3 120s 超时 |
-| `tool_denied_yolo` | Tier 2 命中 + mode = Yolo(跟普通 `tool_denied` 区分) |
-| `mode_changed` | `set_session_mode` 调用 |
-| `yolo_entered` / `yolo_exited` | Mode 在 Yolo 之间切换 |
-| `request_cancelled` | C1 cancel 触发(tier 3 await 被 cancel 打断) |
-| `tool_executed`(C4 PR1, 2026-06-14)| ⑩ tool 执行完成(agent loop 调 `record_tool_executed_audit`) |
-
-**统一 payload JSON 结构** — 按 kind 分发:
-
-⑨ 关类(7 种走 `permissions::record_audit`,统一 `{tool_name, tool_input, reason?, mode, critical?}`):
-```json
-{
-  "tool_name": "shell",
-  "tool_input": { "command": "ls -la" },
-  "reason": "matches denylist: rm -rf /",
-  "mode": "edit",
-  "critical": true
-}
-```
-
-⑩ `tool_executed` payload(C4 PR1,独立 helper `record_tool_executed_audit`):
-```json
-{
-  "tool_name": "shell",
-  "tool_input": { "command": "cargo build" },
-  "duration_ms": 3210,
-  "exit_code": 0
-}
-```
-`exit_code` 是 `Option<i32>`:`null` = 该 tool 无 exit code(read_file / write_file / edit_file / grep / glob / list_dir / web_fetch);`0` = 成功;`-1` = 被 kill(timeout / cancel);非 0 = 失败。C4 前端按值着色(绿 / 警示 / 红)。
-
-⑯ mode 类(`set_session_mode` 直接 inline 写,不走 `record_audit`):
-```json
-{
-  "prev_mode": "edit",
-  "new_mode": "yolo"
-}
-```
-
-`critical: bool` 字段对前端 `PermissionModal` 的 3px 红左 border + shield-x icon 渲染至关重要;`tool_denied` / `tool_denied_yolo` = `true`,其他 ⑨ 关类 = `false`。
-
-**Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错
-(必须保证不破坏 agent loop)。
-
-**UI 查询**(C4 任务,2026-06-14 PR2 已实施):
-- Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`(`camelCase` wire:`id` / `sessionId` / `ts` / `kind` / `payloadJson: Option<String>`)
-- 前端 `useAuditStore` + `<AuditLogModal>`(reka-ui Dialog)挂在 `ChatPanel` header Memory 按钮旁,绑当前 session。顶部 kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;列表按 `ts DESC, id DESC` 排序(秒精度 tie 由 `id DESC` 稳定化),按 kind 分发渲染 reason / duration+exit_code / mode from→to。critical 事件 3px 红左条(复用 PermissionModal 约定)。MVP 全量拉取,无分页 / 无虚拟滚动 / 无实时推送。
-
-**用途**:回看"agent 刚才为啥没做 X"、"那次权限拒绝是不是太严了"、
-"哪步最慢"(⑩ `tool_executed` 落表后可用)、Yolo 模式下被静默
-拒绝的 hard-kill 命令审计(`tool_denied_yolo` 字段配合
-`critical: true`)。
+- **记录场景**:⑨ 权限决策(7 种) + ⑩ tool 执行(`ToolExecuted` C4 PR1) + ⑯ mode 切换(`set_session_mode` inline 写)
+- **存储**:`session_audit_events` 表(SQLite,`session_id` + `ts DESC` 索引)
+- **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
+- **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
+- **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
+- **11 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION.md#4-决策日志) + `app/src-tauri/src/agent/permissions/audit.rs`
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
 
-- **触发**:单 turn 内 LLM 返回的**所有** tool_use ∈ `{read_file, grep, glob, list_dir, use_skill}`(纯本地只读 + 全静默 Allow)**且**任一 path 工具的 `path` 解析后 ∈ project root(复用 `projects::boundary::is_within_root`)→ 并发执行;否则(含任意 write_file/edit_file/shell/update_checklist/web_fetch 或 path-outside-root)→ 整批串行(行为同 L2 前)
-- **判定**:`is_parallel_eligible(&tool_calls, &permission_ctx.cwd)`(纯谓词,`chat_loop.rs:1486+`,拆分自 `chat_loop.rs`,2026-06-23 抽 `run_subagent` 后行号下移 ~522 → 现 `agent/chat_loop.rs:~964+`)
-- **实现**:`FuturesUnordered`,每 task 内 `permissions::check` → `execute_tool(token.clone())` → RULE-A-004 cancel 检查 → audit → `emit_tool_result`;`result_slots[i]` 按 tool_use **原始 index** 回填(不依赖完成时序)
+- **触发**:单 turn 内 LLM 返回的**所有** tool_use ∈ `{read_file, grep, glob, list_dir, use_skill}`(纯本地只读 + 全静默 Allow)**且**任一 path 工具的 `path` 解析后 ∈ project root → 并发执行;否则(含 write_file/edit_file/shell/update_checklist/web_fetch 或 path-outside-root)→ 整批串行
+- **判定**:`is_parallel_eligible(&tool_calls, &permission_ctx.cwd)`(纯谓词)
+- **实现**:`FuturesUnordered` + `permissions::check` → `execute_tool(token.clone())` → cancel 检查 → audit → `emit_tool_result`;`result_slots[i]` 按 tool_use **原始 index** 回填
 - **不变量**:
-  - 多 tool_result 仍**单消息打包**(parallel-tool-use 红线:拆消息会让 Claude "学会"避免并行)
-  - RULE-A-004:cancelled tool 不落 `tool_executed` audit(并行下用 `AtomicBool` 广播回主循环 `cancelled` 标志)
-  - 共享状态安全:并发集合无 shell(唯一改 `current_ctx.cwd` 者)→ 无 cwd 写冲突;无 edit_file(唯一写 `read_guard` 者)。`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
+  - 多 tool_result **单消息打包**(parallel-tool-use 红线:拆消息会让 LLM "学会"避免并行)
+  - `web_fetch` 虽只读但 Tier 4 默认 `emit ask`,MVP 排除(走串行,保留逐个 ask UX)
+  - 共享状态安全:并发集合无 shell(改 cwd)/edit_file(写 read_guard)→ 无写冲突;`PermissionStore`/`SkillCache`/`ReadGuard` 都是 `Arc<Mutex/RwLock>`,多 task 并发 read 安全
   - cancel:并发不 `break`,等所有 task 完成或被 cancel;`execute_tool` 内 `tokio::select!` 各 task 独立响应 cancel
-- **Q2 排除 web_fetch**:web_fetch 虽只读但 Tier4 默认 `emit ask`,纳入会引入并发多 modal 问题 → MVP 排除(走串行,保留逐个 ask UX)。
-- **RULE-A-013 收口(2026-06-19)**:谓词从"tool name 白名单"升级为"name 白名单 + path-in-root"。任一 path 工具的 `path` 解析到 project root 之外(`is_within_root` 返回 false)→ 谓词返回 false → 整批拉回串行,保留"并发集合**绝对** silent Allow"不变量;`use_skill` 无 path arg 不参与 path check(Tier 5 default-allow 永远 silent)。path 解析约定与 `permissions/mod.rs(拆分自 mod.rs,2026-06-23 拆为 8 模块):560-571` 完全一致(absolute → as-is;relative → `root.join(p)`;None/empty → 视作 eligible,沿用 permissions 层"无 path 走 Allow"约定)。`is_within_root` 已有 8 个 boundary 单测覆盖(prefix-trap / nonexistent / empty / 等),不重复测试。详见 `DEBT.md RULE-A-013`(`Status: closed (2026-06-19)`)。
-- **流式 UI**:并行下 `emit_tool_result` 按完成时序(乱序)到达前端,但 `streamController.ts` 按 `tool_use_id` 匹配(`Map.get`),DB reload 后按 tool_use 原始顺序 → UI 正确;streaming 期间可能短暂乱序(MVP 接受,Out of Scope 不改前端)
-- **实现位置**:`app/src-tauri/src/agent/chat_loop.rs:997-1168`(并行路径,拆分自 `chat_loop.rs`,2026-06-23 抽 `run_subagent` 后行号下移 ~522 → 现 ~475-646)+ `1169+`(串行路径 → 现 ~647+,逐字保留)
-- **调研**:[spikes/2026-06-19-async-parallel-tool-research.md](./spikes/2026-06-19-async-parallel-tool-research.md) + [-independent-research.md](./spikes/2026-06-19-async-parallel-tool-independent-research.md);完整 PRD 走 `.trellis/tasks/06-19-l2-parallel-readonly-tool-batch/`;RULE-A-013 follow-up PRD 走 `.trellis/tasks/06-19-l2-followup-rule-a-013-boundary-silent-batch/`
+- **完整设计 + RULE-A-013 path-in-root 收口 + 调研引用**:见 [IMPLEMENTATION §4 2026-06-19 ADR](./IMPLEMENTATION.md#4-决策日志) + [`spikes/2026-06-19-async-parallel-tool-research.md`](./spikes/2026-06-19-async-parallel-tool-research.md)
 
 ---
 

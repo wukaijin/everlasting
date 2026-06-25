@@ -15,9 +15,10 @@
 |---|---|---|---|---|
 | [`REVIEW-agent-loop-full-audit-2026-06-14.md`](./REVIEW-agent-loop-full-audit-2026-06-14.md) | 代码审计 | glm-5.2 (5 路并行深挖) | 2026-06-14 | Agent Loop 全链路 + 5 辅助功能(Permission/Mode · Memory · Provider/Model/SSE · Worktree/Git/Tools)全盘审视; 综合 ★★★★; 发现 3 安全 P0(shell env泄漏/不kill进程组/web_fetch SSRF绕过) + 2 C3 P0(orphan tool_result/超窗静默) + 跨子系统取消语义隐性依赖 + REVIEW-sse 债务 0 落地 |
 | [`REVIEW-a2-b7-permission-mode-plan-2026-06-13.md`](./REVIEW-a2-b7-permission-mode-plan-2026-06-13.md) | 设计评审 | Reasonix | 2026-06-13 | A2+B7 权限系统 + 多模式计划审查; 发现 ⑨ 关 5 道顺序不一致 (blocker) + Per-Mode Tool List 遗漏 + IPC 异常路径缺失 |
-| [`REVIEW-tool-comparison-2026-06-12.md`](./REVIEW-tool-comparison-2026-06-12.md) | 竞品调研 | — | 2026-06-12 | Tool 横向对比: Everlasting vs Claude Code / Open Code / Codex CLI / Cursor / Cline; 现有 7 tool 差距分析 + 缺失 tool 优先级 |
-| [`REVIEW-sse-agent-loop-2026-06-12.md`](./REVIEW-sse-agent-loop-2026-06-12.md) | 代码审计 | Reasonix | 2026-06-12 | SSE 解析 → Provider → Agent Loop → 前端消费全链路: 稳定性 / 正确性 / 取消安全 / 错误处理 / 并发; 整体 ★★★★½ |
 | [`REVIEW-b5-memory-grill-2026-06-10.md`](./REVIEW-b5-memory-grill-2026-06-10.md) | 设计复审 | Reasonix (grill-me) | 2026-06-10 | B5 Memory 设计: 概念混淆 / 注入频率 & 位置 / 命名策略 / 前端文本对齐; 9 题全决议 |
 | [`REVIEW-glm-5.1.md`](./REVIEW-glm-5.1.md) | 设计评审 | GLM 5.1 | 2026-06 | 整体设计 / 架构 16 关卡 / 技术选型 / 实施路线图 / 风险管理 / 文档质量 |
 | [`REVIEW-deepseek-v4-pro.md`](./REVIEW-deepseek-v4-pro.md) | 设计评审 | deepseek v4 pro | 2026-06 | 同上(两份独立评审,对照看更全面) |
 | [`REVIEW-claude-opus-2026-06-09.md`](./REVIEW-claude-opus-2026-06-09.md) | 代码审计 | Claude Opus 4.8 | 2026-06-09 | 大文件重构计划 / 文档审阅 / 技术路线决策 / 项目结构全景图 |
+| [`FINDINGS-b5-cache-wire-validation.md`](./FINDINGS-b5-cache-wire-validation.md) | 实施验证 | — | 2026-06-11 | B5 cache wire 验证: 4 文件 cache_control 注入实测 + Anthropic prompt caching 行为确认 |
+
+> 已移至 [`_deprecated/`](../_deprecated/) 的早期评审快照见该目录 README。

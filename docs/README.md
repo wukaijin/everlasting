@@ -28,30 +28,13 @@
 
 ## 推荐阅读顺序
 
-**第一次接触**:
-1. [DESIGN.md](./DESIGN.md) §1-3 — 了解项目是什么、什么不做
-2. [ROADMAP.md](./ROADMAP.md) §1-2 — 了解 V2 路线图与已实施项,准备动手
-3. [ARCHITECTURE.md](./ARCHITECTURE.md) §1-2 — 了解系统怎么搭、请求生命周期
+> **完整阅读顺序表见 [HANDOFF.md §3 5 分钟上手](./HANDOFF.md#3-5-分钟上手必读顺序)**——本节不重复维护。
 
-**写代码时反复查**:
-- 16 关卡 → [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡)
-- 选库依据 → [TECH.md](./TECH.md)
-- 当前进度 → [ROADMAP.md §1](./ROADMAP.md#1-已实施mvp-主体--路线图外完成) + §2 V2 路线图分类
-- "为什么这么做" → [IMPLEMENTATION.md §4 决策日志](./IMPLEMENTATION.md#4-决策日志)
-
-**评估新功能时**:
-- [BACKLOG.md §0](./BACKLOG.md#0-全局视角这-7-个功能落在-5-个不同的层) — 五层架构,看功能落在哪
-- 对应章节 — 看具体选型
-
-**撞到环境 / API 怪事时**:
-- WSL / 字体 / Rust 工具链 → [HACKING-wsl.md](./HACKING-wsl.md)
-- LLM 流式 / 错误分类 / 协议差异 → [HACKING-llm.md](./HACKING-llm.md)
-- 前端 markdown 渲染 / DOMPurify / 协议白名单 → [HACKING-markdown.md](./HACKING-markdown.md)
-- 前端状态管理 / streamController / Pinia 模式 → [`.trellis/spec/frontend/state-management.md`](../.trellis/spec/frontend/state-management.md)(注:此文件在 `.trellis/spec/`,不在 `docs/`)
-
-**查阅历史决策 / 评审快照**:
-- [docs/_archive/](./_archive/README.md) — 一次性任务归档（PROPOSAL / 评审 / 收尾 follow-up）
-- [docs/_reviews/](./_reviews/README.md) — 项目级设计评审快照（外部 LLM 评审，只读不改）
+**按场景速查**:
+- **第一次接触**:DESIGN.md → ROADMAP.md → ARCHITECTURE.md(看"做什么 / 不做 / 当前在哪步 / 怎么搭")
+- **写代码时反复查**:ARCHITECTURE.md §2 16 关卡 / TECH.md 选库 / IMPLEMENTATION.md §4 ADR
+- **评估新功能**:BACKLOG.md §0 五层架构 → 对应章节
+- **撞环境/API 怪事**:HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md / `.trellis/spec/frontend/state-management.md`
 
 ---
 

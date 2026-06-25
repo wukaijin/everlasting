@@ -30,7 +30,6 @@
 - **Editor**:Monaco vs CodeMirror 6 — Monaco 体积大但功能强;CodeMirror 6 轻量可定制。先用 CodeMirror 6
 - **State management (frontend)**:Pinia(已锁定,跟随 Vue 官方)
 - **UI 组件库**:reka-ui vs shadcn-vue vs radix-vue — 三家都是 unstyled + accessible primitives。先 reka-ui
-- **Schema validation**:schemars 跟着 rmcp 走就行
 
 ### 1.3 明确不用
 

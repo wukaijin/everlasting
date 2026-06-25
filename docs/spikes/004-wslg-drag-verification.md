@@ -3,7 +3,7 @@
 **日期**: 2026-06-06
 **状态**: **PASS**（代码 + 手测均通过，D1 可推进）
 **依赖**: spike-001(WSL + Tauri 窗口能开,中文渲染 OK)
-**前置决策**: `docs/spikes/003-ui-reference-prompts.md` 视觉锚点 + `research/tauri-titlebar-patterns.md` Approach B
+**前置决策**: `research/tauri-titlebar-patterns.md` Approach B
 **预估耗时**: 30-60 分钟手测 + 文档回填
 
 ## 目标
@@ -257,5 +257,4 @@ if (isWSL) {
 
 - [`research/tauri-titlebar-patterns.md`](../research/tauri-titlebar-patterns.md) —— Approach B 推荐方案 + WSLg 风险
 - [`docs/spikes/001-wsl-tauri-window.md`](./001-wsl-tauri-window.md) —— WSLg 窗口能开 + 中文渲染 OK(本 spike 前置)
-- [`docs/spikes/003-ui-reference-prompts.md`](./003-ui-reference-prompts.md) —— 视觉锚点(本 spike 完成后,D2-D4 据此视觉对照)
 - [`docs/HACKING-wsl.md`](../HACKING-wsl.md) —— 坑 1-5(Wayland / 字体 / Rust 版本 / cargo lock / CJK 对齐)

@@ -51,6 +51,8 @@ OpenAI Chat Completions 的 token 用量在流末尾携带(`usage: { prompt_toke
 
 ### Checklist (agent 自跟踪清单)
 
+> **实现状态**:规划中术语,B12 落地后才有完整 schema。定义见此,实施细节待定。
+
 LLM 在跑复杂多步任务时维护的**结构化进度清单**——agent 自己写、改、标记完成,用于不丢失自己的计划与进度。对齐 Claude Code 的 `TaskCreate/TaskList`、opencode 的 `todowrite`、Cline 的 plan-act。
 
 **不是什么**(本项目内这几个词都已占用,需消歧义):
