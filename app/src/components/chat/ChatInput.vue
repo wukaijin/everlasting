@@ -1,3 +1,34 @@
+<script lang="ts">
+// Module-scope IPC cache for `@`-mention file lists. Lives outside
+// `<script setup>` so it survives ChatInput remounts (e.g. when the
+// chat panel is destroyed and re-created on session switch).
+//
+// Two independent caches:
+//   - `fileCache: Map<projectId, shallow[]>` — per-project shallow
+//     (3-layer) walk under `project.path`. Invalidated when
+//     `projectsStore.currentProjectId` changes (see the `watch`
+//     in `<script setup>`).
+//   - `systemRootCache: TriggerMenuItem[] | null` — the literal `/`
+//     walk served by `list_files_at`. Project-independent (the
+//     filesystem root doesn't change with the project), so it
+//     survives project switches and only resets when the app
+//     reloads the cache (no automatic invalidation today).
+//
+// The composable owns the reactive `fileItems` / `fileSystemRootItems`
+// refs and the per-mode `loaded` flags; `resetFilePanelState` on
+// project switch clears those + the per-project `fileCache` entry.
+
+interface FileCacheEntry {
+  shallow?: import("./TriggerMenu.vue").TriggerMenuItem[];
+}
+
+const fileCache = new Map<string, FileCacheEntry>();
+
+let systemRootCache: import("./TriggerMenu.vue").TriggerMenuItem[] | null = null;
+
+export {};
+</script>
+
 <script setup lang="ts">
 // ChatInput — chat composer. A CodeMirror 6 single-line editor that
 // auto-grows up to ~200px + a circular Prussian-blue send button on
@@ -45,13 +76,13 @@
 //   props:  { sending: boolean; placeholder?: string }
 //   emits:  { send: [text: string]; stop: [] }
 
-import { computed, nextTick, ref, watchEffect } from "vue";
+import { computed, nextTick, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import Icon from "../Icon.vue";
 import ModeSelect from "./ModeSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
-import { useChatInputCodeMirror } from "../../utils/chatInputCodeMirror";
+import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
 import { useChatStore } from "../../stores/chat";
 import { MODE_CYCLE, type SessionMode } from "../../stores/chat.types";
 import { useModelsStore } from "../../stores/models";
@@ -188,19 +219,92 @@ const cm = useChatInputCodeMirror({
       return [];
     }
   },
-  fileItemsSource: async (): Promise<TriggerMenuItem[]> => {
+  fileItemsSource: async (mode: FileViewMode): Promise<TriggerMenuItem[]> => {
     const projectId = projectsStore.currentProjectId;
     try {
-      const paths = await invoke<string[]>("list_files", {
-        projectId: projectId ?? null,
-      });
-      return paths.map((p) => ({ key: p, name: p }));
+      if (mode === "system_root") {
+        return await getOrLoadSystemRoot();
+      }
+      if (!projectId) return [];
+      return await getOrLoadShallow(projectId);
     } catch (e) {
       console.error("list_files failed:", e);
       return [];
     }
   },
 });
+
+// === `@`-mention file list cache =================================
+//
+// Two paths through `getOrLoad*`:
+// - `getOrLoadShallow(projectId)` → `list_files(projectId, 3)` —
+//   the default-`@` 3-layer walk under project root. Cached per
+//   project.
+// - `getOrLoadSystemRoot()` → `list_files_at("/", 4)` — the literal
+//   filesystem root walk served when the user types `@/` (e.g. to
+//   mention `/etc/hosts`). Cached globally (project-independent).
+//
+// `maxDepth: 3` for shallow keeps the typical `tree -L 3` reach —
+// enough to surface Cargo.toml / src/* / app/src-tauri/src/* in this
+// repo without ever visiting node_modules / target. `maxDepth: 4`
+// for system root lets the user reach `/usr/local/bin/*` while
+// still hitting the 5000-file cap on the noisy `/usr/share/*` tree.
+
+/** Default shallow depth — project root + 2 nested levels. */
+const FILE_SHALLOW_DEPTH = 3;
+
+/** System-root depth — `/` + 3 nested levels. Beyond 4, `/usr/share`
+ *  alone exceeds the 5000-file IPC cap and the picker degrades. */
+const FILE_SYSTEM_ROOT_DEPTH = 4;
+
+async function getOrLoadShallow(
+  projectId: string,
+): Promise<TriggerMenuItem[]> {
+  const entry = fileCache.get(projectId);
+  if (entry?.shallow) return entry.shallow;
+
+  const paths = await invoke<string[]>("list_files", {
+    projectId,
+    maxDepth: FILE_SHALLOW_DEPTH,
+  });
+  const items = paths.map((p) => ({ key: p, name: p }));
+  fileCache.set(projectId, { shallow: items });
+  return items;
+}
+
+async function getOrLoadSystemRoot(): Promise<TriggerMenuItem[]> {
+  if (systemRootCache) return systemRootCache;
+  const paths = await invoke<string[]>("list_files_at", {
+    root: "/",
+    maxDepth: FILE_SYSTEM_ROOT_DEPTH,
+  });
+  // Prefix items with `/` so they're rendered as absolute paths
+  // (the walk returns root-relative `etc/hosts`, not `/etc/hosts`).
+  // TriggerMenu displays `item.name` verbatim.
+  const items = paths.map((p) => ({ key: `/${p}`, name: `/${p}` }));
+  systemRootCache = items;
+  return items;
+}
+
+/** On project switch: wipe BOTH the IPC cache (this module's
+ *  module-scope `fileCache`) and the composable's reactive panel
+ *  state (`fileItems` / `fileSystemRootItems` / loaded flags).
+ *  `systemRootCache` is deliberately preserved — the filesystem
+ *  root doesn't change with the project, and clearing it forces a
+ *  fresh `/` walk (~1s) for no gain. Skipping the composable reset
+ *  is what caused the original bug — the IPC cache was cleared but
+ *  `cm.fileItems.value` still held the previous project's list, so
+ *  the next `@` open rendered stale paths because `shallowLoaded`
+ *  was still true and the IPC fetch was skipped. */
+watch(
+  () => projectsStore.currentProjectId,
+  (newId, oldId) => {
+    if (oldId && newId !== oldId) {
+      fileCache.delete(oldId);
+      cm.resetFilePanelState();
+    }
+  },
+);
 
 // === TriggerMenu ref bindings ====================================
 //
@@ -443,13 +547,14 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
       <TriggerMenu
         ref="fileTriggerMenu"
         :open="cm.filePaletteOpen.value"
-        :items="cm.fileItems.value"
+        :items="cm.panelItems.value"
         :filter="cm.fileFilter.value"
         trigger="@"
         header-label="文件"
         empty-label="无匹配文件"
         fuzzy
         wide
+        :max-rows="200"
         :trigger-el="cm.view.value?.dom ?? null"
         @select="onFileSelect"
         @close="cm.closeFilePalette"

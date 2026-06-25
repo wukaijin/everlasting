@@ -47,11 +47,6 @@ import fuzzysort from "fuzzysort";
 
 import Icon from "../Icon.vue";
 
-/** Max rows the fuzzy matcher surfaces. B2 passes thousands of file
- *  paths; capping the panel keeps the render + scroll cheap. B3
- *  (/command, ~10 items) never hits this. */
-const FUZZY_LIMIT = 50;
-
 /** A single row in the panel. `CommandInfo` from the Rust
  *  `resource_loader::CommandInfo` (BACKLOG §5.2: TS interface mirrors
  *  the Rust struct field names verbatim — snake_case, NOT camelCase).
@@ -123,6 +118,14 @@ const props = withDefaults(
      *  them. B2 (@file) sets this; B3 (/command) keeps the default
      *  420px cap (command names are short). */
     wide?: boolean;
+    /** Max rows rendered into the panel. Applied both when the
+     *  filter is empty (`items.slice(0, maxRows)`) and when
+     *  fuzzysort is filtering (`limit: maxRows`). The default
+     *  keeps B3's behaviour (no cap, ~10 commands always fit);
+     *  B2 (@file, thousands of paths) MUST pass a value —
+     *  otherwise `v-for` materialises 5000 button DOM nodes and
+     *  typing `@` stutters. */
+    maxRows?: number;
   }>(),
   {
     trigger: "/",
@@ -131,6 +134,7 @@ const props = withDefaults(
     triggerEl: null,
     fuzzy: false,
     wide: false,
+    maxRows: Infinity,
   },
 );
 
@@ -146,21 +150,34 @@ const root = ref<HTMLElement | null>(null);
 
 /** Locally-filtered items. Two modes:
  *  - `fuzzy` (B2 @file): fuzzysort substring match, score-sorted, capped
- *    at `FUZZY_LIMIT`. Thousands of paths need this — `appcp` should
+ *    at `maxRows`. Thousands of paths need this — `appcp` should
  *    find `app/src/components/chat/ChatPanel.vue`.
  *  - default (B3 /command): prefix match on `name` (case-insensitive;
  *    CJK has no case so the lowercasing is a no-op). Builtins keep
- *    their `builtin > project > user` order (we preserve `items` order). */
+ *    their `builtin > project > user` order (we preserve `items` order).
+ *
+ *  Both modes ALSO honour `maxRows` when the filter is empty —
+ *  otherwise `v-for` would render every item in `props.items`
+ *  (B2 = 5000 buttons = stutter). B3's ~10 commands fit
+ *  comfortably under any sensible maxRows. */
 const filtered = computed<TriggerMenuItem[]>(() => {
   const raw = props.filter.trim();
-  if (!raw) return props.items;
+  const cap = props.maxRows;
+  if (!raw) {
+    return cap < props.items.length ? props.items.slice(0, cap) : props.items;
+  }
   if (props.fuzzy) {
     return fuzzysort
-      .go(raw, props.items, { key: "name", limit: FUZZY_LIMIT })
+      .go(raw, props.items, { key: "name", limit: cap })
       .map((r) => r.obj);
   }
   const f = raw.toLowerCase();
-  return props.items.filter((it) => it.name.toLowerCase().startsWith(f));
+  const out: TriggerMenuItem[] = [];
+  for (const it of props.items) {
+    if (out.length >= cap) break;
+    if (it.name.toLowerCase().startsWith(f)) out.push(it);
+  }
+  return out;
 });
 
 /** Active (keyboard-highlighted) index. Reset to 0 whenever the

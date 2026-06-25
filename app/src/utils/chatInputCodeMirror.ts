@@ -37,7 +37,7 @@
 // `ChatInput.vue` (lines 599-654 + 884-944) and are moved here
 // verbatim — no behavior change.
 
-import { ref, shallowRef, onMounted, onUnmounted, watch, type Ref, type ShallowRef } from "vue";
+import { computed, ref, shallowRef, onMounted, onUnmounted, watch, type Ref, type ShallowRef } from "vue";
 import { EditorState, Compartment, Prec } from "@codemirror/state";
 import {
   EditorView,
@@ -101,7 +101,34 @@ export interface ChatInputCodeMirrorApi {
   /** Reactive items used by the parent to pass `:items` to the
    *  TriggerMenu panels. */
   commandItems: Ref<TriggerMenuItem[]>;
-  fileItems: Ref<TriggerMenuItem[]>;
+  /** Computed items for the file panel — derives from
+   *  `fileShallowItems` or `fileSystemRootItems` based on
+   *  `fileViewMode`. Replaces the previous `fileItems` ref +
+   *  `syncFileItemsToMode()` copy logic, which leaked the system
+   *  list into the shallow view when the user backspaced from
+   *  `@/etc` to `@` (the copy left `fileItems.value` pointing at
+   *  `fileSystemRootItems.value`'s array). */
+  panelItems: Ref<TriggerMenuItem[]>;
+  /** Items for the `@/` (system-root) view — only populated when
+   *  the user has typed a leading `/` after `@`. `fileShallowItems`
+   *  always holds the default-`@` 3-layer list;
+   *  `fileSystemRootItems` is the lazy cache for the literal `/`
+   *  walk so backspacing from `@/etc` to `@` keeps the system list
+   *  ready for the next `@/`-prefixed query. */
+  fileSystemRootItems: Ref<TriggerMenuItem[]>;
+  /** Which view the file panel is showing right now. `"shallow"` =
+   *  the cheap 3-layer walk under project root (default `@`);
+   *  `"system_root"` = the literal filesystem root walk
+   *  (`@/`-prefixed). Driven by the filter string —
+   *  `filter.startsWith("/")` → system_root. */
+  fileViewMode: Ref<FileViewMode>;
+  /** Wipe file-panel state: items arrays, per-mode loaded flags,
+   *  view mode, and any open palette. Use this when the surrounding
+   *  context changes (e.g. project switch) and stale lists would
+   *  otherwise leak across. `opts.fileItemsSource` is NOT re-invoked
+   *  until the user types `@` again — the parent's IPC cache is the
+   *  source of truth for what's already known about the new context. */
+  resetFilePanelState: () => void;
 }
 
 /** Geometry of the `/`-trigger token under the caret. Mirrors the
@@ -137,6 +164,20 @@ export interface AtToken {
   tokenEnd: number;
 }
 
+/** Which file-panel data set is currently being shown.
+ *  - `"shallow"`: cheap 3-layer walk under project root (default `@`).
+ *    Loads instantly even on huge repos — covers >90% of `cargo
+ *    build` / `tsc` style file lookups.
+ *  - `"system_root"`: literal `/` walk (`@/`-prefixed). Lazy-loaded
+ *    and cached for the session — opt-in by typing `/` right after
+ *    `@`. Lists the filesystem under `/` (excluding virtual fs:
+ *    `/proc`, `/sys`, `/dev`, etc.) so the user can mention system
+ *    files like `/etc/hosts` or `/root/.bashrc`.
+ *
+ *  The split exists because `@` opens on every keypress and walking
+ *  `/` (or even the project root to `MAX_FILES`) stalls the panel. */
+export type FileViewMode = "shallow" | "system_root";
+
 export interface UseChatInputCodeMirrorOpts {
   /** The host element the EditorView mounts into. Provided by the
    *  parent via a template ref. The composable waits for this to
@@ -162,8 +203,10 @@ export interface UseChatInputCodeMirrorOpts {
    *  `commandItems` empty (panel still opens with empty list). */
   commandItemsSource?: () => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
   /** Optional callback invoked from `syncFilePalette` to refresh
-   *  the file panel's items. */
-  fileItemsSource?: () => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
+   *  the file panel's items. The composable passes the desired view
+   *  mode so the parent can serve a shallow (cheap, default) or full
+   *  (cached, slower) list without re-walking. */
+  fileItemsSource?: (mode: FileViewMode) => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
 }
 
 /** Composable factory. The parent calls this in `<script setup>`
@@ -182,11 +225,21 @@ export function useChatInputCodeMirror(
   const commandItems = ref<TriggerMenuItem[]>([]);
   const commandFilter = ref("");
   const filePaletteOpen = ref(false);
-  const fileItems = ref<TriggerMenuItem[]>([]);
+  // Two independent per-mode lists. `panelItems` below is the
+  // computed the TriggerMenu reads; it always reflects whichever
+  // mode is active, so backspacing `@/etc → @` cleanly re-binds to
+  // the shallow list (no manual sync / no leaked reference).
+  const fileShallowItems = ref<TriggerMenuItem[]>([]);
+  const fileSystemRootItems = ref<TriggerMenuItem[]>([]);
   const fileFilter = ref("");
+  // Mode is derived from the filter string — see `modeForFilter`.
+  // Stored as a ref so the parent can switch `TriggerMenu :items`
+  // reactively when the mode flips.
+  const fileViewMode = ref<FileViewMode>("shallow");
   // Marker so we don't refetch on every keystroke. Cleared on close.
   let commandsLoaded = false;
-  let filesLoaded = false;
+  let shallowLoaded = false;
+  let systemRootLoaded = false;
 
   // TriggerMenu ref handles — the parent sets these via
   // `setCommandMenuRef` / `setFileMenuRef` (typically through a
@@ -363,36 +416,99 @@ export function useChatInputCodeMirror(
     }
   }
 
-  async function loadFiles(): Promise<void> {
-    if (filesLoaded || !opts.fileItemsSource) return;
+  /** Derive view mode from the typed filter. A leading `/` after the
+   *  `@` switches to the system-root view (`@/foo`); anything else
+   *  stays on the cheap shallow walk. The `/` itself is part of the
+   *  filter string the panel renders against, so users see and can
+   *  edit the prefix. */
+  function modeForFilter(filter: string): FileViewMode {
+    return filter.startsWith("/") ? "system_root" : "shallow";
+  }
+
+  /** Load (or return the cached) list for the given mode. The actual
+   *  caching is done in the parent — the composable just guards
+   *  against duplicate in-flight fetches by flipping a loaded flag. */
+  async function loadFilesForMode(mode: FileViewMode): Promise<void> {
+    const loaded = mode === "system_root" ? systemRootLoaded : shallowLoaded;
+    if (loaded || !opts.fileItemsSource) return;
     try {
-      const items = await opts.fileItemsSource();
-      fileItems.value = items;
-      filesLoaded = true;
+      const items = await opts.fileItemsSource(mode);
+      if (mode === "system_root") {
+        fileSystemRootItems.value = items;
+      } else {
+        fileShallowItems.value = items;
+      }
+      if (mode === "system_root") systemRootLoaded = true; else shallowLoaded = true;
     } catch (e) {
       console.error("fileItemsSource failed:", e);
-      fileItems.value = [];
-      filesLoaded = true;
+      if (mode === "system_root") {
+        fileSystemRootItems.value = [];
+      } else {
+        fileShallowItems.value = [];
+      }
+      // Mark loaded even on error so a bad project doesn't re-throw
+      // on every keystroke. The empty list is the user-visible signal.
+      if (mode === "system_root") systemRootLoaded = true; else shallowLoaded = true;
     }
   }
 
-  async function openFilePalette(filter: string): Promise<void> {
+  /** Items the TriggerMenu should render. Picks one of the two
+   *  per-mode lists based on `fileViewMode`. Using a computed
+   *  instead of a ref + manual sync avoids the classic
+   *  "backspace from `@/…` to `@` still shows system-root paths"
+   *  bug — the previous design aliased `fileItems.value` to
+   *  `fileSystemRootItems.value` and never restored it on mode
+   *  flip back to shallow. */
+  const panelItems = computed<TriggerMenuItem[]>(() =>
+    fileViewMode.value === "system_root"
+      ? fileSystemRootItems.value
+      : fileShallowItems.value,
+  );
+
+  function openFilePalette(filter: string): void {
+    fileViewMode.value = modeForFilter(filter);
     fileFilter.value = filter;
     filePaletteOpen.value = true;
-    await loadFiles();
+    void loadFilesForMode(fileViewMode.value);
   }
 
   function closeFilePalette(): void {
     filePaletteOpen.value = false;
-    filesLoaded = false;
-    fileItems.value = [];
+    // Keep shallowLoaded / fullLoaded + the cached arrays. The parent
+    // owns the IPC cache; re-opening `@` (or `@/`) should be instant
+    // when the previous fetch succeeded. Only `fileFilter` resets so
+    // the panel doesn't keep stale text after a close+reopen cycle.
+    fileFilter.value = "";
+  }
+
+  /** Reset everything file-panel-related to initial-mount state. The
+   *  parent calls this on project switch so the next `@` open in the
+   *  new project re-fetches through `opts.fileItemsSource` instead
+   *  of re-rendering the previous project's cached items. */
+  function resetFilePanelState(): void {
+    filePaletteOpen.value = false;
+    fileShallowItems.value = [];
+    fileSystemRootItems.value = [];
+    fileFilter.value = "";
+    fileViewMode.value = "shallow";
+    shallowLoaded = false;
+    systemRootLoaded = false;
   }
 
   function syncFilePalette(): void {
     const { trigger, filter } = detectFileTrigger();
     if (trigger) {
+      const desiredMode = modeForFilter(filter);
       if (!filePaletteOpen.value) {
-        void openFilePalette(filter);
+        openFilePalette(filter);
+      } else if (desiredMode !== fileViewMode.value) {
+        // Mode flip mid-panel: e.g. user typed `@a`, then keeps typing
+        // and the first char after `@` becomes `/` (now `@/…`).
+        // Just update the mode + filter; `panelItems` recomputes and
+        // kicks off the load if the destination mode was never fetched.
+        fileViewMode.value = desiredMode;
+        fileFilter.value = filter;
+        void loadFilesForMode(desiredMode);
       } else {
         fileFilter.value = filter;
       }
@@ -551,6 +667,7 @@ export function useChatInputCodeMirror(
     syncFilePalette,
     closeCommandPalette,
     closeFilePalette,
+    resetFilePanelState,
     submit,
     commandMenuRef,
     fileMenuRef,
@@ -559,6 +676,8 @@ export function useChatInputCodeMirror(
     commandFilter,
     fileFilter,
     commandItems,
-    fileItems,
+    panelItems,
+    fileSystemRootItems,
+    fileViewMode,
   };
 }
