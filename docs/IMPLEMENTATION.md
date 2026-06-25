@@ -30,6 +30,25 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-06-25 — 放开 SSE 流中 mode 切换(后端零改动,toast 仅流中弹)
+
+**Context**: 前端之前在 SSE 流进行中故意禁用 mode 切换(`ModeSelect.vue:117` `toggleMenu()` early-return + `:disabled="isStreaming"` + CSS `.mode-select__trigger--disabled` + `chat.ts:1242` `requestSetMode` 流中 guard + `chat.ts:1278` `confirmYolo` 流中 guard,共 6 处;`ModeSelect.vue` 注释明确"matches the backend's 'mode applies on next turn boundary' rule")。用户希望放开,以便流中也能预切下一轮的 mode(典型场景:发现 agent 走偏了,中途切到 plan 模式让下一轮重新规划)。后端 `set_session_mode` 命令全文无 streaming 检查,`chat_loop.rs:396` 每 turn 开头读 `loaded_session.session.mode` 整 turn 复用 —— turn-boundary 语义是真实的。
+
+**决策**:
+
+1. **UI 6 处 guard 全删**:`ModeSelect.vue` 的 `toggleMenu` early-return、`:disabled="isStreaming"`、CSS `--disabled`、YoloConfirmModal 的 `:disabled`、title 分支文案;`chat.ts` `requestSetMode` 和 `confirmYolo` 的流中 guard。store 不在前端偷偷吞 IPC,IPC 透传到后端照单全收 + DB 持久化 + 审计写入。Yolo confirm modal 整体保留(安全门),仅删 modal trigger 的 `:disabled` —— 让流中点 Yolo 也能走确认门。
+2. **toast 仅在流中弹**:非流中切 mode 立即生效(trigger chip 文字立刻变就是反馈),弹 toast 是噪音;只有流中切 mode 才会有"已切换但不立即生效"的预期差,toast 是必要的 UX 锚点。文案:"Mode 已切换,将在下一轮 turn 生效",kind=info,duration=3000ms。Edit/Plan 路径由 `onModePick` 弹,Yolo 路径在 modal confirm 后由 `onYoloConfirm` 弹。
+3. **toast 调用收敛在 `ModeSelect.vue`**,不进 `chat.ts` —— 避免 store 间耦合,也避免 cancel 路径需要 counter-handler(Yolo cancel 不弹 toast 是默认行为,无需显式处理)。
+4. **`confirmYolo` 返回类型从 `Promise<void>` 改为 `Promise<boolean>`** —— 让 modal 的 `@confirm` handler 可以 await 并根据成功与否决定是否弹 toast。向后兼容(已有 `chatMode.test.ts` 调用者 `await store.confirmYolo()` 不使用返回值)。
+
+**Consequences**:
+
+- 同一 turn 内所有 tool_use 仍按旧 mode 走(`chat_loop.rs:396` 的 turn 开头缓存不变):中途切 yolo 不会让当前轮的 tool 立刻 bypass 弹窗;中途切 plan 不会让当前轮的 write_file 立刻被拦。这是符合设计的 —— turn-boundary 是 backend 的真实语义,不能为了"立即生效"去给 in-flight loop 加 mode 推送通道(性价比极低,且会引入新 race)。
+- toast 频率 = 用户在流中点 mode 的次数,可忽略;每次最多 1 行 `mode_changed` 审计 + 可选 `yolo_entered/exited`,审计密度可接受。
+- 后续如果真的需要"流中途立即生效",需要把 `chat_loop.rs` 的 `session_mode` 从"turn 开头缓存到局部变量"改成"每次 tool_use 重新读 `loaded_session.session.mode`" —— 当前不做(场景未出现,Yolo bypass 仍可通过 reload session 触发)。
+
+**关联**: PRD `.trellis/tasks/06-25-sse-mode-toast-turn/prd.md`;改 `app/src/components/chat/ModeSelect.vue` + `app/src/stores/chat.ts` + `app/src/stores/chatMode.test.ts` 注释;**后端零改动**(PRD 验证:`app/src-tauri/` 无新 commit)。
+
 ### 2026-06-25 — L3a subagent 并发(只读 worker fan-out):竞态消解 + 范围决策 + worker 联网拆分
 
 **Context**: L3a 把 B6 单 worker 串行 dispatch 升级为并发 fan-out。拆自原 L3 子项 1(2026-06-24),L3b(worktree 隔离)另行。Plan 阶段先做行业调研(2 份 research 文档,源码核实 Hermes `delegate_task` 默认同步阻塞/并发3/硬拒/depth1,纠正 scheduling-survey 2 处事实错误:"不阻塞"应为默认阻塞、"30"应为默认3)。

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/chat.md", "reason": "检查 ModeSelect 行为契约 / ChatInput 集成是否仍然成立"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "删 disabled 后 popover 行为 (open/close/onDocumentClick/Esc/Transition) 是否仍符合模式"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat.ts requestSetMode/confirmYolo 删 guard 后 IPC 调用语义、乐观更新、pendingYoloConfirm 流转是否符合 store 约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前端 store guard 删除后的 IPC 直透对后端无影响验证 — backend 接收 mode 后 DB 写入 + 审计的跨层契约"}

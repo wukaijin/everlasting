@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ModeSelect.vue 与 ChatInput.vue 集成规则、ModeSelect 行为契约、chip 视觉标准"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "ModeSelect 是 popover pattern 第 3 个 production 实例;保留 onDocumentClick + Esc + Transition + menuRoot pattern,删 disabled 时不能破坏这个 pattern"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "chat.ts store 改 requestSetMode/confirmYolo 时的乐观更新 + IPC 持久化约定;projects store toast API 也属此类"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "toast 调用统一收敛到 ModeSelect.vue 而非 chat.ts — 避免 store 间耦合,符合 code-reuse 原则"}

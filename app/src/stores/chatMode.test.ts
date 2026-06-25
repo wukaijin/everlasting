@@ -15,8 +15,12 @@
 //      and does NOT touch IPC.
 //   5. `requestSetMode` is a no-op (no IPC) when the session is
 //      already in the target mode.
-//   6. `requestSetMode` is a no-op (no IPC) when the session is
-//      streaming (the `:disabled` contract).
+//   6. Mode changes pass through unconditionally — including
+//      while the session is streaming. The turn-boundary
+//      semantics ("applies on the next turn") live in
+//      `chat_loop.rs:396`, not here; the UI surface a toast
+//      hint while streaming. See `ModeSelect.vue` for the
+//      toast contract.
 //
 // Tauri IPC is mocked via `vi.mock("@tauri-apps/api/core")` so
 // these tests run under vitest's jsdom env without Tauri.

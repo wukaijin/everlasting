@@ -21,11 +21,16 @@
 //   (driven by the shared `pendingYoloConfirm` flag in the
 //   chat store — see `useChatStore.requestSetMode`).
 //
-// Streaming state: per PR2 spec, all UI is `:disabled` while
-// `isCurrentSessionStreaming` is true. Mirrors `ModelSelect`'s
-// contract and matches the backend rule "mode changes apply on
-// the next turn boundary" (PR1 mode check at ⑧a — no mid-stream
-// flips).
+// Streaming state: the trigger + popover are CLICKABLE while
+// `isCurrentSessionStreaming` is true. The backend's mode
+// change applies on the next turn boundary (read at
+// `chat_loop.rs:396`, not mid-stream), so a mode flip made
+// during streaming only takes effect for the NEXT turn. To
+// avoid the user expecting "I clicked Yolo and the next tool
+// ran unprompted", we surface a `projectsStore.showToast`
+// hint ONLY while streaming — non-streaming flips are
+// immediately visible (the chip label flips to the new mode)
+// so a toast there would be noise.
 //
 // `Shift+Tab` cycle is registered in `ChatInput.vue` via
 // `useKeyboard` and routes through the SAME `requestSetMode`
@@ -36,10 +41,12 @@ import { computed, onUnmounted, ref } from "vue";
 
 import { useChatStore } from "../../stores/chat";
 import type { SessionMode } from "../../stores/chat.types";
+import { useProjectsStore } from "../../stores/projects";
 import Icon from "../Icon.vue";
 import YoloConfirmModal from "./YoloConfirmModal.vue";
 
 const chatStore = useChatStore();
+const projectsStore = useProjectsStore();
 
 const menuOpen = ref(false);
 const menuRoot = ref<HTMLElement | null>(null);
@@ -106,15 +113,7 @@ const currentModeLabel = computed<string>(() => {
   return m?.label ?? "Edit";
 });
 
-/** Lock the chip + popover while the active session is
- *  streaming. Mirrors `ModelSelect`'s contract and matches
- *  the backend's "mode applies on next turn boundary" rule. */
-const isStreaming = computed<boolean>(
-  () => chatStore.isCurrentSessionStreaming,
-);
-
 function toggleMenu() {
-  if (isStreaming.value) return;
   menuOpen.value = !menuOpen.value;
 }
 
@@ -160,12 +159,45 @@ onUnmounted(() => {
  *  `Shift+Tab` keyboard entry (see `useKeyboard` /
  *  `ChatInput.cycleMode`). Always closes the popover so the
  *  user sees immediate feedback (the modal — if any — opens
- *  on top). */
+ *  on top).
+ *
+ *  Toast hint semantics:
+ *  - Yolo (modal path) → no toast here; the modal's confirm
+ *    button handler awaits `confirmYolo` and toasts there.
+ *  - Edit / Plan (direct IPC) → toast ONLY while streaming,
+ *    because mid-stream flips apply on the next turn boundary
+ *    and the chip label change alone might look "stuck" until
+ *    the next turn starts. Non-streaming flips are immediately
+ *    visible (chip label flips), so a toast there would be noise. */
 async function onModePick(mode: SessionMode) {
   closeMenu();
   const sid = chatStore.currentSessionId;
   if (!sid) return;
-  await chatStore.requestSetMode(sid, mode);
+  const applied = await chatStore.requestSetMode(sid, mode);
+  if (!applied) return; // Yolo modal flow — toast deferred to confirm
+  if (chatStore.isCurrentSessionStreaming) {
+    projectsStore.showToast(
+      "Mode 已切换,将在下一轮 turn 生效",
+      "info",
+      3000,
+    );
+  }
+}
+
+/** Yolo modal confirm handler. Awaits the IPC + optimistic
+ *  update, then surfaces the same "next-turn applies" toast
+ *  the non-Yolo path emits — only when streaming. We route
+ *  the toast here (rather than in `chat.ts`) so the modal's
+ *  cancel path doesn't need a counter-handler. */
+async function onYoloConfirm() {
+  const applied = await chatStore.confirmYolo();
+  if (applied && chatStore.isCurrentSessionStreaming) {
+    projectsStore.showToast(
+      "Mode 已切换,将在下一轮 turn 生效",
+      "info",
+      3000,
+    );
+  }
 }
 </script>
 
@@ -179,19 +211,13 @@ async function onModePick(mode: SessionMode) {
       type="button"
       class="mode-select__trigger"
       :class="{
-        'mode-select__trigger--disabled': isStreaming,
         'mode-select__trigger--edit': currentMode === 'edit',
         'mode-select__trigger--plan': currentMode === 'plan',
         'mode-select__trigger--yolo': currentMode === 'yolo',
       }"
-      :disabled="isStreaming"
       :aria-haspopup="'menu'"
       :aria-expanded="menuOpen"
-      :title="
-        isStreaming
-          ? 'Streaming 中,无法切换 Mode'
-          : '点击切换当前 session 的 Mode(Shift+Tab 循环)'
-      "
+      title="点击切换当前 session 的 Mode(Shift+Tab 循环)"
       @click="toggleMenu"
     >
       <span class="mode-select__label">{{ currentModeLabel }}</span>
@@ -235,13 +261,14 @@ async function onModePick(mode: SessionMode) {
     <!-- Yolo confirm modal — driven by the store's
          `pendingYoloConfirm` flag so both the popover and the
          Shift+Tab cycle can open it from one place. The modal
-         calls `chatStore.confirmYolo()` / `cancelYolo()` on
-         its buttons. -->
+         calls our `onYoloConfirm` (await + toast on success)
+         on confirm, `chatStore.cancelYolo()` on cancel. The
+         `:disabled` prop is left unset so streaming-state
+         clicks can still open the modal and confirm. -->
     <YoloConfirmModal
       :open="chatStore.pendingYoloConfirm"
-      :disabled="isStreaming"
       @cancel="chatStore.cancelYolo()"
-      @confirm="chatStore.confirmYolo()"
+      @confirm="onYoloConfirm"
     />
   </div>
 </template>
@@ -299,12 +326,6 @@ async function onModePick(mode: SessionMode) {
 }
 .mode-select__trigger--yolo {
   color: var(--color-tool-error);
-}
-
-.mode-select__trigger--disabled,
-.mode-select__trigger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .mode-select__label {

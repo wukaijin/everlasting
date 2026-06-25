@@ -1233,13 +1233,19 @@ export const useChatStore = defineStore("chat", () => {
    *  target mode; this method handles the Yolo gate. Returns
    *  `true` if the mode was applied (or already current),
    *  `false` if the call was deferred to the modal. Errors
-   *  propagate to the caller via the `invoke` throw. */
+   *  propagate to the caller via the `invoke` throw.
+   *
+   *  No streaming guard — mode changes are accepted at any
+   *  time and the backend persists them. The turn-boundary
+   *  semantics ("applies on the next turn") live in
+   *  `chat_loop.rs:396`, not here. Toast feedback for the
+   *  "next-turn" UX hint is the caller's responsibility
+   *  (see `ModeSelect.vue`). */
   async function requestSetMode(
     sessionId: string,
     mode: SessionMode,
   ): Promise<boolean> {
     if (!sessionId) return false;
-    if (isCurrentSessionStreaming.value) return false;
 
     // No-op when the mode is already current. The optimistic
     // local update below is also a no-op, but we skip the IPC
@@ -1269,21 +1275,24 @@ export const useChatStore = defineStore("chat", () => {
 
   /** Called by `YoloConfirmModal`'s confirm button. Fires the
    *  pending IPC, optimistic-updates the session row, and
-   *  closes the modal. No-op when no session is active or
-   *  streaming kicked in while the modal was open. */
-  async function confirmYolo(): Promise<void> {
+   *  closes the modal. Returns `true` on successful IPC + DB
+   *  write, `false` on no-op (no session) or IPC failure.
+   *  No streaming guard — matches `requestSetMode`'s contract
+   *  that mode changes pass through unconditionally. */
+  async function confirmYolo(): Promise<boolean> {
     pendingYoloConfirm.value = false;
     const sid = currentSessionId.value;
-    if (!sid) return;
-    if (isCurrentSessionStreaming.value) return;
+    if (!sid) return false;
     try {
       await invoke("set_session_mode", { sessionId: sid, mode: "yolo" });
       const summary = sessions.value.find((s) => s.id === sid);
       if (summary) {
         (summary as { mode: string }).mode = "yolo";
       }
+      return true;
     } catch (e) {
       console.error("Failed to confirm Yolo:", e);
+      return false;
     }
   }
 
