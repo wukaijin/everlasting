@@ -357,4 +357,31 @@ mod tests {
         assert_eq!(fp.head_hash, fp2.head_hash);
         assert_eq!(fp.mtime, fp2.mtime);
     }
+
+    // Covers the mtime: None branch — the path used when the OS/filesystem
+    // does not support mtime (e.g. some FAT filesystems). `meta.modified()`
+    // returns `Err` in that case, `Fingerprint::capture` wraps the result in
+    // `Option`, and `verify_fresh` falls back to size + head_hash. We must
+    // not panic, nor round-trip a spurious default `SystemTime` value.
+    #[tokio::test]
+    async fn fingerprint_serde_roundtrip_with_none_mtime() {
+        let fp = Fingerprint {
+            mtime: None,
+            size: 0,
+            head_hash: 0,
+        };
+        let json = serde_json::to_string(&fp).unwrap();
+        // The JSON must explicitly encode `null` for mtime (not omit the
+        // field) — otherwise a future schema change to make mtime
+        // non-optional would silently lose the "mtime unsupported" signal.
+        assert!(
+            json.contains("\"mtime\":null"),
+            "expected explicit null for None mtime, got: {json}"
+        );
+        let fp2: Fingerprint = serde_json::from_str(&json).unwrap();
+        assert_eq!(fp.size, fp2.size);
+        assert_eq!(fp.head_hash, fp2.head_hash);
+        assert_eq!(fp.mtime, fp2.mtime);
+        assert!(fp2.mtime.is_none());
+    }
 }

@@ -39,10 +39,14 @@
 // app/src-tauri/src/tools/edit_file.rs
 ToolDef {
  name: "edit_file",
- description: "Replace exact text in a file. old_string must match byte-for-byte
- including whitespace. If not unique, pass replace_all: true or include more
- surrounding context. The file must have been read via read_file in this
- session — ReadGuard enforces read-before-edit and on-disk freshness.",
+ description: "Apply a surgical edit to an existing file. The file must have been \
+ read with read_file in the current session, and must not have been modified on disk \
+ since. Replaces `old_string` with `new_string`.\n\n`old_string` must match exactly \
+ (whitespace-sensitive). If it appears zero times the tool returns an error with hint \
+ lines; if it appears more than once and `replace_all` is not set, the tool returns \
+ the line numbers of all matches and asks for more context.\n\nPaths may be relative \
+ (resolved against the session cwd) or absolute; the resolved path must be inside \
+ the active project root.",
  input_schema: json!({
  "type": "object",
  "properties": {
@@ -74,7 +78,10 @@ ToolDef { name: "list_dir", input_schema: { path, show_hidden?, limit? } }
 
 // app/src-tauri/src/tools/read_guard.rs
 pub struct Fingerprint {
- pub mtime: SystemTime,
+ // None when the OS/filesystem does not support mtime (e.g. some FAT
+ // filesystems); in that case freshness falls back to size + head_hash
+ // alone. Code: `app/src-tauri/src/tools/read_guard.rs:43`.
+ pub mtime: Option<SystemTime>,
  pub size: u64,
  pub content_hash_head: u64, // xxh64 of first8 KiB
 }
@@ -153,7 +160,7 @@ session_id)` into every `execute_tool` call.
 
 | Condition | Tool | Result |
 |-----------|------|--------|
-| File not read in this session | `edit_file` | `"You must read_file <path> first."` (is_error: true) |
+| File not read in this session | `edit_file` | `"You must read_file '<path>' first."` (is_error: true) |
 | File read, but mtime/size changed on disk | `edit_file` | `"File <path> has changed on disk since you last read it. Re-read it first."` |
 | `old_string` not found in file | `edit_file` | `"old_string not found in <path>. Closest match (line N): '<...>'."` (0-3 hints, Jaccard-sorted) |
 | `old_string` matches N>1 times, `replace_all=false` | `edit_file` | `"old_string appears N times in <path>. Add more context or pass replace_all: true."` (lists all line numbers) |
@@ -212,7 +219,12 @@ session_id)` into every `execute_tool` call.
  occurrence, no need to check uniqueness separately when1) → write to disk.
 4. On success, `edit_file::execute` calls `ReadGuard::invalidate(sid, path)` so
  the next edit forces a re-read.
-5. Tool result: `"Successfully edited <path>:1 occurrence replaced."`.
+5. Tool result: `Successfully edited '<path>'.` (single occurrence) or
+   `Successfully edited '<path>': replaced N occurrences.` (when
+   `replace_all: true`, N ≥ 1). The single-occurrence form deliberately
+   omits the count — frontends and tests should match the literal prefix
+   `Successfully edited` and inspect the trailing colon + `replaced N`
+   only when present. Code: `app/src-tauri/src/tools/edit_file.rs:224-232`.
 
 #### Base:0 matches with hint
 
@@ -430,10 +442,14 @@ body-size cap are all security/longevity decisions, not nice-to-haves.
 // app/src-tauri/src/tools/web_fetch.rs
 ToolDef {
  name: "web_fetch",
- description: "Fetches content from a URL and returns it as markdown \
-                (default), plain text, or raw HTML. Supports HTTP and \
-                HTTPS only. Refuses private/loopback/link-local addresses \
-                to prevent SSRF.",
+ description: "Fetches content from a URL and returns it as markdown (default), plain \
+ text, or raw HTML. Use this to read external documentation, API references, error \
+ messages, or any web page. Read-only; does not modify files. Supports HTTP and HTTPS \
+ only.\n\nSecurity: by design, this tool refuses to fetch private, loopback, or \
+ link-local addresses (e.g. 127.0.0.1, 192.168.x.x, 169.254.169.254) to prevent the \
+ agent from being used as an SSRF proxy.\n\nResults may be truncated if very large; \
+ use `format: \"text\"` for a smaller payload, or `format: \"html\"` to get the raw \
+ response.",
  input_schema: json!({
    "type": "object",
    "properties": {
@@ -552,10 +568,18 @@ parallel tests). Production `execute` always passes `false`.
 - **T2e (DNS rebinding)** — Med severity, MVP accepted risk. Single-shot
   `lookup_host` + `ClientBuilder::resolve(domain, ip)` closes most of the
   window. Full socket-level re-validate is a follow-up.
-- **T2f (redirect to private IP)** — Med severity, MVP accepted risk. We use
-  reqwest's default redirect limit (5) and let reqwest follow; the per-redirect
-  IP check is not implemented. The cost of implementing it is a custom redirect
-  policy; the benefit is a tighter SSRF defense on the LLM.
+- **T2f (redirect to private IP)** — Med severity, **IMPLEMENTED** via
+  [`build_redirect_policy()`](../../../app/src-tauri/src/tools/web_fetch.rs)
+  (RULE-E-003, 2026-06-14). A custom `redirect::Policy::custom` callback
+  re-runs `resolve_and_check_sync` + `is_blocked` on every redirect hop and
+  returns `Action::Stop` if the target IP is in the blocklist. The
+  `allow_private` bypass is hard-coded to `false` in the redirect callback
+  (it exists only for the initial URL path, to let integration tests talk
+  to a `httpmock` server on 127.0.0.1). Distinct [`WebFetchError::RedirectBlocked`]
+  variant + dedicated tests (`redirect_to_rfc1918_is_refused`,
+  `redirect_to_cloud_metadata_is_refused`). Without this guard, an
+  LLM-driven local agent would be an effective network scanner
+  (`attacker.com → 169.254.169.254` leaks cloud metadata).
 - **T3a (huge body)** — Hard 5 MiB cap → `TooLarge`.
 - **T3b (slow-loris)** — `connect_timeout(10s)` + `timeout(30s, max 120s)` +
   `tokio::time::timeout(secs+5, ...)` + outer `CancellationToken`.
@@ -1682,7 +1706,11 @@ fn classify_dispatch_batch(tool_calls: &[(String, String, Value)]) -> DispatchBa
 #### Read-only enforcement (subagent/mod.rs)
 
 ```rust
-const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir"];
+// web_fetch is read-only (network fetch, no file mutation) so it is kept
+// in the concurrent-branch allowlist; the 4 file-reading tools cover the
+// on-disk read surface. See `READONLY_TOOL_ALLOWLIST` doc in
+// `app/src-tauri/src/agent/subagent/mod.rs:546` for rationale.
+const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
 pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef>;   // mirrors STRUCTURALLY_DISABLED pattern
 
 // run_subagent gained a trailing param:
@@ -1706,11 +1734,13 @@ calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
 - **Order preservation**: `tool_result` blocks re-collapse into `result_blocks` in **tool_use
   order** via `result_slots[i]`, NOT completion order. Streaming `emit_tool_result` fires in
   completion order (frontend UX); the LLM context sees tool_results in tool_use order (matches L2).
-- **Read-only guarantee — 3 layers**: (1) `SubagentDef` allowlist (`researcher` = the 4 read tools;
-  `general-purpose` = empty = full set); (2) **runtime strip** (L3a): concurrent branch passes
-  `force_readonly=true` → keeps only `[read_file, grep, glob, list_dir]` — `researcher` no-op,
-  `general-purpose` downgraded; (3) `is_worker: true` (B6 PR2b, pre-existing safety floor): even if
-  a write tool slipped through, the worker's Tier 4 `ask` collapses to `Decision::Deny`.
+- **Read-only guarantee — 3 layers**: (1) `SubagentDef` allowlist (`researcher` = the 5 read-only
+  tools `read_file, grep, glob, list_dir, web_fetch`; `general-purpose` = empty = full set);
+  (2) **runtime strip** (L3a): concurrent branch passes
+  `force_readonly=true` → keeps only `[read_file, grep, glob, list_dir, web_fetch]` — `researcher`
+  no-op, `general-purpose` downgraded; (3) `is_worker: true` (B6 PR2b, pre-existing safety
+  floor): even if a write tool slipped through, the worker's Tier 4 `ask` collapses to
+  `Decision::Deny`.
 - **Hard reject on over-limit** (Hermes alignment): `d > DELEGATION_MAX_CONCURRENT_CHILDREN` → every
   `dispatch_subagent` returns an `is_error: true` tool_result ("exceeded concurrent delegation
   limit"); **0 workers spawn** (no truncation, no queueing, no partial execution).
@@ -1736,7 +1766,7 @@ calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
 | Pure batch, d=4 (> limit 3) | 4 tool_results all `is_error: true`; 0 workers spawn |
 | Mixed batch (dispatch + read_file) | Falls to serial path; serial loop runs dispatch (B6) + read_file in order |
 | Single dispatch (d=1) | Serial path (B6 behavior, `force_readonly=false`) — unchanged |
-| `general-purpose` in concurrent branch | worker toolset stripped to 4 read tools; writes impossible |
+| `general-purpose` in concurrent branch | worker toolset stripped to 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`); writes impossible |
 | Parent Stop mid-batch | `parent_token` fires → all N `child_token()` fire → all workers cancelled; `cancel_parent` aggregated |
 | One worker errors, others succeed | each returns its own `(content, is_error, …)`; tool_results carry per-worker `[status: …]` prefix independently |
 
@@ -1756,7 +1786,7 @@ Backend (`cargo test --lib`, `agent/tests_subagent.rs`):
 
 | Test | Asserts |
 |---|---|
-| `l3a_filter_tools_readonly_keeps_only_four_read_tools` | unit: allowlist keeps 4 read tools, strips writes incl. `dispatch_subagent` (anti-nesting pin) |
+| `l3a_filter_tools_readonly_keeps_only_five_read_tools` | unit: allowlist keeps 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`), strips writes incl. `dispatch_subagent` (anti-nesting pin) |
 | `l3a_classify_dispatch_batch_branches_correctly` | unit: all 3 branches (Serial/OverLimit/Concurrent) classified by (d, o) |
 | `l3a_pure_batch_of_three_dispatches_runs_concurrently` | AC1/6: 3 workers, tool_use order preserved (asserted via persisted DB messages) |
 | `l3a_pure_batch_over_limit_hard_rejects_all` | AC3: 4 dispatch → all tool_error, 0 workers (call_count, runs empty) |
