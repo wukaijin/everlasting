@@ -23,6 +23,29 @@ use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
+/// Built-in exclude set for **system-root** walks (`@/` panel).
+/// Wider than [`DEFAULT_EXCLUDE`] — skips virtual filesystems and
+/// package-manager state that would either hang (`/proc`, `/sys`) or
+/// pollute the picker with noise (`/dev` device nodes, `/snap`,
+/// `/lost+found`, large `/usr/share/*` trees). Applied unconditionally
+/// before gitignore (system root is rarely a git workdir anyway).
+const SYSTEM_EXCLUDE: &[&str] = &[
+    "proc",
+    "sys",
+    "dev",
+    "run",
+    "snap",
+    "lost+found",
+    "boot",
+    "mnt",
+    "media",
+    "srv",
+    // Package-manager / daemon state. `/var/lib/docker` etc. live
+    // under `var` and are caught by the `var/` rule; `var` itself is
+    // kept (users sometimes `@/var/log/...`).
+    "var",
+];
+
 /// Built-in exclude set, matched by final path component. Applied
 /// unconditionally (before gitignore) — these are VCS / dependency /
 /// build-output dirs that must never pollute a file picker, regardless
@@ -48,12 +71,15 @@ const DEFAULT_EXCLUDE: &[&str] = &[
 /// Max recursion depth (root's direct entries = depth 1). Guards
 /// against pathological nesting; symlink loops are impossible because
 /// symlinks are not followed (we read non-following file types).
-const MAX_DEPTH: usize = 15;
+///
+/// `pub(crate)` so the Tauri command can request a custom depth for
+/// the shallow-list variant (`@` default = 3 layers under project root).
+pub(crate) const MAX_DEPTH: usize = 15;
 
 /// Max number of file paths returned. A typical project is well under
 /// this; the cap bounds the IPC payload + frontend render. The
 /// frontend's fuzzysort narrows further on each keystroke.
-const MAX_FILES: usize = 5000;
+pub(crate) const MAX_FILES: usize = 5000;
 
 /// Open the git repo at `root` if it is one. Returns `(repo, workdir)`
 /// for ignore checks; `None` when `root` is not inside a git repo
@@ -72,11 +98,6 @@ fn is_git_ignored(repo: &Repository, workdir: &Path, abs_path: &Path) -> bool {
         Err(_) => return false,
     };
     repo.is_path_ignored(rel).unwrap_or(false)
-}
-
-/// True if the entry's final component is in [`DEFAULT_EXCLUDE`].
-fn is_default_excluded(name: &str) -> bool {
-    DEFAULT_EXCLUDE.iter().any(|x| *x == name)
 }
 
 /// Convert a root-relative `Path` to a forward-slash string
@@ -103,10 +124,43 @@ pub fn walk_files(root: &Path) -> Vec<String> {
     walk_files_bounded(root, MAX_DEPTH, MAX_FILES)
 }
 
-/// Bounded variant used by both [`walk_files`] (production caps) and
-/// the tests (small caps so a count/depth assertion doesn't create
-/// thousands of files).
-fn walk_files_bounded(root: &Path, max_depth: usize, max_files: usize) -> Vec<String> {
+/// Like [`walk_files`] but with a caller-supplied depth cap. Use this
+/// when you only need a shallow view (the `@`-mention panel's default
+/// `@` mode walks 3 layers to stay snappy on large repos). The file
+/// cap is fixed at [`MAX_FILES`] — a shallow walk is already small,
+/// no need to make it configurable.
+pub fn walk_files_with_depth(root: &Path, max_depth: usize) -> Vec<String> {
+    walk_files_bounded(root, max_depth, MAX_FILES)
+}
+
+/// Like [`walk_files_with_depth`] but uses the wider [`SYSTEM_EXCLUDE`]
+/// instead of [`DEFAULT_EXCLUDE`]. Used by the `@/` panel when the
+/// user asks to search the literal filesystem root — drops `/proc`,
+/// `/sys`, `/dev`, etc. so the walk doesn't hang on virtual fs.
+pub fn walk_system(root: &Path, max_depth: usize) -> Vec<String> {
+    walk_files_bounded_with_excludes(root, max_depth, MAX_FILES, SYSTEM_EXCLUDE)
+}
+
+/// Bounded variant used by [`walk_files`], [`walk_files_with_depth`],
+/// and the tests (small caps so a count/depth assertion doesn't create
+/// thousands of files). `pub(crate)` because the bounded signature is
+/// an internal detail — callers go through the two named wrappers.
+pub(crate) fn walk_files_bounded(
+    root: &Path,
+    max_depth: usize,
+    max_files: usize,
+) -> Vec<String> {
+    walk_files_bounded_with_excludes(root, max_depth, max_files, DEFAULT_EXCLUDE)
+}
+
+/// Same as [`walk_files_bounded`] but with a caller-supplied exclude
+/// list. The system-root walk uses this to drop `/proc`, `/sys`, etc.
+fn walk_files_bounded_with_excludes(
+    root: &Path,
+    max_depth: usize,
+    max_files: usize,
+    excludes: &[&str],
+) -> Vec<String> {
     let repo_ctx = open_repo(root);
     let mut out: Vec<String> = Vec::new();
     // Explicit stack (DFS); each frame = (dir_abs, depth) where `depth`
@@ -129,11 +183,13 @@ fn walk_files_bounded(root: &Path, max_depth: usize, max_files: usize) -> Vec<St
                 Ok(s) => s,
                 Err(_) => continue, // non-UTF-8 name
             };
-            if is_default_excluded(&name) {
+            if excludes.iter().any(|x| *x == name) {
                 continue;
             }
             let path = entry.path();
-            // gitignore prunes both files and dirs.
+            // gitignore prunes both files and dirs (only relevant when
+            // root happens to be a workdir — the system-root walk
+            // usually isn't, so `repo_ctx` is typically None).
             if let Some((repo, workdir)) = &repo_ctx {
                 if is_git_ignored(repo, workdir, &path) {
                     continue;

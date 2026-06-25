@@ -139,6 +139,8 @@ pub fn run() {
             commands::panel::get_skill_body,
             // B2 @文件补全 (2026-06-17)
             commands::files::list_files,
+            // B2 system-root @/ panel: literal `/` walk under SYSTEM_EXCLUDE.
+            commands::files::list_files_at,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
