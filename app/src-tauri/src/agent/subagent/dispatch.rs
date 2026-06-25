@@ -25,8 +25,8 @@ use crate::tools::ToolContext;
 use super::{
     assemble_subagent_prompt, build_subagent_finished_payload, build_worker_messages,
     filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result, format_final_text,
-    lookup_subagent, summarize_worker_tool_actions, truncate_transcript_for_persistence,
-    SubagentBufferSink, SubagentStatus, TRANSCRIPT_MAX_BYTES,
+    summarize_worker_tool_actions, truncate_transcript_for_persistence,
+    SubagentBufferSink, SubagentCache, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -118,6 +118,15 @@ pub(crate) async fn run_subagent(
     // ⑨ permission layer). This is the 2nd layer of the 3-layer
     // read-only guarantee (PRD §"只读保证三层").
     force_readonly: bool,
+    // L3d (2026-06-25): the process-wide subagent cache, used to
+    // look up the dispatched subagent across builtin + user +
+    // project layers (replaces the static `lookup_subagent(name)`
+    // — `cache.lookup(project_path, name)` returns a cloned
+    // `LoadedSubagent` honoring the project > user > builtin
+    // precedence + Q2 tools-inheritance). Read-through + mtime-
+    // fenced, so a freshly-written `.md` is picked up on the next
+    // chat turn without a reload command.
+    subagent_cache: &Arc<SubagentCache>,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -127,15 +136,40 @@ pub(crate) async fn run_subagent(
     let task = input.get("task").and_then(|v| v.as_str()).unwrap_or("");
     let tool_use_id_owned = tool_use_id.to_string();
 
-    // Resolve the SubagentDef. Unknown name → error tool_result
-    // (keeps the tool_use/tool_result pairing invariant).
-    let Some(def) = lookup_subagent(subagent_name) else {
+    // Resolve the parent session's project_id + path so the worker
+    // reads the same memory cache slots the parent uses. The
+    // `project_path` is also the key the `SubagentCache` uses to
+    // scope its `<project>/.everlasting/agents/` dir.
+    let project_id = resolve_project_id(db, parent_session_id).await;
+    let project_path = current_ctx.worktree_path.to_string_lossy().to_string();
+
+    // L3d (2026-06-25): resolve the SubagentDef via the cache
+    // (builtin + user + project merged with project > user >
+    // builtin precedence). Replaces the static `lookup_subagent`.
+    // Unknown name → error tool_result (keeps the
+    // tool_use/tool_result pairing invariant).
+    let Some(loaded) = subagent_cache.lookup(&project_path, subagent_name).await else {
+        // Build a friendly "available" hint by re-listing (cheap;
+        // the cache is mtime-fenced so this is a HashMap lookup
+        // when nothing changed since the dispatch_def was built).
+        let available: Vec<String> = subagent_cache
+            .list(&project_path)
+            .await
+            .into_iter()
+            .map(|l| l.def.name)
+            .collect();
         let content = format!(
-            "Unknown subagent '{}'. Available: researcher, general-purpose.",
-            subagent_name
+            "Unknown subagent '{}'. Available: {}.",
+            subagent_name,
+            if available.is_empty() {
+                "(none)".to_string()
+            } else {
+                available.join(", ")
+            }
         );
         return (content, true, false, None);
     };
+    let def = &loaded.def;
     if task.trim().is_empty() {
         let content = "Missing or empty 'task' parameter. The delegation task must be a                        non-empty string."
             .to_string();
@@ -145,6 +179,11 @@ pub(crate) async fn run_subagent(
     // Build the worker's toolset (allowlist + structural-disabled
     // strip). The worker's run_chat_loop call gets this filtered
     // Vec; the parent's tool_defs is unaffected.
+    //
+    // L3d (2026-06-25): we clone the resolved `def` (the cache
+    // returns an owned `LoadedSubagent`) so the worker's filter
+    // can consume it. `filter_tools_for_subagent` takes `&SubagentDef`
+    // so we just borrow.
     let worker_tool_defs = filter_tools_for_subagent(crate::tools::builtin_tools(), def);
     // L3a (2026-06-24): concurrent dispatch branch forces the
     // worker's toolset down to read-only tools. The serial path
@@ -159,14 +198,12 @@ pub(crate) async fn run_subagent(
         worker_tool_defs
     };
 
-    // Resolve the parent session's project_id + path so the worker
-    // reads the same memory cache slots the parent uses.
-    let project_id = resolve_project_id(db, parent_session_id).await;
-    let project_path = current_ctx.worktree_path.to_string_lossy().to_string();
-
     // Build the worker's messages: [memory_blocks (cache_control),
     // delegation_task]. The task is APPENDed (prompt-cache invariant
-    // — see PRD §Decisions 6 + research §10.5).
+    // — see PRD §Decisions 6 + research §10.5). `project_id` +
+    // `project_path` were resolved above (before the cache lookup,
+    // since the cache scopes its `<project>/.everlasting/agents/`
+    // dir by `project_path`).
     let worker_messages =
         build_worker_messages(memory_cache, &project_id, &project_path, task).await;
 
@@ -385,6 +422,15 @@ pub(crate) async fn run_subagent(
         // but the practical case is "spawn failed" — the parent
         // gets an Error tool_result anyway).
         worker_run_id_opt.clone(),
+        // L3d (2026-06-25): thread the subagent cache so the
+        // worker's own per-turn tool list construction can append
+        // the dynamic `dispatch_subagent` ToolDef (the worker's
+        // `filter_tools_for_subagent` then strips it via
+        // `STRUCTURALLY_DISABLED`, preventing nesting). Also
+        // powers any future sub-subagent dispatch (also structurally
+        // disabled in MVP). The cache is shared (Arc clone), so the
+        // worker sees the same mtime-fenced view as the parent.
+        subagent_cache.clone(),
     ))
     .await;
 

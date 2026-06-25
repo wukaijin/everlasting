@@ -92,6 +92,11 @@ pub async fn chat(
     // the agent loop can drain completion notifications each turn
     // and the 3 L1a tools can call into it from `ToolContext`.
     let background_shells = state.background_shells.clone();
+    // L3d (2026-06-25): clone the subagent cache so the agent loop
+    // can build the dynamic `dispatch_subagent` enum + look up
+    // workers by name. Same closure-capture pattern as the other
+    // `Arc<...>` handles above.
+    let subagent_cache = state.subagent_cache.clone();
     let rid = request_id;
     // The `app` clone lives on through `AppHandleSink` (built
     // below); the pre-flight error path also uses `app.emit`
@@ -280,6 +285,13 @@ pub async fn chat(
             // `ask_path` can route the interactive ask via the
             // `"worker:<worker_run_id>"` permission session id.
             None,
+            // L3d (2026-06-25): thread the subagent cache so the
+            // loop's per-turn tool list construction can append the
+            // dynamic `dispatch_subagent` ToolDef
+            // (`definition_with_cache`) and `run_subagent` can look
+            // up workers by name across builtin + user + project
+            // layers.
+            subagent_cache,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

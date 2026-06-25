@@ -256,6 +256,22 @@ pub async fn run_chat_loop(
     // gates the worker's `ask_path` branch — this field carries
     // the routing key.
     worker_run_id: Option<String>,
+    // L3d (2026-06-25): the process-wide subagent cache. Used by
+    // the loop's per-turn tool list construction (line ~957) to
+    // append the dynamic `dispatch_subagent` ToolDef via
+    // `definition_with_cache(&subagent_cache, project_path)`, and
+    // by `run_subagent` to look up the dispatched subagent across
+    // builtin + user + project layers (`cache.lookup(project_path,
+    // name)` replaces the static `lookup_subagent(name)`).
+    //
+    // Threaded here (rather than read off `AppState` mid-loop)
+    // because the loop's signature already carries every other
+    // `Arc<...>` handle (memory_cache / skill_cache / etc.) —
+    // uniform treatment keeps the test + production paths
+    // shape-identical. The cache is read-through + mtime-fenced
+    // so adding / editing / deleting a `.md` is picked up on the
+    // next chat turn without a reload command.
+    subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -954,7 +970,45 @@ pub async fn run_chat_loop(
             req
         };
 
-        let turn_tool_defs = permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
+        let mut turn_tool_defs = permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
+        // L3d (2026-06-25): append the dynamic `dispatch_subagent`
+        // ToolDef so the enum reflects builtin + user + project
+        // subagents merged by `SubagentCache` (mtime-fenced scan).
+        // The static `dispatch_subagent` definition is no longer in
+        // `builtin_tools()` (it would freeze the enum at startup);
+        // we rebuild it here every turn so a freshly-written `.md`
+        // is picked up on the next chat turn. `filter_tools_for_mode`
+        // keeps dispatch_subagent in every mode (it is a
+        // `Risk::Low` discovery tool — the worker's actual writes /
+        // shells go through their own Tier 4 permission check).
+        //
+        // WORKER NESTING GUARD (permission-layer.md §"Subagent
+        // availability"): a worker (`effective_is_worker == true`)
+        // MUST NOT see `dispatch_subagent` in its turn tool list.
+        // The B6 `filter_tools_for_subagent` strips
+        // `dispatch_subagent` from the worker's *initial*
+        // `worker_tool_defs` (`dispatch.rs:187`), but that filter
+        // only applies to the seed list — this per-turn append runs
+        // inside the nested `run_chat_loop` and would otherwise
+        // re-introduce the ToolDef on every turn, defeating the
+        // `STRUCTURALLY_DISABLED` no-nesting invariant. Skip the
+        // append when we are inside a worker run.
+        //
+        // `worktree_path` is in scope from `run_chat_loop`'s top-level
+        // session load (canonicalized via `assert_within_root`) — it
+        // matches what `MemoryCache` / `SkillCache` use, so the
+        // subagent `<project>/.everlasting/agents/*.md` dir lines up
+        // with the project's other namespace dirs.
+        if !effective_is_worker {
+            let project_path = worktree_path.to_string_lossy().to_string();
+            let dispatch_def = crate::agent::subagent::definition_with_cache(
+                &subagent_cache,
+                &project_path,
+            )
+            .await;
+            turn_tool_defs.push(dispatch_def);
+        }
+        let turn_tool_defs = turn_tool_defs;
         let mut stream = provider.send(
             Some(system_prompt.clone()),
             turn_messages,
@@ -1771,6 +1825,7 @@ pub async fn run_chat_loop(
                             let app_handle = app_handle.clone();
                             let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
+                            let subagent_cache = subagent_cache.clone();
                             async move {
                                 // Pre-execute ⑨ permission check
                                 // (mirrors the serial path's
@@ -1831,6 +1886,11 @@ pub async fn run_chat_loop(
                                         // L3a (2026-06-24): concurrent
                                         // branch forces read-only.
                                         true,
+                                        // L3d (2026-06-25): thread the
+                                        // subagent cache so the worker
+                                        // resolves across builtin + user
+                                        // + project layers.
+                                        &subagent_cache,
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -1976,6 +2036,11 @@ pub async fn run_chat_loop(
                     // at the ⑨ permission layer. The concurrent
                     // branch below passes `true` to force read-only.
                     false,
+                    // L3d (2026-06-25): thread the subagent cache so
+                    // `run_subagent` can look up the dispatched
+                    // subagent across builtin + user + project layers
+                    // (replaces the static `lookup_subagent(name)`).
+                    &subagent_cache,
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();

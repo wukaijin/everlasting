@@ -43,13 +43,27 @@ use crate::tools::update_checklist::ChecklistHandle;
 
 /// All built-in tools available as of step 2 + the toolset extension.
 ///
-/// `dispatch_subagent` (B6, 2026-06-19) is registered here so the
-/// LLM can discover it + it goes through the ⑨ 关 permission
-/// check. Its **execution is intercepted** in `chat_loop.rs`'s
-/// tool_use dispatch loop — it is NOT routed through
-/// `tools::execute_tool` / `execute_tool_inner` (those lack
-/// access to provider / db / cancellations; see
-/// `agent::subagent` docstring + PRD §"Technical Approach").
+/// `dispatch_subagent` (B6, 2026-06-19) is **NOT** in this list as
+/// of L3d PR3 (2026-06-25): its enum must reflect builtin + user +
+/// project subagents merged by `SubagentCache`, so it can no longer
+/// be a static member of the startup `state.tools` snapshot. Instead
+/// `chat_loop.rs:957` appends `definition_with_cache(&subagent_cache,
+/// project_path)` to the per-turn `turn_tool_defs` AFTER
+/// `filter_tools_for_mode`. Worker agents share the same
+/// `run_chat_loop` body, so the worker-nesting guard is enforced by
+/// a SEPARATE mechanism: the per-turn append is gated on
+/// `effective_is_worker == false` (see `chat_loop.rs:1002`), so the
+/// worker's turn tool list never carries `dispatch_subagent` even
+/// though it traverses the same code path.
+/// `filter_tools_for_subagent` (which strips `dispatch_subagent` via
+/// `STRUCTURALLY_DISABLED`) remains as defense-in-depth on the seed
+/// `worker_tool_defs` list (`dispatch.rs:187`) — it strips
+/// `dispatch_subagent` / `update_checklist` / the L1a shell triple
+/// from the worker's initial toolset, but that filter alone would be
+/// insufficient because the per-turn append runs inside the same
+/// `run_chat_loop` body the worker also reaches. The
+/// `effective_is_worker` gate is the load-bearing guard; the filter
+/// is belt-and-suspenders.
 pub fn builtin_tools() -> Vec<ToolDef> {
     vec![
         read_file::definition(),
@@ -65,10 +79,6 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         run_background_shell::definition(),
         shell_status::definition(),
         shell_kill::definition(),
-        // B6 Subagent (2026-06-19): agent-layer control-flow tool.
-        // Execution is intercepted in chat_loop.rs; the ToolDef here
-        // is discovery-only (LLM sees it in the tools[] array).
-        crate::agent::subagent::definition(),
     ]
 }
 

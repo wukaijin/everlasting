@@ -90,6 +90,7 @@ async fn agent_loop_basic_text_only_completes() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -205,6 +206,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -324,6 +326,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -428,6 +431,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -572,6 +576,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -680,6 +685,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -769,6 +775,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -873,6 +880,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1035,6 +1043,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1182,6 +1191,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1336,6 +1346,7 @@ async fn agent_loop_persist_failure_emits_error() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1492,6 +1503,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1608,6 +1620,7 @@ async fn agent_loop_error_persists_partial_text() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1705,6 +1718,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1796,6 +1810,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1921,6 +1936,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -2014,6 +2030,7 @@ async fn agent_loop_error_emits_turn_complete() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -2150,6 +2167,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -2318,6 +2336,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -2466,6 +2485,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2853,6 +2873,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -3031,6 +3052,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -3229,6 +3251,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3379,6 +3402,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -3542,6 +3566,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -3654,6 +3679,7 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,        // app_handle
         None,        // system_prompt_override
         None,        // worker_run_id
+        h.subagent_cache.clone(), // L3d subagent cache
     )
     .await;
 
@@ -3755,6 +3781,7 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         None,
         None,
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 

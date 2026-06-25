@@ -124,6 +124,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -191,6 +192,50 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
     assert_eq!(
         phantom_worker_text, 0,
         "worker intermediate text must NOT leak into parent messages"
+    );
+
+    // L3d (2026-06-25): worker nesting prevention regression guard.
+    // The per-turn tool list rebuild (`chat_loop.rs` ~line 990)
+    // appends `dispatch_subagent` via `definition_with_cache` —
+    // WITHOUT the `effective_is_worker` gate this would re-expose
+    // `dispatch_subagent` to a worker LLM even though
+    // `filter_tools_for_subagent` stripped it from the seed list
+    // (the seed is filtered once in `dispatch.rs:187`, but the
+    // per-turn append happens inside the nested `run_chat_loop`
+    // body that the worker also reaches). This assertion locks
+    // the no-nesting invariant: the worker turn (send slot 1,
+    // index 1) MUST NOT see `dispatch_subagent` in its tool list.
+    //
+    // Slot 0 = parent_t1 (dispatch_subagent IS visible — parent
+    //          needs to be able to dispatch).
+    // Slot 1 = worker_t1 (dispatch_subagent MUST NOT be visible).
+    // Slot 2 = parent_t2 (dispatch_subagent IS visible again).
+    let sent_tools = mock.sent_tools();
+    assert_eq!(
+        sent_tools.len(),
+        3,
+        "expected 3 send calls captured (parent_t1 + worker_t1 + parent_t2)"
+    );
+    let parent_t1_names: Vec<&str> =
+        sent_tools[0].iter().map(|t| t.name.as_str()).collect();
+    let worker_t1_names: Vec<&str> =
+        sent_tools[1].iter().map(|t| t.name.as_str()).collect();
+    let parent_t2_names: Vec<&str> =
+        sent_tools[2].iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        parent_t1_names.iter().any(|n| *n == "dispatch_subagent"),
+        "parent_t1 MUST see dispatch_subagent (so it can dispatch): {:?}",
+        parent_t1_names
+    );
+    assert!(
+        !worker_t1_names.iter().any(|n| *n == "dispatch_subagent"),
+        "worker_t1 MUST NOT see dispatch_subagent (no nesting): {:?}",
+        worker_t1_names
+    );
+    assert!(
+        parent_t2_names.iter().any(|n| *n == "dispatch_subagent"),
+        "parent_t2 MUST see dispatch_subagent again: {:?}",
+        parent_t2_names
     );
 }
 
@@ -292,6 +337,7 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -426,6 +472,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -565,6 +612,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         None,
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -814,6 +862,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -936,6 +985,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1076,6 +1126,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
     let _ = cancel_task.await;
@@ -1198,6 +1249,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1322,6 +1374,7 @@ async fn agent_loop_dispatch_subagent_token_usage_folds_into_parent() {
         // ask_path parent branch). The worker nested call in
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1522,6 +1575,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
             // caller — no worker context — worker_run_id is None.
             None,
+            h.subagent_cache.clone(),
         ),
     )
     .await;
@@ -1740,6 +1794,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         // `is_worker=Some(false)` already routes ask_path to the
         // parent branch. worker_run_id stays None.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1818,6 +1873,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
         // caller — no worker context — worker_run_id is None.
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 
@@ -1900,6 +1956,7 @@ async fn run_loop(
         None,
         None,
         None,
+        h.subagent_cache.clone(),
     )
     .await;
 }

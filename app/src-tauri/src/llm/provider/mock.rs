@@ -114,6 +114,19 @@ pub struct MockProvider {
     /// (vs. silently being shadowed by the parent's
     /// `assemble_system_prompt` output, which was the pre-fix bug).
     sent_systems: Arc<Mutex<Vec<Option<String>>>>,
+    /// L3d (2026-06-25): per-turn snapshot of the `tools` Vec the
+    /// agent loop passed to `send`. The agent loop rebuilds the
+    /// tool list every turn (e.g. `dispatch_subagent` is appended
+    /// dynamically via `definition_with_cache`); capturing it here
+    /// lets integration tests assert the worker path's tool list
+    /// does NOT contain `dispatch_subagent` (no-nesting invariant,
+    /// see `agent/subagent/dispatch.rs:187`'s
+    /// `filter_tools_for_subagent` + the `effective_is_worker` gate
+    /// at the per-turn append site in `chat_loop.rs`). Locked by
+    /// `std::sync::Mutex` because the writes happen inside the
+    /// (sync) `send` impl; tests read it synchronously after
+    /// `run_chat_loop` returns.
+    sent_tools: Arc<Mutex<Vec<Vec<ToolDef>>>>,
 }
 
 /// One step in the mock provider's script — the response to a
@@ -160,6 +173,7 @@ impl MockProvider {
             },
             sent_messages: Arc::new(Mutex::new(Vec::new())),
             sent_systems: Arc::new(Mutex::new(Vec::new())),
+            sent_tools: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -210,6 +224,15 @@ impl MockProvider {
     pub fn sent_systems(&self) -> Vec<Option<String>> {
         self.sent_systems.lock().unwrap().clone()
     }
+
+    /// L3d (2026-06-25): per-turn snapshot of the `tools` Vec the
+    /// agent loop passed to `send`. Read this from the test after
+    /// `run_chat_loop` returns to assert on the worker path's tool
+    /// list (e.g. `dispatch_subagent` MUST NOT appear when
+    /// `effective_is_worker == true`).
+    pub fn sent_tools(&self) -> Vec<Vec<ToolDef>> {
+        self.sent_tools.lock().unwrap().clone()
+    }
 }
 
 impl Provider for MockProvider {
@@ -217,7 +240,7 @@ impl Provider for MockProvider {
         &self,
         system: Option<String>,
         messages: Vec<ChatMessage>,
-        _tools: Vec<ToolDef>,
+        tools: Vec<ToolDef>,
     ) -> Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send + 'static>> {
         // 2026-06-21 (B6 review defect A fix): capture the per-
         // turn system prompt so tests that exercise
@@ -237,6 +260,15 @@ impl Provider for MockProvider {
         // in for.
         {
             self.sent_messages.lock().unwrap().push(messages.clone());
+        }
+        // L3d (2026-06-25): capture the per-turn tool list so tests
+        // can assert the worker's tool list excludes
+        // `dispatch_subagent` (no-nesting invariant — the worker's
+        // `filter_tools_for_subagent` strips it from the seed list,
+        // and the per-turn `effective_is_worker` gate skips the
+        // dynamic append in `chat_loop.rs`).
+        {
+            self.sent_tools.lock().unwrap().push(tools.clone());
         }
         // Atomically claim the next turn slot. The fetch_add is
         // the canonical "I consumed one turn" signal; the

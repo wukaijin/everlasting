@@ -171,6 +171,12 @@ pub(crate) struct TestHarness {
     /// new 15th parameter and is the same handle `ToolContext`
     /// hands to the 3 L1a tools.
     pub(crate) background_shells: crate::background_shell::DefaultRegistry,
+    /// L3d (2026-06-25): subagent cache. Each test gets a fresh
+    /// cache so the mtime fence + scan state can't leak across
+    /// tests. Threads through `run_chat_loop`'s 25th parameter and
+    /// is what `definition_with_cache` + `run_subagent` consult to
+    /// resolve builtin + user + project subagents.
+    pub(crate) subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
     /// loop's pre-flight canonicalizes it. See struct docstring.
@@ -229,6 +235,7 @@ pub(crate) async fn make_harness() -> TestHarness {
         skill_cache: SkillCache::arc(),
         permission_asks: new_permission_store(),
         background_shells: crate::background_shell::default_registry(),
+        subagent_cache: crate::agent::subagent::SubagentCache::arc(),
         // Move the TempDir guard INTO the harness so it lives as
         // long as the harness (i.e. the whole test). Without this
         // move, `dir` drops at the end of `make_harness` and the

@@ -75,8 +75,21 @@ use crate::memory::MemoryCache;
 mod sink;
 mod transcript;
 mod truncate_summary;
+mod loader;
 pub(crate) mod dispatch;
 
+// L3d PR2 (2026-06-25): re-export the loader's public surface so
+// callers reach it via `crate::agent::subagent::{SubagentCache,
+// LoadedSubagent, SubagentSource}` (mirrors the B3 / B4 re-export
+// convention). PR3 lights up the call sites (`AppState` field,
+// `dispatch.rs::run_subagent` lookup, `tools::definition_with_cache`).
+// `LoadedSubagent` / `SubagentSource` are part of the public API
+// surface but the only production consumer right now is
+// `definition_with_cache` (via the local `loaded: Vec<LoadedSubagent>`);
+// the `#[allow(unused_imports)]` keeps the re-export contract
+// visible to future consumers without churn.
+#[allow(unused_imports)]
+pub use loader::{LoadedSubagent, SubagentCache, SubagentSource};
 pub use sink::SubagentBufferSink;
 pub use transcript::TranscriptEntry;
 // `TranscriptKind` is referenced only from `cfg(test)` code
@@ -146,6 +159,105 @@ pub fn definition() -> ToolDef {
 /// interceptor in `chat_loop.rs` to recognize it.
 pub const DISPATCH_TOOL_NAME: &str = "dispatch_subagent";
 
+/// L3d PR3 (2026-06-25): the dynamic, cache-backed
+/// `dispatch_subagent` ToolDef. Replaces the static `definition()`
+/// at the per-turn tool list construction site (`chat_loop.rs:957`)
+/// so the LLM's enum reflects builtin + user + project subagents
+/// merged by [`SubagentCache::list`] (mtime-fenced scan).
+///
+/// - The `enum` is built from `cache.list(project_path)` — every
+///   subagent's `def.name`, sorted alphabetically by the loader.
+/// - The description appends a per-subagent `Available subagents:`
+///   line carrying the source tag (`builtin` / `user` / `project`)
+///   + the subagent's own `description` field. The LLM uses the
+///   source tag for debugging (it does not affect dispatch
+///   routing); the description helps the LLM pick the right agent.
+/// - The static `definition()` is kept for the existing unit tests
+///   (`definition_*`) + any caller that wants the no-cache version;
+///   the dynamic path is the production path.
+///
+/// `project_path` is the canonical worktree path (same string the
+/// agent loop uses for memory / skill lookups — see `chat_loop.rs`
+/// `worktree_path`). The cache is read-through + mtime-fenced, so
+/// adding / editing / deleting a `.md` is picked up on the next
+/// chat turn without a reload command.
+pub async fn definition_with_cache(cache: &SubagentCache, project_path: &str) -> ToolDef {
+    let loaded = cache.list(project_path).await;
+    let names: Vec<String> = loaded.iter().map(|l| l.def.name.clone()).collect();
+
+    // Build the `Available subagents:` line. Each entry carries
+    // the source tag + the subagent's own description (truncated
+    // for brevity if long). Sorted alphabetically by name (the
+    // loader already sorts; we re-derive for safety).
+    let mut entries: Vec<String> = loaded
+        .iter()
+        .map(|l| {
+            let desc = l.def.description.trim();
+            if desc.is_empty() {
+                format!("{} (source: {})", l.def.name, l.source.as_str())
+            } else {
+                // Truncate long descriptions at one line (~80 chars)
+                // so the tool description stays scannable.
+                let one_line: String = desc.lines().next().unwrap_or("").trim().to_string();
+                let clipped = if one_line.chars().count() > 80 {
+                    let cutoff: String = one_line.chars().take(77).collect();
+                    format!("{}...", cutoff)
+                } else {
+                    one_line
+                };
+                format!(
+                    "{} (source: {}): {}",
+                    l.def.name,
+                    l.source.as_str(),
+                    clipped
+                )
+            }
+        })
+        .collect();
+    entries.sort();
+
+    let base = definition();
+    let available_line = if entries.is_empty() {
+        // Defensive — builtins are always present, so this is
+        // unreachable in practice; keep the description honest
+        // rather than listing an empty set.
+        "Available subagents: (none).".to_string()
+    } else {
+        format!("Available subagents: {}.", entries.join("; "))
+    };
+    let description = format!(
+        "{}\n\n{}",
+        base.description.unwrap_or_default(),
+        available_line
+    );
+
+    ToolDef {
+        name: DISPATCH_TOOL_NAME.to_string(),
+        description: Some(description),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "subagent": {
+                    "type": "string",
+                    "enum": names,
+                    "description": "Which subagent to dispatch. Source tag (builtin/user/project) \
+                                    is informational; the worker inherits the parent's permission \
+                                    Mode regardless of source."
+                },
+                "task": {
+                    "type": "string",
+                    "description": "The delegation prompt for the worker. The worker \
+                                    starts with a fresh context containing ONLY this \
+                                    task string + the project memory files — it does \
+                                    NOT inherit the parent's conversation history. \
+                                    Write the task as a self-contained brief."
+                }
+            },
+            "required": ["subagent", "task"]
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SubagentDef registry
 // ---------------------------------------------------------------------------
@@ -163,16 +275,18 @@ pub const DISPATCH_TOOL_NAME: &str = "dispatch_subagent";
 /// - `system_prompt` **fully replaces** the parent's behavior_prompt
 ///   layer — the worker does NOT inherit the main system prompt
 ///   (Claude Code convention, see PRD §Decisions 6 + research §5).
+#[derive(Clone, Debug)]
 pub struct SubagentDef {
-    pub name: &'static str,
-    /// User-facing description. Used by future PR3 (frontend picker
-    /// UI) and the dispatch_subagent tool description; kept on the
-    /// struct so a future frontmatter loader can populate it from
-    /// the Markdown front-matter.
-    #[allow(dead_code)]
-    pub description: &'static str,
+    pub name: String,
+    /// User-facing description. Consumed by L3d PR3's
+    /// `definition_with_cache` to render the per-subagent source
+    /// tag + summary in the `dispatch_subagent` tool description
+    /// (so the LLM sees builtin + user + project agents with their
+    /// provenance). Also kept on the struct so the frontmatter
+    /// loader (PR2) can populate it from the Markdown front-matter.
+    pub description: String,
     pub system_prompt: String,
-    pub tools: &'static [&'static str],
+    pub tools: Vec<String>,
 }
 
 /// The two MVP subagent definitions, keyed by name. Used by
@@ -185,12 +299,13 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
     REGISTRY.get_or_init(|| {
         vec![
             SubagentDef {
-                name: "researcher",
+                name: "researcher".to_string(),
                 description: "Read-only research subagent. Can read files, grep, glob, list \
                               directories, and fetch web pages, but cannot edit, write, or run \
                               shells. Use for focused code exploration or web research where \
                               the verbose search output would otherwise pollute the main \
-                              conversation.",
+                              conversation."
+                    .to_string(),
                 system_prompt: "You are a read-only research subagent dispatched by the main \
                                 agent to investigate a focused question. You have access to \
                                 `read_file`, `grep`, `glob`, `list_dir`, and `web_fetch` — use \
@@ -205,15 +320,22 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                                 and does not need your intermediate tool logs.\n\nReply in the \
                                 user's language."
                     .to_string(),
-                tools: &["read_file", "grep", "glob", "list_dir", "web_fetch"],
+                tools: vec![
+                    "read_file".to_string(),
+                    "grep".to_string(),
+                    "glob".to_string(),
+                    "list_dir".to_string(),
+                    "web_fetch".to_string(),
+                ],
             },
             SubagentDef {
-                name: "general-purpose",
+                name: "general-purpose".to_string(),
                 description: "General-purpose subagent. Has the full toolset minus the \
                               structural-disabled set (dispatch_subagent, update_checklist, \
                               background-shell tools). Use for self-contained sub-tasks that \
                               would benefit from isolated context (e.g. a focused refactor, \
-                              a full test+fix loop, a multi-file search-and-edit).",
+                              a full test+fix loop, a multi-file search-and-edit)."
+                    .to_string(),
                 system_prompt: "You are a general-purpose subagent dispatched by the main \
                                 agent to work on a self-contained sub-task in your own \
                                 isolated context. You have access to the full toolset minus \
@@ -226,11 +348,11 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                                 verbatim as the tool_result of the dispatch_subagent call, so \
                                 it should be self-contained.\n\nReply in the user's language."
                     .to_string(),
-                // Empty slice = "inherit builtin_tools() minus structural-disabled".
+                // Empty Vec = "inherit builtin_tools() minus structural-disabled".
                 // `filter_tools_for_subagent` reads `tools.is_empty()` as "full set
                 // minus disabled"; this keeps the general-purpose subagent's tool
                 // list self-maintaining as new tools are added to builtin_tools().
-                tools: &[],
+                tools: vec![],
             },
         ]
     })
@@ -238,6 +360,16 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
 
 /// Resolve a built-in subagent by name. Returns `None` for unknown
 /// names (the interceptor synthesizes an error tool_result).
+///
+/// **L3d PR3 (2026-06-25)**: production code now resolves subagents
+/// via `SubagentCache::lookup` (which merges builtin + user + project
+/// with precedence). This function is retained for the unit tests
+/// in this module + `tests_subagent.rs` that want a direct builtin
+/// lookup without spinning up a `SubagentCache`. The
+/// `#[allow(dead_code)]` silences the "never used" warning from the
+/// production build (the function is only called from `#[cfg(test)]`
+/// code).
+#[allow(dead_code)]
 pub fn lookup_subagent(name: &str) -> Option<&'static SubagentDef> {
     builtin_subagents().iter().find(|s| s.name == name)
 }
@@ -371,7 +503,7 @@ pub fn filter_tools_for_subagent(
     let allow: Option<std::collections::HashSet<&str>> = if def.tools.is_empty() {
         None
     } else {
-        Some(def.tools.iter().copied().collect())
+        Some(def.tools.iter().map(|s| s.as_str()).collect())
     };
     all_tools
         .into_iter()
@@ -505,6 +637,152 @@ mod tests {
         assert_eq!(enum_vals, vec!["researcher", "general-purpose"]);
     }
 
+    // ---- definition_with_cache (L3d PR3) ----
+
+    #[tokio::test]
+    async fn definition_with_cache_enum_includes_builtins() {
+        // Fresh cache + empty project dir → enum is the 2 builtins
+        // (alphabetical: general-purpose, researcher).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = SubagentCache::arc();
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path).await;
+        assert_eq!(def.name, DISPATCH_TOOL_NAME);
+        let enum_vals: Vec<String> = def
+            .input_schema
+            .pointer("/properties/subagent/enum")
+            .and_then(|v| v.as_array())
+            .expect("enum present")
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert_eq!(
+            enum_vals,
+            vec!["general-purpose".to_string(), "researcher".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn definition_with_cache_description_has_source_tags() {
+        // The description must carry `Available subagents:` + per-agent
+        // `(source: ...)` tags so the LLM (and the user debugging)
+        // can see each subagent's provenance.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = SubagentCache::arc();
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path).await;
+        let desc = def.description.expect("description present");
+        assert!(
+            desc.contains("Available subagents:"),
+            "description must carry the available-agents line: {}",
+            desc
+        );
+        // Both builtins are source: builtin.
+        assert!(
+            desc.contains("researcher (source: builtin)"),
+            "missing researcher builtin tag: {}",
+            desc
+        );
+        assert!(
+            desc.contains("general-purpose (source: builtin)"),
+            "missing general-purpose builtin tag: {}",
+            desc
+        );
+    }
+
+    #[tokio::test]
+    async fn definition_with_cache_picks_up_user_md() {
+        // mtime fence: writing a user .md between calls changes the
+        // enum on the next `definition_with_cache` invocation.
+        let user_tmp = tempfile::TempDir::new().unwrap();
+        let user_agents = user_tmp.path().join("agents");
+        std::fs::create_dir_all(&user_agents).unwrap();
+
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let project_path = proj_tmp.path().to_string_lossy().to_string();
+
+        let prev = crate::memory::file::set_user_dir_for_test(
+            Some(user_tmp.path().to_path_buf()),
+        );
+        let cache = SubagentCache::arc();
+
+        // Initially only builtins.
+        let def = definition_with_cache(&cache, &project_path).await;
+        let enum_vals: Vec<String> = def
+            .input_schema
+            .pointer("/properties/subagent/enum")
+            .and_then(|v| v.as_array())
+            .expect("enum")
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert_eq!(enum_vals.len(), 2);
+
+        // Write a user .md → next call sees it.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        std::fs::write(
+            user_agents.join("custom.md"),
+            "---\nname: custom\ndescription: my custom agent\ntools: [read_file]\n---\nbody",
+        )
+        .unwrap();
+
+        let def = definition_with_cache(&cache, &project_path).await;
+        let enum_vals: Vec<String> = def
+            .input_schema
+            .pointer("/properties/subagent/enum")
+            .and_then(|v| v.as_array())
+            .expect("enum")
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert_eq!(enum_vals.len(), 3);
+        assert!(enum_vals.contains(&"custom".to_string()));
+
+        // Source tag for the user agent is in the description.
+        let desc = def.description.expect("description");
+        assert!(
+            desc.contains("custom (source: user)"),
+            "missing custom user tag: {}",
+            desc
+        );
+
+        crate::memory::file::set_user_dir_for_test(prev);
+    }
+
+    #[tokio::test]
+    async fn definition_with_cache_project_overrides_builtin() {
+        // project > user > builtin precedence: a project .md with the
+        // same name as a builtin shows source: project.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let proj_agents = proj_tmp
+            .path()
+            .join(".everlasting")
+            .join("agents");
+        std::fs::create_dir_all(&proj_agents).unwrap();
+        std::fs::write(
+            proj_agents.join("researcher.md"),
+            "---\nname: researcher\ndescription: project researcher\n---\nCustom prompt.",
+        )
+        .unwrap();
+
+        let cache = SubagentCache::arc();
+        let project_path = proj_tmp.path().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path).await;
+        let desc = def.description.expect("description");
+        // project researcher wins, source tag is project.
+        assert!(
+            desc.contains("researcher (source: project)"),
+            "expected project source tag for researcher: {}",
+            desc
+        );
+        // No source: builtin for researcher (overridden).
+        assert!(
+            !desc.contains("researcher (source: builtin)"),
+            "builtin tag should be overridden: {}",
+            desc
+        );
+    }
+
     // ---- builtin_subagents ----
 
     #[test]
@@ -516,7 +794,16 @@ mod tests {
     #[test]
     fn builtin_subagents_researcher_tool_allowlist() {
         let r = lookup_subagent("researcher").expect("researcher exists");
-        assert_eq!(r.tools, &["read_file", "grep", "glob", "list_dir", "web_fetch"]);
+        assert_eq!(
+            r.tools,
+            vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "glob".to_string(),
+                "list_dir".to_string(),
+                "web_fetch".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -624,16 +911,16 @@ mod tests {
         // still strip them (structural-disabled wins over the
         // allowlist).
         let synthetic = SubagentDef {
-            name: "synthetic",
-            description: "",
+            name: "synthetic".to_string(),
+            description: String::new(),
             system_prompt: String::new(),
-            tools: &[
-                "read_file",
-                "dispatch_subagent",
-                "update_checklist",
-                "run_background_shell",
-                "shell_status",
-                "shell_kill",
+            tools: vec![
+                "read_file".to_string(),
+                "dispatch_subagent".to_string(),
+                "update_checklist".to_string(),
+                "run_background_shell".to_string(),
+                "shell_status".to_string(),
+                "shell_kill".to_string(),
             ],
         };
         let all = vec![
