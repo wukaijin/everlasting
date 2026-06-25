@@ -6,6 +6,14 @@
 >
 > **Cross-references**:
 > - Main LLM contract: [llm-contract.md](./llm-contract.md)
+>
+> **⚠ 2026-06-26 snapshot 重构**（task `06-26-fix-token-usage-snapshot`）：上下文占用从「每 turn **累加**」改为「**最后一次请求的快照**」。变更要点：
+> - `TokenUsage` 加第 5 字段 `context_input_tokens`（跨 provider 归一化「本次请求总输入」，前端 `%` 的分子）
+> - sessions 加 5 个 `last_*` 快照列（覆盖写）；`add_token_usage` 删除，换 `update_last_turn_usage`
+> - worker（子代理）token **不再** fold 进父 session（reversal of RULE-A-015/PR2a），隔离到 `subagent_runs.token_usage_json`
+> - 前端 `accumulateTokenUsage` → `setLastTurnUsage`（覆盖写，非 `+=`）；ChatInput 分子改 `context_input_tokens`
+>
+> 本文 §2 Signatures / §3 Contracts（agent loop + frontend accumulation 段）已同步更新为 snapshot 语义；§4 Validation Matrix / §5 Cases / §7 中残留的「cumulative / accumulate」表述为历史描述，**当前以 §2 + 上述要点 + 代码为准**。spec 初衷（§1 line "current context usage, **not cumulative session totals**"）至此落地。
 
 ## Scenario: Token Usage Tracking (A4, 2026-06-10)
 
@@ -35,6 +43,11 @@ pub struct TokenUsage {
  pub output_tokens: u32,
  pub cache_creation_input_tokens: u32,
  pub cache_read_input_tokens: u32,
+ /// 2026-06-26: 跨 provider 归一化的「本次请求总输入」= 进入
+ /// context window 的全部 prompt token（含缓存命中）。前端 `%` 分子。
+ /// Anthropic: input+cc+cr; OpenAI: prompt_tokens（勿再加 cache_read）。
+ #[serde(default)]
+ pub context_input_tokens: u32,
 }
 
 pub enum ChatEvent {
@@ -56,19 +69,36 @@ ALTER TABLE sessions ADD COLUMN cache_creation_total INTEGER;
 ALTER TABLE sessions ADD COLUMN cache_read_total INTEGER;
 ```
 
-All four columns are **nullable** (no `DEFAULT`); a pre-A4 session
-keeps NULL until its first LLM turn post-upgrade, when
-`add_token_usage` initializes them from 0 (via `COALESCE(col, 0) + ?`).
+All four columns are **nullable** (no `DEFAULT`) and are now
+**frozen** (2026-06-26 snapshot 重构后代码不再写入；保留列 +
+`SessionRow`/`SessionSummary` 字段以避免 migration/类型连锁，
+后续 debt PR 可清理)。
+
+**2026-06-26 snapshot 列**（`migrations.rs` 加在 A4 4 列之后，覆盖写）：
+
+```sql
+ALTER TABLE sessions ADD COLUMN last_context_input_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN last_input_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN last_output_tokens INTEGER;
+ALTER TABLE sessions ADD COLUMN last_cache_creation INTEGER;
+ALTER TABLE sessions ADD COLUMN last_cache_read INTEGER;
+```
+
+5 列均 nullable，语义 = 「最后一次 LLM 请求」的快照（每次
+`Done` 事件**覆盖写**，非累加）。`last_context_input_tokens`
+是前端 `%` 的分子；4 个分量供 ChatInput 展开详情显示。pre-snapshot
+session 全 NULL，前端 fallback 显示「—」（不是 0%）。
 
 #### DB function (`app/src-tauri/src/db/sessions.rs`)
 
 ```rust
-pub async fn add_token_usage(
+// 2026-06-26: 删除累加式 add_token_usage，换覆盖式快照。
+pub async fn update_last_turn_usage(
  pool: &SqlitePool,
  session_id: &str,
  usage: &TokenUsage,
 ) -> Result<(), sqlx::Error> {
- // Single UPDATE: 4 columns added in place, updated_at bumped.
+ // 单 UPDATE：5 个 last_* 列覆盖写（= 而非 +=），updated_at bumped。
 }
 ```
 
@@ -185,40 +215,51 @@ the **request body** (set in `build_http_body`). Without this,
 OpenAI omits the `usage` field on all chunks and the agent loop
 has no per-turn token counts.
 
-#### Agent loop accumulation (R2)
+#### Agent loop snapshot write（2026-06-26 R3 — replaces R2 accumulation）
 
 The agent loop's `ChatEvent::Done` handler in
-`app/src-tauri/src/agent/chat.rs`:
+`app/src-tauri/src/agent/chat_loop.rs` (Done-event arm, ~:1149-1184):
 
 ```rust
 ChatEvent::Done { stop_reason: sr, usage } => {
- stop_reason = sr.clone();
+ // ...
  if let Some(t) = usage {
- if let Err(e) = crate::db::add_token_usage(&db, &session_id, t).await {
- tracing::warn!(error = %e, "failed to accumulate token usage");
- }
- } else {
- tracing::info!("skipping token accumulation (no usage in Done)");
+     // 2026-06-26 reversal of RULE-A-015/PR2a: 重新关回 !skip_persist gate。
+     // worker 复用父 session_id，若继续写会让父「上下文占用 %」混入
+     // 子代理 turn（实测 1.7M/100% 爆表）。worker token 隔离到
+     // subagent_runs.token_usage_json（dispatch.rs cumulative_usage 写出）。
+     if !skip_persist {
+         if let Err(e) = crate::db::update_last_turn_usage(&db, &session_id, t).await {
+             tracing::warn!(error = %e, "failed to update last-turn usage");
+         }
+     }
  }
 }
 ```
 
-The single SQL `UPDATE col = col + ?` is column-additive, so
-multi-turn sessions converge on the cumulative total. The
-`COALESCE(col, 0) + ?` pattern handles pre-A4 rows (NULL treated
-as 0).
+`update_last_turn_usage` **覆盖写** 5 个 `last_*` 列（`= ?`，不是
+`+= ?`）。语义是「最后一次请求的占用快照」——多 turn session 的
+`last_context_input_tokens` 反映**最近一次**请求的 context window
+占用，不是历史和。worker（`skip_persist=true`）路径被 gate 挡住，
+不写父 session；其 token 由 `SubagentBufferSink::cumulative_usage()`
+在 worker 退出时写入 `subagent_runs.token_usage_json`。
 
-#### Frontend accumulation (`chat.ts` + `streamController.ts`)
+#### Frontend snapshot (`chat.ts` + `streamController.ts`，2026-06-26 重构）
 
 `streamController.handleChatEvent("done")` calls
-`useChatStore().accumulateTokenUsage(sid, event.usage)`. The chat
-store's `tokenUsageBySession: reactive(Map)` holds the running
-totals. `currentSessionTokenUsage` is a `computed` that the
-ChatInput hint reads.
+`useChatStore().setLastTurnUsage(sid, event.usage)`（原
+`accumulateTokenUsage`，改为**覆盖写** `tokenUsageBySession.set(sid,
+{...usage})`，删 `+=` 分支）。`tokenUsageBySession: reactive(Map)` 持有
+**最后一次请求**的快照（非 running total）。`currentSessionTokenUsage`
+computed 供 ChatInput 读取。
 
-The map is also **seeded** from `SessionSummary` /
-`load_session` results, so a page reload shows the cumulative
-value (not "—") immediately.
+`event.usage.context_input_tokens` 是前端 `%` 的分子（÷
+`modelsStore.defaultModel.contextWindow`）。wire payload 上该字段
+optional + fallback `input+cache_creation+cache_read`（兼容旧后端）。
+
+Map 也从 `SessionSummary.last_*` **seed**（`loadSessions` 判定
+`last_context_input_tokens !== null`），所以 reload 显示最后一次
+快照（pre-snapshot session 显「—」）。
 
 #### Color thresholds (UI)
 

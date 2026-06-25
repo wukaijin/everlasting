@@ -70,6 +70,17 @@ pub async fn run_chat_loop(
     // gating it killed the worker's `was_cancelled` tracking. Both are
     // now outside the gate. See "Pattern: PR2a corrected PR1 over-broad
     // skip_persist gate (RULE-A-015)" below.
+    //
+    // **2026-06-26 reversal (task 06-26-fix-token-usage-snapshot)**: item (a)
+    // (`add_token_usage`) is REVERSED — worker token now stays OUT of the
+    // parent's sessions totals. Rationale: worker reuses parent session_id,
+    // so streaming its per-turn usage into the parent's accumulator polluted
+    // the parent's "context occupancy %" (subagent turns summed in → 1.7M /
+    // 100% blowup). Token usage switched to a per-turn **snapshot**
+    // (`update_last_turn_usage`, overwrites not accumulates) and is gated
+    // back inside `!skip_persist`; worker token lives in
+    // `subagent_runs.token_usage_json` only. Item (b) (terminal Done emit)
+    // stays outside the gate — that part of PR2a stands.
     skip_persist: bool,                                                                // 20
     // B6 PR2b (2026-06-20, RULE-A-014): when `Some(true)`, the
     // `PermissionContext` built inside the loop carries `is_worker: true`,
@@ -937,7 +948,7 @@ markdown rendering handles both markers uniformly.
 | `agent_loop_dispatch_subagent_persists_subagent_run` | B6 PR2a: parent dispatches `general-purpose`; `subagent_runs` row exists with `status='completed'`, `summary` carries `final_text`, `transcript_json` non-empty, `transcript_truncated=0`; `transcript_snapshot` is not empty |
 | `agent_loop_dispatch_subagent_cancelled_persists_status_cancelled` | B6 PR2a + RULE-A-015: parent_token cancel mid-worker → `subagent_runs.status='cancelled'` + `finished_at` NOT NULL; regression: terminal `Done` emit is OUTSIDE the `skip_persist` gate (PR2a fix) so `SubagentBufferSink.was_cancelled` was reachable |
 | `agent_loop_dispatch_subagent_audit_not_polluted_by_worker` | B6 PR2a: parent + `researcher` worker (silent allow, Tier 5) → parent's `session_audit_events` only carries parent's own ⑨ decisions; worker Tier 5 decisions stay in `transcript` (NOT in `session_audit_events`) |
-| `agent_loop_dispatch_subagent_token_usage_folds_into_parent` | B6 PR2a: worker emits 2 turns of usage → parent's `sessions.input_tokens_total` and `output_tokens_total` carry the SUM (decoupled `add_token_usage` from `skip_persist` per PR2a RULE-A-015) |
+| `agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent` | 2026-06-26 reversal of PR2a RULE-A-015: worker emits usage → parent's `last_context_input_tokens` reflects ONLY the parent's own turn (NOT the worker sum); worker usage lives in `subagent_runs.token_usage_json`. The old fold-into-parent design caused the 1.7M / 100% context-occupancy blowup. Companion: `l3a_concurrent_token_usage_does_not_fold_into_parent` |
 | `agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied` | B6 PR2b + RULE-A-014 + RULE-A-016: parent Edit mode + `general-purpose` worker + `write_file` to path outside `permission_ctx.cwd` → `tokio::time::timeout(15s)` wraps the worker; Tier 4 `ask_path` sees `ctx.is_worker=true` → `Decision::Deny` IMMEDIATELY (no oneshot wait, no hang); tool_result is `is_error: true` with deny reason. RULE-A-016 (closed B6 PR3a 2026-06-20): the worker's deny does NOT write a `tool_denied` row to the parent's `session_audit_events`; instead `ask_path` emits a `PermissionAskPayload` via the sink → `SubagentBufferSink::emit_permission_ask` records a `TranscriptKind::PermissionAsk` entry in the worker's transcript. The test asserts `tool_denied count == 0` in parent audit + `permission_ask count == 1` in worker transcript + audit delta ≤ 2 (only parent's `tool_allowed` + `tool_executed` for `dispatch_subagent`). |
 | `mock_provider_call_count_tracks_send_calls` | MockProvider instrumentation works (sanity) |
 | `mock_provider_reports_mock_protocol` | MockProvider reports `Mock` protocol (sanity) |

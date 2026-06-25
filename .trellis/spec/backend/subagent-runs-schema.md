@@ -208,6 +208,14 @@ trade-off:
   data path available (the worker emits `ChatEvent::Done { usage }` at
   each turn end), so streaming is essentially "free".
 
+> **⚠ 2026-06-26 STALE（task 06-26-fix-token-usage-snapshot）**：本节
+> 「token_usage streaming 汇总进父 session」的设计已被 **reversal**。
+> worker token 现在隔离到 `subagent_runs.token_usage_json`，**不**进父
+> session（实测 fold-into-parent 导致父「上下文占用 %」1.7M/100% 爆表）。
+> `add_token_usage_streaming` 函数已删除（无 production callsite）。
+> 父 session 的 token 改为快照语义（`update_last_turn_usage`）。下面
+> streaming vs one-shot 的论证仅作历史记录，当前实现是「都不进父」。
+
 The streaming helper is a separate function (not a flag on the
 existing `add_token_usage`) because of the PR2a RULE-A-015 fix:
 `add_token_usage` was incorrectly inside the `if !skip_persist { ... }`
