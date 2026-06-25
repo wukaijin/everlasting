@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口 + Pre-Development Checklist"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker 继承 parent Mode + STRUCTURALLY_DISABLED 无条件剥离 — L3d 安全不变量必须保持"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "ToolDef/builtin_tools 注册约定 — dispatch_subagent 要从启动快照拆出改动态拼 enum"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "dispatch.rs run_subagent + lookup 路径 — 改 cache.lookup 替代 lookup_subagent"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "双层加载 + user_dir(~/.config/everlasting)路径约定 — R1 user 路径修正依据"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "per-file isolation 错误风格 — silent skip + tracing::warn，单个 .md 错不阻塞其他"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 B3 CommandCache/Skill inline-array parser 模式 — L3d 设计核心，避免重造"}
+{"file": "docs/subagent-loader.md", "reason": "设计主文档 — schema 字段/错误处理决策表/三层优先级细节来源（task prd 只记修订，细节查此）"}
+{"file": "docs/_reviews/REVIEW-l3d-subagent-loader-deepseek-v4-pro.md", "reason": "审查报告已知问题 + 本 task prd 的 R1-R4 修订 — 避免重踩"}

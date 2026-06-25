@@ -743,3 +743,13 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **残留**(未纳入本 PR):`permissions/types.rs:144` is_worker 字段 doc + `tests_subagent.rs:1363/1669` 测试注释同款过时,留作关联文档债后续清理
 - **测试**:`mod.rs` 2 处(researcher allowlist + filter 加 web_fetch keep 断言)+ `tests_subagent.rs` `l3a_filter_tools_readonly_keeps_only_four_read_tools` 改名 `_five_` + len 5 + required 加 web_fetch + forbidden 去 web_fetch;`cargo test --lib` **864 passed 0 failed**
 - **沉淀**:`.trellis/spec/backend/tool-contract.md`(web_fetch §1 加 subagent 可用性 + 第 21 参/is_worker/description 过时描述修正 + researcher 表格);`app/src-tauri/src/agent/subagent/mod.rs`(researcher tools+prompt+description + READONLY_TOOL_ALLOWLIST + 注释);`dispatch.rs:339` 注释
+
+### 2026-06-26 — L3d subagent frontmatter loader(第三档收口)
+
+- **决策**:砍设计 PRD 的 `/reload-subagents` 命令,改 B3/B4 同款 read-through mtime fence —— .md 改动下次 chat 自动生效(`builtin_tools()` 启动经 `state.tools` 快照,故 dispatch_subagent 拆出,改每 turn `definition_with_cache(&SubagentCache, project_path)` 动态拼 enum + source tag)
+- **决策**:`tools` 字段可选 —— 覆盖 builtin 同名且未声明 → 继承 builtin tools;全新 agent 未声明 → `vec![]` 全工具集。`SubagentDef.tools: Vec<String>` 本身区分不了 None/Some,用 `LoadedAgentFile.tools_declared: bool` 侧信道承载(scan→cache→merge 流水线)
+- **决策**:`SubagentDef` 全 owned(PR1 纯重构铺路,`name`/`description: String`、`tools: Vec<String>`);`model` 字段 v1 解析但 warn-ignored(`Provider` trait 单实例模型)
+- **修订(对设计 PRD)**:R1 user 路径 `~/.config/everlasting/agents/`(非 `~/.everlasting`,跟 B3/B4/B5 一致);R2 复用 **Skill** loader inline-array parser(非 B3 —— B3 scalar-only 不支持数组,设计 PRD §3.3 + deepseek 审查报告都看错文件);R3 删"YAML fail-fast"伪命题(手写 parser 全容错,无 fail-fast 分支)
+- **安全教训(PR3 check 发现 BLOCKING 回归)**:防 worker 嵌套靠 `chat_loop.rs` `effective_is_worker` gate(worker 跳过 dispatch_subagent 的 per-turn append),`STRUCTURALLY_DISABLED` filter 只是 defense-in-depth —— filter 只过滤 seed list,不过滤共享 `run_chat_loop` body 的 per-turn append。PR3 初版在共享 body 无 gate 追加 → worker 可嵌套(单测全绿因无人断言 worker turn 的 tools 内容)。Forbidden Pattern:共享 loop body 内 append 动态/禁项 tool 必须用 is_worker gate。`MockProvider` 加 `sent_tools()` 可观测性才能测此不变量
+- **测试**:`cargo test --lib` **909 passed 0 failed**(PR1 owned 化适配 + PR2 loader 39 新测试 + PR3 definition_with_cache 4 新 + no-nesting 回归);`vue-tsc --noEmit` 绿
+- **沉淀**:`.trellis/spec/backend/tool-contract.md`(dispatch_subagent scenario:no-nesting 机制 callout + Forbidden Pattern + Tool declaration 动态化 + 三层来源 SubagentCache + cache.lookup);`app/src-tauri/src/agent/subagent/loader.rs`(新建);设计 PRD `docs/subagent-loader.md`(本 task 引用 + R1-R3 修订)

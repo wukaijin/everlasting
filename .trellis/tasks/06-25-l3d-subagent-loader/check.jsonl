@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 清单"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 STRUCTURALLY_DISABLED + worker Mode 继承安全不变量未退化"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 ToolDef 契约 + dispatch_subagent 动态拼 enum 合规"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 per-file isolation + warn 风格一致"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证测试覆盖(scan/lookup/enum/parser/mtime fence)合规"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验证确实复用 B3/Skill loader 而非重造"}
+{"file": "docs/subagent-loader.md", "reason": "对照设计 PRD 验收标准逐条核对"}

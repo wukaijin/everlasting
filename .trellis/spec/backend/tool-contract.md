@@ -761,7 +761,9 @@ bonus. (This was caught by `trellis-check` on PR1 — the original plan said "pr
 
 ### 2. Signatures
 
-#### Tool declaration(`app/src-tauri/src/agent/subagent.rs::definition()`,注册进 `builtin_tools()`)
+#### Tool declaration(`app/src-tauri/src/agent/subagent/mod.rs::definition()`)
+
+> **L3d PR3 (2026-06-26) 动态化**:dispatch_subagent **不再**注册进 `builtin_tools()` 启动快照(`state.tools`,由 `AppState::load()` 启动调一次固化)。production 用 `definition_with_cache(cache: &SubagentCache, project_path: &str) -> ToolDef`(async),每 turn 在 `chat_loop.rs` turn tool list 构造处(`filter_tools_for_mode` 之后)调用 —— `enum` 从 `cache.list(project_path).await` 取所有 subagent 名(builtin + user + project 按优先级合并),`description` 末尾追加 `Available subagents: <name> (source: <builtin|user|project>): <desc>; ...`。.md 改动经 mtime fence 下次 chat 自动生效(无 reload 命令)。下面的静态 `definition()` 保留供单元测试;`tools/mod.rs::builtin_tools()` 现只含其他 12 个工具。no-nesting 防护见 §3 callout。
 
 ```rust
 ToolDef {
@@ -831,7 +833,9 @@ Box::pin(run_chat_loop(
 
 ### 3. Contracts
 
-#### Built-in `SubagentDef` registry(`subagent.rs::builtin_subagents`,OnceLock 缓存)
+#### `SubagentDef` registry + 三层来源(`agent/subagent/mod.rs::builtin_subagents` builtin + `agent/subagent/loader.rs::SubagentCache` user/project)
+
+> **L3d (2026-06-26)**:`SubagentDef` 字段已 owned 化(`name`/`description: String`,`tools: Vec<String>`,PR1)。builtin 之上新增 user 层(`~/.config/everlasting/agents/*.md`)+ project 层(`<project>/.everlasting/agents/*.md`),由 `SubagentCache`(read-through mtime fence,照搬 B3 `CommandCache`)合并,优先级 **project > user > builtin**(last-write-wins)。frontmatter schema(`name`/`description`/`tools`/`model`/body)+ 错误处理(per-file isolation,silent skip + warn,**无 fail-fast**)+ `tools` 继承语义(覆盖 builtin 同名且未声明 tools → 继承 builtin tools;全新 agent 未声明 → `vec![]` 全工具集)详见 [`docs/subagent-loader.md`](../../../docs/subagent-loader.md)。`model` 字段 v1 解析但 warn-ignored(`Provider` trait 单实例模型,不切换)。builtin 两个定义见下表。
 
 | name | `tools` allowlist | system_prompt |
 |---|---|---|
@@ -846,6 +850,10 @@ Box::pin(run_chat_loop(
    - `dispatch_subagent`(禁嵌套,对标 Cline)
    - `run_background_shell` + `shell_status` + `shell_kill`(L1a session 级通知注入,worker 无 sink)
 3. 测试 `filter_strips_structurally_disabled_even_if_allowlist_lists_them` 锁定(防御未来 frontmatter 定义误开禁项)
+
+> **⚠️ no-nesting 真实机制(L3d PR3, 2026-06-26 修正)**:`dispatch_subagent` 在 `STRUCTURALLY_DISABLED` 里是 **defense-in-depth,不是主机制**。PR3 起 dispatch_subagent 不再注册进 `builtin_tools()` 启动快照(见 §2),而是**每 turn 由 `definition_with_cache(&SubagentCache, project_path)` 动态 append** 到 turn tool list —— 此 append 在 parent/worker 共享的 `run_chat_loop` body 内,若不区分,worker nested 调用会同样 append → worker LLM 看得到 dispatch_subagent → **可嵌套**(PR3 check 发现的 BLOCKING 安全回归,单测全绿是因为没人断言 worker turn 的 tools 内容)。真正防嵌套的是 `chat_loop.rs` 的 `if !effective_is_worker { push definition_with_cache }` gate(worker 跳过 append);`filter_tools_for_subagent` 只作用于 seed list(`builtin_tools()`),而 dispatch_subagent 已不在 seed list,故 filter 对它是冗余兜底。
+>
+> **Forbidden Pattern**:在 parent/worker 共享的 `run_chat_loop` body 内 append 动态 tool(或任何结构性禁项 tool),**必须**用 `effective_is_worker` gate 区分;只靠下游 `filter_tools_for_subagent` 不够 —— filter 只过滤 seed list,不过滤 per-turn append。回归测试 `agent_loop_dispatch_subagent_completes_and_returns_summary` 用 `MockProvider::sent_tools()` 断言 worker turn(slot 1)收到的 tools 不含 `dispatch_subagent`。
 
 #### worker context(`subagent.rs::build_worker_messages`,`chat_loop.rs:1940` 传入)
 
@@ -881,7 +889,7 @@ terminal `Done{cancelled}` 事件**不**守 `skip_persist` —— worker `Subage
 | 条件 | 行为 |
 |---|---|
 | `subagent` 不在 enum | LLM 错(input schema 校验拦在前面) |
-| `lookup_subagent(name)` 返 None | 拦截点合成 `tool_result` `[status: error]\nunknown subagent`,`is_error: true`,**tool_use/tool_result 配对保持**(同 RULE-A-007) |
+| `subagent_cache.lookup(project_path, name)` 返 None(L3d PR3 起,替代 `lookup_subagent`) | 拦截点合成 `tool_result` `[status: error]\nunknown subagent: <name>. Available: <cache.list 全部名字>`,`is_error: true`,**tool_use/tool_result 配对保持**(同 RULE-A-007) |
 | worker turn 超 `SUBAGENT_MAX_TURNS=200` | `Done{stop_reason: max_turns}` → status=**Incomplete**(soft,"ran out of budget"),summary 仍带 worker 产出 + `INCOMPLETE_MARKER` `[未完成]` 标记(R2: 06-21 task 把 max_turns 终止从 Completed 改为 Incomplete) |
 | 用户 Stop 传播到 `worker_token`(child of `parent_token`) | `Done{stop_reason: cancelled}` → status=Cancelled + `CANCELLED_MARKER` |
 | worker LLM stream error | `ChatEvent::Error` → SubagentBufferSink.had_error → status=Error |
