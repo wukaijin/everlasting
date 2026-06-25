@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
-- **Last Active**: 2026-06-24
+- **Total Sessions**: 19
+- **Last Active**: 2026-06-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~821 | Active |
+| `journal-1.md` | ~854 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-06-25 | sse-mode-toast: 放开 SSE 流中 mode 切换 + toast 仅流中弹 | `db11930` | `main` |
 | 18 | 2026-06-24 | C2 agent loop ⑬ loop detection | `a35b157`, `ef3477d` | `main` |
 | 17 | 2026-06-16 | 内联审批卡片改造 (06-16) | `b3c6961` | `main` |
 | 16 | 2026-06-15 | P1 RULE-A-003 + RULE-A-004: persist emit Error + audit cancel order | `d8ee7d9`, `220185a` | `main` |
