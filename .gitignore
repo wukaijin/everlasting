@@ -58,8 +58,10 @@ app/src/assets/fonts/source/
 *.sqlite-journal
 .cache/
 
-# App 运行时数据(shell tool outputs spillover 落盘 + 本地 commands fixture)
-.everlasting/
+# App runtime spillover only (shell tool outputs at `<cwd>/.everlasting/outputs/`).
+# Project-level config under `.everlasting/agents/` (L3d subagents), `commands/` (B3),
+# and `skills/` (B4) is **committed and shared** — see loader.rs docs.
+.everlasting/outputs/
 
 
 reasonix.toml
