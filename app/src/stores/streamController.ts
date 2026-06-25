@@ -1455,24 +1455,20 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     const messages = loaded ? rehydrateMessages(loaded.messages) : [];
     putMessages(sessionId, messages, pinnedSessions.has(sessionId));
     loadedFromDb.add(sessionId);
-    // A4: seed the per-session token usage map from the
-    // freshly-loaded session row. Without this, a page reload
-    // would show "—" in the ChatInput hint area until the next
-    // LLM turn in this session. The chat store owns the Map;
-    // the controller hands the row data over via the public
-    // `accumulateTokenUsage` API. (We use the same Map as the
-    // `done`-event path; first call seeds, subsequent calls
-    // add — so reload-then-`done` is correct: the first done
-    // event's `usage` is added to the seeded value.)
-    if (loaded && loaded.session.input_tokens_total !== null) {
-      useChatStore().accumulateTokenUsage(sessionId, {
-        input_tokens: loaded.session.input_tokens_total,
-        output_tokens: loaded.session.output_tokens_total ?? 0,
-        cache_creation_input_tokens:
-          loaded.session.cache_creation_total ?? 0,
-        cache_read_input_tokens: loaded.session.cache_read_total ?? 0,
-      });
-    }
+    // Token usage is seeded from `loadSessions` (chat.ts:393-403)
+    // when the project's session list is loaded — that path runs
+    // once per project change and covers every session in the
+    // project, so by the time `ensureLoaded` fires for a specific
+    // session the per-session `tokenUsageBySession` map already
+    // holds the DB cumulative values.
+    //
+    // Previously this function also called `accumulateTokenUsage`
+    // here, but that produced a 2× seed (loadSessions seeded the
+    // running total, then `ensureLoaded` added the same DB value
+    // on top — see DB session 631362ab input_tokens_total=1.69M
+    // displaying as 3.4M / 100% in the ChatInput hint). Kept here
+    // as a single source-of-truth note so future readers don't
+    // re-introduce the double-seed.
     // F5: seed the per-session latency total from the
     // rehydrated messages. We sum `latency.totalMs` over
     // every assistant role (matches the PRD R6 口径:
