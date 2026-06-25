@@ -22,5 +22,6 @@
 | [`FINDINGS-b5-cache-wire-validation.md`](./FINDINGS-b5-cache-wire-validation.md) | 实施验证 | — | 2026-06-11 | B5 cache wire 验证: 4 文件 cache_control 注入实测 + Anthropic prompt caching 行为确认 |
 | [`b6-subagent-prd-review.md`](./b6-subagent-prd-review.md) | 设计评审 | Carlos (grill) | 2026-06-19 | B6 subagent PRD + 调研 review; PR1/2/3 实施前的设计复审 |
 | [`b6-subagent-assessment.md`](./b6-subagent-assessment.md) | 代码审计 | Carlos | 2026-06-20/21 | B6 subagent 系统评估: PR1+PR2+PR3 + 2026-06-21 fix 全部落地代码; 工具配给 / Mode 结合 / 持久化 / 并发 / 降级债 5 维度评级 |
+| [`REVIEW-l3d-subagent-loader-deepseek-v4-pro.md`](./REVIEW-l3d-subagent-loader-deepseek-v4-pro.md) | 设计评审 | deepseek v4 pro | 2026-06-25 | L3d Subagent Frontmatter Loader PRD 审查: 范围适当性 / 9 维度设计质量 / 架构契合度 / 安全 / 风险; 发现 3 个实施前必须修正的问题(覆盖UX陷阱 / fail-fast过激 / model死代码) + 10 条改进建议 |
 
 > 已移至 [`_deprecated/`](../_deprecated/) 的早期评审快照见该目录 README。
