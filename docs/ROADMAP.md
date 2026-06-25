@@ -99,6 +99,7 @@
 | D2   | 跨 session 全文搜索(双驱动) | ① 用户驱动(MVP,1 PR)+ ② Agent 驱动(`search_history` tool);共享 `search_messages`;先①后②;降档理由(2026-06-17):session 积累尚浅 + B5/C3 已覆盖"当次 memory"层。详见 [IMPLEMENTATION §4 2026-06-17](./IMPLEMENTATION.md#4-决策日志) |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
 | L3b  | worktree 隔离 + 仿 Hermes `delegate_task` | 拆自原 L3 子项 2(2026-06-24);依赖 L3a;`git/worktree.rs` 已就位;旗舰级 harness 学习项 |
+| **L3d**  | **subagent frontmatter 加载器** | **让用户通过 `~/.everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md` 定义自己的 sub-agent 类型;`dispatch_subagent` schema enum 自动扩展 + source tag(`user`/`project`/`builtin`);加载顺序 project > user > builtin,last-write-wins;Q1-Q8 设计已 grill 锁定(2026-06-25);详见 [docs/subagent-loader.md](./subagent-loader.md)** |
 
 > **已完成的 9 项**(B6 / B12 / B4 / C2 / A7 / L2 / L1 / L3a / L3c)已从第三档移到 §1.2 已实施列表。
 
