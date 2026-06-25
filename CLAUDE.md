@@ -169,3 +169,4 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 - `HACKING-llm.md` — LLM API 兼容层笔记
 - `HACKING-wsl.md` — WSL 环境坑笔记
 - `BACKLOG.md` — 候选功能技术评估(排期归 ROADMAP)
+- `DEBUG_DB.md` — SQLite 直连调试指引(DB 路径 / schema / sqlite3 速查)
