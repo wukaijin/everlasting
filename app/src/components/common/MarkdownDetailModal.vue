@@ -227,7 +227,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-xl);
   z-index: 2001;
   outline: none;
   animation: markdown-detail-modal-zoom var(--duration-base) var(--ease-out);

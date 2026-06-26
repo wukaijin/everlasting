@@ -72,15 +72,17 @@ const showSidebar = computed<boolean>(
 
 .toast {
   position: fixed;
-  bottom: 24px;
+  bottom: var(--space-6);
   left: 50%;
   transform: translateX(-50%);
+  /* half-step padding (10/18 not on the 4-based scale) — kept raw
+     per design-tokens.md "don't add a half-step token" rule. */
   padding: 10px 18px;
   border-radius: var(--radius-lg);
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
   font-size: var(--text-base);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-md);
   cursor: pointer;
   max-width: 80vw;
   z-index: 9999;
@@ -94,12 +96,12 @@ const showSidebar = computed<boolean>(
 
 .toast--error {
   background: var(--color-tool-error);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 
 .toast--info {
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 
 .toast-enter-active,

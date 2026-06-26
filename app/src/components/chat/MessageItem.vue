@@ -673,6 +673,14 @@ const showEditedLabel = computed<boolean>(
   background: var(--color-accent-muted);
   color: var(--color-text-primary);
   border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  /* PR5a (2026-06-27, D6 方案A): 3px accent left bar — a visual
+     anchor for "this is my input" that distinguishes the user
+     bubble from the assistant's elevated-gray bubble at a glance,
+     reusing the tool-card left-bar semantic. Inset box-shadow
+     (not border-left) so it doesn't perturb the bubble's 1px
+     border-width or shift the layout. Assistant bubbles get no
+     left bar. */
+  box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
 .msg--assistant .msg__bubble {
@@ -712,7 +720,7 @@ const showEditedLabel = computed<boolean>(
   display: inline-flex;
   align-self: flex-end;
   margin-top: 2px;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-family: var(--font-mono);
   color: var(--color-text-muted);
   font-style: italic;
@@ -790,14 +798,14 @@ const showEditedLabel = computed<boolean>(
   font-size: 0.9em;
   padding: 1px 5px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
   border: 1px solid var(--color-bg-border-strong);
 }
 
 .msg__markdown :deep(pre) {
   margin: 8px 0;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   border: 1px solid var(--color-bg-border-strong);
   border-radius: var(--radius-md);
   overflow-x: auto;

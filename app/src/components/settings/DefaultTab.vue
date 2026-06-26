@@ -216,7 +216,7 @@ function selectDefault(modelId: string) {
 }
 
 .default-tab__tag {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   padding: 1px 6px;
   border-radius: 3px;
   background: var(--color-accent-muted);

@@ -211,7 +211,7 @@ const rows = computed<Row[]>(() => {
 }
 
 .file-injections-hint__status--ok {
-  color: var(--color-status-success, #4ade80);
+  color: var(--color-status-success);
 }
 
 .file-injections-hint__status--bad {

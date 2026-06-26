@@ -330,6 +330,6 @@ async function onClose() {
 
 .titlebar__btn--close:hover {
   background: var(--color-tool-error);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 </style>

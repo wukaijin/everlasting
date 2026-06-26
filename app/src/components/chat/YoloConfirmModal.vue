@@ -196,7 +196,7 @@ watch(
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-xl);
 }
 
 .yolo-confirm-modal__header {
@@ -331,7 +331,7 @@ watch(
 
 .yolo-confirm-modal__btn--confirm {
   background: var(--color-tool-error);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-tool-error);
 }
 

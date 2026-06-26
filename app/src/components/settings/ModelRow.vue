@@ -170,7 +170,7 @@ const testTitle = computed<string>(() =>
 }
 
 .model-row__tag {
-    font-size: 10px;
+    font-size: var(--text-2xs);
     padding: 1px 6px;
     border-radius: 3px;
     background: var(--color-accent-muted);
@@ -193,7 +193,7 @@ const testTitle = computed<string>(() =>
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: var(--text-2xs);
     font-family: var(--font-mono);
     color: var(--color-text-muted);
     flex-shrink: 0;

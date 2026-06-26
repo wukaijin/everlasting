@@ -231,7 +231,7 @@ const latencyRows = computed<Array<{ label: string; value: string }>>(() => {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   padding: 6px 10px;
   min-width: 140px;
   z-index: 3000;

@@ -236,8 +236,8 @@ function onOpenEditor() {
 }
 
 .memory-layer__status--loaded {
-  background: #4ade80; /* green-400 — same family as token-usage ok */
-  box-shadow: 0 0 0 2px color-mix(in srgb, #4ade80 25%, transparent);
+  background: var(--color-status-success); /* green-400 — same family as token-usage ok */
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-status-success) 25%, transparent);
 }
 
 .memory-layer__status--missing {
@@ -245,8 +245,8 @@ function onOpenEditor() {
 }
 
 .memory-layer__status--error {
-  background: #fbbf24; /* amber-400 — same family as token-usage warn */
-  box-shadow: 0 0 0 2px color-mix(in srgb, #fbbf24 25%, transparent);
+  background: var(--color-status-warn); /* amber-400 — same family as token-usage warn */
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-status-warn) 25%, transparent);
 }
 
 .memory-layer__title {
@@ -371,7 +371,7 @@ function onOpenEditor() {
 
 .memory-layer__path {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;

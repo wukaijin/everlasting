@@ -285,7 +285,7 @@ async function onModelPick(modelId: string) {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 220px;
   max-height: 320px;
   overflow-y: auto;
@@ -307,7 +307,7 @@ async function onModelPick(modelId: string) {
   align-items: center;
   gap: 4px;
   padding: 4px 8px 2px;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -348,7 +348,7 @@ async function onModelPick(modelId: string) {
 
 .model-select__item-check {
   color: var(--color-accent);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   flex-shrink: 0;
 }
 

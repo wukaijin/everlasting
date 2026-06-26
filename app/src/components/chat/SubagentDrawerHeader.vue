@@ -237,7 +237,7 @@ defineProps<{
 
 .subagent-drawer__truncated {
   color: var(--color-tool-shell);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   cursor: help;
   font-family: var(--font-mono);
 }

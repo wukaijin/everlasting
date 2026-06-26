@@ -313,7 +313,7 @@ function getStatusFor(path: string): string {
 
 .diff-file__status {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: var(--text-2xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     padding: 1px 6px;

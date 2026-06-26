@@ -305,7 +305,7 @@ function onDelete() {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
     border-radius: var(--radius-md);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-md);
     min-width: 200px;
     z-index: 100;
     padding: 4px;

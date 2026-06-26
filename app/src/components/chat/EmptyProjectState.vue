@@ -178,7 +178,7 @@ async function onLoadHidden() {
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-lg);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
   cursor: pointer;

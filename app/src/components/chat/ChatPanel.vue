@@ -802,7 +802,11 @@ if (typeof window !== "undefined") {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 20px 4px 0px 20px;
+  /* PR4 (2026-06-27): symmetric L/R (--space-5 both sides; was
+     20px/4px — the 4px right was a scrollbar-gutter hack now handled
+     by `scrollbar-gutter: stable` on .messages). Bottom --space-2
+     gives the message list breathing room above the input row. */
+  padding: var(--space-5) var(--space-5) var(--space-2) var(--space-5);
   overflow: hidden;
 }
 

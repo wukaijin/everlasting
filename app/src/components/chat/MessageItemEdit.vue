@@ -237,7 +237,7 @@ function onSave() {
 
 .msg__editor-textarea:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  box-shadow: var(--shadow-ring);
 }
 
 .msg__editor-textarea:disabled {
@@ -292,7 +292,7 @@ function onSave() {
 
 .msg__editor-btn--save {
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-accent);
 }
 
@@ -304,6 +304,6 @@ function onSave() {
 .msg__editor-btn--save:disabled {
   background: color-mix(in srgb, var(--color-accent) 50%, transparent);
   border-color: transparent;
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 </style>

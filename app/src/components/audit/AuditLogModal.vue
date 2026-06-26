@@ -355,7 +355,7 @@ async function onRefresh(): Promise<void> {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-xl);
   z-index: 2001;
   outline: none;
   animation: audit-modal-zoom var(--duration-base) var(--ease-out);
@@ -489,7 +489,7 @@ async function onRefresh(): Promise<void> {
 
 .audit-modal__select-trigger[data-state="open"] {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  box-shadow: var(--shadow-ring);
 }
 
 .audit-modal__select-icon {
@@ -510,7 +510,7 @@ async function onRefresh(): Promise<void> {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: var(--reka-select-trigger-width, 200px);
   width: var(--reka-select-trigger-width);
   max-height: var(--reka-select-content-available-height);

@@ -148,7 +148,7 @@ async function onUnhide(id: string): Promise<void> {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   border-radius: 999px;
   padding: 1px 6px;
   min-width: 18px;

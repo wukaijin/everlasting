@@ -35,6 +35,11 @@
     --color-text-primary: #cbd5e1;
     --color-text-secondary: #8b95a7;
     --color-text-muted: #7c8aa0;
+    /* On-accent / on-error text: pure white for text on saturated
+     colored backgrounds where --color-text-primary (#cbd5e1) would
+     read dirty. Added 2026-06-27 PR2 — 14 ad-hoc color:#ffffff across
+     buttons / toasts / counts, all on accent or tool-error bg. */
+    --color-text-on-accent: #ffffff;
 
     /* Accent (modern Prussian blue) */
     --color-accent: #3b5bdb;
@@ -47,6 +52,14 @@
     --color-tool-shell: #f59e0b; /* amber - shell */
     --color-tool-error: #ef4444; /* red - errors */
     --color-tool-thinking: #a78bfa; /* violet - extended thinking blocks */
+
+    /* Status colors (success / warn feedback). Added 2026-06-27 PR2:
+       green-400 / amber-400 were hardcoded across 4+ components
+       (MemoryPreview / MemoryLayerItem / ChatInputHintRow /
+       FileInjectionsHint — the last already referenced
+       --color-status-success via fallback). See design-tokens.md. */
+    --color-status-success: #4ade80; /* green-400 */
+    --color-status-warn: #fbbf24; /* amber-400 */
 
     /* Font stacks */
     --font-sans:
@@ -91,7 +104,11 @@
     --radius-xl: 12px;
     --radius-pill: 999px;
 
-    /* Type scale — font-size. */
+    /* Type scale — font-size. --text-2xs (10px) added 2026-06-27
+       PR2: the project had 21 ad-hoc font-size:10px values (caption
+       / metadata角标) below the --text-xs floor; this token
+       formalizes that sub-caption tier. See design-tokens.md. */
+    --text-2xs: 10px;
     --text-xs: 11px;
     --text-sm: 12px;
     --text-base: 13px;
@@ -140,6 +157,12 @@
     --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+    /* Largest tier, reserved for modals / large dialogs. Pre-PR1
+     three modals (DeleteWorktreeConfirm / YoloConfirmModal /
+     MarkdownDetailModal) each hardcoded this exact value because
+     --shadow-lg (0 8px 24px) wasn't big enough. See popover-pattern.md
+     "modal = xl" (06-27-frontend-consistency-sweep PR1). */
+    --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5);
     --shadow-ring: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 
@@ -196,4 +219,27 @@ textarea {
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Theme switching extension point (added 2026-06-27 PR5b)                    *
+ * ------------------------------------------------------------------------- *
+ * The app is DARK-ONLY today. All color tokens above are defined once in    *
+ * @theme (Tailwind v4) and cascade via :root — no utility classes consume   *
+ * them, so the @theme block stays as the single dark default (moving the    *
+ * tokens out of @theme into :root[data-theme="dark"] would risk Tailwind v4 *
+ * token registration for zero benefit, since the project uses var() only).  *
+ *                                                                           *
+ * To add a light theme later: override the --color-* variables under        *
+ * [data-theme="light"] below, then set data-theme on <html> (or #app).      *
+ * The override wins by specificity ([data-theme] > :root); every component  *
+ * using var(--color-*) picks up the new palette with no per-component edit. *
+ * ------------------------------------------------------------------------- */
+:root[data-theme="light"] {
+    /* Placeholder — populate with light overrides when a light theme ships.
+       Mirror the @theme color list and flip each to its light equivalent:
+         --color-bg-app: #f8fafc;
+         --color-bg-surface: #ffffff;
+         --color-text-primary: #1e293b;
+         ... (every --color-* / state tint) */
 }

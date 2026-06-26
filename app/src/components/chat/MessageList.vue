@@ -22,6 +22,15 @@ import Icon from "../Icon.vue";
 
 const store = useChatStore();
 const messagesEl = ref<HTMLElement | null>(null);
+// TransitionGroup (tag="ul") exposes its rendered <ul> via the
+// component instance's $el, not via a plain ref (which would hand
+// back the instance). A function ref captures the DOM node so the
+// scroll logic below (scrollHeight / scrollTop / scrollTo) works
+// unchanged.
+function setListEl(instance: unknown) {
+  messagesEl.value =
+    (instance as { $el?: HTMLElement } | null)?.$el ?? null;
+}
 
 // Whether the viewport is currently pinned to (near) the bottom.
 // Drives the scroll-to-bottom button's visibility. Updated on every
@@ -195,13 +204,13 @@ onUnmounted(() => {
 
 <template>
   <div class="messages-wrap">
-    <ul ref="messagesEl" class="messages">
+    <TransitionGroup name="msg" tag="ul" :ref="setListEl" class="messages" appear>
       <MessageItem
         v-for="m in visibleMessages"
         :key="m.id"
         :message="m"
       />
-    </ul>
+    </TransitionGroup>
     <button
       v-if="!isAtBottom"
       class="scroll-to-bottom"
@@ -238,6 +247,56 @@ onUnmounted(() => {
   gap: 12px;
   flex: 1;
   overflow-y: auto;
+  /* overflow-x: hidden — 消息气泡 enter 动画用 translateX 偏移到列表
+     外侧；overflow-y:auto 会让 overflow-x 隐式变 auto，动画期间气泡
+     出界会冒出水平滚动条（底部的"进度条"闪烁）。显式 hidden 让外侧
+     偏移被裁剪而不显示滚动条。 */
+  overflow-x: hidden;
+  /* PR4 (2026-06-27): reserve stable space for the (vertical) scrollbar
+     so message width doesn't jump when it appears/disappears, and so
+     .chat-panel__main can use symmetric L/R padding instead of a 4px
+     right-side gutter hack. */
+  scrollbar-gutter: stable;
+}
+
+/* PR3 (2026-06-27): new-message enter animation. Only fires when an
+   element is ADDED to the already-mounted list (a streaming new turn)
+   — TransitionGroup's `appear` defaults to off, so the full-list
+   remount on session switch does NOT animate (the list just appears).
+   Uses `transform: translateY` (not a layout property) so it never
+   perturbs scrollHeight and the stick-to-bottom loop stays correct.
+   `prefers-reduced-motion` collapses this to ~instant via the
+   top-level @media in style.css.
+
+   :deep() is required because the `msg-enter-*` classes are added by
+   TransitionGroup to MessageItem's root <li> (a CHILD component root);
+   a scoped `.msg-enter-active` compiles to `.msg-enter-active[data-v-ML]`
+   which doesn't reliably match the class on the child's root element.
+   :deep() drops the attribute selector so the transition reaches the li. */
+/* !important: MessageItem 的 `.msg:not(.msg--editing):not(.msg--err)` 特异性
+   (0,4,0) 高于本 :deep (0,2,0)，其 `transition: background-color` 会整体
+   覆盖这里的 opacity/transform transition（transition 是属性级覆盖，非按
+   property 合并），导致 enter 无渐显 + 划入瞬间不可见。!important 强制
+   enter 期间的 transition；enter 期间无 hover，丢掉 background-color
+   transition 无影响。 */
+:deep(.msg-enter-active) {
+  transition: opacity var(--duration-slow) var(--ease-out),
+    transform var(--duration-slow) var(--ease-out) !important;
+}
+/* PR3: 划入方向 —— user 从右划入（translateX +16→0）、assistant 从左
+   划入（translateX -16→0），各从自己的对齐侧"外侧"出来。位移走外侧
+   （user 右边界外、assistant 左边界外）：.messages 的 overflow-y:auto
+   使 overflow-x 隐式 auto，外侧偏移的超出部分会被裁剪，但 transition
+   工作时气泡主体的位移仍清晰可见，正是"从外侧划出"的观感。translateX
+   不参与布局，不扰动 scrollHeight / stick-to-bottom；reduced-motion 由
+   顶层 @media 兜底。 */
+:deep(.msg--user.msg-enter-from) {
+  opacity: 0;
+  transform: translateX(24px);
+}
+:deep(.msg--assistant.msg-enter-from) {
+  opacity: 0;
+  transform: translateX(-24px);
 }
 
 /* Floating "back to bottom" button — appears only when the user has

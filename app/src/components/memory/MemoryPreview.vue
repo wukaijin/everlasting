@@ -270,7 +270,7 @@ const headerHint = computed<string>(() => {
 }
 
 .memory-preview__chip-loaded {
-  color: #4ade80;
+  color: var(--color-status-success);
 }
 
 .memory-preview__chip-missing {
@@ -278,7 +278,7 @@ const headerHint = computed<string>(() => {
 }
 
 .memory-preview__chip-error {
-  color: #fbbf24;
+  color: var(--color-status-warn);
 }
 
 .memory-preview__refresh {
@@ -351,6 +351,6 @@ const headerHint = computed<string>(() => {
   border-radius: 3px;
   padding: 0 4px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
 </style>

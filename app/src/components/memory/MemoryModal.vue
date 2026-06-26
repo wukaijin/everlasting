@@ -103,7 +103,7 @@ const projectsStore = useProjectsStore();
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-xl);
   z-index: 2001;
   /* reka-ui DialogContent sets outline on focus; suppress for our
      design system (the inner focus indicators of MemoryPreview are

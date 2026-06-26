@@ -367,7 +367,7 @@ async function onCopy() {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   padding: 4px;
   z-index: 3000;
   font-size: var(--text-base);
@@ -424,7 +424,7 @@ async function onCopy() {
 }
 
 :deep(.msg-actions__item-hint) {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   margin-left: 4px;

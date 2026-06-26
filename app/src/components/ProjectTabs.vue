@@ -254,7 +254,7 @@ function tabTooltip(p: {
 
 .tab__close:hover {
   background: var(--color-tool-error);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 
 .tabs__add {

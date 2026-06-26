@@ -369,7 +369,7 @@ function cancelFeedback(): void {
   border: 1px solid;
   border-radius: 999px;
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
@@ -400,7 +400,7 @@ function cancelFeedback(): void {
 
 .permission-ask-body__btn--always {
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   border-color: var(--color-accent);
 }
 
@@ -444,7 +444,7 @@ function cancelFeedback(): void {
   border: 1px solid;
   border-radius: 999px;
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1.4;
   background: color-mix(in srgb, currentColor 12%, transparent);

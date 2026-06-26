@@ -347,7 +347,7 @@ async function onYoloConfirm() {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 220px;
   z-index: 100;
   padding: 4px;
@@ -391,7 +391,7 @@ async function onYoloConfirm() {
 
 .mode-select__item-desc {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -406,7 +406,7 @@ async function onYoloConfirm() {
 
 .mode-select__item-check {
   color: var(--color-accent);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   flex-shrink: 0;
   align-self: center;
 }

@@ -498,7 +498,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
 
 .session-item__delete:hover {
   background: var(--color-tool-error);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
 }
 
 .session-empty {

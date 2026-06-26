@@ -319,7 +319,7 @@ function openDeleteConfirm(m: ModelWithProvider) {
     background: var(--color-bg-elevated);
     padding: 0 6px;
     border-radius: 3px;
-    font-size: 10px;
+    font-size: var(--text-2xs);
     font-family: var(--font-mono);
 }
 

@@ -637,7 +637,7 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
 
 .chat-input__row:focus-within {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  box-shadow: var(--shadow-ring);
 }
 
 /* PR1.5: CodeMirror 6 host. The EditorView creates `.cm-editor`
@@ -732,7 +732,7 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   border-radius: 50%;
   border: none;
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-text-on-accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;

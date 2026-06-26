@@ -387,7 +387,7 @@ defineExpose({
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 320px;
   max-width: 420px;
   max-height: 320px;
@@ -416,7 +416,7 @@ defineExpose({
   padding: 2px 6px 4px;
   border-bottom: 1px solid var(--color-bg-border);
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-family: var(--font-mono);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
@@ -513,7 +513,7 @@ defineExpose({
 
 .trigger-menu__row-desc {
   color: var(--color-text-muted);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -533,7 +533,7 @@ defineExpose({
 
 .trigger-menu__row-hint {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--color-text-muted);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
