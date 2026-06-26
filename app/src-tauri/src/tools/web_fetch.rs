@@ -105,6 +105,28 @@ const MAX_REDIRECTS: usize = 5;
 /// the LLM should move on.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// DNS resolution timeout. Applied to the manual `lookup_host` in
+/// [`resolve_public`] — that step runs BEFORE the reqwest client is
+/// built, so reqwest's own `.timeout()` (which only covers the HTTP
+/// lifecycle: connect + headers + body) cannot bound it. Without
+/// this wrapper a hung resolver blocks the tool **indefinitely** —
+/// observed 2026-06-26 as a `researcher` subagent permanently stuck
+/// on `web_fetch` under a fake-ip proxy (github.com → 198.18.0.34)
+/// whose DNS module wasn't ready: `lookup_host` awaited forever,
+/// the dispatch had no wall-clock cap, and the parent session froze
+/// at the `dispatch_subagent` tool_use until the process was killed.
+///
+/// 20 s is far above the ~10 ms healthy case and above the system
+/// resolver's default `attempts × timeout` (~10 s), so it only trips
+/// on a genuinely broken resolver while tolerating slow cold-starts
+/// on proxied / mobile networks. The HTTP lifecycle is still bounded
+/// separately by `timeout_secs` (default 30). Note the *redirect*
+/// path uses the sync [`resolve_and_check_sync`] inside reqwest's
+/// `Policy::custom` callback — that one IS covered by reqwest's
+/// total `.timeout()` (redirects happen inside `request.send()`),
+/// so it needs no separate bound.
+const DNS_TIMEOUT_SECS: u64 = 20;
+
 const USER_AGENT: &str = concat!("Everlasting/", env!("CARGO_PKG_VERSION"));
 
 /// Content-negotiation hint. Sites that serve `text/markdown` (e.g.
@@ -648,10 +670,33 @@ async fn resolve_public(
     port: u16,
     allow_private: bool,
 ) -> Result<SocketAddr, WebFetchError> {
-    let addrs: Vec<SocketAddr> = lookup_host((host, port))
-        .await
-        .map_err(|e| WebFetchError::Network(format!("DNS lookup failed: {}", e)))?
-        .collect();
+    // Bound the DNS lookup itself. reqwest's `.timeout()` only
+    // covers the HTTP lifecycle and this `lookup_host` runs BEFORE
+    // the client is built — so without `tokio::time::timeout` a
+    // hung resolver (dead nameserver, fake-ip proxy DNS module not
+    // yet ready) blocks the tool forever. See `DNS_TIMEOUT_SECS`.
+    let addrs: Vec<SocketAddr> = match tokio::time::timeout(
+        Duration::from_secs(DNS_TIMEOUT_SECS),
+        lookup_host((host, port)),
+    )
+    .await
+    {
+        Ok(Ok(it)) => it.collect(),
+        Ok(Err(e)) => {
+            return Err(WebFetchError::Network(format!("DNS lookup failed: {}", e)))
+        }
+        Err(_) => {
+            tracing::warn!(
+                host = host,
+                timeout_secs = DNS_TIMEOUT_SECS,
+                "web_fetch: DNS lookup timed out"
+            );
+            return Err(WebFetchError::Network(format!(
+                "DNS lookup timed out after {}s (host: {})",
+                DNS_TIMEOUT_SECS, host
+            )));
+        }
+    };
     if addrs.is_empty() {
         return Err(WebFetchError::Network(
             "DNS lookup returned no addresses".to_string(),

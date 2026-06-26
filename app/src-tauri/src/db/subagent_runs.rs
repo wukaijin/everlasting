@@ -575,3 +575,40 @@ pub async fn list_runs_summary_by_session(
         .collect()
 }
 
+/// Mark every still-`running` row as `error`. Called once from
+/// [`crate::state::AppState::load`] right after `run_migrations`, so
+/// a `running` row left behind by a crashed / killed previous
+/// process (whose terminal `update_run_finished` never ran) is
+/// reaped at startup instead of rendering as a phantom "still in
+/// progress" run in the UI across restarts.
+///
+/// 2026-06-26 incident: a `researcher` worker stuck on an unbounded
+/// `web_fetch` DNS lookup outlived its process; the DB row stayed
+/// `running` with `finished_at = NULL`, and the frontend kept
+/// showing it as in-progress after the app was restarted. This
+/// reaper closes that window without adding a new status enum
+/// variant or migration — `error` is already in the `status` CHECK
+/// constraint, and the `summary` / `final_text` string distinguishes
+/// an interrupted run from a genuine worker error. Returns the row
+/// count reaped (logged by the caller; 0 in the common case).
+pub async fn reap_orphaned_runs(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let note = "interrupted: app process restarted while this worker was still running";
+    let result = sqlx::query(
+        r#"
+        UPDATE subagent_runs
+        SET status = 'error',
+            finished_at = ?,
+            summary = ?,
+            final_text = ?
+        WHERE status = 'running'
+        "#,
+    )
+    .bind(&now)
+    .bind(note)
+    .bind(note)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+

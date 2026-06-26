@@ -234,6 +234,23 @@ impl AppState {
             .expect("failed to run migrations");
         tracing::info!(db_path = %db_path.display(), "sqlite ready");
 
+        // 2026-06-26: reap subagent_runs left `running` by a crashed
+        // previous process. Without this, a worker whose terminal
+        // `update_run_finished` never ran (process killed mid-dispatch)
+        // renders as a phantom "still in progress" run in the UI
+        // forever. Best-effort — a failure is logged, not fatal.
+        match crate::db::subagent_runs::reap_orphaned_runs(&db).await {
+            Ok(n) if n > 0 => tracing::info!(
+                reaped = n,
+                "startup: reaped orphaned subagent_runs (marked error)"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "startup: failed to reap orphaned subagent_runs (non-fatal)"
+            ),
+        }
+
         // Grill decision #3: build the provider catalog. We do this
         // BEFORE the backfill spawn so a backfill panic doesn't
         // leave the catalog half-built.
