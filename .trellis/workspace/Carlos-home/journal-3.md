@@ -865,3 +865,63 @@ memory/top-tab-bar-boundary-fix-2026-06-27.md (含反向不兼容清单 + 后续
 ### Next Steps
 
 - None - task complete
+
+
+## Session 75: 工具卡片 footer 修复 + dispatch_subagent 去重 + git branch fallback
+
+**Date**: 2026-06-27
+**Task**: 工具卡片 footer 修复 + dispatch_subagent 去重 + git branch fallback
+**Branch**: `main`
+
+### Summary
+
+P1: MessageItemFooter 在 tool-only message 移入 msg__tools 内,避免 latency chip 漂浮. P2: dispatch_subagent 'done' 重复(头+preview+content 三处), 头部 statusText 完成时清空, preview status span 仅 running 时渲染. P3: ChatPanel git_branch fallback 'git' → '—' + 新增 tooltip 'branch unknown — project row not yet probed'
+
+### Main Changes
+
+## P1 - 工具卡片时间标签嵌入 footer
+**根因**: MessageItemFooter 在每条 message 行底部 right-aligned, 当 message 只有 tool cards 无 text bubble 时, latency chip 漂浮在最后一张 tool card 下方与卡片脱节.
+
+**修复**: MessageItem.vue 把 MessageItemFooter 移入 msg__tools 容器内部, v-if="!showBubble && !isEditingThisMessage". 外部 footer 加 v-if="!visibleToolCalls.length || showBubble" 避免双重渲染. 当 message 有 text bubble, footer 仍渲染在 bubble 下方原位置.
+
+## P2 - dispatch_subagent 卡片 'done' 重复
+**根因**: dispatch_subagent 卡片原来三处都显示 'done':
+1. header: `dispatch_subagent ✓ done 1m 14.4s`
+2. preview: `🧠 general-purpose done`
+3. result content: `[status: completed]` (raw from backend)
+
+**修复**:
+- 新增 `dispatchHeaderStatus` computed, 头部 statusText 完成时空, 仅 running 时 'running…'. ✓ icon + duration 表达完成态.
+- preview meta row status span 加 v-if="workerStatusText === 'running…'", 完成态 meta row 只剩 brain icon + worker name + token count.
+
+## P3 - git branch fallback 字面值
+**根因**: ChatPanel.gitBranchLabel 在 git_branch 为空时 fallback 到字符串 'git', 用户误判为 'branch is named git'.
+
+**修复**: fallback 改为 '—' (em-dash) + 新增 gitBranchTooltip computed:
+- 有 branch: "Current branch: ${branch}"
+- 无 branch (空字符串): "Branch unknown — project row not yet probed (open the project again or restart the app)"
+detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
+
+## 影响面
+- vue-tsc --noEmit: 无错误
+- vitest: 531/531 全过
+- 不改 store / IPC / 后端契约, 不引入新 token
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2e5c4f8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
