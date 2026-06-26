@@ -1,0 +1,2 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/memory.md", "reason": "B5 memory 模块契约:4 文件路径表 / canonical order / layer statuses;§4 '4 fixed file paths' 表是本任务的 source of truth,改完路径后 spec 也必须同步"}

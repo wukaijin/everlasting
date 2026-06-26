@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/memory.md", "reason": "check 时对照 §4 '4 fixed file paths' 表验证 user 层 CLAUDE.md 是否落到 home_dir/.claude/CLAUDE.md、AGENTS.md 仍走 config_dir/everlasting/AGENTS.md"}
+{"file": ".trellis/spec/frontend/memory-ui.md", "reason": "前端 Memory tab 路径示例(JSON 响应 path 字段 + 修改文件流程),路径更新后必须同步"}
+{"file": "docs/_reviews/REVIEW-agent-loop-full-audit-2026-06-14.md", "reason": "P2-2 audit finding 是本任务要关闭的对象 — check 时确认已被标记修复"}
