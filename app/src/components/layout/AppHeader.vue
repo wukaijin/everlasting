@@ -47,9 +47,17 @@ const streamController = useStreamControllerStore();
 </template>
 
 <style scoped>
+/* AppHeader owns the top-of-body divider. Per 2026-06-27 top-tab-bar
+   boundary fix: TitleBar used to carry `border-bottom` itself, which
+   conflicted with ProjectTabs' active-state `::after` accent (both
+   rendered at the same pixel band). Hoisting the border here gives
+   ProjectTabs a stable "anchor" to draw its accent above (z-axis) the
+   divider cleanly, and stops the divider from disappearing if a
+   future child component ever changes height. */
 .app-header {
   flex-shrink: 0;
   background: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-bg-border);
   z-index: 10;
 }
 </style>

@@ -163,7 +163,6 @@ function tabTooltip(p: {
   height: 100%;
   background: transparent;
   border: none;
-  border-right: 1px solid var(--color-bg-border);
   cursor: pointer;
   font-size: 13px;
   color: var(--color-text-secondary);
@@ -176,19 +175,33 @@ function tabTooltip(p: {
   color: var(--color-text-primary);
 }
 
+/* 2026-06-27 top-tab-bar boundary fix: the right-border between
+   tabs now ONLY appears on inactive tabs. Active tabs used to keep
+   the 1px gray border-right, which combined with the active tab's
+   2px accent bottom (`inset` box-shadow below) created a visual
+   "L" at the active↔inactive junction that read as a stray edge.
+   Dropping the right-border on the active tab gives the accent a
+   clean horizontal terminus at the tab edge. */
+.tab:not(.tab--active) {
+  border-right: 1px solid var(--color-bg-border);
+}
+
 .tab--active {
   background: var(--color-accent-muted);
   color: var(--color-text-primary);
 }
 
-.tab--active::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  background: var(--color-accent);
+/* 2026-06-27 top-tab-bar boundary fix: the active-state accent is
+   now an `inset` box-shadow rather than an absolutely-positioned
+   `::after` at `bottom: 0`. Reason: the parent AppHeader now owns
+   the 1px bottom border (single source of truth for the top
+   divider), and a `::after { bottom: 0 }` would render UNDER the
+   border on the same pixel band — producing a "double layer" where
+   the accent bled into the divider. `inset 0 -2px 0` paints the
+   accent INSIDE the tab's bottom 2px, so it sits ABOVE the divider
+   on the z-axis and reads as a clean tab-selection underline. */
+.tab--active {
+  box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 
 .tab__name {
@@ -263,7 +276,6 @@ function tabTooltip(p: {
   height: 100%;
   background: transparent;
   border: none;
-  border-left: 1px solid var(--color-bg-border);
   cursor: pointer;
   display: inline-flex;
   align-items: center;

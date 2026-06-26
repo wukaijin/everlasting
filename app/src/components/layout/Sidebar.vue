@@ -69,15 +69,30 @@ function onSettingsClick() {
   display: flex;
   flex-direction: column;
   background: var(--color-bg-surface);
-  border-right: 1px solid var(--color-bg-border);
+  /* 2026-06-27 top-tab-bar boundary fix: border color bumped from
+     `--color-bg-border` (#1e2530) to `--color-bg-border-strong`
+     (#3b475a). Reason: bg-surface (#131822) → bg-app (#0a0e14) is
+     only 4 luminance units, so a 1px border at the regular color is
+     a 4-unit jump — invisible on dim displays and washed out by
+     screenshot compression. The strong color is +13 luminance units
+     from bg-app and reads consistently in every capture. */
+  border-right: 1px solid var(--color-bg-border-strong);
   overflow: hidden;
 }
 
+/* 2026-06-27 top-tab-bar boundary fix: header height locked to 40px
+   to match AppHeader / ChatPanel header. Previously `padding:
+   14px 16px 10px` produced ~35-36px, which made the "SESSIONS" text
+   baseline NOT align with the ChatPanel header's title-row baseline
+   when both rows are adjacent. Locking height: 40px + align-items:
+   center + adjusting padding gives a stable y-coordinate for the
+   sidebar header text and a stable visual anchor at the bottom. */
 .sidebar__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px 10px;
+  height: 40px;
+  padding: 0 16px;
   flex-shrink: 0;
 }
 

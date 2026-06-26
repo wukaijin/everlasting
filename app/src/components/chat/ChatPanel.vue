@@ -585,10 +585,22 @@ if (typeof window !== "undefined") {
   position: relative;
 }
 
+/* 2026-06-27 top-tab-bar boundary fix: header height locked to 40px
+   to match AppHeader's 40px (TitleBar) row. Previously the header
+   shrunk to its content (~25px: 6+6 padding + 13px text), which made
+   the ChatPanel header's bottom border sit ~15px ABOVE the Sidebar
+   header's bottom border (which lives on `.sidebar__footer` deep
+   down, not the header) — but more importantly the ChatPanel header
+   divider ended up floating without a stable anchor to the AppHeader
+   divider above it. Fixing to a fixed 40px gives the divider line a
+   consistent y-coordinate across the top chrome and lets the
+   `align-items: center` rule center the title row vertically so the
+   text baseline aligns with where the user's eye expects it. */
 .chat-panel__header {
   display: flex;
   align-items: center;
-  padding: 6px 20px;
+  padding: 0 20px;
+  height: 40px;
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   flex-shrink: 0;

@@ -244,7 +244,15 @@ async function onClose() {
   -webkit-user-select: none;
   flex-shrink: 0;
   box-sizing: border-box;
-  border-bottom: 1px solid var(--color-bg-border);
+  /* Border-bottom is owned by the parent `AppHeader` (single source of
+     truth for the top-of-body divider). Per 2026-06-27 top-tab-bar
+     boundary fix: the divider used to live here, which meant
+     `ProjectTabs` (sibling in AppHeader) had to fight this border with
+     its own active-tab `::after` accent — the 2px accent and the 1px
+     border sat on the same pixel band and produced an inconsistent
+     "分界时有时无" effect at the bottom of the active tab. Hoisting the
+     border up to AppHeader lets `ProjectTabs` draw its active-state
+     accent above (z-axis) the divider cleanly. */
 }
 
 /* macOS leaves a slim sliver of breathing room between the top edge
