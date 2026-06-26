@@ -44,6 +44,7 @@ import {
   EyeSlashIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  ChevronRightIcon,
   TrashIcon,
   KeyIcon,
   SignalIcon,
@@ -53,6 +54,7 @@ import {
   CircleStackIcon,
   BoltIcon,
   ClockIcon,
+  MagnifyingGlassIcon,
 } from "@heroicons/vue/24/outline";
 import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle } from "@lucide/vue";
 
@@ -97,6 +99,7 @@ const map = {
   "eye-slash": EyeSlashIcon,
   "chevron-down": ChevronDownIcon,
   "chevron-up": ChevronUpIcon,
+  "chevron-right": ChevronRightIcon,
   "trash": TrashIcon,
   "key": KeyIcon,
   "signal": SignalIcon,
@@ -106,6 +109,8 @@ const map = {
   "circle-stack": CircleStackIcon,
   "bolt": BoltIcon,
   "clock": ClockIcon,
+  // 2026-06-27 sidebar 搜索入口: MagnifyingGlassIcon 触发搜索 input 行
+  "magnifying-glass": MagnifyingGlassIcon,
   "brain": Brain,
   // PR3 (A2 + B7): PermissionModal visuals — lucide icons
   // for the shield/terminal/copy/info family. Heroicons
