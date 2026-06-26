@@ -925,3 +925,55 @@ user 级 CLAUDE.md 路径从 ~/.config/everlasting/CLAUDE.md 改到 ~/.claude/CL
 ### Next Steps
 
 - None - task complete
+
+
+## Session 75: 06-25-l3d-subagent-loader 完结 + ROADMAP 同步
+
+**Date**: 2026-06-26
+**Task**: 06-25-l3d-subagent-loader — subagent frontmatter loader 落地(第三档收口)
+**Branch**: `main`
+
+### Summary
+
+用户 `~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md` 定义 sub-agent,LLM dispatch 自动识别;`SubagentCache` mtime fence 加载(复用 B3 CommandCache / B4 SkillCache inline-array parser 模式),project > user > builtin last-write-wins,`tools` 字段可选(覆盖 builtin 同名且未声明 → 继承 builtin,全新 agent 未声明 → `vec![]` 全工具集 — deepseek review 修正原 PRD "必填")。`dispatch_subagent` 从 `builtin_tools()` 启动快照拆出,改每 turn `definition_with_cache(&SubagentCache, project_path)` 动态拼 enum + source tag(`builtin`/`user`/`project`)。**砍 PRD 的 `/reload-subagents` 命令**(B3/B4 mtime fence 自动 reload,等同)。`SubagentDef` 全 owned(PR1 重构铺路)。**防 worker 嵌套靠 `effective_is_worker` gate**(`chat_loop.rs` 跳过 dispatch_subagent per-turn append),`STRUCTURALLY_DISABLED` filter 退为 defense-in-depth — PR3 check 发现的 BLOCKING 回归(初版共享 body 无 gate 追加 → worker 可嵌套,单测全绿因无人断言 worker turn 的 tools 内容)。`MockProvider` 加 `sent_tools()` 可观测性才能测此不变量。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/subagent/loader.rs`: 新建 1297 行 — SubagentCache mtime fence 加载 + scan / lookup / enum_values + 三层合并
+- `app/src-tauri/src/agent/subagent/mod.rs`: SubagentDef 全 owned + builtin 列表保留(`builtin_subagents()` 不变)
+- `app/src-tauri/src/agent/subagent/dispatch.rs`: run_subagent 从 cache.lookup(name) 替代静态 builtin_subagents
+- `app/src-tauri/src/agent/chat_loop.rs`: definition_with_cache 每 turn 动态拼 enum + source tag + effective_is_worker gate 防 worker 嵌套
+- `app/src-tauri/src/agent/chat.rs`: +12 集成点
+- `app/src-tauri/src/state.rs`: +22 AppState.subagent_cache 字段
+- `app/src-tauri/src/tools/mod.rs`: dispatch_subagent 从 builtin_tools 启动快照拆出
+- `app/src-tauri/src/llm/provider/mock.rs`: +34 sent_tools() 可观测性
+- 测试: `tests_subagent.rs` +57(loader 39 new + definition_with_cache 4 new + no-nesting 回归),`tests_agent_loop.rs` +27
+- spec: `.trellis/spec/backend/tool-contract.md`(dispatch_subagent scenario:no-nesting 真实机制 callout + Forbidden Pattern + Tool declaration 动态化 + 三层来源 SubagentCache + cache.lookup)
+- ADR: docs/IMPLEMENTATION.md §4 行 747-755(4 决策 + 3 修订 + 安全教训)
+- ROADMAP 同步: §1.2 加 L3d 已实施条目 + §2 第三档 L3d 移除 + "已完成的 9 项" → "10 项"
+- **修订 PRD**: R1 user 路径 `~/.config/everlasting/agents/`(非 `~/.everlasting`,跟 B3/B4/B5 一致)+ R2 复用 **Skill** loader(非 B3 — B3 scalar-only 不支持数组,设计 PRD §3.3 + deepseek 审查都看错文件)+ R3 删"YAML fail-fast"伪命题(手写 parser 全容错)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c9511b0` | docs: 加 L3d subagent frontmatter 加载器 PRD + ROADMAP 第三档条目 |
+| `b1e94ef` | review(l3d): deepseek-v4-pro 审查 subagent frontmatter loader PRD |
+| `bb7dfe6` | feat(subagent): L3d frontmatter loader + dispatch 动态 enum |
+| `a9f1f63` | docs(subagent): L3d tool-contract spec 更新 + ADR + task prd |
+| `46d9520` | chore(task): archive 06-25-l3d-subagent-loader |
+| `a7c323b` | docs(spec): subagent loader docs 同步 user CLAUDE.md 路径迁移(顺手 8 处字面量修正) |
+
+### Testing
+
+- [OK] cargo test --lib: 909 passed, 0 failed(含 PR1 owned 化 + PR2 loader 39 新测 + PR3 definition_with_cache 4 新 + no-nesting 回归)
+- [OK] vue-tsc --noEmit: 0 errors
+- [OK] grep ROADMAP 验证: §1.2 行 72 L3d 已实施 / §2 行 104 "已完成的 10 项" 含 L3d / §2 第三档 active 表 L3d 行已移除
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - L3d 收口,第三档剩 6 项(B9 / C6 / B1 / D2 / A5·A6 / L3b)待排期

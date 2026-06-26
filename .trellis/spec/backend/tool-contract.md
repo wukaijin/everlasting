@@ -859,7 +859,7 @@ Box::pin(run_chat_loop(
 
 #### `SubagentDef` registry + 三层来源(`agent/subagent/mod.rs::builtin_subagents` builtin + `agent/subagent/loader.rs::SubagentCache` user/project)
 
-> **L3d (2026-06-26)**:`SubagentDef` 字段已 owned 化(`name`/`description: String`,`tools: Vec<String>`,PR1)。builtin 之上新增 user 层(`~/.config/everlasting/agents/*.md`)+ project 层(`<project>/.everlasting/agents/*.md`),由 `SubagentCache`(read-through mtime fence,照搬 B3 `CommandCache`)合并,优先级 **project > user > builtin**(last-write-wins)。frontmatter schema(`name`/`description`/`tools`/`model`/body)+ 错误处理(per-file isolation,silent skip + warn,**无 fail-fast**)+ `tools` 继承语义(覆盖 builtin 同名且未声明 tools → 继承 builtin tools;全新 agent 未声明 → `vec![]` 全工具集)详见 [`docs/subagent-loader.md`](../../../docs/subagent-loader.md)。`model` 字段 v1 解析但 warn-ignored(`Provider` trait 单实例模型,不切换)。builtin 两个定义见下表。
+> **L3d (2026-06-26)**:`SubagentDef` 字段已 owned 化(`name`/`description: String`,`tools: Vec<String>`,PR1)。builtin 之上新增 user 层(`~/.config/everlasting/agents/*.md`)+ project 层(`<project>/.everlasting/agents/*.md`),由 `SubagentCache`(read-through mtime fence,照搬 B3 `CommandCache`)合并,优先级 **project > user > builtin**(last-write-wins)。frontmatter schema(`name`/`description`/`tools`/`model`/body)+ 错误处理(per-file isolation,silent skip + warn,**无 fail-fast**)+ `tools` 继承语义(覆盖 builtin 同名且未声明 tools → 继承 builtin tools;全新 agent 未声明 → `vec![]` 全工具集)详见 [ROADMAP §1.2 L3d 已实施条目](../../../docs/ROADMAP.md#12-路线图外完成)(**原设计 PRD `docs/subagent-loader.md` 已删除**,实施后归档,2026-06-26)。`model` 字段 v1 解析但 warn-ignored(`Provider` trait 单实例模型,不切换)。builtin 两个定义见下表。
 
 | name | `tools` allowlist | system_prompt |
 |---|---|---|

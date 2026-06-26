@@ -752,7 +752,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **修订(对设计 PRD)**:R1 user 路径 `~/.config/everlasting/agents/`(非 `~/.everlasting`,跟 B3/B4/B5 一致);R2 复用 **Skill** loader inline-array parser(非 B3 —— B3 scalar-only 不支持数组,设计 PRD §3.3 + deepseek 审查报告都看错文件);R3 删"YAML fail-fast"伪命题(手写 parser 全容错,无 fail-fast 分支)
 - **安全教训(PR3 check 发现 BLOCKING 回归)**:防 worker 嵌套靠 `chat_loop.rs` `effective_is_worker` gate(worker 跳过 dispatch_subagent 的 per-turn append),`STRUCTURALLY_DISABLED` filter 只是 defense-in-depth —— filter 只过滤 seed list,不过滤共享 `run_chat_loop` body 的 per-turn append。PR3 初版在共享 body 无 gate 追加 → worker 可嵌套(单测全绿因无人断言 worker turn 的 tools 内容)。Forbidden Pattern:共享 loop body 内 append 动态/禁项 tool 必须用 is_worker gate。`MockProvider` 加 `sent_tools()` 可观测性才能测此不变量
 - **测试**:`cargo test --lib` **909 passed 0 failed**(PR1 owned 化适配 + PR2 loader 39 新测试 + PR3 definition_with_cache 4 新 + no-nesting 回归);`vue-tsc --noEmit` 绿
-- **沉淀**:`.trellis/spec/backend/tool-contract.md`(dispatch_subagent scenario:no-nesting 机制 callout + Forbidden Pattern + Tool declaration 动态化 + 三层来源 SubagentCache + cache.lookup);`app/src-tauri/src/agent/subagent/loader.rs`(新建);设计 PRD `docs/subagent-loader.md`(本 task 引用 + R1-R3 修订)
+- **沉淀**:`.trellis/spec/backend/tool-contract.md`(dispatch_subagent scenario:no-nesting 机制 callout + Forbidden Pattern + Tool declaration 动态化 + 三层来源 SubagentCache + cache.lookup);`app/src-tauri/src/agent/subagent/loader.rs`(新建);task prd `.trellis/tasks/archive/2026-06/06-25-l3d-subagent-loader/prd.md`(R1-R3 修订;**原设计 PRD `docs/subagent-loader.md` 已删除**,实施后归档,见 [ROADMAP §1.2 L3d 已实施条目](./ROADMAP.md#12-路线图外完成))
 
 ### 2026-06-26 — TokenUsage 上下文占用快照语义 + worker 隔离(reversal of RULE-A-015/PR2a)
 

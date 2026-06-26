@@ -2,7 +2,7 @@
 
 > 审查日期：2026-06-25
 > 审查模型：deepseek-v4-pro
-> 审查范围：[`docs/subagent-loader.md`](../subagent-loader.md)（PRD 全文，10 章 + 3 附录，约 500 行）
+> 审查范围：原设计 PRD [`docs/subagent-loader.md`](../subagent-loader.md)(已删除,2026-06-26 实施后归档;见 [ROADMAP §1.2 L3d 已实施条目](../ROADMAP.md#12-路线图外完成));本文是 PRD 全文(10 章 + 3 附录,约 500 行)的实施前审查
 > 审查角度：范围适当性、设计质量、架构契合度、风险、与现有代码的集成成本、优先级合理性
 
 ---
