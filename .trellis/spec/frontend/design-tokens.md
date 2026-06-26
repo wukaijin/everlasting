@@ -43,6 +43,7 @@ contrast.
 | `--color-text-primary` | `#cbd5e1` | Main body text, form input text |
 | `--color-text-secondary` | `#8b95a7` | Less important text (captions, labels) |
 | `--color-text-muted` | `#7c8aa0` | Subtitles, status bar, sidebar headers, hint text |
+| `--color-text-on-accent` | `#ffffff` | Pure white for text on saturated accent / tool-error backgrounds (buttons, toasts, counts) where `--color-text-primary` reads dirty. Added 2026-06-27 PR2 (14 ad-hoc `#ffffff` swept). |
 
 **Token gap rules**:
 
@@ -96,6 +97,24 @@ visual semantics are tight (in-repo writes already use the
 future refactor renames these tokens or introduces
 `--color-tool-success` / `--color-tool-warning`, the
 PermissionModal path-range row should be updated to follow.
+
+### Status colors (added 2026-06-27 PR2)
+
+| Token | Value | Use |
+|---|---|---|
+| `--color-status-success` | `#4ade80` | Success / positive feedback (green-400) — MemoryPreview/MemoryLayerItem loaded, ChatInputHintRow ok, FileInjectionsHint success |
+| `--color-status-warn` | `#fbbf24` | Warning / caution feedback (amber-400) — MemoryPreview/MemoryLayerItem error, ChatInputHintRow warn |
+
+Distinct from `--color-tool-write` (emerald) / `--color-tool-shell`
+(amber): tool colors are **tool-category** semantics (which LLM
+tool ran), status colors are **outcome** semantics (success/warn
+feedback). Pre-PR2 the green/amber hex was hardcoded across 4
+components; `FileInjectionsHint` already referenced
+`--color-status-success` via a CSS fallback, so PR2 defined what
+the project already expected. The re-grill note above (reusing
+`--color-tool-write`/`--color-tool-shell` for PermissionModal
+path-range badges) is unaffected — those badges describe
+path-range risk, not success/warn outcome.
 
 ---
 
@@ -232,6 +251,7 @@ bundle a CJK mono font.
 
 | Token | Value | Use |
 |---|---|---|
+| `--text-2xs` | `10px` | Sub-caption / 角标 metadata (added 2026-06-27 PR2): `(edited)` label, MemoryPreview/DiffView metadata, ModeSelect/TriggerMenu/ModelSelect captions — 21 ad-hoc 10px values were swept into this token |
 | `--text-xs` | `11px` | Mono metadata: chip labels, hint text, sidebar header (`SESSIONS`), status bar, caption |
 | `--text-sm` | `12px` | Caption / hint / small button / form help |
 | `--text-base` | `13px` | Form input, message body, dropdown option |
@@ -405,6 +425,39 @@ preserved, but now expressed via tokens:
 See `popover-pattern.md` "Animation" section for the
 canonical reference.
 
+### List enter (TransitionGroup) — added 2026-06-27 PR3
+
+Message list (`MessageList.vue`) uses Vue `<TransitionGroup>` for
+new-message enter. Four non-obvious gotchas (all hit during PR3):
+
+1. **`:deep()` required** — TransitionGroup adds the `*-enter-*` classes
+   to the child **component's** root element (`MessageItem`'s `<li>`). A
+   scoped `.msg-enter-active` compiles to `.msg-enter-active[data-v-ML]`
+   which doesn't reach the class on the child root; `:deep(.msg-enter-active)`
+   drops the attribute selector so it matches.
+2. **`transition: ... !important` required** — `MessageItem`'s
+   `.msg:not(.msg--editing):not(.msg--err)` carries specificity (0,4,0) with
+   `transition: background-color`. `:deep(.msg-enter-active)` is only (0,2,0),
+   so the background-color transition **wholly overrides** the enter
+   opacity/transform transition (transition is a property-level override,
+   not a per-property merge) → no fade, no slide. `!important` forces the
+   enter transition during the enter window (no hover then, so losing the
+   background-color transition is harmless).
+3. **`appear` to animate the first mount** — TransitionGroup's `appear`
+   defaults off, so the first message in an empty session (where
+   `MessageList` mounts fresh via `v-else`) would NOT animate. Set `appear`.
+4. **`overflow-x: hidden` on the scroll container** — enter uses `translateX`
+   toward the list's outer edge; `overflow-y: auto` makes `overflow-x`
+   implicitly `auto`, so the offset bubbles trigger a **horizontal
+   scrollbar** that flashes during the animation. Explicit `overflow-x:
+   hidden` clips the outer offset without showing a scrollbar.
+
+**Direction**: user enters from the right (`translateX(+24px) → 0`),
+assistant from the left (`translateX(-24px) → 0`) — each from its own
+aligned side's outer edge. The outer offset is clipped by `overflow-x:
+hidden`, but the bubble body's travel is clearly visible. Reference
+implementation: `MessageList.vue` `.msg-enter-*`.
+
 ### Reduced Motion (added 2026-06-27, PR-1)
 
 `app/src/style.css` includes a top-level `@media
@@ -431,8 +484,33 @@ luminance lift on a near-black background (read as flat
 | `--shadow-xs` | `0 1px 2px rgba(0, 0, 0, 0.32)` | Chip hover lift, small raised chip |
 | `--shadow-sm` | `0 2px 4px rgba(0, 0, 0, 0.4)` | Popover, dropdown, subagent drawer "↓ N new" floating button |
 | `--shadow-md` | `0 4px 12px rgba(0, 0, 0, 0.4)` | AppShell toast, larger popover |
-| `--shadow-lg` | `0 8px 24px rgba(0, 0, 0, 0.5)` | Modal, large dialog |
-| `--shadow-ring` | `0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent)` | Focus ring (chat input focus-within, form input :focus). Uses the 20% accent mix that the pre-PR-1 chat input ring used directly as `box-shadow`. |
+| `--shadow-lg` | `0 8px 24px rgba(0, 0, 0, 0.5)` | Reserved intermediate elevation tier (between md dropdowns and xl modals). Pre-PR1 some modals used this; the modal family now uses `--shadow-xl`. |
+| `--shadow-xl` | `0 16px 48px rgba(0, 0, 0, 0.5)` | **Modal / large dialog (largest tier)**. Added 2026-06-27 PR1 — 8 modals (Settings / Memory / AuditLog / Diff / Yolo / DeleteWorktree / MarkdownDetail / ConfirmDialog) previously hardcoded this exact value. See `popover-pattern.md` "modal = xl". |
+| `--shadow-ring` | `0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent)` | Focus ring (chat input focus-within, form input :focus, AuditLog select open). Uses the 20% accent mix that the pre-PR-1 chat input ring used directly as `box-shadow`. |
+
+### Shadow exceptions (2026-06-27 PR1)
+
+The following shadows are deliberately NOT mapped to a token —
+each is a one-off value (unique alpha or offset/blur combo) where
+no tier fits without a visible change. They stay inline so a
+future `grep "box-shadow: 0"` doesn't read them as drift; this
+table is the authoritative "these are intentional" list.
+
+| File | Value | Why kept (not tokenized) |
+|---|---|---|
+| `MessageList.vue:262` (scroll-to-bottom FAB) | `0 2px 8px rgba(0,0,0,0.18)` | Extra-light float for a small FAB; lighter than `--shadow-sm` |
+| `SubagentDrawer.vue:896` (↓N new pill) | `0 2px 8px rgba(0,0,0,0.25)` | Same FAB family, slightly stronger |
+| `SessionList.vue:568` (ctx menu) | `0 4px 16px rgba(0,0,0,0.2)` | Wider blur + lighter alpha than `--shadow-md` |
+| `HiddenProjectsMenu.vue:178` | `0 8px 24px rgba(0,0,0,0.35)` | lg offset/blur but lighter alpha than `--shadow-lg` |
+| `ChecklistCard.vue:269` | `0 6px 24px rgba(0,0,0,0.35)` | Between md/lg for the floating checklist panel |
+| `ChecklistCard.vue:460` | `0 4px 14px rgba(0,0,0,0.3)` | Floating empty-state CTA inside the panel |
+| `EmptyProjectState.vue:187` | `0 1px 0 color-mix(accent 35%)` | 1px inner highlight, not an elevation shadow |
+| `MessageActionsMenu.vue:350` | `0 0 0 2px color-mix(accent 25%)` | 2px focus ring (deliberately thinner than `--shadow-ring`'s 3px) |
+| `MemoryLayerItem.vue:240,249` | `0 0 0 2px color-mix(var(--color-status-success)/--warn 25%)` | Status-dot ring; colors tokenized in PR2 (`--color-status-success`/`--color-status-warn`), only the 2px ring form is non-token (vs `--shadow-ring`'s 3px) |
+
+If a future refactor adds a `--shadow-fab` (light float) token
+covering the FAB family (MessageList / SubagentDrawer), the first
+two rows can retire.
 
 **Don't add a non-ring shadow that uses the accent color**
 (purple/violet glow). Pre-PR-1 some components had subtle

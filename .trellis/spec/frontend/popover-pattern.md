@@ -261,7 +261,7 @@ context but should be consistent within a single trigger.
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 200px;
   z-index: 100;
   padding: 4px;
@@ -281,7 +281,7 @@ context but should be consistent within a single trigger.
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 220px;
   z-index: 100;
   padding: 4px;
@@ -382,7 +382,7 @@ onUnmounted(() => {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   min-width: 200px;
   z-index: 100;
   padding: 4px;
@@ -674,6 +674,12 @@ Modal instances use **fade + scale 0.96 → 1**:
   and define `.confirm-modal-enter-active` / `-leave-active`
   scoped CSS. See DeleteWorktreeConfirm.vue for the
   reference implementation.
+
+**Modal shadow** (2026-06-27 PR1): all modal content surfaces use
+`box-shadow: var(--shadow-xl)` (the largest tier). Pre-PR1 eight
+modals hardcoded `0 16px 48px rgba(0,0,0,0.5)`; that value is now
+the `--shadow-xl` token. Dropdown / popover / tooltip surfaces use
+`--shadow-md` (`0 4px 12px rgba(0,0,0,0.4)`), not `--shadow-sm`.
 
 ### Reduced Motion (added 2026-06-27, PR-1)
 
