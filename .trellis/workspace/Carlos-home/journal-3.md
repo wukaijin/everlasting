@@ -925,3 +925,75 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 76: sidebar 搜索入口 + 密度切换 + 时间分组 (PR-of-PRs 3 features)
+
+**Date**: 2026-06-27
+**Task**: sidebar 搜索入口 + 密度切换 + 时间分组 (PR-of-PRs 3 features)
+**Branch**: `main`
+
+### Summary
+
+3 个 sidebar UX 改进: 搜索 (Cmd/Ctrl+K + Esc 清空 + flat 模式覆盖分组); 密度 (comfortable↔compact, localStorage 持久化); 时间分组 (今天/昨天/本周/更少, calendar-day 算法, 折叠状态持久化). +562/-67 行, 40 新测试 (23 sessionGrouping + 8 GroupHeader + 9 SearchInput), 571 vitest 全过
+
+### Main Changes
+
+## 设计取舍
+- 搜索 vs 分组: 搜索激活时分组隐藏, 避免"分组头还在但实际匹配的项在另一组"的认知成本
+- 密度切换位置: 放 header 而不是 footer, 因为 density 影响 viewport 利用率
+- 持久化粒度: density 单一 key, collapsedGroups 单一 JSON array key — 不引入 Pinia 持久化插件 (overkill for 2 keys)
+- Cmd/Ctrl+K: 走 useKeyboard.ts 已有 capture-phase 注册, 不重新实现全局 keybind
+- calendar-day vs 24-hour: 见 sessionGrouping.ts 头注释, 用户"昨天"心智模型是日历日
+
+## 文件分工
+新增 5 个:
+- utils/sessionGrouping.ts (纯函数 bucketKey / groupSessions / filterByQuery)
+- utils/sessionGrouping.test.ts (23 boundary tests)
+- SessionGroupHeader.vue (纯展示)
+- SessionGroupHeader.test.ts (8 tests)
+- SessionSearchInput.vue (纯展示, defineExpose focus)
+- SessionSearchInput.test.ts (9 tests)
+
+修改 3 个:
+- Icon.vue (+ magnifying-glass + chevron-right)
+- SessionList.vue (script 扩展 + template 分组/flat 双分支 + compact CSS)
+- Sidebar.vue (header 3 icon buttons + 状态 lift up)
+
+## 影响面
+- vue-tsc --noEmit: 干净
+- vitest: 571/571 全过 (531 旧 + 40 新)
+- 不改 store / IPC / 后端契约
+- 不引入新 design token
+
+## 持久化 key
+- everlasting:sessionDensity = "comfortable" | "compact"
+- everlasting:sessionGroupsCollapsed = JSON array of BucketKey
+
+## 未覆盖
+- SessionList.vue 主体没有 component test (历史先例, 集成靠手动)
+- Dev server 截图回归需起 tauri dev (重型 ~5-10min), 未跑
+
+## 下一步候选
+- sidebar Pinned (置顶) section
+- 侧边栏宽度可拖拽 (260 → 320 → 380)
+- "今天" / "本周" 数字徽章
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f24f619` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
