@@ -116,6 +116,11 @@ export function toolIcon(toolName: string): string {
       return "pencil";
     case "shell":
       return "command-line";
+    case "dispatch_subagent":
+      // Worker subagent — `brain` carries the agent connotation
+      // (this card spawns a worker agent; `wrench` is the generic
+      // fallback for unknown tools and reads wrong here).
+      return "brain";
     default:
       return "wrench";
   }

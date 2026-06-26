@@ -48,6 +48,7 @@ import {
 import { useSubagentRunsStore } from "../../stores/subagentRuns";
 import type { SubagentRunSummary } from "../../stores/subagentRuns.types";
 import { abbreviateDuration } from "../../utils/duration";
+import { abbreviateTokens, parseTokenUsageJson } from "../../utils/tokenUsage";
 import DiffView from "./DiffView.vue";
 import Icon from "../Icon.vue";
 import ToolCallHeader from "./ToolCallHeader.vue";
@@ -317,6 +318,21 @@ const workerDisplayName = computed<string>(() => {
   return "worker";
 });
 
+/** Token-usage chip text for the collapsed card (2026-06-26 UX
+ *  polish). Parses `workerSummary.tokenUsageJson` and surfaces
+ *  `context_input_tokens` — the cross-provider-normalized
+ *  cumulative context footprint of the worker run (see
+ *  `parseTokenUsageJson`). Returns "" when there's no summary, no
+ *  usage snapshot yet (worker just started / legacy null-json
+ *  row), or the snapshot reports zero context tokens — so the
+ *  chip stays hidden via `v-if` rather than flashing a misleading
+ *  "0 ctx". */
+const workerTokenText = computed<string>(() => {
+  const snap = parseTokenUsageJson(workerSummary.value?.tokenUsageJson ?? null);
+  if (!snap || snap.context_input_tokens <= 0) return "";
+  return `${abbreviateTokens(snap.context_input_tokens)} ctx`;
+});
+
 /** Click handler for the whole card when it's a dispatch_subagent.
  *  Resolves the worker's run id (from the summary) and asks the
  *  store to open the drawer. Handles the B6 PR3b (2026-06-20)
@@ -545,10 +561,16 @@ watch(
       class="tool-card__subagent-preview"
     >
       <div class="tool-card__subagent-meta">
+        <Icon class="tool-card__subagent-icon" name="brain" :size="12" />
         <span class="tool-card__subagent-name">
           {{ workerDisplayName }}
         </span>
         <span class="tool-card__subagent-status">{{ workerStatusText }}</span>
+        <span
+          v-if="workerTokenText"
+          class="tool-card__subagent-tokens"
+          title="Worker 累计上下文 token 用量"
+        >{{ workerTokenText }}</span>
       </div>
       <p
         v-if="workerSummaryPreview"
@@ -567,7 +589,7 @@ watch(
       <p
         v-else-if="workerMissed"
         class="tool-card__subagent-summary tool-card__subagent-summary--missed"
-      ><Icon name="warn" :size="11" /> worker 未响应,点此重试</p>
+      ><Icon name="warn" :size="12" /> worker 未响应,点此重试</p>
       <p
         v-else
         class="tool-card__subagent-summary tool-card__subagent-summary--muted"
@@ -732,8 +754,13 @@ watch(
 
 .tool-card__subagent-meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
+}
+
+.tool-card__subagent-icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
 }
 
 .tool-card__subagent-name {
@@ -774,5 +801,55 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* 2026-06-26 UX polish: token-usage chip + running "breathing"
+   left bar for the dispatch_subagent card. */
+
+/* Cumulative context-token footprint chip (parsed from
+   `workerSummary.tokenUsageJson` → `context_input_tokens`).
+   `margin-left: auto` pushes it to the trailing edge of the meta
+   row so name + status cluster left and the token count reads
+   right. */
+.tool-card__subagent-tokens {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  flex-shrink: 0;
+}
+
+/* Running state: the 3px left bar "breathes" (amber pulse) to
+   signal an in-flight worker. We animate `border-left-color`
+   directly — per the CSS cascade a RUNNING animation's property
+   outranks normal author declarations INCLUDING inline style
+   (order: normal author/inline < CSS animations < !important), so
+   the keyframes take over the card's inline
+   `borderLeftColor: accent` while the worker is in flight.
+
+   Why not a `::after` overlay: `border-left` paints OUTSIDE the
+   padding edge, an abs-positioned `::after { left: 0 }` paints
+   INSIDE it — they sit side by side instead of overlapping, which
+   produced two visible bars (static grey border + amber overlay).
+   Animating the border itself keeps it a single bar. amber =
+   --color-tool-shell, matching the DrawerSection live-spinner
+   chip + the running border-left convention. Paused under
+   `prefers-reduced-motion`. */
+.tool-card--subagent.tool-card--running {
+  animation: tool-card-subagent-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes tool-card-subagent-breathe {
+  0%, 100% { border-left-color: var(--color-tool-shell); }
+  50% { border-left-color: color-mix(in srgb, var(--color-tool-shell) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-card--subagent.tool-card--running {
+    animation: none;
+  }
 }
 </style>

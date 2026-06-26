@@ -60,3 +60,56 @@ export function abbreviateTokens(n: number): string {
   const m = n / 1_000_000;
   return m % 1 === 0 ? `${m}M` : `${m.toFixed(1).replace(/\.0$/, "")}M`;
 }
+
+/** Parsed `TokenUsage` snapshot — the snake_case JSON stored in
+ *  `subagent_runs.token_usage_json` (and `sessions.last_*_json`).
+ *  Field names are snake_case because the Rust `TokenUsage` struct
+ *  (`llm/types.rs:332`) has NO `#[serde(rename_all)]`. The
+ *  `context_input_tokens` field carries `#[serde(default)]` on the
+ *  Rust side, so legacy rows written before the 2026-06-26
+ *  normalized-field fix may omit it — `parseTokenUsageJson`
+ *  defaults it to 0. `context_input_tokens` is the
+ *  cross-provider-normalized "total input for this request" the
+ *  backend treats as the canonical numerator (see `types.rs:317`
+ *  comment): Anthropic = input + cache_creation + cache_read;
+ *  OpenAI = prompt_tokens. The subagent card shows this as the
+ *  worker run's cumulative context footprint. */
+export interface TokenUsageSnapshot {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  context_input_tokens: number;
+}
+
+/** Parse a `token_usage_json` string into a `TokenUsageSnapshot`,
+ *  tolerating the `context_input_tokens` `#[serde(default)]`
+ *  history and corrupt rows. Returns `null` for null / empty /
+ *  non-JSON / non-object input so every call site can render a
+ *  placeholder chip without its own try/catch. Non-number fields
+ *  coerce to 0 (defensive — the Rust side serializes u32, but a
+ *  half-written row shouldn't crash the UI). */
+export function parseTokenUsageJson(
+  json: string | null | undefined,
+): TokenUsageSnapshot | null {
+  if (!json) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const o = parsed as Record<string, unknown>;
+  const num = (k: string): number => {
+    const v = o[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  };
+  return {
+    input_tokens: num("input_tokens"),
+    output_tokens: num("output_tokens"),
+    cache_creation_input_tokens: num("cache_creation_input_tokens"),
+    cache_read_input_tokens: num("cache_read_input_tokens"),
+    context_input_tokens: num("context_input_tokens"),
+  };
+}
