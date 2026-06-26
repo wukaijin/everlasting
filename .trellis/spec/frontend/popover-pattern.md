@@ -608,19 +608,34 @@ positioning until a real clipping bug is reported.
 > instances in the project now have enter/leave transitions.
 > Conventions captured here so future dropdowns / modals
 > follow the same pattern.
+>
+> **Updated 2026-06-27 (PR-3d)**: the `150ms / 100ms` bare
+> ms values are now expressed as `var(--duration-base)` /
+> `var(--duration-fast)` tokens. The semantic
+> `ease-out` / `ease-in` keywords are kept (the new
+> `--ease-out` is a custom cubic-bezier that's slightly
+> "harder" than CSS default; using the token vs keyword
+> is a deliberate visual choice — see the Modal: fade +
+> scale example below). The toast moves from
+> `200ms` to `var(--duration-slow) var(--ease-out)` (240ms;
+> a 40ms bump to match the project's motion vocabulary).
 
-### Convention: 150ms / 100ms with `ease-out` / `ease-in`
+### Convention: token-based 150ms / 100ms
 
 | Trigger | Enter | Leave |
 |---|---|---|
-| Modal (centered overlay) | 150ms `ease-out` | 100ms `ease-in` |
-| Popover (anchored) | 150ms `ease-out` | 100ms `ease-in` |
-| Toast (AppShell, pre-existing) | 200ms | 200ms (stays the outlier) |
+| Modal (centered overlay) | `var(--duration-base) var(--ease-out)` | `var(--duration-fast) ease-in` |
+| Popover (anchored) | `var(--duration-base) var(--ease-out)` | `var(--duration-fast) ease-in` |
+| Toast (AppShell) | `var(--duration-slow) var(--ease-out)` | (same) |
+| Subagent drawer (`SubagentDrawer.vue`) | `var(--duration-slow) var(--ease-decelerate)` | (same) |
 
 The 150ms / 100ms split is intentional — enter feels responsive,
 leave feels snappy enough that the user doesn't wait on a closing
-animation. The toast uses 200ms in both directions because it's
+animation. The toast uses 240ms in both directions because it's
 attention-grabbing by nature; not a precedent for other popups.
+The subagent drawer is a heavier surface (right-anchored full
+height) so the slide-in is slower + uses `--ease-decelerate` for
+a more "physical" feel.
 
 ### Modal: fade + scale
 
@@ -644,8 +659,12 @@ Modal instances use **fade + scale 0.96 → 1**:
   the `data-state="open|closed"` attribute on the content. Use
   that as the CSS selector:
   ```css
-  [data-state="open"] { animation: modal-enter 150ms ease-out; }
-  [data-state="closed"] { animation: modal-leave 100ms ease-in; }
+  [data-state="open"] {
+    animation: modal-enter var(--duration-base) var(--ease-out);
+  }
+  [data-state="closed"] {
+    animation: modal-leave var(--duration-fast) ease-in;
+  }
   ```
   No Vue `<Transition>` wrapper needed — reka-ui handles the
   mount/unmount internally.
@@ -655,6 +674,16 @@ Modal instances use **fade + scale 0.96 → 1**:
   and define `.confirm-modal-enter-active` / `-leave-active`
   scoped CSS. See DeleteWorktreeConfirm.vue for the
   reference implementation.
+
+### Reduced Motion (added 2026-06-27, PR-1)
+
+`app/src/style.css` includes a top-level `@media
+(prefers-reduced-motion: reduce)` block that collapses
+all `animation-duration` and `transition-duration` to
+`0.01ms` for users with the OS setting on. The convention
+above applies in full only to users WITHOUT that setting;
+reduced-motion users see instant appear/disappear (no fade,
+no scale, no slide). Required for WCAG 2.3.3 accessibility.
 
 ### Confirmation Dialog Pattern (added 2026-06-11, 体验优化 PR `0140502`)
 
