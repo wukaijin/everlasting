@@ -112,14 +112,14 @@ defineProps<{
       class="subagent-drawer__meta"
     >
       <span class="subagent-drawer__meta-time">
-        <Icon name="clock" :size="11" />
+        <Icon name="clock" :size="12" />
         开始 {{ formatTime(run.startedAt) }}
       </span>
       <span
         v-if="run.finishedAt"
         class="subagent-drawer__meta-time"
       >
-        <Icon name="clock" :size="11" />
+        <Icon name="clock" :size="12" />
         结束 {{ formatTime(run.finishedAt) }}
       </span>
     </div>

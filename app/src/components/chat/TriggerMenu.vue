@@ -304,7 +304,7 @@ defineExpose({
       :aria-label="headerLabel"
     >
     <div class="trigger-menu__header">
-      <Icon name="command-line" :size="11" />
+      <Icon name="command-line" :size="12" />
       <span class="trigger-menu__header-label">{{ headerLabel }}</span>
       <span
         v-if="filter"

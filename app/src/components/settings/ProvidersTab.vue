@@ -194,7 +194,7 @@ function protocolBadgeClass(protocol: string): string {
           </span>
           <span class="providers-tab__url">{{ p.baseUrl }}</span>
           <span class="providers-tab__key-hint">
-            <Icon name="key" :size="11" />
+            <Icon name="key" :size="12" />
             {{ keyStatusLabel(p.hasKey) }}
           </span>
         </div>

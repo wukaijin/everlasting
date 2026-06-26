@@ -81,20 +81,20 @@ async function onLoadHidden() {
                   class="hidden-projects__icon"
                   title="旧数据,自动归入"
                 >
-                  <Icon name="archive" :size="13" />
+                  <Icon name="archive" :size="14" />
                 </span>
                 <span
                   v-else-if="!p.is_git_repo"
                   class="hidden-projects__icon hidden-projects__icon--warn"
                   title="非 git 项目,无法附加 worktree"
                 >
-                  <Icon name="warn" :size="13" />
+                  <Icon name="warn" :size="14" />
                 </span>
                 <span
                   v-else
                   class="hidden-projects__icon"
                 >
-                  <Icon name="archive" :size="13" />
+                  <Icon name="archive" :size="14" />
                 </span>
                 <span class="hidden-projects__name" :title="p.name">{{ p.name }}</span>
               </div>

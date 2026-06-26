@@ -210,7 +210,7 @@ const emit = defineEmits<{
                     class="model-form__checkbox"
                 >
                     <CheckboxIndicator class="model-form__checkbox-indicator">
-                        <Icon name="check" :size="11" />
+                        <Icon name="check" :size="12" />
                     </CheckboxIndicator>
                 </CheckboxRoot>
             </div>

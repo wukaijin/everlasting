@@ -200,6 +200,27 @@ No new token is needed; the existing
 
 ---
 
+## Icon Sizing
+
+All icons go through the `Icon.vue` wrapper (the only component
+that imports `@lucide/vue` / `@heroicons/vue`); components render
+`<Icon name="..." :size="N" />` and never touch the underlying SVG
+libraries directly. The wrapper pins the glyph in a `<span>` with
+`width` / `height` + `flex-shrink: 0` so a flex container can't
+squeeze it.
+
+**Rule: `:size` MUST be an even pixel value** — `6` / `10` / `12` /
+`14` / `16` / `18` / `20` / `24`. Odd values (`11` / `13` / `15` …)
+are forbidden.
+
+**Why**: an odd CSS pixel size lands the 1px stroke on a half-device-pixel boundary on fractional-DPR / 1.5× WSLg screens. Subpixel rasterization then shimmers between reflows and the glyph visibly "shifts" / distorts frame to frame. Even sizes snap the stroke to a whole device pixel so the icon stays put. The pinned `<span>` wrapper prevents flex squeeze on top of this rule.
+
+**Audit (2026-06-26)**: swept the tree and normalized 20 odd sizes
+to even — `11→12` across 13 files + `13→14` in
+`EmptyProjectState.vue`. `6` and `10` were already even and kept.
+
+---
+
 ## Don't: Hardcode color / spacing / radius values in component CSS
 
 Component CSS MUST reference the tokens. Hardcoded

@@ -97,11 +97,11 @@ const testTitle = computed<string>(() =>
                     测试中…
                 </template>
                 <template v-else-if="test.kind === 'ok'">
-                    <Icon name="check" :size="11" />
+                    <Icon name="check" :size="12" />
                     通过 ({{ okLatency }}ms)
                 </template>
                 <template v-else>
-                    <Icon name="warn" :size="11" />
+                    <Icon name="warn" :size="12" />
                     {{ failError }}
                 </template>
             </span>

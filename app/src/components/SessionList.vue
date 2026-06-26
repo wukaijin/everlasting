@@ -227,7 +227,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
             class="session-item__pending-approval"
             title="有待审批的工具调用 — 切到此会话处理"
           >
-            <Icon name="shield-check" :size="11" />
+            <Icon name="shield-check" :size="12" />
           </span>
         </div>
         <div class="session-item__meta">

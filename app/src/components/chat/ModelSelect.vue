@@ -181,7 +181,7 @@ async function onModelPick(modelId: string) {
           class="model-select__group"
         >
           <div class="model-select__group-header">
-            <Icon name="server" :size="11" />
+            <Icon name="server" :size="12" />
             {{ group.provider.displayName }}
           </div>
           <button

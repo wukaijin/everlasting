@@ -132,7 +132,7 @@ const averageLabel = computed(() =>
       "
       @click="toggle"
     >
-      <Icon name="clock" :size="11" />
+      <Icon name="clock" :size="12" />
       <span class="chat-input__latency-label">LLM</span>
       <span class="chat-input__latency-value">{{ totalLabel }}</span>
     </button>
@@ -144,7 +144,7 @@ const averageLabel = computed(() =>
         aria-label="LLM 累计耗时明细"
       >
         <div class="chat-input__latency-popover-header">
-          <Icon name="clock" :size="11" />
+          <Icon name="clock" :size="12" />
           <span>本次 session LLM 累计耗时</span>
         </div>
         <div class="chat-input__latency-popover-summary">

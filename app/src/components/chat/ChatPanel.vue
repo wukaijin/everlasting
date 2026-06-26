@@ -472,14 +472,14 @@ if (typeof window !== "undefined") {
             v-if="!currentProject.is_git_repo"
             class="chat-panel__empty-warn"
           >
-            <Icon name="warn" :size="11" />
+            <Icon name="warn" :size="12" />
             非 git 项目,无法附加 worktree
           </span>
           <span
             v-else-if="currentProject.is_legacy"
             class="chat-panel__empty-warn"
           >
-            <Icon name="archive" :size="11" />
+            <Icon name="archive" :size="12" />
             旧数据,自动归入
           </span>
         </p>

@@ -245,7 +245,7 @@ async function onRefresh(): Promise<void> {
               :id="onlyCriticalId"
             >
               <CheckboxIndicator class="audit-modal__checkbox-indicator">
-                <Icon name="check" :size="11" />
+                <Icon name="check" :size="12" />
               </CheckboxIndicator>
             </CheckboxRoot>
             <label
