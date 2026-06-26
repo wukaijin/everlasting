@@ -70,7 +70,7 @@ last load — so the next turn always sees the latest content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryKind {
-    User,      // ~/.config/everlasting/{CLAUDE.md,AGENTS.md}
+    User,      // ~/.claude/CLAUDE.md (Claude Code interop) + ~/.config/everlasting/AGENTS.md (Everlasting-native)
     Project,   // <project.path>/{CLAUDE.md,AGENTS.md}
     #[allow(dead_code)] Session,  // V2 2 期
     #[allow(dead_code)] Runtime,  // V2 2 期
@@ -177,15 +177,22 @@ pub async fn count_tokens(text: &str) -> u32;  // cl100k_base
 
 | Layer | Source | Path |
 |---|---|---|
-| User | CLAUDE.md | `<config_dir>/everlasting/CLAUDE.md` |
+| User | CLAUDE.md | `<home_dir>/.claude/CLAUDE.md` |
 | User | AGENTS.md | `<config_dir>/everlasting/AGENTS.md` |
 | Project | CLAUDE.md | `<project.path>/CLAUDE.md` |
 | Project | AGENTS.md | `<project.path>/AGENTS.md` |
 
+`<home_dir>` is `dirs::home_dir()` — on Linux (the dev
+platform) this is `~/.claude/`. This path matches Claude
+Code's own user-level CLAUDE.md so the two tools share the
+same file (locked 2026-06-26 user-claude-md-home-dir).
+
 `<config_dir>` is `dirs::config_dir()` — on Linux (the dev
 platform) this is `~/.config/`. The trailing `/everlasting/`
 subdirectory is hard-coded (so the loader never collides with
-other tools' `~/.config/` files).
+other tools' `~/.config/` files). AGENTS.md is
+Everlasting-native and stays in the original location; only
+CLAUDE.md moved.
 
 `<project.path>` is the raw `projects.path` column from SQLite;
 the chat command has already validated it through
@@ -319,7 +326,7 @@ it is added.)
 
 #### Good: typical happy path
 
-1. User has `~/.config/everlasting/CLAUDE.md` (1 KB, 250
+1. User has `~/.claude/CLAUDE.md` (1 KB, 250
    tokens) and `<project>/AGENTS.md` (4 KB, 1000 tokens).
 2. App starts → watcher registers the user dir and the
    project dir. Both directories are non-recursive.
@@ -331,7 +338,7 @@ it is added.)
 6. `build_layers_block` returns the 2 section bodies.
 7. System prompt = banner + layers block + base prompt.
 8. LLM sees the memory at the top of its context.
-9. User edits `~/.config/everlasting/CLAUDE.md` in
+9. User edits `~/.claude/CLAUDE.md` in
    `$EDITOR`. Editor save fires 3 inotify events.
 10. Watcher debounces → 1 second after the last event, the
     user CLAUDE.md slot is invalidated.

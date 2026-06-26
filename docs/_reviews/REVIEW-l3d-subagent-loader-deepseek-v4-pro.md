@@ -88,7 +88,7 @@ PRD 未提及 system prompt 的最大长度。sub-agent 的 system prompt 会作
 
 **问题 4: 平台路径未约定**
 
-`~/.everlasting/agents/*.md` 在 Linux/macOS 上是 `$HOME/.everlasting/agents/`，在 Windows 上是 `%USERPROFILE%\.everlasting\agents\`。PRD 没有提及 Windows 路径。考虑到项目是"WSL-first"，短期没问题，但如果未来支持 native Windows，需要处理。
+`~/.config/everlasting/agents/*.md` 在 Linux/macOS 上是 `$HOME/.config/everlasting/agents/`，在 Windows 上是 `%APPDIR%\everlasting\agents\`(走 `dirs::config_dir()` 平台约定)。PRD 没有提及 Windows 路径。考虑到项目是"WSL-first"，短期没问题，但如果未来支持 native Windows，需要处理。
 
 **建议**：在 §4.1 加一句"Windows 上 `~` 解析为 `%USERPROFILE%`"即可。
 

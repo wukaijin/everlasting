@@ -94,7 +94,7 @@ export const useMemoryStore = defineStore("memory", () => {
   {
     "kind": "user",            // lowercase (#[serde(rename_all = "lowercase")])
     "source": "claude",        // snake_case (#[serde(rename_all = "snake_case")])
-    "path": "/home/x/.config/everlasting/CLAUDE.md", // PathBuf → string
+    "path": "/home/x/.claude/CLAUDE.md", // PathBuf → string; locked 2026-06-26 user-claude-md-home-dir (Claude Code interop)
     "tokens": 142,
     "status": { "kind": "loaded" },
     "char_count": 487
@@ -102,7 +102,7 @@ export const useMemoryStore = defineStore("memory", () => {
   {
     "kind": "user",
     "source": "agents",
-    "path": "/home/x/.config/everlasting/AGENTS.md",
+    "path": "/home/x/.config/everlasting/AGENTS.md", // PathBuf → string; AGENTS.md stays at the original location (only CLAUDE.md moved 2026-06-26)
     "tokens": 0,
     "status": { "kind": "missing" },
     "char_count": 0
@@ -227,7 +227,8 @@ export const useMemoryStore = defineStore("memory", () => {
 5. 在 Settings Memory tab 之外,切到 ProjectTabs → 点 Memory 按钮
    - 看到 Project CLAUDE.md / Project AGENTS.md 2 个卡片
 6. 切换 project → Memory dropdown 关闭(避免 stale state)
-7. 修改 `~/.config/everlasting/CLAUDE.md` → 1s 内 watcher
+7. 修改 `~/.claude/CLAUDE.md`(Claude Code interop
+   路径,2026-06-26 user-claude-md-home-dir)→ 1s 内 watcher
    触发 → 下一个 user message 重新加载
    (本期前端不感知此事件,backend 已处理)
 

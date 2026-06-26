@@ -47,11 +47,11 @@
 
 ### 2.1 v1 必交付
 
-- [ ] 用户在 `~/.everlasting/agents/*.md` 写一个 markdown 文件,定义 sub-agent;LLM 能 dispatch 它
+- [ ] 用户在 `~/.config/everlasting/agents/*.md` 写一个 markdown 文件,定义 sub-agent;LLM 能 dispatch 它
 - [ ] 用户在 `<project>/.everlasting/agents/*.md` 同上
 - [ ] `dispatch_subagent` tool 的 enum 自动包含 builtin + user + project 所有 sub-agent
 - [ ] 每个 sub-agent 有 source tag(`user` / `project` / `builtin`),在 tool description 中标注
-- [ ] `~/.everlasting/agents/<name>.md` 覆盖 builtin 同名 sub-agent(完全覆盖,详见 §4.3)
+- [ ] `~/.config/everlasting/agents/<name>.md` 覆盖 builtin 同名 sub-agent(完全覆盖,详见 §4.3)
 - [ ] `<project>/.everlasting/agents/<name>.md` 覆盖 user + builtin 同名
 - [ ] 提供 `/reload-subagents` 命令,当前 session 立即生效新 .md
 - [ ] 单个 .md 错误不阻塞其他 sub-agent 加载(per-file isolation)
@@ -110,7 +110,7 @@ model: <model-id>          # 可选,v1 解析但不切换
 
 ### 3.4 完整例子
 
-`~/.everlasting/agents/quick-lookup.md`:
+`~/.config/everlasting/agents/quick-lookup.md`:
 
 ```markdown
 ---
@@ -136,7 +136,7 @@ Reply in the user's language.
 
 | 层 | 路径 | 用途 |
 |----|------|------|
-| **user-level** | `~/.everlasting/agents/*.md` | 个人常用,跨项目共享 |
+| **user-level** | `~/.config/everlasting/agents/*.md` | 个人常用,跨项目共享 |
 | **project-level** | `<project>/.everlasting/agents/*.md` | 项目专用,可提交进 git |
 
 `<project>` 取自 session 关联的 worktree / 项目根(与 `MemoryCache` 的 project_id 同源)。
@@ -161,7 +161,7 @@ Reply in the user's language.
 
 **`.md` 完全覆盖 builtin 同名 sub-agent**(包括 `tools` / `system prompt` / `model`),**不字段 merge**。
 
-**用户写 `~/.everlasting/agents/researcher.md` 时**:
+**用户写 `~/.config/everlasting/agents/researcher.md` 时**:
 - ✅ **必须显式列全**想要的 `tools`(不能省略字段)
 - ❌ 不能从 builtin 继承未填字段(没有"未填则 fallback"语义)
 
@@ -170,7 +170,7 @@ Reply in the user's language.
 2. 追加 `web_fetch`
 3. 写完整 system prompt(或省略 body 走空字符串)
 
-**示例**(`~/.everlasting/agents/researcher.md` 在 builtin 基础上加 `web_fetch`):
+**示例**(`~/.config/everlasting/agents/researcher.md` 在 builtin 基础上加 `web_fetch`):
 
 ```markdown
 ---
@@ -429,7 +429,7 @@ pub struct ReloadResult {
 
 ### 9.3 手工测试(开发期)
 
-- [ ] `~/.everlasting/agents/quick-lookup.md` 实际写一个 → dispatch 成功
+- [ ] `~/.config/everlasting/agents/quick-lookup.md` 实际写一个 → dispatch 成功
 - [ ] `<project>/.everlasting/agents/db-migrator.md` 实际写一个 → project source tag 生效
 - [ ] user 写 `researcher.md` 覆盖 builtin → dispatch 用 user 版本,tools 列表符合 .md
 - [ ] `tools` 字段拼错 `web_fetxh` → silent skip,该 .md 不出现在 enum;tracing warn 可见
@@ -456,7 +456,7 @@ pub struct ReloadResult {
 - **`max_turns` 扩展字段** — 覆盖默认 200 turn 预算
 - **`SKILL.md` 多文件 sub-agent** — system prompt 分层(L0 摘要 / L1 全文 / L2 reference)
 - **Picker UI** — sub-agent 浏览器(类似 Skill browser)
-- **builtin 迁移** — 把 2 个 Rust 硬编码 builtin 迁到 .md 文件(`~/.everlasting/agents/researcher.md` + `general-purpose.md`)
+- **builtin 迁移** — 把 2 个 Rust 硬编码 builtin 迁到 .md 文件(`~/.config/everlasting/agents/researcher.md` + `general-purpose.md`)
 - **`.claude/agents/*.md` 自动加载** — 双目录支持,通过符号链接或显式配置
 - **AuditLogModal 集成** — subagent_loader warn 事件可视化
 - **Notify 监听**(如果用户高频改 .md 反馈多)— 启动 + reload 不够用再加
