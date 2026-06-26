@@ -31,8 +31,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryKind {
-    /// `~/.config/everlasting/CLAUDE.md` and `AGENTS.md`. Global
-    /// across all projects.
+    /// `~/.claude/CLAUDE.md` (Claude Code interop) and
+    /// `~/.config/everlasting/AGENTS.md` (Everlasting-native).
+    /// The two files live in different directories — locked by
+    /// 2026-06-26 user-claude-md-home-dir. Global across all
+    /// projects.
     User,
     /// `<project.path>/CLAUDE.md` and `AGENTS.md`. Scoped to one
     /// project.

@@ -53,6 +53,28 @@ impl Drop for UserDirGuard {
     }
 }
 
+/// Test-only: temporarily override the User-layer CLAUDE.md
+/// directory for the duration of a test. Mirrors [`UserDirGuard`]
+/// but targets the separate `user_claude_dir()` slot (locked by
+/// 2026-06-26 user-claude-md-home-dir — CLAUDE.md lives at
+/// `~/.claude/`, AGENTS.md still lives at `~/.config/everlasting/`).
+pub struct UserClaudeDirGuard {
+    previous: Option<PathBuf>,
+}
+
+impl UserClaudeDirGuard {
+    pub fn new(path: PathBuf) -> Self {
+        let previous = crate::memory::file::set_user_claude_dir_for_test(Some(path));
+        Self { previous }
+    }
+}
+
+impl Drop for UserClaudeDirGuard {
+    fn drop(&mut self) {
+        crate::memory::file::set_user_claude_dir_for_test(self.previous.clone());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `tokens` tests
 // ---------------------------------------------------------------------------
@@ -172,12 +194,14 @@ async fn load_file_for_test(p: &std::path::Path) -> (String, u32, LayerStatus) {
 
 #[tokio::test]
 async fn loader_load_for_session_with_all_files_present() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
 
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "user claude body").unwrap();
-    std::fs::write(user_dir.path().join("AGENTS.md"), "user agents body").unwrap();
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "user claude body").unwrap();
+    std::fs::write(user_agents_dir.path().join("AGENTS.md"), "user agents body").unwrap();
     std::fs::write(project_dir.path().join("CLAUDE.md"), "project claude body").unwrap();
     std::fs::write(project_dir.path().join("AGENTS.md"), "project agents body").unwrap();
 
@@ -198,9 +222,11 @@ async fn loader_load_for_session_with_all_files_present() {
 
 #[tokio::test]
 async fn loader_load_for_session_with_all_files_missing() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
 
     // No files written — every layer should be Missing.
     let cache = MemoryCache::new();
@@ -213,12 +239,14 @@ async fn loader_load_for_session_with_all_files_missing() {
 
 #[tokio::test]
 async fn loader_load_for_session_partial_files() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
 
     // Only User CLAUDE.md and Project AGENTS.md.
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "u-c body").unwrap();
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "u-c body").unwrap();
     std::fs::write(project_dir.path().join("AGENTS.md"), "p-a body").unwrap();
 
     let cache = MemoryCache::new();
@@ -232,10 +260,12 @@ async fn loader_load_for_session_partial_files() {
 
 #[tokio::test]
 async fn loader_mtime_fence_sees_file_change() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "v1").unwrap();
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "v1").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -246,7 +276,7 @@ async fn loader_mtime_fence_sees_file_change() {
     // the RULE-C-001 contract; the old watcher-debounce path
     // would have served stale "v1" for up to 1s (or forever, if
     // the watcher was dropped — see RULE-C-004).
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "v2").unwrap();
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "v2").unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -259,10 +289,12 @@ async fn loader_mtime_fence_sees_file_change() {
 
 #[tokio::test]
 async fn loader_mtime_fence_hit_when_unchanged() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "stable body").unwrap();
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "stable body").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -278,15 +310,17 @@ async fn loader_mtime_fence_sees_file_appear() {
     // File absent at first load → Missing (cached with mtime
     // None). File appears → next load's stat yields Some; the
     // None != Some trips the fence → reload → Loaded.
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(first[0].status, LayerStatus::Missing);
 
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "appeared").unwrap();
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "appeared").unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
@@ -299,16 +333,18 @@ async fn loader_mtime_fence_sees_file_vanish() {
     // File present → Loaded (mtime Some). File removed → next
     // load's stat yields None; Some != None trips the fence →
     // reload → Missing.
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
-    std::fs::write(user_dir.path().join("CLAUDE.md"), "here").unwrap();
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "here").unwrap();
 
     let cache = MemoryCache::new();
     let first = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(first[0].status, LayerStatus::Loaded);
 
-    std::fs::remove_file(user_dir.path().join("CLAUDE.md")).unwrap();
+    std::fs::remove_file(user_claude_dir.path().join("CLAUDE.md")).unwrap();
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert_eq!(second[0].status, LayerStatus::Missing);
@@ -316,10 +352,12 @@ async fn loader_mtime_fence_sees_file_vanish() {
 
 #[tokio::test]
 async fn loader_different_projects_have_independent_caches() {
-    let user_dir = tempfile::tempdir().unwrap();
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let proj_a = tempfile::tempdir().unwrap();
     let proj_b = tempfile::tempdir().unwrap();
-    let _user_guard = UserDirGuard::new(user_dir.path().to_path_buf());
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
 
     std::fs::write(proj_a.path().join("CLAUDE.md"), "a body").unwrap();
     std::fs::write(proj_b.path().join("CLAUDE.md"), "b body").unwrap();
@@ -371,29 +409,73 @@ async fn banner_with_some_loaded_layers_lists_them() {
 
 #[tokio::test]
 async fn all_paths_yields_four_entries_in_canonical_order() {
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
+    let _user_claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _user_agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+
     let entries = all_paths(Some(project_dir.path().to_str().unwrap()));
-    // The user dir may or may not exist on the test host; we
-    // accept either 2 (no user dir) or 4 (user dir exists).
-    assert!(entries.len() == 2 || entries.len() == 4);
-    // The first 2 user entries (when present) come first, then
-    // the 2 project entries.
-    if entries.len() == 4 {
-        assert_eq!(entries[0].0, MemoryKind::User);
-        assert_eq!(entries[0].1, MemorySource::Claude);
-        assert_eq!(entries[1].0, MemoryKind::User);
-        assert_eq!(entries[1].1, MemorySource::Agents);
-        assert_eq!(entries[2].0, MemoryKind::Project);
-        assert_eq!(entries[2].1, MemorySource::Claude);
-        assert_eq!(entries[3].0, MemoryKind::Project);
-        assert_eq!(entries[3].1, MemorySource::Agents);
-    } else {
-        // No user dir — must be 2 project entries.
-        assert_eq!(entries[0].0, MemoryKind::Project);
-        assert_eq!(entries[0].1, MemorySource::Claude);
-        assert_eq!(entries[1].0, MemoryKind::Project);
-        assert_eq!(entries[1].1, MemorySource::Agents);
-    }
+    // Both User-layer dirs are overridden → expect exactly 4
+    // entries in canonical order.
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0].0, MemoryKind::User);
+    assert_eq!(entries[0].1, MemorySource::Claude);
+    assert_eq!(entries[1].0, MemoryKind::User);
+    assert_eq!(entries[1].1, MemorySource::Agents);
+    assert_eq!(entries[2].0, MemoryKind::Project);
+    assert_eq!(entries[2].1, MemorySource::Claude);
+    assert_eq!(entries[3].0, MemoryKind::Project);
+    assert_eq!(entries[3].1, MemorySource::Agents);
+}
+
+// ---------------------------------------------------------------------------
+// 2026-06-26 user-claude-md-home-dir — User CLAUDE.md lives at
+// `~/.claude/CLAUDE.md` (Claude Code interop), User AGENTS.md
+// stays at `~/.config/everlasting/AGENTS.md`.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn resolve_path_user_claude_uses_override_dir() {
+    // With `UserClaudeDirGuard` pointing at a tempdir, the
+    // resolved User CLAUDE.md path must live under that tempdir.
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let _guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let resolved =
+        crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Claude, None);
+    let path = resolved.expect("resolve_path should yield Some when override is set");
+    assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("CLAUDE.md"));
+    assert_eq!(path.parent(), Some(user_claude_dir.path()));
+}
+
+#[tokio::test]
+async fn resolve_path_user_agents_keeps_user_dir_override() {
+    // Regression: AGENTS.md path resolution MUST continue to use
+    // `user_dir()` (`~/.config/everlasting/`), not
+    // `user_claude_dir()` — even when `UserClaudeDirGuard` is
+    // active. The two User-layer dirs are independent.
+    let user_claude_dir = tempfile::tempdir().unwrap();
+    let user_agents_dir = tempfile::tempdir().unwrap();
+    let _claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
+    let _agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
+    let resolved =
+        crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Agents, None);
+    let path = resolved.expect("resolve_path should yield Some when override is set");
+    assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("AGENTS.md"));
+    assert_eq!(path.parent(), Some(user_agents_dir.path()));
+}
+
+#[tokio::test]
+async fn user_claude_dir_unset_returns_home_dot_claude() {
+    // Clear any prior override (tests run on the same thread —
+    // the per-test guards drop at the end of their test, but be
+    // defensive here) and assert the un-overridden value matches
+    // `dirs::home_dir().map(|p| p.join(".claude"))`.
+    let _guard = UserClaudeDirGuard::new(tempfile::tempdir().unwrap().path().to_path_buf());
+    let _restore = crate::memory::file::set_user_claude_dir_for_test(None);
+    let resolved = crate::memory::file::user_claude_dir();
+    let expected = dirs::home_dir().map(|p| p.join(".claude"));
+    assert_eq!(resolved, expected);
 }
 
 // ---------------------------------------------------------------------------

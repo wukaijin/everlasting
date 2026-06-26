@@ -1,7 +1,8 @@
 //! B5 Memory — User / Project two-layer loader (V2 first-tier, 2026-06-10).
 //!
 //! Loads Markdown memory files (CLAUDE.md / AGENTS.md) from two fixed
-//! layers — User (`~/.config/everlasting/`) and Project
+//! layers — User (`~/.claude/CLAUDE.md` + `~/.config/everlasting/AGENTS.md`,
+//! split locked 2026-06-26 user-claude-md-home-dir) and Project
 //! (`<project.path>/`) — and injects their content into the LLM
 //! system prompt at the ⑤a context-construction stage (per
 //! `docs/ARCHITECTURE.md` §2.2 step ⑤a).
@@ -32,7 +33,7 @@
 //! Files in this module:
 //! - [`types`] — `MemoryKind`, `MemorySource`, `LayerStatus`,
 //!   `MemoryLayer`, `MemoryLayerInfo` (the wire / preview types).
-//! - [`file`] — 4 fixed path resolution (`user_dir` / `project_path`).
+//! - [`file`] — 4 fixed path resolution (`user_claude_dir` / `user_dir` / `project_path`).
 //! - [`tokens`] — `count_tokens` (cl100k_base via `tiktoken-rs`).
 //! - [`loader`] — `MemoryCache` + `load_for_session` (mtime-fenced
 //!   read-through).

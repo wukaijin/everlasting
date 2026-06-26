@@ -566,7 +566,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - **原因**:PRD D7 说不限制 token,但信任用户不塞 50MB CLAUDE.md 不靠谱;4 文件 * 100 KiB ≈ 100K tokens 在 200K 上下文窗内可控
   - **依据**:PRD 实施计划 R1 "失败兜底" + `.trellis/spec/backend/memory.md` §"Decision: Hard size cap (100 KiB) at the loader level"
   - **后果**:`> 100 KiB` 文件前端 preview 显示 `Error` + reason(`"file is 204800 bytes, exceeds 102400 byte cap"`);不影响其他 3 层
-- **决策**:4 文件固定路径(User 走 `dirs::config_dir().join("everlasting")` → Linux `~/.config/everlasting/`,Project 走 `projects.path` 列),watcher 在 `AppState::load` 启动时按当前 project 列表注册,新 project 不 auto-watch
+- **决策**:4 文件固定路径(User CLAUDE.md 走 `dirs::home_dir().join(".claude")` → `~/.claude/CLAUDE.md` Claude Code 互操作;User AGENTS.md 走 `dirs::config_dir().join("everlasting")` → `~/.config/everlasting/AGENTS.md` 保留原位;Project 走 `projects.path` 列),watcher 在 `AppState::load` 启动时按当前 project 列表注册,新 project 不 auto-watch(2026-06-26 user-claude-md-home-dir 把 User CLAUDE.md 从 `~/.config/everlasting/` 切到 `~/.claude/`,与 Claude Code 共享)
   - **原因**:PRD D3 "新建 memory 文件需重启 session 生效" 延伸到"新建 project 也需要重启 watcher",watch 列表固定在启动时是预测行为
   - **依据**:`.trellis/spec/backend/memory.md` §"Decision: Watcher does NOT auto-register new projects"
   - **后果**:运行时新建 project 的 memory 仍能 read-through(下次 chat 缓存 miss 自动从盘读),只是没 hot-reload,要重启 app 才有

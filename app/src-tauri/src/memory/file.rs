@@ -1,17 +1,21 @@
 //! Memory file path resolution + reading.
 //!
 //! V2 1 期 hard-codes 4 fixed paths (2 layers × 2 sources):
-//! - `~/.config/everlasting/CLAUDE.md`  (User layer)
-//! - `~/.config/everlasting/AGENTS.md`  (User layer)
+//! - `~/.claude/CLAUDE.md`              (User layer — Claude Code interop)
+//! - `~/.config/everlasting/AGENTS.md`  (User layer — Everlasting-native)
 //! - `<project.path>/CLAUDE.md`          (Project layer)
 //! - `<project.path>/AGENTS.md`          (Project layer)
 //!
-//! The User directory uses `dirs::config_dir()` so it follows the
-//! platform convention (`~/.config/` on Linux,
-//! `~/Library/Application Support/` on macOS,
-//! `%APPDIR%` on Windows). On Linux (the project's primary dev
-//! platform) this resolves to `~/.config/everlasting/`, matching
-//! the PRD's locked-in choice (2026-06-10 grill decision #2).
+//! The User CLAUDE.md path uses `dirs::home_dir().join(".claude")`
+//! so it matches Claude Code's own user-level location — the two
+//! tools share the same file (no double-write maintenance). The
+//! User AGENTS.md path uses `dirs::config_dir().join("everlasting")`,
+//! following the platform convention (`~/.config/` on Linux,
+//! `~/Library/Application Support/` on macOS, `%APPDIR%` on Windows).
+//! On Linux (the project's primary dev platform) this resolves to
+//! `~/.config/everlasting/`, matching the PRD's locked-in choice
+//! (2026-06-10 grill decision #2). The split was locked by
+//! 2026-06-26 user-claude-md-home-dir.
 //!
 //! Project paths are the raw `projects.path` column from SQLite —
 //! the agent loop has already validated the path through
@@ -40,7 +44,51 @@ pub fn set_user_dir_for_test(path: Option<PathBuf>) -> Option<PathBuf> {
     USER_DIR_OVERRIDE.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), path))
 }
 
-/// Resolve the User-layer directory (`~/.config/everlasting/`).
+// Test-only: thread-local override for the User CLAUDE.md
+// directory (Claude Code interop slot). When `Some(p)`,
+// `user_claude_dir()` returns `Some(p.clone())` instead of
+// `dirs::home_dir().join(".claude")`. Independent from
+// `USER_DIR_OVERRIDE` so each User-layer source can be
+// overridden separately in tests.
+#[cfg(test)]
+thread_local! {
+    static USER_CLAUDE_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub fn set_user_claude_dir_for_test(path: Option<PathBuf>) -> Option<PathBuf> {
+    USER_CLAUDE_DIR_OVERRIDE.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), path))
+}
+
+/// Resolve the User-layer CLAUDE.md directory (`~/.claude/`).
+///
+/// Returns `None` if `dirs::home_dir()` is unavailable (rare —
+/// only on platforms where `HOME` / `USERPROFILE` is unset and
+/// there's no fallback). The caller treats `None` as a
+/// per-file "user dir unreachable" error.
+///
+/// This path mirrors Claude Code's user-level CLAUDE.md
+/// location, so the two tools share the same file (no
+/// double-write maintenance). Locked by 2026-06-26
+/// user-claude-md-home-dir (the previous `~/.config/everlasting/`
+/// location was incompatible with Claude Code's shared user
+/// instructions).
+///
+/// In test builds, the path is taken from the thread-local
+/// override (see `set_user_claude_dir_for_test`) so tests can
+/// run hermetically without touching the developer's real
+/// `~/.claude/`.
+pub fn user_claude_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(override_path) = USER_CLAUDE_DIR_OVERRIDE.with(|cell| cell.borrow().clone()) {
+            return Some(override_path);
+        }
+    }
+    dirs::home_dir().map(|p| p.join(".claude"))
+}
+
+/// Resolve the User-layer AGENTS.md directory (`~/.config/everlasting/`).
 ///
 /// Returns `None` if `dirs::config_dir()` is unavailable (rare —
 /// only on platforms where the XDG / equivalent env var is unset
@@ -70,13 +118,26 @@ pub fn user_dir() -> Option<PathBuf> {
 /// `project_path` is `None` for `MemoryKind::User` (the user layer
 /// is global). For `Project`, the caller passes the project's
 /// `path` column from the `projects` table.
+///
+/// For `MemoryKind::User`, the path is dispatched on
+/// `MemorySource`: `Claude` resolves under
+/// `user_claude_dir()` (`~/.claude/CLAUDE.md`, Claude Code
+/// interop), `Agents` resolves under `user_dir()`
+/// (`~/.config/everlasting/AGENTS.md`, Everlasting-native).
+/// This split was locked by 2026-06-26 user-claude-md-home-dir.
 pub fn resolve_path(
     kind: MemoryKind,
     source: MemorySource,
     project_path: Option<&str>,
 ) -> Option<PathBuf> {
     match kind {
-        MemoryKind::User => Some(user_dir()?.join(source.filename())),
+        MemoryKind::User => {
+            let dir = match source {
+                MemorySource::Claude => user_claude_dir()?,
+                MemorySource::Agents => user_dir()?,
+            };
+            Some(dir.join(source.filename()))
+        }
         MemoryKind::Project => {
             let p = project_path?;
             Some(PathBuf::from(p).join(source.filename()))

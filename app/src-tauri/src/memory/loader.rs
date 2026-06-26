@@ -27,7 +27,7 @@ use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 use crate::llm::types::{CacheControl, ContentBlock};
-use crate::memory::file::{load_layer, resolve_path, user_dir};
+use crate::memory::file::{load_layer, resolve_path, user_claude_dir, user_dir};
 use crate::memory::types::{LayerStatus, MemoryKind, MemoryLayer, MemorySource};
 
 /// A cached memory layer paired with the file's `mtime` at load
@@ -148,11 +148,28 @@ impl Default for MemoryCache {
 /// for the user layer. Returns 4 `(kind, source, absolute_path)`
 /// triples in canonical order: User CLAUDE → User AGENTS →
 /// Project CLAUDE → Project AGENTS.
+///
+/// The User layer is split across two directories (locked
+/// 2026-06-26 user-claude-md-home-dir): User CLAUDE.md uses
+/// `user_claude_dir()` (`~/.claude/`, Claude Code interop), User
+/// AGENTS.md uses `user_dir()` (`~/.config/everlasting/`,
+/// Everlasting-native). Either entry is omitted when its
+/// respective dir resolver returns `None` (platform-rare).
 pub fn all_paths(project_root: Option<&str>) -> Vec<(MemoryKind, MemorySource, PathBuf)> {
     let mut out = Vec::with_capacity(4);
-    if let Some(user) = user_dir() {
-        out.push((MemoryKind::User, MemorySource::Claude, user.join(MemorySource::Claude.filename())));
-        out.push((MemoryKind::User, MemorySource::Agents, user.join(MemorySource::Agents.filename())));
+    if let Some(claude_dir) = user_claude_dir() {
+        out.push((
+            MemoryKind::User,
+            MemorySource::Claude,
+            claude_dir.join(MemorySource::Claude.filename()),
+        ));
+    }
+    if let Some(agents_dir) = user_dir() {
+        out.push((
+            MemoryKind::User,
+            MemorySource::Agents,
+            agents_dir.join(MemorySource::Agents.filename()),
+        ));
     }
     if let Some(root) = project_root {
         let p = PathBuf::from(root);
