@@ -92,14 +92,32 @@ const currentProject = computed(() =>
  *  detached state from a real branch named "HEAD". v1 does not
  *  decorate detached HEAD with a short SHA. Falls back to the
  *  legacy static "git" tag if the project row hasn't been
- *  re-probed yet (older rows pre-PR2). */
+ *  re-probed yet (older rows pre-PR2).
+ *
+ *  2026-06-27 polish: the previous fallback was the literal string
+ *  `"git"` (e.g. `git` shown in the header chip). That read as
+ *  "this project's branch is named 'git'" — confusing. The fallback
+ *  now renders `—` (em-dash) with a tooltip explaining the row
+ *  hasn't been probed yet, so the chip reads as "branch unknown"
+ *  rather than "branch = 'git'". The pre-existing "HEAD" string
+ *  for detached-HEAD repos still passes through unchanged (it's a
+ *  real git concept and useful to surface). */
 const showGitChip = computed<boolean>(
   () => !!currentProject.value?.is_git_repo,
 );
 
 const gitBranchLabel = computed<string>(() => {
   const branch = currentProject.value?.git_branch;
-  return branch && branch.length > 0 ? branch : "git";
+  return branch && branch.length > 0 ? branch : "—";
+});
+
+/** Tooltip for the branch chip. Surfaces the "branch unknown"
+ *  explanation when the project row hasn't been probed yet, so
+ *  the `—` fallback doesn't read as a missing data bug. */
+const gitBranchTooltip = computed<string>(() => {
+  const branch = currentProject.value?.git_branch;
+  if (branch && branch.length > 0) return `Current branch: ${branch}`;
+  return "Branch unknown — project row not yet probed (open the project again or restart the app)";
 });
 
 // -----------------------------------------------------------------------
@@ -385,7 +403,7 @@ if (typeof window !== "undefined") {
         <span
           v-if="showGitChip"
           class="chat-panel__chip chat-panel__chip--git"
-          :title="`Current branch: ${gitBranchLabel}`"
+          :title="gitBranchTooltip"
         >
           <Icon name="refresh" :size="12" />
           {{ gitBranchLabel }}

@@ -292,6 +292,18 @@ const workerStatusText = computed<string>(() => {
   return s;
 });
 
+/** Header status text for dispatch_subagent cards. Per 2026-06-27
+ *  dispatch_subagent dedup: the worker completion state is already
+ *  conveyed by the ✓ icon + duration (`1m 14.4s`) in the header,
+ *  so the textual "done" word is redundant. While the worker is
+ *  still running we keep "running…" so the user sees live progress.
+ *  For non-dispatch tool calls the caller falls back to the regular
+ *  `statusText` ("done" / "error" / "running…"). */
+const dispatchHeaderStatus = computed<string>(() => {
+  if (workerStatusText.value === "running…") return "running…";
+  return "";
+});
+
 /** Short summary preview (≤200 chars). Pulled from the cached summary
  *  if available; otherwise falls back to the tool_result content. */
 const workerSummaryPreview = computed<string>(() => {
@@ -493,7 +505,7 @@ watch(
       :icon-name="toolIcon(call.name)"
       :name="call.name"
       :file-path="filePath"
-      :status-text="isDispatchSubagent ? workerStatusText : statusText"
+      :status-text="isDispatchSubagent ? dispatchHeaderStatus : statusText"
       :status-icon-name="statusIconName"
       :duration-label="durationLabel"
       :is-error="isError"
@@ -565,7 +577,16 @@ watch(
         <span class="tool-card__subagent-name">
           {{ workerDisplayName }}
         </span>
-        <span class="tool-card__subagent-status">{{ workerStatusText }}</span>
+        <!-- 2026-06-27 dispatch_subagent dedup: the "done" word
+             previously rendered here duplicated the ✓ icon +
+             duration in the card header. Only show the live
+             "running…" indicator while the worker is in flight;
+             when complete, the meta row reduces to name + token
+             count (header ✓ carries completion). -->
+        <span
+          v-if="workerStatusText === 'running…'"
+          class="tool-card__subagent-status"
+        >{{ workerStatusText }}</span>
         <span
           v-if="workerTokenText"
           class="tool-card__subagent-tokens"

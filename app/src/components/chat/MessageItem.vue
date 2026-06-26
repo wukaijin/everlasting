@@ -443,6 +443,25 @@ const showEditedLabel = computed<boolean>(
         :call="tc"
         :result="getToolResult(message, tc.id)"
       />
+      <!--
+        2026-06-27 polish: when the message has tool calls but no
+        text bubble (the common "LLM only emitted tools" turn), the
+        F5 latency chip used to render OUTSIDE msg__tools, leaving
+        a visually-detached `2.7s` label floating in space below
+        the last tool card. Moving the footer INSIDE msg__tools
+        attaches the chip to the last tool card visually. When the
+        message has a text bubble, the v-if below short-circuits and
+        the footer renders in its original bubble-anchored position
+        (where the latency is conceptually attached to the LLM's
+        prose, not its tool calls).
+      -->
+      <MessageItemFooter
+        v-if="!showBubble && !isEditingThisMessage"
+        :role="message.role"
+        :streaming="!!message.streaming"
+        :latency="message.latency"
+        :error="message.error"
+      />
     </div>
 
     <!--
@@ -544,8 +563,17 @@ const showEditedLabel = computed<boolean>(
       The parent passes the raw `error` / `latency` from
       the ChatMessage and the streaming flag (the footer
       reads them through the same v-if gate as before).
+
+      2026-06-27 polish: when the message has tool calls but
+      no text bubble, the footer is rendered INSIDE
+      `msg__tools` above (so the latency chip attaches to
+      the last tool card). The outer footer here only
+      renders when there's NO tool-calls/no-bubble mismatch
+      (i.e., bubble-only or user-role / system rows). The
+      `v-if` gates both: no tools AND no bubble visible.
     -->
     <MessageItemFooter
+      v-if="!visibleToolCalls.length || showBubble"
       :role="message.role"
       :streaming="!!message.streaming"
       :latency="message.latency"
