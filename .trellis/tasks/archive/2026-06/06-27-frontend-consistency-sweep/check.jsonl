@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "验收：组件 CSS 零硬编码(shadow/font-size/色/px)、新增 token(--text-2xs/--shadow-xl)命名合规、Type Scale 与 Shadow Scale 表已同步、D6 user 气泡左边条用 --color-accent"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "验收：modal shadow 已同步为 --shadow-xl、modal/popover 动效 token 一致未漂移"}

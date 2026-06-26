@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "token 定义 + 禁硬编码规则；D1(--text-2xs)/D2(--shadow-xl)/D5(light 结构预留) 都要对照此文件新增/挪动 token，并同步 Type Scale / Shadow Scale 表"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "modal/popover 动效与 shadow 约定；PR1 新增 --shadow-xl 后需在此同步'modal = xl'"}
+{"file": ".trellis/spec/frontend/cjk-fonts.md", "reason": "D5 挪 @theme 到 [data-theme] 时 --font-* 字体栈一并挪，参考此文件的字体捆绑说明"}
