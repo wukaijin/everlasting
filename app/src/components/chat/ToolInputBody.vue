@@ -41,7 +41,7 @@ defineProps<{
 .tool-input-body summary {
   cursor: pointer;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   user-select: none;
   list-style: none;
 }
@@ -68,12 +68,12 @@ defineProps<{
   padding: 6px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 200px;
   overflow-y: auto;
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--color-text-primary);
   font-family: var(--font-mono);

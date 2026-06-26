@@ -191,9 +191,9 @@ function onOpenEditor() {
   flex-direction: column;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  transition: border-color 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out);
 }
 
 .memory-layer:hover {
@@ -214,7 +214,7 @@ function onOpenEditor() {
   border: 0;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   color: var(--color-text-primary);
 }
@@ -250,15 +250,15 @@ function onOpenEditor() {
 }
 
 .memory-layer__title {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-primary);
 }
 
 .memory-layer__meta {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   text-align: right;
@@ -277,7 +277,7 @@ function onOpenEditor() {
 
 .memory-layer__loading,
 .memory-layer__error-text {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
   padding: 8px 0;
 }
@@ -287,7 +287,7 @@ function onOpenEditor() {
 }
 
 .memory-layer__markdown {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.6;
   color: var(--color-text-secondary);
   /* Don't let giant tables blow out the panel; horizontal scroll
@@ -308,10 +308,10 @@ function onOpenEditor() {
 .memory-layer__markdown :deep(pre) {
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   overflow-x: auto;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
 }
 
@@ -320,7 +320,7 @@ function onOpenEditor() {
   border: 1px solid var(--color-bg-border);
   border-radius: 3px;
   padding: 1px 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
 }
 
@@ -334,7 +334,7 @@ function onOpenEditor() {
 .memory-layer__markdown :deep(h2),
 .memory-layer__markdown :deep(h3) {
   color: var(--color-text-primary);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   margin: 12px 0 6px 0;
 }
 
@@ -352,10 +352,10 @@ function onOpenEditor() {
 .memory-layer__truncated {
   margin-top: 6px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   background: var(--color-bg-elevated);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-style: italic;
 }
 
@@ -388,12 +388,12 @@ function onOpenEditor() {
   padding: 4px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: inherit;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
 }
 
 .memory-layer__open:hover {

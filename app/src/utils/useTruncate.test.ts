@@ -230,11 +230,11 @@ describe("truncate — UTF-8 safety", () => {
     // JS strings are UTF-16: "你" is one UTF-16 code unit. Our
     // function uses .length (UTF-16 code units). For BMP chars
     // that's the same as char count.
-    const text = "你好世界,hello world";
+    const text = "你好世界，hello world";
     // 13 chars (5 CJK + comma + 5 ASCII + space + ... actually
     // just trust .length here).
     const result = truncate(text, 5);
-    // First 5 chars = "你好世界," + suffix.
+    // First 5 chars = "你好世界，" + suffix.
     expect(result).toBe(text.slice(0, 5) + "…");
   });
 });

@@ -31,7 +31,7 @@
 // RULE-FrontSubagent-001 (2026-06-25): header markup + CSS 抽到共享
 // `<ToolCallHeader>`,故 header 元素的 class 从 `.drawer-tool-card__*`
 // 改查 `.tool-call-header__*` (Vue Test Utils find 穿透子组件 DOM)。
-// card 容器变体 (.drawer-tool-card / --error / --running) 仍在本组件,
+// card 容器变体 (.drawer-tool-card / --error / --running) 仍在本组件，
 // accent / body / 0-store lock / tokens 断言不变。
 
 import { describe, it, expect } from "vitest";

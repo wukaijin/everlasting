@@ -34,7 +34,7 @@
 //   `<ToolCallHeader>` —— 本组件传 iconName="shield-check" + suffix=
 //   "权限询问" + statusVariant(interactive 时 accent 强调) 复用同一
 //   header。card chrome(amber border + 容器)保留本组件;interactive 的
-//   accent 边框/底色是 card 容器变体,header status 的 accent 色由
+//   accent 边框/底色是 card 容器变体，header status 的 accent 色由
 //   ToolCallHeader statusVariant prop 自治。
 //
 // `synthesizeAsk` lives in the drawer (the parent) and is passed
@@ -183,16 +183,16 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
    (RULE-FrontSubagent-001, 2026-06-25);本组件保留 card 容器(amber
    border-left 恒表"额外谨慎") + interactive 容器变体(accent border-left +
    底色 tint)。interactive 的 header status accent 色由 ToolCallHeader 的
-   statusVariant="accent" prop 自治,不靠 card 后代选择器。0 hex,全 token。
+   statusVariant="accent" prop 自治，不靠 card 后代选择器。0 hex,全 token。
    header 与下方 body 的 4px gap 用 :deep 注入 ToolCallHeader root。 */
 
 .drawer-permission-ask-card {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-tool-shell);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-family: var(--font-mono);
   color: var(--color-text-primary);
   max-width: 100%;
@@ -208,7 +208,7 @@ function onRespond(decision: PermissionDecision, reason?: string): void {
 }
 
 /* header 与下方 PermissionAskBody 的 4px gap。header 在 ToolCallHeader
-   子组件内,用 :deep 跨 scoped 边界注入 margin-bottom(原
+   子组件内，用 :deep 跨 scoped 边界注入 margin-bottom(原
    `.drawer-permission-ask-card__header { margin-bottom: 4px }` 迁移)。 */
 .drawer-permission-ask-card :deep(.tool-call-header) {
   margin-bottom: 4px;

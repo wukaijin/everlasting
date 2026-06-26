@@ -70,19 +70,19 @@ const modeOptions: readonly ModeOption[] = [
     value: "edit",
     label: "Edit",
     icon: "pencil",
-    description: "默认模式,可调用所有工具,危险操作需确认",
+    description: "默认模式，可调用所有工具，危险操作需确认",
   },
   {
     value: "plan",
     label: "Plan",
     icon: "clipboard-list",
-    description: "只分析与制定方案,不执行写操作",
+    description: "只分析与制定方案，不执行写操作",
   },
   {
     value: "yolo",
     label: "Yolo",
     icon: "shield-x",
-    description: "跳过所有用户确认,硬 kill list 仍然拦截",
+    description: "跳过所有用户确认，硬 kill list 仍然拦截",
   },
 ] as const;
 
@@ -177,7 +177,7 @@ async function onModePick(mode: SessionMode) {
   if (!applied) return; // Yolo modal flow — toast deferred to confirm
   if (chatStore.isCurrentSessionStreaming) {
     projectsStore.showToast(
-      "Mode 已切换,将在下一轮 turn 生效",
+      "Mode 已切换，将在下一轮 turn 生效",
       "info",
       3000,
     );
@@ -193,7 +193,7 @@ async function onYoloConfirm() {
   const applied = await chatStore.confirmYolo();
   if (applied && chatStore.isCurrentSessionStreaming) {
     projectsStore.showToast(
-      "Mode 已切换,将在下一轮 turn 生效",
+      "Mode 已切换，将在下一轮 turn 生效",
       "info",
       3000,
     );
@@ -290,7 +290,7 @@ async function onYoloConfirm() {
   padding: 3px 8px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   cursor: pointer;
   font: inherit;
@@ -298,13 +298,13 @@ async function onYoloConfirm() {
   /* 3 档化 2026-06-13: trigger font bumped 11px → 13px so the
      mode label reads at the same scale as the textarea text
      (14px) instead of looking like a tiny status chip. */
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .mode-select__trigger:hover:not(:disabled) {
@@ -314,10 +314,10 @@ async function onYoloConfirm() {
 }
 
 /* 3 档 mode 用设计 token 区分颜色 (3 档化 2026-06-13):
-   - edit (默认, full power) → 蓝色 accent
+   - edit (默认， full power) → 蓝色 accent
    - plan (read-only, safe)   → 青色 tool-read
    - yolo (no-ask, 危险)      → 红色 tool-error
-   hover 态不变, 仍走 text-primary; mode color 主要用于 idle 态。 */
+   hover 态不变， 仍走 text-primary; mode color 主要用于 idle 态。 */
 .mode-select__trigger--edit {
   color: var(--color-accent);
 }
@@ -346,7 +346,7 @@ async function onYoloConfirm() {
   right: 0;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 220px;
   z-index: 100;
@@ -368,10 +368,10 @@ async function onYoloConfirm() {
   color: var(--color-text-primary);
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .mode-select__item:hover:not(:disabled) {
@@ -380,13 +380,13 @@ async function onYoloConfirm() {
 
 .mode-select__item--active {
   color: var(--color-accent);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .mode-select__item-name {
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 
 .mode-select__item-desc {
@@ -416,7 +416,7 @@ async function onYoloConfirm() {
    "Popover: fade + slide (direction matches position)"). */
 .mode-select-popover-enter-active,
 .mode-select-popover-leave-active {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
   transform-origin: bottom right;
 }
 

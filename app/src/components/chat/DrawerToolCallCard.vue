@@ -31,8 +31,8 @@
 //         handling)
 //
 // RULE-FrontSubagent-001 (2026-06-25): header markup + CSS 抽到共享
-//   `<ToolCallHeader>` —— redesign PR1-6 收尾后,原 PR4「主 panel
-//   ToolCallCard 本体 0 改动」约束解除,故可抽(推翻 chat.md 旧决策)。
+//   `<ToolCallHeader>` —— redesign PR1-6 收尾后，原 PR4「主 panel
+//   ToolCallCard 本体 0 改动」约束解除，故可抽(推翻 chat.md 旧决策)。
 //   本 wrapper 仍只复用 0-store 的纯展示子组件:ToolCallHeader(header)
 //   + ToolInputBody / ToolOutputBody(FT-F-001 PR1,body)。card 容器
 //   chrome(背景 / 边框 / 3px left bar / padding)保留在本组件 scoped CSS;
@@ -176,9 +176,9 @@ const statusIconName = computed<string>(() => {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-text-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-family: var(--font-mono);
   color: var(--color-text-primary);
   max-width: 100%;

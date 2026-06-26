@@ -131,12 +131,12 @@ const headerTitle = computed<string>(() => {
 
 const headerHint = computed<string>(() => {
   if (props.kind === "user") {
-    return "~/.config/everlasting/CLAUDE.md + AGENTS.md(全局,所有项目可见)";
+    return "~/.config/everlasting/CLAUDE.md + AGENTS.md(全局，所有项目可见)";
   }
   if (props.kind === "project") {
     return "项目根目录下的 CLAUDE.md + AGENTS.md(仅本项目可见)";
   }
-  return "用户 + 项目,共 4 个指令文件";
+  return "用户 + 项目，共 4 个指令文件";
 });
 </script>
 
@@ -241,14 +241,14 @@ const headerHint = computed<string>(() => {
 
 .memory-preview__title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
 .memory-preview__hint {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
@@ -264,7 +264,7 @@ const headerHint = computed<string>(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-muted);
 }
@@ -288,12 +288,12 @@ const headerHint = computed<string>(() => {
   padding: 4px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: inherit;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
 }
 
 .memory-preview__refresh:hover:not(:disabled) {
@@ -313,9 +313,9 @@ const headerHint = computed<string>(() => {
   padding: 8px 12px;
   background: color-mix(in srgb, var(--color-tool-error) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--color-tool-error);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .memory-preview__empty,
@@ -323,7 +323,7 @@ const headerHint = computed<string>(() => {
   padding: 24px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .memory-preview__list {
@@ -337,7 +337,7 @@ const headerHint = computed<string>(() => {
   padding-top: 8px;
   border-top: 1px solid var(--color-bg-border);
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .memory-preview__footer p {

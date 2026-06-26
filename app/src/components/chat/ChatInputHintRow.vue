@@ -154,7 +154,7 @@ defineProps<{
 .chat-input__hint {
   margin-top: 8px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   user-select: none;
   display: flex;
@@ -175,13 +175,13 @@ defineProps<{
   display: inline-flex;
   align-items: center;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   white-space: nowrap;
   cursor: help;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-muted);
-  transition: color 0.15s;
+  transition: color var(--duration-base) var(--ease-out);
   user-select: none;
 }
 
@@ -205,15 +205,15 @@ defineProps<{
 :deep(.chat-input__token-tooltip) {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   padding: 8px 10px;
   min-width: 180px;
   z-index: 3000;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-primary);
-  animation: chat-input-tooltip-enter 150ms ease-out;
+  animation: chat-input-tooltip-enter var(--duration-base) var(--ease-out);
 }
 
 :deep(.chat-input__token-tooltip-row) {

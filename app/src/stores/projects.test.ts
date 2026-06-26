@@ -184,7 +184,7 @@ describe("useProjectsStore — addProject (RULE-FrontProj-001)", () => {
     expect(calledCmds).not.toContain("unhide_project");
   });
 
-  it("dialog 失败 (invoke throws):toast 错误,不调 create_project,return null", async () => {
+  it("dialog 失败 (invoke throws):toast 错误，不调 create_project,return null", async () => {
     const store = useProjectsStore();
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_projects") return [];

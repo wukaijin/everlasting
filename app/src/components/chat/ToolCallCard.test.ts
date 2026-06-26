@@ -142,7 +142,7 @@ describe("ToolCallCard inline approval", () => {
   it("clicking 拒绝 fires respond(deny) with no reason", async () => {
     armPending();
     const w = mountCard();
-    // First --deny button is 拒绝, second is 拒绝并说明.
+    // First --deny button is 拒绝， second is 拒绝并说明.
     await w.findAll(".permission-ask-body__btn--deny")[0].trigger("click");
     await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("permission_response", {
@@ -368,7 +368,7 @@ describe("ToolCallCard dispatch_subagent branch", () => {
   });
 
   // FT-F-002 (2026-06-21): 1.5s retry polling exhausts without the
-  // cache warming → explicit "worker 未响应,点此重试" missed hint
+  // cache warming → explicit "worker 未响应，点此重试" missed hint
   // (was: silent fallback to the default visual). Every
   // fetchForSession returns empty so the loop never resolves.
   // Fake-timer note (memory: subagentdrawer-banner-test-gotchas):

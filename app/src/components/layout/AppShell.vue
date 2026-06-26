@@ -76,10 +76,10 @@ const showSidebar = computed<boolean>(
   left: 50%;
   transform: translateX(-50%);
   padding: 10px 18px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   cursor: pointer;
   max-width: 80vw;
@@ -104,7 +104,7 @@ const showSidebar = computed<boolean>(
 
 .toast-enter-active,
 .toast-leave-active {
-  transition: opacity 0.2s, transform 0.2s;
+  transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out);
 }
 
 .toast-enter-from,

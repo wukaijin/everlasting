@@ -17,7 +17,7 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
 <template>
   <div class="memory-tab">
     <p class="memory-tab__intro">
-      您的个人指令文件 — 在 session 启动时自动注入到对话上下文中(全局,所有项目可见)。
+      您的个人指令文件 — 在 session 启动时自动注入到对话上下文中(全局，所有项目可见)。
       点击展开预览;修改后 1 秒内自动重新加载。
     </p>
     <MemoryPreview kind="user" />
@@ -33,7 +33,7 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
 
 .memory-tab__intro {
   margin: 0 0 4px 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   line-height: 1.6;
 }
@@ -44,7 +44,7 @@ import MemoryPreview from "../memory/MemoryPreview.vue";
   border-radius: 3px;
   padding: 0 4px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-accent);
 }
 </style>

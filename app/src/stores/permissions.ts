@@ -108,7 +108,7 @@ export type PermissionDecision = "allow_once" | "allow_always" | "deny";
  *  timer (keyed by rid) — they no longer share a single slot. The
  *  backend has its own `tokio::time::sleep(ASK_TIMEOUT)` that
  *  auto-denies; we duplicate on the frontend so we can (a) surface a
- *  "已超时,自动拒绝" toast and (b) clear the local pending without
+ *  "已超时，自动拒绝" toast and (b) clear the local pending without
  *  waiting on the backend's resolution. */
 export const ASK_TIMEOUT_MS = 120_000;
 
@@ -151,7 +151,7 @@ export const RISK_META: Record<
     label: "极高",
     iconName: "shield-x",
     iconColor: "var(--color-tool-error)",
-    title: "此命令匹配硬拒绝规则,默认拒绝",
+    title: "此命令匹配硬拒绝规则，默认拒绝",
   },
 };
 
@@ -205,7 +205,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
   /** Optional toast surface — the store doesn't own the toast
    *  system (that lives in `useProjectsStore`), but we accept a
    *  callback at `start()` so the 120s-timeout path can show
-   *  "权限询问已超时,已自动拒绝". */
+   *  "权限询问已超时，已自动拒绝". */
   let showToast: ((msg: string, level: "info" | "warn" | "error") => void) | null =
     null;
 
@@ -231,7 +231,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
       void respond(rid, "deny").catch(() => {
         // Swallow — best-effort; the backend already auto-denied.
       });
-      showToast?.("权限询问已超时,已自动拒绝", "warn");
+      showToast?.("权限询问已超时，已自动拒绝", "warn");
     }, ASK_TIMEOUT_MS);
     timersByRid.set(rid, t);
   }

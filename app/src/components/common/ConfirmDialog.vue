@@ -129,7 +129,7 @@ watch(
 .confirm-modal {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   width: 100%;
   max-width: 460px;
   display: flex;
@@ -149,8 +149,8 @@ watch(
 
 .confirm-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   display: inline-flex;
   align-items: center;
@@ -167,7 +167,7 @@ watch(
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -180,7 +180,7 @@ watch(
 
 .confirm-modal__body {
   padding: 16px;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--color-text-primary);
 }
@@ -195,9 +195,9 @@ watch(
 
 .confirm-modal__btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid var(--color-bg-border);
 }
@@ -233,12 +233,12 @@ watch(
 
 .confirm-modal-enter-active,
 .confirm-modal-leave-active {
-  transition: opacity 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out);
 }
 
 .confirm-modal-enter-active .confirm-modal,
 .confirm-modal-leave-active .confirm-modal {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
 }
 
 .confirm-modal-enter-from,

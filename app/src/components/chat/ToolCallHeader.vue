@@ -143,7 +143,7 @@ const props = withDefaults(
 }
 
 .tool-call-header__name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -153,7 +153,7 @@ const props = withDefaults(
 
 .tool-call-header__path {
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
@@ -162,14 +162,14 @@ const props = withDefaults(
 
 .tool-call-header__suffix {
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 .tool-call-header__status {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
@@ -202,17 +202,17 @@ const props = withDefaults(
    .drawer-permission-ask-card--interactive .status 规则）。 */
 .tool-call-header--status-accent .tool-call-header__status {
   color: var(--color-accent);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .tool-call-header__duration {
   display: inline-flex;
   align-items: center;
   margin-left: 2px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-secondary);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   user-select: none;
 }
 

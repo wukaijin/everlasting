@@ -386,7 +386,7 @@ defineExpose({
   left: 0;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 320px;
   max-width: 420px;
@@ -418,7 +418,7 @@ defineExpose({
   color: var(--color-text-muted);
   font-size: 10px;
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -432,7 +432,7 @@ defineExpose({
   color: var(--color-accent);
   text-transform: none;
   letter-spacing: 0;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -443,7 +443,7 @@ defineExpose({
   padding: 12px 6px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .trigger-menu__list {
@@ -466,14 +466,14 @@ defineExpose({
   padding: 6px 8px;
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
-  transition: background 0.08s;
+  transition: background var(--duration-instant) var(--ease-out);
 }
 
 .trigger-menu__row:hover,
@@ -498,8 +498,8 @@ defineExpose({
 
 .trigger-menu__row-name {
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -547,7 +547,7 @@ defineExpose({
 .trigger-menu__row-source {
   font-family: var(--font-mono);
   font-size: 9px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 1px 5px;
@@ -603,10 +603,10 @@ defineExpose({
 
 /* Open/close animation. Upward popover → slides from translateY(4px)
    up into place, matching `ModeSelect` / `ModelSelect`. Enter
-   150ms ease-out, leave 100ms ease-in. */
+   var(--duration-base) var(--ease-out), leave var(--duration-fast) ease-in. */
 .trigger-menu-enter-active,
 .trigger-menu-leave-active {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
   transform-origin: bottom left;
 }
 

@@ -311,7 +311,7 @@ export type SessionMode = "edit" | "plan" | "yolo";
 
 /** Cycle order for `useKeyboard` Shift+Tab iteration. Matches
  *  Claude Code's `Shift+Tab` cycle convention: Edit → Plan →
- *  Yolo → Edit (forward). 3 档化 2026-06-13: Review 移除, Yolo
+ *  Yolo → Edit (forward). 3 档化 2026-06-13: Review 移除， Yolo
  *  紧跟 Plan 后面。 */
 export const MODE_CYCLE: SessionMode[] = ["edit", "plan", "yolo"];
 

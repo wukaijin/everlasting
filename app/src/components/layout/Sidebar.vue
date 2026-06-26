@@ -82,8 +82,8 @@ function onSettingsClick() {
 }
 
 .sidebar__title {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -92,7 +92,7 @@ function onSettingsClick() {
 .sidebar__add {
   width: 22px;
   height: 22px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: none;
   background: transparent;
   color: var(--color-text-muted);
@@ -102,7 +102,7 @@ function onSettingsClick() {
   justify-content: center;
   font-family: inherit;
   padding: 0;
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .sidebar__add:hover {
@@ -132,10 +132,10 @@ function onSettingsClick() {
   color: var(--color-text-muted);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 4px 6px;
   border-radius: 3px;
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .sidebar__settings:hover {
@@ -144,6 +144,6 @@ function onSettingsClick() {
 }
 
 .sidebar__settings-label {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 </style>

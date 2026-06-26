@@ -88,13 +88,13 @@ function selectDefault(modelId: string) {
 
 .default-tab__heading {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
 .default-tab__current {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
 }
 
@@ -106,7 +106,7 @@ function selectDefault(modelId: string) {
   padding: 24px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .default-tab__groups {
@@ -127,8 +127,8 @@ function selectDefault(modelId: string) {
   gap: 6px;
   padding: 4px 0;
   color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -146,9 +146,9 @@ function selectDefault(modelId: string) {
   padding: 8px 12px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out), background var(--duration-base) var(--ease-out);
 }
 
 .default-tab__option:hover {
@@ -176,7 +176,7 @@ function selectDefault(modelId: string) {
   justify-content: center;
   padding: 0;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out);
 }
 
 .default-tab__radio:hover {
@@ -204,13 +204,13 @@ function selectDefault(modelId: string) {
 }
 
 .default-tab__option-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   color: var(--color-text-primary);
 }
 
 .default-tab__option-id {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }

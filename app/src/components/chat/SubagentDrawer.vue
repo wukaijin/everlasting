@@ -79,7 +79,7 @@ const repoRoot = computed<string>(() => chatStore.currentCwd);
  *
  *  Cross-layer drift note (2026-06-20 check phase): the Rust
  *  `PermissionAskPayload` carries `#[serde(rename_all = "camelCase")]`
- *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`,拆分自 mod.rs,2026-06-23 拆为 8 模块,ask_path 落 `permissions/ask.rs`), so the
+ *  (see `app/src-tauri/src/agent/permissions/mod.rs:406`,拆分自 mod.rs,2026-06-23 拆为 8 模块，ask_path 落 `permissions/ask.rs`), so the
  *  stored `payload_json` actually has camelCase keys. We read BOTH
  *  spellings defensively (camelCase first per production reality,
  *  snake_case as fallback). */
@@ -686,7 +686,11 @@ function isPermissionAskLive(rid: string): boolean {
               />
 
               <div v-if="isEmpty" class="subagent-drawer__empty">
-                Worker is starting...
+                <div class="subagent-drawer__empty-icon" aria-hidden="true">
+                  <Icon name="loader" :size="20" />
+                </div>
+                <p class="subagent-drawer__empty-title">Worker 正在初始化</p>
+                <p class="subagent-drawer__empty-subtitle">通常 1-3 秒</p>
               </div>
               <template v-else>
                 <!-- Thinking segment (collapsed by default per PRD R16). -->
@@ -845,7 +849,7 @@ function isPermissionAskLive(rid: string): boolean {
 /* Slide-in animation */
 .subagent-drawer-enter-active,
 .subagent-drawer-leave-active {
-  transition: transform 0.18s ease-out, opacity 0.18s ease-out;
+  transition: transform var(--duration-slow) var(--ease-decelerate), opacity var(--duration-slow) var(--ease-decelerate);
 }
 .subagent-drawer-enter-from,
 .subagent-drawer-leave-to {
@@ -863,7 +867,7 @@ function isPermissionAskLive(rid: string): boolean {
   color: var(--color-accent);
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 .subagent-drawer__jump-latest:hover {
@@ -881,8 +885,8 @@ function isPermissionAskLive(rid: string): boolean {
   z-index: 1;
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--color-accent);
@@ -903,10 +907,53 @@ function isPermissionAskLive(rid: string): boolean {
 }
 
 .subagent-drawer__empty {
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-7) var(--space-5);
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 12px;
+  gap: var(--space-2);
+}
+
+/* PR-3c (2026-06-27): icon-led loader. The 32px container is
+   intentionally smaller than the chat-panel 64px — the drawer
+   is a transient surface, the worker is in flight, and the
+   user knows the run started (they just clicked the
+   dispatch_subagent card). The 1.2s linear rotation signals
+   "in progress" without the breathing/pulse pattern used by
+   the running tool cards. Collapses under prefers-reduced-motion
+   (PR-1 @media block at top of style.css handles global
+   animation-duration collapse, so the rotation stops). */
+.subagent-drawer__empty-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-elevated);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  margin-bottom: var(--space-1);
+  animation: subagent-drawer-empty-spin 1.2s linear infinite;
+}
+
+.subagent-drawer__empty-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.subagent-drawer__empty-subtitle {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+@keyframes subagent-drawer-empty-spin {
+  to { transform: rotate(360deg); }
 }
 
 .subagent-drawer__segments {
@@ -925,7 +972,7 @@ function isPermissionAskLive(rid: string): boolean {
 }
 
 .subagent-drawer__reply-markdown {
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.55;
   color: var(--color-text-primary);
   max-height: 320px;
@@ -942,7 +989,7 @@ function isPermissionAskLive(rid: string): boolean {
 
 .subagent-drawer__reply-markdown :deep(code) {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   background: var(--color-bg-elevated);
   padding: 1px 4px;
   border-radius: 3px;
@@ -951,12 +998,12 @@ function isPermissionAskLive(rid: string): boolean {
 .subagent-drawer__reply-markdown :deep(pre) {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   margin: 8px 0;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -973,7 +1020,7 @@ function isPermissionAskLive(rid: string): boolean {
   cursor: pointer;
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 2px 0;
 }
 
@@ -982,7 +1029,7 @@ function isPermissionAskLive(rid: string): boolean {
 }
 
 .subagent-drawer__reply-empty {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
   font-style: italic;
 }
@@ -996,12 +1043,12 @@ function isPermissionAskLive(rid: string): boolean {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--color-tool-shell) 10%, transparent);
   color: var(--color-tool-shell);
   font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   align-self: flex-start;
   margin-bottom: 6px;
 }

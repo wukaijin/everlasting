@@ -25,7 +25,7 @@
 // the body top — its visibility + click handler depend on the body's
 // `autoFollow` / `newCount` / `bodyEl` state, which the main drawer
 // orchestrates. Decoupling the header from those is the main point
-// of this split (A 方案, user-confirmed in the PRD ADR-lite section).
+// of this split (A 方案， user-confirmed in the PRD ADR-lite section).
 
 import { DialogClose } from "reka-ui";
 import Icon from "../Icon.vue";
@@ -156,14 +156,14 @@ defineProps<{
   padding: 2px 8px;
   border: 1px solid;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
 .subagent-drawer__name {
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -181,7 +181,7 @@ defineProps<{
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .subagent-drawer__close:hover {
   color: var(--color-text-primary);
@@ -193,10 +193,10 @@ defineProps<{
   align-items: flex-start;
   gap: 6px;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border-left: 3px solid currentColor;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   background: color-mix(in srgb, currentColor 8%, transparent);
   word-break: break-word;
@@ -215,7 +215,7 @@ defineProps<{
 .subagent-drawer__meta {
   display: flex;
   gap: 12px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
@@ -228,7 +228,7 @@ defineProps<{
 
 .subagent-drawer__summary {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   line-height: 1.5;
   max-height: 100px;

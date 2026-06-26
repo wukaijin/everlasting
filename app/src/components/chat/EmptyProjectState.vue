@@ -52,7 +52,7 @@ async function onLoadHidden() {
       </div>
       <h1 class="empty-state__title">还没有项目</h1>
       <p class="empty-state__hint">
-        添加一个项目目录,开始与 LLM 协作编码
+        添加一个项目目录，开始与 LLM 协作编码
       </p>
       <button class="empty-state__add" @click="onAdd">
         <Icon name="plus" :size="16" icon-class="empty-state__add-plus" />
@@ -79,14 +79,14 @@ async function onLoadHidden() {
                 <span
                   v-if="p.is_legacy"
                   class="hidden-projects__icon"
-                  title="旧数据,自动归入"
+                  title="旧数据，自动归入"
                 >
                   <Icon name="archive" :size="14" />
                 </span>
                 <span
                   v-else-if="!p.is_git_repo"
                   class="hidden-projects__icon hidden-projects__icon--warn"
-                  title="非 git 项目,无法附加 worktree"
+                  title="非 git 项目，无法附加 worktree"
                 >
                   <Icon name="warn" :size="14" />
                 </span>
@@ -142,7 +142,7 @@ async function onLoadHidden() {
 .empty-state__icon {
   width: 56px;
   height: 56px;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   display: inline-flex;
@@ -156,15 +156,15 @@ async function onLoadHidden() {
 }
 
 .empty-state__title {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   margin: 0 0 6px;
   letter-spacing: -0.01em;
 }
 
 .empty-state__hint {
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text-muted);
   margin: 0 0 24px;
   line-height: 1.5;
@@ -176,13 +176,13 @@ async function onLoadHidden() {
   gap: 8px;
   padding: 11px 22px;
   border: 1px solid var(--color-accent);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--color-accent);
   color: #ffffff;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  transition: background var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
   font-family: inherit;
   box-shadow: 0 1px 0 color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
@@ -207,7 +207,7 @@ async function onLoadHidden() {
   background: transparent;
   border: none;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
   text-decoration: underline;
   font-family: inherit;
@@ -238,20 +238,20 @@ async function onLoadHidden() {
 }
 
 .hidden-projects__title {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .hidden-projects__count {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
   background: var(--color-bg-elevated);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .hidden-projects__list {
@@ -264,18 +264,24 @@ async function onLoadHidden() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 10px 12px;
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--color-bg-surface);
-  margin-bottom: 6px;
-  font-size: 13px;
-  transition: border-color 0.1s;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-base);
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
 }
 
 .hidden-projects__item:hover {
   border-color: var(--color-accent-muted);
+  background: var(--color-bg-elevated);
+  /* PR-3c (2026-06-27): subtle 2px right-shift on hover signals
+     "可点" without overpowering the existing border/bg change. */
+  transform: translateX(2px);
 }
 
 .hidden-projects__meta {
@@ -306,14 +312,14 @@ async function onLoadHidden() {
 
 .hidden-projects__name {
   color: var(--color-text-primary);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .hidden-projects__path {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -328,11 +334,11 @@ async function onLoadHidden() {
   padding: 5px 12px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-accent);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   font-family: inherit;
 }
 

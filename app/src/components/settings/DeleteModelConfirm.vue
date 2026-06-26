@@ -60,13 +60,13 @@ const emit = defineEmits<{
     align-items: center;
     justify-content: center;
     z-index: 10;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .delete-model-confirm__card {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 16px;
     max-width: 360px;
     display: flex;
@@ -76,7 +76,7 @@ const emit = defineEmits<{
 
 .delete-model-confirm__text {
     margin: 0;
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--color-text-primary);
     line-height: 1.5;
 }
@@ -93,15 +93,15 @@ const emit = defineEmits<{
     gap: 6px;
     padding: 5px 12px;
     border: 1px solid var(--color-bg-border);
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     cursor: pointer;
     background: transparent;
     color: var(--color-text-secondary);
     transition:
-        background 0.15s,
-        color 0.15s;
+        background var(--duration-base) var(--ease-out),
+        color var(--duration-base) var(--ease-out);
 }
 
 .delete-model-confirm__btn--danger {

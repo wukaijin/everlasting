@@ -352,7 +352,7 @@ const workerWaiting = ref(false);
  *  until the user clicks again (retry clears it at the top of
  *  `openSubagentDrawer`) or the component unmounts (session switch
  *  rebuilds the card → resets to default). Drives the "⚠ worker
- *  未响应,点此重试" inline hint so the silent fallback to the
+ *  未响应，点此重试" inline hint so the silent fallback to the
  *  default visual becomes an explicit "that didn't work" signal. */
 const workerMissed = ref(false);
 
@@ -589,7 +589,7 @@ watch(
       <p
         v-else-if="workerMissed"
         class="tool-card__subagent-summary tool-card__subagent-summary--missed"
-      ><Icon name="warn" :size="12" /> worker 未响应,点此重试</p>
+      ><Icon name="warn" :size="12" /> worker 未响应，点此重试</p>
       <p
         v-else
         class="tool-card__subagent-summary tool-card__subagent-summary--muted"
@@ -649,9 +649,9 @@ watch(
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-text-muted);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-family: var(--font-mono);
   color: var(--color-text-primary);
   max-width: 100%;
@@ -682,9 +682,9 @@ watch(
   background: var(--color-accent-muted);
   color: var(--color-accent);
   border: 1px solid var(--color-accent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 
@@ -698,7 +698,7 @@ watch(
   padding: 8px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   max-height: 480px;
   overflow-y: auto;
 }
@@ -709,7 +709,7 @@ watch(
   padding: 12px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-sans);
 }
 
@@ -723,7 +723,7 @@ watch(
    short summary; clicking anywhere on the card opens the drawer. */
 .tool-card--subagent {
   cursor: pointer;
-  transition: filter 0.1s, border-color 0.1s;
+  transition: filter var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 .tool-card--subagent:hover {
   filter: brightness(1.04);
@@ -765,21 +765,21 @@ watch(
 
 .tool-card__subagent-name {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
 .tool-card__subagent-status {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
 }
 
 .tool-card__subagent-summary {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -814,7 +814,7 @@ watch(
 .tool-card__subagent-tokens {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   padding: 1px 6px;
   border-radius: 10px;
@@ -839,7 +839,7 @@ watch(
    chip + the running border-left convention. Paused under
    `prefers-reduced-motion`. */
 .tool-card--subagent.tool-card--running {
-  animation: tool-card-subagent-breathe 1.8s ease-in-out infinite;
+  animation: tool-card-subagent-breathe var(--duration-pulse) ease-in-out infinite;
 }
 
 @keyframes tool-card-subagent-breathe {

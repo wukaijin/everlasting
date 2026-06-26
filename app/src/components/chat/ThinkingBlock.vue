@@ -100,13 +100,13 @@ const headerLabel = computed(() => {
   gap: 6px;
   padding: 5px 12px;
   background: var(--color-bg-elevated);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   cursor: pointer;
   user-select: none;
   list-style: none;
   font-family: var(--font-mono);
-  transition: background 0.1s;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 .thinking__summary::-webkit-details-marker {
@@ -136,7 +136,7 @@ const headerLabel = computed(() => {
 .thinking__streaming {
   margin-left: 2px;
   color: var(--color-accent);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 /* Expanded body: monospace, padded, capped height with thin

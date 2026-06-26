@@ -9,7 +9,7 @@
 //   - Show a red "●" on a tab while its session is streaming.
 // Per Q-resolutions (Q3 dispatch):
 //   - "⚠️" 12px icon for non-git projects (tooltip: "非 git 项目 — session 可创建但无法附加 worktree").
-//   - "📦" 12px icon for legacy/auto-default projects (tooltip: "旧数据,自动归入").
+//   - "📦" 12px icon for legacy/auto-default projects (tooltip: "旧数据，自动归入").
 //   - "×" close button calls `hide_project` (data preserved).
 //   - Selected tab gets a 2px Prussian blue underline + muted bg.
 //
@@ -58,9 +58,9 @@ function tabTooltip(p: {
   is_legacy: boolean;
   is_git_repo: boolean;
 }): string {
-  if (p.is_legacy) return `${p.path} (旧数据,自动归入)`;
+  if (p.is_legacy) return `${p.path} (旧数据，自动归入)`;
   if (!p.is_git_repo) {
-    return `${p.path} (非 git 项目 — session 可创建但无法附加 worktree)`;
+    return `${p.path} (非 git 项目 - session 可创建但无法附加 worktree)`;
   }
   return p.path;
 }
@@ -84,14 +84,14 @@ function tabTooltip(p: {
         <span
           v-if="!p.is_git_repo && !p.is_legacy"
           class="tab__icon tab__icon--warn"
-          title="非 git 项目,无法附加 worktree"
+          title="非 git 项目，无法附加 worktree"
         >
           <Icon name="warn" :size="12" />
         </span>
         <span
           v-else-if="p.is_legacy"
           class="tab__icon tab__icon--legacy"
-          title="旧数据,自动归入"
+          title="旧数据，自动归入"
         >
           <Icon name="archive" :size="12" />
         </span>

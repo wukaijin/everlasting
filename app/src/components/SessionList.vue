@@ -68,7 +68,7 @@ const hiddenCount = computed<number>(() => {
 
 function projectNameFor(s: SessionSummary): string {
   const p = projectsStore.projectById(s.project_id);
-  return p?.name ?? "—";
+  return p?.name ?? "无标题";
 }
 
 function onClick(id: string) {
@@ -225,7 +225,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
           <span
             v-if="permStore.hasPending(s.id)"
             class="session-item__pending-approval"
-            title="有待审批的工具调用 — 切到此会话处理"
+            title="有待审批的工具调用，切到此会话处理"
           >
             <Icon name="shield-check" :size="12" />
           </span>
@@ -249,7 +249,9 @@ function cardStyle(s: SessionSummary): Record<string, string> {
       </button>
     </li>
     <li v-if="store.sessions.length === 0" class="session-empty">
-      还没有对话,点上方 + 开始
+      <Icon name="thinking" :size="20" />
+      <span class="session-empty__title">还没有对话</span>
+      <span class="session-empty__hint">点上方 + 开始</span>
     </li>
     <li v-else-if="hiddenCount > 0" class="session-more">
       <button class="session-more__btn" @click="expanded = true">
@@ -330,29 +332,39 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   gap: 2px;
 }
 
+/* PR-3b (2026-06-27): selected-state visual hierarchy.
+   Four states with clear delta:
+     default   → transparent bg, 2px transparent border-left
+     hover     → 6% primary wash + 2px transparent border-left
+     selected  → 12% accent wash + 2px accent border-left
+     selected:hover → 16% accent wash (tactile feedback)
+   The wash concentration (6% → 12% → 16%) gives the user a clean
+   read of "this row is interactive" → "this row is the current
+   session" → "this row is being pressed". */
 .session-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background-color var(--duration-fast) var(--ease-out),
+              border-left-color var(--duration-fast) var(--ease-out);
   border-left: 2px solid transparent;
   min-width: 0;
 }
 
 .session-item:hover {
-  background: var(--color-bg-elevated);
+  background: var(--color-bg-hover);
 }
 
 .session-item--active {
-  background: var(--color-accent-muted);
+  background: var(--color-bg-selected);
   border-left-color: var(--color-accent);
 }
 
 .session-item--active:hover {
-  background: var(--color-accent-muted);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 .session-item__main {
@@ -370,8 +382,8 @@ function cardStyle(s: SessionSummary): Record<string, string> {
 }
 
 .session-item__title {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -383,8 +395,8 @@ function cardStyle(s: SessionSummary): Record<string, string> {
 .session-item__edit-input {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   color: var(--color-text-primary);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-accent);
@@ -398,7 +410,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   min-width: 0;
   overflow: hidden;
@@ -408,7 +420,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .session-item__sep {
@@ -466,7 +478,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   width: 20px;
   height: 20px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-muted);
   display: inline-flex;
@@ -474,7 +486,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   justify-content: center;
   cursor: pointer;
   opacity: 0;
-  transition: all 0.1s;
+  transition: all var(--duration-fast) var(--ease-out);
   padding: 0;
   font-family: inherit;
 }
@@ -490,10 +502,31 @@ function cardStyle(s: SessionSummary): Record<string, string> {
 }
 
 .session-empty {
-  padding: 16px 12px;
-  font-size: 12px;
-  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-5) var(--space-3);
   text-align: center;
+  color: var(--color-text-muted);
+  list-style: none;
+}
+
+.session-empty > .icon {
+  color: var(--color-accent);
+  margin-bottom: var(--space-1);
+}
+
+.session-empty__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.session-empty__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
 }
 
 .session-more {
@@ -505,12 +538,12 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   width: 100%;
   background: transparent;
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 6px 8px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   font-family: inherit;
 }
 
@@ -529,7 +562,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
 .ctx-menu {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px;
   min-width: 140px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -549,9 +582,9 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   align-items: center;
   width: 100%;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: none;
   background: transparent;
@@ -586,7 +619,7 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
-  transition: border-color 0.1s, transform 0.1s;
+  transition: border-color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
 }
 
 .palette-dot:hover {

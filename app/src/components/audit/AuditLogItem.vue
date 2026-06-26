@@ -275,7 +275,7 @@ const isCritical = computed<boolean>(() => {
   border-bottom: 1px solid var(--color-bg-border);
   background: var(--color-bg-surface);
   border-left: 3px solid transparent;
-  transition: background 0.1s;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
 .audit-item:hover {
@@ -311,36 +311,36 @@ const isCritical = computed<boolean>(() => {
 
 .audit-item__time {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
 .audit-item__kind {
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid;
   font-family: var(--font-sans);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .audit-item__tool {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-primary);
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 
 .audit-item__input {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   line-height: 1.4;
   overflow: hidden;
@@ -358,15 +358,15 @@ const isCritical = computed<boolean>(() => {
 
 .audit-item__duration {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 
 .audit-item__exit {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-bg-border);
   background: var(--color-bg-app);
   color: var(--color-text-secondary);
@@ -383,7 +383,7 @@ const isCritical = computed<boolean>(() => {
 }
 
 .audit-item__reason {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-tool-error);
   line-height: 1.4;
   word-break: break-word;
@@ -391,18 +391,18 @@ const isCritical = computed<boolean>(() => {
 
 .audit-item__mode {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-tool-thinking);
 }
 
 .audit-item__raw {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
   padding: 4px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   word-break: break-all;
   line-height: 1.4;
 }

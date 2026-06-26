@@ -70,11 +70,11 @@ const open = defineModel<boolean>("open", { required: true });
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: settings-modal-fade 150ms ease-out;
+  animation: settings-modal-fade var(--duration-base) var(--ease-out);
 }
 
 .settings-modal__overlay[data-state="closed"] {
-  animation: settings-modal-fade-out 100ms ease-in forwards;
+  animation: settings-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .settings-modal {
@@ -87,7 +87,7 @@ const open = defineModel<boolean>("open", { required: true });
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -95,11 +95,11 @@ const open = defineModel<boolean>("open", { required: true });
   z-index: 2001;
   /* reka-ui DialogContent sets outline on focus; suppress for our design */
   outline: none;
-  animation: settings-modal-zoom 150ms ease-out;
+  animation: settings-modal-zoom var(--duration-base) var(--ease-out);
 }
 
 .settings-modal[data-state="closed"] {
-  animation: settings-modal-zoom-out 100ms ease-in forwards;
+  animation: settings-modal-zoom-out var(--duration-fast) ease-in forwards;
 }
 
 @keyframes settings-modal-fade {
@@ -134,8 +134,8 @@ const open = defineModel<boolean>("open", { required: true });
 
 .settings-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -145,7 +145,7 @@ const open = defineModel<boolean>("open", { required: true });
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -174,14 +174,14 @@ const open = defineModel<boolean>("open", { required: true });
 
 .settings-modal__tab {
   padding: 8px 16px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   color: var(--color-text-muted);
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color var(--duration-base) var(--ease-out), border-color var(--duration-base) var(--ease-out);
 }
 
 .settings-modal__tab:hover {

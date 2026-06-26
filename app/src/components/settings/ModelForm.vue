@@ -244,13 +244,13 @@ const emit = defineEmits<{
     padding: 16px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .model-form__title {
     margin: 0;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--color-text-primary);
 }
 
@@ -278,8 +278,8 @@ const emit = defineEmits<{
 }
 
 .model-form__label {
-    font-size: 11px;
-    font-weight: 500;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
     color: var(--color-text-secondary);
 }
 
@@ -287,9 +287,9 @@ const emit = defineEmits<{
     padding: 6px 10px;
     background: var(--color-bg-app);
     border: 1px solid var(--color-bg-border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-primary);
-    font-size: 13px;
+    font-size: var(--text-base);
     width: 100%;
     box-sizing: border-box;
 }
@@ -310,8 +310,8 @@ const emit = defineEmits<{
     justify-content: center;
     cursor: pointer;
     transition:
-        border-color 0.15s,
-        background 0.15s;
+        border-color var(--duration-base) var(--ease-out),
+        background var(--duration-base) var(--ease-out);
 }
 
 .model-form__checkbox:hover {
@@ -341,14 +341,14 @@ const emit = defineEmits<{
     padding: 6px 10px;
     background: var(--color-bg-app);
     border: 1px solid var(--color-bg-border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-primary);
-    font-size: 13px;
+    font-size: var(--text-base);
     font-family: inherit;
     width: 100%;
     box-sizing: border-box;
     cursor: pointer;
-    transition: border-color 0.15s;
+    transition: border-color var(--duration-base) var(--ease-out);
 }
 
 .model-form__trigger:hover {
@@ -373,7 +373,7 @@ const emit = defineEmits<{
     position: fixed;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     min-width: var(--reka-select-trigger-width, 240px);
     width: var(--reka-select-trigger-width);
@@ -389,9 +389,9 @@ const emit = defineEmits<{
     display: flex;
     align-items: center;
     padding: 6px 10px;
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--color-text-primary);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     user-select: none;
     outline: none;
@@ -418,15 +418,15 @@ const emit = defineEmits<{
     gap: 6px;
     padding: 5px 12px;
     border: 1px solid var(--color-bg-border);
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     cursor: pointer;
     background: transparent;
     color: var(--color-text-secondary);
     transition:
-        background 0.15s,
-        color 0.15s;
+        background var(--duration-base) var(--ease-out),
+        color var(--duration-base) var(--ease-out);
 }
 
 .model-form__btn:disabled {

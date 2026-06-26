@@ -630,9 +630,9 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   gap: 8px;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   padding: 6px 6px 6px 14px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
 }
 
 .chat-input__row:focus-within {
@@ -661,7 +661,7 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   background: transparent;
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-md);
   line-height: 1.5;
   max-height: 200px;
 }
@@ -708,17 +708,17 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
    token for a one-off use"). */
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-command) {
   color: var(--color-accent);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-file) {
   color: var(--color-tool-read);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-skill) {
   color: var(--color-tool-thinking);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 /* Shared shape for both the Send and Stop action buttons. PR5
@@ -739,7 +739,7 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   cursor: pointer;
   font-family: inherit;
   padding: 0;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background var(--duration-base) var(--ease-out), opacity var(--duration-base) var(--ease-out);
 }
 
 .chat-input__send:hover:not(:disabled) {
@@ -799,7 +799,7 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
 
 .chat-input__file-path {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;

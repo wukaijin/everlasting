@@ -759,7 +759,7 @@ describe("useTranscriptPairing — composable 封装 pending Map (RULE-FrontSuba
 
   it("实例隔离: 两实例 first-seen Map 独立 (a.reset 不影响 b)", () => {
     // 注意 pairSections 的 pending 是每次调用 local 重建 —— 跨调用持久的
-    // 是 pendingFirstSeenAt 里的 first-seen 时间戳, 不是"记住消失的 call"。
+    // 是 pendingFirstSeenAt 里的 first-seen 时间戳， 不是"记住消失的 call"。
     // 故每次调用都要带 ToolCall section 才能 flush 出 pending_call。
     const a = useTranscriptPairing();
     const b = useTranscriptPairing();

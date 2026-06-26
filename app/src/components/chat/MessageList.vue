@@ -260,7 +260,7 @@ onUnmounted(() => {
   color: var(--color-text-secondary);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-  transition: background 0.12s, color 0.12s, border-color 0.12s, transform 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
 }
 
 .scroll-to-bottom:hover {

@@ -184,7 +184,7 @@ const finalChipText = computed<string>(() => {
 .drawer-section {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-bottom: 8px;
   overflow: hidden;
 }
@@ -200,7 +200,7 @@ const finalChipText = computed<string>(() => {
   cursor: pointer;
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
   text-align: left;
 }
@@ -212,7 +212,7 @@ const finalChipText = computed<string>(() => {
 .drawer-section__chevron {
   display: inline-flex;
   align-items: center;
-  transition: transform 0.15s ease;
+  transition: transform var(--duration-base) var(--ease-out);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
@@ -231,7 +231,7 @@ const finalChipText = computed<string>(() => {
 }
 
 .drawer-section__label {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   flex: 1;
   min-width: 0;
@@ -239,7 +239,7 @@ const finalChipText = computed<string>(() => {
 
 .drawer-section__count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
@@ -255,8 +255,8 @@ const finalChipText = computed<string>(() => {
   background: color-mix(in srgb, var(--color-tool-shell) 18%, transparent);
   color: var(--color-tool-shell);
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   flex-shrink: 0;
 }
 
@@ -289,8 +289,8 @@ const finalChipText = computed<string>(() => {
   background: color-mix(in srgb, var(--color-tool-write) 18%, transparent);
   color: var(--color-tool-write);
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   flex-shrink: 0;
 }
 

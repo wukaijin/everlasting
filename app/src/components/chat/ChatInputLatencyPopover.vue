@@ -207,17 +207,17 @@ const averageLabel = computed(() =>
   gap: 4px;
   padding: 2px 8px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  font-size: var(--text-xs);
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .chat-input__latency-chip:hover {
@@ -238,7 +238,7 @@ const averageLabel = computed(() =>
 
 .chat-input__latency-value {
   color: var(--color-text-primary);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 /* Popover floats above the chip (chip sits at the bottom of the
@@ -252,7 +252,7 @@ const averageLabel = computed(() =>
   left: 0;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 220px;
   max-width: 280px;
@@ -262,7 +262,7 @@ const averageLabel = computed(() =>
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-primary);
   font-family: var(--font-mono);
 }
@@ -272,7 +272,7 @@ const averageLabel = computed(() =>
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
@@ -298,7 +298,7 @@ const averageLabel = computed(() =>
 
 .chat-input__latency-popover-strong {
   color: var(--color-text-primary);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .chat-input__latency-popover-list {
@@ -326,7 +326,7 @@ const averageLabel = computed(() =>
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .chat-input__latency-popover-turn-detail {
@@ -348,7 +348,7 @@ const averageLabel = computed(() =>
    into place. Exit reverses. */
 .chat-input-latency-popover-enter-active,
 .chat-input-latency-popover-leave-active {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
   transform-origin: bottom left;
 }
 

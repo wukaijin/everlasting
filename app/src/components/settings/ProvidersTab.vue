@@ -150,7 +150,7 @@ async function confirmDelete() {
   }
 }
 
-/** RULE-D-001: 前端只知 key 是否设置 (hasKey), 不持有明文, 故无法 mask
+/** RULE-D-001: 前端只知 key 是否设置 (hasKey), 不持有明文， 故无法 mask
  *  明文 — 显示加密状态. */
 function keyStatusLabel(hasKey: boolean): string {
   return hasKey ? "已加密保存" : "未设置";
@@ -281,7 +281,7 @@ function protocolBadgeClass(protocol: string): string {
             v-model="form.apiKey"
             :type="showApiKey ? 'text' : 'password'"
             class="providers-tab__input"
-            :placeholder="mode === 'edit' ? '留空保持不变, 输入新值则覆盖' : 'sk-...'"
+            :placeholder="mode === 'edit' ? '留空保持不变， 输入新值则覆盖' : 'sk-...'"
           />
           <button
             type="button"
@@ -357,8 +357,8 @@ function protocolBadgeClass(protocol: string): string {
 
 .providers-tab__heading {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -376,7 +376,7 @@ function protocolBadgeClass(protocol: string): string {
   padding: 8px 12px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .providers-tab__row-info {
@@ -388,8 +388,8 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
   color: var(--color-text-primary);
 }
 
@@ -398,7 +398,7 @@ function protocolBadgeClass(protocol: string): string {
   padding: 1px 6px;
   border-radius: 3px;
   font-family: var(--font-mono);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .providers-tab__badge--anthropic {
@@ -412,7 +412,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__url {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -421,7 +421,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__key-hint {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   display: inline-flex;
   align-items: center;
@@ -439,7 +439,7 @@ function protocolBadgeClass(protocol: string): string {
   padding: 24px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* --- Form --- */
@@ -451,13 +451,13 @@ function protocolBadgeClass(protocol: string): string {
   padding: 16px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .providers-tab__form-title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -468,8 +468,8 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__label {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   color: var(--color-text-secondary);
 }
 
@@ -477,9 +477,9 @@ function protocolBadgeClass(protocol: string): string {
   padding: 6px 10px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   width: 100%;
   box-sizing: border-box;
 }
@@ -503,14 +503,14 @@ function protocolBadgeClass(protocol: string): string {
   padding: 6px 10px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-family: inherit;
   width: 100%;
   box-sizing: border-box;
   cursor: pointer;
-  transition: border-color 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out);
 }
 
 .providers-tab__trigger:hover {
@@ -531,7 +531,7 @@ function protocolBadgeClass(protocol: string): string {
   position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: var(--reka-select-trigger-width, 240px);
   width: var(--reka-select-trigger-width);
@@ -547,9 +547,9 @@ function protocolBadgeClass(protocol: string): string {
   display: flex;
   align-items: center;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
   outline: none;
@@ -575,7 +575,7 @@ function protocolBadgeClass(protocol: string): string {
 }
 
 .providers-tab__test-result {
-  font-size: 12px;
+  font-size: var(--text-sm);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -609,13 +609,13 @@ function protocolBadgeClass(protocol: string): string {
   gap: 6px;
   padding: 5px 12px;
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   background: transparent;
   color: var(--color-text-secondary);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--duration-base) var(--ease-out), color var(--duration-base) var(--ease-out);
 }
 
 .providers-tab__btn:disabled {
@@ -672,13 +672,13 @@ function protocolBadgeClass(protocol: string): string {
   align-items: center;
   justify-content: center;
   z-index: 10;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .providers-tab__confirm {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 16px;
   max-width: 360px;
   display: flex;
@@ -688,7 +688,7 @@ function protocolBadgeClass(protocol: string): string {
 
 .providers-tab__confirm-text {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text-primary);
   line-height: 1.5;
 }

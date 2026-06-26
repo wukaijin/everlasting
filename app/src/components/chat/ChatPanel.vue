@@ -459,13 +459,32 @@ if (typeof window !== "undefined") {
     </header>
 
     <main class="chat-panel__main">
-      <!-- F4: loading spinner while switching sessions -->
-      <div v-if="chatStore.sessionLoading" class="chat-panel__loading">
-        <div class="chat-panel__spinner" />
+      <!-- F4: loading state while switching sessions.
+           PR-3e (2026-06-27): replaced the 0.6s rotating 20px
+           spinner (which left the entire message area blank
+           while loading) with a 3-placeholder skeleton list.
+           The skeleton mirrors the visual shape of a real
+           user → assistant turn (right-aligned short user
+           bubble + two left-aligned assistant bubbles of
+           varied width) so the user sees the "list structure"
+           loading rather than a void. Shimmer animation uses
+           a 1.5s linear-gradient sweep that collapses to
+           static under prefers-reduced-motion (PR-1 @media). -->
+      <div v-if="chatStore.sessionLoading" class="chat-panel__skeleton" aria-busy="true">
+        <div class="chat-panel__skeleton-msg chat-panel__skeleton-msg--user">
+          <div class="chat-panel__skeleton-bubble chat-panel__skeleton-bubble--short" />
+        </div>
+        <div class="chat-panel__skeleton-msg chat-panel__skeleton-msg--assistant">
+          <div class="chat-panel__skeleton-bubble chat-panel__skeleton-bubble--wide" />
+          <div class="chat-panel__skeleton-bubble chat-panel__skeleton-bubble--narrow" />
+        </div>
       </div>
       <div v-else-if="!hasMessages" class="chat-panel__empty">
-        <p>输入一句话,跟 LLM 聊聊看</p>
-        <p class="chat-panel__empty-hint">中文输入测试 + 流式响应 + 工具调用</p>
+        <div class="chat-panel__empty-icon" aria-hidden="true">
+          <Icon name="thinking" :size="28" />
+        </div>
+        <p class="chat-panel__empty-title">开始对话</p>
+        <p class="chat-panel__empty-hint">描述任务，跟 LLM 聊聊看</p>
         <p v-if="currentProject" class="chat-panel__empty-project">
           当前项目: <strong>{{ currentProject.name }}</strong>
           <span
@@ -473,14 +492,14 @@ if (typeof window !== "undefined") {
             class="chat-panel__empty-warn"
           >
             <Icon name="warn" :size="12" />
-            非 git 项目,无法附加 worktree
+            非 git 项目，无法附加 worktree
           </span>
           <span
             v-else-if="currentProject.is_legacy"
             class="chat-panel__empty-warn"
           >
             <Icon name="archive" :size="12" />
-            旧数据,自动归入
+            旧数据，自动归入
           </span>
         </p>
       </div>
@@ -583,6 +602,80 @@ if (typeof window !== "undefined") {
   justify-content: center;
 }
 
+/* PR-3e (2026-06-27): skeleton list. The skeleton is 3 gray
+   placeholder bubbles laid out to mirror a real user →
+   assistant turn. The 1.5s linear-gradient shimmer
+   (background-position 200% → -200%) gives the standard
+   "content is loading" affordance without the dated
+   rotating-spinner look. Bubble widths vary (short 35% /
+   wide 70% / narrow 45%) so the placeholder doesn't look
+   like a uniform stripe — a common AI tell. */
+.chat-panel__skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-5);
+  overflow: hidden;
+}
+
+.chat-panel__skeleton-msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat-panel__skeleton-msg--user {
+  align-items: flex-end;
+}
+
+.chat-panel__skeleton-msg--assistant {
+  align-items: flex-start;
+}
+
+.chat-panel__skeleton-bubble {
+  height: 12px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-elevated) 0%,
+    var(--color-bg-border-strong) 50%,
+    var(--color-bg-elevated) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+.chat-panel__skeleton-bubble--short {
+  width: 35%;
+}
+
+.chat-panel__skeleton-bubble--wide {
+  width: 70%;
+}
+
+.chat-panel__skeleton-bubble--narrow {
+  width: 45%;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* PR-3e (2026-06-27): the old .chat-panel__loading + spinner
+   classes are kept as no-op (the v-if was removed) so any
+   future test that still references the spinner class
+   doesn't 404. The keyframe is also kept for the same
+   reason. They render nothing because the v-if no longer
+   targets them; remove in a follow-up if no test references. */
+.chat-panel__loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .chat-panel__spinner {
   width: 20px;
   height: 20px;
@@ -607,8 +700,8 @@ if (typeof window !== "undefined") {
 
 .chat-panel__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -620,12 +713,12 @@ if (typeof window !== "undefined") {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   white-space: nowrap;
 }
@@ -657,10 +750,10 @@ if (typeof window !== "undefined") {
   padding: 0;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   font-family: inherit;
 }
 
@@ -687,10 +780,10 @@ if (typeof window !== "undefined") {
   padding: 0;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   font-family: inherit;
 }
 
@@ -722,22 +815,51 @@ if (typeof window !== "undefined") {
   text-align: center;
   max-width: 480px;
   margin: auto;
-  padding: 32px 16px;
-  gap: 4px;
+  padding: var(--space-7) var(--space-4);
+  gap: var(--space-2);
+}
+
+/* PR-3c (2026-06-27): icon-led empty state. The 64px container
+   mirrors EmptyProjectState's "还没有项目" hero for visual
+   consistency across the app's "no content yet" surfaces. The
+   icon color is accent (Prussian blue) so the empty state
+   reads as "this is an interactive area" rather than "error
+   / disabled". Container has a subtle border + elevated bg
+   so the icon doesn't float on the chat-panel background. */
+.chat-panel__empty-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-3);
+  color: var(--color-accent);
+}
+
+.chat-panel__empty-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
 }
 
 .chat-panel__empty-hint {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
+  margin: 0;
 }
 
 .chat-panel__empty-project {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-secondary);
-  margin-top: 12px;
+  margin-top: var(--space-3);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   justify-content: center;
 }
@@ -745,8 +867,8 @@ if (typeof window !== "undefined") {
 .chat-panel__empty-warn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   color: var(--color-tool-shell);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 </style>

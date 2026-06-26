@@ -181,7 +181,7 @@ const latencyRows = computed<Array<{ label: string; value: string }>>(() => {
   gap: 6px;
   margin-top: 4px;
   padding: 0 14px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-tool-error);
 }
 
@@ -210,12 +210,12 @@ const latencyRows = computed<Array<{ label: string; value: string }>>(() => {
   align-self: flex-end;
   margin-top: 4px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
   cursor: help;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   user-select: none;
 }
 
@@ -230,15 +230,15 @@ const latencyRows = computed<Array<{ label: string; value: string }>>(() => {
 :deep(.msg__latency-tooltip) {
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   padding: 6px 10px;
   min-width: 140px;
   z-index: 3000;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-primary);
-  animation: msg-latency-tooltip-enter 150ms ease-out;
+  animation: msg-latency-tooltip-enter var(--duration-base) var(--ease-out);
 }
 
 :deep(.msg__latency-tooltip-row) {

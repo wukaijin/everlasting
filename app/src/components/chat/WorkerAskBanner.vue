@@ -97,10 +97,10 @@ function openMostRecent(): void {
   background: color-mix(in srgb, var(--color-tool-shell) 12%, transparent);
   color: var(--color-tool-shell);
   font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: filter 0.1s, background 0.1s;
+  transition: filter var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
   /* Non-blocking: doesn't steal focus from the chat input. */
   user-select: none;
 }
@@ -111,7 +111,7 @@ function openMostRecent(): void {
 }
 
 .worker-ask-banner__icon {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
@@ -121,7 +121,7 @@ function openMostRecent(): void {
 }
 
 .worker-ask-banner__action {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   opacity: 0.85;
 }
 </style>

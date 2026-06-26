@@ -247,7 +247,7 @@ function onDelete() {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    font-size: var(--text-xs);
     background: var(--color-accent-muted);
     color: var(--color-accent);
     border: 1px solid var(--color-accent);
@@ -259,7 +259,7 @@ function onDelete() {
     white-space: nowrap;
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--text-xs);
 }
 
 /* When the chevron toggle is absent (state === 'none'), the main
@@ -286,7 +286,7 @@ function onDelete() {
     border-bottom-right-radius: 4px;
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--text-xs);
     padding: 2px 4px;
     display: inline-flex;
     align-items: center;
@@ -304,7 +304,7 @@ function onDelete() {
     right: 0;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     min-width: 200px;
     z-index: 100;
@@ -322,10 +322,10 @@ function onDelete() {
     border: 0;
     color: var(--color-text-primary);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-sm);
     text-align: left;
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 .worktree-chip__menu-item:hover:not(:disabled) {
@@ -356,7 +356,7 @@ function onDelete() {
  * (see popover-pattern.md §Animation). */
 .worktree-popover-enter-active,
 .worktree-popover-leave-active {
-    transition: opacity 150ms ease-out, transform 150ms ease-out;
+    transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
     transform-origin: top right;
 }
 

@@ -197,11 +197,11 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: markdown-detail-modal-fade 150ms ease-out;
+  animation: markdown-detail-modal-fade var(--duration-base) var(--ease-out);
 }
 
 .markdown-detail-modal__overlay[data-state="closed"] {
-  animation: markdown-detail-modal-fade-out 100ms ease-in forwards;
+  animation: markdown-detail-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .markdown-detail-modal {
@@ -223,18 +223,18 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   z-index: 2001;
   outline: none;
-  animation: markdown-detail-modal-zoom 150ms ease-out;
+  animation: markdown-detail-modal-zoom var(--duration-base) var(--ease-out);
 }
 
 .markdown-detail-modal[data-state="closed"] {
-  animation: markdown-detail-modal-zoom-out 100ms ease-in forwards;
+  animation: markdown-detail-modal-zoom-out var(--duration-fast) ease-in forwards;
 }
 
 @keyframes markdown-detail-modal-fade {
@@ -270,8 +270,8 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 
 .markdown-detail-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   display: inline-flex;
   align-items: center;
@@ -291,8 +291,8 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   border-radius: 10px;
   background: var(--color-bg-border);
   color: var(--color-text-secondary);
@@ -321,7 +321,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -342,7 +342,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 }
 
 .markdown-detail-modal__markdown {
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.55;
   color: var(--color-text-primary);
   /* Reuse the bubble typography — the project doesn't have a
@@ -363,7 +363,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 .markdown-detail-modal__markdown :deep(h2),
 .markdown-detail-modal__markdown :deep(h3) {
   margin: 16px 0 8px 0;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -374,7 +374,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   font-size: 15px;
 }
 .markdown-detail-modal__markdown :deep(h3) {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .markdown-detail-modal__markdown :deep(ul),
@@ -389,7 +389,7 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 
 .markdown-detail-modal__markdown :deep(code) {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   background: var(--color-bg-elevated);
   padding: 1px 4px;
   border-radius: 3px;
@@ -399,12 +399,12 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
 .markdown-detail-modal__markdown :deep(pre) {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   margin: 8px 0;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 

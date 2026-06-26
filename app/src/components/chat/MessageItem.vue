@@ -584,7 +584,7 @@ const showEditedLabel = computed<boolean>(
 .msg--editing {
   padding: 4px 6px;
   margin: -4px -6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--color-accent) 6%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-accent) 40%, var(--color-bg-border));
 }
@@ -604,6 +604,22 @@ const showEditedLabel = computed<boolean>(
   opacity: 1;
 }
 
+/* PR-3a (2026-06-27): whole-row hover tint. A 6% primary-text
+   wash on the row tells the user "this is an interactive row"
+   (not just the bubble — the row owns the actions menu).
+   Excluded for edit/err states (they own their own visual
+   treatment via .msg--editing / .msg--err backgrounds). The
+   transition keeps the wash smooth and avoids a hard flash
+   on rapid mouse passes. */
+.msg:not(.msg--editing):not(.msg--err) {
+    border-radius: var(--radius-lg);
+    transition: background-color var(--duration-fast) var(--ease-out);
+}
+.msg:not(.msg--editing):not(.msg--err):hover,
+.msg:not(.msg--editing):not(.msg--err):focus-within {
+    background: var(--color-bg-hover);
+}
+
 .msg__redacted {
   display: inline-flex;
   align-items: center;
@@ -612,8 +628,8 @@ const showEditedLabel = computed<boolean>(
   padding: 4px 10px;
   background: var(--color-bg-elevated);
   border: 1px dashed var(--color-bg-border);
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
 }
@@ -633,31 +649,35 @@ const showEditedLabel = computed<boolean>(
 
 .msg__bubble {
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   /* `white-space: pre-wrap` removed in PR6 — markdown handles its own
      line breaks via `breaks: true` in the marked options, and
      pre-wrap would mangle <pre> code blocks (the leading whitespace
      on each line of code would be preserved literally, fighting the
      monospace font's own rendering). */
   word-break: break-word;
-  line-height: 1.6;
+  line-height: var(--leading-relaxed);
   border: 1px solid var(--color-bg-border);
 
   margin-top: 4px;
   margin-bottom: 4px;
 }
 
+/* PR-3a (2026-06-27): user bubble lightened.
+   Was: accent (#3b5bdb) fill + white text. Too visually heavy for
+   a chat where the user message is one of two equally-weighted roles
+   in a turn. New: accent-muted (#1e2a5e) fill + primary text
+   (cbd5e1). WCAG 8.66:1 contrast — both AA (4.5) and AAA (7) pass.
+   Subtle 30% accent border for delineation against chat-panel bg. */
 .msg--user .msg__bubble {
-  background: var(--color-accent);
-  color: #ffffff;
-  border-color: var(--color-accent);
-  border-bottom-right-radius: 2px;
+  background: var(--color-accent-muted);
+  color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 .msg--assistant .msg__bubble {
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  border-bottom-left-radius: 2px;
 }
 
 .msg--err .msg__bubble {
@@ -723,7 +743,7 @@ const showEditedLabel = computed<boolean>(
 .msg__markdown :deep(h5),
 .msg__markdown :deep(h6) {
   margin: 12px 0 6px 0;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.3;
 }
 
@@ -758,7 +778,7 @@ const showEditedLabel = computed<boolean>(
 }
 
 .msg__markdown :deep(strong) {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .msg__markdown :deep(em) {
@@ -779,7 +799,7 @@ const showEditedLabel = computed<boolean>(
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--color-bg-border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
   line-height: 1.45;
 }
@@ -830,6 +850,6 @@ const showEditedLabel = computed<boolean>(
 
 .msg__markdown :deep(th) {
   background: var(--color-bg);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 </style>

@@ -157,7 +157,7 @@ async function onModelPick(modelId: string) {
       :aria-expanded="menuOpen"
       :title="
         isStreaming
-          ? 'Streaming 中,无法切换模型'
+          ? 'Streaming 中，无法切换模型'
           : (isPlaceholder ? '请到 Sidebar 设置里添加模型' : '切换模型')
       "
       @click="toggleMenu"
@@ -227,21 +227,21 @@ async function onModelPick(modelId: string) {
   padding: 2px 6px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .model-select__trigger:hover:not(:disabled) {
@@ -284,7 +284,7 @@ async function onModelPick(modelId: string) {
   right: 0;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: 220px;
   max-height: 320px;
@@ -308,7 +308,7 @@ async function onModelPick(modelId: string) {
   gap: 4px;
   padding: 4px 8px 2px;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
@@ -325,10 +325,10 @@ async function onModelPick(modelId: string) {
   color: var(--color-text-primary);
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .model-select__item:hover:not(:disabled) {
@@ -337,7 +337,7 @@ async function onModelPick(modelId: string) {
 
 .model-select__item--active {
   color: var(--color-accent);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .model-select__item-name {
@@ -357,7 +357,7 @@ async function onModelPick(modelId: string) {
    and rises into place. Exit reverses the same distance. */
 .model-select-popover-enter-active,
 .model-select-popover-leave-active {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
   transform-origin: bottom right;
 }
 

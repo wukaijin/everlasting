@@ -107,7 +107,7 @@ const milestones = computed<Milestone[]>(() => {
   gap: 4px;
   padding: 4px 0;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 

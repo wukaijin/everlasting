@@ -248,7 +248,7 @@ function getStatusFor(path: string): string {
                     v-if="pf.file.diff_text === ''"
                     class="diff-file__raw diff-file__raw--empty"
                 >
-                    <em>(binary or empty diff — no inline preview)</em>
+                    <em>(binary or empty diff - no inline preview)</em>
                 </div>
             </div>
         </div>
@@ -261,7 +261,7 @@ function getStatusFor(path: string): string {
     flex-direction: column;
     gap: 6px;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--color-text-primary);
 }
 
@@ -269,12 +269,12 @@ function getStatusFor(path: string): string {
     padding: 16px;
     text-align: center;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--text-sm);
 }
 
 .diff-file {
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--color-bg-surface);
     overflow: hidden;
 }
@@ -343,8 +343,8 @@ function getStatusFor(path: string): string {
     flex-shrink: 0;
     display: inline-flex;
     gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
 }
 
 .diff-file__add {
@@ -375,7 +375,7 @@ function getStatusFor(path: string): string {
     grid-template-columns: 48px 48px 16px 1fr;
     align-items: baseline;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
     line-height: 1.5;
     white-space: pre;
     overflow-x: auto;
@@ -424,7 +424,7 @@ function getStatusFor(path: string): string {
 .diff-file__raw {
     margin: 0;
     padding: 10px 12px;
-    font-size: 11px;
+    font-size: var(--text-xs);
     line-height: 1.45;
     color: var(--color-text-secondary);
     white-space: pre-wrap;

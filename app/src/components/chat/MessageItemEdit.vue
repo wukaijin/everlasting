@@ -206,7 +206,7 @@ function onSave() {
   flex-direction: column;
   gap: 8px;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid color-mix(in srgb, var(--color-accent) 60%, var(--color-bg-border));
   background: var(--color-bg-elevated);
   /* `max-width: 100%` so the editor never overflows the
@@ -225,13 +225,13 @@ function onSave() {
   background: var(--color-bg);
   color: var(--color-text-primary);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   resize: vertical;
   outline: none;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
   box-sizing: border-box;
 }
 
@@ -249,11 +249,11 @@ function onSave() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-tool-error);
   background: color-mix(in srgb, var(--color-tool-error) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-tool-error) 40%, transparent);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
 }
 
@@ -269,15 +269,15 @@ function onSave() {
 
 .msg__editor-btn {
   padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   font-family: inherit;
   border: 1px solid var(--color-bg-border);
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .msg__editor-btn:hover:not(:disabled) {

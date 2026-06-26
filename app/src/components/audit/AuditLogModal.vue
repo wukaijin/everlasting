@@ -319,11 +319,11 @@ async function onRefresh(): Promise<void> {
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: audit-modal-fade 150ms ease-out;
+  animation: audit-modal-fade var(--duration-base) var(--ease-out);
 }
 
 .audit-modal__overlay[data-state="closed"] {
-  animation: audit-modal-fade-out 100ms ease-in forwards;
+  animation: audit-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .audit-modal {
@@ -351,18 +351,18 @@ async function onRefresh(): Promise<void> {
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   z-index: 2001;
   outline: none;
-  animation: audit-modal-zoom 150ms ease-out;
+  animation: audit-modal-zoom var(--duration-base) var(--ease-out);
 }
 
 .audit-modal[data-state="closed"] {
-  animation: audit-modal-zoom-out 100ms ease-in forwards;
+  animation: audit-modal-zoom-out var(--duration-fast) ease-in forwards;
 }
 
 @keyframes audit-modal-fade {
@@ -397,8 +397,8 @@ async function onRefresh(): Promise<void> {
 
 .audit-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -411,7 +411,7 @@ async function onRefresh(): Promise<void> {
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -438,12 +438,12 @@ async function onRefresh(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 
 .audit-modal__filter-label {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 /* reka-ui Select trigger — rendered inside this component's own
@@ -474,13 +474,13 @@ async function onRefresh(): Promise<void> {
   box-sizing: border-box;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-family: inherit;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--duration-base) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
 }
 
 .audit-modal__select-trigger:hover {
@@ -509,7 +509,7 @@ async function onRefresh(): Promise<void> {
   position: fixed;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   min-width: var(--reka-select-trigger-width, 200px);
   width: var(--reka-select-trigger-width);
@@ -526,9 +526,9 @@ async function onRefresh(): Promise<void> {
   display: flex;
   align-items: center;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
   outline: none;
@@ -555,7 +555,7 @@ async function onRefresh(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
   user-select: none;
 }
@@ -579,8 +579,8 @@ async function onRefresh(): Promise<void> {
   justify-content: center;
   cursor: pointer;
   transition:
-    border-color 0.15s,
-    background 0.15s;
+    border-color var(--duration-base) var(--ease-out),
+    background var(--duration-base) var(--ease-out);
 }
 
 .audit-modal__checkbox:hover {
@@ -608,7 +608,7 @@ async function onRefresh(): Promise<void> {
 
 .audit-modal__count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   margin-left: auto;
 }
@@ -617,15 +617,15 @@ async function onRefresh(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 4px 8px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .audit-modal__refresh:hover:not(:disabled) {
@@ -649,7 +649,7 @@ async function onRefresh(): Promise<void> {
 .audit-modal__error {
   padding: 16px;
   color: var(--color-tool-error);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
@@ -657,7 +657,7 @@ async function onRefresh(): Promise<void> {
   padding: 32px 16px;
   text-align: center;
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .audit-modal__list {

@@ -207,7 +207,7 @@ describe("usePermissionsStore", () => {
       reason: undefined,
     });
     expect(toastMock).toHaveBeenCalledWith(
-      "权限询问已超时,已自动拒绝",
+      "权限询问已超时，已自动拒绝",
       "warn",
     );
   });

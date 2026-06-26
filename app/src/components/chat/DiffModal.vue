@@ -98,7 +98,7 @@ const emit = defineEmits<{
 .diff-modal {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     width: 100%;
     max-width: 1100px;
     max-height: 100%;
@@ -120,8 +120,8 @@ const emit = defineEmits<{
 
 .diff-modal__title {
     margin: 0;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
     color: var(--color-text-primary);
     display: inline-flex;
     align-items: baseline;
@@ -129,7 +129,7 @@ const emit = defineEmits<{
 }
 
 .diff-modal__count {
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
     font-weight: 400;
 }
@@ -140,7 +140,7 @@ const emit = defineEmits<{
     color: var(--color-text-muted);
     cursor: pointer;
     padding: 4px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -163,7 +163,7 @@ const emit = defineEmits<{
     padding: 24px;
     text-align: center;
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--text-base);
 }
 
 .diff-modal__error {
@@ -171,16 +171,16 @@ const emit = defineEmits<{
 }
 
 /* R4 popup animation: fade + scale 0.96 → 1 from center. Enter
- * is 150ms ease-out, leave is 100ms ease-in (faster exit per the
+ * is var(--duration-base) var(--ease-out), leave is var(--duration-fast) ease-in (faster exit per the
  * PR5 popover pattern). */
 .diff-modal-enter-active,
 .diff-modal-leave-active {
-    transition: opacity 150ms ease-out;
+    transition: opacity var(--duration-base) var(--ease-out);
 }
 
 .diff-modal-enter-active .diff-modal,
 .diff-modal-leave-active .diff-modal {
-    transition: opacity 150ms ease-out, transform 150ms ease-out;
+    transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
 }
 
 .diff-modal-enter-from,

@@ -118,13 +118,13 @@ watch(
         </header>
         <div class="yolo-confirm-modal__body">
           <p class="yolo-confirm-modal__lead">
-            Yolo 模式将允许所有工具调用不再询问,
+            Yolo 模式将允许所有工具调用不再询问，
             硬 kill list 仍然拦截。继续?
           </p>
           <ul class="yolo-confirm-modal__bullets">
             <li>
               <strong>跳过所有用户确认</strong> — LLM 的每一次
-              <code>tool_use</code> 都会直接执行,不再弹窗询问。
+              <code>tool_use</code> 都会直接执行，不再弹窗询问。
             </li>
             <li>
               <strong>硬 kill list 仍然拦截</strong> —
@@ -138,7 +138,7 @@ watch(
             </li>
           </ul>
           <p class="yolo-confirm-modal__hint">
-            Yolo 是会话级别的安全姿态,关闭或重启 session 后
+            Yolo 是会话级别的安全姿态，关闭或重启 session 后
             自动失效。
           </p>
         </div>
@@ -158,7 +158,7 @@ watch(
             :disabled="disabled"
             @click="emit('confirm')"
           >
-            我已知风险,启用 Yolo
+            我已知风险，启用 Yolo
           </button>
         </footer>
       </div>
@@ -190,7 +190,7 @@ watch(
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-tool-error);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   width: 100%;
   max-width: 480px;
   display: flex;
@@ -210,8 +210,8 @@ watch(
 
 .yolo-confirm-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
   display: inline-flex;
   align-items: center;
@@ -228,7 +228,7 @@ watch(
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -246,7 +246,7 @@ watch(
 
 .yolo-confirm-modal__body {
   padding: 16px;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.6;
   color: var(--color-text-primary);
 }
@@ -268,7 +268,7 @@ watch(
   padding-left: 14px;
   position: relative;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .yolo-confirm-modal__bullets li::before {
@@ -280,12 +280,12 @@ watch(
 
 .yolo-confirm-modal__bullets strong {
   color: var(--color-text-primary);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .yolo-confirm-modal__bullets code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   background: var(--color-bg-elevated);
   padding: 1px 4px;
   border-radius: 3px;
@@ -295,7 +295,7 @@ watch(
 .yolo-confirm-modal__hint {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .yolo-confirm-modal__actions {
@@ -308,9 +308,9 @@ watch(
 
 .yolo-confirm-modal__btn {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid var(--color-bg-border);
 }
@@ -344,12 +344,12 @@ watch(
    `ConfirmDialog` so users get a familiar modal feel. */
 .yolo-confirm-enter-active,
 .yolo-confirm-leave-active {
-  transition: opacity 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out);
 }
 
 .yolo-confirm-enter-active .yolo-confirm-modal,
 .yolo-confirm-leave-active .yolo-confirm-modal {
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
+  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
 }
 
 .yolo-confirm-enter-from,

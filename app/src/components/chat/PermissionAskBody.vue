@@ -306,7 +306,7 @@ function cancelFeedback(): void {
   padding: 8px 10px;
   background: var(--color-bg-app);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -317,7 +317,7 @@ function cancelFeedback(): void {
   align-items: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 
@@ -329,7 +329,7 @@ function cancelFeedback(): void {
 }
 
 .permission-ask-body__title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -340,7 +340,7 @@ function cancelFeedback(): void {
 .permission-ask-body__reason {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   line-height: 1.4;
 }
@@ -354,7 +354,7 @@ function cancelFeedback(): void {
 
 .permission-ask-body__path code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -384,14 +384,14 @@ function cancelFeedback(): void {
 .permission-ask-body__btn {
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 3px 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid var(--color-bg-border);
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  transition: filter 0.1s;
+  transition: filter var(--duration-fast) var(--ease-out);
 }
 
 .permission-ask-body__btn:hover {
@@ -413,10 +413,10 @@ function cancelFeedback(): void {
   width: 100%;
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 4px 6px;
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--color-bg-surface);
   color: var(--color-text-primary);
   resize: vertical;
@@ -425,7 +425,7 @@ function cancelFeedback(): void {
 .permission-ask-body__historical-note {
   margin: 0;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-style: italic;
   line-height: 1.4;
@@ -445,7 +445,7 @@ function cancelFeedback(): void {
   border-radius: 999px;
   font-family: var(--font-sans);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.4;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }

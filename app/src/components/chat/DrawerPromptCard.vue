@@ -106,9 +106,9 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-accent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--color-text-primary);
   max-width: 100%;
   margin-bottom: 8px;
@@ -121,8 +121,8 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
   margin-bottom: 4px;
   color: var(--color-accent);
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -143,7 +143,7 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
 }
 
 .drawer-prompt-card__markdown {
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--color-text-secondary);
   max-height: 160px;
@@ -160,7 +160,7 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
 
 .drawer-prompt-card__markdown :deep(code) {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   background: var(--color-bg-elevated);
   padding: 1px 4px;
   border-radius: 3px;
@@ -169,12 +169,12 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
 .drawer-prompt-card__markdown :deep(pre) {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin: 6px 0;
   overflow-x: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.4;
 }
 
@@ -186,7 +186,7 @@ const previewHtml = computed<string>(() => renderMarkdown(preview.value));
   cursor: pointer;
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--text-xs);
   padding: 2px 0;
   text-decoration: none;
 }

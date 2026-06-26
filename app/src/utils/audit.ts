@@ -32,7 +32,7 @@ export interface AuditEventRow {
    *  at the store layer. */
   ts: string;
   /** One of the 13 `AuditKind::as_str()` outputs (see
-   *  `agent/permissions/mod.rs`,拆分自 mod.rs,2026-06-23 拆为 8 模块,AuditKind + record_* 落 `agent/permissions/audit.rs`). The two new D3 PR1/PR3
+   *  `agent/permissions/mod.rs`,拆分自 mod.rs,2026-06-23 拆为 8 模块，AuditKind + record_* 落 `agent/permissions/audit.rs`). The two new D3 PR1/PR3
    *  kinds — `edit_message` and `resend_message` — are
    *  user-initiated direct IPCs (not ⑨ 关 decisions), so the
    *  parser falls back to `kind: "raw"` for them; the UI

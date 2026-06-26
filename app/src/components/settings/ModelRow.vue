@@ -143,7 +143,7 @@ const testTitle = computed<string>(() =>
     padding: 8px 12px;
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-bg-border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .model-row__info {
@@ -155,13 +155,13 @@ const testTitle = computed<string>(() =>
 }
 
 .model-row__name {
-    font-size: 13px;
-    font-weight: 500;
+    font-size: var(--text-base);
+    font-weight: var(--weight-medium);
     color: var(--color-text-primary);
 }
 
 .model-row__model-id {
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
     font-family: var(--font-mono);
     overflow: hidden;
@@ -227,15 +227,15 @@ const testTitle = computed<string>(() =>
     gap: 6px;
     padding: 4px;
     border: 0;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     cursor: pointer;
     background: transparent;
     color: var(--color-text-muted);
     transition:
-        background 0.15s,
-        color 0.15s;
+        background var(--duration-base) var(--ease-out),
+        color var(--duration-base) var(--ease-out);
 }
 
 .model-row__btn:disabled {

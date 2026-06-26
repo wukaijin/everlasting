@@ -611,7 +611,7 @@ export function useChatInputCodeMirror(
       doc: input.value,
       extensions: [
         EditorView.lineWrapping,
-        placeholderCompartment.of(cmPlaceholder(opts.placeholder.value ?? "问点什么,或输入 / 调出命令…")),
+        placeholderCompartment.of(cmPlaceholder(opts.placeholder.value ?? "问点什么，或输入 / 调出命令…")),
         editableCompartment.of(EditorState.readOnly.of(opts.sending.value ? true : false)),
         EditorView.updateListener.of(onEditorUpdate),
         buildKeymap(),
@@ -638,7 +638,7 @@ export function useChatInputCodeMirror(
       if (!v) return;
       v.dispatch({
         effects: placeholderCompartment.reconfigure(
-          cmPlaceholder(next ?? "问点什么,或输入 / 调出命令…"),
+          cmPlaceholder(next ?? "问点什么，或输入 / 调出命令…"),
         ),
       });
     },

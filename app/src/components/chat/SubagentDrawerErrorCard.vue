@@ -49,7 +49,7 @@ defineProps<{
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
   border-left: 3px solid var(--color-tool-error);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   display: flex;
   flex-direction: column;
@@ -61,8 +61,8 @@ defineProps<{
   align-items: center;
   gap: 6px;
   font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   color: var(--color-tool-error);
 }
 
@@ -79,7 +79,7 @@ defineProps<{
 .subagent-drawer__error-message {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.5;
   color: var(--color-text-primary);
   word-break: break-word;

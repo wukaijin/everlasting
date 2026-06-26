@@ -145,14 +145,15 @@ describe("SubagentDrawer", () => {
     w.unmount();
   });
 
-  it("empty state shows 'Worker is starting...' when no sections", async () => {
+  it("empty state shows 'Worker 正在初始化' when no sections", async () => {
     const store = useSubagentRunsStore();
     await openWith(store, { transcriptJson: null }, []);
     const w = makeDrawer();
     await flushPromises();
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Worker is starting");
+    expect(text).toContain("Worker 正在初始化");
+    expect(text).toContain("通常 1-3 秒");
     w.unmount();
   });
 

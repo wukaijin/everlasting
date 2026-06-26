@@ -282,8 +282,8 @@ function openDeleteConfirm(m: ModelWithProvider) {
 
 .models-tab__heading {
     margin: 0;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
     color: var(--color-text-primary);
 }
 
@@ -305,8 +305,8 @@ function openDeleteConfirm(m: ModelWithProvider) {
     gap: 6px;
     padding: 4px 0;
     color: var(--color-text-muted);
-    font-size: 11px;
-    font-weight: 500;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -327,7 +327,7 @@ function openDeleteConfirm(m: ModelWithProvider) {
     padding: 24px;
     text-align: center;
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--text-base);
 }
 
 /* --- Buttons (header Add Model) --- */
@@ -338,15 +338,15 @@ function openDeleteConfirm(m: ModelWithProvider) {
     gap: 6px;
     padding: 5px 12px;
     border: 1px solid var(--color-bg-border);
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
     cursor: pointer;
     background: transparent;
     color: var(--color-text-secondary);
     transition:
-        background 0.15s,
-        color 0.15s;
+        background var(--duration-base) var(--ease-out),
+        color var(--duration-base) var(--ease-out);
 }
 
 .models-tab__btn:disabled {

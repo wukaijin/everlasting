@@ -1,17 +1,17 @@
 <script setup lang="ts">
-// HiddenProjectsMenu — AppHeader 入口,展示已关闭(hidden=1)项目并提供
+// HiddenProjectsMenu — AppHeader 入口，展示已关闭(hidden=1)项目并提供
 // "重新打开" 操作。
 //
-// 背景(RULE-FrontProj-001):关闭项目后,UI 唯一可见的"重新打开"入口是
+// 背景(RULE-FrontProj-001):关闭项目后，UI 唯一可见的"重新打开"入口是
 // EmptyProjectState(只在 currentProjectId === null 时挂载);多项目用户隐藏
-// 单个后,主 UI(ChatPanel)完全无入口。本组件补这条路径——在 AppHeader 的
+// 单个后，主 UI(ChatPanel)完全无入口。本组件补这条路径——在 AppHeader 的
 // `+` 按钮前显示一个 archive 图标按钮 + count badge,点击展开 popover 列
 // 出 hidden projects + per-row 重新打开。
 //
 // 设计取舍:
-//   - 用 reka-ui DropdownMenu(项目已用,见 MessageActionsMenu.vue),拿到
+//   - 用 reka-ui DropdownMenu(项目已用，见 MessageActionsMenu.vue),拿到
 //     keyboard arrow / Esc / focus-return a11y。
-//   - 触发按钮仅在 hiddenProjects.length > 0 时显示,0 hidden 不渲染
+//   - 触发按钮仅在 hiddenProjects.length > 0 时显示，0 hidden 不渲染
 //     (避免噪声)。
 //   - 复用 projects.ts 既有 unhideProject(id),内部已 load + focus,
 //     无新 store 逻辑。
@@ -20,18 +20,18 @@
 //
 // **Portal + scoped 坑**:
 // reka-ui `DropdownMenuContent` 内部 `<Teleport to="body">`,Vue
-// `<style scoped>` 编译时会带 `data-v-xxx` 选择器后缀,portal 子节点
-// 没有该属性 → 样式静默不生效(裸文本,无背景)。本组件触发按钮在
+// `<style scoped>` 编译时会带 `data-v-xxx` 选择器后缀，portal 子节点
+// 没有该属性 → 样式静默不生效(裸文本，无背景)。本组件触发按钮在
 // 组件 template 内 → scoped 正常;**popover 内容必须用 `:deep()`** 穿透。
 // (spec: `.trellis/spec/frontend/reka-ui-usage.md` §"Gotcha: <style
 // scoped> does NOT apply to portal children")。
 //
 // **事件绑定策略**(用户反馈):
-// 事件只绑到内层 "重新打开" 按钮,**不**绑到 `DropdownMenuItem` 整行。
+// 事件只绑到内层 "重新打开" 按钮，**不**绑到 `DropdownMenuItem` 整行。
 // 鼠标点行不触发 unhide,只点按钮才触发(避免误触)。
 //
 // Out of scope:hidden projects 的批量操作、archive 主题、永久删除(项目
-// 删除是 V2 路线图项,PROPOSAL 明确 out of scope)。
+// 删除是 V2 路线图项，PROPOSAL 明确 out of scope)。
 
 import { onMounted } from "vue";
 import {
@@ -130,7 +130,7 @@ async function onUnhide(id: string): Promise<void> {
   border-left: 1px solid var(--color-bg-border);
   cursor: pointer;
   color: var(--color-text-secondary);
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   font-family: inherit;
   position: relative;
 }
@@ -145,7 +145,7 @@ async function onUnhide(id: string): Promise<void> {
 }
 
 .hidden-menu__count {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   background: var(--color-accent);
   color: #ffffff;
@@ -153,7 +153,7 @@ async function onUnhide(id: string): Promise<void> {
   padding: 1px 6px;
   min-width: 18px;
   text-align: center;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.4;
 }
 
@@ -174,10 +174,10 @@ async function onUnhide(id: string): Promise<void> {
   padding: 4px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  /* reka-ui 2.9.9 default opening animation; ~120ms ease-out. */
-  animation: hidden-menu-content-enter 120ms ease-out;
+  /* reka-ui 2.9.9 default opening animation; ~var(--duration-fast) var(--ease-out). */
+  animation: hidden-menu-content-enter var(--duration-fast) var(--ease-out);
 }
 
 @keyframes hidden-menu-content-enter {
@@ -192,8 +192,8 @@ async function onUnhide(id: string): Promise<void> {
 }
 
 :deep(.hidden-menu__header) {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -207,8 +207,8 @@ async function onUnhide(id: string): Promise<void> {
   align-items: center;
   gap: 12px;
   padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
 }
 
 :deep(.hidden-menu__meta) {
@@ -228,14 +228,14 @@ async function onUnhide(id: string): Promise<void> {
 
 :deep(.hidden-menu__name) {
   color: var(--color-text-primary);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 :deep(.hidden-menu__path) {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -250,11 +250,11 @@ async function onUnhide(id: string): Promise<void> {
   padding: 4px 10px;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-accent);
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   font-family: inherit;
 }
 

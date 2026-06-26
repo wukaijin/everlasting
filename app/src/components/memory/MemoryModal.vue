@@ -77,11 +77,11 @@ const projectsStore = useProjectsStore();
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: memory-modal-fade 150ms ease-out;
+  animation: memory-modal-fade var(--duration-base) var(--ease-out);
 }
 
 .memory-modal__overlay[data-state="closed"] {
-  animation: memory-modal-fade-out 100ms ease-in forwards;
+  animation: memory-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .memory-modal {
@@ -99,7 +99,7 @@ const projectsStore = useProjectsStore();
   max-height: 80vh;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -109,11 +109,11 @@ const projectsStore = useProjectsStore();
      design system (the inner focus indicators of MemoryPreview are
      enough). */
   outline: none;
-  animation: memory-modal-zoom 150ms ease-out;
+  animation: memory-modal-zoom var(--duration-base) var(--ease-out);
 }
 
 .memory-modal[data-state="closed"] {
-  animation: memory-modal-zoom-out 100ms ease-in forwards;
+  animation: memory-modal-zoom-out var(--duration-fast) ease-in forwards;
 }
 
 @keyframes memory-modal-fade {
@@ -148,8 +148,8 @@ const projectsStore = useProjectsStore();
 
 .memory-modal__title {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -159,7 +159,7 @@ const projectsStore = useProjectsStore();
   color: var(--color-text-muted);
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;

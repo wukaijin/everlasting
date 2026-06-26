@@ -57,6 +57,105 @@
     --font-mono:
         "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas,
         "Liberation Mono", monospace;
+
+    /* Interaction state tints — used 3+ places (sidebar session items,
+       list items, buttons, chips, nav items, reka-ui SelectItem
+       hover). color-mix resolves at use time, so the var() refs
+       below are safe even though --color-text-primary and
+       --color-accent appear later in this block. */
+    --color-bg-hover: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+    --color-bg-active: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+    --color-bg-selected: color-mix(in srgb, var(--color-accent) 12%, transparent);
+
+    /* Spacing scale (4-based, Linear-style). 0/1/2/3/4/5/6/7/8 ladder
+       = 0, 4, 8, 12, 16, 20, 24, 32, 48 px. Components should
+       reference var(--space-N) instead of writing px values
+       directly. Token consumption rollout happens in follow-up PRs
+       (PR-2 onwards). */
+    --space-0: 0;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-7: 32px;
+    --space-8: 48px;
+
+    /* Radius scale. The project already uses 4/6/8/12 ad-hoc; this
+       formalizes the ladder and adds --radius-pill for circular
+       buttons (chat input send/stop) and pill chips. */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-pill: 999px;
+
+    /* Type scale — font-size. */
+    --text-xs: 11px;
+    --text-sm: 12px;
+    --text-base: 13px;
+    --text-md: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+
+    /* Line heights. Slightly tighter than Tailwind v4 defaults to
+       keep chat message rhythm compact (1.6 vs 1.625). */
+    --leading-tight: 1.3;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.6;
+    --leading-loose: 1.75;
+
+    /* Font weights. */
+    --weight-regular: 400;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    --weight-bold: 700;
+
+    /* Motion vocabulary — durations. 100/150ms split matches the
+       popover-pattern.md modal/popover 150ms-enter / 100ms-leave
+       convention (PR-3d consumes these tokens). --duration-pulse
+       = 1.8s existing subagent breathing; --duration-blink = 1s
+       existing streaming cursor. */
+    --duration-instant: 80ms;
+    --duration-fast: 100ms;
+    --duration-base: 150ms;
+    --duration-slow: 240ms;
+    --duration-pulse: 1800ms;
+    --duration-blink: 1000ms;
+
+    /* Motion vocabulary — easings. --ease-out (snappy decel) is
+       the workhorse for hover/enter; --ease-spring (slight
+       overshoot) for :active press feedback; --ease-decelerate
+       for slide-in transitions (subagent drawer, toast). */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+
+    /* Shadow scale. Alphas are tuned for the dark background
+       (--color-bg-app = #0a0e14) — 0.32 / 0.4 / 0.5 ladder keeps
+       shadows visible without crushing detail. */
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.32);
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+    --shadow-ring: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+/* ------------------------------------------------------------------------- *
+ * Reduced motion — required for accessibility (WCAG 2.3.3). Collapses all  *
+ * animation/transition durations to ~0 under the user's OS preference.      *
+ * ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -69,7 +168,7 @@ body,
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--color-bg-border);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
     overflow: hidden;
@@ -91,7 +190,7 @@ textarea {
     background: var(--color-bg-app);
     color: var(--color-text-primary);
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: var(--text-md);
     line-height: 1.55;
     letter-spacing: 0.01em;
     text-rendering: optimizeLegibility;

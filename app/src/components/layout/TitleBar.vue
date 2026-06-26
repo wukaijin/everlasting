@@ -316,7 +316,7 @@ async function onClose() {
   cursor: default;
   font-family: inherit;
   padding: 0;
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .titlebar__btn:hover {

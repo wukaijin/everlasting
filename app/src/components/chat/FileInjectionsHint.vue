@@ -159,8 +159,8 @@ const rows = computed<Row[]>(() => {
   padding: 6px 10px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
-  font-size: 11px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--color-text-secondary);
   max-width: 100%;
@@ -168,9 +168,9 @@ const rows = computed<Row[]>(() => {
 }
 
 .file-injections-hint__title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   color: var(--color-text-muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
   margin-bottom: 2px;
 }
 

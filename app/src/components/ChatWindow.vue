@@ -43,7 +43,7 @@ onMounted(async () => {
   // the inline `<ToolCallCard>` approval UI reads
   // `getPending(currentSessionId)` and matches `toolUseId`. We pass
   // the projects store's `showToast` so the 120s-timeout path can
-  // surface "权限询问已超时,已自动拒绝".
+  // surface "权限询问已超时，已自动拒绝".
   void permissionsStore.start(
     (msg, level) => projectsStore.showToast(msg, level),
   );
@@ -51,7 +51,7 @@ onMounted(async () => {
   // B6 PR3 (2026-06-20): mount the global `subagent:event` listener.
   // The store routes payloads into per-runId `liveTranscript` (with
   // a 200ms debounce) so the `<SubagentDrawer>` can stream worker
-  // progress in real-time. See `subagentRuns.ts`(拆分自 1416 行,2026-06-23 拆为 types + runAccumulator + store 三文件) + the PR3 PRD.
+  // progress in real-time. See `subagentRuns.ts`(拆分自 1416 行，2026-06-23 拆为 types + runAccumulator + store 三文件) + the PR3 PRD.
   void subagentRuns.start();
 });
 

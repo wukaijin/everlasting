@@ -210,7 +210,7 @@ async function onCopy() {
         <button
           type="button"
           class="msg-actions__trigger"
-          :aria-label="isStreaming ? '流式生成中,无法操作' : '消息操作'"
+          :aria-label="isStreaming ? '流式生成中，无法操作' : '消息操作'"
           :title="isStreaming ? '流式生成中' : isEditing ? '编辑中' : '消息操作'"
           data-testid="msg-actions-trigger"
         >
@@ -301,7 +301,7 @@ async function onCopy() {
   right: 4px;
   z-index: 5;
   opacity: 0;
-  transition: opacity 0.12s ease-out;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
 /* The parent .msg <li> drives the hover-in. We deliberately
@@ -332,10 +332,10 @@ async function onCopy() {
   padding: 0;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
   outline: none;
 }
 
@@ -366,14 +366,14 @@ async function onCopy() {
   min-width: 160px;
   background: var(--color-bg-surface);
   border: 1px solid var(--color-bg-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   padding: 4px;
   z-index: 3000;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--color-text-primary);
-  /* reka-ui 2.9.9 default opening animation; ~120ms ease-out. */
-  animation: msg-actions-content-enter 120ms ease-out;
+  /* reka-ui 2.9.9 default opening animation; ~var(--duration-fast) var(--ease-out). */
+  animation: msg-actions-content-enter var(--duration-fast) var(--ease-out);
 }
 
 @keyframes msg-actions-content-enter {
@@ -393,8 +393,8 @@ async function onCopy() {
   align-items: center;
   column-gap: 8px;
   padding: 6px 8px;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
   line-height: 1.4;
   color: var(--color-text-primary);
   cursor: pointer;

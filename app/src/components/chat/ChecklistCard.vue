@@ -265,7 +265,7 @@ function statusClass(status: ChecklistStatus): string {
     flex-direction: column;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-bg-border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
     overflow: hidden;
 }
@@ -293,8 +293,8 @@ function statusClass(status: ChecklistStatus): string {
     align-items: center;
     gap: 6px;
     flex: 1;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
     color: var(--color-text-primary);
     min-width: 0;
 }
@@ -309,12 +309,12 @@ function statusClass(status: ChecklistStatus): string {
 }
 
 .checklist-card__progress {
-    font-size: 11px;
+    font-size: var(--text-xs);
     font-family: var(--font-mono);
     color: var(--color-text-secondary);
     padding: 1px 6px;
     background: var(--color-bg-app);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     flex-shrink: 0;
 }
 
@@ -327,12 +327,12 @@ function statusClass(status: ChecklistStatus): string {
     justify-content: center;
     background: transparent;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;
     transition:
-        background 0.1s,
-        color 0.1s;
+        background var(--duration-fast) var(--ease-out),
+        color var(--duration-fast) var(--ease-out);
 }
 
 .checklist-card__minimize:hover {
@@ -357,11 +357,11 @@ function statusClass(status: ChecklistStatus): string {
     align-items: flex-start;
     gap: 8px;
     padding: 4px 6px;
-    border-radius: 4px;
-    font-size: 12px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
     line-height: 1.45;
     color: var(--color-text-primary);
-    transition: background 0.12s;
+    transition: background var(--duration-fast) var(--ease-out);
 }
 
 .checklist-card__item:hover {
@@ -439,7 +439,7 @@ function statusClass(status: ChecklistStatus): string {
 .checklist-card__empty {
     padding: 12px;
     text-align: center;
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
 }
 
@@ -459,9 +459,9 @@ function statusClass(status: ChecklistStatus): string {
     cursor: pointer;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
     transition:
-        transform 0.12s,
-        background 0.12s,
-        border-color 0.12s;
+        transform var(--duration-fast) var(--ease-out),
+        background var(--duration-fast) var(--ease-out),
+        border-color var(--duration-fast) var(--ease-out);
     overflow: visible;
 }
 
@@ -496,7 +496,7 @@ function statusClass(status: ChecklistStatus): string {
     margin: 0 auto;
     font-size: 9px;
     font-family: var(--font-mono);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
     line-height: 1;
 }
