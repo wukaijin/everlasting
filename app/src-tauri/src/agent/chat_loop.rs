@@ -273,6 +273,21 @@ pub async fn run_chat_loop(
     // so adding / editing / deleting a `.md` is picked up on the
     // next chat turn without a reload command.
     subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
+    // 2026-06-26 (task `06-26-subagent-per-run-grant`): per-run
+    // in-memory grant cache for worker subagents. `Some(Arc<...>)`
+    // on the worker path (the Arc is constructed fresh in
+    // `run_subagent` per worker); `None` on the parent path
+    // (production chat + tests — never read, never written).
+    //
+    // Threaded into `PermissionContext.run_grants` so `check.rs`
+    // Tier 4's three branches (Path / Shell / WebFetch) can
+    // consult the cache before falling through to `ask_path`, and
+    // `ask_path`'s worker `AllowAlways` arm can write to it. The
+    // cache dies with the worker's `run_chat_loop` invocation —
+    // it does NOT persist to `session_tool_permissions`
+    // (RULE-A-016 isolation: worker grants must not cross the
+    // privilege boundary into the parent session's grant table).
+    run_grants: Option<std::sync::Arc<crate::agent::permissions::RunGrantCache>>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -441,6 +456,14 @@ pub async fn run_chat_loop(
         // the routing key, used only when `effective_is_worker`
         // is true.
         worker_run_id: worker_run_id.clone(),
+        // 2026-06-26 (task 06-26-subagent-per-run-grant): per-run
+        // in-memory grant cache. `None` for the parent path
+        // (production chat + tests) — the Tier 4 grant-check
+        // branches in `check.rs` skip the cache lookup entirely
+        // when this is `None`. `Some(Arc<...>)` for the worker
+        // path — the Arc is constructed fresh in `run_subagent`
+        // per worker, so concurrent workers have isolated caches.
+        run_grants: run_grants.clone(),
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 

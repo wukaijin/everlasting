@@ -79,6 +79,7 @@ pub mod mode;
 pub mod audit;
 pub mod check;
 pub mod ask;
+pub mod run_grant;
 
 // Test files (flat layout — aligned with `agent/tests_*.rs` style
 // from the 2026-06-23 split batch).
@@ -90,6 +91,7 @@ pub mod tests_mode;
 pub mod tests_audit;
 pub mod tests_check;
 pub mod tests_ask;
+pub mod tests_run_grant;
 
 // Re-export — keeps the `permissions::<item>` short path stable for
 // external callers (`state.rs` / `chat_loop.rs` / `commands/*` /
@@ -122,3 +124,11 @@ pub use payload::PermissionAskPayload;
 pub use store::{cancel_session_asks, new_permission_store, register_ask, resolve_ask, PermissionStore};
 #[allow(unused_imports)]
 pub use types::{risk_for_tool, Decision, PermissionContext, PermissionResponse, Risk};
+// `RunGrantCache` is re-exported for `run_chat_loop`'s signature +
+// `dispatch.rs::run_subagent` constructor (both reach it via the
+// flat `crate::agent::permissions::RunGrantCache` path). The
+// `#[allow(unused_imports)]` silences the `cargo check` warning
+// (cargo check doesn't compile the call sites in this crate that
+// need it).
+#[allow(unused_imports)]
+pub use run_grant::RunGrantCache;

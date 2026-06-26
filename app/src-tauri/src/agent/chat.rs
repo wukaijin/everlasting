@@ -292,6 +292,15 @@ pub async fn chat(
             // up workers by name across builtin + user + project
             // layers.
             subagent_cache,
+            // 2026-06-26 (task 06-26-subagent-per-run-grant):
+            // production chat is the parent path — pass `None` so
+            // the parent's `PermissionContext.run_grants` is `None`
+            // and the Tier 4 grant-check branches in `check.rs`
+            // skip the cache lookup entirely. Parent session grants
+            // continue to use the `session_tool_permissions` DB
+            // table (unchanged behavior). Only the worker nested
+            // call (in `run_subagent`) passes `Some(Arc<...>)`.
+            None,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

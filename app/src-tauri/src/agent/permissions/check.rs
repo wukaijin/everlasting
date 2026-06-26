@@ -174,6 +174,26 @@ pub async fn check(
                         let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
                         return Decision::Allow;
                     }
+                    // 2026-06-26 (task 06-26-subagent-per-run-grant):
+                    // worker path — consult the per-run in-memory
+                    // grant cache before falling through to ask_path.
+                    // Same semantics as the DB grant check above
+                    // (sqlite_glob_match on each path-kind row), but
+                    // scoped to the worker's run. Parent path has
+                    // `run_grants = None` and skips this block.
+                    if let Some(cache) = &ctx.run_grants {
+                        let candidate = abs_path.to_string_lossy().to_string();
+                        if cache.has_run_grant(tool_name, "path", &candidate) {
+                            tracing::info!(
+                                session_id = %ctx.session_id,
+                                tool = %tool_name,
+                                path = %abs_path.display(),
+                                "permission::check: Tier 4 worker run-grant hit (path)"
+                            );
+                            let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                            return Decision::Allow;
+                        }
+                    }
                     if inside {
                         // Inside the project, no grant → silent Allow
                         // (the user trusts the agent to work in the repo).
@@ -216,6 +236,24 @@ pub async fn check(
                 let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
                 return Decision::Allow;
             }
+            // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
+            // path — consult the per-run in-memory grant cache before
+            // running classify_prefix. Same prefix semantics as
+            // `check_prefix_grant` above (exact-eq on shell first
+            // token). Parent path has `run_grants = None` and skips.
+            if let Some(cache) = &ctx.run_grants {
+                let first_token = super::shell_trust::first_token_for_allow_always(cmd);
+                if cache.has_run_grant(tool_name, "prefix", &first_token) {
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        tool = %tool_name,
+                        first_token = %first_token,
+                        "permission::check: Tier 4 worker run-grant hit (prefix)"
+                    );
+                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    return Decision::Allow;
+                }
+            }
             // (b) Three-tier classification + per-Mode mapping. shell is
             // heterogenous (git diff vs git push), so the Mode decision
             // lives HERE in Tier 4, not in Tier 3.
@@ -257,6 +295,22 @@ pub async fn check(
             if let Ok(true) = check_tool_grant(db, &ctx.session_id, "web_fetch").await {
                 let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
                 return Decision::Allow;
+            }
+            // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
+            // path — consult the per-run in-memory grant cache before
+            // falling through to ask_path. Same tool-level semantics
+            // as `check_tool_grant` above (tool_name equality;
+            // candidate is unused for tool-kind grants). Parent path
+            // has `run_grants = None` and skips.
+            if let Some(cache) = &ctx.run_grants {
+                if cache.has_run_grant("web_fetch", "tool", "") {
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        "permission::check: Tier 4 worker run-grant hit (tool: web_fetch)"
+                    );
+                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    return Decision::Allow;
+                }
             }
             return ask_path(
                 sink, db, store, ctx,

@@ -343,6 +343,15 @@ pub(crate) async fn run_subagent(
     // the depth-1 invariant), so `Box::pin` breaks the size-
     // infinite Future chain. The cost is one heap allocation per
     // worker dispatch — negligible relative to the LLM round-trip.
+    //
+    // 2026-06-26 (task 06-26-subagent-per-run-grant): construct a
+    // fresh per-run grant cache for THIS worker. The Arc dies with
+    // this `run_chat_loop` call (no shared state across workers,
+    // no leakage to the parent session). L3a concurrent dispatch
+    // → each worker's `run_subagent` constructs its own Arc →
+    // isolated caches (a grant on one worker's `cargo` does not
+    // authorize another worker's `cargo`).
+    let run_grants = std::sync::Arc::new(crate::agent::permissions::run_grant::RunGrantCache::new());
     Box::pin(run_chat_loop(
         worker_tool_defs,
         provider.clone(),
@@ -431,6 +440,14 @@ pub(crate) async fn run_subagent(
         // disabled in MVP). The cache is shared (Arc clone), so the
         // worker sees the same mtime-fenced view as the parent.
         subagent_cache.clone(),
+        // 2026-06-26 (task 06-26-subagent-per-run-grant): per-run
+        // grant cache for this worker. `Some(Arc<...>)` threads
+        // the cache into the worker's `PermissionContext.run_grants`
+        // so `check.rs` Tier 4 can consult it before falling through
+        // to `ask_path`, and the worker's `AllowAlways` arm in
+        // `ask_path` can write to it. Dies with this `run_chat_loop`
+        // call — no persistence to `session_tool_permissions`.
+        Some(run_grants),
     ))
     .await;
 

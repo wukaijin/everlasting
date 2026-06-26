@@ -2,9 +2,13 @@
 //! `Decision`, `PermissionContext`, `PermissionResponse`. Split
 //! out of `mod.rs` on 2026-06-23.
 
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::db::Mode;
+
+use super::run_grant::RunGrantCache;
 
 // ---------------------------------------------------------------------------
 // Risk enum (serialized to IPC in `permission:ask` payload)
@@ -167,6 +171,25 @@ pub struct PermissionContext {
     /// `None` for production (parent) path — the field is left
     /// unused and the existing parent-modal UX is preserved.
     pub worker_run_id: Option<String>,
+    /// 2026-06-26 (task `06-26-subagent-per-run-grant`): per-run
+    /// in-memory grant cache for worker subagents. `Some(Arc<...>)`
+    /// on the worker path (the `Arc` is constructed fresh in
+    /// `run_subagent` per worker); `None` on the parent path
+    /// (production chat + tests — never read, never written).
+    ///
+    /// When `Some`, `check.rs` Tier 4's three branches (Path /
+    /// Shell / WebFetch) consult the cache before falling through
+    /// to `ask_path`, and `ask_path`'s worker `AllowAlways` arm
+    /// writes to it instead of dropping the grant. The cache dies
+    /// with the worker's `run_chat_loop` invocation — it does NOT
+    /// persist to `session_tool_permissions` (RULE-A-016 isolation:
+    /// worker grants must not cross the privilege boundary into
+    /// the parent session's grant table).
+    ///
+    /// See [`RunGrantCache`] for the match_kind semantics
+    /// (tool / prefix / path — mirrors the DB table's three
+    /// variants).
+    pub run_grants: Option<Arc<RunGrantCache>>,
 }
 
 // ---------------------------------------------------------------------------

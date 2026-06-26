@@ -91,6 +91,7 @@ async fn agent_loop_basic_text_only_completes() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -207,6 +208,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -327,6 +329,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -432,6 +435,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -577,6 +581,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -686,6 +691,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -776,6 +782,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -881,6 +888,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1044,6 +1052,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1192,6 +1201,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1347,6 +1357,7 @@ async fn agent_loop_persist_failure_emits_error() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1504,6 +1515,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1621,6 +1633,7 @@ async fn agent_loop_error_persists_partial_text() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1719,6 +1732,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1811,6 +1825,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1937,6 +1952,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -2031,6 +2047,7 @@ async fn agent_loop_error_emits_turn_complete() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -2168,6 +2185,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -2337,6 +2355,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -2486,6 +2505,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2874,6 +2894,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -3053,6 +3074,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -3252,6 +3274,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3403,6 +3426,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -3567,6 +3591,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -3680,6 +3705,7 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,        // system_prompt_override
         None,        // worker_run_id
         h.subagent_cache.clone(), // L3d subagent cache
+        None,
     )
     .await;
 
@@ -3782,6 +3808,7 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         None,
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 

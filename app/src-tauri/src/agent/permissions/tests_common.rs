@@ -79,6 +79,12 @@ pub(super) async fn worker_ctx_with_db() -> (
         cwd: std::path::PathBuf::from("/repo"),
         is_worker: true,
         worker_run_id: Some("worker-run-1".to_string()),
+        // 2026-06-26 (task 06-26-subagent-per-run-grant): None by
+        // default for tests that don't exercise the run-grant cache
+        // (the existing worker-ask tests cover the collapse-to-Allow /
+        // collapse-to-Deny paths). Tests that DO exercise the cache
+        // construct their own PermissionContext with Some(Arc<...>).
+        run_grants: None,
     };
     (pool, store, sink, ctx, tokio_util::sync::CancellationToken::new())
 }

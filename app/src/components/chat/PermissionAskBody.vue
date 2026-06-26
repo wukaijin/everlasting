@@ -19,9 +19,12 @@
 //
 // Visual contract (interactive mode): matches
 // `ToolCallCard.vue:486-525` exactly — the 4-action row
-// (仅一次 / 始终允许 / 拒绝 / 拒绝并说明), the optional feedback
-// textarea, the risk dot, the reason line, the path-with-badge
-// row.
+// (仅一次 / 始终允许|本次运行始终允许 / 拒绝 / 拒绝并说明), the
+// optional feedback textarea, the risk dot, the reason line, the
+// path-with-badge row. The 中间 button label forks by
+// `ask.workerRunId` since task `06-26-subagent-per-run-grant` Step 2
+// (2026-06-26): main-chat → "始终允许" (persists to DB), worker →
+// "本次运行始终允许" (persists to per-run memory cache).
 //
 // Visual contract (historical mode): info-only, no buttons.
 // Renders the risk label + tool name + path badge (when
@@ -55,17 +58,27 @@ const props = withDefaults(
      *  the cross-session cwd mix-up fix from 2026-06-16. */
     repoRoot?: string;
     /** When `true`, the "始终允许" (allow_always) button is NOT
-     *  rendered in interactive mode. Used by the worker-ask path
-     *  (PR2 RULE-FrontSubagent-003, 2026-06-22): the backend treats
-     *  a worker's `PermissionResponse::AllowAlways` as AllowOnce
-     *  (workers do NOT persist grants to
-     *  `session_tool_permissions` — that would cross privilege
-     *  boundaries by extending parent-session permissions from a
-     *  worker). Showing a "persist" button that doesn't actually
-     *  persist is misleading UX, so the worker-ask card hides it
-     *  and shows only "仅一次" / "拒绝" / "拒绝并说明". The
-     *  default (`false`) preserves the main-chat ToolCallCard
-     *  behavior (all 4 buttons). */
+     *  rendered in interactive mode.
+     *
+     *  History:
+     *    - Pre-2026-06-26 (PR2 RULE-FrontSubagent-003, 2026-06-22):
+     *      the worker-ask path (`DrawerPermissionAskCard`) set this
+     *      to `true` (derived from `ask.workerRunId`) because the
+     *      backend worker `AllowAlways` arm silently downgraded to
+     *      `AllowOnce` (workers do NOT persist grants to
+     *      `session_tool_permissions` — would cross privilege
+     *      boundaries). Showing a "persist" button that didn't
+     *      actually persist was misleading UX, so the worker-ask
+     *      card hid it.
+     *    - 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2):
+     *      the backend now persists worker `AllowAlways` to a per-run
+     *      in-memory grant cache (`RunGrantCache`), so the button is
+     *      meaningful again (scope = "本次运行"). The default
+     *      (`false`) now applies to BOTH main-chat and worker paths;
+     *      the label forks by `ask.workerRunId` (主对话 "始终允许"
+     *      / worker "本次运行始终允许"). The prop is retained for
+     *      callers that need to hide the button explicitly
+     *      (defensive / future use). */
     hideAllowAlways?: boolean;
     /** 2026-06-22 (RULE-WorkerAsk-001): the resolve outcome of a
      *  worker's ask. Only rendered in historical mode (interactive
@@ -85,6 +98,24 @@ const props = withDefaults(
 );
 
 const riskMeta = computed(() => RISK_META[props.ask.risk]);
+
+/** 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2): the
+ *  "allow_always" button label forks by ask scope.
+ *    - Main-chat ask (`ask.workerRunId` absent) → `始终允许`. The
+ *      backend persists the grant to `session_tool_permissions`
+ *      (survives across requests in the same session).
+ *    - Worker ask (`ask.workerRunId` present) → `本次运行始终允许`.
+ *      The backend persists the grant to a per-run in-memory cache
+ *      (`RunGrantCache`) that dies with the worker run — the label
+ *      makes the run-scoped semantics explicit so the user doesn't
+ *      confuse it with the main-chat session-level persistence.
+ *
+ *  The wire is still `"allow_always"`; the backend forks the
+ *  persistence target by `is_worker` (parent → DB; worker → run
+ *  cache). */
+const allowAlwaysLabel = computed<string>(() =>
+  props.ask.workerRunId ? "本次运行始终允许" : "始终允许",
+);
 
 /** 2026-06-22 (RULE-WorkerAsk-001): outcome metadata for the
  *  historical card's outcome badge. Drives the Chinese label
@@ -225,7 +256,7 @@ function cancelFeedback(): void {
           type="button"
           class="permission-ask-body__btn permission-ask-body__btn--always"
           @click="respond('allow_always')"
-        >始终允许</button>
+        >{{ allowAlwaysLabel }}</button>
         <button
           type="button"
           class="permission-ask-body__btn permission-ask-body__btn--deny"

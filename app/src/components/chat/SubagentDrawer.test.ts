@@ -1085,10 +1085,13 @@ describe("SubagentDrawer", () => {
             // `workerRunId` too — the PR1.5 backend emits the same
             // payload shape on BOTH the `permission:ask` IPC channel
             // (live store) AND the `subagent:event` transcript
-            // channel. `DrawerPermissionAskCard` derives
-            // `hideAllowAlways` from `ask.workerRunId` (sourced from
-            // the transcript via `synthesizeAsk`), so the transcript
-            // payload MUST carry it for the button to be hidden.
+            // channel. 2026-06-26 (task `06-26-subagent-per-run-grant`
+            // Step 2): the backend now persists worker AllowAlways to
+            // a per-run in-memory grant cache (`RunGrantCache`), so
+            // the worker card now shows the always button with a
+            // forked label ("本次运行始终允许"). Main-chat label
+            // remains "始终允许". Wire is still `"allow_always"`;
+            // backend forks the persistence target by `is_worker`.
             workerRunId: "run-1",
           },
         },
@@ -1116,29 +1119,37 @@ describe("SubagentDrawer", () => {
       const cardEl = document.body.querySelector(".drawer-permission-ask-card");
       // Status pill flips to "等待审批".
       expect(cardEl?.textContent).toContain("等待审批");
-      // The interactive action row renders. N3 fix (RULE-FrontSubagent-003
-      // check phase, 2026-06-22): worker asks hide the "始终允许" button
-      // (backend treats worker AllowAlways as AllowOnce — persisting a
-      // worker grant to `session_tool_permissions` would cross privilege
-      // boundaries). So a worker ask renders 3 buttons, NOT 4.
+      // The interactive action row renders. 2026-06-26 (task
+      // `06-26-subagent-per-run-grant` Step 2): worker asks now
+      // render 4 buttons (the always button reappears with a forked
+      // label). The wire is still `"allow_always"`; backend forks
+      // semantics by `is_worker` (worker → run cache, parent → DB).
       expect(cardEl?.querySelector(".permission-ask-body__actions"))
         .not.toBeNull();
       const btns = cardEl?.querySelectorAll(".permission-ask-body__btn");
-      expect(btns?.length ?? 0).toBe(3);
-      // Specifically: the "始终允许" button must NOT render for a worker ask.
+      expect(btns?.length ?? 0).toBe(4);
+      // The "始终允许" button DOES render for a worker ask now, with
+      // the forked label "本次运行始终允许" (vs main-chat "始终允许").
       const alwaysBtn = cardEl?.querySelector(".permission-ask-body__btn--always");
-      expect(alwaysBtn).toBeNull();
+      expect(alwaysBtn).not.toBeNull();
+      expect(alwaysBtn?.textContent).toBe("本次运行始终允许");
+      expect(alwaysBtn?.textContent).not.toBe("始终允许");
       w.unmount();
     });
 
-    it("N3: worker ask (workerRunId present) hides the 始终允许 button", async () => {
-      // Worker asks route through `DrawerPermissionAskCard`, which
-      // derives `hideAllowAlways` from `ask.workerRunId`. The
-      // main-chat path (no workerRunId) keeps all 4 buttons; that
-      // half of the contract is unit-tested directly in
-      // `PermissionAskBody.test.ts::hideAllowAlways prop` (no Tauri
-      // runtime needed there). This test covers the integration:
-      // drawer → card → body end-to-end for the worker case.
+    it("N3: worker ask (workerRunId present) shows 始终允许 with forked label", async () => {
+      // Worker asks route through `DrawerPermissionAskCard`. The
+      // main-chat path (no workerRunId) keeps all 4 buttons with
+      // label "始终允许"; the worker path (workerRunId present) also
+      // keeps all 4 buttons but the always button label forks to
+      // "本次运行始终允许" (2026-06-26 task `06-26-subagent-per-run-
+      // grant` Step 2 — backend now persists worker AllowAlways to
+      // `RunGrantCache`, scope = per-run memory). The drawer card
+      // itself always passes `:hide-allow-always="false"`; the label
+      // divergence is purely inside `PermissionAskBody`. This test
+      // covers the integration: drawer → card → body end-to-end for
+      // the worker case (label fork) — the unit-level fork is also
+      // locked in `PermissionAskBody.test.ts::worker ask label fork`.
       const store = useSubagentRunsStore();
       const chatStore = useChatStore();
       const permissionsStore = usePermissionsStore();
@@ -1172,11 +1183,15 @@ describe("SubagentDrawer", () => {
       await flushPromises();
 
       const workerCardEl = document.body.querySelector(".drawer-permission-ask-card");
-      // 3 buttons: 仅一次 / 拒绝 / 拒绝并说明 (no 始终允许).
+      // 4 buttons: 仅一次 / 本次运行始终允许 / 拒绝 / 拒绝并说明.
       expect(workerCardEl?.querySelectorAll(".permission-ask-body__btn").length ?? 0)
-        .toBe(3);
-      expect(workerCardEl?.querySelector(".permission-ask-body__btn--always"))
-        .toBeNull();
+        .toBe(4);
+      const alwaysBtn = workerCardEl?.querySelector(".permission-ask-body__btn--always");
+      expect(alwaysBtn).not.toBeNull();
+      // Label fork: worker always-button reads "本次运行始终允许"
+      // (NOT the main-chat "始终允许"). This is the user-visible
+      // signal that the persistence is per-run, not per-session.
+      expect(alwaysBtn?.textContent).toBe("本次运行始终允许");
       w.unmount();
     });
 

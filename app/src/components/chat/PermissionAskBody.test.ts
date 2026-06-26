@@ -81,6 +81,55 @@ describe("PermissionAskBody interactive mode", () => {
     expect(onRespond).toHaveBeenCalledWith("allow_always");
   });
 
+  // 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2):
+  // worker ask now shows the persist button with a forked label
+  // ("本次运行始终允许") vs main-chat "始终允许". The wire is still
+  // `"allow_always"` — backend forks semantics on `is_worker`.
+  describe("worker ask label fork (allow_always label by workerRunId)", () => {
+    it("main-chat ask (no workerRunId) renders 始终允许", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk(),
+          onRespond: vi.fn(),
+          repoRoot: "/data/repo",
+        },
+      });
+      const btn = w.get(".permission-ask-body__btn--always");
+      expect(btn.text()).toBe("始终允许");
+      expect(btn.text()).not.toContain("本次运行");
+    });
+
+    it("worker ask (with workerRunId) renders 本次运行始终允许", () => {
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk({ workerRunId: "run-worker-1" }),
+          onRespond: vi.fn(),
+          repoRoot: "/data/repo",
+        },
+      });
+      const btn = w.get(".permission-ask-body__btn--always");
+      expect(btn.text()).toBe("本次运行始终允许");
+    });
+
+    it("worker ask clicking 本次运行始终允许 still fires onRespond('allow_always')", async () => {
+      const onRespond = vi.fn();
+      const w = mount(PermissionAskBody, {
+        props: {
+          mode: "interactive",
+          ask: makeAsk({ workerRunId: "run-worker-1" }),
+          onRespond,
+          repoRoot: "/data/repo",
+        },
+      });
+      await w
+        .get(".permission-ask-body__btn--always")
+        .trigger("click");
+      expect(onRespond).toHaveBeenCalledWith("allow_always");
+    });
+  });
+
   it("clicking 拒绝 fires onRespond('deny') with no reason", async () => {
     const onRespond = vi.fn();
     const w = mount(PermissionAskBody, {
@@ -252,15 +301,23 @@ describe("PermissionAskBody interactive mode", () => {
   });
 
   // N3 (RULE-FrontSubagent-003 check phase, 2026-06-22): the
-  // "始终允许" (allow_always) button must be hideable via the
-  // `hideAllowAlways` prop. The worker-ask path
-  // (`DrawerPermissionAskCard` derives this from `ask.workerRunId`)
-  // hides it because the backend worker AllowAlways arm treats
-  // the response as AllowOnce — persisting worker grants to
+  // "始终允许" (allow_always) button is hideable via the
+  // `hideAllowAlways` prop. Originally the worker-ask path
+  // (`DrawerPermissionAskCard`) derived this from `ask.workerRunId`
+  // and hid the button because the backend worker AllowAlways arm
+  // treated the response as AllowOnce — persisting worker grants to
   // `session_tool_permissions` would cross privilege boundaries.
-  // The main-chat ToolCallCard path does NOT set the prop and
-  // keeps all 4 buttons.
-  describe("hideAllowAlways prop (N3: worker asks hide 始终允许)", () => {
+  //
+  // 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2): the
+  // backend now persists worker AllowAlways to a per-run in-memory
+  // grant cache (`RunGrantCache`), so the button is meaningful
+  // again (scope = "本次运行"). `DrawerPermissionAskCard` always
+  // passes `hideAllowAlways=false` now; the label forks by
+  // `ask.workerRunId` (主对话 → "始终允许", worker → "本次运行始终
+  // 允许"). The prop is retained as a defensive escape hatch for
+  // callers that need to hide the button explicitly — these tests
+  // pin the prop-level contract.
+  describe("hideAllowAlways prop (defensive hide escape hatch)", () => {
     it("default (false) renders all 4 buttons including 始终允许", () => {
       const w = mount(PermissionAskBody, {
         props: {

@@ -125,6 +125,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -338,6 +339,7 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -473,6 +475,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -613,6 +616,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -863,6 +867,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     cancel_handle.await.unwrap();
@@ -986,6 +991,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1127,6 +1133,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
     let _ = cancel_task.await;
@@ -1250,6 +1257,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1381,6 +1389,7 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         // `run_subagent` passes `Some(worker_run_id_opt)`.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1598,6 +1607,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             // caller — no worker context — worker_run_id is None.
             None,
             h.subagent_cache.clone(),
+            None,
         ),
     )
     .await;
@@ -1817,6 +1827,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         // parent branch. worker_run_id stays None.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1896,6 +1907,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         // caller — no worker context — worker_run_id is None.
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 
@@ -1979,6 +1991,7 @@ async fn run_loop(
         None,
         None,
         h.subagent_cache.clone(),
+        None,
     )
     .await;
 }

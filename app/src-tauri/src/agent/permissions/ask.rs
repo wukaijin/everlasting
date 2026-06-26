@@ -285,22 +285,37 @@ pub(super) async fn ask_path(
                 Decision::Allow
             }
             Ok(PermissionResponse::AllowAlways) => {
-                // Per design decision: workers do NOT persist
-                // "始终允许" to session_tool_permissions. The grant
-                // would leak across privilege boundaries (worker runs
-                // in parent's session but should not extend parent's
-                // permissions). Log + return Allow for this call only.
-                // No audit (RULE-A-016 lineage).
+                // 2026-06-26 (task 06-26-subagent-per-run-grant): the
+                // worker's "always allow" is now persisted to the
+                // per-run in-memory grant cache (NOT to
+                // `session_tool_permissions` — that would leak the
+                // grant across the privilege boundary into the
+                // parent session's grant table, which would silently
+                // authorize the parent and all future workers). The
+                // cache lives for the duration of this worker's
+                // `run_chat_loop` call and dies with it.
                 //
-                // RULE-WorkerAsk-001: worker AllowAlways is treated as
-                // AllowOnce (Session 62 invariant); the outcome wire
-                // string is `"allow"` either way.
+                // Same `(kind, value)` rule as the parent path
+                // (`match_value_for_allow_always`) — tool / prefix /
+                // path variants mirror the DB table, so the read
+                // path in `check.rs` matches identically.
+                //
+                // Still no audit (RULE-A-016 lineage — worker grant
+                // writes stay in the worker's transcript, not the
+                // parent's session_audit_events).
+                //
+                // RULE-WorkerAsk-001: worker AllowAlways outcome wire
+                // string is `"allow"` (Session 62 invariant; the
+                // cache write is invisible to the wire).
+                if let Some(cache) = &ctx.run_grants {
+                    cache.grant_for_run(tool_name, tool_input, path_or_cmd);
+                }
                 sink.emit_permission_ask_resolved(&rid, "allow");
                 tracing::info!(
                     session_id = %ctx.session_id,
                     worker_run_id = %worker_run_id,
                     tool = %tool_name,
-                    "permission::check: worker ask AllowAlways (not persisted — \
+                    "permission::check: worker ask AllowAlways (cached per-run — \
                      worker grants do not extend parent session permissions)"
                 );
                 Decision::Allow

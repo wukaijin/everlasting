@@ -114,16 +114,33 @@ const bodyMode = computed<"interactive" | "historical">(() =>
   props.interactive ? "interactive" : "historical",
 );
 
-/** Hide the "始终允许" (allow_always) button when this card is for
- *  a WORKER ask. The backend worker path (`permissions/mod.rs
- *  ::ask_path` AllowAlways arm) treats `PermissionResponse
- *  ::AllowAlways` as AllowOnce — workers do NOT persist grants to
- *  `session_tool_permissions` (would cross privilege boundaries
- *  by extending parent-session permissions from a worker). So
- *  showing a "persist" button that doesn't actually persist is
- *  misleading UX. Derived from `ask.workerRunId` (present = worker
- *  ask; absent = main-chat ask). */
-const hideAllowAlways = computed<boolean>(() => !!props.ask.workerRunId);
+/** Whether to hide the "始终允许" (allow_always) button.
+ *
+ *  History:
+ *    - Pre-2026-06-26 (task `06-26-subagent-per-run-grant`): worker
+ *      asks forced this to `true` (derived from `ask.workerRunId`)
+ *      because the backend worker `AllowAlways` arm silently
+ *      downgraded to `AllowOnce` — workers did NOT persist grants to
+ *      `session_tool_permissions` (would cross privilege boundaries
+ *      by extending parent-session permissions from a worker), so a
+ *      "persist" button that didn't actually persist was misleading
+ *      UX.
+ *    - 2026-06-26 (task `06-26-subagent-per-run-grant` Step 2): the
+ *      backend now persists worker `AllowAlways` to a per-run
+ *      in-memory grant cache (`RunGrantCache`, lives in the worker's
+ *      `PermissionContext`, dies with the worker run, NEVER writes
+ *      `session_tool_permissions`). So a worker CAN now have a
+ *      meaningful "持久" option — but its scope is "本次运行" not
+ *      "本 session". The button reappears; the label is forked by
+ *      `PermissionAskBody` based on `ask.workerRunId` (主对话 →
+ *      "始终允许"; worker → "本次运行始终允许"). The wire is still
+ *      `"allow_always"`; the backend forks the semantics by
+ *      `is_worker` (parent → write DB; worker → write run cache).
+ *
+ *  Always `false` now — both main-chat and worker asks render the
+ *  persist button. The label divergence lives in
+ *  `PermissionAskBody.vue`. */
+const hideAllowAlways = computed<boolean>(() => false);
 
 /** The `onRespond` callback. Only attached in interactive mode —
  *  `PermissionAskBody` guards its render of the action row on
