@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "§5b worker ask 跨层契约 SOT — 本次核心约束(Validation Matrix line 290 worker AllowAlways 降级规则要改 + RULE-A-016 不污染 parent audit + match_kind 三种语义 + emit_permission_ask_resolved outcome 编码)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "⑨ 关 tool 侧契约 — path-based permission / shell classify_prefix 三档 / match_kind 写入规则(match_value_for_allow_always 复用来源)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 结构 — PermissionContext 构建(chat_loop.rs:428) + 三处 check() 调用点 + run_chat_loop 参数透传路径"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent 生命周期 — run 结束=SubagentBufferSink 销毁=run cache 自动失效的隔离依据 + concurrent dispatch 多 worker 独立 sink"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "前端 chat 组件契约 — PermissionAskBody.vue / DrawerPermissionAskCard.vue / WorkerAskBanner 所在域,文案分流 + 按钮显隐改动依据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约改动指引 — 本任务后端 ctx+check+ask / 前端按钮 / IPC wire 三端联动,§5b 强调跨层一致(任一端错=死代码 B1 教训)"}

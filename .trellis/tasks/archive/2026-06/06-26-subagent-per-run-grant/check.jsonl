@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "§5b worker ask 契约 SOT — 验证 worker AllowAlways 不再降级→写 per-run cache、RULE-A-016 不污染 parent audit、outcome 编码不变"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "⑨ 关 tool 契约 — 验证 match_kind 三种语义(tool/prefix/path-glob)写入与查询规则与 parent 一致"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 结构 — 验证 ctx 字段/参数透传/三处 check 调用点未被破坏"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent 生命周期 — 验证 run 结束 cache 销毁、concurrent dispatch 多 worker 隔离"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "前端 chat 契约 — 验证 worker 卡恢复按钮 + 文案分流,主对话不回归"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约 — 验证后端 ctx/check/ask + 前端按钮 + IPC wire 三端一致"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试规范 — 验证 cache 命中/失效/AllowOnce 不持久/零污染等单测符合约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB 约定 — 验证 session_tool_permissions 零新行(parent 授权表零污染断言)"}
