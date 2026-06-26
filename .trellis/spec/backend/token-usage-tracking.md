@@ -13,7 +13,7 @@
 > - worker（子代理）token **不再** fold 进父 session（reversal of RULE-A-015/PR2a），隔离到 `subagent_runs.token_usage_json`
 > - 前端 `accumulateTokenUsage` → `setLastTurnUsage`（覆盖写，非 `+=`）；ChatInput 分子改 `context_input_tokens`
 >
-> 本文 §2 Signatures / §3 Contracts（agent loop + frontend accumulation 段）已同步更新为 snapshot 语义；§4 Validation Matrix / §5 Cases / §7 中残留的「cumulative / accumulate」表述为历史描述，**当前以 §2 + 上述要点 + 代码为准**。spec 初衷（§1 line "current context usage, **not cumulative session totals**"）至此落地。
+> 本文 §2 Signatures / §3 Contracts / §4 Validation Matrix / §5 Cases / §6 Tests / §7 Wrong-vs-Correct 已**全部同步**为 snapshot 语义（2026-06-26 doc-audit：修正了 §3 wire 说明、§4 矩阵、§5 用例、§6 测试清单、§7 示例中残留的累加 / `camelCase` / 已删函数名表述；仅 Design Decisions 段保留 A4 原始决策措辞，顶部注记标明 DB 语义已转 snapshot）。spec 初衷（§1 line "current context usage, **not cumulative session totals**"）至此落地。
 
 ## Scenario: Token Usage Tracking (A4, 2026-06-10)
 
@@ -143,15 +143,18 @@ interface ChatEventPayload {
 }
 ```
 
-The IPC field is **snake_case** (the existing `kind` discriminator
-and the existing `stop_reason` are both snake_case; mixing styles
-here would break the `parse_*` symmetry on the TS side). Field
-names mirror Rust's `TokenUsage` 1:1 — no `camelCase` rewrite on
-the boundary (the outer `ChatEventPayload` is camelCase via
-`#[serde(rename_all = "camelCase")]` on the Rust side at the
-struct level, but the inner `usage` JSON object keeps snake_case
-to match the user's request). **See "Wrong vs Correct" §7 for the
-rationale.**
+The IPC field is **snake_case** end to end (the existing `kind`
+discriminator and the existing `stop_reason` are both snake_case;
+mixing styles here would break the `parse_*` symmetry on the TS
+side). Field names mirror Rust's `TokenUsage` 1:1 — no
+`camelCase` rewrite on the boundary. The outer `ChatEventPayload`
+(`app/src-tauri/src/state.rs`) has **no** `rename_all` attribute —
+it is just `{ request_id, #[serde(flatten)] event: ChatEvent }`,
+and `ChatEvent` itself is `#[serde(tag = "kind", rename_all =
+"snake_case")]`. So `kind`, `stop_reason`, and every field inside
+`usage` are all snake_case on the wire — one consistent style,
+not a camelCase-outer / snake_case-inner "polyglot" payload.
+**See "Wrong vs Correct" §7 for the rationale.**
 
 #### Anthropic protocol mapping
 
@@ -218,7 +221,7 @@ has no per-turn token counts.
 #### Agent loop snapshot write（2026-06-26 R3 — replaces R2 accumulation）
 
 The agent loop's `ChatEvent::Done` handler in
-`app/src-tauri/src/agent/chat_loop.rs` (Done-event arm, ~:1149-1184):
+`app/src-tauri/src/agent/chat_loop.rs` (Done-event arm, ~:1128-1189):
 
 ```rust
 ChatEvent::Done { stop_reason: sr, usage } => {
@@ -289,8 +292,8 @@ colors, not in the design token system per
 | OpenAI `usage` is all-zero | `parse_openai_usage` returns `None`. Same deliberate contract as Anthropic. |
 | Cancel mid-stream (user hits Stop) | `ChatEvent::Done { usage: None, stop_reason: "cancelled" }`. Agent loop skips the write, `tracing::info!` records the skip. |
 | Network error mid-stream | `ChatEvent::Error { category: Network }`. The agent loop's `if had_error { return }` short-circuits before any `Done` is processed — the `usage` write is naturally skipped. |
-| `add_token_usage` on missing session id | `UPDATE` matches 0 rows. `sqlx::Error` is not raised. `tracing::info!` would log success, but the write is a no-op. |
-| `add_token_usage` on a session where columns are NULL | `COALESCE(col, 0) + ?` evaluates `col` to 0, writes `?`. Subsequent reads show `Some(value)`. |
+| `update_last_turn_usage` on missing session id | `UPDATE` matches 0 rows. `sqlx::Error` is not raised. The write is a silent no-op (0 rows changed). |
+| `update_last_turn_usage` overwrites an existing snapshot | 5 个 `last_*` 列直接 `= ?`（非 `+= ?`、非 `COALESCE`）。每次 `Done` 覆盖写，读回即最近一次请求的值。pre-snapshot session 列为 NULL，首次写后变 `Some(value)`；后续每次写覆盖前值。 |
 | Session switch mid-stream (user views a different session) | The stream keeps running on the controller's `request_id`; the `done` event routes by `request_id` to the originating session, updates `tokenUsageBySession` for that session (not the user's current view). When the user returns to the streamed session, the `currentSessionTokenUsage` computed re-evaluates and shows the updated total. |
 | Page reload after N turns | `list_sessions` returns `SessionSummary` with `input_tokens_total` etc. (not NULL). `onProjectChange` seeds the in-memory Map. The hint area shows the cumulative value on first paint. |
 | Pre-A4 session (columns NULL) | UI renders "—" with the "升级前未统计" tooltip. The first post-upgrade turn starts the counters from 0. |
@@ -306,9 +309,9 @@ colors, not in the design token system per
  - `content_block_start` / `delta`s (text + tool_use + thinking).
  - `message_delta { delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1234, output_tokens: 56, cache_creation_input_tokens: 100, cache_read_input_tokens: 200 } }` — the `usage` local is overwritten with the non-zero value.
  - `message_stop`.
-4. The stream yields `ChatEvent::Done { stop_reason: Some("end_turn"), usage: Some(TokenUsage { 1234, 56, 100, 200 }) }`.
-5. The agent loop's `if let Some(t) = usage { add_token_usage(...) }` runs the SQL UPDATE.
-6. The frontend's `streamController.handleChatEvent("done")` sees the `usage` field and calls `useChatStore().accumulateTokenUsage(sid, t)`. The `tokenUsageBySession` map updates; `currentSessionTokenUsage` re-evaluates.
+4. The stream yields `ChatEvent::Done { stop_reason: Some("end_turn"), usage: Some(TokenUsage { input_tokens: 1234, output_tokens: 56, cache_creation_input_tokens: 100, cache_read_input_tokens: 200, context_input_tokens: 1534 }) }` — `context_input_tokens` = input + cache_creation + cache_read = 1234 + 100 + 200 = 1534，是前端 `%` 的分子。
+5. The agent loop's `if let Some(t) = usage { update_last_turn_usage(...) }`（在 `!skip_persist` gate 内，worker 路径被挡）runs the SQL UPDATE — 5 个 `last_*` 列覆盖写。
+6. The frontend's `streamController.handleChatEvent("done")` sees the `usage` field and calls `useChatStore().setLastTurnUsage(sid, t)`（覆盖写 `tokenUsageBySession.set(sid, { ...usage })`，非 `+=`）。The `tokenUsageBySession` map updates; `currentSessionTokenUsage` re-evaluates.
 7. The ChatInput hint area re-renders: `1.2K · 1% / 200K` (assuming 1234 tokens is ~0.6% of 200K context_window). The color is `ok` (green).
 
 #### Good: OpenAI happy path
@@ -316,7 +319,7 @@ colors, not in the design token system per
 1. Same flow, but the `chat` command's `resolve_chat_provider` returns an `OpenAIProvider` (the user has switched the default to a gpt-4o model).
 2. The OpenAI adapter's `build_http_body` includes `"stream_options": { "include_usage": true }`.
 3. The SSE stream emits normal text deltas, then a final chunk with `usage: { prompt_tokens: 200, completion_tokens: 30, total_tokens: 230, prompt_tokens_details: { cached_tokens: 50 } }` and no `choices`.
-4. The adapter's `parse_openai_usage` normalizes: `input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 0`.
+4. The adapter's `parse_openai_usage` normalizes: `input_tokens: 200, output_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 0, context_input_tokens: 200`（= `prompt_tokens`，前端 `%` 分子；OpenAI 勿再加 `cache_read`）。
 5. The agent loop + frontend flow identically to the Anthropic path.
 
 #### Base: cancel mid-stream
@@ -324,8 +327,8 @@ colors, not in the design token system per
 1. User sends a question; LLM starts streaming.
 2. User hits Stop. The cancellation token fires; the agent loop's `tokio::select!` notices on the next event boundary.
 3. The agent loop bails out, persists whatever's been collected so far, and yields `ChatEvent::Done { stop_reason: Some("cancelled"), usage: None }`.
-4. The frontend's `done` handler sees `usage` is undefined; `accumulateTokenUsage` is not called.
-5. The SQL write is skipped. The session's column totals reflect all PRE-cancel turns (i.e. the cancel did NOT roll anything back). This is the correct behavior — a user who cancelled 3 turns in still has those 3 turns' usage on the dashboard.
+4. The frontend's `done` handler sees `usage` is undefined; `setLastTurnUsage` is not called.
+5. The SQL write is skipped. Snapshot semantics: the `last_*` columns keep the **previous successful turn's** snapshot (cancel does not overwrite). The dashboard still shows the last completed request's context occupancy — cancel mid-stream does not zero it out.
 
 #### Bad: OpenAI stream without `include_usage`
 
@@ -350,13 +353,15 @@ this is the case.
 
 #### Backend (cargo test)
 
-**`llm::types` (4 new tests)**
+**`llm::types` (5 new tests)**
 
 - `token_usage_serializes_with_snake_case_fields`
 - `token_usage_default_is_all_zero`
-- `token_usage_add_assign_saturates_at_u32_max`
+- `token_usage_deserializes_legacy_4_field_json_with_default_context`（snapshot 重构新增：旧 4 字段 JSON 反序列化时 `context_input_tokens` 走 `#[serde(default)]` = 0）
 - `chat_event_done_carries_usage_payload`
 - `chat_event_done_with_none_usage_emits_null`
+
+> 2026-06-26 snapshot 重构后，旧 `token_usage_add_assign_saturates_at_u32_max`（依赖 `impl Add for TokenUsage`）随累加语义一起删除；`Add` impl 已不存在。
 
 **`llm::provider::anthropic` (4 new tests)**
 
@@ -374,28 +379,25 @@ this is the case.
 - `parse_openai_usage_zero_returns_none`
 - `parse_openai_usage_empty_prompt_tokens_details`
 
-**`db::sessions` (4 new tests, in `db::tests`)**
+**`db::sessions` (2 snapshot tests, in `db::tests`)** — 2026-06-26 snapshot 重构后，旧 `add_token_usage_*` 累加测试已删，换为覆盖写不变量测试：
 
-- `add_token_usage_first_turn_initializes_columns`
-- `add_token_usage_accumulates_across_turns`
-- `add_token_usage_on_missing_session_is_noop`
-- `list_sessions_includes_token_columns`
+- `update_last_turn_usage_overwrites_not_accumulates` — 连续两次调用后，行保留**第二次**的值（非两者之和），锁定 snapshot 覆盖写语义。
+- `list_sessions_includes_last_turn_columns` — `SessionSummary`（侧边栏列表）能读到 5 个 `last_*` 列，无需 per-session IPC。
 
-Total A4 tests: **18 new cargo tests** (rounds up to 285 from 281;
-the implementation also has a few additional tests for chat_event
-done serialization edge cases).
+Total token-usage cargo tests: **17**（types 5 + anthropic 4 + openai 6 + db::sessions 2 snapshot）。2026-06-26 snapshot 重构后 db::sessions 从 4 个累加测试降为 2 个覆盖写测试（净 -2）；types 段实际 5 个（旧文本写 "4" 但列了 5 个，本次订正）。
 
 #### Frontend
 
 - `pnpm build` (vue-tsc strict) must pass.
+- **Known test gap (unguarded contract)**: `streamController.handleChatEvent("done")` 对 `context_input_tokens` 的 wire-optional fallback（`?? input + cache_creation + cache_read`，`streamController.ts:999-1003`）目前**无前端单测覆盖**（`**/*.test.ts` 无相关断言）。旧后端 wire shape 或字段缺失时该 fallback 是 load-bearing 的，后续应补一个 fallback 正确性测试。
 - Manual smoke test (acceptance A2 from the parent PRD):
  1. `cd app && pnpm tauri dev`
  2. Open a session, send a question, click Send.
  3. Observe the ChatInput hint area shows "X · Y% / 200K" (e.g. "1.2K · 1% / 200K"), green color (under 50%).
  4. After 4-5 turns, observe the percentage climbs. Watch the color shift to yellow at 50%, red at 75%.
  5. Hover the chip, observe the tooltip shows the four counters (input / cache_read / cache_creation / output).
- 6. Open Settings, delete the model's `api_key` (or the model entirely). Send a message — observe the pre-flight error and "token usage not accumulating" (the agent loop never reached `add_token_usage`).
- 7. Page reload. Observe the hint area still shows the cumulative value (seeded from `list_sessions`).
+ 6. Open Settings, delete the model's `api_key` (or the model entirely). Send a message — observe the pre-flight error and the hint stays at the previous snapshot (the agent loop never reached `update_last_turn_usage`).
+ 7. Page reload. Observe the hint area still shows the last-turn snapshot (seeded from `list_sessions` `last_*` columns; pre-snapshot session 显「—」)。
 
 ### 7. Wrong vs Correct
 
@@ -435,19 +437,23 @@ pub struct TokenUsage {
  pub output_tokens: u32,
  pub cache_creation_input_tokens: u32,
  pub cache_read_input_tokens: u32,
+ #[serde(default)]
+ pub context_input_tokens: u32, // 2026-06-26 第 5 字段（前端 % 分子）
 }
 
-// Resulting IPC payload (mixed at the outer/inner boundary;
-// outer is the parent `ChatEventPayload` which has its own
-// serde rename; inner is the raw Rust struct field names):
+// Resulting IPC payload (snake_case throughout — both the outer
+// ChatEventPayload fields and the inner TokenUsage object;
+// ChatEventPayload has NO `rename_all`, ChatEvent is
+// `rename_all = "snake_case"`):
 {
  "kind": "done",
- "stopReason": "end_turn", // outer ChatEventPayload camelCase
+ "stop_reason": "end_turn", // ChatEvent snake_case
  "usage": {
- "input_tokens": 1234, // inner TokenUsage snake_case
+ "input_tokens": 1234, // TokenUsage snake_case
  "output_tokens": 56,
  "cache_creation_input_tokens": 100,
- "cache_read_input_tokens": 200
+ "cache_read_input_tokens": 200,
+ "context_input_tokens": 1534
  }
 }
 ```
@@ -494,8 +500,9 @@ let u = TokenUsage {
  cache_read_input_tokens: cached,
 };
 // Both yield:
-// ChatEvent::Done { stop_reason, usage: Some(TokenUsage { 4 fields }) }
-// Agent loop is protocol-agnostic.
+// ChatEvent::Done { stop_reason, usage: Some(TokenUsage { 5 fields }) }
+// （第 5 字段 context_input_tokens：Anthropic = input+cc+cr，
+//  OpenAI = prompt_tokens；agent loop is protocol-agnostic。）
 ```
 
 Future protocols (Gemini, Ollama) plug in by writing their own
@@ -516,25 +523,31 @@ PRD's "排除" list), and the per-turn granularity is overkill
 for the A4 hint (the PRD explicitly defers per-turn to "后续
 C3 / B6 阶段").
 
-#### Correct: per-session cumulative on the sessions row
+#### Correct: per-session snapshot on the sessions row（2026-06-26 重构后）
 
 ```rust
-// GOOD — single SQL UPDATE on the sessions row, additive
-// on the existing column values
+// GOOD — single SQL UPDATE on the sessions row, OVERWRITES the
+// 5 `last_*` snapshot columns（= ?，非 += ? / 非 COALESCE）。
+// 语义 = 最近一次 LLM 请求的 context 占用快照。
 UPDATE sessions
- SET input_tokens_total = COALESCE(input_tokens_total, 0) + ?,
- output_tokens_total = COALESCE(output_tokens_total, 0) + ?,
- cache_creation_total = COALESCE(cache_creation_total, 0) + ?,
- cache_read_total = COALESCE(cache_read_total, 0) + ?,
+ SET last_context_input_tokens = ?,
+ last_input_tokens = ?,
+ last_output_tokens = ?,
+ last_cache_creation = ?,
+ last_cache_read = ?,
  updated_at = ?
  WHERE id = ?
 ```
 
-The hint area reads the cumulative value with no aggregation.
+The hint area reads the last-turn snapshot with no aggregation.
 Future C3 / B6 work can ALTER `messages` to add per-turn columns
-without changing the A4 schema.
+without changing the snapshot schema.（旧 A4 累加式 `*_total` 列仍
+保留在 schema 中但代码不再写入 — 见 §2 DB schema "frozen" 注；
+清理它们是后续 debt PR 的事。）
 
 ### Design Decisions
+
+> **⚠ 2026-06-26 snapshot 注记**：以下 Decision 段保留 A4 原始（cumulative 模型）措辞，反映「token usage 走 provider 私有解析 + DB 为 source of truth + frontend Map 投影」的架构决策——这些**架构决策在 snapshot 重构后依然成立**。仅 DB 写入语义从「累加 `*_total`」变为「覆盖 `last_*` 快照」（见 §2 / §3），frontend Map 从「incremented」变为「overwritten」（见 §3 Frontend snapshot）。读时请把下文的 cumulative / accumulate / running total 心智替换为 snapshot 语义。
 
 #### Decision: Anthropic also goes through the wire layer's usage normalization
 
