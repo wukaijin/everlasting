@@ -106,5 +106,12 @@ pub fn all_command_names() -> Vec<&'static str> {
         // per-run detail (with transcript).
         "list_subagent_runs_by_session",
         "get_subagent_run",
+        // L3b PR3 (2026-06-27): merge / discard worker IPCs.
+        // The LLM-side path is the `merge_worker` /
+        // `discard_worker` tools (tool layer); these commands
+        // exist for the PR4 `<SubagentDrawer>` manual
+        // merge / discard buttons.
+        "merge_worker_run",
+        "discard_worker_run",
     ]
 }

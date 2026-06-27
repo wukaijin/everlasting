@@ -599,6 +599,7 @@ mod tests {
             cwd: tmp.path().canonicalize().unwrap(),
             checklist: crate::tools::update_checklist::new_handle(),
             background_shells: crate::background_shell::default_registry(),
+            db: crate::tools::test_default_pool(),
         }
     }
 
@@ -779,6 +780,7 @@ mod tests {
             cwd: PathBuf::from("/etc"),
             checklist: crate::tools::update_checklist::new_handle(),
             background_shells: crate::background_shell::default_registry(),
+            db: crate::tools::test_default_pool(),
         };
         let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),

@@ -42,6 +42,63 @@ mod tools;
 use crate::background_shell::BackgroundShellRegistry;
 use tauri::Manager;
 
+/// L3b PR3 (2026-06-27): sweep helper called once at startup.
+/// Walks every project in the DB and sweeps stale worker
+/// worktrees. Best-effort: a project-row load failure is
+/// logged + skipped; a per-project sweep failure is logged +
+/// skipped. The function does not return any value — the
+/// total count is emitted as a `tracing::info!` event at the
+/// end.
+async fn sweep_stale_workers(db: sqlx::SqlitePool, app_data_dir: std::path::PathBuf) {
+    let projects = match crate::db::list_projects(&db, false).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "startup sweep: failed to list projects (non-fatal; skipping sweep)"
+            );
+            return;
+        }
+    };
+    let cleanup_days = crate::git::worktree::resolve_cleanup_period_days(None);
+    let mut total_destroyed = 0usize;
+    for project in &projects {
+        match crate::git::worktree::sweep_stale_worker_worktrees(
+            &app_data_dir,
+            &project.id,
+            std::path::Path::new(&project.path),
+            cleanup_days,
+        ) {
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!(
+                        project_id = %project.id,
+                        project_name = %project.name,
+                        destroyed = n,
+                        "startup sweep: destroyed stale worker worktrees"
+                    );
+                }
+                total_destroyed += n;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    project_id = %project.id,
+                    project_name = %project.name,
+                    error = %e,
+                    "startup sweep: project sweep failed (non-fatal; continuing)"
+                );
+            }
+        }
+    }
+    if total_destroyed > 0 {
+        tracing::info!(
+            total_destroyed,
+            cleanup_days,
+            "startup sweep: complete"
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -52,7 +109,30 @@ pub fn run() {
             let state = tauri::async_runtime::block_on(async move {
                 std::sync::Arc::new(state::AppState::load(&app_handle).await)
             });
-            app.manage(state);
+            app.manage(state.clone());
+
+            // L3b PR3 (2026-06-27): one-time startup sweep of
+            // stale worker worktrees. We iterate every project
+            // and call `sweep_stale_worker_worktrees` for each;
+            // the sweep destroys worker worktrees whose mtime
+            // is older than `EVERLASTING_CLEANUP_PERIOD_DAYS`
+            // (default 7 days) AND whose libgit2 lock is not
+            // present (a locked worktree is an active worker;
+            // skip it). Best-effort — failures are logged at
+            // `warn!` and never abort the startup sequence.
+            //
+            // Runs as a one-shot background task (not awaited
+            // from the setup closure) so the sweep doesn't
+            // block the Tauri window's first paint. The
+            // `state.db` pool is `Clone` (Arc-internal) so we
+            // can move it into the spawn; the `app_data_dir`
+            // is the same path the AppState already computed.
+            let sweep_db = state.db.clone();
+            let sweep_data_dir = state.app_data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                sweep_stale_workers(sweep_db, sweep_data_dir).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -114,6 +194,13 @@ pub fn run() {
             // returns the full `SubagentRunRow` (with transcript).
             commands::subagent_runs::list_subagent_runs_by_session,
             commands::subagent_runs::get_subagent_run,
+            // L3b PR3 (2026-06-27): merge / discard worker IPCs.
+            // The LLM-side path is the `merge_worker` /
+            // `discard_worker` tools (tool layer); these commands
+            // exist for the PR4 `<SubagentDrawer>` manual
+            // merge / discard buttons.
+            commands::subagent_runs::merge_worker_run,
+            commands::subagent_runs::discard_worker_run,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,

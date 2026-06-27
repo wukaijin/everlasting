@@ -465,6 +465,13 @@ pub async fn run_chat_loop(
         // impl); tools consume it from `ToolContext` so the registry
         // isn't plumbed through every tool signature.
         background_shells: background_shells.clone(),
+        // L3b PR3 (2026-06-27): DB pool for the `merge_worker` /
+        // `discard_worker` tools. These tools read the
+        // `subagent_runs` row to find the worker worktree path +
+        // the parent project root, then call libgit2 to merge /
+        // destroy. The pool is `Clone` (Arc-internal) so the
+        // per-turn `ToolContext::clone()` pattern is unaffected.
+        db: db.clone(),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;

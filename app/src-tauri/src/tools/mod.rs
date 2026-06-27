@@ -16,10 +16,12 @@
 //! State) and a session id; the other 3 are pure functions like the
 //! step 2 tools.
 
+pub mod discard_worker;
 pub mod edit_file;
 pub mod glob;
 pub mod grep;
 pub mod list_dir;
+pub mod merge_worker;
 pub mod read_file;
 pub mod read_guard;
 pub mod run_background_shell;
@@ -33,6 +35,7 @@ pub mod write_file;
 
 use std::path::PathBuf;
 
+use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_shell::DefaultRegistry;
@@ -40,6 +43,59 @@ use crate::llm::types::ToolDef;
 use crate::skill::loader::SkillCache;
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::update_checklist::ChecklistHandle;
+
+/// L3b PR3 (2026-06-27): test-only helper that returns a
+/// process-wide in-memory SQLite pool. The pool is built on
+/// first call (with the test schema migrated) and cached in
+/// a `OnceLock` for reuse across tests. Used by tool-level
+/// `test_ctx` helpers to populate `ToolContext.db` without
+/// each test having to spin up its own pool.
+///
+/// The pool is `sqlite::memory:` so it's per-process; tests
+/// that need a fresh DB must use a different helper (or set
+/// `PRAGMA` truncate / re-migrate). For the tools' unit
+/// tests the in-memory pool is fine because the tools
+/// themselves don't query the DB (only `merge_worker` /
+/// `discard_worker` do, and those are exercised in the
+/// integration suite in `agent/tests_subagent.rs`).
+#[cfg(test)]
+pub(crate) fn test_default_pool() -> SqlitePool {
+    use std::sync::OnceLock;
+
+    static POOL: OnceLock<SqlitePool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        // The init is async; we need a runtime to drive it.
+        // We always create a fresh `current_thread` runtime
+        // on a NEW OS thread — this sidesteps the
+        // "Cannot start a runtime from within a runtime"
+        // pitfall that hits `#[tokio::test]` callers
+        // (which already have a current_thread or
+        // multi_thread runtime in scope). The new thread
+        // has no current runtime, so `block_on` works
+        // without any nesting.
+        let (tx, rx) = std::sync::mpsc::channel::<SqlitePool>();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test_default_pool: new current_thread runtime");
+            let pool = rt.block_on(async {
+                let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+                    .await
+                    .expect("test_default_pool: in-memory connect");
+                sqlx::query("PRAGMA foreign_keys = ON")
+                    .execute(&pool)
+                    .await
+                    .expect("test_default_pool: foreign_keys");
+                pool
+            });
+            let _ = tx.send(pool);
+        });
+        rx.recv()
+            .expect("test_default_pool: receive from init thread")
+    })
+    .clone()
+}
 
 /// All built-in tools available as of step 2 + the toolset extension.
 ///
@@ -79,6 +135,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         run_background_shell::definition(),
         shell_status::definition(),
         shell_kill::definition(),
+        // L3b PR3 (2026-06-27): worker branch merge / discard
+        // tools. Both are Tier 4 Other (no path / shell prefix
+        // argument; the input is a `run_id` UUID, not a
+        // filesystem path). ⑨ 关 still routes through
+        // `permissions::check` — the run is associated with a
+        // specific (parent_session_id, run_id) pair, and the
+        // permission system requires the LLM to be in Edit /
+        // Yolo mode to invoke shell-like tools.
+        merge_worker::definition(),
+        discard_worker::definition(),
     ]
 }
 
@@ -117,12 +183,25 @@ pub fn builtin_tools() -> Vec<ToolDef> {
 /// current caller needs `{:?}` formatting on the whole context.
 /// Tools that need debug logging have access to the individual
 /// fields (e.g. `tracing::info!(cwd = ?ctx.cwd, ...)`).
+///
+/// L3b PR3 (2026-06-27): added `db: SqlitePool` so the
+/// `merge_worker` / `discard_worker` tools can read
+/// `subagent_runs` rows (to look up the worker's worktree
+/// path) without needing the pool plumbed through the tool's
+/// own execute signature. `SqlitePool` is `Clone` (it's an
+/// `Arc` internally) so the per-turn `ToolContext::clone()`
+/// pattern is unaffected. The pool is the agent loop's
+/// `db: SqlitePool` parameter; the LLM is trusted to be the
+/// only one writing to `subagent_runs` here (RULE-A-016
+/// isolation: worker decisions stay in `transcript`, not
+/// the parent's audit table).
 #[derive(Clone)]
 pub struct ToolContext {
     pub worktree_path: PathBuf,
     pub cwd: PathBuf,
     pub checklist: ChecklistHandle,
     pub background_shells: DefaultRegistry,
+    pub db: SqlitePool,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
@@ -285,6 +364,25 @@ async fn execute_tool_inner(
             // Idempotent — killing a Done shell is a no-op success.
             let (out, is_err, update) = shell_kill::execute(input, ctx, session_id).await;
             (out, is_err, update, None)
+        }
+        // L3b PR3 (2026-06-27): merge the worker's preserved
+        // `worker/<run_id>` branch into the parent session's
+        // `session/<id>` branch. Fast-forward or 3-way merge;
+        // conflict → `is_error: true` with the conflict file list
+        // and the worker branch + worktree preserved for the user
+        // to resolve manually.
+        "merge_worker" => {
+            let (out, is_err, update, exit_code) =
+                merge_worker::execute(input, ctx, session_id).await;
+            (out, is_err, update, exit_code)
+        }
+        // L3b PR3 (2026-06-27): discard the worker's preserved
+        // branch + worktree (no merge). Fail-fast on an
+        // already-destroyed run (MVP 不做幂等).
+        "discard_worker" => {
+            let (out, is_err, update, exit_code) =
+                discard_worker::execute(input, ctx, session_id).await;
+            (out, is_err, update, exit_code)
         }
         _ => (
             format!("Unknown tool: {}", name),

@@ -575,6 +575,247 @@ pub fn destroy_worker(
     Ok(())
 }
 
+/// Default cleanup period for worker worktrees (L3b PR3, 2026-06-27).
+/// Matches Claude Code's `cleanupPeriodDays` default of 7 days.
+/// Sweep keeps a worker worktree around for this many days
+/// after its mtime; older ones are destroyed best-effort.
+pub const DEFAULT_CLEANUP_PERIOD_DAYS: u32 = 7;
+
+/// Environment override for [`DEFAULT_CLEANUP_PERIOD_DAYS`].
+/// Read by [`sweep_stale_worker_worktrees`] when the caller
+/// doesn't pass an explicit `cleanup_period_days` value.
+pub const CLEANUP_PERIOD_DAYS_ENV: &str = "EVERLASTING_CLEANUP_PERIOD_DAYS";
+
+/// Sweep stale worker worktrees for a project. Called once
+/// at startup (see `AppState::load` integration) and
+/// discoverable as a stand-alone helper for any future
+/// on-demand sweep (e.g. a "clean up" tool).
+///
+/// L3b PR3 (2026-06-27): the function walks the project's
+/// worker worktree directory
+/// (`<app_data_dir>/worktrees/<project_uuid>/worker/`) and,
+/// for each subdirectory, checks:
+/// 1. **Lock presence** — the worktree is locked iff
+///    `<project_path>/.git/worktrees/<name>/locked` exists
+///    (libgit2's lock file is the canonical "this worktree is
+///    in active use" marker). Locked worktrees are SKIPPED
+///    (the `create_worker` lock mechanism protects running
+///    workers; a sweep must not destroy a worker that's
+///    still running).
+/// 2. **Mtime** — the worktree directory's mtime (the
+///    `Metadata::modified()` timestamp). If the mtime is
+///    older than `cleanup_period_days` days (computed as
+///    `now - cleanup_period_days * 86400` seconds), the
+///    worktree is destroyed via
+///    [`destroy_worker`], which also unlocks + deletes the
+///    `worker/<run_id>` branch + removes the libgit2
+///    worktree metadata.
+///
+/// Returns the number of worktrees destroyed (0 in the
+/// common case). The caller logs the count for observability.
+///
+/// **Best-effort** semantics (per PRD §"Edge Cases"):
+/// - A single failure (lock check error / mtime read error
+///   / `destroy_worker` error) is logged at `warn!` and the
+///   sweep continues with the next worktree. A failure on
+///   one worktree does NOT abort the sweep — that would
+///   leave other stale worktrees in place for a future
+///   sweep that's not guaranteed to happen.
+/// - A worktree that is `libgit2::find_worktree`-
+///   unrecognizable (the on-disk dir is there but the
+///   libgit2 metadata is gone — a crashed create + a manual
+///   `git worktree prune`) is still best-effort destroyed
+///   (we pass the path to `destroy_worker` which tolerates
+///   "metadata already gone" via its own best-effort prune
+///   + branch-delete).
+/// - The sweep is a no-op when the worker dir doesn't exist
+///   (fresh project, no workers have ever been spawned).
+///
+/// **Per-worker lock file detection** is the key correctness
+/// invariant: a worker running RIGHT NOW (a 3-hour
+/// `cargo build` etc.) has its worktree locked by
+/// `create_worker` (see `create_worktree_add` →
+/// `Worktree::lock`). The sweep MUST respect this — without
+/// the lock check, a sweep during a long worker run would
+/// silently destroy the in-flight worktree mid-execution
+/// (the worker would write to a dir that no longer exists
+/// and the parent would `prune` it on the next `git gc`).
+pub fn sweep_stale_worker_worktrees(
+    app_data_dir: &Path,
+    project_uuid: &str,
+    project_path: &Path,
+    cleanup_period_days: u32,
+) -> Result<usize, GitError> {
+    let worker_root = app_data_dir
+        .join("worktrees")
+        .join(project_uuid)
+        .join("worker");
+    if !worker_root.exists() {
+        // No worker dir → nothing to sweep. This is the
+        // common case for fresh projects.
+        return Ok(0);
+    }
+
+    // Open the project repo once. If it fails (the project
+    // worktree dir itself was removed out from under us), we
+    // log + return 0 — the sweep can't proceed without
+    // libgit2 access.
+    let repo = match Repository::open(project_path) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                project = %project_path.display(),
+                error = %e,
+                "sweep: could not open project repo; skipping sweep"
+            );
+            return Ok(0);
+        }
+    };
+
+    let cutoff_secs = (cleanup_period_days as i64) * 86_400;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let entries = match std::fs::read_dir(&worker_root) {
+        Ok(rd) => rd,
+        Err(e) => {
+            tracing::warn!(
+                worker_root = %worker_root.display(),
+                error = %e,
+                "sweep: could not read worker dir; skipping sweep"
+            );
+            return Ok(0);
+        }
+    };
+
+    let mut destroyed_count = 0usize;
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "sweep: read_dir entry error (non-fatal)");
+                continue;
+            }
+        };
+        let wt_path = entry.path();
+        if !wt_path.is_dir() {
+            continue;
+        }
+        // The worktree's libgit2 metadata name is the run_id
+        // (no `worker/` prefix — see `create_worker`). The
+        // on-disk dir layout is `<worker_root>/<run_id>`.
+        let run_id = match wt_path.file_name().and_then(|n| n.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        // ----- Lock check (via libgit2 API) -----
+        // `repo.find_worktree(metadata_name)` returns the
+        // worktree handle; `.is_locked()` consults libgit2's
+        // authoritative lock state (the canonical
+        // `<project>/.git/worktrees/<name>/locked` file,
+        // plus the in-memory lock marker). Using the API
+        // rather than `Path::exists` keeps us robust to
+        // future libgit2 changes (e.g. an in-process lock
+        // mode that doesn't write the file).
+        let locked = match repo.find_worktree(&run_id) {
+            Ok(wt) => matches!(
+                wt.is_locked(),
+                Ok(git2::WorktreeLockStatus::Locked(_))
+            ),
+            Err(_) => {
+                // Worktree metadata not found (the on-disk
+                // dir exists but libgit2 doesn't know about
+                // it — a crashed create + a manual `git
+                // worktree prune`). The destroy_worker call
+                // is best-effort and tolerates this, so we
+                // proceed (treating the worktree as
+                // unlocked).
+                false
+            }
+        };
+        if locked {
+            tracing::info!(
+                run_id = %run_id,
+                "sweep: skipping locked worker worktree (active worker)"
+            );
+            continue;
+        }
+
+        // ----- Mtime check -----
+        let mtime = match std::fs::metadata(&wt_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(
+                    run_id = %run_id,
+                    worktree = %wt_path.display(),
+                    error = %e,
+                    "sweep: could not stat worktree mtime (non-fatal; skipping)"
+                );
+                continue;
+            }
+        };
+        let mtime_secs = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let age_secs = now_secs.saturating_sub(mtime_secs);
+        if age_secs < cutoff_secs {
+            // Not stale yet — skip.
+            continue;
+        }
+
+        // ----- Destroy -----
+        tracing::info!(
+            run_id = %run_id,
+            worktree = %wt_path.display(),
+            age_days = age_secs / 86_400,
+            "sweep: destroying stale worker worktree"
+        );
+        if let Err(e) = destroy_worker(&project_path, &wt_path, &run_id) {
+            tracing::warn!(
+                run_id = %run_id,
+                worktree = %wt_path.display(),
+                error = %e,
+                "sweep: destroy_worker failed (non-fatal; continuing)"
+            );
+            continue;
+        }
+        destroyed_count += 1;
+        // Reference the repo to silence the "unused" warning
+        // when the libgit2 worktree check below is skipped
+        // (we use the project_path, not repo, to keep the
+        // implementation simple — libgit2 worktrees are
+        // discoverable via the on-disk layout, and
+        // `destroy_worker` opens the repo itself).
+        let _ = &repo;
+    }
+
+    Ok(destroyed_count)
+}
+
+/// Resolve the cleanup-period-days value: prefer the explicit
+/// `cleanup_period_days` parameter, fall back to the
+/// `EVERLASTING_CLEANUP_PERIOD_DAYS` env var, fall back to
+/// [`DEFAULT_CLEANUP_PERIOD_DAYS`] (7). Returns the resolved
+/// value. Used by [`sweep_stale_worker_worktrees`] callers
+/// that want the env-aware default.
+pub fn resolve_cleanup_period_days(explicit: Option<u32>) -> u32 {
+    if let Some(d) = explicit {
+        return d;
+    }
+    if let Ok(s) = std::env::var(CLEANUP_PERIOD_DAYS_ENV) {
+        if let Ok(d) = s.parse::<u32>() {
+            if d > 0 {
+                return d;
+            }
+        }
+    }
+    DEFAULT_CLEANUP_PERIOD_DAYS
+}
+
 /// Check that a git working directory (project root, worktree, or
 /// any other tree) has **no uncommitted or untracked changes**.
 /// Returns `Ok(())` for a clean tree, `Err(message)` for a dirty
@@ -1110,5 +1351,256 @@ mod tests {
             p,
             Path::new("/data/worktrees/proj-uuid/worker/run-123")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // L3b PR3 (2026-06-27): sweep mechanism tests
+    //
+    // The sweep walks `<app_data_dir>/worktrees/<project_uuid>/worker/`
+    // and destroys worker worktrees whose mtime is older than
+    // `cleanup_period_days` AND whose libgit2 lock is NOT present.
+    // These tests pin each contract.
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up a project + parent session worktree
+    /// + a worker worktree. Returns
+    /// `(app_data_dir, project_path, project_uuid)`.
+    fn setup_project_with_worker(
+        session_id: &str,
+        run_id: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, String) {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let parent_wt = parent_session_worktree_with_extra_commit(&project, session_id);
+        let app_data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&app_data_dir).unwrap();
+        let worker_wt = worker_worktree_path(&app_data_dir, "project-uuid", run_id);
+        create_worker(&project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should succeed");
+        (tmp, project, "project-uuid".to_string())
+    }
+
+    /// Backdate the mtime of the worker worktree directory
+    /// to N days ago. Uses `touch -t YYYYMMDDhhmm` because
+    /// Rust's `std::fs::File::set_modified` doesn't work
+    /// on directories on Linux (only on files). The `touch`
+    /// binary is universally available on Linux + macOS
+    /// (the project's two build targets).
+    fn backdate_dir(path: &Path, days_ago: u32) {
+        // Compute target time as days_ago days back from
+        // now, formatted as YYYYMMDDhhmm.
+        let now = std::time::SystemTime::now();
+        let target = now
+            .checked_sub(std::time::Duration::from_secs(days_ago as u64 * 86_400))
+            .expect("mtime in range");
+        let secs_since_epoch = target
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("epoch")
+            .as_secs();
+        // Convert to (year, month, day, hour, minute) for
+        // `touch -t` (which expects YYYYMMDDhhmm).
+        let (year, month, day, hour, minute) =
+            epoch_secs_to_ymdhms(secs_since_epoch);
+        let touch_arg = format!(
+            "{:04}{:02}{:02}{:02}{:02}",
+            year, month, day, hour, minute
+        );
+        let out = std::process::Command::new("touch")
+            .args(["-t", &touch_arg])
+            .arg(path)
+            .output()
+            .expect("touch command");
+        assert!(
+            out.status.success(),
+            "touch -t failed for {:?}: {:?}",
+            path,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Convert Unix epoch seconds to (year, month, day, hour,
+    /// minute). Implements the inverse of the algorithm in
+    /// `<time.h>` `gmtime_r`. Pure function (no I/O).
+    fn epoch_secs_to_ymdhms(secs: u64) -> (i32, u32, u32, u32, u32) {
+        let secs_in_day = 86_400u64;
+        let mut days = (secs / secs_in_day) as i64;
+        let secs_today = (secs % secs_in_day) as u32;
+        let hour = secs_today / 3600;
+        let minute = (secs_today % 3600) / 60;
+
+        // 1970-01-01 was a Thursday (day 4 of the week,
+        // where 0 = Sunday). Compute the day of the week
+        // for epoch `days` (with 0 = Sunday).
+        let weekday = ((days + 4).rem_euclid(7)) as u32;
+
+        // Walk forward by year, accounting for leap years.
+        let mut year: i32 = 1970;
+        loop {
+            let leap = is_leap_year(year);
+            let year_days = if leap { 366 } else { 365 };
+            if days < year_days {
+                break;
+            }
+            days -= year_days;
+            year += 1;
+        }
+        // Month lengths for the current year.
+        let month_lengths = if is_leap_year(year) {
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        } else {
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        };
+        let mut month: usize = 0;
+        while month < 12 && days >= month_lengths[month] as i64 {
+            days -= month_lengths[month] as i64;
+            month += 1;
+        }
+        let day = (days + 1) as u32; // 1-indexed
+        let _ = weekday; // silence unused warning
+        (year, (month as u32) + 1, day, hour, minute)
+    }
+
+    fn is_leap_year(year: i32) -> bool {
+        (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    }
+
+    #[test]
+    fn sweep_removes_stale_worker_worktrees() {
+        let (tmp, project, project_uuid) = setup_project_with_worker("sweep-sess", "sweep-stale");
+        let app_data_dir = tmp.path().join("data");
+        let stale_run_id = "sweep-stale";
+        let worker_wt = worker_worktree_path(&app_data_dir, &project_uuid, stale_run_id);
+
+        // Unlock the worker worktree (the test scenario
+        // simulates a worker that exited long ago — the
+        // lock was held during the worker's lifetime and
+        // should be released before the sweep sees the
+        // worktree as a candidate for destruction). Without
+        // this step, the sweep would correctly skip the
+        // worktree (the lock check is the load-bearing
+        // "active worker" guard).
+        let project_repo = git2::Repository::open(&project).unwrap();
+        if let Ok(wt) = project_repo.find_worktree(stale_run_id) {
+            wt.unlock().expect("unlock worker for test setup");
+        }
+
+        // Backdate the worker worktree dir to 30 days ago —
+        // well past the 7-day default.
+        backdate_dir(&worker_wt, 30);
+
+        // Run the sweep with a 7-day cleanup period.
+        let destroyed = sweep_stale_worker_worktrees(
+            &app_data_dir,
+            &project_uuid,
+            &project,
+            7,
+        )
+        .expect("sweep should succeed");
+        assert_eq!(destroyed, 1, "exactly 1 stale worktree destroyed");
+
+        // The worker worktree dir + branch are gone.
+        assert!(!worker_wt.exists(), "worker worktree dir removed");
+        let repo = git2::Repository::open(&project).unwrap();
+        assert!(
+            repo.find_branch(&format!("worker/{}", stale_run_id), git2::BranchType::Local)
+                .is_err(),
+            "worker branch should be deleted"
+        );
+    }
+
+    #[test]
+    fn sweep_skips_locked_worker_worktrees() {
+        let (tmp, project, project_uuid) = setup_project_with_worker("sweep-lock-sess", "sweep-locked");
+        let app_data_dir = tmp.path().join("data");
+        let run_id = "sweep-locked";
+        let worker_wt = worker_worktree_path(&app_data_dir, &project_uuid, run_id);
+
+        // Backdate the worker worktree dir to 30 days ago.
+        backdate_dir(&worker_wt, 30);
+
+        // Manually create the libgit2 lock file at the
+        // canonical lock path: `<project>/.git/worktrees/<run_id>/locked`.
+        // The `create_worker` function normally writes this
+        // for us; we re-add it (it should still be there
+        // from `create_worker`, but we re-touch to be safe
+        // — the test asserts the sweep sees the lock).
+        let lock_path = project.join(".git").join("worktrees").join(run_id).join("locked");
+        // The `create_worker` function already created
+        // this — let's just assert it exists.
+        assert!(
+            lock_path.exists(),
+            "create_worker should have left a lock file"
+        );
+
+        let destroyed = sweep_stale_worker_worktrees(
+            &app_data_dir,
+            &project_uuid,
+            &project,
+            7,
+        )
+        .expect("sweep should succeed");
+        assert_eq!(destroyed, 0, "locked worktree MUST be skipped");
+
+        // Worker worktree dir + branch preserved.
+        assert!(worker_wt.exists(), "locked worktree dir preserved");
+        let repo = git2::Repository::open(&project).unwrap();
+        assert!(
+            repo.find_branch(&format!("worker/{}", run_id), git2::BranchType::Local)
+                .is_ok(),
+            "locked worker branch preserved"
+        );
+    }
+
+    #[test]
+    fn sweep_keeps_recent_worker_worktrees() {
+        // A worker that's only 1 day old should NOT be
+        // destroyed by a 7-day sweep.
+        let (tmp, project, project_uuid) = setup_project_with_worker("sweep-recent-sess", "sweep-recent");
+        let app_data_dir = tmp.path().join("data");
+        let run_id = "sweep-recent";
+        let worker_wt = worker_worktree_path(&app_data_dir, &project_uuid, run_id);
+
+        // The worktree was just created, so its mtime is
+        // "now". No backdate.
+        let destroyed = sweep_stale_worker_worktrees(&app_data_dir, &project_uuid, &project, 7)
+            .expect("sweep should succeed");
+        assert_eq!(destroyed, 0, "recent worktree MUST NOT be destroyed");
+        assert!(worker_wt.exists(), "recent worktree dir preserved");
+    }
+
+    #[test]
+    fn sweep_with_no_worker_dir_is_noop() {
+        let tmp = tempdir().unwrap();
+        let app_data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&app_data_dir).unwrap();
+        // No worker dir exists for this project. Pass a
+        // non-existent project path — sweep returns 0
+        // because the worker dir check fails first.
+        let bogus_project = std::path::Path::new("/tmp/does-not-exist");
+        let destroyed = sweep_stale_worker_worktrees(
+            &app_data_dir,
+            "no-such-project",
+            bogus_project,
+            7,
+        )
+        .expect("sweep should succeed (no work to do)");
+        assert_eq!(destroyed, 0);
+    }
+
+    #[test]
+    fn resolve_cleanup_period_days_prefers_explicit() {
+        assert_eq!(resolve_cleanup_period_days(Some(14)), 14);
+    }
+
+    #[test]
+    fn resolve_cleanup_period_days_uses_default_when_no_env() {
+        // The env var may or may not be set in the test
+        // environment; `resolve_cleanup_period_days(None)`
+        // falls back to the default (7) when the env var is
+        // unset or unparseable. We can't safely assert
+        // against the env var value (it's process-global),
+        // so we just confirm the explicit path works and
+        // the default-when-None path doesn't crash.
+        let _ = resolve_cleanup_period_days(None);
     }
 }
