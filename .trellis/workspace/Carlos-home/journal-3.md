@@ -1098,3 +1098,38 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 80: L3b PR4 前端 SubagentDrawer Merge / Discard UI
+
+**Date**: 2026-06-27
+**Task**: L3b PR4 前端 SubagentDrawer Merge / Discard UI
+**Branch**: `main`
+
+### Summary
+
+闭合 L3b PR3 backend merge_worker_run / discard_worker_run IPC 在前端的可见/可控环。新增 WorkerBranchBadge + WorkerMergeControls(严格可见门 worktreePath != null && status === 'completed') + ConfirmDialog 二次确认 + 冲突 inline 文件列表(parseConflictFiles 正则锁 backend Err 格式);store mergeWorker/discardWorker actions + per-run mergeStateByRunId reactive Map spinner 隔离(多 drawer 互不阻塞);store cache 单源模式(WorkerMergeControls 只接 runId prop,merge 成功后 reactive .set → 按钮自动消失,父无需 re-thread);formatWorkerBranchLabel util → 'Worker <8-char hash>';Icon.vue 加 GitMerge(lucide)。测试 vue-tsc 0 err + vitest 598/598(33 文件),WorkerMergeControls.test.ts 27 测含 C5b 严格门 regression。同步落地:spec/frontend/chat.md 新 PR4 章节 + spec/backend/tool-contract.md 加 conflict error string 跨层契约 + spec/frontend/state-management.md 加 Per-run spinner isolation Pattern + ROADMAP §1.2 加 PR4 行 + IMPLEMENTATION §4 加 2026-06-27 L3b PR4 ADR(严格门决策 + 单源模式 + props.x vs computed.x 同名词坑教训)。3 批 work commit(feat/docs/chore)→ archive → journal。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d1f869a` | (see git log) |
+| `858a27f` | (see git log) |
+| `0e637f4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
