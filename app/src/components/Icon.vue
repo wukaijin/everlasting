@@ -56,7 +56,7 @@ import {
   ClockIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -134,6 +134,11 @@ const map = {
   // mark for done.
   "circle": Circle,
   "loader": LoaderCircle,
+  // L3b PR4 (2026-06-27): WorkerMergeControls merge button —
+  // heroicons doesn't ship a git-merge variant; lucide's line
+  // weight matches the existing shield-x / clipboard-list
+  // family already pulled in.
+  "git-merge": GitMerge,
 } as const;
 
 const Component = computed(() => {

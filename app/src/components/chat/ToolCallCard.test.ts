@@ -257,6 +257,8 @@ describe("ToolCallCard dispatch_subagent branch", () => {
         finalText: null,
         // 2026-06-22 (RULE-FrontSubagent-004): nullable for legacy rows.
         turnCount: null,
+        // L3b PR1 (2026-06-27): null in baseline fixture.
+        worktreePath: null,
       },
     ]);
     // Mock fetchRun so openDrawer doesn't actually try to call IPC.

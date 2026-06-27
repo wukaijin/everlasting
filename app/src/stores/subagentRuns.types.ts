@@ -94,6 +94,13 @@ export interface SubagentRunSummary {
    *  for cancelled / incomplete). Cheap single-i64 column so it's
    *  included in the summary projection. */
   turnCount: number | null;
+  /** L3b PR1 (2026-06-27): worker's isolated worktree path.
+   *  Mirrors `SubagentRunRow.worktreePath`; included in the list
+   *  projection so a future ToolCallCard chip can show "branch
+   *  kept" without a per-run detail roundtrip. PR4 reads it from
+   *  the row projection (drawer detail cache); the summary
+   *  surface is for future use. */
+  worktreePath: string | null;
 }
 
 /** `get_subagent_run` return. The Rust struct carries
@@ -136,6 +143,16 @@ export interface SubagentRunRow {
   // cancelled / incomplete branches only (completed
   // still uses wall-clock).
   turnCount: number | null;
+  // L3b PR1 (2026-06-27): the worker's isolated
+  // worktree path (`<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>`),
+  // set when the worker ran in isolation AND has
+  // preserved changes (the destroy path clears it).
+  // `null` for: non-isolated runs (researcher /
+  // isolation=false), destroyed runs (sweep / merge /
+  // discard). Drives the PR4 Merge / Discard button
+  // visible condition (`status === 'completed' &&
+  // worktreePath != null`).
+  worktreePath: string | null;
 }
 
 /** Live `subagent:event` IPC payload. camelCase via the Rust
@@ -352,3 +369,71 @@ export type ChatEventInnerKind =
   | "tool_result"
   | "done"
   | "error";
+
+// -----------------------------------------------------------------------
+// L3b PR4 (2026-06-27): merge / discard worker branch UI types
+// -----------------------------------------------------------------------
+
+/** Discriminated result of `mergeWorker(runId)`.
+ *
+ *  The backend `merge_worker_run` IPC returns `Result<String,
+ *  String>` — the success arm carries a human-readable status
+ *  string, the error arm carries a plain-English error
+ *  (`"worker run not found"`, `"merge conflict: [...]"`, etc.).
+ *  The store discriminates the conflict case (parse the conflict
+ *  file list from the error string) so the drawer can render an
+ *  inline read-only file list with a "resolve via git CLI" hint.
+ *
+ *  Conflict string format (from
+ *  `app/src-tauri/src/tools/merge_worker.rs::do_merge_blocking`):
+ *    `"merge conflict: [<file1>, <file2>, ...]. The worker branch
+ *    'worker/<run_id>' and parent branch 'session/<id>' both
+ *    modified these files. Resolve manually, then call
+ *    merge_worker again (or discard_worker to drop the changes)."`
+ *  The store's `parseConflictFiles` regex extracts the bracketed
+ *  comma-separated file list. */
+export type MergeResult =
+  | { kind: "success" }
+  | { kind: "conflict"; files: string[] }
+  | { kind: "error"; message: string };
+
+/** Discriminated result of `discardWorker(runId)`. The backend
+ *  has no conflict path — discard is a destructive delete with
+ *  no preconditions beyond `worktree_path IS NOT NULL`, so the
+ *  result is either success or a generic error. */
+export type DiscardResult =
+  | { kind: "success" }
+  | { kind: "error"; message: string };
+
+/** Per-run spinner state for the merge / discard buttons. Stored
+ *  in a `Map<runId, MergeState>` so multiple drawers (different
+ *  runs) don't block each other. `kind` distinguishes which
+ *  action is in flight so the drawer can render the spinner on
+ *  the right button.
+ *
+ *  `null` = no action in flight for this run (button enabled). */
+export type MergeState = { kind: "merge" | "discard"; loading: true };
+
+/** Conflict file list extracted from a `merge_worker_run` Err
+ *  string. Exported as a standalone helper so the unit tests can
+ *  exercise the parser directly without going through the store
+ *  (the parser is a pure string transform).
+ *
+ *  Returns `null` when the input doesn't match the conflict
+ *  message format (caller should treat the whole string as a
+ *  generic error). The bracketed list uses `, ` (comma+space) as
+ *  the separator — the backend `conflicts.join(", ")` format. */
+export function parseConflictFiles(errStr: string): string[] | null {
+  // Match "merge conflict: [<files>]" prefix + the bracketed list.
+  // The backend ALWAYS emits this exact prefix on conflict; a
+  // generic error (e.g. "worker run not found") doesn't match.
+  const m = errStr.match(/^merge conflict: \[([^\]]*)\]/);
+  if (!m) return null;
+  const inner = m[1].trim();
+  if (inner.length === 0) return [];
+  // Backend joins with ", "; split defensively on the same
+  // separator (a file path with a literal ", " is vanishingly
+  // rare — git paths with spaces would still split, but the user
+  // reading the file list can still recognize them).
+  return inner.split(", ").map((s) => s.trim()).filter((s) => s.length > 0);
+}

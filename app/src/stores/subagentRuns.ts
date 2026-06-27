@@ -73,6 +73,10 @@ import {
   type SubagentStatus,
   type TranscriptEntry,
   type TranscriptSection,
+  type MergeResult,
+  type DiscardResult,
+  type MergeState,
+  parseConflictFiles,
 } from "./subagentRuns.types";
 import { RunAccumulator, parseTranscriptJson } from "./runAccumulator";
 
@@ -189,6 +193,17 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  dedup should too). Bounded by the number of distinct runIds seen
    *  in this app session; not a memory concern for realistic usage. */
   const eagerFetchedRunIds = new Set<string>();
+
+  /** L3b PR4 (2026-06-27): per-run spinner state for the merge /
+   *  discard buttons. Stored in a reactive Map so the drawer's
+   *  button-disabled + spinner computed re-evaluates when the
+   *  spinner flips. `null` slot = no action in flight for this
+   *  runId (button enabled). Per-run isolation is the whole point:
+   *  multiple drawers (different runIds) MUST NOT block each other
+   *  (a 5-second merge on run A must not disable the discard
+   *  button on run B). The drawer reads `mergeStateByRunId.get(rid)`
+   *  to drive its disabled + spinner rendering. */
+  const mergeStateByRunId = reactive(new Map<string, MergeState>());
 
   // -----------------------------------------------------------------------
   // API
@@ -499,6 +514,10 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       // triggers a Map-level re-render.
       accumulators.delete(s.id);
       liveSections.delete(s.id);
+      // L3b PR4: drop any in-flight merge / discard spinner.
+      // A delete mid-merge shouldn't strand the run's spinner
+      // (the merge would fail on the missing row anyway).
+      mergeStateByRunId.delete(s.id);
       const t = debounceTimers.get(s.id);
       if (t !== undefined) {
         clearTimeout(t);
@@ -508,6 +527,112 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     runSummaryBySession.delete(sessionId);
     if (openRunId.value && list.some((s) => s.id === openRunId.value)) {
       openRunId.value = null;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // L3b PR4 (2026-06-27): merge / discard worker branch actions
+  // -----------------------------------------------------------------------
+
+  /** Merge a completed worker's `worker/<run_id>` branch into the
+   *  parent session's branch via the `merge_worker_run` IPC.
+   *
+   *  The action manages a per-run spinner (`mergeStateByRunId`), so
+   *  the drawer can disable the button + show a spinner while the
+   *  IPC is in flight. Multiple drawers (different runIds) don't
+   *  block each other.
+   *
+   *  On success the cached row's `worktreePath` is cleared to `null`
+   *  (the merge destroys the worker worktree as a side effect); the
+   *  drawer's reactive `run` computed flips, the Merge / Discard
+   *  buttons disappear, the badge updates. The caller (drawer) is
+   *  responsible for showing the success / conflict / error toast.
+   *
+   *  Returns a discriminated `MergeResult`:
+   *    - `{ kind: "success" }` — fast-forward or clean 3-way merge;
+   *      worker branch + worktree destroyed.
+   *    - `{ kind: "conflict", files }` — 3-way merge hit conflicting
+   *      paths; the backend reset the worktree to the parent tip
+   *      and the worker branch + worktree are PRESERVED. Caller
+   *      renders the file list + a "resolve via git CLI" hint.
+   *    - `{ kind: "error", message }` — any other failure (run not
+   *      found, parent session missing, libgit2 error).
+   *
+   *  Why the IPC `rid` arg is "merge-pr4": the backend
+   *  `merge_worker_run(rid, run_id)` carries an unused `rid` slot
+   *  (reserved for future audit correlation). The store has no chat
+   *  request id at the call site (merge is a UI-driven action, not
+   *  part of an LLM turn), so we pass a stable sentinel the backend
+   *  can recognize in logs. Tauri 2 maps the JS `rid` to the Rust
+   *  `_rid` param (the leading underscore marks it unused on the
+   *  Rust side). */
+  async function mergeWorker(runId: string): Promise<MergeResult> {
+    // Spinner guard: a second click while a merge is already in
+    // flight returns immediately (the button's `:disabled` binding
+    // should already prevent the click, but defensive).
+    if (mergeStateByRunId.has(runId)) {
+      return { kind: "error", message: "another action is already in flight" };
+    }
+    mergeStateByRunId.set(runId, { kind: "merge", loading: true });
+    try {
+      await invoke<string>("merge_worker_run", {
+        rid: "merge-pr4",
+        runId,
+      });
+      // Success: the merge destroyed the worker worktree as a side
+      // effect, so the cached row's `worktreePath` flips to null.
+      // Mutate the cached row in place (reactive Map.set triggers
+      // the drawer's `run` computed re-eval → buttons disappear).
+      const row = getRunCache.get(runId);
+      if (row) {
+        getRunCache.set(runId, { ...row, worktreePath: null });
+      }
+      return { kind: "success" };
+    } catch (e) {
+      const msg = String(e);
+      const files = parseConflictFiles(msg);
+      if (files !== null) {
+        // Conflict: worker branch + worktree PRESERVED (backend
+        // reset to parent tip). The cached row's worktreePath is
+        // UNCHANGED — drawer keeps showing the Merge / Discard
+        // buttons so the user can retry after git-resolving.
+        return { kind: "conflict", files };
+      }
+      return { kind: "error", message: msg };
+    } finally {
+      mergeStateByRunId.delete(runId);
+    }
+  }
+
+  /** Discard a completed worker's preserved branch + worktree via
+   *  the `discard_worker_run` IPC. Fail-fast on
+   *  `worktree_path IS NULL` (the backend treats this as an error,
+   *  not idempotent — the UI's visible condition gate already
+   *  prevents this in normal flow, but the spinner guard + the
+   *  reactive row update make it robust to a sweep racing the
+   *  click).
+   *
+   *  Same spinner pattern as `mergeWorker`: per-run state in
+   *  `mergeStateByRunId`, cleared in `finally`. */
+  async function discardWorker(runId: string): Promise<DiscardResult> {
+    if (mergeStateByRunId.has(runId)) {
+      return { kind: "error", message: "another action is already in flight" };
+    }
+    mergeStateByRunId.set(runId, { kind: "discard", loading: true });
+    try {
+      await invoke<string>("discard_worker_run", {
+        rid: "discard-pr4",
+        runId,
+      });
+      const row = getRunCache.get(runId);
+      if (row) {
+        getRunCache.set(runId, { ...row, worktreePath: null });
+      }
+      return { kind: "success" };
+    } catch (e) {
+      return { kind: "error", message: String(e) };
+    } finally {
+      mergeStateByRunId.delete(runId);
     }
   }
 
@@ -540,6 +665,10 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     liveSections,
     openRunId,
     openRun,
+    // L3b PR4: per-run merge / discard spinner state. Drawer
+    // reads `mergeStateByRunId.get(openRunId)` to drive button
+    // disabled + spinner rendering.
+    mergeStateByRunId,
     // actions
     fetchForSession,
     fetchRun,
@@ -547,6 +676,9 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     closeDrawer,
     getSummaryByToolUseId,
     clearSession,
+    // L3b PR4: merge / discard worker branch actions.
+    mergeWorker,
+    discardWorker,
     // lifecycle
     start,
     stop,

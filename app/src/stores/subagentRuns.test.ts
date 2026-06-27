@@ -86,6 +86,10 @@ const sampleSummary: SubagentRunSummary = {
   // 2026-06-22 (RULE-FrontSubagent-004): nullable for legacy rows;
   // null exercises the wall-clock degrade path in statusDisplay.
   turnCount: null,
+  // L3b PR1 (2026-06-27): null in the baseline fixture (no isolated
+  // worktree preserved). PR4 merge/discard tests override this to
+  // a string when exercising the visible-button path.
+  worktreePath: null,
 };
 
 // NOTE: SubagentRunRow.status is a raw `string` (Drift trap 1) — NOT
@@ -116,6 +120,8 @@ const sampleRow: SubagentRunRow = {
   finalText: null,
   // 2026-06-22 (RULE-FrontSubagent-004): null on legacy rows.
   turnCount: null,
+  // L3b PR1 (2026-06-27): null in the baseline fixture.
+  worktreePath: null,
 };
 
 // -----------------------------------------------------------------------

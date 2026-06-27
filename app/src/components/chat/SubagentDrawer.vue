@@ -53,6 +53,10 @@ import DrawerPermissionAskCard from "./DrawerPermissionAskCard.vue";
 import SubagentDrawerHeader from "./SubagentDrawerHeader.vue";
 import SubagentDrawerErrorCard from "./SubagentDrawerErrorCard.vue";
 import MarkdownDetailModal from "../common/MarkdownDetailModal.vue";
+// L3b PR4 (2026-06-27): merge / discard UI for completed workers
+// with preserved branches.
+import WorkerBranchBadge from "./WorkerBranchBadge.vue";
+import WorkerMergeControls from "./WorkerMergeControls.vue";
 
 const store = useSubagentRunsStore();
 const chatStore = useChatStore();
@@ -146,6 +150,20 @@ const STATUS_META: Record<
   // precedent for the in-repo/out-of-repo badges).
   incomplete: { label: "未完成", color: "var(--color-tool-shell)" },
 };
+
+// L3b PR4 (2026-06-27): worker branch preservation state. Drives
+// the WorkerBranchBadge (threaded as a prop — pure presentation,
+// no store read) + the WorkerMergeControls visible gate (read
+// straight from `store.getRunCache` inside the child, single
+// source of truth — the drawer does NOT thread `worktreePath`
+// to MergeControls). `worktreePath` is non-null only when the
+// worker ran in isolation AND has preserved changes (PR1
+// column; cleared on merge / discard / sweep). The Merge /
+// Discard buttons' visible gate lives inside <WorkerMergeControls>
+// (strict: status === completed && worktreePath != null); the
+// badge derives its own state from the same two fields (it takes
+// the typed `status` computed + this `worktreePath` as props).
+const worktreePath = computed<string | null>(() => run.value?.worktreePath ?? null);
 
 // ---------------------------------------------------------------------------
 // B6 redesign PR5 (2026-06-21): section-based data source.
@@ -648,6 +666,21 @@ function isPermissionAskLive(rid: string): boolean {
             :truncated="truncated"
           />
 
+          <!-- L3b PR4 (2026-06-27): worker branch preservation badge.
+               Rendered as a header-adjacent row so the branch state
+               is visible alongside the status pill. Hidden when the
+               worker has no preserved branch (the badge's own
+               `destroyed` state returns null). -->
+          <div
+            v-if="worktreePath !== null || status === 'running'"
+            class="subagent-drawer__branch-row"
+          >
+            <WorkerBranchBadge
+              :status="status"
+              :worktree-path="worktreePath"
+            />
+          </div>
+
           <!-- Body: 5-segment grouped view -->
           <div
             ref="bodyEl"
@@ -798,6 +831,24 @@ function isPermissionAskLive(rid: string): boolean {
               @click="jumpToLatest"
             >↓ {{ newCount }} new</button>
           </div>
+
+          <!-- L3b PR4 (2026-06-27): Merge / Discard controls for
+               completed workers with preserved branches. The
+               component owns its own visible gate (strict:
+               status === completed && worktreePath != null per
+               PRD §"Requirements" + §"Edge Cases") so mounting
+               it unconditionally is safe — it renders nothing
+               when the gate fails. The component reads both
+               `worktreePath` AND `status` straight from the
+               subagentRunsStore cache (single source of truth
+               — see WorkerMergeControls comments), so we only
+               need to thread `runId`. Placed at the drawer
+               footer so the user sees the transcript first, then
+               the merge / discard affordance. -->
+          <WorkerMergeControls
+            v-if="run"
+            :run-id="run.id"
+          />
         </DialogContent>
       </Transition>
     </DialogPortal>
@@ -904,6 +955,18 @@ function isPermissionAskLive(rid: string): boolean {
   flex: 1;
   overflow-y: auto;
   padding: 8px 12px;
+}
+
+/* L3b PR4 (2026-06-27): branch preservation badge row, sits
+   between the header and the body. Inline-flex so the badge
+   pill hugs the left edge + doesn't stretch full-width. */
+.subagent-drawer__branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 16px 6px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-bg-border);
 }
 
 .subagent-drawer__empty {

@@ -81,6 +81,10 @@ const sampleRow: SubagentRunRow = {
   // that exercise the turn-based suffix pass `turnCount: <number>`
   // explicitly via `openWith`'s Partial override.
   turnCount: null,
+  // L3b PR1 (2026-06-27): null in the baseline fixture (no isolated
+  // worktree preserved). PR4 merge/discard tests override this to a
+  // string when exercising the visible-button path.
+  worktreePath: null,
 };
 
 function makeDrawer() {
