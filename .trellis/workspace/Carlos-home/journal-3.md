@@ -1064,3 +1064,37 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 79: L3b PR3 merge_worker / discard_worker tool + sweep
+
+**Date**: 2026-06-27
+**Task**: L3b PR3 merge_worker / discard_worker tool + sweep
+**Branch**: `main`
+
+### Summary
+
+新增 merge_worker / discard_worker 两个 builtin tool + sweep 机制,处理 PR1 保留的 worker/<run_id> branch 产物。merge_worker:libgit2 fast-forward + 3-way merge + 冲突硬 reset 不残留 marker + 返 conflict 文件列表;discard_worker:NULL worktree_path fail-fast。sweep:libgit2 is_locked 跳过 active worker + mtime 过滤 + EVERLASTING_CLEANUP_PERIOD_DAYS env 默认 7 天(对齐 Claude Code)+ 启动 spawn 接入。代码 21 文件(merge_worker.rs 580 行 + discard_worker.rs 190 行 + ToolContext 加 db 字段连 11 个 test_ctx helper + lib.rs sweep wiring + 2 IPC)+ spec/ROADMAP/IMPLEMENTATION 4 文件。cargo test --lib 955/956(1 fail = RULE-A-017 P3 不相关),11 新 PR3 测试全过。AC #7 并发 merge 串行 MVP 简化(LLM 单线程 + drawer UX,tool-contract.md 文档化)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d23ff9a` | (see git log) |
+| `01a5981` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

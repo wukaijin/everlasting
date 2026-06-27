@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 78
+- **Total Sessions**: 79
 - **Last Active**: 2026-06-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1066 | Active |
+| `journal-3.md` | ~1100 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 79 | 2026-06-27 | L3b PR3 merge_worker / discard_worker tool + sweep | `d23ff9a`, `01a5981` | `main` |
 | 78 | 2026-06-27 | L3b PR2 concurrent dispatch 解锁 worker worktree | `036ea62`, `6d114e0` | `main` |
 | 77 | 2026-06-27 | L3b PR1 worker worktree 隔离核心 | `862caf6` | `main` |
 | 76 | 2026-06-27 | sidebar 搜索入口 + 密度切换 + 时间分组 (PR-of-PRs 3 features) | `f24f619` | `main` |
