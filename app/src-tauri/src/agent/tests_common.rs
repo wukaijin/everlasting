@@ -264,6 +264,28 @@ pub(crate) async fn make_harness() -> TestHarness {
     }
 }
 
+/// L3b PR1 (2026-06-27) + PR2 (2026-06-27): variant of
+/// `make_harness` that also `git init`s the project tempdir so
+/// worker worktree creation succeeds. Used by tests that exercise
+/// isolation (`general-purpose` with default `isolation: Some(true)`
+/// → calls `create_worker` → fails without `.git/`).
+///
+/// The git repo is initialized with `--initial-branch=main` + a
+/// test user + a seed commit so `create_worker` has a base commit
+/// to branch from (the worker's `worker/<run_id>` branch is based
+/// off the project HEAD). The seed file is `seed.txt` (arbitrary
+/// non-empty content) so `commit_all_for_test` has something to
+/// track.
+pub(crate) async fn make_harness_with_git_repo() -> TestHarness {
+    let harness = make_harness().await;
+    init_repo_for_test(&harness.project_path);
+    // Seed a tracked file + initial commit so `create_worker`
+    // (which branches off HEAD) has a base commit to start from.
+    std::fs::write(harness.project_path.join("seed.txt"), "seed").unwrap();
+    commit_all_for_test(&harness.project_path, "init");
+    harness
+}
+
 pub(crate) fn test_messages() -> Vec<ChatMessage> {
     vec![ChatMessage {
         role: Role::User,

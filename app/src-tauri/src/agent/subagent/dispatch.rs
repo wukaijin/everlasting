@@ -220,16 +220,35 @@ pub(crate) async fn run_subagent(
     // live. `None` in unit tests (no Tauri runtime); the sink's
     // `new_without_app_handle` constructor is used in that case.
     app_handle: Option<AppHandle>,
-    // L3a (2026-06-24): when `true`, the worker's toolset is
-    // additionally forced down to read-only tools
-    // (`filter_tools_readonly`) on top of `filter_tools_for_subagent`.
-    // Used by the concurrent dispatch branch in `chat_loop.rs`
-    // (pure dispatch batch, ≥2 workers running in parallel). The
-    // serial path (single dispatch or mixed batch) passes `false`
-    // — `general-purpose` in the serial path keeps its full
-    // write/shell/web toolset (gated by `is_worker: true` at the
-    // ⑨ permission layer). This is the 2nd layer of the 3-layer
-    // read-only guarantee (PRD §"只读保证三层").
+    // L3a (2026-06-24) / L3b PR2 (2026-06-27): when `true`, the
+    // worker's toolset is additionally forced down to read-only
+    // tools (`filter_tools_readonly`) on top of
+    // `filter_tools_for_subagent`. **Post-PR2 this is the
+    // SERIAL-ONLY path** (the concurrent dispatch branch in
+    // `chat_loop.rs` no longer passes `true` — see L3b PR2). The
+    // serial path (single dispatch or mixed batch) keeps passing
+    // `false`, and the L3a regression
+    // (`l3a_single_dispatch_runs_serial_path_unchanged`) continues
+    // to pin the behavior.
+    //
+    // **Why kept after PR2**: the parameter is retained (instead
+    // of removed) for two reasons:
+    // 1. L3a test compat — the regression test
+    //    `l3a_single_dispatch_runs_serial_path_unchanged` was
+    //    written against the `force_readonly=true` API shape;
+    //    removing it would force that test to re-thread its mock
+    //    fixtures.
+    // 2. Future "force read-only at the subagent level" feature
+    //    (e.g. an LLM opts `general-purpose` into read-only for a
+    //    single dispatch) can repurpose this param instead of
+    //    adding a new one.
+    //
+    // The concurrent branch's race-dissolution proof (see
+    // `.trellis/spec/backend/agent-loop-architecture.md`
+    // §"Pattern: Concurrent isolated dispatch (L3b PR2)") no
+    // longer depends on the read-only scope; per-worker worktree
+    // isolation (PR1) handles the write race. The `force_readonly`
+    // arg remains a SERIAL-only behavioral switch.
     force_readonly: bool,
     // L3d (2026-06-25): the process-wide subagent cache, used to
     // look up the dispatched subagent across builtin + user +
@@ -309,22 +328,25 @@ pub(crate) async fn run_subagent(
     // current worktree HEAD. When not isolated, the worker reuses
     // the parent session's worktree (legacy behavior).
     //
-    // **L3a concurrent branch override**: when `force_readonly=true`
-    // (the L3a concurrent dispatch path), isolation is FORCED off
-    // regardless of the frontmatter default or dispatch input.
-    // Rationale: the L3a concurrent branch runs N workers in
-    // parallel against a SHARED cwd with `force_readonly` stripping
-    // write tools — there's no write conflict to isolate (the 3-
-    // layer read-only guarantee). PR2 (L3b phase 2) is what unlocks
-    // per-worker worktree isolation in the concurrent branch; until
-    // then, concurrent = read-only + shared cwd, matching the L3a
-    // race-dissolution proof (see agent-loop-architecture.md
-    // §"Race dissolution by scope").
+    // **L3a backward-compat**: when `force_readonly=true` (the
+    // L3a concurrent dispatch path; the only call site that ever
+    // passed `true`), isolation was historically forced off — the
+    // concurrent branch was scoped to read-only + shared cwd per
+    // the L3a race-dissolution proof. Post-L3b PR2, the concurrent
+    // branch no longer passes `true`; isolation now propagates
+    // from `def.isolation` + `dispatch.isolation` even in the
+    // concurrent path. The short-circuit is retained for
+    // `force_readonly=true` so the L3a serial-only regression
+    // (`l3a_single_dispatch_runs_serial_path_unchanged`) + any
+    // future explicit read-only call site preserve the old
+    // "read-only + shared cwd" semantics.
     let dispatch_isolation = input
         .get("isolation")
         .and_then(|v| v.as_bool());
     let isolated = if force_readonly {
-        // L3a concurrent path — isolation not yet supported here.
+        // L3a pre-PR2 concurrent path; also any future explicit
+        // read-only force (serial). Force isolation off so the
+        // read-only + shared-cwd scope is preserved.
         false
     } else {
         resolve_isolation(def.isolation, dispatch_isolation)

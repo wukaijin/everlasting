@@ -1785,18 +1785,20 @@ pub async fn run_chat_loop(
             // parallel set (Q2) precisely so its Tier 4 ask can
             // fire through the normal single-modal flow.
             //
-            // L3a (2026-06-24): before the regular serial `for`
-            // loop, classify the batch for the concurrent
-            // dispatch_subagent path. A **pure** batch of ≥2
-            // dispatch_subagent tool_uses (no other tools mixed
-            // in) within `DELEGATION_MAX_CONCURRENT_CHILDREN`
-            // (env, default 3) runs concurrently via
-            // `FuturesUnordered` (each worker forced read-only).
-            // A pure batch OVER the limit is hard-rejected (every
-            // tool_use gets a tool_error tool_result — no
-            // truncation, no queuing, mirrors Hermes). Anything
-            // else (single dispatch, or a mixed batch) falls
-            // through to the regular serial `for` loop unchanged.
+            // L3a (2026-06-24) / L3b PR2 (2026-06-27): before the
+            // regular serial `for` loop, classify the batch for
+            // the concurrent dispatch_subagent path. A **pure**
+            // batch of ≥2 dispatch_subagent tool_uses (no other
+            // tools mixed in) within
+            // `DELEGATION_MAX_CONCURRENT_CHILDREN` (env, default 3)
+            // runs concurrently via `FuturesUnordered` (each worker
+            // in its own per-worker worktree — L3b PR1 isolation,
+            // not the L3a read-only scope). A pure batch OVER the
+            // limit is hard-rejected (every tool_use gets a
+            // tool_error tool_result — no truncation, no queuing,
+            // mirrors Hermes). Anything else (single dispatch, or
+            // a mixed batch) falls through to the regular serial
+            // `for` loop unchanged.
             let dispatch_batch = classify_dispatch_batch(
                 &tool_calls,
                 delegation_max_concurrent_children(),
@@ -1842,17 +1844,32 @@ pub async fn run_chat_loop(
                     }
                 }
                 DispatchBatch::Concurrent { count: _ } => {
-                    // ---- L3a concurrent dispatch path (pure
-                    //      dispatch_subagent batch, ≥2 workers) ----
+                    // ---- L3b PR2 concurrent dispatch path (pure
+                    //      dispatch_subagent batch, ≥2 workers,
+                    //      each in its own worker worktree) ----
+                    //
+                    // L3a (2026-06-24) launched this branch with
+                    // `force_readonly = true` to dissolve the 3
+                    // concurrent write races via a read-only
+                    // scope (no writes = no race). L3b PR1
+                    // (2026-06-27) introduced per-worker worktree
+                    // isolation; L3b PR2 (2026-06-27, this change)
+                    // **removes the read-only scope** for the
+                    // concurrent path — each concurrent worker now
+                    // runs in its own `worker/<run_id>` worktree
+                    // (general-purpose builtin defaults to
+                    // `isolation: Some(true)`, so writes land on
+                    // the worker's branch, not the parent's).
                     //
                     // Mirror the L2 parallel-read path's structure
                     // (FuturesUnordered + result_slots[i] + shared
                     // cancelled flag), but each task runs
-                    // `run_subagent` (with `force_readonly = true`)
-                    // instead of `execute_tool`. Every worker is
-                    // forced read-only regardless of its
-                    // SubagentDef (the 2nd layer of the 3-layer
-                    // read-only guarantee).
+                    // `run_subagent` (with `force_readonly = false`,
+                    // serial-only param; the worker worktree
+                    // isolation takes its place). The 3-layer
+                    // read-only guarantee is **no longer the
+                    // concurrent path's safety argument** — the
+                    // per-worker worktree is.
                     //
                     // Permission: every dispatch_subagent tool_use
                     // goes through the existing ⑨ check BEFORE the
@@ -1969,9 +1986,19 @@ pub async fn run_chat_loop(
                                         &token,
                                         &sink,
                                         app_handle.clone(),
-                                        // L3a (2026-06-24): concurrent
-                                        // branch forces read-only.
-                                        true,
+                                        // L3b PR2 (2026-06-27): the
+                                        // concurrent branch no longer
+                                        // forces read-only. Per-worker
+                                        // worktree isolation (PR1) is
+                                        // the new safety argument;
+                                        // `force_readonly` is now
+                                        // serial-only. `general-purpose`
+                                        // builtin defaults to
+                                        // `isolation: Some(true)`, so
+                                        // each concurrent worker lands
+                                        // its writes on its own
+                                        // `worker/<run_id>` branch.
+                                        false,
                                         // L3d (2026-06-25): thread the
                                         // subagent cache so the worker
                                         // resolves across builtin + user
