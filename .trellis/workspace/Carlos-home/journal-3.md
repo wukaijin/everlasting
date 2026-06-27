@@ -997,3 +997,36 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 77: L3b PR1 worker worktree 隔离核心
+
+**Date**: 2026-06-27
+**Task**: L3b PR1 worker worktree 隔离核心
+**Branch**: `main`
+
+### Summary
+
+让 subagent worker 跑在隔离 git worktree(独立 checkout + worker/<run_id> 分支),不污染 parent session 工作区。Approach 1(对标 Claude Code isolation:worktree):create_worker/destroy_worker 变体 + lock/unlock + self-heal 复用 + SubagentDef.isolation 字段 + dispatch_subagent isolation 入参 + resolve_isolation 双层合并 + run_chat_loop worktree_override 25 参(app_data_dir 26 参 pass-through) + ReadGuard reset + subagent_runs.worktree_path 列 + insert_run_with_id + diff_worker_worktree 共享 diff_against_branch helper。941/942 cargo test --lib 绿(C3 pre-existing 记 DEBT RULE-A-017,stash 验证与 L3b 无关)。PR2-4 拆 follow-up tasks。完整 PRD: .trellis/tasks/archive/2026-06/06-27-l3b-worktree-delegate/prd.md;决策: docs/IMPLEMENTATION.md §4 2026-06-27
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `862caf6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

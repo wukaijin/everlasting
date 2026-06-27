@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 76
+- **Total Sessions**: 77
 - **Last Active**: 2026-06-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~999 | Active |
+| `journal-3.md` | ~1032 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 77 | 2026-06-27 | L3b PR1 worker worktree 隔离核心 | `862caf6` | `main` |
 | 76 | 2026-06-27 | sidebar 搜索入口 + 密度切换 + 时间分组 (PR-of-PRs 3 features) | `f24f619` | `main` |
 | 75 | 2026-06-27 | 工具卡片 footer 修复 + dispatch_subagent 去重 + git branch fallback | `2e5c4f8` | `main` |
 | 74 | 2026-06-27 | 顶部 Tab 栏分界修复 + 激活态 accent 解耦 | `7ebfb69` | `main` |
