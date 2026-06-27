@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "PR3 spec: merge/discard 在 worker lifecycle 末端的位置标注"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "merge_worker / discard_worker scenario block + ⑨ Tier 4 权限"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "sweep 契约 + cleanup_period_days env + worktree lock 跳过逻辑"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "worktree_path NULL-on-terminal 不变式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "MergeConflict error variant + 中文用户消息格式"}

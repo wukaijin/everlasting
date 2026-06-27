@@ -1,0 +1,9 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Worker Worktree Override + worker lifecycle (PR3 introduces merge/discard terminal step)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 注册 + ⑨ 关 Tier 4 shell-like 权限白名单 + dispatch_subagent isolation 对照(PR3 merge/discard 不动 isolation)"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "create_worker / destroy_worker / lock / self-heal 契约 + sweep 清理路径"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "worktree_path 列生命周期(create → preserve → discard/merge 后置 NULL)+ status transitions"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "merge_worker / discard_worker Tier 4 ask 路径(同 shell tool,parent UI 可弹 banner)"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "diff_worker_worktree API(merge conflict 报告可能复用)+ numstat subprocess 兜底"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "merge conflict error 类型 + thiserror 域错误结构"}
+{"file": ".trellis/tasks/archive/2026-06/06-27-l3b-worktree-delegate/research/subagent-worktree-isolation-patterns.md", "reason": "PR1 research on worker worktree patterns (reused by PR3 sweep + destroy_worker)"}
