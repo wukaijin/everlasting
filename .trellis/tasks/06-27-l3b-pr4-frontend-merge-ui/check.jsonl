@@ -1,1 +1,5 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "PR4 必须在 SubagentDrawer 章节加 merge/discard UI 契约 + branch 状态 badge 派生规则"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "mergeWorker/discardWorker actions + per-run spinner + store update 契约一致性"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "status badge / spinner / button 配色走 token,不硬编码 hex"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "IPC 签名 + conflict 返回格式前端处理与后端契约对齐"}

@@ -1,1 +1,8 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer 5 段分组布局 + accumulator liveSections 数据流 + 3 边界态;PR4 在此加 merge/discard 按钮 + branch 状态 badge"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store patterns;PR4 在 useSubagentRunsStore 加 mergeWorker/discardWorker actions + per-run spinner state"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "ConfirmDialog component + Tauri webview window.confirm gotcha(merge/discard 危险操作前确认)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui primitives + scoped style portal :deep() gotcha(drawer 内按钮样式)"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "color tokens + state tints + motion vocabulary(button spinner / status badge 配色)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "PR3 merge_worker_run / discard_worker_run IPC 契约 + conflict 返回格式(前端 invoke 对接)"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "worktree_path 列语义(非空 = 有 branch 保留 / NULL = 已 merge/discard/sweep)+ status enum(前端 badge 派生依据)"}
