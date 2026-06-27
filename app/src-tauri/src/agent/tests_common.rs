@@ -7,6 +7,8 @@
 #![cfg(test)]
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -177,6 +179,14 @@ pub(crate) struct TestHarness {
     /// is what `definition_with_cache` + `run_subagent` consult to
     /// resolve builtin + user + project subagents.
     pub(crate) subagent_cache: Arc<crate::agent::subagent::SubagentCache>,
+    /// L3b (2026-06-27): app data dir for worker worktree path
+    /// computation. A fresh tempdir per test so isolated worker
+    /// worktrees (when a test exercises isolation) don't collide
+    /// across tests. Threads through `run_chat_loop`'s 28th
+    /// parameter (`app_data_dir`). Tests that don't exercise
+    /// isolation (most) never read this — the tempdir just exists
+    /// alongside the project tempdir and is cleaned up on drop.
+    pub(crate) app_data_dir: std::path::PathBuf,
     /// TempDir guard — kept alive for the duration of the test so
     /// the project_path directory remains on disk while the agent
     /// loop's pre-flight canonicalizes it. See struct docstring.
@@ -236,6 +246,15 @@ pub(crate) async fn make_harness() -> TestHarness {
         permission_asks: new_permission_store(),
         background_shells: crate::background_shell::default_registry(),
         subagent_cache: crate::agent::subagent::SubagentCache::arc(),
+        // L3b (2026-06-27): fresh tempdir for the app data dir.
+        // Worker worktrees (when a test exercises isolation) land
+        // under `<app_data_dir>/worktrees/<project_uuid>/worker/
+        // <run_id>`. Tests that don't exercise isolation never
+        // touch this; the tempdir just exists for uniformity.
+        app_data_dir: tempfile::tempdir()
+            .expect("app_data_dir tempdir")
+            .path()
+            .to_path_buf(),
         // Move the TempDir guard INTO the harness so it lives as
         // long as the harness (i.e. the whole test). Without this
         // move, `dir` drops at the end of `make_harness` and the
@@ -250,4 +269,61 @@ pub(crate) fn test_messages() -> Vec<ChatMessage> {
         role: Role::User,
         content: MessageContent::Text("hello".to_string()),
     }]
+}
+
+// ---------------------------------------------------------------------------
+// Shared git-repo test helpers (L3b, 2026-06-27)
+//
+// Promoted from `git/worktree.rs::tests`'s private `init_repo` /
+// `commit_all` so the agent-layer tests (notably
+// `subagent/dispatch.rs::tests::probe_worker_changes_*`) can stand up
+// a real git repo to exercise worker worktree create/destroy/probe
+// without depending on git-internal test internals. Kept here under
+// the `_for_test` suffix so a future git-internal helper refactor
+// can't collide with these names. The git-domain tests still have
+// their own private copies (kept local to avoid a cross-module test
+// dependency from `git/` into `agent/`); consolidating them is a
+// follow-up.
+// ---------------------------------------------------------------------------
+
+/// `git init --initial-branch=main` + configure a test user so
+/// subsequent `git commit` calls succeed. Panics on any git error
+/// (test setup, never an assertion failure).
+pub(crate) fn init_repo_for_test(path: &Path) {
+    std::fs::create_dir_all(path).unwrap();
+    let init = StdCommand::new("git")
+        .args(["init", "--initial-branch=main"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init failed: {:?}", init);
+    let cfg_user = StdCommand::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(cfg_user.status.success());
+    let cfg_name = StdCommand::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(cfg_name.status.success());
+}
+
+/// `git add -A` + `git commit -m <msg> --no-gpg-sign` from `path`.
+/// Panics on any git error (test setup, never an assertion failure).
+pub(crate) fn commit_all_for_test(path: &Path, msg: &str) {
+    let add = StdCommand::new("git")
+        .args(["add", "-A"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+    let commit = StdCommand::new("git")
+        .args(["commit", "-m", msg, "--no-gpg-sign"])
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(commit.status.success(), "git commit failed: {:?}", commit);
 }

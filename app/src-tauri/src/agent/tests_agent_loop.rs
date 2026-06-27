@@ -92,6 +92,15 @@ async fn agent_loop_basic_text_only_completes() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -209,6 +218,15 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -330,6 +348,15 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -436,6 +463,15 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -582,6 +618,15 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -692,6 +737,15 @@ async fn agent_loop_max_turns_emits_done_marker() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -783,6 +837,15 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -889,6 +952,15 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1053,6 +1125,15 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1202,6 +1283,15 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1358,6 +1448,15 @@ async fn agent_loop_persist_failure_emits_error() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1516,6 +1615,15 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -1634,6 +1742,15 @@ async fn agent_loop_error_persists_partial_text() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1733,6 +1850,15 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1826,6 +1952,15 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1953,6 +2088,15 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -2048,6 +2192,15 @@ async fn agent_loop_error_emits_turn_complete() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -2186,6 +2339,15 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -2356,6 +2518,15 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -2506,6 +2677,15 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -2895,6 +3075,15 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -3075,6 +3264,15 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -3275,6 +3473,15 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -3427,6 +3634,15 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -3592,6 +3808,15 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -3706,6 +3931,9 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,        // worker_run_id
         h.subagent_cache.clone(), // L3d subagent cache
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -3809,6 +4037,15 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller (and non-isolated
+        // worker path) → worktree_override = None (use the session
+        // row's worktree_path). Only the isolated worker path passes
+        // Some(worker_worktree_path).
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir
+        // (a fresh tempdir per test). Tests that don't exercise
+        // worker isolation never read it.
+        h.app_data_dir.clone(),
     )
     .await;
 

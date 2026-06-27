@@ -130,7 +130,15 @@ pub fn definition() -> ToolDef {
              parent's permission Mode: Yolo → all-allow; Edit/Plan → a tool that \
              needs confirmation (writes, shells, web_fetch without a prior grant) \
              surfaces a `WorkerAskBanner` in the parent's UI for the user to \
-             allow/deny (120s timeout denies)."
+             allow/deny (120s timeout denies).\n\n\
+             L3b (2026-06-27): the optional `isolation` input controls whether the \
+             worker runs in its own git worktree (independent checkout + \
+             `worker/<run_id>` branch). When isolation is active, worker writes \
+             land on a separate branch and are surfaced back as a diff summary in \
+             the tool_result. Precedence: dispatch `isolation` input overrides the \
+             subagent's frontmatter default (e.g. `general-purpose` defaults to \
+             isolated; pass `false` to force shared-cwd). Omit the field to use \
+             the subagent's default."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -148,6 +156,16 @@ pub fn definition() -> ToolDef {
                                     task string + the project memory files — it does \
                                     NOT inherit the parent's conversation history. \
                                     Write the task as a self-contained brief."
+                },
+                "isolation": {
+                    "type": "boolean",
+                    "description": "Override the subagent's worktree-isolation \
+                                    default. `true` forces the worker into its own \
+                                    git worktree (independent checkout + \
+                                    `worker/<run_id>` branch); `false` forces the \
+                                    legacy shared-cwd behavior. Omit to use the \
+                                    subagent's frontmatter default (general-purpose \
+                                    = isolated, researcher = shared)."
                 }
             },
             "required": ["subagent", "task"]
@@ -251,6 +269,15 @@ pub async fn definition_with_cache(cache: &SubagentCache, project_path: &str) ->
                                     task string + the project memory files — it does \
                                     NOT inherit the parent's conversation history. \
                                     Write the task as a self-contained brief."
+                },
+                "isolation": {
+                    "type": "boolean",
+                    "description": "Override the subagent's worktree-isolation \
+                                    default. `true` forces the worker into its own \
+                                    git worktree (independent checkout + \
+                                    `worker/<run_id>` branch); `false` forces the \
+                                    legacy shared-cwd behavior. Omit to use the \
+                                    subagent's frontmatter default."
                 }
             },
             "required": ["subagent", "task"]
@@ -287,6 +314,22 @@ pub struct SubagentDef {
     pub description: String,
     pub system_prompt: String,
     pub tools: Vec<String>,
+    /// L3b (2026-06-27): per-agent default for worktree isolation.
+    /// When `Some(true)`, workers dispatched under this subagent
+    /// run in an isolated git worktree (independent checkout +
+    /// `worker/<run_id>` branch) unless the dispatch-time
+    /// `isolation` input parameter explicitly overrides to `false`.
+    /// `Some(false)` or `None` keeps the legacy shared-cwd behavior
+    /// (worker reuses the parent session's worktree). Builtin
+    /// `general-purpose` ships with `Some(true)` (write-capable
+    /// workers benefit most from isolation); `researcher` ships
+    /// with `None` (read-only workers don't need a separate
+    /// checkout — saves the per-dispatch checkout cost).
+    ///
+    /// The final isolation decision is the merge of this default
+    /// with the dispatch-time override; see
+    /// [`resolve_isolation`] in `dispatch.rs`.
+    pub isolation: Option<bool>,
 }
 
 /// The two MVP subagent definitions, keyed by name. Used by
@@ -327,6 +370,12 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                     "list_dir".to_string(),
                     "web_fetch".to_string(),
                 ],
+                // L3b (2026-06-27): researcher is read-only, so it
+                // does not benefit from a separate worktree (no
+                // write conflicts to isolate). Leaving isolation
+                // `None` keeps the legacy shared-cwd behavior and
+                // saves the per-dispatch checkout cost.
+                isolation: None,
             },
             SubagentDef {
                 name: "general-purpose".to_string(),
@@ -353,6 +402,12 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                 // minus disabled"; this keeps the general-purpose subagent's tool
                 // list self-maintaining as new tools are added to builtin_tools().
                 tools: vec![],
+                // L3b (2026-06-27): general-purpose is write-capable, so it
+                // benefits most from worktree isolation — concurrent workers
+                // can each land writes in their own checkout without racing.
+                // The dispatch-time `isolation` input parameter can still
+                // override this default to `false` on a per-dispatch basis.
+                isolation: Some(true),
             },
         ]
     })
@@ -922,6 +977,7 @@ mod tests {
                 "shell_status".to_string(),
                 "shell_kill".to_string(),
             ],
+            isolation: None,
         };
         let all = vec![
             tool("read_file"),

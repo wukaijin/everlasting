@@ -201,6 +201,18 @@ pub struct SubagentRunRow {
     /// `serde(rename_all = "camelCase")` projects to `turnCount`
     /// on the wire.
     pub turn_count: Option<i64>,
+    /// L3b (2026-06-27): absolute path to the worker's isolated
+    /// git worktree, written by `run_subagent` when isolation is
+    /// active. NULL when:
+    /// - The worker ran non-isolated (researcher builtin, or the
+    ///   dispatch-time `isolation` override was `false`).
+    /// - The worker exited with no changes — the worktree is
+    ///   destroyed and the path is cleared.
+    /// - The row pre-dates L3b (legacy row).
+    /// Preserved on exit-with-changes so a future PR3 merge/discard
+    /// tool can locate the branch + worktree. Wire form:
+    /// `worktreePath` (camelCase via serde).
+    pub worktree_path: Option<String>,
     pub transcript_json: Option<String>,
     pub transcript_truncated: i64,
     pub created_at: String,
@@ -260,6 +272,12 @@ pub struct SubagentRunSummary {
     /// included in the summary projection (no transcript bloat);
     /// the card / drawer can both read it without a second IPC.
     pub turn_count: Option<i64>,
+    /// L3b (2026-06-27): absolute path to the worker's isolated
+    /// git worktree (when isolation is active). NULL for non-
+    /// isolated workers, no-changes-destroyed workers, and legacy
+    /// rows. See [`SubagentRunRow::worktree_path`] for the full
+    /// contract.
+    pub worktree_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +302,19 @@ pub struct SubagentRunSummary {
 /// `update_run_finished` fires) and see the prompt card. `None`
 /// for callers without a prompt (e.g. tests); pre-PR1 callers
 /// pass `None` and the column stays NULL (legacy compat).
+///
+/// L3b (2026-06-27): the lib production path now uses
+/// [`insert_run_with_id`] (the caller generates the id so the
+/// worker worktree path / branch can be derived from it BEFORE
+/// the row is inserted). This auto-id convenience wrapper is
+/// retained for the `db/subagent_runs_tests.rs` integration
+/// suite, which is compiled into the lib `tests` target rather
+/// than the production binary — so the lib build doesn't see
+/// any caller and `rustc` flags the function as dead code.
+/// `#[allow(dead_code)]` keeps the warning quiet without
+/// restructuring the db tests to also use `insert_run_with_id`
+/// (out of PR1 scope).
+#[allow(dead_code)]
 pub async fn insert_run(
     pool: &SqlitePool,
     parent_session_id: &str,
@@ -292,6 +323,32 @@ pub async fn insert_run(
     task: Option<&str>,
 ) -> Result<String, sqlx::Error> {
     let id = Uuid::new_v4().to_string();
+    insert_run_with_id(
+        pool,
+        &id,
+        parent_session_id,
+        parent_request_id,
+        subagent_name,
+        task,
+    )
+    .await?;
+    Ok(id)
+}
+
+/// L3b (2026-06-27): same as [`insert_run`] but the caller supplies
+/// the row id. Used by `run_subagent` when the worker worktree path
+/// + branch name must be derived from the id BEFORE the row is
+/// inserted (the worktree is created first, then the DB row records
+/// its path). The id must be a valid UUID v4 string (caller is
+/// responsible for generation).
+pub async fn insert_run_with_id(
+    pool: &SqlitePool,
+    id: &str,
+    parent_session_id: &str,
+    parent_request_id: &str,
+    subagent_name: &str,
+    task: Option<&str>,
+) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let empty_usage = serde_json::to_string(&TokenUsage::default())
         .unwrap_or_else(|_| "{\"input_tokens\":0,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}".to_string());
@@ -304,7 +361,7 @@ pub async fn insert_run(
         VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, ?, NULL, '[]', 0, ?)
         "#,
     )
-    .bind(&id)
+    .bind(id)
     .bind(parent_session_id)
     .bind(parent_request_id)
     .bind(subagent_name)
@@ -314,7 +371,7 @@ pub async fn insert_run(
     .bind(&now)
     .execute(pool)
     .await?;
-    Ok(id)
+    Ok(())
 }
 
 /// Update a `running` row to its terminal state. Called from
@@ -403,6 +460,34 @@ pub async fn update_run_finished(
     Ok(())
 }
 
+/// L3b (2026-06-27): set or clear the `worktree_path` column on a
+/// `subagent_runs` row. Called by `run_subagent` in two paths:
+///
+/// 1. **Worker started in isolation mode**: `Some(path)` is written
+///    so the row records where the worker's isolated checkout lives.
+///    A future PR3 merge/discard tool reads this column to locate
+///    the branch + worktree.
+/// 2. **Worker exits with no changes**: `None` is written to clear
+///    the column (the worktree was destroyed; the path is stale).
+///    Rows for non-isolated workers keep NULL throughout (no update
+///    is issued in that case — the column was never set).
+///
+/// Best-effort: a DB failure logs at `warn!` and continues (the
+/// dispatch_subagent tool_result is the user-visible artifact; the
+/// worktree_path column is a forward-compat breadcrumb for PR3).
+pub async fn set_worktree_path(
+    pool: &SqlitePool,
+    id: &str,
+    worktree_path: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE subagent_runs SET worktree_path = ? WHERE id = ?")
+        .bind(worktree_path)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Look up a single `subagent_runs` row by id. Returns `None` for
 /// unknown ids. Used by PR3's frontend `ToolCallCard` expand IPC
 /// (a future `get_subagent_run` Tauri command) and by C4's audit
@@ -430,8 +515,8 @@ pub async fn get_run(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count, transcript_json, transcript_truncated,
-               created_at
+               final_text, task, turn_count, worktree_path,
+               transcript_json, transcript_truncated, created_at
         FROM subagent_runs
         WHERE id = ?
         "#,
@@ -454,6 +539,7 @@ pub async fn get_run(
             final_text: r.try_get("final_text")?,
             task: r.try_get("task")?,
             turn_count: r.try_get("turn_count")?,
+            worktree_path: r.try_get("worktree_path")?,
             transcript_json: r.try_get("transcript_json")?,
             transcript_truncated: r.try_get("transcript_truncated")?,
             created_at: r.try_get("created_at")?,
@@ -483,8 +569,8 @@ pub async fn list_runs_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count, transcript_json, transcript_truncated,
-               created_at
+               final_text, task, turn_count, worktree_path,
+               transcript_json, transcript_truncated, created_at
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -508,6 +594,7 @@ pub async fn list_runs_by_session(
                 final_text: r.try_get("final_text")?,
                 task: r.try_get("task")?,
                 turn_count: r.try_get("turn_count")?,
+                worktree_path: r.try_get("worktree_path")?,
                 transcript_json: r.try_get("transcript_json")?,
                 transcript_truncated: r.try_get("transcript_truncated")?,
                 created_at: r.try_get("created_at")?,
@@ -545,7 +632,7 @@ pub async fn list_runs_summary_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count
+               final_text, task, turn_count, worktree_path
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -570,6 +657,7 @@ pub async fn list_runs_summary_by_session(
                 final_text: r.try_get("final_text")?,
                 task: r.try_get("task")?,
                 turn_count: r.try_get("turn_count")?,
+                worktree_path: r.try_get("worktree_path")?,
             })
         })
         .collect()

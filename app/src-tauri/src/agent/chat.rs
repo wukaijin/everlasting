@@ -97,6 +97,10 @@ pub async fn chat(
     // workers by name. Same closure-capture pattern as the other
     // `Arc<...>` handles above.
     let subagent_cache = state.subagent_cache.clone();
+    // L3b (2026-06-27): clone the app data dir so the spawn closure
+    // can capture it by value (State<'_> is borrowed — the closure
+    // must not borrow from it).
+    let app_data_dir = state.app_data_dir.clone();
     let rid = request_id;
     // The `app` clone lives on through `AppHandleSink` (built
     // below); the pre-flight error path also uses `app.emit`
@@ -301,6 +305,20 @@ pub async fn chat(
             // table (unchanged behavior). Only the worker nested
             // call (in `run_subagent`) passes `Some(Arc<...>)`.
             None,
+            // L3b (2026-06-27): production chat is the parent path —
+            // pass `None` so the loop builds the worktree_path from
+            // the session row (the parent's session worktree, or
+            // the project root if no worktree). Only the isolated
+            // worker nested call (in `run_subagent`) passes
+            // `Some(worker_worktree_path)` to redirect the worker's
+            // tools into an isolated checkout.
+            None,
+            // L3b (2026-06-27): thread the app data dir so the
+            // dispatch_subagent interceptor (`run_subagent`) can
+            // compute the worker worktree path when isolation is
+            // active. Pass-through — the agent loop body itself
+            // does not read this.
+            app_data_dir,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

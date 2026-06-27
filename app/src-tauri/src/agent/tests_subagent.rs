@@ -126,6 +126,10 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -340,6 +344,10 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -396,7 +404,13 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
                 name: "dispatch_subagent".into(),
                 input: serde_json::json!({
                     "subagent": "general-purpose",
-                    "task": "do something that will error"
+                    "task": "do something that will error",
+                    // L3b (2026-06-27): this test exercises the
+                    // worker's error path, NOT isolation. Force
+                    // non-isolated so the worker doesn't try to
+                    // create a worktree against the non-git test
+                    // fixture (which would fail dispatch).
+                    "isolation": false
                 }),
             }),
             Ok(ChatEvent::Done {
@@ -476,6 +490,10 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -544,7 +562,11 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
                 name: "dispatch_subagent".into(),
                 input: serde_json::json!({
                     "subagent": "general-purpose",
-                    "task": "read a file, then the upstream will error"
+                    "task": "read a file, then the upstream will error",
+                    // L3b (2026-06-27): force non-isolated (test
+                    // exercises the worker's partial-transcript
+                    // summary path, not isolation).
+                    "isolation": false
                 }),
             }),
             Ok(ChatEvent::Done {
@@ -617,6 +639,10 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -868,6 +894,10 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
     cancel_handle.await.unwrap();
@@ -992,6 +1022,10 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1134,6 +1168,10 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
     let _ = cancel_task.await;
@@ -1258,6 +1296,10 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1390,6 +1432,10 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1482,7 +1528,11 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 name: "dispatch_subagent".into(),
                 input: serde_json::json!({
                     "subagent": "general-purpose",
-                    "task": "Write a file at /tmp/everlasting_worker_escape.txt with content 'leaked'"
+                    "task": "Write a file at /tmp/everlasting_worker_escape.txt with content 'leaked'",
+                    // L3b (2026-06-27): force non-isolated (test
+                    // exercises the PR2b RULE-A-014 worker ask
+                    // collapse, not isolation).
+                    "isolation": false
                 }),
             }),
             Ok(ChatEvent::Done {
@@ -1608,6 +1658,10 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             None,
             h.subagent_cache.clone(),
             None,
+            // L3b (2026-06-27): production-style caller → worktree_override = None.
+            None,
+            // L3b (2026-06-27): thread the test harness's app_data_dir.
+            h.app_data_dir.clone(),
         ),
     )
     .await;
@@ -1828,6 +1882,10 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1908,6 +1966,10 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 
@@ -1992,6 +2054,10 @@ async fn run_loop(
         None,
         h.subagent_cache.clone(),
         None,
+        // L3b (2026-06-27): production-style caller → worktree_override = None.
+        None,
+        // L3b (2026-06-27): thread the test harness's app_data_dir.
+        h.app_data_dir.clone(),
     )
     .await;
 }

@@ -31,6 +31,13 @@ use crate::git::error::GitError;
 /// `session/xxx` as a flat group.
 pub const SESSION_BRANCH_PREFIX: &str = "session/";
 
+/// Branch prefix for all **worker** worktrees (L3b, 2026-06-27).
+/// Combined with the worker run id (the `subagent_runs.id` UUID)
+/// the full branch name is `worker/<run_id>`. Distinct from
+/// [`SESSION_BRANCH_PREFIX`] so concurrent workers never collide
+/// on a branch name (each worker run id is unique per dispatch).
+pub const WORKER_BRANCH_PREFIX: &str = "worker/";
+
 /// The on-disk directory where this session's worktree is checked
 /// out. Layout: `<app_data_dir>/worktrees/<project_uuid>/<session_uuid>`.
 ///
@@ -46,6 +53,29 @@ pub fn worktree_path(data_dir: &Path, project_id: &str, session_id: &str) -> Pat
 /// show all session branches as a flat group.
 pub fn branch_name(session_id: &str) -> String {
     format!("{}{}", SESSION_BRANCH_PREFIX, session_id)
+}
+
+/// The branch name for a **worker** worktree (L3b, 2026-06-27):
+/// `worker/<run_id>`. Distinct from `branch_name` (which produces
+/// `session/<id>`) so worker branches never collide with session
+/// branches or with each other (the run id is unique per dispatch).
+pub fn worker_branch_name(run_id: &str) -> String {
+    format!("{}{}", WORKER_BRANCH_PREFIX, run_id)
+}
+
+/// The on-disk directory for a **worker** worktree (L3b, 2026-06-27).
+/// Layout: `<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>`.
+/// Sibling to the session worktrees dir but under a `worker/`
+/// sub-namespace so a single `ls worktrees/<project_uuid>/` cleanly
+/// separates session-owned trees from worker-owned trees (and a
+/// future PR3 sweep over `worker/` does not need to filter out
+/// session trees).
+pub fn worker_worktree_path(data_dir: &Path, project_id: &str, run_id: &str) -> PathBuf {
+    data_dir
+        .join("worktrees")
+        .join(project_id)
+        .join("worker")
+        .join(run_id)
 }
 
 /// Create a worktree at `worktree_path` for the given session, on a
@@ -81,69 +111,196 @@ pub fn create(
         });
     }
 
-    // 2. Self-heal stale state from previous failed / crashed runs.
-    //
-    //    Motivation: a real-world failure mode reported in the step 4
-    //    follow-up (see
-    //    `.trellis/tasks/06-08-step-4-followup-bugfix-attach-diff-systemprompt/prd.md`
-    //    §Bug 2) is that `attach_worktree` rejected by libgit2 with
-    //    "worktree already exists at <path>" even though our pre-check
-    //    said the path was free. The three roots are:
-    //
-    //    a) Stale `.git/worktrees/<session_id>/` metadata left behind
-    //       by a previous `create` that crashed between the libgit2
-    //       write and the directory fsync. libgit2's `Repository::
-    //       worktree(name, ...)` refuses to create a new worktree
-    //       when its metadata name collides with an existing entry.
-    //    b) Stale `session/<id>` branch from a previous create that
-    //       crashed after `Repository::branch(...)` returned but
-    //       before `Repository::worktree(...)` finished. The branch
-    //       exists in `.git/refs/heads/session/<id>` but no worktree
-    //       points at it; subsequent creates fail because
-    //       `Repository::branch(..., force=false)` refuses to
-    //       overwrite.
-    //    c) Orphan `worktree_path` directory that is NOT tracked by
-    //       libgit2 (e.g. a partial create wrote the parent dir
-    //       but never finished). After (a) prunes the metadata and
-    //       (b) deletes the branch, any directory still standing
-    //       at `worktree_path` is by definition an orphan — a real
-    //       worktree would have been torn down by (a) + (b).
-    //
-    //    We `tracing::warn!` on every self-heal action so the user
-    //    knows stale state was discarded — silent auto-cleanup of
-    //    disk contents would be a footgun (e.g. untracked-but-
-    //    intentional files in the orphan dir would be lost). The
-    //    `worktree_path.exists()` pre-check below still acts as a
-    //    safety net in case self-heal fails for any reason.
-    //
-    //    Order matters: prune metadata BEFORE the worktree-add call
-    //    (a), delete the branch BEFORE the `Repository::branch`
-    //    recreate (b), and remove the orphan dir BEFORE step 4's
-    //    worktree add (c). All three happen after `check_clean`
-    //    (which is performed in the Tauri command, not here) so
-    //    the project root's dirty state doesn't influence our
-    //    self-heal.
     let repo = Repository::open(project_path)?;
     let branch_full = branch_name(session_id);
 
-    // 2a. Stale worktree metadata: if libgit2's worktree list still
-    //     has an entry for `session_id` but the on-disk directory is
-    //     gone (or about to be re-created), `prune` cleans up the
-    //     metadata so the next `Repository::worktree(...)` call
-    //     succeeds. `prune` also unlinks the metadata from
-    //     `.git/worktrees/<session_id>/` so future `git worktree
-    //     list` won't see a ghost entry.
+    // 2. Self-heal stale state (3 roots: stale metadata / stale
+    //    branch / orphan dir). Shared with the worker variant via
+    //    `self_heal_for_create` — see that function for the full
+    //    rationale.
+    self_heal_for_create(&repo, project_path, worktree_path, session_id, &branch_full)?;
+
+    // 3. Parent dir may not exist yet on a fresh install.
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| GitError::Io {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+
+    // 4. The actual worktree add. The branch is created off the
+    //    project's current HEAD (the session variant's base). The
+    //    worker variant (`create_worker`) instead bases the branch
+    //    off an arbitrary commit (the parent session worktree's HEAD).
+    let head_commit = repo.head()?.peel_to_commit()?;
+    create_worktree_add(
+        &repo,
+        worktree_path,
+        session_id,
+        &branch_full,
+        &head_commit,
+    )?;
+
+    tracing::info!(
+        project = %project_path.display(),
+        worktree = %worktree_path.display(),
+        branch = %branch_full,
+        "created session worktree"
+    );
+    Ok(())
+}
+
+/// Create a **worker** worktree at `worktree_path` for the given
+/// worker run, on a new branch `worker/<run_id>` based on the
+/// `base_worktree_path`'s current HEAD commit (L3b, 2026-06-27).
+///
+/// This is the worker-isolation counterpart to [`create`]. Differences
+/// from the session variant:
+///
+/// - **Branch name**: `worker/<run_id>` (via [`worker_branch_name`]),
+///   NOT `session/<id>`. Distinct namespace so concurrent workers
+///   never collide and a future PR3 sweep can target `worker/*`
+///   without filtering session branches.
+/// - **Base commit**: the HEAD of `base_worktree_path` (typically the
+///   parent session's worktree), NOT the project main repo's HEAD.
+///   This makes the worker start from the parent's current commit
+///   (parent progress is inherited at the commit level). Note: git
+///   worktree base is commit-level — the parent's uncommitted WIP is
+///   NOT visible to the worker (git worktree's inherent limitation).
+/// - **Worktree metadata name**: the run_id (no `worker/` prefix),
+///   mirroring the session variant's `session_id` (no `session/`
+///   prefix). libgit2's worktree metadata dir lives under
+///   `.git/worktrees/<name>/`; slashes there would create nested
+///   dirs that confuse `git worktree prune`.
+///
+/// Reuses [`self_heal_for_create`] for the 3-state self-heal
+/// (stale metadata / stale branch / orphan dir) — identical
+/// recovery semantics to the session variant.
+///
+/// `project_path` is the project's main repo path (the `.git/`
+/// directory is shared across all linked worktrees). The function
+/// does NOT need `base_worktree_path` to be openable as a separate
+/// repo — it only reads the base commit id from it.
+pub fn create_worker(
+    project_path: &Path,
+    worktree_path: &Path,
+    base_worktree_path: &Path,
+    run_id: &str,
+) -> Result<(), GitError> {
+    if !project_path.join(".git").exists() {
+        return Err(GitError::NotARepo {
+            path: project_path.display().to_string(),
+        });
+    }
+
+    let repo = Repository::open(project_path)?;
+    let branch_full = worker_branch_name(run_id);
+
+    // Self-heal any stale worker state for this run_id (the same 3
+    // roots as the session variant; the metadata name is the run_id).
+    self_heal_for_create(&repo, project_path, worktree_path, run_id, &branch_full)?;
+
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| GitError::Io {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+
+    // Resolve the base commit from the parent session's worktree
+    // HEAD. `base_worktree_path` is a linked worktree of the same
+    // repo, so opening it gives us a `Repository` whose `head()`
+    // resolves to the parent session branch's tip commit.
+    //
+    // libgit2 invariant: a `Commit` object is owned by the
+    // `Repository` it was peeled from. `repo.branch(name, &commit,
+    // false)` requires `git_commit_owner(commit) == repository`, so
+    // we CANNOT pass the parent-worktree's `Commit` directly to the
+    // project-main repo's `branch()` call. Instead we read the OID
+    // from the parent and re-look it up on the project-main repo
+    // (the commit is shared across all linked worktrees of the same
+    // repo, so the lookup always succeeds).
+    let base_repo = Repository::open(base_worktree_path)?;
+    let base_oid = base_repo.head()?.peel_to_commit()?.id();
+    let base_commit = repo.find_commit(base_oid)?;
+
+    create_worktree_add(&repo, worktree_path, run_id, &branch_full, &base_commit)?;
+
+    // L3b (2026-06-27): lock the worktree for the duration of the
+    // worker run. `git worktree lock` prevents external prune
+    // operations (sweep, manual) from removing the worktree while
+    // the worker is actively using it. The matching `unlock` is
+    // in `destroy_worker` (before `prune`), so a successful destroy
+    // also clears the lock. Failure here is non-fatal: the worktree
+    // is fully usable without the lock; the worst case is a manual
+    // `git worktree prune` sweeping it before the worker finishes.
+    if let Ok(wt_lock) = repo.find_worktree(run_id) {
+        if let Err(e) = wt_lock.lock(Some("L3b worker active")) {
+            tracing::warn!(
+                run_id = %run_id,
+                error = %e,
+                "worker worktree lock failed (non-fatal)"
+            );
+        }
+    }
+
+    tracing::info!(
+        project = %project_path.display(),
+        worktree = %worktree_path.display(),
+        branch = %branch_full,
+        base = %base_commit.id(),
+        "created worker worktree"
+    );
+    Ok(())
+}
+
+/// Shared self-heal logic for [`create`] and [`create_worker`].
+///
+/// The 3 stale-state roots are documented in [`create`]'s doc
+/// comment; this helper exists so the worker variant doesn't
+/// copy-paste the recovery logic (code-reuse-thinking-guide:
+/// asymmetric mechanisms producing the same cleanup must share a
+/// single source of truth).
+///
+/// `metadata_name` is the worktree's libgit2 metadata name (the
+/// session_id for session worktrees, the run_id for worker
+/// worktrees — no prefix in either case). `branch_full` is the
+/// full branch ref (`session/<id>` or `worker/<run_id>`).
+fn self_heal_for_create(
+    repo: &Repository,
+    project_path: &Path,
+    worktree_path: &Path,
+    metadata_name: &str,
+    branch_full: &str,
+) -> Result<(), GitError> {
+    // 2a. Stale worktree metadata.
     if let Ok(worktrees) = repo.worktrees() {
-        if worktrees.iter().any(|name| name.as_deref() == Some(session_id)) {
+        if worktrees
+            .iter()
+            .any(|name| name.as_deref() == Some(metadata_name))
+        {
             tracing::warn!(
                 project = %project_path.display(),
-                session_id = %session_id,
+                metadata = %metadata_name,
                 "self-heal: found stale worktree metadata; pruning"
             );
-            if let Ok(wt) = repo.find_worktree(session_id) {
+            if let Ok(wt) = repo.find_worktree(metadata_name) {
+                // Unlock before prune: libgit2 refuses to prune a
+                // locked worktree without the `force` option. Stale
+                // locks can outlive a crashed worker run (the lock
+                // file on disk is picked up by the next self-heal
+                // when the worktree itself has been removed but the
+                // libgit2 metadata persists).
+                if let Err(e) = wt.unlock() {
+                    tracing::warn!(
+                        metadata = %metadata_name,
+                        error = %e,
+                        "self-heal: worktree unlock failed (non-fatal)"
+                    );
+                }
                 if let Err(e) = wt.prune(None) {
                     tracing::warn!(
-                        session_id = %session_id,
+                        metadata = %metadata_name,
                         error = %e,
                         "self-heal: worktree metadata prune failed (non-fatal)"
                     );
@@ -152,47 +309,27 @@ pub fn create(
         }
     }
 
-    // 2b. Stale `session/<id>` branch: a previous crashed create
-    //     may have left a branch reference in `.git/refs/heads/`.
-    //     `Repository::branch(..., force=false)` will refuse to
-    //     re-create, so we delete the old one first. We DO NOT
-    //     force-update in-place because the user's WIP on the
-    //     branch (if any) would be lost; deletion is the right
-    //     move because the worktree that owned it is gone
-    //     (2a pruned its metadata above). If the user really
-    //     wanted to keep the WIP, they'd `git fetch` it from
-    //     elsewhere before re-attaching.
-    if let Ok(mut existing_branch) =
-        repo.find_branch(&branch_full, BranchType::Local)
-    {
+    // 2b. Stale branch.
+    if let Ok(mut existing_branch) = repo.find_branch(branch_full, BranchType::Local) {
         tracing::warn!(
             project = %project_path.display(),
             branch = %branch_full,
-            "self-heal: found stale session branch; deleting"
+            "self-heal: found stale branch; deleting"
         );
         if let Err(e) = existing_branch.delete() {
             tracing::warn!(
                 branch = %branch_full,
                 error = %e,
-                "self-heal: session branch delete failed (non-fatal)"
+                "self-heal: branch delete failed (non-fatal)"
             );
         }
     }
 
-    // 2c. Orphan `worktree_path` directory. After (2a) pruned any
-    //     libgit2 metadata and (2b) deleted any matching branch,
-    //     anything still standing at `worktree_path` is by
-    //     construction not a real worktree — it is a leftover
-    //     directory from a partial / crashed run. We remove it so
-    //     step 5's `Repository::worktree(...)` has a clean slate.
-    //     We log loudly because the contents (if any) are about
-    //     to be lost; in practice the contents are usually empty
-    //     or contain only `README.md` / scaffolding from the
-    //     previous attempt.
+    // 2c. Orphan worktree_path directory.
     if worktree_path.exists() {
         tracing::warn!(
             project = %project_path.display(),
-            session_id = %session_id,
+            metadata = %metadata_name,
             worktree = %worktree_path.display(),
             "self-heal: found orphan worktree directory; removing"
         );
@@ -202,55 +339,29 @@ pub fn create(
         })?;
     }
 
-    // 3. Parent dir may not exist yet on a fresh install. We make
-    //    it here so the libgit2 call below has a writable parent.
-    if let Some(parent) = worktree_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| GitError::Io {
-            path: parent.display().to_string(),
-            source: e,
-        })?;
-    }
+    Ok(())
+}
 
-    // 4. The actual worktree add.
-    //
-    //    Design note: libgit2's `Repository::worktree(name, path, opts)`
-    //    takes `name` as BOTH the worktree metadata name (the
-    //    directory under `<commondir>/worktrees/`) AND the new
-    //    branch name when no `reference` is set. The CLI's
-    //    `git worktree add -b <branch> <path>` does NOT have this
-    //    coupling — it derives the metadata name from `<path>`'s
-    //    basename and only uses `<branch>` for the branch side.
-    //
-    //    When the branch has slashes (e.g. `session/<uuid>`), the
-    //    libgit2-coupled name tries to mkdir
-    //    `<commondir>/worktrees/session/<uuid>/`. The first fix
-    //    (commit 4930408) pre-created the `session/` intermediate
-    //    dir, which made `git worktree list` treat `session/` as a
-    //    stale worktree and `git worktree prune` would remove it,
-    //    orphaning the real worktree metadata. The fix is to
-    //    separate the two names: pass `name = session_id` (no
-    //    slashes, the metadata dir under `.git/worktrees/`) and
-    //    pass the new branch through `WorktreeAddOptions::reference`.
-    //
-    //    The branch is pre-created on the main repo via
-    //    `Repository::branch` so the Reference object we hand to
-    //    libgit2 is real. This means the branch shows up in the
-    //    main repo's `git branch` listing too — that's fine; the
-    //    branch is shared between the main repo and the worktree.
-    let head_commit = repo.head()?.peel_to_commit()?;
-    let branch_obj = repo.branch(&branch_full, &head_commit, false)?;
+/// Shared worktree-add step for [`create`] and [`create_worker`].
+/// Pre-creates the branch off `base_commit` and then calls
+/// `Repository::worktree(metadata_name, worktree_path, opts)` with
+/// the branch ref as the `reference` (decouples the metadata name
+/// from the branch name — see the design note in the original
+/// `create` for why the slash in `session/<id>` / `worker/<run_id>`
+/// forces this).
+fn create_worktree_add(
+    repo: &Repository,
+    worktree_path: &Path,
+    metadata_name: &str,
+    branch_full: &str,
+    base_commit: &git2::Commit,
+) -> Result<(), GitError> {
+    let branch_obj = repo.branch(branch_full, base_commit, false)?;
     let branch_ref = branch_obj.into_reference();
 
     let mut opts = git2::WorktreeAddOptions::new();
     opts.reference(Some(&branch_ref));
-    repo.worktree(session_id, &worktree_path, Some(&opts))?;
-
-    tracing::info!(
-        project = %project_path.display(),
-        worktree = %worktree_path.display(),
-        branch = %branch_full,
-        "created session worktree"
-    );
+    repo.worktree(metadata_name, worktree_path, Some(&opts))?;
     Ok(())
 }
 
@@ -357,6 +468,109 @@ pub fn destroy(
         worktree = %worktree_path.display(),
         branch = %branch,
         "destroyed session worktree"
+    );
+    Ok(())
+}
+
+/// Destroy a **worker** worktree (L3b, 2026-06-27) and delete its
+/// `worker/<run_id>` branch. Best-effort like [`destroy`]: physical
+/// dir removal is surfaced; metadata prune + branch delete are
+/// best-effort.
+///
+/// Differences from the session variant:
+/// - **Branch name**: `worker/<run_id>` (via [`worker_branch_name`]),
+///   NOT `session/<id>`.
+/// - **Metadata lookup name**: the run_id (no prefix), mirroring
+///   the session variant's session_id.
+///
+/// Used in two paths:
+/// 1. Worker exits with no changes → destroy immediately (the
+///    branch carries nothing useful).
+/// 2. A future PR3 `discard_worker` tool explicitly drops a
+///    kept-changes worker branch.
+pub fn destroy_worker(
+    project_path: &Path,
+    worktree_path: &Path,
+    run_id: &str,
+) -> Result<(), GitError> {
+    let branch = worker_branch_name(run_id);
+
+    if worktree_path.as_os_str().is_empty() || worktree_path == Path::new("/") {
+        return Err(GitError::Io {
+            path: worktree_path.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to remove system-critical path",
+            ),
+        });
+    }
+
+    if worktree_path.exists() {
+        std::fs::remove_dir_all(worktree_path).map_err(|e| GitError::Io {
+            path: worktree_path.display().to_string(),
+            source: e,
+        })?;
+    }
+
+    let worktree_lookup = run_id;
+    match Repository::open(project_path) {
+        Ok(repo) => {
+            if let Ok(wt) = repo.find_worktree(worktree_lookup) {
+                // Unlock before prune: the worktree is locked by
+                // `create_worker` for the worker's lifetime, and
+                // libgit2 refuses to prune a locked worktree without
+                // the `force` option.
+                if let Err(e) = wt.unlock() {
+                    tracing::warn!(
+                        worktree = %worktree_lookup,
+                        error = %e,
+                        "worker worktree unlock failed (non-fatal)"
+                    );
+                }
+                if let Err(e) = wt.prune(None) {
+                    tracing::warn!(
+                        worktree = %worktree_lookup,
+                        error = %e,
+                        "worker worktree metadata prune failed (non-fatal)"
+                    );
+                }
+            }
+            match repo.find_branch(&branch, BranchType::Local) {
+                Ok(mut b) => {
+                    if let Err(e) = b.delete() {
+                        tracing::warn!(
+                            branch = %branch,
+                            error = %e,
+                            "worker branch delete failed (non-fatal)"
+                        );
+                    }
+                }
+                Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                    // Branch was never created or already deleted — fine.
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        branch = %branch,
+                        error = %e,
+                        "worker branch lookup failed (non-fatal)"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                project = %project_path.display(),
+                error = %e,
+                "could not open project repo to prune worker worktree metadata (non-fatal)"
+            );
+        }
+    }
+
+    tracing::info!(
+        project = %project_path.display(),
+        worktree = %worktree_path.display(),
+        branch = %branch,
+        "destroyed worker worktree"
     );
     Ok(())
 }
@@ -717,5 +931,184 @@ mod tests {
             .unwrap()
             .id();
         assert_eq!(wt_head.id(), project_head, "worktree HEAD should match project HEAD");
+    }
+
+    // -----------------------------------------------------------------------
+    // L3b (2026-06-27): worker worktree variants
+    //
+    // `create_worker` / `destroy_worker` are the worker-isolation
+    // counterparts to `create` / `destroy`. The branch is
+    // `worker/<run_id>` (distinct namespace), and the base commit is
+    // the parent session worktree's HEAD (not the project main HEAD).
+    // These tests pin the worker-specific invariants:
+    //   1. Branch name is `worker/<run_id>` (not `session/<id>`).
+    //   2. Base commit is the parent worktree HEAD (an extra commit
+    //      on the parent session branch is visible to the worker).
+    //   3. destroy_worker removes the branch + dir.
+    //   4. Self-heal works for the worker namespace (orphan dir).
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a parent session worktree (one commit ahead of
+    /// project main) so the worker's base-commit inheritance is
+    /// observable. Returns `(project_path, parent_worktree_path,
+    /// parent_head_commit_id)`.
+    fn parent_session_worktree_with_extra_commit(project: &Path, session_id: &str) -> PathBuf {
+        // Bring the project to a clean HEAD with one commit.
+        first_commit_setup(project);
+
+        // Create the parent session worktree (uses `create`, the
+        // session variant — the worker variant will base off this).
+        let parent_wt = project.join(format!("parent_wt_{}", session_id));
+        create(project, &parent_wt, session_id)
+            .expect("parent session worktree create should succeed");
+
+        // Make an extra commit on the parent session branch so the
+        // worker's base-commit inheritance is observable (the worker
+        // should see this commit, the project main should not).
+        std::fs::write(parent_wt.join("parent_only.txt"), "from parent session")
+            .unwrap();
+        let add = StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(&parent_wt)
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+        let commit = StdCommand::new("git")
+            .args(["commit", "-m", "parent session commit", "--no-gpg-sign"])
+            .current_dir(&parent_wt)
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "parent commit failed: {:?}", commit);
+
+        parent_wt
+    }
+
+    #[test]
+    fn create_worker_uses_worker_branch_prefix() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        let parent_wt = parent_session_worktree_with_extra_commit(project, "sess-1");
+
+        let run_id = "run-abc";
+        let worker_wt = tmp.path().join("worker_wt");
+        create_worker(project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should succeed");
+
+        // The worker branch exists as `worker/<run_id>` in the repo.
+        let repo = git2::Repository::open(project).unwrap();
+        let branch = repo
+            .find_branch(&format!("worker/{}", run_id), git2::BranchType::Local)
+            .expect("worker branch should exist");
+        assert!(branch.get().is_branch(), "worker branch is a branch ref");
+
+        // No `session/<run_id>` branch was created (distinct namespace).
+        assert!(
+            repo.find_branch(&format!("session/{}", run_id), git2::BranchType::Local)
+                .is_err(),
+            "no session/<run_id> branch should exist for a worker"
+        );
+
+        // The worktree is a real linked worktree.
+        assert!(worker_wt.join(".git").exists());
+    }
+
+    #[test]
+    fn create_worker_bases_off_parent_worktree_head() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        let parent_wt = parent_session_worktree_with_extra_commit(project, "sess-2");
+
+        // The parent session made one commit ahead of project main.
+        let parent_repo = git2::Repository::open(&parent_wt).unwrap();
+        let parent_head = parent_repo.head().unwrap().peel_to_commit().unwrap().id();
+        let project_repo = git2::Repository::open(project).unwrap();
+        let project_head = project_repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert_ne!(parent_head, project_head, "parent must be ahead of project main");
+
+        let run_id = "run-bases-off-parent";
+        let worker_wt = tmp.path().join("worker_wt_off_parent");
+        create_worker(project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should succeed");
+
+        // The worker's HEAD must equal the parent's HEAD, NOT the
+        // project main HEAD. This is the load-bearing L3b invariant:
+        // the worker inherits the parent session's progress at the
+        // commit level.
+        let worker_repo = git2::Repository::open(&worker_wt).unwrap();
+        let worker_head = worker_repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert_eq!(
+            worker_head, parent_head,
+            "worker HEAD must match parent session HEAD (base-commit inheritance)"
+        );
+        assert_ne!(
+            worker_head, project_head,
+            "worker HEAD must NOT match project main HEAD"
+        );
+
+        // The worker can see the parent's extra file (it was part of
+        // the parent's commit, so the worktree checkout has it).
+        assert!(
+            worker_wt.join("parent_only.txt").exists(),
+            "worker should see the parent's committed file"
+        );
+    }
+
+    #[test]
+    fn destroy_worker_removes_branch_and_dir() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        let parent_wt = parent_session_worktree_with_extra_commit(project, "sess-3");
+
+        let run_id = "run-destroy";
+        let worker_wt = tmp.path().join("worker_wt_destroy");
+        create_worker(project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should succeed");
+        assert!(worker_wt.exists());
+
+        destroy_worker(project, &worker_wt, run_id)
+            .expect("destroy_worker should succeed");
+
+        // Directory is gone.
+        assert!(!worker_wt.exists(), "worker worktree dir should be removed");
+
+        // Branch is gone.
+        let repo = git2::Repository::open(project).unwrap();
+        assert!(
+            repo.find_branch(&format!("worker/{}", run_id), git2::BranchType::Local)
+                .is_err(),
+            "worker branch should be deleted"
+        );
+    }
+
+    #[test]
+    fn create_worker_self_heals_orphan_dir() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        let parent_wt = parent_session_worktree_with_extra_commit(project, "sess-4");
+
+        let run_id = "run-orphan";
+        let worker_wt = tmp.path().join("worker_wt_orphan");
+        // Lay down an orphan dir at the worker worktree path.
+        std::fs::create_dir_all(&worker_wt).unwrap();
+        std::fs::write(worker_wt.join("stale.txt"), "leftover").unwrap();
+
+        create_worker(project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should self-heal orphan dir");
+
+        // Orphan contents are gone; the worktree is real now.
+        assert!(!worker_wt.join("stale.txt").exists());
+        assert!(worker_wt.join(".git").exists());
+    }
+
+    #[test]
+    fn worker_branch_name_and_path_helpers() {
+        assert_eq!(worker_branch_name("run-123"), "worker/run-123");
+        assert_eq!(WORKER_BRANCH_PREFIX, "worker/");
+        let data_dir = Path::new("/data");
+        let p = worker_worktree_path(data_dir, "proj-uuid", "run-123");
+        assert_eq!(
+            p,
+            Path::new("/data/worktrees/proj-uuid/worker/run-123")
+        );
     }
 }

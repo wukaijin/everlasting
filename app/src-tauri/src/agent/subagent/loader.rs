@@ -121,12 +121,19 @@ pub struct LoadedSubagent {
 ///   (single `Provider` model instance). The value is intentionally
 ///   NOT stored on `SubagentDef` — storing it would invite a future
 ///   bug where the field is read but never honored.
+/// - `isolation: Option<bool>` (L3b, 2026-06-27) keeps the same
+///   declared/not-declared distinction so a higher layer that does
+///   not declare `isolation` inherits the lower layer's value (Q2
+///   inheritance extended to the new field).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Frontmatter {
     name: Option<String>,
     description: Option<String>,
     /// `None` = not declared; `Some(vec)` = declared (incl. empty).
     tools: Option<Vec<String>>,
+    /// L3b (2026-06-27): `None` = not declared (inherit on override);
+    /// `Some(true/false)` = declared, use verbatim.
+    isolation: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +226,11 @@ fn apply_kv(fm: &mut Frontmatter, line: &str) {
         // empty" (Some([])). Malformed → None + warn (tolerant parse,
         // the rest of the agent still loads).
         "tools" => fm.tools = Some(parse_tools_array(&v)),
+        // L3b (2026-06-27): accept `isolation: worktree` (Claude Code
+        // spelling) or `isolation: true/false` and normalize to a
+        // bool. Tolerant parse — an unrecognized value is treated as
+        // "not declared" + warn (the rest of the agent still loads).
+        "isolation" => fm.isolation = Some(parse_isolation(&v)),
         // Q4: `model` is accepted so a user writing it doesn't get an
         // "unknown field" silence, but we warn + discard — v1 uses a
         // single Provider model instance and does not switch per
@@ -230,6 +242,30 @@ fn apply_kv(fm: &mut Frontmatter, line: &str) {
             );
         }
         _ => {}
+    }
+}
+
+/// Parse the `isolation` frontmatter value (L3b, 2026-06-27).
+///
+/// Accepts (case-insensitive):
+/// - `worktree` → `true` (Claude Code spelling — `isolation: worktree`)
+/// - `true` / `false` → the literal bool
+///
+/// Any other value → `false` + `warn!` (tolerant parse — the rest of
+/// the agent still loads; the user can fix the typo and the next
+/// mtime-fenced read picks it up).
+fn parse_isolation(raw: &str) -> bool {
+    let v = raw.trim().to_lowercase();
+    match v.as_str() {
+        "worktree" | "true" => true,
+        "false" | "none" | "shared" => false,
+        _ => {
+            tracing::warn!(
+                value = %raw,
+                "subagent: `isolation` value not recognized (expected `worktree` / `true` / `false`); treating as `false`"
+            );
+            false
+        }
     }
 }
 
@@ -439,6 +475,7 @@ async fn load_agent_file(
     };
 
     let tools_declared = fm.tools.is_some();
+    let isolation_declared = fm.isolation.is_some();
     let def = SubagentDef {
         name,
         description,
@@ -448,11 +485,17 @@ async fn load_agent_file(
         // follows the general-purpose convention: empty = full set
         // at filter_tools_for_subagent time).
         tools: fm.tools.unwrap_or_default(),
+        // L3b (2026-06-27): placeholder `None` when not declared;
+        // overwritten by inheritance at merge time (or kept `None`
+        // for brand-new agents, which is the legacy shared-cwd
+        // behavior).
+        isolation: fm.isolation,
     };
 
     Ok(Some(LoadedAgentFile {
         loaded: LoadedSubagent { def, source },
         tools_declared,
+        isolation_declared,
     }))
 }
 
@@ -462,12 +505,20 @@ async fn load_agent_file(
 /// filter path doesn't care about declared-ness); the Q2 inheritance
 /// decision in `merge_with_inheritance` reads `tools_declared` to
 /// decide whether to pull tools up from a lower-priority layer.
+///
+/// L3b (2026-06-27): `isolation_declared` extends the same
+/// inheritance semantics to the `isolation` field (a higher layer
+/// that does not declare `isolation` inherits the lower layer's
+/// value).
 #[derive(Clone, Debug)]
 struct LoadedAgentFile {
     loaded: LoadedSubagent,
     /// `true` iff the frontmatter declared `tools` (even empty).
     /// `false` iff `tools` was absent → eligible for inheritance.
     tools_declared: bool,
+    /// `true` iff the frontmatter declared `isolation`. `false` iff
+    /// `isolation` was absent → eligible for inheritance.
+    isolation_declared: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +614,11 @@ impl SubagentCache {
                 // flows INTO a builtin from a lower layer (there is
                 // no lower layer).
                 tools_declared: true,
+                // L3b (2026-06-27): same for `isolation` — builtins
+                // always have a definitive value (general-purpose =
+                // Some(true), researcher = None), so they count as
+                // "declared" for inheritance purposes.
+                isolation_declared: true,
             })
             .collect();
         layers.push(builtin_files);
@@ -616,31 +672,39 @@ async fn read_through(
 /// (`tools_declared == false`), it inherits the lower entry's
 /// `def.tools` before overwriting. A brand-new name with no
 /// declaration keeps `vec![]` (the general-purpose convention).
+///
+/// L3b (2026-06-27): the same inheritance rule extends to `isolation`
+/// — a higher layer that does NOT declare `isolation` inherits the
+/// lower layer's `def.isolation`. The two fields are independent
+/// (a user can override one without touching the other).
 fn merge_with_inheritance(layers: Vec<Vec<LoadedAgentFile>>) -> Vec<LoadedSubagent> {
     let mut by_name: HashMap<String, LoadedAgentFile> = HashMap::new();
     for layer in layers {
         for file in layer {
             let name = file.loaded.def.name.clone();
-            if !file.tools_declared {
-                if let Some(lower) = by_name.get(&name) {
-                    // Inherit the lower layer's tool list. Source tag
-                    // + system_prompt + description stay from the
-                    // higher layer (the override semantics).
-                    let mut merged = file.loaded.clone();
+            let mut merged = file.loaded.clone();
+            let mut tools_declared = file.tools_declared;
+            let mut isolation_declared = file.isolation_declared;
+            // Inherit from the lower layer for any field this layer
+            // did NOT declare.
+            if let Some(lower) = by_name.get(&name) {
+                if !file.tools_declared {
                     merged.def.tools = lower.loaded.def.tools.clone();
-                    by_name.insert(
-                        name,
-                        LoadedAgentFile {
-                            loaded: merged,
-                            tools_declared: false,
-                        },
-                    );
-                    continue;
+                    tools_declared = false; // stays inheritable for the next layer
                 }
-                // No lower layer — `vec![]` already on the def
-                // (general-purpose convention).
+                if !file.isolation_declared {
+                    merged.def.isolation = lower.loaded.def.isolation;
+                    isolation_declared = false;
+                }
             }
-            by_name.insert(name, file);
+            by_name.insert(
+                name,
+                LoadedAgentFile {
+                    loaded: merged,
+                    tools_declared,
+                    isolation_declared,
+                },
+            );
         }
     }
     let mut out: Vec<LoadedSubagent> = by_name.into_values().map(|f| f.loaded).collect();
@@ -925,10 +989,12 @@ mod tests {
                     description: String::new(),
                     system_prompt: String::new(),
                     tools,
+                    isolation: None,
                 },
                 source,
             },
             tools_declared: declared,
+            isolation_declared: true,
         }
     }
 

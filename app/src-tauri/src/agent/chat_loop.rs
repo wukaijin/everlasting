@@ -288,6 +288,40 @@ pub async fn run_chat_loop(
     // (RULE-A-016 isolation: worker grants must not cross the
     // privilege boundary into the parent session's grant table).
     run_grants: Option<std::sync::Arc<crate::agent::permissions::RunGrantCache>>,
+    // L3b (2026-06-27): worker worktree isolation override. When
+    // `Some(path)`, the loop uses `path` as the worker's worktree
+    // root INSTEAD of the session row's `worktree_path` (which is
+    // the PARENT session's worktree — the root cause of worker
+    // reuse of the parent's checkout). The path is also the basis
+    // for the worker's `cwd` (initialized to the path itself,
+    // since a fresh worktree has no `current_cwd`). The path is
+    // assumed to be inside the project root (the caller —
+    // `run_subagent` — verifies via `assert_within_root` before
+    // passing it).
+    //
+    // When `None`, the loop builds the worktree_path + cwd from
+    // the session row as before (the production chat + test path,
+    // AND the non-isolated worker path).
+    //
+    // Mirrors the `system_prompt_override` pattern (override the
+    // session-row-derived value at the loop's ToolContext
+    // construction site). Production chat + tests pass `None`; the
+    // worker path passes `Some(worker_worktree_path)` when
+    // isolation is active, `None` otherwise.
+    worktree_override: Option<PathBuf>,
+    // L3b (2026-06-27): the app's data directory, threaded so the
+    // dispatch_subagent interceptor can compute the worker
+    // worktree path (`<app_data_dir>/worktrees/<project_uuid>/
+    // worker/<run_id>`) when isolation is active. Production
+    // threads `AppState.app_data_dir.clone()`; tests pass an
+    // empty path (most tests dispatch non-isolated workers or
+    // `researcher` which never needs a worktree).
+    //
+    // This is a pass-through parameter — the agent loop body
+    // itself does NOT read it; only `run_subagent` (the
+    // dispatch_subagent interceptor) does, when creating the
+    // worker worktree.
+    app_data_dir: PathBuf,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -364,6 +398,20 @@ pub async fn run_chat_loop(
         .worktree_path
         .clone()
         .unwrap_or_else(|| project.path.clone());
+    // L3b (2026-06-27): when `worktree_override` is `Some(path)`,
+    // use the override INSTEAD of the session row's worktree_path.
+    // The override is the worker's isolated git worktree (created
+    // by `git::worktree::create_worker`); the session row's
+    // worktree_path is the PARENT session's worktree, which is the
+    // root cause of worker reuse of the parent's checkout. The
+    // override path is already asserted to be inside the project
+    // root by `run_subagent` before being passed here, so the
+    // `assert_within_root` call below still passes (we use the
+    // override as both the path AND the canonicalization target).
+    let session_root_raw = worktree_override
+        .clone()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or(session_root_raw);
     let worktree_path = match crate::projects::boundary::assert_within_root(
         std::path::Path::new(&session_root_raw),
         std::path::Path::new(&session_root_raw),
@@ -381,7 +429,15 @@ pub async fn run_chat_loop(
             return;
         }
     };
-    let session_cwd_raw = if loaded_session.session.current_cwd.is_empty() {
+    // L3b (2026-06-27): a worker worktree is a fresh checkout with
+    // no `current_cwd` history — the worker starts at the worktree
+    // root, NOT the parent session's `current_cwd` (which would
+    // point at a path inside the parent's checkout, not the
+    // worker's). The override path wins; non-override path keeps
+    // the legacy behavior (read `current_cwd` from the session row).
+    let session_cwd_raw = if worktree_override.is_some() {
+        worktree_path.to_string_lossy().to_string()
+    } else if loaded_session.session.current_cwd.is_empty() {
         worktree_path.to_string_lossy().to_string()
     } else {
         loaded_session.session.current_cwd.clone()
@@ -1855,6 +1911,7 @@ pub async fn run_chat_loop(
                             let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
                             let subagent_cache = subagent_cache.clone();
+                            let app_data_dir = app_data_dir.clone();
                             async move {
                                 // Pre-execute ⑨ permission check
                                 // (mirrors the serial path's
@@ -1920,6 +1977,10 @@ pub async fn run_chat_loop(
                                         // resolves across builtin + user
                                         // + project layers.
                                         &subagent_cache,
+                                        // L3b (2026-06-27): thread the
+                                        // app data dir for worker
+                                        // worktree path computation.
+                                        &app_data_dir,
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -2070,6 +2131,10 @@ pub async fn run_chat_loop(
                     // subagent across builtin + user + project layers
                     // (replaces the static `lookup_subagent(name)`).
                     &subagent_cache,
+                    // L3b (2026-06-27): thread the app data dir so
+                    // `run_subagent` can compute the worker worktree
+                    // path when isolation is active.
+                    &app_data_dir,
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();

@@ -628,6 +628,32 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // re-running on a post-PR2 DB is a no-op (the column exists).
  add_subagent_runs_column_if_missing(pool, "turn_count", "INTEGER").await?;
 
+ // --- L3b (2026-06-27): worktree_path column on subagent_runs.
+ //
+ // One new nullable TEXT column: the absolute path to the
+ // worker's isolated git worktree (when isolation is active).
+ // Written by `run_subagent` when it creates the worker worktree
+ // via `git::worktree::create_worker`; cleared (set to NULL) when
+ // the worker exits with no changes (the worktree is destroyed
+ // immediately). When the worker exits WITH changes, the path is
+ // preserved so a future PR3 `merge_worker` / `discard_worker`
+ // tool can locate the branch + worktree for the merge/discard
+ // decision (PR3 is out of scope for L3b PR1; the column is
+ // forward-compatible so PR3 doesn't need a migration).
+ //
+ // - Nullable (no DEFAULT) — pre-L3b rows keep NULL (no worker
+ //   worktree was ever created for them); non-isolated workers
+ //   (researcher builtin, or dispatch `isolation: false`) also
+ //   leave the column NULL.
+ // - Not the branch name — the branch is derivable from the run
+ //   id (`worker/<run_id>`) via `git::worktree::worker_branch_name`.
+ //   Storing the path gives PR3 the on-disk location without a
+ //   round-trip through the data_dir layout helpers.
+ //
+ // Idempotent: re-running on a pre-L3b DB brings it up to date;
+ // re-running on a post-L3b DB is a no-op (the column exists).
+ add_subagent_runs_column_if_missing(pool, "worktree_path", "TEXT").await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`

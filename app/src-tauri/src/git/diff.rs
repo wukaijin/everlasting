@@ -62,10 +62,12 @@ pub struct DiffResult {
 /// - `worktree_path` is not a git working tree
 /// - the `session/<id>` branch doesn't exist
 /// - libgit2 reports any other error during the diff
-pub fn diff_worktree(worktree_path: &Path, session_id: &str) -> Result<DiffResult, GitError> {
+fn diff_against_branch(
+    worktree_path: &Path,
+    branch_full: &str,
+) -> Result<DiffResult, GitError> {
     let repo = Repository::open(worktree_path)?;
-    let branch_name = format!("session/{}", session_id);
-    let branch = repo.find_branch(&branch_name, git2::BranchType::Local)?;
+    let branch = repo.find_branch(branch_full, git2::BranchType::Local)?;
     let base_commit = branch.get().peel_to_commit()?;
     let base_tree = base_commit.tree()?;
 
@@ -269,10 +271,26 @@ pub fn diff_worktree(worktree_path: &Path, session_id: &str) -> Result<DiffResul
         worktree = %worktree_path.display(),
         file_count = files.len(),
         untracked_count,
-        "diff_worktree complete"
+        "diff_against_branch complete"
     );
 
     Ok(DiffResult { files })
+}
+
+/// Diff the session worktree's current state against its base
+/// branch `session/<session_id>`. Used by the UI's session diff
+/// view (IPC `diff_worktree`) to render what the agent changed in
+/// a session.
+pub fn diff_worktree(worktree_path: &Path, session_id: &str) -> Result<DiffResult, GitError> {
+    diff_against_branch(worktree_path, &format!("session/{}", session_id))
+}
+
+/// L3b (2026-06-27): diff a worker worktree against its base branch
+/// `worker/<run_id>`. Used by `probe_worker_changes` to decide
+/// whether the worker left edits behind (and the worktree should be
+/// preserved for `merge_worker` / `discard_worker`).
+pub fn diff_worker_worktree(worktree_path: &Path, run_id: &str) -> Result<DiffResult, GitError> {
+    diff_against_branch(worktree_path, &format!("worker/{}", run_id))
 }
 
 /// Build a synthetic "unified diff" for a newly-added (untracked)

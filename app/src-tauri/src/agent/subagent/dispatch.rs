@@ -7,6 +7,7 @@
 //! dispatch when `name == "dispatch_subagent"`; it owns the nested
 //! `run_chat_loop` call that drives the worker agent.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -81,6 +82,118 @@ use super::{
 /// (token / wall-clock second-stage) are explicitly deferred.
 const SUBAGENT_MAX_TURNS: usize = 200;
 
+// ---------------------------------------------------------------------------
+// L3b (2026-06-27): worktree isolation merge + helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve the worker's worktree-isolation decision by merging the
+/// per-agent frontmatter default with the per-dispatch override.
+///
+/// Truth table (matches the PRD's "已闭合" merge semantics):
+///
+/// | frontmatter default | dispatch `isolation` | result |
+/// |---------------------|----------------------|--------|
+/// | `Some(true)`        | not specified        | isolated |
+/// | `Some(true)`        | `Some(false)`        | shared (LLM opted out) |
+/// | `Some(false)`/`None`| `Some(true)`         | isolated (LLM opted in) |
+/// | `Some(false)`/`None`| not specified        | shared (legacy behavior) |
+/// | `Some(false)`/`None`| `Some(false)`        | shared |
+/// | `Some(true)`        | `Some(true)`         | isolated |
+///
+/// Precedence: **dispatch input > frontmatter default > not isolated**.
+/// The dispatch input is the LLM's per-call override (`dispatch_subagent`'s
+/// `isolation` parameter); the frontmatter default is the SubagentDef's
+/// `isolation` field (builtin `general-purpose` = `Some(true)`,
+/// `researcher` = `None`).
+pub fn resolve_isolation(
+    frontmatter_default: Option<bool>,
+    dispatch_input: Option<bool>,
+) -> bool {
+    // Dispatch input wins if present; otherwise the frontmatter
+    // default; otherwise `false` (legacy shared-cwd behavior).
+    dispatch_input.or(frontmatter_default).unwrap_or(false)
+}
+
+/// A summary of the worker's changes for the dispatch_subagent
+/// tool_result. Built by scanning the worker worktree's diff against
+/// its base commit (the `worker/<run_id>` branch tip vs its parent).
+/// When non-empty, the worker's branch + worktree are PRESERVED so a
+/// future PR3 `merge_worker` / `discard_worker` tool can act on them;
+/// when empty, the worktree is destroyed immediately.
+struct WorkerChanges {
+    /// True iff the worker's worktree has any tracked or untracked
+    /// changes vs its base commit.
+    has_changes: bool,
+    /// A short, LLM-friendly summary of the changes (file list +
+    /// per-file +/- counts). Empty when `has_changes` is false.
+    summary: String,
+}
+
+/// Probe the worker worktree for changes vs its base commit. Used by
+/// `run_subagent` after the worker exits to decide:
+/// 1. **No changes** → destroy the worktree immediately (the branch
+///    carries nothing useful); clear `subagent_runs.worktree_path`.
+/// 2. **Has changes** → preserve the worktree + branch; the diff
+///    summary is appended to the dispatch_subagent tool_result so
+///    the parent LLM knows where the worker's edits live.
+///
+/// Implementation: delegates to `git::diff::diff_worktree`, which
+/// already handles tracked + untracked files. We pass a synthetic
+/// `session_id` of `<run_id>` so the diff is computed against the
+/// `worker/<run_id>` branch (NOT the project's `session/<id>`
+/// branch). On any error we conservatively report "has changes"
+/// (preserving the worktree is the safe fallback — destroying it
+/// could lose the worker's work).
+fn probe_worker_changes(
+    worker_worktree_path: &std::path::Path,
+    run_id: &str,
+) -> WorkerChanges {
+    match crate::git::diff::diff_worker_worktree(worker_worktree_path, run_id) {
+        Ok(result) => {
+            if result.files.is_empty() {
+                WorkerChanges {
+                    has_changes: false,
+                    summary: String::new(),
+                }
+            } else {
+                // Build a compact summary: file list + per-file +/-
+                // counts. Cap at 10 files to keep the tool_result
+                // scannable (the full diff lives on the branch).
+                let mut lines: Vec<String> = Vec::new();
+                for f in result.files.iter().take(10) {
+                    lines.push(format!(
+                        "- {} ({}, +{}/-{})",
+                        f.path, f.status, f.added, f.removed
+                    ));
+                }
+                let omitted = result.files.len().saturating_sub(10);
+                if omitted > 0 {
+                    lines.push(format!("... and {} more", omitted));
+                }
+                WorkerChanges {
+                    has_changes: true,
+                    summary: lines.join("\n"),
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                worker_worktree = %worker_worktree_path.display(),
+                run_id = %run_id,
+                error = %e,
+                "probe_worker_changes: diff failed; preserving worktree as conservative fallback"
+            );
+            // Conservative fallback: assume changes exist so we
+            // don't destroy a worktree that might hold the worker's
+            // edits.
+            WorkerChanges {
+                has_changes: true,
+                summary: "(diff probe failed; changes status unknown)".to_string(),
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_subagent(
     provider: &Arc<dyn Provider>,
@@ -127,6 +240,16 @@ pub(crate) async fn run_subagent(
     // fenced, so a freshly-written `.md` is picked up on the next
     // chat turn without a reload command.
     subagent_cache: &Arc<SubagentCache>,
+    // L3b (2026-06-27): the app's data directory, used to compute
+    // the worker worktree path (`<app_data_dir>/worktrees/
+    // <project_uuid>/worker/<run_id>`). Production threads the real
+    // `AppState.app_data_dir`; tests pass an empty path
+    // (`Path::new("")`) since worker isolation is opted into
+    // per-subagent and most integration tests dispatch `researcher`
+    // (no isolation) or `general-purpose` against a non-isolating
+    // fixture. A test that wants to exercise isolation passes a
+    // tempdir path + sets up a real git repo.
+    app_data_dir: &std::path::Path,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -175,6 +298,114 @@ pub(crate) async fn run_subagent(
             .to_string();
         return (content, true, false, None);
     }
+
+    // L3b (2026-06-27): resolve the worktree-isolation decision.
+    // Merge the per-agent frontmatter default (`def.isolation`) with
+    // the per-dispatch `isolation` input the LLM may have supplied.
+    // Precedence: dispatch input > frontmatter default > not isolated.
+    // When isolated, the worker runs in its own git worktree
+    // (`<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>`)
+    // on branch `worker/<run_id>`, based off the parent session's
+    // current worktree HEAD. When not isolated, the worker reuses
+    // the parent session's worktree (legacy behavior).
+    //
+    // **L3a concurrent branch override**: when `force_readonly=true`
+    // (the L3a concurrent dispatch path), isolation is FORCED off
+    // regardless of the frontmatter default or dispatch input.
+    // Rationale: the L3a concurrent branch runs N workers in
+    // parallel against a SHARED cwd with `force_readonly` stripping
+    // write tools — there's no write conflict to isolate (the 3-
+    // layer read-only guarantee). PR2 (L3b phase 2) is what unlocks
+    // per-worker worktree isolation in the concurrent branch; until
+    // then, concurrent = read-only + shared cwd, matching the L3a
+    // race-dissolution proof (see agent-loop-architecture.md
+    // §"Race dissolution by scope").
+    let dispatch_isolation = input
+        .get("isolation")
+        .and_then(|v| v.as_bool());
+    let isolated = if force_readonly {
+        // L3a concurrent path — isolation not yet supported here.
+        false
+    } else {
+        resolve_isolation(def.isolation, dispatch_isolation)
+    };
+
+    // The worker_run_id is the `subagent_runs.id` we'll insert below
+    // (a UUID). We need it BEFORE the insert to compute the worktree
+    // path (the branch name + on-disk dir are derived from it). So
+    // we pre-generate the UUID here and pass it into `insert_run`'s
+    // slot. This is a small departure from the existing flow (which
+    // let `insert_run` generate the id), but it keeps the worktree
+    // path + DB row id in lockstep.
+    let worker_run_id = uuid::Uuid::new_v4().to_string();
+    let worker_branch = crate::git::worktree::worker_branch_name(&worker_run_id);
+
+    // Compute the worker worktree path + create the worktree when
+    // isolated. On any failure we FAIL the dispatch (return an error
+    // tool_result) — per the PRD's Edge Cases: "worktree 创建失败 →
+    // fail dispatch,不降级到不隔离" (avoids silent behavior
+    // inconsistency where the LLM thinks isolation is active but
+    // it isn't).
+    //
+    // `worker_worktree_opt` carries the path (Some) when isolation
+    // is active + the worktree was created successfully. It's the
+    // value threaded into `run_chat_loop`'s `worktree_override`
+    // parameter (Some) below, and the value written to
+    // `subagent_runs.worktree_path`.
+    let worker_worktree_opt: Option<PathBuf> = if isolated {
+        match create_worker_worktree(
+            db,
+            parent_session_id,
+            &project_id,
+            &worker_run_id,
+            app_data_dir,
+            &current_ctx.worktree_path,
+        )
+        .await
+        {
+            Ok(path) => Some(path),
+            Err(e) => {
+                tracing::warn!(
+                    parent_session_id = %parent_session_id,
+                    worker_run_id = %worker_run_id,
+                    error = %e,
+                    "run_subagent: worker worktree creation failed; failing dispatch (no fallback to non-isolated)"
+                );
+                let content = format!(
+                    "[status: error]\nFailed to create isolated worker worktree on branch \
+                     `worker/{}`: {}. The dispatch was aborted — the worker did not run. \
+                     Either retry without isolation, or resolve the underlying git error.",
+                    worker_run_id, e
+                );
+                return (content, true, false, None);
+            }
+        }
+    } else {
+        None
+    };
+
+    // L3b (2026-06-27): when isolated, RESET the ReadGuard for the
+    // worker. The worker starts in a fresh checkout with no
+    // inherited "already-read" file set — if we passed the parent's
+    // ReadGuard through, the worker's edit_file would pass the
+    // verify_read check for files the parent read (in a DIFFERENT
+    // checkout), then fail at verify_fresh (the file doesn't exist
+    // in the worker's tree). A fresh empty ReadGuard forces the
+    // worker to read files in its own tree before editing.
+    //
+    // We construct a fresh guard and swap it in for the nested
+    // run_chat_loop call; the parent's guard is borrowed (`&`) and
+    // untouched. The fresh guard dies with this run_subagent call
+    // (no shared state to clean up — ReadGuard is per-session and
+    // the worker has no session of its own).
+    let worker_read_guard: ReadGuard = if isolated {
+        ReadGuard::new()
+    } else {
+        // Non-isolated: clone the parent's guard (legacy behavior).
+        // The clone is cheap (Arc inside).
+        read_guard.clone()
+    };
+    let worker_read_guard_ref = &worker_read_guard;
 
     // Build the worker's toolset (allowlist + structural-disabled
     // strip). The worker's run_chat_loop call gets this filtered
@@ -244,26 +475,56 @@ pub(crate) async fn run_subagent(
     // experience is not gated on the audit row). A failed insert
     // leaves `worker_run_id_opt = None`; the post-loop
     // `update_run_finished` is then a no-op.
-    let worker_run_id_opt: Option<String> = match crate::db::subagent_runs::insert_run(
-        db,
-        parent_session_id,
-        &worker_rid,
-        subagent_name,
-        Some(task),
-    )
-    .await
-    {
-        Ok(id) => Some(id),
-        Err(e) => {
+    //
+    // L3b (2026-06-27): we pass the pre-generated `worker_run_id`
+    // (computed above so the worktree path + branch name could be
+    // derived from it BEFORE the insert). On success, the DB row's
+    // id matches the worktree's branch name; on failure, the
+    // worktree (if created) is orphaned and the post-loop cleanup
+    // handles destruction via the `worker_worktree_opt` local
+    // (independent of the DB row's existence).
+    let worker_run_id_opt: Option<String> =
+        match crate::db::subagent_runs::insert_run_with_id(
+            db,
+            &worker_run_id,
+            parent_session_id,
+            &worker_rid,
+            subagent_name,
+            Some(task),
+        )
+        .await
+        {
+            Ok(()) => Some(worker_run_id.clone()),
+            Err(e) => {
+                tracing::warn!(
+                    parent_session_id = %parent_session_id,
+                    worker_rid = %worker_rid,
+                    error = %e,
+                    "run_subagent: failed to insert subagent_runs row (non-fatal; worker still runs)"
+                );
+                None
+            }
+        };
+
+    // L3b (2026-06-27): if isolation is active + the DB row was
+    // inserted, record the worktree path on the row. Best-effort
+    // (warn+continue on failure — the path is a forward-compat
+    // breadcrumb for PR3's merge/discard tool).
+    if let (Some(_), Some(ref wt_path)) = (&worker_run_id_opt, &worker_worktree_opt) {
+        if let Err(e) = crate::db::subagent_runs::set_worktree_path(
+            db,
+            &worker_run_id,
+            Some(&wt_path.to_string_lossy()),
+        )
+        .await
+        {
             tracing::warn!(
-                parent_session_id = %parent_session_id,
-                worker_rid = %worker_rid,
+                worker_run_id = %worker_run_id,
                 error = %e,
-                "run_subagent: failed to insert subagent_runs row (non-fatal; worker still runs)"
+                "run_subagent: failed to record worker worktree_path (non-fatal)"
             );
-            None
         }
-    };
+    }
 
     // B6 PR2b (RULE-A-014, 2026-06-20): the worker's
     // `PermissionContext.is_worker` override is now threaded via
@@ -363,7 +624,12 @@ pub(crate) async fn run_subagent(
         db.clone(),
         cancellations.clone(),
         _session_active_request.clone(),
-        read_guard.clone(),
+        // L3b (2026-06-27): pass the (possibly reset) worker
+        // ReadGuard. When isolated, this is a fresh empty guard
+        // (the worker starts in a new checkout with no inherited
+        // reads); when not isolated, it's a clone of the parent's
+        // guard (legacy behavior).
+        worker_read_guard_ref.clone(),
         memory_cache.clone(),
         skill_cache.clone(),
         permission_asks.clone(),
@@ -448,6 +714,21 @@ pub(crate) async fn run_subagent(
         // `ask_path` can write to it. Dies with this `run_chat_loop`
         // call — no persistence to `session_tool_permissions`.
         Some(run_grants),
+        // L3b (2026-06-27): the worker's isolated worktree path.
+        // When `Some(path)`, the nested `run_chat_loop` uses `path`
+        // as the worker's worktree root (redirecting the worker's
+        // tools into the isolated checkout) INSTEAD of the parent
+        // session's worktree_path. When `None`, the loop builds the
+        // worktree_path from the session row (legacy shared-cwd
+        // behavior).
+        worker_worktree_opt.clone(),
+        // L3b (2026-06-27): thread the app_data_dir so the worker's
+        // own (structurally-disabled) dispatch_subagent interceptor
+        // would have it — in practice the worker never dispatches
+        // a sub-subagent (STRUCTURALLY_DISABLED), so this is purely
+        // for signature uniformity. We pass the same path the parent
+        // passed us.
+        app_data_dir.to_path_buf(),
     ))
     .await;
 
@@ -627,8 +908,95 @@ pub(crate) async fn run_subagent(
             Some(summary)
         }
     };
+
+    // L3b (2026-06-27): worktree change-detection + lifecycle.
+    //
+    // When the worker ran in an isolated worktree (`worker_worktree_opt`
+    // is Some), we probe the worktree for changes vs its base commit
+    // after the worker exits:
+    //   - **No changes** → destroy the worktree immediately (the
+    //     branch carries nothing useful). Clear `subagent_runs.worktree_path`.
+    //   - **Has changes** → preserve the worktree + branch; the diff
+    //     summary is appended to the dispatch_subagent tool_result
+    //     (below) so the parent LLM knows where the worker's edits
+    //     live ("changes left on branch worker/<run_id>"). A future
+    //     PR3 `merge_worker` / `discard_worker` tool acts on the
+    //     preserved branch.
+    //
+    // The change-detection + destroy/preserve decision happens
+    // REGARDLESS of terminal status (completed / cancelled / error /
+    // incomplete) — per the PRD's Edge Cases: "worker 取消 → 按正常
+    // 完成处理 (有 changes 保留 branch, 无 destroy)". A cancelled
+    // worker that landed partial writes still has useful artifacts
+    // worth preserving for inspection.
+    let mut worker_changes_summary: Option<String> = None;
+    if let Some(wt_path) = worker_worktree_opt.as_ref() {
+        let changes = probe_worker_changes(wt_path, &worker_run_id);
+        if changes.has_changes {
+            // Preserve the worktree + branch. The DB row's
+            // `worktree_path` column was already set to `wt_path`
+            // above (after `insert_run`); leave it as-is.
+            worker_changes_summary = Some(format!(
+                "Worker changes left on branch `{}` (worktree at `{}`). \
+                 Use `git diff` in that worktree to review, or merge/discard \
+                 via a future tool.\n\n{}",
+                worker_branch,
+                wt_path.display(),
+                changes.summary
+            ));
+        } else {
+            // No changes — destroy the worktree + branch. Best-effort
+            // (a destroy failure leaves a stale worktree; a future
+            // sweep would clean it up — out of scope for PR1).
+            let project_main_path = resolve_project_main_path(db, parent_session_id).await;
+            if !project_main_path.is_empty() {
+                if let Err(e) = crate::git::worktree::destroy_worker(
+                    std::path::Path::new(&project_main_path),
+                    wt_path,
+                    &worker_run_id,
+                ) {
+                    tracing::warn!(
+                        worker_run_id = %worker_run_id,
+                        worktree = %wt_path.display(),
+                        error = %e,
+                        "run_subagent: destroy_worker failed on no-changes exit (non-fatal; stale worktree left behind)"
+                    );
+                }
+            }
+            // Clear the DB column (best-effort).
+            if worker_run_id_opt.is_some() {
+                if let Err(e) = crate::db::subagent_runs::set_worktree_path(
+                    db,
+                    &worker_run_id,
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        worker_run_id = %worker_run_id,
+                        error = %e,
+                        "run_subagent: failed to clear worktree_path after destroy (non-fatal)"
+                    );
+                }
+            }
+        }
+    }
+
     let (content, is_error) =
         format_dispatch_result(status, &worker_text, partial_actions.as_deref());
+
+    // L3b (2026-06-27): append the worker-changes summary to the
+    // tool_result content when the worker left changes on its branch.
+    // The summary tells the parent LLM where to find the worker's
+    // edits (branch name + worktree path + diff file list). We
+    // append AFTER `format_dispatch_result` so the existing
+    // `[status: ...]` prefix + partial-actions section stay
+    // unchanged; the changes summary is a new trailing section.
+    let content = if let Some(summary) = worker_changes_summary {
+        format!("{}\n\n{}", content, summary)
+    } else {
+        content
+    };
     (content, is_error, cancel_parent, None)
 }
 
@@ -645,5 +1013,246 @@ async fn resolve_project_id(db: &SqlitePool, session_id: &str) -> String {
             );
             String::new()
         }
+    }
+}
+
+/// Resolve the project's MAIN repo path (the directory containing
+/// `.git/`) for a session. L3b (2026-06-27): used by
+/// `create_worker` / `destroy_worker` which need the main repo to
+/// open libgit2 + manage linked worktrees.
+///
+/// This is distinct from `current_ctx.worktree_path` (which is the
+/// PARENT SESSION's worktree — a linked worktree, NOT the main
+/// repo). The project row's `path` field is the main repo path.
+async fn resolve_project_main_path(db: &SqlitePool, session_id: &str) -> String {
+    let project_id = resolve_project_id(db, session_id).await;
+    if project_id.is_empty() {
+        return String::new();
+    }
+    match crate::db::get_project(db, &project_id).await {
+        Ok(Some(p)) => p.path,
+        _ => {
+            tracing::warn!(
+                session_id = %session_id,
+                project_id = %project_id,
+                "run_subagent: failed to load project for main path; falling back to empty"
+            );
+            String::new()
+        }
+    }
+}
+
+/// L3b (2026-06-27): create the worker's isolated git worktree.
+/// Returns the on-disk path on success.
+///
+/// Resolves:
+/// 1. The project's main repo path (`.git/` lives here) — needed
+///    for `git::worktree::create_worker`'s libgit2 open.
+/// 2. The worker worktree path (`<app_data_dir>/worktrees/
+///    <project_uuid>/worker/<run_id>`).
+/// 3. The base worktree (the parent session's worktree) — the
+///    worker's branch is based off this worktree's HEAD commit.
+///
+/// On ANY error we return `Err` — the caller (`run_subagent`) fails
+/// the dispatch (no fallback to non-isolated, per the PRD's Edge
+/// Cases). Errors include: project not found, project main path
+/// not a git repo, worktree creation libgit2 failure.
+async fn create_worker_worktree(
+    db: &SqlitePool,
+    parent_session_id: &str,
+    project_id: &str,
+    worker_run_id: &str,
+    app_data_dir: &std::path::Path,
+    parent_worktree_path: &std::path::Path,
+) -> Result<PathBuf, String> {
+    // 1. Resolve the project's main repo path.
+    let project_main_path = resolve_project_main_path(db, parent_session_id).await;
+    if project_main_path.is_empty() {
+        return Err(
+            "could not resolve the project's main repo path for the session".to_string(),
+        );
+    }
+    let project_main = std::path::Path::new(&project_main_path);
+    if !project_main.join(".git").exists() {
+        return Err(format!(
+            "project main path '{}' is not a git repository (no .git found)",
+            project_main.display()
+        ));
+    }
+
+    // 2. Compute the worker worktree path.
+    let worker_wt_path = crate::git::worktree::worker_worktree_path(
+        app_data_dir,
+        project_id,
+        worker_run_id,
+    );
+
+    // 3. Create the worktree. `create_worker` self-heals any stale
+    //    state for this run_id (orphan dir / stale branch / stale
+    //    metadata), then creates branch `worker/<run_id>` off the
+    //    parent session's worktree HEAD + checks out the worktree.
+    crate::git::worktree::create_worker(
+        project_main,
+        &worker_wt_path,
+        parent_worktree_path,
+        worker_run_id,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(worker_wt_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::tests_common::{commit_all_for_test, init_repo_for_test};
+
+    // -----------------------------------------------------------------------
+    // resolve_isolation truth table (PRD §"已闭合" merge semantics)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_isolation_frontmatter_true_no_override_isolates() {
+        // frontmatter `isolation: worktree` + dispatch omits → isolated.
+        assert_eq!(resolve_isolation(Some(true), None), true);
+    }
+
+    #[test]
+    fn resolve_isolation_frontmatter_true_dispatch_false_opts_out() {
+        // frontmatter `isolation: worktree` + dispatch `isolation: false`
+        // → NOT isolated (LLM opted out).
+        assert_eq!(resolve_isolation(Some(true), Some(false)), false);
+    }
+
+    #[test]
+    fn resolve_isolation_frontmatter_none_dispatch_true_opts_in() {
+        // frontmatter not declared + dispatch `isolation: true`
+        // → isolated (LLM opted in).
+        assert_eq!(resolve_isolation(None, Some(true)), true);
+    }
+
+    #[test]
+    fn resolve_isolation_frontmatter_false_dispatch_false_stays_shared() {
+        // frontmatter `isolation: false` + dispatch `isolation: false`
+        // → NOT isolated.
+        assert_eq!(resolve_isolation(Some(false), Some(false)), false);
+    }
+
+    #[test]
+    fn resolve_isolation_no_default_no_override_is_legacy_shared() {
+        // frontmatter not declared + dispatch omits → NOT isolated
+        // (legacy shared-cwd behavior — the researcher builtin path).
+        assert_eq!(resolve_isolation(None, None), false);
+    }
+
+    #[test]
+    fn resolve_isolation_dispatch_input_wins_over_frontmatter() {
+        // Dispatch input always wins (precedence rule).
+        assert_eq!(resolve_isolation(Some(false), Some(true)), true);
+        assert_eq!(resolve_isolation(Some(true), Some(false)), false);
+    }
+
+    // -----------------------------------------------------------------------
+    // builtin SubagentDef isolation defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn builtin_general_purpose_defaults_to_isolated() {
+        // The general-purpose builtin ships with isolation = Some(true)
+        // (write-capable workers benefit most from worktree isolation).
+        let g = super::super::lookup_subagent("general-purpose")
+            .expect("general-purpose exists");
+        assert_eq!(g.isolation, Some(true));
+    }
+
+    #[test]
+    fn builtin_researcher_defaults_to_no_isolation() {
+        // The researcher builtin ships with isolation = None (read-only
+        // workers don't need a separate checkout — saves the per-
+        // dispatch checkout cost).
+        let r = super::super::lookup_subagent("researcher")
+            .expect("researcher exists");
+        assert_eq!(r.isolation, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // probe_worker_changes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn probe_worker_changes_empty_repo_reports_no_changes() {
+        // A fresh worktree with no edits vs its base commit → no changes.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        init_repo_for_test(project);
+        // Seed an empty-repo-friendly initial commit so the worker
+        // worktree has a base commit to branch from (create_worker
+        // resolves `base_worktree_path`'s HEAD).
+        std::fs::write(project.join("seed.txt"), "seed").unwrap();
+        commit_all_for_test(project, "init");
+
+        // Create a worker worktree off the project HEAD.
+        let run_id = "probe-empty";
+        let worker_wt = project.join("worker_empty");
+        crate::git::worktree::create_worker(project, &worker_wt, project, run_id)
+            .expect("create_worker should succeed");
+
+        let changes = probe_worker_changes(&worker_wt, run_id);
+        assert!(!changes.has_changes, "empty worktree should have no changes");
+        assert!(changes.summary.is_empty());
+    }
+
+    #[test]
+    fn probe_worker_changes_with_edits_reports_changes() {
+        // A worker worktree with an edited file → reports changes.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        init_repo_for_test(project);
+        // Seed a tracked file so the worker can modify it.
+        std::fs::write(project.join("a.txt"), "v1").unwrap();
+        commit_all_for_test(project, "init");
+
+        let run_id = "probe-edits";
+        let worker_wt = project.join("worker_edits");
+        crate::git::worktree::create_worker(project, &worker_wt, project, run_id)
+            .expect("create_worker should succeed");
+
+        // Edit the tracked file in the worker's checkout.
+        std::fs::write(worker_wt.join("a.txt"), "v2-from-worker").unwrap();
+
+        let changes = probe_worker_changes(&worker_wt, run_id);
+        assert!(changes.has_changes, "edited worktree should report changes");
+        assert!(
+            changes.summary.contains("a.txt"),
+            "summary should mention the changed file: {}",
+            changes.summary
+        );
+    }
+
+    #[test]
+    fn probe_worker_changes_with_untracked_file_reports_changes() {
+        // A worker worktree that added a new (untracked) file → reports changes.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path();
+        init_repo_for_test(project);
+        // Seed initial commit so create_worker has a base commit.
+        std::fs::write(project.join("seed.txt"), "seed").unwrap();
+        commit_all_for_test(project, "init");
+
+        let run_id = "probe-untracked";
+        let worker_wt = project.join("worker_untracked");
+        crate::git::worktree::create_worker(project, &worker_wt, project, run_id)
+            .expect("create_worker should succeed");
+
+        // Add an untracked file in the worker's checkout.
+        std::fs::write(worker_wt.join("new_file.txt"), "fresh").unwrap();
+
+        let changes = probe_worker_changes(&worker_wt, run_id);
+        assert!(changes.has_changes, "untracked file should count as a change");
+        assert!(
+            changes.summary.contains("new_file.txt"),
+            "summary should mention the untracked file: {}",
+            changes.summary
+        );
     }
 }
