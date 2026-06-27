@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "PR2 must rewrite L3a Concurrent readonly dispatch section as Concurrent isolated dispatch + race-dissolution proof re-derivation"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Concurrent dispatch warning update (partial → fully mitigated)"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "worktree_path per-run uniqueness invariant"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Concurrent worker permission:ask Tier 4 behavior verification (N banners)"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "Worker token NOT folded into parent (06-26 reversal regression)"}

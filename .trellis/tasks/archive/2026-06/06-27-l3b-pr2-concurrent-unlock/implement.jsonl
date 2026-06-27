@@ -1,0 +1,8 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "L3b PR1 Worker Worktree Override pattern + L3a Concurrent readonly dispatch section to rewrite as Concurrent isolated dispatch"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent isolation truth table + force_readonly semantics + L2 read-only batch parallel reference"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "Worker worktree creation + lock + self-heal + worktree_override wiring"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs.worktree_path column + per-worker isolation evidence + status columns"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 4 worker ask collapse to Deny + FrontSubagent-003 banner contract"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "06-26 reversal: worker token stays in subagent_runs.token_usage_json, NOT folded into parent"}
+{"file": ".trellis/tasks/archive/2026-06/06-27-l3b-worktree-delegate/research/subagent-worktree-isolation-patterns.md", "reason": "PR1 research on worker worktree patterns (reused by PR2)"}
