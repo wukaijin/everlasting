@@ -516,24 +516,35 @@ Two transcript-related contracts that the worker `SubagentBufferSink` is now res
 
 **Why both are sink-level, not chat_loop-level.** The sink already owns the per-event record pathway (chat_event / tool_call / tool_result / permission_ask); adding `emit_permission_ask_resolved` + the `Done` counter to the same struct keeps the transcript the single source of truth and avoids threading new state through `run_chat_loop`'s 23-param signature. The trait-default no-op for `emit_permission_ask_resolved` is the template for any future sink-side contract that doesn't apply to the main chat (`AppHandleSink` — no transcript — inherits the no-op for free).
 
-## Pattern: Concurrent readonly dispatch (L3a, 2026-06-24)
+## Pattern: Concurrent isolated dispatch (L3b PR2, 2026-06-27)
 
 **Problem**: The B6 `Worker Subagent` pattern above dispatches **one worker at a time** — the
 parent turn blocks on a single `run_subagent().await`. When the parent LLM wants to research
 multiple independent directions in parallel, serial fan-out costs `sum(worker_i)` wall-clock
 instead of `max(worker_i)`. The fix is concurrent fan-out, but only **safely** — without worktree
-isolation (deferred to L3b), N workers writing the same cwd would race.
+isolation, N workers writing the same cwd would race.
 
-**Solution**: Add a concurrent branch to the serial-path tool dispatch, **reusing the L2 read-only
-batch parallel path's structure verbatim** (`FuturesUnordered` + `result_slots[i]` +
-`Arc<AtomicBool>`), scoped to **read-only workers** so no shared-state write race can occur. The
-branch is gated by a pure-function classifier so the existing serial path is byte-for-byte
-unchanged for single dispatches and mixed batches (the B6 MVP path this Pattern supersedes).
+**Evolution**:
+- **L3a (2026-06-24)** solved this with `force_readonly=true` + shared cwd — the read-only
+  scope dissolved 3 races (permission:ask, token usage, cancellations). The cost: `general-purpose`
+  worker in concurrent batches was locked to read-only tools.
+- **L3b PR1 (2026-06-27)** introduced per-worker worktree isolation (`worker/<run_id>`
+  branch + per-run UUID + `worktree_override` threading).
+- **L3b PR2 (2026-06-27, this section)** removes the `force_readonly` gate on the concurrent
+  path. Each concurrent worker now runs in its own worktree (general-purpose builtin defaults
+  to `isolation: Some(true)`); the race-dissolution proof is re-derived against the new
+  isolated-write scope.
+
+**Solution**: Concurrent fan-out scoped to **per-worker worktree isolation**. The branch is
+still gated by a pure-function classifier (single dispatch + mixed batch = serial unchanged;
+pure batch ≥ 2 = concurrent) and still reuses the L2 read-only-batch parallel path's structure
+verbatim (`FuturesUnordered` + `result_slots[i]` + `Arc<AtomicBool>`). The only per-task
+difference: `run_subagent(force_readonly=false)` (post-PR2; pre-PR2 it was `force_readonly=true`).
 
 ```rust
 // chat_loop.rs serial-path entry — classify before the existing `for` loop
 match classify_dispatch_batch(&tool_calls) {
-    DispatchBatch::Concurrent { count }         => { /* FuturesUnordered: N × run_subagent(force_readonly=true) */ }
+    DispatchBatch::Concurrent { count }         => { /* FuturesUnordered: N × run_subagent(force_readonly=false) — per-worker worktree isolation via L3b PR1 */ }
     DispatchBatch::OverLimit { count, max_concurrent } => { /* hard-reject: all tool_error, 0 spawn */ }
     DispatchBatch::Serial                       => { /* existing serial `for` loop — UNCHANGED */ }
 }
@@ -543,53 +554,78 @@ match classify_dispatch_batch(&tool_calls) {
 
 The L2 read-only-batch parallel path (`chat_loop.rs` ~:1439-1639) already solved exactly this shape:
 order-preserving `result_slots`, shared `AtomicBool` cancel aggregation, per-task permission check +
-RULE-A-004 audit-skip, streaming `emit_tool_result`. L3a swaps only the per-task body
-(`run_subagent(force_readonly=true)` instead of `execute_tool`). Writing a new construct would
-re-introduce the **faithful-port drift hazard** (see the "Anti-pattern" Pattern above) — two
-parallel dispatch loops that must stay in sync on ordering / cancel / audit semantics.
+RULE-A-004 audit-skip, streaming `emit_tool_result`. L3a swapped only the per-task body
+(`run_subagent(force_readonly=true)` instead of `execute_tool`); L3b PR2 re-swaps to
+`run_subagent(force_readonly=false)`. Writing a new construct would re-introduce the
+**faithful-port drift hazard** (see the "Anti-pattern" Pattern above) — two parallel dispatch
+loops that must stay in sync on ordering / cancel / audit semantics.
 
-### `run_subagent` gains `force_readonly: bool` (not a wrapper)
+### `run_subagent` keeps `force_readonly: bool` (serial-only post-PR2)
 
-The PRD said "run_subagent body unchanged"; the implementation added a trailing `force_readonly`
-param (a 4-line `filter_tools_readonly` application after `filter_tools_for_subagent`) rather than
-a wrapper function. Rationale: `run_subagent` is already the concurrency-safe shared-ref async fn
-the concurrent branch calls N times — a wrapper would either re-pass all 18+ params (drift hazard)
-or duplicate the body (~450 lines). The param keeps a single source of truth; the serial call site
-passes `false` so B6 single-dispatch behavior is unchanged (regression-pinned by
-`l3a_single_dispatch_runs_serial_path_unchanged`).
+`force_readonly` is **retained** as a parameter (not removed) for two reasons:
+1. **L3a test compat** — the regression
+   `l3a_single_dispatch_runs_serial_path_unchanged` + the
+   `l3b_concurrent_general_purpose_workers_complete_shared` test (rebadged from
+   `l3a_concurrent_general_purpose_workers_complete_readonly`) were written against the
+   `force_readonly` API. Removing it would force those tests to re-thread their mock
+   fixtures.
+2. **Future "force read-only at the subagent level" feature** — an LLM opt-in or a future
+   frontmatter flag can repurpose this param instead of adding a new one.
 
-### Race dissolution by scope (the load-bearing argument)
+The concurrent branch always passes `false` now; only the serial single-dispatch path
+retains the historical `false` (no behavior change). The `if force_readonly { false }`
+short-circuit on `isolated` (in `dispatch.rs::run_subagent`) is therefore a no-op for
+the concurrent branch — preserved for the future "force read-only" feature.
 
-Three race conditions that look scary for concurrent workers are **provably dissolved by the
-read-only scope** — no synchronization code is needed, and this is the contract future edits must
-not silently violate:
+### Race dissolution by scope (the load-bearing argument, re-derived post-PR2)
 
-| Race | Why it cannot occur in the read-only scope |
+Four race conditions that look scary for concurrent workers are **provably dissolved by
+the per-worker-worktree scope** — no synchronization code is needed, and this is the
+contract future edits must not silently violate:
+
+| Race | Why it cannot occur in the isolated-worktree scope |
 |---|---|
-| `permission:ask` contention | worker `is_worker=true` (B6 PR2b) collapses Tier 4 `ask` → `Decision::Deny` (no oneshot wait); read tools (`read_file`/`grep`/`glob`/`list_dir`) are low-Tier silent-allow. No concurrent interactive modal can fire. |
-| `token usage` lost update | `add_token_usage` / `add_token_usage_streaming` are `col = COALESCE(col,0) + ?` atomic increment (single statement, no read-modify-write); SQLite's single-writer lock serializes N concurrent folds. |
-| `cancellations` fan-out | each worker registers a unique `worker_rid = "{parent_rid}-sub-{tool_use_id}"` (tool_use_id unique per batch); `worker_token = parent_token.child_token()` × N → one parent cancel fires all children. |
+| **worktree write race** (NEW in PR2) | Each worker writes to its own `worker/<run_id>` worktree + branch. The parent's `HEAD` is untouched. `libgit2 worktree add` is serialized at the metadata level; per-worker worktrees coexist safely under the same `.git/` (this is the design point of git worktrees). |
+| `permission:ask` contention (modified in PR2) | worker `is_worker=true` (B6 PR2b) no longer collapses Tier 4 `ask` to `Deny` (post-2026-06-22 RULE-FrontSubagent-003 the worker ask routes through the `WorkerAskBanner` round-trip — biased select over parent cancel / 120s timeout / oneshot). **N concurrent workers CAN now each fire a `WorkerAskBanner`** in the parent's UI; this is accepted per the L3a PRD's pre-emptive note. Workaround: user pre-AllowAlways the relevant tool in the parent turn. |
+| `token usage` lost update | **Not folded into parent** (2026-06-26 reversal of RULE-A-015/PR2a). Worker token isolation: each worker's `TokenUsage` lives in `subagent_runs.token_usage_json` only. The parent's `sessions.last_*` snapshot is updated by the parent's own `Done` events (gated by `!skip_persist`; worker runs with `skip_persist=true`). **No shared column → no lost update by construction.** |
+| `cancellations` fan-out | each worker registers a unique `worker_rid = "{parent_rid}-sub-{tool_use_id}"` (tool_use_id unique per batch); `worker_token = parent_token.child_token()` × N → one parent cancel fires all children. Unchanged from L3a. |
 
 Also verified concurrency-safe (shared state, not races): each worker's `SubagentBufferSink` is
 `new()`'d independently inside `run_subagent` (no shared sink); the parent sink
 (`AppHandleSink` / test `MockEmitter`) is thread-safe; `PermissionContext` is pure data cloned
-per task.
+per task; each worker's `RunGrantCache` is `Arc::new()`'d per worker (2026-06-26
+`06-26-subagent-per-run-grant` task).
+
+### Concurrent worker ask banners — N `WorkerAskBanner`s is the accepted UX
+
+Post-PR2, a concurrent batch where 1+ workers trigger Tier 4 `ask_path` / `ask_shell` /
+`web_fetch` (in Edit/Plan mode, with a path outside `permission_ctx.cwd` for `ask_path`)
+will see N `WorkerAskBanner`s in the parent's UI. The L3a PRD §"L3a AC4" preemptively
+accepted this tradeoff ("user can pre-AllowAlways in parent turn before dispatching").
+The "block" mode is also accepted — `WebFetch` and other asks block the worker on
+`tokio::select!{cancel, timeout, oneshot}` for up to 120s; concurrent workers can each
+block independently, with the parent still cancellable via the existing cancel fan-out
+mechanism.
 
 ### When to apply this pattern
 
-- The parent genuinely benefits from **parallel independent read-only work** (multi-topic research,
-  multi-file exploration) — the LLM emits pure dispatch batches naturally for this.
-- You want concurrency **without** the worktree/daemon machinery (L3b+) — the read-only scope is
-  the cheaper safety argument.
+- The parent genuinely benefits from **parallel independent work** (multi-topic research,
+  multi-file refactor, parallel writes to different parts of the repo).
+- Workers need to **write** files concurrently — without per-worker worktree, the race
+  dissolves only via the read-only scope (L3a). With per-worker worktree (L3b PR1+),
+  writes are isolated per `worker/<run_id>` branch.
+- You want concurrency **without** the daemon-ization machinery (background, non-blocking
+  parent turn) — this pattern still blocks the parent turn until all workers join.
 
 ### When NOT to apply this pattern
 
-- Workers need to **write** files → the race-dissolution proof breaks (`permission:ask` becomes a
-  real concurrent modal; cwd write races). That is **L3b** (worktree isolation per worker) — do NOT
-  lift `force_readonly` without worktree + re-deriving the safety argument above.
-- You need the parent to stay **responsive** during dispatch (background, non-blocking parent turn)
-  → that's the daemon-ization track (L3b+); this pattern still blocks the parent turn until all
-  workers join.
+- Workers need to **collaborate on the same file** (write + read in a tight loop) — worktree
+  isolation dissolves concurrency at the file level (each worker sees its own copy). For
+  this case, the serial single-worker path is the right primitive; the concurrent branch
+  would just queue them serially via per-turn dispatch anyway.
+- You need the parent to stay **responsive** during dispatch (background, non-blocking
+  parent turn) → that's the daemon-ization track (L3b+); this pattern still blocks the
+  parent turn until all workers join.
 
 ---
 

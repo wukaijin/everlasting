@@ -1673,7 +1673,7 @@ daemon impl will satisfy, but the production wiring holds the
 concrete impl — exactly the pattern every other cross-request
 handle in `AppState` uses.
 
-## Scenario: Concurrent dispatch_subagent batch (L3a, 2026-06-24)
+## Scenario: Concurrent dispatch_subagent batch (L3a → L3b PR2, 2026-06-24 → 2026-06-27)
 
 ### 1. Scope / Trigger
 
@@ -1717,7 +1717,12 @@ pub fn filter_tools_readonly(tools: Vec<ToolDef>) -> Vec<ToolDef>;   // mirrors 
 pub(crate) async fn run_subagent(/* …existing params… */, force_readonly: bool)
     -> (String, /* is_error */ bool, /* cancel_parent */ bool, Option<i32>);
 //   force_readonly == true  → apply filter_tools_readonly AFTER filter_tools_for_subagent
-//   force_readonly == false → unchanged (serial path keeps B6 behavior)
+//                              + force isolated = false (L3a concurrent safety floor;
+//                              retained for L3a regression compat + future opt-in
+//                              read-only callers post-L3b PR2).
+//   force_readonly == false → unchanged (serial path keeps B6 behavior; L3b PR2
+//                              concurrent path also passes false and relies on
+//                              per-worker worktree isolation for the write safety).
 ```
 
 #### Concurrency primitive
@@ -1725,7 +1730,9 @@ pub(crate) async fn run_subagent(/* …existing params… */, force_readonly: bo
 `FuturesUnordered` + `result_slots: Vec<Option<ContentBlock>>` (pre-allocated to N, each task writes
 its own index) + `Arc<AtomicBool>` shared `cancelled_flag` — **structurally mirrored from the L2
 read-only-batch parallel path** (chat_loop.rs ~:1439-1639); the only per-task difference is the body
-calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
+calls `run_subagent(force_readonly=false)` (L3b PR2; pre-PR2 was `force_readonly=true`) instead
+of `execute_tool`. L3b PR2 dropped the L3a `force_readonly=true` read-only scope in favor of
+per-worker worktree isolation (see "L3b PR2 update" below).
 
 ### 3. Contracts
 
@@ -1734,13 +1741,14 @@ calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
 - **Order preservation**: `tool_result` blocks re-collapse into `result_blocks` in **tool_use
   order** via `result_slots[i]`, NOT completion order. Streaming `emit_tool_result` fires in
   completion order (frontend UX); the LLM context sees tool_results in tool_use order (matches L2).
-- **Read-only guarantee — 3 layers**: (1) `SubagentDef` allowlist (`researcher` = the 5 read-only
-  tools `read_file, grep, glob, list_dir, web_fetch`; `general-purpose` = empty = full set);
-  (2) **runtime strip** (L3a): concurrent branch passes
-  `force_readonly=true` → keeps only `[read_file, grep, glob, list_dir, web_fetch]` — `researcher`
-  no-op, `general-purpose` downgraded; (3) `is_worker: true` (B6 PR2b, pre-existing safety
-  floor): even if a write tool slipped through, the worker's Tier 4 `ask` collapses to
-  `Decision::Deny`.
+- **Write safety — 1 layer (L3b PR2)**: each concurrent worker runs in its own
+  `worker/<run_id>` worktree (PR1 isolation; builtin `general-purpose.isolation: Some(true)`,
+  `researcher.isolation: None`). Writes land on the worker's branch, not the parent's —
+  no cwd write race. The 3-layer read-only guarantee from L3a is **removed** for the
+  concurrent path (no longer needed; isolation is the safety argument). Layer 1
+  (`SubagentDef` allowlist) and layer 3 (`is_worker: true` ⑨ collapse-to-Deny) remain
+  in effect for the serial path. The `force_readonly` parameter on `run_subagent` is
+  retained for serial-only opt-in + L3a regression compat.
 - **Hard reject on over-limit** (Hermes alignment): `d > DELEGATION_MAX_CONCURRENT_CHILDREN` → every
   `dispatch_subagent` returns an `is_error: true` tool_result ("exceeded concurrent delegation
   limit"); **0 workers spawn** (no truncation, no queueing, no partial execution).
@@ -1750,7 +1758,10 @@ calls `run_subagent(force_readonly=true)` instead of `execute_tool`.
 - **`run_subagent` single source of truth**: L3a adds the `force_readonly` param (4-line filter)
   rather than duplicating the ~450-line function — duplication is the faithful-port drift hazard
   (`agent-loop-architecture.md §"Anti-pattern: faithful port as a drift hazard"`). Serial call site
-  passes `false`; B6 single-dispatch behavior byte-for-byte unchanged.
+  passes `false`; B6 single-dispatch behavior byte-for-byte unchanged. **L3b PR2 (2026-06-27)**:
+  the concurrent call site **also** passes `false` now (was `true` under L3a) — per-worker
+  worktree isolation (L3b PR1) is the new safety argument, not the read-only scope. The
+  `force_readonly` param is retained for L3a regression compat + future opt-in read-only callers.
 
 #### Environment keys
 
@@ -1786,15 +1797,18 @@ Backend (`cargo test --lib`, `agent/tests_subagent.rs`):
 
 | Test | Asserts |
 |---|---|
-| `l3a_filter_tools_readonly_keeps_only_five_read_tools` | unit: allowlist keeps 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`), strips writes incl. `dispatch_subagent` (anti-nesting pin) |
+| `l3a_filter_tools_readonly_keeps_only_five_read_tools` | unit: allowlist keeps 5 read-only tools (`read_file, grep, glob, list_dir, web_fetch`), strips writes incl. `dispatch_subagent` (anti-nesting pin). L3b PR2: no longer the concurrent-branch safety argument, but the function + test stay (L3a opt-in / future explicit read-only callers). |
 | `l3a_classify_dispatch_batch_branches_correctly` | unit: all 3 branches (Serial/OverLimit/Concurrent) classified by (d, o) |
-| `l3a_pure_batch_of_three_dispatches_runs_concurrently` | AC1/6: 3 workers, tool_use order preserved (asserted via persisted DB messages) |
+| `l3a_pure_batch_of_three_dispatches_runs_concurrently` | AC1/6: 3 workers, tool_use order preserved (asserted via persisted DB messages). L3b PR2: workers now in per-worker worktrees; the order-preservation invariant is unchanged. |
 | `l3a_pure_batch_over_limit_hard_rejects_all` | AC3: 4 dispatch → all tool_error, 0 workers (call_count, runs empty) |
-| `l3a_concurrent_general_purpose_workers_complete_readonly` | AC2: general-purpose in concurrent branch stripped to read-only |
-| `l3a_concurrent_cancel_propagates_to_all_workers` | AC4: parent cancel → 3 cancelled tool_results + 3 cancelled runs + parent Done{cancelled} |
-| `l3a_concurrent_token_usage_folds_into_parent` | AC5: 3 workers' usage folds into parent `sessions.*_total` (atomic increment invariant) |
+| `l3b_concurrent_general_purpose_workers_complete_shared` | L3b PR2: rebadged from `l3a_concurrent_general_purpose_workers_complete_readonly`. 2 general-purpose workers with `isolation: false` dispatch override (truth table: `frontmatter Some(true)` + `dispatch Some(false)` → NOT isolated) → both complete with `[status: completed]`. Pins that the L3a "concurrent batch completes" contract is reachable via the new isolation-truth-table path (no git fixture required). |
+| `l3a_concurrent_cancel_propagates_to_all_workers` | AC4: parent cancel → 3 cancelled tool_results + 3 cancelled runs + parent Done{cancelled}. L3b PR2: cancel fan-out is unchanged. |
+| `l3a_concurrent_token_usage_does_not_fold_into_parent` | 2026-06-26 reversal: worker emits usage → parent's `last_context_input_tokens` reflects ONLY the parent's own turn (NOT the worker sum); worker usage lives in `subagent_runs.token_usage_json`. The old fold-into-parent design caused the 1.7M / 100% context-occupancy blowup. Companion: `l3a_concurrent_token_usage_folds_into_parent` (in earlier PRs) is obsolete. |
 | `l3a_mixed_batch_falls_through_to_serial_path` | AC7: dispatch + read_file → serial path |
-| `l3a_single_dispatch_runs_serial_path_unchanged` | regression: d=1 → B6 serial behavior, `force_readonly=false` |
+| `l3a_single_dispatch_runs_serial_path_unchanged` | regression: d=1 → B6 serial behavior, `force_readonly=false`. L3b PR2: continues to pin the serial path; the concurrent branch no longer passes `force_readonly=true` but the single-dispatch serial path still passes `false` (unchanged). |
+| `l3b_concurrent_general_purpose_workers_complete_with_writes` | L3b PR2 AC1: 2 general-purpose workers in pure batch, each in own `worker/<run_id>` worktree, both complete with `[status: completed]`. 2 `subagent_runs` rows persist (one per worker). Requires `make_harness_with_git_repo` (PR1 init-repo helper promoted to `tests_common.rs`). |
+| `l3b_concurrent_workers_have_isolated_worktrees` | L3b PR2 AC2: concurrent workers' `worker_run_id` UUIDs are distinct (per-run isolation primitive) + `parent_request_id` (worker_rid) is distinct + each worker_rid carries its `tool_use_id` suffix. `subagent_runs.worktree_path` post-exit is `None` (destroy path clears) — see "post-destroy 列清空" caveat in IMPLEMENTATION §4 2026-06-27 L3b PR2 ADR. |
+| `l3b_concurrent_force_readonly_param_no_longer_set` | L3b PR2 AC3: regression — concurrent branch no longer threads `force_readonly=true` to `run_subagent`. Worker turn's tools contain `write_file` / `edit_file` / `shell` (L3a 5-tool strip is removed); `dispatch_subagent` / `update_checklist` still excluded by `STRUCTURALLY_DISABLED` (defense-in-depth). |
 
 ### 7. Wrong vs Correct — concurrency race handling
 
@@ -1819,13 +1833,21 @@ The 3 race points are **dissolved by scope**, not by new synchronization (full d
 #### Correct: reuse the existing architecture + the L2 parallel template
 
 ```rust
-// GOOD — the concurrent branch is the L2 read-only-batch path with run_subagent(force_readonly=true)
-// in place of execute_tool. No new locks; the read-only scope IS the safety argument.
+// GOOD — the concurrent branch is the L2 read-only-batch path with
+// run_subagent(force_readonly=false) in place of execute_tool (L3b PR2;
+// pre-PR2 was force_readonly=true with the read-only scope as the
+// safety argument). No new locks; the per-worker worktree scope IS the
+// safety argument. L3a legacy code path still passes force_readonly=true
+// for opt-in read-only callers (L3a regression-pinned tests).
 let result_slots: Vec<Option<ContentBlock>> = (0..n).map(|_| None).collect();
 let cancelled_flag = Arc::new(AtomicBool::new(false));
 let mut fu: FuturesUnordered<_> = dispatches.enumerate().map(|(i, (id, input))| async move {
+    // L3b PR2 (2026-06-27): force_readonly=false (was true under L3a).
+    // Per-worker worktree isolation (L3b PR1) is the new safety
+    // argument. Pre-PR2 the read-only scope was the only thing
+    // preventing cwd write races between concurrent workers.
     let (content, is_error, cancel_parent, _) =
-        run_subagent(/* …shared-ref deps… */, /*force_readonly=*/ true).await;
+        run_subagent(/* …shared-ref deps… */, /*force_readonly=*/ false).await;
     if cancel_parent { cancelled_flag.store(true, Ordering::SeqCst); }
     Some((i, ContentBlock::ToolResult { tool_use_id: id, content, is_error }))
 }).collect();
@@ -1833,10 +1855,14 @@ while let Some(Some((i, block))) = fu.next().await { result_slots[i] = Some(bloc
 let result_blocks = result_slots.into_iter().flatten().collect();
 ```
 
-> **Invariant to preserve on any future edit**: if the concurrent branch is ever widened to allow
-> write-capable workers (L3b + worktree), the race-dissolution proof above **breaks** — at minimum,
-> `permission:ask` (now a real concurrent interactive modal) and token-usage contention must be
-> re-evaluated. Do NOT lift the read-only strip without worktree + re-deriving the safety argument.
+> **Invariant to preserve on any future edit (L3b PR2 update)**: post-PR2, the concurrent
+> branch **IS widened** to allow write-capable workers — the safety argument is per-worker
+> worktree isolation, not the read-only scope. The race-dissolution proof in
+> `agent-loop-architecture.md §"Pattern: Concurrent isolated dispatch (L3b PR2)"` is the new
+> contract. If the worktree isolation is ever weakened (e.g. concurrent workers land on the
+> same `worker/<run_id>` branch, or `worktree_override` is bypassed), the proof breaks —
+> re-derive it before lifting the safety. **Do NOT add another "concurrent write" mechanism
+> that bypasses per-worker worktree isolation.**
 
 ### `dispatch_subagent` worktree-isolation input (L3b PR1, 2026-06-27)
 
@@ -1869,6 +1895,32 @@ Precedence: **dispatch input > frontmatter default > not isolated**.
 }
 ```
 
-### L3b PR1 update on the concurrent dispatch warning above
+### L3b PR2 update on the concurrent dispatch warning above (2026-06-27)
 
-The "concurrent branch write-capable" warning above is **partially addressed** by PR1 (worker worktree isolation exists; the runtime plumbing is in place) but **not fully closed** — the `chat_loop.rs` concurrent dispatch branch still strips `force_readonly=true` (L3a behavior unchanged). The full `force_readonly → 各 worker worktree` switch is **L3b PR2**, a follow-up task. The race-dissolution proof in this spec is therefore still valid only for the L3a read-only strip; the proof must be re-derived when L3b PR2 lands.
+L3b PR2 **fully closes** the "concurrent branch write-capable" warning above.
+The `chat_loop.rs` concurrent dispatch branch no longer passes `force_readonly=true`;
+concurrent workers run with `force_readonly=false` and rely on per-worker worktree
+isolation (L3b PR1) for the race-dissolution. `general-purpose` builtin defaults to
+`isolation: Some(true)`, so concurrent workers land their writes on independent
+`worker/<run_id>` branches — no cwd write race.
+
+The race-dissolution proof in the preceding "Concurrent dispatch" scenario block has
+been **re-derived** against the new isolated-write scope and lives in
+`.trellis/spec/backend/agent-loop-architecture.md` §"Pattern: Concurrent isolated
+dispatch (L3b PR2, 2026-06-27)". Net changes from the L3a proof:
+
+- **New row in the race table**: **worktree write race** — provably dissolved by
+  per-worker `worker/<run_id>` branch + `libgit2 worktree add` (concurrent worktrees
+  under the same `.git/` are safe by git's own design).
+- **`permission:ask` row modified**: worker `is_worker=true` no longer collapses
+  Tier 4 `ask` to `Deny` (post-2026-06-22 RULE-FrontSubagent-003 routes through
+  `WorkerAskBanner`). N concurrent workers CAN now each fire a banner; this is
+  accepted per the L3a PRD's pre-emptive note (workaround: pre-AllowAlways in
+  parent turn).
+- **`token usage` row modified**: NOT folded into parent (2026-06-26 reversal
+  of RULE-A-015/PR2a). Worker token lives in `subagent_runs.token_usage_json` only —
+  no shared `sessions.last_*` column → no lost update by construction.
+- **`cancellations` row unchanged** from L3a.
+
+`force_readonly` parameter is **retained** on `run_subagent` (serial-only post-PR2)
+for L3a regression compat + a future "explicit read-only opt-in" feature.
