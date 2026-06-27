@@ -1030,3 +1030,37 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 78: L3b PR2 concurrent dispatch 解锁 worker worktree
+
+**Date**: 2026-06-27
+**Task**: L3b PR2 concurrent dispatch 解锁 worker worktree
+**Branch**: `main`
+
+### Summary
+
+把 L3a concurrent dispatch 的 force_readonly=true 闸门换成 PR1 per-worker worker/<run_id> 隔离:concurrent 分支不再传 force_readonly,general-purpose worker 并发可写各自 branch 不冲突。代码(chat_loop.rs concurrent 分支 / dispatch.rs run_subagent doc / tests_subagent.rs +3 测试 / tests_common.rs +git repo helper)+ spec(agent-loop-architecture.md race-dissolution 证明重导 4-row 表 / tool-contract.md Concurrent dispatch warning 升级 / ROADMAP §1.2 + IMPLEMENTATION §4 ADR)8 文件 +584+183。cargo test --lib 944/945(1 fail = RULE-A-017 P3 不相关)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `036ea62` | (see git log) |
+| `6d114e0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
