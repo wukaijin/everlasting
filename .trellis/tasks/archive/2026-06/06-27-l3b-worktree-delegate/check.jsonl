@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 清单"}
+{"file": ".trellis/tasks/06-27-l3b-worktree-delegate/research/subagent-worktree-isolation-patterns.md", "reason": "对照业界模式验证 — Approach 1 对齐 Claude Code,force_readonly→worktree 解锁并发写论证"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 DispatchBatch 不变量 + worker 嵌套深度 1(STRUCTURALLY_DISABLED)未退化 + 并发骨架合规"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 dispatch_subagent isolation 入参 + 双层合并语义合规"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "验证 worker worktree 生命周期(self-heal/lock/destroy)合规 + 无残留"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 is_worker 权限边界 + force_readonly 解锁后 worker 写仍受 Tier 闸门约束"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验证 worktree_path 列 migration + destroy 后状态正确"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "验证测试覆盖(worker worktree create/destroy + 隔离分流 + 并发 + merge/discard)合规"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验证确实复用 git/worktree.rs + L3a 骨架而非重造"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "验证 DEBT 记录规范(若有新债/follow-up 如 gitignored 复制)"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "PR4 验证 SubagentDrawer 合并/丢弃 UI 合规"}

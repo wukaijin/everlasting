@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口 + Pre-Development Checklist"}
+{"file": ".trellis/tasks/06-27-l3b-worktree-delegate/research/subagent-worktree-isolation-patterns.md", "reason": "L3b 决策依据 — Hermes/Claude Code 隔离模式对比 + Approach 1 选型理由 + 4 个实施前 caveats(base/ReadGuard reset/gitignored/merge UI)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "subagent loop + DispatchBatch(Serial/Concurrent/OverLimit) + L3a 并发骨架 — PR1 run_subagent 接入点 + PR2 concurrent 分支解锁 force_readonly"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool 契约 — PR1 加 isolation 入参 + 双层合并语义(frontmatter default + dispatch override)"}
+{"file": ".trellis/spec/backend/worktree-contract.md", "reason": "worktree 生命周期 create/destroy/self-heal — PR1 worker 变体(worker/<run_id> 分支 + git worktree lock + per-run destroy)"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "is_worker / force_readonly / per-run RunGrantCache — PR2 并发解锁把 force_readonly 换各自 worktree,worker 权限边界保持"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs 表 — PR1 加 worktree_path 列(destroy 后置空,保留 branch 时留路径)"}
+{"file": ".trellis/spec/backend/project-cwd-boundary.md", "reason": "ToolContext.worktree_path 边界 — PR1 worker 切到隔离 worktree 树,ReadGuard reset,project_path 传递"}
+{"file": ".trellis/spec/backend/git-diff.md", "reason": "diff_worktree — PR1 有/无 changes 判定 + diff summary 回填 tool_result"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer — PR4 worker branch 可视化 + Merge/Discard 按钮"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 git/worktree.rs(self-heal) + L3a FuturesUnordered 并发骨架 + git/diff.rs — L3b 设计核心是拼装而非重造"}
