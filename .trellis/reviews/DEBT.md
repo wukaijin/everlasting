@@ -58,7 +58,7 @@
 
 _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 
-## P3 — 轻微(文档/一致性) [2 items]
+## P3 — 轻微(文档/一致性) [3 items]
 
 ### RULE-B-007 — Background Mode 仍空壳
 
@@ -82,6 +82,18 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 - **Fix**: 决定硬前置 or 维持当前
 - **Owner**: carlos
 - **Discovered In**: REVIEW-b5-memory-grill-2026-06-10 + REVIEW-agent-loop-full-audit-2026-06-14 §2.3
+
+
+### RULE-A-017 — `agent_loop_c3_compaction_does_not_panic` 在 main 上 deterministic 失败
+
+- **Level**: P3
+- **Subsystem**: Agent Loop
+- **File**: `app/src-tauri/src/agent/tests_agent_loop.rs:970`(`assert!(events.iter().any(|p| matches!(Done)))` 失败)
+- **Description**: C3 context compaction 路径下 mock provider 的 Done event 没被 emit 到 emitter。Stash 验证 pre-PR1 main 同样失败(925 filtered, 1 failed),与 L3b PR1 无关。
+- **Impact**: 测试 fail,但 agent loop 实际能跑通(mock [Start,Delta,Done] 应该 emit Done)。可能是 mock 路径 + C3 trim messages 后 turn body 短路条件。
+- **Fix**: 单独 task 诊断(messages 空时是否 emit Done;或 C3 后 mock 是否被调)
+- **Owner**: carlos
+- **Discovered In**: `.trellis/tasks/06-27-l3b-worktree-delegate`(执行期 stash 验证)
 
 
 ---

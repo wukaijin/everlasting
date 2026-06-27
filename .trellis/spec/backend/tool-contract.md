@@ -1837,3 +1837,38 @@ let result_blocks = result_slots.into_iter().flatten().collect();
 > write-capable workers (L3b + worktree), the race-dissolution proof above **breaks** — at minimum,
 > `permission:ask` (now a real concurrent interactive modal) and token-usage contention must be
 > re-evaluated. Do NOT lift the read-only strip without worktree + re-deriving the safety argument.
+
+### `dispatch_subagent` worktree-isolation input (L3b PR1, 2026-06-27)
+
+L3b PR1 extends `dispatch_subagent` with a `isolation: Option<bool>` input parameter and a matching `SubagentDef.isolation: Option<bool>` frontmatter field. The merge semantics (`resolve_isolation(frontmatter_default, dispatch_input) -> bool` in `agent/subagent/dispatch.rs`):
+
+| frontmatter `isolation` | dispatch `isolation` | result |
+|---|---|---|
+| `Some(true)` | not specified | isolated |
+| `Some(true)` | `Some(false)` | shared (LLM opted out) |
+| `Some(false)` or `None` | `Some(true)` | isolated (LLM opted in) |
+| `Some(false)` or `None` | not specified | shared (legacy behavior) |
+| `Some(false)` or `None` | `Some(false)` | shared |
+| `Some(true)` | `Some(true)` | isolated |
+
+Precedence: **dispatch input > frontmatter default > not isolated**.
+
+#### Builtin defaults
+
+- `general-purpose`: `isolation: Some(true)` — write-capable workers benefit most from isolation (concurrent dispatch conflict isolation is the core L3a → L3b motivation).
+- `researcher`: `isolation: None` — read-only workers don't need a separate checkout; saves the per-dispatch checkout cost.
+
+#### Tool schema addition
+
+```json
+{
+  "isolation": {
+    "type": "boolean",
+    "description": "Override the subagent's worktree-isolation decision for THIS dispatch only. When `true`, the worker runs in its own git worktree on branch `worker/<run_id>`; when `false`, the worker reuses the parent session's checkout (legacy B6 behavior). Precedence: this input overrides the subagent's frontmatter default. See `agent-loop-architecture.md` §worktree_override + `worktree-contract.md` §Worker Worktree Variant for the runtime behavior."
+  }
+}
+```
+
+### L3b PR1 update on the concurrent dispatch warning above
+
+The "concurrent branch write-capable" warning above is **partially addressed** by PR1 (worker worktree isolation exists; the runtime plumbing is in place) but **not fully closed** — the `chat_loop.rs` concurrent dispatch branch still strips `force_readonly=true` (L3a behavior unchanged). The full `force_readonly → 各 worker worktree` switch is **L3b PR2**, a follow-up task. The race-dissolution proof in this spec is therefore still valid only for the L3a read-only strip; the proof must be re-derived when L3b PR2 lands.

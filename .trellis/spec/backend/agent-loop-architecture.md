@@ -969,3 +969,36 @@ invariants on top of the PR1 worker surface. The 7 `subagent_runs::tests_*`
 integration tests in `db/tests.rs` cover the DB CRUD + CASCADE + 4 MiB
 cap + token-usage streaming layer separately (the persistence layer's
 own regression suite, distinct from the agent-loop layer).
+
+## Pattern: Worker Worktree Override (`worktree_override` param, L3b PR1, 2026-06-27)
+
+L3b PR1 introduces two new parameters to `run_chat_loop`:
+
+- **25th `worktree_override: Option<PathBuf>`** — when `Some(path)`, the loop uses `path` as the worker's worktree root INSTEAD of `loaded_session.session.worktree_path` (which is the parent session's worktree — the root cause of worker reuse of the parent's checkout, see `git/diff.rs::diff_against_branch` for the diff-side contract).
+- **26th `app_data_dir: PathBuf`** — pass-through to the dispatch_subagent interceptor (the agent loop body itself does NOT read it; only `run_subagent` does, when creating the worker worktree path).
+
+Mirrors the existing `system_prompt_override` (23rd param) override pattern: per-call clarity, no config struct, thread the override at the `ToolContext` construction site (line ~452). When `None`, the loop builds `worktree_path` + `cwd` from the session row as before (production chat + test path, AND the non-isolated worker path).
+
+### `worktree_override` interaction with `current_cwd`
+
+When `worktree_override.is_some()`, `current_cwd` defaults to `worktree_path` (the override). The parent session's `current_cwd` history is meaningless for a worker (it points at a path inside the parent's checkout, not the worker's). When `None`, `current_cwd` falls through to `loaded_session.session.current_cwd` (legacy behavior, unchanged).
+
+### Why 26 parameters (and not a config struct)?
+
+Same argument as the existing 23-param `run_chat_loop` (see "Why 23 parameters" section above). The 2 added parameters follow the same precedent — per-call overrides are clearer than a config struct that grows every time. Tradeoff: marginal cost (each new override = 1 more param) vs one-time refactor cost.
+
+### Interaction with `STRUCTURALLY_DISABLED` + worker nesting gate
+
+The L3b override does NOT change the no-nesting invariant: `dispatch_subagent` is still stripped from worker's toolset via `STRUCTURALLY_DISABLED` + `effective_is_worker` gate (L3d PR3 lesson, see "Pattern: Worker Subagent" above). A worker's worker (depth 2+) cannot happen. PR1's worker worktree is depth 1 only.
+
+### Tests Required (L3b PR1 additions to `agent/tests_agent_loop.rs` + `agent/tests_subagent.rs`)
+
+The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.app_data_dir.clone()` (production-style caller). The B6 worker tests in `tests_subagent.rs` gain:
+
+| Test | Asserts |
+|---|---|
+| `l3b_worker_with_isolation_runs_in_worker_worktree` | dispatch_subagent with isolation=true → worker's tool calls observe a different `ToolContext.worktree_path` than the parent's session row |
+| `l3b_worker_with_isolation_false_runs_in_parent_worktree` | dispatch_subagent with isolation=false → worker's tool calls run in parent session's worktree (legacy behavior preserved) |
+| `resolve_isolation_truth_table` | 4-row merge semantics from `tool-contract.md §dispatch_subagent isolation` table |
+| `builtin_*_defaults_to_isolated` | `general-purpose.isolation == Some(true)`, `researcher.isolation == None` |
+| `probe_worker_changes_*` (3 tests in dispatch.rs) | empty worktree → no changes; tracked edit → changes; untracked file → changes |

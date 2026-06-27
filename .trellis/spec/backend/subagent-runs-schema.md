@@ -349,4 +349,34 @@ this table pattern verbatim:
 
 ---
 
-**Last updated**: 2026-06-21 (IPC event contract — `runId` must be DB id + `subagent:finished` terminal signal; B6 PR3b hotfix). Previously 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).
+**Last updated**: 2026-06-27 (L3b PR1 — `worktree_path` column + `insert_run_with_id` for caller-supplied id; see "L3b PR1 additions" below). Previously 2026-06-21 (IPC event contract — `runId` must be DB id + `subagent:finished` terminal signal; B6 PR3b hotfix). Previously 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).
+
+## L3b PR1 additions (2026-06-27)
+
+### New column: `worktree_path TEXT NULL`
+
+Tracks the worker worktree path so a future PR3 `merge_worker` / `discard_worker` tool (and the future SubagentDrawer merge/discard UI) can locate the branch + worktree for a preserved-changes run. Lifecycle:
+
+- **INSERT (`insert_run_with_id`)**: `worktree_path` is NOT set at INSERT time (it's NULL) — the worker worktree is created AFTER the row, when isolation is active.
+- **UPDATE on worker exit (post-loop, in `run_subagent`)**: `worktree_path` is updated to `Some(worker_worktree_path)` if `probe_worker_changes` reports changes; NULL if destroyed (no changes / explicit destroy).
+
+The column is **nullable** because not all subagent runs are isolated (`researcher` / `isolation=false` → no worker worktree).
+
+### New function: `insert_run_with_id` (replaces `insert_run` for the isolated path)
+
+```rust
+pub async fn insert_run_with_id(
+    pool: &SqlitePool,
+    id: &str,                       // caller-supplied UUID (vs auto-generated)
+    parent_session_id: &str,
+    parent_request_id: &str,
+    subagent_name: &str,
+    task: Option<&str>,
+) -> Result<(), sqlx::Error>
+```
+
+`insert_run` (auto-generates UUID) is retained for the `db/subagent_runs_tests.rs` integration suite, but is `#[allow(dead_code)]` in the lib build (the db integration tests are not visible to `cargo check --lib` since they're a separate test target). The new `insert_run_with_id` lets `run_subagent` pre-generate the UUID (e.g. `Uuid::new_v4()`) and pass it explicitly, so the worker worktree path (`<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>`) can be **derived from the id BEFORE the row is inserted** — the worktree is created first, then the DB row records its path.
+
+### Migration: `add_subagent_runs_worktree_path_column`
+
+Idempotent column-add migration. CHECK constraint unchanged (still `running | completed | cancelled | error | incomplete`). Index strategy unchanged (still indexed by `(parent_session_id, child_ts DESC)` per the table-level pattern). The column-add is non-breaking: existing rows get `NULL`, which is the correct "not isolated" state for pre-L3b runs.
