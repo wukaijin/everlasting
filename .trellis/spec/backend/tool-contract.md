@@ -2051,6 +2051,31 @@ pattern is unaffected.
 The libgit2 calls run on `tokio::task::spawn_blocking` so the
 async runtime isn't blocked (libgit2 is sync I/O).
 
+#### `merge_worker` conflict error string contract (cross-layer, L3b PR4 2026-06-27)
+
+> The conflict return shape is a **frontend-parsed regex** of the Rust `Err(String)` payload — there is no typed JSON. Locked string format so the frontend regex doesn't drift.
+
+**Backend emits** (Rust side, `tools/merge_worker.rs::do_merge_blocking`):
+```
+"merge conflict: [<file1>, <file2>, ...]. The worker branch 'worker/<run_id>' and parent branch 'session/<id>' both modified these files. Resolve manually, then call merge_worker again (or discard_worker to drop the changes)."
+```
+
+**Frontend parses** (`app/src/stores/subagentRuns.types.ts::parseConflictFiles`):
+```ts
+const m = errStr.match(/^merge conflict: \[([^\]]*)\]/);
+// m[1] is the inner list, split on ", " (matches Rust's `conflicts.join(", ")`)
+```
+
+| Edge case | Behavior |
+|---|---|
+| Empty conflict list `"merge conflict: []. ..."` | `parseConflictFiles` returns `[]` (NOT `null`) — caller treats as "conflict but no file list" |
+| Non-conflict error (e.g. `"worker run not found"`, `"parent session has no worktree"`) | `parseConflictFiles` returns `null` — caller treats as generic error `{ kind: "error", message }` |
+| File path containing literal `, ` | Splits incorrectly — accepted as edge case, file paths with `, ` are vanishingly rare |
+
+**Why not typed JSON for the conflict return**: the LLM-facing `is_error: true` tool result is plain `String` for human readability; the typed JSON channel is reserved for success cases. Conflict file list embedded in the human message keeps the LLM-tool path symmetric with the frontend-drawer path (both consume the same string).
+
+**Why preserve the worker branch + worktree on conflict**: the backend hard-resets the index + workdir to parent tip (so the next `edit_file` / `read_file` doesn't see half-merged state — invariant), but KEEPS the `worker/<run_id>` branch + worktree on disk. The user resolves conflicts in git CLI, then can call `merge_worker` again (or `discard_worker` to drop). The frontend `WorkerMergeControls` keeps the Merge/Discard buttons visible after a conflict (the cached `subagent_runs.worktree_path` is unchanged on conflict).
+
 #### `discard_worker` execution pipeline
 
 1. Parse `run_id` (missing → `is_error: true`).

@@ -207,6 +207,84 @@ Reply 段顶部 `⊘ Cancelled · at turn N` chip,优先读 `run.turnCount`(非 
 > - Session 63 (RULE-WorkerAsk-001):worker ask resolve outcome 写 transcript `PermissionAskResolved` entry;`pairSections` 按 `rid` 配对;`<PermissionAskBody>` historical 分支显 outcome badge
 > - DEBT 见 `.trellis/reviews/DEBT.md` RULE-FrontSubagent-003(closed `89e5ba1`)+ RULE-WorkerAsk-001(closed via `06-22-...task`)
 
+### L3b PR4 (2026-06-27) — SubagentDrawer merge / discard UI
+
+闭合 L3b PR3 backend `merge_worker` / `discard_worker` IPC 在前端的可见/可控环。新增 2 个组件 + 1 个 util,SubagentDrawer footer 渲染 Merge / Discard 按钮(完成 worker 带保留 branch 时)。
+
+#### 新增文件
+
+| 文件 | 职责 |
+|---|---|
+| `app/src/components/chat/WorkerBranchBadge.vue` | 派生 badge:`status + worktreePath` → 隔离中 / 已完成·保留分支(已 destroy 隐藏) |
+| `app/src/components/chat/WorkerMergeControls.vue` | Merge / Discard 按钮 + ConfirmDialog 二次确认 + 冲突 inline 文件列表 |
+| `app/src/components/chat/WorkerMergeControls.test.ts` | 27 单测(store actions + util + parser + 9 组件场景) |
+| `app/src/utils/workerBranch.ts` | `formatWorkerBranchLabel(worker/<run_id> 或 worktree_path)` → `Worker <8-char hash>` |
+| `app/src/stores/subagentRuns.ts` | `mergeWorker(runId)` / `discardWorker(runId)` actions + `mergeStateByRunId: reactive Map` per-run spinner |
+| `app/src/stores/subagentRuns.types.ts` | `MergeResult` / `DiscardResult` / `MergeState` 类型 + `parseConflictFiles(errStr)` 纯函数 |
+
+#### 严格可见门(STRICT — 不是单字段)
+
+```ts
+// WorkerMergeControls.vue visible-gate
+const visible = computed(
+  () => worktreePath.value !== null && status.value === 'completed',
+);
+```
+
+**严格双条件**:worktreePath 非空(branch + worktree 保留) **且** status === 'completed'。cancelled / error / incomplete worker **不显示按钮**,即便 disk 上 worktree_path 残留。原因:worker exit-state 才是「user-actionable」权威信号,disk presence 不可靠(L3b PR3 sweep 会清)。
+
+派生规则(WorkerBranchBadge 三态):
+- `status === 'running'` → 隔离中(amber `--color-tool-shell`)
+- `status === 'completed' && worktreePath != null` → 已完成 · 保留分支(emerald `--color-tool-write`)
+- 其他(worktreePath null)→ hidden
+
+#### store actions 契约
+
+```ts
+// useSubagentRunsStore
+mergeWorker(runId: string): Promise<MergeResult>
+  // ↪ invoke("merge_worker_run", { rid: "merge-pr4", runId })
+  // ↪ 成功 → getRunCache.set(runId, {...row, worktreePath: null}) → 按钮自动消失
+  // ↪ 失败 → parseConflictFiles 命中 → { kind: "conflict", files }
+  //            未命中 → { kind: "error", message }
+discardWorker(runId: string): Promise<DiscardResult>
+  // ↪ invoke("discard_worker_run", { rid: "discard-pr4", runId })
+  // ↪ 成功/失败 (无 conflict 路径)
+```
+
+**Per-run spinner 隔离**: `mergeStateByRunId = reactive(new Map<runId, MergeState>())`,key 是 runId。多 drawer(不同 runId)同时打开互不阻塞。`finally` 清 spinner guard,二次 click 短路(`{ kind: "error", message: "another action is already in flight" }`)做防御性兜底(按钮 `:disabled` 已防双击)。
+
+#### Conflict 跨层契约(cross-layer)
+
+后端 `merge_worker` 冲突路径返 `Err(String)` 形式 `"merge conflict: [<file1>, <file2>, ...]. The worker branch 'worker/<run_id>' and parent branch 'session/<id>' both modified these files. Resolve manually, then call merge_worker again (or discard_worker to drop the changes)."`
+
+前端 `parseConflictFiles(errStr)` 正则 `/^merge conflict: \[([^\]]*)\]/` 提取 `[...]` 内文件列表(逗号+空格 split)。**branch + worktree 保留**(backend 冲突路径已 hard-reset 到 parent tip 但保留 branch),drawer Merge/Discard 按钮保持可见,用户 git resolve 后可点 Merge 重试。conflict 文件列表 inline 渲染(`role="alert"` + `--color-tool-error` left-border),引导用户到 git CLI。
+
+#### Store cache 单源模式(关键决策)
+
+```ts
+// WorkerMergeControls.vue 不接 worktreePath prop,只接 runId
+const props = defineProps<{ runId: string }>();
+const worktreePath = computed(() => store.getRunCache.get(props.runId)?.worktreePath ?? null);
+const status       = computed(() => store.getRunCache.get(props.runId)?.status ?? null);
+```
+
+**SubagentDrawer 父不传 `:worktree-path` 给 MergeControls**(只传 `:run-id`)。理由:`getRunCache` 是 single source of truth,`mergeWorker` 成功后 `.set(runId, {...row, worktreePath: null})` → computed reactive → `v-if="visible"` 自动 false → 按钮消失,**无需父组件 re-thread prop**。WorkerBranchBadge 接 prop(纯展示,无 store),可保留。
+
+#### 设计决策 / 反模式
+
+- **ConfirmDialog(非 `window.confirm`)** — Tauri webview 静默 no-op `window.confirm()`,必须走 in-app ConfirmDialog,见 `popover-pattern.md` 二次确认段
+- **不用 i18n key** — 全部中文硬编码(项目惯例,zh-CN 优先,en-US 留 follow-up)
+- **不接 DiffView 联动** — PRD 显式 out-of-scope,「点 Merge 前想看 diff」留 follow-up
+- **不暴露锁按钮的 `:disabled` 派生状态给父** — 按钮 `disabled` 由组件内 `mergeState` 派生,父不需要 know
+- **C5b regression test** — `worktreePath set but status=cancelled → hidden`,锁严格双条件门,防未来 refactor 退化成单字段
+
+#### Tests Required (PR4 新增)
+
+- `WorkerMergeControls.test.ts`: 27 测(6 store + 5 util + 4 parser + 12 组件含 C5b 严格门)
+- `SubagentDrawer.test.ts`: 0 改(PR4 不动 drawer 既有 5 段布局),baseline fixture `worktreePath: null`
+- `ToolCallCard.test.ts` + `subagentRuns.test.ts`: baseline fixture `worktreePath: null`(PR1 列新增后 fixture 跟齐)
+
 ### Common Mistakes
 
 #### Mistake: drawer 读 liveTranscript 而非 liveSections

@@ -211,6 +211,57 @@ mutated by event handlers / actions, not from inside a computed getter.
 The bug is specifically *mutating a reactive Map from within a computed
 that reads it*.
 
+### Per-run spinner isolation via reactive Map (added L3b PR4 2026-06-27)
+
+For UI surfaces that need to track an in-flight action state **per
+key** (e.g. per-run, per-session) — typically a spinner that drives
+button `:disabled` — use a top-level `reactive(new Map<key, State>())`
+in the store. Mutated from store actions (NOT from inside a computed
+getter per the rule above), cleared in `finally`.
+
+```ts
+// app/src/stores/subagentRuns.ts (L3b PR4)
+type MergeState = { kind: "merge" | "discard"; loading: true };
+const mergeStateByRunId = reactive(new Map<string, MergeState>());
+
+async function mergeWorker(runId: string): Promise<MergeResult> {
+  if (mergeStateByRunId.has(runId)) {
+    // Spinner guard: second click while one is in flight.
+    // Button :disabled should already prevent this, but defensive.
+    return { kind: "error", message: "another action is already in flight" };
+  }
+  mergeStateByRunId.set(runId, { kind: "merge", loading: true });
+  try {
+    await invoke<string>("merge_worker_run", { rid: "merge-pr4", runId });
+    // success → mutate row cache (separate Map), no setter cross-talk
+    return { kind: "success" };
+  } catch (e) {
+    // ...
+  } finally {
+    mergeStateByRunId.delete(runId);  // ALWAYS clear, even on error
+  }
+}
+```
+
+Why a Map (not a single boolean ref): multiple components can mount
+the same control with different keys (e.g. 3 subagent drawers open
+concurrently, each with its own merge in flight). A single `isLoading`
+ref would block all 3 buttons on any one of them. The Map keys on
+`runId` so each drawer drives its own spinner independently.
+
+Why `reactive(new Map())` (not `shallowRef` / `markRaw`): the template
+subscribes to `store.mergeStateByRunId.get(runId)` directly via a
+component computed — Vue needs to track `.has/.get/.set/.delete` on
+the Map for re-render. (This is the documented "template subscribes
+directly" case from the rule above — fine to mutate from actions,
+NOT from inside a computed getter.)
+
+Companion pattern — `getRunCache: reactive(new Map<runId, SubagentRunRow>())`
+for the detail cache: same pattern, separate Map. The detail cache and
+the spinner Map are intentionally separate so a row mutation
+(`getRunCache.set(runId, {...row, worktreePath: null})`) doesn't
+disturb the spinner state and vice versa.
+
 ### Worktree transition invalidation (added 2026-06-08, step 4 follow-up)
 
 After any worktree state change (`attachWorktree` / `detachWorktree` /
