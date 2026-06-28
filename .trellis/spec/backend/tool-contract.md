@@ -2091,16 +2091,19 @@ const m = errStr.match(/^merge conflict: \[([^\]]*)\]/);
 
 ### 3. ⑨ 关 Permission Routing
 
-Both tools are `Risk::High` (shell-like, per
+Both tools are `Risk::High` (per
 `permissions::types::risk_for_tool`) — they modify the user's
 project history (a merge changes the parent session branch;
 a discard deletes the worker branch). The Tier 4 path branch
-classifies them as `ToolKind::Other` (no `path` argument
-extraction; the input is a `run_id` UUID, not a filesystem
-path). Plan mode still allows them (the write-tool filter in
-`filter_tools_for_mode` matches on `write_file` / `edit_file`
-/ `shell` / `run_background_shell`, NOT on `merge_worker` /
-`discard_worker`).
+classifies them as `ToolKind::GitMutation` (tool-level grant +
+ask, mirroring `WebFetch` — the input is a `run_id` UUID, not a
+filesystem path, so the permission modal renders no path-scope
+row). `check_tool_grant` is called with the ACTUAL tool name, so a
+grant on `discard_worker` is not confused with `merge_worker`. Plan
+mode filters them out (`filter_tools_for_mode` lists `merge_worker`
+/ `discard_worker` alongside the write tools). Worker subagents
+cannot reach them (`STRUCTURALLY_DISABLED` — only the parent LLM /
+user via the PR4 drawer may merge or discard).
 
 The merge / destroy actions are reversible at the git level
 (`git reset --hard <parent_tip>` unmerges; `git branch -D
@@ -2196,20 +2199,22 @@ the sweep continues to the next project.
 
 ### 6. Concurrency
 
-The MVP intentionally does NOT serialise per-session `merge_worker`
-calls. Two concurrent merges on the same parent branch would race
-on the libgit2 merge state. The MVP trade-off:
+`do_merge_blocking` serialises per `parent_session_id` via
+`merge_lock_for` (a `std::sync::Mutex` keyed by session id, held
+across the whole libgit2 merge). Both call sites — the
+`merge_worker` tool's `execute` and the `merge_worker_run` IPC
+command — flow through it, so concurrent merges into the SAME
+parent branch are serialised; independent sessions still merge in
+parallel. This closes the race that two frontend drawer Merge
+clicks (or a drawer click racing an LLM-driven merge) could
+otherwise corrupt — libgit2 is not thread-safe across `Repository`
+handles backing the same `.git` dir.
 
-- The LLM is single-threaded per turn (one chat produces one
-  `tool_use` at a time), so concurrent LLM-driven merges can't
-  happen.
-- The only realistic conflict is the frontend drawer (PR4)
-  racing the LLM, which the user permission UX
-  (`WorkerAskBanner` parallel work) prevents in practice.
-- A `Mutex<parent_session_id>` is the right future addition
-  if a real concurrent path emerges. The cost of NOT having
-  it today is bounded by the (currently impossible) concurrent
-  LLM call race.
+`discard_worker` is intentionally NOT serialised: `do_discard` only
+calls `destroy_worker` (worker branch + worktree) and never touches
+the parent session's git index, so concurrent discards of the same
+run_id are safe (the 2nd sees `worktree_path` already NULL → "worker
+already destroyed").
 
 ### 7. Tests Required
 
