@@ -71,6 +71,10 @@ impl Risk {
 pub fn risk_for_tool(tool_name: &str) -> Risk {
     match tool_name {
         "shell" | "run_background_shell" => Risk::High,
+        // L3b PR3 (2026-06-27): merge_worker / discard_worker rewrite
+        // the parent session's git branch — High risk, same tier as
+        // shell. `classify_tool` routes these to `ToolKind::GitMutation`.
+        "merge_worker" | "discard_worker" => Risk::High,
         "write_file" | "edit_file" => Risk::Medium,
         // `web_fetch` is Low at the risk-permission layer; its own
         // SSRF blocklist (in `tools/web_fetch.rs`) is the relevant

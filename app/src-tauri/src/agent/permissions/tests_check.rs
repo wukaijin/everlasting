@@ -29,6 +29,10 @@ fn classify_tool_dispatch() {
     assert_eq!(classify_tool("shell"), ToolKind::Shell);
     assert_eq!(classify_tool("run_background_shell"), ToolKind::Shell);
     assert_eq!(classify_tool("web_fetch"), ToolKind::WebFetch);
+    // L3b PR3 (2026-06-27): merge_worker / discard_worker route to
+    // GitMutation (tool-level grant + ask), NOT Shell.
+    assert_eq!(classify_tool("merge_worker"), ToolKind::GitMutation);
+    assert_eq!(classify_tool("discard_worker"), ToolKind::GitMutation);
     assert_eq!(classify_tool("unknown_future_tool"), ToolKind::Other);
 }
 
@@ -41,6 +45,14 @@ fn risk_for_tool_includes_background_shell_high() {
     assert_eq!(risk_for_tool("run_background_shell"), Risk::High);
     assert_eq!(risk_for_tool("shell_status"), Risk::Low);
     assert_eq!(risk_for_tool("shell_kill"), Risk::Low);
+}
+
+/// L3b PR3 (2026-06-27): merge_worker / discard_worker rewrite the
+/// parent session's git branch — High risk (same tier as shell).
+#[test]
+fn risk_for_tool_includes_merge_discard_high() {
+    assert_eq!(risk_for_tool("merge_worker"), Risk::High);
+    assert_eq!(risk_for_tool("discard_worker"), Risk::High);
 }
 
 /// `run_background_shell` routes through the Tier 4 Shell branch

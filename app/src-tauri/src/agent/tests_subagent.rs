@@ -3323,8 +3323,11 @@ async fn l3b_concurrent_workers_have_isolated_worktrees() {
 ///   (`read_file, grep, glob, list_dir, web_fetch`)
 /// - post-PR2 (no strip): worker turn tools = the
 ///   `general-purpose` allowlist minus `STRUCTURALLY_DISABLED`
-///   = full builtin set minus 4 structurally-disabled tools =
-///   ~9 tools (incl. `write_file`, `edit_file`, `shell`)
+///   = full builtin set minus the structurally-disabled tools
+///   that appear in it (`update_checklist`, `run_background_shell`,
+///   `shell_status`, `shell_kill`, and — per L3b PR3 B3 —
+///   `merge_worker`, `discard_worker`) ≈ 9 tools (incl.
+///   `write_file`, `edit_file`, `shell`)
 ///
 /// The discriminant: `write_file` is in the post-PR2
 /// `general-purpose` toolset but NOT in the L3a strip. If the
@@ -3413,9 +3416,9 @@ async fn l3b_concurrent_force_readonly_param_no_longer_set() {
     // Worker turn 1 (send slot 1) — concurrent branch, no
     // force_readonly strip. The tools come from the
     // general-purpose SubagentDef allowlist (empty = full
-    // builtin set) minus STRUCTURALLY_DISABLED (4 tools:
+    // builtin set) minus STRUCTURALLY_DISABLED (7 entries:
     // dispatch_subagent, update_checklist, run_background_shell,
-    // shell_status, shell_kill).
+    // shell_status, shell_kill, merge_worker, discard_worker).
     let worker_t1_names: Vec<&str> =
         sent_tools[1].iter().map(|t| t.name.as_str()).collect();
     // The PR2 discriminant: `write_file` is in the post-PR2
@@ -3447,6 +3450,20 @@ async fn l3b_concurrent_force_readonly_param_no_longer_set() {
     assert!(
         !worker_t1_names.contains(&"update_checklist"),
         "worker_t1 MUST NOT have update_checklist (STRUCTURALLY_DISABLED): {:?}",
+        worker_t1_names
+    );
+    // L3b PR3 B3 (2026-06-28): merge_worker / discard_worker are
+    // STRUCTURALLY_DISABLED — a worker must not rewrite the parent
+    // session's history (no merging / discarding a sibling worker's
+    // branch via a run_id visible in the dispatch tool_result).
+    assert!(
+        !worker_t1_names.contains(&"merge_worker"),
+        "worker_t1 MUST NOT have merge_worker (STRUCTURALLY_DISABLED, B3): {:?}",
+        worker_t1_names
+    );
+    assert!(
+        !worker_t1_names.contains(&"discard_worker"),
+        "worker_t1 MUST NOT have discard_worker (STRUCTURALLY_DISABLED, B3): {:?}",
         worker_t1_names
     );
 

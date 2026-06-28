@@ -38,6 +38,27 @@ fn filter_tools_for_mode_drops_writes_in_plan_review() {
     assert!(!names.contains(&"shell"));
 }
 
+/// L3b PR3 (2026-06-27): merge_worker / discard_worker rewrite the
+/// parent session branch, so Plan mode (read-only) must filter them
+/// out alongside the write tools; Edit / Yolo keep them.
+#[test]
+fn filter_tools_for_mode_drops_merge_discard_in_plan() {
+    let tools = vec![
+        crate::llm::ToolDef::new_for_test("read_file"),
+        crate::llm::ToolDef::new_for_test("merge_worker"),
+        crate::llm::ToolDef::new_for_test("discard_worker"),
+    ];
+    let filtered = filter_tools_for_mode(tools.clone(), Mode::Plan);
+    let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"read_file"));
+    assert!(!names.contains(&"merge_worker"));
+    assert!(!names.contains(&"discard_worker"));
+    for m in [Mode::Edit, Mode::Yolo] {
+        let filtered = filter_tools_for_mode(tools.clone(), m);
+        assert_eq!(filtered.len(), tools.len(), "Mode {:?} should keep merge/discard", m);
+    }
+}
+
 #[test]
 fn filter_tools_for_mode_keeps_full_for_chat_yolo() {
     let tools = vec![

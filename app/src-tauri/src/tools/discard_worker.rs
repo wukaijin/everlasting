@@ -21,14 +21,17 @@
 //!   previously discarded) → "worker already destroyed"
 //!   (per PRD §"Edge Cases" fail-fast, MVP 不做幂等).
 //!
-//! Concurrency: same MVP trade-off as `merge_worker` — no
-//! per-session mutex; the LLM is single-threaded per turn so
-//! concurrent LLM-driven discards can't happen. The
-//! `destroy_worker` itself is `&self`-style (no shared state),
-//! so two simultaneous discards of the same run_id would
-//! both succeed (the 2nd is a no-op on a missing worktree).
-//! The DB row is the authoritative state — the tool returns
-//! "worker already destroyed" when `worktree_path` is NULL.
+//! ⑨ 关 routing: `Risk::High`, classified as `ToolKind::GitMutation`
+//! (same Tier 4 tool-level grant + ask path as `merge_worker`); Plan
+//! mode filters it out via `filter_tools_for_mode`. Worker subagents
+//! cannot invoke it (`STRUCTURALLY_DISABLED`).
+//!
+//! Concurrency: unlike `merge_worker`, NO per-session mutex —
+//! `do_discard` only calls `destroy_worker` (the worker branch +
+//! worktree); it does NOT touch the parent session's git index, so two
+//! concurrent discards of the same run_id are safe (the 2nd sees
+//! `worktree_path` already NULL → "worker already destroyed"). The DB
+//! row is the authoritative state.
 
 use std::path::{Path, PathBuf};
 

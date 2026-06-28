@@ -51,6 +51,7 @@ pub fn filter_tools_for_mode(
             .filter(|t| !matches!(
                 t.name.as_str(),
                 "write_file" | "edit_file" | "shell" | "run_background_shell"
+                    | "merge_worker" | "discard_worker"
             ))
             .collect(),
         _ => tools,

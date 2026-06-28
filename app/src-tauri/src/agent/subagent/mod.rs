@@ -541,6 +541,13 @@ const STRUCTURALLY_DISABLED: &[&str] = &[
     "run_background_shell",
     "shell_status",
     "shell_kill",
+    // L3b PR3 B3 fix (2026-06-28): only the parent LLM / user (via the
+    // PR4 SubagentDrawer) may merge or discard a worker branch — a
+    // worker must not rewrite the parent session's history (it could
+    // otherwise merge a SIBLING worker's branch using a run_id visible
+    // in the dispatch tool_result). Stripped unconditionally.
+    "merge_worker",
+    "discard_worker",
 ];
 
 /// Filter `builtin_tools()` for a worker.

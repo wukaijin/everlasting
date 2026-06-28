@@ -135,14 +135,13 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         run_background_shell::definition(),
         shell_status::definition(),
         shell_kill::definition(),
-        // L3b PR3 (2026-06-27): worker branch merge / discard
-        // tools. Both are Tier 4 Other (no path / shell prefix
-        // argument; the input is a `run_id` UUID, not a
-        // filesystem path). ⑨ 关 still routes through
-        // `permissions::check` — the run is associated with a
-        // specific (parent_session_id, run_id) pair, and the
-        // permission system requires the LLM to be in Edit /
-        // Yolo mode to invoke shell-like tools.
+        // L3b PR3 (2026-06-27): worker branch merge / discard tools.
+        // Both route to `ToolKind::GitMutation` in Tier 4 (`Risk::High`,
+        // tool-level grant + ask, mirroring WebFetch — the input is a
+        // `run_id` UUID, not a filesystem path). Plan mode filters them
+        // out via `filter_tools_for_mode`; worker subagents can't reach
+        // them (`STRUCTURALLY_DISABLED`). `do_merge_blocking` serializes
+        // per parent session (`merge_lock_for`).
         merge_worker::definition(),
         discard_worker::definition(),
     ]

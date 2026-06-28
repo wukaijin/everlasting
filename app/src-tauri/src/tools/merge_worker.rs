@@ -22,25 +22,23 @@
 //! command (`merge_worker_run`) exists only so the frontend
 //! `<SubagentDrawer>` PR4 can expose a manual button.
 //!
-//! ⑨ 关 routing: `Risk::High` (shell-like, see
-//! `permissions::types::risk_for_tool`). The Tier 4 path branch
-//! classifies it as `ToolKind::Other` (no `path` argument
-//! extraction; the `run_id` is a database key, not a filesystem
-//! path). Plan mode still allows it (the write-tool filter in
-//! `filter_tools_for_mode` does not match this name).
+//! ⑨ 关 routing: `Risk::High` (per `permissions::types::risk_for_tool`).
+//! The Tier 4 path branch classifies it as `ToolKind::GitMutation`
+//! (tool-level grant + ask, mirroring WebFetch — the `run_id` is a
+//! database key, not a filesystem path, so the modal renders no
+//! path-scope row). Plan mode filters it out (`filter_tools_for_mode`
+//! lists `merge_worker`/`discard_worker`).
 //!
-//! Concurrency: per-session merge serialization is NOT implemented
-//! here in MVP. Two concurrent `merge_worker` calls on the same
-//! parent branch would race on the libgit2 merge state. The MVP
-//! trade-off: the LLM is single-threaded per turn (one chat
-//! produces one tool_use at a time), so concurrent LLM-driven
-//! merges can't happen; the only realistic conflict is the
-//! frontend drawer (PR4) racing the LLM, which the user
-//! permission UX (`WorkerAskBanner` parallel work) prevents in
-//! practice. A `Mutex<parent_session_id>` is the right future
-//! addition if a real concurrent path emerges.
+//! Concurrency: per-parent-session merge serialization is enforced in
+//! [`do_merge_blocking`] via [`merge_lock_for`] (a `std::sync::Mutex`
+//! keyed by `parent_session_id`). Both `spawn_blocking` call sites
+//! (this tool's [`execute`] + the `merge_worker_run` IPC command) flow
+//! through it, so concurrent merges into the same parent branch are
+//! serialized; independent sessions still merge in parallel.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use git2::{MergeOptions, Repository};
 use serde_json::json;
@@ -214,6 +212,31 @@ pub async fn execute(
     }
 }
 
+/// Per-parent-session merge serialization (L3b PR3 B2 fix, 2026-06-28).
+///
+/// `do_merge_blocking` is reached from two `spawn_blocking` sites — the
+/// `merge_worker` tool's `execute` and the `merge_worker_run` IPC
+/// command — both of which merge into the SAME parent session branch.
+/// libgit2 is not thread-safe across `Repository` handles that back the
+/// same `.git` dir, so two concurrent merges (e.g. the user clicking
+/// Merge on two drawers at once) could corrupt the index / leave a
+/// half-merged state. This lock serializes per `parent_session_id`;
+/// independent sessions still merge in parallel.
+///
+/// `std::sync::Mutex` (not tokio) because `do_merge_blocking` is a sync
+/// fn on the blocking pool with no `.await` in scope. The outer map
+/// lock is held only for the HashMap lookup/insert and released before
+/// the inner per-session lock is acquired — fixed order, no deadlock.
+fn merge_lock_for(parent_session_id: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    map.lock()
+        .unwrap()
+        .entry(parent_session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 /// Synchronous merge body. Returns `Ok(message)` on success,
 /// `Err(tool_result_content)` on any failure mode (validation,
 /// conflict, or libgit2 error). The function takes the parent
@@ -236,6 +259,13 @@ pub fn do_merge_blocking(
     parent_session_id: &str,
     run_id: &str,
 ) -> Result<String, String> {
+    // Serialize per parent session (see `merge_lock_for`). The guard
+    // spans the whole libgit2 merge, covering both `spawn_blocking`
+    // call sites (tool `execute` + IPC `merge_worker_run`). The Arc is
+    // bound to its own `let` so it outlives the guard (the guard borrows
+    // the Mutex inside the Arc).
+    let _merge_lock = merge_lock_for(parent_session_id);
+    let _merge_guard = _merge_lock.lock().unwrap();
     // Open the parent worktree repo (libgit2's
     // `Repository::open` works for both full repos and
     // linked worktrees; the resulting handle can read

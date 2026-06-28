@@ -326,6 +326,42 @@ pub async fn check(
                 None, tool_use_id, token,
             ).await;
         }
+        ToolKind::GitMutation => {
+            // merge_worker / discard_worker — tool-level grant + ask
+            // (same shape as WebFetch). The `run_id` is a DB key, not
+            // a path, so `path_for_modal = None` keeps the path-scope
+            // row off the wire. `check_tool_grant` takes the ACTUAL
+            // `tool_name` (not a literal) so a grant on discard_worker
+            // is not confused with merge_worker.
+            if let Ok(true) = check_tool_grant(db, &ctx.session_id, tool_name).await {
+                let _ = record_audit(
+                    db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None,
+                )
+                .await;
+                return Decision::Allow;
+            }
+            if let Some(cache) = &ctx.run_grants {
+                if cache.has_run_grant(tool_name, "tool", "") {
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        tool = %tool_name,
+                        "permission::check: Tier 4 worker run-grant hit (tool: git-mutation)"
+                    );
+                    let _ = record_audit(
+                        db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None,
+                    )
+                    .await;
+                    return Decision::Allow;
+                }
+            }
+            return ask_path(
+                sink, db, store, ctx,
+                tool_name, tool_input,
+                tool_input.get("run_id").and_then(|v| v.as_str()).unwrap_or(""),
+                None, tool_use_id, token,
+            )
+            .await;
+        }
         ToolKind::Other => {
             // Unknown / future tool — default Allow (Tier 5).
             // The tool layer's own boundary checks (e.g.
@@ -351,6 +387,10 @@ pub(crate) enum ToolKind {
     Shell,
     /// Web fetch. Always external; uses `tool` match_kind grant.
     WebFetch,
+    /// Git-mutating tools (merge_worker / discard_worker). Mirrors
+    /// WebFetch: tool-level grant + ask; the `run_id` is a DB key,
+    /// not a filesystem path (so the modal renders no path-scope row).
+    GitMutation,
     /// Unknown / future tools. Default Allow.
     Other,
 }
@@ -367,6 +407,14 @@ pub(crate) fn classify_tool(tool_name: &str) -> ToolKind {
         // grants on `cargo` work for both sync and async forms.
         "shell" | "run_background_shell" => ToolKind::Shell,
         "web_fetch" => ToolKind::WebFetch,
+        // L3b PR3: merge_worker / discard_worker mutate the parent
+        // session's git branch. Routed to `GitMutation` (NOT `Shell`)
+        // because they take a `run_id`, not a `command` — Shell's
+        // prefix-grant match (first-token of `command`) would collide
+        // on the empty token and let an "always allow" bleed across
+        // empty-token shell commands. GitMutation uses tool-level
+        // grants, mirroring WebFetch.
+        "merge_worker" | "discard_worker" => ToolKind::GitMutation,
         _ => ToolKind::Other,
     }
 }
@@ -600,6 +648,10 @@ pub(crate) fn match_value_for_allow_always(
         }
         ToolKind::WebFetch => {
             // tool-level grant (per-domain deferred to PR3+)
+            ("tool", None)
+        }
+        ToolKind::GitMutation => {
+            // tool-level grant (merge_worker / discard_worker).
             ("tool", None)
         }
         ToolKind::Other => {
