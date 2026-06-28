@@ -1,0 +1,32 @@
+{
+  "id": "autonomous-memory",
+  "name": "autonomous-memory",
+  "title": "agent 自主记忆系统",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-06-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-29-am-p1-storage",
+    "06-29-am-p2-readwrite",
+    "06-29-am-p3-tool-recall",
+    "06-29-am-p4-event-reflect",
+    "06-29-am-p5-quality"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
