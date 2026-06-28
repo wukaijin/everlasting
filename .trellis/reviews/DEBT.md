@@ -58,30 +58,9 @@
 
 _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 
-## P3 — 轻微(文档/一致性) [2 items]
+## P3 — 轻微(文档/一致性) [0 items]
 
-### RULE-B-007 — Background Mode 仍空壳
-
-- **Level**: P3
-- **Subsystem**: Permission
-- **File**: `app/src-tauri/src/agent/permissions/mode.rs:26-28`(`mode_system_prefix` 的 `Mode::Background` 占位字符串;拆分自 `mod.rs` 2026-06-23)
-- **Description**: `#[allow(dead_code)]`,`mode_system_prefix` 占位字符串
-- **Impact**: UI 已移除,enum 保留预留
-- **Fix**: 路线图评估移除 or 保留
-- **Owner**: carlos
-- **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.2
-
-
-### RULE-C-008 — grill Q4 "AGENTS.md 物理顺序前置"未严格执行
-
-- **Level**: P3
-- **Subsystem**: Memory
-- **File**: `app/src-tauri/src/memory/loader.rs:321`
-- **Description**: 仍按 CLAUDE→AGENTS 顺序;优先级仅靠 `<primary>`/`<reference>` wrapper 标签
-- **Impact**: 软提示 vs 硬提示,标签可能已足够
-- **Fix**: 决定硬前置 or 维持当前
-- **Owner**: carlos
-- **Discovered In**: REVIEW-b5-memory-grill-2026-06-10 + REVIEW-agent-loop-full-audit-2026-06-14 §2.3
+_无 open 项(RULE-B-007 + RULE-C-008 已 closed, 详见 git log)。_
 
 
 ---
@@ -93,8 +72,8 @@ _无 open 项(RULE-D-001 已 closed, 详见 git log)。_
 | P0 | 0 | 全部 closed(详见 git log) |
 | P1 | 0 | 全部 closed(详见 git log) |
 | P2 | 0 | 健壮性 + 债务,中长期清理 |
-| P3 | 2 | 文档 + 一致性,可延后 |
-| **Total** | **2** | 当前 open items |
+| P3 | 0 | 文档 + 一致性,可延后 |
+| **Total** | **0** | 当前 open items |
 
 ---
 
