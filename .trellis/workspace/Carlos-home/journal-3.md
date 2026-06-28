@@ -1217,3 +1217,61 @@ head[2 tiny] + big_middle(~4.8KB) + tail[tiny] + window=1000(trigger 800 / targe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 83: 清空剩余 P3 债(RULE-B-007 + RULE-C-008)
+
+**Date**: 2026-06-28
+**Task**: Clear remaining P3 debt RULE-B-007 + RULE-C-008
+**Branch**: `main`
+
+### Summary
+
+RULE-A-017 闭合后 DEBT 仅剩 2 条 P3(文档/一致性),且都是决策类 open question。
+逐条调研现状 → 两条都确认「维持现状」(零代码改动),从 DEBT 删除。**DEBT open items
+归零(P0-P3 全 0)**。
+
+### 决策依据
+
+- **RULE-B-007(Background Mode 空壳)→ 维持(有意保留预留位)**:
+  - `Mode::Background` wire 完整非 dead code — `db/types.rs:212`(enum) +
+    `:221/:234`(序列化 "background") + `commands/permissions.rs:93`(IPC) +
+    `tests_mode.rs:8,77`(测试)。
+  - `mode.rs` 实际**无** `#[allow(dead_code)]` 残留 — DEBT 描述过时不准确。
+  - `mode_system_prefix` 的 Background arm 是 match 穷尽性必须(不能删)。
+  - CLAUDE.md 顶部 + ROADMAP §4.2 明确「Background enum 留位 UI 不暴露」。
+  - 删 enum 会推翻已记录的项目决策 + 破坏 DB/IPC wire,无收益。
+
+- **RULE-C-008(grill Q4 AGENTS.md 物理顺序前置)→ 维持(wrapper 标签即 Q4 决策)**:
+  - `loader.rs:360-374` **已按 grill Q4 实现** — AGENTS.md 包 `<primary instructions>`、
+    CLAUDE.md 包 `<reference>`,注释 line 360-361 明确 "per the B5 review §3 Q4 decision"。
+  - grill Q4 的结论**就是 wrapper 标签**(语义硬标记,非软提示),不是物理顺序前置。
+  - 物理前置(AGENTS 排 CLAUDE 前)反破坏 User→Project 层级 + cache breakpoint 顺序。
+  - DEBT 条目(06-14 记录)是对 Q4 的误读。
+
+两条对立选项(删 enum / 物理前置)都违反已记录的项目决策,非清债该顺手做。
+
+### Main Changes
+
+- `.trellis/reviews/DEBT.md`:删 RULE-B-007 + RULE-C-008;P3 段 [2 items] → [0 items];
+  表格 P3 2→0、Total 2→0。**open items 归零**。
+- 零代码改动。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `85f7e1a` | docs(debt): 闭合 RULE-B-007 + RULE-C-008 (维持现状,DEBT 归零) |
+| `dbe1578` | chore(task): archive 06-28-debt-clear-p3-b007-c008 |
+
+### Testing
+
+- 无代码改动 → 无需跑测试。DEBT.md open items P0-P3 全 0。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
