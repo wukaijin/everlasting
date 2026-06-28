@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB 层 Quality Check:migration 幂等、CRUD 边界、project 隔离、安全网(敏感过滤/deny-list)验收"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 入口"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查是否复用现有 db 范式而非另起炉灶"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "P1 是纯 DB 层,检查 MemoryRow 未来被 P2-P5 消费的跨层契约一致性"}

@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB 编码规范:migration 幂等模式、CRUD 子模块范式、test_pool 测试惯例——P1 建表+CRUD+单测必须遵循"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent_runs 表 schema + CRUD 范式,P1 prd 明确以此为新表模板(db/subagent_runs.rs)"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "现有 memory(指令文件)模块边界,自主记忆需明确与之区分(静态指令文件 vs DB 自主记忆)"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口:Pre-Development Checklist + Quality Check"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 db 范式(mod.rs facade / run_migrations / tests_*.rs),不重复造轮子"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "完整设计:schema 来源 §5、hook 落点 §6、与 005/006 吸收对比 §11"}
