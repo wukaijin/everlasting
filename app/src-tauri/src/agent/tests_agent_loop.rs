@@ -890,22 +890,66 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         }),
     ])]));
 
-    // context_window = 10 forces aggressive trimming. The
-    // estimator (tiktoken cl100k_base) on a tiny
-    // `["hello"]` message is already > 0 tokens; the
-    // agent loop's pre-compact check (80% of window)
-    // triggers and trims. With a 10-token window, the
-    // agent loop may end up with 0 middle messages to
-    // drop; the B5 synthetic user/assistant head pair
-    // + the current user message are protected, so the
-    // loop survives.
+    // Construct messages that force a CLEAN compaction
+    // (`DegradationKind::None`): head[2 tiny protected] +
+    // middle[1 large droppable] + tail[1 tiny protected].
+    // context_window = 1000 → trigger = 800, target = 500.
+    // `big_middle` (~4.8KB ≈ 1200 tokens) pushes tokens_before
+    // past the 800 trigger; dropping it leaves head(2 tiny) +
+    // tail(1 tiny) ≈ 10 tokens, well under target 500 → `None`
+    // (safe-to-proceed). The provider IS called and emits Done —
+    // the loop completes normally.
+    //
+    // This is the clean-compaction counterpart to
+    // `agent_loop_c3_still_over_emits_error_and_skips_provider`
+    // (which forces `StillOver` via a huge tail so the provider
+    // is NEVER called). Together they cover both C3 exits:
+    // clean drop → continue; exhausted → Error + abort.
+    //
+    // RULE-A-017 (2026-06-28): the original setup
+    // (`test_messages()` = `["hello"]` + context_window = 10)
+    // was dwarfed by run_chat_loop's B5/skill head injection,
+    // which pushed the post-drop estimate past target 5 and
+    // tripped `StillOver` (emit Error, no Done) — the opposite
+    // of this test's "loop survives" intent. The 4-message /
+    // window-1000 shape mirrors the still_over test so it stays
+    // stable under the same injection.
+    let big_middle = {
+        // Same filler helper as the still_over test — repeated
+        // ASCII that cl100k_base encodes at ~4 chars/token.
+        "the quick brown fox jumps over the lazy dog. "
+            .repeat(4_800 / 45 + 1)
+            .chars()
+            .take(4_800)
+            .collect::<String>()
+    };
+    let messages = vec![
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("tiny head 1".into()),
+        },
+        ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text("tiny head 2".into()),
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(big_middle),
+        },
+        ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("tiny tail".into()),
+        },
+    ];
     run_chat_loop(
         vec![],
         mock.clone(),
-        10,
+        // Force compaction to trigger (tokens_before > trigger 800)
+        // but resolve cleanly (post-drop < target 500 → None).
+        1000,
         "rid-c3".into(),
         h.session_id.clone(),
-        test_messages(),
+        messages,
         emitter.clone(),
         h.db.clone(),
         h.cancellations,
@@ -964,19 +1008,29 @@ async fn agent_loop_c3_compaction_does_not_panic() {
     )
     .await;
 
-    // The loop should have completed (one Done event) and
-    // not emitted any error events.
+    // (1) Clean compaction (None) lets the turn proceed — the
+    //     provider is called exactly once. (StillOver, by
+    //     contrast, skips the provider — see the still_over test.)
+    assert_eq!(
+        mock.call_count(),
+        1,
+        "provider.send MUST be called once after a clean (None) C3 compaction"
+    );
+
+    // (2) The loop terminates with a Done event.
     let events = emitter.chat_events();
     assert!(
         events
             .iter()
             .any(|p| matches!(&p.event, ChatEvent::Done { .. })),
-        "agent loop must terminate with a Done event after C3 compaction"
+        "agent loop must terminate with a Done event after a clean C3 compaction"
     );
+
+    // (3) No error events — clean compaction is non-fatal.
     assert_eq!(
         emitter.error_event_count(),
         0,
-        "no error events expected (C3 is best-effort, not fatal)"
+        "no error events expected after a clean (None) C3 compaction"
     );
 }
 
