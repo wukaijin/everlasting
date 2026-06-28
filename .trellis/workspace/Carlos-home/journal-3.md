@@ -1167,3 +1167,53 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 82: RULE-A-017 c3 compaction test fail 修复
+
+**Date**: 2026-06-28
+**Task**: Fix RULE-A-017 c3 compaction test fail
+**Branch**: `main`
+
+### Summary
+
+收口 DEBT 最后一条影响测试绿灯的债(P3 RULE-A-017)。`agent_loop_c3_compaction_does_not_panic`
+在 main 上 deterministic fail(957+1),Session 79/80/81(L3b 系列)反复以
+"1 fail = RULE-A-017 pre-existing" 拖累。逐行诊断根因:RULE-A-002(06-14)把 C3
+`StillOver` 改成 fail-fast(emit Error + return)是正确的生产码改动,但本测试的原
+setup(test_messages [hello] + window=10)被 run_chat_loop 的 B5/skill 注入撑大后,
+意外落到 StillOver(emit Error 无 Done),与测试名 does_not_panic / 注释 loop-survives
+的意图相反。
+
+修复只改测试,生产码零改动:镜像旁边已 green 的 still_over 测试,改成
+head[2 tiny] + big_middle(~4.8KB) + tail[tiny] + window=1000(trigger 800 / target 500),
+走 None 干净压缩路径(drop 后约 10 token << 500)→ provider 被调、emit Done。两测试
+形成 C3 双出口对称覆盖(still_over=StillOver→Error+abort 不调 provider;
+本测试=None→正常完成调 provider)。加 mock.call_count()==1 断言区分两路径。
+
+### Main Changes
+
+- `app/src-tauri/src/agent/tests_agent_loop.rs`:重写 agent_loop_c3_compaction_does_not_panic
+  的 setup(手搓 4 条 messages + window 10→1000)走 None 路径 + 加 call_count==1 断言。
+- `.trellis/reviews/DEBT.md`:删 RULE-A-017 条目(open 集合闭合即删) + P3 计数 3→2。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0634598` | fix(backend): RULE-A-017 c3 compaction test 走 None 路径(镜像 still_over) |
+| `c65f70f` | docs(debt): 闭合 RULE-A-017(c3 compaction test fail) |
+| `e682410` | chore(task): archive 06-28-fix-rule-a017-c3-test-fail |
+
+### Testing
+
+- [OK] cargo test --lib agent_loop_c3_compaction_does_not_panic → ok(fail→pass)
+- [OK] cargo test --lib 全量 → 958 passed; 0 failed(之前 957+1fail),零回归
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
