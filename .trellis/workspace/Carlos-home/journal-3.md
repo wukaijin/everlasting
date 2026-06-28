@@ -1133,3 +1133,37 @@ detached-HEAD 的 'HEAD' 字符串仍 pass through (真实 git 概念).
 ### Next Steps
 
 - None - task complete
+
+
+## Session 81: L3b PR3 三个 Blocker 修复（权限/并发/越权）
+
+**Date**: 2026-06-28
+**Task**: L3b PR3 三个 Blocker 修复（权限/并发/越权）
+**Branch**: `main`
+
+### Summary
+
+全面审查 L3b 4 PR，发现 PR3 三个 Blocker（均逐行验证）并修复：B1 权限模型脱节——merge/discard 落 ToolKind::Other→Tier5 silent Allow + Risk::Low + Plan 模式可执行 merge，而注释/spec 虚假声称 Tier4/Risk::High；新增 ToolKind::GitMutation（WebFetch 式 tool-level grant+ask，不归 Shell 避免 command prefix-grant 空-token 串扰）+ risk High + filter_tools_for_mode Plan 过滤。B2 并发 merge 无锁——do_merge_blocking 两 spawn_blocking 入口无互斥，加 per-parent_session_id std::sync::Mutex（merge_lock_for）。B3 worker 越权——STRUCTURALLY_DISABLED 漏 merge/discard，worker 能 merge 兄弟 branch，加两项。订正 merge_worker/discard_worker/tools/mod 注释 + tool-contract.md spec。957 passed（C3 pre-existing RULE-A-017），+2 新测试，零回归。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9981380` | (see git log) |
+| `8cdbb53` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
