@@ -1275,3 +1275,44 @@ RULE-A-017 闭合后 DEBT 仅剩 2 条 P3(文档/一致性),且都是决策类 o
 ### Next Steps
 
 - None - task complete
+
+## 2026-06-29 — subagent orphan tool_call(OpenAI 400)修复 + 并发上限 3→10
+
+### Background
+
+subagent 并发场景(worker = researcher,连续 read_file 探索)报 OpenAI 400
+"tool_calls must be followed by tool messages"。诊断一波三折:
+
+- 初判 error 路径不补 synthetic tool_result(C1 据此实施,真实缺陷但**非主因**)。
+- DB `subagent_runs.transcript_json` 实证 19/19 tool_call/tool_result 配平、顺序正常 → 排除执行路径。
+- `context_window=1M`(GLM-5.2),trigger 80 万,run 实际几万 token → compact 未触发 → 排除压缩拆 pair。
+- **最终根因**:每次 400 前必然有 `loop detected (HardLoop read_file count:3)` warn。loop detection hint 被 `insert(0)` 到 result_blocks,wire fan-out 后 `user(text)` 插在 `assistant(tool_calls)` 与 `role:tool` 之间,违反 OpenAI "tool_calls 后必须紧跟 tool" 顺序约束 → 400。
+
+教训:orphan 不只是数量,还有**顺序**;只查数量的扫描抓不到顺序 orphan。
+
+### Main Changes
+
+- `chat_loop.rs`:hint `insert(0)`→`push`(末尾)(真根因);error 路径补 synthetic tool_result 对齐 cancel(§469);`DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN` 3→10。
+- `wire.rs`:`orphan_tool_use_ids`(数量配平) + `orphan_tool_call_order`(顺序)双扫描。
+- `openai.rs`:`send` 挂顺序扫描(`tracing::error!` 定位未来回归)。
+- tests:error-after-tool_use / orphan 双扫描 / l3a over-limit 改从 const 生成 dispatch 数。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b4d15f` | fix(agent): 修 loop_hint 致 OpenAI 400 + subagent 并发上限 3→10 |
+| (auto) | chore(task): archive 06-29-subagent-orphan-tool-call-openai-400 |
+
+### Testing
+
+- `cargo test --lib`:970 passed / 0 failed。
+- 用户实跑验证:并发 subagent 场景 400 消除。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 可选:trellis-update-spec 记一条约束("loop hint 不得插在 tool_result 前 / wire 层保证 tool_calls 后紧跟 tool")。
