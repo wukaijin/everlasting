@@ -3497,7 +3497,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
     // attach by directly setting the worktree state.
     let wt_path = h.project_path.join(format!("parent_wt_{}", h.session_id));
     let _ = std::fs::remove_dir_all(&wt_path);
-    crate::git::create_worktree(&h.project_path, &wt_path, &h.session_id)
+    crate::git::worktree::create(&h.project_path, &wt_path, &h.session_id)
         .expect("create parent session worktree");
     crate::db::set_worktree_state(
         &h.db,
@@ -3617,7 +3617,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
     // Parent session worktree (from initial commit only).
     let wt_path = h.project_path.join(format!("parent_wt_{}", h.session_id));
     let _ = std::fs::remove_dir_all(&wt_path);
-    crate::git::create_worktree(&h.project_path, &wt_path, &h.session_id)
+    crate::git::worktree::create(&h.project_path, &wt_path, &h.session_id)
         .expect("create parent session worktree");
     crate::db::set_worktree_state(
         &h.db,
@@ -3648,7 +3648,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
     // initial commit, not the parent's later commit).
     let temp_parent = h.project_path.join(format!("temp_parent_{}", run_id));
     let _ = std::fs::remove_dir_all(&temp_parent);
-    crate::git::create_worktree(&h.project_path, &temp_parent, &format!("temp-p-{}", run_id))
+    crate::git::worktree::create(&h.project_path, &temp_parent, &format!("temp-p-{}", run_id))
         .expect("create temp parent worktree");
     crate::git::worktree::create_worker(
         &h.project_path,
@@ -3845,7 +3845,7 @@ async fn l3b_discard_worker_happy_path() {
     let h = super::tests_common::make_harness_with_git_repo().await;
     let wt_path = h.project_path.join(format!("parent_wt_{}", h.session_id));
     let _ = std::fs::remove_dir_all(&wt_path);
-    crate::git::create_worktree(&h.project_path, &wt_path, &h.session_id)
+    crate::git::worktree::create(&h.project_path, &wt_path, &h.session_id)
         .expect("create parent session worktree");
     crate::db::set_worktree_state(
         &h.db,
