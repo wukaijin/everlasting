@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "Tier 1 Hooks 接入合约 — permissions/check.rs:51 当前 no-op,P3 挂工具执行前召回必须理解 5-tier 拦截链 + Decision 仍 Allow 的语义"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "find_pitfalls_by_trigger / trigger_key 匹配规则 / active 注脚构造契约 + bump_hit_count 时机,P3 直接消费 P1 产出的 DB 接口"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool_result 内容结构(注脚前置回填)+ remember tool silent-allow 模式参考,确认注脚措辞不破坏 tool 协议"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 单源模式 + recall block 注入边界,P3 严禁改动 loop 结构(verified 软拦截才动,P3 纯 Tier1 + 注脚兜底)"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "P3 关键设计依据 — §4 层2 (line 103 trigger_key 精确匹配 + 命中分档) + §6 接入点 B (line 160 permissions/check.rs:51) + §6 流程图 (line 177 注脚分档处置)"}
+{"file": ".trellis/tasks/06-29-autonomous-memory/prd.md", "reason": "父任务 epic 上下文 — 5 阶段依赖图 + 召回两层模型 + pitfall 状态机 + spike-005 安全网吸收,避免 P3 重复发明 P4/P5 概念"}
+{"file": "docs/spikes/005-agent-memory.md", "reason": "安全网原始设计 — 路径泛化 / 长度限制 / 频率控制(虽然在 remember tool 处已实现,但 P3 召回时若涉及反代写入需知边界)"}
+{"file": "docs/spikes/006-agent-autonomous-memory.md", "reason": "前置 spike — FTS5 / 落点决策 / Tier4 ask 否决原因,P3 沿用其决策(吸收对比见 spike-007 §11)"}

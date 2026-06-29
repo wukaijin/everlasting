@@ -1,1 +1,7 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "check 必须验证 5-tier 拦截链顺序未被打乱 + Tier1 返回值仍是 Decision(Allow/Ask/Deny),P3 召回结果只能走'注脚兜底'路径不改 Decision"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "check 验证 trigger_key schema 字段(JSON 结构化)+ find_pitfalls_by_trigger 调用参数对齐 + bump_hit_count 时机(active 命中后 +1,不阻塞调用)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check 验证 tool_result 注脚前置回填不破坏既有 content 协议(Anthropic tool_use_id 关联 + 多 content block 顺序)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "check 验证 find_pitfalls_by_trigger SQL 调用走 sqlx::query_as + bind 链 + idx_am_pitfall 索引命中"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "check 验证召回失败(SQL 异常 / 反序列化失败)走 tracing::warn! 模式,不能因召回失败阻断工具执行(决策降级为放行+无注脚)"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "check 验证 P3 实现不超出 §4 层2 范围 — 不动 verified 软拦截(→P5)/ 不动事件驱动写入(→P4)/ 不动状态机晋升(→P5)"}
+{"file": ".trellis/tasks/06-29-autonomous-memory/prd.md", "reason": "check 验证 P3 不引入 epic Out of Scope 项(向量库 / LLM-judge / global 记忆层 / 记忆晋升 CLAUDE.md)"}
