@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 84
-- **Last Active**: 2026-06-29
+- **Total Sessions**: 85
+- **Last Active**: 2026-06-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1470 | Active |
+| `journal-3.md` | ~1741 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 85 | 2026-06-30 | fix merge_worker no-parent-worktree via lazy auto-attach | `9f51f8d`, `67af5d4`, `e08f68a` | `main` |
 | 84 | 2026-06-29 | Session 84: P3 工具执行前召回 — Tier1 hook seam + active 注脚 + spec 同步 + 归档 | `1a65e77`, `effca94`, `b89f610`, `43e149d` | `main` |
 | 83 | 2026-06-29 | Session 83: P2 自主记忆手工读写闭环 — 闭环落地 + spec 同步 + 归档 | `81fcaf1`, `a1786d6`, `9f34a65`, `95ab765` | `main` |
 | 82 | 2026-06-29 | P1 自主记忆存储底座落地 | `c3b1824`, `f0052f8` | `main` |

@@ -1704,3 +1704,38 @@ epic `06-29-autonomous-memory` 已 archive。active tasks 清空。
 ### Status
 
 [OK] **epic 完成 + archived**。active tasks 清空,session 可收或开新任务。
+
+
+## Session 85: fix merge_worker no-parent-worktree via lazy auto-attach
+
+**Date**: 2026-06-30
+**Task**: fix merge_worker no-parent-worktree via lazy auto-attach
+**Branch**: `main`
+
+### Summary
+
+P1 bug: isolated sub-agent (general-purpose default isolated=true) 可以派生 worker/<run_id> 分支,但 merge 入口要求父 session 有 worktree,UI 报 'parent session has no worktree'、tool 报 'parent branch ... not found',普通用户必撞。修法: 在 two merge 入口(merge_worker_run IPC + merge_worker tool)加 lazy auto-attach helper。三态策略: Active/Delached no-op、None 调 attach_session 顺手建 worktree。重构: 把 commands::worktree::attach_worktree 内层抽出为 git::worktree::attach_session free function(同不变式),新增 GitError::Dirty variant。ToolContext 加 data_dir 字段(~17 test_ctx + chat_loop main 更新)。IPC 返回值结构化 MergeWorkerResult { message, auto_attached_parent },前端 toast 分流 + 触发 chat header chip 翻转 (loadSessions refresh)。spec 加 Pattern: Lazy Auto-Attach on Merge 章节。DEBT.md 不动(非纯 closed-item fix,见 prd §'DEBT.md 不污染')。cargo test 1077 / vitest 622 / vue-tsc clean。3 commits: fix(merge) 9f51f8d + fix(ui) 67af5d4 + docs(spec) e08f68a。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9f51f8d` | (see git log) |
+| `67af5d4` | (see git log) |
+| `e08f68a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
