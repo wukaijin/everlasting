@@ -58,7 +58,12 @@
 //! - No session-end overall reflection (spike-007 §8
 //!   out-of-scope).
 
-#![allow(dead_code)] // P4 lands the data flow + tests; P5 is the next caller, will be exercised end-to-end via the remember tool + chat_loop integration tests then.
+// (P4 landed the data flow + tests; P5 was the next caller. P5
+// landed 2026-06-29 — all auto_reflect fns are now reachable via
+// the chat_loop seam (`try_record_outcome` + `FailureTracker::new`)
+// + tests, so P4's provisional `#![allow(dead_code)]` is removed.
+// If a future change reintroduces an unused fn, prefer deleting it
+// over re-adding the allow.)
 
 use std::collections::HashMap;
 use std::sync::Arc;
