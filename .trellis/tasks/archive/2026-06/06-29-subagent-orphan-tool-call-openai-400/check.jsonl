@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验收:orphan 配平后符合 §469 tool_use↔tool_result Pair Atomicity 不变量 —— assistant 每个 tool_use_id 都有 matching tool_result"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收:error 路径 synthetic tool_result persist 符合 RULE-A-007 log-only + 与 cancel 路径对称,无双 terminal、无 seq 漂移"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验收:messages 序列/turn boundary 不变量未破,cancel/error/max_turns 三路径行为一致"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验收:tool_use/tool_result pairing invariant 维持(RULE-A-004);dispatch_subagent 并发上限提升未破坏 worker 契约"}
