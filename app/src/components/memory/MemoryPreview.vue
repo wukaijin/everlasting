@@ -18,13 +18,25 @@
 // down), the panel renders "Memory 暂不可用" and does not
 // throw. The Rust side already returns a structured error;
 // the store catches it and exposes it via `store.error`.
+//
+// P2 PR3: extends the panel with a "Runtime Memories" / 自主记忆
+// section, sourcing from `store.runtimeMemories` (the P2 autonomous
+// memory list visible to the current project). The section renders
+// below the instruction-file section, with its own loading / error
+// / empty states and a per-row delete affordance. The instruction-
+// file section is unchanged.
 
 import { computed, onMounted, ref, watch } from "vue";
 
-import { useMemoryStore, type MemoryKind } from "../../stores/memory";
+import {
+  useMemoryStore,
+  type AutonomousMemory,
+  type MemoryKind,
+} from "../../stores/memory";
 import { useProjectsStore } from "../../stores/projects";
 import MemoryLayerItem from "./MemoryLayerItem.vue";
 import Icon from "../Icon.vue";
+import ConfirmDialog from "../common/ConfirmDialog.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -138,6 +150,99 @@ const headerHint = computed<string>(() => {
   }
   return "用户 + 项目，共 4 个指令文件";
 });
+
+// ---------------------------------------------------------------------
+// P2 PR3: runtime-memories section
+// ---------------------------------------------------------------------
+
+// Per-row delete confirmation slot. `null` = no row pending. The
+// ID is the SQLite auto-id (matches the v-for :key), not the
+// UUID `memoryId` — see `store.deleteMemory` for the resolution.
+const pendingDeleteId = ref<number | null>(null);
+
+function onDeleteClick(id: number) {
+  pendingDeleteId.value = id;
+}
+
+function onDeleteCancel() {
+  pendingDeleteId.value = null;
+}
+
+async function onDeleteConfirm() {
+  const id = pendingDeleteId.value;
+  if (id === null) return;
+  pendingDeleteId.value = null;
+  await store.deleteMemory(id);
+}
+
+const pendingDeleteMemory = computed<AutonomousMemory | null>(() => {
+  if (pendingDeleteId.value === null) return null;
+  return (
+    store.runtimeMemories.find((m) => m.id === pendingDeleteId.value) ?? null
+  );
+});
+
+// P2 PR3: a content preview that's at most 80 chars (mirrors the
+// 500-char MAX_CONTENT_LEN cap from the Rust write safety net — a
+// full preview would push the row out of the list density). Trims
+// trailing whitespace + adds an ellipsis when truncated.
+function contentPreview(m: AutonomousMemory): string {
+  const text = m.content.trim().replace(/\s+/g, " ");
+  if (text.length <= 80) return text;
+  return text.slice(0, 80) + "…";
+}
+
+// P2 PR3: parse the JSON-encoded tags field for the badge row.
+// Falls back to a free-form string when the field isn't valid JSON
+// (defensive — the DB column is plain TEXT).
+function parseTags(json: string): string[] {
+  try {
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((t): t is string => typeof t === "string");
+    }
+  } catch {
+    // fall through
+  }
+  return [];
+}
+
+// P2 PR3: human-readable kind label. The DB stores lowercase
+// strings; the UI uses the original B5 / spike-007 nomenclature.
+const kindLabel: Record<string, string> = {
+  pitfall: "踩坑",
+  preference: "偏好",
+  fact: "事实",
+  decision: "决策",
+};
+function kindBadgeText(kind: string): string {
+  return kindLabel[kind] ?? kind;
+}
+
+// P2 PR3: human-readable scope label.
+function scopeBadgeText(scope: string): string {
+  return scope === "user" ? "user" : "project";
+}
+
+// P2 PR3: human-readable status label.
+const statusLabel: Record<string, string> = {
+  candidate: "candidate",
+  active: "active",
+  verified: "verified",
+  demoted: "demoted",
+};
+function statusBadgeText(status: string): string {
+  return statusLabel[status] ?? status;
+}
+
+// P2 PR3: timestamp display — strip the RFC 3339 fractional +
+// timezone to a compact YYYY-MM-DD HH:MM for the row meta line.
+// The DB stores RFC 3339; we keep only the wall-clock digits.
+function formatTimestamp(rfc3339: string): string {
+  // RFC 3339 example: "2026-06-29T12:34:56.789+00:00" → "2026-06-29 12:34"
+  const m = rfc3339.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  return m ? `${m[1]} ${m[2]}` : rfc3339;
+}
 </script>
 
 <template>
@@ -204,6 +309,125 @@ const headerHint = computed<string>(() => {
       />
     </div>
 
+    <!-- P2 PR3: Runtime Memories section. New, additive — the
+         instruction-file section above is untouched. -->
+    <section class="memory-preview__runtime" aria-labelledby="runtime-memories-title">
+      <header class="memory-preview__runtime-header">
+        <div class="memory-preview__runtime-header-left">
+          <h3 id="runtime-memories-title" class="memory-preview__runtime-title">
+            自主记忆
+          </h3>
+          <p class="memory-preview__runtime-hint">
+            agent 通过 remember tool 写入的跨 session 记忆(user + 当前 project)
+          </p>
+        </div>
+        <div class="memory-preview__runtime-header-right">
+          <span
+            v-if="store.runtimeMemories.length > 0"
+            class="memory-preview__runtime-count"
+          >
+            {{ store.runtimeMemories.length }} 条
+          </span>
+          <button
+            class="memory-preview__refresh"
+            type="button"
+            :disabled="
+              store.runtimeMemoriesLoading || !effectiveProjectId
+            "
+            @click="store.fetchMemories()"
+          >
+            <Icon name="refresh" :size="12" />
+            <span>刷新</span>
+          </button>
+        </div>
+      </header>
+
+      <div
+        v-if="store.runtimeMemoriesError"
+        class="memory-preview__error"
+      >
+        <Icon name="warn" :size="14" />
+        <span>自主记忆暂不可用:{{ store.runtimeMemoriesError }}</span>
+      </div>
+
+      <div
+        v-else-if="!effectiveProjectId"
+        class="memory-preview__empty"
+      >
+        <p>请先选择一个项目以查看自主记忆。</p>
+      </div>
+
+      <div
+        v-else-if="
+          store.runtimeMemoriesLoading && store.runtimeMemories.length === 0
+        "
+        class="memory-preview__loading"
+      >
+        加载自主记忆中…
+      </div>
+
+      <div
+        v-else-if="store.runtimeMemories.length === 0"
+        class="memory-preview__empty"
+      >
+        <p>该项目暂无自主记忆。agent 通过 remember tool 写入后会自动出现在这里。</p>
+      </div>
+
+      <ul v-else class="memory-preview__runtime-list">
+        <li
+          v-for="mem in store.runtimeMemories"
+          :key="mem.id"
+          class="runtime-memory"
+        >
+          <div class="runtime-memory__main">
+            <div class="runtime-memory__head">
+              <span class="runtime-memory__title">{{ mem.title }}</span>
+              <span
+                class="runtime-memory__badge"
+                :class="`runtime-memory__badge--kind-${mem.kind}`"
+              >
+                {{ kindBadgeText(mem.kind) }}
+              </span>
+              <span
+                class="runtime-memory__badge"
+                :class="`runtime-memory__badge--scope-${mem.scope}`"
+              >
+                {{ scopeBadgeText(mem.scope) }}
+              </span>
+              <span
+                class="runtime-memory__badge"
+                :class="`runtime-memory__badge--status-${mem.status}`"
+              >
+                {{ statusBadgeText(mem.status) }}
+              </span>
+            </div>
+            <p class="runtime-memory__content">{{ contentPreview(mem) }}</p>
+            <div class="runtime-memory__meta">
+              <span class="runtime-memory__timestamp">
+                {{ formatTimestamp(mem.createdAt) }}
+              </span>
+              <span
+                v-for="tag in parseTags(mem.tags)"
+                :key="tag"
+                class="runtime-memory__tag"
+              >
+                #{{ tag }}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="runtime-memory__delete"
+            aria-label="删除记忆"
+            title="删除记忆"
+            @click="onDeleteClick(mem.id)"
+          >
+            <Icon name="trash" :size="12" />
+          </button>
+        </li>
+      </ul>
+    </section>
+
     <footer class="memory-preview__footer">
       <p>
         指令文件每 <strong>1 秒</strong> 自动监听变更;
@@ -212,6 +436,24 @@ const headerHint = computed<string>(() => {
         <code>docs/IMPLEMENTATION.md</code> §4(B5 决策)。
       </p>
     </footer>
+
+    <!-- P2 PR3: delete confirmation modal. Reuses the project-wide
+         ConfirmDialog primitive (see app/src/components/common/ConfirmDialog.vue).
+         Renders a focused danger modal — no silent deletes. -->
+    <ConfirmDialog
+      :open="pendingDeleteId !== null"
+      title="删除自主记忆"
+      variant="danger"
+      confirm-text="删除"
+      @cancel="onDeleteCancel"
+      @confirm="onDeleteConfirm"
+    >
+      <p v-if="pendingDeleteMemory">
+        确认删除「<strong>{{ pendingDeleteMemory.title }}</strong>」吗?
+        此操作不可撤销。
+      </p>
+      <p v-else>确认删除该条记忆吗?此操作不可撤销。</p>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -352,5 +594,194 @@ const headerHint = computed<string>(() => {
   padding: 0 4px;
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
+}
+
+/* ---------------------------------------------------------------------
+   P2 PR3: Runtime Memories section. Stylistically distinct from the
+   instruction-file section (bordered container + 自主记忆 label) so
+   the user can see at a glance which is which.
+   --------------------------------------------------------------------- */
+
+.memory-preview__runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-bg-border);
+}
+
+.memory-preview__runtime-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.memory-preview__runtime-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.memory-preview__runtime-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.memory-preview__runtime-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.memory-preview__runtime-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.memory-preview__runtime-count {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.memory-preview__runtime-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.runtime-memory {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--duration-base) var(--ease-out);
+}
+
+.runtime-memory:hover {
+  border-color: var(--color-bg-border-strong);
+}
+
+.runtime-memory__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runtime-memory__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runtime-memory__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.runtime-memory__badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  border: 1px solid var(--color-bg-border);
+  background: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* kind badge tints — pick muted variants that read on the panel
+   surface. Each kind gets its own hue from the project's existing
+   color tokens. */
+.runtime-memory__badge--kind-pitfall {
+  color: var(--color-tool-error);
+  border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
+}
+.runtime-memory__badge--kind-preference {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+.runtime-memory__badge--kind-fact {
+  color: var(--color-status-info, var(--color-accent));
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+.runtime-memory__badge--kind-decision {
+  color: var(--color-status-warn);
+  border-color: color-mix(in srgb, var(--color-status-warn) 40%, transparent);
+}
+
+/* scope + status badges stay neutral (the kind badge already
+   carries the primary hue). */
+
+.runtime-memory__content {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.runtime-memory__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runtime-memory__timestamp {
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.runtime-memory__tag {
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+}
+
+.runtime-memory__delete {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out);
+}
+
+.runtime-memory__delete:hover {
+  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-tool-error) 40%, transparent);
+  color: var(--color-tool-error);
 }
 </style>
