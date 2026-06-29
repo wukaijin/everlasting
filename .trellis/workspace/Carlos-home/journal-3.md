@@ -1659,3 +1659,30 @@ P4 严格不渗透到 P5/P2/P3:
 ### Next Steps
 
 - None - task complete
+
+---
+
+## 2026-06-29 P5 质量层(06-29-am-p5-quality)— 完成
+
+epic `06-29-autonomous-memory` 最后一个 child(P1-P5 全部 done)。
+
+**4 决策定档**(brainstorm):D1 死循环防护=每坑每 session 软拦截 1 次(session HashSet);D2 晋升=candidate→active@hit≥2,active→verified@hit≥5+age 3 天;D3 Jaccard=char-trigram>0.7;D4 卫生 job=事件触发(insert %10 + app 启动)。
+
+**关键纠正**(design §3):P2 注释预期"P5 收紧 recall filter 到 ActiveVerifiedOnly"会掐断 candidate 晋升(candidate 靠被召回命中晋升,收紧则永不命中)。P5 反向 —— pre-tool recall 从 active-only 放宽到 candidate+active+verified 分档,session-start 保持 IncludeCandidate。
+
+**实现偏离**(design §4):`is_full_match` 字面"三者皆中"对内置工具不可行(Shell 无 path 探针 / Path 无 command_pattern),改为"每个 `Some` 字段匹配且至少一个 `Some`"——宽泛 pitfall 降级 Footnote,更保守。测试锁定。
+
+**1071 测试绿**(+30 P5:分档 / 晋升 / dedup / 2 端到端 soft-block 集成)。
+
+**实施教训**:trellis-implement 首次 completed 通知(result 截断)是中途 snapshot,实际跑 68min 才真完成;我误判后自己补 Step5/6 + dispatch check → 三写者并发。最终协调(Edit 读后写 + 区域不重叠)。**教训:sub-agent completed + 截断 result ≠ 真完成,以 git diff 客观核查;别在 sub-agent 可能还在跑时并发改文件 / 再 dispatch**。
+
+**auto_reflect.rs `#![allow(dead_code)]`**:P4 journal 说"等 P5 消费方落地后移除",但 P5 未碰 auto_reflect(改 check / memory_hygiene / chat_loop 软拦截),移除条件未满足。留 epic 收尾或 debt 任务统一处理。
+
+### Status
+
+[OK] **Completed + archived**(commits `3353156` feat / `52dfb35` artifacts / `d566135` archive)
+
+### Next Steps(epic 收尾)
+
+- epic `06-29-autonomous-memory` [5/5 done] → 收尾:落 `backend/memory.md` 全量 spec(P1-P5) + epic archive + 端到端 AC 验证(失败→成功→pitfall→跨 session 软拦截) + docs 同步(IMPLEMENTATION §4 / ROADMAP) + auto_reflect allow 清理
+- `task.py current` 现 fallback 指向 `06-24-debt-remove-3-closed-rules`(与 P5 无关)
