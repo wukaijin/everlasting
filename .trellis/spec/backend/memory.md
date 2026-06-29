@@ -775,6 +775,122 @@ pub async fn recall_pitfall_footnote(
 - FTS5 bm25 在 trigger_key 字段上召回会引入与本工具无关的 pitfall(噪音)
 - `command_pattern` + `path` 双键命中让"同类操作"语义无歧义
 
+#### Event-driven bypass reflection contract (P4, write side of the loop) — 2026-06-29, 06-29-am-p4-event-reflect
+
+> **P4 是 P3 的写入对偶**。spike-007 §3 路径2(spike-007 §6 接入点 C)定义的"连续 ≥2 次同名工具失败后成功 → 旁路 LLM reflection → 自动产出 pitfall(active)"。P3 是"读"(工具执行前召回已有 pitfall),P4 是"写"(事件驱动把新 pitfall 写库)。P3 + P4 闭合完整自动闭环:踩坑 → 记住 → 下次规避。
+>
+> P4 **不**改 `permissions::check()` 内部,**不**改 P3 的 pre-execute seam,**不**改 `ToolResultPayload` shape — 它在 chat_loop 的 **post-execute seam**(与 P3 的 pre-execute seam 互补)读 `ToolResultPayload.is_error` 信号。
+
+**Signatures**(在 `app/src-tauri/src/agent/auto_reflect.rs`):
+
+```rust
+// agent::auto_reflect::FailureTracker — per-session 状态机
+pub struct FailureTracker {
+    // (tool_name) -> TrackerEntry { consecutive_failures, last_failure_input,
+    //                                last_failure_content, last_failure_path }
+    inner: Mutex<HashMap<String, TrackerEntry>>,
+}
+
+pub const REFLECTION_FAILURE_THRESHOLD: usize = 2;
+
+impl FailureTracker {
+    pub fn new() -> Self;
+    pub fn try_record_outcome(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        content: &str,
+        is_error: bool,
+    ) -> Option<ReflectionTrigger>;
+    // Some(_)= 触发 reflection(call site 调 tokio::spawn 跑 reflect_to_pitfall);
+    // None  = 不触发(失败计数 0/1,或 success 但无前置 ≥2 失败)
+}
+
+// agent::auto_reflect::try_record_outcome (public entry,chat_loop 调用)
+pub fn try_record_outcome(
+    tracker: &Arc<Mutex<FailureTracker>>,
+    request_id: &str,
+    session_id: &str,
+    project_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    content: &str,
+    is_error: bool,
+);
+
+// agent::auto_reflect::reflect_to_pitfall (private,fire-and-forget 内核)
+async fn reflect_to_pitfall(
+    request_id: &str,
+    session_id: &str,
+    project_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    failure_content: &str,
+    success_content: &str,
+    provider: Arc<dyn Provider>,
+    pool: SqlitePool,
+);
+```
+
+**Contracts**:
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 触发时机 | `chat_loop` 的 `execute_tool()` 返回之后、audit 写之前 | `!token.is_cancelled()` 守卫(与 RULE-A-004 audit-skip 对齐) |
+| 触发信号 | 同一 `tool_name` 连续 `REFLECTION_FAILURE_THRESHOLD = 2` 次 `is_error=true` **之后**的 `is_error=false` | 单次失败不触发(PRD AC #3);计数器在成功或触发后重置 |
+| 状态机存储 | `Arc<Mutex<HashMap<tool_name, TrackerEntry>>>` 内嵌于 `run_chat_loop` 局部,per-session 内存 | **不**跨 session 持久化(v1 接受 session 边界重置,v2 扩展位 spike-007 §10) |
+| 调用点 | `chat_loop.rs` parallel-batch L2 path + serial path,两处(seam 与 P3 镜像) | 共享同一 `failure_tracker` 句柄 |
+| Reflection LLM 调 | 走主 provider 同一实例(不另起);独立 `REFLECT_SYSTEM_PROMPT` + `REFLECT_USER_TEMPLATE`;**不**消费主 system prompt / 不消费消息历史 | 1 个 user message 含"失败+成功 transcript 片段";空 `tools` 数组;`max_tokens=512` |
+| Reflection 期望产出 | JSON `{title, content, trigger_key: {tool, command_pattern, path_globs}}` | markdown 代码围栏剥离;JSON parse 失败 → `warn!` + 丢弃 |
+| 写库参数 | `kind=Pitfall, status=Active, scope=Project, source_session_id, source_ref=<request_id>:<tool_name>` | 走 P1 `insert_memory` 复用安全网(敏感过滤 / 长度 / 敏感路径 / frequency cap 50/session)|
+| 触发阈值 | `consecutive_failures >= 2`(常量 `REFLECTION_FAILURE_THRESHOLD`) | PRD AC #3:单次失败不触发 |
+| Fire-and-forget | `tokio::spawn` 整段 reflection | **不** await 主 loop;失败一律 `tracing::warn!` + 静默吞;**不** panic / `unwrap()` / `expect()` |
+| Decision 语义 | **不参与** `permissions::check()` 决策链 | P4 不在 P3 的 pre-execute seam,也不在 5-tier 内部 |
+| ToolResultPayload 污染 | **无** — P4 是 read-only consumer,只读 `is_error` / `content` / `tool_input` | 协议 `tool_use_id` 配对 / `is_error` 语义 / envelope `{result, cwd}` 全部不变 |
+
+**为什么 P4 写在 post-execute 而非 pre-execute(P3 seam)**:
+- P3 是"工具执行前查已知 pitfall" — 写发生在 pre-execute 之前;**读**则在 P3 的 pre-execute seam
+- P4 是"工具执行完记录新经验" — 需要看到 `is_error` 真实结果(成功/失败)才能决策,**写**发生在 post-execute 之后
+- 两个 seam 是 sibling,不互相依赖(顺序独立:同一个 tool_use_id P3 在前 P4 在后,中间夹 `execute_tool` + audit)
+
+**为什么 P4 走 P1 `insert_memory` 而非自写 INSERT**:
+- 写入安全网(sensitive regex / 长度 cap / 敏感路径 deny-list / frequency cap 50/session)单源;旁路绕过 P1 安全网会引入敏感泄漏 / 库膨胀 / 路径泄漏
+- 状态机字段(`hit_count` / `last_used_at` / `demoted_reason`)由 P1 维护,P5 消费;旁路 INSERT 会破坏 P5 状态机读取
+- 复用 `MemoryKind::Pitfall` 枚举 + `MemoryStatus::Active` 强类型,P4 写时直接用 `MemoryInput { kind, status, ... }`
+
+**P3 ↔ P4 闭环**(P4 单元测试 `reflected_pitfall_is_recallable_by_p3_helper` 锁定):
+1. session A:同 `tool_name='shell'` 连续 2 次 `cargo test --no-default-features` 失败,后 1 次 `cargo test` 成功
+2. P4 状态机触发 → `tokio::spawn` reflection → 调 LLM 提炼 `{title: "WSL cargo test 需显式 features", content: "...", trigger_key: {tool: "shell", command_pattern: "cargo test", path_globs: null}}` → 写 `insert_memory(kind=pitfall, status=active)`
+3. session B:agent 跑 `cargo test` → P3 pre-execute seam 调 `find_pitfalls_by_trigger('shell', Some("cargo test"), None)` → 命中 session A 写的 pitfall → 注脚 prepend 到 tool_result → agent 看到 "⚠️ Memory: ..." 提示 → 第一次执行就规避
+
+**Reflection prompt 模板**(独立常量,`auto_reflect.rs` 内部):
+
+```text
+// REFLECT_SYSTEM_PROMPT
+"你是一个经验提炼助手。给定一个工具调用连续失败的 transcript + 后续成功的 transcript,
+提炼成一句 200 字内的'可复用经验'。输出严格 JSON,字段:
+  title: 短标题(≤30 字符)
+  content: 一句可复用的踩坑经验(≤200 字符,imperative 语气)
+  trigger_key: 结构化触发键,字段:
+    tool: 工具名(shell/edit_file/grep/read_file/...)
+    command_pattern: 触发命令模式(可空)
+    path_globs: 触发路径 glob 列表,可空(null = 不限路径)
+**只输出 JSON**,不要 markdown 包装,不要解释。"
+
+// REFLECT_USER_TEMPLATE
+"<failure>
+  tool: {tool_name}
+  input: {tool_input_json}
+  error: {failure_content_truncated_2kib}
+</failure>
+<success>
+  tool: {tool_name}
+  input: {tool_input_json}
+  output: {success_content_truncated_2kib}
+</success>
+请提炼上述失败→成功经验。"
+```
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
@@ -798,6 +914,18 @@ pub async fn recall_pitfall_footnote(
 | **P3** `recall_pitfall_footnote` with candidate-status pitfall | Returns `Ok(None)` — `candidate` is **P2 scope**; not yet promoted to recallable |
 | **P3** `recall_pitfall_footnote` SQL `Err(sqlx::Error)` | `tracing::warn!` + `Ok(None)`; tool executes normally; **never blocks** (PRD hard rule) |
 | **P3** `bump_hit_count` for pre-tool hit fails (fire-and-forget) | `warn!`; recall footnote already in tool_result; non-blocking; P5 state machine may read stale `hit_count` (acceptable) |
+| **P4** `try_record_outcome` with single `is_error=true` (no prior failure for this `tool_name`) | Tracker increments to 1, no reflection triggered; subsequent success resets to 0 (PRD AC #3) |
+| **P4** `try_record_outcome` with 2 consecutive `is_error=true` followed by `is_error=false` for same `tool_name` | Reflection triggered; `tokio::spawn` runs `reflect_to_pitfall`; tracker resets to 0; main loop continues immediately (PRD AC #1, #2) |
+| **P4** `try_record_outcome` with success as the first event for a `tool_name` (no prior failures) | Tracker stays at 0; no reflection triggered (success is a no-op for trigger detection) |
+| **P4** `try_record_outcome` with 1 failure followed by 1 success for same `tool_name` | Tracker increments to 1 on failure, resets to 0 on success (no trigger — below threshold) (PRD AC #3) |
+| **P4** `try_record_outcome` per-tool isolation | `shell` failures do NOT increment `edit_file` counter; each `tool_name` has its own `TrackerEntry` |
+| **P4** reflection LLM call returns non-JSON text (markdown wrapper, prose) | `strip_code_fence` + JSON parse; parse failure → `tracing::warn!` + silent drop; main loop unaffected (no panic, no `unwrap`) |
+| **P4** `reflect_to_pitfall` calls `insert_memory` with sensitive content (LLM hallucinates an API key) | `insert_memory` safety net rejects (returns `Err`); `tracing::warn!` + silent drop; no row written |
+| **P4** `reflect_to_pitfall` calls `insert_memory` with content > 500 chars (LLM verbose) | `insert_memory` safety net rejects; `tracing::warn!` + silent drop; no row written |
+| **P4** `reflect_to_pitfall` calls `insert_memory` with `count_memories_for_session >= 50` | `insert_memory` frequency cap rejects; `tracing::warn!` + silent drop; no row written |
+| **P4** reflection LLM call transient network/timeout error | `tracing::warn!` + silent drop; no retry; main loop unaffected (fire-and-forget hard rule) |
+| **P4** `insert_memory` returns `Err(sqlx::Error)` (DB transient) | `tracing::warn!` + silent drop; no retry; main loop unaffected |
+| **P4** P3 ↔ P4 close-the-loop | P4 writes pitfall via `insert_memory` → immediately recallable by P3's `find_pitfalls_by_trigger` (no extra index/migration; `idx_am_pitfall` already covers P4 writes) |
 
 ### 5. Good / Base / Bad Cases
 
@@ -866,6 +994,33 @@ The recall is **information injection**, not a *decision*. It lives at the chat_
 
 P3 is **active-only footnote**, period. Verified soft-intercept is **P5 scope** (spike-007 §4, 命中分档表). The function `recall_pitfall_footnote` returns `Result<Option<String>, sqlx::Error>` specifically because P5 will add a sibling `verified_pitfall_decision` returning a structured `Decision` and the two can coexist at the chat_loop seam without touching each other.
 
+#### Bad: P4 reflection awaits the main loop (P4 anti-pattern)
+
+1. P4 lands with `try_record_outcome` returning a `Future` that the main loop `await`s.
+2. Main loop blocks while the LLM reflection runs (typically 1-5s).
+3. The "fire-and-forget" guarantee is lost — the user's tool result is delayed by reflection latency.
+4. If the LLM call hangs (network issue), the main loop hangs.
+
+P4's reflection is **fire-and-forget**: `tokio::spawn` wraps the entire `reflect_to_pitfall` call, the spawned `JoinHandle` is dropped (not `.await`ed), and any failure is absorbed at `tracing::warn!`. The main loop sees the original `is_error` / `content` signal and continues immediately. See [agent-loop-architecture.md front-matter "Per-tool auto-reflect seam (P4)"](./agent-loop-architecture.md#).
+
+#### Bad: P4 bypasses P1's `insert_memory` and writes a raw `INSERT` (P4 anti-pattern)
+
+1. P4 lands with a direct `sqlx::query("INSERT INTO autonomous_memories ...")` to avoid P1's `MemoryInput` struct.
+2. P1's safety net (sensitive regex / length cap / 敏感路径 deny-list) is bypassed.
+3. A hallucinated API key or local `/home/user/.ssh/...` path leaks into the autonomous memory table.
+4. The 50/session frequency cap is bypassed — the agent self-poisons its own memory library.
+
+P4's reflection **must** route through P1's `insert_memory` (`MemoryInput { kind: Pitfall, status: Active, scope: Project, ... }`) so the safety net, the state-machine fields (`hit_count` / `last_used_at` / `demoted_reason`), and the type enums (`MemoryKind` / `MemoryStatus` / `MemoryScope`) all flow through the single source of truth. There is no second write path.
+
+#### Bad: P4 fires on every tool failure (P4 anti-pattern)
+
+1. P4 ships with `REFLECTION_FAILURE_THRESHOLD = 1`.
+2. Every single `is_error=true` triggers an LLM reflection.
+3. The agent over-writes its memory library with shallow "this command failed" entries.
+4. Cost + latency explodes; the precision-first P3 recall filter drowns in noise.
+
+P4's threshold is **2 consecutive failures followed by a success** (per spike-007 §3 路径2 contract). Single failures are absorbed. The success-after-threshold pattern is the actual signal of "the agent tried X, failed twice, then found a working approach Y" — which is the only signal worth remembering. See [P4 contracts table — 触发阈值].
+
 ### 6. Tests Required
 
 | Test | Asserts |
@@ -908,6 +1063,19 @@ P3 is **active-only footnote**, period. Verified soft-intercept is **P5 scope** 
 | `recall_pitfall_footnote_candidate_hit_returns_none` (P3) | Insert candidate pitfall; recall → `None` (candidate is P2 scope, not yet promoted) |
 | `recall_pitfall_footnote_command_pattern_mismatch_returns_none` (P3) | Insert pitfall with `command_pattern='cargo test'`; recall with `command='npm test'` → `None` |
 | `recall_pitfall_footnote_empty_db_returns_none` (P3) | Empty DB; recall with any `tool_name` + `tool_input` → `None` (no panic, no error) |
+| `single_failure_does_not_trigger` (P4) | `FailureTracker` with one `is_error=true` for `shell` → `try_record_outcome` returns `None`; no reflection spawned (PRD AC #3) |
+| `two_failures_then_success_triggers` (P4) | `shell` × 2 `is_error=true` then `is_error=false` → `try_record_outcome` returns `Some(_)`; tracker resets to 0 (PRD AC #1) |
+| `first_call_success_does_not_trigger` (P4) | `is_error=false` as first event for any `tool_name` → `try_record_outcome` returns `None` |
+| `one_failure_then_success_does_not_trigger` (P4) | `shell` × 1 failure then 1 success → no trigger (counter resets on success; below threshold) (PRD AC #3) |
+| `counter_resets_after_trigger` (P4) | Trigger fires, then 2 more failures → counter goes 0→1→2, no second trigger until a new success-then-failure cycle |
+| `tools_have_independent_counters` (P4) | `shell` failure × 2 does NOT affect `edit_file` counter; each `tool_name` has its own `TrackerEntry` |
+| `try_record_outcome_writes_active_pitfall_end_to_end` (P4) | Real DB + MockProvider: 2 failures + 1 success → `reflect_to_pitfall` runs → `insert_memory` writes a row with `kind=Pitfall`, `status=Active`, `scope=Project`, `source_ref=<request_id>:<tool_name>`, populated `trigger_key` (PRD AC #1) |
+| `invalid_json_from_llm_does_not_panic_or_write` (P4) | MockProvider returns prose-without-JSON → `strip_code_fence` + `serde_json::from_str` fail → `tracing::warn!` + silent drop; no row in DB; no panic |
+| `try_record_outcome_does_not_block_caller` (P4) | MockProvider with `tokio::time::sleep(10s)`; `try_record_outcome` returns in < 100ms (fire-and-forget hard rule) (PRD AC #2) |
+| `strip_code_fence_handles_common_cases` (P4) | Input `"```json\n{...}\n```"` → `{...}`; input ` ```\n{...}\n``` ` → `{...}`; input `{...}` (no fence) → `{...}` |
+| `truncate_for_reflect_under_cap_passes_through` (P4) | Input 1 KiB → output identical (under 2 KiB cap) |
+| `truncate_for_reflect_over_cap_appends_marker` (P4) | Input 4 KiB → output truncated to 2 KiB with `…(truncated)` marker |
+| `reflected_pitfall_is_recallable_by_p3_helper` (P4) | End-to-end: P4 reflection writes a pitfall with `tool_name='shell'`, `command_pattern='cargo test'`; subsequent `permissions::recall_pitfall_footnote(pool, 'shell', tool_input_with_cargo_test)` returns `Some("⚠️ Memory: ...")` (PRD AC #4) |
 
 30+ tests across DB / agent / tool / IPC / store / component.
 

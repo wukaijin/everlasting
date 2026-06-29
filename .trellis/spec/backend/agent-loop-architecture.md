@@ -35,6 +35,33 @@
 > active-only footnote, mounted at the seam, not inside the 5-tier decision
 > chain. See [permission-layer.md §4.2](./permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall) and
 > [memory.md §Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall).
+>
+> **Per-tool auto-reflect seam (P4, 2026-06-29, 06-29-am-p4-event-reflect)**:
+> the loop has a **post-execute seam** in `chat_loop.rs` (parallel-batch L2
+> path + serial path, sibling to the P3 seams above) where
+> `auto_reflect::try_record_outcome(failure_tracker, ...)` is invoked
+> **after** `execute_tool` returns and **after** the audit-write check
+> (`!token.is_cancelled()`), reading `ToolResultPayload.is_error` as the
+> signal. A per-session `FailureTracker` (`Arc<Mutex<HashMap<tool_name,
+> TrackerEntry>>>`) is created in `run_chat_loop` local scope and shared
+> across turns + parallel/serial paths. On the pattern "consecutive
+> `REFLECTION_FAILURE_THRESHOLD = 2` failures followed by a success for
+> the same `tool_name`", the tracker fires a `tokio::spawn`'d
+> `reflect_to_pitfall(provider, pool, ...)` that calls the **main provider
+> instance** (not a separate one) with a dedicated `REFLECT_SYSTEM_PROMPT`
+> + `REFLECT_USER_TEMPLATE` to elicit JSON
+> `{title, content, trigger_key: {tool, command_pattern, path_globs}}`,
+> then writes via P1's `insert_memory` (single source of truth for the
+> write safety net) with `kind=Pitfall, status=Active, scope=Project,
+> source_ref=<request_id>:<tool_name>`. The whole reflection pipeline
+> is fire-and-forget — failures are absorbed at `tracing::warn!` and
+> never bubble to the main loop. **P3 ↔ P4 close the loop**: a pitfall
+> written by P4 is immediately recallable by P3's
+> `find_pitfalls_by_trigger` (verified by P4 unit test
+> `reflected_pitfall_is_recallable_by_p3_helper`). P4 does NOT touch
+> the 5-tier decision chain, P3's pre-execute seam, or
+> `ToolResultPayload` shape. See
+> [memory.md §Event-driven bypass reflection contract (P4)](./memory.md#event-driven-bypass-reflection-contract-p4-write-side-of-the-loop--2026-06-29-06-29-am-p4-event-reflect).
 
 ---
 

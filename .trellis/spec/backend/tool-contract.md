@@ -159,6 +159,21 @@ footnote renders to the user as part of the tool output. See
 [memory.md §Scenario 2 / Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall)
 for the recall contract.
 
+**P4 is_error consumption (2026-06-29, 06-29-am-p4-event-reflect)**: the
+`is_error` field of `ToolResultPayload` is **read** by the P4
+`FailureTracker` at the chat_loop post-execute seam to drive the
+"consecutive ≥2 failures → success" event signal. P4 is a
+**read-only consumer** of `ToolResultPayload` — it does not modify
+`content` / `is_error` / `tool_use_id` / envelope shape. The P4
+reflection (LLM call + `insert_memory` write) is fire-and-forget
+via `tokio::spawn` and never bubbles back to the tool result. P4 is
+the **write-side counterpart** of P3's read-side footnote injection:
+P3 prepends a recall hint before tool execution; P4 records a new
+pitfall after tool execution. They close the loop (P4 writes → P3
+recalls → agent avoids the pitfall next time). See
+[memory.md §Scenario 2 / Event-driven bypass reflection contract (P4)](./memory.md#event-driven-bypass-reflection-contract-p4-write-side-of-the-loop--2026-06-29-06-29-am-p4-event-reflect)
+for the write contract.
+
 #### Environment keys
 
 No new env keys. The4 new tools have no configurable knobs (the cap100 /30 KiB
