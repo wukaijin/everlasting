@@ -514,6 +514,14 @@ pub async fn run_chat_loop(
         crate::agent::auto_reflect::FailureTracker::new(),
     ));
 
+    // P5 (2026-06-29, 06-29-am-p5-quality): session-scoped soft-block
+    //记账. When a verified pitfall soft-blocks a tool_use, its
+    // memory_id lands here; the next hit on the same pitfall degrades
+    // to Footnote + normal execution (the dead-loop guard, design D1).
+    // Same lifecycle as `failure_tracker` (loop-local, dropped on
+    // exit) — no cross-session carry.
+    let soft_blocked: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
+
     let session_mode = loaded_session.session.mode;
     // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
     // (added as the 21st arg) threads the worker path's
@@ -1771,6 +1779,11 @@ pub async fn run_chat_loop(
                     let failure_tracker = failure_tracker.clone();
                     let provider = provider.clone();
                     let project_id = current_ctx.project_id.clone();
+                    // P5 (2026-06-29, 06-29-am-p5-quality): clone
+                    // the soft-block ledger so the parallel task
+                    // can both read (recall decision) + write
+                    // (record a freshly-soft-blocked memory_id) it.
+                    let soft_blocked = soft_blocked.clone();
                     async move {
                         // check + execute live in the SAME task
                         // (Q2 rationale: no ask risk in the
@@ -1808,32 +1821,72 @@ pub async fn run_chat_loop(
                             ));
                         }
 
-                        // P3 (2026-06-29, 06-29-am-p3-tool-recall):
-                        // Tier 1 Hooks — pre-tool pitfall recall.
-                        // Runs AFTER `check()` returns Allow and
-                        // BEFORE `execute_tool()` (the recall itself
-                        // is read-only and never blocks; verified
-                        // soft-intercept is P5 scope). On active
-                        // hit, we prepend a footnote to the
-                        // `tool_result.content` after execution so
-                        // the LLM sees the hint next to the tool
-                        // output (preserving tool_use/tool_result
-                        // pairing + the existing envelope shape).
-                        let pitfall_footnote = match permissions::recall_pitfall_footnote(
-                            &db, &name, &input,
+                        // P3 + P5 (2026-06-29, 06-29-am-p3-tool-recall
+                        // + 06-29-am-p5-quality): Tier 1 Hooks —
+                        // pre-tool pitfall recall. Runs AFTER
+                        // `check()` returns Allow and BEFORE
+                        // `execute_tool()`. P5 introduces the
+                        // tiered `PitfallRecall`:
+                        //   - SoftBlock { hint, memory_id } —
+                        //     verified + full trigger-key match +
+                        //     not-yet-blocked this session → short-
+                        //     circuit execute_tool, record memory_id,
+                        //     surface hint as is_error=false tool_result.
+                        //   - Footnote(text) — active / candidate /
+                        //     partial / second-hit → execute normally,
+                        //     prepend text to the result content.
+                        //   - None — no recall.
+                        // The dead-loop guard (design D1): the second
+                        // hit on the same SoftBlock'd pitfall
+                        // degrades to Footnote because the memory_id
+                        // is now in `soft_blocked`.
+                        let blocked_snapshot = soft_blocked.lock().await.clone();
+                        let pitfall_recall = permissions::recall_pitfall(
+                            &db, &name, &input, &blocked_snapshot,
                         )
-                        .await
+                        .await;
+                        // SoftBlock: short-circuit. The tool is NOT
+                        // executed; we surface the hint as a non-error
+                        // tool_result so the LLM re-judges (adjust /
+                        // abandon / insist). Mirrors Decision::Deny's
+                        // "skip execute + return ToolResult" structure
+                        // (above), but `is_error: false` so the LLM
+                        // doesn't think the tool is broken.
+                        if let permissions::PitfallRecall::SoftBlock { hint, memory_id } =
+                            pitfall_recall
                         {
-                            Ok(Some(text)) => Some(text),
-                            Ok(None) => None,
-                            Err(e) => {
-                                // Recall failure MUST NOT block tool
-                                // execution (P3 PRD acceptance).
-                                tracing::warn!(
-                                    error = %e,
-                                    tool = %name,
-                                    "P3 recall_pitfall_footnote failed (non-fatal)"
-                                );
+                            // Record in the session ledger (D1).
+                            soft_blocked.lock().await.insert(memory_id);
+                            let envelope = crate::agent::helpers::tool_result_envelope(
+                                &hint,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope.clone(),
+                                is_error: false,
+                            });
+                            // No tool_executed audit (tool didn't run
+                            // — RULE-A-004's intent applies: don't
+                            // lie to the audit log). No P4 reflect
+                            // either (no real outcome to learn from).
+                            return Some((
+                                i,
+                                ContentBlock::ToolResult {
+                                    tool_use_id: id,
+                                    content: envelope,
+                                    is_error: false,
+                                },
+                            ));
+                        }
+                        // Footnote or None: extract the optional text
+                        // for the prepend-after-execute path.
+                        let pitfall_footnote = match pitfall_recall {
+                            permissions::PitfallRecall::Footnote(text) => Some(text),
+                            permissions::PitfallRecall::None => None,
+                            permissions::PitfallRecall::SoftBlock { .. } => {
+                                // Unreachable — handled above.
                                 None
                             }
                         };
@@ -2402,31 +2455,61 @@ pub async fn run_chat_loop(
                 continue;
             }
 
-            // P3 (2026-06-29, 06-29-am-p3-tool-recall): Tier 1
-            // Hooks — pre-tool pitfall recall. Runs AFTER `check()`
-            // returns Allow and the dispatch_subagent intercept,
-            // BEFORE `execute_tool()`. The recall itself is read-
-            // only and never blocks; verified soft-intercept is P5
-            // scope. On active hit, we prepend a footnote to the
-            // `tool_result.content` after execution so the LLM sees
-            // the hint next to the tool output (preserving
-            // tool_use/tool_result pairing + the existing envelope
-            // shape).
-            let pitfall_footnote = match permissions::recall_pitfall_footnote(
-                &db, name, input,
-            )
-            .await
+            // P3 + P5 (2026-06-29, 06-29-am-p3-tool-recall +
+            // 06-29-am-p5-quality): Tier 1 Hooks — pre-tool pitfall
+            // recall. Runs AFTER `check()` returns Allow and the
+            // dispatch_subagent intercept, BEFORE `execute_tool()`.
+            // P5 introduces the tiered `PitfallRecall`:
+            //   - SoftBlock { hint, memory_id } — verified + full
+            //     trigger-key match + not-yet-blocked this session →
+            //     short-circuit execute_tool, record memory_id,
+            //     surface hint as is_error=false tool_result.
+            //   - Footnote(text) — active / candidate / partial /
+            //     second-hit → execute normally, prepend text.
+            //   - None — no recall.
+            // The dead-loop guard (design D1): the second hit on the
+            // same SoftBlock'd pitfall degrades to Footnote because
+            // the memory_id is now in `soft_blocked`.
+            let blocked_snapshot = soft_blocked.lock().await.clone();
+            let pitfall_recall =
+                permissions::recall_pitfall(&db, name, input, &blocked_snapshot).await;
+            // SoftBlock: short-circuit. The tool is NOT executed; we
+            // surface the hint as a non-error tool_result so the LLM
+            // re-judges (adjust / abandon / insist). `is_error=false`
+            // so the LLM doesn't think the tool is broken — semantics
+            // are "experience hint", not "tool failed".
+            if let permissions::PitfallRecall::SoftBlock { hint, memory_id } =
+                pitfall_recall
             {
-                Ok(Some(text)) => Some(text),
-                Ok(None) => None,
-                Err(e) => {
-                    // Recall failure MUST NOT block tool
-                    // execution (P3 PRD acceptance).
-                    tracing::warn!(
-                        error = %e,
-                        tool = %name,
-                        "P3 recall_pitfall_footnote failed (non-fatal)"
-                    );
+                // Record in the session ledger (D1).
+                soft_blocked.lock().await.insert(memory_id);
+                let envelope = crate::agent::helpers::tool_result_envelope(
+                    &hint,
+                    &current_ctx.worktree_path,
+                );
+                sink.emit_tool_result(&crate::state::ToolResultPayload {
+                    request_id: rid.clone(),
+                    tool_use_id: id.clone(),
+                    content: envelope.clone(),
+                    is_error: false,
+                });
+                result_blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: envelope,
+                    is_error: false,
+                });
+                // No tool_executed audit (tool didn't run — RULE-
+                // A-004's intent). No P4 reflect either (no real
+                // outcome). Proceed to the next tool_use.
+                continue;
+            }
+            // Footnote or None: extract optional text for the
+            // prepend-after-execute path.
+            let pitfall_footnote = match pitfall_recall {
+                permissions::PitfallRecall::Footnote(text) => Some(text),
+                permissions::PitfallRecall::None => None,
+                permissions::PitfallRecall::SoftBlock { .. } => {
+                    // Unreachable — handled above.
                     None
                 }
             };

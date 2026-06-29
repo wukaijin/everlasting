@@ -4226,3 +4226,258 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
     assert!(!any_hint, "distinct tool calls must not trigger a loop hint");
 }
 
+// ---------------------------------------------------------------------------
+// P5 (2026-06-29, 06-29-am-p5-quality): verified pitfall soft-block
+// short-circuits execute_tool (design §4 + D1).
+// ---------------------------------------------------------------------------
+
+/// Helper: seed a verified pitfall for the project + tool with a
+/// full trigger-key match (path_globs=Some + the probe path matches).
+/// Mirrors `seed_pitfall` in `tests_check.rs` but keeps the project-
+/// scope wiring the integration harness needs.
+async fn p5_seed_verified_pitfall_full_match(h: &super::tests_common::TestHarness) {
+    use crate::db::memories::{MemoryInput, MemoryKind, MemoryScope, MemoryStatus};
+    let input = MemoryInput {
+        scope: MemoryScope::Project,
+        project_id: Some(h.project_id.clone()),
+        kind: MemoryKind::Pitfall,
+        status: MemoryStatus::Verified,
+        title: "edit_file under app/src is risky".into(),
+        content: "be extra careful with edit_file in app/src/".into(),
+        tags: "[]".into(),
+        tool_name: Some("edit_file".into()),
+        command_pattern: None,
+        path_globs: Some(r#"["app/src/*"]"#.into()),
+        source_session_id: None,
+        source_ref: None,
+    };
+    crate::db::memories::insert_memory(&h.db, &input)
+        .await
+        .expect("insert verified pitfall");
+}
+
+/// P5 AC (design §4 + D1): a verified pitfall with a full trigger-key
+/// match soft-blocks the matching tool_use — `execute_tool` is NOT
+/// called, the loop surfaces an `is_error: false` tool_result with the
+/// hint, and the loop continues to the next turn. This is the
+/// end-to-end "第一时间规避" contract.
+///
+/// The setup: project-scope verified pitfall with `path_globs=
+/// ["app/src/*"]`. Turn 1 the model emits `edit_file` on
+/// `app/src/foo.rs` → SoftBlock. Turn 2 the model emits final text.
+/// Assertions:
+/// - 2 send calls (turn 1 = tool_use; turn 2 = final).
+/// - 1 tool:result emitted, `is_error: false`, content contains the
+///   "未实际执行" hint.
+/// - The tool's actual output ("list_dir output") is NOT in the
+///   result (execute_tool was short-circuited).
+#[tokio::test]
+async fn agent_loop_p5_soft_block_short_circuits_execute() {
+    let h = make_harness().await;
+    p5_seed_verified_pitfall_full_match(&h).await;
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: tool_use on a path that matches the verified
+        // pitfall's path_globs.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_sb".into(),
+                name: "edit_file".into(),
+                input: serde_json::json!({
+                    "path": "app/src/foo.rs",
+                    "old_string": "a",
+                    "new_string": "b",
+                }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: final text after the soft-block hint.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "ok".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-sb".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        None,
+        None,
+        h.subagent_cache.clone(),
+        None,
+        None,
+        h.app_data_dir.clone(),
+    )
+    .await;
+
+    // Turn 1 (tool_use) + Turn 2 (final text) = 2 sends.
+    assert_eq!(
+        mock.call_count(),
+        2,
+        "soft-block still produces a tool_result → loop continues to turn 2"
+    );
+    assert_eq!(emitter.tool_call_count(), 1);
+    // Exactly one tool_result, is_error=false, carries the hint.
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 1);
+    assert!(
+        !results[0].is_error,
+        "soft-block result is is_error=false (experience hint, not tool failure)"
+    );
+    assert!(
+        results[0].content.contains("未实际执行"),
+        "soft-block result carries the 'NOT executed' hint; got: {}",
+        results[0].content
+    );
+    assert!(
+        results[0].content.contains("edit_file under app/src is risky"),
+        "hint carries the pitfall title; got: {}",
+        results[0].content
+    );
+}
+
+/// P5 AC (design D1 — dead-loop guard): the second hit on the same
+/// verified pitfall degrades to Footnote + normal execution (the
+/// session-level HashSet records the first soft-block). This locks
+/// the "每坑每 session 软拦截 1 次" contract end-to-end.
+///
+/// Setup: same verified pitfall. Turn 1 emits the matching edit_file
+/// → soft-blocked. Turn 2 emits the SAME matching edit_file again →
+/// the loop executes it normally (Footnote prepended) + the tool's
+/// real output is in the result. Turn 3: final text.
+#[tokio::test]
+async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
+    let h = make_harness().await;
+    p5_seed_verified_pitfall_full_match(&h).await;
+
+    let emitter = Arc::new(MockEmitter::new());
+    let mock = Arc::new(MockProvider::new(vec![
+        // Turn 1: matching edit_file → SoftBlock (first hit).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_d1".into(),
+                name: "edit_file".into(),
+                input: serde_json::json!({
+                    "path": "app/src/foo.rs",
+                    "old_string": "a",
+                    "new_string": "b",
+                }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 2: LLM insists on the same edit_file → second hit
+        // degrades to Footnote + normal execute (D1 dead-loop guard).
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::ToolCall {
+                id: "toolu_d2".into(),
+                name: "edit_file".into(),
+                input: serde_json::json!({
+                    "path": "app/src/nonexistent_for_test.rs",
+                    "old_string": "x",
+                    "new_string": "y",
+                }),
+            }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("tool_use".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+        // Turn 3: final text.
+        MockResponse::Events(vec![
+            Ok(ChatEvent::Start),
+            Ok(ChatEvent::Delta { text: "done".into() }),
+            Ok(ChatEvent::Done {
+                stop_reason: Some("end_turn".into()),
+                usage: Some(TokenUsage::default()),
+            }),
+        ]),
+    ]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-d1".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        false,
+        Some(false),
+        None,
+        None,
+        None,
+        h.subagent_cache.clone(),
+        None,
+        None,
+        h.app_data_dir.clone(),
+    )
+    .await;
+
+    assert_eq!(mock.call_count(), 3, "three turns: soft-block + exec + final");
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 2, "two tool_results (soft-block + executed)");
+    // First result: soft-block, is_error=false, hint-bearing.
+    assert!(
+        !results[0].is_error,
+        "first hit is a soft-block (is_error=false)"
+    );
+    assert!(results[0].content.contains("未实际执行"));
+    // Second result: executed normally. edit_file on a nonexistent
+    // path returns is_error=true (ReadGuard verify_read fails —
+    // "must read_file first"). The Footnote hint is prepended.
+    assert!(
+        results[1].is_error,
+        "second hit executed normally (edit_file on unread path errors)"
+    );
+    assert!(
+        results[1].content.contains("Memory:"),
+        "second hit carries the Footnote header (degraded from SoftBlock)"
+    );
+}
+

@@ -118,7 +118,16 @@ pub mod tests_run_grant;
 #[allow(unused_imports)]
 pub use audit::{record_message_resend_audit, record_tool_executed_audit, AuditKind};
 pub use check::check;
+pub use check::recall_pitfall;
+// `recall_pitfall_footnote` is retained as the P3-era Footnote-tier
+// reference (see `check.rs` doc comment). Tests in `tests_check.rs`
+// + `auto_reflect.rs` reach it via the full `check::` path; the
+// re-export is kept for external symmetry with `recall_pitfall`.
+// `#[allow(unused_imports)]` silences the `cargo check` warning
+// (cargo check doesn't compile the test files that consume it).
+#[allow(unused_imports)]
 pub use check::recall_pitfall_footnote;
+pub use check::PitfallRecall;
 pub use mode::{filter_tools_for_mode, mode_system_prefix};
 pub use payload::PermissionAskPayload;
 #[allow(unused_imports)]

@@ -567,6 +567,29 @@ pub async fn insert_memory(
     let row = get_memory_by_id(pool, &memory_id)
         .await?
         .ok_or_else(|| sqlx::Error::RowNotFound)?;
+
+    // P5 hygiene event trigger (design D4 / §6): every Nth insert in
+    // this `(scope, kind)` bucket kicks a fire-and-forget
+    // dedup-merge + age-out pass. The COUNT is cheap (small table);
+    // the `spawn` keeps the insert path sync-fast. Best-effort — a
+    // spawn failure just delays cleanup to the next tick or the
+    // startup pass. `pool.clone()` is Arc-internal (cheap).
+    //
+    // `cfg!(test)` guard: the spawn is a fire-and-forget side effect
+    // that would make insert-driven tests flaky (the async hygiene
+    // task could dedup/delete rows the test then counts). The guard
+    // keeps the code path compiled (so `count_memories_by_scope_kind`
+    // stays reachable in test builds) but skips the spawn at runtime
+    // under `cargo test`. Production builds run the trigger.
+    if !cfg!(test) {
+        const HYGIENE_TRIGGER_EVERY: i64 = 10;
+        let bucket_count =
+            count_memories_by_scope_kind(pool, input.scope, input.kind).await;
+        if bucket_count > 0 && bucket_count % HYGIENE_TRIGGER_EVERY == 0 {
+            tokio::spawn(crate::agent::memory_hygiene::run_hygiene_pass(pool.clone()));
+        }
+    }
+
     Ok(row)
 }
 
@@ -704,6 +727,30 @@ pub async fn count_memories_for_session(
         "SELECT COUNT(*) FROM autonomous_memories WHERE source_session_id = ?",
     )
     .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    count.unwrap_or(0)
+}
+
+/// P5 hygiene trigger helper: count rows in a `(scope, kind)` bucket.
+/// Used by [`insert_memory`] to fire a fire-and-forget hygiene pass
+/// every Nth insert per bucket (design D4 / §6) — amortising the
+/// dedup + age-out cost across writes instead of polling on an
+/// interval. Same best-effort + cheap shape as
+/// [`count_memories_for_session`] (returns 0 on error; the trigger is
+/// a soft guard, never blocks a write).
+pub async fn count_memories_by_scope_kind(
+    pool: &SqlitePool,
+    scope: MemoryScope,
+    kind: MemoryKind,
+) -> i64 {
+    let count: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM autonomous_memories WHERE scope = ? AND kind = ?",
+    )
+    .bind(scope.as_str())
+    .bind(kind.as_str())
     .fetch_optional(pool)
     .await
     .ok()
@@ -1109,6 +1156,77 @@ pub async fn find_pitfalls_by_trigger(
     Ok(out)
 }
 
+/// P5 (2026-06-29): same probe as [`find_pitfalls_by_trigger`] but
+/// returns rows in **any** non-`demoted` status (`candidate` +
+/// `active` + `verified`). Used by [`crate::agent::permissions::recall_pitfall`]
+/// so the new `PitfallRecall` tiering can:
+/// - surface `candidate` pitfalls as footnotes + bump them (the
+///   promotion entry point — design §3; without this, candidate
+///   pitfalls could never be recalled and would never promote),
+/// - surface `active` pitfalls as footnotes (unchanged from P3),
+/// - surface `verified` pitfalls as `SoftBlock` (when fully matched
+///   + not yet soft-blocked this session — design §4).
+///
+/// `demoted` rows stay excluded (they've been aged out / superseded;
+/// the hygiene job can re-promote them via `update_status`).
+pub async fn find_pitfalls_by_trigger_all_status(
+    pool: &SqlitePool,
+    tool_name: &str,
+    command_pattern: Option<&str>,
+    path: Option<&str>,
+) -> Result<Vec<MemoryRow>, sqlx::Error> {
+    // Same indexed tool_name probe as find_pitfalls_by_trigger, but
+    // the status filter is widened to all non-demoted statuses.
+    let candidates: Vec<MemoryRow> = sqlx::query_as::<_, MemoryRow>(
+        r#"
+        SELECT id, memory_id, scope, project_id, kind, status, title, content,
+               tags, tool_name, command_pattern, path_globs, source_session_id,
+               source_ref, confidence, hit_count, last_used_at, created_at,
+               updated_at, demoted_reason
+        FROM autonomous_memories
+        WHERE tool_name = ?
+          AND kind = 'pitfall'
+          AND status IN ('candidate','active','verified')
+        "#,
+    )
+    .bind(tool_name)
+    .fetch_all(pool)
+    .await?;
+
+    // Same in-memory command_pattern + path_globs filter as the
+    // original. Kept in sync deliberately (the two functions share
+    // the matching semantics; only the status filter differs).
+    let mut out = Vec::with_capacity(candidates.len());
+    for mem in candidates {
+        if let Some(cp) = command_pattern {
+            if let Some(mem_cp) = &mem.command_pattern {
+                if !cp.contains(mem_cp.as_str()) {
+                    continue;
+                }
+            }
+        }
+        if let Some(globs_json) = &mem.path_globs {
+            match path {
+                Some(p) => {
+                    let globs: Vec<String> =
+                        serde_json::from_str(globs_json).unwrap_or_default();
+                    let matched = globs
+                        .iter()
+                        .any(|g| glob_matches_path(g, p));
+                    if !matched {
+                        continue;
+                    }
+                }
+                None => {
+                    continue;
+                }
+            }
+        }
+        out.push(mem);
+    }
+    Ok(out)
+}
+
 /// Simple glob matcher for `path_globs`. Supports `*` (any sequence
 /// not crossing `/`) and `?` (one char). The glob set is supplied by
 /// the writer (P2 remember tool / P4 reflection); this function is
@@ -1206,11 +1324,40 @@ fn glob_match_inner(glob: &[u8], path: &[u8]) -> bool {
 // bump_hit_count / update_status — P5 status-machine interfaces
 // ---------------------------------------------------------------------------
 
+/// Promotion thresholds for the P5 status machine (design D2).
+///
+/// - `CANDIDATE_TO_ACTIVE_AT` — a candidate memory is promoted to
+///   `active` once its `hit_count` reaches this (i.e. it has been
+///   recalled this many times). 2 = "recalled twice → it's not a
+///   one-off".
+/// - `ACTIVE_TO_VERIFIED_AT` — an active memory is promoted to
+///   `verified` once `hit_count` reaches this AND `created_at` is at
+///   least `ACTIVE_TO_VERIFIED_AGE_DAYS` days old. 5 + 3 days = "hit
+///   repeatedly over a non-trivial window → high-confidence".
+///
+/// Verified is the gating tier for P5's soft-block (design §4) —
+/// getting there is intentionally non-trivial so the LLM doesn't get
+/// soft-blocked on transient or low-quality memories.
+pub const CANDIDATE_TO_ACTIVE_AT: i64 = 2;
+pub const ACTIVE_TO_VERIFIED_AT: i64 = 5;
+pub const ACTIVE_TO_VERIFIED_AGE_DAYS: i64 = 3;
+
 /// Increment `hit_count` and stamp `last_used_at` for a memory.
 /// Called by the recall paths (`search_memories_fts` / P3's
 /// `find_pitfalls_by_trigger` consumer) when a memory is surfaced
 /// — P5's status machine reads `hit_count` to decide promotion
 /// (candidate → active → verified).
+///
+/// **P5 auto-promotion (2026-06-29, 06-29-am-p5-quality)**: after
+/// the UPDATE, the same function checks the row against the
+/// [`CANDIDATE_TO_ACTIVE_AT`] / [`ACTIVE_TO_VERIFIED_AT`] thresholds
+/// and calls [`update_status`] to transition it. This is done on the
+/// **same pool** right after the UPDATE so SQLite's single-writer
+/// serialisation covers the read-modify-write (design §5; avoids the
+/// bump↔promote race a separate caller-driven step would introduce).
+/// Promotion failures are best-effort: logged + swallowed (the bump
+/// already succeeded; a missed promotion this turn will fire next
+/// turn).
 ///
 /// Best-effort: a `warn!` on failure (matches the project's
 /// "audit/metadata writes are best-effort" pattern). The recall
@@ -1234,7 +1381,91 @@ pub async fn bump_hit_count(
     .bind(memory_id)
     .execute(pool)
     .await?;
+
+    // P5 (2026-06-29): best-effort auto-promotion. The bump already
+    // landed; a promotion failure here is non-fatal (next bump
+    // re-checks). Done on the same pool so the read-back sees the
+    // just-written hit_count (SQLite serialises writers; the
+    // UPDATE above is committed before this SELECT runs).
+    if let Err(e) = promote_if_eligible(pool, memory_id).await {
+        tracing::warn!(
+            memory_id = memory_id,
+            error = %e,
+            "bump_hit_count: promote_if_eligible failed (non-fatal)"
+        );
+    }
     Ok(())
+}
+
+/// Check a memory's `(status, hit_count, created_at)` against the P5
+/// promotion thresholds and transition it if eligible (design §5 +
+/// D2). Reads back the post-bump values from the DB (so it sees the
+/// just-incremented `hit_count`), then calls [`update_status`] for
+/// the legal transition. No-op if no threshold is crossed or the
+/// current status isn't promotion-eligible (e.g. already `verified`
+/// or `demoted`).
+///
+/// Thresholds:
+/// - `candidate` + `hit_count >= CANDIDATE_TO_ACTIVE_AT` → `active`.
+/// - `active` + `hit_count >= ACTIVE_TO_VERIFIED_AT`
+///   + age (`created_at` → now) `>= ACTIVE_TO_VERIFIED_AGE_DAYS` →
+///   `verified`.
+///
+/// Illegal transitions are caught by `update_status`'s state matrix
+/// (e.g. `demoted` rows are never re-promoted by this function —
+/// re-promotion is the hygiene job's job). `NotFound` is benign (row
+/// deleted between bump + promote) — returns `Ok(())`.
+pub async fn promote_if_eligible(
+    pool: &SqlitePool,
+    memory_id: &str,
+) -> Result<(), StatusTransitionError> {
+    // Read back the post-bump row.
+    let row = sqlx::query_as::<_, MemoryRow>(
+        r#"
+        SELECT id, memory_id, scope, project_id, kind, status, title, content,
+               tags, tool_name, command_pattern, path_globs, source_session_id,
+               source_ref, confidence, hit_count, last_used_at, created_at,
+               updated_at, demoted_reason
+        FROM autonomous_memories
+        WHERE memory_id = ?
+        "#,
+    )
+    .bind(memory_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        // Row vanished (concurrent delete). Benign.
+        return Ok(());
+    };
+
+    let current = MemoryStatus::from_str_opt(&row.status);
+    let target = match current {
+        MemoryStatus::Candidate if row.hit_count >= CANDIDATE_TO_ACTIVE_AT => {
+            MemoryStatus::Active
+        }
+        MemoryStatus::Active if row.hit_count >= ACTIVE_TO_VERIFIED_AT => {
+            // Age gate: created_at must be ≥ N days old.
+            let Ok(created) = chrono::DateTime::parse_from_rfc3339(&row.created_at) else {
+                return Ok(()); // unparseable timestamp → skip promotion
+            };
+            let age_days =
+                (Utc::now() - created.with_timezone(&Utc)).num_days();
+            if age_days >= ACTIVE_TO_VERIFIED_AGE_DAYS {
+                MemoryStatus::Verified
+            } else {
+                // Hit-count met but age gate not yet — stay active.
+                return Ok(());
+            }
+        }
+        // Candidate below threshold / active below verified threshold
+        // / already verified / demoted → no auto-promotion.
+        _ => return Ok(()),
+    };
+
+    // Transition. Illegal (e.g. somehow already at target) is a
+    // benign no-op via `update_status`'s identity transition.
+    update_status(pool, memory_id, target, None).await
 }
 
 /// Transition a memory to a new status, wrapped in a transaction.

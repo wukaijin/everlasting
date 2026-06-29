@@ -3,6 +3,7 @@
 //! match_value_for_allow_always). Split out of `mod.rs` on
 //! 2026-06-23.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -718,6 +719,14 @@ pub(crate) fn match_value_for_allow_always(
 /// state machine, does NOT touch cancel/audit maps, does NOT alter
 /// the persisted message history (the tool_result already travels
 /// through the normal path).
+//
+// P5 (2026-06-29): production now routes through `recall_pitfall`
+// (tiered). This function is retained as the **Footnote tier**
+// reference + for the P3-era test suite
+// (`recall_pitfall_footnote_*` tests in `tests_check.rs`). It's the
+// stable shape a future caller wanting "active-only footnote, no
+// soft-block semantics" would reach for.
+#[allow(dead_code)]
 pub async fn recall_pitfall_footnote(
     db: &SqlitePool,
     tool_name: &str,
@@ -772,6 +781,269 @@ pub async fn recall_pitfall_footnote(
         out.push_str(&format!("• [{}] {}\n", row.title, row.content));
     }
     Ok(Some(out))
+}
+
+// ---------------------------------------------------------------------------
+// P5 (2026-06-29, 06-29-am-p5-quality): tiered pre-tool pitfall recall
+// ---------------------------------------------------------------------------
+
+/// P5 tiered pitfall recall outcome. Supersedes [`recall_pitfall_footnote`]
+/// for the soft-block tier; the legacy footnote tier is preserved as
+/// [`PitfallRecall::Footnote`].
+///
+/// **Design §4 + D1**: a `verified` pitfall whose trigger key
+/// **fully** matches the current `(tool_name, tool_input)` and that
+/// has not yet soft-blocked this session produces
+/// [`PitfallRecall::SoftBlock`]. The chat loop short-circuits
+/// `execute_tool`, surfaces the hint as an `is_error: false`
+/// `tool_result`, and records the `memory_id` in the session-scoped
+/// `HashSet` so the same pitfall's next hit degrades to
+/// [`PitfallRecall::Footnote`] + normal execution (the dead-loop
+/// guard, D1).
+///
+/// All other hits (active / candidate / partial-match / second-hit
+/// on an already-soft-blocked pitfall) produce
+/// [`PitfallRecall::Footnote`] — the same behavior as P3's
+/// [`recall_pitfall_footnote`] (the tool executes, the hint is
+/// prepended to the result content). Misses produce [`PitfallRecall::None`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PitfallRecall {
+    /// No pitfall matched (or DB error — recall never blocks).
+    None,
+    /// Soft hint: tool executes normally; this text is prepended to
+    /// the `tool_result.content` (preserving the existing envelope
+    /// shape). Carried by active / candidate / partial-match /
+    /// second-hit-on-same-pitfall rows.
+    Footnote(String),
+    /// Verified + full trigger-key match + not yet soft-blocked this
+    /// session. The chat loop short-circuits `execute_tool` and
+    /// surfaces `hint` as an `is_error: false` tool_result. The
+    /// `memory_id` is what the loop records in its session-scoped
+    /// `HashSet<String>` so the next hit on the same pitfall
+    /// degrades to [`PitfallRecall::Footnote`] (D1).
+    SoftBlock { hint: String, memory_id: String },
+}
+
+impl PitfallRecall {
+    /// Convenience: coerce into the P3-style `Option<String>` (the
+    /// footnote text). `SoftBlock` returns `None` here — the chat
+    /// loop handles SoftBlock via its own short-circuit branch, not
+    /// the prepend-after-execute path. Kept for any caller that
+    /// still wants the legacy shape.
+    #[allow(dead_code)]
+    pub fn into_footnote(self) -> Option<String> {
+        match self {
+            Self::Footnote(s) => Some(s),
+            Self::None | Self::SoftBlock { .. } => None,
+        }
+    }
+}
+
+/// Master feature switch for the soft-block tier (design §7). When
+/// `false`, [`recall_pitfall`] never returns [`PitfallRecall::SoftBlock`]
+/// — every hit (including verified + full-match) degrades to
+/// [`PitfallRecall::Footnote`] (i.e. the P3 behavior). Roll-back
+/// lever for the soft-block tier without rippling through every
+/// caller.
+pub const PITFALL_SOFT_BLOCK_ENABLED: bool = true;
+
+/// P5 tiered pre-tool pitfall recall. Replaces [`recall_pitfall_footnote`]
+/// at the chat_loop call sites (parallel + serial paths). The tiering
+/// (design §4 + D1):
+///
+/// 1. Probe [`crate::db::memories::find_pitfalls_by_trigger_all_status`]
+///    (candidate + active + verified; design §3 widened the filter
+///    so candidate pitfalls can be recalled + bumped + promoted).
+/// 2. For each hit, classify by `(status, full-match, already-blocked)`:
+///    - **`verified` + full match + NOT in `already_blocked`** →
+///      [`PitfallRecall::SoftBlock`]. Exactly one SoftBlock wins per
+///      call (the first qualifying hit); the loop records its
+///      `memory_id` so subsequent calls for the same pitfall degrade.
+///    - everything else (active / candidate / partial match / second
+///      hit on an already-blocked verified pitfall) → folded into a
+///      single multi-bullet [`PitfallRecall::Footnote`] (the P3
+///      behavior, unchanged shape).
+/// 3. `bump_hit_count` is fired per hit (best-effort spawn; same as
+///    P3). The auto-promotion hook in `bump_hit_count` will pick up
+///    threshold crosses (P5 Step 2).
+/// 4. DB error → `warn!` + return [`PitfallRecall::None`] (recall
+///    never blocks tool execution; same hard rule as P3).
+///
+/// **`full_match` definition**: the hit's `tool_name` matches the
+/// probe (always true — the SQL filters on it), AND its
+/// `command_pattern` is `Some(_)` and the probe's `command_pattern`
+/// contains it, AND its `path_globs` is `Some(_)` and the probe's
+/// `path` matches at least one glob. A pitfall with `command_pattern
+/// = NULL` and `path_globs = NULL` is **path/command-agnostic** and
+/// does NOT count as a full match for soft-block purposes (it would
+/// soft-block too broadly — e.g. "always pass --offline to cargo"
+/// would soft-block any cargo invocation).
+pub async fn recall_pitfall(
+    db: &SqlitePool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    already_blocked: &HashSet<String>,
+) -> PitfallRecall {
+    recall_pitfall_inner(db, tool_name, tool_input, already_blocked)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                tool = tool_name,
+                "recall_pitfall: DB error (non-fatal, returning None)"
+            );
+            PitfallRecall::None
+        })
+}
+
+async fn recall_pitfall_inner(
+    db: &SqlitePool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    already_blocked: &HashSet<String>,
+) -> Result<PitfallRecall, sqlx::Error> {
+    let (command_pattern, path) = extract_probe_args(tool_name, tool_input);
+    let rows = crate::db::memories::find_pitfalls_by_trigger_all_status(
+        db,
+        tool_name,
+        command_pattern.as_deref(),
+        path.as_deref(),
+    )
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(PitfallRecall::None);
+    }
+
+    // bump_hit_count per hit, fire-and-forget (best-effort). Same
+    // pattern as the P3 footnote tier; the auto-promotion hook
+    // (P5 Step 2) lives inside bump_hit_count.
+    for row in &rows {
+        let pool = db.clone();
+        let mid = row.memory_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::db::memories::bump_hit_count(&pool, &mid).await {
+                tracing::warn!(
+                    memory_id = %mid,
+                    error = %e,
+                    "recall_pitfall: bump_hit_count failed (non-fatal)"
+                );
+            }
+        });
+    }
+
+    // Tier classification (design §4 + D1).
+    let mut soft_block: Option<(String, String)> = None;
+    let mut footnote_rows: Vec<&crate::db::memories::MemoryRow> = Vec::new();
+
+    for row in &rows {
+        let status = row.status.as_str();
+        let full = is_full_match(row, command_pattern.as_deref(), path.as_deref());
+        let already = already_blocked.contains(&row.memory_id);
+
+        if PITFALL_SOFT_BLOCK_ENABLED
+            && status == "verified"
+            && full
+            && !already
+            && soft_block.is_none()
+        {
+            // Verified + full match + not yet blocked this session →
+            // SoftBlock. First qualifying row wins; the loop records
+            // this memory_id so subsequent calls degrade.
+            let hint = format_soft_block_hint(row);
+            soft_block = Some((hint, row.memory_id.clone()));
+            // A soft-blocked pitfall does NOT also appear in the
+            // footnote — the SoftBlock replaces the footnote for
+            // this hit.
+            continue;
+        }
+        // Everything else → footnote bullet.
+        footnote_rows.push(row);
+    }
+
+    if let Some((hint, memory_id)) = soft_block {
+        // If we also have footnote candidates, surface them in the
+        // SoftBlock hint (the LLM benefits from "and also these
+        // related active pitfalls"). SoftBlock still wins (the loop
+        // short-circuits execute_tool).
+        let hint = if footnote_rows.is_empty() {
+            hint
+        } else {
+            format!("{}\n{}", hint, build_footnote_body(&footnote_rows))
+        };
+        return Ok(PitfallRecall::SoftBlock { hint, memory_id });
+    }
+
+    if footnote_rows.is_empty() {
+        return Ok(PitfallRecall::None);
+    }
+    Ok(PitfallRecall::Footnote(build_footnote_body(&footnote_rows)))
+}
+
+/// Build the multi-bullet footnote body (without the leading header).
+/// Reused by both the `Footnote` tier and the SoftBlock hint when
+/// there are also active/candidate rows to surface.
+fn build_footnote_body(rows: &[&crate::db::memories::MemoryRow]) -> String {
+    let mut out = String::from("⚠️ Memory: 此前在本项目执行类似操作时踩过坑 —\n");
+    for row in rows {
+        out.push_str(&format!("• [{}] {}\n", row.title, row.content));
+    }
+    out
+}
+
+/// Compose the soft-block hint (imperative, "this was NOT executed"
+/// phrasing per design §4). `is_error=false` is set by the chat
+/// loop on the wrapping `tool_result`; the hint text itself states
+/// the semantics for the LLM.
+fn format_soft_block_hint(row: &crate::db::memories::MemoryRow) -> String {
+    format!(
+        "⚠️ 此操作因历史 verified pitfall 被暂缓、未实际执行。请重新评估，\
+         调整命令后重试或确认继续。\n\
+         pitfall [{}] (verified): {}\n\
+         （本 session 内此坑仅暂缓 1 次；再次调用将放行 + 注脚提示。）",
+        row.title, row.content
+    )
+}
+
+/// "Full match" predicate for the verified soft-block tier (design
+/// §4: "完全命中 = tool + command_pattern + path_globs 三者皆中").
+/// The bar is high — verified soft-block short-circuits `execute_tool`,
+/// so the hit must be unambiguous.
+///
+/// Returns `true` when ALL of:
+/// - the row has **at least one** of `command_pattern` / `path_globs`
+///   set to `Some(_)` (a row with both `None` is fully path/command-
+///   agnostic and would soft-block too broadly — degraded to Footnote),
+/// - **every** `Some(_)` field on the row matches the probe:
+///   - `command_pattern=Some(cp)` → probe's `command_pattern` contains `cp`.
+///   - `path_globs=Some(globs)` → probe's `path` matches at least one
+///     glob (the underlying SQL already applied this filter; the row
+///     being in the result set is the proof of match).
+///
+/// A row missing the probe field for a `Some(_)` constraint degrades
+/// to Footnote (e.g. a row with `command_pattern=Some` but the tool
+/// kind yields no `command_pattern` in the probe → not a full match).
+fn is_full_match(
+    row: &crate::db::memories::MemoryRow,
+    command_pattern: Option<&str>,
+    _path: Option<&str>,
+) -> bool {
+    let has_cmd = row.command_pattern.is_some();
+    let has_path = row.path_globs.is_some();
+    if !has_cmd && !has_path {
+        return false; // both None → too broad, degrade
+    }
+    // command_pattern constraint (if set on the row).
+    if has_cmd {
+        match (row.command_pattern.as_deref(), command_pattern) {
+            (Some(mem_cp), Some(probe_cp)) if probe_cp.contains(mem_cp) => {}
+            _ => return false,
+        }
+    }
+    // path_globs constraint: the SQL filter already enforced the
+    // glob match (the row wouldn't be here otherwise). has_path
+    // alone is sufficient — the probe's `path` already matched.
+    true
 }
 
 /// Resolve the `(command_pattern, path)` probe arguments from a

@@ -133,6 +133,20 @@ pub fn run() {
                 sweep_stale_workers(sweep_db, sweep_data_dir).await;
             });
 
+            // P5 (2026-06-29, 06-29-am-p5-quality): one-time startup
+            // hygiene pass over the autonomous-memory library —
+            // dedup-merge high-Jaccard pairs + age-out stale low-hit
+            // rows that accumulated while the app was closed
+            // (design D4 / §6). Fire-and-forget, best-effort: every
+            // error is `warn!`-logged inside `run_hygiene_pass`, never
+            // aborts startup. The event trigger in `insert_memory`
+            // covers steady-state; this startup pass covers "user wrote
+            // 200 rows then quit before the 10th-of-each-bucket tick".
+            let hygiene_db = state.db.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::agent::memory_hygiene::run_hygiene_pass(hygiene_db).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

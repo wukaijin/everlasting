@@ -91,8 +91,16 @@ pub async fn build_recall_text(
         None, // scope=None → search user + project layers
         query,
         RECALL_RESULT_LIMIT,
-        // P2 ADR-lite: candidate rows ARE surfaced (P5 tightens
-        // back to ActiveVerifiedOnly once the state machine lands).
+        // P2 ADR-lite: candidate rows ARE surfaced. P5 (design §3)
+        // DELIBERATELY keeps `IncludeCandidate` — tightening to
+        // `ActiveVerifiedOnly` would sever the candidate→active
+        // promotion path: candidate is promoted BY being recalled
+        // (hit_count accrues on recall); exclude it from recall and
+        // it can never graduate (especially preference/fact kinds,
+        // which have no `trigger_key` and rely on this FTS path
+        // alone). Library noise is controlled by the low promotion
+        // threshold (design D2) + the hygiene job (design §6), not
+        // by the recall filter.
         RecallStatusFilter::IncludeCandidate,
     )
     .await

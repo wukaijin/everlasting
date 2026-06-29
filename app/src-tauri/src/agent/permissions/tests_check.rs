@@ -7,8 +7,8 @@
 use sqlx::SqlitePool;
 
 use crate::agent::permissions::check::{
-    classify_tool, extract_path_arg, match_value_for_allow_always, recall_pitfall_footnote,
-    sqlite_glob_match, ToolKind,
+    classify_tool, extract_path_arg, match_value_for_allow_always, recall_pitfall,
+    recall_pitfall_footnote, sqlite_glob_match, PitfallRecall, ToolKind,
 };
 use crate::agent::permissions::risk_for_tool;
 use crate::agent::permissions::Risk;
@@ -403,4 +403,225 @@ async fn recall_pitfall_footnote_empty_db_returns_none() {
         .await
         .expect("recall must succeed on empty DB");
     assert!(footnote.is_none());
+}
+
+// =====================================================================
+// P5 (2026-06-29, 06-29-am-p5-quality): tiered pre-tool pitfall recall.
+// `recall_pitfall` replaces `recall_pitfall_footnote` at the chat_loop
+// call sites. Tiering (design §4 + D1):
+//   verified + full trigger-key match + not-yet-blocked → SoftBlock
+//   active / candidate / partial / second-hit-on-same-pitfall → Footnote
+//   miss → None
+// =====================================================================
+
+/// Helper: insert a pitfall row with explicit trigger-key fields.
+async fn seed_pitfall(
+    pool: &SqlitePool,
+    memory_id: &str,
+    status: crate::db::memories::MemoryStatus,
+    tool: &str,
+    command_pattern: Option<&str>,
+    path_globs: Option<&str>,
+) {
+    use crate::db::memories::{MemoryKind, MemoryScope, test_helpers::insert_raw};
+    insert_raw(
+        pool,
+        memory_id,
+        MemoryScope::User,
+        None,
+        MemoryKind::Pitfall,
+        status,
+        &format!("{memory_id} title"),
+        &format!("{memory_id} content"),
+    )
+    .await
+    .unwrap();
+    let cmd_clause = match command_pattern {
+        Some(c) => format!(", command_pattern='{c}'"),
+        None => String::new(),
+    };
+    let path_clause = match path_globs {
+        Some(p) => format!(", path_globs='{p}'"),
+        None => String::new(),
+    };
+    let sql = format!(
+        "UPDATE autonomous_memories SET tool_name='{tool}'{cmd_clause}{path_clause} \
+         WHERE memory_id='{memory_id}'"
+    );
+    sqlx::query(&sql).execute(pool).await.unwrap();
+}
+
+/// P5 AC: verified + full trigger-key match (command_pattern set AND
+/// contained in the probe command) + NOT in `already_blocked` →
+/// SoftBlock. The hint carries the title + content; the `memory_id`
+/// is returned so the loop can record it.
+#[tokio::test]
+async fn p5_recall_verified_full_match_returns_soft_block() {
+    use crate::db::memories::MemoryStatus;
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    seed_pitfall(
+        &pool,
+        "v-full",
+        MemoryStatus::Verified,
+        "shell",
+        Some("cargo test"),
+        Some(r#"["app/*"]"#),
+    )
+    .await;
+    // Probe: command contains "cargo test"; path matches "app/*".
+    // (`extract_probe_args` for Shell pulls `command` → command_pattern;
+    // path is None for Shell, so the glob check is skipped — but the
+    // row's path_globs is Some, which makes is_full_match require
+    // path Some. To exercise a true full match we use a Path-kind
+    // tool instead — edit_file with a path.)
+    // Re-seed as an edit_file pitfall for a clean full-match exercise.
+    sqlx::query("DELETE FROM autonomous_memories WHERE memory_id='v-full'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed_pitfall(
+        &pool,
+        "v-full",
+        MemoryStatus::Verified,
+        "edit_file",
+        None,
+        Some(r#"["app/src/foo.rs"]"#),
+    )
+    .await;
+    let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    match outcome {
+        PitfallRecall::SoftBlock { hint, memory_id } => {
+            assert_eq!(memory_id, "v-full");
+            assert!(hint.contains("未实际执行"), "hint says it was NOT executed");
+            assert!(hint.contains("v-full title"), "hint carries the title");
+        }
+        other => panic!("expected SoftBlock, got {other:?}"),
+    }
+}
+
+/// P5 AC: an active pitfall (even with full trigger-key match) →
+/// Footnote, NOT SoftBlock. Only verified soft-blocks.
+#[tokio::test]
+async fn p5_recall_active_full_match_returns_footnote() {
+    use crate::db::memories::MemoryStatus;
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    seed_pitfall(
+        &pool,
+        "a-full",
+        MemoryStatus::Active,
+        "edit_file",
+        None,
+        Some(r#"["app/src/foo.rs"]"#),
+    )
+    .await;
+    let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    match outcome {
+        PitfallRecall::Footnote(text) => {
+            assert!(text.contains("Memory:"));
+            assert!(text.contains("a-full title"));
+        }
+        other => panic!("expected Footnote for active, got {other:?}"),
+    }
+}
+
+/// P5 AC: a candidate pitfall → Footnote (the promotion entry point;
+/// candidate gets surfaced + bumped, may promote to active per D2).
+#[tokio::test]
+async fn p5_recall_candidate_returns_footnote() {
+    use crate::db::memories::MemoryStatus;
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    seed_pitfall(
+        &pool,
+        "c-1",
+        MemoryStatus::Candidate,
+        "shell",
+        Some("cargo test"),
+        None,
+    )
+    .await;
+    let input = serde_json::json!({"command": "cargo test --lib"});
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    match outcome {
+        PitfallRecall::Footnote(text) => assert!(text.contains("c-1 title")),
+        other => panic!("expected Footnote for candidate, got {other:?}"),
+    }
+}
+
+/// P5 AC + D1 (dead-loop guard): a verified pitfall already in
+/// `already_blocked` (already soft-blocked once this session) →
+/// degrades to Footnote. The chat loop then executes normally.
+#[tokio::test]
+async fn p5_recall_verified_second_hit_degrades_to_footnote() {
+    use crate::db::memories::MemoryStatus;
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    seed_pitfall(
+        &pool,
+        "v-second",
+        MemoryStatus::Verified,
+        "edit_file",
+        None,
+        Some(r#"["app/src/foo.rs"]"#),
+    )
+    .await;
+    let input = serde_json::json!({"path": "app/src/foo.rs", "old_string": "a", "new_string": "b"});
+    let mut blocked: HashSet<String> = HashSet::new();
+    blocked.insert("v-second".to_string());
+    let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
+    match outcome {
+        PitfallRecall::Footnote(text) => {
+            assert!(text.contains("v-second title"), "second hit surfaces as footnote");
+        }
+        PitfallRecall::SoftBlock { .. } => panic!("second hit must NOT soft-block (D1)"),
+        PitfallRecall::None => panic!("verified row should still surface as footnote"),
+    }
+}
+
+/// P5 AC: no matching pitfall (empty DB or unrelated tool) → None.
+#[tokio::test]
+async fn p5_recall_no_match_returns_none() {
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    let input = serde_json::json!({"command": "cargo test"});
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    assert_eq!(outcome, PitfallRecall::None);
+}
+
+/// P5 AC: verified but path/command-agnostic (both `command_pattern`
+/// AND `path_globs` are `None`) → Footnote, NOT SoftBlock. Such a
+/// pitfall is too broad to soft-block (would fire on every
+/// invocation of the tool regardless of args).
+#[tokio::test]
+async fn p5_recall_verified_path_command_agnostic_returns_footnote() {
+    use crate::db::memories::MemoryStatus;
+    use std::collections::HashSet;
+    let pool = make_pool().await;
+    // Both fields None — fully path/command-agnostic.
+    seed_pitfall(
+        &pool,
+        "v-agnostic",
+        MemoryStatus::Verified,
+        "shell",
+        None,
+        None,
+    )
+    .await;
+    let input = serde_json::json!({"command": "cargo test --lib"});
+    let blocked: HashSet<String> = HashSet::new();
+    let outcome = recall_pitfall(&pool, "shell", &input, &blocked).await;
+    match outcome {
+        PitfallRecall::Footnote(text) => {
+            assert!(text.contains("v-agnostic title"));
+        }
+        other => panic!("path/cmd-agnostic verified must be Footnote, got {other:?}"),
+    }
 }
