@@ -19,7 +19,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # LLM client
-reqwest = { version = "0.13", features = ["stream", "json", "rustls"], default-features = false }
+# gzip/brotli/deflate: auto-decompress response bodies. Without these
+# (plus the matching `.gzip(true)` etc. on the ClientBuilder) we send
+# `Accept-Encoding: gzip, br, deflate` but never decode the result —
+# the raw compressed bytes then fail `from_utf8` ("non-utf8 html body
+# ... invalid utf-8 sequence ... from index 1" = the gzip magic 1f 8b).
+reqwest = { version = "0.13", features = ["stream", "json", "rustls", "gzip", "brotli", "deflate"], default-features = false }
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "process", "fs"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
@@ -91,6 +96,11 @@ tempfile = "3"
 # localhost mock at runtime; assert on the request the tool sent
 # (URL, headers, redirect chain, etc.) and serve canned responses.
 httpmock = "0.7"
+# Pure-Rust gzip encoder for the `web_fetch` "server returns gzip"
+# integration test (reqwest auto-decompresses; we have to *produce*
+# a valid gzip body on the mock side to exercise that path). Uses
+# the miniz_oxide backend — no C dependency.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [profile.dev]
 incremental = true

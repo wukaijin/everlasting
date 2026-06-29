@@ -426,6 +426,17 @@ async fn fetch_and_process(
         .redirect(build_redirect_policy())
         .user_agent(USER_AGENT)
         .resolve(host, public_ip)
+        // Auto-decompress gzip/brotli/deflate per the response
+        // `Content-Encoding` header. This pairs with the
+        // `Accept-Encoding: gzip, br, deflate` request header below —
+        // without it the server returns a compressed body and we
+        // hand the raw bytes to `from_utf8`, which blows up on the
+        // gzip magic (1f 8b): "non-utf8 html body ... invalid utf-8
+        // sequence ... from index 1". Needs the matching `gzip` /
+        // `brotli` / `deflate` reqwest features in Cargo.toml.
+        .gzip(true)
+        .brotli(true)
+        .deflate(true)
         .build()
         .map_err(|e| WebFetchError::Network(e.to_string()))?;
 
@@ -644,8 +655,20 @@ fn truncate_output(s: String) -> String {
     if s.len() <= MAX_OUTPUT_BYTES {
         return s;
     }
-    let head_end = TRUNCATE_HEAD;
-    let tail_start = s.len() - TRUNCATE_TAIL;
+    // `head_end` / `tail_start` are byte offsets, but a Rust `&str`
+    // slice index MUST land on a UTF-8 char boundary — slicing
+    // mid-character panics ("byte index N is not a char boundary").
+    // This bites on any body with multi-byte chars (CJK, emoji, or
+    // the U+FFFD `�` that `from_utf8_lossy` emits for bad bytes).
+    // Walk head back / tail forward to the nearest boundary first.
+    let mut head_end = TRUNCATE_HEAD;
+    while head_end > 0 && !s.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = s.len() - TRUNCATE_TAIL;
+    while tail_start < s.len() && !s.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
     let omitted = s.len() - MAX_OUTPUT_BYTES;
     format!(
         "{}\n<truncated: omitted {} bytes>\n{}",
@@ -957,6 +980,22 @@ mod tests {
         assert!(t.len() < 110_000);
     }
 
+    #[test]
+    fn truncate_output_multibyte_boundary_no_panic() {
+        // A long run of multi-byte chars (中文 = 6 bytes/pair). The
+        // 50 KB head/tail byte offsets land in the MIDDLE of a 3-byte
+        // char, so the naive `&s[..head_end]` panics with
+        // "byte index N is not a char boundary". Regression for the
+        // crash seen on CJK / lossy-`�` bodies. The fix walks the
+        // offsets to the nearest char boundary before slicing.
+        let chunk = "中文"; // 6 bytes
+        let s = chunk.repeat(40_000); // 240 KB, past the 100 KB cap
+        let t = truncate_output(s);
+        assert!(t.contains("<truncated: omitted"));
+        // No panic = pass. Sanity-check a clean char at the head seam.
+        assert!(t.starts_with('中') || t.starts_with('文'));
+    }
+
     // -- Definition --
 
     #[test]
@@ -1087,6 +1126,50 @@ mod tests {
         // `<!-- fetched: ... -->\n\n<h1>raw</h1>`.
         assert!(out.starts_with("<!-- fetched:"));
         assert!(out.ends_with("<h1>raw</h1>"), "got: {:?}", out);
+    }
+
+    #[tokio::test]
+    async fn fetches_gzipped_html_gets_decompressed() {
+        // Server returns a gzip-encoded HTML body with
+        // `Content-Encoding: gzip`. Without `.gzip(true)` on the
+        // client (+ the `gzip` reqwest feature) the raw compressed
+        // bytes reach `from_utf8` and fail on the gzip magic `1f 8b`
+        // → "non-utf8 html body ... from index 1". Regression guard
+        // for that exact bug. We produce a real gzip body with flate2
+        // on the mock side so reqwest's auto-decompress path is
+        // genuinely exercised end-to-end.
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let html = "<html><body><h1>Compressed</h1><p>gunzip me</p></body></html>";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(html.as_bytes()).unwrap();
+        let gzipped: Vec<u8> = encoder.finish().unwrap();
+
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/gz");
+            then.status(200)
+                .header("content-type", "text/html; charset=utf-8")
+                .header("content-encoding", "gzip")
+                .body(gzipped);
+        });
+
+        let url = format!("http://{}/gz", server.address());
+        let (out, is_err) = execute_for_test(
+            &json!({"url": url, "format": "markdown"}),
+            &test_ctx(),
+        )
+        .await;
+
+        assert!(!is_err, "got error: {}", out);
+        mock.assert_hits(1);
+        // If decompression worked, the plaintext survives into the
+        // markdown output; if it didn't, we'd have errored above (or
+        // seen `�` garbage instead of these words).
+        let head: String = out.chars().take(80).collect();
+        assert!(out.contains("Compressed"), "no decompressed text; got: {}", head);
+        assert!(out.contains("gunzip me"));
     }
 
     #[tokio::test]
