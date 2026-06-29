@@ -1511,6 +1511,39 @@ pub async fn run_chat_loop(
         // treats the Error event as terminal; no follow-up Done
         // is required.
         if had_error {
+            // Symmetric with the cancel path above (chat_loop.rs
+            // ~1457): if the model emitted tool_use before the
+            // stream errored, the assistant(tool_use) turn pushed
+            // at line ~1453 would be orphaned (no matching
+            // tool_result) → the next request fails upstream with
+            // HTTP 400 "insufficient tool messages following
+            // tool_calls" (OpenAI) / 2013 (Anthropic). Push one
+            // synthetic is_error tool_result per emitted tool_use
+            // so the pair stays atomic (llm-contract.md §469).
+            // Persist is log-only (RULE-A-007 decision B): the
+            // terminal Error already fired, a persist failure here
+            // must not emit a second terminal.
+            if !tool_calls.is_empty() {
+                let tool_result_msg = build_synthetic_tool_result_message(&tool_calls);
+                if !skip_persist {
+                    if let Err(e) = crate::db::persist_turn(
+                        &db,
+                        &session_id,
+                        tool_result_msg.role,
+                        &tool_result_msg.content,
+                        seq,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            error = %e,
+                            "failed to persist synthetic tool_result turn after error"
+                        );
+                    }
+                }
+                messages.push(tool_result_msg);
+            }
             // B6 PR1b: skip the cwd/touch_session writes in worker
             // mode (the parent's session row is not the worker's
             // to update — the parent owns the lifetime).
@@ -1797,7 +1830,7 @@ pub async fn run_chat_loop(
             // the concurrent dispatch_subagent path. A **pure**
             // batch of ≥2 dispatch_subagent tool_uses (no other
             // tools mixed in) within
-            // `DELEGATION_MAX_CONCURRENT_CHILDREN` (env, default 3)
+            // `DELEGATION_MAX_CONCURRENT_CHILDREN` (env, default 10)
             // runs concurrently via `FuturesUnordered` (each worker
             // in its own per-worker worktree — L3b PR1 isolation,
             // not the L3a read-only scope). A pure batch OVER the
@@ -2293,17 +2326,33 @@ pub async fn run_chat_loop(
         }
 
         // ⑬ loop detection (C2): if this turn tripped the detector,
-        // prepend the hint as a Text block so the LLM sees it ahead of
-        // the tool_results next turn. Soft nudge only — execution was
-        // NOT skipped and the loop is NOT terminated.
+        // append the hint as a Text block AT THE END of the
+        // tool_results. Soft nudge only — execution was NOT skipped
+        // and the loop is NOT terminated.
+        //
+        // WHY the END (not position 0): the user-role message built
+        // from `result_blocks` is fed through `wire::chat_request_to_wire`,
+        // whose `chat_message_to_wire_messages` fans out each block to a
+        // separate wire message — Text → `WireMessage::User { content }`,
+        // ToolResult → `WireMessage::Tool { tool_call_id, .. }`, in block
+        // order. If the hint Text block sits at position 0, the fan-out
+        // produces `user(text) → tool×N`, i.e. a `WireMessage::User`
+        // inserted BETWEEN the preceding `assistant(tool_calls)` and the
+        // `role: "tool"` messages. OpenAI Chat Completions rejects this
+        // with HTTP 400 "An assistant message with 'tool_calls' must be
+        // followed by tool messages responding to each 'tool_call_id'"
+        // (Anthropic has the same Pair Atomicity rule, see
+        // llm-contract.md §469 — but OpenAI enforces the *order*
+        // strictly while Anthropic tolerates tool_results inside a user
+        // message regardless of interleaving). Putting the hint at the
+        // END yields `tool×N → user(text)`, which both protocols accept
+        // (the tool pair stays contiguous; the trailing user message is a
+        // normal follow-up).
         if let Some(hint) = &loop_hint {
-            result_blocks.insert(
-                0,
-                ContentBlock::Text {
-                    text: format!("⚠️  {}\n", hint),
-                    cache_control: None,
-                },
-            );
+            result_blocks.push(ContentBlock::Text {
+                text: format!("⚠️  {}\n", hint),
+                cache_control: None,
+            });
         }
 
         if cancelled {
@@ -2633,7 +2682,7 @@ pub(crate) fn delegation_max_concurrent_children() -> usize {
 /// (`_DEFAULT_MAX_CONCURRENT_CHILDREN`). Kept as a `pub(crate)`
 /// const so tests can assert against it without depending on the
 /// env-var read.
-pub(crate) const DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN: usize = 3;
+pub(crate) const DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN: usize = 10;
 
 /// Outcome of classifying a turn's tool_calls batch for the L3a
 /// concurrent dispatch path. Computed by [`classify_dispatch_batch`]

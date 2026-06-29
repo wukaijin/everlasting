@@ -858,6 +858,107 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
     assert_eq!(mock.call_count(), 1);
 }
 
+/// Error-path orphan fix (llm-contract.md §469 tool_use↔tool_result
+/// Pair Atomicity). When the LLM stream emits a `tool_use` and THEN
+/// errors mid-turn, the agent loop still pushes the `assistant(tool_use)`
+/// turn (RULE-A-007). Pre-fix the error path returned without appending
+/// a matching `tool_result`, orphaning the tool_use — the next request
+/// then failed upstream (OpenAI 400 "insufficient tool messages
+/// following tool_calls" / Anthropic 2013). The fix, symmetric with the
+/// cancel path, appends one synthetic `is_error` tool_result per emitted
+/// tool_use. Asserted by reloading the persisted messages and checking
+/// no orphan tool_use remains.
+#[tokio::test]
+async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    // Turn 1: Start → ToolCall → Error. The stream dies right after
+    // the model emitted a tool_use, so `had_error` fires with a
+    // non-empty `tool_calls`.
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::ToolCall {
+            id: "toolu_err1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"path": "/tmp/x"}),
+        }),
+        Ok(ChatEvent::Error {
+            message: "simulated mid-stream error after tool_use".into(),
+            category: crate::llm::LlmErrorCategory::Server,
+        }),
+    ])]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-err-tool".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None,
+        h.background_shells.clone(),
+        None,
+        false,
+        // skip_persist = false: the error turn (assistant + synthetic
+        // tool_result) lands in the `messages` table so the test can
+        // reload and assert pair atomicity.
+        false,
+        Some(false),
+        None,
+        None,
+        None,
+        h.subagent_cache.clone(),
+        None,
+        None,
+        h.app_data_dir.clone(),
+    )
+    .await;
+
+    // Error path taken: one error event, exactly one send.
+    assert_eq!(emitter.error_event_count(), 1, "error path fired");
+    assert_eq!(mock.call_count(), 1, "error aborts before turn 2");
+
+    // Reload persisted messages and assert pair atomicity: every
+    // assistant tool_use_id has a matching tool_result. Pre-fix this
+    // would report `["toolu_err1"]`.
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY seq",
+    )
+    .bind(&h.session_id)
+    .fetch_all(&h.db)
+    .await
+    .expect("fetch messages");
+
+    let msgs: Vec<ChatMessage> = rows
+        .into_iter()
+        .filter_map(|(role, content)| {
+            let mc: MessageContent = serde_json::from_str(&content).ok()?;
+            let role = match role.as_str() {
+                "assistant" => Role::Assistant,
+                "user" => Role::User,
+                _ => return None,
+            };
+            Some(ChatMessage { role, content: mc })
+        })
+        .collect();
+
+    let orphans = crate::llm::provider::wire::orphan_tool_use_ids(&msgs);
+    assert!(
+        orphans.is_empty(),
+        "error path must append synthetic tool_result to keep the pair atomic; orphans={:?}",
+        orphans
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 6) C3 compaction preserves the agent loop (no panic / no error)
 // ---------------------------------------------------------------------------
@@ -3919,10 +4020,18 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
 //
 // Three consecutive turns of the identical `list_dir {path: "."}` trip
 // Level 1 (exact-signature run of 3). The hint must surface as a Text
-// block prepended to turn 3's tool_result message, which turn 4's
+// block appended to turn 3's tool_result message, which turn 4's
 // `send` therefore sees. Action is SOFT per §2.5.4: the tool still
 // executes (one `tool:result` per turn) and the loop is NOT terminated
 // by the hit (turn 4 runs normally and ends via end_turn).
+//
+// HINT POSITION (chat_loop.rs ~2328): the hint is APPENDED to
+// `result_blocks` (not inserted at index 0). Putting it at the head
+// would make the wire fan-out produce `user(text) → tool×N`, which
+// OpenAI rejects with 400 "tool_calls must be followed by tool
+// messages". Appended yields `tool×N → user(text)` — both providers
+// accept it. See `wire::orphan_tool_call_order` for the wire-layer
+// diagnostic that catches a regression here.
 #[tokio::test]
 async fn agent_loop_loop_detection_injects_hard_hint() {
     let h = make_harness().await;

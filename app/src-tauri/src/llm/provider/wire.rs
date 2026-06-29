@@ -44,6 +44,7 @@
 //! frontend) via [`wire_block_to_chat_event`].
 
 use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::llm::types::{
     CacheControl, ChatEvent, ChatMessage, ChatRequest, ContentBlock, MessageContent, Role, ToolDef,
@@ -227,6 +228,26 @@ pub fn chat_request_to_wire(
     req: ChatRequest,
     system: Option<String>,
 ) -> WireRequest {
+    // Orphan guard (llm-contract.md §469 tool_use↔tool_result Pair
+    // Atomicity): scan the Anthropic-shaped messages BEFORE fan-out
+    // for any assistant `tool_use` whose `tool_use_id` has no matching
+    // `tool_result` anywhere in history. Such an orphan makes the very
+    // request we're about to build fail upstream — OpenAI 400
+    // "insufficient tool messages following tool_calls" / Anthropic
+    // 2013. Pure diagnostics: we do NOT mutate `messages`, only log so
+    // the next failure is grep-able (`tracing::error` "wire: orphan
+    // tool_use") instead of requiring fresh root-causing.
+    let orphans = orphan_tool_use_ids(&req.messages);
+    if !orphans.is_empty() {
+        tracing::error!(
+            orphan_count = orphans.len(),
+            orphan_tool_use_ids = ?orphans,
+            "wire: orphan tool_use detected — assistant emitted tool_use with no \
+             matching tool_result in history; this request will fail upstream \
+             (OpenAI 400 \"insufficient tool messages\" / Anthropic 2013). See \
+             llm-contract.md §469 Pair Atomicity."
+        );
+    }
     let messages = req
         .messages
         .into_iter()
@@ -247,6 +268,147 @@ pub fn chat_request_to_wire(
         system,
         messages,
         tools,
+    }
+}
+
+/// Collect every `assistant(tool_use)` id in `messages` that has no
+/// matching `user(tool_result)` id anywhere in the same history.
+///
+/// Non-empty return = the request is about to violate the
+/// tool_use↔tool_result Pair Atomicity invariant (llm-contract.md §469)
+/// and the upstream provider will reject it. Pure read; no mutation.
+/// Used by [`chat_request_to_wire`] as a defensive diagnostic so the
+/// next orphan failure is grep-able instead of requiring fresh RCA.
+pub(crate) fn orphan_tool_use_ids(messages: &[ChatMessage]) -> Vec<String> {
+    let mut uses: Vec<String> = Vec::new();
+    let mut results: HashSet<String> = HashSet::new();
+    for m in messages {
+        let MessageContent::Blocks(blocks) = &m.content else {
+            continue;
+        };
+        match m.role {
+            Role::Assistant => {
+                for b in blocks {
+                    if let ContentBlock::ToolUse { id, .. } = b {
+                        uses.push(id.clone());
+                    }
+                }
+            }
+            Role::User => {
+                for b in blocks {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        results.insert(tool_use_id.clone());
+                    }
+                }
+            }
+        }
+    }
+    uses.into_iter().filter(|id| !results.contains(id)).collect()
+}
+
+/// Wire-layer **order** guard for the OpenAI "tool_calls must be
+/// followed by tool messages" hard constraint.
+///
+/// OpenAI Chat Completions enforces a stricter contract than Anthropic:
+/// an assistant message carrying `tool_calls[]` MUST be immediately
+/// followed by `role: "tool"` messages — one per `tool_call_id`, with
+/// no `role: "user"` / `role: "assistant"` message interleaved between
+/// the assistant(tool_calls) and its tool messages. Anthropic's same
+/// Pair Atomicity rule (llm-contract.md §469) tolerates the
+/// `tool_result` blocks living inside a single `role: "user"` message
+/// regardless of any interleaved text block; OpenAI does NOT, and
+/// rejects with HTTP 400 "An assistant message with 'tool_calls' must
+/// be followed by tool messages responding to each 'tool_call_id'".
+///
+/// This function walks the wire messages and, for every
+/// `WireMessage::Assistant { blocks }` that emits ≥1 `ToolUse`,
+/// verifies that the **immediately following** wire messages cover
+/// every `ToolUse` id with a `WireMessage::Tool` — and that the first
+/// such following message is itself a `Tool` (not a `User` /
+/// `UserBlocks` / another `Assistant`). Any interleaving non-Tool
+/// message before all the assistant's tool_use ids are satisfied is a
+/// violation.
+///
+/// Returns one human-readable description string per violation (so the
+/// caller can `tracing::error!` a single line per problem). Empty Vec
+/// = the order is valid. Pure read; no mutation. Complements the
+/// count-based [`orphan_tool_use_ids`] check (which catches missing
+/// tool_results entirely; this one catches the order being wrong even
+/// when every id has a result somewhere).
+pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
+    let mut violations: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < messages.len() {
+        // Collect tool_use ids from this assistant message (in order).
+        if let WireMessage::Assistant { blocks } = &messages[i] {
+            let tool_uses: Vec<String> = blocks
+                .iter()
+                .filter_map(|b| {
+                    if let WireBlock::ToolUse { id, .. } = b {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !tool_uses.is_empty() {
+                let mut remaining: HashSet<String> = tool_uses.iter().cloned().collect();
+                let mut j = i + 1;
+                let mut first = true;
+                while j < messages.len() && !remaining.is_empty() {
+                    match &messages[j] {
+                        WireMessage::Tool { tool_call_id, .. } => {
+                            remaining.remove(tool_call_id);
+                        }
+                        WireMessage::User { content } => {
+                            let kind = format!("User({:?})", truncate(content, 40));
+                            let missing: Vec<String> = remaining.iter().cloned().collect();
+                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            violations.push(format!(
+                                "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
+                                i, tool_uses, kind, j, which, missing
+                            ));
+                            break;
+                        }
+                        WireMessage::UserBlocks { .. } => {
+                            let kind = "UserBlocks(...)".to_string();
+                            let missing: Vec<String> = remaining.iter().cloned().collect();
+                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            violations.push(format!(
+                                "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
+                                i, tool_uses, kind, j, which, missing
+                            ));
+                            break;
+                        }
+                        WireMessage::Assistant { .. } => {
+                            let kind = "Assistant(...)".to_string();
+                            let missing: Vec<String> = remaining.iter().cloned().collect();
+                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            violations.push(format!(
+                                "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
+                                i, tool_uses, kind, j, which, missing
+                            ));
+                            break;
+                        }
+                    }
+                    first = false;
+                    j += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    violations
+}
+
+/// Truncate a string for diagnostic display. Returns the original if
+/// `max` ≥ length, otherwise the first `max` chars + `"…"`.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max).collect();
+        format!("{}…", head)
     }
 }
 
@@ -807,6 +969,365 @@ mod tests {
         let m = model(false, None);
         let caps = WireCapabilities::from_model_row(&m, "openai");
         assert!(!caps.supports_reasoning_effort);
+    }
+
+    // ---- orphan_tool_use_ids (Pair Atomicity guard, llm-contract.md §469) ----
+
+    #[test]
+    fn orphan_tool_use_ids_flags_tool_use_without_matching_result() {
+        // assistant emitted tool_use, history has no tool_result → orphan
+        let msgs = vec![ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "toolu_1".to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({}),
+            }]),
+        }];
+        assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_1".to_string()]);
+    }
+
+    #[test]
+    fn orphan_tool_use_ids_empty_when_every_use_has_result() {
+        let msgs = vec![
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }]),
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_1".to_string(),
+                    content: "ok".to_string(),
+                    is_error: false,
+                }]),
+            },
+        ];
+        assert!(orphan_tool_use_ids(&msgs).is_empty());
+    }
+
+    #[test]
+    fn orphan_tool_use_ids_flags_partial_results() {
+        // assistant emits 2 tool_use, only 1 result returned → 1 orphan.
+        // This is the cancel-during-tool-execution partial-result shape.
+        let msgs = vec![
+            ChatMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "toolu_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "toolu_2".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                ]),
+            },
+            ChatMessage {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_1".to_string(),
+                    content: "ok".to_string(),
+                    is_error: false,
+                }]),
+            },
+        ];
+        assert_eq!(orphan_tool_use_ids(&msgs), vec!["toolu_2".to_string()]);
+    }
+
+    // ---- orphan_tool_call_order (OpenAI "tool_calls must be followed
+    // by tool messages" order guard) ----
+
+    #[test]
+    fn orphan_tool_call_order_empty_when_assistant_directly_followed_by_tool() {
+        // assistant(tool_use) → Tool: the canonical correct shape.
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+            WireMessage::User {
+                content: "thanks".to_string(),
+            },
+        ];
+        assert!(
+            orphan_tool_call_order(&messages).is_empty(),
+            "no violation: assistant(tool_use) is immediately followed by Tool"
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_empty_for_two_tool_uses_followed_by_two_tools() {
+        // assistant emits 2 tool_use; both are answered back-to-back
+        // BEFORE any user/assistant message appears.
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::ToolUse {
+                        id: "toolu_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                    WireBlock::ToolUse {
+                        id: "toolu_2".to_string(),
+                        name: "grep".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_2".to_string(),
+                content: "ok".to_string(),
+            },
+            WireMessage::User {
+                content: "next".to_string(),
+            },
+        ];
+        assert!(
+            orphan_tool_call_order(&messages).is_empty(),
+            "no violation: both tool_call_ids satisfied by back-to-back Tool messages"
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_flags_user_text_between_assistant_and_tool() {
+        // THE BUG: a loop-detection hint Text block sits at the head
+        // of the user(tool_results) message → wire fan-out produces
+        // `assistant(tool_use) → user(text) → tool` and OpenAI 400s.
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            WireMessage::User {
+                content: "⚠️  loop detected ...".to_string(),
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+        ];
+        let violations = orphan_tool_call_order(&messages);
+        assert_eq!(
+            violations.len(),
+            1,
+            "exactly one violation (the interleaved user text)"
+        );
+        assert!(
+            violations[0].contains("toolu_1"),
+            "violation names the tool_use_id: {}",
+            violations[0]
+        );
+        assert!(
+            violations[0].contains("User("),
+            "violation names the offending message kind: {}",
+            violations[0]
+        );
+        assert!(
+            violations[0].contains("index 1"),
+            "violation names the offending wire message index: {}",
+            violations[0]
+        );
+        assert!(
+            violations[0].contains("immediately"),
+            "first interleaving message is flagged as the immediate-follow break: {}",
+            violations[0]
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_flags_userblocks_between_assistant_and_tool() {
+        // The B5 memory UserBlocks path (multi-block user message)
+        // interleaved between assistant(tool_use) and its Tool result.
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            WireMessage::UserBlocks {
+                blocks: vec![WireBlock::Text {
+                    text: "banner".to_string(),
+                    cache_control: None,
+                }],
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+        ];
+        let violations = orphan_tool_call_order(&messages);
+        assert_eq!(violations.len(), 1);
+        assert!(
+            violations[0].contains("UserBlocks("),
+            "UserBlocks kind surfaced: {}",
+            violations[0]
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_flags_second_assistant_before_tool_complete() {
+        // assistant(tool_use A) → assistant(...) → tool(A): the second
+        // assistant is interleaved before A's result is satisfied.
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::Text {
+                    text: "thinking...".to_string(),
+                    cache_control: None,
+                }],
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+        ];
+        let violations = orphan_tool_call_order(&messages);
+        assert_eq!(violations.len(), 1);
+        assert!(
+            violations[0].contains("Assistant("),
+            "Assistant kind surfaced: {}",
+            violations[0]
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_no_violation_when_no_tool_uses() {
+        // Pure text conversation — nothing to check.
+        let messages = vec![
+            WireMessage::User {
+                content: "hi".to_string(),
+            },
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::Text {
+                    text: "hello".to_string(),
+                    cache_control: None,
+                }],
+            },
+        ];
+        assert!(orphan_tool_call_order(&messages).is_empty());
+    }
+
+    #[test]
+    fn orphan_tool_call_order_truncates_long_user_content_in_diagnostic() {
+        // Diagnostic must not blow up the log on a huge user message —
+        // `truncate(content, 40)` caps the displayed prefix.
+        let long = "x".repeat(500);
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![WireBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            WireMessage::User {
+                content: long.clone(),
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok".to_string(),
+            },
+        ];
+        let violations = orphan_tool_call_order(&messages);
+        assert_eq!(violations.len(), 1);
+        // The diagnostic should contain the ellipsis marker, NOT the
+        // full 500-char string.
+        assert!(
+            violations[0].contains("…"),
+            "long content is truncated: {}",
+            violations[0]
+        );
+        assert!(
+            violations[0].len() < long.len() + 200,
+            "diagnostic is bounded: {}",
+            violations[0].len()
+        );
+    }
+
+    #[test]
+    fn orphan_tool_call_order_flags_partial_tools_then_interleave() {
+        // assistant emits 2 tool_use; first Tool answers toolu_1, then
+        // a User message interleaves before toolu_2 is answered.
+        // The User at index 3 should be flagged (not immediately the
+        // first following message, but before toolu_2 is satisfied).
+        let messages = vec![
+            WireMessage::Assistant {
+                blocks: vec![
+                    WireBlock::ToolUse {
+                        id: "toolu_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                    WireBlock::ToolUse {
+                        id: "toolu_2".to_string(),
+                        name: "grep".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_1".to_string(),
+                content: "ok1".to_string(),
+            },
+            WireMessage::User {
+                content: "interleaved".to_string(),
+            },
+            WireMessage::Tool {
+                tool_call_id: "toolu_2".to_string(),
+                content: "ok2".to_string(),
+            },
+        ];
+        let violations = orphan_tool_call_order(&messages);
+        assert_eq!(
+            violations.len(),
+            1,
+            "the User at index 2 is the only violation: {}",
+            violations
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
+        assert!(
+            violations[0].contains("toolu_2"),
+            "the unsatisfied id (toolu_2) appears in missing list: {}",
+            violations[0]
+        );
+        assert!(
+            violations[0].contains("before all tool_call_ids were satisfied"),
+            "non-immediate violation tagged correctly: {}",
+            violations[0]
+        );
     }
 
     // ---- chat_request_to_wire ----

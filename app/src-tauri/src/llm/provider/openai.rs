@@ -63,7 +63,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use super::wire::{
-    chat_request_to_wire, strip_unsupported, WireCapabilities, WireBlock, WireRequest,
+    self, chat_request_to_wire, strip_unsupported, WireCapabilities, WireBlock, WireRequest,
 };
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::classify_error_response;
@@ -520,6 +520,34 @@ impl Provider for OpenAIProvider {
             messages: strip_unsupported(wire.messages, &caps),
             ..wire
         };
+
+        // Wire-layer **order** guard (defensive diagnostic, no mutation):
+        // OpenAI Chat Completions rejects an assistant(tool_calls) that is
+        // NOT immediately followed by `role: "tool"` messages with HTTP
+        // 400 "An assistant message with 'tool_calls' must be followed by
+        // tool messages responding to each 'tool_call_id'". The count-based
+        // `orphan_tool_use_ids` (run inside `chat_request_to_wire`) catches
+        // a missing tool_result entirely; this order check catches the
+        // case where every id HAS a result but a `User`/`UserBlocks`/
+        // `Assistant` message is interleaved between the assistant and its
+        // tool messages. Symptom: a 400 mid-session after a hint Text
+        // block was inserted at the head of a user(tool_results) message
+        // (loop-detection hint block) — fixed at the chat_loop layer, but
+        // this guard makes any future regression grep-able via
+        // `tracing::error` "wire: orphan tool_call order" instead of
+        // requiring a fresh RCA against an opaque 400.
+        let order_violations = wire::orphan_tool_call_order(&wire.messages);
+        if !order_violations.is_empty() {
+            tracing::error!(
+                model = %self.config.model,
+                violation_count = order_violations.len(),
+                violations = ?order_violations,
+                "wire: orphan tool_call order detected — an assistant(tool_calls) wire \
+                 message is not immediately followed by role:tool messages; this request \
+                 will fail upstream with OpenAI 400 \"insufficient tool messages following \
+                 tool_calls\". See llm-contract.md §469 Pair Atomicity."
+            );
+        }
 
         // 2. Build the HTTP body.
         let body = Self::build_http_body(&wire, &self.config);

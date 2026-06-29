@@ -2379,51 +2379,37 @@ async fn l3a_pure_batch_of_three_dispatches_runs_concurrently() {
     }
 }
 
-/// L3a AC3: 4 dispatch_subagent tool_uses in one pure batch (over
-/// the default limit of 3) → all 4 hard-rejected with tool_error.
-/// No worker runs. The MockProvider script has only parent_t1 +
-/// parent_t2 (no worker slots) because no worker should be spawned.
+/// L3a AC3: a pure batch of (default limit + 1) dispatch_subagent
+/// tool_uses → all hard-rejected with tool_error. No worker runs.
+/// The MockProvider script has only parent_t1 + parent_t2 (no worker
+/// slots) because no worker should be spawned. N is derived from
+/// [`DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN`] so the test tracks
+/// the limit automatically (the default rose 3→10 on 2026-06-29).
 #[tokio::test]
 async fn l3a_pure_batch_over_limit_hard_rejects_all() {
     let h = make_harness().await;
     let emitter = Arc::new(MockEmitter::new());
+    // Parent turn 1: N dispatch_subagent tool_uses, N = default limit
+    // + 1, so the pure batch is OVER the limit → OverLimit branch →
+    // all hard-rejected, no workers spawned. Deriving N from the
+    // default const keeps this test correct if the default changes.
+    let n_over = crate::agent::chat_loop::DEFAULT_DELEGATION_MAX_CONCURRENT_CHILDREN + 1;
+    let mut turn1_events: Vec<std::result::Result<ChatEvent, crate::llm::error::LlmError>> =
+        vec![Ok(ChatEvent::Start)];
+    for i in 1..=n_over {
+        turn1_events.push(Ok(ChatEvent::ToolCall {
+            id: format!("toolu_over_{i}"),
+            name: "dispatch_subagent".into(),
+            input: serde_json::json!({ "subagent": "researcher", "task": format!("t{i}") }),
+        }));
+    }
+    turn1_events.push(Ok(ChatEvent::Done {
+        stop_reason: Some("tool_use".into()),
+        usage: Some(TokenUsage::default()),
+    }));
+
     let mock = Arc::new(MockProvider::new(vec![
-        // Parent turn 1: 4 dispatch_subagent tool_uses.
-        MockResponse::Events(vec![
-            Ok(ChatEvent::Start),
-            Ok(ChatEvent::ToolCall {
-                id: "toolu_over_1".into(),
-                name: "dispatch_subagent".into(),
-                input: serde_json::json!({
-                    "subagent": "researcher", "task": "t1"
-                }),
-            }),
-            Ok(ChatEvent::ToolCall {
-                id: "toolu_over_2".into(),
-                name: "dispatch_subagent".into(),
-                input: serde_json::json!({
-                    "subagent": "researcher", "task": "t2"
-                }),
-            }),
-            Ok(ChatEvent::ToolCall {
-                id: "toolu_over_3".into(),
-                name: "dispatch_subagent".into(),
-                input: serde_json::json!({
-                    "subagent": "researcher", "task": "t3"
-                }),
-            }),
-            Ok(ChatEvent::ToolCall {
-                id: "toolu_over_4".into(),
-                name: "dispatch_subagent".into(),
-                input: serde_json::json!({
-                    "subagent": "researcher", "task": "t4"
-                }),
-            }),
-            Ok(ChatEvent::Done {
-                stop_reason: Some("tool_use".into()),
-                usage: Some(TokenUsage::default()),
-            }),
-        ]),
+        MockResponse::Events(turn1_events),
         // Parent turn 2: final text — no worker slots because all
         // 4 dispatches are hard-rejected (no run_subagent calls).
         MockResponse::Events(vec![
@@ -2455,9 +2441,9 @@ async fn l3a_pure_batch_over_limit_hard_rejects_all() {
         "over-limit batch must NOT spawn any workers"
     );
 
-    // 4 tool_results, all is_error=true, in tool_use order.
+    // N tool_results, all is_error=true, in tool_use order.
     let results = emitter.tool_results_snapshot();
-    assert_eq!(results.len(), 4, "4 dispatches → 4 tool_results");
+    assert_eq!(results.len(), n_over, "N dispatches → N tool_results");
     for r in &results {
         assert!(r.is_error, "over-limit reject → is_error=true");
         assert!(
