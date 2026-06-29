@@ -54,6 +54,8 @@ const emit = defineEmits<{
     /** Main chip click — for `none` this means attach, otherwise
      *  it means open the diff. */
     "chip-click": [];
+    /** User picked "Publish → main" from the dropdown (active only). */
+    "publish-click": [];
     /** User picked "解绑 (detach)" from the dropdown. */
     "detach-click": [];
     /** User picked "删除 worktree" from the dropdown. */
@@ -145,6 +147,11 @@ function onCopyBranch() {
     emit("copy-branch");
 }
 
+function onPublish() {
+    closeMenu();
+    emit("publish-click");
+}
+
 function onDetach() {
     closeMenu();
     emit("detach-click");
@@ -211,6 +218,17 @@ function onDelete() {
                     复制 branch name
                 </button>
                 <div class="worktree-chip__menu-sep" />
+                <button
+                    v-if="state === 'active'"
+                    type="button"
+                    class="worktree-chip__menu-item"
+                    role="menuitem"
+                    :disabled="detachDisabled"
+                    @click="onPublish"
+                >
+                    <Icon name="document" :size="12" />
+                    Publish → main
+                </button>
                 <button
                     type="button"
                     class="worktree-chip__menu-item"

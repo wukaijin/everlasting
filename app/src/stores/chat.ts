@@ -620,6 +620,20 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  // D (2026-06-30): publish the session's `session/<id>` branch into
+  // `main` (local only — never pushes). Surfaces the chat-header
+  // "Publish → main" button. On success main advances; the session
+  // worktree stays bound so the user can keep working.
+  async function publishSessionToMain(sessionId: string): Promise<void> {
+    try {
+      const result = await invoke<string>("publish_session_to_main", { sessionId });
+      projectsStore.showToast(result, "info");
+    } catch (e) {
+      projectsStore.showToast(`publish 到 main 失败: ${String(e)}`, "error");
+      throw e;
+    }
+  }
+
   async function detachWorktree(sessionId: string): Promise<void> {
     try {
       await invoke("detach_worktree", { sessionId });
@@ -1344,6 +1358,7 @@ export const useChatStore = defineStore("chat", () => {
     setSessionColor,
     attachWorktree,
     detachWorktree,
+    publishSessionToMain,
     deleteWorktree,
     fetchDiff,
     getDiff,

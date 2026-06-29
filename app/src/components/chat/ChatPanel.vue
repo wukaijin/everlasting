@@ -276,6 +276,18 @@ async function onDetach() {
   }
 }
 
+/** D (2026-06-30): publish the session branch into `main` (local
+ *  only, no push). The store surfaces success/conflict toasts. */
+async function onPublish() {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return;
+  try {
+    await chatStore.publishSessionToMain(sid);
+  } catch {
+    // Toast already shown by the store on error.
+  }
+}
+
 /** Delete worktree — confirm modal only for `active`+`has_diff`;
  *  one-click for the other two paths. */
 const confirmDeleteOpen = ref(false);
@@ -432,6 +444,7 @@ if (typeof window !== "undefined") {
           :path-for-display="worktreePathForDisplay"
           :is-streaming="isStreaming"
           @chip-click="onChipClick"
+          @publish-click="onPublish"
           @detach-click="onDetach"
           @delete-click="onDeleteClick"
         />

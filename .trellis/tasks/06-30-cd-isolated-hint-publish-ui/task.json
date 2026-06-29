@@ -3,7 +3,7 @@
   "name": "cd-isolated-hint-publish-ui",
   "title": "C+D: isolated 上下文注入 + publish session→main UI",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

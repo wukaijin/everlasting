@@ -219,6 +219,7 @@ pub fn run() {
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,
             commands::worktree::delete_worktree,
+            commands::worktree::publish_session_to_main,
             // Projects
             commands::projects::list_projects,
             commands::projects::list_hidden_projects,

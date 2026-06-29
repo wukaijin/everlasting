@@ -15,6 +15,51 @@ use crate::db;
 use crate::git;
 use crate::state::AppState;
 
+/// D (2026-06-30): publish the session's `session/<id>` branch into
+/// `main` (local only — never pushes). Surfaces the
+/// `merge_session_into_main` git helper as a Tauri command for the
+/// chat-header "Publish → main" button. Requires the session to have
+/// an Active worktree (else there's no `session/<id>` branch to
+/// merge). On conflict, returns the conflict file list verbatim.
+#[tauri::command]
+pub async fn publish_session_to_main(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<String, String> {
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("publish_session_to_main: load session: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "publish_session_to_main: session '{}' not found",
+                session_id
+            )
+        })?;
+    if loaded.session.worktree_state != db::WorktreeState::Active {
+        return Err(format!(
+            "publish_session_to_main: session '{}' has no active worktree; attach one first",
+            session_id
+        ));
+    }
+    let project = db::get_project(&state.db, &loaded.session.project_id)
+        .await
+        .map_err(|e| format!("publish_session_to_main: load project: {}", e))?
+        .ok_or_else(|| "publish_session_to_main: project not found".to_string())?;
+    if !project.is_git_repo {
+        return Err(format!(
+            "publish_session_to_main: project '{}' is not a git repository",
+            project.name
+        ));
+    }
+    let project_path = std::path::Path::new(&project.path).to_path_buf();
+    let session_id_owned = session_id.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::tools::merge_worker::merge_session_into_main(&project_path, &session_id_owned)
+    })
+    .await
+    .map_err(|e| format!("publish_session_to_main: join: {}", e))?
+}
+
 #[tauri::command]
 pub async fn attach_worktree(
     state: State<'_, Arc<AppState>>,

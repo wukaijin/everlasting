@@ -134,6 +134,26 @@ fn worker_is_writable(def: &super::SubagentDef) -> bool {
         .any(|t: &String| !super::READONLY_TOOL_ALLOWLIST.contains(&t.as_str()))
 }
 
+/// C (2026-06-30): wrap the delegation `task` with an isolation
+/// environment hint when the worker runs in its own worktree. The hint
+/// tells the worker it is on `worker/<run_id>`, its edits are
+/// auto-committed by the system (child1 A's `commit_worker_changes`)
+/// and merged back by the parent, and it should NOT run `git commit`
+/// itself. Shared dispatches get the raw task unchanged.
+fn task_with_env_hint(task: &str, isolated: bool, run_id: &str) -> String {
+    if !isolated {
+        return task.to_string();
+    }
+    format!(
+        "{task}\n\n---\n\
+         [environment] You are running in an ISOLATED git worktree on branch \
+         `worker/{run_id}`. Your file edits land on that branch, are \
+         auto-committed by the system when you finish, and the parent agent \
+         will merge them back. You do NOT need to run `git commit` yourself — \
+         focus on the task."
+    )
+}
+
 /// A summary of the worker's changes for the dispatch_subagent
 /// tool_result. Built by scanning the worker worktree's diff against
 /// its base commit (the `worker/<run_id>` branch tip vs its parent).
@@ -501,8 +521,11 @@ pub(crate) async fn run_subagent(
     // `project_path` were resolved above (before the cache lookup,
     // since the cache scopes its `<project>/.everlasting/agents/`
     // dir by `project_path`).
+    // C (2026-06-30): append an isolation environment hint to the
+    // delegation task when the worker runs isolated (shared: raw task).
+    let final_task = task_with_env_hint(task, isolated, &worker_run_id);
     let worker_messages =
-        build_worker_messages(memory_cache, &project_id, &project_path, task).await;
+        build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await;
 
     // Assemble the worker's system prompt — fully replaces the
     // parent's behavior_prompt + mode_prefix + base_prompt layers.
@@ -1301,6 +1324,25 @@ mod tests {
         let r = super::super::lookup_subagent("researcher")
             .expect("researcher exists");
         assert_eq!(r.isolation, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // task_with_env_hint (C, 2026-06-30)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn task_with_env_hint_isolated_appends_hint() {
+        let out = task_with_env_hint("do the thing", true, "run-xyz");
+        assert!(out.contains("do the thing"), "original task preserved");
+        assert!(out.contains("ISOLATED git worktree"), "env hint present");
+        assert!(out.contains("worker/run-xyz"), "run_id interpolated");
+        assert!(out.contains("do NOT need to run"), "told not to commit");
+    }
+
+    #[test]
+    fn task_with_env_hint_shared_is_unchanged() {
+        let out = task_with_env_hint("do the thing", false, "run-xyz");
+        assert_eq!(out, "do the thing");
     }
 
     // -----------------------------------------------------------------------

@@ -641,6 +641,168 @@ pub fn do_merge_blocking(
     ))
 }
 
+/// D (2026-06-30): merge the session's `session/<id>` branch into
+/// `main` (local only — never pushes). Called by the
+/// `publish_session_to_main` Tauri command (the "Publish → main"
+/// chat-header button). Structurally a sibling of `do_merge_blocking`
+/// (FF → 3-way → conflict), but the target is `main` and the source
+/// is `session/<id>` (vs `do_merge_blocking`'s `session/<parent>` ←
+/// `worker/<run_id>`). Reuses this module's private helpers
+/// (`merge_lock_for` / `is_ancestor` / `collect_conflict_paths`).
+///
+/// On conflict: returns a structured error naming the files and resets
+/// `main` to a clean HEAD (no half-merged dirty state — same contract
+/// as `do_merge_blocking`). The session worktree is left untouched
+/// (the user can keep working in the session; only `main` advances).
+pub fn merge_session_into_main(
+    project_path: &Path,
+    session_id: &str,
+) -> Result<String, String> {
+    // Per-session lock mirrors `do_merge_blocking` (prevents the same
+    // session racing two publishes; cross-session main races are
+    // acceptable — last writer wins, git ref move is atomic).
+    let _merge_lock = merge_lock_for(session_id);
+    let _merge_guard = _merge_lock.lock().unwrap();
+    let repo = Repository::open(project_path).map_err(|e| {
+        format!(
+            "merge_session: could not open project repo at '{}': {}",
+            project_path.display(),
+            e
+        )
+    })?;
+
+    let main_branch_name = "main";
+    let session_branch_name = git::worktree::branch_name(session_id);
+
+    let main_branch = repo
+        .find_branch(main_branch_name, git2::BranchType::Local)
+        .map_err(|e| format!("merge_session: '{}' branch not found: {}", main_branch_name, e))?;
+    let main_tip = main_branch
+        .get()
+        .peel_to_commit()
+        .map_err(|e| format!("merge_session: main tip: {}", e))?;
+    let session_branch = repo
+        .find_branch(&session_branch_name, git2::BranchType::Local)
+        .map_err(|e| {
+            format!(
+                "merge_session: session branch '{}' not found (session has no worktree?): {}",
+                session_branch_name, e
+            )
+        })?;
+    let session_tip = session_branch
+        .get()
+        .peel_to_commit()
+        .map_err(|e| format!("merge_session: session tip: {}", e))?;
+
+    // Fast-forward: main is an ancestor of session → just move main
+    // forward to the session tip (no merge commit).
+    if is_ancestor(&repo, main_tip.id(), session_tip.id())? {
+        let mut main_ref = repo
+            .reference(
+                &format!("refs/heads/{}", main_branch_name),
+                session_tip.id(),
+                true,
+                "merge_session: fast-forward",
+            )
+            .map_err(|e| format!("merge_session: fast-forward main ref: {}", e))?;
+        let _ = &mut main_ref;
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| format!("merge_session: post-fast-forward checkout: {}", e))?;
+        return Ok(format!(
+            "published {} → main (fast-forward)",
+            session_branch_name
+        ));
+    }
+
+    // 3-way merge: session into main.
+    let session_annotated = {
+        let session_ref = session_branch.get();
+        repo.reference_to_annotated_commit(&session_ref)
+            .map_err(|e| format!("merge_session: annotated commit: {}", e))?
+    };
+    let mut merge_opts = MergeOptions::new();
+    let mut checkout_opts = git2::build::CheckoutBuilder::new();
+    checkout_opts.allow_conflicts(true);
+    checkout_opts.conflict_style_diff3(false);
+    checkout_opts.force();
+    repo.merge(&[&session_annotated], Some(&mut merge_opts), Some(&mut checkout_opts))
+        .map_err(|e| format!("merge_session: libgit2 merge failed: {} (likely a conflict)", e))?;
+
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("merge_session: could not load index: {}", e))?;
+    if index.has_conflicts() {
+        let conflicts = collect_conflict_paths(&index);
+        let file_list = if conflicts.is_empty() {
+            "(unknown)".to_string()
+        } else {
+            conflicts.join(", ")
+        };
+        // Reset main to a clean HEAD so the workdir isn't left
+        // half-merged (mirrors `do_merge_blocking`'s conflict arm).
+        let main_commit = match main_branch.get().peel_to_commit() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "merge_session: post-conflict peel failed; skipping reset");
+                return Err(format!(
+                    "merge conflict: [{}]. session '{}' and main both modified these files. \
+                     Resolve manually, then publish again.",
+                    file_list, session_branch_name
+                ));
+            }
+        };
+        let main_obj = main_commit.into_object();
+        let mut reset_checkout = git2::build::CheckoutBuilder::new();
+        reset_checkout.force();
+        reset_checkout.remove_untracked(true);
+        if let Err(e) = repo.reset(&main_obj, git2::ResetType::Hard, Some(&mut reset_checkout)) {
+            tracing::warn!(error = %e, "merge_session: post-conflict reset failed (worktree may be half-merged)");
+        }
+        return Err(format!(
+            "merge conflict: [{}]. session '{}' and main both modified these files. \
+             Resolve manually, then publish again.",
+            file_list, session_branch_name
+        ));
+    }
+
+    // Clean 3-way merge → commit on main.
+    let merge_oid = {
+        let sig = repo
+            .signature()
+            .unwrap_or_else(|_| git2::Signature::now("Everlasting", "agent@everlasting").unwrap());
+        let tree_oid = index
+            .write_tree()
+            .map_err(|e| format!("merge_session: write_tree: {}", e))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| format!("merge_session: find_tree: {}", e))?;
+        let main_commit = repo
+            .find_commit(main_tip.id())
+            .map_err(|e| format!("merge_session: find main commit: {}", e))?;
+        let session_commit = repo
+            .find_commit(session_tip.id())
+            .map_err(|e| format!("merge_session: find session commit: {}", e))?;
+        repo.commit(
+            Some(&format!("refs/heads/{}", main_branch_name)),
+            &sig,
+            &sig,
+            &format!("merge_session: merge {} into main", session_branch_name),
+            &tree,
+            &[&main_commit, &session_commit],
+        )
+        .map_err(|e| format!("merge_session: write merge commit: {}", e))?
+    };
+    repo.cleanup_state()
+        .map_err(|e| tracing::warn!(error = %e, "merge_session: cleanup_state failed (non-fatal)"))
+        .ok();
+    Ok(format!(
+        "published {} → main (3-way, merge commit {})",
+        session_branch_name, merge_oid
+    ))
+}
+
 /// Check whether `ancestor_oid` is an ancestor of `descendant_oid`
 /// in the commit graph. Used for the fast-forward detection.
 fn is_ancestor(
@@ -810,6 +972,146 @@ mod tests {
             .status()
             .unwrap();
         assert!(commit.success());
+    }
+
+    // --- merge_session_into_main (D, 2026-06-30) ---
+
+    #[test]
+    fn merge_session_into_main_fast_forwards_when_main_is_ancestor() {
+        let project_dir = tempdir().unwrap();
+        let project = project_dir.path();
+        init_clean_git_repo(project);
+        let session_id = "sess-ff";
+        let session_branch = crate::git::worktree::branch_name(session_id);
+
+        // Create session/<id> off main, advance it one commit.
+        StdCommand::new("git")
+            .args(["branch", &session_branch])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["checkout", &session_branch])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        std::fs::write(project.join("b.txt"), "session work").unwrap();
+        StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["commit", "-m", "session", "--no-gpg-sign"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["checkout", "main"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+
+        let repo = git2::Repository::open(project).unwrap();
+        let main_before = repo
+            .find_branch("main", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+
+        let result = merge_session_into_main(project, session_id).unwrap();
+        assert!(result.contains("fast-forward"), "got: {}", result);
+
+        let main_after = repo
+            .find_branch("main", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+        assert_ne!(main_before, main_after, "main must advance on fast-forward");
+        // workdir updated to include the session's new file.
+        assert!(project.join("b.txt").exists());
+    }
+
+    #[test]
+    fn merge_session_into_main_conflict_reports_error_and_keeps_main_clean() {
+        let project_dir = tempdir().unwrap();
+        let project = project_dir.path();
+        init_clean_git_repo(project);
+        let session_id = "sess-conf";
+        let session_branch = crate::git::worktree::branch_name(session_id);
+
+        // Both main and session modify a.txt → diverge → conflict.
+        StdCommand::new("git")
+            .args(["branch", &session_branch])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["checkout", &session_branch])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        std::fs::write(project.join("a.txt"), "session version").unwrap();
+        StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["commit", "-m", "session edit", "--no-gpg-sign"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["checkout", "main"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        std::fs::write(project.join("a.txt"), "main version").unwrap();
+        StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .args(["commit", "-m", "main edit", "--no-gpg-sign"])
+            .current_dir(project)
+            .status()
+            .unwrap();
+
+        let main_before = git2::Repository::open(project)
+            .unwrap()
+            .find_branch("main", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+
+        let result = merge_session_into_main(project, session_id);
+        assert!(result.is_err(), "conflicting merge must error");
+        let err = result.unwrap_err();
+        assert!(err.contains("merge conflict"), "got: {}", err);
+
+        // main unchanged (reset to clean HEAD — no half-merged state).
+        let main_after = git2::Repository::open(project)
+            .unwrap()
+            .find_branch("main", git2::BranchType::Local)
+            .unwrap()
+            .get()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+        assert_eq!(main_before, main_after, "main must not move on conflict");
+        assert_eq!(
+            std::fs::read_to_string(project.join("a.txt")).unwrap(),
+            "main version",
+            "workdir must be clean (no conflict markers)"
+        );
     }
 
     /// Create a project + session row, return (project, session_id,
