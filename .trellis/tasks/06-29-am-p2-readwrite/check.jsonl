@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 入口"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend Quality Check 入口(PR3 UI 验收)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "CRUD 消费合规 + project 隔离验收(避免跨项目泄漏)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "remember tool 范式 + 权限(silent allow 不走 Tier4 ask)合规"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop 注入点 + 不破坏 turn 循环/cache 验收"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "cache_control 位置(prefix 不变)+ ContentBlock 格式验收"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查复用现有 tool/store/command 范式而非另起炉灶"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "P2 跨层,MemoryRow/command↔store↔UI 契约一致性检查"}

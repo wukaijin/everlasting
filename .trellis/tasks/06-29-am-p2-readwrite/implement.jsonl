@@ -1,1 +1,15 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Pre-Development Checklist 入口,P2 跨 db/tools/agent/commands 多模块"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "remember tool 定义/注册 builtin_tools/execute_tool 分发/wire shape 范式(PR1 写路径)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop turn 循环 + build_instructions_blocks 注入点(PR2 读路径落点)"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "消费 P1 memories.rs CRUD(search_memories_fts/insert_memory/list/delete/bump_hit_count)+ project 隔离"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ContentBlock / synthetic user message / cache_control Ephemeral(PR2 追加注入保 cache prefix 不变)"}
+{"file": ".trellis/spec/backend/token-usage-tracking.md", "reason": "count_tokens + token 预算(PR2 召回 ≤500 截断)"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "现有 memory 指令文件模块边界,自主记忆需明确区分(静态指令文件 vs DB 自主记忆)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend Pre-Development Checklist(PR3 UI)"}
+{"file": ".trellis/spec/frontend/memory-ui.md", "reason": "MemoryPreview 现有 UI 规范(PR3 扩展 runtime memories 列表 + 删除)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 范式(stores/memory.ts 加 fetchMemories/deleteMemory + runtime memories 状态)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 tool/store/command 范式而非另起炉灶"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "P2 跨 backend(Tauri command)+ frontend(store/UI),MemoryRow 跨层契约一致性"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "设计来源 §3 remember 写入 + §4 召回注入 + §10 前端落点"}
+{"file": "docs/spikes/005-agent-memory.md", "reason": "§3 何时 remember 引导措辞 + §4 写入安全网(P1 已实现,P2 remember tool 复用)"}
+{"file": "docs/spikes/006-agent-autonomous-memory.md", "reason": "§4.4 注入位置(checklist 后/provider.send 前)+ §5 前端集成"}
