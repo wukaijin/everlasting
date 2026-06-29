@@ -1,16 +1,19 @@
-# Tool Contract —工具定义 + ReadGuard + Bash Spillover
+# Tool Contract —工具定义 + ReadGuard + Bash Spillover + 自主记忆写工具
 
-> **基线**:2026-06-13(PR1 + PR3 of `06-12-a2-b7-permission-and-mode`)
+> **基线**:
+> - 2026-06-13(PR1 + PR3 of `06-12-a2-b7-permission-and-mode`)
+> - 2026-06-29 `06-29-am-p2-readwrite`(`remember` 工具加入 builtin_tools(),silent-allow 模式)
 > **来源**:从原 `llm-contract.md` (3149 行)拆出本文件
 > **同源文档**:
 > - [llm-contract.md](./llm-contract.md) —核心类型 + Extended Thinking + 反模式汇总 + ⑨ 关 IPC 协议
-> - [tool-contract.md](./tool-contract.md) (本文) —工具定义 + ReadGuard + shell spillover
+> - [tool-contract.md](./tool-contract.md) (本文) —工具定义 + ReadGuard + shell spillover + `remember` silent-allow
 > - [permission-layer.md](./permission-layer.md) —⑨ 关 Permission Layer 设计合约(A2 + B7 canonical,2026-06-13)
 > - [worktree-contract.md](./worktree-contract.md) — attach/detach/delete + cancel + system prompt
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider trait + catalog + Anthropic/OpenAI 分发
 > - [test-model-contract.md](./test-model-contract.md) — `test_model` IPC
+> - [memory.md](./memory.md) §Scenario: Autonomous Memories —`remember` 完整契约(DB schema / 安全网 / 频率控制 / silent-allow 权限模型)
 >
-> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` 时。
+> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` / `remember`(silent-allow 自主记忆写)时。
 >
 > **⑨ 关 Permission Layer 设计合约**:[permission-layer.md](./permission-layer.md)(A2 + B7, 2026-06-13,2026-06-21 移入)。
 

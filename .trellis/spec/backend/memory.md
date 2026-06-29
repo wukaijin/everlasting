@@ -1,14 +1,19 @@
-# Memory Contract — User / Project Two-Layer Loader (B5)
+# Memory Contract — Static Instruction Loader (B5) + Autonomous Runtime Memory (V2 2 期)
 
-> **基线**:2026-06-10 commit `b5-memory-user-project-2layer` (PR1: backend loader + injection)
-> **来源**:V2 1 期 B5 Memory 任务后端模块
+> **基线**:
+> - 2026-06-10 commit `b5-memory-user-project-2layer` (V2 1 期: 4 文件 static loader)
+> - 2026-06-29 `06-29-am-p2-readwrite` (V2 2 期 P1 DB + P2 手工读写闭环)
+> **来源**:
+> - V2 1 期 B5 Memory 任务后端模块 — `## Scenario: Two-Layer Memory Injection`(本文 §Scenario 1)
+> - V2 2 期 自主记忆 epic — `## Scenario: Autonomous Memories (V2 2 期)`(本文 §Scenario 2)
 > **同源文档**:
-> - [llm-contract.md](./llm-contract.md) — system prompt 注入(本文件引用其 §2 协议映射)
-> - [tool-contract.md](./tool-contract.md) — ReadGuard 失败兜底模式
+> - [llm-contract.md](./llm-contract.md) — system prompt + synthetic user message 注入(两个 scenario 都引用其 §2 协议映射)
+> - [tool-contract.md](./tool-contract.md) — ReadGuard 失败兜底模式 + `remember` 工具 silent-allow 权限模型
 > - [error-handling.md](./error-handling.md) — tracing::warn! 模式
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider 抽象隔离
+> - [agent-loop-architecture.md](./agent-loop-architecture.md) — turn 循环内 recall 注入点
 >
-> **何时读本文**:涉及 4 文件 memory 加载 / system prompt 注入 / 监听 inotify / `MemoryCache` / `read_memory_*` IPC / `open_memory_in_editor` IPC 时。
+> **何时读本文**:涉及 4 文件 memory 加载 / system prompt 注入 / 监听 inotify / `MemoryCache` / `read_memory_*` IPC / `open_memory_in_editor` IPC / `autonomous_memories` 表 / FTS5 召回 / `remember` tool / `memory_recall` 注入 / runtime memories UI 时。**Scenario 1 与 Scenario 2 是 sibling,不是替代**:同一个文件中两套独立子系统,边界不可混。
 
 ---
 
@@ -522,6 +527,366 @@ debounces, then sets the cache slot to `None` (via
 `apply_invalidation`). The next `load_for_session` call
 takes the read-lock and does the disk I/O. No race, no
 sync I/O on the watcher's task.
+
+---
+
+## Scenario: Autonomous Memories (DB-backed Runtime Memory, V2 2 期)
+
+> **基线**:2026-06-29 `06-29-am-p2-readwrite` (P1 落库 + P2 手工读写闭环)
+> **epic**:V2 2 期 自主记忆(5-PR rollout,P1 archived,P2 见本文,P3-P5 planning)
+> **何时读本文**:`autonomous_memories` 表 / FTS5 召回 / `remember` tool / `memory_recall` 注入 / `stores/memory.ts` runtime memories 状态 / `MemoryPreview` runtime section 任一相关时。
+
+### 1. Scope / Trigger
+
+- **Trigger**: the agent needs long-term **runtime** memory — facts / preferences / decisions that survive across sessions. Distinct from the B5 static instruction files in the scenario above (4 fixed Markdown files, no LLM write surface).
+- **Why code-spec depth**: the recall injection is **inside the Anthropic cache breakpoint** (same synthetic user message as `build_instructions_blocks`). A wrong shape (separate message, wrong `cache_control`) silently invalidates the prompt cache and adds 5-10× cost on every turn. The `remember` tool is the LLM's only write surface for this memory — wrong permission semantics (Tier 4 ask) silently degrades the LLM to never remembering anything.
+- **V2 2 期 epic rollout**:
+  - P1 `06-29-am-p1-storage` (archived): `autonomous_memories` + FTS5(trigram) + `insert_memory` + `search_memories_fts` + safety net
+  - **P2 `06-29-am-p2-readwrite` (this scenario)**: `remember` tool + `memory_recall` per-turn injection + `MemoryPreview` runtime section
+  - P3 `06-29-am-p3-tool-recall` (planning): tool-execution-time recall (before each `tool_use`)
+  - P4 `06-29-am-p4-event-reflect` (planning): event-driven auto-write hooks
+  - P5 `06-29-am-p5-quality` (planning): state machine auto-promotion + hygiene job
+
+### 2. Signatures
+
+```rust
+// app/src-tauri/src/db/memories.rs
+pub enum MemoryScope { User, Project }                                    // snake_case in DB
+pub enum MemoryKind { Preference, Fact, Decision, Pitfall, Skill, Other }
+pub enum MemoryStatus { Candidate, Active, Verified, Archived, Deleted }
+
+pub struct Memory {
+    pub id: i64,
+    pub project_id: Option<String>,                                       // None → user scope
+    pub scope: MemoryScope,
+    pub kind: MemoryKind,
+    pub title: String,                                                    // ≤200 chars
+    pub content: String,                                                  // ≤500 chars (P2 safety net)
+    pub tags: Option<String>,                                            // JSON array as TEXT
+    pub source_session_id: Option<String>,
+    pub trigger_key: Option<String>,                                      // for P3 pitfall recall
+    pub status: MemoryStatus,                                             // insert defaults to Candidate
+    pub hit_count: i64,
+    pub created_at: i64,                                                  // unix epoch ms
+    pub updated_at: i64,
+    pub last_hit_at: Option<i64>,
+}
+
+pub struct InsertMemoryInput<'a> { /* project_id, scope, kind, title, content,
+                                       tags, source_session_id, trigger_key */ }
+
+pub async fn insert_memory(pool: &SqlitePool, input: InsertMemoryInput<'_>)
+    -> Result<i64, sqlx::Error>;                                          // returns new id; status fixed to Candidate
+pub async fn search_memories_fts(pool, query, project_id, statuses, limit) -> Result<Vec<Memory>>;
+pub async fn list_memories(pool, project_id, statuses, limit) -> Result<Vec<Memory>>;
+pub async fn delete_memory(pool, id: i64) -> Result<(), sqlx::Error>;
+pub async fn count_memories_for_session(pool, session_id: &str) -> Result<i64, sqlx::Error>;
+pub async fn bump_hit_count(pool, id: i64) -> Result<(), sqlx::Error>;    // fire-and-forget on recall hit
+
+// Recall-specific
+pub enum RecallStatusFilter {
+    P2Manual,                                                             // [Candidate, Active, Verified]
+    P5Auto,                                                               // [Active, Verified] — P5+ only
+}
+pub async fn search_memories_fts_recall(pool, query, project_id, filter) -> Result<Vec<Memory>>;
+```
+
+```rust
+// app/src-tauri/src/agent/memory_recall.rs
+pub const RECALL_TOKEN_BUDGET: u32 = 500;
+
+pub async fn build_recall_text(
+    pool: &SqlitePool,
+    query: &str,
+    project_id: Option<&str>,
+    filter: RecallStatusFilter,
+) -> Result<Option<String>, sqlx::Error>;
+// Returns None when query empty or no matches; otherwise
+// newline-separated "<title>: <content>" entries, truncated
+// at RECALL_TOKEN_BUDGET (count_tokens) — newer entries first
+// (created_at DESC). Stable ordering = no cache thrash.
+
+pub fn build_recall_block(recall_text: &str) -> ContentBlock;
+// Wraps recall_text in <autonomous-memories>...</autonomous-memories>
+// with NO cache_control — the breakpoint is on the first instruction
+// block (build_instructions_blocks). Adding another cache_control
+// here would shift the breakpoint and invalidate the Anthropic cache.
+```
+
+```rust
+// app/src-tauri/src/tools/remember.rs
+pub const REMEMBER_TOOL_NAME: &str = "remember";
+
+// Permission: silent-allow (NO Tier 4 ask). Safety net lives in
+// `insert_memory` (sensitive content regex + 500-char cap) +
+// `count_memories_for_session` rate cap (default 50 per session).
+// Per-turn cap (≤3) OUT OF SCOPE for P2; deferred to P5
+// (requires ToolContext turn counter).
+```
+
+```typescript
+// app/src/stores/memory.ts
+interface AutonomousMemory {
+  id: number;
+  projectId: string | null;
+  scope: 'user' | 'project';
+  kind: 'preference' | 'fact' | 'decision' | 'pitfall' | 'skill' | 'other';
+  title: string;
+  content: string;
+  tags: string[] | null;
+  sourceSessionId: string | null;
+  triggerKey: string | null;
+  status: 'candidate' | 'active' | 'verified' | 'archived' | 'deleted';
+  hitCount: number;
+  createdAt: number;
+  updatedAt: number;
+  lastHitAt: number | null;
+}
+
+const runtimeMemories = ref<AutonomousMemory[]>([]);
+const runtimeMemoriesLoading = ref(false);
+const runtimeMemoriesError = ref<string | null>(null);
+
+async function fetchMemories(): Promise<void>;
+async function deleteMemory(id: number): Promise<void>;
+```
+
+```typescript
+// Tauri commands (app/src-tauri/src/commands/memory.rs)
+invoke<AutonomousMemory[]>('list_autonomous_memories', { projectId, statuses, limit })
+invoke<void>('delete_autonomous_memory', { id })
+```
+
+### 3. Contracts
+
+#### Two memory systems — DO NOT CONFUSE
+
+| Property | B5 Static (V2 1 期, §Scenario 1 above) | Autonomous (V2 2 期, this section) |
+|---|---|---|
+| Storage | 4 fixed Markdown files (disk) | SQLite `autonomous_memories` table |
+| Source | User / Project disk files | `remember` tool (LLM write) or `MemoryPreview` UI (user write) |
+| Lifecycle | Read on session start, hot-reload via mtime | Per-turn FTS5 recall + LLM-initiated write |
+| Injection | `build_instructions_blocks` → `messages[0]` synthetic | `memory_recall::build_recall_block` → appended to same `messages[0]` (P2) / before `tool_use` (P3) |
+| Cache | `cache_control: Ephemeral` on first instruction block | **No** `cache_control` on recall block (preserves the instruction breakpoint) |
+| LLM write surface | None (file-based, no LLM "write memory") | `remember` tool (silent-allow) |
+| Promotion | N/A | P5 state machine: Candidate → Active → Verified |
+
+#### DB schema (`autonomous_memories`)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | |
+| `project_id` | TEXT NULL | NULL = user scope; FK `projects(id)` ON DELETE CASCADE for project-scope rows |
+| `scope` | TEXT NOT NULL | `user` / `project` (denormalized for index efficiency) |
+| `kind` | TEXT NOT NULL | one of `MemoryKind` |
+| `title` | TEXT NOT NULL | ≤200 chars |
+| `content` | TEXT NOT NULL | ≤500 chars (P2 safety net) |
+| `tags` | TEXT NULL | JSON array of strings |
+| `source_session_id` | TEXT NULL | session that wrote it (for audit + rate cap) |
+| `trigger_key` | TEXT NULL | for P3 pitfall recall; P2 schema only, not consumed |
+| `status` | TEXT NOT NULL DEFAULT 'candidate' | one of `MemoryStatus` |
+| `hit_count` | INTEGER NOT NULL DEFAULT 0 | bumped on recall hit |
+| `created_at` | INTEGER NOT NULL | unix epoch ms |
+| `updated_at` | INTEGER NOT NULL | unix epoch ms |
+| `last_hit_at` | INTEGER NULL | unix epoch ms |
+
+Indexes: `(project_id, status)`, `(status, kind)`, FTS5 virtual table on `(content, title, tags)` with **trigram tokenizer** (per P1, supports substring + CJK). `trigger_key` is a UNIQUE NULL-distinct partial index `(project_id, trigger_key) WHERE trigger_key IS NOT NULL` (P3).
+
+#### Recall injection contract (CRITICAL — cache-preserving)
+
+`memory_recall::build_recall_block` is called **per turn** from `chat_loop.rs` after `build_instructions_blocks` and **before** `provider.send`. The block is **appended** to the same `messages[0]` synthetic user message — **NOT** a new message.
+
+- **Query source**: most-recent user message text (`messages.iter().rev().find(User).to_text()`). Empty query → return `None` → no block added.
+- **Filter**: P2 `RecallStatusFilter::P2Manual` (Candidate, Active, Verified). P5 narrows to `P5Auto`.
+- **Order**: `created_at DESC` (newer first). P2 memories are all Candidate with `hit_count=0`, so `created_at` is the only meaningful sort. **Stable order is load-bearing** — reordering would re-tokenize the recall block and bust the cache.
+- **Token cap**: `count_tokens` summed, truncate at `RECALL_TOKEN_BUDGET = 500`. Newer-first until budget exhausted.
+- **First-line overflow**: when the first entry alone exceeds 500 tokens (defensive — P2 safety net caps content at 500 chars ≈ 200 tokens), surface it anyway.
+- **`bump_hit_count`**: fire-and-forget on each recalled row. Failure is non-blocking (recall text already in prompt; stale hit_count is OK).
+- **Empty / all-missing**: `None` → no block → no prompt noise.
+
+#### `remember` tool contract (silent-allow + safety net)
+
+`tools/remember::execute` does:
+1. Parse input (`title`, `content`, `kind`, `scope`, `tags`, optional `trigger_key`).
+2. **Safety net** (in `db::memories::insert_memory`; runs for both tool and UI paths):
+   - Reject when `content` matches sensitive regex (API key / password / token patterns — see P1 spike-005 §4).
+   - Reject when `content` > 500 chars.
+3. **Rate cap** (in tool layer, per-call):
+   - `count_memories_for_session(source_session_id) >= 50` → reject.
+   - Per-turn cap (≤3) **OUT OF SCOPE for P2**; deferred to P5.
+4. Insert with `status=Candidate`, `source_session_id=ctx.session_id`, `hit_count=0`, `created_at=now_ms()`, `updated_at=now_ms()`.
+5. Return success + new id.
+
+`scope=Project` requires a `project_id`; if missing → error. `scope=User` requires no `project_id`; if set → silently drop (user memory is global, project_id is not relevant).
+
+#### Permission model (silent-allow, NOT Tier 4 ask)
+
+`remember` is **silent-allow** — does NOT route through Tier 4 `permission_ask`. The LLM can write autonomous memory without user confirmation. Rationale (per spike-007 §5 + `06-29-autonomous-memory` ADR):
+
+- The safety net (sensitive content regex + length cap) is the actual guard rail.
+- Tier 4 `ask` would make the LLM silently never remember anything (the LLM would have to predict which writes the user will approve, defeating the purpose).
+- "全自主写" is the epic-level decision; `remember` is its flagship tool.
+- Other autonomous-write tools (future `auto_reflect`, P4 event-driven writes) follow the same silent-allow pattern.
+
+For comparison, `write_file` / `edit_file` / `shell` (filesystem writes) **DO** route through Tier 4 `ask` — they are user-visible file mutations, not autonomous knowledge. The two permission classes are intentionally distinct.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| `remember` with sensitive content (API key regex hit) | `insert_memory` returns `Err`; tool surfaces "rejected: sensitive content detected" |
+| `remember` with content > 500 chars | `insert_memory` returns `Err`; tool surfaces "rejected: content exceeds 500 char cap" |
+| `remember` with `scope=Project` but no `project_id` in context | `Err("project_id required for project scope")` |
+| `remember` with `count_memories_for_session >= 50` | Tool returns "rejected: per-session cap of 50 memories reached" |
+| FTS5 query empty | `build_recall_text` returns `None`; no block added; no error |
+| FTS5 query non-empty, 0 matches | `build_recall_text` returns `None`; no block added; no error |
+| FTS5 query N matches, sum > 500 tokens | Truncate at line boundary; newer first until budget exhausted |
+| FTS5 query N matches, first entry alone > 500 tokens | Surface first entry anyway (defensive; should not happen with P2 content cap) |
+| `bump_hit_count` fails (DB transient error) | `warn!`; recall text already in prompt; non-blocking |
+| `delete_memory` with id not found | 0 rows affected; idempotent success |
+| `delete_memory` for `status=Active`/`Verified` row (P5+) | P2 allows deletion of any status; P5+ may restrict to Candidate/Archived |
+| Frontend `fetchMemories` IPC failure | `runtimeMemoriesError` set; UI shows error state |
+| Frontend `deleteMemory` IPC failure | Toast / inline error; optimistic remove rolled back |
+
+### 5. Good / Base / Bad Cases
+
+#### Good: full loop
+
+1. Session 1 — user: "I prefer tabs over spaces". LLM calls `remember(title="pref-tabs", kind=Preference)`. Row inserted with `status=Candidate`, `source_session_id="s1"`.
+2. Session 2 — user: "format this code". `build_recall_text("format this code", ...)` FTS5-hits the tabs preference. `build_recall_block` wraps in `<autonomous-memories>...</autonomous-memories>`, appended to instructions in the same `messages[0]` synthetic user message. LLM sees the preference, recommends tabs.
+
+#### Base: fresh install
+
+No memories. `build_recall_text` returns `None` for any query. No recall block. Prompt = base system prompt + instruction blocks only.
+
+#### Bad: separate user message for recall
+
+```rust
+// BAD — recall as messages[1]
+if let Some(text) = build_recall_text(...).await? {
+    messages.push(synthetic_user_message(text));  // new message
+}
+provider.send(messages).await;
+```
+
+New user message shifts the Anthropic cache breakpoint → 5-10× cost on every turn. The instructions (4 files) are no longer the cache anchor. The recall block must **append** to `messages[0]`, not insert at index 1.
+
+#### Bad: `cache_control` on recall block
+
+```rust
+// BAD — adding cache_control to the recall block
+ContentBlock::Text { text: recall_text, cache_control: Some(Ephemeral) }
+```
+
+Anthropic's rule: "the last cache_control block is the breakpoint". Adding a second `cache_control: Ephemeral` shifts the breakpoint to the recall block, demoting the instruction files from cache anchor to plain text. The instruction block already carries the cache_control marker; recall blocks do not.
+
+#### Bad: Tier 4 ask on `remember`
+
+```rust
+// BAD — treat remember like any other write tool
+PermissionContext::new(...).with_ask(Tier4Ask::Write).check(REMEMBER_TOOL_NAME)?;
+```
+
+LLM either silently abstains (most common — predictive abstention) or interrupts the user 50 times per session. The whole point of autonomous memory is that the LLM writes it; the safety net is the actual guard.
+
+#### Bad: unfiltered candidate recall in P5+
+
+1. P5 lands with state machine: Candidate → Active → Verified promotion.
+2. Code updates `build_recall_text` to `RecallStatusFilter::P5Auto`.
+3. P2 `search_memories_fts_recall` with `P2Manual` filter is still reachable from a stray call site (e.g., legacy `update_checklist`).
+4. Candidate memories pollute the recall → LLM sees unverified noise.
+
+The `RecallStatusFilter` enum is a load-bearing contract; updating it requires a code-wide audit of call sites.
+
+### 6. Tests Required
+
+| Test | Asserts |
+|---|---|
+| `insert_memory_roundtrip` | Insert + read returns same fields; `status=Candidate`, `hit_count=0` |
+| `insert_memory_rejects_sensitive_content` | API-key-shaped content → `Err`; no row inserted |
+| `insert_memory_rejects_oversize_content` | >500 chars → `Err`; no row inserted |
+| `search_memories_fts_finds_title` | Insert "tabs over spaces" + search "prefer tabs" → hit |
+| `search_memories_fts_finds_content` | Same with content-only keyword |
+| `search_memories_fts_trigram_supports_substring` | Insert "everlasting" + search "lastin" → hit (trigram, not just prefix) |
+| `search_memories_fts_filters_by_status` | Insert Candidate + Active, filter Candidate only → 1 row |
+| `list_memories_orders_by_created_at_desc` | Insert 3 rows with distinct timestamps → first is newest |
+| `delete_memory_removes_row` | Insert + delete + list → 0 rows |
+| `count_memories_for_session_returns_count` | Insert 2 in same session → 2 |
+| `bump_hit_count_increments` | Insert + bump + read → `hit_count=1` |
+| `build_recall_text_returns_none_for_empty_query` | `""` → `None` |
+| `build_recall_text_returns_none_when_no_matches` | Non-matching query → `None` |
+| `build_recall_text_surfaces_candidate_match` | 1 Candidate + search → text contains title+content |
+| `build_recall_text_truncates_at_token_budget` | N rows summing >500 tokens → truncated; newer first |
+| `build_recall_block_has_no_cache_control` | Returned `ContentBlock::Text.cache_control == None` |
+| `inject_recall_appends_to_instruction_message_blocks` | Existing instruction message + recall block → `blocks.len()` grows by 1; cache_control on block 0 unchanged |
+| `tools_remember_execute_writes_candidate_roundtrip` | Tool call → row with `status=Candidate`, `source_session_id=ctx.session_id` |
+| `tools_remember_execute_rejects_sensitive_content` | Tool call with API-key content → `Err` |
+| `tools_remember_execute_rejects_when_session_cap_reached` | Pre-seed 50 rows for session → 51st call → `Err` |
+| `tools_remember_execute_no_turn_cap_p2` | 4 `remember` calls in same turn (P2) → all succeed (deferred to P5) |
+| `commands_list_autonomous_memories_returns_runtime_list` | Insert 2 + invoke Tauri command → 2 rows in response |
+| `commands_delete_autonomous_memory_removes_row` | Insert + invoke Tauri command → row gone |
+| `commands_delete_autonomous_memory_project_isolation` | Insert in A, delete from B → row not deleted (404 / no-op) |
+| `store_fetch_memories_happy_path` | Mock IPC → `runtimeMemories` populated |
+| `store_fetch_memories_error_path` | Mock IPC rejects → `runtimeMemoriesError` set |
+| `store_delete_memory_happy_path` | Mock IPC + 2 rows → 1 row left after delete |
+| `store_delete_memory_error_path` | Mock IPC rejects → `runtimeMemoriesError` set; row not optimistically removed |
+| `MemoryPreview_renders_runtime_memories_list` | 2 rows in store → component renders 2 list items |
+| `MemoryPreview_delete_button_opens_confirm` | Click delete → `ConfirmDialog` opens with title |
+| `MemoryPreview_confirm_delete_calls_store` | Confirm click → `store.deleteMemory(id)` invoked |
+| `MemoryPreview_cancel_delete_keeps_row` | Cancel click → row remains; IPC not invoked |
+
+30+ tests across DB / agent / tool / IPC / store / component.
+
+### 7. Wrong vs Correct
+
+#### Wrong: per-tool Tier 4 ask on `remember` → Correct: silent-allow + safety net
+
+```rust
+// BAD
+PermissionContext::new(...).with_ask(Tier4Ask::Write).check(REMEMBER_TOOL_NAME)?;
+
+// GOOD — remember is a knowledge-write, not a file mutation.
+// No Tier 4 ask. Safety net lives in insert_memory:
+// - sensitive content regex
+// - 500-char content cap
+// - per-session count cap (50)
+insert_memory(pool, InsertMemoryInput {
+    scope, kind, title, content, tags, source_session_id: ctx.session_id, ...
+}).await?;
+```
+
+The tool returns the new id. The user sees the new memory in `MemoryPreview` (runtime memories section) and can delete it. The write is "autonomous" — visible and revocable, not pre-approved.
+
+#### Wrong: separate user message for recall → Correct: append to instruction message
+
+```rust
+// BAD — recall as messages[1]
+if let Some(text) = build_recall_text(...).await? {
+    messages.push(synthetic_user_message(text));
+}
+provider.send(messages).await;
+
+// GOOD — recall is a new block in messages[0]
+if let Some(text) = build_recall_text(...).await? {
+    let block = memory_recall::build_recall_block(&text);
+    messages[0].content.push(block);  // append, not insert
+}
+provider.send(messages).await;
+```
+
+Recall is ephemeral (not persisted to message history); it lives in the same `messages[0]` synthetic user message as `build_instructions_blocks`. The `cache_control: Ephemeral` breakpoint on the first instruction block stays put.
+
+#### Wrong: `cache_control` on recall block → Correct: no `cache_control`
+
+```rust
+// BAD
+ContentBlock::Text { text: recall_text, cache_control: Some(Ephemeral) }
+
+// GOOD — no cache_control on recall blocks
+ContentBlock::Text { text: recall_text, cache_control: None }
+```
+
+Anthropic's "last cache_control block is the breakpoint" rule: recall blocks must NOT carry a `cache_control` marker. The instruction block already carries the marker; adding another shifts the breakpoint to the recall block and demotes the instructions from cache anchor.
 
 ---
 

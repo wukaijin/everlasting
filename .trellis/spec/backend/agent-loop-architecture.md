@@ -5,6 +5,23 @@
 > of truth for the agent loop body" in the project. Any new agent-loop-shaped
 > function should follow the same pattern unless the divergence is intentional
 > and documented in DEBT.md.
+>
+> **Per-turn context construction** (⑤a stage) includes TWO injected blocks in the
+> same `messages[0]` synthetic user message:
+> 1. **Instruction blocks** — `build_instructions_blocks(memory_cache)` returns
+>    the 4 instruction files (User/Project × CLAUDE.md/AGENTS.md) with
+>    `cache_control: Ephemeral` on the first block (the cache breakpoint).
+>    See [memory.md §Scenario: Two-Layer Memory Injection](./memory.md).
+> 2. **Recall block** — `memory_recall::build_recall_block(recall_text)` returns
+>    a FTS5-recalled autonomous-memory block with **no** `cache_control` (must
+>    NOT shift the breakpoint). Appended to the same `messages[0]` after
+>    instruction blocks. See [memory.md §Scenario: Autonomous Memories](./memory.md#scenario-autonomous-memories-db-backed-runtime-memory-v2-2-期) for the full recall contract.
+>
+> **CRITICAL**: Recall must **append** to `messages[0]`; a new user message at
+> index 1 shifts the Anthropic cache breakpoint and invalidates the cache on
+> every turn (5-10× cost). Adding `cache_control` to the recall block shifts
+> the breakpoint to the recall block and demotes the instructions from cache
+> anchor. See [memory.md §7 Wrong vs Correct](./memory.md#7-wrong-vs-correct).
 
 ---
 
