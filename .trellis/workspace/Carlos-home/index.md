@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 83
+- **Total Sessions**: 84
 - **Last Active**: 2026-06-29
 <!-- @@@/auto:current-status -->
 
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 84 | 2026-06-29 | Session 84: P3 工具执行前召回 — Tier1 hook seam + active 注脚 + spec 同步 + 归档 | `1a65e77`, `effca94`, `b89f610`, `43e149d` | `main` |
 | 83 | 2026-06-29 | Session 83: P2 自主记忆手工读写闭环 — 闭环落地 + spec 同步 + 归档 | `81fcaf1`, `a1786d6`, `9f34a65`, `95ab765` | `main` |
 | 82 | 2026-06-29 | P1 自主记忆存储底座落地 | `c3b1824`, `f0052f8` | `main` |
 | 81 | 2026-06-28 | L3b PR3 三个 Blocker 修复（权限/并发/越权） | `9981380`, `8cdbb53` | `main` |

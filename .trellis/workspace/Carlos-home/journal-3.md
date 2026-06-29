@@ -1468,3 +1468,98 @@ P3/P4/P5 工作未渗透到 P2:
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 84: P3 工具执行前召回 — Tier1 hook seam + active 注脚 + spec 同步 + 归档
+
+**Date**: 2026-06-29
+**Task**: P3 工具执行前召回(06-29-am-p3-tool-recall, child of `06-29-autonomous-memory` epic)
+**Branch**: `main`
+
+### Summary
+
+P2 session-start FTS5 recall 之外,补 layer 2 工具执行前 pitfall 召回(spike-007 §4 层2,接入点 B `permissions/check.rs:51`)。agent 跑 `shell`/`edit`/`grep`/... 前,用 `tool_name + tool_input` 精确匹配 `trigger_key`,active 命中把 pitfall 作为 `⚠️ Memory:` 注脚 prepend 到 `tool_result.content`,**不阻断**工具执行。Verified 软拦截 / 事件驱动自动写入 / 状态机晋升均严格 P5/P4 范围,本 PR 不触动。
+
+**关键架构决策(5 条,落 prd.md 已定决策段)**:
+1. **挂在 `chat_loop` seam 而非 `permissions::check()` 内部** — 5-tier 拦截链纯净;P5 verified 软拦截需要从 check() 内部走(结构化 `Decision`),P3 active-only footnote 放 seam 简化 P5 落地
+2. **active-only filter** — `find_pitfalls_by_trigger` SQL 返回 active + verified,但 P3 严格过滤 `status == 'active'`;verified 留 P5(已在 spike-007 §4 命中分档表定档)
+3. **`bump_hit_count` 走 `tokio::spawn` fire-and-forget** — 不阻塞 recall 步骤,匹配项目 audit-write 模式(非阻塞 metadata);P5 状态机读 `hit_count` 决定晋升
+4. **不阻断工具执行** — `Err(sqlx::Error)` → `tracing::warn!` + 返回 `Ok(None)`,工具照常执行(PRD hard rule);`Decision::Allow` 不变
+5. **注脚 prepend 到 `tool_result.content` 在 envelope wrap 之前** — `tool_use_id` 配对 / `is_error` 语义 / envelope `{result, cwd}` shape 全部不变;前端 `extractToolResultDisplay` 兼容(plain text 在 result 字段内)
+
+**Spec 同步 (4 文件,+131 行)**:
+- `permission-layer.md` §4.2: 新增 "Tier 1 Hooks 实际实现路径 — P3 工具执行前召回" 小节;记函数签名 + 两处调用点 + 6 个 test 名称;Why-seam-not-check 段:职责分离 / P5 扩展位 / 可测性
+- `memory.md` §Scenario 2: 新增 "Pre-tool pitfall recall contract (P3, layer 2 of 2)" 子节;明文区分 layer 1(P2 FTS5 session-start)+ layer 2(P3 trigger_key pre-tool)是 two-independent-recall;Contracts 表;Validation & Error Matrix 加 6 行;Bad Cases 加 2 条("recall 放 check() 内部"/"verified 软拦截错放 P3");Tests Required 加 6 个 P3 test
+- `tool-contract.md` Response 段: 加 P3 footnote 注入提示 — plain-text 前缀 / NOT new content block / tool_use_id 配对不变 / 前端兼容
+- `agent-loop-architecture.md` front-matter: 加 "Per-tool pitfall recall seam (P3)" 段 — 现有 per-turn context construction (⑤a) 两块 instruction + recall 之外,新增 post-check / pre-execute seam
+
+### Implementation Summary
+
+- `permissions/check.rs` (+173): `recall_pitfall_footnote(pool, tool_name, tool_input) -> Result<Option<String>, sqlx::Error>` + 私有 `extract_probe_args`(按 tool kind 选 path/command/url 探针)
+- `permissions/mod.rs` (+1): re-export
+- `permissions/tests_check.rs` (+235,含 make_pool helper): 6 个新 test — active hit / unrelated tool / verified out-of-scope / candidate out-of-scope / command_pattern mismatch / empty DB
+- `chat_loop.rs` (+80): 两处 seam 挂载 — parallel-batch L2 path (≈line 1792) + serial path (≈line 2361);位于 `permissions::check` 返回 Allow 之后、`execute_tool` 之前
+- frontend: 零改动(plain text 在 content 内,前端 lenient parser 兼容)
+
+### Decisions (锁档)
+
+- **decision 1 (seam vs check() 内部)** — 已锁,见上
+- **decision 2 (active-only)** — 严格排除 verified/candidate;P5/P2 范围各自走自己的入口
+- **decision 3 (bump_hit_count fire-and-forget)** — `tokio::spawn` 不阻塞 recall 步骤;P5 状态机读 stale `hit_count` 可接受
+- **decision 4 (不阻断)** — PRD hard rule;`tracing::warn!` 降级放行
+- **decision 5 (prepend in content)** — 不破坏 content 协议 + envelope 兼容;多命中用 `\n• [title] content` 多行 bullets
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a65e77` | feat(memory): P3 工具执行前召回 — Tier1 hook seam + active 注脚 |
+| `effca94` | docs(spec): P3 自主记忆同步 — permission-layer §4.2 + memory §Scenario 2 P3 + tool-contract footnote + agent-loop seam |
+| `b89f610` | chore(task): P3 落地 — implementation-log + Open Q 闭合 + status→in_progress |
+| `43e149d` | chore(task): archive 06-29-am-p3-tool-recall (auto) |
+
+### Testing
+
+- `cargo test --lib`: **1028 passed / 0 failed / 0 ignored**(基线 1022 + P3 新增 6)
+- `cargo check`: 0 warning
+- `pnpm build`: vue-tsc + vite green(frontend 未触碰)
+- `pnpm vitest`: 未跑(P3 是纯后端,无前端改动)
+- trellis-check sub-agent: 10 spec 检查项全 PASS(5-tier 拦截链顺序 / Tier1 返回值仍是 Decision / find_pitfalls_by_trigger 调用参数对齐 / bump_hit_count 时机 / trigger_key schema / SQL 走 idx_am_pitfall 索引 / 召回失败降级 / tool_use_id 配对 / 9 项 Out-of-Scope 全未触动)
+
+### AC Compliance (P3 prd.md)
+
+- [x] AC1 召回对象 `kind=pitfall` + `status=active` — `recall_pitfall_footnote_active_hit_returns_text` test
+- [x] AC2 不误命中(无关命令) — `recall_pitfall_footnote_unrelated_tool_returns_none` + `recall_pitfall_footnote_command_pattern_mismatch_returns_none` + `recall_pitfall_footnote_empty_db_returns_none` tests
+- [x] AC3 不阻断(Decision 仍 Allow) — `permissions::check()` 5-tier 纯净,recall 是旁路 seam 调用;`Err` 走 `tracing::warn!` 降级
+- [x] AC4 verified 严格排除(→ P5 范围) — `recall_pitfall_footnote_verified_hit_returns_none_for_p3` test
+- [x] AC5 candidate 严格排除(→ P2 范围) — `recall_pitfall_footnote_candidate_hit_returns_none` test
+- [x] AC6 cargo test 全绿 — 1028/0
+- [x] AC7 frontend 不动 — `pnpm build` 通过,零前端 diff
+
+### Scope Guard (P3 严禁)
+
+P3 严格不渗透到 P4/P5/P2:
+- verified 软拦截重判(→ P5)未实施 — `find_pitfalls_by_trigger` SQL 返回 verified 行但 P3 active-only filter 严格排除
+- 事件驱动自动写入 hooks(→ P4)未加 — `chat_loop.rs:1717 emit_tool_result` 处未动
+- 状态机自动晋升(→ P5)未加 — `MemoryStatus` 枚举 `update_status` / `promote` / `demote` 未调用
+- 11 个 tool 文件未触碰 — `ToolContext.project_id` 等 P1 注入字段 P3 不消费
+- `commands/memory.rs` / `tools/remember.rs` 未改 — P2 闭环保持稳定
+- `run_chat_loop` 23-param 签名未改 — recall 是旁路 seam 调用,0 个新参数
+- `db/memories.rs` 未改 — 消费 P1 产出的 `find_pitfalls_by_trigger` / `bump_hit_count` 接口
+- `memory_recall.rs` 未改 — P3 走 trigger_key 精确匹配,不走 FTS5 layer 1 路径
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- P4 (06-29-am-p4-event-reflect) 事件驱动自动写入 — `insert_memory` 入口已稳 + `chat_loop.rs:1717 emit_tool_result` 是预定挂点;P3 召回的 pitfall 写入后立刻可被 P3 consumer 消费(闭环验证)
+- P5 (06-29-am-p5-quality) 状态机 + 卫生 job — `MemoryStatus` 枚举 + `RecallStatusFilter::P5Auto` 变体已留位;`verified_pitfall_decision` 是 P3 `recall_pitfall_footnote` 的 sibling 扩展位(同 seam,不互相影响)
+- 父任务 [2/5 done] → [3/5 done];剩余 P4 + P5 各 1 PR
+- 文档同步:`docs/IMPLEMENTATION.md` §4 ADR 日志 + `docs/ROADMAP.md` V2 4 档分类更新(在 P5 落地后整体 re-trim)
+
+### Next Steps
+
+- None - task complete
