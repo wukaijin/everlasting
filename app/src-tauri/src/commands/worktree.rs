@@ -61,42 +61,16 @@ pub async fn attach_worktree(
         return Err(format!("attach_worktree: {}", msg));
     }
 
-    // Disk first, then DB. If the worktree creation fails we
-    // don't touch the DB; the user can retry.
+    // ----- Disk + DB write via shared helper -----
+    // The helper is the inner work that the `merge_worker`
+    // tool-layer lazy-attach path also calls. The
+    // state-machine guard stays here at the IPC boundary
+    // (re-IPC-attaching an Active session is still a user
+    // error). The helper does NOT re-validate that state.
     let data_dir = state.app_data_dir.clone();
-    let wt_path = git::session_worktree_path(&data_dir, &project.id, &session_id);
-    git::create_worktree(project_path, &wt_path, &session_id)
-        .map_err(|e| format!("attach_worktree: worktree creation failed: {}", e))?;
-
-    // Now write the new state to the DB.
-    let wt_str = wt_path.to_str().map(str::to_string);
-    db::set_worktree_state(
-        &state.db,
-        &session_id,
-        db::WorktreeState::Active,
-        wt_str.as_deref(),
-        loaded.session.last_worktree_path.as_deref(),
-    )
-    .await
-    .map_err(|e| format!("attach_worktree: db update failed: {}", e))?;
-
-    // Inject system event so the next LLM turn sees the
-    // transition.
-    let branch = git::worktree::branch_name(&session_id);
-    let wt_display = wt_path.display().to_string();
-    let event_text = format!(
-        "worktree attached: {} on branch {}",
-        wt_display, branch
-    );
-    if let Err(e) =
-        db::insert_system_event(&state.db, &session_id, &event_text, "attached").await
-    {
-        tracing::warn!(
-            error = %e,
-            session_id = %session_id,
-            "attach_worktree: insert_system_event failed (non-fatal)"
-        );
-    }
+    git::worktree::attach_session(&state.db, &project, &session_id, &data_dir)
+        .await
+        .map_err(|e| format!("attach_worktree: {}", e))?;
 
     // Reload and return the canonical row.
     let updated = db::load_session(&state.db, &session_id)

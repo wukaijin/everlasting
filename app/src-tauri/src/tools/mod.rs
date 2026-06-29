@@ -217,6 +217,17 @@ pub struct ToolContext {
     /// (a filesystem path) — the two are different concepts that
     /// happen to identify the same project.
     pub project_id: String,
+    /// 06-30 follow-up: app-global data directory (resolved once
+    /// by `AppState::load` from `tauri::AppHandle::app_data_dir`).
+    /// Tool-layer callers that need to construct absolute
+    /// paths under `<data_dir>/worktrees/...` (e.g. lazy
+    /// auto-attach inside `merge_worker::ensure_parent_worktree
+    /// _attached`) read it from here instead of a separate
+    /// parameter. The Tauri IPC side has direct access via
+    /// `State::app_data_dir`; the test path uses a tmpdir
+    /// placeholder since the worktree tools under test don't
+    /// depend on the data dir layout.
+    pub data_dir: PathBuf,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses

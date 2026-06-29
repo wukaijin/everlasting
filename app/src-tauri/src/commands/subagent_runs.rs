@@ -107,16 +107,42 @@ pub async fn get_subagent_run(
 /// 3-way merge, conflict returns the file list and leaves
 /// both branches intact).
 ///
-/// Wire shape: `(rid: String, run_id: String) -> String` —
+/// Wire shape: `(rid: String, run_id: String) -> MergeWorkerResult` —
 /// the `rid` is the chat request id (unused by the merge
 /// itself; reserved for future audit / correlation). The
-/// `run_id` is the `subagent_runs.id` UUID.
+/// `run_id` is the `subagent_runs.id` UUID. The result carries
+/// the libgit2 merge outcome message AND an `auto_attached_parent`
+/// flag indicating whether the merge entry point had to lazily
+/// attach a worktree to the parent session first (06-30
+/// follow-up). The frontend uses the flag to surface a
+/// specific toast message ("已合并…并自动绑定了父工作区") so
+/// the user knows the merge had the side effect of attaching
+/// the parent session.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeWorkerResult {
+    /// Human-readable merge outcome message (e.g. "merged 3
+    /// commits fast-forward" or "merged with conflicts; files
+    /// preserved"). When libgit2 reports conflicts, this string
+    /// carries the file list per `parseConflictFiles` contract.
+    pub message: String,
+    /// `true` iff this merge triggered a lazy attach on the
+    /// parent session (parent was at `WorktreeState::None`).
+    /// Frontend reads this to render a specific toast and to
+    /// refresh the chat header's worktree chip (which just
+    /// flipped from `none → active`). `false` when the parent
+    /// was already `Active` (nothing to do) OR was `Detached`
+    /// (we skipped re-attach intentionally; the merge will fail
+    /// in `do_merge_blocking` and surface that error verbatim).
+    pub auto_attached_parent: bool,
+}
+
 #[tauri::command]
 pub async fn merge_worker_run(
     _rid: String,
     run_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
+) -> Result<MergeWorkerResult, String> {
     // Look up the run row → find parent session id + worktree
     // path. We need the parent session id to look up the
     // session branch name (the parent is the one whose
@@ -134,9 +160,43 @@ pub async fn merge_worker_run(
         })?
         .to_string();
 
-    // Load the parent session row → resolve the worktree path
-    // (the one whose `session/<id>` branch is the merge
-    // target).
+    // ----- Lazy auto-attach (06-30 follow-up) -----
+    // The parent session may not have a worktree (`None`),
+    // because session creation is opt-in and only the LLM/UI
+    // can flip it to `Active`. Before pre-06-30 this hard-failed
+    // with `"parent session has no worktree"`. Now we let the
+    // helper transparently create one when missing (Active /
+    // Detached are no-ops). Errors flow up as actionable
+    // messages to the frontend toast.
+    let mut auto_attached_parent = false;
+    match crate::tools::merge_worker::ensure_parent_worktree_attached(
+        &state.db,
+        &state.app_data_dir,
+        &parent_session_id,
+    )
+    .await
+    {
+        Ok(true) => {
+            auto_attached_parent = true;
+        }
+        Ok(false) => {
+            // Active or Detached — the helper was a no-op.
+            // Detached intentionally skips re-attach per INV-M3.
+        }
+        Err(e) => {
+            return Err(format!(
+                "merge_worker_run: cannot auto-attach parent worktree: {}",
+                e
+            ));
+        }
+    }
+
+    // Re-load the parent row to capture the (potentially new)
+    // `worktree_path`. After lazy attach, the path we hand to
+    // `do_merge_blocking` must point at the fresh worktree the
+    // helper just created — the in-memory `parent_wt`
+    // captured earlier is stale by definition when
+    // `auto_attached_parent == true`.
     let session_row = db::load_session(&state.db, &parent_session_id)
         .await
         .map_err(|e| format!("merge_worker_run: failed to load session: {}", e))?
@@ -146,18 +206,27 @@ pub async fn merge_worker_run(
                 parent_session_id
             )
         })?;
-    let parent_wt = session_row
-        .session
-        .worktree_path
-        .as_deref()
-        .ok_or_else(|| "parent session has no worktree".to_string())?;
-    let parent_wt = std::path::Path::new(parent_wt);
+    let parent_wt = match session_row.session.worktree_path.as_deref() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            // Detached parent: per INV-M3 we did NOT
+            // re-attach, so `worktree_path` is still None.
+            // The merge will fail downstream with the existing
+            // libgit2 "parent branch ... not found" error
+            // (this is a clean, recognizable signal — the user
+            // can manually attach via the chat header).
+            return Err(format!(
+                "merge_worker_run: parent session '{}' is detached (no worktree bound); please attach via the chat header before merging",
+                parent_session_id
+            ));
+        }
+    };
 
     // Stage 1: libgit2 merge (off-thread, since libgit2 is
     // blocking I/O).
     let run_id_for_task = run_id.clone();
     let parent_session_id_for_task = parent_session_id.clone();
-    let parent_wt_for_task = parent_wt.to_path_buf();
+    let parent_wt_for_task = parent_wt;
     let merge_result = tauri::async_runtime::spawn_blocking(move || {
         crate::tools::merge_worker::do_merge_blocking(
             &parent_wt_for_task,
@@ -189,7 +258,10 @@ pub async fn merge_worker_run(
             // re-render. Currently unused; kept for parity
             // with the tool-layer shape.
             let _ = worker_wt;
-            Ok(msg)
+            Ok(MergeWorkerResult {
+                message: msg,
+                auto_attached_parent,
+            })
         }
         Err(msg) => Err(msg),
     }

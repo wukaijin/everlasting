@@ -365,6 +365,165 @@ fn create_worktree_add(
     Ok(())
 }
 
+/// Attach a session's `session/<id>` worktree and write the
+/// resulting state to the DB (06-30 follow-up, `merge_worker`
+/// lazy-attach).
+///
+/// This is the inner work of `commands::worktree::attach_worktree`
+/// extracted as a free function so tool-layer call sites
+/// (`tools::merge_worker::ensure_parent_worktree_attached`) can
+/// invoke it without dragging a Tauri `State`. It preserves every
+/// invariant of the original IPC body:
+///
+/// - **State machine guard is the caller's responsibility.** This
+///   helper unconditionally creates the worktree + writes Active
+///   state. The IPC `attach_worktree` rejects `Active` (already
+///   attached) and accepts `None` / `Detached`. The merge_worker
+///   helper has its own tri-state policy. Putting the policy in
+///   the helper would force one caller's contract onto the other,
+///   so each caller enforces its own guard before calling here.
+/// - **Dirty-project-root check** IS enforced here. A new
+///   worktree branching from a dirty base would silently lose the
+///   user's WIP, which is an unacceptable regression. We refuse
+///   with `GitError::Dirty` (carrying up to 10 offending paths).
+/// - **Disk first, then DB.** If the libgit2 worktree add fails,
+///   we do not touch the DB; the user can retry with the same
+///   `session_id` and the row state stays at whatever it was
+///   (typically `None`, occasionally `Detached`).
+/// - **System event injection** is best-effort (`tracing::warn!`
+///   on failure): the worktree is already on disk + the DB row
+///   is updated, so a missing event only delays the LLM's
+///   awareness by one turn (the next turn will reload + run
+///   `build_system_prompt` which embeds the current state).
+///
+/// Errors propagate as `GitError`. The `Dirty` variant carries a
+/// pre-formatted, user-friendly message; `NotARepo` for non-git
+/// projects; `Git2` for libgit2 failures (verbatim); `Io` for
+/// filesystem errors. The IPC layer prefixes the helper error
+/// with `"attach_worktree: "` for parity with the prior string
+/// contract; tool-layer callers add their own prefix.
+pub async fn attach_session(
+    db: &sqlx::SqlitePool,
+    project: &crate::projects::ProjectRow,
+    session_id: &str,
+    data_dir: &Path,
+) -> Result<PathBuf, GitError> {
+    let project_path = Path::new(&project.path);
+
+    // Reject non-git projects up front. The IPC layer does this
+    // too, but the helper needs to be self-sufficient (called from
+    // tool-layer paths that have no State-derived guards).
+    if !project.is_git_repo {
+        return Err(GitError::NotARepo {
+            path: project.path.clone(),
+        });
+    }
+
+    // Dirty-project-root check. The new worktree would diverge
+    // from the user's WIP if we branched off HEAD with uncommitted
+    // changes in the project root. We have to convert from
+    // `Result<(), String>` (check_clean's contract) to a typed
+    // GitError::Dirty — the String carries the paths, so parse
+    // out the trailing `": ...path..."` suffix when present.
+    if project_path.exists() {
+        match check_clean(project_path) {
+            Ok(()) => {}
+            Err(msg) => {
+                // Surface up to 10 paths for an actionable message.
+                // check_clean's string format is `"<path> has
+                // uncommitted changes: <path1>, <path2>, ..."`.
+                let paths: Vec<String> = msg
+                    .rsplit_once(": ")
+                    .map(|(_, rest)| {
+                        rest.split(", ").map(String::from).take(10).collect()
+                    })
+                    .unwrap_or_default();
+                return Err(GitError::Dirty {
+                    path: project_path.display().to_string(),
+                    paths,
+                });
+            }
+        }
+    }
+
+    // Compute the worktree path (same layout as the IPC layer)
+    // and run the libgit2 work. `create` already does the
+    // 3-state self-heal (stale metadata / stale branch / orphan
+    // dir) before the worktree add, so prior-crash recovery is
+    // transparent.
+    let wt_path = worktree_path(data_dir, &project.id, session_id);
+    create(project_path, &wt_path, session_id)?;
+
+    // Persist the new state. We update `last_worktree_path` only
+    // when transitioning from Detached (preserving the previous
+    // pointer); None → Active leaves it None (the prior value is
+    // NULL anyway). The `as_deref()` is safe because project.id is
+    // never None at the row level.
+    let prev = crate::db::sessions::load_session(db, session_id)
+        .await
+        .map_err(|e| GitError::Io {
+            path: project_path.display().to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        })?
+        .ok_or_else(|| {
+            GitError::Io {
+                path: project_path.display().to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("session '{}' not found", session_id),
+                ),
+            }
+        })?;
+    let last_wt = prev
+        .session
+        .last_worktree_path
+        .as_deref()
+        .or(prev.session.worktree_path.as_deref());
+    let wt_str = wt_path.to_str();
+    crate::db::sessions::set_worktree_state(
+        db,
+        session_id,
+        crate::db::WorktreeState::Active,
+        wt_str,
+        last_wt,
+    )
+    .await
+    .map_err(|e| {
+        GitError::Io {
+            path: project_path.display().to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        }
+    })?;
+
+    // Inject the system event. Best-effort (tracing::warn! on
+    // failure): the worktree is already on disk + the row is
+    // updated, so a missing event only delays the LLM's awareness
+    // by one turn (next-turn reload + system prompt rebuild fills
+    // the gap).
+    let branch = branch_name(session_id);
+    let event_text =
+        format!("worktree attached: {} on branch {}", wt_path.display(), branch);
+    if let Err(e) =
+        crate::db::sessions::insert_system_event(db, session_id, &event_text, "attached").await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %session_id,
+            "attach_session: insert_system_event failed (non-fatal)"
+        );
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        project = %project_path.display(),
+        worktree = %wt_path.display(),
+        branch = %branch,
+        "attached session worktree"
+    );
+
+    Ok(wt_path)
+}
+
 /// Destroy the worktree at `worktree_path` and delete the session
 /// branch. Best-effort: errors in the directory removal are
 /// surfaced; the metadata prune and branch delete are
@@ -1603,4 +1762,191 @@ mod tests {
         // the default-when-None path doesn't crash.
         let _ = resolve_cleanup_period_days(None);
     }
+
+    // -----------------------------------------------------------------------
+    // attach_session helper (06-30 follow-up, lazy auto-attach on merge)
+    //
+    // These tests cover the inner work of `commands::worktree::
+    // attach_worktree` extracted as a free function for tool-layer
+    // (`merge_worker`) reuse. The contract:
+    //   - happy_path: clean git project + session at None →
+    //     worktree created + DB row flipped to Active + system
+    //     event inserted; returns the new worktree path
+    //   - non_git_project: project_row.is_git_repo=false →
+    //     GitError::NotARepo, no disk writes, no DB writes
+    //   - dirty_project_root: project root has uncommitted
+    //     changes → GitError::Dirty carrying the offending path(s)
+    //
+    // The state machine guard (None / Detached / Active policy)
+    // lives at the IPC boundary, NOT in this helper — covered by
+    // the IPC-layer tests rather than the helper.
+    // -----------------------------------------------------------------------
+
+    /// Minimal in-test DB pool (sqlite::memory:) + migrations.
+    /// Self-contained here (vs importing from db::sessions_tests)
+    /// because git-domain tests historically have no DB surface;
+    /// sharing the helper would couple git-test compile to
+    /// db-test compile.
+    async fn attach_session_test_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::db::migrations::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    /// Helper: init a git repo at `path`, commit a single file,
+    /// and create a ProjectRow + session in the DB. Returns
+    /// (project_row, session_id, data_dir).
+    async fn attach_session_setup(
+        project_dir: &Path,
+        pool: &sqlx::SqlitePool,
+        is_git_repo: bool,
+    ) -> (crate::projects::ProjectRow, String, PathBuf) {
+        if is_git_repo {
+            init_repo(project_dir);
+            std::fs::write(project_dir.join("a.txt"), "hello").unwrap();
+            commit_all(project_dir);
+        } else {
+            fs::create_dir_all(project_dir).unwrap();
+            std::fs::write(project_dir.join("README"), "no git here").unwrap();
+        }
+        let data_dir = tempfile::tempdir().unwrap().keep();
+        let project = crate::db::projects::create_project(
+            pool,
+            "test-proj",
+            project_dir.to_str().unwrap(),
+            is_git_repo,
+            None,
+        )
+        .await
+        .unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        crate::db::sessions::create_session(
+            pool,
+            &session_id,
+            &project.id,
+            project_dir.to_str().unwrap(),
+            "GLM-4.7",
+            None,
+        )
+        .await
+        .unwrap();
+        (project, session_id, data_dir)
+    }
+
+    #[tokio::test]
+    async fn attach_session_happy_path() {
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("proj");
+        let pool = attach_session_test_pool().await;
+        let (project, session_id, data_dir) =
+            attach_session_setup(&project_dir, &pool, true).await;
+        // First commit done — project root is clean.
+
+        let result = attach_session(&pool, &project, &session_id, &data_dir).await;
+        let wt_path = result.expect("attach_session should succeed");
+
+        // Helper contract: returns the worktree path it built.
+        let expected = worktree_path(&data_dir, &project.id, &session_id);
+        assert_eq!(wt_path, expected, "returned path should match canonical layout");
+
+        // Libgit2 effect: the on-disk worktree exists and points
+        // at a fresh `session/<sid>` branch.
+        assert!(wt_path.exists(), "worktree directory should exist on disk");
+        let wt_repo = Repository::open(&wt_path).expect("wt should open as repo");
+        let head_branch = wt_repo
+            .head()
+            .expect("HEAD should resolve")
+            .shorthand()
+            .expect("HEAD should have shorthand")
+            .to_string();
+        assert_eq!(head_branch, format!("session/{}", session_id));
+
+        // DB effect 1: row should flip to Active with the new
+        // worktree_path.
+        let reloaded = crate::db::sessions::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::Active);
+        assert_eq!(reloaded.session.worktree_path.as_deref(), Some(expected.to_str().unwrap()));
+
+        // DB effect 2: a system-event row should be appended
+        // (the [worktree event] attached: <path> on branch
+        // session/<sid> message).
+        let msgs = reloaded.messages;
+        assert_eq!(msgs.len(), 1, "exactly one system event expected");
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].seq, 0);
+        let meta = msgs[0].metadata.as_ref().expect("metadata present");
+        assert_eq!(meta["kind"], "worktree_event");
+        assert_eq!(meta["event"], "attached");
+    }
+
+    #[tokio::test]
+    async fn attach_session_non_git_project() {
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("proj");
+        let pool = attach_session_test_pool().await;
+        let (project, session_id, data_dir) =
+            attach_session_setup(&project_dir, &pool, false).await;
+
+        let result = attach_session(&pool, &project, &session_id, &data_dir).await;
+        match result {
+            Err(GitError::NotARepo { path }) => {
+                assert_eq!(path, project_dir.to_str().unwrap());
+            }
+            other => panic!("expected NotARepo, got {:?}", other),
+        }
+
+        // DB should be unchanged (still None + no system event).
+        let reloaded = crate::db::sessions::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::None);
+        assert!(reloaded.messages.is_empty(), "no system event on rejected attach");
+    }
+
+    #[tokio::test]
+    async fn attach_session_dirty_project_root() {
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("proj");
+        let pool = attach_session_test_pool().await;
+        let (project, session_id, data_dir) =
+            attach_session_setup(&project_dir, &pool, true).await;
+        // Now make the project root dirty: add an uncommitted
+        // file (NOT stage+commit).
+        std::fs::write(project_dir.join("dirty.txt"), "stale").unwrap();
+
+        let result = attach_session(&pool, &project, &session_id, &data_dir).await;
+        match result {
+            Err(GitError::Dirty { paths, .. }) => {
+                assert!(
+                    paths.iter().any(|p| p.ends_with("dirty.txt")),
+                    "Dirty error must list dirty.txt as offending path, got: {:?}",
+                    paths
+                );
+            }
+            other => panic!("expected Dirty, got {:?}", other),
+        }
+
+        // DB should be unchanged.
+        let reloaded = crate::db::sessions::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::None);
+        assert!(reloaded.messages.is_empty(), "no system event on rejected attach");
+
+        // No worktree directory should be created on disk.
+        let expected = worktree_path(&data_dir, &project.id, &session_id);
+        assert!(!expected.exists(), "no worktree dir on rejected attach");
+    }
 }
+

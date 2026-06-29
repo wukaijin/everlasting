@@ -3565,6 +3565,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
+        data_dir: h.app_data_dir.clone(),
     };
 
     // Invoke merge_worker.
@@ -3731,6 +3732,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
+        data_dir: h.app_data_dir.clone(),
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -3812,6 +3814,7 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
+        data_dir: h.app_data_dir.clone(),
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) = crate::tools::merge_worker::execute(
@@ -3892,6 +3895,7 @@ async fn l3b_discard_worker_happy_path() {
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
+        data_dir: h.app_data_dir.clone(),
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -3959,6 +3963,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
+        data_dir: h.app_data_dir.clone(),
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) = crate::tools::discard_worker::execute(

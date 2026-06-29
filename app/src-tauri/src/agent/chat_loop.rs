@@ -479,6 +479,15 @@ pub async fn run_chat_loop(
         // checkout OF the parent's project), so the worker path
         // also carries the parent's project_id.
         project_id: project.id.clone(),
+        // 06-30 follow-up: pass through the app-global data
+        // directory so tool-layer helpers that need to construct
+        // absolute paths (e.g. lazy auto-attach on the
+        // merge_worker path) can read it from `ToolContext`
+        // without changing every tool-execute signature. The
+        // value here is identical to `state.app_data_dir` — we
+        // clone the `app_data_dir` parameter that's already in
+        // scope on the chat_loop function.
+        data_dir: app_data_dir.clone(),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;

@@ -115,13 +115,14 @@ pub async fn execute(
             )
         }
     };
-    // `ctx.worktree_path` is the canonical on-disk path the
-    // parent session should be operating on; we use it for the
-    // libgit2 `Repository::open` and to look up the merge base
-    // (parent's `session/<id>` branch lives in the same `.git/`
-    // as any worktree, but the worktree's HEAD is the
-    // authoritative "where the merge lands" location).
-    let parent_wt = ctx.worktree_path.clone();
+    // `ctx.worktree_path` may be the project root (parent never
+    // attached a worktree) OR the actual worktree path (parent
+    // already Active). We don't trust it directly — Stage 2a
+    // below calls `ensure_parent_worktree_attached` to normalize
+    // the parent's state (lazy-attaching if needed), then reloads
+    // the parent session row to capture the authoritative
+    // `worktree_path` for `do_merge_blocking`.
+    //
     // We need the parent session id to look up the parent branch
     // name. The chat session is the parent of this LLM-driven
     // merge call (the worker is the immediate subagent, but the
@@ -171,14 +172,88 @@ pub async fn execute(
         );
     }
 
-    // ----- Stage 2: do the libgit2 merge on a blocking task -----
+    // ----- Stage 2a: lazy auto-attach parent worktree -----
+    // (06-30 follow-up.) The parent session may be at
+    // `WorktreeState::None` (no worktree ever attached). Without
+    // this guard, `do_merge_blocking` would fail downstream with
+    // the opaque "parent branch '<sid>' not found" error from
+    // libgit2 — see design §3.4 + prd §"Goals". The helper is
+    // shared with the IPC `merge_worker_run` so both paths
+    // follow the exact same tri-state contract.
+    match ensure_parent_worktree_attached(&ctx.db, &ctx.data_dir, &parent_session_id).await {
+        Ok(true) | Ok(false) => {
+            // Ok(true)  → we just attached a fresh worktree;
+            //             `ctx.worktree_path` (captured above
+            //             from before this call) is now stale
+            //             and must be replaced before
+            //             `do_merge_blocking` opens the repo.
+            // Ok(false) → no-op (parent already Active, or
+            //             Detached (skipped intentionally per
+            //             INV-M3)); `ctx.worktree_path` is
+            //             still valid IF parent was Active,
+            //             but if Detached we need a fresh
+            //             load to fail with a clean error
+            //             instead of an opaque libgit2 one.
+            // Either way: reload the parent session row to get
+            // the authoritative `worktree_path`.
+        }
+        Err(e) => {
+            return (
+                format!("merge_worker: cannot auto-attach parent worktree: {}", e),
+                true,
+                ToolContextUpdate::default(),
+                None,
+            );
+        }
+    }
+    let reloaded_parent = match crate::db::load_session(&ctx.db, &parent_session_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return (
+                format!("merge_worker: parent session '{}' disappeared", parent_session_id),
+                true,
+                ToolContextUpdate::default(),
+                None,
+            );
+        }
+        Err(e) => {
+            return (
+                format!("merge_worker: failed to reload parent session: {}", e),
+                true,
+                ToolContextUpdate::default(),
+                None,
+            );
+        }
+    };
+    let parent_wt = match reloaded_parent.session.worktree_path.as_deref() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            // Detached parent (INV-M3): we did NOT
+            // re-attach. Surface an actionable error rather
+            // than the cryptic libgit2 "parent branch not
+            // found" downstream. The LLM sees this and can
+            // instruct the user (or the user can attach via
+            // the chat header manually).
+            return (
+                format!(
+                    "merge_worker: parent session '{}' is detached (no worktree bound); call attach_worktree first or attach via the chat header",
+                    parent_session_id
+                ),
+                true,
+                ToolContextUpdate::default(),
+                None,
+            );
+        }
+    };
+
+    // ----- Stage 2b: do the libgit2 merge on a blocking task -----
     // The blocking task takes ownership of `parent_wt`,
     // `parent_session_id`, and `run_id` (they're `Clone`-able
     // — `PathBuf` is, `String` is). The post-merge cleanup
     // uses clones of the same values (a `String` / `PathBuf`
     // clone is cheap — `String` is a heap-backed buffer,
     // `PathBuf` is the same).
-    let parent_wt_for_task = parent_wt.clone();
+    let parent_wt_for_task = parent_wt;
     let session_id_for_task = parent_session_id.clone();
     let run_id_for_task = run_id.clone();
     let merge_result = tokio::task::spawn_blocking(move || {
@@ -235,6 +310,72 @@ fn merge_lock_for(parent_session_id: &str) -> Arc<Mutex<()>> {
         .entry(parent_session_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
+}
+
+/// Lazy auto-attach helper for the merge entry points (06-30
+/// follow-up). Called from BOTH the `merge_worker` tool's `execute`
+/// AND the `merge_worker_run` IPC command before they invoke
+/// `do_merge_blocking`. Same policy on both paths so behavior is
+/// deterministic regardless of whether the merge was triggered by
+/// the user clicking the drawer's Merge button or by the LLM
+/// deciding to merge.
+///
+/// Returns:
+/// - `Ok(false)` — parent is `Active` (already has a worktree;
+///   nothing to do) **OR** parent is `Detached` (the user explicitly
+///   tore down their worktree; we MUST NOT silently re-attach —
+///   forcing re-attachment would override user intent and could
+///   pull the session into a different branch state than they
+///   expect). The merge will then fail at `do_merge_blocking` with
+///   a clean error that the UI surfaces back.
+/// - `Ok(true)` — parent was `None`, and we lazily created a fresh
+///   worktree via [`crate::git::worktree::attach_session`]. The
+///   caller's NEXT step must reload the parent's `worktree_path`
+///   from the DB; the value cached on `ctx.worktree_path` (or
+///   captured before the call) is now stale because attach creates
+///   a brand-new tree under `<data_dir>/worktrees/<pid>/<sid>`.
+/// - `Err(reason)` — the lazy attach was attempted but failed.
+///   Common reasons are "project not a git repository" (the
+///   project isn't a git repo at all) or "dirty project root"
+///   (uncommitted changes in the project dir would be silently
+///   bypassed by branching from HEAD). The returned `String` is
+///   the upstream `attach_session` error verbatim — the IPC layer
+///   prefixes it with `"merge_worker_run: cannot auto-attach
+///   parent worktree: "` for user-facing display, and the tool
+///   layer wraps it in a tuple `(..., true, ...)` as the tool
+///   result content.
+pub async fn ensure_parent_worktree_attached(
+    db: &sqlx::SqlitePool,
+    data_dir: &Path,
+    parent_session_id: &str,
+) -> Result<bool, String> {
+    let loaded = db::sessions::load_session(db, parent_session_id)
+        .await
+        .map_err(|e| format!("failed to load parent session: {}", e))?
+        .ok_or_else(|| format!("parent session '{}' not found", parent_session_id))?;
+    match loaded.session.worktree_state {
+        db::WorktreeState::Active | db::WorktreeState::Detached => Ok(false),
+        db::WorktreeState::None => {
+            let project = db::projects::get_project(db, &loaded.session.project_id)
+                .await
+                .map_err(|e| format!("failed to load parent project: {}", e))?
+                .ok_or_else(|| {
+                    format!(
+                        "parent project '{}' not found",
+                        loaded.session.project_id
+                    )
+                })?;
+            crate::git::worktree::attach_session(db, &project, parent_session_id, data_dir)
+                .await
+                .map_err(|e| e.to_string())?;
+            tracing::info!(
+                parent_session_id = %parent_session_id,
+                branch = %crate::git::worktree::branch_name(parent_session_id),
+                "merge_worker: auto-attached parent worktree for merge"
+            );
+            Ok(true)
+        }
+    }
 }
 
 /// Synchronous merge body. Returns `Ok(message)` on success,
@@ -609,4 +750,194 @@ pub async fn finalize_merge(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for `ensure_parent_worktree_attached` (06-30
+    //! follow-up). The helper's tri-state contract must hold across
+    //! both the IPC and tool entry points; the invariant is
+    //! anchored here. End-to-end behavioral coverage for the IPC
+    //! path lives in `commands/subagent_runs.rs` tests; for the
+    //! tool path in `tests_subagent.rs`.
+
+    use super::*;
+    use std::process::Command as StdCommand;
+    use tempfile::tempdir;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::db::migrations::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    /// Init a git repo at `path`, add + commit a placeholder file
+    /// so the project root is clean (required by `attach_session`).
+    fn init_clean_git_repo(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        let status = StdCommand::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git init failed");
+        let _ = StdCommand::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        let _ = StdCommand::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::fs::write(path.join("a.txt"), "hello").unwrap();
+        let add = StdCommand::new("git")
+            .args(["add", "-A"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(add.success());
+        let commit = StdCommand::new("git")
+            .args(["commit", "-m", "init", "--no-gpg-sign"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(commit.success());
+    }
+
+    /// Create a project + session row, return (project, session_id,
+    /// data_dir). Session is at `worktree_state=None` after this
+    /// call; tests that need a different state call
+    /// `db::set_worktree_state` to flip it explicitly.
+    async fn make_session(
+        pool: &sqlx::SqlitePool,
+        project_dir: &Path,
+    ) -> (crate::projects::ProjectRow, String, PathBuf) {
+        let data_dir = tempfile::tempdir().unwrap().keep();
+        let project = crate::db::projects::create_project(
+            pool,
+            "merge-test",
+            project_dir.to_str().unwrap(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        crate::db::sessions::create_session(
+            pool,
+            &session_id,
+            &project.id,
+            project_dir.to_str().unwrap(),
+            "GLM-4.7",
+            None,
+        )
+        .await
+        .unwrap();
+        (project, session_id, data_dir)
+    }
+
+    #[tokio::test]
+    async fn active_state_is_noop() {
+        let pool = test_pool().await;
+        let project_dir = tempdir().unwrap().keep();
+        init_clean_git_repo(&project_dir);
+        let (_project, session_id, data_dir) = make_session(&pool, &project_dir).await;
+
+        // Flip to Active with a fake worktree_path (no disk effect).
+        crate::db::sessions::set_worktree_state(
+            &pool,
+            &session_id,
+            crate::db::WorktreeState::Active,
+            Some("/data/fake_wt"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let result =
+            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        assert_eq!(result, Ok(false), "Active parent must be no-op");
+
+        // DB row's worktree_path must be UNCHANGED (we did nothing).
+        let loaded = crate::db::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.session.worktree_path.as_deref(), Some("/data/fake_wt"));
+    }
+
+    #[tokio::test]
+    async fn detached_state_is_noop_skipped() {
+        // Detached parent: we MUST NOT silently re-attach (prd
+        // INV-M3). Returning `Ok(false)` lets the merge fail at
+        // `do_merge_blocking` instead of overriding user intent.
+        let pool = test_pool().await;
+        let project_dir = tempdir().unwrap().keep();
+        init_clean_git_repo(&project_dir);
+        let (_project, session_id, data_dir) = make_session(&pool, &project_dir).await;
+
+        crate::db::sessions::set_worktree_state(
+            &pool,
+            &session_id,
+            crate::db::WorktreeState::Detached,
+            None,
+            Some("/data/old_wt"),
+        )
+        .await
+        .unwrap();
+
+        let result =
+            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        assert_eq!(result, Ok(false), "Detached parent must skip attach");
+
+        // DB row stays Detached; no new worktree_path written.
+        let loaded = crate::db::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.session.worktree_state, crate::db::WorktreeState::Detached);
+        assert!(loaded.session.worktree_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn lazy_attach_on_none_state() {
+        let pool = test_pool().await;
+        let project_dir = tempdir().unwrap().keep();
+        init_clean_git_repo(&project_dir);
+        let (project, session_id, data_dir) = make_session(&pool, &project_dir).await;
+
+        // Initial state is None (create_session doesn't attach).
+        let result =
+            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        assert_eq!(result, Ok(true), "None parent must trigger lazy attach");
+
+        // Side effects: DB row flipped to Active with the new
+        // worktree_path, and a [worktree event] row was injected.
+        let loaded = crate::db::load_session(&pool, &session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.session.worktree_state, crate::db::WorktreeState::Active);
+        let wt_path = loaded
+            .session
+            .worktree_path
+            .as_deref()
+            .expect("worktree_path should be set after lazy attach");
+        let expected =
+            crate::git::worktree::worktree_path(&data_dir, &project.id, &session_id);
+        assert_eq!(wt_path, expected.to_str().unwrap());
+
+        // The directory exists on disk and points at the new branch.
+        assert!(std::path::Path::new(wt_path).exists());
+        assert_eq!(loaded.messages.len(), 1, "exactly one system event expected");
+        assert_eq!(loaded.messages[0].role, "user");
+    }
 }

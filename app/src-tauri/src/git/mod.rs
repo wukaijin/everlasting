@@ -26,5 +26,4 @@ pub mod worktree;
 
 pub use worktree::{
     check_clean, create as create_worktree, destroy as destroy_worktree,
-    worktree_path as session_worktree_path,
 };

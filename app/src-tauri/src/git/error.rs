@@ -30,4 +30,21 @@ pub enum GitError {
     /// google / git-log the cause.
     #[error("git2 error: {0}")]
     Git2(#[from] git2::Error),
+
+    /// The target working directory has uncommitted or untracked
+    /// changes. Surfaced by `check_clean` and propagated through
+    /// helpers that refuse to attach a worktree onto a dirty base
+    /// (the new worktree would diverge from the user's WIP).
+    /// The `paths` list carries up to 10 offending paths for
+    /// an actionable user-facing message.
+    #[error("working tree at {path} has uncommitted changes{}", paths_formatted(.paths))]
+    Dirty { path: String, paths: Vec<String> },
+}
+
+fn paths_formatted(paths: &[String]) -> String {
+    if paths.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", paths.join(", "))
+    }
 }
