@@ -2034,6 +2034,17 @@ start a runtime from within a runtime" pitfall). The field is
 `Clone` (Arc-internal) so the per-turn `ToolContext::clone()`
 pattern is unaffected.
 
+> **06-30 follow-up**: `ToolContext` also gains a `data_dir:
+> PathBuf` field (resolved from `AppState::app_data_dir`).
+> `merge_worker::execute` reads it to thread into
+> `ensure_parent_worktree_attached(... &data_dir)` for the
+> lazy-attach path described below. Adding the field was a
+> one-time ~17-site update across test fixtures
+> (`tools/*.rs::test_ctx` + `agent/tests_subagent.rs`); see
+> the lazy-attach pattern in
+> `backend/worktree-contract.md` §"Pattern: Lazy Auto-Attach
+> on Merge" for the full contract.
+
 #### `merge_worker` execution pipeline (libgit2 + DB)
 
 1. Parse `run_id` from input (missing → `is_error: true`,
@@ -2041,20 +2052,33 @@ pattern is unaffected.
 2. Look up `subagent_runs.worktree_path` for the row (load fail →
    `is_error: true`; row missing worktree_path → `is_error: true`,
    "worker has no worktree to merge (already merged or discarded)").
-3. Open the parent worktree (`ctx.worktree_path`) with libgit2 +
+3. **Lazy auto-attach the parent** (06-30): call
+   `ensure_parent_worktree_attached(db, data_dir,
+   parent_session_id)`. Active → no-op; Detached → no-op
+   (intentional skip per INV-M3); None → creates a fresh
+   `session/<id>` worktree via `git::worktree::attach_session`
+   and injects the `[worktree event] attached:` system event.
+   Helper error surfaces as `(error_msg, true, ...)`. After
+   the helper, reload the parent row from the DB to capture
+   the authoritative `worktree_path` (ctx.worktree_path is
+   stale when attach happened). The detached skip → if
+   `worktree_path` is still None, return the actionable
+   `"merge_worker: parent session ... is detached (...)"`
+   error.
+4. Open the parent worktree (`ctx.worktree_path` reloaded in step 3) with libgit2 +
    resolve the parent branch (`session/<parent_session_id>`) + the
    worker branch (`worker/<run_id>`).
-4. **Fast-forward path**: if the parent tip is an ancestor of the
+5. **Fast-forward path**: if the parent tip is an ancestor of the
    worker tip (`repo.merge_base(parent_tip, worker_tip) == parent_tip`),
    move the parent ref to the worker tip via `repo.reference(name,
    oid, force=true, msg)` and call `repo.checkout_head(force)` to
    update the workdir. Result: "merged {worker} (fast-forward, 0
    merge commit)".
-5. **3-way merge path**: build an `AnnotatedCommit` via
+6. **3-way merge path**: build an `AnnotatedCommit` via
    `repo.reference_to_annotated_commit(worker_branch.get())`,
    call `repo.merge(&[annotated], &mut MergeOptions::new(),
    &mut CheckoutBuilder)` with `allow_conflicts(true)`.
-6. **Conflict detection**: post-merge, `repo.index().has_conflicts()`
+7. **Conflict detection**: post-merge, `repo.index().has_conflicts()`
    is true if any path is in a conflict stage (we check
    `entry.flags & 0x3000 != 0` since `IndexEntry` exposes `flags`
    directly — git2-rs 0.20 has no `flags_stage()` method). On
