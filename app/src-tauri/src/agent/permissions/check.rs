@@ -660,3 +660,176 @@ pub(crate) fn match_value_for_allow_always(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tier 1 Hooks: pre-tool pitfall recall (P3, 2026-06-29)
+// ---------------------------------------------------------------------------
+
+/// Pre-tool pitfall recall — the Tier 1 Hooks side of the ⑨ layer.
+///
+/// **Scope**: hooks the `permissions/check.rs` Tier 1 site (currently
+/// no-op per the 5-tier design) with a `find_pitfalls_by_trigger`
+/// probe. When `active` pitfalls match the current `(tool_name,
+/// tool_input)`, the function builds a footnote string that the
+/// chat loop prepends to the `tool_result.content`. The tool
+/// execution itself is NEVER blocked (this is the **active 注脚**
+/// tier per spike-007 §4 + P3 PRD; the verified soft-intercept tier
+/// is OUT OF SCOPE here — `P5`).
+///
+/// **Why separate from `check()`**: `check()` returns a `Decision`
+/// (Allow/Deny/resolved-Ask); injecting a "soft footnote" would
+/// pollute that contract (Deny is silent, Ask goes through
+/// oneshot, neither carries text). The chat loop already has a
+/// clear "after check returns Allow, before execute_tool" seam,
+/// so the recall runs there as its own pure-data step. This keeps
+/// `check()` 5-tier-pure and the loop structure untouched (PRD
+/// hard rule).
+///
+/// **Behavior contract** (locked by P3 acceptance criteria):
+/// 1. Resolves `(command_pattern, path)` from `tool_input` based
+///    on tool kind (Path → `path`/`cwd`/`working_directory`;
+///    Shell → `command`; WebFetch → `url`; other → `(None, None)`).
+/// 2. Calls `db::memories::find_pitfalls_by_trigger` — exact-match
+///    `tool_name`, substring `command_pattern` (when supplied by
+///    the caller), `path_globs` glob match (when supplied).
+/// 3. Filters to `status == 'active'` rows only (verified soft-
+///    intercept is P5 scope; see spike-007 §4 tier table).
+/// 4. Builds a multi-line footnote: one bullet per matching pitfall
+///    with title + content. Token budget is loose (P3 doesn't cap;
+///    P5 will re-derive alongside the verified soft-intercept).
+/// 5. Fires `db::memories::bump_hit_count` per hit, fire-and-forget
+///    on a `tokio::spawn` so the recall step stays sync-fast
+///    (matches the audit-write pattern: best-effort metadata, never
+///    blocks the hot path).
+/// 6. Any DB error → `tracing::warn!` + return `Ok(None)` (recall
+///    failure MUST NOT block tool execution; PRD acceptance
+///    criterion).
+///
+/// **Returns**: `Ok(Some(footnote))` on active hit, `Ok(None)` on
+/// miss / DB-error / out-of-scope. The chat loop prepends the
+/// footnote to `content` before envelope wrapping. The footnote is
+/// deliberately plain text (no `cache_control`, no Anthropic
+/// metadata) — it travels inside the tool_result `content` string
+/// alongside the tool's normal output.
+///
+/// **Wire / cross-layer**: this function is called from
+/// `agent/chat_loop.rs` between `permissions::check` returning
+/// `Allow` and `execute_tool`. It does NOT mutate the agent loop
+/// state machine, does NOT touch cancel/audit maps, does NOT alter
+/// the persisted message history (the tool_result already travels
+/// through the normal path).
+pub async fn recall_pitfall_footnote(
+    db: &SqlitePool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+) -> Result<Option<String>, sqlx::Error> {
+    // Step 1: extract the relevant probe string from tool_input.
+    let (command_pattern, path) = extract_probe_args(tool_name, tool_input);
+
+    // Step 2: probe find_pitfalls_by_trigger.
+    let rows = crate::db::memories::find_pitfalls_by_trigger(
+        db,
+        tool_name,
+        command_pattern.as_deref(),
+        path.as_deref(),
+    )
+    .await?;
+
+    // Step 3: filter to active rows only (verified → P5).
+    let active_rows: Vec<_> = rows
+        .into_iter()
+        .filter(|r| r.status == "active")
+        .collect();
+
+    if active_rows.is_empty() {
+        return Ok(None);
+    }
+
+    // Step 5: bump_hit_count fire-and-forget per hit (best-effort,
+    // never blocks the recall step).
+    for row in &active_rows {
+        let pool = db.clone();
+        let mid = row.memory_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::db::memories::bump_hit_count(&pool, &mid).await {
+                tracing::warn!(
+                    memory_id = %mid,
+                    error = %e,
+                    "recall_pitfall_footnote: bump_hit_count failed (non-fatal)"
+                );
+            }
+        });
+    }
+
+    // Step 4: build the multi-line footnote. Imperative, pitfall-
+    // style phrasing per spike-007 §4 "active 注脚" tier (the
+    // soft hint that doesn't interrupt execution).
+    let mut out = String::from("⚠️ Memory: 此前在本项目执行类似操作时踩过坑 —\n");
+    for row in &active_rows {
+        // Title + content, one pitfall per line. Use the bullet
+        // marker `•` so the LLM can pick the relevant one out of
+        // multiple hits without losing alignment.
+        out.push_str(&format!("• [{}] {}\n", row.title, row.content));
+    }
+    Ok(Some(out))
+}
+
+/// Resolve the `(command_pattern, path)` probe arguments from a
+/// tool's input JSON, dispatching by tool kind. Returns
+/// `(None, None)` for tool kinds that don't carry a probe-able
+/// argument (e.g. dispatch_subagent — irrelevant for pitfall
+/// recall).
+///
+/// **Why a per-tool dispatch**: pitfall rows store their
+/// `command_pattern` (substring match) and `path_globs` (glob
+/// match) as separate fields. The probe must extract the right
+/// fields per tool so the underlying
+/// `find_pitfalls_by_trigger` SQL filter does the right thing:
+/// - Shell: `command` → substring probe.
+/// - Path tools: `path` (with `cwd`/`working_directory` fallback) →
+///   glob probe via `path_globs`.
+/// - WebFetch: `url` → substring probe (matches pitfalls that
+///   trigger on a domain or URL pattern).
+/// - Other / unknown: no probe (no recall possible).
+///
+/// **Mirrors `extract_path_arg`'s precedence** for the path key
+/// (`path` > `cwd` > `working_directory`), so the recall probe
+/// uses the same canonical path the Tier 4 path-glob check
+/// would resolve.
+fn extract_probe_args(
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+) -> (Option<String>, Option<String>) {
+    match classify_tool(tool_name) {
+        ToolKind::Path => {
+            // path-globs probe.
+            (None, extract_path_arg(tool_name, tool_input))
+        }
+        ToolKind::Shell => {
+            // substring probe on the full command. The underlying
+            // `find_pitfalls_by_trigger` will further check
+            // `command_pattern` substring containment inside
+            // this value (the writer sets `command_pattern` to a
+            // distinctive substring like "cargo test").
+            let cmd = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (cmd, None)
+        }
+        ToolKind::WebFetch => {
+            // URL substring probe. Most pitfalls store a host
+            // substring (e.g. "api.example.com") that the full
+            // URL contains.
+            let url = tool_input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (url, None)
+        }
+        ToolKind::GitMutation | ToolKind::Other => {
+            // No probe-able field — recall returns empty.
+            (None, None)
+        }
+    }
+}

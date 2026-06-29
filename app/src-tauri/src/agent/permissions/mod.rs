@@ -118,6 +118,7 @@ pub mod tests_run_grant;
 #[allow(unused_imports)]
 pub use audit::{record_message_resend_audit, record_tool_executed_audit, AuditKind};
 pub use check::check;
+pub use check::recall_pitfall_footnote;
 pub use mode::{filter_tools_for_mode, mode_system_prefix};
 pub use payload::PermissionAskPayload;
 #[allow(unused_imports)]

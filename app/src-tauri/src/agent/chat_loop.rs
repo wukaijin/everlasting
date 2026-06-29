@@ -1778,6 +1778,36 @@ pub async fn run_chat_loop(
                             ));
                         }
 
+                        // P3 (2026-06-29, 06-29-am-p3-tool-recall):
+                        // Tier 1 Hooks — pre-tool pitfall recall.
+                        // Runs AFTER `check()` returns Allow and
+                        // BEFORE `execute_tool()` (the recall itself
+                        // is read-only and never blocks; verified
+                        // soft-intercept is P5 scope). On active
+                        // hit, we prepend a footnote to the
+                        // `tool_result.content` after execution so
+                        // the LLM sees the hint next to the tool
+                        // output (preserving tool_use/tool_result
+                        // pairing + the existing envelope shape).
+                        let pitfall_footnote = match permissions::recall_pitfall_footnote(
+                            &db, &name, &input,
+                        )
+                        .await
+                        {
+                            Ok(Some(text)) => Some(text),
+                            Ok(None) => None,
+                            Err(e) => {
+                                // Recall failure MUST NOT block tool
+                                // execution (P3 PRD acceptance).
+                                tracing::warn!(
+                                    error = %e,
+                                    tool = %name,
+                                    "P3 recall_pitfall_footnote failed (non-fatal)"
+                                );
+                                None
+                            }
+                        };
+
                         let tool_exec_start = Instant::now();
                         let (content, is_error, _update, exit_code) =
                             crate::tools::execute_tool(
@@ -1790,6 +1820,17 @@ pub async fn run_chat_loop(
                                 token.clone(),
                             )
                             .await;
+                        // P3: prepend the pitfall footnote (if any)
+                        // to the tool result content BEFORE the
+                        // envelope wrap, so the LLM reads the hint
+                        // together with the tool output. is_error
+                        // is preserved (an error message preceded
+                        // by a pitfall hint is still an error).
+                        let content = if let Some(footnote) = pitfall_footnote {
+                            format!("{}{}", footnote, content)
+                        } else {
+                            content
+                        };
                         let duration_ms = tool_exec_start.elapsed().as_millis();
                         // RULE-A-004 (2026-06-15): a tool cancelled
                         // mid-flight MUST NOT leave a `tool_executed`
@@ -2307,6 +2348,35 @@ pub async fn run_chat_loop(
                 continue;
             }
 
+            // P3 (2026-06-29, 06-29-am-p3-tool-recall): Tier 1
+            // Hooks — pre-tool pitfall recall. Runs AFTER `check()`
+            // returns Allow and the dispatch_subagent intercept,
+            // BEFORE `execute_tool()`. The recall itself is read-
+            // only and never blocks; verified soft-intercept is P5
+            // scope. On active hit, we prepend a footnote to the
+            // `tool_result.content` after execution so the LLM sees
+            // the hint next to the tool output (preserving
+            // tool_use/tool_result pairing + the existing envelope
+            // shape).
+            let pitfall_footnote = match permissions::recall_pitfall_footnote(
+                &db, name, input,
+            )
+            .await
+            {
+                Ok(Some(text)) => Some(text),
+                Ok(None) => None,
+                Err(e) => {
+                    // Recall failure MUST NOT block tool
+                    // execution (P3 PRD acceptance).
+                    tracing::warn!(
+                        error = %e,
+                        tool = %name,
+                        "P3 recall_pitfall_footnote failed (non-fatal)"
+                    );
+                    None
+                }
+            };
+
             let tool_exec_start = Instant::now();
             let (content, is_error, update, exit_code) = crate::tools::execute_tool(
                 name,
@@ -2318,6 +2388,16 @@ pub async fn run_chat_loop(
                 token.clone(),
             )
             .await;
+            // P3: prepend the pitfall footnote (if any) to the
+            // tool result content BEFORE the envelope wrap, so the
+            // LLM reads the hint together with the tool output.
+            // is_error is preserved (an error message preceded by
+            // a pitfall hint is still an error).
+            let content = if let Some(footnote) = pitfall_footnote {
+                format!("{}{}", footnote, content)
+            } else {
+                content
+            };
             let duration_ms = tool_exec_start.elapsed().as_millis();
             // RULE-A-004 (2026-06-15): audit AFTER the cancel
             // check. Previously `record_tool_executed_audit` ran
