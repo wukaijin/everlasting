@@ -1,1 +1,6 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/memory.md", "reason": "memory 模块约定:autonomous_memories schema/CRUD/FTS5/trigger_key 召回。P5 晋升(promote_if_eligible)+软拦截(recall_pitfall 分档)+卫生 job 全在此模块边界内"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 23 参 + CancellationGuard + skip_persist gates。软拦截短路 execute_tool 必须保持 cancel/audit 不变量(RULE-A-004),两 path(parallel FuturesUnordered + serial for)对称改"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "⑨ 关 5-tier 决策层 + Tier1 hook 落点。软拦截插入点 = check 返回 Allow 之后、execute_tool 之前;PitfallRecall::SoftBlock 复用 Decision::Deny 的不执行+回填模式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "sqlx 事务 + idempotent migration 范式。promote_if_eligible 同事务读回 hit_count+update_status 原子化;卫生 job dedup/降权写"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "设计源:§3 状态机+§4 软拦截分档(verified 软拦截/active 注脚)+§10 待决项。P5 4 决策(D1-D4)的依据全在此"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "软拦截跨 DB→agent loop→前端 ToolCard。提示型 tool_result(is_error=false) 的生成与渲染需跨层一致,不能被前端当 error 态"}

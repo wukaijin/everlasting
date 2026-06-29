@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/memory.md", "reason": "核对晋升阈值(D2)/软拦截分档/char-trigram dedup 是否符合 memory 模块约定 + 状态机转换矩阵(update_status legal transitions)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "核对软拦截改动是否保持 cancel/audit/skip_persist 不变量,parallel+serial 两 path 对称,MAX_TURNS 不被死循环烧光(D1 HashSet)"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "核对 4 决策落地与 spike-007 §3/§4/§10 设计一致,5 条 AC + 死循环防护 AC 兑现"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "核对 Tier1 软拦截分档不破坏 5-tier 决策语义:软拦截发生在 Allow 之后(非 Deny),is_error=false 不混入权限拒绝路径"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对提示型 tool_result 在 DB→chat_loop→emit_tool_result→前端 ToolCard 的数据流一致,is_error=false 渲染正确"}

@@ -21,16 +21,20 @@
 
 - [ ] pitfall 多次命中(hit_count 达阈值)→ 自动升 verified
 - [ ] verified pitfall 工具执行前强命中 → 软拦截生效(LLM 重判,非直接执行)
+- [ ] 软拦截死循环防护:同一 verified pitfall 一个 session 内只拦 1 次,二次命中降级注脚 + 正常执行(不卡到 MAX_TURNS)
 - [ ] 卫生 job:相似度 >0.7 的两条 → 合并(hit_count 累加),不重复
 - [ ] 长期不命中的记忆 → demoted,不再参与召回
 - [ ] cargo test 全绿
 
-## Technical Approach(方向,实现细节延后)
+## Technical Approach
 
-- **hint round 的 loop 改法**(本 task 最需设计的细节):verified 命中后如何干净地把"提示+原 tool_use"变成 LLM 重判的回合,不破坏 turn 结构/cancel 语义——实施时设计,spike-007 §10 待决项之一
-- 状态机晋升阈值(hit_count 多少升 active/verified)——实施时定
-- Jaccard 文本相似度实现(trigram? 分词?)——实施时定
-- 卫生 job 触发时机(定时? 事件?)——实施时定
+方向 + 4 个原待决项已收敛定档,完整技术设计见 [`design.md`](./design.md)(§2 决策清单 / §3 两路 recall filter 纠正 / §4 软拦截数据流),执行计划见 [`implement.md`](./implement.md):
+
+- **hint round loop 改法**(本 task 最复杂):verified + `trigger_key` 完全命中 → 短路 `execute_tool`、回灌 `is_error=false` 提示让 LLM 重判;**每坑每 session 软拦截 1 次**(session 级 HashSet 防循环),同坑二次命中降级注脚 + 正常执行
+- **状态机晋升阈值**:candidate→active @ `hit_count≥2`;active→verified @ `hit_count≥5` 且创建满 3 天(v1 无跨 session 翻车信号,用存续时长代理"未翻车")
+- **Jaccard**:char-trigram 集合,Jaccard >0.7 视为重复(零依赖、语言无关)
+- **卫生 job 触发**:事件触发(`insert_memory` 后按计数 + app 启动一次),不引入长驻 interval(项目无此范式)
+- **关键纠正**:P2 注释预期"P5 收紧 recall filter 到 ActiveVerifiedOnly"会掐断 candidate 晋升路径 —— P5 反而**保持/放宽** filter,靠低阈值快速晋升控噪(design.md §3)
 
 ## Out of Scope
 
@@ -41,3 +45,4 @@
 ## 关联
 
 - epic:[`06-29-autonomous-memory/prd.md`](../06-29-autonomous-memory/prd.md) · spike-007 §3 状态机 + §4 软拦截 + §10 待决项
+- 技术设计:[`design.md`](./design.md) · 执行计划:[`implement.md`](./implement.md)
