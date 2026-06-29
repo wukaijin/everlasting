@@ -1563,3 +1563,99 @@ P3 严格不渗透到 P4/P5/P2:
 ### Next Steps
 
 - None - task complete
+
+## Session 85: P4 事件驱动自动写入 — FailureTracker 状态机 + 旁路 reflection + spec 同步 + 归档
+
+**Date**: 2026-06-29
+**Task**: P4 事件驱动自动写入(06-29-am-p4-event-reflect, child of `06-29-autonomous-memory` epic)
+**Branch**: `main`
+
+### Summary
+
+P3 recall 已有 pitfall 可被消费,但 pitfall 怎么进库?P2 remember tool 是 agent 主动写(易疏漏),P4 补"事件驱动自动写"路径(spike-007 §3 路径2,接入点 C `chat_loop.rs:1717 emit_tool_result`):检测"连续 ≥2 次同名工具失败后成功"信号 → 旁路 LLM reflection 提炼经验 → 写 `insert_memory(kind=pitfall, status=active)`。事件天然高置信,**直写 active**(不经过 candidate 漏斗),与 P3 recall 闭合完整自动闭环(踩坑→记住→下次规避)。P5 状态机晋升 / verified 软拦截 / session 结束整体 reflection 严格 P5/v2 范围,本 PR 不触动。
+
+**关键架构决策(8 条,落 prd.md 已定决策段)**:
+1. **挂在 `run_chat_loop` 局部 + `Arc<Mutex<...>>` 共享** — per-session 内存状态机,不跨 session 持久化(v1 接受 session 边界重置,v2 扩展位 spike-007 §10)
+2. **挂在 emit seam(post `execute_tool`, pre audit write)** — 镜像 P3 pre-execute seam 模式,与 P3 是 sibling 不互相依赖
+3. **fire-and-forget** — `tokio::spawn` 整段 reflection,主 loop 0 感知时延/失败
+4. **走 P1 `insert_memory` 复用安全网** — 敏感/长度/敏感路径/frequency cap 50/session 单源
+5. **直写 `status=active`** — 事件驱动高置信(spike-007 §3 路径2 表格定档)
+6. **阈值 = 2 连续失败** — PRD AC #3 单次失败不触发
+7. **独立 reflection prompt 模板**(`REFLECT_SYSTEM_PROMPT` / `REFLECT_USER_TEMPLATE`)— 不污染主 `DEFAULT_BEHAVIOR_PROMPT` / `system_prompt_override`
+8. **`scope=Project` only** — 旁路 reflection 一定在 project context 中;`User` scope 留 P2
+
+**Spec 同步 (3 文件,+210 行)**:
+- `agent-loop-architecture.md` front-matter: 新增 "Per-tool auto-reflect seam (P4)" 段 — P3 pre-execute seam 旁新增 post-execute seam;FailureTracker 共享 `Arc<Mutex<HashMap<tool_name, TrackerEntry>>>` 在 `run_chat_loop` 局部创建;走主 provider 实例 + 独立 prompt;fire-and-forget `tokio::spawn`;P3 ↔ P4 闭环(单元测试锁定)
+- `memory.md` §Scenario 2: 新增 "Event-driven bypass reflection contract (P4, write side of the loop)" 子节;明文区分 P3 是 read(工具执行前召回)、P4 是 write(事件驱动写新 pitfall);Contracts 表(触发时机/触发信号/状态机存储/调用点/Reflection LLM 调/期望产出/写库参数/阈值/fire-and-forget/Decision 语义/ToolResultPayload 污染);Why-post-execute 段(同 tool_use_id 顺序 P3-pre → execute_tool+audit → P4-post);Why-走-insert_memory 段(安全网/状态机字段/枚举单源);P3↔P4 闭环 3 步详解;REFLECT prompt 模板;Validation & Error Matrix 加 12 行 P4;Bad Cases 加 3 条(await 主 loop / 自写 INSERT / 阈值=1);Tests Required 加 13 个 P4 test
+- `tool-contract.md` Response 段: 加 P4 is_error consumption footnote — `ToolResultPayload.is_error` 被 P4 FailureTracker 在 post-execute seam 读作为事件信号;P4 是 read-only consumer 不修改 `content`/`is_error`/`tool_use_id`/envelope;P4 reflection 永不 bubble 回 tool_result;P4 是 P3 的 write-side 对偶
+
+### Implementation Summary
+
+- `agent/auto_reflect.rs` (new, 1022 行含 13 tests): `FailureTracker` 状态机 + `try_record_outcome` 公开入口 + `reflect_to_pitfall` 私有 fire-and-forget 内核;`REFLECT_SYSTEM_PROMPT` / `REFLECT_USER_TEMPLATE` 常量;`strip_code_fence` / `truncate_for_reflect` 工具函数
+- `agent/mod.rs` (+1): `pub mod auto_reflect;`
+- `agent/chat_loop.rs` (+78): `run_chat_loop` 顶部创建 `failure_tracker: Arc<Mutex<FailureTracker::new()>>`(per-session 共享);2 处 seam 挂载 — parallel-batch L2 path (FuturesUnordered task closure clone tracker) + serial path (DispatchBatch::Serial for-loop) — 都在 `execute_tool` 返回后 audit 写之前调 `try_record_outcome`,`!token.is_cancelled()` 守卫对齐 RULE-A-004
+- frontend: 零改动(纯后端,无 IPC/UI 变化)
+
+### Decisions (锁档)
+
+- **decision 1 (per-session Arc 共享)** — 已锁,v2 跨 session 持久化留 spike-007 §10 扩展位
+- **decision 2 (post-execute seam)** — 镜像 P3 pre-execute;两者 sibling,顺序 P3 → execute+audit → P4
+- **decision 3 (fire-and-forget tokio::spawn)** — 失败一律 `tracing::warn!` + 静默吞;`JoinHandle` 不 await
+- **decision 4 (复用 P1 insert_memory)** — 走 `MemoryInput { kind: Pitfall, status: Active, scope: Project, ... }` 复用安全网 + 状态机字段 + 强类型枚举
+- **decision 5 (status=active 直写)** — 事件驱动高置信,不走 candidate 漏斗
+- **decision 6 (阈值 = 2)** — PRD AC #3;counter 在 success 或 trigger 后重置
+- **decision 7 (独立 prompt 常量)** — 独立 module 内部常量,不污染 `DEFAULT_BEHAVIOR_PROMPT`
+- **decision 8 (scope=Project only)** — 旁路 reflection 必有 project context;`User` scope 留 P2
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `374b1fe` | docs(spec): P4 旁路 reflection 同步 — agent-loop-architecture seam + memory Scenario 2 P4 + tool-contract is_error footnote |
+| `df85780` | feat(memory): P4 事件驱动自动写入 — FailureTracker 状态机 + 旁路 reflection 挂 emit_tool_result seam |
+| `8dac235` | chore(task): P4 落地 — implementation-log + Open Q 闭合 + status→in_progress |
+| `5ca3bfc` | chore(task): archive 06-29-am-p4-event-reflect (auto) |
+
+### Testing
+
+- `cargo test --lib`: **1041 passed / 0 failed / 0 ignored**(基线 1028 + P4 新增 13)
+- `cargo check --tests`: 0 warning / 0 error
+- `pnpm build` / `pnpm vitest`: 未跑(P4 纯后端,无前端改动)
+- trellis-check sub-agent: 9 spec 检查项全 PASS(`insert_memory` 参数对齐 / `is_error` 信号消费 / 零 loop 结构改动 / provider 走主实例 / DB bind 链 / 三段失败全 `tracing::warn!` 降级 / 复用 P1 写口 / 严格 §3 路径2+§6 C 范围 / 9 项 Out-of-Scope 全未触动)
+- 端到端闭环: `reflected_pitfall_is_recallable_by_p3_helper` 单元测试 — P4 写出的 active pitfall 立刻可被 P3 `find_pitfalls_by_trigger` 命中
+
+### AC Compliance (P4 prd.md)
+
+- [x] AC1 连续 2 次失败后成功 → 自动产出 pitfall(`status=active` + `trigger_key` 3 列) — `two_failures_then_success_triggers` + `try_record_outcome_writes_active_pitfall_end_to_end` tests
+- [x] AC2 reflection 异步不阻塞主 loop(< 100ms) — `try_record_outcome_does_not_block_caller` test
+- [x] AC3 单次失败不触发(需连续 ≥2) — `single_failure_does_not_trigger` + `one_failure_then_success_does_not_trigger` tests
+- [x] AC4 产出的 pitfall 能被 P3 召回命中 — `reflected_pitfall_is_recallable_by_p3_helper` test
+- [x] AC5 `cargo test --lib` 全绿 + `cargo check` 0 warning — 1041/0 / 0 warning
+
+### Scope Guard (P4 严禁)
+
+P4 严格不渗透到 P5/P2/P3:
+- 状态机自动晋升(→ P5)未加 — `update_status` / `promote` / `demote` 路径未调;hit_count 默认 0 由 P1 INSERT 处理
+- verified 软拦截(→ P5)未加 — 直写 active,verified 状态机留给 P5
+- 卫生 job(dedup / 降权 / 冲突标记)(→ P5)未加
+- session 结束整体 reflection(→ v2)未加 — per-session 状态机 session 结束 drop 即丢
+- remember tool(→ P2)未改 — P2 闭环保持稳定
+- `run_chat_loop` 23-param 签名未改 — reflection 走主 provider 同一实例 + pool clone + Arc clone,0 个新参数
+- `db/memories.rs` 未改 — 消费 P1 产出的 `insert_memory` 接口
+- `permissions::check()` 内部未动 — P4 是 read-only consumer 读 `ToolResultPayload.is_error` 信号,Decision 仍由 P3 seam 内部决策
+- frontend: 零改动
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- P5 (06-29-am-p5-quality) 状态机自动晋升 + verified 软拦截 + 卫生 job — `MemoryStatus` 枚举 `update_status` / `promote` / `demote` 路径已留位;P4 写入的 pitfall 立刻可被 P5 状态机消费(晋升到 verified);P3 `recall_pitfall_footnote` 的 sibling 扩展位 `verified_pitfall_decision` 走 `permissions::check()` Tier 1 内部返回结构化 `Decision`
+- 父任务 [3/5 done] → [4/5 done];剩余 P5 1 PR
+- 文档同步:`docs/IMPLEMENTATION.md` §4 ADR 日志 + `docs/ROADMAP.md` V2 4 档分类更新(在 P5 落地后整体 re-trim)
+- DEBT.md 闭合检查:P4 引入新债 — `#![allow(dead_code)]` 在 `auto_reflect.rs` 顶层(per-module level,沿用 P1 subagent_runs 先例,等 P5 真实消费方落地后移除);其他无新债
+
+### Next Steps
+
+- None - task complete
