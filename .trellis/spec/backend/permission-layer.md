@@ -168,6 +168,38 @@ Tier 6. Audit           (写 session_audit_events)
 Permission Layer"`,包括 `shell_trust::classify_prefix` 的
 whitelist / asklist 完整表。
 
+#### 4.2. Tier 1 Hooks 实际实现路径 — P3 工具执行前召回(2026-06-29, 06-29-am-p3-tool-recall)
+
+> **P3 收口前** Tier 1 Hooks 一直是 no-op(MVP 留口);P3 落地时**没有**改
+> `permissions::check()` 内部(保持 5-tier 拦截链纯净),而是把"工具执行前
+> 召回 pitfall"挂到了 `chat_loop.rs` 的"check → execute_tool"seam 上。
+
+- **函数**:`agent::permissions::recall_pitfall_footnote(pool, tool_name, tool_input) -> Result<Option<String>, sqlx::Error>`
+- **调用点**:`chat_loop.rs` parallel-batch L2 path(line ~1792) + serial path(line ~2361)
+  - 时机:`permissions::check()` 返回 `Allow` **之后**、`execute_tool()` **之前**
+  - 不走 `check()` 内部 → 5-tier 拦截链顺序未被打乱;P3 recall 是旁路
+- **行为**:
+  - 调 `db::memories::find_pitfalls_by_trigger(pool, tool_name, command, path)`(P1 产出)
+  - 过滤 `status == 'active'`(`verified` 留 P5 软拦截,本阶段不消费)
+  - 命中后构造 `⚠️ Memory: 此前在本项目执行类似操作时踩过坑 —\n• [title] content\n...` 注脚文本
+  - `bump_hit_count` 走 `tokio::spawn` fire-and-forget,不阻塞 recall 步骤
+  - 注脚 prepend 到 `tool_result.content` **在 envelope wrap 之前** — `tool_use_id` 配对与 `is_error` 语义不变
+- **降级**:`Err(sqlx::Error)` → `tracing::warn!` + 返回 `None`,工具照常执行。**Recall failure 永不阻断工具执行**(PRD hard rule)
+- **Decision 语义**:`check()` 仍返回 `Decision::Allow/Ask/Deny`,recall 仅产出 `Option<String>` 注脚;不参与决策链
+
+**为什么挂在 seam 而非 `check()` 内部**:
+1. **5-tier 纯净性**:`check()` 是决策层,recall 是"信息注入",职责不同
+2. **P5 扩展性**:P5 的 verified 软拦截需要返回结构化 `Decision`,可直接进 `check()` Tier 1;P3 的 active 注脚是旁路 hint,放 seam 简化 P5 落地
+3. **可测性**:`recall_pitfall_footnote` 是纯函数(pool + 字符串入参 → `Result<Option<String>>`),`tests_check.rs` 直接单测无需 mock 决策链
+
+**Tests**(6 个,在 `permissions/tests_check.rs`):
+- `recall_pitfall_footnote_active_hit_returns_text`
+- `recall_pitfall_footnote_unrelated_tool_returns_none`
+- `recall_pitfall_footnote_verified_hit_returns_none_for_p3`(verified 是 P5 范围,P3 严格排除)
+- `recall_pitfall_footnote_candidate_hit_returns_none`(candidate 是 P2 范围,P3 严格排除)
+- `recall_pitfall_footnote_command_pattern_mismatch_returns_none`
+- `recall_pitfall_footnote_empty_db_returns_none`
+
 ### 5. ⑨ 关 ↔ `permission:ask` IPC 协议
 
 **Server → Client**:后端 `agent::permissions::check` Tier 3 发:

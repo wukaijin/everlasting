@@ -147,6 +147,18 @@ After execution, the agent loop builds a `ContentBlock::ToolResult` and appends
 it to the conversation in the same `tool_use_id` / `content` / `is_error` shape
 as the existing3 tools.
 
+**P3 footnote injection (2026-06-29, 06-29-am-p3-tool-recall)**: the
+`content` field of `ContentBlock::ToolResult` may be prepended with a plain-text
+recall footnote (e.g. `"⚠️ Memory: 此前在本项目执行类似操作时踩过坑 —\n• ..."`)
+when a matching `active`-status pitfall is found in `autonomous_memories`. This
+is **plain text inside `content`**, NOT a new content block. The `tool_use_id`
+pairing, `is_error` semantics, and envelope wrap (`{result, cwd}`) are all
+preserved. The frontend's lenient parser (`utils/messageFormat.ts
+extractToolResultDisplay`) returns the `result` string verbatim, so the
+footnote renders to the user as part of the tool output. See
+[memory.md §Scenario 2 / Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall)
+for the recall contract.
+
 #### Environment keys
 
 No new env keys. The4 new tools have no configurable knobs (the cap100 /30 KiB

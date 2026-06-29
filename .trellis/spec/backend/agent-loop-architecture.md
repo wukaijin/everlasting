@@ -22,6 +22,19 @@
 > every turn (5-10× cost). Adding `cache_control` to the recall block shifts
 > the breakpoint to the recall block and demotes the instructions from cache
 > anchor. See [memory.md §7 Wrong vs Correct](./memory.md#7-wrong-vs-correct).
+>
+> **Per-tool pitfall recall seam (P3, 2026-06-29, 06-29-am-p3-tool-recall)**:
+> in addition to the two `messages[0]` blocks above, the loop has a
+> **post-check / pre-execute seam** in `chat_loop.rs` (parallel-batch L2 path
+> ~line 1792 + serial path ~line 2361) where
+> `permissions::recall_pitfall_footnote(pool, tool_name, tool_input)` is invoked.
+> On `active`-status pitfall hit, the returned string is prepended to
+> `tool_result.content` **before** the envelope wrap, so `tool_use_id` pairing
+> and `is_error` semantics stay intact. Verified soft-intercept (returning a
+> structured `Decision` from inside `check()`) is **P5 scope** — P3 is
+> active-only footnote, mounted at the seam, not inside the 5-tier decision
+> chain. See [permission-layer.md §4.2](./permission-layer.md#42-tier-1-hooks-实际实现路径--p3-工具执行前召回2026-06-29-06-29-am-p3-tool-recall) and
+> [memory.md §Pre-tool pitfall recall contract](./memory.md#pre-tool-pitfall-recall-contract-p3-layer-2-of-2--2026-06-29-06-29-am-p3-tool-recall).
 
 ---
 
