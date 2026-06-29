@@ -41,6 +41,15 @@ import Icon from "../Icon.vue";
 const props = defineProps<{
   /** The worker run id (`subagent_runs.id`). */
   runId: string;
+  /** The parent session id (`subagent_runs.parent_session_id`).
+   *  Threaded to the store so a successful lazy auto-attach (06-30
+   *  follow-up) can refresh the chat session list and flip the
+   *  chat header's worktree chip from `none → active`. Without
+   *  this prop the merge still works (the toast announces the
+   *  side effect) but the chip stays stale until the next user
+   *  action. The drawer passes the value from
+   *  `run.parentSessionId` (the run row's DB column). */
+  parentSessionId: string;
 }>();
 
 const store = useSubagentRunsStore();
@@ -122,10 +131,26 @@ function cancelConfirm(): void {
 /** Fire the actual merge IPC after the user confirms. */
 async function doMerge(): Promise<void> {
   confirmKind.value = null;
-  const result: MergeResult = await store.mergeWorker(props.runId);
+  const result: MergeResult = await store.mergeWorker(
+    props.runId,
+    props.parentSessionId,
+  );
   if (result.kind === "success") {
     conflictFiles.value = null;
-    projects.showToast("已合并到 session 分支", "info");
+    // 06-30 follow-up: differentiate the toast by whether the
+    // backend had to lazily attach a worktree on the parent
+    // session as a side effect of the merge. The plain "merged"
+    //    toast covers the common case (parent was already
+    //    Active); the new "merged and bound the parent
+    //    workspace" toast covers the case where the user
+    //    clicked merge on a parent session that never had a
+    //    worktree attached (this is now transparently handled
+    //    end-to-end, so the user no longer has to attach
+    //    manually first).
+    const msg = result.autoAttachedParent
+      ? "已合并到父 session 分支,并自动绑定了父工作区"
+      : "已合并到 session 分支";
+    projects.showToast(msg, "info");
   } else if (result.kind === "conflict") {
     // Preserve the file list for inline display; the buttons
     // stay visible (the worker branch + worktree are intact).

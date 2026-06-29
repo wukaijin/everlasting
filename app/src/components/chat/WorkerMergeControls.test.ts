@@ -336,7 +336,13 @@ describe("WorkerMergeControls", () => {
       });
     }
     return mount(WorkerMergeControls, {
-      props: { runId: opts.runId },
+      // 06-30 follow-up: WorkerMergeControls now requires
+      // `parentSessionId` so a successful lazy auto-attach can
+      // trigger `chatStore.loadSessions` for the parent row.
+      // Tests use the run's `parentSessionId` from `baseRow`
+      // (defined earlier in the file) — see the test fixtures
+      // section.
+      props: { runId: opts.runId, parentSessionId: baseRow.parentSessionId },
       global: { stubs: { Icon: true } },
     });
   }

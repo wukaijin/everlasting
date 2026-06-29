@@ -21,6 +21,25 @@ import { setActivePinia, createPinia } from "pinia";
 
 const invokeMock = vi.fn();
 
+// 06-30 follow-up: `mergeWorker` calls `useChatStore().loadSessions`
+// when the backend reports `autoAttachedParent = true`. We mock the
+// chat + projects stores so the test can assert that loadSessions
+// was invoked (or NOT, in the autoAttachedParent=false branch)
+// without spinning up real Pinia state. The mock returns a
+// stub `currentProjectId` so the action's `if
+// (projectsStore.currentProjectId)` branch is exercisable.
+const loadSessionsMock = vi.fn(async (_projectId: string) => {});
+vi.mock("./chat", () => ({
+  useChatStore: () => ({
+    loadSessions: loadSessionsMock,
+  }),
+}));
+vi.mock("./projects", () => ({
+  useProjectsStore: () => ({
+    currentProjectId: "proj-active",
+  }),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
@@ -985,5 +1004,67 @@ describe("RunAccumulator", () => {
     const acc = new RunAccumulator();
     acc.rebuildFromCache(null, null);
     expect(acc.transcript.value).toEqual([]);
+  });
+
+  // 06-30 follow-up: `mergeWorker` happy path returns
+  // `MergeWorkerIpcResult { message, autoAttachedParent }` instead
+  // of a plain string. Three branches to lock:
+  //   - autoAttachedParent=true → loadSessions called (chat header
+  //     chip must refresh)
+  //   - autoAttachedParent=false → loadSessions NOT called (no-op
+  //     side effect, skip the wasteful refresh)
+  //   - libgit2 conflict in `message` → still surfaces via
+  //     parseConflictFiles (the old parser logic is preserved
+  //     across the IPC envelope change)
+  describe("mergeWorker auto-attached parent (06-30)", () => {
+    beforeEach(() => {
+      invokeMock.mockReset();
+      loadSessionsMock.mockClear();
+    });
+
+    it("triggers chatStore.loadSessions when backend returns autoAttachedParent=true", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValueOnce({
+        message: "merged fast-forward",
+        autoAttachedParent: true,
+      });
+      const result = await store.mergeWorker("run-1", "sess-parent");
+      if (result.kind !== "success") throw new Error("expected success");
+      expect(result.autoAttachedParent).toBe(true);
+      expect(loadSessionsMock).toHaveBeenCalledOnce();
+      expect(loadSessionsMock).toHaveBeenCalledWith("proj-active");
+    });
+
+    it("does NOT trigger chatStore.loadSessions when autoAttachedParent=false", async () => {
+      const store = useSubagentRunsStore();
+      invokeMock.mockResolvedValueOnce({
+        message: "merged fast-forward",
+        autoAttachedParent: false,
+      });
+      const result = await store.mergeWorker("run-1", "sess-parent");
+      if (result.kind !== "success") throw new Error("expected success");
+      expect(result.autoAttachedParent).toBe(false);
+      expect(loadSessionsMock).not.toHaveBeenCalled();
+    });
+
+    it("surfaces libgit2 conflict via parseConflictFiles on the IPC reject arm", async () => {
+      // libgit2 returns `Err(message)` on conflict (NOT Ok with
+      // conflict text in the body). The frontend's `catch` arm
+      // runs `parseConflictFiles` against the error string. The
+      // 06-30 envelope change does NOT touch the error arm —
+      // the IPC error arm is still a plain string. This test
+      // locks the invariant: parseConflictFiles still finds the
+      // bracketed file list in the rejected message after the
+      // envelope change.
+      const store = useSubagentRunsStore();
+      invokeMock.mockRejectedValueOnce(
+        "merge conflict: [src/foo.ts, src/bar.ts]. The worker branch 'worker/run-1' and parent branch 'session/sess-parent' both modified these files.",
+      );
+      const result = await store.mergeWorker("run-1", "sess-parent");
+      expect(result.kind).toBe("conflict");
+      if (result.kind === "conflict") {
+        expect(result.files).toEqual(["src/foo.ts", "src/bar.ts"]);
+      }
+    });
   });
 });

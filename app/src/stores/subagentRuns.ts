@@ -76,9 +76,11 @@ import {
   type MergeResult,
   type DiscardResult,
   type MergeState,
+  type MergeWorkerIpcResult,
   parseConflictFiles,
 } from "./subagentRuns.types";
 import { RunAccumulator, parseTranscriptJson } from "./runAccumulator";
+import { useChatStore } from "./chat";
 
 // -----------------------------------------------------------------------
 // Helpers — cross-layer drift trap fixes
@@ -566,7 +568,10 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  can recognize in logs. Tauri 2 maps the JS `rid` to the Rust
    *  `_rid` param (the leading underscore marks it unused on the
    *  Rust side). */
-  async function mergeWorker(runId: string): Promise<MergeResult> {
+  async function mergeWorker(
+    runId: string,
+    parentSessionId?: string,
+  ): Promise<MergeResult> {
     // Spinner guard: a second click while a merge is already in
     // flight returns immediately (the button's `:disabled` binding
     // should already prevent the click, but defensive).
@@ -575,7 +580,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     }
     mergeStateByRunId.set(runId, { kind: "merge", loading: true });
     try {
-      await invoke<string>("merge_worker_run", {
+      const result = await invoke<MergeWorkerIpcResult>("merge_worker_run", {
         rid: "merge-pr4",
         runId,
       });
@@ -587,7 +592,23 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       if (row) {
         getRunCache.set(runId, { ...row, worktreePath: null });
       }
-      return { kind: "success" };
+      // 06-30 follow-up: if the backend transparently attached
+      // the parent session's worktree as a side effect of the
+      // merge, refresh the chat session list so the chat
+      // header's worktree chip flips from `none` → `active`
+      // (otherwise the UI shows a stale "no worktree" chip
+      // while the DB row is already Active). The chat store
+      // exposes `loadSessions(projectId)` which reloads the
+      // session list from the DB — the same path
+      // `attachWorktree` / `detachWorktree` use. Skipped if
+      // no parentSessionId was supplied (defensive — old
+      // callers passing only runId still get the toast-and-
+      // workflow behavior, just without the chip refresh).
+      const projectsStore = (await import("./projects")).useProjectsStore();
+      if (result.autoAttachedParent && parentSessionId && projectsStore.currentProjectId) {
+        await useChatStore().loadSessions(projectsStore.currentProjectId);
+      }
+      return { kind: "success", autoAttachedParent: result.autoAttachedParent };
     } catch (e) {
       const msg = String(e);
       const files = parseConflictFiles(msg);

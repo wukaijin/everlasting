@@ -848,6 +848,7 @@ function isPermissionAskLive(rid: string): boolean {
           <WorkerMergeControls
             v-if="run"
             :run-id="run.id"
+            :parent-session-id="run.parentSessionId"
           />
         </DialogContent>
       </Transition>

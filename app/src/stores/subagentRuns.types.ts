@@ -374,15 +374,14 @@ export type ChatEventInnerKind =
 // L3b PR4 (2026-06-27): merge / discard worker branch UI types
 // -----------------------------------------------------------------------
 
-/** Discriminated result of `mergeWorker(runId)`.
+/** Discriminated result of `mergeWorker(runId, parentSessionId?)`.
  *
- *  The backend `merge_worker_run` IPC returns `Result<String,
- *  String>` — the success arm carries a human-readable status
- *  string, the error arm carries a plain-English error
- *  (`"worker run not found"`, `"merge conflict: [...]"`, etc.).
- *  The store discriminates the conflict case (parse the conflict
- *  file list from the error string) so the drawer can render an
- *  inline read-only file list with a "resolve via git CLI" hint.
+ *  The backend `merge_worker_run` IPC returns
+ *  `Result<MergeWorkerResult, String>` (06-30 follow-up) — the
+ *  success arm carries a structured `MergeWorkerResult` with
+ *  `message` (libgit2 outcome) + `autoAttachedParent` (whether
+ *  the merge transparently attached the parent session's
+ *  worktree because it was in `WorktreeState::None`).
  *
  *  Conflict string format (from
  *  `app/src-tauri/src/tools/merge_worker.rs::do_merge_blocking`):
@@ -393,9 +392,23 @@ export type ChatEventInnerKind =
  *  The store's `parseConflictFiles` regex extracts the bracketed
  *  comma-separated file list. */
 export type MergeResult =
-  | { kind: "success" }
+  | { kind: "success"; autoAttachedParent?: boolean }
   | { kind: "conflict"; files: string[] }
   | { kind: "error"; message: string };
+
+/** Wire shape of `merge_worker_run` IPC success payload (06-30
+ *  follow-up). The backend's Tauri command
+ *  `commands::subagent_runs::merge_worker_run` derives Serialize
+ *  with `rename_all = "camelCase"`, so the IPC payload here uses
+ *  `message` (raw libgit2 outcome, which may include conflict
+ *  text — see `parseConflictFiles`) and `autoAttachedParent`
+ *  (boolean). The message field carries the same human-readable
+ *  status string the old `Result<String, String>` did; only the
+ *  wrapper shape is new. */
+export type MergeWorkerIpcResult = {
+  message: string;
+  autoAttachedParent: boolean;
+};
 
 /** Discriminated result of `discardWorker(runId)`. The backend
  *  has no conflict path — discard is a destructive delete with
