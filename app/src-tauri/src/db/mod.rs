@@ -56,6 +56,8 @@
 //! without any caller change.
 
 pub mod config;
+pub mod memories;
+pub mod memories_tests;
 pub mod messages_tests;
 pub mod migrations;
 pub mod models;

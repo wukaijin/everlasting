@@ -654,6 +654,179 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // re-running on a post-L3b DB is a no-op (the column exists).
  add_subagent_runs_column_if_missing(pool, "worktree_path", "TEXT").await?;
 
+ // --- P1 (autonomous memory, 2026-06-29): storage layer for the
+ // agent's self-produced, cross-session recalled experience memory.
+ //
+ // See `.trellis/tasks/06-29-am-p1-storage/prd.md` §1 for the full
+ // schema rationale + spike-007 §5 for the design lineage. This
+ // table is the foundation P2 (read/write closed loop via remember
+ // tool + session-start recall injection) / P3 (pre-tool pitfall
+ // recall) / P4 (event-driven reflection write) / P5 (status
+ // machine + hygiene job) all build on.
+ //
+ // **FK decision (H1)**: `project_id` is a soft column — deliberately
+ // NOT a `REFERENCES projects(id) ON DELETE CASCADE`. Memories are
+ // durable experience: deleting a project should NOT wipe the
+ // memories the agent learned while working in it (the project may
+ // be restored, and the experience transfers to other projects via
+ // the `scope='user'` layer). Orphan rows (project_id pointing at a
+ // deleted project) are reclaimed by P5's hygiene job / an
+ // independent sweep — NOT by CASCADE.
+ //
+ // **CHECK constraints (B1/2.2)**: SQLite has no `ALTER TABLE ...
+ // ADD CONSTRAINT` — length/enum CHECKs MUST be defined at CREATE
+ // TABLE time. The 4 CHECKs here are the DB-side guard; the Rust
+ // enums (`MemoryKind` / `MemoryScope` / `MemoryStatus` in
+ // `db/memories.rs`) are the application-side guard. Unknown enum
+ // strings fail at INSERT; over-length title/content fail at INSERT.
+ //
+ // **trigger_key split (M1)**: spike-007 §5 originally proposed a
+ // single JSON `trigger_key` column. External review split it into
+ // 3 typed columns (`tool_name` / `command_pattern` / `path_globs`)
+ // so the high-frequency pre-tool pitfall recall path
+ // (`find_pitfalls_by_trigger`) can hit `idx_am_pitfall` via an
+ // equality probe on `tool_name` — no `json_extract` (SQLite ≥3.38
+ // dependency) and no LIKE-order-sensitivity on JSON text.
+ //
+ // **id vs memory_id (B2)**: `id INTEGER PRIMARY KEY AUTOINCREMENT`
+ // is the internal rowid that FTS5's `content_rowid` requires (FTS5
+ // external-content tables demand an integer rowid). `memory_id
+ // TEXT UNIQUE` is the UUID v7 the rest of the system references
+ // (UUID v7 is time-ordered → B-tree friendly, RFC 9562). The two
+ // are split so FTS5 can keep its integer rowid contract while the
+ // public API exposes a stable UUID.
+ //
+ // **forward-compat fields (H5)**: `confidence` / `hit_count` /
+ // `last_used_at` / `demoted_reason` are P5 (status machine /
+ // hygiene job) consumption. P1 only provides the storage + the
+ // `bump_hit_count` / `update_status` interfaces; no production
+ // code reads these fields yet. Defaults keep INSERTs from the
+ // current write paths valid (P2 remember tool / P4 reflection).
+ sqlx::query(
+ r#"
+ CREATE TABLE IF NOT EXISTS autonomous_memories (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_id           TEXT    NOT NULL UNIQUE,
+    scope               TEXT    NOT NULL,
+    project_id          TEXT,
+    kind                TEXT    NOT NULL,
+    status              TEXT    NOT NULL,
+    title               TEXT    NOT NULL,
+    content             TEXT    NOT NULL,
+    tags                TEXT    NOT NULL DEFAULT '[]',
+    -- pitfall trigger key split into 3 typed columns (M1):
+    -- pre-tool recall hits `idx_am_pitfall` via tool_name equality.
+    tool_name           TEXT,
+    command_pattern     TEXT,
+    path_globs          TEXT,
+    source_session_id   TEXT,
+    source_ref          TEXT,
+    -- forward-compat: P5 status machine / hygiene job consumption.
+    confidence          REAL    NOT NULL DEFAULT 0.5,
+    hit_count           INTEGER NOT NULL DEFAULT 0,
+    last_used_at        TEXT,
+    created_at          TEXT    NOT NULL,
+    updated_at          TEXT    NOT NULL,
+    demoted_reason      TEXT,
+    CHECK(scope  IN ('user','project')),
+    CHECK(kind   IN ('pitfall','preference','fact','decision')),
+    CHECK(status IN ('candidate','active','verified','demoted')),
+    CHECK(length(title)   <= 200),
+    CHECK(length(content) <= 500)
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ // session-start recall: FTS5 search + scope/project filter.
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_am_recall
+ ON autonomous_memories(scope, project_id, status, kind)
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ // pitfall pre-tool recall: tool_name equality + status filter.
+ // Partial index (WHERE tool_name IS NOT NULL) — non-pitfall kinds
+ // never have tool_name set, so they're excluded from the index
+ // entirely (smaller index, faster pitfall probe).
+ sqlx::query(
+ r#"
+ CREATE INDEX IF NOT EXISTS idx_am_pitfall
+ ON autonomous_memories(tool_name, status)
+ WHERE tool_name IS NOT NULL
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
+ // --- P1 PR1b: FTS5 virtual table + sync triggers.
+ //
+ // **Open Q#1 verification (2026-06-29)**: FTS5 is compiled into the
+ // system SQLite (3.53.0 on this dev box). Default tokenizer
+ // `unicode61` does NOT tokenize CJK into searchable terms — both
+ // ASCII terms embedded in CJK runs AND CJK terms themselves fail
+ // to MATCH (verified empirically). The `trigram` tokenizer (SQLite
+ // ≥3.34) tokenizes by 3-char sliding window, which handles CJK
+ // AND substring search ("cargo" / "WSL" inside CJK text both
+ // MATCH). Trade-off accepted: trigram requires ≥3 chars in the
+ // query (2-char Chinese queries like "权限" won't MATCH); v1 is
+ // precision-first and 2-char queries are uncommon for recall
+ // (the title field still carries the bulk of search signal).
+ //
+ // External-content table pattern (`content='autonomous_memories'`)
+ // keeps the FTS index in sync with the base table WITHOUT storing
+ // a second copy of the text — FTS5 stores only the token index;
+ // `content_rowid='id'` tells FTS5 to use the base table's integer
+ // `id` as the rowid. The 3 triggers below are the standard FTS5
+ // external-content sync dance: INSERT inserts into FTS, DELETE
+ // inserts a special `'delete'` row (FTS5's idiom for "remove this
+ // rowid's index entries"), UPDATE does a delete-then-insert pair.
+ sqlx::query(
+ r#"
+ CREATE VIRTUAL TABLE IF NOT EXISTS autonomous_memories_fts USING fts5(
+    title, content, tags,
+    content='autonomous_memories', content_rowid='id',
+    tokenize='trigram'
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE TRIGGER IF NOT EXISTS am_fts_insert AFTER INSERT ON autonomous_memories BEGIN
+    INSERT INTO autonomous_memories_fts(rowid, title, content, tags)
+    VALUES (new.id, new.title, new.content, new.tags);
+ END
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE TRIGGER IF NOT EXISTS am_fts_delete AFTER DELETE ON autonomous_memories BEGIN
+    INSERT INTO autonomous_memories_fts(autonomous_memories_fts, rowid, title, content, tags)
+    VALUES ('delete', old.id, old.title, old.content, old.tags);
+ END
+ "#,
+ )
+ .execute(pool)
+ .await?;
+ sqlx::query(
+ r#"
+ CREATE TRIGGER IF NOT EXISTS am_fts_update AFTER UPDATE ON autonomous_memories BEGIN
+    INSERT INTO autonomous_memories_fts(autonomous_memories_fts, rowid, title, content, tags)
+    VALUES ('delete', old.id, old.title, old.content, old.tags);
+    INSERT INTO autonomous_memories_fts(rowid, title, content, tags)
+    VALUES (new.id, new.title, new.content, new.tags);
+ END
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
  // --- PR1 of multi-model task: seed default providers + models
  // if the catalog is empty. Idempotent:0-row check skips the
  // insert on subsequent boots. Backfills `sessions.model_id`
