@@ -1686,3 +1686,21 @@ epic `06-29-autonomous-memory` 最后一个 child(P1-P5 全部 done)。
 
 - epic `06-29-autonomous-memory` [5/5 done] → 收尾:落 `backend/memory.md` 全量 spec(P1-P5) + epic archive + 端到端 AC 验证(失败→成功→pitfall→跨 session 软拦截) + docs 同步(IMPLEMENTATION §4 / ROADMAP) + auto_reflect allow 清理
 - `task.py current` 现 fallback 指向 `06-24-debt-remove-3-closed-rules`(与 P5 无关)
+
+---
+
+## 2026-06-29 autonomous-memory epic 收尾完成
+
+epic `06-29-autonomous-memory` 已 archive。active tasks 清空。
+
+**收尾产物**(commits `a558b88` spec / `b020a3b` docs / `836b704` auto_reflect 清理 / `1a6cc26` archive):
+- **spec**:`backend/memory.md` Scenario 2 补 P5 contract(软拦截/状态机/卫生 job/D1-D4/is_full_match)+ §4/§6 矩阵 + 修正 4 处 P5 相关过时(P3-P5 rollout planning→archived、P3 verified 排除→三态分档、unfiltered-candidate anti-pattern→P5 保持 IncludeCandidate、sibling verified_pitfall_decision→PitfallRecall enum)
+- **docs**:ROADMAP §1.2 加 epic 行 + IMPLEMENTATION §4 加 2026-06-29 epic 决策日志 entry
+- **债清理**:移除 `auto_reflect.rs` P4 遗留 `#![allow(dead_code)]`(P5 后全函数经 chat_loop seam + 测试 reachable,cargo check 0 warning)
+- epic prd AC 全勾(端到端代码层面 P3↔P4↔P5 三层闭环 + 集成测试;真实 LLM 手动跑 app 验证 deferred)
+
+**v1 边界(留 v2)**:向量检索 / LLM-judge 写入过滤 / global 记忆层 / 跨 session 翻车追踪 / `recall_memory` 主动深挖 tool。
+
+### Status
+
+[OK] **epic 完成 + archived**。active tasks 清空,session 可收或开新任务。
