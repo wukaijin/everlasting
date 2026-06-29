@@ -543,9 +543,9 @@ sync I/O on the watcher's task.
 - **V2 2 期 epic rollout**:
   - P1 `06-29-am-p1-storage` (archived): `autonomous_memories` + FTS5(trigram) + `insert_memory` + `search_memories_fts` + safety net
   - **P2 `06-29-am-p2-readwrite` (this scenario)**: `remember` tool + `memory_recall` per-turn injection + `MemoryPreview` runtime section
-  - P3 `06-29-am-p3-tool-recall` (planning): tool-execution-time recall (before each `tool_use`)
-  - P4 `06-29-am-p4-event-reflect` (planning): event-driven auto-write hooks
-  - P5 `06-29-am-p5-quality` (planning): state machine auto-promotion + hygiene job
+  - P3 `06-29-am-p3-tool-recall` (archived): tool-execution-time recall (before each `tool_use`)
+  - P4 `06-29-am-p4-event-reflect` (archived): event-driven auto-write hooks
+  - P5 `06-29-am-p5-quality` (archived): verified soft-intercept + state-machine auto-promotion + hygiene job (see P5 contract below)
 
 ### 2. Signatures
 
@@ -762,7 +762,7 @@ pub async fn recall_pitfall_footnote(
 | 项 | 值 | 说明 |
 |---|---|---|
 | 触发时机 | `chat_loop` 拿到 `Decision::Allow` 之后、`execute_tool` 之前 | 不在 `permissions::check()` 内部(见 permission-layer.md §4.2) |
-| 召回对象 | `kind = 'pitfall'` AND `status = 'active'` | `verified` 是 P5 软拦截范围,严格排除;`candidate` 是 P2 范围,严格排除 |
+| 召回对象 | `kind = 'pitfall'` AND `status IN (candidate, active, verified)` | P3 落地时 active-only;**P5 放宽**到三态分档(`recall_pitfall`):verified+`is_full_match`→SoftBlock,active/candidate→Footnote。见 P5 contract |
 | 匹配方式 | `find_pitfalls_by_trigger` 的 `tool_name` + `command_pattern` / `path` **精确匹配** | 命中 `idx_am_pitfall` 索引(migration.rs:756);O(1) 不是 O(n) |
 | 注脚格式 | `⚠️ Memory: 此前在本项目执行类似操作时踩过坑 —\n• [title] content\n...` | imperative 强提示;多命中时多行 bullets |
 | 注入位置 | `tool_result.content` 前缀(plain text),**envelope wrap 之前** | `tool_use_id` 配对 / `is_error` 语义 / envelope `{result, cwd}` shape 全部不变 |
@@ -891,6 +891,63 @@ async fn reflect_to_pitfall(
 请提炼上述失败→成功经验。"
 ```
 
+#### P5 quality-layer contract (verified soft-intercept + state-machine promotion + hygiene job) — 2026-06-29, 06-29-am-p5-quality
+
+> **P5 是 P3 的质量收口层**(spike-007 §9 步 6 + §3 状态机 + §4 软拦截分档)。三块:(1) verified pitfall 软拦截重判(动 loop,兑现"第一时间规避");(2) 状态机自动晋升 candidate→active→verified(靠 hit_count + 存续时长);(3) 异步卫生 job(dedup/降权)。
+>
+> **P5 不改** P3/P4 的 seam 位置,**不改** `permissions::check()` 内部,**不改** `ToolResultPayload` shape —— 它把 P3 的 `recall_pitfall_footnote`(返 `Option<String>`)升级为分档 `recall_pitfall`(返 `PitfallRecall` enum),并在 chat_loop 两 path 的 pre-execute seam 加 SoftBlock 短路。
+
+**Signatures**(`agent/permissions/check.rs` + `db/memories.rs` + `agent/memory_hygiene.rs`):
+
+```rust
+// agent::permissions::check — P5 分档
+pub enum PitfallRecall {
+    None,
+    Footnote(String),                              // active / candidate / 二次命中(同 P3 注脚)
+    SoftBlock { hint: String, memory_id: String }, // verified + is_full_match + 本 session 未拦过
+}
+pub const PITFALL_SOFT_BLOCK_ENABLED: bool = true;  // feature flag;false → 退回 P3 纯注脚
+pub async fn recall_pitfall(
+    db: &SqlitePool, tool_name: &str, tool_input: &serde_json::Value,
+    already_blocked: &HashSet<String>,             // session 级 D1 防循环记账
+) -> PitfallRecall;  // DB err → warn! + None(不阻断)
+
+// db::memories — P5 状态机(嵌 bump_hit_count 同连接,避免 bump↔promote 竞态)
+pub async fn promote_if_eligible(pool: &SqlitePool, memory_id: &str) -> Result<(), sqlx::Error>;
+pub async fn update_status(pool, memory_id, new_status: MemoryStatus, demoted_reason: Option<&str>)
+    -> Result<(), StatusTransitionError>;          // 事务 + 转换矩阵校验
+pub async fn find_pitfalls_by_trigger_all_status(...) -> ...;  // P5 放宽版(含 candidate/active/verified)
+pub async fn count_memories_by_scope_kind(pool, scope, kind) -> i64;  // 卫生 job 触发计数
+
+// agent::memory_hygiene — P5 卫生 job
+pub fn char_trigrams(s: &str) -> HashSet<String>;  // Unicode char(中文友好,非 byte)
+pub fn jaccard(a: &str, b: &str) -> f32;            // char-trigram 集合 Jaccard 0.0..=1.0
+pub async fn run_hygiene_pass(pool: SqlitePool);    // dedup_pass + age_out_pass,fire-and-forget
+```
+
+**Contracts**:
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 软拦截触发 | `status='verified'` AND `is_full_match` AND `memory_id ∉ already_blocked` AND `PITFALL_SOFT_BLOCK_ENABLED` | 首条命中 row 胜出 SoftBlock;其余进 Footnote |
+| SoftBlock 回合改法 | **不调** `execute_tool`、**不写** `tool_executed` audit、构造 `ToolResult{content:hint, is_error:false}`、`emit_tool_result`、记 `memory_id` 入 set、`bump_hit_count` | 复用 `Decision::Deny` 的"不执行+回填"模式;下一轮 send LLM 重判 |
+| `is_error=false` | 提示非错误 | 避免 LLM 误判"工具坏了"换工具;语义是经验提示,不是错误 |
+| D1 死循环防护 | 每条 pitfall 每 session 软拦截 **1 次**;同坑二次(`already_blocked` 含)→ 降级 Footnote + 正常 execute | 保证不卡到 `MAX_TURNS`(50);`already_blocked` = session 级 `Arc<Mutex<HashSet<String>>>`,loop 顶部建(同 `FailureTracker` 生命周期) |
+| `is_full_match` 语义 | 行上每个 `Some(_)` 字段(command_pattern 子串 + path_globs glob)都匹配,且至少一个 `Some` | ⚠️ 偏离 design 字面"三者皆中"——内置工具探针对称(Shell 无 path 探针、Path 工具无 command_pattern),字面不可行;宽泛 pitfall(皆 None)→ 永不 SoftBlock,降级 Footnote(比字面更保守) |
+| 晋升 candidate→active | `hit_count ≥ 2`(被召回命中过 2 次) | `promote_if_eligible` 嵌 `bump_hit_count` 同连接读回 hit_count + `update_status` |
+| 晋升 active→verified | `hit_count ≥ 5` AND `created_at` 距今 ≥ 3 天 | "存续时长"代理"未翻车"(v1 无跨 session 翻车信号,P4 `FailureTracker` 是 session 内) |
+| 非法转换 | `update_status` 矩阵拒绝 → `StatusTransitionError::Illegal` | 合法集:candidate→{active,verified,demoted}, active→{verified,demoted}, verified→demoted, demoted→active |
+| recall filter 方向 | session-start FTS **保持** `IncludeCandidate`;pre-tool **放宽** candidate+active+verified 分档 | ⚠️ P5 推翻 P2 注释"收紧到 ActiveVerifiedOnly"——收紧会掐断 candidate 晋升(candidate 靠被召回命中晋升,排除则永不命中) |
+| 卫生 dedup | 同 `(scope,kind)`:pitfall 按 trigger_key 全等;其余按 char-trigram Jaccard >0.7 | 合并保留高 confidence/高 hit_count,`delete_memory` 删冗余 |
+| 卫生 age-out | `status IN (candidate,active)` AND age(`last_used_at`‖`created_at`)>30 天 AND `hit_count<2` → `Demoted("aged_out")` | verified 豁免(已证明价值) |
+| 卫生 job 触发 | `insert_memory` 后 `(scope,kind)` 计数 `%10==0` → spawn;app 启动(`lib.rs` setup)spawn 一次 | `if !cfg!(test)` 守卫防测试 flaky;fire-and-forget,失败 warn! 吞 |
+| Decision 语义 | **不参与** `check()` 决策链 | SoftBlock 在 Allow 之后、execute 之前短路,非 Deny |
+
+**P3 ↔ P4 ↔ P5 三层闭环**(集成测试 `agent_loop_p5_soft_block_short_circuits_execute` + `agent_loop_p5_soft_block_second_hit_degrades_to_execute` 锁定):
+1. session A:P4 旁路 reflection 写 `active` pitfall(带 trigger_key)
+2. session B+:P3/P5 pre-tool recall 命中 → bump hit_count → `promote_if_eligible` 晋升 active→verified(多次命中 + 存续 3 天)
+3. session N:verified + `is_full_match` → P5 SoftBlock 短路 execute → LLM 重判(第一时间规避);同坑二次命中 → Footnote + 正常执行
+
 ### 4. Validation & Error Matrix
 
 | Condition | Result |
@@ -926,6 +983,12 @@ async fn reflect_to_pitfall(
 | **P4** reflection LLM call transient network/timeout error | `tracing::warn!` + silent drop; no retry; main loop unaffected (fire-and-forget hard rule) |
 | **P4** `insert_memory` returns `Err(sqlx::Error)` (DB transient) | `tracing::warn!` + silent drop; no retry; main loop unaffected |
 | **P4** P3 ↔ P4 close-the-loop | P4 writes pitfall via `insert_memory` → immediately recallable by P3's `find_pitfalls_by_trigger` (no extra index/migration; `idx_am_pitfall` already covers P4 writes) |
+| **P5** verified pitfall + `is_full_match` + `memory_id ∉ already_blocked` | `recall_pitfall` 返 `SoftBlock`;chat_loop 短路 `execute_tool`、回灌 `is_error=false` 提示、记 `memory_id` 入 session set、`bump_hit_count` |
+| **P5** 同坑二次命中(`already_blocked` 已含) | 降级 `Footnote` + 正常 `execute_tool`(D1 防循环,不卡 `MAX_TURNS`) |
+| **P5** candidate `hit_count` 跨 2 | `promote_if_eligible` 升 active;active `hit_count` 跨 5 且 age≥3 天升 verified(嵌 `bump_hit_count` 同连接) |
+| **P5** 宽泛 pitfall(command_pattern/path_globs 皆 None) | `is_full_match=false` → 永不 SoftBlock,降级 Footnote(比 design 字面更保守) |
+| **P5** `PITFALL_SOFT_BLOCK_ENABLED=false` | `recall_pitfall` 永不返 SoftBlock,退回 P3 纯注脚(feature flag 回滚) |
+| **P5** 卫生 job:同 `(scope,kind)` Jaccard>0.7 / trigger_key 全等 | 合并保留高 confidence/hit_count,`delete_memory` 删冗余;age>30天 且 hit<2 → `Demoted("aged_out")` |
 
 ### 5. Good / Base / Bad Cases
 
@@ -968,14 +1031,13 @@ PermissionContext::new(...).with_ask(Tier4Ask::Write).check(REMEMBER_TOOL_NAME)?
 
 LLM either silently abstains (most common — predictive abstention) or interrupts the user 50 times per session. The whole point of autonomous memory is that the LLM writes it; the safety net is the actual guard.
 
-#### Bad: unfiltered candidate recall in P5+
+#### Bad: 收紧 recall filter 到 ActiveVerifiedOnly(P5 推翻的预测)
 
-1. P5 lands with state machine: Candidate → Active → Verified promotion.
-2. Code updates `build_recall_text` to `RecallStatusFilter::P5Auto`.
-3. P2 `search_memories_fts_recall` with `P2Manual` filter is still reachable from a stray call site (e.g., legacy `update_checklist`).
-4. Candidate memories pollute the recall → LLM sees unverified noise.
+1. P5 设计时曾预期"状态机落地后,session-start recall 收紧到 `RecallStatusFilter::ActiveVerifiedOnly`"(P2 注释 + 本节早期版本)。
+2. 实现时发现**收紧会掐断 candidate 晋升路径**:candidate→active 的唯一 v1 触发是"被召回命中"(recall 命中 → `bump_hit_count` → 达 D2 阈值晋升);把 candidate 排除出 recall 则它永不命中、永不晋升(preference/fact 类无 `trigger_key`,只靠 FTS 召回,断路尤甚)。
+3. **P5 实际决策**:session-start recall **保持 `IncludeCandidate`**;噪音靠"低阈值快速晋升"(candidate 命中 ≥2 即升 active,流出 candidate 池)+ 卫生 job age-out 控制,**不靠 filter 收紧**。
 
-The `RecallStatusFilter` enum is a load-bearing contract; updating it requires a code-wide audit of call sites.
+`RecallStatusFilter` 枚举仍是 load-bearing contract;P5 的教训是 —— **filter 收紧与"靠召回命中晋升"的状态机互斥**:设计晋升路径时,必须确认 recall filter 覆盖所有待晋升状态,否则状态机死锁。见 P5 contract "recall filter 方向"行。
 
 #### Bad: pre-tool recall inside `permissions::check()` (P3 anti-pattern)
 
@@ -992,7 +1054,7 @@ The recall is **information injection**, not a *decision*. It lives at the chat_
 2. P5 lands later wanting a "soft" intercept (return `Decision::Allow` + structured hint to LLM).
 3. The P3 hard-block path is now dead code; the seam is in the wrong place.
 
-P3 is **active-only footnote**, period. Verified soft-intercept is **P5 scope** (spike-007 §4, 命中分档表). The function `recall_pitfall_footnote` returns `Result<Option<String>, sqlx::Error>` specifically because P5 will add a sibling `verified_pitfall_decision` returning a structured `Decision` and the two can coexist at the chat_loop seam without touching each other.
+P3 is **active-only footnote**, period. Verified soft-intercept is **P5 scope** (spike-007 §4, 命中分档表). The function `recall_pitfall_footnote` returns `Result<Option<String>, sqlx::Error>` because the recall result is a **hint, not a decision**. **P5 落地(2026-06-29)**:verified soft-intercept 用 `PitfallRecall` enum(`None` / `Footnote` / `SoftBlock`)+ `recall_pitfall` 分档函数 —— **不返 `Decision`**(SoftBlock 在 chat_loop seam 短路 `execute_tool`,不是权限 Deny);`recall_pitfall_footnote` 保留为 Footnote 档基础。早期"P5 加 sibling `verified_pitfall_decision` 返 `Decision`"的预测未采纳(enum 比 sibling 更统一)。见 P5 contract。
 
 #### Bad: P4 reflection awaits the main loop (P4 anti-pattern)
 
@@ -1076,6 +1138,12 @@ P4's threshold is **2 consecutive failures followed by a success** (per spike-00
 | `truncate_for_reflect_under_cap_passes_through` (P4) | Input 1 KiB → output identical (under 2 KiB cap) |
 | `truncate_for_reflect_over_cap_appends_marker` (P4) | Input 4 KiB → output truncated to 2 KiB with `…(truncated)` marker |
 | `reflected_pitfall_is_recallable_by_p3_helper` (P4) | End-to-end: P4 reflection writes a pitfall with `tool_name='shell'`, `command_pattern='cargo test'`; subsequent `permissions::recall_pitfall_footnote(pool, 'shell', tool_input_with_cargo_test)` returns `Some("⚠️ Memory: ...")` (PRD AC #4) |
+| `agent_loop_p5_soft_block_short_circuits_execute` (P5) | 端到端:verified pitfall + `is_full_match` → 首次 tool_use 触发 SoftBlock(`execute_tool` 未调、`is_error=false` 提示、`memory_id` 入 session set) |
+| `agent_loop_p5_soft_block_second_hit_degrades_to_execute` (P5) | 同坑二次命中 → `Footnote` + 正常 `execute_tool`(D1 防循环) |
+| `p5_recall_verified_full_match_returns_soft_block` (P5) | `recall_pitfall`:verified + 完全匹配 → `SoftBlock`;path/command-agnostic(皆 None)→ `Footnote` |
+| `promote_if_eligible_*` (P5) | hit_count 跨 2 升 active;跨 5 + age≥3 天升 verified;demoted 不被 bump 晋升(矩阵拒绝) |
+| `jaccard_*` / `char_trigrams_*` (P5) | 中文短句重叠 Jaccard>0.7;identical=1.0;disjoint=0.0;Unicode char 非 byte |
+| `pick_keeper_*` / `trigger_key_equal_*` (P5) | 高 confidence/hit_count 胜出;trigger_key 三字段(tool+command_pattern+path_globs)全等 |
 
 30+ tests across DB / agent / tool / IPC / store / component.
 

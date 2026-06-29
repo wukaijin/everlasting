@@ -84,11 +84,11 @@ P1 存储底座(无依赖,基础)
 
 ## Acceptance Criteria(epic 级,各 child 有自己的细化)
 
-- [ ] P1-P5 全部 child 完成 + archive
-- [ ] 端到端:连续失败→成功 → 自动产出 pitfall → 另一 session 跑同类命令 → 工具执行前命中 → 第一时间规避(verified 软拦截)
-- [ ] 记忆库可经 UI 查看/删除/pin(MemoryPreview 扩展)
-- [ ] 召回不污染主 loop(token 预算 + 精确率优先验证)
-- [ ] **实现后**落 `.trellis/spec/backend/`(用户要求:实现之后才落 spec)
+- [x] P1-P5 全部 child 完成 + archive(5/5 done)
+- [x] 端到端:连续失败→成功 → 自动产出 pitfall → 另一 session 跑同类命令 → 工具执行前命中 → 第一时间规避(verified 软拦截)——代码层面 P3↔P4↔P5 三层闭环 + 集成测试(`agent_loop_p5_soft_block_*`)锁定;真实 LLM 手动跑 app 验证 deferred
+- [x] 记忆库可经 UI 查看/删除/pin(MemoryPreview 扩展,P2)
+- [x] 召回不污染主 loop(token 预算 `RECALL_TOKEN_BUDGET=500` + trigger_key 精确匹配,精确率优先)
+- [x] **实现后**落 `.trellis/spec/backend/`(`memory.md` Scenario 2 补 P5 contract + 修正 4 处过时,2026-06-29)
 
 ## Out of Scope
 
