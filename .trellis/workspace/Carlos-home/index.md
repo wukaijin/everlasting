@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 81
-- **Last Active**: 2026-06-28
+- **Total Sessions**: 82
+- **Last Active**: 2026-06-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1169 | Active |
+| `journal-3.md` | ~1352 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 82 | 2026-06-29 | P1 自主记忆存储底座落地 | `c3b1824`, `f0052f8` | `main` |
 | 81 | 2026-06-28 | L3b PR3 三个 Blocker 修复（权限/并发/越权） | `9981380`, `8cdbb53` | `main` |
 | 80 | 2026-06-27 | L3b PR4 前端 SubagentDrawer Merge / Discard UI | `d1f869a`, `858a27f`, `0e637f4` | `main` |
 | 79 | 2026-06-27 | L3b PR3 merge_worker / discard_worker tool + sweep | `d23ff9a`, `01a5981` | `main` |

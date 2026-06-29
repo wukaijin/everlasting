@@ -1316,3 +1316,37 @@ subagent 并发场景(worker = researcher,连续 read_file 探索)报 OpenAI 400
 ### Next Steps
 
 - 可选:trellis-update-spec 记一条约束("loop hint 不得插在 tool_result 前 / wire 层保证 tool_calls 后紧跟 tool")。
+
+
+## Session 82: P1 自主记忆存储底座落地
+
+**Date**: 2026-06-29
+**Task**: P1 自主记忆存储底座落地
+**Branch**: `main`
+
+### Summary
+
+P1 自主记忆存储底座:autonomous_memories 表(4 CHECK+2 索引)+FTS5 虚拟表(trigram,默认 unicode61 对 CJK 失效是关键发现)+3 同步触发器+memories.rs CRUD(7 接口)+写入安全网(敏感内容/路径 deny-list/超长/空值/路径泛化)+escape_fts5+glob matcher,26 测覆盖全 AC。trellis-implement 全量实施+trellis-check 独立审查修 6 问题:insert_memory .expect() 规范违规→防御性错误、glob 方言注释错归因 SQLite GLOB(实测推翻)→纠正为 session_tool_permissions 风格、dead_code 先例核实纠正、补强 escape_fts5+EXPLAIN 测试。cargo check 0 warning,全量 998 passed 0 回归。遵循 epic '实现后落 spec' 约定暂不落 backend spec,FTS5-trigram-CJK+glob 方言知识点进 prd,待 P5 收尾统一落 database-guidelines。epic 进 P2(手工读写闭环,需 brainstorm+curate)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3b1824` | (see git log) |
+| `f0052f8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
