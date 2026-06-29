@@ -204,10 +204,17 @@ impl AppState {
     ///    (possibly empty) so `AppState::load` doesn't unwind on
     ///    a single bad row.
     pub async fn load(app: &AppHandle) -> Self {
+        // Cold-start env-derived config is only consulted by the
+        // `get_llm_config` IPC fallback and the (currently unused)
+        // "no-catalog" code path. The chat command reads from the
+        // DB-backed `ProviderCatalog` built below — a missing env
+        // var here only matters if the DB also has no configured
+        // provider, in which case the first chat surfaces an
+        // `LlmError::Auth`. Log at `info` so cold start isn't noisy.
         let config = LlmConfig::from_env().unwrap_or_else(|e| {
-            tracing::warn!(
+            tracing::info!(
                 error = %e,
-                "ANTHROPIC_API_KEY not set; chat requests will return an auth error"
+                "cold-start LlmConfig::from_env failed; using unconfigured (DB provider catalog takes precedence)"
             );
             LlmConfig::unconfigured()
         });
