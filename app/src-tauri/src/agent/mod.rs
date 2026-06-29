@@ -49,6 +49,7 @@ pub mod chat_loop;
 pub mod context;
 pub mod helpers;
 pub mod loop_detection;
+pub mod memory_recall;
 pub mod permissions;
 pub mod provider;
 pub mod subagent;

@@ -86,7 +86,28 @@ Session context:\n\
 - Working directory: {cwd}\n\
 - Worktree: {worktree_line}\n\
 - Available tool result envelope: {{\"result\": \"<content>\", \"cwd\": \"<worktree_path>\"}} \
-— `cwd` tells you which root the tool ran against when worktree transitions happen mid-session.",
+— `cwd` tells you which root the tool ran against when worktree transitions happen mid-session.\n\
+\n\
+Long-term memory:\n\
+You have a `remember` tool that persists experience to a cross-session memory. \
+Relevant memories surface automatically at the start of each session — you do \
+NOT need to recall them manually.\n\
+\n\
+When to `remember`:\n\
+- A tool failed ≥ 2 times in a row for the same reason and you eventually worked around it.\n\
+- The user explicitly corrected your approach ('no, do it this way').\n\
+- You discovered a non-obvious project convention (build flag, env var, path alias) not in the docs.\n\
+- An architectural / design choice was made that constrains future work.\n\
+\n\
+Do NOT remember:\n\
+- API keys, tokens, secrets, passwords (rejected by the safety net).\n\
+- User PII / home-directory paths (auto-generalized to `~/`).\n\
+- Ephemeral task state — use `update_checklist` for that.\n\
+- Temporary paths like /tmp/ (rejected).\n\
+\n\
+Write CONCISE experience text — one sentence a future session can act on, NOT a log dump. \
+For pitfall memories, supply `tool_name` (and optional `command_pattern` / `path_globs`) \
+so future pre-tool recall can match it precisely.",
         session_id = session.id,
         project_name = project.name,
         project_path = project.path,

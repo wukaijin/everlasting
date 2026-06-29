@@ -472,6 +472,13 @@ pub async fn run_chat_loop(
         // destroy. The pool is `Clone` (Arc-internal) so the
         // per-turn `ToolContext::clone()` pattern is unaffected.
         db: db.clone(),
+        // P2 (2026-06-29): the session's `projects.id` UUID. The
+        // `remember` tool binds project-scope memories to this id;
+        // the session-start recall filters by the same id. Worker
+        // subagents reuse the parent's project (their worktree is a
+        // checkout OF the parent's project), so the worker path
+        // also carries the parent's project_id.
+        project_id: project.id.clone(),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;
@@ -1053,6 +1060,48 @@ pub async fn run_chat_loop(
                     }]),
                 };
                 req.push(msg);
+            }
+            // P2 (2026-06-29): autonomous-memory session-start
+            // recall. Per-turn (PRD decision 6): query = the most
+            // recent user message text. The recall text is
+            // appended to the instruction message's block list
+            // (messages[0]) in the REQUEST clone — the persisted
+            // `messages` Vec is byte-identical across turns (the
+            // recall block is per-turn-only, like the B12
+            // checklist). The banner + instruction-body prefix
+            // stays stable so the Anthropic cache window stays
+            // warm. See `agent::memory_recall` for the cache-
+            // correctness rationale + the candidate-inclusion
+            // ADR-lite (P5 tightens back to active/verified).
+            //
+            // Skip when `skip_persist` (worker path): the worker
+            // reuses the parent's session_id, and surfacing the
+            // parent's memories in the worker's context would
+            // (a) confuse the worker's focused task and (b) bump
+            // hit_count on rows the worker didn't actually
+            // contribute to. The worker has its own context.
+            if !skip_persist {
+                let query = messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == Role::User)
+                    .map(|m| m.content.to_text())
+                    .unwrap_or_default();
+                if !query.trim().is_empty() {
+                    if let Some(recall_text) =
+                        crate::agent::memory_recall::build_recall_text(
+                            &db,
+                            &project.id,
+                            &query,
+                        )
+                        .await
+                    {
+                        crate::agent::memory_recall::inject_recall_into_turn(
+                            &mut req,
+                            recall_text,
+                        );
+                    }
+                }
             }
             req
         };

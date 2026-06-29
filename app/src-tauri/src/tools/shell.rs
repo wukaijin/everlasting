@@ -600,6 +600,7 @@ mod tests {
             checklist: crate::tools::update_checklist::new_handle(),
             background_shells: crate::background_shell::default_registry(),
             db: crate::tools::test_default_pool(),
+            project_id: "test-proj".to_string(),
         }
     }
 
@@ -781,6 +782,7 @@ mod tests {
             checklist: crate::tools::update_checklist::new_handle(),
             background_shells: crate::background_shell::default_registry(),
             db: crate::tools::test_default_pool(),
+            project_id: "test-proj".to_string(),
         };
         let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),

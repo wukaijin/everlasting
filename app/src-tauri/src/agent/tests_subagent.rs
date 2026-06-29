@@ -3564,6 +3564,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         checklist: crate::tools::update_checklist::new_handle(),
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
+        project_id: "test-proj".to_string(),
     };
 
     // Invoke merge_worker.
@@ -3729,6 +3730,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
         checklist: crate::tools::update_checklist::new_handle(),
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
+        project_id: "test-proj".to_string(),
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -3809,6 +3811,7 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         checklist: crate::tools::update_checklist::new_handle(),
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
+        project_id: "test-proj".to_string(),
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) = crate::tools::merge_worker::execute(
@@ -3888,6 +3891,7 @@ async fn l3b_discard_worker_happy_path() {
         checklist: crate::tools::update_checklist::new_handle(),
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
+        project_id: "test-proj".to_string(),
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -3954,6 +3958,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         checklist: crate::tools::update_checklist::new_handle(),
         background_shells: crate::background_shell::default_registry(),
         db: h.db.clone(),
+        project_id: "test-proj".to_string(),
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) = crate::tools::discard_worker::execute(

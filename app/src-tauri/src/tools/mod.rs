@@ -24,6 +24,7 @@ pub mod list_dir;
 pub mod merge_worker;
 pub mod read_file;
 pub mod read_guard;
+pub mod remember;
 pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
@@ -144,6 +145,12 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // per parent session (`merge_lock_for`).
         merge_worker::definition(),
         discard_worker::definition(),
+        // P2 (2026-06-29): agent self-writes a long-term memory.
+        // Silent Allow (no Tier 4 ask — epic "全自主写" decision); the
+        // write-safety net in `db::memories::insert_memory` is the
+        // guard. `Risk::Low` (the `_` default). Plan mode keeps it
+        // (writes land in the DB, not the filesystem).
+        remember::definition(),
     ]
 }
 
@@ -201,6 +208,15 @@ pub struct ToolContext {
     pub checklist: ChecklistHandle,
     pub background_shells: DefaultRegistry,
     pub db: SqlitePool,
+    /// P2 (2026-06-29): the session's `projects.id` UUID. Used by
+    /// the `remember` tool to bind a project-scope memory to the
+    /// same identifier the session-start recall
+    /// (`memory_recall::build_recall_text`) filters by — keeping
+    /// the two sides in lockstep so a written memory is
+    /// immediately recallable. Distinct from `worktree_path`
+    /// (a filesystem path) — the two are different concepts that
+    /// happen to identify the same project.
+    pub project_id: String,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
@@ -382,6 +398,15 @@ async fn execute_tool_inner(
             let (out, is_err, update, exit_code) =
                 discard_worker::execute(input, ctx, session_id).await;
             (out, is_err, update, exit_code)
+        }
+        // P2 (2026-06-29): remember tool — agent self-writes a
+        // candidate-status memory. Silent Allow (no Tier 4 ask);
+        // the write-safety net + per-session ≤50 cap are the
+        // guards. `session_id` becomes `source_session_id` for
+        // frequency-control accounting.
+        "remember" => {
+            let (out, is_err) = remember::execute(input, ctx, session_id).await;
+            (out, is_err, ToolContextUpdate::default(), None)
         }
         _ => (
             format!("Unknown tool: {}", name),

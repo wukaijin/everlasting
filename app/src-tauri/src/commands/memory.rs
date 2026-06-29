@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db;
+use crate::db::memories::list_memories as db_list_memories;
 use crate::memory::loader::{
     all_paths, load_for_session, resolve_one, MemoryCache,
 };
@@ -221,3 +222,87 @@ fn fallback_open(path: &std::path::Path) -> std::io::Result<std::process::Child>
 // Re-export for unit tests.
 #[allow(dead_code)]
 pub(crate) fn _ensure_used_for_test(_c: &MemoryCache) {}
+
+// ---------------------------------------------------------------------------
+// P2 (2026-06-29): runtime autonomous-memory CRUD commands.
+//
+// `list_memories` / `delete_memory` back the MemoryPreview panel's
+// "runtime memories" section. The list is project-isolated: a
+// project-scoped memory in proj-A is NEVER surfaced when the panel
+// is open for proj-B. User-scope memories are global (they surface
+// for every project's panel — that's the "user" layer's contract).
+//
+// Permission: these are user-driven direct IPCs (the panel is the
+// UI), NOT LLM tool invocations. The ⑨ 关 permission layer does
+// NOT apply (same precedent as the B5 memory-file commands above
+// + the D3 edit/resend commands). The project-isolation check
+// below is the security boundary.
+// ---------------------------------------------------------------------------
+
+/// List runtime memories (P2 autonomous memories) visible to the
+/// given project. Returns user-scope memories (global) + the
+/// project's own project-scope memories, newest first. Used by
+/// the MemoryPreview panel's "runtime memories" list.
+///
+/// Project isolation: a project-scope memory in another project
+/// is NEVER returned. The user-scope memories are global by
+/// design (cross-project experience).
+#[tauri::command]
+pub async fn list_autonomous_memories(
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<crate::db::memories::MemoryRow>, String> {
+    // Verify the project exists (defensive — the IPC is
+    // user-driven from the panel, but a stale project_id should
+    // surface a clean error rather than an empty list).
+    match db::get_project(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Err(format!(
+                "list_autonomous_memories: project '{}' not found",
+                project_id
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "list_autonomous_memories: failed to load project: {}",
+                e
+            ));
+        }
+    }
+    // scope=None → both layers. The DB layer ignores project_id
+    // for user-scope rows (they're global) and filters project-
+    // scope rows by the supplied id. This is exactly the
+    // project-isolation contract.
+    match db_list_memories(&state.db, None, Some(&project_id)).await {
+        Ok(rows) => Ok(rows),
+        Err(e) => Err(format!(
+            "list_autonomous_memories: query failed: {}",
+            e
+        )),
+    }
+}
+
+/// Delete a runtime memory by its `memory_id` UUID. Best-effort
+/// idempotent: deleting an already-deleted memory returns Ok(0).
+///
+/// **Project isolation**: the command does NOT take a project_id
+/// — the `memory_id` is globally unique (UUID v7), so there's no
+/// cross-project leak risk from the delete itself. The
+/// MemoryPreview panel only displays memories already filtered
+/// to the current project (via `list_autonomous_memories`), so
+/// the user can only see + click delete on memories they're
+/// allowed to manage.
+#[tauri::command]
+pub async fn delete_autonomous_memory(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+) -> Result<u64, String> {
+    match crate::db::memories::delete_memory(&state.db, &memory_id).await {
+        Ok(n) => Ok(n),
+        Err(e) => Err(format!(
+            "delete_autonomous_memory: delete failed: {}",
+            e
+        )),
+    }
+}

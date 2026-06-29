@@ -685,9 +685,63 @@ pub async fn delete_memory(
     Ok(result.rows_affected())
 }
 
+/// Count memories attributable to a session via `source_session_id`.
+/// Used by P2's `remember` tool frequency control (spike-005 §4.3
+/// "same session ≤ 50" rule). The count covers ALL statuses (a
+/// demoted row still occupies a slot — pruning is a separate concern).
+///
+/// Best-effort + cheap: one `COUNT(*) WHERE source_session_id = ?`
+/// (no dedicated index — the table is small; full scan is
+/// microseconds). Returns 0 on any error (frequency control is a
+/// soft guard — a DB hiccup shouldn't block a legitimate write;
+/// the worst case is one extra row over the cap, which the next
+/// hygiene job / manual delete fixes).
+pub async fn count_memories_for_session(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> i64 {
+    let count: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM autonomous_memories WHERE source_session_id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    count.unwrap_or(0)
+}
+
 // ---------------------------------------------------------------------------
 // search_memories_fts — FTS5 bm25 search with scope semantics
 // ---------------------------------------------------------------------------
+
+/// Status-filter policy for [`search_memories_fts`].
+///
+/// - `ActiveVerifiedOnly` — original P1 semantics (P3 pre-tool
+///   pitfall recall, P5 status-machine path). `candidate` rows are
+///   NOT surfaced — they haven't earned recall surface yet.
+/// - `IncludeCandidate` — P2 session-start recall semantics (PRD
+///   ADR-lite decision: candidate rows ARE surfaced because P2
+///   has no promotion mechanism; remember writes fixed-candidate,
+///   so excluding candidate would make P2 written memories never
+///   recallable, breaking the core AC). P5 will tighten the
+///   session-start path back to `ActiveVerifiedOnly` once the
+///   state machine lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecallStatusFilter {
+    ActiveVerifiedOnly,
+    IncludeCandidate,
+}
+
+impl RecallStatusFilter {
+    /// The SQL fragment used in the `AND m.status IN (...)` clause.
+    fn status_in_clause(&self) -> &'static str {
+        match self {
+            Self::ActiveVerifiedOnly => "'active','verified'",
+            Self::IncludeCandidate => "'candidate','active','verified'",
+        }
+    }
+}
 
 /// Search memories via FTS5 `MATCH` + `bm25` ranking. The query is
 /// escaped via [`escape_fts5`] (phrase match; H3 tradeoff accepted
@@ -705,9 +759,11 @@ pub async fn delete_memory(
 ///   In this case `project_id` MUST be `Some` (the project branch
 ///   of the OR needs it) — returns Err otherwise.
 ///
-/// Only `status IN ('active','verified')` rows are returned
-/// (candidate / demoted rows aren't surfaced to recall — they
-/// haven't earned promotion or have been demoted).
+/// `status_filter` controls which status values are surfaced:
+/// - [`RecallStatusFilter::ActiveVerifiedOnly`] (default, P1
+///   semantics) — `active` + `verified` only.
+/// - [`RecallStatusFilter::IncludeCandidate`] (P2 session-start
+///   recall) — adds `candidate`.
 ///
 /// `limit` caps the result count (P2's session-start recall uses
 /// a small top-k; the caller decides).
@@ -717,6 +773,7 @@ pub async fn search_memories_fts(
     scope: Option<MemoryScope>,
     query: &str,
     limit: i64,
+    status_filter: RecallStatusFilter,
 ) -> Result<Vec<MemoryRow>, MemoryInsertError> {
     // Empty / whitespace query → empty result (FTS5 MATCH on an
     // empty phrase is a syntax error; short-circuit instead).
@@ -725,6 +782,7 @@ pub async fn search_memories_fts(
     }
 
     let escaped = escape_fts5(query);
+    let status_in = status_filter.status_in_clause();
 
     // Build the scope filter per H2. Three branches:
     // (a) User scope — ignore project_id.
@@ -734,7 +792,7 @@ pub async fn search_memories_fts(
     let (sql, bind_project_id) = match scope {
         Some(MemoryScope::User) => (
             // (a)
-            r#"
+            format!(r#"
             SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                    m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                    m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -744,10 +802,10 @@ pub async fn search_memories_fts(
             JOIN autonomous_memories m ON m.id = f.rowid
             WHERE autonomous_memories_fts MATCH ?
               AND m.scope = 'user'
-              AND m.status IN ('active','verified')
+              AND m.status IN ({status_in})
             ORDER BY bm25(autonomous_memories_fts)
             LIMIT ?
-            "#,
+            "#),
             false,
         ),
         Some(MemoryScope::Project) => {
@@ -756,7 +814,7 @@ pub async fn search_memories_fts(
             }
             (
                 // (b)
-                r#"
+                format!(r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -767,10 +825,10 @@ pub async fn search_memories_fts(
                 WHERE autonomous_memories_fts MATCH ?
                   AND m.scope = 'project'
                   AND m.project_id = ?
-                  AND m.status IN ('active','verified')
+                  AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#,
+                "#),
                 true,
             )
         }
@@ -780,7 +838,7 @@ pub async fn search_memories_fts(
                 return Err(MemoryInsertError::ProjectScopeMissingId);
             }
             (
-                r#"
+                format!(r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -791,16 +849,169 @@ pub async fn search_memories_fts(
                 WHERE autonomous_memories_fts MATCH ?
                   AND (m.scope = 'user'
                        OR (m.scope = 'project' AND m.project_id = ?))
-                  AND m.status IN ('active','verified')
+                  AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#,
+                "#),
                 true,
             )
         }
     };
 
-    let mut q = sqlx::query_as::<_, MemoryRow>(sql).bind(&escaped);
+    let mut q = sqlx::query_as::<_, MemoryRow>(&sql).bind(&escaped);
+    if bind_project_id {
+        q = q.bind(project_id);
+    }
+    q = q.bind(limit);
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows)
+}
+
+/// Build an OR-joined FTS5 query from a natural-language phrase
+/// (the user's latest message). Splits on whitespace, drops
+/// stopwords + tokens shorter than 3 chars (trigram tokenizer
+/// needs ≥3 chars to match), then OR-joins the per-token
+/// phrase-escaped fragments. Used by P2's session-start recall —
+/// the phrase-match [`escape_fts5`] is too strict for natural-
+/// language recall (it requires contiguous in-order tokens, which
+/// a free-form user message almost never satisfies against a
+/// concise memory body).
+///
+/// Returns an empty `String` when no usable tokens survive the
+/// filter — the caller short-circuits to "no recall" (avoids
+/// passing an empty MATCH expression to FTS5, which is a syntax
+/// error).
+///
+/// **Token cap**: only the first 8 surviving tokens are OR-joined
+/// — beyond that, bm25 ranking degrades and the MATCH expression
+/// grows (FTS5 has a default 64-phrase OR limit, but the practical
+/// precision/recall tradeoff caps out well before that).
+pub(crate) fn build_recall_fts_query(text: &str) -> String {
+    // Minimal English + Chinese stopword set. Kept tiny — the
+    // goal is to drop high-frequency function words that would
+    // match too many rows, not to be a complete NLP stoplist.
+    const STOPWORDS: &[&str] = &[
+        "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "for",
+        "is", "are", "was", "were", "be", "been", "being", "this", "that", "these",
+        "those", "it", "its", "with", "as", "by", "how", "what", "when", "why",
+        "i", "you", "we", "they", "he", "she", "my", "your", "our",
+        "的", "了", "是", "在", "和", "与", "或", "我", "你", "他", "她", "这", "那",
+    ];
+    const MAX_TOKENS: usize = 8;
+
+    let mut phrases: Vec<String> = Vec::new();
+    for raw in text.split_whitespace() {
+        // Trim punctuation around the token.
+        let token = raw.trim_matches(|c: char| !c.is_alphanumeric());
+        let lower = token.to_lowercase();
+        // trigram tokenizer needs ≥3 chars; stopwords are noise.
+        if lower.chars().count() < 3 {
+            continue;
+        }
+        if STOPWORDS.contains(&lower.as_str()) {
+            continue;
+        }
+        // Escape each token as its own phrase (handles embedded
+        // quotes / operators per-token).
+        phrases.push(format!("\"{}\"", lower.replace('"', "\"\"")));
+        if phrases.len() >= MAX_TOKENS {
+            break;
+        }
+    }
+    phrases.join(" OR ")
+}
+
+/// Loose-recall variant of [`search_memories_fts`] for P2's
+/// session-start recall. Same scope/project_id interaction (H2)
+/// and same `status_filter` semantics, but the query is OR-joined
+/// per-token via [`build_recall_fts_query`] (natural-language
+/// friendly) instead of phrase-matched (which is too strict for a
+/// free-form user message).
+///
+/// Returns an empty Vec when the query yields no usable tokens
+/// (all stopwords / too short) — the caller treats this as "no
+/// recall".
+pub async fn search_memories_fts_recall(
+    pool: &SqlitePool,
+    project_id: Option<&str>,
+    scope: Option<MemoryScope>,
+    query: &str,
+    limit: i64,
+    status_filter: RecallStatusFilter,
+) -> Result<Vec<MemoryRow>, MemoryInsertError> {
+    let or_query = build_recall_fts_query(query);
+    if or_query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let status_in = status_filter.status_in_clause();
+
+    let (sql, bind_project_id) = match scope {
+        Some(MemoryScope::User) => (
+            format!(r#"
+            SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
+                   m.title, m.content, m.tags, m.tool_name, m.command_pattern,
+                   m.path_globs, m.source_session_id, m.source_ref, m.confidence,
+                   m.hit_count, m.last_used_at, m.created_at, m.updated_at,
+                   m.demoted_reason
+            FROM autonomous_memories_fts f
+            JOIN autonomous_memories m ON m.id = f.rowid
+            WHERE autonomous_memories_fts MATCH ?
+              AND m.scope = 'user'
+              AND m.status IN ({status_in})
+            ORDER BY bm25(autonomous_memories_fts)
+            LIMIT ?
+            "#),
+            false,
+        ),
+        Some(MemoryScope::Project) => {
+            if project_id.is_none() {
+                return Err(MemoryInsertError::ProjectScopeMissingId);
+            }
+            (
+                format!(r#"
+                SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
+                       m.title, m.content, m.tags, m.tool_name, m.command_pattern,
+                       m.path_globs, m.source_session_id, m.source_ref, m.confidence,
+                       m.hit_count, m.last_used_at, m.created_at, m.updated_at,
+                       m.demoted_reason
+                FROM autonomous_memories_fts f
+                JOIN autonomous_memories m ON m.id = f.rowid
+                WHERE autonomous_memories_fts MATCH ?
+                  AND m.scope = 'project'
+                  AND m.project_id = ?
+                  AND m.status IN ({status_in})
+                ORDER BY bm25(autonomous_memories_fts)
+                LIMIT ?
+                "#),
+                true,
+            )
+        }
+        None => {
+            if project_id.is_none() {
+                return Err(MemoryInsertError::ProjectScopeMissingId);
+            }
+            (
+                format!(r#"
+                SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
+                       m.title, m.content, m.tags, m.tool_name, m.command_pattern,
+                       m.path_globs, m.source_session_id, m.source_ref, m.confidence,
+                       m.hit_count, m.last_used_at, m.created_at, m.updated_at,
+                       m.demoted_reason
+                FROM autonomous_memories_fts f
+                JOIN autonomous_memories m ON m.id = f.rowid
+                WHERE autonomous_memories_fts MATCH ?
+                  AND (m.scope = 'user'
+                       OR (m.scope = 'project' AND m.project_id = ?))
+                  AND m.status IN ({status_in})
+                ORDER BY bm25(autonomous_memories_fts)
+                LIMIT ?
+                "#),
+                true,
+            )
+        }
+    };
+
+    let mut q = sqlx::query_as::<_, MemoryRow>(&sql).bind(&or_query);
     if bind_project_id {
         q = q.bind(project_id);
     }
