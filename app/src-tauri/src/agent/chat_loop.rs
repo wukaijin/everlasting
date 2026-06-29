@@ -495,6 +495,25 @@ pub async fn run_chat_loop(
     // `max_turns` exits (c27f3fd7 worker run).
     let mut last_usage_terminal: Option<crate::llm::types::TokenUsage> = None;
 
+    // P4 (2026-06-29, 06-29-am-p4-event-reflect): per-session
+    // failure tracker. Created once at the top of `run_chat_loop`
+    // and shared (via `Arc`) across the two tool-emit sites —
+    // the parallel-batch L2 path's `FuturesUnordered` task AND
+    // the serial path's `for (id, name, input) in &tool_calls`
+    // loop both feed outcomes into the same tracker. When the
+    // "≥2 consecutive failures → success" pattern lands for
+    // a tool, the tracker fires a fire-and-forget LLM reflection
+    // that produces a `kind=pitfall, status=active` row in
+    // `autonomous_memories` — which the P3 pre-tool recall
+    // surfaces on the next session (or even later in the same
+    // session if a worker re-tries the same operation). v1
+    // accepts session-boundary reset (no cross-session carry
+    // of "tools that were flaky yesterday"; spike-007 §10
+    // extension point).
+    let failure_tracker = Arc::new(Mutex::new(
+        crate::agent::auto_reflect::FailureTracker::new(),
+    ));
+
     let session_mode = loaded_session.session.mode;
     // B6 PR2b (RULE-A-014, 2026-06-20): the `is_worker` parameter
     // (added as the 21st arg) threads the worker path's
@@ -1741,6 +1760,17 @@ pub async fn run_chat_loop(
                     let skill_cache = skill_cache.clone();
                     let current_ctx = current_ctx.clone();
                     let token = token.clone();
+                    // P4 (2026-06-29, 06-29-am-p4-event-reflect):
+                    // the per-session failure tracker + provider
+                    // + project_id are cloned into the parallel
+                    // task so the L2 batch's tool outcomes feed
+                    // the same in-session state machine as the
+                    // serial path. The reflection is fire-and-
+                    // forget (tokio::spawn inside) so the parallel
+                    // path's perf is unaffected.
+                    let failure_tracker = failure_tracker.clone();
+                    let provider = provider.clone();
+                    let project_id = current_ctx.project_id.clone();
                     async move {
                         // check + execute live in the SAME task
                         // (Q2 rationale: no ask risk in the
@@ -1831,6 +1861,30 @@ pub async fn run_chat_loop(
                         } else {
                             content
                         };
+                        // P4 (2026-06-29, 06-29-am-p4-event-reflect):
+                        // record this tool_use outcome into the
+                        // in-session failure tracker. On the
+                        // "≥2 fails then success" pattern, the
+                        // tracker fires a fire-and-forget LLM
+                        // reflection that produces a pitfall memory
+                        // row. Skipped on cancel (the in-flight tool
+                        // was interrupted, not a real outcome) — same
+                        // intent as the audit-skip above.
+                        if !token.is_cancelled() {
+                            crate::agent::auto_reflect::try_record_outcome(
+                                &failure_tracker,
+                                provider.clone(),
+                                db.clone(),
+                                &rid,
+                                &session_id,
+                                &project_id,
+                                &name,
+                                &input,
+                                is_error,
+                                &content,
+                            )
+                            .await;
+                        }
                         let duration_ms = tool_exec_start.elapsed().as_millis();
                         // RULE-A-004 (2026-06-15): a tool cancelled
                         // mid-flight MUST NOT leave a `tool_executed`
@@ -2398,6 +2452,30 @@ pub async fn run_chat_loop(
             } else {
                 content
             };
+            // P4 (2026-06-29, 06-29-am-p4-event-reflect):
+            // record this tool_use outcome into the
+            // in-session failure tracker. On the "≥2 fails
+            // then success" pattern, the tracker fires a
+            // fire-and-forget LLM reflection that produces
+            // a pitfall memory row. Skipped on cancel (the
+            // in-flight tool was interrupted, not a real
+            // outcome) — same intent as the audit-skip
+            // below.
+            if !token.is_cancelled() {
+                crate::agent::auto_reflect::try_record_outcome(
+                    &failure_tracker,
+                    provider.clone(),
+                    db.clone(),
+                    &rid,
+                    &session_id,
+                    &current_ctx.project_id,
+                    name,
+                    input,
+                    is_error,
+                    &content,
+                )
+                .await;
+            }
             let duration_ms = tool_exec_start.elapsed().as_millis();
             // RULE-A-004 (2026-06-15): audit AFTER the cancel
             // check. Previously `record_tool_executed_audit` ran
