@@ -114,6 +114,26 @@ pub fn resolve_isolation(
     dispatch_input.or(frontmatter_default).unwrap_or(false)
 }
 
+/// Whether a subagent's declared toolset can write (files / shell) —
+/// used by the isolation decision. Only **writable** workers need a
+/// worktree when dispatched concurrently: read-only workers (e.g.
+/// `researcher`) share the parent cwd with no write race, so we save
+/// the per-dispatch checkout cost.
+///
+/// Precedence:
+/// - `tools.is_empty()` → inherits the full builtin set (which includes
+///   write/shell tools) → writable.
+/// - otherwise → writable iff any declared tool is **outside**
+///   [`READONLY_TOOL_ALLOWLIST`] (i.e. a write/shell/other tool).
+fn worker_is_writable(def: &super::SubagentDef) -> bool {
+    if def.tools.is_empty() {
+        return true;
+    }
+    def.tools
+        .iter()
+        .any(|t: &String| !super::READONLY_TOOL_ALLOWLIST.contains(&t.as_str()))
+}
+
 /// A summary of the worker's changes for the dispatch_subagent
 /// tool_result. Built by scanning the worker worktree's diff against
 /// its base commit (the `worker/<run_id>` branch tip vs its parent).
@@ -269,6 +289,15 @@ pub(crate) async fn run_subagent(
     // fixture. A test that wants to exercise isolation passes a
     // tempdir path + sets up a real git repo.
     app_data_dir: &std::path::Path,
+    // B (2026-06-30): `true` when this dispatch comes from the
+    // concurrent batch (`DispatchBatch::Concurrent` in `chat_loop.rs`).
+    // Combined with `worker_is_writable(def)`, this force-isolates
+    // concurrent *write-capable* workers onto their own
+    // `worker/<run_id>` branch (replaces the old "general-purpose
+    // defaults to isolated" safety argument). Concurrent *read-only*
+    // workers and all serial dispatches ignore this and fall back to
+    // the subagent's `isolation` default (now `None` = shared).
+    parallel: bool,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -344,10 +373,25 @@ pub(crate) async fn run_subagent(
         .get("isolation")
         .and_then(|v| v.as_bool());
     let isolated = if force_readonly {
-        // L3a pre-PR2 concurrent path; also any future explicit
-        // read-only force (serial). Force isolation off so the
-        // read-only + shared-cwd scope is preserved.
+        // Serial-only switch; force isolation off so the read-only +
+        // shared-cwd scope is preserved (L3a legacy compat).
         false
+    } else if let Some(explicit) = dispatch_isolation {
+        // Explicit per-dispatch input always wins — including
+        // `isolation: false` to opt OUT of isolation even in a
+        // concurrent batch (the caller then owns any write race).
+        // Mirrors resolve_isolation's precedence (dispatch > default).
+        explicit
+    } else if parallel && worker_is_writable(def) {
+        // B (2026-06-30): concurrent batch + writable worker + no
+        // explicit input → default to isolated, so concurrent writes
+        // land on separate `worker/<run_id>` branches. Replaces the
+        // old "general-purpose defaults to isolated" safety argument
+        // but, unlike a hard force, a caller can still opt out with
+        // `isolation: false` (handled above). Read-only concurrent
+        // workers (researcher) fall through to def default (shared) —
+        // no write race, saves the checkout.
+        true
     } else {
         resolve_isolation(def.isolation, dispatch_isolation)
     };
@@ -955,6 +999,26 @@ pub(crate) async fn run_subagent(
     if let Some(wt_path) = worker_worktree_opt.as_ref() {
         let changes = probe_worker_changes(wt_path, &worker_run_id);
         if changes.has_changes {
+            // A (auto-commit, 2026-06-30): commit the worker's
+            // working-tree changes onto `worker/<run_id>` so the branch
+            // tip advances past the base. `probe_worker_changes` diffs
+            // the working tree while `do_merge_blocking` merges branch
+            // tips — without this, a worker that never commits leaves
+            // worker_tip == parent_tip and merge_worker hits the
+            // is_ancestor == short-circuit (merge_worker.rs:651) →
+            // "merged fast-forward" with zero changes actually merged
+            // (silent false-success). Failure is non-fatal: warn +
+            // preserve the worktree anyway; merge degrades to legacy.
+            if let Err(e) =
+                crate::git::worktree::commit_worker_changes(wt_path, &worker_run_id)
+            {
+                tracing::warn!(
+                    worker_run_id = %worker_run_id,
+                    worktree = %wt_path.display(),
+                    error = %e,
+                    "run_subagent: auto-commit of worker changes failed; preserving worktree (merge may degrade to legacy behavior)"
+                );
+            }
             // Preserve the worktree + branch. The DB row's
             // `worktree_path` column was already set to `wt_path`
             // above (after `insert_run`); leave it as-is.
@@ -1179,12 +1243,54 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn builtin_general_purpose_defaults_to_isolated() {
-        // The general-purpose builtin ships with isolation = Some(true)
-        // (write-capable workers benefit most from worktree isolation).
+    fn builtin_general_purpose_defaults_to_shared() {
+        // B (2026-06-30): general-purpose ships with isolation = None
+        // (shared) so a single serial dispatch reuses the parent cwd
+        // (zero merge, matches Claude Code). Concurrent dispatch is
+        // force-isolated in chat_loop's DispatchBatch::Concurrent branch
+        // (gated by worker_is_writable) — concurrent-write safety no
+        // longer relies on this default being Some(true).
         let g = super::super::lookup_subagent("general-purpose")
             .expect("general-purpose exists");
-        assert_eq!(g.isolation, Some(true));
+        assert_eq!(g.isolation, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // worker_is_writable (B, 2026-06-30) — drives the concurrent-force-
+    // isolate decision (only writable workers need a worktree when
+    // dispatched concurrently).
+    // -----------------------------------------------------------------------
+
+    fn writable_def(name: &str, tools: &[&str]) -> crate::agent::subagent::SubagentDef {
+        crate::agent::subagent::SubagentDef {
+            name: name.to_string(),
+            description: String::new(),
+            system_prompt: String::new(),
+            tools: tools.iter().map(|t| (*t).to_string()).collect(),
+            isolation: None,
+        }
+    }
+
+    #[test]
+    fn worker_is_writable_empty_tools_inherits_full_set() {
+        // Empty `tools` = inherit the full builtin set (write/shell) → writable.
+        assert!(worker_is_writable(&writable_def("gp-like", &[])));
+    }
+
+    #[test]
+    fn worker_is_writable_readonly_only_is_not_writable() {
+        // A toolset that is exactly READONLY_TOOL_ALLOWLIST (researcher)
+        // → not writable → concurrent dispatch stays shared (no write race).
+        assert!(!worker_is_writable(&writable_def(
+            "researcher-like",
+            &["read_file", "grep", "glob", "list_dir", "web_fetch"]
+        )));
+    }
+
+    #[test]
+    fn worker_is_writable_with_write_tool_is_writable() {
+        // A declared toolset containing a write tool → writable.
+        assert!(worker_is_writable(&writable_def("writer", &["read_file", "write_file"])));
     }
 
     #[test]

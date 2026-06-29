@@ -575,6 +575,13 @@ Two transcript-related contracts that the worker `SubagentBufferSink` is now res
 
 ## Pattern: Concurrent isolated dispatch (L3b PR2, 2026-06-27)
 
+> **B update (2026-06-30)**: the force-isolate *trigger* moved from
+> "general-purpose defaults to `Some(true)`" to "chat_loop's `DispatchBatch::Concurrent`
+> passes `parallel=true` → decision `dispatch input > (parallel && worker_is_writable) > def default`".
+> Race-dissolution proof below (per-worker `worker/<run_id>` branch) is unchanged —
+> concurrent writes still land on separate branches. See `tool-contract.md`
+> §"B update (2026-06-30)" for the full decision table + the auto-commit false-success fix.
+
 **Problem**: The B6 `Worker Subagent` pattern above dispatches **one worker at a time** — the
 parent turn blocks on a single `run_subagent().await`. When the parent LLM wants to research
 multiple independent directions in parallel, serial fan-out costs `sum(worker_i)` wall-clock

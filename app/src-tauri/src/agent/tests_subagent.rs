@@ -2490,8 +2490,9 @@ async fn l3b_concurrent_general_purpose_workers_complete_shared() {
     let mock = Arc::new(MockProvider::new(vec![
         // Parent turn 1: 2 general-purpose dispatches. The
         // `isolation: false` dispatch input overrides the
-        // builtin `general-purpose.isolation: Some(true)` default
-        // (per the resolve_isolation truth table:
+        // builtin `general-purpose.isolation: None` default and opts
+        // out of the concurrent batch's force-isolate-writable default
+        // (B 2026-06-30) — per the resolve_isolation truth table:
         // `frontmatter Some(true)` + `dispatch Some(false)` →
         // NOT isolated). This reproduces the L3a pre-PR2
         // concurrent behavior (shared cwd + full toolset) without

@@ -131,14 +131,17 @@ pub fn definition() -> ToolDef {
              needs confirmation (writes, shells, web_fetch without a prior grant) \
              surfaces a `WorkerAskBanner` in the parent's UI for the user to \
              allow/deny (120s timeout denies).\n\n\
-             L3b (2026-06-27): the optional `isolation` input controls whether the \
-             worker runs in its own git worktree (independent checkout + \
-             `worker/<run_id>` branch). When isolation is active, worker writes \
-             land on a separate branch and are surfaced back as a diff summary in \
-             the tool_result. Precedence: dispatch `isolation` input overrides the \
-             subagent's frontmatter default (e.g. `general-purpose` defaults to \
-             isolated; pass `false` to force shared-cwd). Omit the field to use \
-             the subagent's default."
+             B (2026-06-30): worktree isolation is decided automatically by the \
+             system based on dispatch shape — you usually do NOT need to set \
+             `isolation`. A single dispatch_subagent per turn runs in the parent \
+             cwd (shared: edits land immediately, zero merge). Multiple \
+             dispatch_subagent calls in one turn run concurrently and \
+             write-capable workers are auto-isolated to their own \
+             `worker/<run_id>` branch so concurrent writes never race (each \
+             worker's edits merge back via `merge_worker`). The optional \
+             `isolation` input overrides this: `true` forces a worktree even for \
+             a single dispatch; `false` forces shared-cwd. Omit for the system \
+             default."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -159,13 +162,13 @@ pub fn definition() -> ToolDef {
                 },
                 "isolation": {
                     "type": "boolean",
-                    "description": "Override the subagent's worktree-isolation \
-                                    default. `true` forces the worker into its own \
-                                    git worktree (independent checkout + \
-                                    `worker/<run_id>` branch); `false` forces the \
-                                    legacy shared-cwd behavior. Omit to use the \
-                                    subagent's frontmatter default (general-purpose \
-                                    = isolated, researcher = shared)."
+                    "description": "Override the system's automatic worktree-isolation \
+                                    decision. A single dispatch defaults to shared-cwd \
+                                    (edits land immediately); concurrent dispatch \
+                                    (multiple dispatch_subagent in one turn) auto-isolates \
+                                    write-capable workers. `true` forces a worktree even \
+                                    for a single dispatch; `false` forces shared-cwd. Omit \
+                                    for the system default."
                 }
             },
             "required": ["subagent", "task"]
@@ -272,12 +275,13 @@ pub async fn definition_with_cache(cache: &SubagentCache, project_path: &str) ->
                 },
                 "isolation": {
                     "type": "boolean",
-                    "description": "Override the subagent's worktree-isolation \
-                                    default. `true` forces the worker into its own \
-                                    git worktree (independent checkout + \
-                                    `worker/<run_id>` branch); `false` forces the \
-                                    legacy shared-cwd behavior. Omit to use the \
-                                    subagent's frontmatter default."
+                    "description": "Override the system's automatic worktree-isolation \
+                                    decision. A single dispatch defaults to shared-cwd \
+                                    (edits land immediately); concurrent dispatch \
+                                    (multiple dispatch_subagent in one turn) auto-isolates \
+                                    write-capable workers. `true` forces a worktree even \
+                                    for a single dispatch; `false` forces shared-cwd. Omit \
+                                    for the system default."
                 }
             },
             "required": ["subagent", "task"]
@@ -405,9 +409,14 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                 // L3b (2026-06-27): general-purpose is write-capable, so it
                 // benefits most from worktree isolation — concurrent workers
                 // can each land writes in their own checkout without racing.
-                // The dispatch-time `isolation` input parameter can still
-                // override this default to `false` on a per-dispatch basis.
-                isolation: Some(true),
+                // B (2026-06-30): default changed to `None` (shared) so
+                // a single serial dispatch reuses the parent cwd — zero
+                // merge, matches Claude Code's default. Concurrent
+                // dispatch is force-isolated in `chat_loop.rs`'s
+                // `DispatchBatch::Concurrent` branch (gated by
+                // `worker_is_writable`), so concurrent-write safety no
+                // longer relies on this default being `Some(true)`.
+                isolation: None,
             },
         ]
     })

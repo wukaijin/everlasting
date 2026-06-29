@@ -1911,7 +1911,7 @@ Precedence: **dispatch input > frontmatter default > not isolated**.
 
 #### Builtin defaults
 
-- `general-purpose`: `isolation: Some(true)` — write-capable workers benefit most from isolation (concurrent dispatch conflict isolation is the core L3a → L3b motivation).
+- `general-purpose`: `isolation: None` (shared) — **B (2026-06-30)**: changed from `Some(true)`. Single serial dispatch reuses the parent cwd (zero merge, matches Claude Code). Concurrent-write isolation moved to `chat_loop.rs`'s `DispatchBatch::Concurrent` branch (force-isolate-writable), so this default no longer carries it.
 - `researcher`: `isolation: None` — read-only workers don't need a separate checkout; saves the per-dispatch checkout cost.
 
 #### Tool schema addition
@@ -1954,6 +1954,31 @@ dispatch (L3b PR2, 2026-06-27)". Net changes from the L3a proof:
 
 `force_readonly` parameter is **retained** on `run_subagent` (serial-only post-PR2)
 for L3a regression compat + a future "explicit read-only opt-in" feature.
+
+### B update: serial-default-shared + parallel-force-isolate + auto-commit (2026-06-30)
+
+Task `06-30-ab-autocommit-shared-default` (parent `06-30-subagent-worktree-smooth`).
+Two changes to the isolation model above + one bug fix:
+
+1. **`general-purpose` default `Some(true)` → `None`** (Builtin defaults above).
+   Single serial dispatch is now shared (zero merge).
+2. **Concurrent-write safety re-anchored**: the `DispatchBatch::Concurrent` branch
+   in `chat_loop.rs` passes a new `run_subagent` param `parallel=true`; the decision
+   becomes `dispatch input > (parallel && worker_is_writable) > def default`. A
+   concurrent batch defaults writable workers to isolated (replacing the old
+   "general-purpose defaults to isolated" argument) **but** an explicit
+   `isolation: false` still opts out (precedence preserved). Read-only concurrent
+   workers (`researcher`) stay shared — no write race, saves the checkout.
+3. **Auto-commit fix (`commit_worker_changes`)**: `run_subagent` now commits the
+   worker's working-tree changes onto `worker/<run_id>` right after
+   `probe_worker_changes` reports `has_changes`. This closes the merge
+   false-success gap: `probe` diffs the working tree but `do_merge_blocking`
+   merges branch tips — without the auto-commit, an uncommitted worker left
+   `worker_tip == parent_tip` and `merge_worker` returned "fast-forward" with
+   zero changes merged (`merge_worker.rs:651` `==` short-circuit).
+
+`resolve_isolation` signature is unchanged; the `resolve_isolation_*` truth-table
+tests still pass. `cargo test --lib`: 1081 passed.
 
 ## Scenario: `merge_worker` / `discard_worker` tools (L3b PR3, 2026-06-27)
 

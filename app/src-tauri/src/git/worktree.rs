@@ -738,6 +738,53 @@ pub fn destroy_worker(
 /// Matches Claude Code's `cleanupPeriodDays` default of 7 days.
 /// Sweep keeps a worker worktree around for this many days
 /// after its mtime; older ones are destroyed best-effort.
+/// Commit all of a worker's changes (tracked modifications + untracked
+/// files) onto its `worker/<run_id>` branch. Called by `run_subagent`
+/// AFTER `probe_worker_changes` reports `has_changes=true` and BEFORE
+/// the preserve-worktree decision, so the worker's branch tip truly
+/// advances past the base — making a subsequent `merge_worker` (FF or
+/// 3-way) actually carry the worker's edits.
+///
+/// Why this exists (the merge false-success gap): `probe_worker_changes`
+/// diffs the **working tree** (detects uncommitted edits), but
+/// `do_merge_blocking` merges **branch tips** (commits). Without this
+/// auto-commit, a worker that never commits leaves `worker_tip ==
+/// parent_tip`, and `merge_worker` hits the `is_ancestor` `==`
+/// short-circuit (`tools/merge_worker.rs:651`) → returns "merged
+/// fast-forward" with zero changes actually merged (silent
+/// false-success). This helper closes that gap by always committing
+/// the worker's working-tree changes before the branch is preserved.
+///
+/// Stages everything (`add_all(["*"])`, mirroring a human `git add -A`),
+/// then commits on `refs/heads/worker/<run_id>` with the Everlasting
+/// signature. Returns the new commit OID. Best-effort at the call site:
+/// a failure is logged and the worktree preserved anyway; the merge
+/// then degrades to the legacy behavior.
+pub fn commit_worker_changes(worker_wt: &Path, run_id: &str) -> Result<git2::Oid, GitError> {
+    let repo = Repository::open(worker_wt)?;
+    let branch_ref = format!("refs/heads/{}", worker_branch_name(run_id));
+
+    // Stage all changes — tracked modifications + untracked files.
+    let mut index = repo.index()?;
+    index.add_all(&["*"], git2::IndexAddOption::DEFAULT, None)?;
+    index.write()?;
+
+    // Write the staged tree and commit on top of the current tip.
+    let tree_oid = index.write_tree()?;
+    let tree = repo.find_tree(tree_oid)?;
+    let head_commit = repo.head()?.peel_to_commit()?;
+    let sig = git2::Signature::now("Everlasting", "agent@everlasting")?;
+    let oid = repo.commit(
+        Some(&branch_ref),
+        &sig,
+        &sig,
+        &format!("worker {}: auto-commit worker changes", run_id),
+        &tree,
+        &[&head_commit],
+    )?;
+    Ok(oid)
+}
+
 pub const DEFAULT_CLEANUP_PERIOD_DAYS: u32 = 7;
 
 /// Environment override for [`DEFAULT_CLEANUP_PERIOD_DAYS`].
@@ -1451,6 +1498,50 @@ mod tests {
             worker_wt.join("parent_only.txt").exists(),
             "worker should see the parent's committed file"
         );
+    }
+
+    #[test]
+    fn commit_worker_changes_advances_tip_and_includes_edits() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        let parent_wt = parent_session_worktree_with_extra_commit(project, "sess-commit");
+        let run_id = "run-autocommit";
+        let worker_wt = tmp.path().join("worker_wt_autocommit");
+        create_worker(project, &worker_wt, &parent_wt, run_id)
+            .expect("create_worker should succeed");
+
+        // The worker overwrites a tracked file + adds an untracked file,
+        // WITHOUT committing (mirrors a subagent that wrote edits but
+        // never ran `git commit`).
+        std::fs::write(worker_wt.join("parent_only.txt"), "worker overwrote this").unwrap();
+        std::fs::write(worker_wt.join("new_file.txt"), "worker added this").unwrap();
+
+        let repo = git2::Repository::open(&worker_wt).unwrap();
+        let tip_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+        let new_oid = commit_worker_changes(&worker_wt, run_id)
+            .expect("auto-commit should succeed");
+
+        // The branch tip advanced — the load-bearing invariant: probe
+        // sees working-tree edits but merge_worker merges branch tips;
+        // without this commit the tip would equal the base and
+        // merge_worker would false-success (is_ancestor == short-circuit).
+        assert_ne!(new_oid, tip_before, "auto-commit must advance the tip");
+
+        // The new commit's tree contains both the edit + the new file
+        // (add_all stages tracked mods + untracked).
+        let new_commit = repo.find_commit(new_oid).unwrap();
+        let tree = new_commit.tree().unwrap();
+        assert!(
+            tree.get_name("new_file.txt").is_some(),
+            "untracked file must be committed"
+        );
+        assert!(tree.get_name("parent_only.txt").is_some());
+
+        // The worker branch ref points at the new commit.
+        let branch_ref = format!("refs/heads/worker/{}", run_id);
+        let ref_oid = repo.find_reference(&branch_ref).unwrap().target().unwrap();
+        assert_eq!(ref_oid, new_oid);
     }
 
     #[test]

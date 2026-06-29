@@ -2254,6 +2254,11 @@ pub async fn run_chat_loop(
                                         // app data dir for worker
                                         // worktree path computation.
                                         &app_data_dir,
+                                        // B (2026-06-30): concurrent batch →
+                                        // `parallel=true` force-isolates
+                                        // writable workers onto their own
+                                        // `worker/<run_id>` branch.
+                                        true,
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -2408,6 +2413,10 @@ pub async fn run_chat_loop(
                     // `run_subagent` can compute the worker worktree
                     // path when isolation is active.
                     &app_data_dir,
+                    // B (2026-06-30): serial dispatch → `parallel=false`,
+                    // isolation falls back to the subagent's default
+                    // (general-purpose now shared).
+                    false,
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();
