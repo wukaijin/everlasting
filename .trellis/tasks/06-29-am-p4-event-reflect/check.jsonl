@@ -1,1 +1,9 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/memory.md", "reason": "check 验证 insert_memory 调用参数(kind=pitfall, status=active, trigger_key 3 列对齐, source_ref=tool_call_id)+ 写入安全网被触发(长 / 敏感仍会拒)+ scope/project_id 交互(per project_id)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check 验证 ToolResultPayload.is_error 信号被正确用作状态机输入;旁路 reflection 只在 is_error=true(失败)或 false 但前序 is_error=true 计数 ≥2(成功后)时触发;不污染原 tool_result content / is_error 语义"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "check 验证 P4 挂在 emit_tool_result seam 不动 run_chat_loop 结构(对比 P3 zero-loop-change 准则);P4 状态机内嵌于 chat_loop 函数栈内(Arc<Mutex> 共享),不引入新并发原语"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "check 验证 reflection 走 provider.chat_stream_with_tools 走主 provider 同一实例(不另起),JSON 解析产出 {title, content, trigger_key{tool,command_pattern,path_globs}};流式丢弃,只取 final 文本"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "check 验证状态机 map 持久化(若选 DB 而非内存)走 sqlx 范式;insert_memory 调用走 bind 链 + CHECK 兜底;source_ref 字符串格式(turn_id:tool_call_id 或单 tool_call_id)合理可溯"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "check 验证旁路 reflection 三段(状态机 / LLM 调 / insert_memory)任一失败走 tracing::warn! + 静默吞,主 loop 0 感知;tokio::spawn fire-and-forget 不 join / 不 await;"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "check 验证复用 P1 写口(insert_memory)而非另写;状态机复用 HashMap 范式;reflection prompt 独立模块不污染主 system prompt"}
+{"file": "docs/spikes/007-agent-autonomous-memory-plan.md", "reason": "check 验证 P4 实现严格落在 §3 路径2 + §6 C 点范围 — 不动 §4 层2(P3)+ 不动 §3 状态机晋升(P5)+ 不动 verified 软拦截(P5)+ 不动 session 结束 reflection(v2)"}
+{"file": ".trellis/tasks/06-29-autonomous-memory/prd.md", "reason": "check 验证不引入 epic Out of Scope 项(向量库 / LLM-judge / global 记忆层 / 记忆晋升 CLAUDE.md / 主动 recall_memory tool)"}
