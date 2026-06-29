@@ -158,12 +158,20 @@ fn escape_fts5(q: &str) -> String {
 
 ## Open Questions
 
-1. **【blocking,第一个动作】FTS5 是否启用 + tokenizer 中文支持?**
+1. **【blocking,第一个动作】FTS5 是否启用 + tokenizer 中文支持?** ✅ **CLOSED(2026-06-29)**
    - 验证:写最小 `CREATE VIRTUAL TABLE ... USING fts5` migration 试跑;查 sqlx feature flags;**插入中文内容测搜索效果**(默认 unicode61 对中文按字符边界,可能需 `tokenize='trigram'` 或 `simple`)
    - 启用 + 中文 OK → 按上方方案;启用但中文差 → 换 tokenizer(trigram 对中文/子串友好);未启用退路 A:sqlx 开 fts5 feature;退路 B(都不行):降级 `content LIKE '%kw%'`(tool_name 精确匹配不受影响)。决策记录进 prd
-2. **JSON 字段映射**:tags / path_globs 用 `TEXT` + serde_json(trigger_key 已拆列)。实施时确认现有项目 JSON 列惯例
-3. **UUID crate**:倾向 `uuid` crate **v7**(时间有序,B-tree 友好,RFC 9562);项目若已有 uuid 依赖则复用
-4. **SQLite 并发模型**(2.1):PR1a 查 `PRAGMA journal_mode`/`busy_timeout` 现状——**已开 WAL 则不动**(项目已有 DB 层在用,可能已开);未开则记为独立改进(影响全 DB 层,非本 task 范围)。`update_status` 事务包裹(已在 §3 落地)
+   - **验证结论**:
+     - **FTS5 启用**:系统 SQLite 3.53.0 编译时启用 FTS5(sqlx 非 bundled,链系统 libsqlite3;实测 `CREATE VIRTUAL TABLE ... USING fts5` 在 `cargo test --lib memories::fts5_trigram_tokenizer_is_available_for_cjk` 通过)。
+     - **默认 `unicode61` 对 CJK 失效**:实测插入中文行后,`MATCH 'cargo'`(CJK 文本里夹的 ASCII 词)**和** `MATCH '权限'`(纯中文)**都搜不到**——unicode61 在 CJK 字符间找不到词边界,把整段当一 token。
+     - **`trigram` tokenizer 是正确选择**:`tokenize='trigram'` 后 ASCII 子串(`cargo`/`WSL`)和 ≥3 字符中文(`权限管理`/`注意权限`)都 MATCH。tradeoff:**trigram 要求 query ≥3 字符**(2 字符中文如 `权限` 不 MATCH);v1 接受(精度优先,title 字段仍提供主要搜索信号)。
+     - **最终路径**:**FTS5 + `tokenize='trigram'`**(不走 LIKE 退路)。已落地到 `migrations.rs` 的 `autonomous_memories_fts` 虚拟表 + 3 个同步触发器(insert/delete/update)。
+2. **JSON 字段映射**:tags / path_globs 用 `TEXT` + serde_json(trigger_key 已拆列)。实施时确认现有项目 JSON 列惯例。✅ **CLOSED**:tags / path_globs 用 `TEXT` + serde_json;Rust 侧 CRUD 函数对 `path_globs` 做 `serde_json::from_str<Vec<String>>`(find_pitfalls_by_trigger 的 glob 匹配),tags 透传(由 P2 前端 parse)。与 `subagent_runs.transcript_json` / `session_audit_events.payload_json` 同一 JSON-in-TEXT 惯例。
+3. **UUID crate**:倾向 `uuid` crate **v7**(时间有序,B-tree 友好,RFC 9562);项目若已有 uuid 依赖则复用。✅ **CLOSED**:`Cargo.toml` 加 `"v7"` feature(保留 `"v4"` 兼容旧代码);`insert_memory` 用 `Uuid::now_v7()`。
+4. **SQLite 并发模型**(2.1):PR1a 查 `PRAGMA journal_mode`/`busy_timeout` 现状——**已开 WAL 则不动**(项目已有 DB 层在用,可能已开);未开则记为独立改进(影响全 DB 层,非本 task 范围)。`update_status` 事务包裹(已在 §3 落地)。✅ **CLOSED**:
+   - `init_pool` **未设** `journal_mode` 也未设 `busy_timeout`——全 DB 层走默认(in-memory 测试 `journal_mode='memory'`,文件库默认 `'delete'` 回滚日志;`busy_timeout` 默认 5000ms)。
+   - **WAL 改造记为独立改进**(影响全 DB 层,非本 task 范围);现状对单写者访问模式足够,`update_status` 事务包裹防止 status 读与 `bump_hit_count` 竞争。
+   - 测试 `am_pragma_status_recorded_for_open_q4` 锁定现状(任何一项漂移会失败)。
 
 ## Out of Scope(本 task 明确不做)
 
@@ -214,3 +222,14 @@ fn escape_fts5(q: &str) -> String {
 | H5 confidence 无消费方 | ✅ 字段注释标 forward-compat/P5 |
 | M1 schema 演变未记 | ✅ §1 上方加 trigger_key 拆列说明 |
 | M2 path_globs NULL 语义 | ✅ 注释 NULL=不限路径 + Rust Option<Vec> |
+
+**implementation-log(2026-06-29,P1 落地决策)**
+
+| 决策 | 处理 |
+|---|---|
+| FTS5 + tokenizer 选型 | ✅ FTS5 启用 + `tokenize='trigram'`(默认 `unicode61` 对 CJK 失效,trigram 对 ASCII 子串 + ≥3 字符中文友好;tradeoff:trigram 要求 query ≥3 字符,2 字符中文 query 不命中)。详见 Open Q #1 闭合段 |
+| glob 方言 | ✅ `session_tool_permissions` 风格 glob(`*` 不跨 `/`,非原生 SQLite GLOB——check 期实测 SQLite 3.53 `'a/b' GLOB 'a*'` 返回 1,原生 GLOB 的 `*` **会**跨 `/`;此处用的是 re-grill 定档的自定义变体);`app/src-tauri/*` 只匹配单层(`app/src-tauri/Cargo.toml`),不匹配深层(`app/src-tauri/src/lib.rs`)。spike-007 re-grill 已明示不接受 `**` 递归。`find_pitfalls_by_trigger` 的 `glob_matches_path` 是手写字节级 matcher(避免 globset crate 依赖);**char-level caveat**:`?` 按 byte 匹配,非 SQLite GLOB 的 `sqlite3Utf8Read` char-level——CJK glob 带 `?`(如 `中?` 匹配 `中文`)在此实现不命中(P1 接受,CJK path glob 罕见);test `find_pitfalls_path_globs_semantics` 锁定 ASCII 行为 |
+| dead_code 策略 | ✅ 模块级 `#![allow(dead_code)]` + 文档注释解释 P1 是存储底座无 production 消费方(P2 remember tool 是首个 caller)。沿用 `subagent_runs.rs` PR2 的先例;P2 落地后移除 |
+| 长度检查时机 | ✅ Rust 安全网前置拒绝(DB CHECK 兜底);错误信息可操作("title length 201 exceeds 200" vs DB 的 "CHECK constraint failed") |
+| `escape_fts5` phrase match | ✅ H3 tradeoff:v1 整 query 包双引号(FTS5 phrase match,要求词序连续);`"WSL cargo"` 搜不到 `cargo ... WSL`。v1 接受(精度优先);v2 改 tokenize 后各 token OR-join |
+| 测试范式 | ✅ 新建 `db/memories_tests.rs`,复制 `test_pool`(无 common helper,遵循 db 6 域文件惯例);26 测覆盖全部 AC |
