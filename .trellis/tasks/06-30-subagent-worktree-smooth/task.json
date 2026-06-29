@@ -1,0 +1,29 @@
+{
+  "id": "subagent-worktree-smooth",
+  "name": "subagent-worktree-smooth",
+  "title": "sub-agent worktree 链路顺滑化",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-06-30",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-30-ab-autocommit-shared-default",
+    "06-30-cd-isolated-hint-publish-ui"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
