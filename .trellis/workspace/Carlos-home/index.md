@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 87
-- **Last Active**: 2026-06-30
+- **Total Sessions**: 88
+- **Last Active**: 2026-07-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1848 | Active |
+| `journal-3.md` | ~1881 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 88 | 2026-07-01 | read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list | `87c91f0` | `main` |
 | 87 | 2026-06-30 | AskUserQuestion 阻塞反问 tool 落地 | `cfdf177`, `064fbbc` | `main` |
 | 86 | 2026-06-30 | sub-agent worktree 链路顺滑化 epic (A+B+C+D) | `cda336c`, `91968e5`, `16fccf9` | `main` |
 | 85 | 2026-06-30 | fix merge_worker no-parent-worktree via lazy auto-attach | `9f51f8d`, `67af5d4`, `e08f68a` | `main` |

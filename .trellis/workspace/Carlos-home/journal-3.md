@@ -1846,3 +1846,36 @@ P1 bug: isolated sub-agent (general-purpose default isolated=true) 可以派生 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 88: read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list
+
+**Date**: 2026-07-01
+**Task**: read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list
+**Branch**: `main`
+
+### Summary
+
+read 族(read_file/grep/glob/list_dir)的 tool 层 assert_within_root 与权限层 ask 口径冲突('假 ask'——用户 Allow 后 tool 层又拒),删硬卡改由权限层受控:Tier 2.5 敏感路径 deny-list(中等档:私钥/.env/credentials,含 yolo + symlink 逃逸 canonicalize 保护)+ Tier 4 受信 allow-list(~/.config/everlasting/** 免 ask)+ 新 helper boundary::resolve_path 展开 ~(6 处共用)。write 族保留硬卡(零回归)。双 anchor(cwd 决定 ask / worktree 决定 deny-allow)。两轮 review 各补一个盲区:trellis-check 抓 symlink escape(安全回归),用户抓 ~ 不解析(allow-list 形同虚设)。1127 tests passed, 0 warning。spec project-cwd-boundary.md §5+§7。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87c91f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
