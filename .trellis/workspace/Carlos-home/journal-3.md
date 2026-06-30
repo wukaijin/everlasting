@@ -1812,3 +1812,37 @@ P1 bug: isolated sub-agent (general-purpose default isolated=true) 可以派生 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 87: AskUserQuestion 阻塞反问 tool 落地
+
+**Date**: 2026-06-30
+**Task**: AskUserQuestion 阻塞反问 tool 落地
+**Branch**: `main`
+
+### Summary
+
+实现 agent-loop 阻塞反问 tool ask_user_question(对齐 Claude Code AskUserQuestion)。Backend: QuestionStore(单 pending 互斥)+ execute_blocking(schema 校验 short-circuit → register → emit → select)+ chat_loop 特判 blocking 分支 + ChatEventSink.emit_tool_question(sync)+ commands resolve/get_pending + worker STRUCTURALLY_DISABLED 禁用。Frontend: AskUserQuestionCard inline card(非 modal,整体提交语义,答完保留展开)+ questionCards store + streamController tool:question listener(get_pending 作 source of truth,LRU 淘汰后校正)+ MessageItem tool name 分发(3-tier state lookup)。Session 挂起保留(切 session 不释放 oneshot,与 permission:ask 的 cancel-on-switch 故意不一致)。v1 简化:无 timeout/auto-decide/DB 专用表,turn 计数接受 +1。测试 1109 backend + 659 frontend 全过,6 新集成测试覆盖 AC1/AC1'/AC5'/AC6/AC9。文档对齐 5 处实施偏离(async→sync / 文件路径 / click handler / 3-tier lookup / already_pending 触发方式)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cfdf177` | (see git log) |
+| `064fbbc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

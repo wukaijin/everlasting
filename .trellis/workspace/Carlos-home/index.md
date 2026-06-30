@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-3.md`
-- **Total Sessions**: 86
+- **Total Sessions**: 87
 - **Last Active**: 2026-06-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1776 | Active |
+| `journal-3.md` | ~1848 | Active |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +31,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 87 | 2026-06-30 | AskUserQuestion 阻塞反问 tool 落地 | `cfdf177`, `064fbbc` | `main` |
 | 86 | 2026-06-30 | sub-agent worktree 链路顺滑化 epic (A+B+C+D) | `cda336c`, `91968e5`, `16fccf9` | `main` |
 | 85 | 2026-06-30 | fix merge_worker no-parent-worktree via lazy auto-attach | `9f51f8d`, `67af5d4`, `e08f68a` | `main` |
 | 84 | 2026-06-29 | Session 84: P3 工具执行前召回 — Tier1 hook seam + active 注脚 + spec 同步 + 归档 | `1a65e77`, `effca94`, `b89f610`, `43e149d` | `main` |
