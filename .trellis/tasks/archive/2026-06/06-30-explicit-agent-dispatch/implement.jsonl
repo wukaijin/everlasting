@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 闭包架构 + dispatch 拦截器（chat_loop.rs:2374），forced 注入点的直接参照"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent 工具契约 + worker no-nesting 不变量，新增 forced 路径不得破坏"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "worker 继承父 Mode + WorkerAskBanner，forced 路径复用同一 permission 链"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "TriggerMenu 向上弹层模式，第三实例 @@ 触发器照此实现"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ChatInput / send / chat.ts 链路，forcedDispatch 拆分与注入的落点"}

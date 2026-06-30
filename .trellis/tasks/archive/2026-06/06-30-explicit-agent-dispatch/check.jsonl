@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "校验 dispatch_subagent 契约 + worker no-nesting 不变量未被 forced 路径破坏"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "校验闭包依赖 / turn 循环 / cancel 传播不变量保持"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "校验 permission 继承 + WorkerAskBanner 路径未受影响"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "校验 @@ 触发器与 / @ 弹层一致性 + 互斥规则"}
