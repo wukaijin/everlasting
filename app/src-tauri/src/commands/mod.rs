@@ -30,6 +30,7 @@ pub mod panel;
 pub mod permissions;
 pub mod projects;
 pub mod providers;
+pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod worktree;
@@ -115,5 +116,10 @@ pub fn all_command_names() -> Vec<&'static str> {
         // merge / discard buttons.
         "merge_worker_run",
         "discard_worker_run",
+        // 2026-06-30 (`ask_user_question` task): tool
+        // question IPCs (frontend `/<AskUserQuestionCard>`
+        // submit/跳过 + session-switch source-of-truth lookup).
+        "resolve_tool_question",
+        "get_pending_question",
     ]
 }

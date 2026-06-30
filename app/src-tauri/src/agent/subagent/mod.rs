@@ -590,6 +590,17 @@ const STRUCTURALLY_DISABLED: &[&str] = &[
     // in the dispatch tool_result). Stripped unconditionally.
     "merge_worker",
     "discard_worker",
+    // 2026-06-30 (`ask_user_question` task): worker subagents must
+    // NOT block on user input. Worker has no UI sink (the
+    // `WorkerAskBanner` affordance is for `permission:ask` style
+    // Tier-4 decisions, not for an interactive Q&A card); the
+    // blocking oneshot would hang the worker's tokio task
+    // forever (or until parent cancel). Stripped here as the
+    // first line of defense; the per-turn tool-list construction
+    // in `chat_loop.rs` also gates any per-turn dynamic append
+    // on `effective_is_worker == false` (mirroring the
+    // `dispatch_subagent` no-nesting pattern).
+    "ask_user_question",
 ];
 
 /// Filter `builtin_tools()` for a worker.
@@ -1025,6 +1036,7 @@ mod tests {
                 "run_background_shell".to_string(),
                 "shell_status".to_string(),
                 "shell_kill".to_string(),
+                "ask_user_question".to_string(),
             ],
             isolation: None,
         };
@@ -1035,9 +1047,14 @@ mod tests {
             tool("run_background_shell"),
             tool("shell_status"),
             tool("shell_kill"),
+            tool("ask_user_question"),
         ];
         let filtered = filter_tools_for_subagent(all, &synthetic);
         let names = tool_names(&filtered);
+        // ask_user_question (06-30 task) is structurally disabled for
+        // workers — workers have no UI sink and would hang the oneshot
+        // forever. Assert it explicitly alongside the other disabled
+        // tools so AC3 has a named coverage point.
         assert_eq!(names, vec!["read_file".to_string()]);
     }
 }

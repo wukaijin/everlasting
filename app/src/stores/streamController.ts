@@ -53,6 +53,14 @@ import {
   useChecklistStore,
   CHECKLIST_TOOL_NAME,
 } from "./checklist";
+import {
+  useQuestionCardsStore,
+} from "./questionCards";
+import {
+  GET_PENDING_QUESTION_CMD,
+  TOOL_QUESTION_EVENT,
+  type ToolQuestionPayload,
+} from "./questionCards.types";
 
 /** Upper bound on number of sessions whose messages are kept
  *  in memory. Pinned (in-flight streaming) sessions are not
@@ -310,6 +318,7 @@ const genId = () =>
 let unlistenChat: UnlistenFn | null = null;
 let unlistenTC: UnlistenFn | null = null;
 let unlistenTR: UnlistenFn | null = null;
+let unlistenTQ: UnlistenFn | null = null;
 let listenerWired = false;
 
 // --- Wire-format rehydration ------------------------------------------
@@ -1208,6 +1217,91 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     }
   }
 
+  /** Phase C3 (2026-06-30, `ask_user_question` task): pull the
+   *  authoritative pending-question state from the backend's
+   *  QuestionStore via the `get_pending_question` IPC.
+   *
+   *  Source-of-truth correction (design §5.4): the live
+   *  `tool:question` listener (`handleToolQuestion`) is the
+   *  optimistic push side; this pull is the authoritative
+   *  side. Called from `ensureLoaded` (every reload, including
+   *  the cache-hit early-return path — that's the LRU
+   *  correction point) and `reloadAfterFinalize` (every stream
+   *  completion — corrects stale cache after resolve/cancel).
+   *
+   *  Behavior:
+   *    - Backend returns `Some(payload)` → overwrite cache.
+   *    - Backend returns `null` → remove cache entry (backend
+   *      says "no pending" — correct any drift from a stale
+   *      optimistic push).
+   *    - IPC fails (defensive) → swallow the error. The
+   *      optimistic push already populated the cache when the
+   *      live event arrived, so a missed pull costs us
+   *      staleness, not missing state. The card will simply
+   *      render whatever the cache had (a future
+   *      `ensureLoaded` will retry the pull).
+   *
+   *  Why this lives in its own function: three call sites
+   *  (`ensureLoaded` cache-hit, `ensureLoaded` cache-miss,
+   *  `reloadAfterFinalize`) all need the same pull logic. The
+   *  helper enforces single-source-of-truth (any future fix —
+   *  e.g. debouncing, batching — lands here once). */
+  async function reconcilePendingQuestionFromBackend(sessionId: string): Promise<void> {
+    try {
+      const payload = await invoke<ToolQuestionPayload | null>(
+        GET_PENDING_QUESTION_CMD,
+        { sessionId },
+      );
+      const cards = useQuestionCardsStore();
+      if (payload) {
+        cards.addPending({
+          sessionId: payload.session_id,
+          toolUseId: payload.tool_use_id,
+          questions: payload.questions,
+          ts: payload.ts,
+        });
+      } else {
+        cards.removePending(sessionId);
+      }
+    } catch {
+      // Defensive swallow — see comment above.
+    }
+  }
+
+  /** Phase C3 (2026-06-30, `ask_user_question` task): handler for
+   *  the `tool:question` IPC event. Pushes the payload into the
+   *  `questionCards` store's per-session cache so the
+   *  `<AskUserQuestionCard>` (Phase D) can render it immediately.
+   *
+   *  Cache semantics (per design §5.4): this handler is the
+   *  OPTIMISTIC push side. The AUTHORITATIVE pull side is
+   *  `ensureLoaded` / `reloadAfterFinalize`, which invoke
+   *  `get_pending_question` to overwrite the cache with the
+   *  backend's QuestionStore state. The push side keeps the UI
+   *  snappy (no IPC round-trip before the card renders); the
+   *  pull side corrects any drift (e.g. session-switch LRU
+   *  eviction cleared the cache while the backend's pending
+   *  question still lives).
+   *
+   *  Snake_case mapping: the backend's `ToolQuestionPayload`
+   *  emits snake_case (no `rename_all`); we map to the
+   *  store's `PendingQuestion` (camelCase) here — single
+   *  conversion point, no other call site has to remember.
+   *
+   *  Single-pending mutex (PRD R12): the backend's QuestionStore
+   *  guarantees only one pending question per session. If a
+   *  second event somehow arrives (shouldn't happen in
+   *  production), `addPending`'s overwrite semantics replace
+   *  the prior entry — the new event wins. */
+  function handleToolQuestion(payload: ToolQuestionPayload): void {
+    useQuestionCardsStore().addPending({
+      sessionId: payload.session_id,
+      toolUseId: payload.tool_use_id,
+      questions: payload.questions,
+      ts: payload.ts,
+    });
+  }
+
   /** Mark a request as finished: drop from activeRequests, unpin
    *  its session, and reload from DB to replace the streaming buffer
    *  with the per-turn persisted shape.
@@ -1300,6 +1394,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // text). Drops any prior live state if no committed checklist
     // exists in history.
     useChecklistStore().rehydrateFromMessages(sessionId, messages);
+    // Phase C3 (2026-06-30): same authoritative pull as
+    // `ensureLoaded`. Fires after every stream completion —
+    // see the helper's doc for the source-of-truth rationale.
+    await reconcilePendingQuestionFromBackend(sessionId);
     // F5: persist the per-message latency to the DB. The
     // rehydrated messages carry the seq on each row, so we
     // find the LAST assistant message (the one the agent
@@ -1419,6 +1517,22 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     unlistenTR = await listen<ToolResultPayload>("tool:result", (e) => {
       handleToolResult(e.payload);
     });
+    // Phase C3 (2026-06-30): the `ask_user_question` blocking
+    // reverse-question tool emits a `tool:question` event when
+    // the backend registers a pending question. The listener
+    // pushes the payload into the questionCards store's cache;
+    // `ensureLoaded` later corrects the cache via
+    // `get_pending_question` (the authoritative source —
+    // QuestionStore lives in AppState, not in the LRU-bounded
+    // messagesBySession, so it survives session-switch reloads
+    // intact per PRD R9-R11). Mirrors the listener style of
+    // `tool:call` / `tool:result` / `permission:ask` — one
+    // global listener, routes by payload fields (session_id)
+    // rather than by current session (the whole point of the
+    // controller pattern).
+    unlistenTQ = await listen<ToolQuestionPayload>(TOOL_QUESTION_EVENT, (e) => {
+      handleToolQuestion(e.payload);
+    });
     listenerWired = true;
     listenerReady.value = true;
   }
@@ -1430,9 +1544,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     unlistenChat?.();
     unlistenTC?.();
     unlistenTR?.();
+    unlistenTQ?.();
     unlistenChat = null;
     unlistenTC = null;
     unlistenTR = null;
+    unlistenTQ = null;
     listenerWired = false;
     listenerReady.value = false;
   }
@@ -1474,6 +1590,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // safe.
       messagesBySession.delete(sessionId);
       messagesBySession.set(sessionId, existing);
+      // Phase C3 (2026-06-30): even on the early-return (cache-hit)
+      // path, we MUST pull the authoritative pending-question state.
+      // This is the key LRU correction point — without it, a session
+      // whose `messagesBySession` was kept in memory but whose
+      // pending question was overwritten by a fresh live event
+      // would render the stale cache. The pull is the source of
+      // truth; the optimistic push (live listener) is just for
+      // snappiness before the pull can complete.
+      await reconcilePendingQuestionFromBackend(sessionId);
       return existing;
     }
     const loaded = await invoke<LoadedSession | null>("load_session", {
@@ -1522,6 +1647,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // session whose checklist was set by a prior run, and the
     // card should reflect that history immediately.
     useChecklistStore().rehydrateFromMessages(sessionId, messages);
+    // Phase C3 (2026-06-30): authoritative pull for the
+    // pending-question cache. Single source of truth lives in
+    // the helper `reconcilePendingQuestionFromBackend`.
+    await reconcilePendingQuestionFromBackend(sessionId);
     // Return the reactive proxy, NOT the plain `messages` array. Callers
     // like `chat.ts` `send` / `resendMessage` push user/assistant
     // placeholders into the returned reference; pushing into the plain
@@ -1540,6 +1669,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     pinnedSessions.delete(sessionId);
     loadedFromDb.delete(sessionId);
     messagesBySession.delete(sessionId);
+    // Phase C3 (2026-06-30): clear the questionCards cache too.
+    // Mirrors the B12 checklist cleanup (which the chat store's
+    // deleteSession path fires explicitly) — without this, a
+    // session re-created with the same id would briefly show a
+    // stale pending card from the prior session. The backend
+    // QuestionStore also drops the entry on session delete
+    // (Phase A's `commands::sessions::delete_session` clears it),
+    // so removing the cache here matches the backend's cleared
+    // state — no source-of-truth drift.
+    useQuestionCardsStore().removePending(sessionId);
   }
 
   /** Step 4 follow-up: force a re-load of `sessionId` from the DB.

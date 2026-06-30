@@ -95,6 +95,12 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
             subagent: "researcher".into(),
             task: "Find all .rs files under src/.".into(),
         }),
+        // 2026-06-30 (ask_user_question task): per-test
+        // QuestionStore. The forced-dispatch test exercises the
+        // worker path, where `ask_user_question` is stripped via
+        // STRUCTURALLY_DISABLED — the store sits unused on this
+        // thread but is signature-required.
+        h.question_store.clone(),
     )
     .await;
 
@@ -249,7 +255,9 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Parent turn count: parent_t1 + worker_t1 + parent_t2 = 3 sends.
@@ -467,7 +475,9 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -613,7 +623,9 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // 3 sends: parent_t1 + worker_t1 (errored) + parent_t2.
@@ -762,7 +774,9 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
@@ -1017,7 +1031,9 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -1145,7 +1161,9 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Verify the worker run is in `subagent_runs` and the row
@@ -1291,7 +1309,9 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     let _ = cancel_task.await;
 
@@ -1419,7 +1439,9 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
@@ -1555,7 +1577,9 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // The parent's session snapshot should reflect ONLY the last
@@ -1781,7 +1805,9 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             None,
             // L3b (2026-06-27): thread the test harness's app_data_dir.
             h.app_data_dir.clone(),
-            None,),
+            None,
+            // 2026-06-30 (ask_user_question task): per-test QuestionStore.
+            h.question_store.clone(),),
     )
     .await;
     assert!(
@@ -2005,7 +2031,9 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // The override must reach the LLM verbatim.
@@ -2089,7 +2117,9 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Recompute what the parent path should send. We mirror the
@@ -2177,7 +2207,9 @@ async fn run_loop(
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 }
 

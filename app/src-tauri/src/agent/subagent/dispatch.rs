@@ -318,6 +318,15 @@ pub(crate) async fn run_subagent(
     // workers and all serial dispatches ignore this and fall back to
     // the subagent's `isolation` default (now `None` = shared).
     parallel: bool,
+    // 2026-06-30 (`ask_user_question` task): the parent's
+    // `QuestionStore` handle. Threaded into the nested
+    // `run_chat_loop` so the signature is shape-identical with
+    // the parent path; the worker never reaches the
+    // `ask_user_question` interception (the tool is in
+    // `STRUCTURALLY_DISABLED` and stripped by
+    // `filter_tools_for_subagent`), so the store is unused on
+    // this path.
+    parent_question_store: &crate::agent::question_store::QuestionStore,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input
@@ -818,7 +827,23 @@ pub(crate) async fn run_subagent(
         // for signature uniformity. We pass the same path the parent
         // passed us.
         app_data_dir.to_path_buf(),
-        None,))
+        // explicit-agent-dispatch (2026-06-30): worker path —
+        // no forced dispatch on the nested call. User-forced
+        // dispatch is a parent-LLM bypass; only the parent chat
+        // command honors `@@` prefixes.
+        None,
+        // 2026-06-30 (`ask_user_question` task): the worker's
+        // toolset strips `ask_user_question` via
+        // `STRUCTURALLY_DISABLED`, so the worker never reaches
+        // the `chat_loop.rs` interception branch and this store
+        // is unused on the worker path. We still pass it (the
+        // parameter is non-optional) so the signature stays
+        // shape-identical with the parent — pass the parent's
+        // handle cloned, defensively. If a future change ever
+        // re-enables the tool for workers, the same store is
+        // already wired in (no further changes needed).
+        parent_question_store.clone(),
+    ))
     .await;
 
     // Drain the worker's accumulated state.

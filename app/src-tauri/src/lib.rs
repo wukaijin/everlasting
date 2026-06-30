@@ -248,6 +248,11 @@ pub fn run() {
             commands::files::list_files,
             // B2 system-root @/ panel: literal `/` walk under SYSTEM_EXCLUDE.
             commands::files::list_files_at,
+            // 2026-06-30 (`ask_user_question` task): tool
+            // question IPCs (frontend `<AskUserQuestionCard>`
+            // resolve + pending-state source-of-truth lookup).
+            commands::question::resolve_tool_question,
+            commands::question::get_pending_question,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

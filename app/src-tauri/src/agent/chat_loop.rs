@@ -331,6 +331,24 @@ pub async fn run_chat_loop(
     // calls + all tests). See `ForcedDispatch` + the prefix block
     // below the user-message persist site.
     forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+    // 2026-06-30 (`ask_user_question` task): parallel
+    // `QuestionStore` for the blocking reverse-question tool.
+    // Threads through so `chat_loop.rs`'s
+    // `tool_name == "ask_user_question"` interception can call
+    // `ask_user_question::execute_blocking(input, session_id,
+    // tool_use_id, &question_store, &sink, &token)`. The
+    // production `chat` Tauri command sources it from
+    // `AppState.question_store.clone()`; tests pass
+    // `h.question_store.clone()` (each test gets a fresh
+    // registry). Worker nested calls (via `run_subagent`) carry
+    // the parent's — but since `ask_user_question` is in
+    // `STRUCTURALLY_DISABLED`, a worker never reaches the
+    // intercept, so the store is unused on the worker path.
+    // Appended at the tail rather than inserted mid-signature
+    // so the 28→29 expansion is one trailing argument — tests
+    // need only add a final positional `h.question_store.clone()
+    // // 29` (or `None` for legacy 28-arg tests).
+    question_store: crate::agent::question_store::QuestionStore,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -925,6 +943,9 @@ pub async fn run_chat_loop(
                 &subagent_cache,
                 &app_data_dir,
                 false,
+                // 2026-06-30 (`ask_user_question`): thread the
+                // parent's QuestionStore. Worker can't reach it.
+                &question_store,
             )
             .await;
         let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -2354,6 +2375,19 @@ pub async fn run_chat_loop(
                             let cancelled_flag = cancelled_flag.clone();
                             let subagent_cache = subagent_cache.clone();
                             let app_data_dir = app_data_dir.clone();
+                            // 2026-06-30 (`ask_user_question` task):
+                            // clone the QuestionStore for this task
+                            // body. The worker's toolset strips
+                            // `ask_user_question` via
+                            // `STRUCTURALLY_DISABLED`, so this clone
+                            // is never actually used by the worker's
+                            // run_subagent on this concurrent branch —
+                            // pass for signature uniformity with the
+                            // serial dispatch path. (The cargo borrow
+                            // checker requires clone() here regardless
+                            // because each concurrent task takes
+                            // ownership of its slot via `async move`.)
+                            let question_store = question_store.clone();
                             async move {
                                 // Pre-execute ⑨ permission check
                                 // (mirrors the serial path's
@@ -2438,6 +2472,13 @@ pub async fn run_chat_loop(
                                         // writable workers onto their own
                                         // `worker/<run_id>` branch.
                                         true,
+                                        // 2026-06-30 (`ask_user_question`):
+                                        // thread the parent's QuestionStore.
+                                        // Worker never reaches the
+                                        // intercept (tool is in
+                                        // STRUCTURALLY_DISABLED) — pass-
+                                        // through only.
+                                        &question_store,
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -2532,6 +2573,89 @@ pub async fn run_chat_loop(
                 continue;
             }
 
+            // 2026-06-30 (`ask_user_question` task): block the
+            // current turn on a reverse-question card. This is
+            // the same "control-flow tool" interception pattern as
+            // `dispatch_subagent` below — the tool needs
+            // QuestionStore + ChatEventSink access that
+            // `execute_tool_inner` doesn't have. We route to
+            // `ask_user_question::execute_blocking`, which
+            // internally:
+            //   1. validates the schema (short-circuits with
+            //      `is_error: true` on boundary violations),
+            //   2. registers a oneshot in QuestionStore,
+            //   3. emits `tool:question` to the frontend,
+            //   4. `tokio::select! { cancel | oneshot }` until
+            //      resolve.
+            //
+            // `is_parallel_eligible` (the L2 whitelist of
+            // `read_file` / `grep` / `glob` / `list_dir` /
+            // `use_skill`) does NOT include this name → mixed
+            // batches fall to the serial path (this branch)
+            // automatically (per design §6.3 + the
+            // `dispatch_subagent` precedent).
+            //
+            // The interception here is structurally identical to
+            // the dispatch_subagent one just below: same audit
+            // row, same `tool:result` IPC emit, same
+            // `ContentBlock::ToolResult` push, same cancel
+            // propagation. The only difference is the work
+            // function — `execute_blocking` instead of
+            // `run_subagent` — and `execute_blocking` does NOT
+            // need the `cancel_parent` separate flag (it
+            // collapses into the session cancel token directly).
+            // We accept +1 turn counter cost for the blocking
+            // tool's recover (v1 trade-off — see PRD §R3).
+            if name == "ask_user_question" {
+                let tool_exec_start = Instant::now();
+                let (content, is_error, _update, exit_code) =
+                    crate::tools::ask_user_question::execute_blocking(
+                        input,
+                        &session_id,
+                        id,
+                        &question_store,
+                        &sink,
+                        &token,
+                    )
+                    .await;
+                let duration_ms = tool_exec_start.elapsed().as_millis();
+                if token.is_cancelled() {
+                    cancelled = true;
+                } else if !skip_persist {
+                    if let Err(e) = permissions::record_tool_executed_audit(
+                        &db,
+                        &session_id,
+                        name,
+                        input,
+                        duration_ms,
+                        exit_code,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for ask_user_question (non-fatal)");
+                    }
+                }
+                let envelope_str = crate::agent::helpers::tool_result_envelope(
+                    &content,
+                    &current_ctx.worktree_path,
+                );
+                sink.emit_tool_result(&crate::state::ToolResultPayload {
+                    request_id: rid.clone(),
+                    tool_use_id: id.clone(),
+                    content: envelope_str.clone(),
+                    is_error,
+                });
+                result_blocks.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: envelope_str,
+                    is_error,
+                });
+                if cancelled {
+                    break;
+                }
+                continue;
+            }
+
             // B6 Subagent (2026-06-19): intercept dispatch_subagent
             // BEFORE the normal execute_tool path. This is an
             // agent-layer control-flow tool — it needs the parent
@@ -2596,6 +2720,11 @@ pub async fn run_chat_loop(
                     // isolation falls back to the subagent's default
                     // (general-purpose now shared).
                     false,
+                    // 2026-06-30 (`ask_user_question`): thread the
+                    // parent's QuestionStore. Worker can't reach it
+                    // (STRUCTURALLY_DISABLED) but the signature
+                    // requires it.
+                    &question_store,
                 )
                 .await;
                 let duration_ms = tool_exec_start.elapsed().as_millis();

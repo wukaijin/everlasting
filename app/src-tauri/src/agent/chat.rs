@@ -94,6 +94,15 @@ pub async fn chat(
     let memory_cache = state.memory_cache.clone();
     let skill_cache = state.skill_cache.clone();
     let permission_asks = state.permission_asks.clone();
+    // 2026-06-30 (`ask_user_question` task): clone the parallel
+    // `QuestionStore` from `AppState`. Source-of-truth for the
+    // in-flight `ask_user_question` oneshot map (frontend IPC
+    // resolves through `commands::question::resolve_tool_question`).
+    // Must be cloned BEFORE the spawn closure so the captured
+    // value doesn't outlive the borrowed `state`'s lifetime
+    // (the borrow checker rejects `state.foo` references inside
+    // an `async move` block on `tauri::async_runtime::spawn`).
+    let question_store = state.question_store.clone();
     // L1a (2026-06-19): clone the cross-request background-shell
     // registry BEFORE the spawn so the move closure doesn't
     // capture a borrowed `state`. Threaded into `run_chat_loop` so
@@ -331,6 +340,13 @@ pub async fn chat(
             // dispatch into the loop's turn-1 short-circuit
             // (trailing `forced_dispatch` parameter).
             forcedDispatch,
+            // 2026-06-30 (`ask_user_question` task): pass the
+            // `QuestionStore` cloned above (captured-by-value in
+            // the spawn closure). The `ask_user_question`
+            // interception in `chat_loop.rs` reads it; workers
+            // won't (the tool is in `STRUCTURALLY_DISABLED` so
+            // the worker's tool list strips it).
+            question_store,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

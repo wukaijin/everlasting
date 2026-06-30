@@ -42,11 +42,36 @@ pub(crate) struct MockEmitter {
     pub(crate) tool_results: Arc<StdMutex<Vec<ToolResultPayload>>>,
     pub(crate) permission_asks:
         Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
+    /// 2026-06-30 (`ask_user_question` task): captured
+    /// `ToolQuestionPayload`s emitted to the `tool:question`
+    /// channel. Tests assert against this to confirm the IPC
+    /// emit happened (mirrors the `permission_asks` pattern).
+    pub(crate) tool_questions:
+        Arc<StdMutex<Vec<crate::agent::question_store::ToolQuestionPayload>>>,
 }
 
 impl MockEmitter {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Snapshot all `tool:question` payloads (the
+    /// `ToolQuestionPayload`s emitted to the `tool:question`
+    /// channel). Tests assert against this to confirm the IPC
+    /// emit happened. Mirrors `permission_asks` snapshot.
+    /// Marked `#[allow(dead_code)]` because Phase A's
+    /// happy-path tests don't yet exercise it (Phase F's
+    /// `agent_loop_ask_user_question_*` tests will).
+    #[allow(dead_code)]
+    pub(crate) fn tool_questions_snapshot(
+        &self,
+    ) -> Vec<crate::agent::question_store::ToolQuestionPayload> {
+        self.tool_questions.lock().unwrap().clone()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tool_question_count(&self) -> usize {
+        self.tool_questions.lock().unwrap().len()
     }
 
     /// Snapshot all chat-event payloads recorded so far.
@@ -122,6 +147,15 @@ impl ChatEventSink for MockEmitter {
     fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
         self.permission_asks.lock().unwrap().push(payload);
     }
+    fn emit_tool_question(
+        &self,
+        payload: &crate::agent::question_store::ToolQuestionPayload,
+    ) {
+        // 2026-06-30: record the `tool:question` IPC payload so
+        // tests can assert "the ask_user_question tool was
+        // emitted on the channel". Mirrors `emit_permission_ask`.
+        self.tool_questions.lock().unwrap().push(payload.clone());
+    }
 }
 
 async fn test_pool() -> SqlitePool {
@@ -167,6 +201,13 @@ pub(crate) struct TestHarness {
     pub(crate) memory_cache: Arc<MemoryCache>,
     pub(crate) skill_cache: Arc<SkillCache>,
     pub(crate) permission_asks: crate::agent::permissions::PermissionStore,
+    /// 2026-06-30 (`ask_user_question` task): fresh
+    /// `QuestionStore` per test for isolation. Threads through
+    /// `run_chat_loop`'s new `question_store` parameter so the
+    /// `ask_user_question` blocking tool's
+    /// `register` / `resolve` / `get_payload` calls operate on a
+    /// per-test registry (no cross-test leak).
+    pub(crate) question_store: crate::agent::question_store::QuestionStore,
     /// L1a (2026-06-19): cross-request background-shell registry.
     /// Each test gets a fresh registry so concurrent tests can't
     /// see each other's shells. Threads through `run_chat_loop`'s
@@ -244,6 +285,11 @@ pub(crate) async fn make_harness() -> TestHarness {
         memory_cache: MemoryCache::arc(),
         skill_cache: SkillCache::arc(),
         permission_asks: new_permission_store(),
+        // 2026-06-30: fresh `QuestionStore` per test (parallel to
+        // `permission_asks`). Tests that exercise
+        // `ask_user_question` (Phase F, not Phase A) reach into
+        // `harness.question_store` to register / resolve.
+        question_store: crate::agent::question_store::QuestionStore::new(),
         background_shells: crate::background_shell::default_registry(),
         subagent_cache: crate::agent::subagent::SubagentCache::arc(),
         // L3b (2026-06-27): fresh tempdir for the app data dir.

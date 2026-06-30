@@ -16,6 +16,7 @@
 //! State) and a session id; the other 3 are pure functions like the
 //! step 2 tools.
 
+pub mod ask_user_question;
 pub mod discard_worker;
 pub mod edit_file;
 pub mod glob;
@@ -151,6 +152,16 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // guard. `Risk::Low` (the `_` default). Plan mode keeps it
         // (writes land in the DB, not the filesystem).
         remember::definition(),
+        // ask_user_question (2026-06-30): blocking reverse-question
+        // tool (Claude Code `AskUserQuestion` parity). Execution
+        // does NOT go through `execute_tool` — `chat_loop.rs`
+        // detects `tool_name == "ask_user_question"` and calls
+        // `ask_user_question::execute_blocking(...)` directly (same
+        // interception pattern as `dispatch_subagent`).
+        // `execute_tool_inner`'s `match` therefore has NO arm for
+        // this name; if it's reached the unknown-tool fallback
+        // fires (defensive — should never happen in production).
+        ask_user_question::definition(),
     ]
 }
 
@@ -419,6 +430,18 @@ async fn execute_tool_inner(
             let (out, is_err) = remember::execute(input, ctx, session_id).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
+        // "remember" | _ => unknown-tool fallback below.
+        // `ask_user_question` (2026-06-30) is intentionally NOT
+        // in this match — see the comment on `ask_user_question::
+        // definition()` in `builtin_tools()`. Its blocking
+        // execution path lives in `chat_loop.rs`'s
+        // `tool_name == "ask_user_question"` branch which
+        // dispatches to `ask_user_question::execute_blocking`.
+        // A request that somehow reaches this `match` for the
+        // name falls through to `_ => "Unknown tool: ..."` —
+        // never executed in production because the agent loop
+        // pre-emptively routes the name to the blocking
+        // interpreter.
         _ => (
             format!("Unknown tool: {}", name),
             true,

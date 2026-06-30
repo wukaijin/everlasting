@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::permissions::PermissionAskPayload;
 use crate::agent::permissions::PermissionStore;
+use crate::agent::question_store::QuestionStore;
 use crate::agent::subagent::SubagentCache;
 use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
 use crate::memory::MemoryCache;
@@ -173,6 +174,12 @@ pub struct AppState {
     /// user's decision, which wakes the agent loop's
     /// `tokio::select!` arm inside `permissions::check`.
     pub permission_asks: PermissionStore,
+    /// 2026-06-30 (`ask_user_question` task): in-flight
+    /// `ask_user_question` oneshot senders, keyed by session id.
+    /// Mirrors `permission_asks` (parallel shape, separate store
+    /// — see `agent::question_store` doc for the
+    /// PermissionStore-vs-QuestionStore rationale).
+    pub question_store: QuestionStore,
     /// L1a (2026-06-19): cross-request background-shell registry.
     /// Lives in `AppState` so the agent loop, the
     /// `run_background_shell` / `shell_status` / `shell_kill`
@@ -329,6 +336,13 @@ impl AppState {
             skill_cache,
             subagent_cache,
             permission_asks: crate::agent::permissions::new_permission_store(),
+            // 2026-06-30 (`ask_user_question` task): fresh
+            // in-memory oneshot registry. Parallel to
+            // `permission_asks` (see `agent::question_store` for
+            // the rationale). Lifted from `load_for_session` /
+            // `register` / `resolve` (no mtime fence — the store
+            // is purely in-process).
+            question_store: QuestionStore::new(),
             // L1a (2026-06-19): fresh in-memory background-shell
             // registry. The single GUI-process impl
             // (`InMemoryBackgroundShellRegistry`) holds a
@@ -564,6 +578,28 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// `AppHandleSink` and the test `MockEmitter` use the default
     /// no-op (no parent-side audit / IPC for worker resolve).
     fn emit_permission_ask_resolved(&self, _rid: &str, _outcome: &str) {}
+    /// Emit a `ToolQuestionPayload` on the `tool:question`
+    /// channel (2026-06-30, `ask_user_question` task). Used by
+    /// `tools/ask_user_question::execute_blocking` to push the
+    /// pending question to the frontend so the user can render
+    /// an inline `<AskUserQuestionCard>` and answer or skip.
+    /// Default impl is a `tracing::warn!` no-op so a custom sink
+    /// that doesn't care about the question surface (only
+    /// `AppHandleSink` and the test `MockEmitter` implement it
+    /// for real) compiles unchanged. `SubagentBufferSink`
+    /// inherits the no-op — but `ask_user_question` is
+    /// structurally disabled for workers (see
+    /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker
+    /// never reaches this method; the no-op is "defense in
+    /// depth" against a future config that re-enables it.
+    fn emit_tool_question(&self, _payload: &crate::agent::question_store::ToolQuestionPayload) {
+        tracing::warn!(
+            "ChatEventSink::emit_tool_question default no-op invoked — \
+             this sink should override emit_tool_question to forward \
+             questions to the frontend. If you see this in production, \
+             check that the production AppHandleSink is the active sink."
+        );
+    }
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
@@ -591,6 +627,20 @@ impl ChatEventSink for AppHandleSink {
     fn emit_permission_ask(&self, payload: PermissionAskPayload) {
         if let Err(e) = self.app.emit("permission:ask", payload) {
             tracing::warn!(error = %e, "AppHandleSink: permission:ask emit failed");
+        }
+    }
+    fn emit_tool_question(
+        &self,
+        payload: &crate::agent::question_store::ToolQuestionPayload,
+    ) {
+        // 2026-06-30 (`ask_user_question` task): production
+        // `AppHandleSink` forwards the question payload to the
+        // Tauri `tool:question` channel. The frontend
+        // `streamController` listens on this channel (Phase C,
+        // task `06-30-ask-user-question-tool`) and inserts the
+        // payload into `questionCardsStore.pendingBySession`.
+        if let Err(e) = self.app.emit("tool:question", payload.clone()) {
+            tracing::warn!(error = %e, "AppHandleSink: tool:question emit failed");
         }
     }
 }

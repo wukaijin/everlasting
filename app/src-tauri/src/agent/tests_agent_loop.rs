@@ -101,7 +101,9 @@ async fn agent_loop_basic_text_only_completes() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(mock.call_count(), 1, "expected exactly 1 send call");
@@ -227,7 +229,9 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(
@@ -357,7 +361,9 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(
@@ -472,7 +478,9 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     let results = emitter.tool_results_snapshot();
@@ -627,7 +635,9 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -746,7 +756,9 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(
@@ -846,7 +858,9 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // The agent loop's error path emits one `ChatEvent::Error`
@@ -920,7 +934,9 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         None,
         None,
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Error path taken: one error event, exactly one send.
@@ -1106,7 +1122,9 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // (1) Clean compaction (None) lets the turn proceed — the
@@ -1289,7 +1307,9 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     let error_events: Vec<_> = emitter
@@ -1447,7 +1467,9 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // (1) `provider.send` was NEVER called — the C3 guard
@@ -1612,7 +1634,9 @@ async fn agent_loop_persist_failure_emits_error() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // (1) provider.send was never called — the initial user-message
@@ -1779,7 +1803,9 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -1906,7 +1932,9 @@ async fn agent_loop_error_persists_partial_text() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Exactly one Error event (the pre-emit from the per-event
@@ -2014,7 +2042,9 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(emitter.error_event_count(), 1);
@@ -2116,7 +2146,9 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(emitter.error_event_count(), 1);
@@ -2252,7 +2284,9 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // The single Error event is the pre-emit from the per-event
@@ -2356,7 +2390,9 @@ async fn agent_loop_error_emits_turn_complete() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Exactly one TurnComplete, pointing at the persisted
@@ -2503,7 +2539,9 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // 2 turns = 2 send calls.
@@ -2682,7 +2720,9 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     let results = emitter.tool_results_snapshot();
@@ -2841,7 +2881,9 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -3239,7 +3281,9 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(
@@ -3428,7 +3472,9 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(mock.call_count(), 2, "serial path drives 2 turns");
@@ -3637,7 +3683,9 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
     cancel_handle.await.unwrap();
 
@@ -3798,7 +3846,9 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Two turns → two `send` calls.
@@ -3972,7 +4022,9 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     let sent = mock.sent_messages();
@@ -4097,7 +4149,9 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         // L3b (2026-06-27): production-style caller → worktree_override = None.
         None,
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // All 4 turns ran — the hint is soft and never terminates.
@@ -4209,7 +4263,9 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(mock.call_count(), 3);
@@ -4336,7 +4392,9 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         None,
         None,
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     // Turn 1 (tool_use) + Turn 2 (final text) = 2 sends.
@@ -4456,7 +4514,9 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         None,
         None,
         h.app_data_dir.clone(),
-        None,)
+        None,
+        // 2026-06-30 (ask_user_question task): per-test QuestionStore
+        h.question_store.clone(),)
     .await;
 
     assert_eq!(mock.call_count(), 3, "three turns: soft-block + exec + final");
