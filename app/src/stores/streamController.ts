@@ -1588,6 +1588,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
      *  parameter (Tauri auto-converts the snake_case Rust
      *  field to camelCase JS). */
     resendSeq?: number;
+    /** explicit-agent-dispatch (2026-06-30): when set, the backend
+     *  short-circuits the LLM and dispatches the named subagent
+     *  directly (the `@@<agent> <task>` prefix the user typed).
+     *  `undefined` for normal sends + resends. */
+    forcedDispatch?: { subagent: string; task: string };
   }
 
   /** Kick off a new stream. The caller is responsible for
@@ -1658,6 +1663,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // When a number, the agent loop fires `resend_message`
         // audit at the user-message persist site.
         resendSeq: args.resendSeq,
+        // explicit-agent-dispatch: thread the forced dispatch into
+        // the loop's turn-1 short-circuit. `null` (not undefined)
+        // so the Rust Option<ForcedDispatch> deserializes to None.
+        forcedDispatch: args.forcedDispatch ?? null,
       });
     } catch (e) {
       const msgs = messagesBySession.get(args.sessionId);

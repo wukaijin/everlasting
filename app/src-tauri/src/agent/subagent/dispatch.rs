@@ -818,7 +818,7 @@ pub(crate) async fn run_subagent(
         // for signature uniformity. We pass the same path the parent
         // passed us.
         app_data_dir.to_path_buf(),
-    ))
+        None,))
     .await;
 
     // Drain the worker's accumulated state.

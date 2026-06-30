@@ -29,6 +29,125 @@ use crate::llm::types::{ChatEvent, TokenUsage};
 /// - Parent frontend emits exactly one tool:call (the dispatch) +
 ///   one tool:result (the summary). No worker tool:call / tool:result
 ///   on the parent sink.
+/// explicit-agent-dispatch (2026-06-30): a forced `@@` dispatch
+/// bypasses the parent LLM entirely. The loop short-circuits at
+/// turn 1 — it never calls `provider.stream` for the parent; it
+/// dispatches the named worker directly via the same `run_subagent`
+/// path the LLM-driven interceptor uses, then emits the worker's
+/// summary as the turn's assistant text and exits.
+///
+/// Invariants locked:
+/// - `mock.call_count() == 1` — ONLY the worker's single turn. The
+///   parent contributed zero LLM calls (the short-circuit). This is
+///   the core "explicit dispatch" guarantee.
+/// - One dispatch_subagent tool:result carrying `[status: completed]`
+///   + the worker's summary.
+/// - The assistant turn is persisted carrying the summary text (so a
+///   reload shows the result in the main conversation).
+#[tokio::test]
+async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
+    let h = make_harness().await;
+    let emitter = Arc::new(MockEmitter::new());
+    // Only the worker's response is scripted — the parent never
+    // calls the provider (the forced short-circuit skips provider.stream).
+    let mock = Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
+        Ok(ChatEvent::Start),
+        Ok(ChatEvent::Delta {
+            text: "found 3 files".into(),
+        }),
+        Ok(ChatEvent::Done {
+            stop_reason: Some("end_turn".into()),
+            usage: Some(TokenUsage::default()),
+        }),
+    ])]));
+
+    run_chat_loop(
+        vec![],
+        mock.clone(),
+        200_000,
+        "rid-forced".into(),
+        h.session_id.clone(),
+        test_messages(),
+        emitter.clone(),
+        h.db.clone(),
+        h.cancellations,
+        h.session_active_request,
+        h.read_guard,
+        h.memory_cache,
+        h.skill_cache,
+        h.permission_asks,
+        CancellationToken::new(),
+        None, // resend_seq
+        h.background_shells.clone(),
+        None, // max_turns
+        false, // skip_session_active
+        false, // skip_persist
+        Some(false), // is_worker
+        None, // app_handle
+        None, // system_prompt_override
+        None, // worker_run_id
+        h.subagent_cache.clone(),
+        None,
+        None, // worktree_override
+        h.app_data_dir.clone(),
+        // explicit-agent-dispatch: forced dispatch of `researcher`.
+        Some(crate::agent::subagent::ForcedDispatch {
+            subagent: "researcher".into(),
+            task: "Find all .rs files under src/.".into(),
+        }),
+    )
+    .await;
+
+    // ONLY the worker's single turn — the parent contributed ZERO
+    // LLM calls (the forced short-circuit). This is the invariant
+    // that makes the dispatch "explicit": the user, not the LLM,
+    // decided which agent runs.
+    assert_eq!(
+        mock.call_count(),
+        1,
+        "forced dispatch must not call the parent LLM (only the worker's 1 turn)"
+    );
+
+    // One dispatch_subagent tool:result carrying the worker summary.
+    let results = emitter.tool_results_snapshot();
+    assert_eq!(results.len(), 1, "exactly one dispatch_subagent tool:result");
+    assert!(
+        results[0].content.contains("[status: completed]"),
+        "tool_result carries [status: completed] + worker summary, got: {}",
+        results[0].content
+    );
+    assert!(
+        results[0].content.contains("found 3 files"),
+        "tool_result carries the worker's summary, got: {}",
+        results[0].content
+    );
+
+    // The assistant turn is persisted carrying the worker's summary
+    // (so a reload shows the result in the main conversation).
+    let loaded = db::load_session(&h.db, &h.session_id)
+        .await
+        .expect("load_session")
+        .expect("session exists");
+    // load_session returns role as a String + content as a JSON
+    // Value (the DB-stored serialization); match loosely so the
+    // assertion survives role-casing / MessageContent shape changes.
+    let assistant_blob = loaded
+        .messages
+        .iter()
+        .filter(|m| m.role.to_lowercase().contains("assistant"))
+        .map(|m| m.content.to_string())
+        .collect::<String>();
+    assert!(
+        assistant_blob.contains("found 3 files"),
+        "persisted assistant turn must carry the worker summary, got: {}",
+        assistant_blob
+    );
+
+    // (h is partially moved into run_chat_loop above; its remaining
+    // fields — incl. the tempdir backing db / app_data_dir — drop at
+    // function end, after the load_session assertions.)
+}
+
 #[tokio::test]
 async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
     let h = make_harness().await;
@@ -130,7 +249,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // Parent turn count: parent_t1 + worker_t1 + parent_t2 = 3 sends.
@@ -348,7 +467,7 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
     cancel_handle.await.unwrap();
 
@@ -494,7 +613,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // 3 sends: parent_t1 + worker_t1 (errored) + parent_t2.
@@ -643,7 +762,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
@@ -898,7 +1017,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
     cancel_handle.await.unwrap();
 
@@ -1026,7 +1145,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // Verify the worker run is in `subagent_runs` and the row
@@ -1172,7 +1291,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
     let _ = cancel_task.await;
 
@@ -1300,7 +1419,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
@@ -1436,7 +1555,7 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // The parent's session snapshot should reflect ONLY the last
@@ -1662,7 +1781,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             None,
             // L3b (2026-06-27): thread the test harness's app_data_dir.
             h.app_data_dir.clone(),
-        ),
+            None,),
     )
     .await;
     assert!(
@@ -1886,7 +2005,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // The override must reach the LLM verbatim.
@@ -1970,7 +2089,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 
     // Recompute what the parent path should send. We mirror the
@@ -2058,7 +2177,7 @@ async fn run_loop(
         None,
         // L3b (2026-06-27): thread the test harness's app_data_dir.
         h.app_data_dir.clone(),
-    )
+        None,)
     .await;
 }
 

@@ -322,6 +322,15 @@ pub async fn run_chat_loop(
     // dispatch_subagent interceptor) does, when creating the
     // worker worktree.
     app_data_dir: PathBuf,
+    // explicit-agent-dispatch (2026-06-30): when `Some(fd)`, the
+    // loop's turn-1 prefix short-circuits the LLM — it synthesizes a
+    // `dispatch_subagent` tool_use from `fd` and calls `run_subagent`
+    // directly (NO `provider.stream`), then emits the worker's summary
+    // as the turn's assistant text and exits. `None` = normal LLM-
+    // driven loop (production chat without `@@` prefix + worker nested
+    // calls + all tests). See `ForcedDispatch` + the prefix block
+    // below the user-message persist site.
+    forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -851,6 +860,176 @@ pub async fn run_chat_loop(
     // returned clone is not needed (the chat loop iterates
     // `messages` directly downstream).
     let _ = last_user_after_inject;
+
+    // -----------------------------------------------------------------
+    // explicit-agent-dispatch (2026-06-30): forced dispatch prefix.
+    //
+    // When the user typed `@@<agent> <task>`, the frontend parsed it
+    // into `forced_dispatch` and threaded it here. We short-circuit
+    // the LLM entirely — NO `provider.stream` — and dispatch the named
+    // worker directly via the SAME `run_subagent` call the LLM-driven
+    // interceptor uses at chat_loop.rs:2376. The worker's summary
+    // becomes this turn's assistant text. Forced dispatch runs exactly
+    // one turn (no follow-up LLM loop) — the user already decided
+    // which agent runs; the main agent is never asked to judge.
+    // -----------------------------------------------------------------
+    if let Some(fd) = &forced_dispatch {
+        // `forced_{rid}-{seq}` is unique within the session (rid is
+        // per-request, seq is per-turn) and the `forced_` prefix
+        // namespaces it away from any LLM-emitted tool_use id.
+        let tool_use_id = format!("forced_{}-{}", rid, seq);
+        let input = serde_json::json!({
+            "subagent": fd.subagent,
+            "task": fd.task,
+        });
+        let dispatch_name = crate::agent::subagent::DISPATCH_TOOL_NAME;
+
+        // ① open the assistant message + emit the synthetic
+        //    dispatch_subagent tool_use so the UI renders the same
+        //    tool card + opens the SubagentDrawer.
+        emit_chat_event_via_sink(&sink, &rid, &ChatEvent::Start);
+        sink.emit_tool_call(&ToolCallPayload {
+            request_id: rid.clone(),
+            id: tool_use_id.clone(),
+            name: dispatch_name.to_string(),
+            input: input.clone(),
+        });
+
+        // ② run the worker. Parameters mirror the LLM-driven
+        //    interceptor at chat_loop.rs:2376-2419 verbatim
+        //    (force_readonly=false, parallel=false → single serial
+        //    dispatch; isolation falls back to the subagent's
+        //    frontmatter default via `resolve_isolation`).
+        let tool_exec_start = std::time::Instant::now();
+        let (content, is_error, cancel_parent, exit_code) =
+            crate::agent::subagent::dispatch::run_subagent(
+                &provider,
+                context_window,
+                &rid,
+                &session_id,
+                &memory_cache,
+                &read_guard,
+                &skill_cache,
+                &permission_asks,
+                &cancellations,
+                &session_active_request,
+                &background_shells,
+                &db,
+                &current_ctx,
+                &tool_use_id,
+                &input,
+                &token,
+                &sink,
+                app_handle.clone(),
+                false,
+                &subagent_cache,
+                &app_data_dir,
+                false,
+            )
+            .await;
+        let duration_ms = tool_exec_start.elapsed().as_millis();
+
+        // ③ cancel propagation — user Stop reached the worker, or the
+        //    worker detected a parent-propagated cancel.
+        let cancelled = token.is_cancelled() || cancel_parent;
+
+        // ④ audit. The parent records its own dispatch_subagent audit
+        //    (mirrors chat_loop.rs:2448; skipped on cancel + worker
+        //    skip_persist paths).
+        if !cancelled && !skip_persist {
+            if let Err(e) = crate::agent::permissions::record_tool_executed_audit(
+                &db,
+                &session_id,
+                dispatch_name,
+                &input,
+                duration_ms,
+                exit_code,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    request_id = %rid,
+                    "chat_loop: record_tool_executed_audit failed for forced dispatch (non-fatal)"
+                );
+            }
+        }
+
+        // ⑤ emit the dispatch_subagent tool_result (worker summary).
+        let envelope_str =
+            crate::agent::helpers::tool_result_envelope(&content, &current_ctx.worktree_path);
+        sink.emit_tool_result(&crate::state::ToolResultPayload {
+            request_id: rid.clone(),
+            tool_use_id: tool_use_id.clone(),
+            content: envelope_str,
+            is_error,
+        });
+
+        // ⑥ the worker summary is also this turn's assistant text —
+        //    emit it as a Delta so the frontend renders an assistant
+        //    message carrying the result (the SubagentDrawer already
+        //    showed the live worker output; this lands the summary in
+        //    the main conversation).
+        emit_chat_event_via_sink(&sink, &rid, &ChatEvent::Delta { text: content.clone() });
+
+        // ⑦ persist the assistant turn: Blocks = [synthetic
+        //    ToolUse(dispatch), Text(summary)]. The ToolUse block keeps
+        //    a reload self-consistent (the assistant turn visibly
+        //    performed the dispatch). No separate tool_result message
+        //    row — the worker's result lives in `subagent_runs` + the
+        //    summary text; a stray tool_result row without a following
+        //    LLM turn would orphan it.
+        let assistant_msg = ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolUse {
+                    id: tool_use_id.clone(),
+                    name: dispatch_name.to_string(),
+                    input: input.clone(),
+                },
+                ContentBlock::Text {
+                    text: content.clone(),
+                    cache_control: None,
+                },
+            ]),
+        };
+        if !skip_persist {
+            if let Err(e) =
+                crate::db::persist_turn(&db, &session_id, assistant_msg.role, &assistant_msg.content, seq, None)
+                    .await
+            {
+                emit_persist_failure(&sink, &rid, &e);
+                return;
+            }
+            emit_chat_event_via_sink(
+                &sink,
+                &rid,
+                &ChatEvent::TurnComplete {
+                    seq,
+                    ttfb_ms: Some(0),
+                    gen_ms: Some(0),
+                    total_ms: Some(duration_ms as i64),
+                    thinking_ms: Some(0),
+                },
+            );
+            let _ = crate::db::touch_session(&db, &session_id).await;
+        }
+        messages.push(assistant_msg);
+        // (No `seq += 1` — forced dispatch returns immediately, so
+        // the bump is never read again. The assistant row's seq was
+        // already consumed by `persist_turn` above.)
+
+        // ⑧ terminal Done. cancelled → "cancelled"; else "end_turn".
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Done {
+                stop_reason: Some(if cancelled { "cancelled" } else { "end_turn" }.to_string()),
+                usage: None,
+            },
+        );
+        return;
+    }
 
     // ⑬ loop detection (C2): sliding window of recent tool calls,
     // checked once per turn after tool_calls are collected. Declared

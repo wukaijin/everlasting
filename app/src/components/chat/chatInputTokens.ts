@@ -80,6 +80,16 @@ const COMMAND_RE = /(^|[\s])(\/[A-Za-z][\w-]*)/g;
  */
 const FILE_RE = /(^|[\s])(@[.\w][\w/.-]*)/g;
 
+/**
+ * Agent token (explicit-agent-dispatch, 2026-06-30): `@@` followed by
+ * an agent-name run `[A-Za-z0-9_-]+`. Mutually exclusive with FILE_RE
+ * at the same offset — FILE_RE's `[.\w]` first class excludes `@`, so
+ * `@@name` never matches FILE_RE, and AGENT_RE never matches `@file`
+ * (needs the leading `@@`). Boundary rule (`(^|[\s])`) mirrors FILE_RE
+ * so `x@@y` mid-word stays uncolored.
+ */
+const AGENT_RE = /(^|[\s])(@@[A-Za-z0-9_-]+)/g;
+
 /** Build a match function from a global regex with a leading capture
  *  group for the boundary char (so we can offset `from` past it). */
 function matchFrom(regex: RegExp): (doc: string) => Array<{ from: number; to: number }> {
@@ -111,6 +121,11 @@ const TOKEN_KINDS: TokenKind[] = [
   {
     className: "cm-token-file",
     match: matchFrom(FILE_RE),
+  },
+  // explicit-agent-dispatch (2026-06-30): @@agent token.
+  {
+    className: "cm-token-agent",
+    match: matchFrom(AGENT_RE),
   },
   // B4 skill token — regex intentionally absent. When B4 lands, add a
   // `{ className: "cm-token-skill", match: matchFrom(SKILL_RE) }` entry

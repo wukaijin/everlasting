@@ -242,6 +242,8 @@ pub fn run() {
             // B4 skill stretches (2026-06-18): merged /-trigger panel
             commands::panel::list_panel_items,
             commands::panel::get_skill_body,
+            // explicit-agent-dispatch (2026-06-30): @@-trigger agent panel
+            commands::panel::list_subagents,
             // B2 @文件补全 (2026-06-17)
             commands::files::list_files,
             // B2 system-root @/ panel: literal `/` walk under SYSTEM_EXCLUDE.

@@ -75,6 +75,14 @@ pub async fn chat(
     // auto-converts the JS-side `resendSeq: number | null`.
     #[allow(non_snake_case)]
     resendSeq: Option<i64>,
+    // explicit-agent-dispatch (2026-06-30): `@@<agent> <task>` prefix
+    // parsed by the frontend (`chat.ts send()`). When `Some`,
+    // `run_chat_loop`'s turn-1 prefix short-circuits the LLM and
+    // dispatches the named worker directly (no `provider.stream`).
+    // `None` for normal sends. Mutually exclusive with `resendSeq`
+    // (a resend never carries a forced dispatch).
+    #[allow(non_snake_case)]
+    forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) -> Result<(), String> {
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
@@ -319,6 +327,10 @@ pub async fn chat(
             // active. Pass-through — the agent loop body itself
             // does not read this.
             app_data_dir,
+            // explicit-agent-dispatch: thread the user-forced
+            // dispatch into the loop's turn-1 short-circuit
+            // (trailing `forced_dispatch` parameter).
+            forcedDispatch,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

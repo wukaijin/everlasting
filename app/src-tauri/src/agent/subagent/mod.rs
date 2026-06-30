@@ -104,6 +104,39 @@ pub use truncate_summary::{
 };
 
 // ---------------------------------------------------------------------------
+// Forced dispatch (explicit-agent-dispatch, 2026-06-30)
+// ---------------------------------------------------------------------------
+
+/// A **user-forced** subagent dispatch, parsed by the frontend from an
+/// `@@<agent> <task>` input prefix and threaded through the `chat`
+/// Tauri command → `run_chat_loop`'s turn-1 prefix short-circuit.
+///
+/// Unlike the LLM-driven `dispatch_subagent` tool_use, this path
+/// **bypasses `provider.stream` entirely** — the parent loop never
+/// asks the LLM which agent to run; the user already decided. The
+/// turn-1 prefix synthesizes a `dispatch_subagent` tool_use from this
+/// struct and calls [`dispatch::run_subagent`] directly (same code
+/// path as the LLM-driven interceptor at `chat_loop.rs:2374`), then
+/// emits the worker's summary as the turn's assistant text and exits.
+///
+/// Fields are `snake_case` to match the JS wire object
+/// (`{ subagent, task }`) verbatim; the surrounding Tauri command arg
+/// is `forcedDispatch` (camelCase, like `resendSeq`) and serde-converts.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct ForcedDispatch {
+    /// The subagent name (must exist in `SubagentCache`: builtin +
+    /// user + project). The frontend validates before send; the
+    /// backend trusts it (an unknown name surfaces as
+    /// `run_subagent`'s error content, same as an LLM naming a
+    /// nonexistent worker).
+    pub subagent: String,
+    /// The self-contained task brief for the worker (the text after
+    /// the `@@<agent>` prefix). Written into the synthesized
+    /// tool_use's `input.task` verbatim.
+    pub task: String,
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch tool definition
 // ---------------------------------------------------------------------------
 

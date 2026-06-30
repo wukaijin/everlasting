@@ -89,6 +89,8 @@ pub fn all_command_names() -> Vec<&'static str> {
         "get_command_body",
         // B4 skill stretches (2026-06-18): merged panel IPC
         "list_panel_items",
+        // explicit-agent-dispatch (2026-06-30): @@-trigger agent panel
+        "list_subagents",
         "get_skill_body",
         // B2 @文件补全
         "list_files",

@@ -235,6 +235,24 @@ const cm = useChatInputCodeMirror({
       return [];
     }
   },
+  agentItemsSource: async (): Promise<TriggerMenuItem[]> => {
+    const projectId = projectsStore.currentProjectId;
+    try {
+      const list = await invoke<{ name: string; description: string; source: string }[]>(
+        "list_subagents",
+        { projectId: projectId ?? null },
+      );
+      return list.map((a) => ({
+        key: `${a.source}:${a.name}`,
+        name: a.name,
+        description: a.description || undefined,
+        source: a.source,
+      }));
+    } catch (e) {
+      console.error("list_subagents failed:", e);
+      return [];
+    }
+  },
 });
 
 // === `@`-mention file list cache =================================
@@ -318,6 +336,8 @@ watch(
 
 const triggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
 const fileTriggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
+// explicit-agent-dispatch (2026-06-30): @@-trigger agent panel.
+const agentTriggerMenu = ref<InstanceType<typeof TriggerMenu> | null>(null);
 
 // Mirror: composable's commandMenuRef should track the local
 // triggerMenu ref. The composable's internal ref is exported and
@@ -329,6 +349,9 @@ watchEffect(() => {
 });
 watchEffect(() => {
   cm.fileMenuRef.value = fileTriggerMenu.value;
+});
+watchEffect(() => {
+  cm.agentMenuRef.value = agentTriggerMenu.value;
 });
 
 // === Send / Stop / Esc ===========================================
@@ -506,6 +529,25 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
   await nextTick();
   cm.view.value?.focus();
 }
+
+/** explicit-agent-dispatch (2026-06-30): @@-trigger agent panel
+ *  selection. Strips the `@@` token + any partial name, inserts
+ *  `@@<name> ` (trailing space positions the caret for the task
+ *  text — the rest of the input becomes the forced-dispatch task). */
+async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
+  const atAtTok = cm.currentAtAtToken();
+  if (!atAtTok || atAtTok.atOffset < 0) return;
+  const { atOffset, tokenEnd } = atAtTok;
+  const doc = cm.input.value;
+  const beforeAt = doc.slice(0, atOffset);
+  const afterToken = doc.slice(tokenEnd);
+  const newDoc = beforeAt + `@@${item.name} ` + afterToken;
+  const caret = atOffset + 2 + item.name.length + 1;
+  cm.closeAgentPalette();
+  cm.replaceDoc(newDoc, caret);
+  await nextTick();
+  cm.view.value?.focus();
+}
 </script>
 
 <template>
@@ -569,6 +611,26 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
           </span>
         </template>
       </TriggerMenu>
+      <!-- explicit-agent-dispatch (2026-06-30): @@-trigger agent
+           palette. Third <TriggerMenu> caller — trigger="@@",
+           sources from `list_subagents` (builtin + user + project).
+           Uses the default row slot (not #row) so each row renders
+           name + description + the source chip (builtin/user/project)
+           via TriggerMenu's built-in chrome. Selecting inserts
+           `@@<name> `; the rest of the input becomes the
+           forced-dispatch task (parsed by `chat.ts send()`). -->
+      <TriggerMenu
+        ref="agentTriggerMenu"
+        :open="cm.agentPaletteOpen.value"
+        :items="cm.agentItems.value"
+        :filter="cm.agentFilter.value"
+        trigger="@@"
+        header-label="Agent"
+        empty-label="无匹配 agent"
+        :trigger-el="cm.view.value?.dom ?? null"
+        @select="onAgentSelect"
+        @close="cm.closeAgentPalette"
+      />
       <!-- PR1.5: CodeMirror 6 host div. The EditorView mounts into
            this element via the composable's onMounted hook and
            owns all internal DOM (`.cm-editor`, `.cm-scroller`,
@@ -717,6 +779,14 @@ async function onFileSelect(item: TriggerMenuItem): Promise<void> {
 }
 
 :deep(.chat-input__field .cm-editor .cm-content .cm-token-skill) {
+  color: var(--color-tool-thinking);
+  font-weight: var(--weight-semibold);
+}
+
+/* explicit-agent-dispatch (2026-06-30): @@agent token. Uses the
+   thinking color (violet) — the agent dispatch is a directive layer
+   akin to skills, distinct from file (read cyan) + command (accent). */
+:deep(.chat-input__field .cm-editor .cm-content .cm-token-agent) {
   color: var(--color-tool-thinking);
   font-weight: var(--weight-semibold);
 }

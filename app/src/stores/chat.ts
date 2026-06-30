@@ -847,6 +847,25 @@ export const useChatStore = defineStore("chat", () => {
       throw new Error("send: no current project");
     }
 
+    // explicit-agent-dispatch (2026-06-30): detect a `@@<agent>
+    // <task>` prefix. When present, strip it from the user message
+    // body (the body becomes the task) and thread a `forcedDispatch`
+    // payload through the `chat` IPC so the backend short-circuits
+    // the LLM and dispatches the named subagent directly. An unknown
+    // agent name is NOT rejected here — the backend's `run_subagent`
+    // surfaces it as an error tool_result (cache.lookup miss). An
+    // empty task after the prefix is rejected (no dispatch without a
+    // brief). Only one leading `@@` prefix is honored.
+    let forcedDispatch: { subagent: string; task: string } | undefined;
+    let body = trimmed;
+    const atAt = trimmed.match(/^@@([A-Za-z0-9_-]+)[ \t]+([\s\S]+)$/);
+    if (atAt) {
+      const task = atAt[2].trim();
+      if (!task) return;
+      forcedDispatch = { subagent: atAt[1], task };
+      body = task;
+    }
+
     // Lazily create a session if there isn't one yet. `createNewSession`
     // throws if no project is active, so the chat area is expected
     // to be visible only when a project is selected (Q2 in dispatch
@@ -923,7 +942,7 @@ export const useChatStore = defineStore("chat", () => {
       // here.
       seq: nextSeq,
       role: "user",
-      content: trimmed,
+      content: body,
     };
     const assistantMsg: ChatMessage = {
       id: genId(),
@@ -968,6 +987,7 @@ export const useChatStore = defineStore("chat", () => {
       userMsg,
       assistantMsg,
       history,
+      forcedDispatch,
     });
   }
 

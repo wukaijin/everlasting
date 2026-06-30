@@ -69,6 +69,47 @@ pub struct PanelItem {
 /// matching the B3 `list_commands` contract. The frontend renders
 /// each row with a `source` chip so the user can tell at a glance
 /// which type they're picking.
+/// One row in the `@@`-trigger agent panel (explicit-agent-dispatch,
+/// 2026-06-30). The frontend's third `<TriggerMenu trigger="@@">`
+/// sources from this; selecting a row inserts `@@<name> ` and the
+/// remaining input becomes the forced-dispatch task.
+///
+/// `source` is `"builtin"` / `"user"` / `"project"` — rendered as a
+/// chip so the user sees provenance (mirrors `PanelItem.source`).
+#[derive(serde::Serialize, Clone)]
+pub struct SubagentInfo {
+    pub name: String,
+    pub description: String,
+    /// `"builtin"` | `"user"` | `"project"`.
+    pub source: String,
+    pub tools: Vec<String>,
+}
+
+/// List the subagents available for explicit `@@` dispatch: builtin
+/// + user (`~/.config/everlasting/agents/`) + project
+/// (`<project>/.everlasting/agents/`), already merged by the
+/// `SubagentCache` (project > user > builtin precedence, mtime-fenced
+/// — a freshly-written `.md` is picked up on the next chat turn).
+/// Output order matches `definition_with_cache`'s enum (loader-sorted).
+#[tauri::command]
+pub async fn list_subagents(
+    state: State<'_, Arc<AppState>>,
+    project_id: Option<String>,
+) -> Result<Vec<SubagentInfo>, String> {
+    let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
+    let path_str = project_path.as_deref().unwrap_or("");
+    let loaded = state.subagent_cache.list(path_str).await;
+    Ok(loaded
+        .into_iter()
+        .map(|l| SubagentInfo {
+            name: l.def.name,
+            description: l.def.description,
+            source: l.source.as_str().to_string(),
+            tools: l.def.tools,
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub async fn list_panel_items(
     state: State<'_, Arc<AppState>>,

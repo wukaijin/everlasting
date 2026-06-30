@@ -129,6 +129,19 @@ export interface ChatInputCodeMirrorApi {
    *  until the user types `@` again — the parent's IPC cache is the
    *  source of truth for what's already known about the new context. */
   resetFilePanelState: () => void;
+  // --- explicit-agent-dispatch (2026-06-30): @@-trigger agent panel
+  /** Read the `@@` token at the caret. Null when not on a `@@` line.
+   *  `atOffset` points at the first `@` of the pair; the slice
+   *  `[atOffset, tokenEnd)` is what the parent strips on selection. */
+  currentAtAtToken: () => AtToken | null;
+  detectAgentTrigger: () => { trigger: boolean; filter: string };
+  syncAgentPalette: () => void;
+  closeAgentPalette: () => void;
+  resetAgentPanelState: () => void;
+  agentMenuRef: Ref<{ moveActive: (d: number) => void; confirmActive: () => void } | null>;
+  agentPaletteOpen: Ref<boolean>;
+  agentFilter: Ref<string>;
+  agentItems: Ref<TriggerMenuItem[]>;
 }
 
 /** Geometry of the `/`-trigger token under the caret. Mirrors the
@@ -207,6 +220,10 @@ export interface UseChatInputCodeMirrorOpts {
    *  mode so the parent can serve a shallow (cheap, default) or full
    *  (cached, slower) list without re-walking. */
   fileItemsSource?: (mode: FileViewMode) => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
+  /** explicit-agent-dispatch (2026-06-30): pull the available
+   *  subagents for the `@@`-trigger panel (builtin + user + project
+   *  layers via `list_subagents`). */
+  agentItemsSource?: () => TriggerMenuItem[] | Promise<TriggerMenuItem[]>;
 }
 
 /** Composable factory. The parent calls this in `<script setup>`
@@ -246,6 +263,13 @@ export function useChatInputCodeMirror(
   // template ref binding).
   const commandMenuRef = ref<{ moveActive: (d: number) => void; confirmActive: () => void } | null>(null);
   const fileMenuRef = ref<{ moveActive: (d: number) => void; confirmActive: () => void } | null>(null);
+  // explicit-agent-dispatch (2026-06-30): @@-trigger agent panel.
+  const agentMenuRef = ref<{ moveActive: (d: number) => void; confirmActive: () => void } | null>(null);
+  const agentPaletteOpen = ref(false);
+  const agentFilter = ref("");
+  const agentItems = ref<TriggerMenuItem[]>([]);
+  // Marker so we don't refetch agents on every keystroke. Cleared on close.
+  let agentsLoaded = false;
 
   // === Trigger detection (verbatim from ChatInput.vue) ============
 
@@ -355,6 +379,68 @@ export function useChatInputCodeMirror(
 
   function detectFileTrigger(): { trigger: boolean; filter: string } {
     const t = currentAtToken();
+    if (!t) return { trigger: false, filter: "" };
+    return { trigger: t.trigger, filter: t.filter };
+  }
+
+  /** explicit-agent-dispatch (2026-06-30): read the `@@` token under
+   *  the caret. Walks left for a `@@` pair whose first `@` is preceded
+   *  by a boundary (line start / whitespace). The single-`@` file
+   *  trigger (`currentAtToken`) already returns false for `@@x` (the
+   *  2nd `@`'s prev char is `@`, not a boundary), so `@@` and `@`
+   *  triggers are mutually exclusive — no priority arbitration needed. */
+  function currentAtAtToken(): AtToken | null {
+    const v = view.value;
+    if (!v) return null;
+    const head = v.state.selection.main.head;
+    const line = v.state.doc.lineAt(head);
+    const lineText = line.text;
+    const caretCol = head - line.from;
+    let atCol = -1;
+    // Walk left for a `@@` pair (first '@' at i, second at i+1).
+    for (let i = caretCol - 2; i >= 0; i--) {
+      const ch = lineText[i];
+      if (ch === " ") break;
+      if (ch === "@" && lineText[i + 1] === "@") {
+        atCol = i;
+        break;
+      }
+    }
+    if (atCol === -1) {
+      return { line: line.number, from: 0, to: 0, trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+    }
+    const prevCh = atCol > 0 ? lineText[atCol - 1] : "";
+    const prevIsBoundary = atCol === 0 || /\s/.test(prevCh);
+    if (!prevIsBoundary) {
+      return { line: line.number, from: 0, to: 0, trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+    }
+    const afterAtAt = lineText.slice(atCol + 2, caretCol);
+    if (afterAtAt.includes(" ")) {
+      return { line: line.number, from: 0, to: 0, trigger: false, filter: "", atOffset: -1, tokenEnd: -1 };
+    }
+    const atOffset = line.from + atCol;
+    let endCol = caretCol;
+    for (let i = caretCol; i < lineText.length; i++) {
+      if (/\s/.test(lineText[i])) {
+        endCol = i;
+        break;
+      }
+      endCol = i + 1;
+    }
+    const tokenEnd = line.from + endCol;
+    return {
+      line: line.number,
+      from: line.from,
+      to: tokenEnd,
+      trigger: true,
+      filter: afterAtAt,
+      atOffset,
+      tokenEnd,
+    };
+  }
+
+  function detectAgentTrigger(): { trigger: boolean; filter: string } {
+    const t = currentAtAtToken();
     if (!t) return { trigger: false, filter: "" };
     return { trigger: t.trigger, filter: t.filter };
   }
@@ -495,6 +581,53 @@ export function useChatInputCodeMirror(
     systemRootLoaded = false;
   }
 
+  // === explicit-agent-dispatch (2026-06-30): @@ agent panel =====
+
+  function resetAgentPanelState(): void {
+    agentPaletteOpen.value = false;
+    agentItems.value = [];
+    agentFilter.value = "";
+    agentsLoaded = false;
+  }
+
+  async function loadAgents(): Promise<void> {
+    if (agentsLoaded || !opts.agentItemsSource) return;
+    try {
+      const items = await opts.agentItemsSource();
+      agentItems.value = items;
+      agentsLoaded = true;
+    } catch (e) {
+      console.error("agentItemsSource failed:", e);
+      agentItems.value = [];
+      agentsLoaded = true;
+    }
+  }
+
+  async function openAgentPalette(filter: string): Promise<void> {
+    agentFilter.value = filter;
+    agentPaletteOpen.value = true;
+    await loadAgents();
+  }
+
+  function closeAgentPalette(): void {
+    agentPaletteOpen.value = false;
+    agentsLoaded = false;
+    agentItems.value = [];
+  }
+
+  function syncAgentPalette(): void {
+    const { trigger, filter } = detectAgentTrigger();
+    if (trigger) {
+      if (!agentPaletteOpen.value) {
+        void openAgentPalette(filter);
+      } else {
+        agentFilter.value = filter;
+      }
+    } else if (agentPaletteOpen.value) {
+      closeAgentPalette();
+    }
+  }
+
   function syncFilePalette(): void {
     const { trigger, filter } = detectFileTrigger();
     if (trigger) {
@@ -527,6 +660,7 @@ export function useChatInputCodeMirror(
       }
       syncCommandPalette();
       syncFilePalette();
+      syncAgentPalette();
     }
   }
 
@@ -536,8 +670,8 @@ export function useChatInputCodeMirror(
     const v = view.value;
     if (!v) return false;
     if (v.composing) return true;
-    if (commandPaletteOpen.value || filePaletteOpen.value) {
-      const menu = filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value;
+    if (commandPaletteOpen.value || filePaletteOpen.value || agentPaletteOpen.value) {
+      const menu = agentPaletteOpen.value ? agentMenuRef.value : (filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value);
       menu?.confirmActive();
       return true;
     }
@@ -560,8 +694,8 @@ export function useChatInputCodeMirror(
         {
           key: "ArrowDown",
           run: () => {
-            if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
-            const menu = filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value;
+            if (!commandPaletteOpen.value && !filePaletteOpen.value && !agentPaletteOpen.value) return false;
+            const menu = agentPaletteOpen.value ? agentMenuRef.value : (filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value);
             menu?.moveActive(1);
             return true;
           },
@@ -569,8 +703,8 @@ export function useChatInputCodeMirror(
         {
           key: "ArrowUp",
           run: () => {
-            if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
-            const menu = filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value;
+            if (!commandPaletteOpen.value && !filePaletteOpen.value && !agentPaletteOpen.value) return false;
+            const menu = agentPaletteOpen.value ? agentMenuRef.value : (filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value);
             menu?.moveActive(-1);
             return true;
           },
@@ -579,8 +713,8 @@ export function useChatInputCodeMirror(
         {
           key: "Tab",
           run: () => {
-            if (!commandPaletteOpen.value && !filePaletteOpen.value) return false;
-            const menu = filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value;
+            if (!commandPaletteOpen.value && !filePaletteOpen.value && !agentPaletteOpen.value) return false;
+            const menu = agentPaletteOpen.value ? agentMenuRef.value : (filePaletteOpen.value ? fileMenuRef.value : commandMenuRef.value);
             menu?.confirmActive();
             return true;
           },
@@ -588,6 +722,10 @@ export function useChatInputCodeMirror(
         {
           key: "Escape",
           run: () => {
+            if (agentPaletteOpen.value) {
+              closeAgentPalette();
+              return true;
+            }
             if (filePaletteOpen.value) {
               closeFilePalette();
               return true;
@@ -661,22 +799,31 @@ export function useChatInputCodeMirror(
     replaceDoc,
     currentSlashToken,
     currentAtToken,
+    currentAtAtToken,
     detectCommandTrigger,
     detectFileTrigger,
+    detectAgentTrigger,
     syncCommandPalette,
     syncFilePalette,
+    syncAgentPalette,
     closeCommandPalette,
     closeFilePalette,
+    closeAgentPalette,
     resetFilePanelState,
+    resetAgentPanelState,
     submit,
     commandMenuRef,
     fileMenuRef,
+    agentMenuRef,
     commandPaletteOpen,
     filePaletteOpen,
+    agentPaletteOpen,
     commandFilter,
     fileFilter,
+    agentFilter,
     commandItems,
     panelItems,
+    agentItems,
     fileSystemRootItems,
     fileViewMode,
   };
