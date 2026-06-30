@@ -30,6 +30,29 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-07-01 — read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list(+ `~` 展开)
+
+**Context**: read 族(read_file/grep/glob/list_dir)的 tool 层 `assert_within_root` 与权限层 `ask_path` 口径冲突 —— 权限层 Tier 4 对项目外路径弹窗 ask,用户 Allow 后 `execute_tool` 内的 `assert_within_root` 又以 "outside project root" 硬拒。即"假 ask":弹窗点了允许也没用。用户原始动机:读 `~/.config/everlasting/commands/test-b3.md` 报错。目标:拉齐 Claude Code Read 能力(它默认能读项目外)+ 受控(不放弃审计/用户感知)。
+
+**决策**:
+
+1. **删 read 族 tool 层 `assert_within_root`** —— 边界判定收归权限层单一 source of truth,消除口径冲突。write/edit 的 `assert_within_root` 保留(defense in depth,写不可逆)。
+2. **权限层 Tier 2.5 敏感路径 deny-list**(`permissions/sensitive.rs`,对标 `dangerous.rs`):中等档 pattern(私钥/`.env`/credentials),命中即硬 `Deny`、含 yolo、不可绕过。**仅项目外 lexical**生效(Q1.2:项目内 `.env` 信任);**项目内 symlink 逃逸**额外挡(canonicalize 后到项目外且敏感 —— 恢复原 `assert_within_root` 的 symlink 防御,lexical deny-list 单独挡不住)。
+3. **Tier 4 受信 allow-list**:`~/.config/everlasting/**` 免 ask 直接 Allow(app 自己的运行时数据,agent 读它本不该弹窗)。优先级 deny > allow > ask。
+4. **新 helper `projects::boundary::resolve_path`** 展开 `~`/`~/...` → home —— read 族 4 tool + check.rs 2 处 abs_path 共用。这是 allow-list 实用的硬前提(LLM 自然传 `~/...`,否则 `~` 被当字面目录名 → 路径错)。
+5. **双 anchor**:`cwd` 决定 ask vs silent-Allow(权限层历史不变);`worktree_path`(项目根)决定 deny/allow 的"项目外"触发 —— 避免 session cwd 是子目录时项目根文件被误判 outside。`PermissionContext` 加 `worktree_path` 字段(5 处构造点)。
+
+**Consequences**:
+
+- read 项目外受控:edit/plan 弹 ask、yolo 放行+审计、敏感硬 deny、everlasting data 免 ask。
+- 私钥/凭证/项目外 `.env` 不进 LLM context(不可逆泄露面堵住)。
+- **已知 gap**(OOS):grep/glob 的 deny-list 只匹配 `path` 参数(搜索根),搜索结果里偶遇敏感文件内容不额外过滤(等同 redaction,留 follow-up)。项目内真 `.env`/`*.pem` 信任不挡(Q1.2)。
+- write 族"假 ask"同构问题(write 项目外 ask 通过后仍被 tool 层拒)留后续 follow-up —— 本 task 仅保证 write 零回归。
+
+**两轮 review 各补一个盲区**:trellis-check 抓到 symlink escape(安全回归,已修);用户 review 抓到 `~` 不解析(allow-list 形同虚设,已修)。两者自验时都用"绝对路径测试"绕过。
+
+**关联**: PRD `.trellis/tasks/07-01-read-side-boundary-decouple/prd.md`;commit `87c91f0`;spec `.trellis/spec/backend/project-cwd-boundary.md` §5 + §7;1127 tests passed。
+
 ### 2026-06-25 — 放开 SSE 流中 mode 切换(后端零改动,toast 仅流中弹)
 
 **Context**: 前端之前在 SSE 流进行中故意禁用 mode 切换(`ModeSelect.vue:117` `toggleMenu()` early-return + `:disabled="isStreaming"` + CSS `.mode-select__trigger--disabled` + `chat.ts:1242` `requestSetMode` 流中 guard + `chat.ts:1278` `confirmYolo` 流中 guard,共 6 处;`ModeSelect.vue` 注释明确"matches the backend's 'mode applies on next turn boundary' rule")。用户希望放开,以便流中也能预切下一轮的 mode(典型场景:发现 agent 走偏了,中途切到 plan 模式让下一轮重新规划)。后端 `set_session_mode` 命令全文无 streaming 检查,`chat_loop.rs:396` 每 turn 开头读 `loaded_session.session.mode` 整 turn 复用 —— turn-boundary 语义是真实的。
