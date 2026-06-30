@@ -1739,3 +1739,38 @@ P1 bug: isolated sub-agent (general-purpose default isolated=true) 可以派生 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 86: sub-agent worktree 链路顺滑化 epic (A+B+C+D)
+
+**Date**: 2026-06-30
+**Task**: sub-agent worktree 链路顺滑化 epic (A+B+C+D)
+**Branch**: `main`
+
+### Summary
+
+修主 agent<->sub-agent worktree 链路 3 个摩擦点。A: probe 看 working tree 但 merge 合 branch tip 导致假成功 bug, 新增 commit_worker_changes 系统 auto-commit 兜底。B: isolation 改系统层 serial/parallel 自动决定 (general-purpose 默认 shared 零 merge; 并发写型 worker force-isolate; 显式 isolation:false 可 opt-out; 只读 worker 并发保持共享)。C: isolated sub-agent 注入 worktree 知情提示。D: publish session->main (merge_session_into_main + command + WorktreeChip 按钮, 不 push)。resolve_isolation 签名不变。cargo test --lib 1085 passed, pnpm build 过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cda336c` | (see git log) |
+| `91968e5` | (see git log) |
+| `16fccf9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
