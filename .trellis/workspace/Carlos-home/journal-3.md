@@ -1774,3 +1774,41 @@ P1 bug: isolated sub-agent (general-purpose default isolated=true) 可以派生 
 ### Next Steps
 
 - None - task complete
+
+---
+
+**Date**: 2026-06-30
+**Task**: 显式 @@ agent dispatch (forced, bypasses LLM)
+**Branch**: `main`
+
+### Summary
+
+让用户在输入框用 `@@<agent> <task>` 显式指定 sub-agent，发送时后端绕过主 agent LLM 决策（`provider.stream` 零调用），直接强制 `dispatch_subagent`。核心洞察：把现有 LLM-driven dispatch 拦截器（`chat_loop.rs:2374`）的 `run_subagent` 调用**提前到 turn-1 前置短路**，19 参数照抄零复制——复用 `run_subagent` 全部能力（permission/isolation/transcript/drawer）。前端 `@@` TriggerMenu 第三实例 + chatInputCodeMirror `@@` 检测（与 `@` 天然互斥：`currentAtToken` 对 `@@` 返回 false）+ chat.ts send 前缀拆分 + cm-token-agent 高亮（thinking 色 violet）。
+
+### Main Changes
+
+- 后端: `ForcedDispatch` struct (subagent/mod.rs) + `run_chat_loop` 第 24 参数 `forced_dispatch` + turn-1 短路（合成 tool_use + `run_subagent` + summary 回填 + persist）+ chat `forcedDispatch` IPC + `list_subagents` command (panel.rs)
+- 前端: chatInputCodeMirror `@@` 检测/面板/keymap + ChatInput 第三 TriggerMenu + chat.ts send `@@` 拆分 + streamController `forcedDispatch` + `AGENT_RE`/`cm-token-agent` 高亮
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `82d7464` | feat(agent): explicit @@ agent dispatch (forced, bypasses LLM) |
+| `21bc3ff` | docs(spec): record forced dispatch pattern in agent-loop-architecture |
+| (auto) | chore(task): archive 06-30-explicit-agent-dispatch |
+
+### Testing
+
+- [OK] cargo test --lib: 1086 passed（新 forced 测试 `mock.call_count()==1` 证明父 LLM 零调用）
+- [OK] vitest: 622 passed (35 文件)
+- [OK] vue-tsc + pnpm build 过
+- [defer] GUI 手测：用户确认 `@@` token violet 高亮；其余场景自动化覆盖
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
