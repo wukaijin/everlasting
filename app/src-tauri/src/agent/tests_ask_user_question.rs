@@ -973,3 +973,62 @@ async fn get_pending_question_command_register_resolve_round_trip() {
         crate::agent::question_store::QuestionStoreError::NotFound
     );
 }
+
+// ---------------------------------------------------------------------------
+// F3 Test — `resolve_tool_question` scalar-arg → QuestionResponse mapping.
+//
+// `resolve_tool_question` is a thin Tauri command whose only
+// non-trivial logic is the `cancelled`-vs-`answer` branch. That
+// branch lives in the pure helper `commands::question::
+// resolve_response_from_args` (extracted for testability — the
+// command's `State<'_, _>` arg rules out a direct call here
+// without a `tauri::test` mock_app, which this project doesn't
+// use). The invoke serde boundary itself (JS
+// `{ sessionId, toolUseId, answer, cancelled }` → Rust scalar
+// args) is covered by the `permission_response` precedent +
+// manual `tauri dev` verification per the command's doc
+// comment, not by this unit test.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn resolve_response_from_args_maps_scalar_inputs() {
+    use crate::agent::question_store::{QuestionAnswer, QuestionResponse};
+    use crate::commands::question::resolve_response_from_args;
+
+    // cancelled=true wins regardless of answer presence
+    // (frontend's 跳过 button sends { cancelled: true }).
+    assert!(matches!(
+        resolve_response_from_args(Some(true), None),
+        QuestionResponse::Cancelled
+    ));
+    assert!(matches!(
+        resolve_response_from_args(Some(true), Some(vec![])),
+        QuestionResponse::Cancelled
+    ));
+
+    // cancelled=false + answer → Answered carries the answers.
+    let ans = vec![QuestionAnswer {
+        question: "q".into(),
+        header: None,
+        options: vec!["a".into()],
+        multi_select: false,
+    }];
+    match resolve_response_from_args(Some(false), Some(ans.clone())) {
+        QuestionResponse::Answered(a) => assert_eq!(a, ans),
+        other => panic!("expected Answered, got {:?}", other),
+    }
+
+    // cancelled=None (frontend omitted the field) → treated as
+    // NOT cancelled → Answered with the supplied answer.
+    assert!(matches!(
+        resolve_response_from_args(None, Some(vec![])),
+        QuestionResponse::Answered(_)
+    ));
+
+    // Neither field (defensive — a frontend bug) → Answered
+    // empty so the agent loop surfaces an empty answer array
+    // rather than silently treating it as a cancel.
+    match resolve_response_from_args(None, None) {
+        QuestionResponse::Answered(a) => assert!(a.is_empty()),
+        other => panic!("expected empty Answered, got {:?}", other),
+    }
+}

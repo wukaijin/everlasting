@@ -38,10 +38,11 @@
 //! frontend session-switch path uses `get_pending_question` to
 //! recover the live payload (so a switched-back session can
 //! render the still-pending card). The user-facing `取消` button
-//! resolves with `QuestionResponse::Cancelled`, the session
-//! cancel token resolves with `QuestionResponse::SessionCancelled`
-//! — both are explicit user/chrome signals, never implicit
-//! session-switch.
+//! resolves with `QuestionResponse::Cancelled`; the session
+//! cancel token (user Stop / app shutdown) is handled by the
+//! cancel arm dropping the receiver (`Err(RecvError)` →
+//! `cancelled_by_session` tool_result). Both are explicit
+//! user/chrome signals, never implicit session-switch.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,14 +52,31 @@ use tokio::sync::{oneshot, Mutex};
 
 /// IPC wire shape — the question payload the frontend renders
 /// into `<AskUserQuestionCard>`. Mirrors design §4.1 (the
-/// `tool:question` event body) and PRD §R3 wire spec. Fields
-/// are snake_case so the LLM's JSON input matches the
-/// frontend's TS types without rename. `ts` is unix-ms
-/// timestamp from the backend — lets the frontend distinguish
-/// "this question is from before my session switch" from
-/// "fresh question during my session" without server-side
-/// ordering (the oneshot map is single-entry-per-session, so
-/// ordering within a session is trivially the most-recent).
+/// `tool:question` event body) and PRD §R3 wire spec.
+///
+/// # Why snake_case (IPC `camelCase` rule exemption)
+///
+/// `database-guidelines.md` mandates `#[serde(rename_all =
+/// "camelCase")]` on structs crossing the IPC boundary. This
+/// struct (and `Question` / `QuestionOption` below) are
+/// **exempt**: the same `Question` type is shared with
+/// `tools::ask_user_question::AskUserQuestionInput`, which
+/// deserializes the LLM's tool-use JSON. The LLM schema (see
+/// `ask_user_question::definition()`'s `input_schema`) is
+/// snake_case — it mirrors Claude Code's trained
+/// `AskUserQuestion` schema for zero learning cost. Renaming
+/// the shared `Question` to camelCase would break LLM input
+/// parsing. So the entire emit chain stays snake_case on both
+/// sides of the IPC (backend Serialize snake → frontend reads
+/// `payload.session_id` snake). The exemption is recorded in
+/// `database-guidelines.md` near the catalog checklist.
+///
+/// `ts` is unix-ms timestamp from the backend — lets the
+/// frontend distinguish "this question is from before my
+/// session switch" from "fresh question during my session"
+/// without server-side ordering (the oneshot map is
+/// single-entry-per-session, so ordering within a session is
+/// trivially the most-recent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolQuestionPayload {
     pub session_id: String,
@@ -112,32 +130,17 @@ pub struct QuestionAnswer {
     pub multi_select: bool,
 }
 
-/// IPC wire shape for `resolve_tool_question` (design §4.2).
-/// One of `answer` / `cancelled` is populated — frontend uses
-/// the `cancelled` flag to mean "user 跳过"; `answer` is the
-/// normal-path wire.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolQuestionResolvePayload {
-    pub session_id: String,
-    pub tool_use_id: String,
-    #[serde(default)]
-    pub answer: Vec<QuestionAnswer>,
-    #[serde(default)]
-    pub cancelled: bool,
-}
-
-/// Internal — what the oneshot delivers on resolve. Three
+/// Internal — what the oneshot delivers on resolve. Two
 /// states; downstream `execute_blocking` matches on these to
 /// produce the right `tool_result` content + `is_error` flag.
 ///
-/// `SessionCancelled` is the wire shape for the session-cancel
-/// arm (token.cancelled inside `execute_blocking`'s
-/// `tokio::select!`) — not constructed in this module's
-/// helpers but reachable through the consumer pattern; the
-/// enum variant stays in case a future caller (e.g. tests or a
-/// parallel cancellation source) needs it.
+/// Session cancel is NOT a third variant — it's handled by
+/// `execute_blocking`'s `tokio::select!` cancel arm directly:
+/// the cancel arm calls `store.remove()`, dropping the sender,
+/// which makes the awaiting receiver yield `Err(RecvError)`;
+/// that arm maps to the `cancelled_by_session` tool_result.
+/// So only the two user-driven resolutions travel the oneshot.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // SessionCancelled is consumed in execute_blocking, not constructed here
 pub enum QuestionResponse {
     /// User submitted the card with valid answers; the agent
     /// loop receives `Vec<QuestionAnswer>` to serialize as
@@ -146,14 +149,6 @@ pub enum QuestionResponse {
     /// User clicked "跳过" on the card; tool_result is
     /// `{"cancelled": true}` with `is_error: true`.
     Cancelled,
-    /// Session cancel token fired mid-wait (user Stop / app
-    /// shutdown / destructive op cancel-inflight); tool_result
-    /// is `{"cancelled_by_session": true}` with `is_error:
-    /// true`. Distinct from `Cancelled` so the agent loop can
-    /// tell "user chose to skip" from "session was forcibly
-    /// stopped" — same UI surface but different recovery
-    /// semantics.
-    SessionCancelled,
 }
 
 /// One pending `ask_user_question`. The `oneshot` is `Option`
@@ -231,10 +226,10 @@ impl QuestionStore {
     /// invokes on submit / 跳过).
     ///
     /// Returns `NotFound` if the session has no pending
-    /// question (race: frontend clicked Submit AFTER the
-    /// session-cancel arm already fired). Returns
-    /// `AlreadyResolved` if the oneshot was already taken
-    /// (double-resolve — defensive guard).
+    /// question — covers both "never registered" and the
+    /// already-resolved race (resolve removes the entry
+    /// atomically with taking the oneshot, so a double-resolve
+    /// finds no key and returns `NotFound`).
     pub async fn resolve(
         &self,
         session_id: &str,
@@ -244,10 +239,17 @@ impl QuestionStore {
         let pending = map
             .get_mut(session_id)
             .ok_or(QuestionStoreError::NotFound)?;
+        // Invariant: while an entry exists its `oneshot` is
+        // `Some` — `register` inserts `Some(tx)` and the only
+        // `take()` site is this function, which `remove`s the
+        // entry in the same critical section. A second resolve
+        // therefore never sees an entry (it returns `NotFound`
+        // above). The `expect` pins that invariant; a panic
+        // here would mean store-internal corruption.
         let tx = pending
             .oneshot
             .take()
-            .ok_or(QuestionStoreError::AlreadyResolved)?;
+            .expect("oneshot present while entry exists");
         // Take the entry out — the question is no longer
         // pending. If the sender fails (receiver already
         // dropped because the cancel arm selected), the
@@ -261,9 +263,11 @@ impl QuestionStore {
 
     /// Remove a pending question without sending through the
     /// oneshot. Used by the cancel arm in `execute_blocking`'s
-    /// `tokio::select!` — the receiver is dropped here, which
-    /// makes the `oneshot::Receiver` return `Err(RecvError)`;
-    /// `execute_blocking` treats that as `SessionCancelled`.
+    /// `tokio::select!` — the sender is dropped here (it lives
+    /// inside the removed `PendingQuestion`), which makes the
+    /// awaiting `oneshot::Receiver` return `Err(RecvError)`;
+    /// `execute_blocking` maps that to the
+    /// `cancelled_by_session` tool_result.
     pub async fn remove(&self, session_id: &str) -> Option<PendingQuestion> {
         let mut map = self.inner.lock().await;
         map.remove(session_id)
@@ -300,11 +304,16 @@ impl Default for QuestionStore {
     }
 }
 
-/// Errors for `QuestionStore` operations. Mirrors the
-/// `PermissionStore` shape (NotFound / AlreadyResolved are the
-/// "no pending" / "race" pair; `AlreadyPending` is the
-/// concurrency gate the `PermissionStore` doesn't need because
-/// Tier 4 doesn't enforce single-pending).
+/// Errors for `QuestionStore` operations. Two variants:
+/// `AlreadyPending` is the single-pending concurrency gate
+/// (design §6.1); `NotFound` covers both "never registered" and
+/// the already-resolved race (resolve removes the entry in the
+/// same critical section that takes the oneshot, so a second
+/// resolve finds no key). There is intentionally no
+/// `AlreadyResolved` variant — the entry-removal + oneshot-take
+/// happen under one lock, so the "double resolve" state is
+/// unreachable. The `PermissionStore` parity is structural
+/// (same `Arc<Mutex<HashMap>>` shape), not variant-for-variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuestionStoreError {
     /// `register` called for a session that already has a
@@ -313,16 +322,11 @@ pub enum QuestionStoreError {
     /// "已有 pending question,等当前回答完成" message.
     AlreadyPending,
     /// `resolve` called for a session with no pending entry.
-    /// Race: frontend Submit AFTER session cancel arm already
-    /// cleared the entry. Frontend sees a no-op command
-    /// result; not user-facing.
+    /// Covers both "never registered" and the already-resolved
+    /// case (resolve removes the entry atomically with the
+    /// oneshot take, so a double-resolve finds no key). The
+    /// frontend treats this as a no-op.
     NotFound,
-    /// `resolve` called twice for the same session (the
-    /// second call found the entry but the oneshot was
-    /// already taken). Defensive — should not happen in
-    /// production (IPC layer doesn't expose enough knobs to
-    /// trigger this), but cheap to guard.
-    AlreadyResolved,
 }
 
 impl std::fmt::Display for QuestionStoreError {
@@ -330,7 +334,6 @@ impl std::fmt::Display for QuestionStoreError {
         match self {
             Self::AlreadyPending => write!(f, "a question is already pending for this session"),
             Self::NotFound => write!(f, "no pending question for this session"),
-            Self::AlreadyResolved => write!(f, "question already resolved"),
         }
     }
 }
@@ -433,11 +436,13 @@ mod tests {
         assert_eq!(err, QuestionStoreError::NotFound);
     }
 
-    /// resolve twice on the same session returns
-    /// `AlreadyResolved` on the second call (the entry was
-    /// already cleared by the first resolve).
+    /// resolve twice on the same session returns `NotFound` on
+    /// the second call — `resolve` removes the entry atomically
+    /// with taking the oneshot, so there is no separate
+    /// `AlreadyResolved` state; the second call simply finds no
+    /// key.
     #[tokio::test]
-    async fn resolve_already_resolved() {
+    async fn resolve_twice_second_call_not_found() {
         let store = QuestionStore::new();
         store
             .register("s1", "tu_1", make_payload("s1", "tu_1"))
@@ -447,11 +452,6 @@ mod tests {
             .resolve("s1", QuestionResponse::Cancelled)
             .await
             .expect("first resolve ok");
-        // Second resolve fails with NotFound (entry was
-        // removed) — already-resolved case is collapsed into
-        // NotFound in the implementation. Either error is
-        // acceptable from the frontend's perspective; we
-        // accept NotFound as the documented behavior here.
         let err = store
             .resolve("s1", QuestionResponse::Cancelled)
             .await

@@ -583,22 +583,18 @@ pub trait ChatEventSink: Send + Sync + 'static {
     /// `tools/ask_user_question::execute_blocking` to push the
     /// pending question to the frontend so the user can render
     /// an inline `<AskUserQuestionCard>` and answer or skip.
-    /// Default impl is a `tracing::warn!` no-op so a custom sink
-    /// that doesn't care about the question surface (only
-    /// `AppHandleSink` and the test `MockEmitter` implement it
-    /// for real) compiles unchanged. `SubagentBufferSink`
-    /// inherits the no-op — but `ask_user_question` is
-    /// structurally disabled for workers (see
-    /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker
-    /// never reaches this method; the no-op is "defense in
-    /// depth" against a future config that re-enables it.
+    /// Default impl is a **silent** no-op (not `warn!` — matches
+    /// `emit_permission_ask_resolved`'s default style; a noisy warn
+    /// on every call would spam logs if a future sink forgot to
+    /// override and the tool somehow fired). Only `AppHandleSink`
+    /// (production) and the test `MockEmitter` implement it for real;
+    /// `SubagentBufferSink` inherits the no-op — but
+    /// `ask_user_question` is structurally disabled for workers (see
+    /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker never
+    /// reaches this method; the no-op is "defense in depth" against a
+    /// future config that re-enables it.
     fn emit_tool_question(&self, _payload: &crate::agent::question_store::ToolQuestionPayload) {
-        tracing::warn!(
-            "ChatEventSink::emit_tool_question default no-op invoked — \
-             this sink should override emit_tool_question to forward \
-             questions to the frontend. If you see this in production, \
-             check that the production AppHandleSink is the active sink."
-        );
+        // Silent no-op — see the doc comment above.
     }
 }
 

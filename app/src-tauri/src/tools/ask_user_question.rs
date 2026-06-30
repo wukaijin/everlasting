@@ -286,8 +286,9 @@ pub type BlockingToolResult = (
 ///        _, None)`.
 ///      - `Cancelled` → return `({"cancelled": true}, true, _,
 ///        None)`.
-///      - `SessionCancelled` — should not reach here (the cancel
-///        arm handles it); defensive Deny just in case.
+///      - `Err(RecvError)` (sender dropped by the cancel arm's
+///        `store.remove`) → return `({"cancelled_by_session":
+///        true}, true, _, None)`.
 ///
 /// **No retries, no timeout** — v1 keeps it simple (PRD §"Notes"
 /// "无 timeout 兜底"). A user who neither answers nor skips and
@@ -356,8 +357,9 @@ pub async fn execute_blocking(
             return (msg, true, crate::tools::ToolContextUpdate::default(), None);
         }
         Err(e) => {
-            // NotFound / AlreadyResolved are not reachable from
-            // `register` — defensive branch.
+            // `NotFound` is not reachable from `register` —
+            // defensive branch (register only ever returns
+            // `AlreadyPending`). Kept for exhaustiveness.
             let msg = format!("ask_user_question: store error: {}", e);
             tracing::error!(
                 session_id = %session_id,
@@ -422,13 +424,6 @@ pub async fn execute_blocking(
                     // User clicked 跳过 (PRD §R5).
                     let content =
                         serde_json::json!({"cancelled": true}).to_string();
-                    (content, true, crate::tools::ToolContextUpdate::default(), None)
-                }
-                Ok(QuestionResponse::SessionCancelled) => {
-                    // Defensive: cancel arm should have caught
-                    // this. Same wire shape regardless.
-                    let content = serde_json::json!({"cancelled_by_session": true})
-                        .to_string();
                     (content, true, crate::tools::ToolContextUpdate::default(), None)
                 }
                 Err(_recv_err) => {
@@ -654,8 +649,18 @@ mod tests {
             .await
         });
 
-        // Give the executor a chance to register + emit.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Wait for the executor to register + emit — poll the
+        // store instead of a fixed sleep (robust against CI
+        // scheduling jitter; mirrors the integration suite's
+        // `spawn_resolver` wait loop).
+        let register_wait_deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(5);
+        while store.get_payload("s1").await.is_none() {
+            if std::time::Instant::now() > register_wait_deadline {
+                panic!("executor never registered the pending question");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
 
         // emit was called.
         let emitted = sink.emitted.lock().unwrap();
@@ -684,7 +689,7 @@ mod tests {
         assert_eq!(parsed, answers);
     }
 
-    // ----- cancel arm → SessionCancelled-like content -----
+    // ----- cancel arm → cancelled_by_session content -----
 
     #[tokio::test]
     async fn cancel_arm_returns_session_cancelled_marker() {
@@ -709,7 +714,14 @@ mod tests {
             .await
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let register_wait_deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(5);
+        while store.get_payload("s1").await.is_none() {
+            if std::time::Instant::now() > register_wait_deadline {
+                panic!("executor never registered the pending question");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         cancel.cancel();
         let (content, is_error, _, _) = exec.await.expect("exec ok");
         assert!(is_error);
@@ -743,7 +755,14 @@ mod tests {
             .await
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let register_wait_deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(5);
+        while store.get_payload("s1").await.is_none() {
+            if std::time::Instant::now() > register_wait_deadline {
+                panic!("executor never registered the pending question");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         store
             .resolve("s1", QuestionResponse::Cancelled)
             .await

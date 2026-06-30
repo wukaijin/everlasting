@@ -726,13 +726,52 @@ one, walk this checklist:
 - [ ] `id` is `TEXT PRIMARY KEY` (`Uuid::new_v4().to_string()`)
 - [ ] All `Serialize` structs that cross the IPC boundary have
       `#[serde(rename_all = "camelCase")]` (Tauri 2 default is
-      snake_case, JS expects camelCase)
+      snake_case, JS expects camelCase). **Exception**: structs
+      shared with an LLM tool-input schema stay snake_case on
+      both sides — see "snake_case exemption for LLM-schema
+      structs" below.
 - [ ] All IPC args use Rust snake_case (Tauri 2 auto-converts from JS
       camelCase — verified in HACKING-wsl FU-4)
 - [ ] At least one happy-path test + one error-path test per CRUD
       function; cascade test for `ON DELETE CASCADE` parent
 - [ ] `PRAGMA foreign_keys = ON` in `test_pool` so cascade tests are
       real
+
+---
+
+## snake_case exemption for LLM-schema structs (added 2026-06-30)
+
+The `rename_all = "camelCase"` rule above has **one structural
+exemption**: a Serialize/Deserialize struct that is *also* used
+to deserialize an LLM's tool-use JSON must stay snake_case,
+because the LLM tool schema is authored snake_case to match the
+model's training data (Claude Code's `AskUserQuestion` schema
+in this project — see `tools::ask_user_question::definition()`'s
+`input_schema`).
+
+The instance: `agent::question_store::Question` /
+`QuestionOption` are shared between
+`tools::ask_user_question::AskUserQuestionInput` (LLM input) and
+`ToolQuestionPayload` (the `tool:question` IPC emit). Renaming
+the shared type to camelCase would break LLM input parsing, so
+the entire `tool:question` emit chain is snake_case on both
+sides of the IPC (backend `Serialize` snake → frontend reads
+`payload.session_id` snake). The wire stays consistent; only the
+naming convention is exempted.
+
+**How to decide for a new struct:**
+
+- Struct crosses IPC **and** is shared with an LLM tool schema
+  → snake_case on both sides (this exemption).
+- Struct crosses IPC **only** (no LLM reuse) →
+  `rename_all = "camelCase"` (the rule above).
+- Frontend→backend **command args** → prefer scalar Rust
+  snake_case args (Tauri auto-converts JS camelCase), NOT a
+  struct payload whose inner fields you'd then have to rename —
+  see `commands::question::resolve_tool_question` for the
+  scalar pattern (and the struct-payload serde pitfall that
+  motivated it: Tauri 2 renames command *args* camelCase↔snake
+  but does NOT rename *struct fields* without `rename_all`).
 
 ---
 
