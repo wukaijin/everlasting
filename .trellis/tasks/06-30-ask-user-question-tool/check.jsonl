@@ -1,0 +1,20 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "verify ask_user_question::definition() schema 与现有 builtin tool 风格一致(字段 snake_case / 描述清晰 / Risk::Low / 不进 execute_tool dispatch 的注释落地)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "verify chat_loop.rs blocking tool 分支正确接入 23 参 shared entry point + CancellationGuard + faithful-port drift 无新增 + is_parallel_eligible 白名单机制未被破坏"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "verify 不引入新表 / migration,persist_turn 路径自动覆盖新 tool + audit record_tool_executed_audit 自动覆盖新 tool"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "verify useQuestionCardsStore 符合 Pinia store 模式 + chat facade / streamController split 边界未破 + LRU 淘汰后 'backend source of truth' 校正逻辑落实"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "verify AskUserQuestionCard 复用 Card 样式系统(不重写)+ 视觉原语边界正确(不 wrap ToolCallCard)+ SubagentDrawer 教训未重蹈"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "verify AC10 红线:无 Dialog/Popover/AlertDialog / 无 Teleport to body / 无浮层遮罩。检查 import 列表 + template"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "verify Card 视觉 token 化(无硬编码 hex + icon :size 偶数 px + 间距走 spacing scale),符合 2026-06-27 token 体系"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "verify QuestionStore 与 PermissionStore 不重复实现(共享 pattern 但不复用代码),避免 register / select pattern 被复制粘贴"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify 跨 5 层数据流:backend QuestionStore ↔ IPC tool:question ↔ frontend pendingBySession ↔ MessageItem 分发 ↔ AskUserQuestionCard 渲染,边界清晰无泄漏"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "若本次引入新 RULE-* 债务(预计不会 — v1 简化路径)需按本指南推进,否则跳过"}
+{"file": ".trellis/tasks/06-30-ask-user-question-tool/prd.md", "reason": "verify R1-R22 + AC1-AC11 + Out of Scope(v1) 全部满足,逐条对照"}
+{"file": ".trellis/tasks/06-30-ask-user-question-tool/design.md", "reason": "verify §2-§11 关键决策落地:QuestionStore 不依赖 permission:ask / 不动 is_parallel_eligible / struct{AskUserQuestionInput} schema 照搬 / IPC 命名 / AC1' Serial 断言 / STRUCTURALLY_DISABLED 加项"}
+{"file": "app/src-tauri/src/agent/permissions/mode.rs", "reason": "verify AC3 STRUCTURALLY_DISABLED 含 ask_user_question + filter_tools_for_subagent 单测覆盖"}
+{"file": "app/src-tauri/src/agent/chat_loop.rs", "reason": "verify is_parallel_eligible 单测:ask_user_question 返回 false + 含它的批次被强制 Serial(AC3')"}
+{"file": "app/src-tauri/src/agent/permissions/ask.rs", "reason": "verify QuestionStore 借鉴 PermissionStore pattern 但不复用代码(独立模块,IPC 独立,UI 独立)"}
+{"file": "app/src-tauri/src/state.rs", "reason": "verify ChatEventSink trait 扩展未破坏现有 AppHandleSink / MockEmitter / SubagentBufferSink 三个实现"}
+{"file": "app/src/stores/streamController.ts", "reason": "verify LRU + backend source-of-truth 合并逻辑无破坏 + listener 注册风格与现有 tool:call / tool:result / permission:ask 一致"}
+{"file": "app/src/components/chat/MessageItem.vue", "reason": "verify AC11 tool name 分发正确:ask_user_question → AskUserQuestionCard,其他 → ToolCallCard"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "verify resolve_tool_question + get_pending_question 已注册到 tauri::generate_handler!"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "verify AskUserQuestionCard 复用 Card 样式系统(不重写视觉原语)"}

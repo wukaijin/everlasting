@@ -1,0 +1,18 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "新增 builtin tool 'ask_user_question',tool 定义/execute_blocking 签名/permission decision layer 集成都要对齐 tool-contract。R1 / R22 / 设计 §2.1 实施必读"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "A6 在 chat_loop.rs 加 blocking tool 挂起点,涉及 23 参 shared entry point / CancellationGuard / is_parallel_eligible 白名单机制 / B6 nested run_chat_loop skip 行为 / faithful-port drift 警示。设计 §6.3 '不要加 ask_user_question => false 分支' 的关键约束来源"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "新增 useQuestionCardsStore + streamController 集成,涉及 chat facade + streamController split / per-session message buffer LRU 20 / SSE listener routing。设计 §5.3 / §5.4 实施必读,尤其 LRU 淘汰后 '以 backend 为 source of truth 校正缓存' 的边界"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "AskUserQuestionCard.vue 在消息流同 ToolCallCard 一层,需复用 Card 样式系统 + 视觉原语,不 wrap ToolCallCard(SubagentDrawer 教训)。D1 / 设计 §5.5 实施必读"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "D1 红线'禁止 reka-ui Dialog/Popover/AlertDialog / 禁止 Teleport to body',Anti-pattern rationale 来源。同时 <style scoped> + portal 的 :deep() gotcha 不适用本组件(inline 无 portal)但要确认"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "Card 视觉必须走 token 体系(bg/text/accent/tool + State Tints + Radius ladder + spacing scale),禁硬编码 hex。D1 实施必读"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本特性跨 5 层(backend tools / agent loop / state / ipc command / frontend store / frontend component / wire protocol),跨层数据流思考必读"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "QuestionStore / execute_blocking 形态与 PermissionStore / register_ask 高度相似,需明确共享与不复用的边界(设计 §2.2 '不依赖 permission:ask 系统')。防止重写 ask.rs 的 register / select pattern"}
+{"file": "app/src-tauri/src/agent/permissions/ask.rs", "reason": "PermissionStore / register_ask / tokio::select!{cancel, timeout, oneshot} 的现有实现,设计 §6 提到的 'pattern 借鉴' 来源。本特性不复用代码但复用 pattern,实施前需读全"}
+{"file": "app/src-tauri/src/agent/permissions/mode.rs", "reason": "STRUCTURALLY_DISABLED 列表 + filter_tools_for_subagent 实现位置,A4 实施必读 + 写 AC3 单测的入口"}
+{"file": "app/src-tauri/src/agent/chat_loop.rs", "reason": "A6 插入 blocking tool 分支的位置 + is_parallel_eligible NAME_ELIGIBLE 白名单核实 + tool 处理阶段现有分支结构。实施前必读全文,避免打乱现有 2064 行结构"}
+{"file": "app/src-tauri/src/state.rs", "reason": "A5 修改 ChatEventSink trait + AppHandleSink + MockEmitter 三处实现,需读现有 trait 方法签名保持一致 + AppState 字段初始化路径"}
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "A3 在 builtin_tools() 注册 ask_user_question (仅 schema,不进 execute_tool dispatch),需读 builtin_tools 当前顺序确认插入位置 + update_checklist 旁的位置"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "A7 把 resolve_tool_question + get_pending_question 注册到 tauri::generate_handler!,读现有 handler 顺序保持风格一致"}
+{"file": "app/src/stores/streamController.ts", "reason": "C3 在 ensureLoaded / rehydrateMessages 调 get_pending_question + 合并到消息流,需读 LRU 缓存 + messagesBySession 结构 + 已有的 listener 注册风格"}
+{"file": "app/src/components/chat/ToolCallCard.vue", "reason": "D1 / E1 复用 Card 样式系统(不重写),需读现有 template / script setup 风格以保持视觉一致。设计 §5.5 '复用现有 Card 样式系统' 落地参考"}
+{"file": "app/src/components/chat/MessageItem.vue", "reason": "E1 加 tool name → component 分发(ask_user_question → AskUserQuestionCard,其他 → ToolCallCard),需读现有 tool block 渲染结构 + props 传递方式"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "本特性不引入新表,但 persist_turn 现有路径确认 + audit record_tool_executed_audit 自动覆盖新 tool,需读 sqlx 模式确认不破坏"}
