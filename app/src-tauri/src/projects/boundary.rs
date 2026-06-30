@@ -126,6 +126,39 @@ pub fn is_within_root(root: &Path, target: &Path) -> bool {
     false
 }
 
+/// Resolve a raw path argument to an absolute `PathBuf`, with `~` /
+/// `~/...` home expansion (read-side boundary decouple, 2026-07-01).
+///
+/// Used by read 族 tools (`read_file`/`grep`/`glob`/`list_dir`) and
+/// the permission layer's `check()` so LLM-emitted `~/...` paths reach
+/// the right file. Without this, `Path::new("~/.ssh").is_absolute()`
+/// is false and `~` gets treated as a literal directory name under `cwd`.
+///
+/// - `~` alone → home dir.
+/// - `~/foo` → `home/foo`.
+/// - anything else → absolute as-is; relative anchors on `cwd`.
+///
+/// If `dirs::home_dir()` fails (no HOME env; rare), the `~` is left
+/// intact and falls through to the relative-path arm (will likely fail
+/// downstream, but we don't panic).
+pub fn resolve_path(raw: &str, cwd: &Path) -> PathBuf {
+    if raw == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    let p = Path::new(raw);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    }
+}
+
 /// Lexical normalization that strips `.` and `..` components
 /// from a path **without** touching the filesystem. This is the
 /// "syntactic" sibling of `Path::canonicalize` — the OS doesn't
@@ -484,5 +517,45 @@ mod tests {
         let dir = tempdir().unwrap();
         let empty = std::path::Path::new("");
         assert!(!is_within_root(dir.path(), empty));
+    }
+
+    // ----- resolve_path (~ home expansion, 2026-07-01) -----
+
+    #[test]
+    fn resolve_path_tilde_expands_to_home() {
+        let cwd = std::path::Path::new("/some/cwd");
+        let home = dirs::home_dir().expect("HOME resolved in test env");
+        assert_eq!(resolve_path("~", cwd), home);
+        assert_eq!(resolve_path("~/foo/bar", cwd), home.join("foo/bar"));
+        // `~/` (trailing slash, no name) → home itself.
+        assert_eq!(resolve_path("~/", cwd), home);
+    }
+
+    #[test]
+    fn resolve_path_absolute_passes_through() {
+        let cwd = std::path::Path::new("/some/cwd");
+        assert_eq!(
+            resolve_path("/abs/path.txt", cwd),
+            std::path::PathBuf::from("/abs/path.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_path_relative_anchors_on_cwd() {
+        let cwd = std::path::Path::new("/some/cwd");
+        assert_eq!(
+            resolve_path("rel/path.txt", cwd),
+            std::path::PathBuf::from("/some/cwd/rel/path.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_path_tilde_only_in_prefix_not_middle() {
+        // `~` in the middle is NOT expanded (matches shell behavior).
+        let cwd = std::path::Path::new("/c");
+        assert_eq!(
+            resolve_path("/foo/~/bar", cwd),
+            std::path::PathBuf::from("/foo/~/bar")
+        );
     }
 }

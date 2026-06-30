@@ -597,6 +597,9 @@ pub async fn run_chat_loop(
         // path — the Arc is constructed fresh in `run_subagent`
         // per worker, so concurrent workers have isolated caches.
         run_grants: run_grants.clone(),
+        // read-side boundary decouple (2026-07-01): deny-list/allow-list
+        // 的"项目外"判定锚点(项目根). 见 PermissionContext.worktree_path doc.
+        worktree_path: worktree_path.clone(),
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 

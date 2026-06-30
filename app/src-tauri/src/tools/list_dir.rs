@@ -10,10 +10,8 @@
 //!   tell file from dir at a glance.
 //! - Default limit 500 entries.
 
-use std::path::Path;
 
 use crate::llm::types::ToolDef;
-use crate::projects::boundary::assert_within_root;
 use crate::tools::ToolContext;
 
 /// Default cap on the number of entries returned. Matches the
@@ -65,23 +63,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         .unwrap_or(DEFAULT_LIMIT);
 
     // 1. Resolve path against ctx.cwd.
-    let requested = {
-        let p = Path::new(raw_path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            ctx.cwd.join(p)
-        }
-    };
-    let validated = match assert_within_root(&ctx.worktree_path, &requested) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                format!("path '{}' rejected: {}", raw_path, e),
-                true,
-            );
-        }
-    };
+    let requested = crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
+    // read-side boundary decouple (2026-07-01): tool-layer
+    // assert_within_root removed for read 族 — project-outside reads
+    // are gated by the permission layer (Tier 2.5 deny + Tier 4 allow
+    // + ask_path). assert_within_root stays for write_file/edit_file.
+    let validated = requested;
 
     // 2. Read directory entries.
     let read = match tokio::fs::read_dir(&validated).await {
@@ -268,14 +255,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn path_outside_root_rejected() {
+    async fn path_outside_root_not_rejected_by_tool_layer() {
+        // read-side boundary decouple (2026-07-01): tool layer no longer
+        // rejects project-outside paths (permission layer gates them).
+        // /etc exists + is outside tempdir → listing succeeds.
         let tmp = tempdir().unwrap();
         let (content, is_err) = execute(
             &serde_json::json!({"path": "/etc"}),
             &test_ctx(&tmp),
         )
         .await;
-        assert!(is_err);
-        assert!(content.contains("rejected") || content.contains("outside"));
+        assert!(!is_err, "project-outside listing must succeed: {content}");
     }
 }

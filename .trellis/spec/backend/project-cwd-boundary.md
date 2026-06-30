@@ -127,8 +127,7 @@ let validated_cwd = boundary::assert_within_root(&ctx.project_root, effective_cw
 - 这保留了 §2 的 7 个 edge case 合约(前缀陷阱、symlink、broken
   symlink、nonexistent 等) — boundary check 是不可绕过的最后一道
   关。
-- 工具内部的二次 boundary check(每个 tool 自己的 `assert_within_root`
-  调用) 仍然保留,作为 defense in depth。
+- 工具内部的二次 boundary check(每个 tool 自己的 `assert_within_root` 调用):**write 族(`write_file`/`edit_file`)保留**作 defense in depth;**read 族(`read_file`/`grep`/`glob`/`list_dir`)2026-07-01 移除** —— 项目外读改由权限层 deny-list + allow-list + ask_path 受控(见 §7),避免"权限层 ask 通过后 tool 层硬卡又拒"的口径冲突。
 
 ## 6. Non-failing boolean variant: `is_within_root` (re-grill 2026-06-13)
 
@@ -181,6 +180,24 @@ pub fn is_within_root(root: &Path, target: &Path) -> bool
 
 8 个 unit test 在 `projects::boundary::tests::is_within_root_*`
 锁定。
+
+## 7. 敏感路径 deny-list / 受信 allow-list(read-side decouple, 2026-07-01)
+
+> **Added in**: task `07-01-read-side-boundary-decouple`
+> **Location**: `app/src-tauri/src/agent/permissions/sensitive.rs` + `check.rs` Tier 2.5 / Tier 4
+
+read 族(`read_file` / `grep` / `glob` / `list_dir`)的 tool 层 `assert_within_root` 已**移除**(见 §5 末条)。项目外读改由权限层两份 static list 受控:
+
+- **deny-list**(Tier 2.5,`check.rs`,早于 yolo bypass):项目外路径命中即硬 `Deny`、含 yolo、不可绕过。中等档 pattern:`~/.ssh/**`、`**/*.pem`/`*.key`/`*.p12`/`*.keystore`、`/etc/shadow`、`**/.env`(枚举 `.env.local`/`.production`,不挡 `.env.example`)、`**/*credentials*`/`*secret*`、`~/.aws/credentials`/`.netrc`/`.npmrc`/`.docker/config.json`。**仅项目外 lexical**生效(项目内真 `.env`/`*.pem` 信任);**项目内 symlink 逃逸**额外挡(canonicalize 后到项目外且敏感 → `Deny`,恢复原 tool 层 `assert_within_root` 的 symlink 保护)。
+- **allow-list**(Tier 4 Path 分支,项目外、ask 前):`~/.config/everlasting/**` 免 `ask_path` 直接 `Allow` + 审计。
+- **优先级**:deny-list > allow-list > ask(`check.rs` 调用顺序保证)。
+- **双 anchor**:`cwd` 决定 ask vs silent-Allow(历史不变);`worktree_path`(项目根)决定 deny/allow 的"项目外"触发 —— 避免 session cwd 是子目录时项目根文件被误判 outside。
+- **匹配**:`globset`(`Cargo.toml` 已在依赖)+ `literal_separator(true)`(`*` 不跨 `/`、`**` 跨)+ `dirs::home_dir()` 展开 `~` + `OnceLock` 缓存编译结果。lexical(不 `canonicalize`)。
+- **`~` 展开**(`projects::boundary::resolve_path`,2026-07-01):read 族 4 tool + `check.rs` 2 处 abs_path 共用此 helper,展开 `~` / `~/...` → home(`dirs::home_dir()`)。保证 LLM 的 `~/...` 写法能正确解析 + 命中 deny/allow-list(否则 `~` 被当字面目录名 → 路径错)。
+- **worker 审计**:deny/allow 命中走 Tier 2 模式 `record_audit` 写父(与 `dangerous.rs` kill-list 一致),不触发 RULE-A-016(该规则仅约束 Tier 4 `ask_path` worker collapse)。
+- **grep/glob 已知 gap**:deny-list 只匹配 tool 的 `path` 参数(搜索根);搜索结果里偶遇敏感文件内容不额外过滤(等同 redaction,OOS)。
+
+write 族(`write_file`/`edit_file`)的 tool 层 `assert_within_root` **保留**(defense in depth)。
 
 ## 5. 关联
 

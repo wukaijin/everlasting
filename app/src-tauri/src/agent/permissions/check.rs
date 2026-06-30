@@ -85,6 +85,55 @@ pub async fn check(
         return Decision::Deny { reason, critical };
     }
 
+    // ----- Tier 2.5: Sensitive-path deny-list (read-side boundary
+    //      decouple, 2026-07-01) -----
+    // read 族(read_file/grep/glob/list_dir)的项目外敏感路径硬墙。
+    // 早于 Tier 3(Mode)+ yolo bypass → 含 yolo 都挡。仅项目外生效
+    // (Q1.2:项目内 .env/credentials 信任不挡);"项目外"用 worktree_path
+    // (项目根),非 cwd。write/edit 不进(其 tool 层 assert_within_root 保留)。
+    // 命中走 Tier 2 模式 record_audit 写父(与 dangerous kill-list 一致,
+    // 不触发 RULE-A-016 — 该规则仅约束 Tier 4 ask_path worker collapse)。
+    if matches!(tool_name, "read_file" | "grep" | "glob" | "list_dir") {
+        if let Some(p) = extract_path_arg(tool_name, tool_input) {
+            let abs_path = crate::projects::boundary::resolve_path(&p, &ctx.cwd);
+            // sensitive_hit:项目外(lexical)走 deny-list;项目内额外查
+            // symlink 逃逸 — canonicalize 后若到项目外且敏感,也挡。恢复
+            // 原 assert_within_root 的 canonicalize symlink 保护(lexical
+            // deny-list 单独挡不住"项目内 symlink → ~/.ssh/id_rsa"攻击链)。
+            // 项目内真文件(含项目内 .env)→ 不挡(Q1.2 信任);canonicalize
+            // 失败(不存在)→ 不挡(read 走 IO error)。
+            let sensitive_hit =
+                if crate::projects::boundary::is_within_root(&ctx.worktree_path, &abs_path) {
+                    abs_path.canonicalize().map_or(false, |canon| {
+                        !crate::projects::boundary::is_within_root(&ctx.worktree_path, &canon)
+                            && super::sensitive::is_sensitive_path(&canon)
+                    })
+                } else {
+                    super::sensitive::is_sensitive_path(&abs_path)
+                };
+            if sensitive_hit {
+                let reason = "path blocked: matches sensitive-path deny-list (private key / credentials / system secrets). Use a shell command if you need to inspect it manually.";
+                let kind = if ctx.mode == Mode::Yolo {
+                    AuditKind::ToolDeniedYolo
+                } else {
+                    AuditKind::ToolDenied
+                };
+                tracing::warn!(
+                    session_id = %ctx.session_id,
+                    mode = %ctx.mode.as_str(),
+                    tool = %tool_name,
+                    path = %abs_path.display(),
+                    "permission::check: Tier 2.5 sensitive-path deny"
+                );
+                let _ = record_audit(db, ctx, kind, tool_name, tool_input, Some(reason)).await;
+                return Decision::Deny {
+                    reason: reason.to_string(),
+                    critical: true,
+                };
+            }
+        }
+    }
+
     // ----- Tier 3: Mode check (Plan blocks file writes) -----
     // ⑨ 关第 3 道 + ⑧a 三重防御的最后一层. Plan 模式拦截
     // write_file/edit_file (纯写工具, 无歧义, 直接 text error
@@ -157,11 +206,7 @@ pub async fn check(
                     // Normalize: the LLM may send relative paths.
                     // For the permission layer, we treat the path as
                     // relative to ctx.cwd unless it's already absolute.
-                    let abs_path = if std::path::Path::new(&p).is_absolute() {
-                        std::path::PathBuf::from(&p)
-                    } else {
-                        ctx.cwd.join(&p)
-                    };
+                    let abs_path = crate::projects::boundary::resolve_path(&p, &ctx.cwd);
                     let inside = crate::projects::boundary::is_within_root(&ctx.cwd, &abs_path);
                     // Tier 4.1: check session_tool_permissions
                     // match_kind='path' for a grant. If hit, Allow.
@@ -205,6 +250,23 @@ pub async fn check(
                             "permission::check: Tier 4 path inside root, silent Allow"
                         );
                         let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                        return Decision::Allow;
+                    }
+                    // read-side decouple (2026-07-01): 受信项目外 allow-list
+                    // (~/.config/everlasting/**)免 ask 直接放行。仅 read 族
+                    // (R7);write/edit 不享此特权(保持 ask,与 Q1.2 写族不动一致)。
+                    if matches!(tool_name, "read_file" | "grep" | "glob" | "list_dir")
+                        && super::sensitive::is_trusted_external(&abs_path)
+                    {
+                        let _ = record_audit(
+                            db,
+                            ctx,
+                            AuditKind::ToolAllowed,
+                            tool_name,
+                            tool_input,
+                            None,
+                        )
+                        .await;
                         return Decision::Allow;
                     }
                     // Outside the project, no grant → modal.

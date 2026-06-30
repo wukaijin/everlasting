@@ -625,3 +625,189 @@ async fn p5_recall_verified_path_command_agnostic_returns_footnote() {
         other => panic!("path/cmd-agnostic verified must be Footnote, got {other:?}"),
     }
 }
+
+// =====================================================================
+// read-side boundary decouple (2026-07-01): Tier 2.5 deny-list +
+// Tier 4 allow-list integration via `check()`.
+// =====================================================================
+
+/// Tier 2.5 is a hard wall — it must block sensitive project-outside
+/// paths EVEN in Yolo (which otherwise bypasses Tier 4). `~/.ssh/id_rsa`
+/// is outside the tempdir project root + matches the deny-list.
+#[tokio::test]
+async fn tier25_denies_sensitive_outside_even_in_yolo() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+        std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Yolo,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    let ssh_key = dirs::home_dir().unwrap().join(".ssh/id_rsa");
+    let decision = crate::agent::permissions::check::check(
+        &ctx,
+        &store,
+        &pool,
+        &sink,
+        "read_file",
+        &serde_json::json!({"path": ssh_key}),
+        "tu-tier25",
+        &token,
+    )
+    .await;
+    assert!(
+        decision.is_deny(),
+        "yolo must still deny sensitive outside path (Tier 2.5 hard wall)"
+    );
+}
+
+/// The trusted allow-list (`~/.config/everlasting/**`) must Allow without
+/// emitting `permission:ask`. Wrapped in a 5s timeout so a regression
+/// (allow-list miss → `ask_path` waits oneshot 120s) fails fast instead
+/// of hanging the suite.
+#[tokio::test]
+async fn tier4_allow_trusted_external_skips_ask() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    let trusted = dirs::home_dir()
+        .unwrap()
+        .join(".config/everlasting/commands/test-b3.md");
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "read_file",
+            &serde_json::json!({"path": trusted}),
+            "tu-tier4",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: allow-list miss would hang on ask_path oneshot");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "trusted external (~/.config/everlasting/**) must Allow without ask"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "trusted external must NOT emit permission:ask"
+    );
+}
+
+/// Symlink escape: a project-internal symlink pointing at a project-
+/// external sensitive file must still be denied. Restores the
+/// canonicalize protection the old tool-layer `assert_within_root` had
+/// (the lexical deny-list alone can't catch it — `./link → ~/.ssh/id_rsa`
+/// reads as project-internal lexically).
+#[cfg(unix)]
+#[tokio::test]
+async fn tier25_denies_symlink_escape_to_sensitive_outside() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink: std::sync::Arc<dyn crate::state::ChatEventSink> =
+        std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let token = tokio_util::sync::CancellationToken::new();
+    let project = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap(); // sibling of project → project-external
+    let sensitive = outside_dir.path().join("escape.pem");
+    std::fs::write(&sensitive, "FAKE-PRIVATE-KEY").unwrap();
+    let link = project.path().join("link.pem");
+    std::os::unix::fs::symlink(&sensitive, &link).unwrap();
+    let root = project.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Yolo,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    let decision = crate::agent::permissions::check::check(
+        &ctx,
+        &store,
+        &pool,
+        &sink,
+        "read_file",
+        &serde_json::json!({"path": "link.pem"}),
+        "tu-symlink",
+        &token,
+    )
+    .await;
+    assert!(
+        decision.is_deny(),
+        "symlink → project-outside sensitive must be denied even in yolo"
+    );
+}
+
+/// The trusted allow-list must also fire when the LLM emits the path in
+/// `~/...` form (resolve_path expands before the allow check). Without
+/// `~` expansion this would miss the allow-list and hang on ask_path.
+#[tokio::test]
+async fn tier4_allow_trusted_external_with_tilde_form() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "read_file",
+            &serde_json::json!({"path": "~/.config/everlasting/commands/test-b3.md"}),
+            "tu-tilde",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: ~ not expanded → allow-list miss → ask_path hang");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "~/... form must expand + hit the trusted allow-list"
+    );
+}

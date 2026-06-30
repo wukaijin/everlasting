@@ -30,10 +30,8 @@
 //! - The ReadGuard fingerprint still covers the full file (offset/
 //!   limit only affect the output slice, not the guard).
 
-use std::path::Path;
 
 use crate::llm::types::ToolDef;
-use crate::projects::boundary::assert_within_root;
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
@@ -102,30 +100,16 @@ pub async fn execute(
         None => return ("Missing required parameter: path".to_string(), true),
     };
 
-    // 1. Resolve to an absolute Path. Relative inputs anchor on
-    //    ctx.cwd (the session's current working directory).
-    let requested: std::path::PathBuf = {
-        let p = Path::new(raw_path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            ctx.cwd.join(p)
-        }
-    };
+    // 1. Resolve (with `~` home expansion; see boundary::resolve_path).
+    let requested: std::path::PathBuf =
+        crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
 
-    // 2. Boundary check: the resolved path must be physically
-    //    located inside the project root. This handles both
-    //    "absolute path is outside" and "relative path resolves to
-    //    outside (e.g. via ../../)" uniformly.
-    let validated = match assert_within_root(&ctx.worktree_path, &requested) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                format!("path '{}' rejected: {}", raw_path, e),
-                true,
-            );
-        }
-    };
+    // 2. read-side boundary decouple (2026-07-01): tool-layer
+    //    assert_within_root removed for read 族 — project-outside
+    //    reads are gated by the permission layer (Tier 2.5 sensitive
+    //    deny-list + Tier 4 trusted allow-list + ask_path).
+    //    assert_within_root stays for write_file/edit_file.
+    let validated = requested;
 
     // 3. Parse offset and limit parameters.
     let offset = input
@@ -388,7 +372,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_rejects_traversal_outside_root() {
+    async fn execute_reads_outside_root_file() {
+        // read-side boundary decouple (2026-07-01): tool layer no longer
+        // rejects project-outside paths — the permission layer gates them
+        // (Tier 2.5 deny / Tier 4 allow / ask_path). /etc/hostname exists
+        // and is outside the tempdir project root, so the read succeeds.
         let tmp = tempdir().unwrap();
         let (msg, is_error) = execute(
             &serde_json::json!({"path": "/etc/hostname"}),
@@ -397,22 +385,29 @@ mod tests {
             None,
         )
         .await;
-        assert!(is_error);
-        assert!(msg.contains("rejected") || msg.contains("outside"));
+        assert!(!is_error, "project-outside read must succeed (boundary moved to permission layer): {msg}");
+        assert!(!msg.is_empty());
     }
 
     #[tokio::test]
-    async fn execute_rejects_relative_traversal() {
+    async fn execute_relative_traversal_not_boundary_rejected() {
+        // read-side decouple: relative traversal is no longer tool-layer
+        // boundary-rejected. The path may resolve to a missing file
+        // (tempdir-depth dependent) → IO error is fine; a boundary error
+        // ("outside project root" / "rejected") is NOT — boundary is gone
+        // for read 族.
         let tmp = tempdir().unwrap();
-        let (msg, is_error) = execute(
+        let (msg, _is_error) = execute(
             &serde_json::json!({"path": "../../etc/hostname"}),
             &test_ctx(&tmp),
             None,
             None,
         )
         .await;
-        assert!(is_error);
-        assert!(msg.contains("rejected") || msg.contains("outside") || msg.contains("cannot be resolved"));
+        assert!(
+            !msg.contains("outside project root") && !msg.contains("rejected"),
+            "tool layer must not boundary-reject relative traversal; got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -434,9 +429,10 @@ mod tests {
         )
         .await;
         assert!(is_error);
-        // Boundary check rejects nonexistent files (canonicalize
-        // fails), so the error is "rejected", not "Failed to read".
-        assert!(content.contains("rejected") || content.contains("Failed to read"));
+        // read-side decouple (2026-07-01): tool-layer boundary gone →
+        // nonexistent files now surface as a tokio IO error ("Failed to
+        // read"), not a boundary "rejected".
+        assert!(content.contains("Failed to read"));
     }
 
     /// When a guard + session_id are provided, the read is recorded.

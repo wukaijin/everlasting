@@ -85,6 +85,7 @@ pub(super) async fn worker_ctx_with_db() -> (
         // collapse-to-Deny paths). Tests that DO exercise the cache
         // construct their own PermissionContext with Some(Arc<...>).
         run_grants: None,
+        worktree_path: std::path::PathBuf::from("/repo"),
     };
     (pool, store, sink, ctx, tokio_util::sync::CancellationToken::new())
 }

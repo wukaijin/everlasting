@@ -194,6 +194,12 @@ pub struct PermissionContext {
     /// (tool / prefix / path — mirrors the DB table's three
     /// variants).
     pub run_grants: Option<Arc<RunGrantCache>>,
+    /// read-side boundary decouple (2026-07-01): project-root anchor for
+    /// deny-list / allow-list's "项目外"判定. 权限层现有 ask-vs-Allow 的
+    /// anchor 仍是 `cwd`(历史不变); deny/allow 的"项目外"触发用本字段
+    /// (= 项目根),避免 session cwd 是子目录时项目根文件被误判 outside.
+    /// caller(`chat_loop`) 填入已 canonicalize 的 worktree_path.
+    pub worktree_path: std::path::PathBuf,
 }
 
 // ---------------------------------------------------------------------------

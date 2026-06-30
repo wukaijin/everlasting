@@ -71,6 +71,7 @@
 //! `docs/IMPLEMENTATION.md §4` for the ADR.
 
 pub mod dangerous;
+pub mod sensitive;
 pub mod shell_trust;
 pub mod types;
 pub mod store;

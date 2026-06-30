@@ -525,6 +525,7 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
         is_worker: true,
         worker_run_id: Some("worker-run-grant".to_string()),
         run_grants: Some(cache.clone()),
+        worktree_path: std::path::PathBuf::from("/repo"),
     };
 
     // Snapshot the parent grant table BEFORE — must start empty.
@@ -622,6 +623,7 @@ async fn worker_ask_allow_once_does_not_write_run_grant_cache() {
         is_worker: true,
         worker_run_id: Some("worker-run-once".to_string()),
         run_grants: Some(cache.clone()),
+        worktree_path: std::path::PathBuf::from("/repo"),
     };
 
     let store_for_resolve = store.clone();
@@ -708,6 +710,7 @@ async fn check_worker_run_grant_hit_short_circuits_ask_path() {
         is_worker: true,
         worker_run_id: Some("worker-run-hit".to_string()),
         run_grants: Some(cache.clone()),
+        worktree_path: std::path::PathBuf::from("/repo"),
     };
 
     // Call `check()` directly — the production entry point the

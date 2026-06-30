@@ -21,7 +21,6 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 use crate::llm::types::ToolDef;
-use crate::projects::boundary::assert_within_root;
 use crate::tools::ToolContext;
 
 /// Per-line cap from pi_agent_rust's `GREP_MAX_LINE_LENGTH`.
@@ -139,23 +138,12 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         .get("path")
         .and_then(|v| v.as_str())
         .unwrap_or(".");
-    let requested = {
-        let p = Path::new(raw_path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            ctx.cwd.join(p)
-        }
-    };
-    let validated_root = match assert_within_root(&ctx.worktree_path, &requested) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                format!("path '{}' rejected: {}", raw_path, e),
-                true,
-            );
-        }
-    };
+    let requested = crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
+    // read-side boundary decouple (2026-07-01): tool-layer
+    // assert_within_root removed for read 族 — project-outside reads
+    // are gated by the permission layer (Tier 2.5 deny + Tier 4 allow
+    // + ask_path). assert_within_root stays for write_file/edit_file.
+    let validated_root = requested;
 
     // 2. Build the rg command. The default is to respect .gitignore
     //    (no -u / -uu / -uuu flags), matching claude-code behavior.
