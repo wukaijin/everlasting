@@ -207,6 +207,7 @@ re-running all 36 integration tests + cargo check.
 | 2026-06-20 | 21 | B6 PR2b (RULE-A-014) | `is_worker: Option<bool>` | thread `is_worker` to nested `run_chat_loop` so Tier 4 `ask_path` / `ask_shell` collapses to `Deny` on the worker path (workers have no UI sink) |
 | 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None` |
 | 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override (pre-fix `_worker_system_prompt` was dead code; the worker silently inherited the parent's `assemble_system_prompt` output, causing prompt/permission contradictions in Edit/Plan mode); production + 36 `agent_loop_*` tests pass `None`, the worker nested call passes `Some(assemble_subagent_prompt(def, &task))` |
+| 2026-06-30 | 24 | `06-30-explicit-agent-dispatch` | `forced_dispatch: Option<ForcedDispatch>` | user `@@<agent> <task>` prefix → turn-1 short-circuit bypasses `provider.stream` (parent LLM zero calls) + reuses `run_subagent` directly; production passes the parsed `ForcedDispatch` (or `None`), worker nested + all tests pass `None` |
 
 The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
 single 2-week window) is the largest single jump. It is justified because
@@ -1100,5 +1101,23 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 | `l3b_worker_with_isolation_runs_in_worker_worktree` | dispatch_subagent with isolation=true → worker's tool calls observe a different `ToolContext.worktree_path` than the parent's session row |
 | `l3b_worker_with_isolation_false_runs_in_parent_worktree` | dispatch_subagent with isolation=false → worker's tool calls run in parent session's worktree (legacy behavior preserved) |
 | `resolve_isolation_truth_table` | 4-row merge semantics from `tool-contract.md §dispatch_subagent isolation` table |
+
+## Pattern: Forced dispatch — `@@` explicit dispatch (2026-06-30)
+
+**Problem**: `dispatch_subagent` is an LLM-owned tool — the model decides whether + which worker to run. The user had no way to force a specific agent (e.g. `@@spec-auditor 审一下 X.md`) without the LLM judging whether to comply.
+
+**Mechanism** (`06-30-explicit-agent-dispatch`): a `@@<agent> <task>` input prefix is parsed by the frontend (`chat.ts send()`) into a `ForcedDispatch { subagent, task }`, threaded through the `chat` Tauri command → `run_chat_loop`'s 24th param `forced_dispatch: Option<ForcedDispatch>`.
+
+**Turn-1 short-circuit** (sits AFTER the user-message persist site, BEFORE `for turn in 1..=turn_limit`): when `Some(fd)`, the loop:
+1. emits `ChatEvent::Start` + a synthetic `dispatch_subagent` `tool:call` (`tool_use_id = "forced_{rid}-{seq}"`);
+2. calls `run_subagent(...)` directly — **`provider.stream` is NOT called** (this is the load-bearing invariant: the parent LLM contributes zero calls);
+3. emits the worker's summary as `tool:result` + `ChatEvent::Delta` (assistant text) + `ChatEvent::Done`;
+4. persists the assistant turn (`Blocks = [ToolUse(dispatch), Text(summary)]`) + returns. **Forced dispatch runs exactly ONE turn** — no follow-up LLM loop.
+
+**Reuses `run_subagent` verbatim** — the 19 params mirror the LLM-driven interceptor at `chat_loop.rs:2374` (force_readonly=false, parallel=false → single serial dispatch; isolation falls back to the subagent's frontmatter default via `resolve_isolation`). The permission chain (worker inherits parent Mode → `WorkerAskBanner`) is unchanged.
+
+**Why this isn't a new dispatch path**: it's the same `run_subagent` the LLM-driven interceptor uses, just triggered by a user prefix instead of an LLM `tool_use`. The only thing the prefix skips is `provider.stream` on the parent's turn 1.
+
+**Test**: `agent_loop_forced_dispatch_runs_worker_without_llm` asserts `mock.call_count() == 1` (only the worker's single turn — the parent contributed zero LLM calls).
 | `builtin_*_defaults_to_isolated` | `general-purpose.isolation == Some(true)`, `researcher.isolation == None` |
 | `probe_worker_changes_*` (3 tests in dispatch.rs) | empty worktree → no changes; tracked edit → changes; untracked file → changes |
