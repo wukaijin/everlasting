@@ -345,7 +345,18 @@ export const useChatStore = defineStore("chat", () => {
       // its ref. Done here (not in the projects store) so the
       // persistence lives next to the read path (config.load) for
       // cohesion.
-      configStore.lastActiveProjectId = newId;
+      //
+      // Guard against null: this watcher is `immediate`, so it fires
+      // once synchronously at store creation — before
+      // `ChatWindow.onMounted` has restored the saved project. At
+      // that moment `currentProjectId` is still null, and writing
+      // null here would overwrite the just-restored
+      // `lastActiveProjectId` and (via the config store's own
+      // watcher) delete the localStorage key, so every cold start
+      // fell back to the first project. Only persist real selections.
+      if (newId !== null) {
+        configStore.lastActiveProjectId = newId;
+      }
       await onProjectChange(newId);
     },
     { immediate: true },
