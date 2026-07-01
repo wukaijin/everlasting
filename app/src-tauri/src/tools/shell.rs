@@ -252,9 +252,8 @@ pub fn definition() -> ToolDef {
              Outputs over 30 KB are saved to `<cwd>/.everlasting/outputs/<id>.txt`; \
              the tool returns the path plus a short preview so you can read the \
              full file with read_file.\n\n\
-             Environment is restricted to a safe allowlist \
-             (PATH/HOME/USER/LOGNAME/LANG/LANGUAGE/LC_ALL/TERM/TZ/TMPDIR). \
-             API keys and tokens from the agent process are NOT inherited.\n\n\
+             Environment is restricted to a safe allowlist; API keys and tokens \
+             from the agent process are NOT inherited.\n\n\
              Avoid `find -exec` / `-execdir`: they are blocked by the permission \
              kill list (find would run an arbitrary command). To act on find's \
              results, pipe with `-print0 | xargs -0` — e.g. `find . -name '*.ts' \

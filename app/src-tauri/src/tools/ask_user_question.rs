@@ -110,19 +110,12 @@ pub fn definition() -> ToolDef {
         name: "ask_user_question".to_string(),
         description: Some(
             "Ask the user one to four structured multi-choice questions to gather \
-             preferences or clarify ambiguous requirements. Each question should \
-             have 2 to 4 options, each option may have a short description and an \
-             optional markdown preview. Use this ONLY when you genuinely need \
-             user input to proceed (architecture choice, ambiguous requirement, \
-             preference) — NOT for routine exploration tasks (use read_file / \
-             grep / shell instead). The user can answer or skip the question. \
-             Plan / Edit / Yolo modes all support this — it is not a permission \
-             gate, just an information request.\n\n\
-             Constraints:\n\
-             - questions: 1..=4\n\
-             - options per question: 2..=4\n\
-             - header (optional, shown as a card chip): ≤12 characters\n\
-             - When the user clicks 跳过, the tool returns is_error: true with \
+             preferences or clarify ambiguous requirements. Use this ONLY when you \
+             genuinely need user input to proceed (architecture choice, ambiguous \
+             requirement, preference) — NOT for routine exploration tasks (use \
+             read_file / grep / shell instead). Plan / Edit / Yolo modes all support \
+             this — it is not a permission gate, just an information request.\n\n\
+             When the user clicks 跳过, the tool returns is_error: true with \
              {\"cancelled\": true} — continue without that input."
                 .to_string(),
         ),

@@ -160,10 +160,7 @@ pub fn definition() -> ToolDef {
              `researcher` (read-only: read_file / grep / glob / list_dir / \
              web_fetch) and `general-purpose` (full toolset minus dispatch_subagent \
              / update_checklist / background-shell tools). The worker inherits the \
-             parent's permission Mode: Yolo → all-allow; Edit/Plan → a tool that \
-             needs confirmation (writes, shells, web_fetch without a prior grant) \
-             surfaces a `WorkerAskBanner` in the parent's UI for the user to \
-             allow/deny (120s timeout denies).\n\n\
+             parent's permission Mode.\n\n\
              B (2026-06-30): worktree isolation is decided automatically by the \
              system based on dispatch shape — you usually do NOT need to set \
              `isolation`. A single dispatch_subagent per turn runs in the parent \

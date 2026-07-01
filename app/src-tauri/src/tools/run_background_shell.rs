@@ -86,9 +86,8 @@ pub fn definition() -> ToolDef {
              Output handling (same as the synchronous `shell` tool): outputs > 30 KB are \
              saved to `<cwd>/.everlasting/outputs/<id>.txt`; the status response then carries \
              the path plus a 1 KB head+tail preview.\n\n\
-             Environment is restricted to a safe allowlist \
-             (PATH/HOME/USER/LOGNAME/LANG/LANGUAGE/LC_ALL/TERM/TZ/TMPDIR). \
-             API keys and tokens from the agent process are NOT inherited."
+             Environment is restricted to a safe allowlist; API keys and tokens \
+             from the agent process are NOT inherited."
                 .to_string(),
         ),
         input_schema: serde_json::json!({

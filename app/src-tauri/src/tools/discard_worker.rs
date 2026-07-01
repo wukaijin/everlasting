@@ -51,11 +51,9 @@ pub fn definition() -> ToolDef {
             "Discard a completed worker subagent's preserved changes (the `worker/<run_id>` \
              branch + worktree) without merging. Use this when the worker's output isn't \
              wanted — the task was exploratory, the changes are wrong, or the user explicitly \
-             rejected them.\n\n\
+             rejected them. The parent session's branch is never affected.\n\n\
              On success, the worker worktree + branch are destroyed and the \
-             `subagent_runs.worktree_path` column is cleared. The parent session's branch is \
-             NOT affected (the worker's commits live on a separate branch and never made it \
-             into the parent's history).\n\n\
+             `subagent_runs.worktree_path` column is cleared.\n\n\
              Errors:\n\
              - `run_id` is unknown → \"worker run not found\"\n\
              - The worker has no worktree to discard (already merged or previously discarded) \

@@ -45,12 +45,9 @@ pub fn definition() -> ToolDef {
         description: Some(
             "Query the status of a background shell started by `run_background_shell`. \
              Pass the `shell_session_id` (the `bsh_<uuid>` handle) returned by the start \
-             call. Returns the current state: `running` (still executing), `completed` \
-             (exited normally; carries stdout/stderr previews plus an optional full-output \
-             path when the output exceeded 30 KB), or `killed` (terminated by `shell_kill`, \
-             session delete, app shutdown, or `max_runtime_ms` timeout). Output > 30 KB is \
-             saved to `<cwd>/.everlasting/outputs/<id>.txt`; the response then includes the \
-             path so you can `read_file` the full output.\n\n\
+             call. The response carries the current state, stdout/stderr previews, and a \
+             path to the full output when it exceeds 30 KB (saved to \
+             `<cwd>/.everlasting/outputs/<id>.txt` — `read_file` it for details).\n\n\
              Call this after the `[system] 后台 shell ... 已完成...` notification arrives, \
              or while the shell is still running to poll progress."
                 .to_string(),

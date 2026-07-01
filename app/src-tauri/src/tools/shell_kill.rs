@@ -41,8 +41,8 @@ pub fn definition() -> ToolDef {
         name: "shell_kill".to_string(),
         description: Some(
             "Force-terminate a background shell started by `run_background_shell`. \
-             Pass the `shell_session_id` (the `bsh_<uuid>` handle). The entire process group \
-             is SIGKILLed, so backgrounded descendants are reaped along with the direct child.\n\n\
+             The entire process group is SIGKILLed, so backgrounded descendants are \
+             reaped along with the direct child.\n\n\
              Idempotent: killing an already-completed shell is a no-op (returns success). \
              Use this when a long-running command is no longer needed — for example, the \
              build is taking too long and you want to try a different approach."

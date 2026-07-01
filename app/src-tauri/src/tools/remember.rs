@@ -62,21 +62,15 @@ pub fn definition() -> ToolDef {
     ToolDef {
         name: "remember".to_string(),
         description: Some(
-            "Persist a piece of long-term, cross-session experience memory. Use this when \
-             you discover a reusable pitfall, preference, fact, or decision that future \
-             sessions would benefit from recalling. The memory is written at `candidate` \
-             status and surfaces in future sessions via the session-start recall (matched \
-             against the user's latest message). Write CONCISE experience text — one \
-             sentence a future you can act on, NOT a log dump.\n\n\
+            "Persist a cross-session experience memory (pitfall / preference / fact / \
+             decision). Written at `candidate` status; future sessions auto-recall it. \
+             Write CONCISE text — one sentence a future you can act on, NOT a log dump.\n\n\
              When to remember:\n\
              - A tool failed ≥ 2 times in a row for the same reason and you eventually \
                worked around it (pitfall).\n\
-             - The user explicitly corrected your approach ('no, do it this way') — \
-               capture the correction (preference / pitfall).\n\
-             - You discovered a non-obvious project convention (build flag, env var, \
-               path alias) that isn't in the docs (fact).\n\
-             - An architectural / design choice was made that constrains future work \
-               (decision).\n\n\
+             - The user explicitly corrected your approach ('no, do it this way').\n\
+             - You discovered a non-obvious project convention not in the docs (fact).\n\
+             - An architectural / design choice was made that constrains future work.\n\n\
              Do NOT remember:\n\
              - API keys, tokens, secrets, passwords (rejected by the safety net).\n\
              - User PII / home-directory paths (auto-generalized to `~/`).\n\
