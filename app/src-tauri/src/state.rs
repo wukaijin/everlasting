@@ -239,6 +239,12 @@ impl AppState {
             .path()
             .app_data_dir()
             .expect("failed to resolve app_data_dir");
+        // 2026-07-01 follow-up: 让受信 allow-list 包含动态段
+        // `<app_data_dir>/worktrees/**`(session + worker worktree root),
+        // 见 `permissions::sensitive::init_trusted_external`。在 SQL /
+        // catalog / cache 之前调 —— 任何 read 触发 Tier 4 都需要这个 set
+        // 已就绪。Idempotent,重复调用是 no-op。
+        crate::agent::permissions::sensitive::init_trusted_external(&app_data_dir);
         let db_path = app_data_dir.join("everlasting.db");
         let db = crate::db::init_pool(&db_path)
             .await

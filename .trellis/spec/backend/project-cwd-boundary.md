@@ -189,7 +189,11 @@ pub fn is_within_root(root: &Path, target: &Path) -> bool
 read 族(`read_file` / `grep` / `glob` / `list_dir`)的 tool 层 `assert_within_root` 已**移除**(见 §5 末条)。项目外读改由权限层两份 static list 受控:
 
 - **deny-list**(Tier 2.5,`check.rs`,早于 yolo bypass):项目外路径命中即硬 `Deny`、含 yolo、不可绕过。中等档 pattern:`~/.ssh/**`、`**/*.pem`/`*.key`/`*.p12`/`*.keystore`、`/etc/shadow`、`**/.env`(枚举 `.env.local`/`.production`,不挡 `.env.example`)、`**/*credentials*`/`*secret*`、`~/.aws/credentials`/`.netrc`/`.npmrc`/`.docker/config.json`。**仅项目外 lexical**生效(项目内真 `.env`/`*.pem` 信任);**项目内 symlink 逃逸**额外挡(canonicalize 后到项目外且敏感 → `Deny`,恢复原 tool 层 `assert_within_root` 的 symlink 保护)。
-- **allow-list**(Tier 4 Path 分支,项目外、ask 前):`~/.config/everlasting/**` 免 `ask_path` 直接 `Allow` + 审计。
+- **allow-list**(Tier 4 Path 分支,项目外、ask 前):两段 pattern 命中即免 `ask_path` 直接 `Allow` + 审计:
+  - static 段 `~/.config/everlasting/**`(`permissions::sensitive::STATIC_TRUSTED_EXTERNAL_PATTERNS`)
+  - 动态段 `<app_data_dir>/worktrees/**`(`build_trusted_external_patterns` + `init_trusted_external` 在 `AppState::load` 解析完 `app_data_dir` 后注入,覆盖 session worktree `<dir>/worktrees/<project_uuid>/<session_uuid>` + worker worktree `<dir>/worktrees/<project_uuid>/worker/<run_id>`)
+  - 为什么需要动态段:worktree 是 agent 自己的运行时数据(任务上下文经常需要 cross-file 看),`~/.config/...` 同款免 ask 理由。平台差异(Linux `/root/.local/share/<bundle-id>/` / macOS `~/Library/...` / Windows `%APPDATA%\...`) + bundle id 从 `tauri.conf.json::identifier` 读,不能硬编码绝对路径。
+  - Idempotent init:重复调用 `init_trusted_external` 是 no-op(first writer wins),`app_data_dir` 进程内固定。
 - **优先级**:deny-list > allow-list > ask(`check.rs` 调用顺序保证)。
 - **双 anchor**:`cwd` 决定 ask vs silent-Allow(历史不变);`worktree_path`(项目根)决定 deny/allow 的"项目外"触发 —— 避免 session cwd 是子目录时项目根文件被误判 outside。
 - **匹配**:`globset`(`Cargo.toml` 已在依赖)+ `literal_separator(true)`(`*` 不跨 `/`、`**` 跨)+ `dirs::home_dir()` 展开 `~` + `OnceLock` 缓存编译结果。lexical(不 `canonicalize`)。

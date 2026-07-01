@@ -60,24 +60,55 @@ pub(crate) const SENSITIVE_PATH_PATTERNS: &[&str] = &[
     "~/.docker/config.json",
 ];
 
-/// 受信项目外 allow-list。命中即免 ask 放行(+ 审计)。
+/// 受信项目外 allow-list 的 static 段。基于 `~` 展开(`build_set` 内
+/// `dirs::home_dir()`),与平台无关。
 ///
-/// app 自己的运行时数据目录 —— agent 读 commands / memory / config
-/// 是合理且常见操作,不该每次弹窗(本 task 的原始动机:
-/// `~/.config/everlasting/commands/test-b3.md` 报错)。
-pub(crate) const TRUSTED_EXTERNAL_PATTERNS: &[&str] = &["~/.config/everlasting/**"];
+/// 动态段(worktree root `<app_data_dir>/worktrees/**`)由
+/// [`build_trusted_external_patterns`] 在启动期拼接,见下面 doc。
+pub(crate) const STATIC_TRUSTED_EXTERNAL_PATTERNS: &[&str] = &["~/.config/everlasting/**"];
+
+/// 拼接完整受信 allow-list 列表(static 段 + Tauri 解析的
+/// `<app_data_dir>/worktrees/**`)。
+///
+/// worktree 路径格式(`git::worktree`):
+/// - session worktree:`<app_data_dir>/worktrees/<project_uuid>/<session_uuid>`
+/// - worker worktree: `<app_data_dir>/worktrees/<project_uuid>/worker/<run_id>`
+///
+/// 二者都被 `<dir>/worktrees/**` 覆盖。`agent` 读自己创建的 worktree
+/// 是合理且常见操作(任务上下文往往需要 cross-file 看),不该每次弹窗
+/// (本 task 的原始动机:`read_file ~/.config/...` 不该卡 worktree 同款
+/// friction)。
+///
+/// 为什么需要动态 `<app_data_dir>` 而非硬编码 `/root/.local/share/...`:
+/// 1. 平台差异: Linux `/root/.local/share/<bundle-id>/` / macOS
+///    `~/Library/Application Support/<bundle-id>/` / Windows
+///    `%APPDATA%\<bundle-id>\`,硬编码任一种在另两个 OS 都会误判
+///    (allow 漏命中 / 误命中别处)。
+/// 2. bundle id 从 `tauri.conf.json::identifier` 读(staging / dev /
+///    prod build 可能不同),Rust 端不应写死,只读 Tauri 解析结果。
+pub(crate) fn build_trusted_external_patterns(app_data_dir: &Path) -> Vec<String> {
+    let mut patterns: Vec<String> = STATIC_TRUSTED_EXTERNAL_PATTERNS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    if !app_data_dir.as_os_str().is_empty() {
+        patterns.push(format!("{}/worktrees/**", app_data_dir.display()));
+    }
+    patterns
+}
 
 /// 把 pattern 列表编译成 GlobSet。`~` 展开为 home dir;
 /// `literal_separator(true)` 让 `*` 不跨 `/`、`**` 跨。
 ///
 /// panic 只在 pattern 语法非法时(开发期错误,非运行期输入)。
-fn build_set(patterns: &[&str]) -> GlobSet {
+fn build_set<S: AsRef<str>>(patterns: &[S]) -> GlobSet {
     let home = dirs::home_dir()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut b = globset::GlobSetBuilder::new();
     for p in patterns {
-        let expanded = if let Some(rest) = p.strip_prefix("~/") {
+        let pat = p.as_ref();
+        let expanded = if let Some(rest) = pat.strip_prefix("~/") {
             if home.is_empty() {
                 // home 解析失败(Linux 之外的极端环境)—— 退化为 strip 后的
                 // 相对 pattern,匹配大概率失败但不 panic。
@@ -86,27 +117,48 @@ fn build_set(patterns: &[&str]) -> GlobSet {
                 format!("{}/{}", home, rest)
             }
         } else {
-            (*p).to_string()
+            pat.to_string()
         };
         let glob = GlobBuilder::new(&expanded)
             .literal_separator(true)
             .build()
-            .unwrap_or_else(|e| panic!("invalid sensitive-path pattern {p:?}: {e}"));
+            .unwrap_or_else(|e| panic!("invalid sensitive-path pattern {pat:?}: {e}"));
         b.add(glob);
     }
     b.build()
-        .unwrap_or_else(|e| panic!("sensitive-path GlobSet build failed: {e}"))
+        .unwrap_or_else(|e| panic!("invalid sensitive-path pattern set: {e}"))
 }
 
 static SENSITIVE_SET: OnceLock<GlobSet> = OnceLock::new();
 static TRUSTED_SET: OnceLock<GlobSet> = OnceLock::new();
+
+/// One-time 初始化受信 allow-list 集合。**必须**在 `AppState::load`
+/// 解析完 `app_data_dir` 之后调用,否则动态 worktree pattern 缺失。
+///
+/// Idempotent:重复调用是 no-op(first writer wins;后续调用 `warn!`
+/// 一行)。用不同 dir 重复调用**忽略后者** —— `app_data_dir` 在进程
+/// 生命周期内固定,后续重 init 用不同值是 caller bug。
+pub fn init_trusted_external(app_data_dir: &Path) {
+    let patterns = build_trusted_external_patterns(app_data_dir);
+    let set = build_set(&patterns);
+    if TRUSTED_SET.set(set).is_err() {
+        tracing::warn!(
+            app_data_dir = %app_data_dir.display(),
+            "init_trusted_external called more than once; first call wins (subsequent dir ignored)"
+        );
+    }
+}
 
 fn sensitive_set() -> &'static GlobSet {
     SENSITIVE_SET.get_or_init(|| build_set(SENSITIVE_PATH_PATTERNS))
 }
 
 fn trusted_set() -> &'static GlobSet {
-    TRUSTED_SET.get_or_init(|| build_set(TRUSTED_EXTERNAL_PATTERNS))
+    // 如果 `init_trusted_external` 从未调用(tests / CLI 工具 / 早期
+    // boot 路径),回退到 static-only set —— 与 pre-init 行为一致
+    // (仅 `~/.config/everlasting/**`)。生产路径走 `AppState::load`,
+    // 任意 read 触发前 init 已完成。
+    TRUSTED_SET.get_or_init(|| build_set(STATIC_TRUSTED_EXTERNAL_PATTERNS))
 }
 
 /// `abs_path` 是否命中敏感路径 deny-list。lexical 匹配(不 canonicalize)。
@@ -120,7 +172,8 @@ pub fn is_sensitive_path(abs_path: &Path) -> bool {
 /// `abs_path` 是否命中受信项目外 allow-list。lexical 匹配。
 ///
 /// caller(`check.rs` Tier 4 Path 分支)在项目外、deny 未命中、`ask_path`
-/// 之前调用。
+/// 之前调用。完整 set 包含 `~/.config/everlasting/**`(static) +
+/// `<app_data_dir>/worktrees/**`(动态,见 `init_trusted_external`)。
 pub fn is_trusted_external(abs_path: &Path) -> bool {
     trusted_set().is_match(abs_path)
 }
@@ -218,5 +271,62 @@ mod tests {
         let candidate = home().join(".config/everlasting/commands/test-b3.md");
         assert!(is_trusted_external(&candidate));
         assert!(!is_sensitive_path(&candidate));
+    }
+
+    // === 动态段:`<app_data_dir>/worktrees/**` ===
+    //
+    // 测 `build_trusted_external_patterns` + `build_set` 的纯函数行为,
+    // 不污染全局 `TRUSTED_SET`(那是 `init_trusted_external` 的职责,
+    // 生产代码 `AppState::load` 调一次,测试不能动)。校验:
+    //   1. pattern 列表里包含 `<dir>/worktrees/**`
+    //   2. 编译出来的 set 命中 session worktree + worker worktree + 嵌套
+    //   3. static 段(`~/.config/everlasting/**`)仍然命中 —— init 不能
+    //      丢掉原 allow-list
+    //   4. 不相关子目录(如 `<dir>/not-worktrees/...`)不命中
+    #[test]
+    fn dynamic_worktree_pattern_builds_and_matches() {
+        let test_dir = std::path::PathBuf::from("/tmp/everlasting-test-app-data");
+        let patterns = build_trusted_external_patterns(&test_dir);
+        // 1. pattern 列表包含 worktree 段
+        let wt_pattern = format!("{}/worktrees/**", test_dir.display());
+        assert!(
+            patterns.iter().any(|p| p == &wt_pattern),
+            "patterns 缺 worktree 段: {patterns:?}"
+        );
+        // 1b. static 段保留
+        assert!(
+            patterns.iter().any(|p| p == "~/.config/everlasting/**"),
+            "patterns 缺 static 段: {patterns:?}"
+        );
+
+        // 用该 pattern 列表单独编译 set(纯函数,不动全局)
+        let pattern_refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+        let set = build_set(&pattern_refs);
+
+        // 2. session worktree 命中
+        let session_wt = test_dir.join("worktrees/proj-uuid/sess-uuid/file.rs");
+        assert!(set.is_match(&session_wt));
+        // 2b. 嵌套子目录也命中(`**` 跨 `/`)
+        let nested = test_dir.join("worktrees/proj-uuid/sess-uuid/deep/nested/f");
+        assert!(set.is_match(&nested));
+        // 2c. worker worktree 命中
+        let worker_wt = test_dir.join("worktrees/proj-uuid/worker/run-123/x");
+        assert!(set.is_match(&worker_wt));
+
+        // 3. static 段仍然命中
+        assert!(set.is_match(&home().join(".config/everlasting/commands/x.md")));
+
+        // 4. 不相关子目录不命中
+        assert!(!set.is_match(&test_dir.join("not-worktrees/foo")));
+        // 4b. worktrees 兄弟目录不命中
+        assert!(!set.is_match(&test_dir.join("other/foo")));
+    }
+
+    // 空 app_data_dir 不抛、只生成 static 段(防御性,见
+    // `build_trusted_external_patterns` 的 `is_empty` 分支)。
+    #[test]
+    fn empty_app_data_dir_yields_static_only() {
+        let patterns = build_trusted_external_patterns(std::path::Path::new(""));
+        assert_eq!(patterns, vec!["~/.config/everlasting/**".to_string()]);
     }
 }
