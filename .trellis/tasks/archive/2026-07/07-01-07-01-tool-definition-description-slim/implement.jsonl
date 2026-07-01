@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "工具行为契约(timeout/spillover/env allowlist/SSRF/read-before-edit/do-NOT-retry)——精简 description 时不得违反"}
+{"file": "docs/SESSION-FIRST-MESSAGE-INTERFACE.md", "reason": "首次请求字节 baseline + tools 段拆解,measure_tools.py 的数据来源"}
