@@ -15,8 +15,8 @@ use crate::projects::DEFAULT_PROJECT_ID;
 use super::{
     migrations::run_migrations,
     permissions::{
-        grant_tool_permission, has_tool_permission, list_audit_events, record_audit_event,
-        update_session_mode,
+        grant_tool_permission, has_tool_permission, list_audit_events, list_tool_permissions,
+        record_audit_event, revoke_tool_permission, update_session_mode,
     },
     sessions::{create_session, delete_session, list_sessions, load_session},
 };
@@ -422,5 +422,204 @@ async fn mode_backfill_legacy_null_to_edit() {
  .await
  .unwrap();
  assert_eq!(mode.as_deref(), Some("edit"));
+}
+
+// ---------------------------------------------------------------------------
+// Task 07-01 (permission-grant list management UI): list + revoke
+// ---------------------------------------------------------------------------
+
+/// `list_tool_permissions` on a fresh session returns an empty Vec
+/// (NOT an error) — the management modal renders its empty-state
+/// placeholder against this shape.
+#[tokio::test]
+async fn list_tool_permissions_empty_session_returns_empty_vec() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
+    assert!(rows.is_empty());
+}
+
+/// The three live match_kind dimensions (tool / prefix / path) all
+/// round-trip through `list_tool_permissions` with their match_value
+/// intact (NULL for tool, glob for path, token for prefix), so the
+/// UI can render each row distinctly.
+#[tokio::test]
+async fn list_tool_permissions_returns_all_three_match_kinds() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // tool kind (match_value = NULL) — e.g. web_fetch.
+    grant_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+    // path kind — e.g. read_file on a glob.
+    grant_tool_permission(&pool, &s.id, "read_file", "path", Some("src/*"))
+        .await
+        .unwrap();
+    // prefix kind — e.g. shell on a command prefix.
+    grant_tool_permission(&pool, &s.id, "shell", "prefix", Some("cargo"))
+        .await
+        .unwrap();
+
+    let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 3);
+
+    // Find each by (tool_name, match_kind) — order is not guaranteed
+    // to match insert order when granted_at ties (same second).
+    let find = |kind: &str, tool: &str| {
+        rows.iter()
+            .find(|r| r.match_kind == kind && r.tool_name == tool)
+            .unwrap_or_else(|| panic!("missing {kind} {tool} row"))
+    };
+    assert!(
+        find("tool", "web_fetch").match_value.is_none(),
+        "tool kind match_value must be NULL"
+    );
+    assert_eq!(find("path", "read_file").match_value.as_deref(), Some("src/*"));
+    assert_eq!(find("prefix", "shell").match_value.as_deref(), Some("cargo"));
+}
+
+/// **design D2 — the NULL match_value pitfall**: revoking a
+/// `match_kind='tool'` row (match_value IS NULL) must actually
+/// delete it. A naive `WHERE match_value = ?` bound to NULL would
+/// silently match 0 rows (revoke looks successful but the grant
+/// survives). This test fails if the NULL branch is ever dropped.
+#[tokio::test]
+async fn revoke_tool_permission_null_value_tool_kind() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    grant_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+    assert!(has_tool_permission(&pool, &s.id, "web_fetch").await.unwrap());
+
+    revoke_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+    assert!(
+        !has_tool_permission(&pool, &s.id, "web_fetch").await.unwrap(),
+        "revoking a tool-kind (NULL match_value) grant must actually delete it (design D2)"
+    );
+    let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
+    assert!(rows.is_empty());
+}
+
+/// Revoking one PK row must NOT touch sibling grants on the same
+/// `tool_name` under a different `match_kind`/`match_value`. This
+/// is the whole reason revoke is per-PK, not per-tool — e.g.
+/// revoking one read_file path glob must keep the others.
+#[tokio::test]
+async fn revoke_tool_permission_preserves_sibling_grants() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    grant_tool_permission(&pool, &s.id, "read_file", "path", Some("src/*"))
+        .await
+        .unwrap();
+    grant_tool_permission(&pool, &s.id, "read_file", "path", Some("docs/*"))
+        .await
+        .unwrap();
+    grant_tool_permission(&pool, &s.id, "shell", "prefix", Some("cargo"))
+        .await
+        .unwrap();
+
+    // Revoke just the src/* path row.
+    revoke_tool_permission(&pool, &s.id, "read_file", "path", Some("src/*"))
+        .await
+        .unwrap();
+
+    let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 2, "only the src/* row must be deleted");
+    assert!(
+        !rows.iter().any(|r| r.tool_name == "read_file"
+            && r.match_value.as_deref() == Some("src/*")),
+        "the revoked src/* row must be gone"
+    );
+    assert!(
+        rows.iter().any(|r| r.tool_name == "read_file"
+            && r.match_value.as_deref() == Some("docs/*")),
+        "the sibling docs/* row must survive"
+    );
+    assert!(
+        rows.iter().any(|r| r.tool_name == "shell"
+            && r.match_value.as_deref() == Some("cargo")),
+        "the unrelated shell prefix row must survive"
+    );
+}
+
+/// Revoking a grant on session A must not affect session B's grants
+/// (the DELETE is scoped by session_id).
+#[tokio::test]
+async fn revoke_tool_permission_is_session_scoped() {
+    let pool = make_pool().await;
+    let a = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let b = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    grant_tool_permission(&pool, &a.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+    grant_tool_permission(&pool, &b.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+
+    revoke_tool_permission(&pool, &a.id, "web_fetch", "tool", None)
+        .await
+        .unwrap();
+    assert!(!has_tool_permission(&pool, &a.id, "web_fetch").await.unwrap());
+    assert!(
+        has_tool_permission(&pool, &b.id, "web_fetch").await.unwrap(),
+        "session B's grant must survive revoking session A's"
+    );
 }
 

@@ -184,6 +184,10 @@ pub fn run() {
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,
             commands::permissions::grant_tool_permission,
+            // Permission-grant management UI (task 07-01):
+            // list + per-PK revoke of "always allow" rows.
+            commands::permissions::list_session_tool_permissions,
+            commands::permissions::revoke_tool_permission,
             // C4 (Audit-log query UI, 2026-06-14) — read-side
             // command for the AuditLogModal. The write side (⑩
             // `tool_executed`) lands in the agent loop.

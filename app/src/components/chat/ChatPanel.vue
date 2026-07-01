@@ -46,6 +46,7 @@ import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
+import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
 import WorkerAskBanner from "./WorkerAskBanner.vue";
 import Icon from "../Icon.vue";
@@ -355,6 +356,16 @@ const memoryModalOpen = ref(false);
 const auditModalOpen = ref(false);
 
 // -----------------------------------------------------------------------
+// Permission-grant management entry (task 07-01-permission-grant-list-ui)
+// -----------------------------------------------------------------------
+//
+// A key icon button next to the Audit button opens the
+// PermissionGrantsModal. Same session-scoped gating as audit
+// (v-if on currentSessionId) — grants live at the session level.
+// The watcher below closes it on session switch.
+const grantsModalOpen = ref(false);
+
+// -----------------------------------------------------------------------
 // B12 Checklist (PR2 frontend, 2026-06-19): the current session's
 // checklist. The card reads this off the checklist store + current
 // session id. `null` hides the card (no update_checklist seen this
@@ -379,6 +390,10 @@ watch(
     // the new id).
     if (auditModalOpen.value) {
       auditModalOpen.value = false;
+    }
+    // Same close-on-switch for the grants modal (task 07-01).
+    if (grantsModalOpen.value) {
+      grantsModalOpen.value = false;
     }
   },
 );
@@ -475,6 +490,23 @@ if (typeof window !== "undefined") {
           @click="auditModalOpen = true"
         >
           <Icon name="shield-check" :size="14" />
+        </button>
+        <!--
+                  Permission-grant management entry (task
+                  07-01-permission-grant-list-ui). Sits next to the
+                  Audit button — same session scope, same chip-family
+                  icon button. Opens the PermissionGrantsModal which
+                  lists + revokes the session's "always allow" rows.
+                -->
+        <button
+          v-if="chatStore.currentSessionId"
+          class="chat-panel__grants-btn"
+          type="button"
+          title="管理「始终允许」放行"
+          aria-label="Permissions"
+          @click="grantsModalOpen = true"
+        >
+          <Icon name="key" :size="14" />
         </button>
         <!--
                   PR2 RULE-FrontSubagent-003 (2026-06-22): worker ask
@@ -584,6 +616,14 @@ if (typeof window !== "undefined") {
           closes the modal on session switch.
         -->
     <AuditLogModal v-model:open="auditModalOpen" />
+
+    <!--
+          Permission-grant management modal (task 07-01). Same reka-ui
+          Dialog shell + load-on-open watcher pattern as AuditLogModal.
+          The watcher on `chatStore.currentSessionId` closes it on
+          session switch.
+        -->
+    <PermissionGrantsModal v-model:open="grantsModalOpen" />
 
     <!--
           B12 Checklist (PR2 frontend, 2026-06-19). Floating
@@ -837,6 +877,36 @@ if (typeof window !== "undefined") {
 }
 
 .chat-panel__audit-btn:active {
+  background: var(--color-bg-border);
+}
+
+/* Permission-grant management entry (task 07-01). Visually
+   identical to the audit/memory buttons — the three read as a
+   chip-family group of "session inspector" actions. */
+.chat-panel__grants-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  font-family: inherit;
+}
+
+.chat-panel__grants-btn:hover {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.chat-panel__grants-btn:active {
   background: var(--color-bg-border);
 }
 

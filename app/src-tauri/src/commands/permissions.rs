@@ -302,6 +302,62 @@ pub async fn grant_tool_permission(
  }
 }
 
+// ---------------------------------------------------------------------------
+// Permission-grant management UI (task 07-01-permission-grant-list-ui)
+// ---------------------------------------------------------------------------
+
+/// Read every "always allow" row for a session, newest first. Wired
+/// to the permission-grant management modal's "load on open" call.
+/// Each row carries its `match_kind` + `match_value` so the UI can
+/// render path globs / shell prefixes distinctly and revoke a single
+/// PK row without touching sibling grants. Empty / missing session
+/// returns an empty `Vec` (NOT an error) — the modal renders its
+/// empty-state placeholder.
+#[tauri::command]
+pub async fn list_session_tool_permissions(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::PermissionGrantRow>, String> {
+    db::list_tool_permissions(&state.db, &session_id)
+        .await
+        .map_err(|e| format!("list_session_tool_permissions failed: {}", e))
+}
+
+/// Revoke ONE "always allow" row by its full PK. `match_value` is
+/// `None` for `match_kind = "tool"` (matches the NULL the DB stores);
+/// `Some(...)` for `prefix` / `path`. The NULL branch is handled in
+/// `db::revoke_tool_permission` (design D2): passing `None` here must
+/// reach the DB as `IS NULL`, not as a bound NULL parameter (which
+/// would silently match nothing). `match_kind` is validated to keep
+/// parity with `grant_tool_permission`.
+#[tauri::command]
+pub async fn revoke_tool_permission(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_name: String,
+    match_kind: String,
+    match_value: Option<String>,
+) -> Result<(), String> {
+    match match_kind.as_str() {
+        "tool" | "prefix" | "path" => {}
+        other => {
+            return Err(format!(
+                "revoke_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
+                other
+            ))
+        }
+    }
+    db::revoke_tool_permission(
+        &state.db,
+        &session_id,
+        &tool_name,
+        &match_kind,
+        match_value.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("revoke_tool_permission failed: {}", e))
+}
+
 
 // ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events

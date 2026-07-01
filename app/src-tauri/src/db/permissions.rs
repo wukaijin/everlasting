@@ -143,27 +143,103 @@ pub async fn has_tool_permission(
  Ok(row.is_some())
 }
 
-/// Remove all "always allow" rows for `(session_id, tool_name)`.
-/// Used by a future "撤销授权" UI affordance; not wired into
-/// PR1 (the UI doesn't expose it yet, but the backend helper
-/// is here for parity with `grant_tool_permission`).
-#[allow(dead_code)]
+/// Remove ONE "always allow" row identified by its full PK
+/// `(session_id, tool_name, match_kind, match_value)`. Wired to
+/// the permission-grant management UI's per-row "撤销" button
+/// (task 07-01-permission-grant-list-ui).
+///
+/// **NULL match_value (design D2)**: `match_kind = 'tool'` rows
+/// store `match_value IS NULL`. SQLite evaluates
+/// `match_value = NULL` as always-false, so a naive
+/// `WHERE match_value = ?` bound to NULL would silently delete 0
+/// rows (revoke looks successful but the grant survives). We
+/// branch: `None` → `match_value IS NULL`, `Some(v)` →
+/// `match_value = ?`. Covered by the
+/// `revoke_tool_permission_null_value_tool_kind` test.
+///
+/// Only the exact PK row is deleted; sibling grants for the same
+/// `tool_name` under a different `match_kind`/`match_value` (e.g.
+/// other path globs on `read_file`) are preserved.
 pub async fn revoke_tool_permission(
  pool: &SqlitePool,
  session_id: &str,
  tool_name: &str,
+ match_kind: &str,
+ match_value: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+ match match_value {
+ None => {
  sqlx::query(
  r#"
  DELETE FROM session_tool_permissions
  WHERE session_id = ? AND tool_name = ?
+ AND match_kind = ? AND match_value IS NULL
  "#,
  )
  .bind(session_id)
  .bind(tool_name)
+ .bind(match_kind)
  .execute(pool)
  .await?;
+ }
+ Some(v) => {
+ sqlx::query(
+ r#"
+ DELETE FROM session_tool_permissions
+ WHERE session_id = ? AND tool_name = ?
+ AND match_kind = ? AND match_value = ?
+ "#,
+ )
+ .bind(session_id)
+ .bind(tool_name)
+ .bind(match_kind)
+ .bind(v)
+ .execute(pool)
+ .await?;
+ }
+ }
  Ok(())
+}
+
+/// Read every "always allow" row for `session_id`, newest first.
+/// Wired to the permission-grant management UI's "load on open"
+/// call (task 07-01-permission-grant-list-ui). The row set is the
+/// raw `session_tool_permissions` rows; the frontend renders each
+/// row's `match_kind` + `match_value` (path glob / prefix token)
+/// so the user can distinguish multiple grants on the same tool.
+///
+/// Empty / missing session returns an empty `Vec` (NOT an error)
+/// — the modal renders its empty-state placeholder. The
+/// `ORDER BY granted_at DESC, rowid DESC` is a stable sort:
+/// `granted_at` is `datetime('now')` (1-second resolution), so
+/// same-second grants tie on `granted_at` and break on `rowid`
+/// (SQLite's implicit monotonic insertion id).
+pub async fn list_tool_permissions(
+ pool: &SqlitePool,
+ session_id: &str,
+) -> Result<Vec<PermissionGrantRow>, sqlx::Error> {
+ let rows = sqlx::query(
+ r#"
+ SELECT session_id, tool_name, match_kind, match_value, granted_at
+ FROM session_tool_permissions
+ WHERE session_id = ?
+ ORDER BY granted_at DESC, rowid DESC
+ "#,
+ )
+ .bind(session_id)
+ .fetch_all(pool)
+ .await?;
+ rows.into_iter()
+ .map(|r| {
+ Ok(PermissionGrantRow {
+ session_id: r.try_get("session_id")?,
+ tool_name: r.try_get("tool_name")?,
+ match_kind: r.try_get("match_kind")?,
+ match_value: r.try_get("match_value")?,
+ granted_at: r.try_get("granted_at")?,
+ })
+ })
+ .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -264,4 +340,23 @@ pub struct AuditEventRow {
  pub ts: String,
  pub kind: String,
  pub payload_json: Option<String>,
+}
+
+/// Row shape for [`list_tool_permissions`] and the
+/// `list_session_tool_permissions` Tauri command (task
+/// 07-01-permission-grant-list-ui). `match_value` is `None` for
+/// `match_kind = 'tool'` (whole-tool grants); `Some(glob)` for
+/// `path`; `Some(prefix_token)` for `prefix`. Mirrors
+/// [`AuditEventRow`]'s wire convention —
+/// `#[serde(rename_all = "camelCase")]` per
+/// `.trellis/spec/backend/database-guidelines.md` (the frontend TS
+/// reads `matchKind` / `matchValue`, not snake_case).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionGrantRow {
+ pub session_id: String,
+ pub tool_name: String,
+ pub match_kind: String,
+ pub match_value: Option<String>,
+ pub granted_at: String,
 }
