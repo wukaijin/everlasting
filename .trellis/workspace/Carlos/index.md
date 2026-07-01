@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
-- **Last Active**: 2026-06-26
+- **Total Sessions**: 21
+- **Last Active**: 2026-07-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~927 | Active |
+| `journal-1.md` | ~1015 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-01 | Tool description 顺手清理 + CLAUDE.md/AGENTS.md 索引 | `6361fec`, `5c5f475`, `c160411`, `4373c4e` | `main` |
 | 20 | 2026-06-26 | Session 74 user CLAUDE.md home dir 完结 | `5ddccb1`, `a7c323b` | `main` |
 | 19 | 2026-06-25 | sse-mode-toast: 放开 SSE 流中 mode 切换 + toast 仅流中弹 | `db11930` | `main` |
 | 18 | 2026-06-24 | C2 agent loop ⑬ loop detection | `a35b157`, `ef3477d` | `main` |

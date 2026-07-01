@@ -977,3 +977,39 @@ user 级 CLAUDE.md 路径从 ~/.config/everlasting/CLAUDE.md 改到 ~/.claude/CL
 ### Next Steps
 
 - None - L3d 收口,第三档剩 6 项(B9 / C6 / B1 / D2 / A5·A6 / L3b)待排期
+
+
+## Session 21: Tool description 顺手清理 + CLAUDE.md/AGENTS.md 索引
+
+**Date**: 2026-07-01
+**Task**: Tool description 顺手清理 + CLAUDE.md/AGENTS.md 索引
+**Branch**: `main`
+
+### Summary
+
+评估并实施 tool description 精简。v1(skill 下沉)实施后回退——暴露 skill body 常驻/compaction 不保护/漏调 use_skill/worker 引导缺口四个问题。v2(1.7K token 精简)分析后否决——caching 抹平首请求收益,ROI 不成立。最终落地 v3 顺手清理:8 个工具删与 schema/返回值重复的冗余措辞,省 1563B/446 tokens,保留全部行为契约(timeout 引导/do-NOT-retry/remember When-to-Do-NOT,后者因 general-purpose worker 看不到 main system_prompt 是其唯一引导)。1132 测试全绿。顺带修 CLAUDE.md 的 PKG_CONFIG_PATH 注释符 + 把 CLAUDE.md 索引到 AGENTS.md。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6361fec` | (see git log) |
+| `5c5f475` | (see git log) |
+| `c160411` | (see git log) |
+| `4373c4e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
