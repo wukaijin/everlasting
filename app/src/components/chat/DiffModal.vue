@@ -170,33 +170,35 @@ const emit = defineEmits<{
     color: var(--color-tool-error);
 }
 
-/* R4 popup animation: fade + scale 0.96 → 1 from center. Enter
- * is var(--duration-base) var(--ease-out), leave is var(--duration-fast) ease-in (faster exit per the
- * PR5 popover pattern). */
-.diff-modal-enter-active,
+/* R4 popup animation: 仅 content 做 scale 0.96→1 + opacity 过渡；
+ * backdrop（Transition 根元素）opacity 始终 1、无视觉动画，transition-
+ * duration 仅用于让 Vue Transition 的 enter/leave 计时与 content 同步，
+ * 避免 active class 提前移除而中断 content 过渡 (07-02-modal-motion-rhythm)。 */
+.diff-modal-enter-active {
+    transition: opacity var(--duration-modal-in);
+}
+
 .diff-modal-leave-active {
-    transition: opacity var(--duration-base) var(--ease-out);
+    transition: opacity var(--duration-modal-out);
 }
 
 .diff-modal-enter-active .diff-modal,
 .diff-modal-leave-active .diff-modal {
-    transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+    transition: opacity var(--duration-modal-in) var(--ease-modal-in), transform var(--duration-modal-in) var(--ease-modal-in);
 }
 
-.diff-modal-enter-from,
-.diff-modal-leave-to {
+.diff-modal-enter-from .diff-modal {
     opacity: 0;
+    transform: scale(0.1);
 }
 
-.diff-modal-enter-from .diff-modal,
 .diff-modal-leave-to .diff-modal {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.1);
 }
 
-.diff-modal-leave-active,
 .diff-modal-leave-active .diff-modal {
-    transition-duration: 100ms;
-    transition-timing-function: ease-in;
+    transition-duration: var(--duration-modal-out);
+    transition-timing-function: var(--ease-accelerate);
 }
 </style>

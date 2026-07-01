@@ -201,7 +201,10 @@ adding the missing motion vocabulary (durations + easings).
   subagent drawer slide (was 180ms ad-hoc). `--duration-pulse`
   (1800ms) absorbs the subagent breathing animation that
   was hard-coded twice (tool card left bar, drawer section
-  spinner).
+  spinner). **Modal** 另有专用档位 `--duration-modal-in/out`
+  (200/150ms) + `--ease-modal-in` / `--ease-accelerate`
+  (2026-07-02, task 07-02-modal-motion-rhythm)；popover/drawer
+  仍用 `--duration-base/fast`。
 - `--ease-out` is `cubic-bezier(0.16, 1, 0.3, 1)` — a
   Linear-style snappy decel, replacing the bare CSS
   `ease-out` keyword. Slightly "harder" feel (faster

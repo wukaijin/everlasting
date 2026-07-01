@@ -197,11 +197,6 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: markdown-detail-modal-fade var(--duration-base) var(--ease-out);
-}
-
-.markdown-detail-modal__overlay[data-state="closed"] {
-  animation: markdown-detail-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .markdown-detail-modal {
@@ -230,31 +225,21 @@ const bodyHtml = computed<string>(() => renderMarkdown(props.markdown));
   box-shadow: var(--shadow-xl);
   z-index: 2001;
   outline: none;
-  animation: markdown-detail-modal-zoom var(--duration-base) var(--ease-out);
+  animation: markdown-detail-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
 
 .markdown-detail-modal[data-state="closed"] {
-  animation: markdown-detail-modal-zoom-out var(--duration-fast) ease-in forwards;
-}
-
-@keyframes markdown-detail-modal-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes markdown-detail-modal-fade-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+  animation: markdown-detail-modal-zoom-out var(--duration-modal-out) var(--ease-accelerate) forwards;
 }
 
 @keyframes markdown-detail-modal-zoom {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
   to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @keyframes markdown-detail-modal-zoom-out {
   from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
 }
 
 .markdown-detail-modal__header {

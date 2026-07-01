@@ -70,11 +70,6 @@ const open = defineModel<boolean>("open", { required: true });
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: settings-modal-fade var(--duration-base) var(--ease-out);
-}
-
-.settings-modal__overlay[data-state="closed"] {
-  animation: settings-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .settings-modal {
@@ -95,31 +90,21 @@ const open = defineModel<boolean>("open", { required: true });
   z-index: 2001;
   /* reka-ui DialogContent sets outline on focus; suppress for our design */
   outline: none;
-  animation: settings-modal-zoom var(--duration-base) var(--ease-out);
+  animation: settings-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
 
 .settings-modal[data-state="closed"] {
-  animation: settings-modal-zoom-out var(--duration-fast) ease-in forwards;
-}
-
-@keyframes settings-modal-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes settings-modal-fade-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+  animation: settings-modal-zoom-out var(--duration-modal-out) var(--ease-accelerate) forwards;
 }
 
 @keyframes settings-modal-zoom {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
   to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @keyframes settings-modal-zoom-out {
   from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
 }
 
 .settings-modal__header {

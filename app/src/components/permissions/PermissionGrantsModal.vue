@@ -149,7 +149,6 @@ function onRevoke(row: PermissionGrantRow): void {
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: grant-modal-fade var(--duration-base) var(--ease-out);
 }
 
 .grant-modal {
@@ -171,17 +170,21 @@ function onRevoke(row: PermissionGrantRow): void {
   box-shadow: var(--shadow-xl);
   z-index: 2001;
   outline: none;
-  animation: grant-modal-zoom var(--duration-base) var(--ease-out);
+  animation: grant-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
 
-@keyframes grant-modal-fade {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.grant-modal[data-state="closed"] {
+  animation: grant-modal-zoom-out var(--duration-modal-out) var(--ease-accelerate) forwards;
 }
 
 @keyframes grant-modal-zoom {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes grant-modal-zoom-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
 }
 
 .grant-modal__header {

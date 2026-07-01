@@ -145,10 +145,21 @@
     /* Motion vocabulary — easings. --ease-out (snappy decel) is
        the workhorse for hover/enter; --ease-spring (slight
        overshoot) for :active press feedback; --ease-decelerate
-       for slide-in transitions (subagent drawer, toast). */
+       for fade/slide-in transitions (subagent drawer, toast). */
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
     --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+
+    /* Modal 动画 convention（8 个 modal 共用，task 07-02-modal-motion-rhythm）。
+       进入/退出统一用平滑曲线 ease cubic-bezier(0.25, 0.1, 0.25, 1)——起手
+       加速、中段最快、末段减速的对称 S 曲线，进出观感一致、不偏不倚。仍
+       保留进入/退出两个 token 以便将来再分开调。mask 不做动画（瞬间切），
+       只有 content 做 scale+opacity；scale 幅度 0.1↔1（进入从 0.1 放大、
+       退出缩到 0.1）。 */
+    --duration-modal-in: 200ms;
+    --duration-modal-out: 150ms;
+    --ease-modal-in: cubic-bezier(0.25, 0.1, 0.25, 1);
+    --ease-accelerate: cubic-bezier(0.25, 0.1, 0.25, 1);
 
     /* Shadow scale. Alphas are tuned for the dark background
        (--color-bg-app = #0a0e14) — 0.32 / 0.4 / 0.5 ladder keeps

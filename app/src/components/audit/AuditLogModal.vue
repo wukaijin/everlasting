@@ -319,11 +319,6 @@ async function onRefresh(): Promise<void> {
   background: color-mix(in srgb, var(--color-bg-app) 70%, transparent);
   backdrop-filter: blur(4px);
   z-index: 2000;
-  animation: audit-modal-fade var(--duration-base) var(--ease-out);
-}
-
-.audit-modal__overlay[data-state="closed"] {
-  animation: audit-modal-fade-out var(--duration-fast) ease-in forwards;
 }
 
 .audit-modal {
@@ -358,31 +353,21 @@ async function onRefresh(): Promise<void> {
   box-shadow: var(--shadow-xl);
   z-index: 2001;
   outline: none;
-  animation: audit-modal-zoom var(--duration-base) var(--ease-out);
+  animation: audit-modal-zoom var(--duration-modal-in) var(--ease-modal-in) both;
 }
 
 .audit-modal[data-state="closed"] {
-  animation: audit-modal-zoom-out var(--duration-fast) ease-in forwards;
-}
-
-@keyframes audit-modal-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes audit-modal-fade-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+  animation: audit-modal-zoom-out var(--duration-modal-out) var(--ease-accelerate) forwards;
 }
 
 @keyframes audit-modal-zoom {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
   to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 @keyframes audit-modal-zoom-out {
   from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
 }
 
 .audit-modal__header {

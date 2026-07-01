@@ -231,30 +231,35 @@ watch(
   filter: brightness(1.1);
 }
 
-.confirm-modal-enter-active,
+/* backdrop（Transition 根元素）：opacity 始终 1，无视觉动画；
+   transition-duration 仅用于让 Vue Transition 的 enter/leave 计时与下方
+   content 动画同步，避免 active class 提前移除而中断 content 过渡
+   (07-02-modal-motion-rhythm: mask 不做动画，只 content 做)。 */
+.confirm-modal-enter-active {
+  transition: opacity var(--duration-modal-in);
+}
+
 .confirm-modal-leave-active {
-  transition: opacity var(--duration-base) var(--ease-out);
+  transition: opacity var(--duration-modal-out);
 }
 
 .confirm-modal-enter-active .confirm-modal,
 .confirm-modal-leave-active .confirm-modal {
-  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+  transition: opacity var(--duration-modal-in) var(--ease-modal-in), transform var(--duration-modal-in) var(--ease-modal-in);
 }
 
-.confirm-modal-enter-from,
-.confirm-modal-leave-to {
+.confirm-modal-enter-from .confirm-modal {
   opacity: 0;
+  transform: scale(0.1);
 }
 
-.confirm-modal-enter-from .confirm-modal,
 .confirm-modal-leave-to .confirm-modal {
   opacity: 0;
-  transform: scale(0.96);
+  transform: scale(0.1);
 }
 
-.confirm-modal-leave-active,
 .confirm-modal-leave-active .confirm-modal {
-  transition-duration: 100ms;
-  transition-timing-function: ease-in;
+  transition-duration: var(--duration-modal-out);
+  transition-timing-function: var(--ease-accelerate);
 }
 </style>

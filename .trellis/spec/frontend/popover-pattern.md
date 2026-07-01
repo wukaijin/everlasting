@@ -619,61 +619,74 @@ positioning until a real clipping bug is reported.
 > scale example below). The toast moves from
 > `200ms` to `var(--duration-slow) var(--ease-out)` (240ms;
 > a 40ms bump to match the project's motion vocabulary).
+>
+> **Updated 2026-07-02 (task 07-02-modal-motion-rhythm)**: the
+> **modal** convention below is rewritten. Modal **mask**
+> (overlay / backdrop) no longer animates — instant appear/
+> disappear; only the modal **content** animates. New modal-
+> specific tokens `--duration-modal-in/out` (200/150ms),
+> `--ease-modal-in`, `--ease-accelerate` (both
+> `cubic-bezier(0.25, 0.1, 0.25, 1)` = CSS `ease`, symmetric
+> S-curve). Scale amplitude changed from `0.96↔1` to `0.1↔1`
+> (enter grows from 10%, leave shrinks to 10%). Popover /
+> Toast / Drawer rows below are unchanged.
 
-### Convention: token-based 150ms / 100ms
+### Convention: token-based durations
 
 | Trigger | Enter | Leave |
 |---|---|---|
-| Modal (centered overlay) | `var(--duration-base) var(--ease-out)` | `var(--duration-fast) ease-in` |
+| **Modal content** (8 modals；mask 不动画) | `var(--duration-modal-in) var(--ease-modal-in)` | `var(--duration-modal-out) var(--ease-accelerate)` |
 | Popover (anchored) | `var(--duration-base) var(--ease-out)` | `var(--duration-fast) ease-in` |
 | Toast (AppShell) | `var(--duration-slow) var(--ease-out)` | (same) |
 | Subagent drawer (`SubagentDrawer.vue`) | `var(--duration-slow) var(--ease-decelerate)` | (same) |
 
-The 150ms / 100ms split is intentional — enter feels responsive,
-leave feels snappy enough that the user doesn't wait on a closing
-animation. The toast uses 240ms in both directions because it's
-attention-grabbing by nature; not a precedent for other popups.
-The subagent drawer is a heavier surface (right-anchored full
-height) so the slide-in is slower + uses `--ease-decelerate` for
-a more "physical" feel.
+Modal 是 200ms-in / 150ms-out + `ease` 平滑曲线 + scale `0.1↔1`（详见下节
+"Modal: scale"）；**mask（overlay/backdrop）不参与动画，瞬间出现/消失**，
+只有 content 做 scale+opacity。Popover 仍是 150/100ms + `--ease-out`/`ease-in`
+（起手更利落，适合小尺寸弹出）。Toast 用 240ms 双向（引人注意，不作为其他
+弹窗的先例）。Subagent drawer 是更重的右锚定全高面板，slide-in 更慢 +
+`--ease-decelerate` 更"物理"。
 
-### Modal: fade + scale
+### Modal: scale（mask 无动画）
 
-Modal instances use **fade + scale 0.96 → 1**:
+Modal **content** 用 **scale `0.1 ↔ 1` + opacity**；**mask（overlay/
+backdrop）不动画**——瞬间出现/消失。A 类（reka-ui Dialog）的 overlay 不写
+animation，reka-ui 的 `usePresence` 检测到 overlay 无 animation-name → 立即
+unmount；B 类（Vue `<Transition>`）的 backdrop 保留 `transition-duration`
+仅作 Vue leave 计时，opacity 始终 1（否则 active class 提前移除会中断 content
+过渡）。content keyframe（A 类用 `translate(-50%,-50%)` 居中，B 类用 flex
+居中、无 translate）：
 
 ```css
-@keyframes modal-enter {
-  from { opacity: 0; transform: scale(0.96); }
-  to   { opacity: 1; transform: scale(1); }
+@keyframes modal-zoom {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
-
-@keyframes modal-leave {
-  from { opacity: 1; transform: scale(1); }
-  to   { opacity: 0; transform: scale(0.96); }
+@keyframes modal-zoom-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
 }
 ```
 
 **Trigger mechanism differs by component**:
 
-- **reka-ui DialogContent** (SettingsModal): reka-ui auto-sets
-  the `data-state="open|closed"` attribute on the content. Use
-  that as the CSS selector:
+- **reka-ui DialogContent**（A 类，5 个 modal：Settings/Memory/Audit/
+  MarkdownDetail/PermissionGrants）: reka-ui 在 content 上设
+  `data-state="open|closed"`，overlay **不写 animation**（mask 无动画），
+  content 用 `[data-state]` 选择器：
   ```css
-  [data-state="open"] {
-    animation: modal-enter var(--duration-base) var(--ease-out);
-  }
-  [data-state="closed"] {
-    animation: modal-leave var(--duration-fast) ease-in;
-  }
+  .xxx-modal { animation: modal-zoom var(--duration-modal-in) var(--ease-modal-in) both; }
+  .xxx-modal[data-state="closed"] { animation: modal-zoom-out var(--duration-modal-out) var(--ease-accelerate) forwards; }
   ```
-  No Vue `<Transition>` wrapper needed — reka-ui handles the
-  mount/unmount internally.
+  enter 加 `both` 避免 `fill-mode: none` 的首帧闪现。reka-ui 的 `Presence`
+  靠 `animation-name` 切换检测 exit（close 时 name 变 → `unmountSuspended`
+  → 等 `animationend` 卸载）；overlay 无 animation → close 时立即卸载。
 
-- **Hand-rolled modals** (DeleteWorktreeConfirm, diff modal
-  in ChatPanel): wrap in Vue `<Transition name="confirm-modal">`
-  and define `.confirm-modal-enter-active` / `-leave-active`
-  scoped CSS. See DeleteWorktreeConfirm.vue for the
-  reference implementation.
+- **Vue `<Transition>`**（B 类，3 个：ConfirmDialog/YoloConfirmModal/DiffModal）:
+  包 `<Transition name="xxx">`，backdrop（Transition 根元素）只设
+  `transition: opacity var(--duration-modal-in/out)`（opacity 不变，仅作
+  计时）；content 的 `.xxx-enter-active .modal` / `.xxx-leave-to .modal` 设
+  scale+opacity 过渡。见 `ConfirmDialog.vue` 参考实现。
 
 **Modal shadow** (2026-06-27 PR1): all modal content surfaces use
 `box-shadow: var(--shadow-xl)` (the largest tier). Pre-PR1 eight
@@ -722,8 +735,9 @@ and `confirm` (Enter or confirm button click).
 - **Focus** is auto-moved to the confirm button on `open` (via
   `setTimeout(..., 0)` after the v-if mount), so Enter works
   without a prior Tab.
-- **Transition** uses `name="confirm-modal"` with the 150ms
-  fade+scale convention from this file.
+- **Transition** uses `name="confirm-modal"`；backdrop 无视觉动画，
+  content 走 `--duration-modal-in/out` + `--ease-modal-in/accelerate`
+  + scale `0.1↔1`（见上节 "Modal: scale"）。
 
 **Why the component exists**: see the "Don't" section below
 about `window.confirm()` in Tauri webview. The whole reason

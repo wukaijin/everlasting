@@ -342,30 +342,35 @@ watch(
 /* 150ms fade + scale 0.96→1 enter, 100ms fade-in leave —
    same convention as `DeleteWorktreeConfirm` /
    `ConfirmDialog` so users get a familiar modal feel. */
-.yolo-confirm-enter-active,
+/* backdrop（Transition 根元素）：opacity 始终 1，无视觉动画；
+   transition-duration 仅用于让 Vue Transition 的 enter/leave 计时与下方
+   content 动画同步，避免 active class 提前移除而中断 content 过渡
+   (07-02-modal-motion-rhythm: mask 不做动画，只 content 做)。 */
+.yolo-confirm-enter-active {
+  transition: opacity var(--duration-modal-in);
+}
+
 .yolo-confirm-leave-active {
-  transition: opacity var(--duration-base) var(--ease-out);
+  transition: opacity var(--duration-modal-out);
 }
 
 .yolo-confirm-enter-active .yolo-confirm-modal,
 .yolo-confirm-leave-active .yolo-confirm-modal {
-  transition: opacity var(--duration-base) var(--ease-out), transform var(--duration-base) var(--ease-out);
+  transition: opacity var(--duration-modal-in) var(--ease-modal-in), transform var(--duration-modal-in) var(--ease-modal-in);
 }
 
-.yolo-confirm-enter-from,
-.yolo-confirm-leave-to {
+.yolo-confirm-enter-from .yolo-confirm-modal {
   opacity: 0;
+  transform: scale(0.1);
 }
 
-.yolo-confirm-enter-from .yolo-confirm-modal,
 .yolo-confirm-leave-to .yolo-confirm-modal {
   opacity: 0;
-  transform: scale(0.96);
+  transform: scale(0.1);
 }
 
-.yolo-confirm-leave-active,
 .yolo-confirm-leave-active .yolo-confirm-modal {
-  transition-duration: 100ms;
-  transition-timing-function: ease-in;
+  transition-duration: var(--duration-modal-out);
+  transition-timing-function: var(--ease-accelerate);
 }
 </style>
