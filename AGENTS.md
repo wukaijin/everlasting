@@ -19,3 +19,7 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+## Project Guide
+
+- [`CLAUDE.md`](./CLAUDE.md) — 项目总览、Common Commands(含 WSL `PKG_CONFIG_PATH` 用法)、架构、技术栈、环境变量、文档索引。写代码前先读。
