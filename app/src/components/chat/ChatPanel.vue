@@ -790,6 +790,22 @@ if (typeof window !== "undefined") {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 50vw;
+  /* Two flex fixes, working together:
+     1. `min-width: 0` unlocks the shrink path — flex children default
+        to `min-width: auto`, which makes an <h1> refuse to shrink
+        below its intrinsic content width. With a long Chinese session
+        title that intrinsic width blows past 50vw and pushes the
+        right-side chips (git branch, cwd, worktree, memory, audit,
+        grants) off-screen — `max-width` and `text-overflow: ellipsis`
+        silently no-op without this.
+     2. `flex: 1 1 0` makes the title actively grow into the leftover
+        row space (after the fixed-size chips + buttons claim theirs)
+        and start ellipsizing only when content actually overflows.
+        Without this, the title sits at its intrinsic width and just
+        gives up — the row ends up lopsided with the cwd chip flush
+        right but the title not filling the left half. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .chat-panel__chip {
@@ -809,6 +825,11 @@ if (typeof window !== "undefined") {
 .chat-panel__chip--git {
   color: var(--color-accent);
   border-color: var(--color-accent-muted);
+  /* Same flex-shrink rationale as the title: the git branch chip is
+     short ("main", "feature/foo") so it normally doesn't need to
+     shrink, but locking it down explicitly keeps it from being
+     squeezed by the title-row's wrap. */
+  flex-shrink: 0;
 }
 
 .chat-panel__chip--cwd {
@@ -816,6 +837,10 @@ if (typeof window !== "undefined") {
   max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Mirrors the title fix: without min-width: 0 the flex item's
+     intrinsic content width (~ 280px for a full /usr/local/code/.../foo
+     path) overrides the 50% cap and crowds the buttons. */
+  min-width: 0;
 }
 
 /* Memory entry button (2026-06-11). Sits to the right of the
