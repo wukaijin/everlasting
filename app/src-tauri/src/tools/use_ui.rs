@@ -67,7 +67,8 @@ pub fn definition() -> ToolDef {
              chat. Use this when a visual presentation is clearer than prose.\n\n\
              Supported `primitive.type`:\n\
              - `diff` — a read-only code diff (compare two versions / two approaches). NOT \
-               for applying changes (use `edit_file` to write).\n\
+               for applying changes (use `edit_file` to write). Fields: `diff_text` (unified\n\
+               diff string, required).\n\
              - `code_block` — a syntax-highlighted code snippet the user can copy. Fields: `code`\n\
                (string, required), `language` (optional, e.g. 'rust'/'python'; omit for auto-detect).\n\n\
              Do NOT use `use_ui` for:\n\

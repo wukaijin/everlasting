@@ -32,9 +32,10 @@ describe("UiCard — primitive rendering", () => {
     const w = mountCard({
       primitives: [{ type: "diff" }, { type: "code_block" }],
     });
-    // Child B: code_block now renders CodeBlockPrimitive; only diff stays mock.
+    // Child C: diff + code_block both have real renderers now; no mock.
     expect(w.findAll(".ui-prim").length).toBe(2);
-    expect(w.findAll(".ui-prim--mock").length).toBe(1);
+    expect(w.findAll(".ui-prim--mock").length).toBe(0);
+    expect(w.findAll(".ui-prim--diff").length).toBe(1);
     expect(w.findAll(".ui-prim--code").length).toBe(1);
   });
 

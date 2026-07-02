@@ -15,12 +15,13 @@
 import type { Component } from "vue";
 
 import CodeBlockPrimitive from "./primitives/CodeBlockPrimitive.vue";
+import DiffPrimitive from "./primitives/DiffPrimitive.vue";
 import MockPrimitive from "./primitives/MockPrimitive.vue";
 
-/** `type` → component. Child B replaced `code_block`; Child C will
- *  replace `diff`. */
+/** `type` → component. Child B replaced `code_block`, Child C replaced
+ *  `diff`. MockPrimitive stays as the fallback for unknown types. */
 export const UI_PRIMITIVE_REGISTRY: Record<string, Component> = {
-  diff: MockPrimitive,
+  diff: DiffPrimitive,
   code_block: CodeBlockPrimitive,
 };
 
