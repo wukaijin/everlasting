@@ -374,3 +374,67 @@ const status       = computed(() => store.getRunCache.get(props.runId)?.status ?
 - `UiCard.test.ts`：registry dispatch（type→组件）+ 未知 type fallback + 空/缺 primitives 守卫
 - `CodeBlockPrimitive.test.ts` / `DiffPrimitive.test.ts`：各自渲染 + 复制 + 边界
 - 后端 `use_ui::tests`：definition schema + execute 校验
+
+### DiffPrimitive / DiffView raw fallback contract (RULE-FrontDiff-001, 2026-07-02)
+
+`use_ui` 的 `diff` primitive 的 LLM 输出有**两种合法形态**,渲染器必须都能兜住(LLM 风格 +/- 片段是默认行为,标准 unified-diff 是升级形态):
+
+| 形态 | 例子 | 渲染路径 |
+|---|---|---|
+| 标准 unified-diff(首选) | `--- a/foo\n+++ b/foo\n@@ ... @@\n-x\n+y` | `jsdiff parsePatch` 拆出 hunks → `<DiffView>` 走 `diff-file__hunks` 分支(行级 +/- 染色 + 双 gutter 行号 + 折叠) |
+| LLM 风格 +/- 片段(无 `---`/`+++` 头) | ` foo\n-x\n+y\n bar` | **raw fallback** — `DiffPrimitive.files` 按"原 patchToText round-trip 后无内容"路径返回原始 `diff_text` → `<DiffView>` 走 `diff-file__raw` 分支(每行 div 按首字符分类 add/del/ctx/other,绿/红背景,无双 gutter) |
+
+#### 关键 invariant(b00dde2 + b5073ea 落地)
+
+1. **`parsePatch` 空 hunks 检测**:`jsdiff` 对"无 `---`/`+++` 头但有 `+`/`-` 行"的输入返回 **`[{ hunks: [] }]`(`length === 1` 但 hunks 空)**,**不是** `[]`。`patches.length === 0` 守卫会失效。`DiffPrimitive.files` computed 必须额外检查 `patches.length > 0 && patches.every(p => p.hunks.length === 0)` 才触发 raw fallback。
+2. **raw fallback 必须保留原文**:`DiffPrimitive` 走 raw fallback 时,`FileDiff.diff_text` 字段填**原始文本**(不是 `patchToText(p)` 重新打包)。DiffView re-parse 这段文本得到同一 `[{hunks:[]}]` 形态,触发自身的 raw fallback `<div>` 分支。round-trip 会丢内容(`patchToText({hunks:[]}) === "--- a\n+++ b"`),永远不要走。
+3. **DiffView 防御性兜底**:`out.parsed` 仅在 `out.hunks.length > 0` 时置 true。原 `out.parsed = true` 隐含 `parsed-but-empty` 静默空白根因(模板 `v-for pf.hunks` 走 0 迭代)。如果上游某天绕过 `DiffPrimitive` 直接传 `FileDiff[]` 进 DiffView,这一守卫保证不出现空 body。
+4. **计数从原文派生**:raw fallback 的 `added`/`removed` 字段必须按 `text.split("\n")` 重数 `+`/`-` 行(不能从空 hunks 派生,否则永远 0),保证文件 header 的 `+N / −M` badge 显示真实值。
+5. **行级染色复用既有 token**:`.diff-raw-line--add / --del` 用 `rgba(16, 185, 129, 0.12)` / `rgba(239, 68, 68, 0.12)`(与 `diff-line--add / --del` 同色,不引入新 token);`--ctx` 与 `--other` 走 `--color-text-secondary` 普通色。
+
+#### Wrong vs Correct
+
+**Wrong**:`DiffPrimitive.files` 只用 `patches.length === 0` 守卫,空 hunks 形态漏判:
+
+```ts
+const patches = parsePatch(text);
+if (patches.length === 0) return [rawFallback(text)];  // ❌ 漏 catch [{hunks:[]}]
+return patches.map(p => ({ diff_text: patchToText(p), ... }));  // 进去后 round-trip 空
+// 后果: DiffView 拿 "--- a\n+++ b" → parsePatch 又得 0 hunks
+//       → out.parsed = true + hunks = [] → 模板静默空白
+```
+
+**Correct**:双守卫 + 原文保留 + DiffView 防御:
+
+```ts
+// DiffPrimitive.vue
+const allHunksEmpty =
+  patches.length > 0 && patches.every(p => p.hunks.length === 0);
+if (patches.length === 0 || allHunksEmpty) {
+  let added = 0, removed = 0;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added++;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+  }
+  return [{ path: "diff", status: "modified", added, removed, diff_text: text }];
+}
+return patches.map(p => ({ ... patchToText(p) }));
+```
+
+```ts
+// DiffView.vue
+out.hunks = patch.hunks.map(hunk => /* lines */);
+out.parsed = out.hunks.length > 0;  // ❌→✅ 防御 parsed-but-empty
+```
+
+#### Common Mistakes / Gotchas
+
+- **jsdiff 空 hunks 不是空数组**:`patches.length === 0` 看着像合理守卫,实际只 catch 0 patch 的输入;LLM-style 不齐的 +/- 进去都是 1 个 patch + 0 hunks。**Lock**:测试两种空 fallback 输入("just some prose" → `[]`、LLM-style → `[{hunks:[]}]`)都得触发 raw 路径。
+- **`patchToText({hunks:[]})` 是字符串陷阱**:返回的 `"--- a\n+++ b"` 看似合法(unified-diff 头),但下游 re-parse 后得到 0 行,body 空白。永远不要从空 hunks round-trip。
+- **不在 frontend 强制 LLM 格式**:Schema 仅校验 `type`,不校验 `diff_text` 字段是不是真 unified-diff(避免误拒 + 与 `additionalProperties: true` 一致);渲染器承担兜底责任,LLM 契约写在 tool description 里(给 LLM 看,见 `tool-contract.md` §use_ui + `use_ui.rs` definition 的 `description`)。
+
+#### Tests required(RULE-FrontDiff-001 锁定)
+
+- `DiffPrimitive.test.ts`:"falls back to raw text for LLM-style +/- fragments" — 断言(1)`+N / −M` header 计数正确,(2)`add`/`del`/`ctx` 行级 class 各自分配正确次数,(3)`(1..=n).product()` 与 `match n {` 等关键文本可见。
+- `DiffPrimitive.test.ts`:"does not crash on non-diff text" 保留(`parsePatch returns []` 单字串分支,断言 wrapper 存在)。
+- 防回归锚点:session `1b469d93-84d3-49b0-a4c5-eefc34b1bf58` — prompt "调 use_ui 输出一个 code_block(rust 代码)和一个 diff(两段对比)",该次 LLM 输出是 LLM-style `+/-` 片段,该 prompt 下必须不再出现"打开 diff 卡片是空白"。

@@ -41,6 +41,16 @@
 //! type-specific fields (`diff_text` / `code` / `language`) are added
 //! by Child B/C and pass through here unchecked
 //! (`additionalProperties: true`).
+//!
+//! `diff_text` accepts two formats (see `definition().description`
+//! and `frontend/chat.md` "DiffPrimitive raw fallback contract"):
+//!   - PREFERRED: standard unified-diff with `---`/`+++`/`@@` headers
+//!     (full colored hunk rendering, line numbers, collapse)
+//!   - ACCEPTED: plain +/-/context-line fragment without headers
+//!     (raw fallback — line-classified tinting + real `+N/-M` counts)
+//! Either form is valid; frontend renders both. The description
+//! teaches the model the natural LLM-style writeup is also accepted,
+//! so it doesn't pad `diff_text` with invented `---`/`+++` headers.
 
 use crate::llm::types::ToolDef;
 use crate::tools::ToolContext;
@@ -67,8 +77,15 @@ pub fn definition() -> ToolDef {
              chat. Use this when a visual presentation is clearer than prose.\n\n\
              Supported `primitive.type`:\n\
              - `diff` — a read-only code diff (compare two versions / two approaches). NOT \
-               for applying changes (use `edit_file` to write). Fields: `diff_text` (unified\n\
-               diff string, required).\n\
+               for applying changes (use `edit_file` to write). Fields: `diff_text` (string,\
+               required). Two accepted formats:\n\
+               • PREFERRED: standard unified-diff with `--- a/path` / `+++ b/path` / \
+                 `@@ -oldStart,oldLines +newStart,newLines @@` headers. Renders as \
+                 colored hunks with line numbers + collapse.\n\
+               • ACCEPTED: plain +/-/context-line fragment WITHOUT `---`/`+++` headers \
+                 (the natural \"show old vs new\" writeup). Renders as raw fallback — \
+                 each `+` line gets a green tint, each `-` line a red tint, header shows \
+                 real `+N/-M` counts. Either form is fine; preferred gives richer rendering.\n\
              - `code_block` — a syntax-highlighted code snippet the user can copy. Fields: `code`\n\
                (string, required), `language` (optional, e.g. 'rust'/'python'; omit for auto-detect).\n\n\
              Do NOT use `use_ui` for:\n\
@@ -227,6 +244,21 @@ mod tests {
             .and_then(|v| v.as_u64())
             .expect("maxItems present");
         assert_eq!(max as usize, MAX_PRIMITIVES);
+    }
+
+    /// Lock the LLM-facing description mentions BOTH accepted `diff_text`
+    /// formats (standard unified-diff PREFERRED + LLM-style +/- fragment
+    /// ACCEPTED). If a future cleanup collapses to a single format, this
+    /// fails and forces the author to choose between expanding the
+    /// renderer's accepted formats and shrinking the description.
+    /// Mirrors the raw fallback contract in `frontend/chat.md`
+    /// `RULE-FrontDiff-001` and the b00dde2 + b5073ea bug fixes.
+    #[test]
+    fn diff_description_advertises_both_accepted_formats() {
+        let desc = definition().description.expect("description set");
+        assert!(desc.contains("PREFERRED"), "missing PREFERRED marker");
+        assert!(desc.contains("ACCEPTED"), "missing ACCEPTED marker");
+        assert!(desc.contains("`diff_text`"), "must name the `diff_text` field");
     }
 
     // ---- execute: happy paths ----
