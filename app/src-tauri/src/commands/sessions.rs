@@ -16,6 +16,7 @@ use tauri::State;
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::background_shell::BackgroundShellRegistry;
 use crate::db;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::git;
 use crate::llm::types::MessageContent;
 use crate::state::AppState;
@@ -24,10 +25,10 @@ use crate::state::AppState;
 pub async fn list_sessions(
     state: State<'_, Arc<AppState>>,
     project_id: String,
-) -> Result<Vec<db::SessionSummary>, String> {
+) -> Result<Vec<db::SessionSummary>, AppCommandError> {
     db::list_sessions(&state.db, &project_id)
         .await
-        .map_err(|e| format!("list_sessions failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_sessions failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -36,14 +37,17 @@ pub async fn create_session(
     project_id: String,
     initial_cwd: String,
     model: Option<String>,
-) -> Result<db::SessionRow, String> {
+) -> Result<db::SessionRow, AppCommandError> {
     let model = model.unwrap_or_else(|| state.config.model.clone());
     // Defensive: every session is bound to a project. The frontend
     // is expected to gate this with a "no project = no chat" check,
     // but a stray IPC call should not silently create a
     // legacy-bound session.
     if project_id.trim().is_empty() {
-        return Err("create_session: project_id must not be empty".to_string());
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "create_session: project_id must not be empty",
+        ));
     }
 
     // Step 4 follow-up: worktree is now opt-in. We no longer
@@ -55,9 +59,16 @@ pub async fn create_session(
     let _project = match db::get_project(&state.db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err(format!("create_session: project '{}' not found", project_id));
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("create_session: project '{}' not found", project_id),
+            ));
         }
-        Err(e) => return Err(format!("create_session: failed to load project: {}", e)),
+        Err(e) => {
+            return Err(
+                anyhow::anyhow!("create_session: failed to load project: {}", e).into(),
+            )
+        }
     };
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -71,32 +82,37 @@ pub async fn create_session(
 
     db::create_session(&state.db, &session_id, &project_id, &initial_cwd, &model, model_id.as_deref())
         .await
-        .map_err(|e| format!("create_session: db insert failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("create_session: db insert failed: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn load_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<Option<db::LoadedSession>, String> {
+) -> Result<Option<db::LoadedSession>, AppCommandError> {
     db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("load_session failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("load_session failed: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn diff_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<git::diff::DiffResult, String> {
+) -> Result<git::diff::DiffResult, AppCommandError> {
     // Look up the session to find its worktree. Pre-step-4
     // sessions (worktree_path NULL) have no diff to show —
     // return an empty result rather than an error so the UI can
     // render "no changes yet" gracefully.
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("diff_worktree: failed to load session: {}", e))?
-        .ok_or_else(|| format!("diff_worktree: session '{}' not found", session_id))?;
+        .map_err(|e| anyhow::anyhow!("diff_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("diff_worktree: session '{}' not found", session_id),
+            )
+        })?;
 
     let worktree_path = match loaded.session.worktree_path.as_deref() {
         Some(p) if !p.trim().is_empty() => p,
@@ -111,14 +127,14 @@ pub async fn diff_worktree(
     };
 
     git::diff::diff_worktree(std::path::Path::new(worktree_path), &session_id)
-        .map_err(|e| format!("diff_worktree: {}", e))
+        .map_err(|e| anyhow::anyhow!("diff_worktree: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn delete_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     // Step 4 follow-up: in-flight cancel hook. If a chat stream
     // is running for this session, cancel it BEFORE the
     // destructive work. The frontend is expected to disable the
@@ -227,7 +243,7 @@ pub async fn delete_session(
 
     db::delete_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("delete_session failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("delete_session failed: {}", e).into())
 }
 
 /// B3 `/clear`: clear the current session's messages but keep the
@@ -242,7 +258,7 @@ pub async fn delete_session(
 pub async fn clear_session_messages(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     // Cancel any in-flight chat first (the backend is the last line
     // of defense — the frontend disables the trigger while
     // streaming). Wait for the loop to exit so a late `persist_turn`
@@ -264,7 +280,7 @@ pub async fn clear_session_messages(
     // Delete messages only; the session row + audit log survive.
     db::delete_messages_by_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("clear_session_messages failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("clear_session_messages failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -272,13 +288,16 @@ pub async fn rename_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     new_title: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     if new_title.trim().is_empty() {
-        return Err("rename_session: title must not be empty".to_string());
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "rename_session: title must not be empty",
+        ));
     }
     db::rename_session(&state.db, &session_id, &new_title)
         .await
-        .map_err(|e| format!("rename_session failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("rename_session failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -286,10 +305,10 @@ pub async fn set_session_color(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     color_tag: Option<i32>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     db::set_session_color(&state.db, &session_id, color_tag)
         .await
-        .map_err(|e| format!("set_session_color failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("set_session_color failed: {}", e).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +350,7 @@ pub async fn update_message_latency(
     gen_ms: Option<i64>,
     total_ms: Option<i64>,
     thinking_ms: Option<i64>,
-) -> Result<bool, String> {
+) -> Result<bool, AppCommandError> {
     // Resolve the (session_id, seq) pair to the auto-incrementing
     // row id. The seq was assigned by the agent loop in the order
     // user → assistant → user(tool_result) → ... so it's unique
@@ -339,7 +358,7 @@ pub async fn update_message_latency(
     // constraint in the schema).
     let message_id = match crate::db::find_message_id_by_seq(&state.db, &session_id, seq)
         .await
-        .map_err(|e| format!("update_message_latency: lookup failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("update_message_latency: lookup failed: {}", e))?
     {
         Some(id) => id,
         None => {
@@ -359,7 +378,7 @@ pub async fn update_message_latency(
     };
     crate::db::update_message_latency(&state.db, message_id, &latency)
         .await
-        .map_err(|e| format!("update_message_latency failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("update_message_latency failed: {}", e))?;
     Ok(true)
 }
 
@@ -381,10 +400,10 @@ pub async fn record_tool_duration(
     session_id: String,
     tool_use_id: String,
     duration_ms: i64,
-) -> Result<bool, String> {
+) -> Result<bool, AppCommandError> {
     crate::db::record_tool_duration(&state.db, &session_id, &tool_use_id, duration_ms)
         .await
-        .map_err(|e| format!("record_tool_duration failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("record_tool_duration failed: {}", e).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +462,7 @@ pub async fn edit_user_message(
     session_id: String,
     message_seq: i64,
     new_content: MessageContent,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     // 1. Stream race: cancel any in-flight chat on this session
     // first. Mirrors `delete_session` /
     // `clear_session_messages`. Wait for the loop to exit so the
@@ -465,9 +484,12 @@ pub async fn edit_user_message(
     // succeed on a stale session id.
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("edit_user_message: load_session failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("edit_user_message: load_session failed: {}", e))?
         .ok_or_else(|| {
-            format!("edit_user_message: session '{}' not found", session_id)
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("edit_user_message: session '{}' not found", session_id),
+            )
         })?;
     // Confirm the user message we're editing exists too — same
     // UX rationale (silent no-op on the DB layer is the F5
@@ -478,9 +500,12 @@ pub async fn edit_user_message(
         .iter()
         .find(|m| m.seq == message_seq && m.role == "user")
         .ok_or_else(|| {
-            format!(
-                "edit_user_message: user message at seq {} not found in session '{}'",
-                message_seq, session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "edit_user_message: user message at seq {} not found in session '{}'",
+                    message_seq, session_id
+                ),
             )
         })?;
     // Defensive: confirm we resolved the same row we're about to
@@ -491,25 +516,31 @@ pub async fn edit_user_message(
     // error rather than silently editing the wrong row.
     let resolved_id = db::find_message_id_by_seq(&state.db, &session_id, message_seq)
         .await
-        .map_err(|e| format!("edit_user_message: lookup failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("edit_user_message: lookup failed: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "edit_user_message: user message at seq {} not found in session '{}' (resolver mismatch)",
-                message_seq, session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "edit_user_message: user message at seq {} not found in session '{}' (resolver mismatch)",
+                    message_seq, session_id
+                ),
             )
         })?;
     if resolved_id != edited_msg.id {
-        return Err(format!(
-            "edit_user_message: resolved id {} != loaded id {} for seq {} — refusing to edit",
-            resolved_id, edited_msg.id, message_seq
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "edit_user_message: resolved id {} != loaded id {} for seq {} — refusing to edit",
+                resolved_id, edited_msg.id, message_seq
+            ),
         ));
     }
 
     // 3. Hand off to the DB layer. Single transaction wraps the
     // UPDATE + cascade DELETE + INSERT audit; a failure returns
-    // `sqlx::Error` which we wrap as a `String` for the IPC
+    // `sqlx::Error` which we wrap via anyhow for the IPC
     // rejection. The frontend surfaces as a toast.
     db::edit_user_message(&state.db, &session_id, message_seq, &new_content)
         .await
-        .map_err(|e| format!("edit_user_message: db failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("edit_user_message: db failed: {}", e).into())
 }

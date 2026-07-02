@@ -907,3 +907,18 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **关键教训 — hljs 接入改变 markdown HTML 输出 → 测试断言要跟**:marked-highlight 让代码块从 `<code>print(1)</code>` 变成 `<span class="hljs-built_in">print</span>...`。markdown.test.ts / MarkdownDetailModal.test.ts 的 `toContain("print(1)")` 失效。**接入改变输出的库时,先 grep 现有断言看哪些 substring 匹配会破**。
 - **测试**:cargo test 1146+/use_ui 12 + vue-tsc 0 err + vitest 694/694(UiCard 8 + CodeBlockPrimitive 7 + DiffPrimitive 9 + 4 处断言适配 hljs)。端到端(tauri dev)待手动验收。
 - **推后期**:独立 button primitive + action 白名单(D3)/ diff 应用(D4)/ session allow_generative_ui 开关(D5)/ 自由式 UI / form/chart/table primitive。
+
+### 2026-07-02 — A5 错误处理完善(全栈错误契约:`AppCommandError` wire shape + 10 类型 `impl AppError` + 前端 errorBus)
+
+- **Context**:`error-handling.md` 是半成品模板(五章里三章 `To be filled`)+ spec drift(称 `LlmErrorKind`/`Protocol`,代码实际 `LlmError`/`InvalidRequest`);代码侧 10 个对外错误类型仅 `LlmError` 有 `category()/user_message()`,Tauri command 全为 `Result<T,String>`(~65 处)无结构化错误,前端错误散点 `.catch(console.error)` 静默吞。本期目标:spec 补活文档 + Rust `AppError` trait 统一 + `AppCommandError` wire shape 一次性全切 IPC + 前端 `useErrorBus` 按 category 路由。
+- **决策 D1 — IPC 错误 = `AppCommandError { category, kind, message, retryable, request_id }` 结构化 wire**(否决继续用 String):category 驱动前端路由,kind/message 供诊断与展示,request_id 关联 tracing。不带 stacktrace(IPC 体积 + 用户消息无 stack,stack 留 tracing log)。
+- **决策 D2 — `retryable` 默认按 category 派生,本期零 override**(否决每 variant 手填):Server/Network/RateLimit=true,Auth/InvalidRequest=false。初版设计曾用 `BackgroundShellError::Timeout` 当 override 唯一样板,review 发现该 variant 不存在,整个 override 机制本期无真实案例,删除。
+- **决策 D3 — 10 个领域 `From<E>` 手写 + `From<anyhow::Error>` 边界兜底**(否决 blanket `From<E: AppError>`):AppError impl 分散各类型文件,blanket 触发 coherence 冲突。anyhow 兜底必须,因 commands 大量 `?anyhow`,无此转换 PR-A5-3 编译失败(先 downcast 已知类型,未命中归 Server/`kind="Anyhow"`)。
+- **决策 D4 — 一次性全切 IPC,无 String 兼容层,A5-3/A5-5 同次发布**(否决双协议期):errorBus `parseAppCommandError` 容错 String rejection 降级 Server/Unknown,降低迁移期回归风险;但前后端签名必须同次发布,消除"后端返对象/前端按 String 解析"中间窗口。不留 `From<AppCommandError> for String` 临时兼容层。
+- **决策 D5 — 5 类 category 复用 LlmError**(否决 PermissionDenied/Cancelled/NotFound 独立类):LlmError 5 类已是成熟的 category 原型;其余 9 类型 variant 归并(典型 NotFound→InvalidRequest、Db→Server)。独立类后续按需扩。
+- **决策 D6 — `PreFlightError::EmptyApiKey/DecryptFailed` → Auth**(非统一 InvalidRequest):前端 Auth 路由正是"引导去 Settings 检查 API key",语义对齐;NoModel/ProviderMissing/BuildFailed 仍归 InvalidRequest。
+- **决策 D7 — 前端 `errors` 数组 `MAX_ERRORS=50` FIFO**(否决无限增长 / TTL):长会话 Server/Network 风暴防护;单条 dismiss / TTL 推 toast UI follow-up。
+- **关键教训 —「planning drift 比 spec drift 更贵」**:review 发现 design.md §5 映射表 6 个类型的 variant 名凭印象虚构(`GitError::NotFound/Conflict`、`BackgroundShellError::Timeout`、`ReflectError::Parse`、`WebFetchError::Http4xx/Http5xx`、`QuestionStoreError::Duplicate`、`StatusTransitionError` 漏 Db),且"11 个 thiserror"计数错(实际 10 对外,含 2 手写)+ 漏 `ValidationError`(`pub(crate)`)。**写 planning 前必须 `rg "pub enum .*Error" -g '*.rs'` + 逐 `#[error]` 行核对真实 variant 名**,否则实施连环返工。已沉淀进 `error-handling.md §Common Mistakes`。
+- **关键教训 —「trait 超类型约束的隐藏工作量要先核实」**:`trait AppError: std::error::Error` 对 `PreFlightError` 不成立(它无 Display 也无 Error impl,只有 `auth_message()/invalid_request_message()` 分方法)。PR-A5-2 必须先补两个 impl。三个类型(LlmError/PreFlightError/QuestionStoreError)现有对外接口形态各异,非"一刀切迁移"。
+- **测试**:进行中(PR-A5-2 ~ A5-5 完成后补:10 类型 ~41 variant `category()/user_message()` 快照 + `HttpStatus` 4xx/5xx 分流 + `From<anyhow::Error>` 兜底 + grep `Result<String>` 残留 + `parseAppCommandError` 容错 + cargo/pnpm 全绿)。
+- **推后期**:多语言 i18n `user_message` / 自动重试策略 / Telemetry Metrics(request_id→Sentry/OTel)/ PermissionDenied·Cancelled·NotFound 独立 category / legacy `.catch(console.error)` 全量替换 / toast UI 接 reka-ui + 单条 dismiss·TTL / `ValidationError`(`pub(crate)`)纳入 impl AppError。

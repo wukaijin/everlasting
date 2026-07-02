@@ -36,6 +36,7 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 
 import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
@@ -612,7 +613,7 @@ export const useChatStore = defineStore("chat", () => {
     try {
       await invoke("attach_worktree", { sessionId });
     } catch (e) {
-      projectsStore.showToast(`attach worktree 失败: ${String(e)}`, "error");
+      projectsStore.showToast(`attach worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
     }
     // Invalidate cached diff (the on-disk worktree is now
@@ -640,7 +641,7 @@ export const useChatStore = defineStore("chat", () => {
       const result = await invoke<string>("publish_session_to_main", { sessionId });
       projectsStore.showToast(result, "info");
     } catch (e) {
-      projectsStore.showToast(`publish 到 main 失败: ${String(e)}`, "error");
+      projectsStore.showToast(`publish 到 main 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
     }
   }
@@ -649,7 +650,7 @@ export const useChatStore = defineStore("chat", () => {
     try {
       await invoke("detach_worktree", { sessionId });
     } catch (e) {
-      projectsStore.showToast(`detach worktree 失败: ${String(e)}`, "error");
+      projectsStore.showToast(`detach worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
     }
     diffCache.value.delete(sessionId);
@@ -670,7 +671,7 @@ export const useChatStore = defineStore("chat", () => {
     try {
       await invoke("delete_worktree", { sessionId });
     } catch (e) {
-      projectsStore.showToast(`delete worktree 失败: ${String(e)}`, "error");
+      projectsStore.showToast(`delete worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
     }
     diffCache.value.delete(sessionId);

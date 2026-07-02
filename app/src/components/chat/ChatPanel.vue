@@ -34,6 +34,7 @@
 // action handlers (attach / detach / delete + confirm modal),
 // and delegates the chip + diff UI to the new components.
 
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
 import type { SessionSummary } from "../../stores/chat.types";
@@ -143,7 +144,7 @@ async function openDiffModal() {
   try {
     diffResult.value = await chatStore.fetchDiff(sid);
   } catch (e) {
-    diffError.value = e instanceof Error ? e.message : String(e);
+    diffError.value = e instanceof Error ? e.message : extractErrorMessage(e);
   } finally {
     diffLoading.value = false;
   }

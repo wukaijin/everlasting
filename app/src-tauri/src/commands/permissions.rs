@@ -28,6 +28,7 @@ use tauri::{AppHandle, State};
 
 use crate::agent::permissions::PermissionResponse;
 use crate::db;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -80,7 +81,7 @@ pub async fn set_session_mode(
  state: State<'_, Arc<AppState>>,
  session_id: String,
  mode: String,
-) -> Result<db::SessionRow, String> {
+) -> Result<db::SessionRow, AppCommandError> {
  // Parse + validate the mode string. Unknown / empty falls
  // back to Edit per the lenient-parse contract (matches
  // `db::types::Mode::from_str_opt`). Old 'chat' / 'review'
@@ -106,21 +107,29 @@ pub async fn set_session_mode(
  session_id = %session_id,
  "set_session_mode: refused to enable Yolo as root"
  );
- return Err("Cannot enable Yolo as root".to_string());
+ return Err(AppCommandError::new(
+ ErrorCategory::InvalidRequest,
+ "Cannot enable Yolo as root",
+ ));
  }
 
  // Read the current mode for the yolo_entered / yolo_exited
  // audit dispatch.
  let loaded = db::load_session(&state.db, &session_id)
  .await
- .map_err(|e| format!("set_session_mode: load_session failed: {}", e))?
- .ok_or_else(|| format!("set_session_mode: session '{}' not found", session_id))?;
+ .map_err(|e| anyhow::anyhow!("set_session_mode: load_session failed: {}", e))?
+ .ok_or_else(|| {
+ AppCommandError::new(
+ ErrorCategory::InvalidRequest,
+ format!("set_session_mode: session '{}' not found", session_id),
+ )
+ })?;
  let prev_mode = loaded.session.mode;
 
  // Write the new mode.
  db::update_session_mode(&state.db, &session_id, new_mode)
  .await
- .map_err(|e| format!("set_session_mode: db update failed: {}", e))?;
+ .map_err(|e| anyhow::anyhow!("set_session_mode: db update failed: {}", e))?;
 
  // Audit row: mode_changed (always).
  let payload = serde_json::json!({
@@ -169,11 +178,16 @@ pub async fn set_session_mode(
  // the returned row).
  let updated = db::load_session(&state.db, &session_id)
  .await
- .map_err(|e| format!("set_session_mode: re-load failed: {}", e))?
- .ok_or_else(|| format!(
+ .map_err(|e| anyhow::anyhow!("set_session_mode: re-load failed: {}", e))?
+ .ok_or_else(|| {
+ AppCommandError::new(
+ ErrorCategory::InvalidRequest,
+ format!(
  "set_session_mode: session '{}' disappeared mid-call",
  session_id
- ))?;
+ ),
+ )
+ })?;
  Ok(updated.session)
 }
 
@@ -200,7 +214,7 @@ pub async fn permission_response(
  rid: String,
  decision: String,
  reason: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, AppCommandError> {
  let response = match decision.as_str() {
  "allow_once" => PermissionResponse::AllowOnce,
  "allow_always" => PermissionResponse::AllowAlways,
@@ -211,10 +225,10 @@ pub async fn permission_response(
  reason: reason.unwrap_or_default(),
  },
  other => {
- return Err(format!(
- "permission_response: unknown decision '{}'",
- other
- ));
+ return Err(AppCommandError::new(
+ ErrorCategory::InvalidRequest,
+ format!("permission_response: unknown decision '{}'", other),
+ ))
  }
  };
  let resolved = crate::agent::permissions::resolve_ask(
@@ -264,7 +278,7 @@ pub async fn grant_tool_permission(
  tool_name: String,
  match_kind: Option<String>,
  match_value: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
  // Default the `match_kind` to `"tool"` when omitted
  // (back-compat with the pre-re-grill IPC, which only
  // wrote tool-level grants).
@@ -282,22 +296,28 @@ pub async fn grant_tool_permission(
  match_value.as_deref(),
  )
  .await
- .map_err(|e| format!("grant_tool_permission failed: {}", e))
+ .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
  }
  "prefix" | "path" => {
  let value = match_value.as_deref().ok_or_else(|| {
+ AppCommandError::new(
+ ErrorCategory::InvalidRequest,
  format!(
  "grant_tool_permission: match_kind='{}' requires a non-NULL match_value",
  kind
+ ),
  )
  })?;
  db::grant_tool_permission(&state.db, &session_id, &tool_name, kind, Some(value))
  .await
- .map_err(|e| format!("grant_tool_permission failed: {}", e))
+ .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
  }
- other => Err(format!(
+ other => Err(AppCommandError::new(
+ ErrorCategory::InvalidRequest,
+ format!(
  "grant_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
  other
+ ),
  )),
  }
 }
@@ -317,10 +337,10 @@ pub async fn grant_tool_permission(
 pub async fn list_session_tool_permissions(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<Vec<db::PermissionGrantRow>, String> {
+) -> Result<Vec<db::PermissionGrantRow>, AppCommandError> {
     db::list_tool_permissions(&state.db, &session_id)
         .await
-        .map_err(|e| format!("list_session_tool_permissions failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_session_tool_permissions failed: {}", e).into())
 }
 
 /// Revoke ONE "always allow" row by its full PK. `match_value` is
@@ -337,13 +357,16 @@ pub async fn revoke_tool_permission(
     tool_name: String,
     match_kind: String,
     match_value: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     match match_kind.as_str() {
         "tool" | "prefix" | "path" => {}
         other => {
-            return Err(format!(
-                "revoke_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
-                other
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "revoke_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
+                    other
+                ),
             ))
         }
     }
@@ -355,7 +378,7 @@ pub async fn revoke_tool_permission(
         match_value.as_deref(),
     )
     .await
-    .map_err(|e| format!("revoke_tool_permission failed: {}", e))
+    .map_err(|e| anyhow::anyhow!("revoke_tool_permission failed: {}", e).into())
 }
 
 
@@ -380,8 +403,8 @@ pub async fn revoke_tool_permission(
 pub async fn list_session_audit_events(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<Vec<db::AuditEventRow>, String> {
+) -> Result<Vec<db::AuditEventRow>, AppCommandError> {
     db::list_audit_events(&state.db, &session_id)
         .await
-        .map_err(|e| format!("list_session_audit_events failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_session_audit_events failed: {}", e).into())
 }

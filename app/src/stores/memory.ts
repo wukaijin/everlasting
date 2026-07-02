@@ -40,6 +40,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 
 // --- Types — mirror `MemoryLayerInfo` from the Rust side. -----------
 // Field names are snake_case to match the serde renaming on the
@@ -192,7 +193,7 @@ export const useMemoryStore = defineStore("memory", () => {
       contentCache.value = new Map();
       error.value = null;
     } catch (e) {
-      error.value = String(e);
+      error.value = extractErrorMessage(e);
     } finally {
       loading.value = false;
     }
@@ -315,7 +316,7 @@ export const useMemoryStore = defineStore("memory", () => {
       runtimeMemories.value = next;
       runtimeMemoriesError.value = null;
     } catch (e) {
-      runtimeMemoriesError.value = String(e);
+      runtimeMemoriesError.value = extractErrorMessage(e);
     } finally {
       runtimeMemoriesLoading.value = false;
     }
@@ -362,7 +363,7 @@ export const useMemoryStore = defineStore("memory", () => {
       );
       runtimeMemoriesError.value = null;
     } catch (e) {
-      runtimeMemoriesError.value = String(e);
+      runtimeMemoriesError.value = extractErrorMessage(e);
     }
   }
 

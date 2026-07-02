@@ -36,6 +36,7 @@
 
 import { computed, ref, watch, onUnmounted } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { useChatStore } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";
@@ -444,7 +445,7 @@ async function onResend(messageSeq: number) {
     await chatStore.resendMessage(sid, messageSeq, props.message.content);
   } catch (e) {
     projectsStore.showToast(
-      `重发失败: ${String(e)}`,
+      `重发失败: ${extractErrorMessage(e)}`,
       "error",
     );
   }
@@ -492,9 +493,9 @@ async function handleSave(trimmed: string) {
     // `String` rejection (e.g. "edit_user_message: user
     // message at seq 5 not found in session ...") or a
     // generic message for client-side errors.
-    editError.value = String(e);
+    editError.value = extractErrorMessage(e);
     projectsStore.showToast(
-      `编辑失败: ${String(e)}`,
+      `编辑失败: ${extractErrorMessage(e)}`,
       "error",
     );
   } finally {
@@ -534,7 +535,7 @@ async function handleResend() {
     await chatStore.resendMessage(sid, props.message.seq, props.message.content);
   } catch (e) {
     projectsStore.showToast(
-      `重发失败: ${String(e)}`,
+      `重发失败: ${extractErrorMessage(e)}`,
       "error",
     );
   }

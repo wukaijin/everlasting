@@ -187,7 +187,7 @@ describe("useMemoryStore — fetchMemories (P2 PR3)", () => {
     await store.fetchMemories();
 
     expect(store.runtimeMemoriesError).toBe(
-      "Error: list_autonomous_memories: query failed: connection lost",
+      "list_autonomous_memories: query failed: connection lost",
     );
     // Defensive: the previous list is NOT cleared on failure.
     expect(store.runtimeMemories).toHaveLength(1);
@@ -260,7 +260,7 @@ describe("useMemoryStore — deleteMemory (P2 PR3)", () => {
     await store.deleteMemory(10);
 
     expect(store.runtimeMemoriesError).toBe(
-      "Error: delete_autonomous_memory: delete failed: db busy",
+      "delete_autonomous_memory: delete failed: db busy",
     );
     // The failed row is still in the list.
     expect(store.runtimeMemories).toHaveLength(2);

@@ -4,54 +4,182 @@
 
 ---
 
+## RULES 索引(error-handling 相关 RULE-A-*)
+
+> 集中收纳与错误处理相关的 RULE-A-* 不变量。每条引 IMPLEMENTATION.md §4 对应日期 ADR。grep by `RULE-A-NNN`。
+
+| RULE | 日期 | 含义 | 状态 | 主要落地 |
+|---|---|---|---|---|
+| RULE-A-001 | 2026-06-12 | C3 上下文压缩 tail pair orphan 不变量(compress 不留孤儿) | closed | `agent/context.rs`;ADR [IMPLEMENTATION §4 2026-06-12](../../../docs/IMPLEMENTATION.md#4-决策日志) |
+| RULE-A-002 | 2026-06-14 | C3 over-budget degradation(超预算降级,不静默截断) | closed | `agent/context.rs`;ADR 2026-06-14 |
+| RULE-A-003 | 2026-06-15 | **normal-path persist 失败 → emit `ChatEvent::Error{Server}` + abort,不静默吞用户消息** | closed `d8ee7d9` | `agent/chat_loop.rs`;本文 §"Agent Loop Error Paths" |
+| RULE-A-004 | 2026-06-15 | cancel 掉的 tool 不记 audit / 不 commit tool_result(audit 在 cancel check 之后) | closed | `agent/chat_loop.rs`;[`backend/agent-loop-architecture.md`](./agent-loop-architecture.md) |
+| RULE-A-006 | 2026-06-15 | chat_loop 单一权威(production = test 同一 `run_chat_loop`,23 参) | closed `759607c` | `agent/chat_loop.rs` + `agent/subagent/dispatch.rs` |
+| RULE-A-007 | 2026-06-17 | **error arm 对称 cancel 路径 persist partial turn**(不丢弃已累积 text/thinking/tool_use) | closed | `agent/chat_loop.rs` + `agent/helpers.rs`(`ERROR_MARKER`);本文 §"Agent Loop Error Paths" |
+| RULE-A-010 | 2026-06-17 | cancel「一次即终止」MVP 简化(未实现二次取消语义,spec 偏离声明) | closed(spec 偏离) | [`docs/ARCHITECTURE.md §2.5.1`](../../../docs/ARCHITECTURE.md) |
+| RULE-A-012 | 2026-06-19 | **reqwest per-chunk `read_timeout` + stream-error `tracing::warn!`**(不静默 wrap) | closed | `llm/provider/anthropic.rs` + `openai.rs` + `agent/chat_loop.rs`;本文 §"RULE-A-012" |
+| RULE-A-013 | 2026-06-19 | path-in-root 收口(async 并行只读工具集 boundary) | closed | `tools/`;[`spikes/2026-06-19-async-parallel-tool-research.md`](../../../docs/spikes/2026-06-19-async-parallel-tool-research.md) |
+| RULE-A-014 | 2026-06-20 | worker 的 Tier 4 `ask_path`/`ask_shell` collapse to Deny(workers 无 UI sink,否则挂起) | closed PR2b | `agent/chat_loop.rs`(`is_worker` 第 21 参) |
+| RULE-A-015 | 2026-06-20 | `skip_persist` gate 校正(PR1 过宽 18 → 实际 16);2026-06-26 partial reversal(worker token 隔离到 `subagent_runs`) | closed PR2a | `agent/chat_loop.rs`;[`backend/agent-loop-architecture.md`](./agent-loop-architecture.md) Pattern |
+| RULE-A-016 | 2026-06-20 | worker `ask_path` 写 transcript `PermissionAsk`(historical mode 直吃 payload_json) | closed PR3a | `agent/subagent/transcript.rs` |
+| RULE-A-017 | pre-existing | C3 `agent_loop_c3_compaction_does_not_panic` 测试失败(已知观测盲点,pre-PR main 同样失败) | open | [`.trellis/reviews/DEBT.md`](../../reviews/DEBT.md) |
+
+---
+
 ## Overview
 
-<!--
-Document your project's error handling conventions here.
+错误处理围绕 4 个目标(缺一不可):
 
-Questions to answer:
-- What error types do you define?
-- How are errors propagated?
-- How are errors logged?
-- How are errors returned to clients?
--->
+1. **可观测** — 开发者能从 tracing log 定位根因(每个错误留 Rust 侧 breadcrumb,见 RULE-A-012)。
+2. **可恢复** — 用户能判断是否值得重试(`retryable` 字段暴露给前端,Server/Network/RateLimit 默认可重试)。
+3. **可读** — 用户看到中文友好消息(`user_message()`),而非 `unwrap` panic 或原始英文 stack。
+4. **不静默** — 持久化失败、流中断、状态机违例都不允许吞掉(RULE-A-003 / A-007 / A-012)。
 
-(To be filled by the team)
+错误在 4 层流转,每层有明确职责:
+
+| 层 | 职责 | 边界契约 |
+|---|---|---|
+| **Tool 内部** | tool 执行的领域错误(校验/IO/git/网络) | thiserror enum,`#[error]` 中文友好 |
+| **Agent Loop** | 把领域错误包成 terminal `ChatEvent::Error` + persist partial turn | `LlmError` 5 类是 category 原型;RULE-A-007 对称 cancel |
+| **IPC command** | Tauri command 返回结构化错误 | `AppCommandError` wire shape(本文 §API Error Responses) |
+| **前端 errorBus** | `invoke().catch()` 收口,按 category 路由(toast/inline) | `useErrorBus` composable |
+
+不变量:每个请求**恰好一个 terminal event**(RULE-A-007);persist 失败在 normal path emit、在 terminal path log-only(见 §Agent Loop Error Paths 表)。
 
 ---
 
 ## Error Types
 
-<!-- Custom error classes/types -->
+### `LlmError`(`llm/error.rs`)— category 原型
 
-(To be filled by the team)
+5 个 variant,既是 LLM 调用错误,也是全仓 5 类 `ErrorCategory` 的原型:
+
+| variant | category | retryable | 触发 |
+|---|---|---|---|
+| `Auth(String)` | Auth | false | API key 失效 / 401/403 |
+| `RateLimit(String)` | RateLimit | true | 429 |
+| `InvalidRequest(String)` | InvalidRequest | false | 4xx(非 401/403/429),含 Anthropic thinking 400 |
+| `Server { status, message }` | Server | true | 5xx |
+| `Network(String)` | Network | true | 连接/超时 |
+
+> **spec drift 修正(2026-07-02)**:本节原称该 enum 为 `LlmErrorKind`、含 `Protocol` variant。代码实际命名为 `LlmError`(`llm/error.rs:17`),`Protocol` variant 实际叫 `InvalidRequest`。category enum `LlmErrorCategory` 在 `llm/types.rs`。
+
+### 其余 9 个对外错误类型
+
+均 `impl AppError`(trait 见 §Error Handling Patterns),variant → category 完整映射见任务 [`07-02-a5-error-handling-refine`](../../tasks/07-02-07-02-a5-error-handling-refine/design.md) §5。组成:
+
+- **8 个 thiserror**:`GitError`(`git/error.rs`,NotARepo/Io/Git2/Dirty)、`MemoryInsertError` + `StatusTransitionError`(`db/memories.rs`)、`BackgroundShellError`(`background_shell/mod.rs`)、`ReflectError`(`agent/auto_reflect.rs`)、`WebFetchError`(`tools/web_fetch.rs`)、`ProviderBuildError`(`llm/provider/mod.rs`)。
+- **2 个手写**:`QuestionStoreError`(`agent/question_store.rs`,手写 Display + 空 `impl Error`)、`PreFlightError`(`agent/provider.rs`,需补 Display + Error impl)。
+
+排除:`ValidationError`(`tools/ask_user_question.rs`,`pub(crate)` tool 内部错误,不冒泡 IPC 边界,不纳入 `impl AppError`)。
 
 ---
 
 ## Error Handling Patterns
 
-<!-- Try-catch patterns, error propagation -->
+### 传播:`?` + `From<E>`
 
-(To be filled by the team)
+领域错误用 `?` 向上传播;IPC command 边界通过 `From<E> for AppCommandError` 收口:
+
+```rust
+// commands 内部:? 配合 From 转换(含 anyhow 边界兜底)
+async fn create_session(req: CreateSessionReq) -> Result<SessionId, AppCommandError> {
+    let id = db::create_session(&pool, req.project_id).await?;  // sqlx::Error → anyhow → AppCommandError(Server)
+    Ok(id)
+}
+```
+
+`From` 覆盖:10 个领域类型 + `From<anyhow::Error>`(commands 大量 `?anyhow`,未命中已知类型则归 Server/`kind="Anyhow"`)。
+
+### `AppError` trait(`app/src-tauri/src/error.rs`)
+
+每个对外错误类型 `impl AppError`,提供统一的对外接口:
+
+```rust
+pub trait AppError: std::error::Error {
+    fn category(&self) -> ErrorCategory;
+    fn user_message(&self) -> String;          // 中文友好,直接展示用户
+    fn retryable(&self) -> bool {              // 默认按 category 派生
+        matches!(self.category(), ErrorCategory::Server | ErrorCategory::Network | ErrorCategory::RateLimit)
+    }
+}
+```
+
+- `retryable` 默认派生,**本期零 override**(初版基于不存在的 `BackgroundShellError::Timeout` 的 override 设计已删除)。
+- 两个 variant 在 `category()` 内部做条件分流:`WebFetchError::HttpStatus(u16)`(4xx→InvalidRequest / 5xx→Server)、`PreFlightError`(EmptyApiKey/DecryptFailed→Auth,其余→InvalidRequest)。
+
+### 不静默(RULE-A-003 / A-007 / A-012)
+
+- **persist 失败不静默**(RULE-A-003):normal-path `persist_turn` 失败 → emit `ChatEvent::Error{Server}` + abort;terminal-path(error/cancel)log-only(避免 double-terminal,见 §Agent Loop Error Paths 表)。
+- **stream error 必留 trace**(RULE-A-012):`LlmError` 包成 `ChatEvent::Error` 时**必须**先 `tracing::warn!(category = ..., error = %err)`,否则错误只在前端 toast 可见、reload 后消失。
+- **error arm 不丢内容**(RULE-A-007):流中断时已累积的 text/thinking/tool_use 必须 flush + persist(对称 cancel 路径)。
+
+### 前端:useErrorBus 收口
+
+`invoke().catch(e => useErrorBus().handle(e))` → `parseAppCommandError(e)`(容错 Tauri String rejection / JSON parse fail / 对象 + category 值域校验)→ 按 category 路由(Auth→Settings 引导 / RateLimit→toast / InvalidRequest→inline / Server→toast+重试 / Network→toast)。全局 `window.onerror` + `unhandledrejection` 兜底。
 
 ---
 
 ## API Error Responses
 
-<!-- Standard error response format -->
+Tauri command 的错误返回统一为 `AppCommandError` wire shape(`app/src-tauri/src/error.rs`)。前端按 `category` 路由,`kind`/`requestId` 供诊断与日志关联。
 
-The agent classifies LLM-side failures into `LlmErrorKind` (`llm/error.rs`):
+### `AppCommandError` schema
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppCommandError {
+    pub category: ErrorCategory,   // 前端路由键
+    pub kind: String,              // 诊断短名,如 "LlmError::Auth" / "GitError::NotARepo"
+    pub message: String,           // 中文友好,直接展示
+    pub retryable: bool,           // 前端决定是否提供"重试"
+    pub request_id: Option<String>,// 高频 command 透传前端 requestId,关联 tracing
+}
+```
+
+IPC JSON payload:
+
+```json
+{
+  "category": "RateLimit",
+  "kind": "LlmError::RateLimit",
+  "message": "请求过于频繁,请稍后再试",
+  "retryable": true,
+  "requestId": "mz8s3hqwx6rmqjswgte"
+}
+```
+
+### 5 类 `ErrorCategory` 全集
+
+全仓 10 个对外错误类型均归并到这 5 类(完整 variant→category 映射见任务 design.md §5):
+
+| category | retryable 默认 | 覆盖 | 前端路由 |
+|---|---|---|---|
+| `Auth` | false | API key 缺失/失效 / 401/403 / 解密失败 / `PreFlightError::EmptyApiKey/DecryptFailed` | toast + 引导去 Settings |
+| `RateLimit` | true | 429 | toast("请求过于频繁") |
+| `InvalidRequest` | false | 4xx(非 401/403/429)/ 数据校验 / 状态机违例 / 配置错 / SSRF / NotFound | 内联错误(调用点) |
+| `Server` | true | 5xx / DB(sqlx)错 / 内部错误 / libgit2 / io | toast + 重试按钮 |
+| `Network` | true | 连接超时 / DNS / TLS / 中断 | toast(检查网络) |
+
+### `From<E>` 转换
+
+`AppCommandError` 集中实现 `From<E>`:10 个领域类型(各调 `AppError::category()/user_message()/retryable()`)+ `From<anyhow::Error>` 边界兜底(commands 大量 `?anyhow`,先 downcast 已知类型,未命中归 Server/`kind="Anyhow"`)。
+
+### `LlmError` 5 类(category 原型)
+
+`LlmError`(`llm/error.rs`)是 category 原型,5 个 variant 与 `ErrorCategory` 1:1:
 
 - `Auth` — bad or missing API key, 401/403 from upstream.
 - `RateLimit` — 429.
 - `Server` — 5xx.
 - `Network` — connection / timeout.
-- `Protocol` — 4xx other than 401/403/429, including 400 from a malformed request
+- `InvalidRequest` — 4xx other than 401/403/429, including 400 from a malformed request
   body. **This is the bucket that catches the thinking-related failures below.**
 
 ### Anthropic 400 from extended-thinking contract violations
 
-The `Protocol` kind covers failures caused by our own payload. Three patterns
+The `InvalidRequest` kind covers failures caused by our own payload. Three patterns
 all surface as a 400 with a message like `"messages.0.content.0.signature: Field required"`:
 
 | Cause | Fix |
@@ -130,6 +258,21 @@ per request" invariant stays intact.
 ## Common Mistakes
 
 <!-- Error handling mistakes your team has made -->
+
+### Mistake: spec drift — 错误类型名 / variant 名与代码不一致
+
+`error-handling.md` 曾两处与代码脱节:
+
+- 称 LLM 错误 enum 为 `LlmErrorKind`,代码实际是 `LlmError`(`llm/error.rs:17`),category enum `LlmErrorCategory` 在 `llm/types.rs`。
+- 称 5 类含 `Protocol` variant,代码实际命名为 `InvalidRequest`。
+
+更早的规划文档(design.md §5 映射表)曾凭印象写出 `GitError::NotFound/Conflict`、`BackgroundShellError::Timeout`、`ReflectError::Parse`、`WebFetchError::Http4xx/Http5xx` 等**不存在的 variant** —— 把不存在的 variant 当契约来规划,会让实施直接返工。
+
+**防护**:
+
+- 写 spec / planning 前,先 `rg "pub enum .*Error" -g '*.rs'` + 逐 variant 核对真实名(thiserror 的 `#[error]` 行 + struct field 形态)。
+- A5 落地 grep-style 单测(R5.2):`grep -rE "Result<.*, *String>" app/src-tauri/src/commands/` 必须无结果,挡住"签名回退"类 drift。
+- 本文档 §Error Types 已用真实 variant 名;新增错误类型时同步更新本节 + 任务 design.md §5 映射表。
 
 ### Mistake: dropping the `signature` to "save space"
 

@@ -41,6 +41,7 @@
 import { defineStore } from "pinia";
 import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { useChatStore } from "./chat";
@@ -1813,7 +1814,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         const last = msgs[msgs.length - 1];
         if (last && last.role === "assistant") {
           last.streaming = false;
-          last.error = { message: String(e), category: "server" };
+          last.error = { message: extractErrorMessage(e), category: "server" };
         }
       }
       finalizeRequest(requestId, args.sessionId, true);

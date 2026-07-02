@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::error::AppCommandError;
 use crate::resource_loader::{CommandInfo, list_all};
 use crate::state::AppState;
 
@@ -25,11 +26,11 @@ use crate::state::AppState;
 pub async fn list_commands(
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
-) -> Result<Vec<CommandInfo>, String> {
+) -> Result<Vec<CommandInfo>, AppCommandError> {
     let project_path = match project_id {
         Some(pid) => crate::db::get_project(&state.db, &pid)
             .await
-            .map_err(|e| format!("list_commands: get_project failed: {}", e))?
+            .map_err(|e| anyhow::anyhow!("list_commands: get_project failed: {}", e))?
             .map(|p| p.path),
         None => None,
     };
@@ -46,11 +47,11 @@ pub async fn get_command_body(
     state: State<'_, Arc<AppState>>,
     name: String,
     project_id: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppCommandError> {
     let project_path = match project_id {
         Some(pid) => crate::db::get_project(&state.db, &pid)
             .await
-            .map_err(|e| format!("get_command_body: get_project failed: {}", e))?
+            .map_err(|e| anyhow::anyhow!("get_command_body: get_project failed: {}", e))?
             .map(|p| p.path),
         None => None,
     };

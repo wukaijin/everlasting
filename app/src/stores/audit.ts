@@ -33,6 +33,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 import type { AuditEventRow } from "../utils/audit";
 
 export const useAuditStore = defineStore("audit", () => {
@@ -79,7 +80,7 @@ export const useAuditStore = defineStore("audit", () => {
       events.value = sortEvents(rows);
       lastSessionId.value = sessionId;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e);
     } finally {
       loading.value = false;
     }

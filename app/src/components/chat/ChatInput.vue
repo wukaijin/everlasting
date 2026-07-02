@@ -78,6 +78,7 @@ export {};
 
 import { computed, nextTick, ref, watch, watchEffect } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import Icon from "../Icon.vue";
 import ModeSelect from "./ModeSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
@@ -501,7 +502,7 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
     });
   } catch (e) {
     console.error(`get_command_body "/${item.name}" failed:`, e);
-    projectsStore.showToast(`命令 /${item.name} 读取失败: ${String(e)}`, "error");
+    projectsStore.showToast(`命令 /${item.name} 读取失败: ${extractErrorMessage(e)}`, "error");
     return;
   }
   if (!body || !body.trim()) {

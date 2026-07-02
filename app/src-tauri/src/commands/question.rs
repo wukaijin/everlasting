@@ -25,6 +25,7 @@ use tauri::State;
 use crate::agent::question_store::{
     QuestionAnswer, QuestionResponse, ToolQuestionPayload,
 };
+use crate::error::AppCommandError;
 use crate::state::AppState;
 
 /// Forward the user's answer (or cancel) to the
@@ -74,7 +75,7 @@ pub async fn resolve_tool_question(
     tool_use_id: String,
     answer: Option<Vec<QuestionAnswer>>,
     cancelled: Option<bool>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     // Accepted for routing parity with the wire shape; the
     // store keys on session_id alone (single-pending).
     let _ = tool_use_id;
@@ -82,8 +83,8 @@ pub async fn resolve_tool_question(
     state
         .question_store
         .resolve(&session_id, response)
-        .await
-        .map_err(|e| e.to_string())
+        .await?;
+    Ok(())
 }
 
 /// Map the scalar IPC args to a `QuestionResponse`. Pure
@@ -120,6 +121,6 @@ pub(crate) fn resolve_response_from_args(
 pub async fn get_pending_question(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<Option<ToolQuestionPayload>, String> {
+) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
     Ok(state.question_store.get_payload(&session_id).await)
 }

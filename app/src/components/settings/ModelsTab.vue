@@ -18,6 +18,7 @@
 
 import { ref, reactive, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { useModelsStore, type ModelWithProvider } from "../../stores/models";
 import { useProvidersStore } from "../../stores/providers";
 import ModelRow, { type TestState } from "./ModelRow.vue";
@@ -186,7 +187,7 @@ async function runTest(modelId: string) {
       };
     }
   } catch (e) {
-    tests[modelId] = { kind: "fail", error: String(e) };
+    tests[modelId] = { kind: "fail", error: extractErrorMessage(e) };
   }
 }
 

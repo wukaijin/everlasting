@@ -12,6 +12,7 @@ use tauri::State;
 
 use crate::agent::helpers::{await_inflight_exit, cancel_inflight_for_session};
 use crate::db;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::git;
 use crate::state::AppState;
 
@@ -25,30 +26,44 @@ use crate::state::AppState;
 pub async fn publish_session_to_main(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<String, String> {
+) -> Result<String, AppCommandError> {
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("publish_session_to_main: load session: {}", e))?
+        .map_err(|e| anyhow::anyhow!("publish_session_to_main: load session: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "publish_session_to_main: session '{}' not found",
-                session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "publish_session_to_main: session '{}' not found",
+                    session_id
+                ),
             )
         })?;
     if loaded.session.worktree_state != db::WorktreeState::Active {
-        return Err(format!(
-            "publish_session_to_main: session '{}' has no active worktree; attach one first",
-            session_id
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "publish_session_to_main: session '{}' has no active worktree; attach one first",
+                session_id
+            ),
         ));
     }
     let project = db::get_project(&state.db, &loaded.session.project_id)
         .await
-        .map_err(|e| format!("publish_session_to_main: load project: {}", e))?
-        .ok_or_else(|| "publish_session_to_main: project not found".to_string())?;
+        .map_err(|e| anyhow::anyhow!("publish_session_to_main: load project: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "publish_session_to_main: project not found".to_string(),
+            )
+        })?;
     if !project.is_git_repo {
-        return Err(format!(
-            "publish_session_to_main: project '{}' is not a git repository",
-            project.name
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "publish_session_to_main: project '{}' is not a git repository",
+                project.name
+            ),
         ));
     }
     let project_path = std::path::Path::new(&project.path).to_path_buf();
@@ -57,31 +72,43 @@ pub async fn publish_session_to_main(
         crate::tools::merge_worker::merge_session_into_main(&project_path, &session_id_owned)
     })
     .await
-    .map_err(|e| format!("publish_session_to_main: join: {}", e))?
+    .map_err(|e| anyhow::anyhow!("publish_session_to_main: join: {}", e))?
+    .map_err(|e| anyhow::anyhow!("publish_session_to_main: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn attach_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<db::SessionRow, String> {
+) -> Result<db::SessionRow, AppCommandError> {
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("attach_worktree: failed to load session: {}", e))?
-        .ok_or_else(|| format!("attach_worktree: session '{}' not found", session_id))?;
+        .map_err(|e| anyhow::anyhow!("attach_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("attach_worktree: session '{}' not found", session_id),
+            )
+        })?;
     let project = db::get_project(&state.db, &loaded.session.project_id)
         .await
-        .map_err(|e| format!("attach_worktree: failed to load project: {}", e))?
+        .map_err(|e| anyhow::anyhow!("attach_worktree: failed to load project: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "attach_worktree: project '{}' not found",
-                loaded.session.project_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "attach_worktree: project '{}' not found",
+                    loaded.session.project_id
+                ),
             )
         })?;
     if !project.is_git_repo {
-        return Err(format!(
-            "attach_worktree: project '{}' is not a git repository",
-            project.name
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "attach_worktree: project '{}' is not a git repository",
+                project.name
+            ),
         ));
     }
 
@@ -91,9 +118,12 @@ pub async fn attach_worktree(
     match loaded.session.worktree_state {
         db::WorktreeState::None | db::WorktreeState::Detached => {}
         db::WorktreeState::Active => {
-            return Err(format!(
-                "attach_worktree: session '{}' already has an active worktree",
-                session_id
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "attach_worktree: session '{}' already has an active worktree",
+                    session_id
+                ),
             ));
         }
     }
@@ -103,7 +133,10 @@ pub async fn attach_worktree(
     // loses the user's WIP.
     let project_path = std::path::Path::new(&project.path);
     if let Err(msg) = git::check_clean(project_path) {
-        return Err(format!("attach_worktree: {}", msg));
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("attach_worktree: {}", msg),
+        ));
     }
 
     // ----- Disk + DB write via shared helper -----
@@ -115,16 +148,19 @@ pub async fn attach_worktree(
     let data_dir = state.app_data_dir.clone();
     git::worktree::attach_session(&state.db, &project, &session_id, &data_dir)
         .await
-        .map_err(|e| format!("attach_worktree: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("attach_worktree: {}", e))?;
 
     // Reload and return the canonical row.
     let updated = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("attach_worktree: reload failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("attach_worktree: reload failed: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "attach_worktree: session '{}' disappeared after attach",
-                session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "attach_worktree: session '{}' disappeared after attach",
+                    session_id
+                ),
             )
         })?;
     Ok(updated.session)
@@ -134,7 +170,7 @@ pub async fn attach_worktree(
 pub async fn detach_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<db::SessionRow, String> {
+) -> Result<db::SessionRow, AppCommandError> {
     let exit_rx = cancel_inflight_for_session(
         &state.cancellations,
         &state.session_active_request,
@@ -150,25 +186,41 @@ pub async fn detach_worktree(
 
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("detach_worktree: failed to load session: {}", e))?
-        .ok_or_else(|| format!("detach_worktree: session '{}' not found", session_id))?;
+        .map_err(|e| anyhow::anyhow!("detach_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("detach_worktree: session '{}' not found", session_id),
+            )
+        })?;
 
     if loaded.session.worktree_state != db::WorktreeState::Active {
-        return Err(format!(
-            "detach_worktree: session '{}' is not in 'active' state (current: {:?})",
-            session_id, loaded.session.worktree_state
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "detach_worktree: session '{}' is not in 'active' state (current: {:?})",
+                session_id, loaded.session.worktree_state
+            ),
         ));
     }
     let wt_path_str = loaded
         .session
         .worktree_path
         .clone()
-        .ok_or_else(|| "detach_worktree: active session has no worktree_path".to_string())?;
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "detach_worktree: active session has no worktree_path".to_string(),
+            )
+        })?;
     let wt_path = std::path::PathBuf::from(&wt_path_str);
 
     // REQ-9: refuse if the worktree has uncommitted changes.
     if let Err(msg) = git::check_clean(&wt_path) {
-        return Err(format!("detach_worktree: {}", msg));
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("detach_worktree: {}", msg),
+        ));
     }
 
     // Write the new state FIRST. If the DB update fails, we
@@ -184,7 +236,7 @@ pub async fn detach_worktree(
         Some(&wt_path_str),
     )
     .await
-    .map_err(|e| format!("detach_worktree: db update failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("detach_worktree: db update failed: {}", e))?;
 
     let branch = git::worktree::branch_name(&session_id);
     let event_text = format!(
@@ -204,11 +256,14 @@ pub async fn detach_worktree(
 
     let updated = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("detach_worktree: reload failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("detach_worktree: reload failed: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "detach_worktree: session '{}' disappeared after detach",
-                session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "detach_worktree: session '{}' disappeared after detach",
+                    session_id
+                ),
             )
         })?;
     Ok(updated.session)
@@ -218,7 +273,7 @@ pub async fn detach_worktree(
 pub async fn delete_worktree(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> Result<db::SessionRow, String> {
+) -> Result<db::SessionRow, AppCommandError> {
     let exit_rx = cancel_inflight_for_session(
         &state.cancellations,
         &state.session_active_request,
@@ -236,26 +291,37 @@ pub async fn delete_worktree(
 
     let loaded = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("delete_worktree: failed to load session: {}", e))?
-        .ok_or_else(|| format!("delete_worktree: session '{}' not found", session_id))?;
+        .map_err(|e| anyhow::anyhow!("delete_worktree: failed to load session: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("delete_worktree: session '{}' not found", session_id),
+            )
+        })?;
 
     // Delete is valid from `active` OR `detached`.
     if loaded.session.worktree_state != db::WorktreeState::Active
         && loaded.session.worktree_state != db::WorktreeState::Detached
     {
-        return Err(format!(
-            "delete_worktree: session '{}' has no worktree to delete (state: {:?})",
-            session_id, loaded.session.worktree_state
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "delete_worktree: session '{}' has no worktree to delete (state: {:?})",
+                session_id, loaded.session.worktree_state
+            ),
         ));
     }
 
     let project = db::get_project(&state.db, &loaded.session.project_id)
         .await
-        .map_err(|e| format!("delete_worktree: failed to load project: {}", e))?
+        .map_err(|e| anyhow::anyhow!("delete_worktree: failed to load project: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "delete_worktree: project '{}' not found",
-                loaded.session.project_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "delete_worktree: project '{}' not found",
+                    loaded.session.project_id
+                ),
             )
         })?;
 
@@ -302,7 +368,7 @@ pub async fn delete_worktree(
         None,
     )
     .await
-    .map_err(|e| format!("delete_worktree: db update failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("delete_worktree: db update failed: {}", e))?;
 
     let event_text = format!(
         "worktree deleted: branch {} and dir {} removed",
@@ -324,11 +390,14 @@ pub async fn delete_worktree(
 
     let updated = db::load_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("delete_worktree: reload failed: {}", e))?
+        .map_err(|e| anyhow::anyhow!("delete_worktree: reload failed: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "delete_worktree: session '{}' disappeared after delete",
-                session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "delete_worktree: session '{}' disappeared after delete",
+                    session_id
+                ),
             )
         })?;
     Ok(updated.session)

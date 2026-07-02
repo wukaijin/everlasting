@@ -17,6 +17,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::db;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::projects;
 use crate::state::AppState;
 
@@ -34,31 +35,33 @@ pub struct ListProjectsFilter {
 pub async fn list_projects(
     state: State<'_, Arc<AppState>>,
     filter: Option<ListProjectsFilter>,
-) -> Result<Vec<projects::ProjectRow>, String> {
+) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
     let include_hidden = filter
         .as_ref()
         .and_then(|f| f.hidden)
         .unwrap_or(false);
     db::list_projects(&state.db, include_hidden)
         .await
-        .map_err(|e| format!("list_projects failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_projects failed: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn list_hidden_projects(
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<projects::ProjectRow>, String> {
+) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
     db::list_hidden_projects(&state.db)
         .await
-        .map_err(|e| format!("list_hidden_projects failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_hidden_projects failed: {}", e).into())
 }
 
 #[tauri::command]
 pub async fn create_project(
     state: State<'_, Arc<AppState>>,
     path: String,
-) -> Result<projects::ProjectRow, String> {
-    projects::store::create_project(&state.db, &path).await
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::create_project(&state.db, &path)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
 #[tauri::command]
@@ -66,8 +69,10 @@ pub async fn update_project_path(
     state: State<'_, Arc<AppState>>,
     id: String,
     new_path: String,
-) -> Result<projects::ProjectRow, String> {
-    projects::store::update_project_path(&state.db, &id, &new_path).await
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::update_project_path(&state.db, &id, &new_path)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
 #[tauri::command]
@@ -75,18 +80,30 @@ pub async fn update_project_name(
     state: State<'_, Arc<AppState>>,
     id: String,
     new_name: String,
-) -> Result<projects::ProjectRow, String> {
-    projects::store::update_project_name(&state.db, &id, &new_name).await
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::update_project_name(&state.db, &id, &new_name)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
 #[tauri::command]
-pub async fn hide_project(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    projects::store::hide_project(&state.db, &id).await
+pub async fn hide_project(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), AppCommandError> {
+    projects::store::hide_project(&state.db, &id)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
 #[tauri::command]
-pub async fn unhide_project(state: State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
-    projects::store::unhide_project(&state.db, &id).await
+pub async fn unhide_project(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), AppCommandError> {
+    projects::store::unhide_project(&state.db, &id)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
 
 /// Show a native directory picker. Returns `Some(path)` if the
@@ -102,7 +119,7 @@ pub async fn unhide_project(state: State<'_, Arc<AppState>>, id: String) -> Resu
 pub async fn pick_project_dir(
     app: AppHandle,
     #[allow(unused_variables)] fallback: bool,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppCommandError> {
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<PathBuf>>();
     app.dialog()
         .file()
@@ -116,6 +133,9 @@ pub async fn pick_project_dir(
     match rx.await {
         Ok(Some(p)) => Ok(Some(p.to_string_lossy().into_owned())),
         Ok(None) => Ok(None),
-        Err(_) => Err("dialog channel closed".to_string()),
+        Err(_) => Err(AppCommandError::new(
+            ErrorCategory::Server,
+            "dialog channel closed",
+        )),
     }
 }

@@ -16,15 +16,16 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::db;
+use crate::error::AppCommandError;
 use crate::state::AppState;
 
 #[tauri::command]
 pub async fn list_providers(
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::ProviderRow>, String> {
+) -> Result<Vec<db::ProviderRow>, AppCommandError> {
     db::list_providers(&state.db)
         .await
-        .map_err(|e| format!("list_providers failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_providers failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -34,10 +35,10 @@ pub async fn add_provider(
     display_name: String,
     base_url: String,
     api_key: String,
-) -> Result<db::ProviderRow, String> {
+) -> Result<db::ProviderRow, AppCommandError> {
     let row = db::create_provider(&state.db, &protocol, &display_name, &base_url, &api_key)
         .await
-        .map_err(|e| format!("add_provider failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("add_provider failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
 }
@@ -53,20 +54,23 @@ pub async fn update_provider(
     // `Some(v)` = 加密覆盖. 前端编辑 provider 时 apiKey input 留空
     // 传 undefined → Tauri 反序列化为 `None`.
     api_key: Option<String>,
-) -> Result<Option<db::ProviderRow>, String> {
+) -> Result<Option<db::ProviderRow>, AppCommandError> {
     let row =
         db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, api_key.as_deref())
         .await
-        .map_err(|e| format!("update_provider failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("update_provider failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
 }
 
 #[tauri::command]
-pub async fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+pub async fn delete_provider(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, AppCommandError> {
     let ok = db::delete_provider(&state.db, &id)
         .await
-        .map_err(|e| format!("delete_provider failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("delete_provider failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(ok)
 }
@@ -74,10 +78,10 @@ pub async fn delete_provider(state: State<'_, Arc<AppState>>, id: String) -> Res
 #[tauri::command]
 pub async fn list_models(
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::ModelWithProvider>, String> {
+) -> Result<Vec<db::ModelWithProvider>, AppCommandError> {
     db::list_models(&state.db)
         .await
-        .map_err(|e| format!("list_models failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_models failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -90,7 +94,7 @@ pub async fn add_model(
     thinking_effort: Option<String>,
     supports_thinking: bool,
     context_window: u32,
-) -> Result<db::ModelRow, String> {
+) -> Result<db::ModelRow, AppCommandError> {
     let display_name = if display_name.is_empty() {
         model_name.clone()
     } else {
@@ -107,7 +111,7 @@ pub async fn add_model(
         context_window,
     )
     .await
-    .map_err(|e| format!("add_model failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("add_model failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
 }
@@ -123,7 +127,7 @@ pub async fn update_model(
     thinking_effort: Option<String>,
     supports_thinking: bool,
     context_window: u32,
-) -> Result<Option<db::ModelRow>, String> {
+) -> Result<Option<db::ModelRow>, AppCommandError> {
     let display_name = if display_name.is_empty() {
         model_name.clone()
     } else {
@@ -141,16 +145,19 @@ pub async fn update_model(
         context_window,
     )
     .await
-    .map_err(|e| format!("update_model failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("update_model failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
 }
 
 #[tauri::command]
-pub async fn delete_model(state: State<'_, Arc<AppState>>, id: String) -> Result<bool, String> {
+pub async fn delete_model(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, AppCommandError> {
     let ok = db::delete_model(&state.db, &id)
         .await
-        .map_err(|e| format!("delete_model failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("delete_model failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(ok)
 }
@@ -158,15 +165,17 @@ pub async fn delete_model(state: State<'_, Arc<AppState>>, id: String) -> Result
 #[tauri::command]
 pub async fn get_default_model(
     state: State<'_, Arc<AppState>>,
-) -> Result<Option<db::ModelWithProvider>, String> {
+) -> Result<Option<db::ModelWithProvider>, AppCommandError> {
     let id = match db::get_config_value(&state.db, "default_model_id").await {
         Ok(Some(id)) => id,
         Ok(None) => return Ok(None),
-        Err(e) => return Err(format!("get_default_model failed: {}", e)),
+        Err(e) => {
+            return Err(anyhow::anyhow!("get_default_model failed: {}", e).into());
+        }
     };
     let models = db::list_models(&state.db)
         .await
-        .map_err(|e| format!("get_default_model failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("get_default_model failed: {}", e))?;
     Ok(models.into_iter().find(|m| m.model.id == id))
 }
 
@@ -174,10 +183,10 @@ pub async fn get_default_model(
 pub async fn set_default_model(
     state: State<'_, Arc<AppState>>,
     model_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     db::set_config_value(&state.db, "default_model_id", &model_id)
         .await
-        .map_err(|e| format!("set_default_model failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("set_default_model failed: {}", e).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -194,10 +203,10 @@ pub async fn update_session_model_id(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     model_id: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     db::update_session_model_id(&state.db, &session_id, &model_id)
         .await
-        .map_err(|e| format!("update_session_model_id failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("update_session_model_id failed: {}", e).into())
 }
 
 /// Test a provider's connectivity by sending a lightweight request
@@ -228,11 +237,11 @@ pub async fn test_provider(
     base_url: String,
     api_key: String,
     protocol: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppCommandError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("failed to build HTTP client: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
     let start = std::time::Instant::now();
 
     let (success, error) = match protocol.as_str() {
@@ -251,7 +260,7 @@ pub async fn test_provider(
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| format!("request failed: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("request failed: {}", e))?;
 
             let status = resp.status();
             if status.is_success() {
@@ -275,7 +284,7 @@ pub async fn test_provider(
                 .header("authorization", format!("Bearer {}", api_key))
                 .send()
                 .await
-                .map_err(|e| format!("request failed: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("request failed: {}", e))?;
 
             let status = resp.status();
             if status.is_success() {
@@ -315,7 +324,7 @@ pub async fn test_provider(
 pub async fn test_model(
     state: State<'_, Arc<AppState>>,
     model_id: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, AppCommandError> {
     let model = match db::get_model(&state.db, &model_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
@@ -355,7 +364,7 @@ pub async fn test_model(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("failed to build HTTP client: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
     let start = std::time::Instant::now();
 
     let (success, error) = match provider.protocol.as_str() {

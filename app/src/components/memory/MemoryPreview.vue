@@ -26,6 +26,7 @@
 // / empty states and a per-row delete affordance. The instruction-
 // file section is unchanged.
 
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, onMounted, ref, watch } from "vue";
 
 import {
@@ -130,7 +131,7 @@ async function onOpenEditor(path: string) {
     // (e.g. "open_memory_in_editor: project '...' not found").
     // We surface it via the same `error` ref the fetch path uses
     // so the panel renders a single error banner.
-    store.error = String(e);
+    store.error = extractErrorMessage(e);
   }
 }
 

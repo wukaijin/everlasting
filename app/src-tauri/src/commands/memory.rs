@@ -24,6 +24,7 @@ use tauri::State;
 
 use crate::db;
 use crate::db::memories::list_memories as db_list_memories;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::memory::loader::{
     all_paths, load_for_session, resolve_one, MemoryCache,
 };
@@ -38,13 +39,18 @@ use crate::state::AppState;
 pub async fn read_memory_layers(
     state: State<'_, Arc<AppState>>,
     project_id: String,
-) -> Result<Vec<MemoryLayerInfo>, String> {
+) -> Result<Vec<MemoryLayerInfo>, AppCommandError> {
     let project = match db::get_project(&state.db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err(format!("read_memory_layers: project '{}' not found", project_id));
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("read_memory_layers: project '{}' not found", project_id),
+            ));
         }
-        Err(e) => return Err(format!("read_memory_layers: failed to load project: {}", e)),
+        Err(e) => {
+            return Err(anyhow::anyhow!("read_memory_layers: failed to load project: {}", e).into())
+        }
     };
 
     let layers = load_for_session(&state.memory_cache, &project_id, &project.path).await;
@@ -66,13 +72,18 @@ pub async fn read_memory_content(
     state: State<'_, Arc<AppState>>,
     project_id: String,
     path: String,
-) -> Result<String, String> {
+) -> Result<String, AppCommandError> {
     let project = match db::get_project(&state.db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err(format!("read_memory_content: project '{}' not found", project_id));
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("read_memory_content: project '{}' not found", project_id),
+            ));
         }
-        Err(e) => return Err(format!("read_memory_content: failed to load project: {}", e)),
+        Err(e) => {
+            return Err(anyhow::anyhow!("read_memory_content: failed to load project: {}", e).into())
+        }
     };
 
     let requested = PathBuf::from(&path);
@@ -86,23 +97,32 @@ pub async fn read_memory_content(
         .find(|(_, _, k)| k == &canonical || k == &requested);
 
     let Some((kind, source, _)) = known_match else {
-        return Err(format!(
-            "read_memory_content: path '{}' is not a known memory file",
-            path
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "read_memory_content: path '{}' is not a known memory file",
+                path
+            ),
         ));
     };
 
     let resolved = match resolve_one(*kind, *source, Some(&project.path)) {
         Some(p) => p,
-        None => return Err("read_memory_content: cannot resolve path".to_string()),
+        None => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "read_memory_content: cannot resolve path".to_string(),
+            ))
+        }
     };
 
     std::fs::read_to_string(&resolved).map_err(|e| {
-        format!(
+        anyhow::anyhow!(
             "read_memory_content: failed to read {}: {}",
             resolved.display(),
             e
         )
+        .into()
     })
 }
 
@@ -124,20 +144,24 @@ pub async fn open_memory_in_editor(
     state: State<'_, Arc<AppState>>,
     project_id: String,
     path: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     let project = match db::get_project(&state.db, &project_id).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return Err(format!(
-                "open_memory_in_editor: project '{}' not found",
-                project_id
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "open_memory_in_editor: project '{}' not found",
+                    project_id
+                ),
             ));
         }
         Err(e) => {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "open_memory_in_editor: failed to load project: {}",
                 e
-            ));
+            )
+            .into())
         }
     };
 
@@ -150,15 +174,23 @@ pub async fn open_memory_in_editor(
         .iter()
         .find(|(_, _, k)| k == &canonical || k == &requested);
     let Some((kind, source, _)) = known_match else {
-        return Err(format!(
-            "open_memory_in_editor: path '{}' is not a known memory file",
-            path
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "open_memory_in_editor: path '{}' is not a known memory file",
+                path
+            ),
         ));
     };
 
     let resolved = match resolve_one(*kind, *source, Some(&project.path)) {
         Some(p) => p,
-        None => return Err("open_memory_in_editor: cannot resolve path".to_string()),
+        None => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "open_memory_in_editor: cannot resolve path".to_string(),
+            ))
+        }
     };
 
     // Try $VISUAL → $EDITOR → OS default.
@@ -166,7 +198,7 @@ pub async fn open_memory_in_editor(
         .ok()
         .or_else(|| std::env::var("EDITOR").ok());
 
-    let result: Result<std::process::Child, String> = if let Some(editor) = editor {
+    let result: Result<std::process::Child, AppCommandError> = if let Some(editor) = editor {
         // $EDITOR is a single command (possibly with args
         // like "code --wait"). Split on whitespace for the
         // simple case; full shell-quoting is out of scope
@@ -174,7 +206,12 @@ pub async fn open_memory_in_editor(
         let mut parts = editor.split_whitespace();
         let cmd = match parts.next() {
             Some(c) => c,
-            None => return Err("open_memory_in_editor: empty $EDITOR".to_string()),
+            None => {
+                return Err(AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    "open_memory_in_editor: empty $EDITOR".to_string(),
+                ))
+            }
         };
         let args: Vec<&str> = parts.collect();
         Command::new(cmd)
@@ -182,21 +219,28 @@ pub async fn open_memory_in_editor(
             .arg(&resolved)
             .spawn()
             .map_err(|e| {
-                format!(
-                    "open_memory_in_editor: failed to spawn editor '{}': {}",
-                    editor, e
+                AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    format!(
+                        "open_memory_in_editor: failed to spawn editor '{}': {}",
+                        editor, e
+                    ),
                 )
             })
     } else {
         // No $EDITOR — use the OS default opener as a fallback.
-        fallback_open(&resolved)
-            .map_err(|e| format!("open_memory_in_editor: fallback open failed: {}", e))
+        fallback_open(&resolved).map_err(|e| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("open_memory_in_editor: fallback open failed: {}", e),
+            )
+        })
     };
 
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            tracing::warn!(error = %e, path = %resolved.display(), "open_memory_in_editor failed");
+            tracing::warn!(error = %e.message, path = %resolved.display(), "open_memory_in_editor failed");
             Err(e)
         }
     }
@@ -251,36 +295,38 @@ pub(crate) fn _ensure_used_for_test(_c: &MemoryCache) {}
 pub async fn list_autonomous_memories(
     state: State<'_, Arc<AppState>>,
     project_id: String,
-) -> Result<Vec<crate::db::memories::MemoryRow>, String> {
+) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
     // Verify the project exists (defensive — the IPC is
     // user-driven from the panel, but a stale project_id should
     // surface a clean error rather than an empty list).
     match db::get_project(&state.db, &project_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return Err(format!(
-                "list_autonomous_memories: project '{}' not found",
-                project_id
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "list_autonomous_memories: project '{}' not found",
+                    project_id
+                ),
             ));
         }
         Err(e) => {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "list_autonomous_memories: failed to load project: {}",
                 e
-            ));
+            )
+            .into())
         }
     }
     // scope=None → both layers. The DB layer ignores project_id
     // for user-scope rows (they're global) and filters project-
     // scope rows by the supplied id. This is exactly the
     // project-isolation contract.
-    match db_list_memories(&state.db, None, Some(&project_id)).await {
-        Ok(rows) => Ok(rows),
-        Err(e) => Err(format!(
-            "list_autonomous_memories: query failed: {}",
-            e
-        )),
-    }
+    db_list_memories(&state.db, None, Some(&project_id))
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into()
+        })
 }
 
 /// Delete a runtime memory by its `memory_id` UUID. Best-effort
@@ -297,12 +343,10 @@ pub async fn list_autonomous_memories(
 pub async fn delete_autonomous_memory(
     state: State<'_, Arc<AppState>>,
     memory_id: String,
-) -> Result<u64, String> {
-    match crate::db::memories::delete_memory(&state.db, &memory_id).await {
-        Ok(n) => Ok(n),
-        Err(e) => Err(format!(
-            "delete_autonomous_memory: delete failed: {}",
-            e
-        )),
-    }
+) -> Result<u64, AppCommandError> {
+    crate::db::memories::delete_memory(&state.db, &memory_id)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into()
+        })
 }

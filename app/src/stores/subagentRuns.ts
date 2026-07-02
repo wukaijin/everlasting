@@ -63,6 +63,7 @@
 import { defineStore } from "pinia";
 import { reactive, computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   SUBAGENT_EVENT_DEBOUNCE_MS,
@@ -610,7 +611,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       }
       return { kind: "success", autoAttachedParent: result.autoAttachedParent };
     } catch (e) {
-      const msg = String(e);
+      const msg = extractErrorMessage(e);
       const files = parseConflictFiles(msg);
       if (files !== null) {
         // Conflict: worker branch + worktree PRESERVED (backend
@@ -651,7 +652,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       }
       return { kind: "success" };
     } catch (e) {
-      return { kind: "error", message: String(e) };
+      return { kind: "error", message: extractErrorMessage(e) };
     } finally {
       mergeStateByRunId.delete(runId);
     }

@@ -30,6 +30,7 @@
 // `useSubagentRunsStore`) — bodies don't read stores; this card
 // owns the store and passes plain data props + a callback.
 
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
 import type {
@@ -192,7 +193,7 @@ async function toggleFileDiff() {
   try {
     await chatStore.fetchDiff(sid);
   } catch (e) {
-    fileDiffError.value = e instanceof Error ? e.message : String(e);
+    fileDiffError.value = e instanceof Error ? e.message : extractErrorMessage(e);
   } finally {
     fileDiffLoading.value = false;
   }

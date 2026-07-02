@@ -14,6 +14,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::db;
+use crate::error::AppCommandError;
 use crate::state::AppState;
 
 /// Frontend-safe view of the LLM config (returned by
@@ -46,10 +47,10 @@ pub struct PublicLlmConfig {
 #[tauri::command]
 pub async fn get_llm_config(
     state: State<'_, Arc<AppState>>,
-) -> Result<PublicLlmConfig, String> {
+) -> Result<PublicLlmConfig, AppCommandError> {
     let default_id = db::get_config_value(&state.db, "default_model_id")
         .await
-        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("get_llm_config failed: {}", e))?;
     let Some(model_id) = default_id else {
         return Ok(PublicLlmConfig {
             model: String::new(),
@@ -59,7 +60,7 @@ pub async fn get_llm_config(
     };
     let models = db::list_models(&state.db)
         .await
-        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("get_llm_config failed: {}", e))?;
     let Some(mwp) = models.into_iter().find(|m| m.model.id == model_id) else {
         return Ok(PublicLlmConfig {
             model: String::new(),
@@ -70,7 +71,7 @@ pub async fn get_llm_config(
     // Look up the parent provider to get its base_url + api_key.
     let providers = db::list_providers(&state.db)
         .await
-        .map_err(|e| format!("get_llm_config failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("get_llm_config failed: {}", e))?;
     let provider = providers
         .into_iter()
         .find(|p| p.id == mwp.model.provider_id);

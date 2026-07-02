@@ -29,6 +29,7 @@ mod background_shell;
 mod commands;
 mod crypto;
 mod db;
+mod error;
 mod files;
 mod git;
 mod llm;

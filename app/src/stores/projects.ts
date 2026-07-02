@@ -14,6 +14,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Project as returned over Tauri IPC. Mirrors `projects::ProjectRow`
@@ -159,7 +160,7 @@ export const useProjectsStore = defineStore("projects", () => {
         fallback: false,
       });
     } catch (e) {
-      pickError = String(e);
+      pickError = extractErrorMessage(e);
     }
 
     if (pickError) {
@@ -218,7 +219,7 @@ export const useProjectsStore = defineStore("projects", () => {
       currentProjectId.value = created.id;
       return created;
     } catch (e) {
-      showToast(`添加项目失败: ${String(e)}`, "error");
+      showToast(`添加项目失败: ${extractErrorMessage(e)}`, "error");
       return null;
     }
   }
@@ -235,7 +236,7 @@ export const useProjectsStore = defineStore("projects", () => {
     try {
       await invoke("hide_project", { id });
     } catch (e) {
-      showToast(`关闭项目失败: ${String(e)}`, "error");
+      showToast(`关闭项目失败: ${extractErrorMessage(e)}`, "error");
       return;
     }
     // The current project may have just been hidden — fall back to
@@ -261,7 +262,7 @@ export const useProjectsStore = defineStore("projects", () => {
     try {
       await invoke("unhide_project", { id });
     } catch (e) {
-      showToast(`重新打开项目失败: ${String(e)}`, "error");
+      showToast(`重新打开项目失败: ${extractErrorMessage(e)}`, "error");
       return false;
     }
     await loadHiddenProjects();
@@ -285,7 +286,7 @@ export const useProjectsStore = defineStore("projects", () => {
       });
       await loadProjects();
     } catch (e) {
-      showToast(`重命名失败: ${String(e)}`, "error");
+      showToast(`重命名失败: ${extractErrorMessage(e)}`, "error");
     }
   }
 

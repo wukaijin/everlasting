@@ -52,6 +52,7 @@
 import { computed, ref } from "vue";
 
 import Icon from "../Icon.vue";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { resolveToolQuestion } from "../../utils/toolQuestion";
 import type {
   Question,
@@ -247,7 +248,7 @@ async function handleSubmit(): Promise<void> {
     localState.value = "answered";
     emit("answered", answer);
   } catch (e) {
-    submitError.value = String(e);
+    submitError.value = extractErrorMessage(e);
   } finally {
     submitting.value = false;
   }
@@ -266,7 +267,7 @@ async function handleSkip(): Promise<void> {
     localState.value = "cancelled";
     emit("cancelled");
   } catch (e) {
-    submitError.value = String(e);
+    submitError.value = extractErrorMessage(e);
   } finally {
     submitting.value = false;
   }

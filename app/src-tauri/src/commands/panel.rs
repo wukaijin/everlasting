@@ -34,6 +34,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
+use crate::error::AppCommandError;
 use crate::resource_loader::{BUILTIN_COMMANDS, CommandInfo, list_all as list_commands_all};
 use crate::skill::loader::list_skill_infos;
 use crate::state::AppState;
@@ -95,7 +96,7 @@ pub struct SubagentInfo {
 pub async fn list_subagents(
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
-) -> Result<Vec<SubagentInfo>, String> {
+) -> Result<Vec<SubagentInfo>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
     let path_str = project_path.as_deref().unwrap_or("");
     let loaded = state.subagent_cache.list(path_str).await;
@@ -114,7 +115,7 @@ pub async fn list_subagents(
 pub async fn list_panel_items(
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
-) -> Result<Vec<PanelItem>, String> {
+) -> Result<Vec<PanelItem>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
 
     // Skills: list_skill_infos already handles project > user
@@ -196,7 +197,7 @@ pub async fn get_skill_body(
     state: State<'_, Arc<AppState>>,
     name: String,
     project_id: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
     match crate::skill::loader::find_skill(&state.skill_cache, &name, project_path.as_deref())
         .await
@@ -219,12 +220,12 @@ pub async fn get_skill_body(
 async fn resolve_project_path(
     state: &State<'_, Arc<AppState>>,
     project_id: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AppCommandError> {
     match project_id {
         Some(pid) => crate::db::get_project(&state.db, pid)
             .await
             .map(|opt| opt.map(|p| p.path))
-            .map_err(|e| format!("panel: get_project failed: {}", e)),
+            .map_err(|e| anyhow::anyhow!("panel: get_project failed: {}", e).into()),
         None => Ok(None),
     }
 }

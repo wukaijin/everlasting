@@ -22,6 +22,7 @@
 
 import { computed, onUnmounted, ref } from "vue";
 import { useProjectsStore } from "../../stores/projects";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import Icon from "../Icon.vue";
 
 export type WorktreeState = "none" | "active" | "detached";
@@ -128,7 +129,7 @@ async function copyToClipboard(value: string, label: string) {
         }
         projectsStore.showToast(`已复制 ${label}`, "info", 2000);
     } catch (e) {
-        projectsStore.showToast(`复制失败: ${String(e)}`, "error");
+        projectsStore.showToast(`复制失败: ${extractErrorMessage(e)}`, "error");
     }
 }
 

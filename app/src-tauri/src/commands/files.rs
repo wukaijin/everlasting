@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
 
 /// List files under the current project root as root-relative
@@ -37,11 +38,11 @@ pub async fn list_files(
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
     max_depth: Option<u32>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, AppCommandError> {
     let project_path = match project_id {
         Some(pid) => crate::db::get_project(&state.db, &pid)
             .await
-            .map_err(|e| format!("list_files: get_project failed: {}", e))?
+            .map_err(|e| anyhow::anyhow!("list_files: get_project failed: {}", e))?
             .map(|p| p.path),
         None => None,
     };
@@ -56,7 +57,7 @@ pub async fn list_files(
         None => crate::files::walk_files(&root),
     })
     .await
-    .map_err(|e| format!("list_files: walk join failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("list_files: walk join failed: {}", e))?;
     Ok(paths)
 }
 
@@ -78,12 +79,12 @@ pub async fn list_files(
 pub async fn list_files_at(
     root: String,
     max_depth: Option<u32>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, AppCommandError> {
     let root_path = PathBuf::from(&root);
     if !root_path.is_absolute() {
-        return Err(format!(
-            "list_files_at: root must be absolute, got {:?}",
-            root_path
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!("list_files_at: root must be absolute, got {:?}", root_path),
         ));
     }
     // Only the literal filesystem root is allowed. We don't accept
@@ -91,9 +92,12 @@ pub async fn list_files_at(
     // walk `/home/...` or other users' homes. If the need arises,
     // add a separate `list_files_under` with explicit boundary checks.
     if root_path != PathBuf::from("/") {
-        return Err(format!(
-            "list_files_at: root must be `/`, got {:?} (use list_files for project paths)",
-            root_path
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
+                "list_files_at: root must be `/`, got {:?} (use list_files for project paths)",
+                root_path
+            ),
         ));
     }
     let depth = max_depth.map(|d| d as usize);
@@ -102,6 +106,6 @@ pub async fn list_files_at(
         None => crate::files::walk_system(&root_path, crate::files::MAX_DEPTH),
     })
     .await
-    .map_err(|e| format!("list_files_at: walk join failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("list_files_at: walk join failed: {}", e))?;
     Ok(paths)
 }

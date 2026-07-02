@@ -18,17 +18,18 @@
 //!   `dispatch_subagent` tool card; the frontend store caches
 //!   the result keyed by `runId`.
 //!
-//! Both commands return `Result<T, String>` per the project's
-//! IPC convention (see `commands/permissions.rs::list_session_audit_events`
-//! for the reference pattern). DB errors are wrapped as
-//! `String` so the frontend's `invoke` rejection handler can
-//! toast without needing a typed error.
+//! Both commands return `Result<T, AppCommandError>` per the
+//! project's IPC convention (see `error.rs` + A5 task). DB
+//! errors are wrapped via `anyhow::Error` → `Server` category
+//! so the frontend's `invoke` rejection handler can toast
+//! without needing a typed error.
 
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::db;
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -54,10 +55,10 @@ use crate::state::AppState;
 pub async fn list_subagent_runs_by_session(
     session_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, String> {
+) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, AppCommandError> {
     db::subagent_runs::list_runs_summary_by_session(&state.db, &session_id)
         .await
-        .map_err(|e| format!("list_subagent_runs_by_session failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("list_subagent_runs_by_session failed: {}", e).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -77,10 +78,10 @@ pub async fn list_subagent_runs_by_session(
 pub async fn get_subagent_run(
     run_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<Option<db::subagent_runs::SubagentRunRow>, String> {
+) -> Result<Option<db::subagent_runs::SubagentRunRow>, AppCommandError> {
     db::subagent_runs::get_run(&state.db, &run_id)
         .await
-        .map_err(|e| format!("get_subagent_run failed: {}", e))
+        .map_err(|e| anyhow::anyhow!("get_subagent_run failed: {}", e).into())
 }
 
 // ---------------------------------------------------------------------------
@@ -142,21 +143,29 @@ pub async fn merge_worker_run(
     _rid: String,
     run_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<MergeWorkerResult, String> {
+) -> Result<MergeWorkerResult, AppCommandError> {
     // Look up the run row → find parent session id + worktree
     // path. We need the parent session id to look up the
     // session branch name (the parent is the one whose
     // `session/<id>` branch receives the merge).
     let run_row = db::subagent_runs::get_run(&state.db, &run_id)
         .await
-        .map_err(|e| format!("merge_worker_run: failed to load run: {}", e))?
-        .ok_or_else(|| format!("worker run not found: {}", run_id))?;
+        .map_err(|e| anyhow::anyhow!("merge_worker_run: failed to load run: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("worker run not found: {}", run_id),
+            )
+        })?;
     let parent_session_id = run_row.parent_session_id.clone();
     let worker_wt = run_row
         .worktree_path
         .as_deref()
         .ok_or_else(|| {
-            "worker has no worktree to merge (already merged or discarded)".to_string()
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "worker has no worktree to merge (already merged or discarded)".to_string(),
+            )
         })?
         .to_string();
 
@@ -184,10 +193,11 @@ pub async fn merge_worker_run(
             // Detached intentionally skips re-attach per INV-M3.
         }
         Err(e) => {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "merge_worker_run: cannot auto-attach parent worktree: {}",
                 e
-            ));
+            )
+            .into());
         }
     }
 
@@ -199,11 +209,14 @@ pub async fn merge_worker_run(
     // `auto_attached_parent == true`.
     let session_row = db::load_session(&state.db, &parent_session_id)
         .await
-        .map_err(|e| format!("merge_worker_run: failed to load session: {}", e))?
+        .map_err(|e| anyhow::anyhow!("merge_worker_run: failed to load session: {}", e))?
         .ok_or_else(|| {
-            format!(
-                "merge_worker_run: parent session '{}' not found",
-                parent_session_id
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "merge_worker_run: parent session '{}' not found",
+                    parent_session_id
+                ),
             )
         })?;
     let parent_wt = match session_row.session.worktree_path.as_deref() {
@@ -215,9 +228,12 @@ pub async fn merge_worker_run(
             // libgit2 "parent branch ... not found" error
             // (this is a clean, recognizable signal — the user
             // can manually attach via the chat header).
-            return Err(format!(
-                "merge_worker_run: parent session '{}' is detached (no worktree bound); please attach via the chat header before merging",
-                parent_session_id
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "merge_worker_run: parent session '{}' is detached (no worktree bound); please attach via the chat header before merging",
+                    parent_session_id
+                ),
             ));
         }
     };
@@ -235,7 +251,7 @@ pub async fn merge_worker_run(
         )
     })
     .await
-    .map_err(|e| format!("merge_worker_run: task join failed: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("merge_worker_run: task join failed: {}", e))?;
 
     match merge_result {
         Ok(msg) => {
@@ -263,7 +279,7 @@ pub async fn merge_worker_run(
                 auto_attached_parent,
             })
         }
-        Err(msg) => Err(msg),
+        Err(msg) => Err(anyhow::anyhow!("{}", msg).into()),
     }
 }
 
@@ -275,6 +291,8 @@ pub async fn discard_worker_run(
     _rid: String,
     run_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<String, String> {
-    crate::tools::discard_worker::do_discard(&state.db, &run_id).await
+) -> Result<String, AppCommandError> {
+    crate::tools::discard_worker::do_discard(&state.db, &run_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e).into())
 }

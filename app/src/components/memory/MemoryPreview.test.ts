@@ -182,7 +182,7 @@ describe("MemoryPreview — runtime memories section (P2 PR3)", () => {
     const errors = w.findAll(".memory-preview__error");
     expect(
       errors.some((n) =>
-        n.text().includes("自主记忆暂不可用:Error: list_autonomous_memories: connection lost"),
+        n.text().includes("自主记忆暂不可用:list_autonomous_memories: connection lost"),
       ),
     ).toBe(true);
     w.unmount();

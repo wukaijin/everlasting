@@ -30,6 +30,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { extractErrorMessage } from "../utils/useErrorBus";
 
 /** Wire shape of a `session_tool_permissions` row. camelCase to
  *  match the Rust `PermissionGrantRow`'s
@@ -77,7 +78,7 @@ export const usePermissionGrantsStore = defineStore("permissionGrants", () => {
       grants.value = rows;
       lastSessionId.value = sessionId;
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e);
     } finally {
       loading.value = false;
     }
@@ -102,7 +103,7 @@ export const usePermissionGrantsStore = defineStore("permissionGrants", () => {
       const key = rowKey(row);
       grants.value = grants.value.filter((g) => rowKey(g) !== key);
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = e instanceof Error ? e.message : extractErrorMessage(e);
     }
   }
 

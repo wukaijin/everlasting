@@ -70,6 +70,7 @@ import {
 } from "reka-ui";
 
 import Icon from "../Icon.vue";
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { useProjectsStore } from "../../stores/projects";
 
 const props = withDefaults(
@@ -187,7 +188,7 @@ async function onCopy() {
     // didn't originate from a user gesture — show a toast so
     // the user knows what happened instead of silently failing.
     projectsStore.showToast(
-      `复制失败: ${String(e)}`,
+      `复制失败: ${extractErrorMessage(e)}`,
       "error",
     );
   }

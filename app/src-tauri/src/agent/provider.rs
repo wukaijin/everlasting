@@ -94,6 +94,19 @@ impl PreFlightError {
     }
 }
 
+// A5(2026-07-02):PreFlightError 此前无 Display / std::error::Error impl,
+// 不满足 `trait AppError: std::error::Error` 约束。Display 复用上面的
+// user_message 文案;AppError 的 category 映射在 `error.rs`(design D6:
+// EmptyApiKey/DecryptFailed → Auth,与本方法返回的 LlmErrorCategory 略有
+// 不同 —— 那是 A5 的有意改进,见 error.rs 注释)。
+impl std::fmt::Display for PreFlightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.user_message_and_category().0)
+    }
+}
+
+impl std::error::Error for PreFlightError {}
+
 /// PR2 catalog resolution. Reads the default model id from
 /// `app_config`, finds the corresponding `ModelWithProvider` row,
 /// looks up the parent provider's `api_key` (for the pre-flight

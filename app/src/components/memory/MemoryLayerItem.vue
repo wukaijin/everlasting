@@ -18,6 +18,7 @@
 // We do NOT use the debounced renderer here — the file is fetched
 // once on expand, not streamed, so a 50ms debounce adds nothing.
 
+import { extractErrorMessage } from "../../utils/useErrorBus";
 import { computed, ref, watch } from "vue";
 
 import { renderMarkdown } from "../../utils/markdown";
@@ -108,7 +109,7 @@ watch(
       }
       bodyHtml.value = renderMarkdown(display);
     } catch (e) {
-      bodyError.value = String(e);
+      bodyError.value = extractErrorMessage(e);
     } finally {
       bodyLoading.value = false;
     }

@@ -15,13 +15,14 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::error::AppCommandError;
 use crate::state::AppState;
 
 #[tauri::command]
 pub async fn cancel_chat(
     request_id: String,
     state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     let token = {
         let map = state.cancellations.lock().await;
         map.get(&request_id).cloned()
