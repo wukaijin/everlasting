@@ -49,9 +49,16 @@ const files = computed<FileDiff[]>(() => {
   if (!text.trim()) return [];
   try {
     const patches = parsePatch(text);
-    if (patches.length === 0) {
-      // parsePatch returns [] for input with no patch headers — surface
-      // the raw text via DiffView's raw fallback.
+    // parsePatch returns [] for input with no patch structure at all.
+    // It also returns [{ hunks: [] }] (length 1, empty hunks) for
+    // LLM-style +/- fragments that lack `---`/`+++`/`@@` headers —
+    // a common misuse from `use_ui`. Both shapes have nothing
+    // DiffView can render, so surface the raw text via its raw
+    // fallback (`<pre>` path) instead of re-round-tripping an
+    // empty `--- a\n+++ b` blob that produces a silently empty body.
+    const allHunksEmpty =
+      patches.length > 0 && patches.every((p) => p.hunks.length === 0);
+    if (patches.length === 0 || allHunksEmpty) {
       return [{ path: "diff", status: "modified", added: 0, removed: 0, diff_text: text }];
     }
     return patches.map((p) => {

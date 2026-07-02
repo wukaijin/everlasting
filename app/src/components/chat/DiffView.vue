@@ -112,7 +112,13 @@ const parsedFiles = computed<ParsedFile[]>(() => {
                 }
                 return lines;
             });
-            out.parsed = true;
+            // Only mark parsed when we actually have renderable hunks.
+            // parsePatch can return patches with zero hunks for inputs
+            // that look like +/- fragments but lack `---`/`+++`
+            // headers — without this guard we'd set parsed=true and
+            // render an empty body (DiffPrimitive's raw fallback would
+            // be bypassed). See DiffPrimitive "allHunksEmpty" branch.
+            out.parsed = out.hunks.length > 0;
         } catch (e) {
             // parsePatch throws on truly malformed input. We
             // treat this as a render-with-raw-text fallback and

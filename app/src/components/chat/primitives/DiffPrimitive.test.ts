@@ -106,6 +106,35 @@ describe("DiffPrimitive — malformed / empty fallback", () => {
     // the card mounts without throwing.
     expect(w.find(".ui-prim--diff").exists()).toBe(true);
   });
+
+  it("falls back to raw text for LLM-style +/- fragments (no ---/+++ headers)", async () => {
+    // Real-world LLM misuse: use_ui asks for a "diff" primitive and the
+    // model emits +/- lines without `---`/`+++` header lines. jsdiff's
+    // parsePatch returns `[{ hunks: [] }]` (length 1, no hunks), not [].
+    // Before the fix, DiffPrimitive round-tripped this empty patch and
+    // DiffView rendered a silently empty body.
+    const llmStyle = " fn factorial(n: u32) -> u32 {\n"
+      + "-    match n {\n"
+      + "-        0 | 1 => 1,\n"
+      + "-        _ => n * factorial(n - 1),\n"
+      + "-    }\n"
+      + "+    (1..=n).product()\n"
+      + " }\n"
+      + " \n"
+      + " fn main() {\n"
+      + '     println!("5! = {}", factorial(5));\n'
+      + " }\n";
+    const w = mountPrim(llmStyle);
+    // Exactly one file card is mounted (the raw-fallback wrapper).
+    expect(w.findAll(".diff-file").length).toBe(1);
+    // Expand the body — "modified" starts collapsed.
+    await w.find(".diff-file__header").trigger("click");
+    // Raw fallback renders the original text in a <pre>; verify content.
+    const raw = w.find(".diff-file__raw");
+    expect(raw.exists()).toBe(true);
+    expect(raw.text()).toContain("fn factorial");
+    expect(raw.text()).toContain("(1..=n).product()");
+  });
 });
 
 describe("DiffPrimitive — copy button", () => {
