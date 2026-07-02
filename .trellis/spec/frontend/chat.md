@@ -331,3 +331,46 @@ const status       = computed(() => store.getRunCache.get(props.runId)?.status ?
 <DrawerToolCallCard :call="callInfo" :result="resultInfo" />
 <!-- 内部: <ToolInputBody :name :input /> + <ToolOutputBody :content :is-error :duration-ms /> -->
 ```
+
+---
+
+## B9 生成式 UI — `use_ui` primitive registry (2026-07-02)
+
+`use_ui` tool 的 primitive 由前端 `uiPrimitiveRegistry.ts` 的 `type → Component` Map 派发。`<UiCard>` 读 `call.input.primitives` 遍历，按 `primitive.type` 从 registry 取组件，未知 type 走 fallback（不崩）。
+
+### 注册条目
+
+| type | 组件 | child |
+|---|---|---|
+| `diff` | `DiffPrimitive.vue`（`parsePatch` 拆多文件 → 复用 `DiffView` 只读 + 复制） | C |
+| `code_block` | `CodeBlockPrimitive.vue`（hljs 高亮 + 复制） | B |
+| (unknown) | `MockPrimitive`（fallback，渲染 type + JSON dump） | A |
+
+### MessageItem dispatch（`tool_name` 路由，仿 ask_user_question 对称结构）
+
+`<UiCard>` 作为 `<ToolCallCard>` 的 sibling 挂在 `visibleToolCalls` v-for 内（同 `AskUserQuestionCard` 模式，不 portal）：
+```vue
+<template v-for="tc in visibleToolCalls" :key="tc.id">
+  <ToolCallCard :call="tc" :result="..." />
+  <AskUserQuestionCard v-if="askCardPropsFor(tc) !== undefined" v-bind="askCardPropsFor(tc)!" />
+  <UiCard v-if="tc.name === USE_UI_TOOL_NAME" :call="tc" />
+</template>
+```
+
+### 加新 primitive 的契约（registry 可扩展性）
+
+加新 type = 改 `uiPrimitiveRegistry.ts` 一行条目 + 后端 `use_ui.rs` 的 `KNOWN_TYPES` + schema `enum` + description 字段说明。`<UiCard>` / MessageItem dispatch 零改动（Child B/C 实证：各只改 registry 一行）。后端 `definition_schema_type_enum_matches_known_types` 测试锁定 schema `enum` 与 `KNOWN_TYPES` 同步。
+
+### 数据源
+
+`<UiCard>` 直接读 `call.input.primitives`（tool_use 输入）—— non-blocking tool 无需独立 IPC 事件（不像 `ask_user_question` 的 `tool:question` channel）。`ToolCallInfo.input: Record<string, unknown>`，`primitives` 用 `Array.isArray` narrow，非数组/缺 → 不渲染（防御 stale 消息）。
+
+### hljs 共享（D6）
+
+`utils/highlight.ts` 的 `renderCodeHtml(code, language)` 两个入口共用：markdown 管线（`marked-highlight` 接 marked 18，现有 markdown 代码块顺带高亮）+ `<CodeBlockPrimitive>`。语言集 `highlight.js/lib/common`（非 full ~900KB）。**注意**：hljs 改变代码块 HTML 输出（`<span class="hljs-*">`），含代码块 substring 的测试断言要适配（见 markdown.test.ts / MarkdownDetailModal.test.ts）。
+
+### Tests required
+
+- `UiCard.test.ts`：registry dispatch（type→组件）+ 未知 type fallback + 空/缺 primitives 守卫
+- `CodeBlockPrimitive.test.ts` / `DiffPrimitive.test.ts`：各自渲染 + 复制 + 边界
+- 后端 `use_ui::tests`：definition schema + execute 校验

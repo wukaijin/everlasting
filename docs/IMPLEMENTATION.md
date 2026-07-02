@@ -892,3 +892,18 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **关键教训 — sub-agent completed 通知 ≠ 真完成**:P5 `trellis-implement` 首次 completed 通知(result 截断在"添加集成测试")是中途 snapshot,实际继续跑 68min 才真完成(同 task-id 两次 completed 通知);误判后自己补 Step5/6 + 又 dispatch check → 三写者并发改同一批文件,靠 Edit 读后写 + 区域不重叠才侥幸协调。**收到截断/不自洽 result 时用 `git diff --stat` 客观核查工作树,确认 sub-agent 真停之前别并发改文件 / 再 dispatch 同批文件的 agent**。
 - **测试**:P1-P5 累计 **1071 passed**(P5 +30:软拦截分档 / 晋升阈值 / char-trigram Jaccard dedup / 2 端到端 soft-block 集成)。spec 落 `.trellis/spec/backend/memory.md` Scenario 2(P5 contract 段 + §4/§6 矩阵 + 修正 4 处 P5 相关过时)。
 - **v1 边界(留 v2)**:向量检索 / LLM-judge 写入过滤 / global 记忆层 / 跨 session "翻车"持久追踪(P4 `FailureTracker` 是 session 内状态机)/ recall_memory 主动深挖 tool。完整设计见 [spike-007](./spikes/007-agent-autonomous-memory-plan.md)。
+
+### 2026-07-02 — B9 生成式 UI(部分落地:selector/diff/code_block,button 推后期)
+
+- **Context**:输出层生成式 UI。parent `07-02-b9-generative-ui` + 3 child(A use_ui 基础设施 / B code_block hljs / C diff 复用 DiffView)。brainstorm 收敛 6 决策(D1-D6),MVP 范围从"4 primitives 全做"缩到"selector 复用 + diff 只读 + code_block 高亮",button/diff应用/开关全推后期。
+- **决策 D1 — 承载机制 = `use_ui` 单 tool + primitives 数组**(否决 `ui_render` content block):现有所有结构化输出都走 tool_use 且管线成熟(权限⑨/审计/persist_turn 持久化/前端 tool_name dispatch);新增 ContentBlock 变体要改 Anthropic+OpenAI 两 Provider wire,且 Anthropic 不原生认 ui_render block。B9 primitive 本质是 agent 主动决定展示 UI,跟"决定调 tool"无别 —— content block 唯一独占的"自然输出"优势在此场景是空的。架构文档(§⑭)预留的 ui_render/use_ui/ui:render 全仓零实现,B9 从零设计承载机制。
+- **决策 D2 — 执行模型 = non-blocking 展示;selector 复用 ask_user_question**:use_ui 立即返 tool_result("已渲染 N 个"),不等用户交互。**selector 不重做,直接 = `ask_user_question`**(blocking oneshot 已 06-30 验证,语义 100% 重合)。前端 registry 统一 dispatch:`tool_name===ask_user_question`→AskUserQuestionCard;`tool_name===use_ui`→按 primitive.type 路由。
+- **决策 D3 — 独立 button primitive 推后期**:B9 最大安全面(action 白名单 + 高危 action 过权限⑨,DESIGN.md:70)。首批 80% 用例(询问=selector/展示=diff+code_block)已覆盖。
+- **决策 D4 — diff primitive MVP 只读 + 复制**(应用推后期):edit_file+权限⑨+DiffView 已覆盖"修改确认"全流程;diff primitive MVP 聚焦展示型,避免与 edit_file 并存两种修改模型造成 LLM 困惑。零新增安全面。
+- **决策 D5 — session 开关 MVP 不做**:use_ui non-blocking 展示型无副作用,Mode(edit/plan/yolo)已是更通用控制层。
+- **决策 D6 — code_block 高亮 = hljs `lib/common`**:最轻、marked-highlight 集成成熟。两入口共用 `renderCodeHtml`(markdown 代码块 + CodeBlockPrimitive),语言集永不分裂。
+- **关键教训 —「先查代码再问用户」避免重复造轮子**:brainstorm 前探索发现 selector 已实质落地(ask_user_question)、diff 渲染层已落地(DiffView 且在 ToolCallCard:635 内嵌)、code_block 半落地(markdown 无高亮)。**4 个 primitive 里 2.5 个已以特化形式存在**,真正从零做的只有 button + 统一 UiCard 模型。Evidence rule 在 parent brainstorm 阶段就砍掉了"selector 怎么做""diff 渲染怎么实现"两个伪问题。
+- **关键教训 —「registry 可扩展性」兑现于 Child B/C 零改动 dispatch**:Child A 设计 registry 为 `Record<type, Component>` Map + UiCard 遍历 dispatch,Child B/C 各自只改 registry 一行条目,UiCard/MessageItem dispatch 零改动。
+- **关键教训 — hljs 接入改变 markdown HTML 输出 → 测试断言要跟**:marked-highlight 让代码块从 `<code>print(1)</code>` 变成 `<span class="hljs-built_in">print</span>...`。markdown.test.ts / MarkdownDetailModal.test.ts 的 `toContain("print(1)")` 失效。**接入改变输出的库时,先 grep 现有断言看哪些 substring 匹配会破**。
+- **测试**:cargo test 1146+/use_ui 12 + vue-tsc 0 err + vitest 694/694(UiCard 8 + CodeBlockPrimitive 7 + DiffPrimitive 9 + 4 处断言适配 hljs)。端到端(tauri dev)待手动验收。
+- **推后期**:独立 button primitive + action 白名单(D3)/ diff 应用(D4)/ session allow_generative_ui 开关(D5)/ 自由式 UI / form/chart/table primitive。
