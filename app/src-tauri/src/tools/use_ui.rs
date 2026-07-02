@@ -68,7 +68,8 @@ pub fn definition() -> ToolDef {
              Supported `primitive.type`:\n\
              - `diff` — a read-only code diff (compare two versions / two approaches). NOT \
                for applying changes (use `edit_file` to write).\n\
-             - `code_block` — a syntax-highlighted code snippet the user can copy.\n\n\
+             - `code_block` — a syntax-highlighted code snippet the user can copy. Fields: `code`\n\
+               (string, required), `language` (optional, e.g. 'rust'/'python'; omit for auto-detect).\n\n\
              Do NOT use `use_ui` for:\n\
              - Asking the user to choose → use `ask_user_question` (single/multi select).\n\
              - Modifying files → use `edit_file` / `write_file`.\n\n\

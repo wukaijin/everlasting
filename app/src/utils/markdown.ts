@@ -23,8 +23,10 @@
 //   caller invokes `flush()` to render the final frame immediately.
 
 import { marked } from "marked";
+import { markedHighlight } from "marked-highlight";
 import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { ref, type Ref } from "vue";
+import { renderCodeHtml } from "./highlight";
 
 // --- marked configuration ----------------------------------------------
 // Configure once at module load. `marked.setOptions` mutates the
@@ -37,6 +39,24 @@ marked.setOptions({
   gfm: true,
   breaks: true,
 });
+
+// B9 Child B (2026-07-02): wire hljs into the markdown pipeline so
+// ```lang fenced code blocks in assistant prose get syntax highlighting.
+// marked-highlight calls the shared `renderCodeHtml` (the same helper
+// `<CodeBlockPrimitive>` uses), so language support never diverges
+// between the two entry points. The highlighted HTML then goes through
+// the existing DOMPurify pass in `renderMarkdown` — hljs emits escaped
+// `<span class="hljs-*">` which the default html profile keeps (the
+// markdown.test.ts XSS fixtures guard against regression).
+marked.use(
+  markedHighlight({
+    langPrefix: "hljs language-",
+    emptyLangClass: "hljs",
+    highlight(code: string, lang: string) {
+      return renderCodeHtml(code, (lang ?? "").toLowerCase());
+    },
+  }),
+);
 
 // --- DOMPurify configuration -------------------------------------------
 // The defaults already strip <script>, on* handlers, and javascript:

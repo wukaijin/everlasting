@@ -43,7 +43,10 @@ describe("renderMarkdown", () => {
       const html = renderMarkdown("```py\nprint(1)\n```");
       expect(html).toContain("<pre>");
       expect(html).toContain("<code");
-      expect(html).toContain("print(1)");
+      // Child B: hljs highlights the block — "print" is wrapped in a
+      // hljs span, so the bare "print(1)" substring no longer appears.
+      expect(html).toContain("hljs");
+      expect(html).toContain("print");
     });
 
     it("renders a link with a safe href", () => {

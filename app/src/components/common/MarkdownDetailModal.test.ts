@@ -236,7 +236,10 @@ describe("MarkdownDetailModal — body markdown rendering", () => {
       ".markdown-detail-modal__markdown",
     );
     expect(body?.innerHTML).toContain("<pre>");
-    expect(body?.innerHTML).toContain("print(1)");
+    // Child B: hljs highlights the block; assert the markup, not the
+    // bare substring (print is now inside a hljs span).
+    expect(body?.innerHTML).toContain("hljs");
+    expect(body?.innerHTML).toContain("print");
     w.unmount();
   });
 

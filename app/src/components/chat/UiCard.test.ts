@@ -32,7 +32,10 @@ describe("UiCard — primitive rendering", () => {
     const w = mountCard({
       primitives: [{ type: "diff" }, { type: "code_block" }],
     });
-    expect(w.findAll(".ui-prim--mock").length).toBe(2);
+    // Child B: code_block now renders CodeBlockPrimitive; only diff stays mock.
+    expect(w.findAll(".ui-prim").length).toBe(2);
+    expect(w.findAll(".ui-prim--mock").length).toBe(1);
+    expect(w.findAll(".ui-prim--code").length).toBe(1);
   });
 
   it("surfaces each primitive's type label (registry dispatch)", () => {
@@ -43,7 +46,8 @@ describe("UiCard — primitive rendering", () => {
       ],
     });
     const types = w.findAll(".ui-prim__type").map((e) => e.text());
-    expect(types).toEqual(["diff", "code_block"]);
+    // diff → "diff" (MockPrimitive); code_block → language||"code" (CodeBlockPrimitive).
+    expect(types).toEqual(["diff", "code"]);
   });
 
   it("renders the title when present", () => {

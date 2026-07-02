@@ -14,12 +14,14 @@
 
 import type { Component } from "vue";
 
+import CodeBlockPrimitive from "./primitives/CodeBlockPrimitive.vue";
 import MockPrimitive from "./primitives/MockPrimitive.vue";
 
-/** `type` → component. Child B/C replace the real entries. */
+/** `type` → component. Child B replaced `code_block`; Child C will
+ *  replace `diff`. */
 export const UI_PRIMITIVE_REGISTRY: Record<string, Component> = {
   diff: MockPrimitive,
-  code_block: MockPrimitive,
+  code_block: CodeBlockPrimitive,
 };
 
 /** Fallback for types not in the registry (e.g. a hallucinated type
