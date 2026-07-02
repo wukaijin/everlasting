@@ -42,17 +42,35 @@
 - **Related DEBT**: RULE-E-003 (P0,closed)
 - **Discovered In**: REVIEW-agent-loop-full-audit-2026-06-14 §2.5
 
+### DRIFT-003 — AuditKind 文档计数散落且过期
+
+- **Type**: 无意遗漏(spec drift,实施侧逐步加 variant 后文档未同步)
+- **Spec**:
+  - `.trellis/spec/backend/permission-layer.md:401` "### 6. Audit (`session_audit_events`) — 10 类 AuditKind" + `:403` "PR1 ... 实现了 10 类事件" + `:419-430` 表格列 10 行
+  - `.trellis/spec/backend/permission-layer.md:454` "10 类 AuditKind 都 serializable"
+  - `docs/ROADMAP.md:55` "⑯ 审计日志 10 类 AuditKind"
+  - `docs/DESIGN.md:69` "⑯ 审计日志 10 类 AuditKind"
+  - `docs/ARCHITECTURE.md:690` "**11 类 AuditKind**"
+  - `docs/spikes/2026-06-19-async-parallel-tool-research.md:148` "10 类 AuditKind"
+- **Implementation**: `app/src-tauri/src/agent/permissions/audit.rs:4` docstring "intentionally a **single enum** (17 variants)";`audit_kind_round_trip` 测试(`tests_audit.rs:6-36`)覆盖全部 17 个 variant
+- **17 个 variant 全集**(对照 audit.rs:36-108):ToolDenied / ToolAllowed / ToolPermissionAsk / ToolExecuted / ToolDeniedYolo / PermissionGranted / PermissionTimeout / RequestCancelled / ModeChanged / YoloEntered / YoloExited / EditMessage / ResendMessage / WorkerAskAllowed / WorkerAskDenied / WorkerAskTimedOut / WorkerAskCancelled
+- **Impact**: 文档计数错误(10 / 11 vs 17)误导读者对 AuditKind 全集认知;permission-layer.md 表格缺 7 行(ToolExecuted + EditMessage + ResendMessage + 4 WorkerAsk*)使 spec 失去"全 variant 清单"功能
+- **Resolution 候选**:
+  - A. 统一现役 spec/docs 为 "17 类",permission-layer.md 表格补 7 行 ✅ 选 A(本 task 范围内)
+  - B. 历史 spike/历史 review 标"不改"
+- **Decision**: ✅ resolved — task `07-02-spec-drift-audit` (2026-07-02):permission-layer.md 计数 10 → 17 + 表格补 7 行;ROADMAP/DESIGN/ARCHITECTURE/spike 4 处统一为 17;历史 review `REVIEW-agent-loop-full-audit-2026-06-14.md` 不改(Snapshot at 2026-06-14,值为 11)
+- **Related DEBT**: 无(Rust 代码层无 bug,纯 spec drift)
+- **Discovered In**: SPEC-DRIFT.md "待审" audit (2026-07-02, task `07-02-spec-drift-audit`)
+
 ---
 
 ## 待审(待 audit 验证)
 
-| 候选 drift | 状态 |
-|---|---|
-| spec §2.5.1 二次取消语义 | ✅ DRIFT-001 已记录 |
-| web_fetch redirect docstring 矛盾 | ✅ DRIFT-002 已记录 |
-| Memory watcher "立即生效" vs 1s debounce | 待审(spec 可能也写了"概率性",需确认) |
-| AuditKind 11 vs docstring "10" | 待审(spec 是否写"10"?) |
-| cancel_session_asks 死代码标注 | 待审(`#[allow(dead_code)]` 是不是 spec 要求保留?) |
+_全部清空(2026-07-02,task `07-02-spec-drift-audit`)。最近 3 条 audit 结论:_
+
+- ✅ **已审:Memory watcher "立即生效" vs 1s debounce** — 非 drift(spec 已对齐,见 `memory.md:35-45` 顶部 2026-06-15 更新注释明确"notify-based watcher removed, mtime fence";老 debounce 章节保留作 historical reference 是有意为之)。`memory/watcher.rs` grep `debounce` 已无结果,实现确为 mtime fence。
+- ✅ **已审:AuditKind 11 vs docstring "10"** — 真 drift(无意),已上升为 **DRIFT-003**(本文上一段),决议选 A:统一文档为 17 + permission-layer.md 表格补 7 行。
+- ✅ **已审:`cancel_session_asks` 死代码标注** — 非 drift,误报。grep 8+ 处使用(`commands/sessions.rs:147/150/261` + `permissions/mod.rs:54/135` + `permissions/store.rs:78` 定义 + `permissions/ask.rs:32/358` + `tests_store.rs:8/20` + `tests_ask.rs:66/126/131/141`),函数无 `#[allow(dead_code)]` 标注,活跃代码,接入 `delete_session` 销毁路径(per RULE-B-002)。
 
 ---
 

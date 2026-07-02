@@ -398,9 +398,9 @@ AuditKind 变体已加到 enum(forward-compat + round-trip test),但无 writer�
 
 **Per-run cache 命中放行**(2026-06-26,task `06-26-subagent-per-run-grant`):worker Tier 4 三分支(Path/Shell/WebFetch)在"session grant miss → 将 emit ask"之前各插一道 `RunGrantCache` 查询,命中 → `Decision::Allow`。cache 命中放行走 `check.rs` 现有 worker grant-hit 的 `record_audit(ToolAllowed)` 模式(与 session-grant-hit 一致),**不违反 RULE-A-016**(不写 ask resolve 端的 parent `session_audit_events`;不写 `session_tool_permissions`);cache 命中本身不出现在 transcript(只有首次 ask 的 `PermissionAsk` + resolve 的 `PermissionAskResolved` 在 transcript;后续 cache-hit 是静默 Allow,无新 transcript entry —— 同 session-grant-hit 在主对话中无新 audit 行)。
 
-### 6. Audit (`session_audit_events`) — 10 类 AuditKind
+### 6. Audit (`session_audit_events`) — 17 类 AuditKind
 
-PR1 在 `agent::permissions::AuditKind` 实现了 10 类事件(见
+PR1 在 `agent::permissions::AuditKind` 实现首批 9 行(10 variant,`yolo_entered` / `yolo_exited` 共行),后续 PR(2026-06-14 C4 PR1 `ToolExecuted` + 2026-06-17 D3 `EditMessage` / `ResendMessage` + 2026-06-22 RULE-WorkerAsk-001 4 个 `WorkerAsk*`)扩到 **17 类**(见
 `audit §3.4` 完整列表)。`payload_json` 字段统一结构:
 
 ```json
@@ -427,6 +427,13 @@ PR1 在 `agent::permissions::AuditKind` 实现了 10 类事件(见
 | `mode_changed` | `set_session_mode` 调用 |
 | `yolo_entered` / `yolo_exited` | Mode 在 Yolo 之间切换 |
 | `request_cancelled` | C1 cancel 触发(tier 3 await 被 cancel 打断) |
+| `tool_executed` | ⑩ tool 执行完成(`record_tool_executed_audit`,C4 PR1 2026-06-14);payload `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill)。含 2026-06-22 L3b PR3+ `ToolKind::GitMutation` 写入对齐 |
+| `edit_message` | D3 PR1 (2026-06-17):session 内 user 编辑消息(in-place update + 级联删后续 message);payload `{message_seq, new_text_preview, edited_at}`。落表点在 `db::sessions::edit_user_message` 事务尾部 |
+| `resend_message` | D3 PR3 (2026-06-17):session 内 user 点 Resend 重发(不修改 content,只 cancel 旧 stream + 重 send);payload `{message_seq, content_text_preview}`。落表点 best-effort 异步(`record_message_resend_audit`) |
+| `worker_ask_allowed` | worker Tier 4 交互式 ask → user "Allow" / "仅一次"(oneshot 收到 `PermissionResponse::AllowOnce` / `AllowAlways`);payload `{worker_run_id, tool_name, tool_input}`(对齐 `ToolAllowed` 形状,2026-06-22 RULE-WorkerAsk-001) |
+| `worker_ask_denied` | worker Tier 4 ask → user "Deny";payload `{worker_run_id, tool_name, tool_input, reason?}`(user 可选 "拒绝并说明" feedback) |
+| `worker_ask_timed_out` | worker Tier 4 ask → 120s 超时自动 Deny;payload `{worker_run_id, tool_name}`(`tokio::select!` timeout 臂命中) |
+| `worker_ask_cancelled` | worker Tier 4 ask → parent session cancel 触发 resolve 为 Deny;payload `{worker_run_id, tool_name}`(`tokio::select!` cancel 臂命中,parent_token → worker_token child 取消) |
 
 ### 7. ⑨ 关 IPC 异常路径
 
@@ -451,7 +458,7 @@ PR1 在 `agent::permissions::AuditKind` 实现了 10 类事件(见
 | `permissions::tests::filter_tools_for_mode_drops_writes_in_plan` | ⑧a tool filter |
 | `permissions::tests::filter_tools_for_mode_keeps_full_for_chat_yolo` | ⑧a full tool list |
 | `permissions::tests::mode_system_prefix_is_non_empty` | 5 个 mode 都有 prefix |
-| `permissions::tests::audit_kind_round_trip` | 10 类 AuditKind 都 serializable |
+| `permissions::tests::audit_kind_round_trip` | 17 类 AuditKind 都 serializable |
 | `permissions::dangerous::tests::kill_list_blocks_rm_rf_root` | Tier 2 命中 |
 | `permissions::dangerous::tests::kill_list_blocks_fork_bomb` | Tier 2 命中 |
 | `permissions::dangerous::tests::kill_list_normal_dev_commands_pass` | Tier 2 不误杀 |

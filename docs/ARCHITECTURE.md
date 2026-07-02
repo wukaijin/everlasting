@@ -687,7 +687,7 @@ agent loop 结束(text-only response or max_turns reached):
 - **payload 统一 JSON 结构**:按 kind 分发 — ⑨ 关类 `{tool_name, tool_input, reason?, mode, critical?}`;⑩ `ToolExecuted` `{tool_name, tool_input, duration_ms, exit_code: Option<i32>}`(`null` = 无 exit code,`-1` = 被 kill);⑯ mode 类 `{prev_mode, new_mode}`。`critical: bool` 决定前端 `PermissionModal` 的 3px 红左 border + shield-x icon
 - **Audit write 策略**:best-effort,失败 `tracing::warn!` 不报错(必须保证不破坏 agent loop)
 - **UI 查询**(C4 任务,2026-06-14 PR2 已实施):Tauri command `list_session_audit_events(session_id)` → `Vec<AuditEventRow>`;前端 `useAuditStore` + `<AuditLogModal>` 绑当前 session;kind 下拉筛选 + "仅 critical" 复选 + 计数 + 刷新;按 `ts DESC, id DESC` 稳定排序
-- **11 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION.md#4-决策日志) + `app/src-tauri/src/agent/permissions/audit.rs`
+- **17 类 AuditKind + 完整 schema + payload wire shape + UI 渲染细节**:见 [IMPLEMENTATION §4 2026-06-13/14 ADR](./IMPLEMENTATION.md#4-决策日志) + `app/src-tauri/src/agent/permissions/audit.rs`
 
 #### 2.5.9 ⑩ 并行 tool 执行(L2 MVP,2026-06-19 落地,**已实施**)
 
