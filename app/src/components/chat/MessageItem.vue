@@ -44,12 +44,14 @@ import { createDebouncedRenderer } from "../../utils/markdown";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
+import UiCard from "./UiCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
 import MessageItemEdit from "./MessageItemEdit.vue";
 import MessageItemFooter from "./MessageItemFooter.vue";
 import Icon from "../Icon.vue";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../stores/questionCards.types";
+import { USE_UI_TOOL_NAME } from "./uiCard.types";
 import {
   useQuestionCardsStore,
 } from "../../stores/questionCards";
@@ -704,6 +706,7 @@ const showEditedLabel = computed<boolean>(
           v-if="askCardPropsFor(tc) !== undefined"
           v-bind="askCardPropsFor(tc)!"
         />
+        <UiCard v-if="tc.name === USE_UI_TOOL_NAME" :call="tc" />
       </template>
       <!--
         2026-06-27 polish: when the message has tool calls but no

@@ -32,6 +32,7 @@ pub mod shell_kill;
 pub mod shell_status;
 pub mod update_checklist;
 pub mod use_skill;
+pub mod use_ui;
 pub mod web_fetch;
 pub mod write_file;
 
@@ -162,6 +163,15 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // this name; if it's reached the unknown-tool fallback
         // fires (defensive — should never happen in production).
         ask_user_question::definition(),
+        // use_ui (B9 generative UI, 2026-07-02): non-blocking display
+        // tool. The model calls use_ui({primitives:[...]}) to emit
+        // interactive UI cards rendered by the frontend component
+        // registry. Unlike ask_user_question this DOES go through
+        // execute_tool_inner (non-blocking, no oneshot wait) — it's
+        // display-only with no side effects (Tier 5 silent Allow,
+        // same as remember). Child A wires plumbing + mock renderer;
+        // Child B/C add the real code_block / diff renderers.
+        use_ui::definition(),
     ]
 }
 
@@ -428,6 +438,15 @@ async fn execute_tool_inner(
         // frequency-control accounting.
         "remember" => {
             let (out, is_err) = remember::execute(input, ctx, session_id).await;
+            (out, is_err, ToolContextUpdate::default(), None)
+        }
+        // use_ui (B9, 2026-07-02): non-blocking display tool. Returns
+        // a plain "已渲染 N 个 primitive" ack; the primitives data is
+        // carried in the tool_use input and rendered frontend-side
+        // (no side effect, no wait — unlike ask_user_question's
+        // blocking interception in chat_loop.rs). Tier 5 silent Allow.
+        "use_ui" => {
+            let (out, is_err) = use_ui::execute(input, ctx, session_id).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         // "remember" | _ => unknown-tool fallback below.
