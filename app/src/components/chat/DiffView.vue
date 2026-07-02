@@ -181,6 +181,27 @@ const statusByPath = computed<Record<string, string>>(() => {
 function getStatusFor(path: string): string {
     return statusByPath.value[path] ?? "modified";
 }
+
+/** Per-line classification for the raw fallback path (used when
+ *  jsdiff couldn't form real hunks — typically LLM-style +/- fragments
+ *  lacking `---`/`+++` headers). Splits on "\n" and tags each line by
+ *  its first character so we can paint add/del backgrounds without
+ *  re-invoking the parser. Lines that don't look like diff lines
+ *  ("other") render plain — common when the LLM emits a heading or
+ *  short summary before the +/- block. */
+type RawLineKind = "add" | "del" | "ctx" | "other";
+function classifyRawLine(line: string): RawLineKind {
+    if (line.startsWith("+") && !line.startsWith("+++")) return "add";
+    if (line.startsWith("-") && !line.startsWith("---")) return "del";
+    if (line.startsWith(" ")) return "ctx";
+    return "other";
+}
+function rawLines(pf: ParsedFile): { kind: RawLineKind; text: string }[] {
+    return pf.file.diff_text.split("\n").map((text) => ({
+        kind: classifyRawLine(text),
+        text,
+    }));
+}
 </script>
 
 <template>
@@ -249,7 +270,13 @@ function getStatusFor(path: string): string {
                         </div>
                     </div>
                 </div>
-                <pre v-else class="diff-file__raw">{{ pf.file.diff_text }}</pre>
+                <div v-else class="diff-file__raw">
+                    <div
+                        v-for="(rl, ri) in rawLines(pf)"
+                        :key="ri"
+                        :class="['diff-raw-line', `diff-raw-line--${rl.kind}`]"
+                    >{{ rl.text }}</div>
+                </div>
                 <div
                     v-if="pf.file.diff_text === ''"
                     class="diff-file__raw diff-file__raw--empty"
@@ -428,13 +455,38 @@ function getStatusFor(path: string): string {
 }
 
 .diff-file__raw {
-    margin: 0;
-    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
     font-size: var(--text-xs);
-    line-height: 1.45;
+    line-height: 1.5;
     color: var(--color-text-secondary);
-    white-space: pre-wrap;
-    word-break: break-all;
+}
+
+.diff-raw-line {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    padding: 0 12px;
+    white-space: pre;
+    overflow-x: auto;
+}
+
+.diff-raw-line--add {
+    background: rgba(16, 185, 129, 0.12);
+    color: var(--color-text-primary);
+}
+
+.diff-raw-line--del {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--color-text-primary);
+}
+
+.diff-raw-line--ctx {
+    color: var(--color-text-secondary);
+}
+
+.diff-raw-line--other {
+    color: var(--color-text-secondary);
 }
 
 .diff-file__raw--empty {

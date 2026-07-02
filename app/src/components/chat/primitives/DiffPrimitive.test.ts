@@ -127,13 +127,23 @@ describe("DiffPrimitive — malformed / empty fallback", () => {
     const w = mountPrim(llmStyle);
     // Exactly one file card is mounted (the raw-fallback wrapper).
     expect(w.findAll(".diff-file").length).toBe(1);
+    // Counts in the header: 1 added line, 4 deleted lines (the body
+    // of match n...factorial — three inner lines plus the closing
+    // brace). The leading context ' fn factorial' and trailing ' fn main'
+    // are space-prefixed, not +/-.
+    expect(w.find(".diff-file__add").text()).toBe("+1");
+    expect(w.find(".diff-file__del").text()).toBe("−4");
     // Expand the body — "modified" starts collapsed.
     await w.find(".diff-file__header").trigger("click");
-    // Raw fallback renders the original text in a <pre>; verify content.
-    const raw = w.find(".diff-file__raw");
-    expect(raw.exists()).toBe(true);
-    expect(raw.text()).toContain("fn factorial");
-    expect(raw.text()).toContain("(1..=n).product()");
+    // Raw fallback renders each line tagged by prefix.
+    const addLines = w.findAll(".diff-raw-line--add");
+    const delLines = w.findAll(".diff-raw-line--del");
+    const ctxLines = w.findAll(".diff-raw-line--ctx");
+    expect(addLines.length).toBe(1);
+    expect(delLines.length).toBe(4);
+    expect(ctxLines.length).toBeGreaterThan(0);
+    expect(addLines[0].text()).toContain("(1..=n).product()");
+    expect(delLines[0].text()).toContain("match n {");
   });
 });
 

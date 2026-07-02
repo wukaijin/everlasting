@@ -59,7 +59,15 @@ const files = computed<FileDiff[]>(() => {
     const allHunksEmpty =
       patches.length > 0 && patches.every((p) => p.hunks.length === 0);
     if (patches.length === 0 || allHunksEmpty) {
-      return [{ path: "diff", status: "modified", added: 0, removed: 0, diff_text: text }];
+      // Raw fallback: count +/- lines so DiffView's header surfaces
+      // the same +N/-M badge that a parsed unified-diff would.
+      let added = 0;
+      let removed = 0;
+      for (const line of text.split("\n")) {
+        if (line.startsWith("+") && !line.startsWith("+++")) added++;
+        else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+      }
+      return [{ path: "diff", status: "modified", added, removed, diff_text: text }];
     }
     return patches.map((p) => {
       let added = 0;
