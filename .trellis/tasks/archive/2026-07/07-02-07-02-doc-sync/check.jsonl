@@ -1,0 +1,6 @@
+{"file": "docs/IMPLEMENTATION.md", "reason": "已实施日期清单 — B12(06-19)/ L1(06-19)/ L2(06-19)/ L3a(06-24)/ L3b(06-27)/ L3c(06-25)/ L3d(06-25/26)/ C2(06-24)/ RULE-D-001(06-24)/ V2 2 期(06-29)/ B9(07-02)对照依据"}
+{"file": "docs/ROADMAP.md", "reason": "§1.2 已实施表 — 19 行落地项摘要,DESIGN.md §3.1 / CLAUDE.md 状态行内容来源"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool tier(risk_for_tool) + match_kind + AuditKind 10 类枚举,CONTEXT.md 新增术语(Loop Detection / AuditKind / BackgroundShell)的 tier 映射依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "agent loop 架构 + 并发 dispatch + worker worktree 隔离契约,ARCHITECTURE.md §2 16 关卡 + CONTEXT.md Worker Worktree 术语依据"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "SubagentDrawer / UiCard / WorkerBranchBadge / WorkerMergeControls 组件契约,CLAUDE.md components/ 清单依据"}
+{"file": "docs/HACKING-llm.md", "reason": "本任务的目标文件 R9 — 需加 OPENAI 兼容层段(原 GLM-4.7 单 provider),与现有 Anthropic 差异段并列"}

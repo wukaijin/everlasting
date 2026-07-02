@@ -1,0 +1,13 @@
+{"file": "app/src-tauri/src/tools/mod.rs", "reason": "builtin_tools() 函数返回 19 个工具的权威注册表,DESIGN/ARCHITECTURE 工具清单以此为准"}
+{"file": "app/src-tauri/src/agent/mod.rs", "reason": "agent 子模块清单(16+ 个 pub mod)+ MAX_TURNS=200 常量(第 76 行)"}
+{"file": "app/src-tauri/src/db/migrations.rs", "reason": "CREATE TABLE 列表(10 张表)的权威来源,DEBUG_DB §2 表索引以此为准;autonomous_memories 表从第 707 行起"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "§4 决策日志已实施日期清单(B12/L1/L2/L3a-d/C2/RULE-D-001/V2 2 期/B9),ARCHITECTURE §2 16 关卡对账依据"}
+{"file": "docs/ROADMAP.md", "reason": "§1.2 已实施粗粒度归类 + §2 V2 4 档分类 + §3 移除项,CLAUDE.md 状态行 + DESIGN §3.1 引用此为单一 source of truth"}
+{"file": "app/package.json", "reason": "前端依赖清单,fuzzysort ^3.1.0 是 B2 @文件补全实际采用方案"}
+{"file": "app/src-tauri/src/agent/loop_detection.rs", "reason": "C2 循环检测实现细节 — L1 精确签名 N=3 + L2 Jaccard N=5/0.85 分级触发,CONTEXT + DESIGN §5.1 描述依据"}
+{"file": "app/src-tauri/src/agent/context.rs", "reason": "C3 context 压缩阈值 0.80 → 0.50 + B5 永远保护,CONTEXT 术语表阈值条目依据"}
+{"file": "app/src-tauri/src/agent/subagent/mod.rs", "reason": "B6/L3 subagent 模块结构入口 + re-exports,CLAUDE.md agent/ 子模块清单依据"}
+{"file": "app/src-tauri/src/agent/permissions/mod.rs", "reason": "B7/A2 权限模块 8 文件拆分入口(mod/types/store/payload/mode/audit/check/ask)+ 6 tests_,CLAUDE.md 同上"}
+{"file": "app/src/components/chat/UiCard.vue", "reason": "B9 新增 UiCard(注册/dispatch UiPrimitive),L3b PR4 新增 WorkerBranchBadge/WorkerMergeControls,CLAUDE.md components 清单依据"}
+{"file": "app/src-tauri/src/tools/run_background_shell.rs", "reason": "L1a 后台 shell 工具实现细节 — tokio Child(非 PTY)+ BackgroundShellRegistry trait + session-scoped,TECH §1.1 terminal 行描述依据"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "工具行为契约权威来源,B9 use_ui / L1a shell_* / L3b merge/discard worker 等工具的 tier/risk 标注以此为准"}
