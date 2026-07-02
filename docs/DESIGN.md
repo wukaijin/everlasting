@@ -56,16 +56,30 @@
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
 - 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 16 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集:`read_file` / `write_file` / `edit_file` / `shell` / `grep` / `glob` / `list_dir` / `web_fetch`(ReadGuard 防护 + Bash 落盘 + cat -n)
-- Git 集成:worktree 解耦 + opt-in attach / detach / delete
+- 工具集(19 个 builtin,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册):
+  - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
+  - Shell:`shell`(Bash 落盘 + cat -n)/ `run_background_shell` / `shell_status` / `shell_kill`(L1a 后台 shell,tokio Child 不带 PTY)
+  - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)
+  - Skill / Memory / UI:`use_skill`(B4 三层渐进披露)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local)/ `remember`(V2 2 期自主记忆写入)
+  - 交互:`ask_user_question`(跨 turn,B9 selector 复用)
+  - Subagent:`dispatch_subagent`(B6)/ `merge_worker` / `discard_worker`(L3b worker worktree 收口)
+- Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
-- 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器
-- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 10 类 AuditKind + web_fetch 接入 ⑨(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
-- C3 Context 压缩 + token 硬卡:`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,MAX_TURNS 20 → 50 → 200(详见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级c3-mvp2026-06-12-落地已实施))
-- B5 Memory/指令文件系统:4 文件(User / Project × CLAUDE.md / AGENTS.md) + `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + notify 监听
+- 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
+- A2+B7 权限系统:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit`/`plan`/`yolo`)+ ⑯ 审计日志 10 类 AuditKind + web_fetch 接入 ⑨ + **`ToolKind::GitMutation`**(L3b PR3+,WebFetch 式 tool-level grant,避免 Shell 串扰)(详见 [ARCHITECTURE §2.2 ⑨ / §2.5.8](./ARCHITECTURE.md))
+- C3 Context 压缩 + token 硬卡:`context_window * 0.80` 触发,降到 `0.50`,B5 memory 永远保护,MAX_TURNS 20 → 50 → **200**(C2 06-24 调,详见 [ARCHITECTURE §2.5.5](./ARCHITECTURE.md#255-⑤-context-超限降级c3-mvp2026-06-12-落地已实施))
+- C2 循环检测:分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示命中后注入 `ContentBlock::Text` hint,**不打断 loop**,MAX_TURNS=200 仍是硬兜底
+- B5 Memory/指令文件系统:4 文件(User / Project × CLAUDE.md / AGENTS.md)+ `cache_control: ephemeral` 注入 + 100 KiB 硬卡 + tiktoken cl100k_base 估算 + notify 监听
+- **V2 2 期** 自主记忆系统(2026-06-29 落地,5 child epic):agent 自主产生 + 跨 session 召回的经验库 — `autonomous_memories` 表(状态机 candidate→active→verified)+ 两层召回(per-turn FTS5 + 工具前 trigger_key 精确匹配)+ verified 软拦截重判 + 异步卫生 job
 - A4 Token 用量统计:per-session 累积(4 列)+ ChatInput hint 区 0-49% 绿 / 50-74% 黄 / 75%+ 红
 - D1 session 重命名 + 8 色标记
 - C1 取消机制完整化:tool 执行中途可取消(CancellationToken)
+- **B12** Checklist(agent 自跟踪进度清单):TodoWrite 式 `update_checklist` tool(全量替换 + 三态 pending/in_progress/done + 至多一 in_progress coerce),loop-local Vec,前端 `<ChecklistCard>` 浮层
+- **L1a** 后台 shell + 完成通知:3 tool(`run_background_shell` / `shell_status` / `shell_kill`),session-scoped,默认 `max_runtime_ms` 24h,APPEND user message 保 memory cache breakpoint
+- **L2** 单 turn 多 tool 并发(只读 batch):`is_parallel_eligible` 纯谓词 + `FuturesUnordered`,并发集合 `{read_file, grep, glob, list_dir, use_skill}`,多 tool_result 单消息打包
+- **L3a-d** Subagent 全套:并发只读 dispatch / worker worktree 隔离 / worker 联网 / frontmatter loader(`~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md`)
+- **B9** 生成式 UI(部分落地:selector / diff / code_block):`use_ui` tool + `<UiCard>` + component registry + `WorkerBranchBadge` / `WorkerMergeControls` for L3b PR4
+- **RULE-D-001** provider api_key 加密存储:AES-256-GCM + HKDF(machine-id),`api_key_enc` 列 + `key_migrated_at` 哨兵,IPC 切断明文
 
 **未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
@@ -135,13 +149,13 @@
 
 | 风险                          | 严重度 | 缓解                                          |
 |-------------------------------|--------|-----------------------------------------------|
-| Rig 0.x breaking change       | 中     | rig-core 已弃用(2026-06-09),改自研 Provider trait;rig 升级不再适用 |
+| Rig 0.x breaking change       | ✅ **已无** | rig-core 已弃用(2026-06-09),改自研 Provider trait;rig 升级不再适用 |
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#9-工具权限检查) 实施的前提 |
 | LLM 流式 token 断连            | 低     | 实现重连,断点续传用 message ID                |
-| 上下文爆炸                    | 高     | 实现 context 压缩、消息裁剪、tool result 截断 |
-| 循环检测(agent 死循环)        | 高     | 跟踪相同 tool call 出现 N 次,自动打断        |
+| 上下文爆炸                    | 高     | ✅ C3 context 压缩(0.80→0.50,B5 保护)+ 消息裁剪 + tool result 截断 |
+| 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,MAX_TURNS=200 兜底 |
 
 ### 5.2 工程权衡
 

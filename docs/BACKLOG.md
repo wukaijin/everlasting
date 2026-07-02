@@ -67,7 +67,7 @@
 | /command    | 模板执行用户代码                | 模板只插值,不 exec            |
 | Skill       | 第三方 skill 注入               | 文件位置隔离 + 显式 approve   |
 | Memory      | 改文件不通知                    | banner 提示                   |
-| 生成式 UI   | 按钮 action 越权                | Tauri command 白名单          |
+| 生成式 UI   | 按钮 action 越权            | B9 当前落地范围:selector(复用 ask_user_question)/ code_block(hljs + 复制)/ diff(复用 DiffView),**无独立 button + action surface**;独立 button + action 白名单推 D3 后期 |
 | 飞书        | 消息内容外泄                    | 不在飞书存 session 历史       |
 | 云端        | 第三方数据托管                  | 只 push 摘要 + 端到端鉴权     |
 
@@ -154,12 +154,13 @@
 - **关联**:FOLLOW-UP §FU-2(已决策,2026-06-07)。
 - **状态**:⏸ 保持现状,显式决策已记录。
 
-### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态)
+### 5.3 `pick_project_dir` 改成前端 reka-ui 渲染 dialog ⏸ 未实施(2026-06-07 状态;07-01 间接碰过)
 
 - **现状**:Tauri native `pick_folder` dialog,WSLg 下走 GTK / xdg-desktop-portal,渲染是 linux GTK 风格。
 - **用户偏好**:"本来期望 dialog 是由前端渲染的"(2026-06-05 session)。希望自渲染:HTML 树形目录 + 搜索框 + 文件图标。
 - **修法**:PR2 frontend 写一个 `<ProjectDirPicker>` 组件,新加 `list_dir(path)` Tauri command 读子目录,前端自渲染树形 + 键盘导航。`pick_project_dir` 废弃。
 - **工作量**:~150 行(frontend ~120 + backend `list_dir` ~30)。**中等优先**(UX 改善,不阻塞功能)。
+- **07-01 关联**:`fe91605 fix: 冷启动不再总是落到第一个项目` 间接碰过项目初始化路径(冷启动回退),但 dialog 仍未实施,留作下次碰项目创建流程时评估。
 - **关联**:PROPOSAL §5.4 (Q8v2 修正) + 用户偏好;FOLLOW-UP §FU-3。
 - **状态**:⏸ 未实施,下次碰 project 创建流程时评估。
 

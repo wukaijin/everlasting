@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-**当前状态(2026-06-13)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统（4 文件加载 + cache_control 注入）+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 50)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 10 类 AuditKind)已全部落地;V2 路线图第一档收口 + 第二档 2/7 进 §1 已实施,剩余 5 项在第二档,详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。position bug(2026-06-14 ✅ 已解决,A7 收尾):根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,非 Tauri bug),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`;RDP 双屏已验证通过,详见 [IMPLEMENTATION §4 2026-06-14](./docs/IMPLEMENTATION.md#4-决策日志)。
+**当前状态(2026-07-02)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统(4 文件加载 + cache_control 注入)+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 200)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 10 类 AuditKind)已全部落地;V2 路线图第一档 + 第二档 7/7 全部完成,第三档已落地 B4 Skill / B6 Subagent(06-21 收尾)/ B12 Checklist / C2 循环检测 / L1 后台 shell / L2 并行只读 / L3a-d subagent 全套 / RULE-D-001 api_key 加密 / V2 2 期自主记忆(06-29)/ B9 生成式 UI(07-02 部分),详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。position bug(2026-06-14 ✅ 已解决,A7 收尾):根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,非 Tauri bug),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`;RDP 双屏已验证通过,详见 [IMPLEMENTATION §4 2026-06-14](./docs/IMPLEMENTATION.md#4-决策日志)。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
@@ -51,8 +51,8 @@ app/
 ├── src/                    # Vue 3 前端 (8-PR3 拆分后;06-23 续拆 3 组件 + 1 composable + 3 store 模块)
 │   ├── components/
 │   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo
-│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer 等
-│   │   │                   # (06-23 拆:MessageItemEdit/Footer + SubagentDrawerHeader/ErrorCard + ChatInputLatencyPopover/HintRow)
+│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(B9)/ WorkerBranchBadge + WorkerMergeControls(L3b PR4) 等
+│   │   │                   # (06-23 拆:MessageItemEdit/Footer + SubagentDrawerHeader/ErrorCard + ChatInputLatencyPopover/HintRow;B9:UiCard + primitive registry;L3b PR4:WorkerBranchBadge/WorkerMergeControls)
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
 │   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
 │   │   ├── audit/          # C4 审计日志查询 UI (AuditLogModal / AuditLogItem)
@@ -90,8 +90,14 @@ app/
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
 │       ├── memory/         # Memory/指令文件系统(4 文件加载 + cache_control 注入)
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
-│       ├── agent/          # Agent Loop(8-PR1 拆分;06-23 续拆 subagent/ + chat_loop + tests)
-│       │   ├── chat.rs / chat_loop.rs  # (06-23 抽 run_subagent 后)主循环 ~2064 行
+│       ├── agent/          # Agent Loop(8-PR1 拆分;06-23 续拆 subagent/ + chat_loop + tests;06-24 后增 loop_detection + memory_*)
+│       │   ├── chat.rs / chat_loop.rs    # 主循环 + run_subagent 串联
+│       │   ├── context.rs               # C3 context 压缩(token 阈值 + 降级 + B5 保护)
+│       │   ├── loop_detection.rs        # C2 循环检测分级触发(L1 精确 N=3 + L2 Jaccard N=5/0.85)
+│       │   ├── system_prompt.rs / behavior_prompt.rs / thinking.rs # prompt 与 thinking 块处理
+│       │   ├── auto_reflect.rs / memory_recall.rs / memory_hygiene.rs # V2 2 期自主记忆:反思 / 召回 / 卫生 job
+│       │   ├── question_store.rs        # ask_user_question 跨 turn 状态
+│       │   ├── helpers.rs / provider.rs / at_file.rs # 工具级辅助
 │       │   ├── subagent/   # (06-23 拆 4 文件 + dispatch.rs)
 │       │   │   ├── mod.rs / sink.rs / transcript.rs / truncate_summary.rs
 │       │   │   └── dispatch.rs  # (06-23 抽自 chat_loop.rs)run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
@@ -100,24 +106,30 @@ app/
 │       │   │   ├── mode.rs / audit.rs / check.rs / ask.rs
 │       │   │   ├── dangerous.rs / shell_trust.rs (sibling 不动)
 │       │   │   └── tests_*.rs (6 个 + tests_common.rs)
-│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs)
+│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs;后续追加 tests_agent_loop / tests_ask_user_question / tests_cancellation / tests_envelope / tests_prompts / tests_subagent)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
 │       ├── commands/       # Tauri commands(8-PR1 拆分: sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs 等)
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
-│       └── tools/          # Tool 定义与执行
-│           ├── mod.rs      # builtin_tools()、execute_tool() 分发
-│           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs / shell.rs
+│       └── tools/          # Tool 定义与执行(19 个 builtin,mod.rs::builtin_tools() 注册)
+│           ├── mod.rs       # builtin_tools()、execute_tool() 分发、ToolKind/GitMutation(WebFetch式 tool-level grant)
+│           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs  # L2 并发只读集
+│           ├── shell.rs / run_background_shell.rs / shell_status.rs / shell_kill.rs  # L1a 后台 shell(tokio Child,无 PTY)
 │           ├── web_fetch.rs   # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
-│           ├── use_skill.rs   # Skill 调用 tool
-│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool
+│           ├── use_skill.rs   # B4 Skill 调用 tool(三层渐进披露 L0/L1/L2)
+│           ├── use_ui.rs      # B9 生成式 UI(non-blocking execute + UiPrimitive registry)
+│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool(loop-local,不入持久化)
+│           ├── remember.rs    # V2 2 期自主记忆写入 tool
+│           ├── ask_user_question.rs  # 跨 turn 问题(selector 复用,query_store 配对)
+│           ├── dispatch_subagent.rs # B6 派 worker agent
+│           ├── merge_worker.rs / discard_worker.rs  # L3b worker worktree 收口
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```
 
 ### 核心数据流
 
-前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → Tauri IPC `invoke("chat", { requestId, sessionId, messages })` → Rust `chat` 命令 **Agent Loop**（max 50 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）→ `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 如果 tool_use 则执行 tool → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite，session 列表从 DB 读。前端 Pinia store 多 listener 监听，增量更新消息 + 工具卡片。
+前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → Tauri IPC `invoke("chat", { requestId, sessionId, messages })` → Rust `chat` 命令 **Agent Loop**（max 200 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）+ 工具前 V2 2 期 `memory_recall` 召回 + C3 context 压缩降级 → `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → L2 并发只读集 `FuturesUnordered` 批量执行 + 写类 / shell 串行 → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite，session 列表从 DB 读。前端 Pinia store 多 listener 监听，增量更新消息 + 工具卡片。
 
 ### 关键架构决策
 
@@ -165,7 +177,6 @@ LLM_MAX_TOKENS=1024          # 默认 1024
 - `DESIGN.md` — 项目能力边界 + 硬约束(明确不做)
 - `TECH.md` — 技术选型决策（锁定/候选/不用）
 - `IMPLEMENTATION.md` — 决策档案(§1 自研 agent core 决策 + §4 ADR 决策日志)
-- `HANDOFF.md` — session 交接指南
 - `HACKING-llm.md` — LLM API 兼容层笔记
 - `HACKING-wsl.md` — WSL 环境坑笔记
 - `BACKLOG.md` — 候选功能技术评估(排期归 ROADMAP)

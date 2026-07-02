@@ -30,7 +30,7 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 
 ---
 
-## 2. Schema 索引(9 张表)
+## 2. Schema 索引(10 张表)
 
 权威定义在 [`app/src-tauri/src/db/migrations.rs`](../../app/src-tauri/src/db/migrations.rs);每张表的 CRUD 函数按表分文件组织在 `app/src-tauri/src/db/{table}.rs`。
 
@@ -44,9 +44,10 @@ sqlite3 ~/.local/share/dev.everlasting.app/everlasting.db
 | 6 | `app_config` | `migrations.rs:276` | 单行 kv 表(默认 model_id / 默认 cwd 等) |
 | 7 | `session_tool_permissions` | `migrations.rs:404` | `session_id` / `match_kind` (tool/prefix/path) / `match_value` / `decision` (allow/deny) / `expires_at` |
 | 8 | `session_audit_events` | `migrations.rs:428` | `id` / `session_id` / `ts` / `kind` (AuditKind 字符串) / `payload_json` |
-| 9 | `subagent_runs` | `migrations.rs` (06-23 添) | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` |
+| 9 | `subagent_runs` | `migrations.rs:1137` | `id` / `parent_session_id` / `parent_request_id` / `subagent_name` / `status` (running/completed/cancelled/error/incomplete) / `started_at` / `finished_at` (NULL while running) / `task` / `final_text` / `summary` / `turn_count` / `token_usage_json` / `transcript_json` / `transcript_truncated` / `worktree_path` / `isolation` (L3b PR1+) |
+| 10 | `autonomous_memories` | `migrations.rs:707` | `id` / `memory_id` (TEXT UNIQUE) / `scope` / `project_id` / `kind` / `status` (candidate/active/verified) / `title` / `content` / `tags` (JSON) / `tool_name` / `command_pattern` / `path_globs` (JSON) / `source_session_id` / `source_ref` / `confidence` / `hit_count` / `last_used_at` / `demoted_reason`(V2 2 期,2026-06-29 落地,状态机候选/激活/已验证) |
 
-**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` 等(`migrations.rs` 顶部)。
+**索引**:`idx_sessions_updated_at` / `idx_sessions_project_id` / `idx_messages_session_seq` / `idx_session_audit_events_session_ts` / `idx_subagent_runs_request` / `idx_am_pitfall`(autonomous_memories 的 `tool_name` 等 trigger 命中)/ `idx_autonomous_memories_status` 等(`migrations.rs` 顶部)。
 
 ---
 
@@ -105,12 +106,20 @@ ORDER BY (input_tokens_total + output_tokens_total) DESC
 LIMIT 10;
 
 -- 5. 看活跃的 subagent run(未完成)
---    注意：关联列是 parent_session_id（不是 session_id），
---    终态是 completed/cancelled/error/incomplete（没有 'failed'）。
+--    注意:关联列是 parent_session_id(不是 session_id),
+--    终态是 completed/cancelled/error/incomplete(没有 'failed')。
 SELECT id, parent_session_id, subagent_name, status, task, started_at
 FROM subagent_runs
 WHERE status NOT IN ('completed', 'error', 'cancelled', 'incomplete')
 ORDER BY started_at DESC;
+
+-- 6. 看 candidate / active 的 autonomous memory(已验证不进工具前召回池)
+--    工具前召回走 idx_am_pitfall(tool_name equality)+ command_pattern + path_globs
+SELECT memory_id, kind, status, title, tool_name, command_pattern,
+       hit_count, confidence
+FROM autonomous_memories
+WHERE status IN ('candidate', 'active')
+ORDER BY hit_count DESC, last_used_at DESC;
 ```
 
 ### 3.4 消息内容(content 是 JSON)解析
@@ -161,8 +170,9 @@ WHERE session_id = 'YOUR_SESSION_ID'
 | Session 标题乱码 | `sessions.title` | 应是 UTF-8;若 ? 替换查前端 encoding |
 | Token 计数对不上 | `sessions.{input,output,cache_creation,cache_read}_total` | 单条 LLM 响应的 token 在 `chat-event` 实时更新,DB 累计是 turn 边界 commit 的 |
 | 权限决策错了 | `session_audit_events` 同 session_id + kind = 'tool_denied' / 'tool_allowed' | payload_json 里有 reason / critical / mode |
-| Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。app 启动时 `reap_orphaned_runs` 会把残留 `running`（上一进程崩溃/被杀留下的孤儿）标记为 `error`，所以重启后看到的假 running 已被清理 |
+| Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。app 启动时 `reap_orphaned_runs` 会把残留 `running`(上一进程崩溃 / 被杀留下的孤儿)标记为 `error`,所以重启后看到的假 running 已被清理 |
 | FTS5 搜索不返回 | `messages_fts`(如已建) | FTS5 虚拟表是单独表,messages 主表 INSERT 时需同步;查 [IMPLEMENTATION §4 2026-06-17 "D2 降档"](../IMPLEMENTATION.md#4-决策日志) 状态 |
+| Memory 召回不命中 | `autonomous_memories.status NOT IN ('verified', 'active')` | status='candidate' 不进 recall;查 `tool_name` / `command_pattern` 是否精确匹配,`hit_count` 是否 < 阈值(quality 层 P5 软拦截) |
 
 ---
 

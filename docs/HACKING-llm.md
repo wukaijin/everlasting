@@ -15,7 +15,63 @@
 - **当前 API key**:环境变量 `ANTHROPIC_API_KEY`(智谱风格 `sk-g4HcGHnrqbc...`,不是 Anthropic 风格)
 - **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`
 
+**多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议(默认 base URL `https://api.openai.com/v1`,用 `OPENAI_API_KEY` / `OPENAI_BASE_URL`)。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction"。
+
 未来切真 Claude:改 `ANTHROPIC_BASE_URL` 空、model 改 `claude-haiku-4-5`、key 换 Anthropic 的 `sk-ant-...`。重测下面 3 处差异。
+
+---
+
+## OpenAI Chat Completions 兼容层差异(vs Anthropic Messages API)
+
+`OpenAIProvider` 走 OpenAI Chat Completions 流协议(可接 DeepSeek / GLM 兼容 / 本地 vllm 等),与 Anthropic 的字段语义有 3 处主要差异。
+
+### 差异 A:Token 用量只在流末尾
+
+| | Anthropic Messages API | OpenAI Chat Completions |
+|---|---|---|
+| 携带位置 | `message_delta` SSE 事件,**每个 turn 都报** | 流最末 `data: [DONE]` 前的最后一个 chunk(若请求体带 `stream_options: { include_usage: true }`) |
+| 触发条件 | 默认开 | **必须显式**带 `stream_options.include_usage: true`,否则流末尾无 usage chunk |
+
+**客户端对策**:`OpenAIProvider` 始终带 `stream_options: { include_usage: true }`,确保 usage 可观测;`Provider::chat_stream` 把 OpenAI 的 `prompt_tokens` / `completion_tokens` / `total_tokens` 归一化到 Anthropic schema(`input_tokens` / `output_tokens` / `cache_creation` + `cache_read`),下游 ChatEvent 不感知 provider。
+
+### 差异 B:`cached_tokens` 字段位置
+
+| | Anthropic | OpenAI |
+|---|---|---|
+| 顶层字段 | `cache_read_input_tokens`(顶层 `usage` 对象) | `prompt_tokens_details.cached_tokens`(**嵌套字段**,非顶层) |
+
+**客户端对策**:`provider::wire::to_canonical_usage()` 提取路径不同 — Anthropic 直接读 `usage.cache_read_input_tokens`;OpenAI 必须先 `usage.prompt_tokens_details?.cached_tokens` 解嵌套。
+
+### 差异 C:无 `cache_creation_input_tokens`
+
+OpenAI Chat Completions **不支持** `cache_creation_input_tokens`(OpenAI 的 cache 概念与 Anthropic `cache_control: ephemeral` 不同 — prompt cache 是隐式的 service-level,客户端无需标记)。
+
+**客户端对策**:归一化时 OpenAI 的 `cache_creation_input_tokens` 恒为 `0`,只走 `cache_read_input_tokens`(对齐 B5 注入的 `cached_tokens`)。`ChatEvent::TokenUsage` 上游不区分。
+
+---
+
+## `cache_control: ephemeral` 注入机制(B5 + V2 2 期)
+
+B5 memory / 指令文件加载后,以及 V2 2 期 autonomous_memories 召回结果,在 Anthropic 协议侧需要标记 `cache_control: { type: "ephemeral" }` 让 Anthropic 服务端做 prompt cache(下次同前缀命中按 0.1x input 价)。
+
+**实现位置**:`llm/provider/anthropic.rs` 的 request body 构造 + `app/src-tauri/src/memory/` 的 `build_instructions_blocks()`(B5 4 指令文件)/ `agent/memory_recall.rs`(V2 2 期)。
+
+**Anthropic schema**:
+```json
+{
+  "role": "user",
+  "content": [
+    { "type": "text", "text": "<CLAUDE.md content>", "cache_control": { "type": "ephemeral" } }
+  ]
+}
+```
+
+**OpenAI**:无需 client 侧标记,服务侧隐式 cache(命中条件由 OpenAI 决定)。
+
+**注意事项**:
+- `cache_control` 只能放在**最后一个** content block;放在中间会被忽略
+- ephemeral cache 有效期 5 分钟(Anthropic 默认),TTL 内同前缀(精确到 token 序列)命中
+- 客户端不需要做 max_tokens 上限预检(HACKING §3 差异同理),由 server 决定
 
 ---
 

@@ -51,11 +51,15 @@
 │  │  │  - 手写 SSE 状态机                         │    │    │
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  Tool Registry                           │    │    │
-│  │  │  - read_file / write_file / edit_file   │    │    │
-│  │  │  - shell / grep / glob / list_dir       │    │    │
-│  │  │  - web_fetch (06-12 落地,SSRF 拦截)     │    │    │
-│  │  │  - use_skill / use_memory / use_ui      │    │    │
+│  │  │  Tool Registry (19 builtin,mod.rs::builtin_tools() 注册)
+│  │  │  - 读 / 写:read_file / write_file / edit_file (ReadGuard 三道 check)
+│  │  │  - 只读:grep / glob / list_dir
+│  │  │  - Shell:shell / run_background_shell / shell_status / shell_kill (L1a)
+│  │  │  - 联网:web_fetch (06-12 落地,SSRF 拦截 + 5 MiB body cap)
+│  │  │  - Skill / Memory / UI:use_skill (B4) / remember (V2 2 期) / use_ui (B9)
+│  │  │  - 自跟踪:update_checklist (B12)
+│  │  │  - 交互:ask_user_question (selector 复用)
+│  │  │  - Subagent:dispatch_subagent (B6) / merge_worker / discard_worker (L3b)
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
 │  │  │  Agent Loop                              │    │    │
@@ -66,11 +70,12 @@
 │  │  └─────────────────────────────────────────┘    │    │
 │  └─────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │  Resource Loaders (共用 frontmatter loader)      │    │
-│  │  - Memory loader (每次 LLM 调用前自动加载)        │    │
-│  │  - Skill loader (LLM 调 use_skill 时按需加载)   │    │
-│  │  - Role loader (session 启动时加载)             │    │
-│  │  - Command registry (用户 / 触发)                │    │
+│  │  Resource Loaders (共用 frontmatter 手写 parser)
+│  │  - Memory loader (4 文件 User/Project × CLAUDE.md/AGENTS.md,每次 LLM 调用前自动加载 + cache_control 注入)
+│  │  - Skill loader (LLM 调 use_skill 时按需加载,三层渐进披露 L0/L1/L2)
+│  │  - Command registry (/ 触发,B3 + 内置 /help /clear /new)
+│  │  - Subagent loader (L3d,frontmatter 从 ~/.config/everlasting/agents/ + <project>/.everlasting/agents/)
+│  │  - Autonomous memory loader (V2 2 期,autonomous_memories 表 recall)
 │  └─────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────┐    │
 │  │  Infrastructure                                   │    │

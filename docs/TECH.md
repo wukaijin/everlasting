@@ -22,8 +22,9 @@
 | 序列化     | serde + serde_json      | 标准选择                                 |
 | 错误处理   | anyhow + thiserror      | 边界用 anyhow,领域用 thiserror           |
 | HTTP       | reqwest                 | 直接用,自研 Provider trait 内部也走 reqwest |
-| 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;`app/src/components/chat/DiffView.vue` 用 `parsePatch` |
-| 终端       | xterm.js + portable-pty | 跑 shell 命令的实时终端                 |
+| 前端 diff  | `diff` (jsdiff) + 自渲染 | 框架无关,Vue 包装;`app/src/components/chat/DiffView.vue` 用 `parsePatch`(B9 复用只读展示) |
+| 后台 shell | `tokio::process::Child` | L1a(2026-06-19 落地,**不带 PTY**);`BackgroundShellRegistry` trait + 进程内 impl;session-scoped,默认 `max_runtime_ms` 24h。`portable-pty` / `xterm.js` 留 L1b follow-up |
+| 模糊搜索(前端) | `fuzzysort` ^3.1.0 | @文件补全 B2 PR1(替代 `nucleo`,极轻量 TS 库) |
 
 ### 1.2 候选但暂不锁定
 
@@ -48,16 +49,17 @@
 | 图像处理 | `image` | 客户端 resize / 格式转换 | BACKLOG §1 输入层图片 |
 | HEIC 支持 | `libheif-rs` | 苹果 HEIC/HEIF 格式 | BACKLOG §1 输入层图片 |
 | 哈希 | `blake3` | 图片去重 / 缓存 key | BACKLOG §1 输入层图片 |
-| 模糊搜索 | ~~`nucleo`~~(未采用) | @文件补全(B2,2026-06-17 落地)改用更简实现,未引入 nucleo | BACKLOG §1 输入层 @文件 |
-| gitignore 解析 | `ignore` | 过滤项目扫描范围 | BACKLOG §1 输入层 @文件 |
+| 模糊搜索 | `fuzzysort` ^3.1.0(B2 PR1 实际采用,前端 TS 库) | @文件补全 | BACKLOG §1 输入层 @文件 |
+| gitignore 解析 | **未引入 `ignore` crate**(B2 改用更简实现) | 过滤项目扫描范围 | BACKLOG §1 输入层 @文件 |
 | 文件监听 | ~~`notify`~~(已移除) | memory watcher 原用 notify,后改为 mtime fence freshness check(read_guard 防过期),notify 已从依赖删除 | BACKLOG §3 Memory |
 | YAML 解析 | 手写 parser(B3);~~`serde_yml`~~(已废弃) | frontmatter 解析 | BACKLOG §2 Skill / §3 Memory / §4 Role / B3 /command |
 | TOML 解析 | `toml` | role / config 解析 | BACKLOG §4 Role |
 | 飞书 SDK | 用现有 `feishu-integration` skill | 消息收发 | BACKLOG §6 飞书 |
 | 命令面板(前端) | reka-ui `command` (或自写 `<TriggerMenu>`) | 输入触发器 | BACKLOG §1 输入层 |
-| 图表(前端) | `ECharts` + `vue-echarts` | 生成式 UI chart | BACKLOG §5 |
-| 表格(前端) | `@tanstack/vue-table` | 生成式 UI table | BACKLOG §5 |
-| 表单(前端) | `vee-validate` | 生成式 UI form | BACKLOG §5 |
+| 图表(前端) | `ECharts` + `vue-echarts` | 生成式 UI chart | BACKLOG §5(**B9 当前未引入,B9 落地范围:selector 复用 ask_user_question + code_block hljs + diff 复用 DiffView;chart/table/form 推后期**) |
+| 表格(前端) | `@tanstack/vue-table` | 生成式 UI table | BACKLOG §5(**B9 当前未引入**) |
+| 表单(前端) | `vee-validate` | 生成式 UI form | BACKLOG §5(**B9 当前未引入**) |
+| 后台 shell 实现 | `tokio::process::Child` + `BackgroundShellRegistry` trait | L1a(进程内 impl,daemon 化换 impl 不动调用点) | L1a 2026-06-19 落地 |
 | 工作流可视化 | `@vue-flow/core` | DAG 编辑器(后期再加) | BACKLOG §4 编排 |
 | 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
 

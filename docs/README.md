@@ -18,7 +18,6 @@
 | [CONTEXT.md](./CONTEXT.md) | 术语表 | A4 Token 用量统计核心术语定义(glossary) | 写/改 token 统计或 cache 逻辑前对齐术语时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + §4 决策日志(ADR 性质,只追加) | 想看"为什么这么做"的历史 ADR |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
-| [HANDOFF.md](./HANDOFF.md) | 新 session 引导 | 5 分钟上手 + 当前任务清单 | 进新 session 第一时间读 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |
 | [HACKING-markdown.md](./HACKING-markdown.md) | 前端 markdown 渲染陷阱 | marked v18 + DOMPurify 的 XSS / 协议白名单 / 测试 fixture | 改前端 markdown 渲染 / 加 vitest fixture 时 |
@@ -28,10 +27,8 @@
 
 ## 推荐阅读顺序
 
-> **完整阅读顺序表见 [HANDOFF.md §3 5 分钟上手](./HANDOFF.md#3-5-分钟上手必读顺序)**——本节不重复维护。
-
 **按场景速查**:
-- **第一次接触**:DESIGN.md → ROADMAP.md → ARCHITECTURE.md(看"做什么 / 不做 / 当前在哪步 / 怎么搭")
+- **第一次接触**:CLAUDE.md → DESIGN.md → ROADMAP.md → ARCHITECTURE.md(看"做什么 / 不做 / 当前在哪步 / 怎么搭")
 - **写代码时反复查**:ARCHITECTURE.md §2 16 关卡 / TECH.md 选库 / IMPLEMENTATION.md §4 ADR
 - **评估新功能**:BACKLOG.md §0 五层架构 → 对应章节
 - **撞环境/API 怪事**:HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md / `.trellis/spec/frontend/state-management.md`

@@ -518,7 +518,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 │ ├── README.md # docs索引
 │ ├── ARCHITECTURE.md #架构 +16阶段生命周期
 │ ├── IMPLEMENTATION.md #8步路线图 +决策日志
-│ ├── DESIGN.md / TECH.md / BACKLOG.md / HANDOFF.md
+│ ├── DESIGN.md / TECH.md / BACKLOG.md
 │ ├── HACKING-wsl.md / HACKING-llm.md / HACKING-markdown.md
 │ ├── _archive/ / _reviews/ / spikes/
 └── .trellis/
@@ -534,8 +534,7 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 ###13.2文档读取顺序(新 session)
 
 1. **CLAUDE.md**(必读)
-2. **HANDOFF.md**(必读)
-3. **IMPLEMENTATION.md**(必读)
+2. **IMPLEMENTATION.md**(必读)
 4. **DESIGN.md**(必读)
 5. **ARCHITECTURE.md**(写代码时反复查)
 6. **STRUCTURE.md**(本文,代码结构)
