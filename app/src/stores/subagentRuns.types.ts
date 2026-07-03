@@ -101,6 +101,17 @@ export interface SubagentRunSummary {
    *  the row projection (drawer detail cache); the summary
    *  surface is for future use. */
   worktreePath: string | null;
+  /** 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+   *  worker's actual model display (the third element of
+   *  `resolve_worker_provider`'s return). `null` on pre-C rows
+   *  AND when the worker inherited the parent model (no
+   *  override / frontmatter hit, OR catalog miss downgrade) —
+   *  the frontend treats both shapes as "inherit parent" and
+   *  either renders "继承父级" or hides the chip via `v-if`
+   *  (AC14-15: card / drawer model chip is hidden on null).
+   *  Wire form: `modelDisplay` (camelCase via the backend
+   *  `#[serde(rename_all = "camelCase")]` on `SubagentRunSummary`). */
+  modelDisplay: string | null;
 }
 
 /** `get_subagent_run` return. The Rust struct carries
@@ -153,6 +164,16 @@ export interface SubagentRunRow {
   // visible condition (`status === 'completed' &&
   // worktreePath != null`).
   worktreePath: string | null;
+  // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+  // worker's actual model display (see `SubagentRunSummary`
+  // for the full contract). Same null-handling rules as the
+  // summary projection. The drawer's Header renders the
+  // model inline next to the worker name when non-null; on
+  // null the slot is hidden entirely (no "inherit parent"
+  // chip in the drawer — the card chip handles that, the
+  // drawer is more terse). Wire form: `modelDisplay`
+  // (camelCase).
+  modelDisplay: string | null;
 }
 
 /** Live `subagent:event` IPC payload. camelCase via the Rust

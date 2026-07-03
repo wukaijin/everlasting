@@ -85,6 +85,11 @@ const baseRow: SubagentRunRow = {
   task: "do work",
   turnCount: 3,
   worktreePath: "/data/worktrees/proj/worker/run-merge-1",
+  // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+  // baseline null (parent inheritance / pre-C row); the merge
+  // controls surface is worktree-only so the model field
+  // doesn't affect its visibility.
+  modelDisplay: null,
 };
 
 // -----------------------------------------------------------------------

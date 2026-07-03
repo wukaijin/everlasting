@@ -213,6 +213,17 @@ pub struct SubagentRunRow {
     /// tool can locate the branch + worktree. Wire form:
     /// `worktreePath` (camelCase via serde).
     pub worktree_path: Option<String>,
+    /// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+    /// worker's *actual* model display, written at
+    /// `insert_run_with_id` from the third element of
+    /// `resolve_worker_provider`'s return (`Some(display_name)` on
+    /// catalog hit, `None` on parent inheritance / catalog miss).
+    /// NULL on pre-C rows (the column is purely additive — no
+    /// DEFAULT, no backfill). The frontend reads `null` as "inherit
+    /// parent" / "继承父级" (the chip is hidden via `v-if` in
+    /// `<SubagentDrawerHeader>` + `<ToolCallCard>` dispatch branch
+    /// per AC14-15). Wire form: `modelDisplay` (camelCase).
+    pub model_display: Option<String>,
     pub transcript_json: Option<String>,
     pub transcript_truncated: i64,
     pub created_at: String,
@@ -278,6 +289,14 @@ pub struct SubagentRunSummary {
     /// rows. See [`SubagentRunRow::worktree_path`] for the full
     /// contract.
     pub worktree_path: Option<String>,
+    /// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+    /// worker's actual model display (see
+    /// [`SubagentRunRow::model_display`] for the full contract).
+    /// `null` on pre-C rows AND when the worker inherited the
+    /// parent model (no override / frontmatter hit, OR catalog
+    /// miss downgrade). The frontend's card/drawer renders the
+    /// "inherit parent" affordance on null.
+    pub model_display: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +349,7 @@ pub async fn insert_run(
         parent_request_id,
         subagent_name,
         task,
+        None,
     )
     .await?;
     Ok(id)
@@ -341,6 +361,13 @@ pub async fn insert_run(
 /// inserted (the worktree is created first, then the DB row records
 /// its path). The id must be a valid UUID v4 string (caller is
 /// responsible for generation).
+///
+/// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13): also
+/// accepts the worker's *actual* model display (third element of
+/// `resolve_worker_provider`'s return — `Some(name)` on catalog hit,
+/// `None` on parent inheritance / catalog miss). The frontend reads
+/// this for the card / drawer model chip (AC14-15). Pre-C callers
+/// pass `None` and the column stays NULL (legacy compat).
 pub async fn insert_run_with_id(
     pool: &SqlitePool,
     id: &str,
@@ -348,6 +375,7 @@ pub async fn insert_run_with_id(
     parent_request_id: &str,
     subagent_name: &str,
     task: Option<&str>,
+    model_display: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let empty_usage = serde_json::to_string(&TokenUsage::default())
@@ -357,8 +385,10 @@ pub async fn insert_run_with_id(
         INSERT INTO subagent_runs
         (id, parent_session_id, parent_request_id, subagent_name,
          status, started_at, finished_at, token_usage_json, summary,
-         task, final_text, transcript_json, transcript_truncated, created_at)
-        VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, ?, NULL, '[]', 0, ?)
+         task, final_text, transcript_json, transcript_truncated,
+         model_display, created_at)
+        VALUES (?, ?, ?, ?, 'running', ?, NULL, ?, NULL, ?, NULL, '[]', 0,
+         ?, ?)
         "#,
     )
     .bind(id)
@@ -368,6 +398,7 @@ pub async fn insert_run_with_id(
     .bind(&now)
     .bind(&empty_usage)
     .bind(task)
+    .bind(model_display)
     .bind(&now)
     .execute(pool)
     .await?;
@@ -515,7 +546,7 @@ pub async fn get_run(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count, worktree_path,
+               final_text, task, turn_count, worktree_path, model_display,
                transcript_json, transcript_truncated, created_at
         FROM subagent_runs
         WHERE id = ?
@@ -540,6 +571,7 @@ pub async fn get_run(
             task: r.try_get("task")?,
             turn_count: r.try_get("turn_count")?,
             worktree_path: r.try_get("worktree_path")?,
+            model_display: r.try_get("model_display")?,
             transcript_json: r.try_get("transcript_json")?,
             transcript_truncated: r.try_get("transcript_truncated")?,
             created_at: r.try_get("created_at")?,
@@ -569,7 +601,7 @@ pub async fn list_runs_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count, worktree_path,
+               final_text, task, turn_count, worktree_path, model_display,
                transcript_json, transcript_truncated, created_at
         FROM subagent_runs
         WHERE parent_session_id = ?
@@ -595,6 +627,7 @@ pub async fn list_runs_by_session(
                 task: r.try_get("task")?,
                 turn_count: r.try_get("turn_count")?,
                 worktree_path: r.try_get("worktree_path")?,
+                model_display: r.try_get("model_display")?,
                 transcript_json: r.try_get("transcript_json")?,
                 transcript_truncated: r.try_get("transcript_truncated")?,
                 created_at: r.try_get("created_at")?,
@@ -632,7 +665,7 @@ pub async fn list_runs_summary_by_session(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
                status, started_at, finished_at, token_usage_json, summary,
-               final_text, task, turn_count, worktree_path
+               final_text, task, turn_count, worktree_path, model_display
         FROM subagent_runs
         WHERE parent_session_id = ?
         ORDER BY started_at DESC
@@ -658,6 +691,7 @@ pub async fn list_runs_summary_by_session(
                 task: r.try_get("task")?,
                 turn_count: r.try_get("turn_count")?,
                 worktree_path: r.try_get("worktree_path")?,
+                model_display: r.try_get("model_display")?,
             })
         })
         .collect()

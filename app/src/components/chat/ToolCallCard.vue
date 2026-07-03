@@ -308,13 +308,36 @@ const dispatchHeaderStatus = computed<string>(() => {
 /** Short summary preview (≤200 chars). Pulled from the cached summary
  *  if available; otherwise falls back to the tool_result content. */
 const workerSummaryPreview = computed<string>(() => {
+  // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC14):
+  // strip the `[model: X]` line from the preview text — the
+  // chip renders the model name inline next to the worker
+  // name, so a duplicate in the preview would be visual
+  // noise. We also strip the leading `[status: ...]` prefix
+  // (the status badge in the header carries that signal).
+  // The `workerModelText` chip + the `workerSummary` status
+  // badge are the canonical "what happened" surfaces; this
+  // preview is just the worker-text body.
+  const stripStatusAndModel = (s: string): string => {
+    return s
+      .split("\n")
+      .filter(
+        (line) =>
+          !/^\[status:\s/.test(line) && !/^\[model:\s/.test(line),
+      )
+      .join("\n")
+      .trim();
+  };
   const s = workerSummary.value?.summary;
-  if (s) return s.length > 200 ? s.slice(0, 200) + "…" : s;
+  if (s) {
+    const cleaned = stripStatusAndModel(s);
+    return cleaned.length > 200 ? cleaned.slice(0, 200) + "…" : cleaned;
+  }
   // Fall back to the tool_result content (which carries the
   // `[status: ...]` prefix from `format_dispatch_result`).
   if (props.result) {
     const display = displayContent.value ?? props.result.content;
-    return display.length > 200 ? display.slice(0, 200) + "…" : display;
+    const cleaned = stripStatusAndModel(display);
+    return cleaned.length > 200 ? cleaned.slice(0, 200) + "…" : cleaned;
   }
   return "";
 });
@@ -329,6 +352,19 @@ const workerDisplayName = computed<string>(() => {
   const input = props.call.input as { subagent?: unknown } | undefined;
   if (input && typeof input.subagent === "string") return input.subagent;
   return "worker";
+});
+
+/** Worker model display (2026-07-03, task 07-03-subagent-per-agent-model-ui,
+ *  AC14). Pulls `modelDisplay` from the cached summary
+ *  (`SubagentRunSummary.modelDisplay`); empty string on null
+ *  (parent inheritance / catalog miss / legacy row) so the
+ *  chip stays hidden via `v-if` rather than flashing a
+ *  misleading "inherit parent" placeholder. The `[model: X]`
+ *  line in the worker `tool_result` text is stripped from
+ *  the summary preview (see `workerSummaryPreview` below) so
+ *  the chip + the text don't double-display the same value. */
+const workerModelText = computed<string>(() => {
+  return workerSummary.value?.modelDisplay ?? "";
 });
 
 /** Token-usage chip text for the collapsed card (2026-06-26 UX
@@ -589,6 +625,14 @@ watch(
           class="tool-card__subagent-status"
         >{{ workerStatusText }}</span>
         <span
+          v-if="workerModelText"
+          class="tool-card__subagent-model"
+          title="Worker 实际使用的 model（来自 catalog）"
+        >
+          <Icon name="cpu" :size="12" />
+          {{ workerModelText }}
+        </span>
+        <span
           v-if="workerTokenText"
           class="tool-card__subagent-tokens"
           title="Worker 累计上下文 token 用量"
@@ -841,6 +885,27 @@ watch(
   padding: 1px 6px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  flex-shrink: 0;
+}
+
+/* 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC14):
+   per-row model chip on the dispatch_subagent preview. Sits
+   between the live status indicator and the token chip
+   (the model is stable across the worker's lifetime — the
+   order is "live state → static identity → cost"). Same
+   visual treatment as the token chip (mono, muted) but
+   uses the accent color (the model is the worker's
+   identity, not a cost line). */
+.tool-card__subagent-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   flex-shrink: 0;
 }
 

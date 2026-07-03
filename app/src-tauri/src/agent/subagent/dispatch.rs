@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
+use crate::db::subagent_overrides::get_subagent_model_override;
 use crate::llm::Provider;
 use crate::memory::MemoryCache;
 use crate::skill::loader::SkillCache;
@@ -553,13 +554,33 @@ pub(crate) async fn run_subagent(
     // `&ProviderCatalog` in; `worker_display` threads to
     // `format_dispatch_result_with_model` so the parent LLM sees which
     // model the worker actually used.
+    //
+    // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 1):
+    // the resolved model is `resolve_final_model` — DB override
+    // (per-agent UI preference) > frontmatter `model:` (file
+    // declaration) > parent. The two priority arms collapse into a
+    // single `Option<model_id>` before reaching
+    // `resolve_worker_provider`, which is **unchanged** (its 6
+    // existing unit tests stay green; the priority change is
+    // upstream of the resolver).
+    let final_model = match resolve_final_model(db, def.name.as_str(), def.model.as_deref()).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                agent_name = %def.name,
+                error = %e,
+                "run_subagent: resolve_final_model failed; falling back to frontmatter-only"
+            );
+            def.model.clone()
+        }
+    };
     let cat_guard = match &catalog {
         Some(c) => Some(c.read().await),
         None => None,
     };
     let (worker_provider, worker_ctx, worker_display): (Arc<dyn Provider>, u32, Option<String>) =
         resolve_worker_provider(
-            def.model.as_deref(),
+            final_model.as_deref(),
             provider,
             context_window,
             cat_guard.as_deref(),
@@ -620,6 +641,19 @@ pub(crate) async fn run_subagent(
             &worker_rid,
             subagent_name,
             Some(task),
+            // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
+            // AC13): thread the worker's *actual* model display into
+            // the row. `worker_display` is `Some(name)` on catalog
+            // hit (i.e. the worker resolved a model override /
+            // frontmatter), `None` on parent inheritance / catalog
+            // miss. The frontend reads this for the card / drawer
+            // model chip (AC14-15). The wire `[model: <name>]`
+            // line in `format_dispatch_result_with_model` follows
+            // the same `Option<String>` shape — when
+            // `worker_display` is `None`, the line is omitted (no
+            // redundant "inherited parent" line; the parent
+            // fallback is implied).
+            worker_display.as_deref(),
         )
         .await
         {
@@ -1169,6 +1203,55 @@ pub(crate) async fn run_subagent(
     (content, is_error, cancel_parent, None)
 }
 
+/// task 07-03-subagent-per-agent-model-ui: priority chain
+/// `DB override > frontmatter > parent`. Pure (modulo the DB call
+/// for the override lookup) so unit tests can cover the merge
+/// without spinning up a full `run_subagent` fixture.
+///
+/// Decision: read the DB override FIRST (always — even if the
+/// frontmatter is `Some(...)`); the DB row is the user-managed
+/// "set this agent to this model" affordance, which by design
+/// overrides anything the `.md` file declares. If the DB row
+/// doesn't exist OR the lookup fails, fall through to the
+/// frontmatter `model:` value. If both are absent, the returned
+/// `None` lets [`resolve_worker_provider`] handle the
+/// parent-inheritance fallback.
+///
+/// **Catalog-miss decision (NOT a fallback chain)**: when the DB
+/// override is `Some(mid)` but the catalog later misses (model
+/// was deleted / provider's `api_key` is empty), the
+/// `resolve_worker_provider` path already logs `warn!` + falls
+/// back to the parent provider (NOT to the frontmatter — the
+/// frontmatter is a *declaration* of intent, not a *fallback*).
+/// The DB override is the highest-priority declaration; the
+/// frontmatter is the second-priority declaration; both are
+/// declarations of "which model to use", and the parent
+/// inheritance is the catch-all when there's no declaration.
+/// This matches the design's stated priority chain (DB > fm >
+/// parent) — a missing highest-priority declaration does NOT
+/// silently defer to the second-priority declaration; it errors
+/// to the parent. Settings UI surfaces invalid overrides with a
+/// red "model 已删除" badge so the user can fix them.
+///
+/// Failure mode: a transient DB error during the override
+/// lookup logs `warn!` (in the caller) + falls through to the
+/// frontmatter `model:` (NOT to the parent). The Settings UI
+/// works on a stable DB; a transient error is rare and the
+/// frontmatter is a sensible "default to file" fallback for
+/// the duration of the error.
+pub(crate) async fn resolve_final_model(
+    db: &SqlitePool,
+    agent_name: &str,
+    frontmatter_model: Option<&str>,
+) -> Result<Option<String>, sqlx::Error> {
+    // ① DB override (highest priority).
+    if let Some(mid) = get_subagent_model_override(db, agent_name).await? {
+        return Ok(Some(mid));
+    }
+    // ② Frontmatter declaration (lowest priority declaration).
+    Ok(frontmatter_model.map(str::to_string))
+}
+
 /// task 07-03-subagent-frontmatter-model: snapshot `AppState.catalog`
 /// for a `run_subagent` call site. Returns `None` when there is no
 /// `AppHandle` (unit tests, no Tauri runtime) or the state isn't
@@ -1674,5 +1757,97 @@ mod tests {
         assert!(Arc::ptr_eq(&wp, &worker));
         assert_eq!(ctx, 50_000, "ctx must come from the model row, not parent");
         assert_eq!(disp.as_deref(), Some("Claude Test"));
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_final_model (task 07-03-subagent-per-agent-model-ui, 阶段 1)
+    //
+    // AC1 (UI: builtin override wins) / AC2 (DB > frontmatter) /
+    // AC3 (frontmatter > parent) / AC4 (都无 → parent) / AC9 (DB miss
+    // 指向失效 model: catalog miss 走 parent, NOT frontmatter fallback).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn resolve_final_model_db_wins_over_frontmatter() {
+        // AC2: both DB and frontmatter declare a model → DB wins.
+        let pool = test_pool().await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-from-db",
+        )
+        .await
+        .unwrap();
+        let got = resolve_final_model(&pool, "researcher", Some("model-from-fm"))
+            .await
+            .unwrap();
+        assert_eq!(got.as_deref(), Some("model-from-db"));
+    }
+
+    #[tokio::test]
+    async fn resolve_final_model_only_frontmatter() {
+        // AC3: only frontmatter → frontmatter.
+        let pool = test_pool().await;
+        let got = resolve_final_model(&pool, "researcher", Some("model-from-fm"))
+            .await
+            .unwrap();
+        assert_eq!(got.as_deref(), Some("model-from-fm"));
+    }
+
+    #[tokio::test]
+    async fn resolve_final_model_only_db() {
+        // Only DB → DB (frontmatter is None).
+        let pool = test_pool().await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-from-db",
+        )
+        .await
+        .unwrap();
+        let got = resolve_final_model(&pool, "researcher", None).await.unwrap();
+        assert_eq!(got.as_deref(), Some("model-from-db"));
+    }
+
+    #[tokio::test]
+    async fn resolve_final_model_neither_returns_none_for_parent_inheritance() {
+        // AC4: no DB + no frontmatter → None (resolve_worker_provider
+        // then inherits parent provider + ctx).
+        let pool = test_pool().await;
+        let got = resolve_final_model(&pool, "researcher", None).await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_final_model_dangling_db_override_still_returns_some() {
+        // AC9 (priority chain invariant): `resolve_final_model` is
+        // intentionally catalog-agnostic — a DB override pointing
+        // at a deleted model STILL returns `Some(<deleted-id>)` so
+        // the resolver can chain into `resolve_worker_provider`
+        // (which logs `warn!` + falls back to parent on catalog
+        // miss). The fall-back is NOT to frontmatter (per the
+        // priority decision in the doc comment); it's directly to
+        // parent. This test pins that behavior so a future refactor
+        // doesn't silently change the catalog-miss path.
+        let pool = test_pool().await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-deleted",
+        )
+        .await
+        .unwrap();
+        let got = resolve_final_model(&pool, "researcher", Some("model-from-fm"))
+            .await
+            .unwrap();
+        assert_eq!(
+            got.as_deref(),
+            Some("model-deleted"),
+            "DB override wins even when frontmatter is also set"
+        );
+        // The catalog-miss fallback to parent is tested in
+        // `resolve_worker_provider_miss_falls_back_to_parent` above
+        // (the same `model-id-not-in-catalog` case there covers the
+        // downstream half of AC9).
     }
 }

@@ -3698,6 +3698,11 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         "parent-rid-l3b-mw-happy",
         "general-purpose",
         Some("write a file"),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui): test
+        // fixtures don't carry a model display (the merge_worker
+        // path is the worktree path, not the model); pass `None`
+        // for `model_display` (legacy compat shape).
+        None,
     )
     .await
     .expect("insert_run_with_id");
@@ -3866,6 +3871,10 @@ async fn l3b_merge_worker_conflict_returns_error() {
         "parent-rid-l3b-mw-conflict",
         "general-purpose",
         Some("edit seed.txt"),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui): test
+        // fixtures pass `None` for `model_display` (no model
+        // resolution needed for the merge_worker conflict path).
+        None,
     )
     .await
     .expect("insert_run_with_id");
@@ -3951,6 +3960,10 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         "parent-rid-l3b-mw-no-wt",
         "general-purpose",
         Some("test"),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui):
+        // `merge_worker` no-worktree test fixture — `model_display`
+        // is irrelevant to the "no worktree" error path; pass `None`.
+        None,
     )
     .await
     .expect("insert_run_with_id");
@@ -4029,6 +4042,10 @@ async fn l3b_discard_worker_happy_path() {
         "parent-rid-l3b-dw-happy",
         "general-purpose",
         Some("test discard"),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui):
+        // `discard_worker` happy-path test fixture — model display
+        // is not part of the discard contract; pass `None`.
+        None,
     )
     .await
     .expect("insert_run_with_id");
@@ -4102,6 +4119,11 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         "parent-rid-l3b-dw-already",
         "general-purpose",
         Some("test"),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui):
+        // `discard_worker` test fixture passes `None` for the new
+        // `model_display` parameter (the test does not exercise
+        // model resolution).
+        None,
     )
     .await
     .expect("insert_run_with_id");

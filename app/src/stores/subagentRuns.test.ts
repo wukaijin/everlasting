@@ -109,6 +109,10 @@ const sampleSummary: SubagentRunSummary = {
   // worktree preserved). PR4 merge/discard tests override this to
   // a string when exercising the visible-button path.
   worktreePath: null,
+  // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13):
+  // null in baseline (parent inheritance / pre-C row); the
+  // card's model chip is hidden via `v-if` on null.
+  modelDisplay: null,
 };
 
 // NOTE: SubagentRunRow.status is a raw `string` (Drift trap 1) — NOT
@@ -141,6 +145,10 @@ const sampleRow: SubagentRunRow = {
   turnCount: null,
   // L3b PR1 (2026-06-27): null in the baseline fixture.
   worktreePath: null,
+  // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC13/14):
+  // null in the baseline (parent inheritance / pre-C row); the
+  // card's model chip is hidden via `v-if` on null.
+  modelDisplay: null,
 };
 
 // -----------------------------------------------------------------------

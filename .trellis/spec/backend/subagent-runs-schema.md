@@ -349,7 +349,34 @@ this table pattern verbatim:
 
 ---
 
-**Last updated**: 2026-06-27 (L3b PR1 — `worktree_path` column + `insert_run_with_id` for caller-supplied id; see "L3b PR1 additions" below). Previously 2026-06-21 (IPC event contract — `runId` must be DB id + `subagent:finished` terminal signal; B6 PR3b hotfix). Previously 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).
+**Last updated**: 2026-07-03 (B6+ C — `model_display` column + per-agent model UI; see "B6+ C additions" below). Previously 2026-06-27 (L3b PR1 — `worktree_path` column + `insert_run_with_id` for caller-supplied id; see "L3b PR1 additions" below). Previously 2026-06-21 (IPC event contract — `runId` must be DB id + `subagent:finished` terminal signal; B6 PR3b hotfix). Previously 2026-06-20 (B6 PR2 subagent_runs schema + audit invariant; RULE-A-016 closed B6 PR3a).
+
+## B6+ C additions (2026-07-03)
+
+### New column: `model_display TEXT NULL`
+
+Carries the worker's **actual** model display name (the third element of `resolve_worker_provider`'s return tuple: `Some(display_name)` on catalog hit, `None` on parent inheritance / catalog miss). The frontend reads this for the dispatch card's model chip and the `<SubagentDrawerHeader>`'s model slot (AC14-15); both are `v-if`-guarded on non-null so legacy / parent-inheriting rows render without a chip.
+
+**Why a dedicated column, not parse-from-tool_result**: the wire `[model: <name>]` line in the dispatch_subagent `tool_result` (added by task 07-03-subagent-frontmatter-model) is an implementation detail of the parent-facing LLM signal. Parsing it back on the frontend would re-implement the parser in 2 places (card + drawer) and is brittle to format changes (the format is `format_dispatch_result_with_model`'s private contract). Persisting the value structurally:
+- Single source of truth (`run_subagent` is the only writer — same site that builds the `[model:]` line, so the two never disagree).
+- Trivially testable (DB round-trip is the regression net).
+- Frontend parsers stay shallow (a single `v-if="modelDisplay"`).
+
+**Lifecycle**:
+- `insert_run_with_id` carries a new trailing `model_display: Option<&str>` parameter (the value the dispatch path writes; `None` → `NULL`). Pre-C callers pass `None` (legacy compat).
+- The value is set ONCE at INSERT time and never updated (the worker's model doesn't change mid-run).
+- The cell's actual value comes from `resolve_worker_provider`'s `Some(name)` arm (catalog hit). Parent inheritance (`resolve_worker_provider` returns `None`) writes NULL — consistent with the `[model:]` line omission in `format_dispatch_result_with_model` for the same `None` case.
+
+**NULL semantics** (all render the same way in the UI: chip hidden, no "inherit parent" placeholder):
+- Pre-C rows (column didn't exist; migration is non-destructive).
+- C-task builtin / user / project agents with no override and no frontmatter `model:` (parent inheritance).
+- C-task DB override pointing at a model that's been deleted out from under it (catalog miss → parent fallback at dispatch; the override's `id` is in `subagent_runs.model_display` only when the catalog hit succeeded).
+
+**Wire form**: `modelDisplay: string | null` (camelCase via the backend `#[serde(rename_all = "camelCase")]` on both `SubagentRunRow` and `SubagentRunSummary`).
+
+### Migration: `add_subagent_runs_model_display_column`
+
+Idempotent column-add via `add_subagent_runs_column_if_missing` (same pattern as `task` / `final_text` / `turn_count` / `worktree_path` — see "L3b PR1 additions" below for the helper's contract). NULL-able, no DEFAULT — pre-C rows keep NULL and the UI degrades to "no chip" cleanly.
 
 ## L3b PR1 additions (2026-06-27)
 
@@ -372,6 +399,9 @@ pub async fn insert_run_with_id(
     parent_request_id: &str,
     subagent_name: &str,
     task: Option<&str>,
+    // B6+ C (2026-07-03): worker's *actual* model display; see
+    // "B6+ C additions" above. Pre-C callers pass `None`.
+    model_display: Option<&str>,
 ) -> Result<(), sqlx::Error>
 ```
 

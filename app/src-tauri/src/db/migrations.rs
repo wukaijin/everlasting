@@ -654,6 +654,52 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
  // re-running on a post-L3b DB is a no-op (the column exists).
  add_subagent_runs_column_if_missing(pool, "worktree_path", "TEXT").await?;
 
+ // --- 2026-07-03 (task 07-03-subagent-per-agent-model-ui):
+ // subagent_model_overrides table.
+ //
+ // 1 row per subagent name (PRIMARY KEY), carrying a `models.id`
+ // UUID (soft FK; no constraint — see database-guidelines.md "Soft
+ // FK pattern"). Globally scoped (no project_id) — matches the
+ // builtin subagents' global nature and keeps the schema minimal.
+ //
+ // Why no FK: `models.id` may be deleted out from under a stale
+ // override; the dispatch path's `resolve_worker_provider` already
+ // handles catalog miss with `warn!` + parent fallback. The
+ // Settings UI shows invalid overrides with a red "model 已删除"
+ // badge so the user can fix it.
+ //
+ // Idempotent: `CREATE TABLE IF NOT EXISTS` is a no-op on
+ // greenfield DBs and a no-op on post-migration DBs. No
+ // `add_subagent_model_overrides_column_if_missing` needed (the
+ // first release ships the full schema).
+ sqlx::query(
+ r#"
+ CREATE TABLE IF NOT EXISTS subagent_model_overrides (
+ agent_name TEXT NOT NULL PRIMARY KEY,
+ model_id   TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+ )
+ "#,
+ )
+ .execute(pool)
+ .await?;
+
+ // --- 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 可观测性段):
+ // model_display column on subagent_runs.
+ //
+ // Nullable TEXT (no DEFAULT) so pre-C rows keep NULL — the frontend
+ // reads `null` as "inherit parent" and either renders a "继承父级"
+ // chip or hides the chip entirely (per AC14 / AC15). The column
+ // carries the worker's *actual* model display, not the override /
+ // frontmatter declaration (a catalog-miss downgrade writes NULL
+ // even if the agent's override points at a real model; the
+ // "实际用的" semantic is the load-bearing one for the UI).
+ //
+ // Nullable also lets legacy pre-C rows (and the post-L3b / pre-C
+ // 1b-transition rows) load losslessly — the column is purely
+ // additive.
+ add_subagent_runs_column_if_missing(pool, "model_display", "TEXT").await?;
+
  // --- P1 (autonomous memory, 2026-06-29): storage layer for the
  // agent's self-produced, cross-session recalled experience memory.
  //

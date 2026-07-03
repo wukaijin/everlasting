@@ -19,7 +19,7 @@ use super::{
     migrations::run_migrations,
     sessions::{create_session, delete_session},
     subagent_runs::{
-        get_run, insert_run, list_runs_by_session,
+        get_run, insert_run, insert_run_with_id, list_runs_by_session,
         list_runs_summary_by_session, update_run_finished, SubagentStatusDb,
     },
 };
@@ -862,4 +862,132 @@ async fn subagent_runs_widen_incomplete_migration_is_idempotent() {
         get_run(&pool, &id).await.unwrap().is_some(),
         "rows survive the idempotent re-run"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 1b):
+// model_display column on subagent_runs
+// ---------------------------------------------------------------------------
+
+/// `insert_run_with_id` with `model_display = Some("Claude Test")`
+/// lands in the column verbatim. The frontend reads it for the
+/// card / drawer model chip (AC14-15).
+#[tokio::test]
+async fn subagent_runs_insert_with_model_display_persists() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let run_id = Uuid::new_v4().to_string();
+    insert_run_with_id(
+        &pool,
+        &run_id,
+        &s.id,
+        "rid-display",
+        "researcher",
+        Some("test task"),
+        Some("Claude Test"),
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &run_id).await.unwrap().expect("row exists");
+    assert_eq!(row.model_display.as_deref(), Some("Claude Test"));
+}
+
+/// `insert_run_with_id` with `model_display = None` (parent
+/// inheritance / catalog miss) writes NULL — the frontend's
+/// `v-if` chip hides on null (AC14-15 `workerModelText` is empty
+/// when `modelDisplay === null`). Mirrors the `tool_result [model:]`
+/// line omission in `format_dispatch_result_with_model` for the
+/// same `None` case.
+#[tokio::test]
+async fn subagent_runs_insert_with_none_model_display_writes_null() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let run_id = Uuid::new_v4().to_string();
+    insert_run_with_id(
+        &pool,
+        &run_id,
+        &s.id,
+        "rid-display-none",
+        "researcher",
+        Some("test task"),
+        None,
+    )
+    .await
+    .unwrap();
+    let row = get_run(&pool, &run_id).await.unwrap().expect("row exists");
+    assert!(
+        row.model_display.is_none(),
+        "parent inheritance / catalog miss → NULL column"
+    );
+}
+
+/// `model_display` is included in the summary list projection
+/// (so the card can read it without a per-run detail IPC).
+#[tokio::test]
+async fn subagent_runs_list_summary_includes_model_display() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    insert_run_with_id(
+        &pool,
+        "run-summary-display",
+        &s.id,
+        "rid-summary-display",
+        "researcher",
+        None,
+        Some("GLM-4.7"),
+    )
+    .await
+    .unwrap();
+    let summaries =
+        list_runs_summary_by_session(&pool, &s.id).await.unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].model_display.as_deref(), Some("GLM-4.7"));
+    // null model_display is also included (pre-C rows / parent
+    // inheritance) — verified by the next test.
+    insert_run_with_id(
+        &pool,
+        "run-summary-display-null",
+        &s.id,
+        "rid-summary-display-null",
+        "researcher",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let summaries =
+        list_runs_summary_by_session(&pool, &s.id).await.unwrap();
+    assert_eq!(summaries.len(), 2);
+    let null_row = summaries
+        .iter()
+        .find(|r| r.id == "run-summary-display-null")
+        .unwrap();
+    assert!(null_row.model_display.is_none());
 }

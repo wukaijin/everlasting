@@ -69,6 +69,8 @@ pub mod providers;
 pub mod providers_tests;
 pub mod sessions;
 pub mod sessions_tests;
+pub mod subagent_overrides;
+pub mod subagent_overrides_tests;
 pub mod subagent_runs;
 pub mod subagent_runs_tests;
 pub mod types;

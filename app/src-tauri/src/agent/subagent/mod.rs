@@ -102,6 +102,17 @@ pub use truncate_summary::{
     format_dispatch_result_with_model, format_final_text, summarize_worker_tool_actions,
     truncate_transcript_for_persistence, TRANSCRIPT_MAX_BYTES,
 };
+// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 2/3):
+// the `commands::subagents` IPC needs to locate the on-disk file
+// for user / project agents (`set_subagent_model` routes the
+// write to the frontmatter `.md` file vs. the DB override
+// table) + to perform the line-level frontmatter edit
+// (`write_frontmatter_model`). Both helpers live in the
+// `loader` module (private to the agent subagent family) —
+// re-export them here so the IPC layer can reach them via
+// `crate::agent::subagent::*` without making the whole loader
+// module `pub`.
+pub use loader::{locate_agent_file, write_frontmatter_model};
 
 // ---------------------------------------------------------------------------
 // Forced dispatch (explicit-agent-dispatch, 2026-06-30)

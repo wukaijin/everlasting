@@ -88,6 +88,21 @@ defineProps<{
       <span class="subagent-drawer__name">
         {{ run?.subagentName ?? "worker" }}
       </span>
+      <!-- 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC15):
+           per-run model display. Reads `modelDisplay` from the
+           row directly (the main drawer already passes `run`
+           through); renders a small mono chip when non-null.
+           Null → slot hidden (no "inherit parent" placeholder
+           here — the drawer is a detailed view, the card chip
+           is the affordance for the model). -->
+      <span
+        v-if="run?.modelDisplay"
+        class="subagent-drawer__model"
+        :title="`Worker 实际使用的 model: ${run.modelDisplay}`"
+      >
+        <Icon name="cpu" :size="12" />
+        {{ run.modelDisplay }}
+      </span>
       <DialogClose
         class="subagent-drawer__close"
         aria-label="Close"
@@ -169,6 +184,25 @@ defineProps<{
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 2026-07-03 (task 07-03-subagent-per-agent-model-ui, AC15):
+   per-run model display in the drawer header. Same color
+   treatment as the card's model chip (accent + tint) so the
+   two surfaces read as a pair. Renders inline next to the
+   worker name; the `flex: 1` on `.subagent-drawer__name`
+   handles the long-name overflow. */
+.subagent-drawer__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  flex-shrink: 0;
 }
 
 .subagent-drawer__close {

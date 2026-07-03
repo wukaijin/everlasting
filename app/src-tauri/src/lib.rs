@@ -220,6 +220,11 @@ pub fn run() {
             // merge / discard buttons.
             commands::subagent_runs::merge_worker_run,
             commands::subagent_runs::discard_worker_run,
+            // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
+            // 阶段 3): Settings-UI IPCs for per-subagent model
+            // configuration (DB override + frontmatter write-back).
+            commands::subagents::list_subagents_with_model,
+            commands::subagents::set_subagent_model,
             // Worktrees
             commands::worktree::attach_worktree,
             commands::worktree::detach_worktree,

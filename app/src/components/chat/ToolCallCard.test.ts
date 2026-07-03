@@ -259,6 +259,11 @@ describe("ToolCallCard dispatch_subagent branch", () => {
         turnCount: null,
         // L3b PR1 (2026-06-27): null in baseline fixture.
         worktreePath: null,
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
+        // AC13/14): null in baseline (parent inheritance / pre-C
+        // row); the card's model chip is hidden via `v-if` on
+        // null.
+        modelDisplay: null,
       },
     ]);
     // Mock fetchRun so openDrawer doesn't actually try to call IPC.

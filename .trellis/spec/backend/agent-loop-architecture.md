@@ -208,6 +208,7 @@ re-running all 36 integration tests + cargo check.
 | 2026-06-20 | 22 | B6 PR3 (PR2 hotfix) | `app_handle: Option<tauri::AppHandle>` | thread the parent's `AppHandle` through so `run_subagent` can wire the worker's `SubagentBufferSink` with a live `subagent:event` IPC emit path (live transcript streaming for the PR3b `<SubagentDrawer>`); tests pass `None` |
 | 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override (pre-fix `_worker_system_prompt` was dead code; the worker silently inherited the parent's `assemble_system_prompt` output, causing prompt/permission contradictions in Edit/Plan mode); production + 36 `agent_loop_*` tests pass `None`, the worker nested call passes `Some(assemble_subagent_prompt(def, &task))` |
 | 2026-06-30 | 24 | `06-30-explicit-agent-dispatch` | `forced_dispatch: Option<ForcedDispatch>` | user `@@<agent> <task>` prefix → turn-1 short-circuit bypasses `provider.stream` (parent LLM zero calls) + reuses `run_subagent` directly; production passes the parsed `ForcedDispatch` (or `None`), worker nested + all tests pass `None` |
+| 2026-07-03 | 25 | `07-03-subagent-per-agent-model-ui` (B6+ C) | (no new `run_chat_loop` param) | per-agent model priority chain `DB override > frontmatter > parent` lives in `agent::subagent::dispatch::resolve_final_model`, called by `run_subagent` BEFORE `resolve_worker_provider`; the resolver itself is **unchanged** (6 existing tests stay green); the new `subagent_model_overrides` table (`db::subagent_overrides`) is the global DB row that wins over the file-declared `model:` |
 
 The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
 single 2-week window) is the largest single jump. It is justified because
@@ -222,6 +223,23 @@ worker to its `SubagentDef.system_prompt` after PR1b's nested call had
 silently inherited the parent's `assemble_system_prompt` output (causing
 prompt / permission contradictions in Edit/Plan mode). The 6 total B6 params
 across 5 PRs remain the minimum surface needed.
+
+**B6+ C (2026-07-03, task `07-03-subagent-per-agent-model-ui`) does NOT
+add a new `run_chat_loop` param** — the per-agent model priority chain
+`DB override > frontmatter > parent` is enforced **upstream** of
+`resolve_worker_provider` (a new `resolve_final_model` helper in
+`agent::subagent::dispatch` collapses the two priority arms into a
+single `Option<model_id>`; the resolver itself is unchanged so its
+6 existing tests stay green). The chain lives entirely in `run_subagent`
+body, which already had the `catalog` (added by task 07-03) and now
+also reads from the `subagent_model_overrides` table via a single
+DB call. The Settings-UI surface (`list_subagents_with_model` +
+`set_subagent_model` commands in `commands::subagents`) is the only
+new IPC pair. **`run_chat_loop`'s 24-param signature stays unchanged**
+in this task — the upstream priority resolution is the architectural
+decision; the alternative (adding a `model_override` param to
+`run_chat_loop` so the parent path could also benefit from per-session
+overrides) is deferred to a follow-up.
 
 ### Production + test call site parity
 

@@ -116,11 +116,17 @@ pub struct LoadedSubagent {
 ///   - `None` → field not declared → inherit on override / `vec![]`
 ///     on brand-new.
 ///   - `Some(vec)` (incl. `Some(vec![])`) → use verbatim.
-/// - `model` is parsed (so the user can write it) but immediately
-///   warned-and-discarded: v1 does not switch models per subagent
-///   (single `Provider` model instance). The value is intentionally
-///   NOT stored on `SubagentDef` — storing it would invite a future
-///   bug where the field is read but never honored.
+/// - `model: Option<String>` (task 07-03-subagent-frontmatter-model,
+///   2026-07-03; superseded the prior "warn+discard" behavior
+///   once the C task added the UI to set the model): the worker
+///   resolves its `Arc<dyn Provider>` from the process catalog by
+///   this `models.id`. Empty / whitespace-only is normalized to
+///   `None` at the parse site. Format is NOT validated here — a
+///   non-existent / stale id surfaces at dispatch time as a
+///   catalog miss → `warn!` + parent fallback (see
+///   `resolve_worker_provider`). The new C task (2026-07-03)
+///   layers a DB override on top of this frontmatter `model:`
+///   via `resolve_final_model` in `agent::subagent::dispatch`.
 /// - `isolation: Option<bool>` (L3b, 2026-06-27) keeps the same
 ///   declared/not-declared distinction so a higher layer that does
 ///   not declare `isolation` inherits the lower layer's value (Q2
@@ -662,6 +668,243 @@ impl SubagentCache {
     }
 }
 
+// ---------------------------------------------------------------------------
+// L3d / 2026-07-03: file-locating helper for the frontmatter writer
+// (task 07-03-subagent-per-agent-model-ui, 阶段 2)
+//
+// The `set_subagent_model` IPC needs to translate `(source, name,
+// project_path)` into a concrete file path so it can `write_frontmatter_model`
+// the new `model:` line. Reusing the same path constants as the loader
+// guarantees the writer writes to the file the loader will re-read on
+// the next mtime-fenced scan — no parallel-path drift.
+// ---------------------------------------------------------------------------
+
+/// Resolve the on-disk path for a user- or project-layer agent's
+/// frontmatter file. `builtin` agents have no file (the caller
+/// routes the write to the DB override table instead, per
+/// `design.md` §1 priority + §3 IPC source dispatch).
+///
+/// `project_path` is the canonical worktree path the loader uses
+/// for its `<project>/.everlasting/agents/` scan key. For user
+/// agents, the path is rooted at the platform `user_dir()` (see
+/// `user_agents_dir` for the exact layout). The function returns
+/// the path the writer will read-from / write-to; the writer
+/// performs its own IO error handling.
+///
+/// This helper is a thin wrapper over the same private constants
+/// the loader uses internally — the public surface keeps the
+/// `AGENTS_SUBDIR` / `PROJECT_NAMESPACE` names out of the IPC
+/// layer (the writer doesn't need to know which layout is in
+/// effect; the helper picks the right one from `source`).
+pub fn locate_agent_file(
+    source: SubagentSource,
+    name: &str,
+    project_path: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    if !is_valid_agent_name(name) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid agent name: '{}'", name),
+        ));
+    }
+    let path = match source {
+        SubagentSource::Builtin => {
+            // Builtin has no file path — the caller should have
+            // routed to the DB override table instead. Return an
+            // error so a misrouted caller surfaces as an IO error
+            // (not a silent no-op).
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "builtin subagents have no file path; use the DB override instead",
+            ));
+        }
+        SubagentSource::User => user_agents_dir()
+            .map(|d| d.join(format!("{name}.md")))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "user dir is not available on this platform",
+                )
+            })?,
+        SubagentSource::Project => project_agents_dir(project_path)
+            .join(format!("{name}.md")),
+    };
+    Ok(path)
+}
+
+// ---------------------------------------------------------------------------
+// 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 2): line-level
+// frontmatter editor + IO wrapper
+//
+// The Settings UI's "set model" affordance writes the user's
+// per-agent `model:` value back to the agent's `.md` file (for
+// user / project agents; builtin agents go to the DB override
+// table instead, see `subagent_overrides` + `set_subagent_model`
+// IPC). Rather than introducing a YAML crate, the writer does
+// LINE-LEVEL EDITS: it reads the file, locates the frontmatter
+// block, and rewrites only the `model:` line. Body, comments,
+// and other frontmatter keys are preserved verbatim.
+// ---------------------------------------------------------------------------
+
+/// Apply a `model:` line edit to an agent's frontmatter text.
+/// Pure (no IO) so the line-level logic is unit-testable without
+/// touching the filesystem.
+///
+/// Behavior:
+/// - **`Some(mid)`** (set or replace `model`):
+///   - If a `model:` line already exists inside the frontmatter
+///     block, replace it with the new value.
+///   - If `model:` is absent, insert a new `model: <id>` line as
+///     the first line INSIDE the frontmatter block (right after
+///     the opening `---` fence).
+/// - **`None`** (clear `model`):
+///   - If a `model:` line exists, delete it (along with its
+///     trailing newline so the file doesn't gain a blank line).
+///   - If `model:` is absent, the file is unchanged.
+///
+/// **Frontmatter detection**: the function looks for the first
+/// `---\n` ... `---\n` block. If the input has no opening `---`
+/// fence, the function returns `Err(String)` — a `.md` agent
+/// without frontmatter is broken (the loader would have rejected
+/// it for missing `name`); silently adding a fence would rewrite
+/// the file structure in a way the user didn't ask for. The IPC
+/// layer surfaces this as an `InvalidRequest` error.
+///
+/// **Preserves**: line ordering for all other frontmatter keys,
+/// the body section, in-line `#` comments, and surrounding
+/// whitespace (we only touch the targeted line; no
+/// re-serialization of the rest).
+pub fn apply_model_line(content: &str, model_id: Option<&str>) -> Result<String, String> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Locate the opening `---` fence. Skip leading blank lines
+    // so a file that starts with a blank line is still recognized.
+    let mut open_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "---" {
+            open_idx = Some(i);
+            break;
+        }
+        if !line.trim().is_empty() {
+            // Non-blank, non-fence line before any `---` → no
+            // frontmatter. Reject (don't auto-insert a fence —
+            // see doc comment).
+            return Err(format!(
+                "agent file has no frontmatter fence (first non-blank line is `{}`)",
+                line
+            ));
+        }
+    }
+    let open_idx = match open_idx {
+        Some(i) => i,
+        None => return Err("agent file has no frontmatter (no opening `---`)".to_string()),
+    };
+
+    // Find the closing `---` fence (search from `open_idx + 1`).
+    let mut close_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().skip(open_idx + 1) {
+        if line.trim() == "---" {
+            close_idx = Some(i);
+            break;
+        }
+    }
+    let close_idx = match close_idx {
+        Some(i) => i,
+        None => return Err("agent file has unterminated frontmatter (no closing `---`)".to_string()),
+    };
+
+    // Scan frontmatter lines for an existing `model:` entry.
+    // The check is a `starts_with` match against the trimmed line
+    // (the inline whitespace + the colon; values can have any
+    // shape). We capture the index so we can replace or remove
+    // in place; the "remove" path also drops the trailing
+    // newline so the file doesn't gain a blank line.
+    let mut existing_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().take(close_idx).skip(open_idx + 1) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("model:") || trimmed.starts_with("model :") {
+            existing_idx = Some(i);
+            break;
+        }
+    }
+
+    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+
+    match (model_id, existing_idx) {
+        // Set, no existing → insert as the FIRST line inside the
+        // fence (right after the opening `---`). The line goes at
+        // `open_idx + 1`, shifting the close_idx (and everything
+        // after) by 1.
+        (Some(mid), None) => {
+            new_lines.insert(open_idx + 1, format!("model: {mid}"));
+        }
+        // Set, existing → replace in place. The trimmed line is
+        // matched (model: or model :) for compatibility with the
+        // tolerant parser in `apply_kv`; the new line uses the
+        // canonical single-space form.
+        (Some(mid), Some(idx)) => {
+            new_lines[idx] = format!("model: {mid}");
+        }
+        // Clear, existing → drop the line. The trailing
+        // newline is implicit (Vec<String> line-by-line →
+        // `join("\n")`); the file's bytes are unchanged in the
+        // resulting shape (a single line removal from the fence
+        // interior is the desired contract).
+        (None, Some(idx)) => {
+            new_lines.remove(idx);
+        }
+        // Clear, no existing → no-op (return input verbatim).
+        (None, None) => {}
+    }
+
+    // Re-attach the original line ending. `content.lines()` drops
+    // a single trailing newline (Rust's `Lines` iterator is
+    // documented to yield "as if the string ends with a final
+    // line terminator"); the round-trip must preserve it so the
+    // `write_frontmatter_model` no-op short-circuit
+    // (`updated == content`) doesn't fire a spurious mtime
+    // update on a no-op.
+    let mut out = new_lines.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// IO wrapper around [`apply_model_line`]: read the file, apply
+/// the line edit, write back atomically (`.tmp` + rename) so a
+/// mid-write crash doesn't leave the agent file half-edited.
+///
+/// Errors:
+/// - File missing → `Err(io::Error::NotFound)`.
+/// - File present but malformed (no frontmatter / unterminated
+///   fence / no `name` field) → `Err(io::Error::InvalidData)`
+///   with the parser's message.
+/// - IO error on the read or write path → `Err(io::Error)` (the
+///   atomic write uses `.tmp` + `rename`, so partial writes don't
+///   corrupt the agent file).
+pub fn write_frontmatter_model(
+    path: &std::path::Path,
+    model_id: Option<&str>,
+) -> std::io::Result<()> {
+    let content = std::fs::read_to_string(path)?;
+    let updated = apply_model_line(&content, model_id)
+        .map_err(|msg| std::io::Error::new(std::io::ErrorKind::InvalidData, msg))?;
+    // No-op short-circuit: if the line edit produced identical
+    // bytes, skip the write. Avoids touching the file's mtime
+    // unnecessarily (which would invalidate the loader's mtime
+    // cache on a no-op round-trip).
+    if updated == content {
+        return Ok(());
+    }
+    // Atomic write: temp + rename. Same pattern as the rest of
+    // the project (see `files.rs` for analogous usage).
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, updated.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// Core mtime-fence read: stat the dir, compare against the cached
 /// mtimes; on a full match return the cached clone, otherwise re-scan.
 async fn read_through(
@@ -887,11 +1130,20 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_model_field_is_warn_ignored() {
-        // model is parsed (no "unknown field" silence) but discarded.
+    fn frontmatter_model_field_is_stored_for_dispatch() {
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui): the
+        // `model` field is now STORED on `Frontmatter` (previously
+        // warn+discard; see `frontmatter_model_field_is_stored`
+        // above for the new contract). The dispatch path
+        // (`resolve_final_model` + `resolve_worker_provider`) reads
+        // it; an invalid `models.id` surfaces as a catalog miss
+        // at dispatch time (defensive: format is not validated at
+        // parse time, per the doc comment on `Frontmatter.model`).
+        // This test pins that the field is read+stored — the
+        // pre-C "warn+discard" behavior is gone.
         let (fm, _) = parse_frontmatter("---\nname: x\nmodel: claude-sonnet-4-6\n---\nb");
         assert_eq!(fm.name.as_deref(), Some("x"));
-        // model value is intentionally not stored anywhere on fm.
+        assert_eq!(fm.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     // ---- name validation ----
@@ -1414,5 +1666,209 @@ mod tests {
         assert_eq!(SubagentSource::Builtin.as_str(), "builtin");
         assert_eq!(SubagentSource::User.as_str(), "user");
         assert_eq!(SubagentSource::Project.as_str(), "project");
+    }
+
+    // ---- 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 2):
+    // apply_model_line + write_frontmatter_model
+
+    /// Set on a file that already declares `model:` → the value
+    /// is replaced; body + other frontmatter keys are preserved.
+    #[test]
+    fn apply_model_line_replaces_existing() {
+        let input = "---\nname: x\nmodel: old-uuid\ndescription: d\n---\nbody line 1\nbody line 2\n";
+        let got = apply_model_line(input, Some("new-uuid")).unwrap();
+        assert!(got.contains("model: new-uuid"));
+        assert!(!got.contains("old-uuid"));
+        // body + description preserved
+        assert!(got.contains("description: d"));
+        assert!(got.contains("body line 1"));
+        assert!(got.contains("body line 2"));
+    }
+
+    /// Set on a file with no `model:` declaration → the field
+    /// is inserted as the first line inside the frontmatter
+    /// (after the opening `---` fence).
+    #[test]
+    fn apply_model_line_inserts_when_absent() {
+        let input = "---\nname: x\ndescription: d\n---\nbody\n";
+        let got = apply_model_line(input, Some("new-uuid")).unwrap();
+        // The new line is the first line inside the fence
+        // (right after the opening `---`). The closing fence +
+        // body are still there.
+        let model_idx = got.find("model: new-uuid").unwrap();
+        let open_idx = got.find("---").unwrap();
+        // open_idx points at the FIRST `---`; the new model
+        // line must come after it.
+        assert!(model_idx > open_idx, "model line must be inside the fence");
+        // All other frontmatter lines still present.
+        assert!(got.contains("name: x"));
+        assert!(got.contains("description: d"));
+        // body still present
+        assert!(got.contains("body"));
+    }
+
+    /// Clear (`None`) when `model:` is declared → the line is
+    /// removed; everything else is preserved.
+    #[test]
+    fn apply_model_line_clears_existing() {
+        let input = "---\nname: x\nmodel: old-uuid\ndescription: d\n---\nbody\n";
+        let got = apply_model_line(input, None).unwrap();
+        assert!(!got.contains("model:"));
+        assert!(!got.contains("old-uuid"));
+        assert!(got.contains("name: x"));
+        assert!(got.contains("description: d"));
+        assert!(got.contains("body"));
+    }
+
+    /// Clear when `model:` is absent → no-op (return input
+    /// unchanged).
+    #[test]
+    fn apply_model_line_clear_no_existing_is_noop() {
+        let input = "---\nname: x\ndescription: d\n---\nbody\n";
+        let got = apply_model_line(input, None).unwrap();
+        assert_eq!(got, input);
+    }
+
+    /// `name:` / `description:` ordering is preserved across edits
+    /// (the writer must not reorder existing keys). The new
+    /// `model:` line goes AT THE TOP of the frontmatter body
+    /// when inserting (so `model` is read first; matches the
+    /// pre-existing file convention from the doc-comment
+    /// example).
+    #[test]
+    fn apply_model_line_preserves_key_order() {
+        let input = "---\nname: x\ndescription: d\ntools: [read_file]\n---\nbody\n";
+        let got = apply_model_line(input, Some("new-uuid")).unwrap();
+        // The first 3 lines after the opening fence are now:
+        // model: new-uuid, name: x, description: d, tools: [...]
+        // (model is inserted as the first line, the rest stays
+        // in original order).
+        let n_idx = got.find("name: x").unwrap();
+        let d_idx = got.find("description: d").unwrap();
+        let t_idx = got.find("tools: [read_file]").unwrap();
+        let m_idx = got.find("model: new-uuid").unwrap();
+        // model is the first key (right after the opening fence);
+        // the other 3 stay in their original order.
+        assert!(m_idx < n_idx);
+        assert!(n_idx < d_idx);
+        assert!(d_idx < t_idx);
+    }
+
+    /// `model :` (space before colon) is also accepted — matches
+    /// the tolerant parser in `apply_kv` (which accepts both
+    /// `model: x` and `model :x`). The writer normalizes to the
+    /// canonical single-space form.
+    #[test]
+    fn apply_model_line_tolerates_space_before_colon() {
+        let input = "---\nname: x\nmodel :old-uuid\n---\nbody\n";
+        let got = apply_model_line(input, Some("new-uuid")).unwrap();
+        assert!(got.contains("model: new-uuid"), "normalized to canonical form");
+        assert!(!got.contains("old-uuid"));
+        assert!(!got.contains("model :"), "no space-before-colon form remains");
+    }
+
+    /// File with no frontmatter fence → Err (the loader would
+    /// have rejected this for missing `name`; we don't
+    /// auto-insert a fence here — see the function doc comment
+    /// for the "don't rewrite file structure" rationale).
+    #[test]
+    fn apply_model_line_no_fence_errors() {
+        let input = "no frontmatter here\njust body\n";
+        let err = apply_model_line(input, Some("new-uuid"));
+        assert!(err.is_err(), "no fence → Err");
+    }
+
+    /// File with unterminated frontmatter (opening `---` but no
+    /// closing one) → Err.
+    #[test]
+    fn apply_model_line_unterminated_fence_errors() {
+        let input = "---\nname: x\nbody without closing fence\n";
+        let err = apply_model_line(input, Some("new-uuid"));
+        assert!(err.is_err());
+    }
+
+    /// IO wrapper: writes the new content atomically (`.tmp` +
+    /// rename) and preserves the rest of the file.
+    #[test]
+    fn write_frontmatter_model_writes_atomically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("agent.md");
+        std::fs::write(
+            &path,
+            "---\nname: x\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+        write_frontmatter_model(&path, Some("new-uuid")).unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(got.contains("model: new-uuid"));
+        assert!(got.contains("name: x"));
+        assert!(got.contains("description: d"));
+        assert!(got.contains("body"));
+        // No `.tmp` left behind.
+        assert!(!tmp.path().join("agent.md.tmp").exists());
+    }
+
+    /// IO wrapper: `None` removes the line.
+    #[test]
+    fn write_frontmatter_model_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("agent.md");
+        std::fs::write(
+            &path,
+            "---\nname: x\nmodel: old-uuid\n---\nbody\n",
+        )
+        .unwrap();
+        write_frontmatter_model(&path, None).unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(!got.contains("model:"));
+        assert!(got.contains("name: x"));
+    }
+
+    /// IO wrapper: no-op when there's nothing to change (the
+    /// caller passes `Some(<existing value>)` and the file is
+    /// already in that state). The function returns Ok(())
+    /// without touching the file's mtime.
+    #[test]
+    fn write_frontmatter_model_noop_skips_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("agent.md");
+        let original = "---\nname: x\nmodel: same-uuid\n---\nbody\n";
+        std::fs::write(&path, original).unwrap();
+        let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // Sleep so the mtime would actually advance on a re-write.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_frontmatter_model(&path, Some("same-uuid")).unwrap();
+        let after_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(original_mtime, after_mtime, "mtime unchanged on no-op");
+    }
+
+    /// IO wrapper: missing file → Err (not a silent no-op).
+    #[test]
+    fn write_frontmatter_model_missing_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("does-not-exist.md");
+        let res = write_frontmatter_model(&path, Some("any"));
+        assert!(res.is_err(), "missing file → Err");
+    }
+
+    /// IO wrapper: file without frontmatter fence → Err.
+    #[test]
+    fn write_frontmatter_model_malformed_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("broken.md");
+        std::fs::write(&path, "no fence here\njust body\n").unwrap();
+        let res = write_frontmatter_model(&path, Some("any"));
+        assert!(res.is_err(), "no fence → Err (no silent rewrite)");
+    }
+
+    /// IO wrapper: builtins have no file path → the
+    /// `locate_agent_file` helper returns Err so a misrouted
+    /// caller surfaces a clean error (the IPC layer routes
+    /// builtin writes to the DB override table instead, so
+    /// this case is a defensive guard for future refactors).
+    #[test]
+    fn locate_agent_file_builtin_errors() {
+        let res = locate_agent_file(SubagentSource::Builtin, "researcher", "/tmp/proj");
+        assert!(res.is_err(), "builtin has no file path");
     }
 }

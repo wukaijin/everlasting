@@ -33,6 +33,7 @@ pub mod providers;
 pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
+pub mod subagents;
 pub mod worktree;
 
 /// The full set of Tauri commands, used by `lib.rs::run` to
@@ -116,6 +117,15 @@ pub fn all_command_names() -> Vec<&'static str> {
         // merge / discard buttons.
         "merge_worker_run",
         "discard_worker_run",
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 3):
+        // Settings-UI IPCs for per-subagent model configuration.
+        // `list_subagents_with_model` extends the existing
+        // `list_subagents` panel IPC with the resolved model
+        // (DB override > frontmatter > inherit); `set_subagent_model`
+        // dispatches by source to the DB table (builtin) or the
+        // agent's frontmatter file (user / project).
+        "list_subagents_with_model",
+        "set_subagent_model",
         // 2026-06-30 (`ask_user_question` task): tool
         // question IPCs (frontend `/<AskUserQuestionCard>`
         // submit/跳过 + session-switch source-of-truth lookup).
