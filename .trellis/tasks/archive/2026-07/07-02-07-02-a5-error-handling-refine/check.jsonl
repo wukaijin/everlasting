@@ -1,0 +1,24 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "A5 主 spec 检查点:五章节无 'To be filled by the team'(line 19/27/35);LlmError 命名统一 InvalidRequest(line 49/54 当前规格正文改写,line 205 已是 InvalidRequest);RULES 索引表完整 13 条;AppCommandError wire shape 定义清晰;10 个错误类型 user_message 模板与 5 类 category 映射清单展示。"}
+{"file": "app/src-tauri/src/error.rs", "reason": "AppError trait + ErrorCategory enum + AppCommandError struct + 10 个领域 From<E> impl + From<anyhow::Error> 边界兜底 是 A5 后端核心;检查 trait 默认 retryable 派生规则(本期零 override);检查 10 个 impl 覆盖完整;From<anyhow::Error> 先 downcast 已知领域类型再兜底 Server。"}
+{"file": "app/src-tauri/src/lib.rs", "reason": "模块注册(modules::error)与 AppCommandError 类型导出位置;检查不会因命名冲突或循环依赖失败。"}
+{"file": "app/src-tauri/src/llm/error.rs", "reason": "LlmError 已有的 category() + user_message() 迁移至 AppError trait(返回类型 LlmErrorCategory→ErrorCategory 1:1 映射);spec drift(Protocol→InvalidRequest)代码层无残留;classify_error_response 仍正确分类(回归测试不退化)。"}
+{"file": "app/src-tauri/src/git/error.rs", "reason": "GitError variant → category 映射(真实 variant:NotARepo/Dirty→InvalidRequest, Io/Git2→Server);user_message 中文友好。"}
+{"file": "app/src-tauri/src/db/memories.rs", "reason": "MemoryInsertError(9 校验→InvalidRequest, Db→Server)+ StatusTransitionError(NotFound/Illegal→InvalidRequest, Db→Server;⚠️ Db 归 Server 非 InvalidRequest)impl AppError。"}
+{"file": "app/src-tauri/src/agent/question_store.rs", "reason": "QuestionStoreError(AlreadyPending/NotFound→InvalidRequest;手写 enum,已有 Display+空 Error impl)impl AppError;user_message 中文。"}
+{"file": "app/src-tauri/src/agent/provider.rs", "reason": "PreFlightError 先补 impl Display + impl std::error::Error(当前两者皆无),再 impl AppError;EmptyApiKey/DecryptFailed→Auth,NoModel/ProviderMissing/BuildFailed→InvalidRequest;auth_message/invalid_request_message 收敛进 user_message。"}
+{"file": "app/src-tauri/src/background_shell/mod.rs", "reason": "BackgroundShellError(真实 variant:NotFound/WrongSession/InvalidCwd→InvalidRequest, Spawn/Poisoned→Server;#[allow(dead_code)] reserved variants 仍需 match 穷尽);本期无 retryable override,全部按 category 默认派生。"}
+{"file": "app/src-tauri/src/agent/auto_reflect.rs", "reason": "ReflectError(Llm→Server, NoText/Json/MissingField/Insert→InvalidRequest)impl AppError。"}
+{"file": "app/src-tauri/src/tools/web_fetch.rs", "reason": "WebFetchError 真实 variant:HttpStatus(u16) 在 category() 内按 4xx→InvalidRequest/5xx→Server 分流;BlockedAddress/BlockedRedirect/BodyTooLarge/InvalidUrl→InvalidRequest;Timeout/Tls/Network→Network;SSRF 拦(BlockedAddress/BlockedRedirect)为 InvalidRequest + retryable=false。"}
+{"file": "app/src-tauri/src/llm/provider/mod.rs", "reason": "ProviderBuildError(NotImplemented/UnknownProtocol→InvalidRequest)impl AppError。"}
+{"file": "app/src-tauri/src/commands/", "reason": "全目录 grep 验证无 Result<T, String> 残留(13 个文件 ~65 处;允许 Result<T, ()>/Result<T, serde_json::Value>;commands/mod.rs 仅 re-export 无 fn);每个 command 的 request_id 填充策略(高频 command 透传前端 requestId,后端不新生成 uuid);高频 command(chat/cancel/sessions/projects/merge_worker/discard_worker)request_id 必填;From<anyhow::Error> 兜底 commands ?anyhow 路径。"}
+{"file": "app/src/composables/useErrorBus.ts", "reason": "composable 单例 ref;parseAppCommandError 3 种输入容错(对象/JSON 字符串/原始 string)+ category 值域校验(防误判);5 类 category 路由 stub 函数;clear 方法;readonly 暴露 errors;MAX_ERRORS=50 FIFO 上限。"}
+{"file": "app/src/composables/useErrorBus.test.ts", "reason": "vitest 覆盖 parseAppCommandError 三种输入 + 非法 category 值不误判;5 类 category 路由 mock 验证;FIFO 上限触发丢最旧;global window 错误器接入 mock。"}
+{"file": "app/src/types/error.d.ts", "reason": "AppCommandError + ErrorCategory TypeScript 类型导出;与 Rust AppCommandError 字段对齐(category/kind/message/retryable/requestId,requestId 可选)。"}
+{"file": "app/src/stores/chat.ts", "reason": "invoke edit_user_message 等高频 catch 接入 useErrorBus().handle(e);保留原有 console.error fallback。"}
+{"file": "app/src/stores/streamController.ts", "reason": "多 .catch 散点迁移至 useErrorBus;legacy 散点保留 console.error 容错。"}
+{"file": "app/src/stores/permissions.ts", "reason": "permissions store respond catch(rid)→ useErrorBus 路由;Auth 错误提示用户去 Settings。"}
+{"file": "app/src/stores/subagentRuns.ts", "reason": "subagent store error toast → useErrorBus 路由;worker error 与 parent 错误边界(RULE-A-014/015/016)。"}
+{"file": "app/src/components/chat/MessageItemEdit.vue", "reason": "errorMessage 改走 useErrorBus;保留原 errorMessage prop 作为内联错误展示(InvalidRequest category)。"}
+{"file": "app/src/main.ts", "reason": "挂 window.onerror / unhandledrejection 接入 useErrorBus;开发模式 + 生产模式一致行为。"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "§4 决策日志新增 A5 ADR 条目;引用日期 + 决策摘要 + 替代方案 + 关联 PR 列表;RULES 索引表每条引用对应日期 ADR。"}
+{"file": "app/src-tauri/src/tools/ask_user_question.rs", "reason": "确认 ValidationError(pub(crate) 内部错误,5 variant 全 input 校验)本期不纳入 impl AppError;调用方 tool 自行转 AppCommandError 或经 LlmError 路径消化,不冒泡 IPC 边界。"}

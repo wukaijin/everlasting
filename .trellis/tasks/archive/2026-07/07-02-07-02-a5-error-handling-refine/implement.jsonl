@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "A5 主 spec 文档。本期目标:填 Overview / Error Types / Handling Patterns / API Error Responses 五章;修正 LlmError Protocol→InvalidRequest spec drift;新增 RULES 索引表(RULE-A-001/002/003/004/006/007/010/012/013/014/015/016/017)。"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "LlmError 5 类(Auth/RateLimit/InvalidRequest/Server/Network)+ Anthropic thinking 400 错误矩阵;wire shape category 取值集合复用 LlmError 5 类。§4 Validation & Error Matrix 必读。"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "Agent Loop 三终端路径(normal Done / cancel / error)+ 终端事件不变量(RULE-A-007)。AppCommandError 在 chat_loop 路径上的 emit 顺序。"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "tool 执行错误的统一处理契约;web_fetch / shell / background_shell / merge_worker / discard_worker 等工具的 ToolKind / Risk / Permission 错误归类。"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "permission 错误(Ask/Deny/Timeout/Cancel)的语义与 RULE-A-014/015/016 错误隔离。Ask error 在 AppCommandError 中的 category 归并(默认 InvalidRequest)。"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "subagent 错误传播(RULE-A-014/015/016);worker error 与 parent 错误的边界;transcript entry `PermissionAskResolved` 的 outcome 编码。"}
+{"file": "docs/IMPLEMENTATION.md", "reason": "§4 决策日志:RULE-A-001/002/003/004/006/007/010/012/013/014/015/016/017 的完整 ADR。本期新增 A5 ADR 条目;RULES 索引表的每个条目引用对应日期 ADR。"}
+{"file": "docs/ARCHITECTURE.md", "reason": "系统架构 + 16 阶段请求生命周期;错误事件(error / done{cancelled} / persist failure)在生命周期中的位置。"}
+{"file": "docs/HACKING-llm.md", "reason": "LLM 错误分类策略(不只信 HTTP status,parse body error.type / error.code);GLM 兼容层 3 处差异。本期 LlmError 5 类保持不变,文案与现有保持一致。"}
+{"file": ".trellis/reviews/DEBT.md", "reason": "现有错误相关债务(RULE-A-017 C3 pre-existing、RULE-FrontSubagent-003/004 等)。A5 不收口这些,但需知道哪些错误债务已存在,避免重复登记。"}
+{"file": ".trellis/spec/backend/index.md", "reason": "spec 索引;确认 error-handling.md 在 backend spec 包内的位置 + 与 llm-contract / agent-loop-architecture 的 cross-reference。"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "RULE-* 标识符使用规范(grep by RULE-A-NNN);新增 RULE-A-* 必须有 ADR + spec 引用 + DEBT.md 登记。A5 索引表按此规范写。"}
