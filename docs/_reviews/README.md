@@ -23,5 +23,7 @@
 | [`b6-subagent-prd-review.md`](./b6-subagent-prd-review.md) | 设计评审 | Carlos (grill) | 2026-06-19 | B6 subagent PRD + 调研 review; PR1/2/3 实施前的设计复审 |
 | [`b6-subagent-assessment.md`](./b6-subagent-assessment.md) | 代码审计 | Carlos | 2026-06-20/21 | B6 subagent 系统评估: PR1+PR2+PR3 + 2026-06-21 fix 全部落地代码; 工具配给 / Mode 结合 / 持久化 / 并发 / 降级债 5 维度评级 |
 | [`REVIEW-l3d-subagent-loader-deepseek-v4-pro.md`](./REVIEW-l3d-subagent-loader-deepseek-v4-pro.md) | 设计评审 | deepseek v4 pro | 2026-06-25 | L3d Subagent Frontmatter Loader PRD 审查: 范围适当性 / 9 维度设计质量 / 架构契合度 / 安全 / 风险; 发现 3 个实施前必须修正的问题(覆盖UX陷阱 / fail-fast过激 / model死代码) + 10 条改进建议 |
+| [`REVIEW-a2-shell-classification-deepseek-v4-pro.md`](./REVIEW-a2-shell-classification-deepseek-v4-pro.md) | 设计评审 | deepseek v4 pro | 2026-07-03 | A2+ Shell 命令只读/副作用精细判定方案审查; 代码验证 `shell_trust.rs`/`check.rs`/`dangerous.rs` 全量; 发现 1 个 P0 文档内部不一致(§3.1 阶段标注 swap) + 4 个 P1 遗漏(重定向覆盖不全/`\|\|` 贪吃/引号模型简略/env前缀) + 5 个 P2/P3 补充建议; 综合 ★★★★ |
+| [`REVIEW-a2-shell-classification-2026-07-03.md`](./REVIEW-a2-shell-classification-2026-07-03.md) | 设计评审 | MiniMax-M3 | 2026-07-03 | A2+ Shell 命令只读/副作用精细判定方案评审; 核实 `shell_trust.rs`/`check.rs`/`dangerous.rs`; 发现 kill-list 实为 10 条(草案误写 11)/`>` 写重定向现状静默放行(独立漏判)/`2>&1` fd 复制边界; 另提 shell P0 前置依赖与 `echo $()` 放宽两条建议(经独立核实驳回: 前者早已还债 RULE-E-001/002, 后者 `echo $(rm x)` 实测会删文件); 综合 ★★★★ |
 
 > 已移至 [`_deprecated/`](../_deprecated/) 的早期评审快照见该目录 README。
