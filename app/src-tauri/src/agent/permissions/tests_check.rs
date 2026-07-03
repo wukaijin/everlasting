@@ -811,3 +811,188 @@ async fn tier4_allow_trusted_external_with_tilde_form() {
         "~/... form must expand + hit the trusted allow-list"
     );
 }
+
+// =====================================================================
+// A2+ P1 (2026-07-04): grant short-circuit gate for compound commands.
+//
+// `ls; rm -rf ~/notes` should NOT enjoy a user's `ls` prefix-grant —
+// the structural classifier must run, otherwise the trailing `rm`
+// hides behind the benign first token. The gate is the deliberately
+// NOT-quote-aware `has_structural_metachar` (a false positive on
+// `echo "a;b"` is safe: grant skipped → classify_prefix re-splits
+// accurately → correct tier returned, just without the short-circuit
+// speed-up).
+// =====================================================================
+
+/// Helper: seed a `prefix`-kind grant row for `shell` on the given
+/// first-token (`ls`, `cargo`, …). Mirrors what
+/// `match_value_for_allow_always` would write on a user's
+/// "始终允许" click.
+async fn seed_shell_prefix_grant(pool: &sqlx::SqlitePool, session_id: &str, first_token: &str) {
+    sqlx::query(
+        r#"
+        INSERT INTO session_tool_permissions (session_id, tool_name, match_kind, match_value)
+        VALUES (?, 'shell', 'prefix', ?)
+        "#,
+    )
+    .bind(session_id)
+    .bind(first_token)
+    .execute(pool)
+    .await
+    .expect("seed prefix grant");
+}
+
+/// Single-segment `ls` with a prefix grant → Allow (short-circuit
+/// fires; the gate does NOT block non-compound commands).
+#[tokio::test]
+async fn tier4_shell_prefix_grant_short_circuits_for_single_segment() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    seed_shell_prefix_grant(&pool, "parent-sess", "ls").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Plan,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "shell",
+            &serde_json::json!({"command": "ls -la"}),
+            "tu-grant-single",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: grant short-circuit would hang on ask_path oneshot");
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "single-segment `ls` with prefix grant must short-circuit to Allow"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "grant short-circuit must NOT emit permission:ask"
+    );
+}
+
+/// Compound `ls; rm x` with a prefix grant on `ls` → does NOT
+/// short-circuit. Falls through to classify_prefix, which produces
+/// Ask (max(ReadOnly, Ask)), so Plan mode surfaces a modal. This is
+/// the R1 security fix.
+#[tokio::test]
+async fn tier4_shell_prefix_grant_does_not_short_circuit_for_compound() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    seed_shell_prefix_grant(&pool, "parent-sess", "ls").await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        // Edit mode: SideEffect/Ask would normally modal; we want to
+        // confirm the grant short-circuit is BYPASSED, so we expect
+        // an ask emission (the modal path).
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: false,
+        worker_run_id: None,
+        run_grants: None,
+        worktree_path: root,
+    };
+    // Fire the check; expect it to reach `ask_path` (which waits on
+    // a oneshot). Wrap in a 2s timeout so the test fails fast on
+    // regression (grant short-circuit firing → Allow, no ask emitted).
+    let compound_input = serde_json::json!({
+        "command": "ls; rm /tmp/nonexistent-everlasting-test"
+    });
+    let check_fut = crate::agent::permissions::check::check(
+        &ctx,
+        &store,
+        &pool,
+        &sink_arc,
+        "shell",
+        &compound_input,
+        "tu-grant-compound",
+        &token,
+    );
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), check_fut).await;
+    // The check is still pending on the oneshot (timeout elapsed).
+    // Assert the ask was emitted (proof the grant did NOT short-circuit).
+    let asks = sink.asks.lock().unwrap();
+    assert!(
+        !asks.is_empty(),
+        "compound `ls; rm` must NOT short-circuit the prefix grant — \
+         expected a permission:ask emission (R1 security fix)"
+    );
+}
+
+/// Worker run-grant path: same gate applies. A compound command
+/// with a worker prefix run-grant on `ls` must NOT short-circuit.
+/// This pins R1 coverage on the worker path (the worker run-grant
+/// is the in-memory sibling of the DB prefix grant).
+#[tokio::test]
+async fn tier4_worker_run_grant_does_not_short_circuit_for_compound() {
+    use crate::agent::permissions::run_grant::RunGrantCache;
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let cache = std::sync::Arc::new(RunGrantCache::new());
+    // Seed a worker run-grant on `ls` (prefix kind).
+    cache.grant_for_run(
+        "shell",
+        &serde_json::json!({"command": "ls"}),
+        "ls",
+    );
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: root.clone(),
+        is_worker: true,
+        worker_run_id: Some("worker-run-grant-test".to_string()),
+        run_grants: Some(cache),
+        worktree_path: root,
+    };
+    let compound_input = serde_json::json!({
+        "command": "ls; rm /tmp/nonexistent-everlasting-test"
+    });
+    let check_fut = crate::agent::permissions::check::check(
+        &ctx,
+        &store,
+        &pool,
+        &sink_arc,
+        "shell",
+        &compound_input,
+        "tu-worker-grant-compound",
+        &token,
+    );
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), check_fut).await;
+    let asks = sink.asks.lock().unwrap();
+    assert!(
+        !asks.is_empty(),
+        "compound `ls; rm` on worker path must NOT short-circuit the \
+         run-grant — expected a permission:ask emission (R1 worker coverage)"
+    );
+}
+

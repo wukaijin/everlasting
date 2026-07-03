@@ -1561,6 +1561,46 @@ let turn_messages = {
 - Plan mode filter drops `run_background_shell` along with
   `shell` / `write_file` / `edit_file` (read-only session).
 
+#### Compound command classification (A2+ P1+P2, 2026-07-04)
+
+The Tier 4 shell branch classifies the WHOLE command, not just the
+first token — a user's grant on `ls` must NOT auto-allow
+`ls; rm -rf ~/notes`. Four gates (all in `shell_trust.rs` /
+`check.rs`, applied uniformly to sync `shell` and async
+`run_background_shell`):
+
+1. **Grant short-circuit gate (P1, R1)** — the (a) prefix-grant
+   short-circuit AND the worker per-run prefix-grant short-circuit
+   are wrapped together in `if !has_structural_metachar(cmd)`. A
+   command containing `|` / `&&` / `;` does NOT enjoy either
+   short-circuit; it falls through to classification. The gate is
+   deliberately NOT quote-aware (false positive is safe: the grant
+   is skipped, then `classify_prefix` re-splits accurately and
+   produces the right tier); a single-segment `ls` still matches
+   the grant and Allow.
+2. **Compound split + take-max (P2, R2/R4)** — `classify_prefix`
+   splits on top-level `;` / `&&` / `||` / `|` (quoting/escaping-
+   aware 4-state machine) and classifies each segment via
+   `classify_single`; the result is the most-dangerous tier
+   (`Ask > SideEffect > ReadOnly`). `git diff | head` → ReadOnly
+   (R2 win); `ls; rm x` → max(ReadOnly, Ask) = Ask.
+3. **Write-redirect bump (P1, R3)** — a segment containing a write
+   redirection (`>` / `>>` / `&>` / `[N]>file`) bumps to at least
+   SideEffect. fd duplication (`2>&1` / `>&N`) and input redirection
+   (`<` / `<<` / `<<<`) do NOT bump. `git diff > patch.txt` →
+   SideEffect (was ReadOnly — the silent Plan-mode write hole).
+4. **Command substitution (R4 fail-safe)** — `$()` or backtick
+   anywhere → the WHOLE command is `Ask` (NOT quote-aware; `echo
+   $(rm x)` deletes a file at shell-expand time, the outer `echo`
+   cannot widen it).
+
+Invariants unchanged: Tier 2 kill-list, Yolo bypass, Mode three-
+tier semantics, grant schema (`tool`/`prefix`/`path`), 17
+AuditKind, `shell.rs` execution hardening, "when in doubt, Ask".
+See `agent/permissions/shell_trust.rs` module docs for the
+classification algorithm; ADR in `docs/IMPLEMENTATION.md §4`
+(2026-07-04).
+
 #### Lifecycle hooks (3 trigger points)
 
 | Hook | Where | Trigger |

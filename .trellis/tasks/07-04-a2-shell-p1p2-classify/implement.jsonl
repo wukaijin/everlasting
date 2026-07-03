@@ -1,0 +1,3 @@
+{"file": "docs/A2-SHELL-CLASSIFICATION.md", "reason": "源方案 §2.2 七不变量 / §3 函数签名 / §4 阶段 / §5 断言重判表 / §6 回归矩阵——prd/design/implement 全程引用其细节,sub-agent 必读(不重复实现细节)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "Path-based Permission Layer 契约(L1551 起 classify_prefix + prefix grants 段)——本任务扩展 grant 短路前置 + 拆分取 max + > 写重定向升 SideEffect 的契约,实现须对齐且 Step 7 要更新此文件"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "classify_single 须从现有 classify_prefix 提取(L369-386),split_top_level 复用现有白名单/git 子命令表/first_token——避免重写既有的 first-token 分类逻辑"}

@@ -295,26 +295,45 @@ pub async fn check(
             // old gap: match_value_for_allow_always wrote match_kind='prefix'
             // rows for shell but Tier 4 never queried them — a user's
             // AllowAlways on a shell command now sticks across turns.
-            if let Ok(true) = check_prefix_grant(db, &ctx.session_id, &super::shell_trust::first_token_for_allow_always(cmd)).await {
-                let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
-                return Decision::Allow;
-            }
-            // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
-            // path — consult the per-run in-memory grant cache before
-            // running classify_prefix. Same prefix semantics as
-            // `check_prefix_grant` above (exact-eq on shell first
-            // token). Parent path has `run_grants = None` and skips.
-            if let Some(cache) = &ctx.run_grants {
-                let first_token = super::shell_trust::first_token_for_allow_always(cmd);
-                if cache.has_run_grant(tool_name, "prefix", &first_token) {
-                    tracing::info!(
-                        session_id = %ctx.session_id,
-                        tool = %tool_name,
-                        first_token = %first_token,
-                        "permission::check: Tier 4 worker run-grant hit (prefix)"
-                    );
+            //
+            // **A2+ P1 (2026-07-04) grant short-circuit gate**: a
+            // compound command (containing `|` / `&&` / `;`) does NOT
+            // enjoy the prefix-grant short-circuit. Otherwise a user's
+            // grant on `ls` would auto-allow `ls; rm -rf ~/notes` —
+            // the structural classifier would never run. We use a
+            // deliberately NOT-quote-aware `has_structural_metachar`
+            // here (false positive is safe: grant skipped → falls
+            // through to classify_prefix, which re-splits accurately
+            // and produces the right tier). The user's grant still
+            // applies to single-segment `ls`.
+            if !super::shell_trust::has_structural_metachar(cmd) {
+                if let Ok(true) = check_prefix_grant(db, &ctx.session_id, &super::shell_trust::first_token_for_allow_always(cmd)).await {
                     let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
                     return Decision::Allow;
+                }
+                // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
+                // path — consult the per-run in-memory grant cache before
+                // running classify_prefix. Same prefix semantics as
+                // `check_prefix_grant` above (exact-eq on shell first
+                // token). Parent path has `run_grants = None` and skips.
+                //
+                // The compound-command gate applies identically to the
+                // worker run-grant (R1: worker path must not be a bypass
+                // for `ls; rm`). Since the same `has_structural_metachar`
+                // gate guards the outer `if`, the worker check inside is
+                // also gated.
+                if let Some(cache) = &ctx.run_grants {
+                    let first_token = super::shell_trust::first_token_for_allow_always(cmd);
+                    if cache.has_run_grant(tool_name, "prefix", &first_token) {
+                        tracing::info!(
+                            session_id = %ctx.session_id,
+                            tool = %tool_name,
+                            first_token = %first_token,
+                            "permission::check: Tier 4 worker run-grant hit (prefix)"
+                        );
+                        let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                        return Decision::Allow;
+                    }
                 }
             }
             // (b) Three-tier classification + per-Mode mapping. shell is

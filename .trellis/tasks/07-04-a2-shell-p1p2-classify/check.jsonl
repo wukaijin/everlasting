@@ -1,0 +1,3 @@
+{"file": "docs/A2-SHELL-CLASSIFICATION.md", "reason": "§6 回归矩阵(prd AC 11 项之源)+ §5 现有结构降级测试断言重判表——check 逐条验证矩阵覆盖齐全、断言变化(如 ls|grep 从 Ask→ReadOnly)无遗漏"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "契约符合性 + Step 7 更新核验——check 对照 prd Constraints 七不变量(grant schema/Mode/AuditKind 不变)与 Path-based Permission Scenario 是否已补复合命令判定契约"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用核查——确认实现复用了现有 first_token/classify_git_subcommand/三张表,未重复造轮子;classify_single 是 extract 不是 rewrite"}

@@ -1,0 +1,28 @@
+{
+  "id": "a2-shell-classification",
+  "name": "a2-shell-classification",
+  "title": "A2+ Shell 命令只读/副作用精细判定",
+  "description": "Parent/umbrella task:持有 docs/A2-SHELL-CLASSIFICATION.md(2026-07-03 草案)作为 source requirement set,统筹 A2+ shell 命令只读/副作用精细判定三阶段落地。Task map(按方案 §6):子任务 1 = P1+P2(grant 短路收紧 + > 写重定向检测 + classify 复合命令拆分取 max,落判定层 shell_trust.rs/check.rs,含 worker 路径);子任务 2 = P3(执行期沙盒兜底,bubblewrap/overlayfs/firejail,远期,前置 WSL userns spike)。本 parent 不作 implementation target,只持有 cross-child 不变量(Tier 2 kill-list / Yolo bypass / Mode 三档 / grant schema / 17 AuditKind 不变)+ 最终集成 review。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-07-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-04-a2-shell-p1p2-classify"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

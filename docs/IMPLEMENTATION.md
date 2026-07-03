@@ -30,6 +30,31 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-07-04 — A2+ shell 精细判定(复合命令拆分取 max + grant 短路对结构元字符失效 + `>` 写重定向升 SideEffect)
+
+**Context**: A2+B7(06-12/13)shell 三档分类用 first-token + 一刀切结构降级,有三个缺口:① **R1 安全** — `ls; rm -rf ~/notes` 首 token=`ls`,用户对 `ls` 点过"始终允许"后 Tier 4 prefix-grant 短路在 classify 之前直接放行,跳过结构降级;Tier 2 kill-list 故意不挡 `rm -rf <非根>`(`dangerous.rs` deliberately narrow),`~/notes` 在项目外 git 救不回。② **R2 体验** — 纯读管道 `git diff | head` / `ls | grep foo` 被一刀切降级 Ask,Plan 模式(本就是只读分析)每次都要放行。③ **R3 独立漏判** — 结构检测只查 `|`/`&&`/`;`,**不查 `>`** → `git diff > patch.txt` 走 first-token=git diff → ReadOnly → Plan 模式静默写文件。源方案过双 review(commit `fbb7ced` / `247ed68`)落 `docs/A2-SHELL-CLASSIFICATION.md`。
+
+**决策**:
+
+1. **P1+P2 同 PR**(方案 §4 锁定):先上 P2 拆分器而不收紧 P1 grant,复合命令仍会被 (a) 短路放行,拆分成果到不了 → 必须同 PR。implement.md 原计划 P1/P2 分两 commit,实际**单 commit**:代码高度耦合(`classify_prefix` 入口同时依赖 P1 `detect_write_redirect` + P2 `split_top_level`,sub-agent 一次实现),且 design §6 回滚 shape 明确"P1+P2 同 PR,实际回滚单元是整个 PR(`git revert <merge>`)"。P1 内部先于 P2(Step 1-2 → 3-6)仅作实现顺序与理解路径,非提交边界。
+2. **自研零依赖拆分器** vs tree-sitter-bash vs 沙盒优先:选自研。tree-sitter-bash 重依赖 overkill(引号/转义 corner case 靠 4 态状态机 Normal/Single/Double/Escaped + 测试矩阵锁足够);P3 bubblewrap 沙盒远期独立 task(判定错了也限损,本任务不碰)。契合项目"自研 SSE / 自研 Provider trait"风格。
+3. **`has_structural_metachar` v1 不引号感知**(`contains('|') || contains("&&") || contains(';')`):grant 短路前置用宽检测。false-positive 安全 — `echo "a;b"` 报 true → 跳过 grant 短路 → 回落 `classify_prefix` → 拆分器引号感知不拆 → 单段 echo → ReadOnly(结果正确,仅损失短路速度);false-negative 不可接受,故用宽检测而非引号感知。
+4. **命令替换 `$()` / 反引号一律 Ask**(`has_command_substitution`,不看引号):fail-safe。`echo $(rm x)` 在 shell 展开阶段执行会真删文件,按外层 `echo` 放宽是危险误判。`'$()'` 单引号内字面也判 Ask(用户可放行,acceptable)。拆分器因此无需处理 `$()` 嵌套 → 状态机简化为 4 态。
+5. **`detect_write_redirect` per-segment**:`>`/`>>`/`&>`(整体重定向)/`[N]>file` 升 SideEffect;`>&N`/`2>&1`(fd 复制,无文件副作用)/`<`/`<<`/`<<<`(输入,纯读)不升。被 `classify_single` 每段调用一次(P1 检测设计成可被 P2 拆分器复用的 per-segment 函数,prd Notes 锁定)。
+6. **`ShellTrust::severity()` + 自由函数 `max_of()`** 不 derive Ord:内敛偏序(`ReadOnly=0 < SideEffect=1 < Ask=2`),避免改 enum trait 表面(序列化 / cross-type PartialOrd 风险)。
+7. **单 `&`(bash 后台标记)不拆**:design §3.3 状态机表未明确,实现选择留在段内。bash 单 `&` 是后台执行,严格说应分离,但 v1 接受为盲区(design §7 风险表)—— `first_token` 把它当 token 一部分 → 非 whitelist → Ask 兜底。
+8. **check.rs 两处 grant 短路合一**包进单个 `if !has_structural_metachar(cmd)`:(a) prefix-grant + worker run-grant 共享同一 gate(R1:worker 路径不能成 bypass),而非两个独立 if —— 语义等价,且改动更集中。
+
+**Consequences**:
+- 纯读管道/命令链(`git diff | head` / `ls && echo done` / `echo a; echo b`)所有模式静默放行(ReadOnly)— R2 恢复,Plan 模式体验修复。
+- `ls; rm -rf ~/notes` + grant 不再被短路放行 → 回落 classify → 拆分 → rm 段 Ask → 整条 Ask — R1 收口(worker run-grant 同款,worker 路径不成 bypass)。
+- `git diff > patch.txt` → SideEffect(Plan 弹窗 / Edit 静默 Allow)— R3 收口。
+- 命令替换 / 空命令 / 全空段 一律 Ask(fail-safe 不变)。
+- **v1 接受的盲区**(design §7):`VAR=val cmd` env-prefix(段首 token=`VAR=val` 非 whitelist → 整条 Ask,远期 first-token 可剥前缀)/ 单 `&` 后台不拆 / 拆分器引号误判(靠 grant 前置 `contains` 兜底 + Tier 2 kill-list 兜底灾难性模式)/ `$var` 变量展开(静态不可知,P3 沙盒兜底)。
+- 七不变量全保持(grant schema 三 match_kind / Mode 三档 / 17 AuditKind / Tier 2 kill-list / Yolo bypass / shell.rs 执行层 / "不确定就 Ask");grant 表存量数据无需迁移(前置是代码层,grant 行不受影响,存量授权对单条命令仍生效)。
+
+**关联**: PRD `.trellis/tasks/07-04-a2-shell-p1p2-classify/prd.md` + design.md + implement.md;方案 `docs/A2-SHELL-CLASSIFICATION.md`(经双 review);spec `.trellis/spec/backend/tool-contract.md` "Compound command classification (A2+)" 段;commit 见 `git log --grep a2-shell-p1p2-classify`;1237 tests passed(0 failed,55 shell_trust 新增/重判 + 3 check grant 短路集成)。
+
 ### 2026-07-01 — read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list(+ `~` 展开)
 
 **Context**: read 族(read_file/grep/glob/list_dir)的 tool 层 `assert_within_root` 与权限层 `ask_path` 口径冲突 —— 权限层 Tier 4 对项目外路径弹窗 ask,用户 Allow 后 `execute_tool` 内的 `assert_within_root` 又以 "outside project root" 硬拒。即"假 ask":弹窗点了允许也没用。用户原始动机:读 `~/.config/everlasting/commands/test-b3.md` 报错。目标:拉齐 Claude Code Read 能力(它默认能读项目外)+ 受控(不放弃审计/用户感知)。
