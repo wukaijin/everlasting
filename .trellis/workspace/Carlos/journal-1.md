@@ -1013,3 +1013,36 @@ user 级 CLAUDE.md 路径从 ~/.config/everlasting/CLAUDE.md 改到 ~/.claude/CL
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: A2+ shell P1+P2:复合命令拆分取 max + grant 短路收紧
+
+**Date**: 2026-07-04
+**Task**: A2+ shell P1+P2:复合命令拆分取 max + grant 短路收紧
+**Branch**: `main`
+
+### Summary
+
+A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_structural_metachar(v1 不引号感知,false-positive 安全)gate check.rs 两处 grant 短路合一((a) prefix-grant + worker run-grant);detect_write_redirect per-segment(>/>>/&> 升 SideEffect;2>&1/>&N fd 复制 / < 输入不升)。P2 恢复体验:classify_prefix 入口重写为 命令替换($()/反引号一律 Ask)→ 自研 4 态拆分器(顶层 ;/&&/||/|,引号/转义感知 4 态状态机)→ 每段 classify_single(复用现有 first-token + 三张表 + git 子命令)→ 取 max(ShellTrust::severity + max_of,不 derive Ord)。流程:1.3 curate jsonl → 1.4 start → 2.1 dispatch trellis-implement(Step 1-6)→ 2.2 dispatch trellis-check(七不变量 ✅ + AC 11 项全覆盖)→ 3.3 文档(tool-contract 加 Compound command classification 段 + ROADMAP §1.2 新行/第三档删除线/计数 14 + IMPLEMENTATION §4 2026-07-04 ADR)→ 3.4 单 commit 2658cc4(P1+P2 代码耦合 + design §6 回滚单元=整个 PR,合并原计划两 commit)。七不变量全保持。1237 tests passed。v1 盲区(VAR=val env-prefix / 单 & 后台 / $var 展开)接受,P3 沙盒远期兜底。parent 07-04-a2-shell-classification 留 active(P3 远期 + 集成 review,child 已 archive)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2658cc4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
