@@ -687,6 +687,13 @@ function isPermissionAskLive(rid: string): boolean {
             class="subagent-drawer__body"
             @scroll="onBodyScroll"
           >
+            <!-- 2026-07-03: top jump-latest 按钮 sticky 到 body 顶部,
+                 并合并原底部 subagent-drawer__new-events 的 newCount 显示。
+                 旧版本问题:按钮在 body 顶部普通流式布局,触发条件却是
+                 !autoFollow(用户已滚到上方),滚动后按钮滚出视野,
+                 等于"看不见也用不到"。sticky top=0 让按钮始终停在
+                 视口顶部,新事件计数合进同一按钮('↓ N new' /
+                 '↓ 跳到最新'),删除原底部冗余按钮。 -->
             <button
               v-if="showJumpLatest"
               class="subagent-drawer__jump-latest"
@@ -695,7 +702,8 @@ function isPermissionAskLive(rid: string): boolean {
               aria-label="Jump to latest"
               @click="jumpToLatest"
             >
-              <Icon name="arrow-down" :size="14" />
+              <Icon name="arrow-down" :size="12" />
+              <span>{{ newCount > 0 ? `${newCount} new` : '跳到最新' }}</span>
             </button>
             <div class="subagent-drawer__segments">
               <!-- Prompt card (always-expanded, hidden when task is null).
@@ -824,12 +832,6 @@ function isPermissionAskLive(rid: string): boolean {
                 </DrawerSection>
               </template>
             </div>
-            <button
-              v-if="!autoFollow && newCount > 0"
-              class="subagent-drawer__new-events"
-              type="button"
-              @click="jumpToLatest"
-            >↓ {{ newCount }} new</button>
           </div>
 
           <!-- L3b PR4 (2026-06-27): Merge / Discard controls for
@@ -909,32 +911,22 @@ function isPermissionAskLive(rid: string): boolean {
   opacity: 0;
 }
 
+/* 2026-07-03: jump-latest 按钮 sticky 到 body 顶部,合并原底部
+   subagent-drawer__new-events 的 newCount 显示。原版按钮在 body
+   顶部普通流式布局,触发条件却是 !autoFollow(用户已滚到上方),
+   滚动后按钮滚出视野,等于"看不见也用不到"。sticky top=0 让按钮
+   始终停在视口顶部。pill 样式 + 阴影 + 居中,行为与原底部
+   subagent-drawer__new-events 一致;z-index:2 盖在 segments
+   滚动内容之上(segments 自身无 z-index,默认 auto)。 */
 .subagent-drawer__jump-latest {
-  font: inherit;
-  font-family: var(--font-sans);
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
-}
-.subagent-drawer__jump-latest:hover {
-  background: var(--color-accent);
-  color: var(--color-bg-app);
-}
-
-.subagent-drawer__new-events {
   position: sticky;
-  bottom: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  margin: 8px auto 0;
-  display: block;
-  z-index: 1;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 auto 8px;
+  width: fit-content;
   font: inherit;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
@@ -947,9 +939,12 @@ function isPermissionAskLive(rid: string): boolean {
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
-.subagent-drawer__new-events:hover {
+.subagent-drawer__jump-latest:hover {
   background: var(--color-accent);
   color: var(--color-bg-app);
+}
+.subagent-drawer__jump-latest svg {
+  flex-shrink: 0;
 }
 
 .subagent-drawer__body {
