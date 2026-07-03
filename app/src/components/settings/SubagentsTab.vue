@@ -163,11 +163,18 @@ watch(
   },
 );
 
+/** Sentinel value used for the "inherit parent" SelectItem.
+ *  reka-ui 2.9.9 forbids empty-string SelectItem values
+ *  ("A <SelectItem /> must have a value prop that is not an
+ *  empty string"), so we map `null` ↔ this sentinel at the
+ *  SelectRoot boundary and only emit `null` to the IPC. */
+const INHERIT_SENTINEL = "__inherit__";
+
 /** Maps the row's resolved model to the SelectRoot's string
- *  value (empty string = inherit parent; reka-ui doesn't accept
- *  null/boolean as a SelectItem value). */
+ *  value (`null` resolvedModel → INHERIT_SENTINEL, since reka-ui
+ *  forbids empty-string SelectItem values). */
 function selectValue(row: SubagentWithModelRow): string {
-  return row.resolvedModelId ?? "";
+  return row.resolvedModelId ?? INHERIT_SENTINEL;
 }
 
 async function onModelChange(
@@ -180,7 +187,7 @@ async function onModelChange(
   // typing forces us to handle it).
   const normalized =
     Array.isArray(newValue) ? newValue[0] ?? "" : (newValue ?? "");
-  const modelId = normalized === "" ? null : normalized;
+  const modelId = normalized === INHERIT_SENTINEL ? null : normalized;
   // Clear the row's prior error before firing the new write
   // (so the red banner disappears on the first successful set).
   delete errorByName.value[row.name];
@@ -291,9 +298,13 @@ function sourceLabel(source: SubagentWithModelRow["source"]): string {
                 :side-offset="4"
               >
                 <SelectViewport class="subagents-tab__viewport">
-                  <!-- Inherit parent — always first. -->
+                  <!-- Inherit parent — always first.
+                       Value is the INHERIT_SENTINEL sentinel
+                       (reka-ui 2.9.9 forbids empty-string
+                       SelectItem values); onModelChange maps
+                       it back to `null` for the IPC. -->
                   <SelectItem
-                    value=""
+                    :value="INHERIT_SENTINEL"
                     class="subagents-tab__option subagents-tab__option--inherit"
                   >
                     <SelectItemText>继承父级 (inherit)</SelectItemText>
