@@ -106,6 +106,13 @@
 | B1   | 图片支持(multimodal) | 输入层扩展 |
 | D2   | 跨 session 全文搜索(双驱动) | ① 用户驱动(MVP,1 PR)+ ② Agent 驱动(`search_history` tool);共享 `search_messages`;先①后②;降档理由(2026-06-17):session 积累尚浅 + B5/C3 已覆盖"当次 memory"层。详见 [IMPLEMENTATION §4 2026-06-17](./IMPLEMENTATION.md#4-决策日志) |
 | A5/A6 | 错误处理完善 + README + demo | 打磨 |
+| **E1** | CI 测试自动化管线(GitHub Actions) | 1100+ Rust 测试 + vitest + `vue-tsc` 全靠手动跑,无防回归;加 push/PR CI。CI 上 `PKG_CONFIG_PATH` 反而干净(ubuntu runner 原生带 gtk/webkit pkgconfig) |
+| **A5+** | LLM 网络健壮性(重试 / 指数退避 / SSE 断点续传) | A5 错误契约已落地(07-02);provider 层补网络重试,堵长会话 5xx / rate-limit / 流断连整轮重来的体验缺口(DESIGN §5.1 已留口) |
+| **A4+** | 成本聚合视图(token → $) | A4 per-session token 累计已有;补跨 session / provider / day 汇总换算,纯前端聚合查询不动 agent core |
+| **V2-2+** | 自主记忆可观测性 + 管理面板 | V2 2 期自主记忆(06-29)落地;补召回命中可视化 + candidate/active/verified 手动状态转换 UI(Settings → Memory)。差异化能力,契合学习目标 |
+| **E2** | turn-level harness trace viewer | per-turn 决策时间线(context 构造 / C3 压缩触发 / token 分布 / C2 循环检测);复用审计日志 17 类 AuditKind + token 用量。既是调试器也是 harness 学习教具 |
+| **C2+** | 循环检测升级为主动干预 | C2(06-24)软提示只注入 hint;补"连续命中软提示 N 次 → 主动 `ask_user_question` 是否终止",堵 MAX_TURNS=200 烧钱敞口 |
+| **B9+** | 生成式 UI 收尾(button + action / diff 应用) | B9(07-02)落地 selector/code_block/diff 只读;补 D3(button + action 白名单,安全关键)+ D4(diff 应用闭环) |
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
 
 > **已完成的 13 项**(B6 / B12 / B4 / C2 / A7 / L2 / L1 / L3a / L3b PR1 / L3b PR2 / L3b PR3 / L3c / L3d)已从第三档移到 §1.2 已实施列表。
