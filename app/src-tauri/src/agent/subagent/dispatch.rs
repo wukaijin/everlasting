@@ -1265,7 +1265,7 @@ pub(crate) fn app_subagent_catalog(
 ) -> Option<Arc<RwLock<ProviderCatalog>>> {
     app_handle
         .as_ref()
-        .and_then(|h| h.try_state::<crate::state::AppState>())
+        .and_then(|h| h.try_state::<std::sync::Arc<crate::state::AppState>>())
         .map(|s| s.catalog.clone())
 }
 
