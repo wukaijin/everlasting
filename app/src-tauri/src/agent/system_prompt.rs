@@ -39,6 +39,24 @@ pub fn lookup_head_sha(path: &std::path::Path) -> String {
     full.chars().take(7).collect()
 }
 
+/// Format today's date with the local UTC offset, e.g.
+/// `2026/07/03 (UTC+08:00)`. Local timezone (not hard-coded UTC)
+/// so the model sees the date the user is actually experiencing —
+/// important when the user says "today" / "this week" or asks
+/// about time-sensitive context. Generic over `Tz` so the unit
+/// test can pin a fixed offset instead of depending on the test
+/// runner's local zone.
+pub(crate) fn today_line<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String
+where
+    <Tz as chrono::TimeZone>::Offset: std::fmt::Display,
+{
+    format!(
+        "{date} (UTC{offset})",
+        date = now.format("%Y/%m/%d"),
+        offset = now.format("%:z"),
+    )
+}
+
 /// Step 4 follow-up Bug 3: construct the per-session system
 /// prompt the LLM sees at the top of every chat request. The
 /// prompt describes the session's project, working directory, and
@@ -74,6 +92,7 @@ pub fn build_system_prompt(
             crate::db::WorktreeState::None => "NONE — running in project root".to_string(),
         }
     };
+    let today = today_line(chrono::Local::now());
 
     format!(
         "You are a coding agent. You have access to the tools defined in this \
@@ -85,6 +104,7 @@ Session context:\n\
 - Project: {project_name} ({project_path})\n\
 - Working directory: {cwd}\n\
 - Worktree: {worktree_line}\n\
+- Date: {today} — today's date in the user's local timezone.\n\
 - Available tool result envelope: {{\"result\": \"<content>\", \"cwd\": \"<worktree_path>\"}} \
 — `cwd` tells you which root the tool ran against when worktree transitions happen mid-session.\n\
 \n\
@@ -113,6 +133,7 @@ so future pre-tool recall can match it precisely.",
         project_path = project.path,
         cwd = ctx_root.display(),
         worktree_line = worktree_line,
+        today = today,
     )
 }
 

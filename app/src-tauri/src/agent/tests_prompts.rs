@@ -288,6 +288,66 @@ fn build_system_prompt_non_git_project() {
     );
 }
 
+/// Today's date is injected into the system prompt so the model is
+/// grounded in the user's wall-clock date (not just the LLM's
+/// training cutoff). Format is `YYYY/MM/DD (UTC±HH:MM)` — local
+/// timezone, not a hard-coded UTC, so "today" matches what the user
+/// is experiencing. This test pins `today_line` against fixed offsets
+/// (incl. a half-hour zone) so it never depends on the runner's zone.
+#[test]
+fn today_line_formats_local_date_with_utc_offset() {
+    use crate::agent::system_prompt::today_line;
+    use chrono::{FixedOffset, TimeZone};
+
+    // +08:00 (e.g. Asia/Shanghai)
+    let east = FixedOffset::east_opt(8 * 3600).unwrap();
+    let dt_east = east.with_ymd_and_hms(2026, 7, 3, 10, 30, 0).unwrap();
+    assert_eq!(
+        today_line(dt_east),
+        "2026/07/03 (UTC+08:00)",
+        "east offset must render as +HH:MM"
+    );
+
+    // -05:00 (e.g. US Eastern) — also checks the date is taken at
+    // that offset, not at UTC.
+    let west = FixedOffset::west_opt(5 * 3600).unwrap();
+    let dt_west = west.with_ymd_and_hms(2026, 7, 2, 23, 5, 0).unwrap();
+    assert_eq!(
+        today_line(dt_west),
+        "2026/07/02 (UTC-05:00)",
+        "west offset must render as -HH:MM with the date at that offset"
+    );
+
+    // +05:30 (India) — guards against assuming whole-hour offsets.
+    let india = FixedOffset::east_opt(5 * 3600 + 30 * 60).unwrap();
+    let dt_india = india.with_ymd_and_hms(2026, 12, 31, 23, 59, 0).unwrap();
+    assert_eq!(
+        today_line(dt_india),
+        "2026/12/31 (UTC+05:30)",
+        "half-hour offset must keep the :MM minutes"
+    );
+}
+
+/// The full `build_system_prompt` carries the today line in its
+/// Session context block. Uses `contains` (not an exact match) so
+/// the assertion is independent of the runner's local date/zone.
+#[test]
+fn build_system_prompt_includes_today_date_line() {
+    let session = make_session_row("date-id", db::WorktreeState::None, None);
+    let project = make_project_row(true);
+    let prompt = build_system_prompt(
+        &session,
+        &project,
+        std::path::Path::new("/home/carlos/code/everlasting"),
+        "abc1234",
+    );
+    assert!(
+        prompt.contains("- Date:") && prompt.contains("(UTC"),
+        "system prompt must carry the today line with a UTC offset; got: {}",
+        prompt
+    );
+}
+
 // ---------------------------------------------------------------------------
 // P2 RULE-A-005 (2026-06-24): head_sha refresh after commit
 // ---------------------------------------------------------------------------
