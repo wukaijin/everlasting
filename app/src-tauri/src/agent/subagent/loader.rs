@@ -134,6 +134,15 @@ struct Frontmatter {
     /// L3b (2026-06-27): `None` = not declared (inherit on override);
     /// `Some(true/false)` = declared, use verbatim.
     isolation: Option<bool>,
+    /// task 07-03-subagent-frontmatter-model: `None` = not declared
+    /// (worker inherits the parent provider); `Some(model_id)` = the
+    /// worker resolves its `Arc<dyn Provider>` from the process
+    /// catalog by this `models.id`. Empty / whitespace-only is
+    /// normalized to `None` at the parse site. Format is NOT
+    /// validated here — a non-existent / stale id surfaces at
+    /// dispatch time as a catalog miss → `warn!` + parent fallback
+    /// (see `run_subagent`).
+    model: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +157,7 @@ struct Frontmatter {
 /// name: quick-lookup
 /// description: 轻量级只读代码探索
 /// tools: [read_file, grep, glob, list_dir]
-/// model: claude-sonnet-4-6        # parsed + warn-ignored (Q4)
+/// model: <models.id>              # catalog key; None = inherit parent (task 07-03)
 /// ---
 /// <system prompt — markdown body>
 /// ```
@@ -168,7 +177,8 @@ struct Frontmatter {
 /// - Values trimmed; balanced surrounding quotes stripped; leading
 ///   `#` lines treated as comments.
 /// - Unknown keys ignored (forward-compat). `model` is matched
-///   explicitly so we can emit the Q4 "ignored" warning.
+///   explicitly and stored (task 07-03-subagent-frontmatter-model; was
+///   Q4 warn+discard when v1 used a single provider).
 fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
     let lines: Vec<&str> = content.lines().collect();
     let mut fm = Frontmatter::default();
@@ -231,15 +241,20 @@ fn apply_kv(fm: &mut Frontmatter, line: &str) {
         // bool. Tolerant parse — an unrecognized value is treated as
         // "not declared" + warn (the rest of the agent still loads).
         "isolation" => fm.isolation = Some(parse_isolation(&v)),
-        // Q4: `model` is accepted so a user writing it doesn't get an
-        // "unknown field" silence, but we warn + discard — v1 uses a
-        // single Provider model instance and does not switch per
-        // subagent. The value is intentionally not stored.
+        // task 07-03-subagent-frontmatter-model: `model` is now STORED
+        // (previously Q4 warn+discard, when v1 used a single provider
+        // and did not switch per subagent). Empty / whitespace-only →
+        // None (build site treats None as "inherit parent provider").
+        // No format validation here — a non-existent / stale id
+        // surfaces at dispatch time as a catalog miss → warn + parent
+        // fallback (see `run_subagent`).
         "model" => {
-            tracing::warn!(
-                value = %v,
-                "subagent model field not yet supported, ignoring (v1 uses a single provider model)"
-            );
+            let trimmed = v.trim();
+            fm.model = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
         }
         _ => {}
     }
@@ -490,6 +505,10 @@ async fn load_agent_file(
         // for brand-new agents, which is the legacy shared-cwd
         // behavior).
         isolation: fm.isolation,
+        // task 07-03-subagent-frontmatter-model: frontmatter `model:`
+        // value (None = inherit parent provider). Empty / missing is
+        // normalized to None at the parse site.
+        model: fm.model,
     };
 
     Ok(Some(LoadedAgentFile {
@@ -797,6 +816,41 @@ mod tests {
         assert_eq!(fm.tools, Some(Vec::new()));
     }
 
+    // ---- frontmatter `model` field (task 07-03-subagent-frontmatter-model) ----
+    // Previously Q4 warn+discard; now STORED so the worker can resolve
+    // its provider from the catalog by `models.id`.
+
+    #[test]
+    fn frontmatter_model_field_is_stored() {
+        let (fm, _) = parse_frontmatter(
+            "---\nname: x\nmodel: 550e8400-e29b-41d4-a716-446655440000\n---\nb",
+        );
+        assert_eq!(
+            fm.model.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn frontmatter_model_absent_is_none() {
+        let (fm, _) = parse_frontmatter("---\nname: x\n---\nb");
+        assert!(fm.model.is_none());
+    }
+
+    #[test]
+    fn frontmatter_model_empty_is_none() {
+        // `model:` with empty value → None (worker inherits parent).
+        let (fm, _) = parse_frontmatter("---\nname: x\nmodel: \n---\nb");
+        assert!(fm.model.is_none());
+    }
+
+    #[test]
+    fn frontmatter_model_is_trimmed() {
+        // Surrounding whitespace trimmed at parse time.
+        let (fm, _) = parse_frontmatter("---\nname: x\nmodel:  abc-123  \n---\nb");
+        assert_eq!(fm.model.as_deref(), Some("abc-123"));
+    }
+
     #[test]
     fn frontmatter_strips_quotes_on_scalars() {
         let (fm, _) = parse_frontmatter("---\nname: \"q\"\ndescription: 's'\n---\nb");
@@ -990,6 +1044,7 @@ mod tests {
                     system_prompt: String::new(),
                     tools,
                     isolation: None,
+                    model: None,
                 },
                 source,
             },

@@ -925,6 +925,7 @@ pub async fn run_chat_loop(
         let (content, is_error, cancel_parent, exit_code) =
             crate::agent::subagent::dispatch::run_subagent(
                 &provider,
+                crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
                 context_window,
                 &rid,
                 &session_id,
@@ -2431,6 +2432,7 @@ pub async fn run_chat_loop(
                                 let (content, is_error, cancel_parent, exit_code) =
                                     crate::agent::subagent::dispatch::run_subagent(
                                         &provider,
+                                        crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
                                         context_window,
                                         &rid,
                                         &session_id,
@@ -2681,6 +2683,7 @@ pub async fn run_chat_loop(
                 let tool_exec_start = Instant::now();
                 let (content, is_error, cancel_parent, exit_code) = crate::agent::subagent::dispatch::run_subagent(
                     &provider,
+                    crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
                     context_window,
                     &rid,
                     &session_id,

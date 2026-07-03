@@ -11,21 +11,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
 use crate::llm::Provider;
 use crate::memory::MemoryCache;
 use crate::skill::loader::SkillCache;
-use crate::state::ChatEventSink;
+use crate::state::{ChatEventSink, ProviderCatalog};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
 use super::{
     assemble_subagent_prompt, build_subagent_finished_payload, build_worker_messages,
-    filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result, format_final_text,
+    filter_tools_for_subagent, filter_tools_readonly,
+    format_dispatch_result_with_model, format_final_text,
     summarize_worker_tool_actions, truncate_transcript_for_persistence,
     SubagentBufferSink, SubagentCache, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
@@ -237,6 +238,15 @@ fn probe_worker_changes(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_subagent(
     provider: &Arc<dyn Provider>,
+    // task 07-03-subagent-frontmatter-model: the process-wide provider
+    // catalog, threaded so the worker can resolve its own provider when
+    // `def.model` is `Some(model_id)`. `None` in unit tests (no
+    // `AppState`) and on any production path without an `AppHandle`;
+    // `run_subagent` falls back to the parent provider on `None` or
+    // catalog miss (see `resolve_worker_provider` below). The value is
+    // `Arc<RwLock<ProviderCatalog>>` (clone-cheap) so the caller can
+    // pass `state.catalog.clone()` or `None` uniformly.
+    catalog: Option<Arc<RwLock<ProviderCatalog>>>,
     context_window: u32,
     parent_rid: &str,
     parent_session_id: &str,
@@ -536,6 +546,27 @@ pub(crate) async fn run_subagent(
     let worker_messages =
         build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await;
 
+    // task 07-03-subagent-frontmatter-model: resolve the worker's
+    // provider / context_window / display from `def.model` via
+    // [`resolve_worker_provider`] (the pure-over-(catalog, db) core,
+    // unit-tested). We hold the catalog read lock here and pass
+    // `&ProviderCatalog` in; `worker_display` threads to
+    // `format_dispatch_result_with_model` so the parent LLM sees which
+    // model the worker actually used.
+    let cat_guard = match &catalog {
+        Some(c) => Some(c.read().await),
+        None => None,
+    };
+    let (worker_provider, worker_ctx, worker_display): (Arc<dyn Provider>, u32, Option<String>) =
+        resolve_worker_provider(
+            def.model.as_deref(),
+            provider,
+            context_window,
+            cat_guard.as_deref(),
+            db,
+        )
+        .await;
+
     // Assemble the worker's system prompt — fully replaces the
     // parent's behavior_prompt + mode_prefix + base_prompt layers.
     // The assembled prompt is threaded as the 23rd
@@ -713,8 +744,8 @@ pub(crate) async fn run_subagent(
     let run_grants = std::sync::Arc::new(crate::agent::permissions::run_grant::RunGrantCache::new());
     Box::pin(run_chat_loop(
         worker_tool_defs,
-        provider.clone(),
-        context_window,
+        worker_provider.clone(),
+        worker_ctx,
         worker_rid.clone(),
         parent_session_id.to_string(),
         worker_messages,
@@ -1116,8 +1147,12 @@ pub(crate) async fn run_subagent(
         }
     }
 
-    let (content, is_error) =
-        format_dispatch_result(status, &worker_text, partial_actions.as_deref());
+    let (content, is_error) = format_dispatch_result_with_model(
+        status,
+        &worker_text,
+        partial_actions.as_deref(),
+        worker_display.as_deref(),
+    );
 
     // L3b (2026-06-27): append the worker-changes summary to the
     // tool_result content when the worker left changes on its branch.
@@ -1132,6 +1167,67 @@ pub(crate) async fn run_subagent(
         content
     };
     (content, is_error, cancel_parent, None)
+}
+
+/// task 07-03-subagent-frontmatter-model: snapshot `AppState.catalog`
+/// for a `run_subagent` call site. Returns `None` when there is no
+/// `AppHandle` (unit tests, no Tauri runtime) or the state isn't
+/// managed yet (defensive — never in a real chat). `run_subagent`
+/// falls back to the parent provider on `None` or catalog miss, so
+/// `None` here is always safe. Used inline as the `catalog` argument
+/// at the three `run_subagent` call sites in `chat_loop.rs` (forced
+/// dispatch / concurrent batch / serial interceptor).
+pub(crate) fn app_subagent_catalog(
+    app_handle: &Option<tauri::AppHandle>,
+) -> Option<Arc<RwLock<ProviderCatalog>>> {
+    app_handle
+        .as_ref()
+        .and_then(|h| h.try_state::<crate::state::AppState>())
+        .map(|s| s.catalog.clone())
+}
+
+/// task 07-03-subagent-frontmatter-model: resolve the worker's
+/// provider / context_window / display_name from `def.model`. Pure over
+/// (catalog, db) so it's unit-testable without spinning up
+/// `run_chat_loop` — the caller (`run_subagent`) holds the catalog read
+/// lock and passes `&ProviderCatalog` here.
+///
+/// - `def_model=None` (or empty after trim) → inherit parent provider + ctx.
+/// - `def_model=Some(mid)` + catalog hit → worker provider from catalog;
+///   ctx/display from `get_model(mid)` (one DB roundtrip; ctx falls back
+///   to parent if the row vanished between catalog build + now).
+/// - `def_model=Some(mid)` + catalog miss → `warn!` + inherit parent.
+pub(crate) async fn resolve_worker_provider(
+    def_model: Option<&str>,
+    parent_provider: &Arc<dyn Provider>,
+    parent_ctx: u32,
+    catalog: Option<&ProviderCatalog>,
+    db: &SqlitePool,
+) -> (Arc<dyn Provider>, u32, Option<String>) {
+    let mid = match def_model.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(m) => m,
+        None => return (parent_provider.clone(), parent_ctx, None),
+    };
+    let hit: Option<Arc<dyn Provider>> = catalog.and_then(|c| c.get(mid).cloned());
+    match hit {
+        Some(p) => {
+            let model_row = crate::db::models::get_model(db, mid).await.ok().flatten();
+            let ctx = model_row
+                .as_ref()
+                .map(|m| m.context_window)
+                .unwrap_or(parent_ctx);
+            let disp = model_row.as_ref().map(|m| m.display_name.clone());
+            (p, ctx, disp)
+        }
+        None => {
+            tracing::warn!(
+                model = mid,
+                "subagent model not in catalog (deleted / provider api_key missing); \
+                 falling back to parent provider"
+            );
+            (parent_provider.clone(), parent_ctx, None)
+        }
+    }
 }
 
 /// Resolve the project_id for a session. Best-effort DB lookup of
@@ -1316,6 +1412,7 @@ mod tests {
             system_prompt: String::new(),
             tools: tools.iter().map(|t| (*t).to_string()).collect(),
             isolation: None,
+            model: None,
         }
     }
 
@@ -1449,5 +1546,133 @@ mod tests {
             "summary should mention the untracked file: {}",
             changes.summary
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_worker_provider (task 07-03-subagent-frontmatter-model)
+    // AC1 (hit swaps provider) / AC2 (None inherits) / AC3 (miss falls
+    // back) / AC4 (ctx + display from model row).
+    // -----------------------------------------------------------------------
+
+    use std::collections::HashMap;
+    use crate::llm::provider::mock::MockProvider;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    fn mock_provider() -> Arc<dyn Provider> {
+        Arc::new(MockProvider::new(vec![]))
+    }
+
+    #[tokio::test]
+    async fn resolve_worker_provider_none_inherits_parent() {
+        let pool = test_pool().await;
+        let parent = mock_provider();
+        let catalog: ProviderCatalog = HashMap::new();
+        let (wp, ctx, disp) =
+            resolve_worker_provider(None, &parent, 100_000, Some(&catalog), &pool).await;
+        assert!(Arc::ptr_eq(&wp, &parent), "None model must inherit parent");
+        assert_eq!(ctx, 100_000);
+        assert!(disp.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_worker_provider_hit_swaps_provider() {
+        let pool = test_pool().await;
+        let parent = mock_provider();
+        let worker = mock_provider();
+        let mut catalog: ProviderCatalog = HashMap::new();
+        catalog.insert("model-worker".to_string(), worker.clone());
+        let (wp, _ctx, _disp) = resolve_worker_provider(
+            Some("model-worker"),
+            &parent,
+            100_000,
+            Some(&catalog),
+            &pool,
+        )
+        .await;
+        assert!(
+            !Arc::ptr_eq(&wp, &parent),
+            "catalog hit must swap away from parent"
+        );
+        assert!(
+            Arc::ptr_eq(&wp, &worker),
+            "worker provider must be the catalog entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_worker_provider_miss_falls_back_to_parent() {
+        let pool = test_pool().await;
+        let parent = mock_provider();
+        let catalog: ProviderCatalog = HashMap::new();
+        let (wp, _ctx, disp) = resolve_worker_provider(
+            Some("nonexistent-id"),
+            &parent,
+            100_000,
+            Some(&catalog),
+            &pool,
+        )
+        .await;
+        assert!(
+            Arc::ptr_eq(&wp, &parent),
+            "catalog miss must fall back to parent"
+        );
+        assert!(disp.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_worker_provider_catalog_none_falls_back() {
+        // catalog=None (tests, no AppHandle) + model=Some → parent.
+        let pool = test_pool().await;
+        let parent = mock_provider();
+        let (wp, _, _) =
+            resolve_worker_provider(Some("any-id"), &parent, 100_000, None, &pool).await;
+        assert!(Arc::ptr_eq(&wp, &parent));
+    }
+
+    #[tokio::test]
+    async fn resolve_worker_provider_hit_reads_ctx_and_display() {
+        // AC4: hit + DB has the model row → ctx = model.context_window,
+        // disp = display_name (NOT the parent's).
+        let pool = test_pool().await;
+        let provider_row = crate::db::providers::create_provider(
+            &pool,
+            "anthropic",
+            "Anthropic",
+            "https://api.anthropic.com",
+            "sk-test",
+        )
+        .await
+        .unwrap();
+        let model_row = crate::db::models::create_model(
+            &pool,
+            &provider_row.id,
+            "claude-test",
+            "Claude Test",
+            None,
+            None,
+            false,
+            50_000,
+        )
+        .await
+        .unwrap();
+        let worker = mock_provider();
+        let mut catalog: ProviderCatalog = HashMap::new();
+        catalog.insert(model_row.id.clone(), worker.clone());
+        let parent = mock_provider();
+        let (wp, ctx, disp) =
+            resolve_worker_provider(Some(&model_row.id), &parent, 100_000, Some(&catalog), &pool)
+                .await;
+        assert!(Arc::ptr_eq(&wp, &worker));
+        assert_eq!(ctx, 50_000, "ctx must come from the model row, not parent");
+        assert_eq!(disp.as_deref(), Some("Claude Test"));
     }
 }

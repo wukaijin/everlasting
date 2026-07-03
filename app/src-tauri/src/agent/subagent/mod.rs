@@ -99,7 +99,7 @@ pub use transcript::TranscriptEntry;
 pub use transcript::TranscriptKind;
 pub(crate) use transcript::build_subagent_finished_payload;
 pub use truncate_summary::{
-    format_dispatch_result, format_final_text, summarize_worker_tool_actions,
+    format_dispatch_result_with_model, format_final_text, summarize_worker_tool_actions,
     truncate_transcript_for_persistence, TRANSCRIPT_MAX_BYTES,
 };
 
@@ -364,6 +364,21 @@ pub struct SubagentDef {
     /// with the dispatch-time override; see
     /// [`resolve_isolation`] in `dispatch.rs`.
     pub isolation: Option<bool>,
+    /// Per-agent model override (task 07-03-subagent-frontmatter-model,
+    /// 2026-07-03). When `Some(model_id)`, a worker dispatched under this
+    /// subagent resolves its `Arc<dyn Provider>` from the process catalog
+    /// (`models.id` → provider) instead of inheriting the parent's
+    /// provider — enabling cross-model adversarial review (e.g. a
+    /// `reviewer` agent bound to a stronger / different-family model). The
+    /// worker's `context_window` follows the target model. `None` (the
+    /// builtin + legacy default) inherits the parent provider +
+    /// context_window, preserving current behavior. Value is the catalog
+    /// key (`models.id`, a UUID); if absent from the catalog at dispatch
+    /// time (model deleted / provider api_key empty → `build_provider`
+    /// skipped), `run_subagent` logs `warn!` and falls back to the parent.
+    /// Display-name resolution is deferred to ROADMAP `B6+` C (UI picker);
+    /// MVP writes the raw `models.id`.
+    pub model: Option<String>,
 }
 
 /// The two MVP subagent definitions, keyed by name. Used by
@@ -410,6 +425,9 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                 // `None` keeps the legacy shared-cwd behavior and
                 // saves the per-dispatch checkout cost.
                 isolation: None,
+                // task 07-03-subagent-frontmatter-model: builtin
+                // inherits the parent provider (model: None).
+                model: None,
             },
             SubagentDef {
                 name: "general-purpose".to_string(),
@@ -447,6 +465,9 @@ pub fn builtin_subagents() -> &'static [SubagentDef] {
                 // `worker_is_writable`), so concurrent-write safety no
                 // longer relies on this default being `Some(true)`.
                 isolation: None,
+                // task 07-03-subagent-frontmatter-model: builtin
+                // inherits the parent provider (model: None).
+                model: None,
             },
         ]
     })
@@ -1036,6 +1057,7 @@ mod tests {
                 "ask_user_question".to_string(),
             ],
             isolation: None,
+            model: None,
         };
         let all = vec![
             tool("read_file"),

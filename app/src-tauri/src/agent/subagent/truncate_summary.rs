@@ -233,12 +233,24 @@ pub fn format_final_text(status: SubagentStatus, worker_text: &str) -> String {
 /// for the "what does the worker's final text look like" shape
 /// shared between `format_final_text` (DB write) and this
 /// function (tool_result wire).
-pub fn format_dispatch_result(
+pub fn format_dispatch_result_with_model(
     status: SubagentStatus,
     worker_text: &str,
     partial_actions: Option<&str>,
+    // task 07-03-subagent-frontmatter-model: the worker's resolved
+    // model display name. `Some(name)` (only when `def.model` hit the
+    // catalog) inserts a `[model: <name>]` line after the
+    // `[status: ...]` prefix so the parent LLM can see which model the
+    // worker actually used (key for cross-model adversarial review).
+    // `None` (inherit-parent + catalog-miss fallback) omits the line —
+    // preserving the pre-task tool_result shape verbatim.
+    model_display: Option<&str>,
 ) -> (String, bool) {
     let prefix = format!("[status: {}]", status.as_str());
+    let model_line = match model_display {
+        Some(d) if !d.is_empty() => format!("\n[model: {}]", d),
+        _ => String::new(),
+    };
     let body = format_final_text(status, worker_text);
     let is_error = !matches!(status, SubagentStatus::Completed);
     let content = match partial_actions {
@@ -247,11 +259,30 @@ pub fn format_dispatch_result(
         // caller guarantees `None` for Completed; the empty-guard keeps
         // the function total if an empty summary slips through.
         Some(actions) if !actions.is_empty() => {
-            format!("{}\n{}\n\nWorker partial actions:\n{}", prefix, body, actions)
+            format!(
+                "{}{}\n{}\n\nWorker partial actions:\n{}",
+                prefix, model_line, body, actions
+            )
         }
-        _ => format!("{}\n{}", prefix, body),
+        _ => format!("{}{}\n{}", prefix, model_line, body),
     };
     (content, is_error)
+}
+
+/// Back-compat shim (task 07-03): `format_dispatch_result` without a
+/// model line — delegates with `model_display = None`, so the
+/// tool_result shape is identical to pre-task. The in-module unit
+/// tests call this; production (dispatch path) calls
+/// [`format_dispatch_result_with_model`] to emit `[model: <name>]`.
+/// `#[cfg(test)]` because only tests use it now — production always
+/// threads the model display.
+#[cfg(test)]
+fn format_dispatch_result(
+    status: SubagentStatus,
+    worker_text: &str,
+    partial_actions: Option<&str>,
+) -> (String, bool) {
+    format_dispatch_result_with_model(status, worker_text, partial_actions, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +572,52 @@ mod tests {
         assert!(is_error);
         assert!(content.starts_with("[status: error]"));
         assert!(content.contains("LLM stream errored"));
+    }
+
+    // ---- format_dispatch_result_with_model (task 07-03) ----
+
+    #[test]
+    fn format_with_model_inserts_model_line_when_some() {
+        let (content, _) = format_dispatch_result_with_model(
+            SubagentStatus::Completed,
+            "done",
+            None,
+            Some("gpt-4o"),
+        );
+        assert!(content.starts_with("[status: completed]"));
+        assert!(
+            content.contains("[model: gpt-4o]"),
+            "missing [model:] line: {}",
+            content
+        );
+        // model line comes after the status prefix.
+        let status_idx = content.find("[status:").unwrap();
+        let model_idx = content.find("[model:").unwrap();
+        assert!(model_idx > status_idx);
+    }
+
+    #[test]
+    fn format_with_model_omits_line_when_none() {
+        let (content, _) =
+            format_dispatch_result_with_model(SubagentStatus::Completed, "done", None, None);
+        assert!(content.starts_with("[status: completed]"));
+        assert!(
+            !content.contains("[model:"),
+            "unexpected [model:] line: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn format_with_model_empty_display_omits_line() {
+        // model_display=Some("") → treated as none (no empty [model:] line).
+        let (content, _) = format_dispatch_result_with_model(
+            SubagentStatus::Completed,
+            "done",
+            None,
+            Some(""),
+        );
+        assert!(!content.contains("[model:"));
     }
 
     #[test]
