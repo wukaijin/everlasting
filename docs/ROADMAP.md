@@ -114,6 +114,7 @@
 | **V2-2+** | 自主记忆可观测性 + 管理面板 | V2 2 期自主记忆(06-29)落地;补召回命中可视化 + candidate/active/verified 手动状态转换 UI(Settings → Memory)。差异化能力,契合学习目标 |
 | **E2** | turn-level harness trace viewer | per-turn 决策时间线(context 构造 / C3 压缩触发 / token 分布 / C2 循环检测);复用审计日志 17 类 AuditKind + token 用量。既是调试器也是 harness 学习教具 |
 | **C2+** | 循环检测升级为主动干预 | C2(06-24)软提示只注入 hint;补"连续命中软提示 N 次 → 主动 `ask_user_question` 是否终止",堵 MAX_TURNS=200 烧钱敞口 |
+| **A2+** | shell 命令只读/副作用精细判定 | A2+B7(06-12/13)的 shell 三档分类(`shell_trust::classify_prefix`)用 first-token + 结构性一刀切降级,有两个已知缺口:① **复合命令 grant 绕过** — `ls; rm x` 首 token 是 `ls`,用户对 `ls` 点过"始终允许"后,Tier 4 prefix-grant 短路在 `classify_prefix` 之前直接放行,跳过结构性降级,而 Tier 2 kill-list 只兜灾难性模式(`rm -rf` 非根 / 项目外路径溜过,worktree+git 救不回);② **只读管道误伤** — `git diff \| head`、`ls \| grep` 被一律降级 Ask。升级方向:复合命令拆分(尊重引号,按顶层 `;` `&&` `\|\|` `\|` 切)+ 子命令独立分类取 max + 裸重定向(`>`/`>>`/`2>`)检测 + `$()`/反引号命令替换降级 Ask,一次性收两个缺口;自研零依赖,契合项目风格,远期配 bubblewrap 沙盒兜底(判定错了也限损) |
 | **B9+** | 生成式 UI 收尾(button + action / diff 应用) | B9(07-02)落地 selector/code_block/diff 只读;补 D3(button + action 白名单,安全关键)+ D4(diff 应用闭环) |
 | **B6+** | subagent 多模型支持（B 动态选模型） | A=frontmatter `model:` 声明（07-03 落地，见 §1.2）；**C=UI 配置 + builtin DB override + 写回 frontmatter（2026-07-03 落地，见 §1.2）**；本条目剩余 = B（dispatch_subagent 加 `model` 参数 + `@@agent --model=`，优先级 dispatch>DB>frontmatter>parent）。动机：跨模型对抗性 review，抗同模型自确认偏差 |
 | ~~L3b PR1~~ | ~~worker worktree 隔离核心(PR1 落地,见 §1.2)~~ | 06-27 PR1 已落地,见 §1.2;PR2-4 拆为 follow-up tasks |
