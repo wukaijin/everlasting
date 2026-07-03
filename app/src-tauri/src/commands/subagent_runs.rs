@@ -140,7 +140,6 @@ pub struct MergeWorkerResult {
 
 #[tauri::command]
 pub async fn merge_worker_run(
-    _rid: String,
     run_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<MergeWorkerResult, AppCommandError> {
@@ -288,7 +287,6 @@ pub async fn merge_worker_run(
 /// already-destroyed; no idempotency in MVP).
 #[tauri::command]
 pub async fn discard_worker_run(
-    _rid: String,
     run_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppCommandError> {

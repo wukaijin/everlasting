@@ -134,7 +134,7 @@ pub struct AppCommandError {
     pub kind: String,              // 诊断短名,如 "LlmError::Auth" / "GitError::NotARepo"
     pub message: String,           // 中文友好,直接展示
     pub retryable: bool,           // 前端决定是否提供"重试"
-    pub request_id: Option<String>,// 高频 command 透传前端 requestId,关联 tracing
+    pub request_id: Option<String>,// chat command 透传前端 requestId;其余 None(见下 §request_id 语义)
 }
 ```
 
@@ -149,6 +149,16 @@ IPC JSON payload:
   "requestId": "mz8s3hqwx6rmqjswgte"
 }
 ```
+
+### `request_id` 语义
+
+`request_id` 是 **chat 流的 cancel 配对 id**(前端为每个 `chat` invoke 生成 UUID,`cancel_chat` 凭它找到 `CancellationToken`)。R3.4 落地后的真实边界:
+
+- **`chat` command**(`agent/chat.rs`):前置错误 emit `ChatEvent::Error` 走 stream;`AppCommandError` 只在 emit 本身失败的 IPC 双重故障路径返回,带 `Some(request_id)`(透传)。
+- **其他所有 command**(sessions / projects / `merge_worker_run` / `discard_worker_run` / config / ...):UI-driven,不在 chat 流,**无 requestId 概念**,`request_id: None`。
+- **后端不新生成 uuid**(会与前端 requestId 脱钩,tracing 对不上)。
+
+> L3b PR4 曾给 `merge_worker_run`/`discard_worker_run` 预留 `_rid` sentinel(`"merge-pr4"`/`"discard-pr4"`),A5 R3.4 审查发现它是死占位(无消费方)后已清理。requestId 是 chat 独有语义,不为非 chat command 强加。
 
 ### 5 类 `ErrorCategory` 全集
 

@@ -10,11 +10,6 @@
 //! 设计:见任务 `07-02-a5-error-handling-refine` 的 design.md §3/§4/§5。
 //! spec:见 `.trellis/spec/backend/error-handling.md`。
 
-// PR-A5-2 阶段:AppError / AppCommandError / From<E> 仅定义,未被 commands 接入
-// (PR-A5-3 才用)。临时 allow dead_code,避免 PR-A5-2 中间状态刷 warning。
-// PR-A5-3 commands 接入后,移除本属性并验证 `cargo check` 0 warning。
-#![allow(dead_code)]
-
 use crate::agent::auto_reflect::ReflectError;
 use crate::agent::provider::PreFlightError;
 use crate::agent::question_store::QuestionStoreError;

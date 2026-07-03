@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
 use crate::llm::{ChatEvent, ChatMessage};
+use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::{AppState, ChatEventPayload};
 
 // ---------------------------------------------------------------------------
@@ -83,7 +84,7 @@ pub async fn chat(
     // (a resend never carries a forced dispatch).
     #[allow(non_snake_case)]
     forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
     let catalog = state.catalog.clone();
@@ -143,10 +144,19 @@ pub async fn chat(
                 "chat: pre-flight failed (catalog)"
             );
             let payload = ChatEventPayload {
-                request_id: rid,
+                request_id: rid.clone(),
                 event: ChatEvent::Error { message: msg, category },
             };
-            app.emit("chat-event", payload).map_err(|e| e.to_string())?;
+            // A5(R3.4):emit 失败是 IPC 边界双重故障(pre-flight 错误
+            // 本要走 stream,emit 又失败)。归 Server,透传 rid 让
+            // 前端/log 关联。罕见路径,但契约要求 command 错误结构化。
+            app.emit("chat-event", payload).map_err(|e| {
+                AppCommandError::new(
+                    ErrorCategory::Server,
+                    format!("chat: 发送前置错误失败: {}", e),
+                )
+                .with_request_id(Some(rid))
+            })?;
             return Ok(());
         }
     };

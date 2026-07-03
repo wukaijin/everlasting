@@ -169,7 +169,6 @@ describe("useSubagentRunsStore mergeWorker / discardWorker", () => {
     const result = await store.mergeWorker(row.id);
     expect(result.kind).toBe("success");
     expect(invokeMock).toHaveBeenCalledWith("merge_worker_run", {
-      rid: "merge-pr4",
       runId: row.id,
     });
     // worktreePath cleared
@@ -214,7 +213,6 @@ describe("useSubagentRunsStore mergeWorker / discardWorker", () => {
     const result = await store.discardWorker(row.id);
     expect(result.kind).toBe("success");
     expect(invokeMock).toHaveBeenCalledWith("discard_worker_run", {
-      rid: "discard-pr4",
       runId: row.id,
     });
     expect(store.getRunCache.get(row.id)?.worktreePath).toBeNull();
@@ -398,7 +396,6 @@ describe("WorkerMergeControls", () => {
     await flushPromises();
 
     expect(invokeMock).toHaveBeenCalledWith("merge_worker_run", {
-      rid: "merge-pr4",
       runId: "r1",
     });
     // worktreePath cleared in store → component v-if flips → hidden.
@@ -454,7 +451,6 @@ describe("WorkerMergeControls", () => {
     await flushPromises();
 
     expect(invokeMock).toHaveBeenCalledWith("discard_worker_run", {
-      rid: "discard-pr4",
       runId: "r1",
     });
     await flushPromises();

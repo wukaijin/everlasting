@@ -561,14 +561,9 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *    - `{ kind: "error", message }` — any other failure (run not
    *      found, parent session missing, libgit2 error).
    *
-   *  Why the IPC `rid` arg is "merge-pr4": the backend
-   *  `merge_worker_run(rid, run_id)` carries an unused `rid` slot
-   *  (reserved for future audit correlation). The store has no chat
-   *  request id at the call site (merge is a UI-driven action, not
-   *  part of an LLM turn), so we pass a stable sentinel the backend
-   *  can recognize in logs. Tauri 2 maps the JS `rid` to the Rust
-   *  `_rid` param (the leading underscore marks it unused on the
-   *  Rust side). */
+   *  A5(R3.4):merge/discard 是 UI-driven action,不在 chat 流,
+   *  无 requestId 透传(后端 AppCommandError.request_id = None)。
+   *  L3b PR4 预留的 `rid` sentinel 随 A5 R3.4 清理。 */
   async function mergeWorker(
     runId: string,
     parentSessionId?: string,
@@ -582,7 +577,6 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     mergeStateByRunId.set(runId, { kind: "merge", loading: true });
     try {
       const result = await invoke<MergeWorkerIpcResult>("merge_worker_run", {
-        rid: "merge-pr4",
         runId,
       });
       // Success: the merge destroyed the worker worktree as a side
@@ -643,7 +637,6 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     mergeStateByRunId.set(runId, { kind: "discard", loading: true });
     try {
       await invoke<string>("discard_worker_run", {
-        rid: "discard-pr4",
         runId,
       });
       const row = getRunCache.get(runId);
