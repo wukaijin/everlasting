@@ -22,7 +22,7 @@
 | RULE-A-014 | 2026-06-20 | worker 的 Tier 4 `ask_path`/`ask_shell` collapse to Deny(workers 无 UI sink,否则挂起) | closed PR2b | `agent/chat_loop.rs`(`is_worker` 第 21 参) |
 | RULE-A-015 | 2026-06-20 | `skip_persist` gate 校正(PR1 过宽 18 → 实际 16);2026-06-26 partial reversal(worker token 隔离到 `subagent_runs`) | closed PR2a | `agent/chat_loop.rs`;[`backend/agent-loop-architecture.md`](./agent-loop-architecture.md) Pattern |
 | RULE-A-016 | 2026-06-20 | worker `ask_path` 写 transcript `PermissionAsk`(historical mode 直吃 payload_json) | closed PR3a | `agent/subagent/transcript.rs` |
-| RULE-A-017 | pre-existing | C3 `agent_loop_c3_compaction_does_not_panic` 测试失败(已知观测盲点,pre-PR main 同样失败) | open | [`.trellis/reviews/DEBT.md`](../../reviews/DEBT.md) |
+| RULE-A-017 | 2026-06-28 | C3 `agent_loop_c3_compaction_does_not_panic` 测试 setup 过时(指令注入撑大消息 vec 致 StillOver 误触发);只改测试,生产码零改动 | closed | `agent/tests_agent_loop.rs`;task [06-28-fix-rule-a017-c3-test-fail](../../tasks/archive/2026-06/06-28-fix-rule-a017-c3-test-fail/) |
 
 ---
 
