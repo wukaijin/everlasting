@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "阶段 1b 加 model_display 列的权威 schema + 阶段 5 同步更新其 'XXX additions' 段;以 worktree_path 列(含 insert_run_with_id / add_subagent_runs_column_if_missing)为范例"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_subagent / resolve_worker_provider / dispatch_subagent 链路;阶段 1 resolve_final_model 接入点 + 阶段 1b model_display 写入位置"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "阶段 0 新表 subagent_model_overrides + CREATE TABLE IF NOT EXISTS 幂等惯例 + UPSERT(ON CONFLICT)写法 + add_column helper 模式"}
+{"file": ".trellis/spec/backend/multi-provider-contract.md", "reason": "ProviderCatalog(HashMap<model_id, Arc<dyn Provider>>)/ get_model / catalog build;阶段 1/3 model_id↔provider↔display 映射依据"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool 契约(本任务 tool schema 不变);format_dispatch_result_with_model 的 [model:] 行语义(model_display=None 省略)是阶段 1b 持久化语义的来源"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "ToolCallCard dispatch 分支(workerSummary / workerTokenText chip 模式,阶段 4.6 复用)+ SubagentDrawer / SubagentDrawerHeader(阶段 4.7)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 模式;阶段 4 per-row spinner 隔离(reactive Map,仿 WorkerMergeControls)+ 新 subagents store actions"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "阶段 4.3 Settings TabsRoot/TabsTrigger/TabsContent 加第 5 个 Subagents tab 的 reka-ui 用法"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SubagentRunSummary 后端 struct(serde camelCase)↔ 前端 type 的 modelDisplay 字段跨层一致性;阶段 1b/3 wire shape"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用判定:workerTokenText chip / SubagentCache.list / useModelsStore.modelsGroupedByProvider / files.rs 原子写 —— 阶段 2/3/4 多处复用点"}
+{"file": ".trellis/tasks/archive/2026-07/07-03-subagent-frontmatter-model/design.md", "reason": "前序 A 任务 design(resolve_worker_provider / catalog 穿透 / [model:] 行来由)。以代码为准:§113/118 设想的 parent display thread 未落地"}

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "校验 model_display 新列符合 schema 惯例(nullable / add_column_if_missing / 不破坏 CHECK 与 index);阶段 5 spec 同步是否完整"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验新表 subagent_model_overrides 主键/UPSERT/迁移幂等;CRUD 函数命名与错误类型符合规范"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "测试惯例:阶段 0-1b 的 cargo test --lib 用例组织 + PKG_CONFIG_PATH + test_pool 模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验 catalog miss / 写回 frontmatter 失败 / DB 查询失败的降级与 warn 路径一致性"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "校验 dispatch_subagent tool_use/tool_result 配对不变量(RULE-A-007)未被阶段 1/1b 破坏;[model:] 行语义未被 model_display 持久化改变"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "校验 card chip / drawer header 改动符合 ToolCallCard dispatch 分支与 SubagentDrawer 渲染契约;preview [model:] strip 处理"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性核查:model_display 后端 struct ↔ 前端 type ↔ DB 列三方对齐;wire camelCase"}
+{"file": ".trellis/spec/guides/debt-status-evolution-guide.md", "reason": "确认本任务未引入新 RULE 债务;A 任务残留过时注释(loader.rs:119)已清理"}
+{"file": ".trellis/tasks/archive/2026-07/07-03-subagent-frontmatter-model/prd.md", "reason": "A 任务 AC1-5 是阶段 1 的回归基准(resolve_worker_provider 6 测试零改动);校验本任务不破坏 A 的 acceptance criteria"}
