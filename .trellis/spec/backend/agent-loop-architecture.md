@@ -1139,3 +1139,15 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 **Test**: `agent_loop_forced_dispatch_runs_worker_without_llm` asserts `mock.call_count() == 1` (only the worker's single turn — the parent contributed zero LLM calls).
 | `builtin_*_defaults_to_isolated` | `general-purpose.isolation == Some(true)`, `researcher.isolation == None` |
 | `probe_worker_changes_*` (3 tests in dispatch.rs) | empty worktree → no changes; tracked edit → changes; untracked file → changes |
+
+---
+
+## Pattern: LLM retry_open wrapper (A5+, 2026-07-05)
+
+`run_chat_loop` turn 内 provider 阶段的 `provider.send(...)` 由 `llm::retry::retry_open(...)` 包装(`chat_loop.rs` 调用点)。retry_open 处理**首字节前**的可重试失败(`Network`/`Server`/`RateLimit`):Full Jitter 退避 + retry-after advisory + 双向熔断(`max_retries` × `budget`)。**首字节后**任何错误交回 chat_loop per-event loop(had_error 路径,不回 retry)。
+
+**为何是 turn 内 wrapper 而非 Provider trait 内**:Provider 专注协议转换不感知 retry;wrapper 可见 chat_loop 的 `token`(取消)与 `sink`(前端 Retrying 事件);Provider trait 签名零改动。
+
+返回 `OpenOutcome::Stream(first_byte chained with rest)` 或 `Cancelled` — chat_loop 拿到 Stream 后用既有 per-event select loop 消费,**select loop 零改动**。两个 select(首字节 await / backoff sleep)都 `biased` 第一位 `token.cancelled()`,sleep 中取消立即响应。
+
+完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](./llm-contract.md)。决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION.md#4-决策日志)。
