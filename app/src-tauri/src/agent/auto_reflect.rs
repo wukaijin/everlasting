@@ -72,9 +72,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
-use crate::db::memories::{
-    insert_memory, MemoryInput, MemoryKind, MemoryScope, MemoryStatus,
-};
+use crate::db::memories::{insert_memory, MemoryInput, MemoryKind, MemoryScope, MemoryStatus};
 use crate::llm::{ChatMessage, MessageContent, Provider, Role};
 
 // ---------------------------------------------------------------------------
@@ -185,10 +183,7 @@ impl FailureTracker {
                         .last_failure_input
                         .take()
                         .unwrap_or_else(|| serde_json::Value::Null),
-                    last_failure_content: entry
-                        .last_failure_content
-                        .take()
-                        .unwrap_or_default(),
+                    last_failure_content: entry.last_failure_content.take().unwrap_or_default(),
                     success_input: tool_input.clone(),
                     success_content: result_content.to_string(),
                 };
@@ -402,7 +397,10 @@ fn build_reflect_user_message(trigger: &Trigger) -> String {
         .replace("{failure_count}", &trigger.failure_count.to_string())
         .replace("{tool_name}", &trigger.tool_name)
         .replace("{tool_input}", &tool_input_str)
-        .replace("{last_failure}", &truncate_for_reflect(&trigger.last_failure_content))
+        .replace(
+            "{last_failure}",
+            &truncate_for_reflect(&trigger.last_failure_content),
+        )
         .replace("{success_input}", &success_input_str)
         .replace("{success}", &truncate_for_reflect(&trigger.success_content))
 }
@@ -449,11 +447,7 @@ async fn reflect_to_pitfall(
     // response, not a multi-step agentic call. The LLM
     // must not be able to invoke other tools from this
     // prompt.
-    let stream = provider.send(
-        Some(REFLECT_SYSTEM_PROMPT.to_string()),
-        messages,
-        vec![],
-    );
+    let stream = provider.send(Some(REFLECT_SYSTEM_PROMPT.to_string()), messages, vec![]);
 
     // Drain the stream into a single text blob. We don't
     // care about `Done`'s `usage` or `Stop` reason — only
@@ -492,8 +486,7 @@ async fn reflect_to_pitfall(
     // strip costs nothing.
     let json_text = strip_code_fence(&text);
 
-    let parsed: ReflectOutput = serde_json::from_str(json_text)
-        .map_err(ReflectError::Json)?;
+    let parsed: ReflectOutput = serde_json::from_str(json_text).map_err(ReflectError::Json)?;
 
     if parsed.title.trim().is_empty() {
         return Err(ReflectError::MissingField("title"));
@@ -618,12 +611,22 @@ mod tests {
         let mut t = FailureTracker::new();
         // First failure.
         let r1 = t
-            .record("shell", &shell_input("cargo test"), true, "error: PKG_CONFIG_PATH")
+            .record(
+                "shell",
+                &shell_input("cargo test"),
+                true,
+                "error: PKG_CONFIG_PATH",
+            )
             .await;
         assert!(r1.is_none());
         // Second failure.
         let r2 = t
-            .record("shell", &shell_input("cargo test"), true, "error: PKG_CONFIG_PATH")
+            .record(
+                "shell",
+                &shell_input("cargo test"),
+                true,
+                "error: PKG_CONFIG_PATH",
+            )
             .await;
         assert!(r2.is_none());
         // Success.
@@ -647,9 +650,7 @@ mod tests {
     #[tokio::test]
     async fn first_call_success_does_not_trigger() {
         let mut t = FailureTracker::new();
-        let r = t
-            .record("shell", &shell_input("ls"), false, "")
-            .await;
+        let r = t.record("shell", &shell_input("ls"), false, "").await;
         assert!(r.is_none());
         assert_eq!(t.count("shell"), 0);
     }
@@ -679,9 +680,7 @@ mod tests {
         // First failure-then-success cycle.
         t.record("shell", &shell_input("a"), true, "f1").await;
         t.record("shell", &shell_input("a"), true, "f2").await;
-        let triggered = t
-            .record("shell", &shell_input("a"), false, "ok1")
-            .await;
+        let triggered = t.record("shell", &shell_input("a"), false, "ok1").await;
         assert!(triggered.is_some());
 
         // After the trigger, the counter is reset.
@@ -690,9 +689,7 @@ mod tests {
         // A follow-up single failure + success does NOT
         // re-trigger (we're back at 0, not at 1).
         t.record("shell", &shell_input("a"), true, "f3").await;
-        let r = t
-            .record("shell", &shell_input("a"), false, "ok2")
-            .await;
+        let r = t.record("shell", &shell_input("a"), false, "ok2").await;
         assert!(
             r.is_none(),
             "post-trigger counter must reset (1 fail + success is below threshold)"
@@ -708,21 +705,19 @@ mod tests {
         t.record("shell", &shell_input("a"), true, "err").await;
         t.record("shell", &shell_input("a"), true, "err").await;
         // `grep` only failed once — should NOT trigger.
-        let r = t
-            .record("grep", &shell_input("b"), false, "ok")
-            .await;
+        let r = t.record("grep", &shell_input("b"), false, "ok").await;
         assert!(r.is_none(), "grep counter is independent of shell");
         // `shell` triggers.
-        let r2 = t
-            .record("shell", &shell_input("a"), false, "ok")
-            .await;
+        let r2 = t.record("shell", &shell_input("a"), false, "ok").await;
         assert!(r2.is_some(), "shell counter hit 2 fails + success");
     }
 
     fn make_text_provider(text: &str) -> Arc<MockProvider> {
         Arc::new(MockProvider::new(vec![MockResponse::Events(vec![
             Ok(crate::llm::ChatEvent::Start),
-            Ok(crate::llm::ChatEvent::Delta { text: text.to_string() }),
+            Ok(crate::llm::ChatEvent::Delta {
+                text: text.to_string(),
+            }),
             Ok(crate::llm::ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(crate::llm::types::TokenUsage::default()),
@@ -732,7 +727,7 @@ mod tests {
 
     /// `try_record_outcome` with a MockProvider that
     /// returns a valid JSON: end-to-end the row is
-     /// inserted (PRD AC #1 + #4).
+    /// inserted (PRD AC #1 + #4).
     #[tokio::test]
     async fn try_record_outcome_writes_active_pitfall_end_to_end() {
         let pool = make_pool().await;
@@ -878,11 +873,10 @@ mod tests {
         // return.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM autonomous_memories")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM autonomous_memories")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 0, "no row should be written on JSON parse failure");
     }
 
@@ -959,14 +953,8 @@ mod tests {
     #[test]
     fn strip_code_fence_handles_common_cases() {
         assert_eq!(strip_code_fence(r#"{"a":1}"#), r#"{"a":1}"#);
-        assert_eq!(
-            strip_code_fence("```json\n{\"a\":1}\n```"),
-            "{\"a\":1}"
-        );
-        assert_eq!(
-            strip_code_fence("```\n{\"a\":1}\n```"),
-            "{\"a\":1}"
-        );
+        assert_eq!(strip_code_fence("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_code_fence("```\n{\"a\":1}\n```"), "{\"a\":1}");
     }
 
     /// `truncate_for_reflect` leaves short strings alone
@@ -1014,13 +1002,10 @@ mod tests {
         .await
         .unwrap();
 
-        let footnote = recall_pitfall_footnote(
-            &pool,
-            "shell",
-            &json!({"command": "cargo test --lib"}),
-        )
-        .await
-        .expect("recall must succeed on healthy pool");
+        let footnote =
+            recall_pitfall_footnote(&pool, "shell", &json!({"command": "cargo test --lib"}))
+                .await
+                .expect("recall must succeed on healthy pool");
         let text = footnote.expect("P3 helper must hit the active pitfall");
         assert!(text.contains("WSL cargo test needs PKG_CONFIG_PATH"));
     }

@@ -22,10 +22,8 @@ use sqlx::SqlitePool;
 use super::memories::{
     bump_hit_count, count_memories_for_session, delete_memory, find_pitfalls_by_trigger,
     get_memory_by_id, insert_memory, list_memories, promote_if_eligible, search_memories_fts,
-    update_status,
-    MemoryInput, MemoryInsertError, MemoryKind, MemoryScope, MemoryStatus, RecallStatusFilter,
-    StatusTransitionError,
-    test_helpers::insert_raw,
+    test_helpers::insert_raw, update_status, MemoryInput, MemoryInsertError, MemoryKind,
+    MemoryScope, MemoryStatus, RecallStatusFilter, StatusTransitionError,
     ACTIVE_TO_VERIFIED_AGE_DAYS, ACTIVE_TO_VERIFIED_AT, CANDIDATE_TO_ACTIVE_AT,
 };
 
@@ -39,9 +37,7 @@ async fn test_pool() -> SqlitePool {
         .execute(&pool)
         .await
         .unwrap();
-    crate::db::migrations::run_migrations(&pool)
-        .await
-        .unwrap();
+    crate::db::migrations::run_migrations(&pool).await.unwrap();
     pool
 }
 
@@ -99,7 +95,11 @@ async fn fts5_trigram_tokenizer_is_available_for_cjk() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(rows.len(), 1, "ASCII term 'cargo' in CJK must MATCH via trigram");
+    assert_eq!(
+        rows.len(),
+        1,
+        "ASCII term 'cargo' in CJK must MATCH via trigram"
+    );
     // 3+ char CJK term — trigram must MATCH.
     let rows: Vec<(i64, String)> = sqlx::query_as(
         "SELECT m.id, m.title FROM autonomous_memories_fts f \
@@ -345,7 +345,10 @@ async fn insert_memory_happy_path_roundtrip() {
 
     let row = insert_memory(&pool, &inp).await.expect("insert ok");
     assert!(row.id > 0, "auto-id assigned");
-    assert!(uuid::Uuid::parse_str(&row.memory_id).is_ok(), "memory_id is a UUID");
+    assert!(
+        uuid::Uuid::parse_str(&row.memory_id).is_ok(),
+        "memory_id is a UUID"
+    );
     assert_eq!(row.scope, "project");
     assert_eq!(row.project_id.as_deref(), Some("proj-1"));
     assert_eq!(row.kind, "pitfall");
@@ -398,7 +401,10 @@ async fn insert_memory_rejects_empty_title_and_content() {
     // Empty content.
     let inp = input(MemoryScope::User, MemoryKind::Fact, "title", "");
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::EmptyContent), "empty content");
+    assert!(
+        matches!(err, MemoryInsertError::EmptyContent),
+        "empty content"
+    );
 }
 
 /// Over-length title / content are rejected by the safety net
@@ -430,7 +436,10 @@ async fn insert_memory_rejects_sensitive_content() {
         "regular content here",
     );
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::SensitiveContent), "api_key in title");
+    assert!(
+        matches!(err, MemoryInsertError::SensitiveContent),
+        "api_key in title"
+    );
     // password in content.
     let inp = input(
         MemoryScope::User,
@@ -439,7 +448,10 @@ async fn insert_memory_rejects_sensitive_content() {
         "the database password is hunter2",
     );
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::SensitiveContent), "password in content");
+    assert!(
+        matches!(err, MemoryInsertError::SensitiveContent),
+        "password in content"
+    );
     // bearer token in content.
     let inp = input(
         MemoryScope::User,
@@ -448,7 +460,10 @@ async fn insert_memory_rejects_sensitive_content() {
         "Authorization: bearer xyz",
     );
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::SensitiveContent), "bearer in content");
+    assert!(
+        matches!(err, MemoryInsertError::SensitiveContent),
+        "bearer in content"
+    );
     // token= (query-param form) in content.
     let inp = input(
         MemoryScope::User,
@@ -457,7 +472,10 @@ async fn insert_memory_rejects_sensitive_content() {
         "url with token=abc123",
     );
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::SensitiveContent), "token= in content");
+    assert!(
+        matches!(err, MemoryInsertError::SensitiveContent),
+        "token= in content"
+    );
 }
 
 /// Sensitive-path components (.ssh / .aws / .gnupg / credentials /
@@ -473,7 +491,10 @@ async fn insert_memory_rejects_sensitive_path_components() {
         "the key is in /home/user/.ssh/id_ed25519",
     );
     let err = insert_memory(&pool, &inp).await.unwrap_err();
-    assert!(matches!(err, MemoryInsertError::SensitivePath(_)), ".ssh denied");
+    assert!(
+        matches!(err, MemoryInsertError::SensitivePath(_)),
+        ".ssh denied"
+    );
     // .aws in path_globs (the JSON string carries the component).
     let mut inp = input(
         MemoryScope::User,
@@ -521,7 +542,10 @@ async fn insert_memory_generalizes_home_path() {
         "title generalized: {}",
         row.title
     );
-    assert!(row.title.contains("~/code/everlasting"), "title has ~/ prefix");
+    assert!(
+        row.title.contains("~/code/everlasting"),
+        "title has ~/ prefix"
+    );
     assert!(
         !row.content.contains("/home/alice"),
         "content generalized: {}",
@@ -700,9 +724,16 @@ async fn search_memories_fts_bm25_ranking_and_status_filter() {
     .await
     .unwrap();
 
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     // Only the 2 active rows; the candidate is filtered out.
     assert_eq!(rows.len(), 2, "candidate excluded");
     let ids: Vec<&str> = rows.iter().map(|r| r.memory_id.as_str()).collect();
@@ -738,9 +769,16 @@ async fn search_memories_fts_escapes_special_characters() {
     // prefix search. With escaping it's a literal phrase "cargo*"
     // which won't match (the content has "cargo" not "cargo*").
     // We assert NO error + NO false positive.
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "cargo*", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "cargo*",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert!(
         rows.is_empty(),
         "escaped 'cargo*' should not prefix-match; got {} rows",
@@ -749,9 +787,16 @@ async fn search_memories_fts_escapes_special_characters() {
 
     // Query with `NEAR` — without escaping, FTS5 treats it as the
     // proximity operator. With escaping it's a literal phrase.
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "NEAR", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "NEAR",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert!(rows.is_empty(), "escaped 'NEAR' is a literal phrase");
 
     // `AND` — without escaping FTS5 treats `cargo AND test` as a
@@ -759,9 +804,16 @@ async fn search_memories_fts_escapes_special_characters() {
     // escaping it's the literal phrase "cargo AND test" (contiguous,
     // in order) which the content does NOT contain → 0 rows. This
     // proves AND is neutralized, not parsed as a boolean operator.
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "cargo AND test", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "cargo AND test",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert!(
         rows.is_empty(),
         "escaped 'cargo AND test' is a literal phrase, not a boolean; got {} rows",
@@ -811,9 +863,16 @@ async fn search_memories_fts_escapes_special_characters() {
     // double quote exercises the `""` escape path inside escape_fts5.
     // `cargo"test` → escaped to `"cargo""test"` (a valid FTS5 phrase
     // containing a literal quote). Content lacks it → 0 rows, no error.
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "cargo\"test", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .expect("embedded quote does not crash");
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "cargo\"test",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .expect("embedded quote does not crash");
     assert!(
         rows.is_empty(),
         "escaped embedded-quote phrase is literal; got {} rows",
@@ -821,15 +880,29 @@ async fn search_memories_fts_escapes_special_characters() {
     );
 
     // Plain query still works.
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1);
 
     // Empty / whitespace query → empty result (no syntax error).
-    let rows = search_memories_fts(&pool, None, Some(MemoryScope::User), "   ", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::User),
+        "   ",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert!(rows.is_empty(), "empty query → empty result");
 }
 
@@ -878,29 +951,57 @@ async fn search_memories_fts_scope_project_id_interaction() {
     .unwrap();
 
     // (a) User scope — project_id arg ignored; only the user row.
-    let rows = search_memories_fts(&pool, Some("proj-a"), Some(MemoryScope::User), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        Some("proj-a"),
+        Some(MemoryScope::User),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].memory_id, "u");
 
     // (b) Project scope + None → Err.
-    let err = search_memories_fts(&pool, None, Some(MemoryScope::Project), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap_err();
+    let err = search_memories_fts(
+        &pool,
+        None,
+        Some(MemoryScope::Project),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, MemoryInsertError::ProjectScopeMissingId));
 
     // (b2) Project scope + proj-a → only proj-a's row (proj-b excluded).
-    let rows = search_memories_fts(&pool, Some("proj-a"), Some(MemoryScope::Project), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        Some("proj-a"),
+        Some(MemoryScope::Project),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].memory_id, "pa");
 
     // (c) None scope + proj-a → user row + proj-a's row (proj-b excluded).
-    let rows = search_memories_fts(&pool, Some("proj-a"), None, "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        Some("proj-a"),
+        None,
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 2);
     let ids: Vec<&str> = rows.iter().map(|r| r.memory_id.as_str()).collect();
     assert!(ids.contains(&"u"));
@@ -908,9 +1009,16 @@ async fn search_memories_fts_scope_project_id_interaction() {
     assert!(!ids.contains(&"pb"), "other project excluded");
 
     // (c2) None scope + None → Err (project branch of OR needs id).
-    let err = search_memories_fts(&pool, None, None, "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap_err();
+    let err = search_memories_fts(
+        &pool,
+        None,
+        None,
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, MemoryInsertError::ProjectScopeMissingId));
 }
 
@@ -933,16 +1041,33 @@ async fn search_memories_fts_project_isolation() {
     .await
     .unwrap();
     // Search proj-b for "cargo" — must NOT see proj-a's row.
-    let rows = search_memories_fts(&pool, Some("proj-b"), Some(MemoryScope::Project), "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        Some("proj-b"),
+        Some(MemoryScope::Project),
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     assert!(rows.is_empty(), "proj-a memory isolated from proj-b");
     // And the None-scope search from proj-b also excludes proj-a.
-    let rows = search_memories_fts(&pool, Some("proj-b"), None, "cargo", 10, RecallStatusFilter::ActiveVerifiedOnly)
-        .await
-        .unwrap();
+    let rows = search_memories_fts(
+        &pool,
+        Some("proj-b"),
+        None,
+        "cargo",
+        10,
+        RecallStatusFilter::ActiveVerifiedOnly,
+    )
+    .await
+    .unwrap();
     let ids: Vec<&str> = rows.iter().map(|r| r.memory_id.as_str()).collect();
-    assert!(!ids.contains(&"secret-a"), "proj-a isolated in None-scope too");
+    assert!(
+        !ids.contains(&"secret-a"),
+        "proj-a isolated in None-scope too"
+    );
 }
 
 /// P2 (2026-06-29, ADR-lite decision): session-start recall passes
@@ -1223,39 +1348,25 @@ async fn find_pitfalls_path_globs_semantics() {
 
     // Probe with a MATCHING path (single-segment after the prefix):
     // both fire.
-    let rows = find_pitfalls_by_trigger(
-        &pool,
-        "shell",
-        None,
-        Some("app/src-tauri/Cargo.toml"),
-    )
-    .await
-    .unwrap();
+    let rows = find_pitfalls_by_trigger(&pool, "shell", None, Some("app/src-tauri/Cargo.toml"))
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 2, "both fire when path matches the glob");
 
     // Probe with a NON-MATCHING path: only path-agnostic fires.
     // `app/src-tauri/src/lib.rs` does NOT match `app/src-tauri/*`
     // (`session_tool_permissions`-style glob: `*` doesn't cross `/`).
-    let rows = find_pitfalls_by_trigger(
-        &pool,
-        "shell",
-        None,
-        Some("app/src-tauri/src/lib.rs"),
-    )
-    .await
-    .unwrap();
+    let rows = find_pitfalls_by_trigger(&pool, "shell", None, Some("app/src-tauri/src/lib.rs"))
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1, "deep path doesn't match single-segment glob");
     assert_eq!(rows[0].memory_id, "pit-any");
 
     // Probe with a totally unrelated path: only path-agnostic fires.
-    let rows = find_pitfalls_by_trigger(
-        &pool,
-        "shell",
-        None,
-        Some("/home/user/some-other-dir/foo"),
-    )
-    .await
-    .unwrap();
+    let rows =
+        find_pitfalls_by_trigger(&pool, "shell", None, Some("/home/user/some-other-dir/foo"))
+            .await
+            .unwrap();
     assert_eq!(rows.len(), 1, "unrelated path → only path-agnostic");
     assert_eq!(rows[0].memory_id, "pit-any");
 }
@@ -1287,14 +1398,9 @@ async fn find_pitfalls_command_pattern_substring_filter() {
     .unwrap();
 
     // Matching command — fires.
-    let rows = find_pitfalls_by_trigger(
-        &pool,
-        "shell",
-        Some("cargo test --lib"),
-        None,
-    )
-    .await
-    .unwrap();
+    let rows = find_pitfalls_by_trigger(&pool, "shell", Some("cargo test --lib"), None)
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1);
 
     // Non-matching command — does NOT fire.
@@ -1331,7 +1437,9 @@ async fn bump_hit_count_increments_and_stamps_last_used() {
     assert_eq!(row.hit_count, 2);
     assert!(row.last_used_at.is_some(), "last_used_at stamped");
     // Unknown memory_id → no error (UPDATE matches 0 rows).
-    bump_hit_count(&pool, "unknown").await.expect("no error on unknown id");
+    bump_hit_count(&pool, "unknown")
+        .await
+        .expect("no error on unknown id");
 }
 
 /// `update_status` accepts legal transitions and rejects illegal
@@ -1441,10 +1549,12 @@ async fn fts_triggers_sync_on_insert_update_delete() {
     assert_eq!(n, 1, "INSERT → FTS reachable");
 
     // UPDATE content (change the keyword) → old FTS entry replaced.
-    sqlx::query("UPDATE autonomous_memories SET content='now about rustc instead' WHERE memory_id='tr-1'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE autonomous_memories SET content='now about rustc instead' WHERE memory_id='tr-1'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM autonomous_memories_fts \
          WHERE autonomous_memories_fts MATCH '\"cargo\"'",
@@ -1626,7 +1736,11 @@ async fn p5_promote_candidate_to_active_at_threshold() {
     // hit_count=1 → below threshold, stays candidate.
     bump_hit_count(&pool, "p5-1").await.unwrap();
     assert_eq!(
-        get_memory_by_id(&pool, "p5-1").await.unwrap().unwrap().status,
+        get_memory_by_id(&pool, "p5-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "candidate"
     );
     // hit_count=2 → crosses CANDIDATE_TO_ACTIVE_AT → promoted.
@@ -1691,7 +1805,11 @@ async fn p5_promote_active_to_verified_needs_hits_and_age() {
     reseat_created_at(&pool, "p5-2b", ACTIVE_TO_VERIFIED_AGE_DAYS - 1).await;
     bump_hit_count(&pool, "p5-2b").await.unwrap();
     assert_eq!(
-        get_memory_by_id(&pool, "p5-2b").await.unwrap().unwrap().status,
+        get_memory_by_id(&pool, "p5-2b")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "active",
         "1 day short of age gate → stays active"
     );
@@ -1720,7 +1838,11 @@ async fn p5_promote_skips_demoted_rows() {
         bump_hit_count(&pool, "p5-3").await.unwrap();
     }
     assert_eq!(
-        get_memory_by_id(&pool, "p5-3").await.unwrap().unwrap().status,
+        get_memory_by_id(&pool, "p5-3")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "demoted",
         "demoted rows stay demoted through bump"
     );
@@ -1756,7 +1878,11 @@ async fn p5_promote_verified_stays_verified() {
     bump_hit_count(&pool, "p5-5").await.unwrap();
     bump_hit_count(&pool, "p5-5").await.unwrap();
     assert_eq!(
-        get_memory_by_id(&pool, "p5-5").await.unwrap().unwrap().status,
+        get_memory_by_id(&pool, "p5-5")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "verified"
     );
 }
@@ -1781,7 +1907,11 @@ async fn p5_promote_candidate_below_threshold_stays_candidate() {
     // Single bump → hit=1 < CANDIDATE_TO_ACTIVE_AT(=2) → no promote.
     bump_hit_count(&pool, "p5-6").await.unwrap();
     assert_eq!(
-        get_memory_by_id(&pool, "p5-6").await.unwrap().unwrap().status,
+        get_memory_by_id(&pool, "p5-6")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "candidate"
     );
 }

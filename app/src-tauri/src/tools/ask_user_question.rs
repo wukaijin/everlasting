@@ -184,11 +184,7 @@ pub(crate) enum ValidationError {
         got: usize,
     },
     #[error("question #{idx} `header` exceeds {max} characters (got {got})")]
-    HeaderTooLong {
-        idx: usize,
-        max: usize,
-        got: usize,
-    },
+    HeaderTooLong { idx: usize, max: usize, got: usize },
     #[error("question #{idx} `question` text is empty")]
     EmptyQuestionText { idx: usize },
     #[error("question #{idx} option #{opt_idx} `label` is empty")]
@@ -340,8 +336,7 @@ pub async fn execute_blocking(
     {
         Ok(rx) => rx,
         Err(crate::agent::question_store::QuestionStoreError::AlreadyPending) => {
-            let msg =
-                "已有 pending question,等当前回答完成".to_string();
+            let msg = "已有 pending question,等当前回答完成".to_string();
             tracing::warn!(
                 session_id = %session_id,
                 tool_use_id = %tool_use_id,
@@ -455,22 +450,10 @@ mod tests {
     }
 
     impl ChatEventSink for CapturingSink {
-        fn emit_chat_event(
-            &self,
-            _payload: &crate::state::ChatEventPayload,
-        ) {
-        }
+        fn emit_chat_event(&self, _payload: &crate::state::ChatEventPayload) {}
         fn emit_tool_call(&self, _payload: &crate::state::ToolCallPayload) {}
-        fn emit_tool_result(
-            &self,
-            _payload: &crate::state::ToolResultPayload,
-        ) {
-        }
-        fn emit_permission_ask(
-            &self,
-            _payload: crate::agent::permissions::PermissionAskPayload,
-        ) {
-        }
+        fn emit_tool_result(&self, _payload: &crate::state::ToolResultPayload) {}
+        fn emit_permission_ask(&self, _payload: crate::agent::permissions::PermissionAskPayload) {}
         fn emit_tool_question(&self, payload: &ToolQuestionPayload) {
             self.emitted.lock().unwrap().push(payload.clone());
         }
@@ -646,8 +629,7 @@ mod tests {
         // store instead of a fixed sleep (robust against CI
         // scheduling jitter; mirrors the integration suite's
         // `spawn_resolver` wait loop).
-        let register_wait_deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered the pending question");
@@ -707,8 +689,7 @@ mod tests {
             .await
         });
 
-        let register_wait_deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered the pending question");
@@ -748,8 +729,7 @@ mod tests {
             .await
         });
 
-        let register_wait_deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered the pending question");
@@ -762,10 +742,11 @@ mod tests {
             .expect("resolve ok");
         let (content, is_error, _, _) = exec.await.expect("exec ok");
         assert!(is_error, "cancelled = is_error: true");
-        assert!(content.contains("\"cancelled\":true")
-            || content.contains("\"cancelled\": true"),
+        assert!(
+            content.contains("\"cancelled\":true") || content.contains("\"cancelled\": true"),
             "content carries cancelled marker: {}",
-            content);
+            content
+        );
     }
 
     // ----- AlreadyPending race -----
@@ -808,15 +789,8 @@ mod tests {
         let input = make_valid_input();
         let cancel = CancellationToken::new();
         let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
-        let (content, is_error, _, _) = execute_blocking(
-            &input,
-            "s1",
-            "tu_2",
-            &store,
-            &sink_arc,
-            &cancel,
-        )
-        .await;
+        let (content, is_error, _, _) =
+            execute_blocking(&input, "s1", "tu_2", &store, &sink_arc, &cancel).await;
         assert!(is_error);
         assert!(content.contains("已有 pending"));
         // No emit happened for the duplicate.

@@ -39,8 +39,8 @@ use crate::agent::subagent::SubagentSource;
 use crate::agent::subagent::{locate_agent_file, write_frontmatter_model};
 use crate::db;
 use crate::db::subagent_overrides::{
-    get_subagent_model_override, set_subagent_model_override, clear_subagent_model_override,
-    list_subagent_model_overrides as db_list_overrides,
+    clear_subagent_model_override, get_subagent_model_override,
+    list_subagent_model_overrides as db_list_overrides, set_subagent_model_override,
 };
 use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
@@ -107,9 +107,7 @@ pub async fn list_subagents_with_model(
     // display_name projection.
     let overrides: HashMap<String, String> = db_list_overrides(&state.db)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!("list_subagents_with_model: list overrides failed: {}", e)
-        })?
+        .map_err(|e| anyhow::anyhow!("list_subagents_with_model: list overrides failed: {}", e))?
         .into_iter()
         .collect();
     let models = db::models::list_models(&state.db)
@@ -137,9 +135,7 @@ pub async fn list_subagents_with_model(
     let mut out = Vec::with_capacity(loaded.len());
     for l in loaded {
         let db_override = overrides.get(&l.def.name).cloned();
-        let resolved = db_override
-            .clone()
-            .or_else(|| l.def.model.clone());
+        let resolved = db_override.clone().or_else(|| l.def.model.clone());
         let resolved_display = resolved
             .as_ref()
             .and_then(|mid| model_display.get(mid))
@@ -220,43 +216,30 @@ pub async fn set_subagent_model(
     // pass a slightly stale source if the user changed the file
     // out-of-band; the user's intent is honored).
     match source_enum {
-        SubagentSource::Builtin => {
-            match &model_id {
-                Some(mid) => {
-                    set_subagent_model_override(&state.db, &name, mid)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "set_subagent_model: write DB override failed: {}",
-                                e
-                            )
-                        })?;
-                }
-                None => {
-                    clear_subagent_model_override(&state.db, &name)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "set_subagent_model: clear DB override failed: {}",
-                                e
-                            )
-                        })?;
-                }
+        SubagentSource::Builtin => match &model_id {
+            Some(mid) => {
+                set_subagent_model_override(&state.db, &name, mid)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("set_subagent_model: write DB override failed: {}", e)
+                    })?;
             }
-        }
+            None => {
+                clear_subagent_model_override(&state.db, &name)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("set_subagent_model: clear DB override failed: {}", e)
+                    })?;
+            }
+        },
         SubagentSource::User | SubagentSource::Project => {
-            let path = locate_agent_file(source_enum, &name, &project_path)
-                .map_err(|e| {
-                    AppCommandError::new(
-                        ErrorCategory::InvalidRequest,
-                        format!("set_subagent_model: cannot locate agent file: {}", e),
-                    )
-                })?;
-            write_frontmatter_model(
-                &path,
-                model_id.as_deref(),
-            )
-            .map_err(|e| {
+            let path = locate_agent_file(source_enum, &name, &project_path).map_err(|e| {
+                AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    format!("set_subagent_model: cannot locate agent file: {}", e),
+                )
+            })?;
+            write_frontmatter_model(&path, model_id.as_deref()).map_err(|e| {
                 AppCommandError::new(
                     ErrorCategory::Server,
                     format!(
@@ -280,7 +263,10 @@ pub async fn set_subagent_model(
         .ok_or_else(|| {
             AppCommandError::new(
                 ErrorCategory::Server,
-                format!("set_subagent_model: agent '{}' disappeared after write", name),
+                format!(
+                    "set_subagent_model: agent '{}' disappeared after write",
+                    name
+                ),
             )
         })?;
 
@@ -293,9 +279,7 @@ pub async fn set_subagent_model(
     // (the mtime-fence has already picked up the write).
     let db_override = get_subagent_model_override(&state.db, &name)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!("set_subagent_model: re-read override failed: {}", e)
-        })?;
+        .map_err(|e| anyhow::anyhow!("set_subagent_model: re-read override failed: {}", e))?;
     let resolved = db_override.clone().or_else(|| after.def.model.clone());
     let models = db::models::list_models(&state.db)
         .await

@@ -22,9 +22,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::agent::question_store::{
-    QuestionAnswer, QuestionResponse, ToolQuestionPayload,
-};
+use crate::agent::question_store::{QuestionAnswer, QuestionResponse, ToolQuestionPayload};
 use crate::error::AppCommandError;
 use crate::state::AppState;
 
@@ -80,10 +78,7 @@ pub async fn resolve_tool_question(
     // store keys on session_id alone (single-pending).
     let _ = tool_use_id;
     let response = resolve_response_from_args(cancelled, answer);
-    state
-        .question_store
-        .resolve(&session_id, response)
-        .await?;
+    state.question_store.resolve(&session_id, response).await?;
     Ok(())
 }
 

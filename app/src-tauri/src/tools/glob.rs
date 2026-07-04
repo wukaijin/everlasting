@@ -68,10 +68,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     };
 
     // 1. Resolve the search root against ctx.cwd.
-    let raw_path = input
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let raw_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let requested = crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
     // read-side boundary decouple (2026-07-01): tool-layer
     // assert_within_root removed for read 族 — project-outside reads
@@ -84,10 +81,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     let glob = match Glob::new(pattern) {
         Ok(g) => g.compile_matcher(),
         Err(e) => {
-            return (
-                format!("Invalid glob pattern '{}': {}", pattern, e),
-                true,
-            );
+            return (format!("Invalid glob pattern '{}': {}", pattern, e), true);
         }
     };
 
@@ -107,8 +101,8 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     //    side (pure CPU, no syscall).
     let root = validated_root.clone();
     let worktree = ctx.worktree_path.clone();
-    let join = tokio::task::spawn_blocking(
-        move || -> Result<(Vec<Match>, usize), std::io::Error> {
+    let join =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<Match>, usize), std::io::Error> {
             let walker = walk_dir(&root)?;
             let mut matches: Vec<Match> = Vec::new();
             let mut truncated = 0usize;
@@ -148,13 +142,16 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
                 });
             }
             Ok((matches, truncated))
-        },
-    );
+        });
     let (mut matches, truncated) = match join.await {
         Ok(Ok(tuple)) => tuple,
         Ok(Err(e)) => {
             return (
-                format!("Failed to walk directory '{}': {}", validated_root.display(), e),
+                format!(
+                    "Failed to walk directory '{}': {}",
+                    validated_root.display(),
+                    e
+                ),
                 true,
             );
         }
@@ -257,11 +254,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.rs"), "x").unwrap();
         std::fs::write(tmp.path().join("b.txt"), "x").unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"pattern": "*.rs"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"pattern": "*.rs"}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("a.rs"));
         assert!(!content.contains("b.txt"));
@@ -304,11 +298,8 @@ mod tests {
         for i in 0..110 {
             std::fs::write(tmp.path().join(format!("f{:03}.txt", i)), "x").unwrap();
         }
-        let (content, is_err) = execute(
-            &serde_json::json!({"pattern": "*.txt"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"pattern": "*.txt"}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("more matches"));
     }
@@ -333,11 +324,8 @@ mod tests {
     #[tokio::test]
     async fn invalid_pattern() {
         let tmp = tempdir().unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"pattern": "[invalid"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"pattern": "[invalid"}), &test_ctx(&tmp)).await;
         assert!(is_err);
         assert!(content.contains("Invalid glob pattern"));
     }
@@ -356,6 +344,9 @@ mod tests {
             &test_ctx(&tmp),
         )
         .await;
-        assert!(!is_err, "project-outside glob must not be boundary-rejected: {content}");
+        assert!(
+            !is_err,
+            "project-outside glob must not be boundary-rejected: {content}"
+        );
     }
 }

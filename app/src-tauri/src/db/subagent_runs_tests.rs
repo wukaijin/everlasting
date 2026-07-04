@@ -25,18 +25,18 @@ use super::{
 };
 
 async fn test_pool() -> SqlitePool {
- let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
- // Mirror what `init_pool` does.
- sqlx::query("PRAGMA foreign_keys = ON")
- .execute(&pool)
- .await
- .unwrap();
- run_migrations(&pool).await.unwrap();
- pool
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    // Mirror what `init_pool` does.
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    pool
 }
 
 async fn make_pool() -> SqlitePool {
- test_pool().await // alias for readability inside this section
+    test_pool().await // alias for readability inside this section
 }
 // ---------------------------------------------------------------------------
 // B6 PR2: subagent_runs tests
@@ -135,7 +135,10 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
     .unwrap();
     let row = get_run(&pool, &id).await.unwrap().expect("row exists");
     assert_eq!(row.status, "completed");
-    assert_eq!(row.finished_at.as_deref(), Some("2026-06-20T00:00:00+00:00"));
+    assert_eq!(
+        row.finished_at.as_deref(),
+        Some("2026-06-20T00:00:00+00:00")
+    );
     assert_eq!(row.summary.as_deref(), Some("found 3 files"));
     assert_eq!(
         row.final_text.as_deref(),
@@ -323,7 +326,10 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         sum.task.is_none(),
         "task=None at insert → column NULL, projected as None"
     );
-    assert_eq!(sum.token_usage_json.as_deref(), Some(serde_json::to_string(&usage).unwrap().as_str()));
+    assert_eq!(
+        sum.token_usage_json.as_deref(),
+        Some(serde_json::to_string(&usage).unwrap().as_str())
+    );
 }
 
 /// B6 PR3a (2026-06-20): `list_runs_summary_by_session` returns
@@ -414,9 +420,15 @@ async fn subagent_runs_update_finished_writes_final_text_column() {
     )
     .await
     .unwrap();
-    let id = insert_run(&pool, &s.id, "rid-ft", "general-purpose", Some("do the thing"))
-        .await
-        .unwrap();
+    let id = insert_run(
+        &pool,
+        &s.id,
+        "rid-ft",
+        "general-purpose",
+        Some("do the thing"),
+    )
+    .await
+    .unwrap();
     // Caller passes the prefix-stripped final_text (per the
     // run_subagent contract: format_final_text is invoked at the
     // call site, not inside update_run_finished).
@@ -620,13 +632,14 @@ async fn subagent_runs_migration_adds_turn_count_column_idempotently() {
     crate::db::migrations::run_migrations(&pool)
         .await
         .expect("migration re-run is idempotent on turn_count");
-    let exists: i64 =
-        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = 'turn_count'")
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .try_get(0)
-            .unwrap();
+    let exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('subagent_runs') WHERE name = 'turn_count'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .try_get(0)
+    .unwrap();
     assert_eq!(exists, 1, "turn_count column present after re-run");
 }
 
@@ -724,9 +737,7 @@ async fn subagent_runs_update_finished_round_trips_turn_count() {
     // list_runs_summary_by_session: summary projection carries
     // turn_count too (single-i64 column is cheap; included so the
     // card / drawer can both read it).
-    let summaries = list_runs_summary_by_session(&pool, &s.id)
-        .await
-        .unwrap();
+    let summaries = list_runs_summary_by_session(&pool, &s.id).await.unwrap();
     assert_eq!(summaries.len(), 2);
     let summary_cancelled = summaries
         .iter()
@@ -965,8 +976,7 @@ async fn subagent_runs_list_summary_includes_model_display() {
     )
     .await
     .unwrap();
-    let summaries =
-        list_runs_summary_by_session(&pool, &s.id).await.unwrap();
+    let summaries = list_runs_summary_by_session(&pool, &s.id).await.unwrap();
     assert_eq!(summaries.len(), 1);
     assert_eq!(summaries[0].model_display.as_deref(), Some("GLM-4.7"));
     // null model_display is also included (pre-C rows / parent
@@ -982,8 +992,7 @@ async fn subagent_runs_list_summary_includes_model_display() {
     )
     .await
     .unwrap();
-    let summaries =
-        list_runs_summary_by_session(&pool, &s.id).await.unwrap();
+    let summaries = list_runs_summary_by_session(&pool, &s.id).await.unwrap();
     assert_eq!(summaries.len(), 2);
     let null_row = summaries
         .iter()

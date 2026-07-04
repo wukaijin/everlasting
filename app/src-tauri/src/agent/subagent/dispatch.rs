@@ -26,9 +26,8 @@ use crate::tools::ToolContext;
 
 use super::{
     assemble_subagent_prompt, build_subagent_finished_payload, build_worker_messages,
-    filter_tools_for_subagent, filter_tools_readonly,
-    format_dispatch_result_with_model, format_final_text,
-    summarize_worker_tool_actions, truncate_transcript_for_persistence,
+    filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result_with_model,
+    format_final_text, summarize_worker_tool_actions, truncate_transcript_for_persistence,
     SubagentBufferSink, SubagentCache, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
 
@@ -107,10 +106,7 @@ const SUBAGENT_MAX_TURNS: usize = 200;
 /// `isolation` parameter); the frontmatter default is the SubagentDef's
 /// `isolation` field (builtin `general-purpose` = `Some(true)`,
 /// `researcher` = `None`).
-pub fn resolve_isolation(
-    frontmatter_default: Option<bool>,
-    dispatch_input: Option<bool>,
-) -> bool {
+pub fn resolve_isolation(frontmatter_default: Option<bool>, dispatch_input: Option<bool>) -> bool {
     // Dispatch input wins if present; otherwise the frontmatter
     // default; otherwise `false` (legacy shared-cwd behavior).
     dispatch_input.or(frontmatter_default).unwrap_or(false)
@@ -186,10 +182,7 @@ struct WorkerChanges {
 /// branch). On any error we conservatively report "has changes"
 /// (preserving the worktree is the safe fallback — destroying it
 /// could lose the worker's work).
-fn probe_worker_changes(
-    worker_worktree_path: &std::path::Path,
-    run_id: &str,
-) -> WorkerChanges {
+fn probe_worker_changes(worker_worktree_path: &std::path::Path, run_id: &str) -> WorkerChanges {
     match crate::git::diff::diff_worker_worktree(worker_worktree_path, run_id) {
         Ok(result) => {
             if result.files.is_empty() {
@@ -340,10 +333,7 @@ pub(crate) async fn run_subagent(
     parent_question_store: &crate::agent::question_store::QuestionStore,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
-    let subagent_name = input
-        .get("subagent")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let subagent_name = input.get("subagent").and_then(|v| v.as_str()).unwrap_or("");
     let task = input.get("task").and_then(|v| v.as_str()).unwrap_or("");
     let tool_use_id_owned = tool_use_id.to_string();
 
@@ -409,9 +399,7 @@ pub(crate) async fn run_subagent(
     // (`l3a_single_dispatch_runs_serial_path_unchanged`) + any
     // future explicit read-only call site preserve the old
     // "read-only + shared cwd" semantics.
-    let dispatch_isolation = input
-        .get("isolation")
-        .and_then(|v| v.as_bool());
+    let dispatch_isolation = input.get("isolation").and_then(|v| v.as_bool());
     let isolated = if force_readonly {
         // Serial-only switch; force isolation off so the read-only +
         // shared-cwd scope is preserved (L3a legacy compat).
@@ -633,41 +621,40 @@ pub(crate) async fn run_subagent(
     // worktree (if created) is orphaned and the post-loop cleanup
     // handles destruction via the `worker_worktree_opt` local
     // (independent of the DB row's existence).
-    let worker_run_id_opt: Option<String> =
-        match crate::db::subagent_runs::insert_run_with_id(
-            db,
-            &worker_run_id,
-            parent_session_id,
-            &worker_rid,
-            subagent_name,
-            Some(task),
-            // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
-            // AC13): thread the worker's *actual* model display into
-            // the row. `worker_display` is `Some(name)` on catalog
-            // hit (i.e. the worker resolved a model override /
-            // frontmatter), `None` on parent inheritance / catalog
-            // miss. The frontend reads this for the card / drawer
-            // model chip (AC14-15). The wire `[model: <name>]`
-            // line in `format_dispatch_result_with_model` follows
-            // the same `Option<String>` shape — when
-            // `worker_display` is `None`, the line is omitted (no
-            // redundant "inherited parent" line; the parent
-            // fallback is implied).
-            worker_display.as_deref(),
-        )
-        .await
-        {
-            Ok(()) => Some(worker_run_id.clone()),
-            Err(e) => {
-                tracing::warn!(
-                    parent_session_id = %parent_session_id,
-                    worker_rid = %worker_rid,
-                    error = %e,
-                    "run_subagent: failed to insert subagent_runs row (non-fatal; worker still runs)"
-                );
-                None
-            }
-        };
+    let worker_run_id_opt: Option<String> = match crate::db::subagent_runs::insert_run_with_id(
+        db,
+        &worker_run_id,
+        parent_session_id,
+        &worker_rid,
+        subagent_name,
+        Some(task),
+        // 2026-07-03 (task 07-03-subagent-per-agent-model-ui,
+        // AC13): thread the worker's *actual* model display into
+        // the row. `worker_display` is `Some(name)` on catalog
+        // hit (i.e. the worker resolved a model override /
+        // frontmatter), `None` on parent inheritance / catalog
+        // miss. The frontend reads this for the card / drawer
+        // model chip (AC14-15). The wire `[model: <name>]`
+        // line in `format_dispatch_result_with_model` follows
+        // the same `Option<String>` shape — when
+        // `worker_display` is `None`, the line is omitted (no
+        // redundant "inherited parent" line; the parent
+        // fallback is implied).
+        worker_display.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => Some(worker_run_id.clone()),
+        Err(e) => {
+            tracing::warn!(
+                parent_session_id = %parent_session_id,
+                worker_rid = %worker_rid,
+                error = %e,
+                "run_subagent: failed to insert subagent_runs row (non-fatal; worker still runs)"
+            );
+            None
+        }
+    };
 
     // L3b (2026-06-27): if isolation is active + the DB row was
     // inserted, record the worktree path on the row. Best-effort
@@ -775,7 +762,8 @@ pub(crate) async fn run_subagent(
     // → each worker's `run_subagent` constructs its own Arc →
     // isolated caches (a grant on one worker's `cargo` does not
     // authorize another worker's `cargo`).
-    let run_grants = std::sync::Arc::new(crate::agent::permissions::run_grant::RunGrantCache::new());
+    let run_grants =
+        std::sync::Arc::new(crate::agent::permissions::run_grant::RunGrantCache::new());
     Box::pin(run_chat_loop(
         worker_tool_defs,
         worker_provider.clone(),
@@ -969,10 +957,8 @@ pub(crate) async fn run_subagent(
     // tool_use/tool_result mismatch (RULE-A-007 invariant).
     if let Some(worker_run_id) = worker_run_id_opt.as_ref() {
         let transcript_snapshot = worker_sink.transcript_snapshot();
-        let (truncated_transcript, transcript_truncated) = truncate_transcript_for_persistence(
-            transcript_snapshot,
-            TRANSCRIPT_MAX_BYTES,
-        );
+        let (truncated_transcript, transcript_truncated) =
+            truncate_transcript_for_persistence(transcript_snapshot, TRANSCRIPT_MAX_BYTES);
         let cumulative_usage = worker_sink.cumulative_usage();
         let finished_at = chrono::Utc::now().to_rfc3339();
         let status_db = match status {
@@ -1066,8 +1052,7 @@ pub(crate) async fn run_subagent(
     // the parent fires; check parent_token directly so the caller's
     // serial loop flips its `cancelled` flag and drives the existing
     // cancel path (matches the user's Stop intent).
-    let cancel_parent =
-        parent_token.is_cancelled() && status == SubagentStatus::Cancelled;
+    let cancel_parent = parent_token.is_cancelled() && status == SubagentStatus::Cancelled;
 
     // RULE-BackSubagent-001 (PR2): for non-completed terminal states,
     // summarize the worker's executed tool_calls so the parent LLM can
@@ -1078,9 +1063,7 @@ pub(crate) async fn run_subagent(
     let partial_actions = if matches!(status, SubagentStatus::Completed) {
         None
     } else {
-        let summary = summarize_worker_tool_actions(
-            &worker_sink.transcript_snapshot(),
-        );
+        let summary = summarize_worker_tool_actions(&worker_sink.transcript_snapshot());
         if summary.is_empty() {
             None
         } else {
@@ -1122,9 +1105,7 @@ pub(crate) async fn run_subagent(
             // "merged fast-forward" with zero changes actually merged
             // (silent false-success). Failure is non-fatal: warn +
             // preserve the worktree anyway; merge degrades to legacy.
-            if let Err(e) =
-                crate::git::worktree::commit_worker_changes(wt_path, &worker_run_id)
-            {
+            if let Err(e) = crate::git::worktree::commit_worker_changes(wt_path, &worker_run_id) {
                 tracing::warn!(
                     worker_run_id = %worker_run_id,
                     worktree = %wt_path.display(),
@@ -1164,12 +1145,8 @@ pub(crate) async fn run_subagent(
             }
             // Clear the DB column (best-effort).
             if worker_run_id_opt.is_some() {
-                if let Err(e) = crate::db::subagent_runs::set_worktree_path(
-                    db,
-                    &worker_run_id,
-                    None,
-                )
-                .await
+                if let Err(e) =
+                    crate::db::subagent_runs::set_worktree_path(db, &worker_run_id, None).await
                 {
                     tracing::warn!(
                         worker_run_id = %worker_run_id,
@@ -1381,9 +1358,7 @@ async fn create_worker_worktree(
     // 1. Resolve the project's main repo path.
     let project_main_path = resolve_project_main_path(db, parent_session_id).await;
     if project_main_path.is_empty() {
-        return Err(
-            "could not resolve the project's main repo path for the session".to_string(),
-        );
+        return Err("could not resolve the project's main repo path for the session".to_string());
     }
     let project_main = std::path::Path::new(&project_main_path);
     if !project_main.join(".git").exists() {
@@ -1394,11 +1369,8 @@ async fn create_worker_worktree(
     }
 
     // 2. Compute the worker worktree path.
-    let worker_wt_path = crate::git::worktree::worker_worktree_path(
-        app_data_dir,
-        project_id,
-        worker_run_id,
-    );
+    let worker_wt_path =
+        crate::git::worktree::worker_worktree_path(app_data_dir, project_id, worker_run_id);
 
     // 3. Create the worktree. `create_worker` self-heals any stale
     //    state for this run_id (orphan dir / stale branch / stale
@@ -1477,8 +1449,7 @@ mod tests {
         // force-isolated in chat_loop's DispatchBatch::Concurrent branch
         // (gated by worker_is_writable) — concurrent-write safety no
         // longer relies on this default being Some(true).
-        let g = super::super::lookup_subagent("general-purpose")
-            .expect("general-purpose exists");
+        let g = super::super::lookup_subagent("general-purpose").expect("general-purpose exists");
         assert_eq!(g.isolation, None);
     }
 
@@ -1518,7 +1489,10 @@ mod tests {
     #[test]
     fn worker_is_writable_with_write_tool_is_writable() {
         // A declared toolset containing a write tool → writable.
-        assert!(worker_is_writable(&writable_def("writer", &["read_file", "write_file"])));
+        assert!(worker_is_writable(&writable_def(
+            "writer",
+            &["read_file", "write_file"]
+        )));
     }
 
     #[test]
@@ -1526,8 +1500,7 @@ mod tests {
         // The researcher builtin ships with isolation = None (read-only
         // workers don't need a separate checkout — saves the per-
         // dispatch checkout cost).
-        let r = super::super::lookup_subagent("researcher")
-            .expect("researcher exists");
+        let r = super::super::lookup_subagent("researcher").expect("researcher exists");
         assert_eq!(r.isolation, None);
     }
 
@@ -1573,7 +1546,10 @@ mod tests {
             .expect("create_worker should succeed");
 
         let changes = probe_worker_changes(&worker_wt, run_id);
-        assert!(!changes.has_changes, "empty worktree should have no changes");
+        assert!(
+            !changes.has_changes,
+            "empty worktree should have no changes"
+        );
         assert!(changes.summary.is_empty());
     }
 
@@ -1623,7 +1599,10 @@ mod tests {
         std::fs::write(worker_wt.join("new_file.txt"), "fresh").unwrap();
 
         let changes = probe_worker_changes(&worker_wt, run_id);
-        assert!(changes.has_changes, "untracked file should count as a change");
+        assert!(
+            changes.has_changes,
+            "untracked file should count as a change"
+        );
         assert!(
             changes.summary.contains("new_file.txt"),
             "summary should mention the untracked file: {}",
@@ -1637,8 +1616,8 @@ mod tests {
     // back) / AC4 (ctx + display from model row).
     // -----------------------------------------------------------------------
 
-    use std::collections::HashMap;
     use crate::llm::provider::mock::MockProvider;
+    use std::collections::HashMap;
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -1805,7 +1784,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let got = resolve_final_model(&pool, "researcher", None).await.unwrap();
+        let got = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
         assert_eq!(got.as_deref(), Some("model-from-db"));
     }
 
@@ -1814,7 +1795,9 @@ mod tests {
         // AC4: no DB + no frontmatter → None (resolve_worker_provider
         // then inherits parent provider + ctx).
         let pool = test_pool().await;
-        let got = resolve_final_model(&pool, "researcher", None).await.unwrap();
+        let got = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
         assert!(got.is_none());
     }
 

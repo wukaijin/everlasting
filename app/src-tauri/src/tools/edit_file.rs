@@ -116,10 +116,7 @@ pub async fn execute(
     let validated = match assert_within_root(&ctx.worktree_path, &requested) {
         Ok(p) => p,
         Err(e) => {
-            return (
-                format!("path '{}' rejected: {}", raw_path, e),
-                true,
-            );
+            return (format!("path '{}' rejected: {}", raw_path, e), true);
         }
     };
 
@@ -356,7 +353,10 @@ mod tests {
         .await;
         assert!(!is_err, "{}", msg);
         assert!(msg.contains("Successfully edited"));
-        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "goodbye world\n");
+        assert_eq!(
+            tokio::fs::read_to_string(&p).await.unwrap(),
+            "goodbye world\n"
+        );
     }
 
     /// AC1.2: edit before read — ReadGuard rejects.
@@ -491,7 +491,10 @@ mod tests {
         .await;
         assert!(!is_err, "{}", msg);
         assert!(msg.contains("replaced 2 occurrences"));
-        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "qux\nbar\nqux\n");
+        assert_eq!(
+            tokio::fs::read_to_string(&p).await.unwrap(),
+            "qux\nbar\nqux\n"
+        );
     }
 
     /// AC1.6: no-op (old == new) → rejected.

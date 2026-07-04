@@ -22,7 +22,7 @@
 //! parallel store is intentional; the implementation mirrors
 //! `permissions/store.rs` 1:1 for parity (same field shape,
 //! same `tokio::select!` consumption pattern in `tools/ask_user_
- //! question.rs`).
+//! question.rs`).
 //!
 //! No new IPC channel here — that lives in `state.rs::ChatEventSink
 //! ::emit_tool_question` (the `tool:question` Tauri event) and in
@@ -279,10 +279,7 @@ impl QuestionStore {
     /// `PendingQuestion` fields — frontend doesn't need
     /// `oneshot` or `ts` mapped separately; `ts` is inside the
     /// payload).
-    pub async fn get_payload(
-        &self,
-        session_id: &str,
-    ) -> Option<ToolQuestionPayload> {
+    pub async fn get_payload(&self, session_id: &str) -> Option<ToolQuestionPayload> {
         let map = self.inner.lock().await;
         map.get(session_id).map(|p| p.payload.clone())
     }
@@ -421,7 +418,10 @@ mod tests {
             .expect_err("second register errors");
         assert_eq!(err, QuestionStoreError::AlreadyPending);
         // First entry still present.
-        let got = store.get_payload("s1").await.expect("first entry still present");
+        let got = store
+            .get_payload("s1")
+            .await
+            .expect("first entry still present");
         assert_eq!(got.tool_use_id, "tu_1");
     }
 
@@ -470,10 +470,7 @@ mod tests {
             .register("s1", "tu_1", make_payload("s1", "tu_1"))
             .await
             .expect("register ok");
-        let pending = store
-            .remove("s1")
-            .await
-            .expect("remove returns pending");
+        let pending = store.remove("s1").await.expect("remove returns pending");
         assert_eq!(pending.session_id, "s1");
         assert_eq!(pending.tool_use_id, "tu_1");
         assert!(store.get_payload("s1").await.is_none());

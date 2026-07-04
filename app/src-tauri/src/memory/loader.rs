@@ -18,7 +18,6 @@
 /// their respective slots in parallel; the writer path (a cache
 /// miss / mtime change) takes the write lock only for the
 /// duration of the slot swap.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -173,8 +172,16 @@ pub fn all_paths(project_root: Option<&str>) -> Vec<(MemoryKind, MemorySource, P
     }
     if let Some(root) = project_root {
         let p = PathBuf::from(root);
-        out.push((MemoryKind::Project, MemorySource::Claude, p.join(MemorySource::Claude.filename())));
-        out.push((MemoryKind::Project, MemorySource::Agents, p.join(MemorySource::Agents.filename())));
+        out.push((
+            MemoryKind::Project,
+            MemorySource::Claude,
+            p.join(MemorySource::Claude.filename()),
+        ));
+        out.push((
+            MemoryKind::Project,
+            MemorySource::Agents,
+            p.join(MemorySource::Agents.filename()),
+        ));
     }
     out
 }
@@ -263,9 +270,7 @@ async fn read_or_load_project(
     }
     let layer = load_layer(MemoryKind::Project, source, Some(project_path)).await;
     let mut guard = cache.project.write().await;
-    let entry = guard
-        .entry(project_id.to_string())
-        .or_insert([None, None]);
+    let entry = guard.entry(project_id.to_string()).or_insert([None, None]);
     entry[slot_index(source)] = Some(CachedLayer {
         layer: layer.clone(),
         mtime,
@@ -366,7 +371,10 @@ pub fn build_instructions_blocks(layers: &[MemoryLayer]) -> Vec<ContentBlock> {
         };
         let text = match layer.source {
             MemorySource::Agents => {
-                format!("<primary instructions>\n{}\n</primary instructions>", section)
+                format!(
+                    "<primary instructions>\n{}\n</primary instructions>",
+                    section
+                )
             }
             MemorySource::Claude => {
                 format!("<reference>\n{}\n</reference>", section)
@@ -395,7 +403,10 @@ pub fn resolve_known_path(
     path: &std::path::Path,
     project_path: &str,
 ) -> Option<(MemoryKind, MemorySource, Option<String>)> {
-    let canon = path.canonicalize().ok().unwrap_or_else(|| path.to_path_buf());
+    let canon = path
+        .canonicalize()
+        .ok()
+        .unwrap_or_else(|| path.to_path_buf());
     for (kind, source, candidate) in all_paths(Some(project_path)) {
         if candidate == canon || candidate == path {
             return Some((
@@ -417,10 +428,11 @@ pub fn resolve_known_path(
 /// `Some((MemoryKind, MemorySource, None))` if the path matches
 /// a user-layer file.
 #[allow(dead_code)]
-pub fn resolve_user_known_path(
-    path: &std::path::Path,
-) -> Option<(MemoryKind, MemorySource)> {
-    let canon = path.canonicalize().ok().unwrap_or_else(|| path.to_path_buf());
+pub fn resolve_user_known_path(path: &std::path::Path) -> Option<(MemoryKind, MemorySource)> {
+    let canon = path
+        .canonicalize()
+        .ok()
+        .unwrap_or_else(|| path.to_path_buf());
     for (kind, source, candidate) in all_paths(None) {
         if candidate == canon || candidate == path {
             if matches!(kind, MemoryKind::User) {

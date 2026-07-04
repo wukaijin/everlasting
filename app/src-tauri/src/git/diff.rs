@@ -62,10 +62,7 @@ pub struct DiffResult {
 /// - `worktree_path` is not a git working tree
 /// - the `session/<id>` branch doesn't exist
 /// - libgit2 reports any other error during the diff
-fn diff_against_branch(
-    worktree_path: &Path,
-    branch_full: &str,
-) -> Result<DiffResult, GitError> {
+fn diff_against_branch(worktree_path: &Path, branch_full: &str) -> Result<DiffResult, GitError> {
     let repo = Repository::open(worktree_path)?;
     let branch = repo.find_branch(branch_full, git2::BranchType::Local)?;
     let base_commit = branch.get().peel_to_commit()?;
@@ -222,9 +219,7 @@ fn diff_against_branch(
         // status bitmask) — skip modified/staged/etc. (those are
         // already in the libgit2 workdir diff above).
         let st = entry.status();
-        let is_untracked = st.is_wt_new()
-            && !st.is_wt_modified()
-            && !st.is_wt_deleted();
+        let is_untracked = st.is_wt_new() && !st.is_wt_modified() && !st.is_wt_deleted();
         if !is_untracked {
             continue;
         }
@@ -302,10 +297,7 @@ pub fn diff_worker_worktree(worktree_path: &Path, run_id: &str) -> Result<DiffRe
 /// because the consumer is the UI's diff popup, not a
 /// patch-application tool. The prefix `+ ` is enough for the UI
 /// to render the file in green / added style.
-fn build_untracked_diff(
-    content: &[u8],
-    cap: usize,
-) -> (String, usize, bool) {
+fn build_untracked_diff(content: &[u8], cap: usize) -> (String, usize, bool) {
     if content.is_empty() {
         return (String::new(), 0, false);
     }
@@ -400,8 +392,16 @@ fn git_numstat(worktree: &Path, path: &str) -> Result<(usize, usize), std::io::E
         let mut cols = line.split('\t');
         let a_raw = cols.next().unwrap_or("0");
         let r_raw = cols.next().unwrap_or("0");
-        let added = if a_raw == "-" { 0 } else { a_raw.parse::<usize>().unwrap_or(0) };
-        let removed = if r_raw == "-" { 0 } else { r_raw.parse::<usize>().unwrap_or(0) };
+        let added = if a_raw == "-" {
+            0
+        } else {
+            a_raw.parse::<usize>().unwrap_or(0)
+        };
+        let removed = if r_raw == "-" {
+            0
+        } else {
+            r_raw.parse::<usize>().unwrap_or(0)
+        };
         return Ok((added, removed));
     }
     Ok((0, 0))
@@ -580,11 +580,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let project = tmp.path().join("project");
         init_repo(&project);
-        fs::write(
-            project.join("a.txt"),
-            "line1\nline2\nline3\n",
-        )
-        .unwrap();
+        fs::write(project.join("a.txt"), "line1\nline2\nline3\n").unwrap();
         commit_all(&project);
 
         let session_id = "insert-1";
@@ -658,10 +654,11 @@ mod tests {
             paths
         );
         assert!(
-            !paths.iter().any(|p| p.contains("output/") || p.contains("spill.txt")),
+            !paths
+                .iter()
+                .any(|p| p.contains("output/") || p.contains("spill.txt")),
             "gitignored output/ should not appear: {:?}",
             paths
         );
     }
 }
-

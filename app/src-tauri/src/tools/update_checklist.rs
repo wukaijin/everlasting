@@ -254,9 +254,7 @@ mod tests {
             .get("required")
             .and_then(|v| v.as_array())
             .expect("required array present");
-        let has_items = required
-            .iter()
-            .any(|v| v.as_str() == Some("items"));
+        let has_items = required.iter().any(|v| v.as_str() == Some("items"));
         assert!(has_items, "items must be required");
     }
 
@@ -267,10 +265,7 @@ mod tests {
             .pointer("/properties/items/items/properties/status/enum")
             .and_then(|v| v.as_array())
             .expect("status enum present");
-        let strs: Vec<&str> = status_enum
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let strs: Vec<&str> = status_enum.iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(strs, vec!["pending", "in_progress", "done"]);
     }
 
@@ -392,11 +387,7 @@ mod tests {
             .iter()
             .filter(|i| i.status == ChecklistStatus::InProgress)
             .collect();
-        assert_eq!(
-            in_progress.len(),
-            1,
-            "exactly one in_progress after coerce"
-        );
+        assert_eq!(in_progress.len(), 1, "exactly one in_progress after coerce");
         // Last in array order wins.
         assert_eq!(in_progress[0].content, "last");
         // The first one demoted to pending.
@@ -419,7 +410,10 @@ mod tests {
         let input = serde_json::json!({"items": []});
         let (out, is_err) = execute(&input, &handle).await;
         assert!(!is_err);
-        assert!(handle.lock().await.is_empty(), "empty items must clear the list");
+        assert!(
+            handle.lock().await.is_empty(),
+            "empty items must clear the list"
+        );
         assert!(out.contains("0 items") || out.contains("empty checklist"));
     }
 

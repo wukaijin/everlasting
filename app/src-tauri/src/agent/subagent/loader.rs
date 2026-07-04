@@ -60,8 +60,8 @@ use std::time::SystemTime;
 
 use tokio::sync::RwLock;
 
-use crate::memory::file::user_dir;
 use crate::agent::subagent::{builtin_subagents, SubagentDef};
+use crate::memory::file::user_dir;
 
 /// Subdirectory under both the user config dir and the project root
 /// that holds custom subagent files (`*.md`). Matches the Claude Code
@@ -726,8 +726,7 @@ pub fn locate_agent_file(
                     "user dir is not available on this platform",
                 )
             })?,
-        SubagentSource::Project => project_agents_dir(project_path)
-            .join(format!("{name}.md")),
+        SubagentSource::Project => project_agents_dir(project_path).join(format!("{name}.md")),
     };
     Ok(path)
 }
@@ -810,7 +809,9 @@ pub fn apply_model_line(content: &str, model_id: Option<&str>) -> Result<String,
     }
     let close_idx = match close_idx {
         Some(i) => i,
-        None => return Err("agent file has unterminated frontmatter (no closing `---`)".to_string()),
+        None => {
+            return Err("agent file has unterminated frontmatter (no closing `---`)".to_string())
+        }
     };
 
     // Scan frontmatter lines for an existing `model:` entry.
@@ -1028,21 +1029,14 @@ mod tests {
         let (fm, _) = parse_frontmatter("---\nname: x\ntools: [a, a, b , c,  b]\n---\nb");
         assert_eq!(
             fm.tools,
-            Some(vec![
-                "a".to_string(),
-                "b".to_string(),
-                "c".to_string(),
-            ])
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string(),])
         );
     }
 
     #[test]
     fn frontmatter_tools_strips_quotes() {
         let (fm, _) = parse_frontmatter("---\nname: x\ntools: \"[a, b]\"\n---\nb");
-        assert_eq!(
-            fm.tools,
-            Some(vec!["a".to_string(), "b".to_string()])
-        );
+        assert_eq!(fm.tools, Some(vec!["a".to_string(), "b".to_string()]));
     }
 
     #[test]
@@ -1065,9 +1059,8 @@ mod tests {
 
     #[test]
     fn frontmatter_model_field_is_stored() {
-        let (fm, _) = parse_frontmatter(
-            "---\nname: x\nmodel: 550e8400-e29b-41d4-a716-446655440000\n---\nb",
-        );
+        let (fm, _) =
+            parse_frontmatter("---\nname: x\nmodel: 550e8400-e29b-41d4-a716-446655440000\n---\nb");
         assert_eq!(
             fm.model.as_deref(),
             Some("550e8400-e29b-41d4-a716-446655440000")
@@ -1215,8 +1208,11 @@ mod tests {
 
     #[tokio::test]
     async fn scan_missing_dir_returns_empty() {
-        let files =
-            scan_dir(Path::new("/no/such/everlasting/agents/xyz"), SubagentSource::User).await;
+        let files = scan_dir(
+            Path::new("/no/such/everlasting/agents/xyz"),
+            SubagentSource::User,
+        )
+        .await;
         assert!(files.is_empty());
     }
 
@@ -1287,7 +1283,12 @@ mod tests {
 
     // ---- merge_with_inheritance (Q2) ----
 
-    fn loaded(name: &str, tools: Vec<String>, declared: bool, source: SubagentSource) -> LoadedAgentFile {
+    fn loaded(
+        name: &str,
+        tools: Vec<String>,
+        declared: bool,
+        source: SubagentSource,
+    ) -> LoadedAgentFile {
         LoadedAgentFile {
             loaded: LoadedSubagent {
                 def: SubagentDef {
@@ -1413,10 +1414,7 @@ mod tests {
         );
 
         let proj_tmp = tempfile::TempDir::new().unwrap();
-        let proj_agents = proj_tmp
-            .path()
-            .join(PROJECT_NAMESPACE)
-            .join(AGENTS_SUBDIR);
+        let proj_agents = proj_tmp.path().join(PROJECT_NAMESPACE).join(AGENTS_SUBDIR);
         std::fs::create_dir_all(&proj_agents).unwrap();
         write_agent(
             &proj_agents,
@@ -1543,7 +1541,10 @@ mod tests {
 
         let c = merged.iter().find(|l| l.def.name == "custom").unwrap();
         assert_eq!(c.source, SubagentSource::User);
-        assert!(c.def.tools.is_empty(), "no tools + no lower layer → empty Vec");
+        assert!(
+            c.def.tools.is_empty(),
+            "no tools + no lower layer → empty Vec"
+        );
     }
 
     #[tokio::test]
@@ -1562,7 +1563,10 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        assert!(cache.lookup(&project_path, "does-not-exist").await.is_none());
+        assert!(cache
+            .lookup(&project_path, "does-not-exist")
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -1577,10 +1581,7 @@ mod tests {
         );
 
         let proj_tmp = tempfile::TempDir::new().unwrap();
-        let proj_agents = proj_tmp
-            .path()
-            .join(PROJECT_NAMESPACE)
-            .join(AGENTS_SUBDIR);
+        let proj_agents = proj_tmp.path().join(PROJECT_NAMESPACE).join(AGENTS_SUBDIR);
         std::fs::create_dir_all(&proj_agents).unwrap();
         write_agent(
             &proj_agents,
@@ -1675,7 +1676,8 @@ mod tests {
     /// is replaced; body + other frontmatter keys are preserved.
     #[test]
     fn apply_model_line_replaces_existing() {
-        let input = "---\nname: x\nmodel: old-uuid\ndescription: d\n---\nbody line 1\nbody line 2\n";
+        let input =
+            "---\nname: x\nmodel: old-uuid\ndescription: d\n---\nbody line 1\nbody line 2\n";
         let got = apply_model_line(input, Some("new-uuid")).unwrap();
         assert!(got.contains("model: new-uuid"));
         assert!(!got.contains("old-uuid"));
@@ -1762,9 +1764,15 @@ mod tests {
     fn apply_model_line_tolerates_space_before_colon() {
         let input = "---\nname: x\nmodel :old-uuid\n---\nbody\n";
         let got = apply_model_line(input, Some("new-uuid")).unwrap();
-        assert!(got.contains("model: new-uuid"), "normalized to canonical form");
+        assert!(
+            got.contains("model: new-uuid"),
+            "normalized to canonical form"
+        );
         assert!(!got.contains("old-uuid"));
-        assert!(!got.contains("model :"), "no space-before-colon form remains");
+        assert!(
+            !got.contains("model :"),
+            "no space-before-colon form remains"
+        );
     }
 
     /// File with no frontmatter fence → Err (the loader would
@@ -1793,11 +1801,7 @@ mod tests {
     fn write_frontmatter_model_writes_atomically() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("agent.md");
-        std::fs::write(
-            &path,
-            "---\nname: x\ndescription: d\n---\nbody\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "---\nname: x\ndescription: d\n---\nbody\n").unwrap();
         write_frontmatter_model(&path, Some("new-uuid")).unwrap();
         let got = std::fs::read_to_string(&path).unwrap();
         assert!(got.contains("model: new-uuid"));
@@ -1813,11 +1817,7 @@ mod tests {
     fn write_frontmatter_model_clears() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("agent.md");
-        std::fs::write(
-            &path,
-            "---\nname: x\nmodel: old-uuid\n---\nbody\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "---\nname: x\nmodel: old-uuid\n---\nbody\n").unwrap();
         write_frontmatter_model(&path, None).unwrap();
         let got = std::fs::read_to_string(&path).unwrap();
         assert!(!got.contains("model:"));

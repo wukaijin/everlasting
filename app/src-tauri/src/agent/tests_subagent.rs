@@ -1,15 +1,15 @@
 #![cfg(test)]
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
 use super::tests_common::{make_harness, test_messages, MockEmitter};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::chat_loop::{classify_dispatch_batch, DispatchBatch};
-use crate::agent::system_prompt::build_system_prompt;
 use crate::agent::subagent::filter_tools_readonly;
+use crate::agent::system_prompt::build_system_prompt;
 use crate::db;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, TokenUsage};
@@ -79,13 +79,13 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         CancellationToken::new(),
         None, // resend_seq
         h.background_shells.clone(),
-        None, // max_turns
-        false, // skip_session_active
-        false, // skip_persist
+        None,        // max_turns
+        false,       // skip_session_active
+        false,       // skip_persist
         Some(false), // is_worker
-        None, // app_handle
-        None, // system_prompt_override
-        None, // worker_run_id
+        None,        // app_handle
+        None,        // system_prompt_override
+        None,        // worker_run_id
         h.subagent_cache.clone(),
         None,
         None, // worktree_override
@@ -116,7 +116,11 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
 
     // One dispatch_subagent tool:result carrying the worker summary.
     let results = emitter.tool_results_snapshot();
-    assert_eq!(results.len(), 1, "exactly one dispatch_subagent tool:result");
+    assert_eq!(
+        results.len(),
+        1,
+        "exactly one dispatch_subagent tool:result"
+    );
     assert!(
         results[0].content.contains("[status: completed]"),
         "tool_result carries [status: completed] + worker summary, got: {}",
@@ -257,7 +261,8 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // Parent turn count: parent_t1 + worker_t1 + parent_t2 = 3 sends.
@@ -348,12 +353,9 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         3,
         "expected 3 send calls captured (parent_t1 + worker_t1 + parent_t2)"
     );
-    let parent_t1_names: Vec<&str> =
-        sent_tools[0].iter().map(|t| t.name.as_str()).collect();
-    let worker_t1_names: Vec<&str> =
-        sent_tools[1].iter().map(|t| t.name.as_str()).collect();
-    let parent_t2_names: Vec<&str> =
-        sent_tools[2].iter().map(|t| t.name.as_str()).collect();
+    let parent_t1_names: Vec<&str> = sent_tools[0].iter().map(|t| t.name.as_str()).collect();
+    let worker_t1_names: Vec<&str> = sent_tools[1].iter().map(|t| t.name.as_str()).collect();
+    let parent_t2_names: Vec<&str> = sent_tools[2].iter().map(|t| t.name.as_str()).collect();
     assert!(
         parent_t1_names.iter().any(|n| *n == "dispatch_subagent"),
         "parent_t1 MUST see dispatch_subagent (so it can dispatch): {:?}",
@@ -477,7 +479,8 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -626,7 +629,8 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // 3 sends: parent_t1 + worker_t1 (errored) + parent_t2.
@@ -778,7 +782,8 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
@@ -789,7 +794,11 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
     );
 
     let results = emitter.tool_results_snapshot();
-    assert_eq!(results.len(), 1, "exactly one tool_result (dispatch_subagent)");
+    assert_eq!(
+        results.len(),
+        1,
+        "exactly one tool_result (dispatch_subagent)"
+    );
     assert!(results[0].is_error, "errored worker → is_error=true");
     assert!(
         results[0].content.contains("[status: error]"),
@@ -1035,7 +1044,8 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -1165,7 +1175,8 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // Verify the worker run is in `subagent_runs` and the row
@@ -1313,7 +1324,8 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
     let _ = cancel_task.await;
 
@@ -1443,7 +1455,8 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
@@ -1581,7 +1594,8 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // The parent's session snapshot should reflect ONLY the last
@@ -1617,7 +1631,8 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
     assert_eq!(v.get("input_tokens").and_then(|x| x.as_i64()), Some(100));
     assert_eq!(v.get("output_tokens").and_then(|x| x.as_i64()), Some(50));
     assert_eq!(
-        v.get("cache_creation_input_tokens").and_then(|x| x.as_i64()),
+        v.get("cache_creation_input_tokens")
+            .and_then(|x| x.as_i64()),
         Some(7)
     );
     assert_eq!(
@@ -1809,7 +1824,8 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
             h.app_data_dir.clone(),
             None,
             // 2026-06-30 (ask_user_question task): per-test QuestionStore.
-            h.question_store.clone(),),
+            h.question_store.clone(),
+        ),
     )
     .await;
     assert!(
@@ -2035,7 +2051,8 @@ async fn system_prompt_override_worker_path_sends_override() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // The override must reach the LLM verbatim.
@@ -2121,7 +2138,8 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 
     // Recompute what the parent path should send. We mirror the
@@ -2211,7 +2229,8 @@ async fn run_loop(
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
-        h.question_store.clone(),)
+        h.question_store.clone(),
+    )
     .await;
 }
 
@@ -2266,7 +2285,8 @@ fn l3a_filter_tools_readonly_keeps_only_five_read_tools() {
 fn l3a_classify_dispatch_batch_branches_correctly() {
     let dispatch_input = serde_json::json!({ "subagent": "researcher", "task": "x" });
     let read_input = serde_json::json!({ "path": "a.rs" });
-    let tc = |id: &str, name: &str, input: serde_json::Value| (id.to_string(), name.to_string(), input);
+    let tc =
+        |id: &str, name: &str, input: serde_json::Value| (id.to_string(), name.to_string(), input);
 
     // Single dispatch → Serial.
     let single = vec![tc("t1", "dispatch_subagent", dispatch_input.clone())];
@@ -2305,7 +2325,10 @@ fn l3a_classify_dispatch_batch_branches_correctly() {
     ];
     assert!(matches!(
         classify_dispatch_batch(&four, 3),
-        DispatchBatch::OverLimit { count: 4, max_concurrent: 3 }
+        DispatchBatch::OverLimit {
+            count: 4,
+            max_concurrent: 3
+        }
     ));
 
     // Mixed batch (1 dispatch + 1 read_file) → Serial (fall through).
@@ -2447,8 +2470,7 @@ async fn l3a_pure_batch_of_three_dispatches_runs_concurrently() {
     // tool_result message in the DB.
     let results = emitter.tool_results_snapshot();
     assert_eq!(results.len(), 3, "3 dispatch_subagent → 3 tool_results");
-    let mut tool_use_ids: Vec<String> =
-        results.iter().map(|r| r.tool_use_id.clone()).collect();
+    let mut tool_use_ids: Vec<String> = results.iter().map(|r| r.tool_use_id.clone()).collect();
     tool_use_ids.sort();
     assert_eq!(
         tool_use_ids,
@@ -2700,9 +2722,7 @@ async fn l3b_concurrent_general_purpose_workers_complete_shared() {
         // Parent turn 2.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ack".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ack".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3071,11 +3091,7 @@ async fn l3a_mixed_batch_falls_through_to_serial_path() {
     assert_eq!(results[1].tool_use_id, "toolu_mixed_read");
     // The dispatch tool_result is completed.
     assert!(!results[0].is_error);
-    assert!(
-        results[0]
-            .content
-            .contains("[status: completed]")
-    );
+    assert!(results[0].content.contains("[status: completed]"));
 
     // Exactly 1 subagent_run persisted (the single serial dispatch).
     let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
@@ -3153,11 +3169,7 @@ async fn l3a_single_dispatch_runs_serial_path_unchanged() {
     let results = emitter.tool_results_snapshot();
     assert_eq!(results.len(), 1);
     assert!(!results[0].is_error);
-    assert!(
-        results[0]
-            .content
-            .contains("[status: completed]")
-    );
+    assert!(results[0].content.contains("[status: completed]"));
 
     let runs = crate::db::subagent_runs::list_runs_by_session(&h.db, &h.session_id)
         .await
@@ -3255,9 +3267,7 @@ async fn l3b_concurrent_general_purpose_workers_complete_with_writes() {
         // Parent turn 2.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta {
-                text: "ack".into(),
-            }),
+            Ok(ChatEvent::Delta { text: "ack".into() }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3284,7 +3294,10 @@ async fn l3b_concurrent_general_purpose_workers_complete_with_writes() {
     let results = emitter.tool_results_snapshot();
     assert_eq!(results.len(), 2);
     for r in &results {
-        assert!(!r.is_error, "general-purpose concurrent+isolated → completed");
+        assert!(
+            !r.is_error,
+            "general-purpose concurrent+isolated → completed"
+        );
         assert!(
             r.content.contains("[status: completed]"),
             "got: {}",
@@ -3355,7 +3368,9 @@ async fn l3b_concurrent_workers_have_isolated_worktrees() {
         // 2 worker single-turn summaries.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "A done".into() }),
+            Ok(ChatEvent::Delta {
+                text: "A done".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3363,7 +3378,9 @@ async fn l3b_concurrent_workers_have_isolated_worktrees() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "B done".into() }),
+            Ok(ChatEvent::Delta {
+                text: "B done".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3418,24 +3435,21 @@ async fn l3b_concurrent_workers_have_isolated_worktrees() {
     // distinct per dispatch (the tool_use_id is unique per
     // batch). This is the SECOND isolation primitive — the
     // worker_rid → worktree_path → worker_run_id round-trip.
-    let mut rids: Vec<String> = runs
-        .iter()
-        .map(|r| r.parent_request_id.clone())
-        .collect();
+    let mut rids: Vec<String> = runs.iter().map(|r| r.parent_request_id.clone()).collect();
     rids.sort();
     rids.dedup();
     assert_eq!(
         rids.len(),
         2,
         "2 concurrent workers MUST have distinct worker_rid values, got: {:?}",
-        runs.iter().map(|r| (&r.id, &r.parent_request_id)).collect::<Vec<_>>()
+        runs.iter()
+            .map(|r| (&r.id, &r.parent_request_id))
+            .collect::<Vec<_>>()
     );
     // Each worker_rid carries the tool_use_id suffix, proving
     // the 1:1 mapping (worker_rid derived from tool_use_id).
-    let rids_set: std::collections::HashSet<&str> = runs
-        .iter()
-        .map(|r| r.parent_request_id.as_str())
-        .collect();
+    let rids_set: std::collections::HashSet<&str> =
+        runs.iter().map(|r| r.parent_request_id.as_str()).collect();
     assert!(
         rids_set.iter().any(|r| r.contains("toolu_l3b_iso_a")),
         "one worker_rid should encode toolu_l3b_iso_a: {:?}",
@@ -3512,7 +3526,9 @@ async fn l3b_concurrent_force_readonly_param_no_longer_set() {
         // 2 worker single-turn summaries.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "general-purpose A".into() }),
+            Ok(ChatEvent::Delta {
+                text: "general-purpose A".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3520,7 +3536,9 @@ async fn l3b_concurrent_force_readonly_param_no_longer_set() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "general-purpose B".into() }),
+            Ok(ChatEvent::Delta {
+                text: "general-purpose B".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -3559,8 +3577,7 @@ async fn l3b_concurrent_force_readonly_param_no_longer_set() {
     // builtin set) minus STRUCTURALLY_DISABLED (7 entries:
     // dispatch_subagent, update_checklist, run_background_shell,
     // shell_status, shell_kill, merge_worker, discard_worker).
-    let worker_t1_names: Vec<&str> =
-        sent_tools[1].iter().map(|t| t.name.as_str()).collect();
+    let worker_t1_names: Vec<&str> = sent_tools[1].iter().map(|t| t.name.as_str()).collect();
     // The PR2 discriminant: `write_file` is in the post-PR2
     // general-purpose toolset but NOT in the L3a 5-tool strip.
     // If the strip is still applied (L3a regression), this
@@ -3669,13 +3686,8 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
     // Insert a subagent_runs row with worktree_path set +
     // create a worker worktree on a separate file.
     let worker_wt = worker_worktree_path(&h.app_data_dir, &h.project_id, run_id);
-    crate::git::worktree::create_worker(
-        &h.project_path,
-        &worker_wt,
-        &wt_path,
-        run_id,
-    )
-    .expect("create worker worktree");
+    crate::git::worktree::create_worker(&h.project_path, &worker_wt, &wt_path, run_id)
+        .expect("create worker worktree");
     // The worker creates a new file in its worktree and
     // commits it on the worker branch.
     std::fs::write(worker_wt.join("worker_change.txt"), "from worker").unwrap();
@@ -3690,7 +3702,11 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         .current_dir(&worker_wt)
         .output()
         .unwrap();
-    assert!(commit.status.success(), "worker commit failed: {:?}", commit);
+    assert!(
+        commit.status.success(),
+        "worker commit failed: {:?}",
+        commit
+    );
 
     // Insert a subagent_runs row referencing the worktree.
     crate::db::subagent_runs::insert_run_with_id(
@@ -3708,13 +3724,9 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
     )
     .await
     .expect("insert_run_with_id");
-    crate::db::subagent_runs::set_worktree_path(
-        &h.db,
-        run_id,
-        Some(worker_wt.to_str().unwrap()),
-    )
-    .await
-    .expect("set_worktree_path");
+    crate::db::subagent_runs::set_worktree_path(&h.db, run_id, Some(worker_wt.to_str().unwrap()))
+        .await
+        .expect("set_worktree_path");
 
     // Build the ToolContext the merge_worker tool needs.
     let ctx = crate::tools::ToolContext {
@@ -3729,12 +3741,8 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
 
     // Invoke merge_worker.
     let input = serde_json::json!({"run_id": run_id});
-    let (msg, is_err, _update, _exit_code) = crate::tools::merge_worker::execute(
-        &input,
-        &ctx,
-        Some(&h.session_id),
-    )
-    .await;
+    let (msg, is_err, _update, _exit_code) =
+        crate::tools::merge_worker::execute(&input, &ctx, Some(&h.session_id)).await;
     assert!(!is_err, "merge_worker should succeed: {}", msg);
     assert!(
         msg.contains("fast-forward") || msg.contains("3-way"),
@@ -3809,13 +3817,8 @@ async fn l3b_merge_worker_conflict_returns_error() {
     let _ = std::fs::remove_dir_all(&temp_parent);
     crate::git::worktree::create(&h.project_path, &temp_parent, &format!("temp-p-{}", run_id))
         .expect("create temp parent worktree");
-    crate::git::worktree::create_worker(
-        &h.project_path,
-        &worker_wt,
-        &temp_parent,
-        run_id,
-    )
-    .expect("create worker worktree");
+    crate::git::worktree::create_worker(&h.project_path, &worker_wt, &temp_parent, run_id)
+        .expect("create worker worktree");
     // Clean up the temp parent worktree (we don't need
     // it anymore; the worker branch is now based off the
     // project HEAD, which is what we want for a 3-way
@@ -3848,7 +3851,11 @@ async fn l3b_merge_worker_conflict_returns_error() {
         .current_dir(&wt_path)
         .output()
         .unwrap();
-    assert!(commit.status.success(), "parent commit failed: {:?}", commit);
+    assert!(
+        commit.status.success(),
+        "parent commit failed: {:?}",
+        commit
+    );
 
     // Worker modifies seed.txt differently (commits on
     // worker/<run_id>).
@@ -3880,13 +3887,9 @@ async fn l3b_merge_worker_conflict_returns_error() {
     )
     .await
     .expect("insert_run_with_id");
-    crate::db::subagent_runs::set_worktree_path(
-        &h.db,
-        run_id,
-        Some(worker_wt.to_str().unwrap()),
-    )
-    .await
-    .expect("set_worktree_path");
+    crate::db::subagent_runs::set_worktree_path(&h.db, run_id, Some(worker_wt.to_str().unwrap()))
+        .await
+        .expect("set_worktree_path");
 
     let ctx = crate::tools::ToolContext {
         worktree_path: wt_path.clone(),
@@ -3899,12 +3902,8 @@ async fn l3b_merge_worker_conflict_returns_error() {
     };
 
     let input = serde_json::json!({"run_id": run_id});
-    let (msg, is_err, _update, _exit_code) = crate::tools::merge_worker::execute(
-        &input,
-        &ctx,
-        Some(&h.session_id),
-    )
-    .await;
+    let (msg, is_err, _update, _exit_code) =
+        crate::tools::merge_worker::execute(&input, &ctx, Some(&h.session_id)).await;
     if !is_err {
         eprintln!("merge_worker succeeded unexpectedly: {}", msg);
     }
@@ -3921,7 +3920,10 @@ async fn l3b_merge_worker_conflict_returns_error() {
     );
 
     // Worker worktree + branch are PRESERVED.
-    assert!(worker_wt.exists(), "worker worktree dir preserved on conflict");
+    assert!(
+        worker_wt.exists(),
+        "worker worktree dir preserved on conflict"
+    );
     let repo = git2::Repository::open(&h.project_path).unwrap();
     assert!(
         repo.find_branch(&format!("worker/{}", run_id), git2::BranchType::Local)
@@ -3984,19 +3986,13 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         data_dir: h.app_data_dir.clone(),
     };
     let input = serde_json::json!({"run_id": run_id});
-    let (msg, is_err, _update, _exit_code) = crate::tools::merge_worker::execute(
-        &input,
-        &ctx,
-        Some(&h.session_id),
-    )
-    .await;
+    let (msg, is_err, _update, _exit_code) =
+        crate::tools::merge_worker::execute(&input, &ctx, Some(&h.session_id)).await;
     assert!(is_err, "merge_worker should fail when no parent worktree");
     // The error path fires on `find_branch` — it should
     // mention the branch name OR the worktree path.
     assert!(
-        msg.contains("not found")
-            || msg.contains("could not open")
-            || msg.contains("worktree"),
+        msg.contains("not found") || msg.contains("could not open") || msg.contains("worktree"),
         "error should explain the failure: {}",
         msg
     );
@@ -4026,13 +4022,8 @@ async fn l3b_discard_worker_happy_path() {
 
     let run_id = "00000000-0000-0000-0000-000000000004";
     let worker_wt = worker_worktree_path(&h.app_data_dir, &h.project_id, run_id);
-    crate::git::worktree::create_worker(
-        &h.project_path,
-        &worker_wt,
-        &wt_path,
-        run_id,
-    )
-    .expect("create worker worktree");
+    crate::git::worktree::create_worker(&h.project_path, &worker_wt, &wt_path, run_id)
+        .expect("create worker worktree");
     // Worker makes a change but we don't care about
     // commit (discard is independent of commit state).
     std::fs::write(worker_wt.join("discard_me.txt"), "should be gone").unwrap();
@@ -4051,13 +4042,9 @@ async fn l3b_discard_worker_happy_path() {
     )
     .await
     .expect("insert_run_with_id");
-    crate::db::subagent_runs::set_worktree_path(
-        &h.db,
-        run_id,
-        Some(worker_wt.to_str().unwrap()),
-    )
-    .await
-    .expect("set_worktree_path");
+    crate::db::subagent_runs::set_worktree_path(&h.db, run_id, Some(worker_wt.to_str().unwrap()))
+        .await
+        .expect("set_worktree_path");
 
     let ctx = crate::tools::ToolContext {
         worktree_path: wt_path.clone(),
@@ -4070,12 +4057,8 @@ async fn l3b_discard_worker_happy_path() {
     };
 
     let input = serde_json::json!({"run_id": run_id});
-    let (msg, is_err, _update, _exit_code) = crate::tools::discard_worker::execute(
-        &input,
-        &ctx,
-        Some(&h.session_id),
-    )
-    .await;
+    let (msg, is_err, _update, _exit_code) =
+        crate::tools::discard_worker::execute(&input, &ctx, Some(&h.session_id)).await;
     assert!(!is_err, "discard_worker should succeed: {}", msg);
     assert!(
         msg.contains("discarded"),
@@ -4142,12 +4125,8 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         data_dir: h.app_data_dir.clone(),
     };
     let input = serde_json::json!({"run_id": run_id});
-    let (msg, is_err, _update, _exit_code) = crate::tools::discard_worker::execute(
-        &input,
-        &ctx,
-        Some(&h.session_id),
-    )
-    .await;
+    let (msg, is_err, _update, _exit_code) =
+        crate::tools::discard_worker::execute(&input, &ctx, Some(&h.session_id)).await;
     assert!(is_err, "discard_worker should fail on already-destroyed");
     assert!(
         msg.contains("already destroyed"),

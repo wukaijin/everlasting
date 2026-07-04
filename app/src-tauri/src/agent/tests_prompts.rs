@@ -393,14 +393,7 @@ fn head_sha_refresh_after_commit_updates_system_prompt() {
         let tree = repo.find_tree(tree_oid).expect("find tree");
         // First commit has no parents.
         let _ = repo
-            .commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "initial commit",
-                &tree,
-                &[],
-            )
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
             .expect("commit A");
     }
     let sha_1 = lookup_head_sha(tmp.path());
@@ -425,14 +418,7 @@ fn head_sha_refresh_after_commit_updates_system_prompt() {
         let tree_oid = index.write_tree().expect("write tree");
         let tree = repo.find_tree(tree_oid).expect("find tree");
         let _ = repo
-            .commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "second commit",
-                &tree,
-                &[&head],
-            )
+            .commit(Some("HEAD"), &sig, &sig, "second commit", &tree, &[&head])
             .expect("commit B");
     }
     let sha_2 = lookup_head_sha(tmp.path());
@@ -451,8 +437,7 @@ fn head_sha_refresh_after_commit_updates_system_prompt() {
     );
     let mut project = make_project_row(true);
     project.path = tmp.path().to_string_lossy().to_string();
-    let prompt_after_refresh =
-        build_system_prompt(&session, &project, tmp.path(), &sha_2);
+    let prompt_after_refresh = build_system_prompt(&session, &project, tmp.path(), &sha_2);
     assert!(
         prompt_after_refresh.contains(&format!("HEAD {}", sha_2)),
         "post-refresh system_prompt must carry SHA-2 ({}) — the per-turn \

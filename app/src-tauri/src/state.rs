@@ -23,7 +23,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::permissions::PermissionAskPayload;
@@ -437,10 +437,7 @@ async fn build_provider_catalog(db: &SqlitePool) -> ProviderCatalog {
         }
     }
 
-    tracing::info!(
-        catalog_size = catalog.len(),
-        "provider catalog built"
-    );
+    tracing::info!(catalog_size = catalog.len(), "provider catalog built");
     catalog
 }
 
@@ -631,10 +628,7 @@ impl ChatEventSink for AppHandleSink {
             tracing::warn!(error = %e, "AppHandleSink: permission:ask emit failed");
         }
     }
-    fn emit_tool_question(
-        &self,
-        payload: &crate::agent::question_store::ToolQuestionPayload,
-    ) {
+    fn emit_tool_question(&self, payload: &crate::agent::question_store::ToolQuestionPayload) {
         // 2026-06-30 (`ask_user_question` task): production
         // `AppHandleSink` forwards the question payload to the
         // Tauri `tool:question` channel. The frontend

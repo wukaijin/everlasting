@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::memory::types::{LayerStatus, MemoryKind, MemorySource, MemoryLayer};
+use crate::memory::types::{LayerStatus, MemoryKind, MemoryLayer, MemorySource};
 use crate::memory::MAX_FILE_SIZE;
 
 use super::tokens::count_tokens;

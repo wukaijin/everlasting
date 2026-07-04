@@ -55,10 +55,16 @@ pub async fn update_provider(
     // 传 undefined → Tauri 反序列化为 `None`.
     api_key: Option<String>,
 ) -> Result<Option<db::ProviderRow>, AppCommandError> {
-    let row =
-        db::update_provider(&state.db, &id, &protocol, &display_name, &base_url, api_key.as_deref())
-        .await
-        .map_err(|e| anyhow::anyhow!("update_provider failed: {}", e))?;
+    let row = db::update_provider(
+        &state.db,
+        &id,
+        &protocol,
+        &display_name,
+        &base_url,
+        api_key.as_deref(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("update_provider failed: {}", e))?;
     state.rebuild_catalog().await;
     Ok(row)
 }
@@ -411,7 +417,10 @@ pub async fn test_model(
             }
         }
         "openai" => {
-            let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+            let url = format!(
+                "{}/chat/completions",
+                provider.base_url.trim_end_matches('/')
+            );
             let body = serde_json::json!({
                 "model": model.model_name,
                 "messages": [{"role": "user", "content": "hi"}],
@@ -451,7 +460,10 @@ pub async fn test_model(
                 )
             }
         }
-        _ => (false, Some(format!("unsupported protocol: {}", provider.protocol))),
+        _ => (
+            false,
+            Some(format!("unsupported protocol: {}", provider.protocol)),
+        ),
     };
 
     let latency_ms = start.elapsed().as_millis() as u64;

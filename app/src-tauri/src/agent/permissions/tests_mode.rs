@@ -55,7 +55,12 @@ fn filter_tools_for_mode_drops_merge_discard_in_plan() {
     assert!(!names.contains(&"discard_worker"));
     for m in [Mode::Edit, Mode::Yolo] {
         let filtered = filter_tools_for_mode(tools.clone(), m);
-        assert_eq!(filtered.len(), tools.len(), "Mode {:?} should keep merge/discard", m);
+        assert_eq!(
+            filtered.len(),
+            tools.len(),
+            "Mode {:?} should keep merge/discard",
+            m
+        );
     }
 }
 
@@ -68,7 +73,12 @@ fn filter_tools_for_mode_keeps_full_for_chat_yolo() {
     ];
     for m in [Mode::Edit, Mode::Yolo] {
         let filtered = filter_tools_for_mode(tools.clone(), m);
-        assert_eq!(filtered.len(), tools.len(), "Mode {:?} should keep all tools", m);
+        assert_eq!(
+            filtered.len(),
+            tools.len(),
+            "Mode {:?} should keep all tools",
+            m
+        );
     }
 }
 

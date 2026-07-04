@@ -340,7 +340,10 @@ mod tests {
 
     #[test]
     fn full_jitter_zero_base_does_not_panic() {
-        let p = RetryPolicy { base: Duration::ZERO, ..policy() };
+        let p = RetryPolicy {
+            base: Duration::ZERO,
+            ..policy()
+        };
         let mut rng = fastrand::Rng::with_seed(0);
         assert_eq!(p.full_jitter(0, &mut rng), Duration::ZERO);
     }
@@ -349,7 +352,12 @@ mod tests {
     fn wait_advisory_overrides_jitter() {
         let p = policy();
         let mut rng = fastrand::Rng::with_seed(0);
-        let wait = p.wait(0, Some(Duration::from_secs(5)), Duration::from_secs(60), &mut rng);
+        let wait = p.wait(
+            0,
+            Some(Duration::from_secs(5)),
+            Duration::from_secs(60),
+            &mut rng,
+        );
         assert_eq!(wait, Duration::from_secs(5));
     }
 
@@ -365,7 +373,12 @@ mod tests {
     fn wait_clamps_to_budget_remaining() {
         let p = policy();
         let mut rng = fastrand::Rng::with_seed(0);
-        let wait = p.wait(0, Some(Duration::from_secs(5)), Duration::from_secs(2), &mut rng);
+        let wait = p.wait(
+            0,
+            Some(Duration::from_secs(5)),
+            Duration::from_secs(2),
+            &mut rng,
+        );
         assert_eq!(wait, Duration::from_secs(2));
     }
 
@@ -393,10 +406,17 @@ mod tests {
     // LlmError is non-Clone by design (mock.rs), so scripts that need the
     // same error shape N times build N fresh instances via these helpers.
     fn server_503() -> LlmError {
-        LlmError::Server { status: 503, message: "x".into(), retry_after: None }
+        LlmError::Server {
+            status: 503,
+            message: "x".into(),
+            retry_after: None,
+        }
     }
     fn rate_limit_advisory(d: Duration) -> LlmError {
-        LlmError::RateLimit { message: "x".into(), retry_after: Some(d) }
+        LlmError::RateLimit {
+            message: "x".into(),
+            retry_after: Some(d),
+        }
     }
 
     #[tokio::test]
@@ -413,7 +433,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream after retry"),
@@ -433,7 +463,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err)"),
@@ -456,7 +496,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err)"),
@@ -483,7 +533,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (first byte succeeded)"),
@@ -513,7 +573,17 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         let start = Instant::now();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let elapsed = start.elapsed();
         assert!(matches!(outcome, OpenOutcome::Stream(_)));
         assert!(
@@ -554,7 +624,17 @@ mod tests {
             cancel_token.cancel();
         });
         let start = Instant::now();
-        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &policy,
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let elapsed = start.elapsed();
         assert!(matches!(outcome, OpenOutcome::Cancelled));
         assert_eq!(mock.call_count(), 1); // only the initial failed send
@@ -583,7 +663,17 @@ mod tests {
             max_retries: 5,
             ..fast_policy()
         };
-        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &policy,
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err)"),
@@ -603,7 +693,17 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         token.cancel();
-        let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &fast_policy(),
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         assert!(matches!(outcome, OpenOutcome::Cancelled));
         assert_eq!(mock.call_count(), 0);
         assert_eq!(retrying_count(&sink), 0);
@@ -640,7 +740,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &policy,
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err after budget trip)"),
@@ -679,7 +789,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &policy,
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err)"),
@@ -702,7 +822,12 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         // 30s advisory, only 5s remaining → wait must clamp to 5s
         // (NOT the 30s advisory, NOT the policy's 60s cap).
-        let wait = p.wait(0, Some(Duration::from_secs(30)), Duration::from_secs(5), &mut rng);
+        let wait = p.wait(
+            0,
+            Some(Duration::from_secs(30)),
+            Duration::from_secs(5),
+            &mut rng,
+        );
         assert_eq!(wait, Duration::from_secs(5));
     }
 
@@ -731,7 +856,17 @@ mod tests {
         let sink = MockSink::default();
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
-        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let outcome = retry_open(
+            &mock,
+            None,
+            vec![],
+            vec![],
+            &policy,
+            &token,
+            &sink,
+            &mut rng,
+        )
+        .await;
         let mut stream = match outcome {
             OpenOutcome::Stream(s) => s,
             _ => panic!("expected Stream (terminal Err)"),

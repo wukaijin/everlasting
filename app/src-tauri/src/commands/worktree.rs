@@ -203,16 +203,12 @@ pub async fn detach_worktree(
             ),
         ));
     }
-    let wt_path_str = loaded
-        .session
-        .worktree_path
-        .clone()
-        .ok_or_else(|| {
-            AppCommandError::new(
-                ErrorCategory::InvalidRequest,
-                "detach_worktree: active session has no worktree_path".to_string(),
-            )
-        })?;
+    let wt_path_str = loaded.session.worktree_path.clone().ok_or_else(|| {
+        AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "detach_worktree: active session has no worktree_path".to_string(),
+        )
+    })?;
     let wt_path = std::path::PathBuf::from(&wt_path_str);
 
     // REQ-9: refuse if the worktree has uncommitted changes.
@@ -244,9 +240,7 @@ pub async fn detach_worktree(
         wt_path.display(),
         branch
     );
-    if let Err(e) =
-        db::insert_system_event(&state.db, &session_id, &event_text, "detached").await
-    {
+    if let Err(e) = db::insert_system_event(&state.db, &session_id, &event_text, "detached").await {
         tracing::warn!(
             error = %e,
             session_id = %session_id,
@@ -334,8 +328,7 @@ pub async fn delete_worktree(
     let branch = git::worktree::branch_name(&session_id);
 
     if let Some(wtp) = &worktree_path_for_destroy {
-        if let Err(e) =
-            git::destroy_worktree(std::path::Path::new(&project.path), wtp, &session_id)
+        if let Err(e) = git::destroy_worktree(std::path::Path::new(&project.path), wtp, &session_id)
         {
             tracing::warn!(
                 session_id = %session_id,
@@ -360,15 +353,9 @@ pub async fn delete_worktree(
 
     // DB state: clear worktree_path AND last_worktree_path; the
     // branch is gone so re-attach is no longer meaningful.
-    db::set_worktree_state(
-        &state.db,
-        &session_id,
-        db::WorktreeState::None,
-        None,
-        None,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("delete_worktree: db update failed: {}", e))?;
+    db::set_worktree_state(&state.db, &session_id, db::WorktreeState::None, None, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("delete_worktree: db update failed: {}", e))?;
 
     let event_text = format!(
         "worktree deleted: branch {} and dir {} removed",
@@ -378,9 +365,7 @@ pub async fn delete_worktree(
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unknown>".to_string())
     );
-    if let Err(e) =
-        db::insert_system_event(&state.db, &session_id, &event_text, "deleted").await
-    {
+    if let Err(e) = db::insert_system_event(&state.db, &session_id, &event_text, "deleted").await {
         tracing::warn!(
             error = %e,
             session_id = %session_id,

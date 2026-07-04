@@ -86,8 +86,9 @@ impl LlmError {
     /// over Full Jitter when set.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
-            LlmError::RateLimit { retry_after, .. }
-            | LlmError::Server { retry_after, .. } => *retry_after,
+            LlmError::RateLimit { retry_after, .. } | LlmError::Server { retry_after, .. } => {
+                *retry_after
+            }
             _ => None,
         }
     }
@@ -164,14 +165,8 @@ pub fn classify_error_response(
     //   3. top-level `type` (Anthropic sometimes wraps here)
     //   4. `error.type` verbatim (no keyword match — final fallback
     //      so the caller still sees a useful string in `message`)
-    let err_type = parsed
-        .error
-        .as_ref()
-        .and_then(|e| e.r#type.clone());
-    let err_code = parsed
-        .error
-        .as_ref()
-        .and_then(|e| e.code.clone());
+    let err_type = parsed.error.as_ref().and_then(|e| e.r#type.clone());
+    let err_code = parsed.error.as_ref().and_then(|e| e.code.clone());
     let top_type = parsed.r#type.clone();
 
     let keyword_in = |s: &Option<String>| {
@@ -216,9 +211,8 @@ pub fn classify_error_response(
 
     // Parse the server's retry advisory once (only consumed by RateLimit /
     // Server variants). Capped at RETRY_AFTER_CAP_SECS.
-    let retry_after = headers.and_then(|h| {
-        parse_retry_after(h, std::time::Duration::from_secs(RETRY_AFTER_CAP_SECS))
-    });
+    let retry_after = headers
+        .and_then(|h| parse_retry_after(h, std::time::Duration::from_secs(RETRY_AFTER_CAP_SECS)));
 
     let classified = if keyword.contains("authentication")
         || keyword.contains("new_api_error")
@@ -226,16 +220,27 @@ pub fn classify_error_response(
     {
         LlmError::Auth(inner_message)
     } else if keyword.contains("rate_limit") {
-        LlmError::RateLimit { message: inner_message, retry_after }
+        LlmError::RateLimit {
+            message: inner_message,
+            retry_after,
+        }
     } else if keyword.contains("invalid_request") {
         LlmError::InvalidRequest(inner_message)
     } else if status >= 500 {
-        LlmError::Server { status, message: inner_message, retry_after }
+        LlmError::Server {
+            status,
+            message: inner_message,
+            retry_after,
+        }
     } else if status >= 400 {
         // 4xx with no recognizable subtype — treat as invalid request.
         LlmError::InvalidRequest(inner_message)
     } else {
-        LlmError::Server { status, message: inner_message, retry_after }
+        LlmError::Server {
+            status,
+            message: inner_message,
+            retry_after,
+        }
     };
 
     classified
@@ -327,7 +332,9 @@ fn parse_go_duration(s: &str) -> Option<std::time::Duration> {
         let mut got_digit = false;
         while let Some(&c) = chars.peek() {
             if c.is_ascii_digit() {
-                int_part = int_part.saturating_mul(10).saturating_add((c as u8 - b'0') as u64);
+                int_part = int_part
+                    .saturating_mul(10)
+                    .saturating_add((c as u8 - b'0') as u64);
                 chars.next();
                 got_digit = true;
             } else {
@@ -456,7 +463,11 @@ mod tests {
         assert!(!LlmError::Auth("x".into()).is_retryable());
         assert!(!LlmError::InvalidRequest("x".into()).is_retryable());
         assert!(LlmError::Network("x".into()).is_retryable());
-        assert!(LlmError::RateLimit { message: "x".into(), retry_after: None }.is_retryable());
+        assert!(LlmError::RateLimit {
+            message: "x".into(),
+            retry_after: None
+        }
+        .is_retryable());
         assert!(LlmError::Server {
             status: 503,
             message: "x".into(),
@@ -476,7 +487,10 @@ mod tests {
             message: "x".into(),
             retry_after: Some(std::time::Duration::from_secs(5)),
         };
-        assert_eq!(with_advisory.retry_after(), Some(std::time::Duration::from_secs(5)));
+        assert_eq!(
+            with_advisory.retry_after(),
+            Some(std::time::Duration::from_secs(5))
+        );
         let without_advisory = LlmError::Server {
             status: 503,
             message: "x".into(),
@@ -550,7 +564,10 @@ mod tests {
     #[test]
     fn parse_retry_after_missing_is_none() {
         let h = headers(&[]);
-        assert_eq!(parse_retry_after(&h, std::time::Duration::from_secs(60)), None);
+        assert_eq!(
+            parse_retry_after(&h, std::time::Duration::from_secs(60)),
+            None
+        );
     }
 
     #[test]
@@ -559,7 +576,10 @@ mod tests {
         // OpenAI use integer seconds in practice). Falls through to OpenAI
         // keys, then None.
         let h = headers(&[("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT")]);
-        assert_eq!(parse_retry_after(&h, std::time::Duration::from_secs(60)), None);
+        assert_eq!(
+            parse_retry_after(&h, std::time::Duration::from_secs(60)),
+            None
+        );
     }
 
     #[test]
@@ -568,7 +588,10 @@ mod tests {
         let h = headers(&[("retry-after", "5")]);
         let err = classify_error_response(429, body, Some(&h));
         match err {
-            LlmError::RateLimit { retry_after: Some(d), .. } => {
+            LlmError::RateLimit {
+                retry_after: Some(d),
+                ..
+            } => {
                 assert_eq!(d, std::time::Duration::from_secs(5));
             }
             _ => panic!("expected RateLimit with advisory"),
@@ -580,7 +603,9 @@ mod tests {
         let body = "internal server error";
         let err = classify_error_response(503, body, None);
         match err {
-            LlmError::Server { retry_after: None, .. } => {}
+            LlmError::Server {
+                retry_after: None, ..
+            } => {}
             _ => panic!("expected Server with no advisory"),
         }
     }

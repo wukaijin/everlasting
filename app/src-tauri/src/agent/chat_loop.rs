@@ -45,26 +45,24 @@ use std::time::Instant;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
+use std::pin::Pin;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
-use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
 // A5+ (2026-07-04): LLM first-byte-safe retry open.
-use crate::llm::retry::{retry_open, OpenOutcome, RetryingEvent, RetryPolicy, RetrySink};
+use crate::llm::retry::{retry_open, OpenOutcome, RetryPolicy, RetrySink, RetryingEvent};
 
 use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event_via_sink, persist_turn_cwd,
     CANCELLED_MARKER, ERROR_MARKER,
 };
+use crate::agent::loop_detection;
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
-use crate::agent::loop_detection;
-use std::collections::VecDeque;
 use crate::background_shell::BackgroundShellRegistry;
 use crate::llm::{
-    ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Provider, Role,
-    ToolDef,
+    ChatEvent, ChatMessage, ContentBlock, LlmErrorCategory, MessageContent, Provider, Role, ToolDef,
 };
 use crate::memory::MemoryCache;
 use crate::projects::boundary::is_within_root;
@@ -72,6 +70,7 @@ use crate::skill::loader::SkillCache;
 use crate::state::{ChatEventSink, ToolCallPayload};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
+use std::collections::VecDeque;
 
 /// Production + test entry point for the agent loop body
 /// (P1 RULE-A-006, 2026-06-15). Called by:
@@ -588,9 +587,7 @@ pub async fn run_chat_loop(
     // accepts session-boundary reset (no cross-session carry
     // of "tools that were flaky yesterday"; spike-007 §10
     // extension point).
-    let failure_tracker = Arc::new(Mutex::new(
-        crate::agent::auto_reflect::FailureTracker::new(),
-    ));
+    let failure_tracker = Arc::new(Mutex::new(crate::agent::auto_reflect::FailureTracker::new()));
 
     // P5 (2026-06-29, 06-29-am-p5-quality): session-scoped soft-block
     //记账. When a verified pitfall soft-blocks a tool_use, its
@@ -649,8 +646,7 @@ pub async fn run_chat_loop(
     // temp project dir). Skip the synthetic user/assistant
     // inserts when `load_for_session` returns no layers.
     let memory_layers = load_for_session(&memory_cache, &project.id, &project.path).await;
-    let instructions_blocks =
-        crate::memory::loader::build_instructions_blocks(&memory_layers);
+    let instructions_blocks = crate::memory::loader::build_instructions_blocks(&memory_layers);
     let has_memory = !instructions_blocks.is_empty();
     if !instructions_blocks.is_empty() {
         messages.insert(
@@ -764,7 +760,9 @@ pub async fn run_chat_loop(
     // keys on reload are `${sid}-${seq}`, so `message_seq`
     // round-trips through the DB and matches the rehydrated
     // key).
-    let (last_user_snapshot, last_user_seq) = if let Some(last_user) = messages.iter().rev().find(|m| m.role == Role::User) {
+    let (last_user_snapshot, last_user_seq) = if let Some(last_user) =
+        messages.iter().rev().find(|m| m.role == Role::User)
+    {
         let msg = last_user.clone();
         // B6 PR1b: in the worker path, skip ALL DB writes (see
         // `skip_persist` docstring at the function head). The
@@ -778,8 +776,8 @@ pub async fn run_chat_loop(
         // continuing would let the LLM answer a message the DB
         // never recorded, so the next session reload is blank.
         if !skip_persist {
-            if let Err(e) = crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None)
-                .await
+            if let Err(e) =
+                crate::db::persist_turn(&db, &session_id, msg.role, &msg.content, seq, None).await
             {
                 emit_persist_failure(&sink, &rid, &e);
                 return;
@@ -826,13 +824,13 @@ pub async fn run_chat_loop(
                 .await
                 {
                     tracing::warn!(
-                        error = %e,
-                        request_id = %rid,
-                        session_id = %session_id,
-                        original_seq = original_seq,
-                        "chat_loop: record_message_resend_audit failed (non-fatal)"
-                );
-            }
+                            error = %e,
+                            request_id = %rid,
+                            session_id = %session_id,
+                            original_seq = original_seq,
+                            "chat_loop: record_message_resend_audit failed (non-fatal)"
+                    );
+                }
             }
         }
         // B2 PR3: snap the seq for the FileInjections event;
@@ -887,22 +885,17 @@ pub async fn run_chat_loop(
         // B6 PR1b: skip the metadata UPDATE in worker mode (the
         // user row is the parent's, not the worker's).
         if !skip_persist {
-            if let Err(e) = crate::db::update_message_metadata(
-                &db,
-                &session_id,
-                last_user_seq,
-                &meta,
-            )
-            .await
+            if let Err(e) =
+                crate::db::update_message_metadata(&db, &session_id, last_user_seq, &meta).await
             {
                 tracing::warn!(
-                    request_id = %rid,
-                    session_id = %session_id,
-                    message_seq = last_user_seq,
-                    error = %e,
-                    "agent loop: failed to persist injection manifest as messages.metadata (non-fatal)"
-            );
-        }
+                        request_id = %rid,
+                        session_id = %session_id,
+                        message_seq = last_user_seq,
+                        error = %e,
+                        "agent loop: failed to persist injection manifest as messages.metadata (non-fatal)"
+                );
+            }
         }
         // Live-push the manifest to the frontend. The
         // controller's `handleChatEvent("file_injections")`
@@ -1037,7 +1030,13 @@ pub async fn run_chat_loop(
         //    message carrying the result (the SubagentDrawer already
         //    showed the live worker output; this lands the summary in
         //    the main conversation).
-        emit_chat_event_via_sink(&sink, &rid, &ChatEvent::Delta { text: content.clone() });
+        emit_chat_event_via_sink(
+            &sink,
+            &rid,
+            &ChatEvent::Delta {
+                text: content.clone(),
+            },
+        );
 
         // ⑦ persist the assistant turn: Blocks = [synthetic
         //    ToolUse(dispatch), Text(summary)]. The ToolUse block keeps
@@ -1061,9 +1060,15 @@ pub async fn run_chat_loop(
             ]),
         };
         if !skip_persist {
-            if let Err(e) =
-                crate::db::persist_turn(&db, &session_id, assistant_msg.role, &assistant_msg.content, seq, None)
-                    .await
+            if let Err(e) = crate::db::persist_turn(
+                &db,
+                &session_id,
+                assistant_msg.role,
+                &assistant_msg.content,
+                seq,
+                None,
+            )
+            .await
             {
                 emit_persist_failure(&sink, &rid, &e);
                 return;
@@ -1292,15 +1297,12 @@ pub async fn run_chat_loop(
         // the LLM calls `shell_status` to pull stdout/stderr. Keeps
         // the per-turn context cost bounded for builds that fan out
         // into many background shells.
-        let background_notifications =
-            background_shells.drain_notifications(&session_id).await;
+        let background_notifications = background_shells.drain_notifications(&session_id).await;
         let turn_messages = {
             let checklist_snapshot = current_ctx.checklist.lock().await.clone();
             let mut req = messages.clone();
             if !checklist_snapshot.is_empty() {
-                let block = crate::tools::update_checklist::render_checklist(
-                    &checklist_snapshot,
-                );
+                let block = crate::tools::update_checklist::render_checklist(&checklist_snapshot);
                 let text = format!(
                     "<current-checklist>\nThis is your running progress checklist for the current task. \
                      Items marked `[~]` are in progress; `[x]` are done; `[ ]` are pending. Use the \
@@ -1371,24 +1373,18 @@ pub async fn run_chat_loop(
                     .unwrap_or_default();
                 if !query.trim().is_empty() {
                     if let Some(recall_text) =
-                        crate::agent::memory_recall::build_recall_text(
-                            &db,
-                            &project.id,
-                            &query,
-                        )
-                        .await
+                        crate::agent::memory_recall::build_recall_text(&db, &project.id, &query)
+                            .await
                     {
-                        crate::agent::memory_recall::inject_recall_into_turn(
-                            &mut req,
-                            recall_text,
-                        );
+                        crate::agent::memory_recall::inject_recall_into_turn(&mut req, recall_text);
                     }
                 }
             }
             req
         };
 
-        let mut turn_tool_defs = permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
+        let mut turn_tool_defs =
+            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
         // L3d (2026-06-25): append the dynamic `dispatch_subagent`
         // ToolDef so the enum reflects builtin + user + project
         // subagents merged by `SubagentCache` (mtime-fenced scan).
@@ -1419,11 +1415,8 @@ pub async fn run_chat_loop(
         // with the project's other namespace dirs.
         if !effective_is_worker {
             let project_path = worktree_path.to_string_lossy().to_string();
-            let dispatch_def = crate::agent::subagent::definition_with_cache(
-                &subagent_cache,
-                &project_path,
-            )
-            .await;
+            let dispatch_def =
+                crate::agent::subagent::definition_with_cache(&subagent_cache, &project_path).await;
             turn_tool_defs.push(dispatch_def);
         }
         let turn_tool_defs = turn_tool_defs;
@@ -1464,20 +1457,25 @@ pub async fn run_chat_loop(
         // the top of the loop body (conditionally assigned; `None` default
         // is load-bearing for `is_none()` checks).
         let turn_send_at = Some(Instant::now());
-        let mut stream: Pin<Box<dyn futures_util::Stream<Item = Result<crate::llm::types::ChatEvent, crate::llm::error::LlmError>> + Send>> =
-            match outcome {
-                OpenOutcome::Stream(s) => s,
-                OpenOutcome::Cancelled => {
-                    // Retry gave up because the user cancelled during open
-                    // or backoff. Set the cancel flag and feed an empty
-                    // stream so the per-event loop below exits immediately
-                    // (None arm); the post-loop persist handles
-                    // CANCELLED_MARKER. The biased `token.cancelled()` arm
-                    // also fires on the first select iteration as backup.
-                    cancelled = true;
-                    Box::pin(futures_util::stream::empty())
-                }
-            };
+        let mut stream: Pin<
+            Box<
+                dyn futures_util::Stream<
+                        Item = Result<crate::llm::types::ChatEvent, crate::llm::error::LlmError>,
+                    > + Send,
+            >,
+        > = match outcome {
+            OpenOutcome::Stream(s) => s,
+            OpenOutcome::Cancelled => {
+                // Retry gave up because the user cancelled during open
+                // or backoff. Set the cancel flag and feed an empty
+                // stream so the per-event loop below exits immediately
+                // (None arm); the post-loop persist handles
+                // CANCELLED_MARKER. The biased `token.cancelled()` arm
+                // also fires on the first select iteration as backup.
+                cancelled = true;
+                Box::pin(futures_util::stream::empty())
+            }
+        };
 
         loop {
             tokio::select! {
@@ -1731,7 +1729,10 @@ pub async fn run_chat_loop(
             }
         }
         if !full_text.is_empty() {
-            assistant_blocks.push(ContentBlock::Text { text: full_text, cache_control: None });
+            assistant_blocks.push(ContentBlock::Text {
+                text: full_text,
+                cache_control: None,
+            });
         }
         for (id, name, input) in &tool_calls {
             assistant_blocks.push(ContentBlock::ToolUse {
@@ -1924,8 +1925,7 @@ pub async fn run_chat_loop(
             return;
         }
 
-        let should_continue =
-            stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
+        let should_continue = stop_reason.as_deref() == Some("tool_use") && !tool_calls.is_empty();
 
         if !should_continue {
             // B6 PR1b: skip the cwd/touch_session writes in worker
@@ -1947,7 +1947,10 @@ pub async fn run_chat_loop(
             emit_chat_event_via_sink(
                 &sink,
                 &rid,
-                &ChatEvent::Done { stop_reason, usage: last_usage },
+                &ChatEvent::Done {
+                    stop_reason,
+                    usage: last_usage,
+                },
             );
             return;
         }
@@ -1969,16 +1972,12 @@ pub async fn run_chat_loop(
         // the hard backstop). Per §2.5.8 this is tracing-only, no
         // AuditKind row.
         for (_id, name, input) in &tool_calls {
-            loop_window.push_back(loop_detection::ToolCall::new(
-                name.clone(),
-                input.clone(),
-            ));
+            loop_window.push_back(loop_detection::ToolCall::new(name.clone(), input.clone()));
         }
         while loop_window.len() > loop_detection::SOFT_WINDOW {
             loop_window.pop_front();
         }
-        let loop_verdict =
-            loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
+        let loop_verdict = loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
         let loop_hint: Option<String> = loop_verdict.hint_text();
         if loop_hint.is_some() {
             tracing::warn!(verdict = ?loop_verdict, "agent loop ⑬: loop detected (soft hint)");
@@ -2041,8 +2040,7 @@ pub async fn run_chat_loop(
             // row. The shared flag is read after the join to
             // drive the existing cancel path.
             let n = tool_calls.len();
-            let mut result_slots: Vec<Option<ContentBlock>> =
-                (0..n).map(|_| None).collect();
+            let mut result_slots: Vec<Option<ContentBlock>> = (0..n).map(|_| None).collect();
             let cancelled_flag = Arc::new(AtomicBool::new(false));
             let mut fu: FuturesUnordered<_> = tool_calls
                 .iter()
@@ -2094,7 +2092,11 @@ pub async fn run_chat_loop(
                             &token,
                         )
                         .await;
-                        if let Decision::Deny { reason, critical: _ } = decision {
+                        if let Decision::Deny {
+                            reason,
+                            critical: _,
+                        } = decision
+                        {
                             let envelope = crate::agent::helpers::tool_result_envelope(
                                 &reason,
                                 &current_ctx.worktree_path,
@@ -2135,10 +2137,9 @@ pub async fn run_chat_loop(
                         // degrades to Footnote because the memory_id
                         // is now in `soft_blocked`.
                         let blocked_snapshot = soft_blocked.lock().await.clone();
-                        let pitfall_recall = permissions::recall_pitfall(
-                            &db, &name, &input, &blocked_snapshot,
-                        )
-                        .await;
+                        let pitfall_recall =
+                            permissions::recall_pitfall(&db, &name, &input, &blocked_snapshot)
+                                .await;
                         // SoftBlock: short-circuit. The tool is NOT
                         // executed; we surface the hint as a non-error
                         // tool_result so the LLM re-judges (adjust /
@@ -2186,17 +2187,16 @@ pub async fn run_chat_loop(
                         };
 
                         let tool_exec_start = Instant::now();
-                        let (content, is_error, _update, exit_code) =
-                            crate::tools::execute_tool(
-                                &name,
-                                &input,
-                                &current_ctx,
-                                Some(&read_guard),
-                                Some(&session_id),
-                                Some(&skill_cache),
-                                token.clone(),
-                            )
-                            .await;
+                        let (content, is_error, _update, exit_code) = crate::tools::execute_tool(
+                            &name,
+                            &input,
+                            &current_ctx,
+                            Some(&read_guard),
+                            Some(&session_id),
+                            Some(&skill_cache),
+                            token.clone(),
+                        )
+                        .await;
                         // P3: prepend the pitfall footnote (if any)
                         // to the tool result content BEFORE the
                         // envelope wrap, so the LLM reads the hint
@@ -2330,10 +2330,8 @@ pub async fn run_chat_loop(
             // mirrors Hermes). Anything else (single dispatch, or
             // a mixed batch) falls through to the regular serial
             // `for` loop unchanged.
-            let dispatch_batch = classify_dispatch_batch(
-                &tool_calls,
-                delegation_max_concurrent_children(),
-            );
+            let dispatch_batch =
+                classify_dispatch_batch(&tool_calls, delegation_max_concurrent_children());
             match dispatch_batch {
                 DispatchBatch::OverLimit {
                     count,
@@ -2622,408 +2620,417 @@ pub async fn run_chat_loop(
                 }
                 DispatchBatch::Serial => {
                     // Regular serial path (existing behavior, unchanged).
-            for (id, name, input) in &tool_calls {
-            // Run the full 5-tier permission check (matches
-            // production). Tests that want a clean
-            // tool-execute-and-continue path should pre-load
-            // an Allow for the test tool into
-            // `session_tool_permissions`, or use a read tool
-            // that hits Tier 5 default-allow.
-            let decision = permissions::check(
-                &permission_ctx,
-                &permission_asks,
-                &db,
-                &sink,
-                name,
-                input,
-                id,
-                &token,
-            )
-            .await;
-            if let Decision::Deny { reason, critical: _ } = decision {
-                let envelope = crate::agent::helpers::tool_result_envelope(
-                    &reason,
-                    &current_ctx.worktree_path,
-                );
-                sink.emit_tool_result(&crate::state::ToolResultPayload {
-                    request_id: rid.clone(),
-                    tool_use_id: id.clone(),
-                    content: envelope.clone(),
-                    is_error: true,
-                });
-                result_blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: envelope,
-                    is_error: true,
-                });
-                continue;
-            }
+                    for (id, name, input) in &tool_calls {
+                        // Run the full 5-tier permission check (matches
+                        // production). Tests that want a clean
+                        // tool-execute-and-continue path should pre-load
+                        // an Allow for the test tool into
+                        // `session_tool_permissions`, or use a read tool
+                        // that hits Tier 5 default-allow.
+                        let decision = permissions::check(
+                            &permission_ctx,
+                            &permission_asks,
+                            &db,
+                            &sink,
+                            name,
+                            input,
+                            id,
+                            &token,
+                        )
+                        .await;
+                        if let Decision::Deny {
+                            reason,
+                            critical: _,
+                        } = decision
+                        {
+                            let envelope = crate::agent::helpers::tool_result_envelope(
+                                &reason,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope.clone(),
+                                is_error: true,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope,
+                                is_error: true,
+                            });
+                            continue;
+                        }
 
-            // 2026-06-30 (`ask_user_question` task): block the
-            // current turn on a reverse-question card. This is
-            // the same "control-flow tool" interception pattern as
-            // `dispatch_subagent` below — the tool needs
-            // QuestionStore + ChatEventSink access that
-            // `execute_tool_inner` doesn't have. We route to
-            // `ask_user_question::execute_blocking`, which
-            // internally:
-            //   1. validates the schema (short-circuits with
-            //      `is_error: true` on boundary violations),
-            //   2. registers a oneshot in QuestionStore,
-            //   3. emits `tool:question` to the frontend,
-            //   4. `tokio::select! { cancel | oneshot }` until
-            //      resolve.
-            //
-            // `is_parallel_eligible` (the L2 whitelist of
-            // `read_file` / `grep` / `glob` / `list_dir` /
-            // `use_skill`) does NOT include this name → mixed
-            // batches fall to the serial path (this branch)
-            // automatically (per design §6.3 + the
-            // `dispatch_subagent` precedent).
-            //
-            // The interception here is structurally identical to
-            // the dispatch_subagent one just below: same audit
-            // row, same `tool:result` IPC emit, same
-            // `ContentBlock::ToolResult` push, same cancel
-            // propagation. The only difference is the work
-            // function — `execute_blocking` instead of
-            // `run_subagent` — and `execute_blocking` does NOT
-            // need the `cancel_parent` separate flag (it
-            // collapses into the session cancel token directly).
-            // We accept +1 turn counter cost for the blocking
-            // tool's recover (v1 trade-off — see PRD §R3).
-            if name == "ask_user_question" {
-                let tool_exec_start = Instant::now();
-                let (content, is_error, _update, exit_code) =
-                    crate::tools::ask_user_question::execute_blocking(
-                        input,
-                        &session_id,
-                        id,
-                        &question_store,
-                        &sink,
-                        &token,
-                    )
-                    .await;
-                let duration_ms = tool_exec_start.elapsed().as_millis();
-                if token.is_cancelled() {
-                    cancelled = true;
-                } else if !skip_persist {
-                    if let Err(e) = permissions::record_tool_executed_audit(
-                        &db,
-                        &session_id,
-                        name,
-                        input,
-                        duration_ms,
-                        exit_code,
-                    )
-                    .await
-                    {
-                        tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for ask_user_question (non-fatal)");
+                        // 2026-06-30 (`ask_user_question` task): block the
+                        // current turn on a reverse-question card. This is
+                        // the same "control-flow tool" interception pattern as
+                        // `dispatch_subagent` below — the tool needs
+                        // QuestionStore + ChatEventSink access that
+                        // `execute_tool_inner` doesn't have. We route to
+                        // `ask_user_question::execute_blocking`, which
+                        // internally:
+                        //   1. validates the schema (short-circuits with
+                        //      `is_error: true` on boundary violations),
+                        //   2. registers a oneshot in QuestionStore,
+                        //   3. emits `tool:question` to the frontend,
+                        //   4. `tokio::select! { cancel | oneshot }` until
+                        //      resolve.
+                        //
+                        // `is_parallel_eligible` (the L2 whitelist of
+                        // `read_file` / `grep` / `glob` / `list_dir` /
+                        // `use_skill`) does NOT include this name → mixed
+                        // batches fall to the serial path (this branch)
+                        // automatically (per design §6.3 + the
+                        // `dispatch_subagent` precedent).
+                        //
+                        // The interception here is structurally identical to
+                        // the dispatch_subagent one just below: same audit
+                        // row, same `tool:result` IPC emit, same
+                        // `ContentBlock::ToolResult` push, same cancel
+                        // propagation. The only difference is the work
+                        // function — `execute_blocking` instead of
+                        // `run_subagent` — and `execute_blocking` does NOT
+                        // need the `cancel_parent` separate flag (it
+                        // collapses into the session cancel token directly).
+                        // We accept +1 turn counter cost for the blocking
+                        // tool's recover (v1 trade-off — see PRD §R3).
+                        if name == "ask_user_question" {
+                            let tool_exec_start = Instant::now();
+                            let (content, is_error, _update, exit_code) =
+                                crate::tools::ask_user_question::execute_blocking(
+                                    input,
+                                    &session_id,
+                                    id,
+                                    &question_store,
+                                    &sink,
+                                    &token,
+                                )
+                                .await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    exit_code,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for ask_user_question (non-fatal)");
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        // B6 Subagent (2026-06-19): intercept dispatch_subagent
+                        // BEFORE the normal execute_tool path. This is an
+                        // agent-layer control-flow tool — it needs the parent
+                        // loop's full closure dependencies (provider / db /
+                        // cancellations / ...) which `execute_tool_inner` does
+                        // NOT have access to (see `agent::subagent` docstring +
+                        // PRD §"Technical Approach" review #3). The interceptor
+                        // builds the worker context, calls run_chat_loop
+                        // recursively, and turns the worker's final state into a
+                        // tool_result that pairs with the dispatch_subagent
+                        // tool_use (RULE-A-007 pairing invariant preserved).
+                        //
+                        // dispatch_subagent is structurally excluded from the
+                        // L2 parallel set (it's not in `is_parallel_eligible`'s
+                        // NAME_ELIGIBLE list), so the entire batch falls into
+                        // this serial path whenever the model emits it. MVP runs
+                        // dispatches serially (one worker at a time); parallel
+                        // fan-out is v2 / L3.
+                        if name == crate::agent::subagent::DISPATCH_TOOL_NAME {
+                            let tool_exec_start = Instant::now();
+                            let (content, is_error, cancel_parent, exit_code) =
+                                crate::agent::subagent::dispatch::run_subagent(
+                                    &provider,
+                                    crate::agent::subagent::dispatch::app_subagent_catalog(
+                                        &app_handle,
+                                    ),
+                                    context_window,
+                                    &rid,
+                                    &session_id,
+                                    &memory_cache,
+                                    &read_guard,
+                                    &skill_cache,
+                                    &permission_asks,
+                                    &cancellations,
+                                    &session_active_request,
+                                    &background_shells,
+                                    &db,
+                                    &current_ctx,
+                                    id,
+                                    input,
+                                    &token,
+                                    &sink,
+                                    // B6 PR3 (2026-06-20, PR2 hotfix): thread the
+                                    // parent's AppHandle so the worker's
+                                    // SubagentBufferSink can emit the `subagent:event`
+                                    // IPC channel live. From the chat command's spawn
+                                    // closure this is `Some(app.clone())`; from the
+                                    // unit tests it's `None` (no Tauri runtime).
+                                    app_handle.clone(),
+                                    // L3a (2026-06-24): serial path keeps the
+                                    // worker's full toolset (write/shell/web for
+                                    // general-purpose), gated by `is_worker: true`
+                                    // at the ⑨ permission layer. The concurrent
+                                    // branch below passes `true` to force read-only.
+                                    false,
+                                    // L3d (2026-06-25): thread the subagent cache so
+                                    // `run_subagent` can look up the dispatched
+                                    // subagent across builtin + user + project layers
+                                    // (replaces the static `lookup_subagent(name)`).
+                                    &subagent_cache,
+                                    // L3b (2026-06-27): thread the app data dir so
+                                    // `run_subagent` can compute the worker worktree
+                                    // path when isolation is active.
+                                    &app_data_dir,
+                                    // B (2026-06-30): serial dispatch → `parallel=false`,
+                                    // isolation falls back to the subagent's default
+                                    // (general-purpose now shared).
+                                    false,
+                                    // 2026-06-30 (`ask_user_question`): thread the
+                                    // parent's QuestionStore. Worker can't reach it
+                                    // (STRUCTURALLY_DISABLED) but the signature
+                                    // requires it.
+                                    &question_store,
+                                )
+                                .await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            // Audit dispatch_subagent like any other tool so
+                            // the C4 audit log records "subagent ran". This
+                            // lands AFTER the worker's full turn sequence +
+                            // the worker's own audit rows already landed
+                            // (they're tied to the same session_id by design —
+                            // workers don't have their own sessions).
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                // B6 PR1b: the parent (NOT the worker) records
+                                // its own dispatch_subagent audit. The worker
+                                // passes skip_persist=true on its nested
+                                // run_chat_loop call, so this site is only
+                                // reached for the parent's own dispatch —
+                                // the worker's run_subagent returns BEFORE
+                                // any nested run_chat_loop call sees this code.
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    exit_code,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for dispatch_subagent (non-fatal)");
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancel_parent {
+                                cancelled = true;
+                            }
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        // P3 + P5 (2026-06-29, 06-29-am-p3-tool-recall +
+                        // 06-29-am-p5-quality): Tier 1 Hooks — pre-tool pitfall
+                        // recall. Runs AFTER `check()` returns Allow and the
+                        // dispatch_subagent intercept, BEFORE `execute_tool()`.
+                        // P5 introduces the tiered `PitfallRecall`:
+                        //   - SoftBlock { hint, memory_id } — verified + full
+                        //     trigger-key match + not-yet-blocked this session →
+                        //     short-circuit execute_tool, record memory_id,
+                        //     surface hint as is_error=false tool_result.
+                        //   - Footnote(text) — active / candidate / partial /
+                        //     second-hit → execute normally, prepend text.
+                        //   - None — no recall.
+                        // The dead-loop guard (design D1): the second hit on the
+                        // same SoftBlock'd pitfall degrades to Footnote because
+                        // the memory_id is now in `soft_blocked`.
+                        let blocked_snapshot = soft_blocked.lock().await.clone();
+                        let pitfall_recall =
+                            permissions::recall_pitfall(&db, name, input, &blocked_snapshot).await;
+                        // SoftBlock: short-circuit. The tool is NOT executed; we
+                        // surface the hint as a non-error tool_result so the LLM
+                        // re-judges (adjust / abandon / insist). `is_error=false`
+                        // so the LLM doesn't think the tool is broken — semantics
+                        // are "experience hint", not "tool failed".
+                        if let permissions::PitfallRecall::SoftBlock { hint, memory_id } =
+                            pitfall_recall
+                        {
+                            // Record in the session ledger (D1).
+                            soft_blocked.lock().await.insert(memory_id);
+                            let envelope = crate::agent::helpers::tool_result_envelope(
+                                &hint,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope.clone(),
+                                is_error: false,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope,
+                                is_error: false,
+                            });
+                            // No tool_executed audit (tool didn't run — RULE-
+                            // A-004's intent). No P4 reflect either (no real
+                            // outcome). Proceed to the next tool_use.
+                            continue;
+                        }
+                        // Footnote or None: extract optional text for the
+                        // prepend-after-execute path.
+                        let pitfall_footnote = match pitfall_recall {
+                            permissions::PitfallRecall::Footnote(text) => Some(text),
+                            permissions::PitfallRecall::None => None,
+                            permissions::PitfallRecall::SoftBlock { .. } => {
+                                // Unreachable — handled above.
+                                None
+                            }
+                        };
+
+                        let tool_exec_start = Instant::now();
+                        let (content, is_error, update, exit_code) = crate::tools::execute_tool(
+                            name,
+                            input,
+                            &current_ctx,
+                            Some(&read_guard),
+                            Some(&session_id),
+                            Some(&skill_cache),
+                            token.clone(),
+                        )
+                        .await;
+                        // P3: prepend the pitfall footnote (if any) to the
+                        // tool result content BEFORE the envelope wrap, so the
+                        // LLM reads the hint together with the tool output.
+                        // is_error is preserved (an error message preceded by
+                        // a pitfall hint is still an error).
+                        let content = if let Some(footnote) = pitfall_footnote {
+                            format!("{}{}", footnote, content)
+                        } else {
+                            content
+                        };
+                        // P4 (2026-06-29, 06-29-am-p4-event-reflect):
+                        // record this tool_use outcome into the
+                        // in-session failure tracker. On the "≥2 fails
+                        // then success" pattern, the tracker fires a
+                        // fire-and-forget LLM reflection that produces
+                        // a pitfall memory row. Skipped on cancel (the
+                        // in-flight tool was interrupted, not a real
+                        // outcome) — same intent as the audit-skip
+                        // below.
+                        if !token.is_cancelled() {
+                            crate::agent::auto_reflect::try_record_outcome(
+                                &failure_tracker,
+                                provider.clone(),
+                                db.clone(),
+                                &rid,
+                                &session_id,
+                                &current_ctx.project_id,
+                                name,
+                                input,
+                                is_error,
+                                &content,
+                            )
+                            .await;
+                        }
+                        let duration_ms = tool_exec_start.elapsed().as_millis();
+                        // RULE-A-004 (2026-06-15): audit AFTER the cancel
+                        // check. Previously `record_tool_executed_audit` ran
+                        // before the `token.is_cancelled()` test, so a tool
+                        // whose execution was interrupted by a cancel (token
+                        // fired during `execute_tool`) still got a
+                        // `tool_executed` audit row — lying to the audit log
+                        // (the tool did not complete from the user's intent;
+                        // they hit Stop). Now a cancelled-in-flight tool is
+                        // marked `cancelled` and skipped for auditing. The two
+                        // checks are back-to-back with no `.await` between
+                        // them, so the token state is identical across both.
+                        if token.is_cancelled() {
+                            cancelled = true;
+                        } else if !skip_persist {
+                            // B6 PR1b: skip the tool_executed audit write in
+                            // worker mode (SubagentBufferSink transcript is
+                            // the worker's record; PR2 persists it).
+                            if let Err(e) = permissions::record_tool_executed_audit(
+                                &db,
+                                &session_id,
+                                name,
+                                input,
+                                duration_ms,
+                                exit_code,
+                            )
+                            .await
+                            {
+                                tracing::warn!(error = %e, "chat: record_tool_executed_audit failed (non-fatal)");
+                            }
+                        }
+                        if let Some(new_cwd) = update.new_cwd.clone() {
+                            current_ctx.cwd = new_cwd.clone();
+                            last_cwd = Some(new_cwd);
+                        }
+                        let envelope_str = crate::agent::helpers::tool_result_envelope(
+                            &content,
+                            &current_ctx.worktree_path,
+                        );
+                        sink.emit_tool_result(&crate::state::ToolResultPayload {
+                            request_id: rid.clone(),
+                            tool_use_id: id.clone(),
+                            content: envelope_str.clone(),
+                            is_error,
+                        });
+                        result_blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: envelope_str,
+                            is_error,
+                        });
+                        if cancelled {
+                            break;
+                        }
                     }
-                }
-                let envelope_str = crate::agent::helpers::tool_result_envelope(
-                    &content,
-                    &current_ctx.worktree_path,
-                );
-                sink.emit_tool_result(&crate::state::ToolResultPayload {
-                    request_id: rid.clone(),
-                    tool_use_id: id.clone(),
-                    content: envelope_str.clone(),
-                    is_error,
-                });
-                result_blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: envelope_str,
-                    is_error,
-                });
-                if cancelled {
-                    break;
-                }
-                continue;
-            }
-
-            // B6 Subagent (2026-06-19): intercept dispatch_subagent
-            // BEFORE the normal execute_tool path. This is an
-            // agent-layer control-flow tool — it needs the parent
-            // loop's full closure dependencies (provider / db /
-            // cancellations / ...) which `execute_tool_inner` does
-            // NOT have access to (see `agent::subagent` docstring +
-            // PRD §"Technical Approach" review #3). The interceptor
-            // builds the worker context, calls run_chat_loop
-            // recursively, and turns the worker's final state into a
-            // tool_result that pairs with the dispatch_subagent
-            // tool_use (RULE-A-007 pairing invariant preserved).
-            //
-            // dispatch_subagent is structurally excluded from the
-            // L2 parallel set (it's not in `is_parallel_eligible`'s
-            // NAME_ELIGIBLE list), so the entire batch falls into
-            // this serial path whenever the model emits it. MVP runs
-            // dispatches serially (one worker at a time); parallel
-            // fan-out is v2 / L3.
-            if name == crate::agent::subagent::DISPATCH_TOOL_NAME {
-                let tool_exec_start = Instant::now();
-                let (content, is_error, cancel_parent, exit_code) = crate::agent::subagent::dispatch::run_subagent(
-                    &provider,
-                    crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
-                    context_window,
-                    &rid,
-                    &session_id,
-                    &memory_cache,
-                    &read_guard,
-                    &skill_cache,
-                    &permission_asks,
-                    &cancellations,
-                    &session_active_request,
-                    &background_shells,
-                    &db,
-                    &current_ctx,
-                    id,
-                    input,
-                    &token,
-                    &sink,
-                    // B6 PR3 (2026-06-20, PR2 hotfix): thread the
-                    // parent's AppHandle so the worker's
-                    // SubagentBufferSink can emit the `subagent:event`
-                    // IPC channel live. From the chat command's spawn
-                    // closure this is `Some(app.clone())`; from the
-                    // unit tests it's `None` (no Tauri runtime).
-                    app_handle.clone(),
-                    // L3a (2026-06-24): serial path keeps the
-                    // worker's full toolset (write/shell/web for
-                    // general-purpose), gated by `is_worker: true`
-                    // at the ⑨ permission layer. The concurrent
-                    // branch below passes `true` to force read-only.
-                    false,
-                    // L3d (2026-06-25): thread the subagent cache so
-                    // `run_subagent` can look up the dispatched
-                    // subagent across builtin + user + project layers
-                    // (replaces the static `lookup_subagent(name)`).
-                    &subagent_cache,
-                    // L3b (2026-06-27): thread the app data dir so
-                    // `run_subagent` can compute the worker worktree
-                    // path when isolation is active.
-                    &app_data_dir,
-                    // B (2026-06-30): serial dispatch → `parallel=false`,
-                    // isolation falls back to the subagent's default
-                    // (general-purpose now shared).
-                    false,
-                    // 2026-06-30 (`ask_user_question`): thread the
-                    // parent's QuestionStore. Worker can't reach it
-                    // (STRUCTURALLY_DISABLED) but the signature
-                    // requires it.
-                    &question_store,
-                )
-                .await;
-                let duration_ms = tool_exec_start.elapsed().as_millis();
-                // Audit dispatch_subagent like any other tool so
-                // the C4 audit log records "subagent ran". This
-                // lands AFTER the worker's full turn sequence +
-                // the worker's own audit rows already landed
-                // (they're tied to the same session_id by design —
-                // workers don't have their own sessions).
-                if token.is_cancelled() {
-                    cancelled = true;
-                } else if !skip_persist {
-                    // B6 PR1b: the parent (NOT the worker) records
-                    // its own dispatch_subagent audit. The worker
-                    // passes skip_persist=true on its nested
-                    // run_chat_loop call, so this site is only
-                    // reached for the parent's own dispatch —
-                    // the worker's run_subagent returns BEFORE
-                    // any nested run_chat_loop call sees this code.
-                    if let Err(e) = permissions::record_tool_executed_audit(
-                        &db,
-                        &session_id,
-                        name,
-                        input,
-                        duration_ms,
-                        exit_code,
-                    )
-                    .await
-                    {
-                        tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for dispatch_subagent (non-fatal)");
-                    }
-                }
-                let envelope_str = crate::agent::helpers::tool_result_envelope(
-                    &content,
-                    &current_ctx.worktree_path,
-                );
-                sink.emit_tool_result(&crate::state::ToolResultPayload {
-                    request_id: rid.clone(),
-                    tool_use_id: id.clone(),
-                    content: envelope_str.clone(),
-                    is_error,
-                });
-                result_blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: envelope_str,
-                    is_error,
-                });
-                if cancel_parent {
-                    cancelled = true;
-                }
-                if cancelled {
-                    break;
-                }
-                continue;
-            }
-
-            // P3 + P5 (2026-06-29, 06-29-am-p3-tool-recall +
-            // 06-29-am-p5-quality): Tier 1 Hooks — pre-tool pitfall
-            // recall. Runs AFTER `check()` returns Allow and the
-            // dispatch_subagent intercept, BEFORE `execute_tool()`.
-            // P5 introduces the tiered `PitfallRecall`:
-            //   - SoftBlock { hint, memory_id } — verified + full
-            //     trigger-key match + not-yet-blocked this session →
-            //     short-circuit execute_tool, record memory_id,
-            //     surface hint as is_error=false tool_result.
-            //   - Footnote(text) — active / candidate / partial /
-            //     second-hit → execute normally, prepend text.
-            //   - None — no recall.
-            // The dead-loop guard (design D1): the second hit on the
-            // same SoftBlock'd pitfall degrades to Footnote because
-            // the memory_id is now in `soft_blocked`.
-            let blocked_snapshot = soft_blocked.lock().await.clone();
-            let pitfall_recall =
-                permissions::recall_pitfall(&db, name, input, &blocked_snapshot).await;
-            // SoftBlock: short-circuit. The tool is NOT executed; we
-            // surface the hint as a non-error tool_result so the LLM
-            // re-judges (adjust / abandon / insist). `is_error=false`
-            // so the LLM doesn't think the tool is broken — semantics
-            // are "experience hint", not "tool failed".
-            if let permissions::PitfallRecall::SoftBlock { hint, memory_id } =
-                pitfall_recall
-            {
-                // Record in the session ledger (D1).
-                soft_blocked.lock().await.insert(memory_id);
-                let envelope = crate::agent::helpers::tool_result_envelope(
-                    &hint,
-                    &current_ctx.worktree_path,
-                );
-                sink.emit_tool_result(&crate::state::ToolResultPayload {
-                    request_id: rid.clone(),
-                    tool_use_id: id.clone(),
-                    content: envelope.clone(),
-                    is_error: false,
-                });
-                result_blocks.push(ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: envelope,
-                    is_error: false,
-                });
-                // No tool_executed audit (tool didn't run — RULE-
-                // A-004's intent). No P4 reflect either (no real
-                // outcome). Proceed to the next tool_use.
-                continue;
-            }
-            // Footnote or None: extract optional text for the
-            // prepend-after-execute path.
-            let pitfall_footnote = match pitfall_recall {
-                permissions::PitfallRecall::Footnote(text) => Some(text),
-                permissions::PitfallRecall::None => None,
-                permissions::PitfallRecall::SoftBlock { .. } => {
-                    // Unreachable — handled above.
-                    None
-                }
-            };
-
-            let tool_exec_start = Instant::now();
-            let (content, is_error, update, exit_code) = crate::tools::execute_tool(
-                name,
-                input,
-                &current_ctx,
-                Some(&read_guard),
-                Some(&session_id),
-                Some(&skill_cache),
-                token.clone(),
-            )
-            .await;
-            // P3: prepend the pitfall footnote (if any) to the
-            // tool result content BEFORE the envelope wrap, so the
-            // LLM reads the hint together with the tool output.
-            // is_error is preserved (an error message preceded by
-            // a pitfall hint is still an error).
-            let content = if let Some(footnote) = pitfall_footnote {
-                format!("{}{}", footnote, content)
-            } else {
-                content
-            };
-            // P4 (2026-06-29, 06-29-am-p4-event-reflect):
-            // record this tool_use outcome into the
-            // in-session failure tracker. On the "≥2 fails
-            // then success" pattern, the tracker fires a
-            // fire-and-forget LLM reflection that produces
-            // a pitfall memory row. Skipped on cancel (the
-            // in-flight tool was interrupted, not a real
-            // outcome) — same intent as the audit-skip
-            // below.
-            if !token.is_cancelled() {
-                crate::agent::auto_reflect::try_record_outcome(
-                    &failure_tracker,
-                    provider.clone(),
-                    db.clone(),
-                    &rid,
-                    &session_id,
-                    &current_ctx.project_id,
-                    name,
-                    input,
-                    is_error,
-                    &content,
-                )
-                .await;
-            }
-            let duration_ms = tool_exec_start.elapsed().as_millis();
-            // RULE-A-004 (2026-06-15): audit AFTER the cancel
-            // check. Previously `record_tool_executed_audit` ran
-            // before the `token.is_cancelled()` test, so a tool
-            // whose execution was interrupted by a cancel (token
-            // fired during `execute_tool`) still got a
-            // `tool_executed` audit row — lying to the audit log
-            // (the tool did not complete from the user's intent;
-            // they hit Stop). Now a cancelled-in-flight tool is
-            // marked `cancelled` and skipped for auditing. The two
-            // checks are back-to-back with no `.await` between
-            // them, so the token state is identical across both.
-            if token.is_cancelled() {
-                cancelled = true;
-            } else if !skip_persist {
-                // B6 PR1b: skip the tool_executed audit write in
-                // worker mode (SubagentBufferSink transcript is
-                // the worker's record; PR2 persists it).
-                if let Err(e) = permissions::record_tool_executed_audit(
-                    &db,
-                    &session_id,
-                    name,
-                    input,
-                    duration_ms,
-                    exit_code,
-                )
-                .await
-                {
-                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed (non-fatal)");
-                }
-            }
-            if let Some(new_cwd) = update.new_cwd.clone() {
-                current_ctx.cwd = new_cwd.clone();
-                last_cwd = Some(new_cwd);
-            }
-            let envelope_str =
-                crate::agent::helpers::tool_result_envelope(&content, &current_ctx.worktree_path);
-            sink.emit_tool_result(&crate::state::ToolResultPayload {
-                request_id: rid.clone(),
-                tool_use_id: id.clone(),
-                content: envelope_str.clone(),
-                is_error,
-            });
-            result_blocks.push(ContentBlock::ToolResult {
-                tool_use_id: id.clone(),
-                content: envelope_str,
-                is_error,
-            });
-            if cancelled {
-                break;
-            }
-            }
                 } // close DispatchBatch::Serial => { … }
             } // close match dispatch_batch
         }
@@ -3407,7 +3414,10 @@ pub(crate) enum DispatchBatch {
     /// `count` is kept on the variant for debug logging + future
     /// telemetry even though the concurrent branch reads
     /// `tool_calls.len()` directly.
-    Concurrent { #[allow(dead_code)] count: usize },
+    Concurrent {
+        #[allow(dead_code)]
+        count: usize,
+    },
 }
 
 /// Classify a turn's `tool_calls` for the L3a concurrent
@@ -3448,4 +3458,3 @@ pub(crate) fn classify_dispatch_batch(
         DispatchBatch::Serial
     }
 }
-

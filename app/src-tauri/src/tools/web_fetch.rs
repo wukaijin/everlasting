@@ -187,22 +187,22 @@ pub enum WebFetchError {
 /// cover RFC 1918, loopback, link-local (which includes cloud
 /// metadata at 169.254.169.254), CGNAT, multicast, and reserved.
 const BLOCKED_V4: &[(Ipv4Addr, u8)] = &[
-    (Ipv4Addr::new(0, 0, 0, 0), 8),       // "this network"
-    (Ipv4Addr::new(10, 0, 0, 0), 8),      // RFC 1918
-    (Ipv4Addr::new(127, 0, 0, 0), 8),     // loopback
-    (Ipv4Addr::new(169, 254, 0, 0), 16),  // link-local + cloud metadata
-    (Ipv4Addr::new(172, 16, 0, 0), 12),   // RFC 1918
-    (Ipv4Addr::new(192, 168, 0, 0), 16),  // RFC 1918
-    (Ipv4Addr::new(100, 64, 0, 0), 10),   // CGNAT
-    (Ipv4Addr::new(224, 0, 0, 0), 4),     // multicast
-    (Ipv4Addr::new(240, 0, 0, 0), 4),     // reserved
+    (Ipv4Addr::new(0, 0, 0, 0), 8),      // "this network"
+    (Ipv4Addr::new(10, 0, 0, 0), 8),     // RFC 1918
+    (Ipv4Addr::new(127, 0, 0, 0), 8),    // loopback
+    (Ipv4Addr::new(169, 254, 0, 0), 16), // link-local + cloud metadata
+    (Ipv4Addr::new(172, 16, 0, 0), 12),  // RFC 1918
+    (Ipv4Addr::new(192, 168, 0, 0), 16), // RFC 1918
+    (Ipv4Addr::new(100, 64, 0, 0), 10),  // CGNAT
+    (Ipv4Addr::new(224, 0, 0, 0), 4),    // multicast
+    (Ipv4Addr::new(240, 0, 0, 0), 4),    // reserved
 ];
 
 const BLOCKED_V6: &[(Ipv6Addr, u8)] = &[
-    (Ipv6Addr::LOCALHOST, 128),                                     // ::1
-    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),                // ULA
-    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),               // link-local
-    (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),                // multicast
+    (Ipv6Addr::LOCALHOST, 128),                       // ::1
+    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),  // ULA
+    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10), // link-local
+    (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),  // multicast
 ];
 
 /// Returns true if `ip` is in any blocked range. Defends the LLM
@@ -334,10 +334,7 @@ pub fn definition() -> ToolDef {
 // session_id)
 // ---------------------------------------------------------------------------
 
-pub async fn execute(
-    input: &serde_json::Value,
-    ctx: &ToolContext,
-) -> (String, bool) {
+pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, bool) {
     execute_with(input, ctx, false).await
 }
 
@@ -347,10 +344,7 @@ pub async fn execute(
 /// instead — this function is `#[cfg(test)]`-gated to keep it
 /// out of the production binary.
 #[cfg(test)]
-pub async fn execute_for_test(
-    input: &serde_json::Value,
-    ctx: &ToolContext,
-) -> (String, bool) {
+pub async fn execute_for_test(input: &serde_json::Value, ctx: &ToolContext) -> (String, bool) {
     execute_with(input, ctx, true).await
 }
 
@@ -523,7 +517,11 @@ async fn fetch_and_process(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         status_code,
         body_bytes.len(),
-        if content_type.is_empty() { "none" } else { content_type.as_str() },
+        if content_type.is_empty() {
+            "none"
+        } else {
+            content_type.as_str()
+        },
     );
 
     Ok(format!("{}{}", attribution, truncated))
@@ -551,11 +549,7 @@ fn classify_reqwest_error(e: reqwest::Error, timeout_secs: u64) -> WebFetchError
     WebFetchError::Network(e.to_string())
 }
 
-fn convert_body(
-    body: &[u8],
-    content_type: &str,
-    format: Format,
-) -> Result<String, WebFetchError> {
+fn convert_body(body: &[u8], content_type: &str, format: Format) -> Result<String, WebFetchError> {
     let ct = content_type.to_ascii_lowercase();
     let is_html = ct.contains("text/html") || ct.contains("application/xhtml");
     let is_json = ct.contains("json");
@@ -564,9 +558,8 @@ fn convert_body(
         Format::Html => Ok(String::from_utf8_lossy(body).to_string()),
         Format::Markdown => {
             if is_html {
-                let html = std::str::from_utf8(body).map_err(|e| {
-                    WebFetchError::Network(format!("non-utf8 html body: {}", e))
-                })?;
+                let html = std::str::from_utf8(body)
+                    .map_err(|e| WebFetchError::Network(format!("non-utf8 html body: {}", e)))?;
                 html_to_markdown(html)
             } else if is_json {
                 pretty_json(body)
@@ -576,9 +569,8 @@ fn convert_body(
         }
         Format::Text => {
             if is_html {
-                let html = std::str::from_utf8(body).map_err(|e| {
-                    WebFetchError::Network(format!("non-utf8 html body: {}", e))
-                })?;
+                let html = std::str::from_utf8(body)
+                    .map_err(|e| WebFetchError::Network(format!("non-utf8 html body: {}", e)))?;
                 Ok(html_to_text(html))
             } else if is_json {
                 pretty_json(body)
@@ -705,9 +697,7 @@ async fn resolve_public(
     .await
     {
         Ok(Ok(it)) => it.collect(),
-        Ok(Err(e)) => {
-            return Err(WebFetchError::Network(format!("DNS lookup failed: {}", e)))
-        }
+        Ok(Err(e)) => return Err(WebFetchError::Network(format!("DNS lookup failed: {}", e))),
         Err(_) => {
             tracing::warn!(
                 host = host,
@@ -892,15 +882,15 @@ mod tests {
 
     #[test]
     fn blocks_cgnat_and_multicast() {
-        assert!(is_blocked("100.64.0.1".parse().unwrap(), false));      // CGNAT
-        assert!(is_blocked("239.255.255.255".parse().unwrap(), false));   // multicast
+        assert!(is_blocked("100.64.0.1".parse().unwrap(), false)); // CGNAT
+        assert!(is_blocked("239.255.255.255".parse().unwrap(), false)); // multicast
     }
 
     #[test]
     fn allows_public_v4() {
-        assert!(!is_blocked("8.8.8.8".parse().unwrap(), false));         // Google DNS
-        assert!(!is_blocked("1.1.1.1".parse().unwrap(), false));         // Cloudflare DNS
-        assert!(!is_blocked("93.184.216.34".parse().unwrap(), false));   // example.com
+        assert!(!is_blocked("8.8.8.8".parse().unwrap(), false)); // Google DNS
+        assert!(!is_blocked("1.1.1.1".parse().unwrap(), false)); // Cloudflare DNS
+        assert!(!is_blocked("93.184.216.34".parse().unwrap(), false)); // example.com
     }
 
     #[test]
@@ -1061,11 +1051,8 @@ mod tests {
         });
 
         let url = format!("http://{}/page", server.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url, "format": "markdown"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) =
+            execute_for_test(&json!({"url": url, "format": "markdown"}), &test_ctx()).await;
 
         assert!(!is_err, "got error: {}", out);
         mock.assert_hits(1);
@@ -1090,11 +1077,8 @@ mod tests {
         });
 
         let url = format!("http://{}/page", server.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url, "format": "text"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) =
+            execute_for_test(&json!({"url": url, "format": "text"}), &test_ctx()).await;
 
         assert!(!is_err, "got error: {}", out);
         assert!(out.contains("Hello"));
@@ -1103,7 +1087,11 @@ mod tests {
         // and contains `<` / `>`. The body itself has no tags.
         // Find the body after the prefix terminator (`-->\n\n`).
         let body = out.split("-->").nth(1).unwrap_or("");
-        assert!(!body.contains('<'), "body should have no tags, got: {:?}", body);
+        assert!(
+            !body.contains('<'),
+            "body should have no tags, got: {:?}",
+            body
+        );
     }
 
     #[tokio::test]
@@ -1117,11 +1105,8 @@ mod tests {
         });
 
         let url = format!("http://{}/raw", server.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url, "format": "html"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) =
+            execute_for_test(&json!({"url": url, "format": "html"}), &test_ctx()).await;
 
         assert!(!is_err, "got error: {}", out);
         // Attribution prefix is prepended, so the output is
@@ -1158,11 +1143,8 @@ mod tests {
         });
 
         let url = format!("http://{}/gz", server.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url, "format": "markdown"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) =
+            execute_for_test(&json!({"url": url, "format": "markdown"}), &test_ctx()).await;
 
         assert!(!is_err, "got error: {}", out);
         mock.assert_hits(1);
@@ -1170,7 +1152,11 @@ mod tests {
         // markdown output; if it didn't, we'd have errored above (or
         // seen `�` garbage instead of these words).
         let head: String = out.chars().take(80).collect();
-        assert!(out.contains("Compressed"), "no decompressed text; got: {}", head);
+        assert!(
+            out.contains("Compressed"),
+            "no decompressed text; got: {}",
+            head
+        );
         assert!(out.contains("gunzip me"));
     }
 
@@ -1183,8 +1169,7 @@ mod tests {
         });
 
         let url = format!("http://{}/missing", server.address());
-        let (out, is_err) =
-            execute_for_test(&json!({"url": url}), &test_ctx()).await;
+        let (out, is_err) = execute_for_test(&json!({"url": url}), &test_ctx()).await;
 
         assert!(is_err);
         assert!(out.contains("HTTP 404"), "got: {}", out);
@@ -1199,8 +1184,7 @@ mod tests {
         });
 
         let url = format!("http://{}/boom", server.address());
-        let (out, is_err) =
-            execute_for_test(&json!({"url": url}), &test_ctx()).await;
+        let (out, is_err) = execute_for_test(&json!({"url": url}), &test_ctx()).await;
 
         assert!(is_err);
         assert!(out.contains("HTTP 500"), "got: {}", out);
@@ -1210,11 +1194,8 @@ mod tests {
     async fn invalid_scheme_returns_invalid_url_error() {
         // file://, gopher://, etc. all rejected at parse time.
         // (No mock needed — fails before any network call.)
-        let (out, is_err) = execute_for_test(
-            &json!({"url": "file:///etc/passwd"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) =
+            execute_for_test(&json!({"url": "file:///etc/passwd"}), &test_ctx()).await;
 
         assert!(is_err);
         assert!(out.contains("http or https"), "got: {}", out);
@@ -1222,14 +1203,14 @@ mod tests {
 
     #[tokio::test]
     async fn unparseable_url_returns_invalid_url_error() {
-        let (out, is_err) = execute_for_test(
-            &json!({"url": "not a url"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) = execute_for_test(&json!({"url": "not a url"}), &test_ctx()).await;
 
         assert!(is_err);
-        assert!(out.contains("http or https") || out.contains("URL"), "got: {}", out);
+        assert!(
+            out.contains("http or https") || out.contains("URL"),
+            "got: {}",
+            out
+        );
     }
 
     /// Production entry (`execute`) MUST still block loopback.
@@ -1241,13 +1222,13 @@ mod tests {
     async fn production_entry_blocks_loopback() {
         // 127.0.0.1 should always be rejected, regardless of any
         // test-only override (this is the production path).
-        let (out, is_err) = execute(
-            &json!({"url": "http://127.0.0.1:1/"}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) = execute(&json!({"url": "http://127.0.0.1:1/"}), &test_ctx()).await;
         assert!(is_err, "127.0.0.1 should be blocked in production");
-        assert!(out.contains("private") || out.contains("loopback"), "got: {}", out);
+        assert!(
+            out.contains("private") || out.contains("loopback"),
+            "got: {}",
+            out
+        );
     }
 
     // -- Redirect SSRF guard (RULE-E-003, 2026-06-14) --
@@ -1271,16 +1252,11 @@ mod tests {
         let attacker = MockServer::start();
         let attacker_mock = attacker.mock(|when, then| {
             when.method(GET).path("/redirect");
-            then.status(301)
-                .header("Location", "http://10.0.0.1/admin");
+            then.status(301).header("Location", "http://10.0.0.1/admin");
         });
 
         let url = format!("http://{}/redirect", attacker.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) = execute_for_test(&json!({"url": url}), &test_ctx()).await;
 
         assert!(is_err, "redirect to RFC 1918 must be refused, got: {}", out);
         assert!(
@@ -1310,13 +1286,13 @@ mod tests {
         });
 
         let url = format!("http://{}/imds", attacker.address());
-        let (out, is_err) = execute_for_test(
-            &json!({"url": url}),
-            &test_ctx(),
-        )
-        .await;
+        let (out, is_err) = execute_for_test(&json!({"url": url}), &test_ctx()).await;
 
-        assert!(is_err, "redirect to cloud metadata must be refused, got: {}", out);
+        assert!(
+            is_err,
+            "redirect to cloud metadata must be refused, got: {}",
+            out
+        );
         assert!(
             out.contains("redirect") && out.contains("refused"),
             "expected redirect-refused error, got: {}",
@@ -1340,8 +1316,8 @@ mod tests {
     #[test]
     fn resolve_and_check_sync_allows_public_ip() {
         // Public IP — the SSRF guard must pass.
-        let addr = resolve_and_check_sync("8.8.8.8", 80, false)
-            .expect("public IP must not be blocked");
+        let addr =
+            resolve_and_check_sync("8.8.8.8", 80, false).expect("public IP must not be blocked");
         assert_eq!(addr.ip().to_string(), "8.8.8.8");
     }
 
@@ -1350,11 +1326,12 @@ mod tests {
         // RFC 1918 — the SSRF guard must reject even with the
         // test-only `allow_private=true` bypass NOT set. This
         // mirrors what the redirect policy callback sees.
-        let err = resolve_and_check_sync("10.0.0.1", 80, false)
-            .expect_err("RFC 1918 must be blocked");
+        let err =
+            resolve_and_check_sync("10.0.0.1", 80, false).expect_err("RFC 1918 must be blocked");
         assert!(
             matches!(err, WebFetchError::BlockedAddress(_)),
-            "got: {:?}", err
+            "got: {:?}",
+            err
         );
     }
 

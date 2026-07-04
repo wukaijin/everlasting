@@ -23,9 +23,7 @@ async fn make_pool() -> SqlitePool {
         .execute(&pool)
         .await
         .unwrap();
-    crate::db::migrations::run_migrations(&pool)
-        .await
-        .unwrap();
+    crate::db::migrations::run_migrations(&pool).await.unwrap();
     pool
 }
 
@@ -80,10 +78,7 @@ fn risk_for_tool_includes_merge_discard_high() {
 /// async `run_background_shell`. This test guards the routing.
 #[test]
 fn classify_tool_routes_background_shell_to_shell_kind() {
-    assert_eq!(
-        classify_tool("run_background_shell"),
-        ToolKind::Shell
-    );
+    assert_eq!(classify_tool("run_background_shell"), ToolKind::Shell);
 }
 
 /// extract_path_arg reads the `path` key (with `cwd` /
@@ -91,13 +86,19 @@ fn classify_tool_routes_background_shell_to_shell_kind() {
 #[test]
 fn extract_path_arg_reads_path_key() {
     let v = serde_json::json!({"path": "/abs/path.txt"});
-    assert_eq!(extract_path_arg("read_file", &v), Some("/abs/path.txt".to_string()));
+    assert_eq!(
+        extract_path_arg("read_file", &v),
+        Some("/abs/path.txt".to_string())
+    );
 }
 
 #[test]
 fn extract_path_arg_falls_back_to_cwd() {
     let v = serde_json::json!({"cwd": "/fallback"});
-    assert_eq!(extract_path_arg("read_file", &v), Some("/fallback".to_string()));
+    assert_eq!(
+        extract_path_arg("read_file", &v),
+        Some("/fallback".to_string())
+    );
 }
 
 #[test]
@@ -146,9 +147,7 @@ fn sqlite_glob_match_literal() {
 #[test]
 fn match_value_for_allow_always_path_uses_parent_glob() {
     let v = serde_json::json!({});
-    let (kind, val) = match_value_for_allow_always(
-        "read_file", &v, "/Users/me/Documents/notes.md",
-    );
+    let (kind, val) = match_value_for_allow_always("read_file", &v, "/Users/me/Documents/notes.md");
     assert_eq!(kind, "path");
     assert_eq!(val, Some("/Users/me/Documents/*".to_string()));
 }
@@ -161,9 +160,7 @@ fn match_value_for_allow_always_path_uses_parent_glob() {
 #[test]
 fn match_value_for_allow_always_path_basename_only() {
     let v = serde_json::json!({});
-    let (kind, val) = match_value_for_allow_always(
-        "read_file", &v, "notes.md",
-    );
+    let (kind, val) = match_value_for_allow_always("read_file", &v, "notes.md");
     assert_eq!(kind, "path");
     assert_eq!(val, Some("notes.md/*".to_string()));
 }
@@ -172,9 +169,7 @@ fn match_value_for_allow_always_path_basename_only() {
 #[test]
 fn match_value_for_allow_always_shell_uses_first_token() {
     let v = serde_json::json!({});
-    let (kind, val) = match_value_for_allow_always(
-        "shell", &v, "cargo test --release",
-    );
+    let (kind, val) = match_value_for_allow_always("shell", &v, "cargo test --release");
     assert_eq!(kind, "prefix");
     assert_eq!(val, Some("cargo".to_string()));
 }
@@ -184,9 +179,7 @@ fn match_value_for_allow_always_shell_uses_first_token() {
 #[test]
 fn match_value_for_allow_always_web_fetch_uses_tool() {
     let v = serde_json::json!({});
-    let (kind, val) = match_value_for_allow_always(
-        "web_fetch", &v, "https://example.com",
-    );
+    let (kind, val) = match_value_for_allow_always("web_fetch", &v, "https://example.com");
     assert_eq!(kind, "tool");
     assert_eq!(val, None);
 }
@@ -204,7 +197,7 @@ fn match_value_for_allow_always_web_fetch_uses_tool() {
 /// → tool_result 注脚回填可见" acceptance flow from prd.md.
 #[tokio::test]
 async fn recall_pitfall_footnote_active_hit_returns_text() {
-    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
     let pool = make_pool().await;
     // Path-agnostic active pitfall for the `shell` tool with
     // `command_pattern="cargo test"` — the canonical example
@@ -234,7 +227,10 @@ async fn recall_pitfall_footnote_active_hit_returns_text() {
         .await
         .expect("recall must succeed on a healthy pool");
     let text = footnote.expect("active hit must produce a footnote");
-    assert!(text.contains("Memory:"), "footnote carries the warning header");
+    assert!(
+        text.contains("Memory:"),
+        "footnote carries the warning header"
+    );
     assert!(
         text.contains("WSL cargo test needs PKG_CONFIG_PATH"),
         "footnote carries the pitfall title"
@@ -251,7 +247,7 @@ async fn recall_pitfall_footnote_active_hit_returns_text() {
 /// (irrelevant to the agent's actual action).
 #[tokio::test]
 async fn recall_pitfall_footnote_unrelated_tool_returns_none() {
-    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
     let pool = make_pool().await;
     insert_raw(
         &pool,
@@ -286,7 +282,7 @@ async fn recall_pitfall_footnote_unrelated_tool_returns_none() {
 /// soft-intercept path).
 #[tokio::test]
 async fn recall_pitfall_footnote_verified_hit_returns_none_for_p3() {
-    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
     let pool = make_pool().await;
     insert_raw(
         &pool,
@@ -320,7 +316,7 @@ async fn recall_pitfall_footnote_verified_hit_returns_none_for_p3() {
 /// `active` and (P5) `verified` surface.
 #[tokio::test]
 async fn recall_pitfall_footnote_candidate_hit_returns_none() {
-    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
     let pool = make_pool().await;
     insert_raw(
         &pool,
@@ -354,7 +350,7 @@ async fn recall_pitfall_footnote_candidate_hit_returns_none() {
 /// caller's command must contain it for the recall to match.
 #[tokio::test]
 async fn recall_pitfall_footnote_command_pattern_mismatch_returns_none() {
-    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope, MemoryStatus};
     let pool = make_pool().await;
     insert_raw(
         &pool,
@@ -423,7 +419,7 @@ async fn seed_pitfall(
     command_pattern: Option<&str>,
     path_globs: Option<&str>,
 ) {
-    use crate::db::memories::{MemoryKind, MemoryScope, test_helpers::insert_raw};
+    use crate::db::memories::{test_helpers::insert_raw, MemoryKind, MemoryScope};
     insert_raw(
         pool,
         memory_id,
@@ -578,7 +574,10 @@ async fn p5_recall_verified_second_hit_degrades_to_footnote() {
     let outcome = recall_pitfall(&pool, "edit_file", &input, &blocked).await;
     match outcome {
         PitfallRecall::Footnote(text) => {
-            assert!(text.contains("v-second title"), "second hit surfaces as footnote");
+            assert!(
+                text.contains("v-second title"),
+                "second hit surfaces as footnote"
+            );
         }
         PitfallRecall::SoftBlock { .. } => panic!("second hit must NOT soft-block (D1)"),
         PitfallRecall::None => panic!("verified row should still surface as footnote"),
@@ -954,11 +953,7 @@ async fn tier4_worker_run_grant_does_not_short_circuit_for_compound() {
     let pool = super::tests_common::worker_test_pool().await;
     let cache = std::sync::Arc::new(RunGrantCache::new());
     // Seed a worker run-grant on `ls` (prefix kind).
-    cache.grant_for_run(
-        "shell",
-        &serde_json::json!({"command": "ls"}),
-        "ls",
-    );
+    cache.grant_for_run("shell", &serde_json::json!({"command": "ls"}), "ls");
     let store = new_permission_store();
     let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
     let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
@@ -995,4 +990,3 @@ async fn tier4_worker_run_grant_does_not_short_circuit_for_compound() {
          run-grant — expected a permission:ask emission (R1 worker coverage)"
     );
 }
-

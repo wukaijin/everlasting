@@ -188,7 +188,10 @@ mod tests {
             (TranscriptKind::ToolCall, "tool_call"),
             (TranscriptKind::ToolResult, "tool_result"),
             (TranscriptKind::PermissionAsk, "permission_ask"),
-            (TranscriptKind::PermissionAskResolved, "permission_ask_resolved"),
+            (
+                TranscriptKind::PermissionAskResolved,
+                "permission_ask_resolved",
+            ),
         ] {
             let p = build_subagent_event_payload("rid", "sid", kind, serde_json::Value::Null);
             assert_eq!(p["kind"], expected, "kind={kind:?} wire form");

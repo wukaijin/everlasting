@@ -392,7 +392,9 @@ async fn agent_loop_ask_user_question_user_skip() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "got it".into() }),
+            Ok(ChatEvent::Delta {
+                text: "got it".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -432,8 +434,7 @@ async fn agent_loop_ask_user_question_user_skip() {
     // wrapper.
     let raw = unwrap_envelope(&ask_result.content);
     assert!(
-        raw.contains("\"cancelled\":true")
-            || raw.contains("\"cancelled\": true"),
+        raw.contains("\"cancelled\":true") || raw.contains("\"cancelled\": true"),
         "wire shape carries {{cancelled: true}}; got: {}",
         raw
     );
@@ -484,7 +485,11 @@ async fn agent_loop_ask_user_question_session_cancel() {
         // fixture bug, not a real cancel-path regression).
         let start = std::time::Instant::now();
         loop {
-            if store_for_cancel.get_payload(&session_id_for_cancel).await.is_some() {
+            if store_for_cancel
+                .get_payload(&session_id_for_cancel)
+                .await
+                .is_some()
+            {
                 // Wait for the cancel arm to clear the entry.
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let after = store_for_cancel.get_payload(&session_id_for_cancel).await;
@@ -717,7 +722,11 @@ async fn agent_loop_ask_user_question_serial_batch() {
     // strict; one non-eligible name disqualifies the whole
     // batch).
     let batch: Vec<(String, String, serde_json::Value)> = vec![
-        ("id1".into(), "shell".into(), serde_json::json!({"command": "ls"})),
+        (
+            "id1".into(),
+            "shell".into(),
+            serde_json::json!({"command": "ls"}),
+        ),
         (
             "id2".into(),
             "ask_user_question".into(),
@@ -731,42 +740,36 @@ async fn agent_loop_ask_user_question_serial_batch() {
 
     // Pure read-only batch without ask_user_question IS
     // eligible (sanity check).
-    let read_only_batch: Vec<(String, String, serde_json::Value)> = vec![
-        (
-            "r1".into(),
-            "read_file".into(),
-            serde_json::json!({"path": "Cargo.toml"}),
-        ),
-    ];
+    let read_only_batch: Vec<(String, String, serde_json::Value)> = vec![(
+        "r1".into(),
+        "read_file".into(),
+        serde_json::json!({"path": "Cargo.toml"}),
+    )];
     // Path resolution: `Cargo.toml` joined onto `/tmp` is
     // outside the project root, so this returns false. Use a
     // path that's inside the test's project cwd instead.
     let h = make_harness().await;
     let cwd_str = h.project_path.to_string_lossy().to_string();
     let cwd_path = Path::new(&cwd_str);
-    let inside: Vec<(String, String, serde_json::Value)> = vec![
-        (
-            "r1".into(),
-            "read_file".into(),
-            serde_json::json!({"path": "Cargo.toml"}),
-        ),
-    ];
+    let inside: Vec<(String, String, serde_json::Value)> = vec![(
+        "r1".into(),
+        "read_file".into(),
+        serde_json::json!({"path": "Cargo.toml"}),
+    )];
     let _ = read_only_batch; // unused — the inside case is the assertion
-    // For the assertion to pass we'd need a real
-    // Cargo.toml at the project path; the test harness doesn't
-    // seed one. We just verify `is_parallel_eligible` returns
-    // true for a pure read-only batch against a permissive
-    // root (no path-tools need root-membership — only the
-    // path-tool branch enforces `is_within_root`). Use a
-    // permissive root that contains the project path.
+                             // For the assertion to pass we'd need a real
+                             // Cargo.toml at the project path; the test harness doesn't
+                             // seed one. We just verify `is_parallel_eligible` returns
+                             // true for a pure read-only batch against a permissive
+                             // root (no path-tools need root-membership — only the
+                             // path-tool branch enforces `is_within_root`). Use a
+                             // permissive root that contains the project path.
     let permissive_root = Path::new("/");
-    let permissive_batch: Vec<(String, String, serde_json::Value)> = vec![
-        (
-            "r1".into(),
-            "list_dir".into(),
-            serde_json::json!({"path": "."}),
-        ),
-    ];
+    let permissive_batch: Vec<(String, String, serde_json::Value)> = vec![(
+        "r1".into(),
+        "list_dir".into(),
+        serde_json::json!({"path": "."}),
+    )];
     assert!(
         is_parallel_eligible(&permissive_batch, permissive_root),
         "pure read-only batch IS parallel-eligible (sanity)"

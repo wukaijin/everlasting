@@ -87,5 +87,11 @@ pub(super) async fn worker_ctx_with_db() -> (
         run_grants: None,
         worktree_path: std::path::PathBuf::from("/repo"),
     };
-    (pool, store, sink, ctx, tokio_util::sync::CancellationToken::new())
+    (
+        pool,
+        store,
+        sink,
+        ctx,
+        tokio_util::sync::CancellationToken::new(),
+    )
 }

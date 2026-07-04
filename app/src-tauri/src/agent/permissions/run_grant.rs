@@ -155,9 +155,9 @@ impl RunGrantCache {
             Err(_) => return false,
         };
         match kind {
-            "tool" => grants.iter().any(|g| {
-                g.match_kind == "tool" && g.tool_name == tool_name
-            }),
+            "tool" => grants
+                .iter()
+                .any(|g| g.match_kind == "tool" && g.tool_name == tool_name),
             "prefix" => {
                 if candidate.is_empty() {
                     return false;
@@ -192,10 +192,7 @@ impl RunGrantCache {
     /// wrote exactly one grant".
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.grants
-            .lock()
-            .map(|g| g.len())
-            .unwrap_or(0)
+        self.grants.lock().map(|g| g.len()).unwrap_or(0)
     }
 
     /// Whether the cache currently holds any grant. Test-only.

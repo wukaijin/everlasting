@@ -65,9 +65,7 @@ pub async fn create_session(
             ));
         }
         Err(e) => {
-            return Err(
-                anyhow::anyhow!("create_session: failed to load project: {}", e).into(),
-            )
+            return Err(anyhow::anyhow!("create_session: failed to load project: {}", e).into())
         }
     };
 
@@ -80,9 +78,16 @@ pub async fn create_session(
         .ok()
         .flatten();
 
-    db::create_session(&state.db, &session_id, &project_id, &initial_cwd, &model, model_id.as_deref())
-        .await
-        .map_err(|e| anyhow::anyhow!("create_session: db insert failed: {}", e).into())
+    db::create_session(
+        &state.db,
+        &session_id,
+        &project_id,
+        &initial_cwd,
+        &model,
+        model_id.as_deref(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("create_session: db insert failed: {}", e).into())
 }
 
 #[tauri::command]
@@ -163,11 +168,7 @@ pub async fn delete_session(
     // across session churn. cancel_session_asks filters by
     // session_id (RULE-B-002), so other sessions' pending asks
     // are untouched.
-    crate::agent::permissions::cancel_session_asks(
-        &state.permission_asks,
-        &session_id,
-    )
-    .await;
+    crate::agent::permissions::cancel_session_asks(&state.permission_asks, &session_id).await;
 
     // Clear the in-memory ReadGuard for this session so we don't
     // leak fingerprints for a session the user just deleted.

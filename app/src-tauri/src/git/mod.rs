@@ -24,6 +24,4 @@ pub mod diff;
 pub mod error;
 pub mod worktree;
 
-pub use worktree::{
-    check_clean, destroy as destroy_worktree,
-};
+pub use worktree::{check_clean, destroy as destroy_worktree};

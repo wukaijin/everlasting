@@ -154,7 +154,10 @@ fn push_message_tokens(buf: &mut String, m: &ChatMessage) {
                     buf.push_str(tool_use_id);
                     buf.push_str(content);
                 }
-                ContentBlock::Thinking { thinking, signature } => {
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
                     buf.push_str(thinking);
                     buf.push_str(&signature);
                 }
@@ -203,10 +206,7 @@ pub async fn estimate_messages_tokens(messages: &[ChatMessage]) -> u32 {
 /// blocks are never orphaned. Since they live inside assistant
 /// turns and a turn is dropped atomically, no signature ends up
 /// without its parent turn.
-pub async fn compact_messages(
-    messages: Vec<ChatMessage>,
-    context_window: u32,
-) -> CompactResult {
+pub async fn compact_messages(messages: Vec<ChatMessage>, context_window: u32) -> CompactResult {
     let tokens_before = estimate_messages_tokens(&messages).await;
 
     // Trigger threshold not reached — nothing to do.
@@ -313,7 +313,10 @@ pub async fn compact_messages(
             dropped_count,
             "C3 compaction: all droppable exhausted but still over target"
         );
-        DegradationKind::StillOver { tokens_after, target }
+        DegradationKind::StillOver {
+            tokens_after,
+            target,
+        }
     } else {
         DegradationKind::None
     };
@@ -340,10 +343,7 @@ fn target_threshold(context_window: u32) -> u32 {
 
 /// Estimate tokens across `messages`, skipping indices flagged in
 /// `dropped`. Cheaper than rebuilding the Vec on every step.
-async fn estimate_messages_tokens_iter(
-    messages: &[ChatMessage],
-    dropped: &[bool],
-) -> u32 {
+async fn estimate_messages_tokens_iter(messages: &[ChatMessage], dropped: &[bool]) -> u32 {
     let mut buf = String::new();
     for (i, m) in messages.iter().enumerate() {
         if dropped[i] {
@@ -395,9 +395,9 @@ fn group_droppable_turns(
             // orphan the tail). So in that case we skip emitting
             // any group for this assistant message entirely.
             let pair_with_next = i + 1 <= tail_index
-                && messages.get(i + 1).map_or(false, |n| {
-                    n.role == Role::User && has_tool_result(n)
-                });
+                && messages
+                    .get(i + 1)
+                    .map_or(false, |n| n.role == Role::User && has_tool_result(n));
             if i + 1 < tail_index && pair_with_next {
                 // The tool_result sits in the droppable middle;
                 // the whole pair is one atomic group.
@@ -624,7 +624,10 @@ mod tests {
             result.messages.len() >= 3,
             "at least head[0..=1] + the tail user message should survive"
         );
-        assert_eq!(result.messages[0].content.to_text(), "B5 memory instructions go here");
+        assert_eq!(
+            result.messages[0].content.to_text(),
+            "B5 memory instructions go here"
+        );
         assert_eq!(result.messages[1].content.to_text(), "Understood.");
     }
 
@@ -672,7 +675,11 @@ mod tests {
                 );
             }
             if m.role == Role::User && has_tool_result(m) {
-                let prev = if i == 0 { None } else { result.messages.get(i - 1) };
+                let prev = if i == 0 {
+                    None
+                } else {
+                    result.messages.get(i - 1)
+                };
                 assert!(
                     matches!(prev, Some(p) if p.role == Role::Assistant && has_tool_use(p)),
                     "user(tool_result) at index {} must be immediately preceded by assistant(tool_use) — got {:?}",
@@ -706,7 +713,10 @@ mod tests {
             "head pair must survive (got {} messages)",
             result.messages.len()
         );
-        assert_eq!(result.messages[0].content.to_text(), "B5_INSTRUCTIONS_MARKER");
+        assert_eq!(
+            result.messages[0].content.to_text(),
+            "B5_INSTRUCTIONS_MARKER"
+        );
         assert_eq!(result.messages[1].content.to_text(), "ack");
     }
 
@@ -735,7 +745,11 @@ mod tests {
         for m in &result.messages {
             if let MessageContent::Blocks(blocks) = &m.content {
                 for b in blocks {
-                    if let ContentBlock::Thinking { thinking, signature } = b {
+                    if let ContentBlock::Thinking {
+                        thinking,
+                        signature,
+                    } = b
+                    {
                         // The signature we constructed is
                         // "sig_for_<visible text>"; check it's still
                         // there (i.e. not split off).
@@ -763,11 +777,7 @@ mod tests {
     async fn case_6_too_few_messages_to_compact() {
         // Only head + tail = 3 messages (head=2 + 1 tail = 3, but
         // we require head + tail + at least one droppable middle).
-        let messages = vec![
-            user("B5 memory"),
-            assistant("ack"),
-            user("hi"),
-        ];
+        let messages = vec![user("B5 memory"), assistant("ack"), user("hi")];
         // Force trigger by setting an absurdly small context_window.
         let result = compact_messages(messages, 10).await;
         assert_eq!(result.dropped_count, 0, "not enough messages to compact");
@@ -1021,7 +1031,11 @@ mod tests {
                 );
             }
             if m.role == Role::User && has_tool_result(m) {
-                let prev = if i == 0 { None } else { result.messages.get(i - 1) };
+                let prev = if i == 0 {
+                    None
+                } else {
+                    result.messages.get(i - 1)
+                };
                 assert!(
                     matches!(prev, Some(p) if p.role == Role::Assistant && has_tool_use(p)),
                     "user(tool_result) at index {} must be immediately preceded by assistant(tool_use) — got {:?}",
@@ -1093,10 +1107,7 @@ mod tests {
                 );
                 assert_eq!(*target, target_threshold(1000));
             }
-            other => panic!(
-                "expected DegradationKind::StillOver, got {:?}",
-                other
-            ),
+            other => panic!("expected DegradationKind::StillOver, got {:?}", other),
         }
     }
 

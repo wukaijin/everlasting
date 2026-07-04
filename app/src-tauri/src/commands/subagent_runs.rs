@@ -255,12 +255,9 @@ pub async fn merge_worker_run(
     match merge_result {
         Ok(msg) => {
             // Stage 2: post-merge cleanup (best-effort).
-            let cleanup_result = crate::tools::merge_worker::finalize_merge(
-                &state.db,
-                &parent_session_id,
-                &run_id,
-            )
-            .await;
+            let cleanup_result =
+                crate::tools::merge_worker::finalize_merge(&state.db, &parent_session_id, &run_id)
+                    .await;
             if let Err(e) = cleanup_result {
                 tracing::warn!(
                     run_id = %run_id,

@@ -341,15 +341,15 @@ async fn execute_tool_inner(
                 (out, is_err, ToolContextUpdate::default(), None)
             }
             _ => (
-                "edit_file called without a ReadGuard / session_id; this is a bug."
-                    .to_string(),
+                "edit_file called without a ReadGuard / session_id; this is a bug.".to_string(),
                 true,
                 ToolContextUpdate::default(),
                 None,
             ),
         },
         "shell" => {
-            let (out, is_err, update, exit_code) = shell::execute(input, ctx, session_id, cancel).await;
+            let (out, is_err, update, exit_code) =
+                shell::execute(input, ctx, session_id, cancel).await;
             (out, is_err, update, exit_code)
         }
         "grep" => {
@@ -396,8 +396,7 @@ async fn execute_tool_inner(
             // a `shell_session_id` handle; the spawned task's
             // completion notification is drained at the start of
             // the next agent-loop turn.
-            let (out, is_err, update) =
-                run_background_shell::execute(input, ctx, session_id).await;
+            let (out, is_err, update) = run_background_shell::execute(input, ctx, session_id).await;
             (out, is_err, update, None)
         }
         "shell_status" => {

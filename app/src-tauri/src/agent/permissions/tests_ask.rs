@@ -130,12 +130,7 @@ async fn worker_ask_uses_isolated_permission_session_id() {
     // subsequent resolve_ask would fail (rid missing).
     crate::agent::permissions::cancel_session_asks(&store, "parent-sess").await;
     let rid = payload.rid.clone();
-    let resolved = resolve_ask(
-        &store,
-        &rid,
-        PermissionResponse::AllowOnce,
-    )
-    .await;
+    let resolved = resolve_ask(&store, &rid, PermissionResponse::AllowOnce).await;
     assert!(
         resolved,
         "cancel_session_asks(parent_session_id) must NOT drop the worker's \
@@ -183,12 +178,7 @@ async fn worker_ask_allowed_resolves_allow() {
             if let Some((rid, _)) = map.iter().next() {
                 let rid = rid.clone();
                 drop(map);
-                let _ = resolve_ask(
-                    &store_for_resolve,
-                    &rid,
-                    PermissionResponse::AllowOnce,
-                )
-                .await;
+                let _ = resolve_ask(&store_for_resolve, &rid, PermissionResponse::AllowOnce).await;
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
@@ -210,7 +200,11 @@ async fn worker_ask_allowed_resolves_allow() {
     )
     .await;
 
-    assert!(matches!(decision, Decision::Allow), "expected Allow, got {:?}", decision);
+    assert!(
+        matches!(decision, Decision::Allow),
+        "expected Allow, got {:?}",
+        decision
+    );
 
     // No new audit row (RULE-A-016 — worker Allow does NOT write
     // parent's `session_audit_events`). We assert the only rows
@@ -348,7 +342,9 @@ async fn worker_ask_user_deny_resolves_deny() {
                 let _ = resolve_ask(
                     &store_for_resolve,
                     &rid,
-                    PermissionResponse::Deny { reason: "use git clean".to_string() },
+                    PermissionResponse::Deny {
+                        reason: "use git clean".to_string(),
+                    },
                 )
                 .await;
                 return;
@@ -402,9 +398,9 @@ async fn worker_ask_user_deny_resolves_deny() {
 /// `<PermissionModal>`.
 #[tokio::test]
 async fn worker_ask_payload_carries_worker_run_id_camel_case() {
-    use std::sync::Mutex as StdMutex;
-    use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
     use crate::agent::permissions::PermissionAskPayload;
+    use crate::state::{ChatEventPayload, ToolCallPayload, ToolResultPayload};
+    use std::sync::Mutex as StdMutex;
 
     let (pool, store, _sink, ctx, token) = worker_ctx_with_db().await;
 
@@ -416,10 +412,7 @@ async fn worker_ask_payload_carries_worker_run_id_camel_case() {
         fn emit_chat_event(&self, _p: &ChatEventPayload) {}
         fn emit_tool_call(&self, _p: &ToolCallPayload) {}
         fn emit_tool_result(&self, _p: &ToolResultPayload) {}
-        fn emit_permission_ask(
-            &self,
-            p: PermissionAskPayload,
-        ) {
+        fn emit_permission_ask(&self, p: PermissionAskPayload) {
             self.asks.lock().unwrap().push(p);
         }
     }
@@ -488,13 +481,12 @@ async fn worker_ask_payload_carries_worker_run_id_camel_case() {
 /// test harness starts with an empty table and the worker path
 /// must never insert into it).
 async fn count_session_tool_permissions(pool: &sqlx::SqlitePool, session_id: &str) -> i64 {
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM session_tool_permissions WHERE session_id = ?",
-    )
-    .bind(session_id)
-    .fetch_one(pool)
-    .await
-    .expect("count session_tool_permissions");
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM session_tool_permissions WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .expect("count session_tool_permissions");
     count.0
 }
 
@@ -529,9 +521,11 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
     };
 
     // Snapshot the parent grant table BEFORE — must start empty.
-    let before =
-        count_session_tool_permissions(&pool, "parent-sess").await;
-    assert_eq!(before, 0, "test harness: parent grant table must start empty");
+    let before = count_session_tool_permissions(&pool, "parent-sess").await;
+    assert_eq!(
+        before, 0,
+        "test harness: parent grant table must start empty"
+    );
 
     // Spawn a resolver that sends `PermissionResponse::AllowAlways`
     // for the first rid that registers.
@@ -542,12 +536,8 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
             if let Some((rid, _)) = map.iter().next() {
                 let rid = rid.clone();
                 drop(map);
-                let _ = resolve_ask(
-                    &store_for_resolve,
-                    &rid,
-                    PermissionResponse::AllowAlways,
-                )
-                .await;
+                let _ =
+                    resolve_ask(&store_for_resolve, &rid, PermissionResponse::AllowAlways).await;
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
@@ -595,8 +585,7 @@ async fn worker_ask_allow_always_writes_run_grant_cache_not_db() {
 
     // Parent session grant table is STILL EMPTY — worker grants do
     // not leak across the privilege boundary.
-    let after =
-        count_session_tool_permissions(&pool, "parent-sess").await;
+    let after = count_session_tool_permissions(&pool, "parent-sess").await;
     assert_eq!(
         after, 0,
         "RULE-A-016: worker AllowAlways must NOT write to parent's \
@@ -633,12 +622,7 @@ async fn worker_ask_allow_once_does_not_write_run_grant_cache() {
             if let Some((rid, _)) = map.iter().next() {
                 let rid = rid.clone();
                 drop(map);
-                let _ = resolve_ask(
-                    &store_for_resolve,
-                    &rid,
-                    PermissionResponse::AllowOnce,
-                )
-                .await;
+                let _ = resolve_ask(&store_for_resolve, &rid, PermissionResponse::AllowOnce).await;
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;

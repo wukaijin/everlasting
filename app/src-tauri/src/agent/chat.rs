@@ -33,8 +33,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
-use crate::llm::{ChatEvent, ChatMessage};
 use crate::error::{AppCommandError, ErrorCategory};
+use crate::llm::{ChatEvent, ChatMessage};
 use crate::state::{AppState, ChatEventPayload};
 
 // ---------------------------------------------------------------------------
@@ -74,16 +74,14 @@ pub async fn chat(
     // effort). `None` for normal first-time sends. Field
     // name is snake_case to match the other IPC args; serde
     // auto-converts the JS-side `resendSeq: number | null`.
-    #[allow(non_snake_case)]
-    resendSeq: Option<i64>,
+    #[allow(non_snake_case)] resendSeq: Option<i64>,
     // explicit-agent-dispatch (2026-06-30): `@@<agent> <task>` prefix
     // parsed by the frontend (`chat.ts send()`). When `Some`,
     // `run_chat_loop`'s turn-1 prefix short-circuits the LLM and
     // dispatches the named worker directly (no `provider.stream`).
     // `None` for normal sends. Mutually exclusive with `resendSeq`
     // (a resend never carries a forced dispatch).
-    #[allow(non_snake_case)]
-    forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
+    #[allow(non_snake_case)] forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) -> Result<(), AppCommandError> {
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
@@ -145,7 +143,10 @@ pub async fn chat(
             );
             let payload = ChatEventPayload {
                 request_id: rid.clone(),
-                event: ChatEvent::Error { message: msg, category },
+                event: ChatEvent::Error {
+                    message: msg,
+                    category,
+                },
             };
             // A5(R3.4):emit 失败是 IPC 边界双重故障(pre-flight 错误
             // 本要走 stream,emit 又失败)。归 Server,透传 rid 让
@@ -220,9 +221,8 @@ pub async fn chat(
     // the chat-event / tool:call / tool:result emits). The
     // testable variant in `chat_loop.rs` uses the same trait
     // for ALL emits, so tests get a single MockEmitter sink.
-    let sink: Arc<dyn crate::state::ChatEventSink> = Arc::new(crate::state::AppHandleSink {
-        app: app.clone(),
-    });
+    let sink: Arc<dyn crate::state::ChatEventSink> =
+        Arc::new(crate::state::AppHandleSink { app: app.clone() });
     let sink_for_spawn = sink.clone();
 
     tauri::async_runtime::spawn(async move {

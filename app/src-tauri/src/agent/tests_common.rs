@@ -40,8 +40,7 @@ pub(crate) struct MockEmitter {
     pub(crate) chat_events: Arc<StdMutex<Vec<ChatEventPayload>>>,
     pub(crate) tool_calls: Arc<StdMutex<Vec<ToolCallPayload>>>,
     pub(crate) tool_results: Arc<StdMutex<Vec<ToolResultPayload>>>,
-    pub(crate) permission_asks:
-        Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
+    pub(crate) permission_asks: Arc<StdMutex<Vec<crate::agent::permissions::PermissionAskPayload>>>,
     /// 2026-06-30 (`ask_user_question` task): captured
     /// `ToolQuestionPayload`s emitted to the `tool:question`
     /// channel. Tests assert against this to confirm the IPC
@@ -147,10 +146,7 @@ impl ChatEventSink for MockEmitter {
     fn emit_permission_ask(&self, payload: crate::agent::permissions::PermissionAskPayload) {
         self.permission_asks.lock().unwrap().push(payload);
     }
-    fn emit_tool_question(
-        &self,
-        payload: &crate::agent::question_store::ToolQuestionPayload,
-    ) {
+    fn emit_tool_question(&self, payload: &crate::agent::question_store::ToolQuestionPayload) {
         // 2026-06-30: record the `tool:question` IPC payload so
         // tests can assert "the ask_user_question tool was
         // emitted on the channel". Mirrors `emit_permission_ask`.

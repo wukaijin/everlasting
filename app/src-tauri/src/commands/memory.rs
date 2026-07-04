@@ -25,9 +25,7 @@ use tauri::State;
 use crate::db;
 use crate::db::memories::list_memories as db_list_memories;
 use crate::error::{AppCommandError, ErrorCategory};
-use crate::memory::loader::{
-    all_paths, load_for_session, resolve_one, MemoryCache,
-};
+use crate::memory::loader::{all_paths, load_for_session, resolve_one, MemoryCache};
 use crate::memory::types::MemoryLayerInfo;
 use crate::state::AppState;
 
@@ -82,7 +80,9 @@ pub async fn read_memory_content(
             ));
         }
         Err(e) => {
-            return Err(anyhow::anyhow!("read_memory_content: failed to load project: {}", e).into())
+            return Err(
+                anyhow::anyhow!("read_memory_content: failed to load project: {}", e).into(),
+            )
         }
     };
 
@@ -150,18 +150,13 @@ pub async fn open_memory_in_editor(
         Ok(None) => {
             return Err(AppCommandError::new(
                 ErrorCategory::InvalidRequest,
-                format!(
-                    "open_memory_in_editor: project '{}' not found",
-                    project_id
-                ),
+                format!("open_memory_in_editor: project '{}' not found", project_id),
             ));
         }
         Err(e) => {
-            return Err(anyhow::anyhow!(
-                "open_memory_in_editor: failed to load project: {}",
-                e
+            return Err(
+                anyhow::anyhow!("open_memory_in_editor: failed to load project: {}", e).into(),
             )
-            .into())
         }
     };
 
@@ -260,7 +255,9 @@ fn fallback_open(path: &std::path::Path) -> std::io::Result<std::process::Child>
 
 #[cfg(target_os = "windows")]
 fn fallback_open(path: &std::path::Path) -> std::io::Result<std::process::Child> {
-    Command::new("cmd").args(["/c", "start", "", &path.to_string_lossy()]).spawn()
+    Command::new("cmd")
+        .args(["/c", "start", "", &path.to_string_lossy()])
+        .spawn()
 }
 
 // Re-export for unit tests.
@@ -311,11 +308,9 @@ pub async fn list_autonomous_memories(
             ));
         }
         Err(e) => {
-            return Err(anyhow::anyhow!(
-                "list_autonomous_memories: failed to load project: {}",
-                e
+            return Err(
+                anyhow::anyhow!("list_autonomous_memories: failed to load project: {}", e).into(),
             )
-            .into())
         }
     }
     // scope=None → both layers. The DB layer ignores project_id
@@ -324,9 +319,7 @@ pub async fn list_autonomous_memories(
     // project-isolation contract.
     db_list_memories(&state.db, None, Some(&project_id))
         .await
-        .map_err(|e| {
-            anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into()
-        })
+        .map_err(|e| anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into())
 }
 
 /// Delete a runtime memory by its `memory_id` UUID. Best-effort
@@ -346,7 +339,5 @@ pub async fn delete_autonomous_memory(
 ) -> Result<u64, AppCommandError> {
     crate::db::memories::delete_memory(&state.db, &memory_id)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into()
-        })
+        .map_err(|e| anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into())
 }

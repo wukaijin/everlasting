@@ -148,11 +148,7 @@ pub fn detect(window: &[ToolCall]) -> LoopVerdict {
     // --- Level 1: exact-signature run ending at the last call -------
     let sigs: Vec<String> = window.iter().map(signature_of).collect();
     let last_sig = sigs.last().expect("window is non-empty");
-    let tail_run = sigs
-        .iter()
-        .rev()
-        .take_while(|s| *s == last_sig)
-        .count();
+    let tail_run = sigs.iter().rev().take_while(|s| *s == last_sig).count();
     if tail_run >= HARD_WINDOW {
         return LoopVerdict::HardLoop {
             tool: window.last().expect("window is non-empty").name.clone(),
@@ -200,10 +196,7 @@ fn signature_of(call: &ToolCall) -> String {
         // Path-centric reads/writes: repeated ops on the same path.
         "read_file" | "write_file" | "list_dir" => format!("{}:{}", name, path()),
         "grep" | "glob" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
             format!("{}:{}:{}", name, pattern, path())
         }
         // edit_file includes old_string: same-file/different-block edits
@@ -217,10 +210,7 @@ fn signature_of(call: &ToolCall) -> String {
             format!("{}:{}:{}", name, path(), old)
         }
         "shell" | "run_background_shell" => {
-            let command = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             format!("{}:{}", name, command)
         }
         _ => format!("{}:{}", name, canonical_json(input)),
@@ -281,8 +271,22 @@ fn tokenize_for_jaccard(s: &str) -> HashSet<String> {
         let trimmed = word.trim_matches(|c: char| {
             matches!(
                 c,
-                '"' | '\'' | '`' | '-' | '.' | ':' | '=' | ',' | ';' | '!'
-                    | '?' | '(' | ')' | '[' | ']' | '{' | '}'
+                '"' | '\''
+                    | '`'
+                    | '-'
+                    | '.'
+                    | ':'
+                    | '='
+                    | ','
+                    | ';'
+                    | '!'
+                    | '?'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
             )
         });
         if !trimmed.is_empty() {

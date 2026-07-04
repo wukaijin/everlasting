@@ -38,11 +38,7 @@ pub async fn create_project(pool: &sqlx::SqlitePool, path: &str) -> Result<Proje
     // `current_branch_sync` already short-circuits on non-git repos,
     // but doing the explicit guard keeps the intent clear and saves a
     // redundant `git -C <path> rev-parse --show-toplevel` invocation.
-    let git_branch = if is_git {
-        current_branch_sync(p)
-    } else {
-        None
-    };
+    let git_branch = if is_git { current_branch_sync(p) } else { None };
     let name = ProjectRow::default_name_from_path(path);
     db::create_project(pool, &name, path, is_git, git_branch)
         .await
@@ -65,11 +61,7 @@ pub async fn update_project_path(
         return Err(format!("path '{}' is not a directory", new_path));
     }
     let is_git = is_git_repo_sync(p);
-    let git_branch = if is_git {
-        current_branch_sync(p)
-    } else {
-        None
-    };
+    let git_branch = if is_git { current_branch_sync(p) } else { None };
     db::update_project_path(pool, project_id, new_path, is_git, git_branch)
         .await
         .map_err(|e| format!("update_project_path failed: {}", e))
@@ -121,9 +113,7 @@ pub async fn unhide_project(pool: &sqlx::SqlitePool, project_id: &str) -> Result
 /// caller (the spawn closure in `lib.rs`) is responsible for
 /// emitting the `projects:refreshed` Tauri event so the frontend
 /// can refresh its in-memory list when the count is non-zero.
-pub async fn batch_reprobe_git_metadata(
-    pool: &sqlx::SqlitePool,
-) -> Result<usize, String> {
+pub async fn batch_reprobe_git_metadata(pool: &sqlx::SqlitePool) -> Result<usize, String> {
     let stale = db::list_projects_with_stale_git_probe(pool)
         .await
         .map_err(|e| format!("list stale projects failed: {}", e))?;
@@ -151,13 +141,8 @@ pub async fn batch_reprobe_git_metadata(
         if p.is_git_repo == is_git && stored_branch == git_branch.as_deref() {
             continue;
         }
-        if let Err(e) = db::update_project_git_metadata(
-            pool,
-            &p.id,
-            is_git,
-            git_branch.as_deref(),
-        )
-        .await
+        if let Err(e) =
+            db::update_project_git_metadata(pool, &p.id, is_git, git_branch.as_deref()).await
         {
             tracing::warn!(
                 project_id = %p.id,
@@ -255,15 +240,9 @@ mod tests {
         // was created before PR2 (so it carries the
         // `is_git_repo=0, git_branch=NULL` defaults from the
         // ALTER TABLE migration).
-        let p = db::create_project(
-            &pool,
-            "stale",
-            dir.path().to_str().unwrap(),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        let p = db::create_project(&pool, "stale", dir.path().to_str().unwrap(), false, None)
+            .await
+            .unwrap();
         assert!(!p.is_git_repo);
         assert!(p.git_branch.is_none());
 
@@ -272,7 +251,10 @@ mod tests {
         assert_eq!(updated, 1, "exactly one stale row should be updated");
 
         let reloaded = db::get_project(&pool, &p.id).await.unwrap().unwrap();
-        assert!(reloaded.is_git_repo, "backfill should have flipped is_git_repo to true");
+        assert!(
+            reloaded.is_git_repo,
+            "backfill should have flipped is_git_repo to true"
+        );
         // The branch name depends on the host's `init.defaultBranch`
         // (main / master / etc.); we just assert it's *some* real
         // branch (not the literal "HEAD" and not empty).
@@ -290,15 +272,9 @@ mod tests {
         // No `git init` — `is_git_repo_sync` will return false.
 
         let pool = test_pool().await;
-        let p = db::create_project(
-            &pool,
-            "notgit",
-            dir.path().to_str().unwrap(),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        let p = db::create_project(&pool, "notgit", dir.path().to_str().unwrap(), false, None)
+            .await
+            .unwrap();
 
         // Run the backfill. The probe returns `false, None`, which
         // matches the stored `(false, None)`, so the row is skipped

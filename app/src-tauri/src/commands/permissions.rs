@@ -52,12 +52,12 @@ use crate::state::AppState;
 /// `windows-sys::Win32::Security::IsUserAnAdmin` or similar).
 #[cfg(target_family = "unix")]
 pub fn is_running_as_root() -> bool {
- unsafe { libc::geteuid() == 0 }
+    unsafe { libc::geteuid() == 0 }
 }
 
 #[cfg(not(target_family = "unix"))]
 pub fn is_running_as_root() -> bool {
- false
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -78,117 +78,105 @@ pub fn is_running_as_root() -> bool {
 ///    - `yolo_exited` (only when leaving Yolo)
 #[tauri::command]
 pub async fn set_session_mode(
- state: State<'_, Arc<AppState>>,
- session_id: String,
- mode: String,
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    mode: String,
 ) -> Result<db::SessionRow, AppCommandError> {
- // Parse + validate the mode string. Unknown / empty falls
- // back to Edit per the lenient-parse contract (matches
- // `db::types::Mode::from_str_opt`). Old 'chat' / 'review'
- // strings intentionally NOT aliased — the v6 migration
- // rewrites historical rows; new IPC calls must use the
- // 3 档 wire names ('edit' / 'plan' / 'yolo').
- let new_mode = match mode.as_str() {
- "plan" => db::Mode::Plan,
- "yolo" => db::Mode::Yolo,
- "background" => db::Mode::Background,
- _ => db::Mode::Edit,
- };
+    // Parse + validate the mode string. Unknown / empty falls
+    // back to Edit per the lenient-parse contract (matches
+    // `db::types::Mode::from_str_opt`). Old 'chat' / 'review'
+    // strings intentionally NOT aliased — the v6 migration
+    // rewrites historical rows; new IPC calls must use the
+    // 3 档 wire names ('edit' / 'plan' / 'yolo').
+    let new_mode = match mode.as_str() {
+        "plan" => db::Mode::Plan,
+        "yolo" => db::Mode::Yolo,
+        "background" => db::Mode::Background,
+        _ => db::Mode::Edit,
+    };
 
- // Yolo safety guard: refuse to enable Yolo when running as
- // root. Yolo removes all user confirmations and the only
- // remaining gate is Tier 2 (hard kill list). Running as root
- // means `rm -rf /` could actually destroy the system before
- // the kill list even matters (the kill list rejects it but
- // other destructive commands are not enumerated). Refusing
- // here is the simplest, safest guard.
- if new_mode == db::Mode::Yolo && is_running_as_root() {
- tracing::warn!(
- session_id = %session_id,
- "set_session_mode: refused to enable Yolo as root"
- );
- return Err(AppCommandError::new(
- ErrorCategory::InvalidRequest,
- "Cannot enable Yolo as root",
- ));
- }
+    // Yolo safety guard: refuse to enable Yolo when running as
+    // root. Yolo removes all user confirmations and the only
+    // remaining gate is Tier 2 (hard kill list). Running as root
+    // means `rm -rf /` could actually destroy the system before
+    // the kill list even matters (the kill list rejects it but
+    // other destructive commands are not enumerated). Refusing
+    // here is the simplest, safest guard.
+    if new_mode == db::Mode::Yolo && is_running_as_root() {
+        tracing::warn!(
+        session_id = %session_id,
+        "set_session_mode: refused to enable Yolo as root"
+        );
+        return Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            "Cannot enable Yolo as root",
+        ));
+    }
 
- // Read the current mode for the yolo_entered / yolo_exited
- // audit dispatch.
- let loaded = db::load_session(&state.db, &session_id)
- .await
- .map_err(|e| anyhow::anyhow!("set_session_mode: load_session failed: {}", e))?
- .ok_or_else(|| {
- AppCommandError::new(
- ErrorCategory::InvalidRequest,
- format!("set_session_mode: session '{}' not found", session_id),
- )
- })?;
- let prev_mode = loaded.session.mode;
+    // Read the current mode for the yolo_entered / yolo_exited
+    // audit dispatch.
+    let loaded = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_mode: load_session failed: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("set_session_mode: session '{}' not found", session_id),
+            )
+        })?;
+    let prev_mode = loaded.session.mode;
 
- // Write the new mode.
- db::update_session_mode(&state.db, &session_id, new_mode)
- .await
- .map_err(|e| anyhow::anyhow!("set_session_mode: db update failed: {}", e))?;
+    // Write the new mode.
+    db::update_session_mode(&state.db, &session_id, new_mode)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_mode: db update failed: {}", e))?;
 
- // Audit row: mode_changed (always).
- let payload = serde_json::json!({
- "prev_mode": prev_mode.as_str(),
- "new_mode": new_mode.as_str(),
- })
- .to_string();
- if let Err(e) = db::record_audit_event(
- &state.db,
- &session_id,
- "mode_changed",
- Some(&payload),
- )
- .await
- {
- tracing::warn!(error = %e, "set_session_mode: record_audit_event(mode_changed) failed");
- }
+    // Audit row: mode_changed (always).
+    let payload = serde_json::json!({
+    "prev_mode": prev_mode.as_str(),
+    "new_mode": new_mode.as_str(),
+    })
+    .to_string();
+    if let Err(e) =
+        db::record_audit_event(&state.db, &session_id, "mode_changed", Some(&payload)).await
+    {
+        tracing::warn!(error = %e, "set_session_mode: record_audit_event(mode_changed) failed");
+    }
 
- // Audit row: yolo_entered / yolo_exited (only on the
- // transition, not on every set_session_mode call).
- let transition_kind = match (prev_mode, new_mode) {
- (db::Mode::Yolo, db::Mode::Yolo) => None, // no-op toggle
- (_, db::Mode::Yolo) => Some("yolo_entered"),
- (db::Mode::Yolo, _) => Some("yolo_exited"),
- _ => None,
- };
- if let Some(kind) = transition_kind {
- if let Err(e) = db::record_audit_event(
- &state.db,
- &session_id,
- kind,
- Some(&payload),
- )
- .await
- {
- tracing::warn!(
- error = %e,
- kind = %kind,
- "set_session_mode: record_audit_event(transition) failed"
- );
- }
- }
+    // Audit row: yolo_entered / yolo_exited (only on the
+    // transition, not on every set_session_mode call).
+    let transition_kind = match (prev_mode, new_mode) {
+        (db::Mode::Yolo, db::Mode::Yolo) => None, // no-op toggle
+        (_, db::Mode::Yolo) => Some("yolo_entered"),
+        (db::Mode::Yolo, _) => Some("yolo_exited"),
+        _ => None,
+    };
+    if let Some(kind) = transition_kind {
+        if let Err(e) = db::record_audit_event(&state.db, &session_id, kind, Some(&payload)).await {
+            tracing::warn!(
+            error = %e,
+            kind = %kind,
+            "set_session_mode: record_audit_event(transition) failed"
+            );
+        }
+    }
 
- // Re-load the row so the IPC return matches the typical
- // CRUD shape (the frontend updates its `currentSession` with
- // the returned row).
- let updated = db::load_session(&state.db, &session_id)
- .await
- .map_err(|e| anyhow::anyhow!("set_session_mode: re-load failed: {}", e))?
- .ok_or_else(|| {
- AppCommandError::new(
- ErrorCategory::InvalidRequest,
- format!(
- "set_session_mode: session '{}' disappeared mid-call",
- session_id
- ),
- )
- })?;
- Ok(updated.session)
+    // Re-load the row so the IPC return matches the typical
+    // CRUD shape (the frontend updates its `currentSession` with
+    // the returned row).
+    let updated = db::load_session(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_mode: re-load failed: {}", e))?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!(
+                    "set_session_mode: session '{}' disappeared mid-call",
+                    session_id
+                ),
+            )
+        })?;
+    Ok(updated.session)
 }
 
 // ---------------------------------------------------------------------------
@@ -209,42 +197,38 @@ pub async fn set_session_mode(
 /// per audit §3.2).
 #[tauri::command]
 pub async fn permission_response(
- _app: AppHandle,
- state: State<'_, Arc<AppState>>,
- rid: String,
- decision: String,
- reason: Option<String>,
+    _app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    rid: String,
+    decision: String,
+    reason: Option<String>,
 ) -> Result<bool, AppCommandError> {
- let response = match decision.as_str() {
- "allow_once" => PermissionResponse::AllowOnce,
- "allow_always" => PermissionResponse::AllowAlways,
- // `reason` is the user's optional "拒绝并说明" feedback.
- // Empty / None → plain deny. The agent loop surfaces this as
- // the tool_result(is_error) content for the LLM.
- "deny" => PermissionResponse::Deny {
- reason: reason.unwrap_or_default(),
- },
- other => {
- return Err(AppCommandError::new(
- ErrorCategory::InvalidRequest,
- format!("permission_response: unknown decision '{}'", other),
- ))
- }
- };
- let resolved = crate::agent::permissions::resolve_ask(
- &state.permission_asks,
- &rid,
- response,
- )
- .await;
- if !resolved {
- tracing::warn!(
- rid = %rid,
- decision = %decision,
- "permission_response: rid not found (timed out or duplicate response)"
- );
- }
- Ok(resolved)
+    let response = match decision.as_str() {
+        "allow_once" => PermissionResponse::AllowOnce,
+        "allow_always" => PermissionResponse::AllowAlways,
+        // `reason` is the user's optional "拒绝并说明" feedback.
+        // Empty / None → plain deny. The agent loop surfaces this as
+        // the tool_result(is_error) content for the LLM.
+        "deny" => PermissionResponse::Deny {
+            reason: reason.unwrap_or_default(),
+        },
+        other => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                format!("permission_response: unknown decision '{}'", other),
+            ))
+        }
+    };
+    let resolved =
+        crate::agent::permissions::resolve_ask(&state.permission_asks, &rid, response).await;
+    if !resolved {
+        tracing::warn!(
+        rid = %rid,
+        decision = %decision,
+        "permission_response: rid not found (timed out or duplicate response)"
+        );
+    }
+    Ok(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -273,53 +257,53 @@ pub async fn permission_response(
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn grant_tool_permission(
- state: State<'_, Arc<AppState>>,
- session_id: String,
- tool_name: String,
- match_kind: Option<String>,
- match_value: Option<String>,
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_name: String,
+    match_kind: Option<String>,
+    match_value: Option<String>,
 ) -> Result<(), AppCommandError> {
- // Default the `match_kind` to `"tool"` when omitted
- // (back-compat with the pre-re-grill IPC, which only
- // wrote tool-level grants).
- let kind = match_kind.as_deref().unwrap_or("tool");
- // Validation: match_value must be Some for prefix / path.
- match kind {
- "tool" => {
- // match_value is ignored for `tool`; we still pass
- // through what the frontend sent for transparency.
- db::grant_tool_permission(
- &state.db,
- &session_id,
- &tool_name,
- kind,
- match_value.as_deref(),
- )
- .await
- .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
- }
- "prefix" | "path" => {
- let value = match_value.as_deref().ok_or_else(|| {
- AppCommandError::new(
- ErrorCategory::InvalidRequest,
- format!(
- "grant_tool_permission: match_kind='{}' requires a non-NULL match_value",
- kind
- ),
- )
- })?;
- db::grant_tool_permission(&state.db, &session_id, &tool_name, kind, Some(value))
- .await
- .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
- }
- other => Err(AppCommandError::new(
- ErrorCategory::InvalidRequest,
- format!(
+    // Default the `match_kind` to `"tool"` when omitted
+    // (back-compat with the pre-re-grill IPC, which only
+    // wrote tool-level grants).
+    let kind = match_kind.as_deref().unwrap_or("tool");
+    // Validation: match_value must be Some for prefix / path.
+    match kind {
+        "tool" => {
+            // match_value is ignored for `tool`; we still pass
+            // through what the frontend sent for transparency.
+            db::grant_tool_permission(
+                &state.db,
+                &session_id,
+                &tool_name,
+                kind,
+                match_value.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
+        }
+        "prefix" | "path" => {
+            let value = match_value.as_deref().ok_or_else(|| {
+                AppCommandError::new(
+                    ErrorCategory::InvalidRequest,
+                    format!(
+                        "grant_tool_permission: match_kind='{}' requires a non-NULL match_value",
+                        kind
+                    ),
+                )
+            })?;
+            db::grant_tool_permission(&state.db, &session_id, &tool_name, kind, Some(value))
+                .await
+                .map_err(|e| anyhow::anyhow!("grant_tool_permission failed: {}", e).into())
+        }
+        other => Err(AppCommandError::new(
+            ErrorCategory::InvalidRequest,
+            format!(
  "grant_tool_permission: unknown match_kind '{}' (expected 'tool' | 'prefix' | 'path')",
  other
  ),
- )),
- }
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +364,6 @@ pub async fn revoke_tool_permission(
     .await
     .map_err(|e| anyhow::anyhow!("revoke_tool_permission failed: {}", e).into())
 }
-
 
 // ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events

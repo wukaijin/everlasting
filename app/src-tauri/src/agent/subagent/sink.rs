@@ -272,10 +272,7 @@ impl SubagentBufferSink {
         self.transcript
             .lock()
             .expect("SubagentBufferSink transcript mutex poisoned")
-            .push(TranscriptEntry {
-                kind,
-                payload_json,
-            });
+            .push(TranscriptEntry { kind, payload_json });
     }
 
     /// Snapshot of the worker's accumulated text deltas, joined.
@@ -289,13 +286,11 @@ impl SubagentBufferSink {
     }
 
     pub fn had_error(&self) -> bool {
-        self.had_error
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.had_error.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn was_cancelled(&self) -> bool {
-        self.was_cancelled
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.was_cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 2026-06-21 (R2): set when the worker emitted a synthetic
@@ -539,7 +534,10 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                 m
             }
         };
-        payload_obj.insert("tool_use_id".into(), serde_json::Value::String(payload.id.clone()));
+        payload_obj.insert(
+            "tool_use_id".into(),
+            serde_json::Value::String(payload.id.clone()),
+        );
         let enriched = serde_json::Value::Object(payload_obj);
         self.record(TranscriptKind::ToolCall, enriched);
     }
@@ -935,7 +933,11 @@ mod tests {
         sink.emit_chat_event(&done_with_usage(100, 50));
         sink.emit_chat_event(&done_with_usage(200, 30));
         sink.emit_chat_event(&done_with_usage(50, 10));
-        assert_eq!(sink.turns_completed(), 3, "3 real per-turn Dones → counter == 3");
+        assert_eq!(
+            sink.turns_completed(),
+            3,
+            "3 real per-turn Dones → counter == 3"
+        );
 
         // (b) Cancelled: 2 per-turn Dones + 1 synthetic cancelled.
         let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
@@ -1012,8 +1014,14 @@ mod tests {
                 usage: None,
             },
         });
-        assert!(sink.was_incomplete(), "max_turns terminal must set was_incomplete=true");
-        assert!(!sink.was_cancelled(), "max_turns must NOT also set was_cancelled");
+        assert!(
+            sink.was_incomplete(),
+            "max_turns terminal must set was_incomplete=true"
+        );
+        assert!(
+            !sink.was_cancelled(),
+            "max_turns must NOT also set was_cancelled"
+        );
         assert!(!sink.had_error(), "max_turns must NOT also set had_error");
     }
 
@@ -1029,8 +1037,14 @@ mod tests {
                 usage: None,
             },
         });
-        assert!(sink.was_cancelled(), "cancelled terminal must set was_cancelled=true");
-        assert!(!sink.was_incomplete(), "cancelled must NOT also set was_incomplete");
+        assert!(
+            sink.was_cancelled(),
+            "cancelled terminal must set was_cancelled=true"
+        );
+        assert!(
+            !sink.was_incomplete(),
+            "cancelled must NOT also set was_incomplete"
+        );
     }
 
     /// R3: clean `end_turn` exit sets neither flag.
@@ -1045,8 +1059,14 @@ mod tests {
                 usage: None,
             },
         });
-        assert!(!sink.was_incomplete(), "end_turn terminal must NOT set was_incomplete");
-        assert!(!sink.was_cancelled(), "end_turn terminal must NOT set was_cancelled");
+        assert!(
+            !sink.was_incomplete(),
+            "end_turn terminal must NOT set was_incomplete"
+        );
+        assert!(
+            !sink.was_cancelled(),
+            "end_turn terminal must NOT set was_cancelled"
+        );
     }
 
     // ---- PR2 hotfix: subagent:event IPC payload ----
@@ -1131,7 +1151,10 @@ mod tests {
         });
         assert_eq!(sink.transcript_snapshot().len(), 1);
         TEST_COLLECTOR.with(|c| {
-            assert!(c.borrow().is_none(), "no collector armed → no IPC attempted");
+            assert!(
+                c.borrow().is_none(),
+                "no collector armed → no IPC attempted"
+            );
         });
     }
 
@@ -1150,7 +1173,10 @@ mod tests {
         assert_eq!(transcript.len(), 1);
         let entry = &transcript[0];
         assert_eq!(entry.kind, TranscriptKind::ToolCall);
-        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
         assert_eq!(
             pj.get("tool_use_id").and_then(|v| v.as_str()),
             Some("toolu_42"),
@@ -1198,8 +1224,14 @@ mod tests {
             .get("duration_ms")
             .and_then(|v| v.as_u64())
             .expect("duration_ms is u64");
-        assert!(duration >= 4, "duration_ms must reflect wall-clock gap, got {duration}");
-        assert!(duration < 5_000, "duration_ms unreasonably large: {duration}");
+        assert!(
+            duration >= 4,
+            "duration_ms must reflect wall-clock gap, got {duration}"
+        );
+        assert!(
+            duration < 5_000,
+            "duration_ms unreasonably large: {duration}"
+        );
         assert_eq!(pj.get("content").and_then(|v| v.as_str()), Some("ok"));
         assert_eq!(pj.get("is_error").and_then(|v| v.as_bool()), Some(false));
     }
@@ -1280,7 +1312,10 @@ mod tests {
             "second pair ({dur_b}ms) should be at least as long as first ({dur_a}ms)"
         );
         assert!(dur_a >= 1, "dur_a < 1ms is implausible, got {dur_a}");
-        assert!(dur_b >= 4, "dur_b < 4ms is implausible (we slept 8ms), got {dur_b}");
+        assert!(
+            dur_b >= 4,
+            "dur_b < 4ms is implausible (we slept 8ms), got {dur_b}"
+        );
     }
 
     // ---- emit_permission_ask (RULE-FrontSubagent-003) ----
@@ -1327,8 +1362,14 @@ mod tests {
             "transcript payload must carry workerRunId camelCase"
         );
         assert_eq!(pj.get("rid").and_then(|v| v.as_str()), Some("ask-rid-1"),);
-        assert_eq!(pj.get("toolName").and_then(|v| v.as_str()), Some("write_file"),);
-        assert_eq!(pj.get("toolUseId").and_then(|v| v.as_str()), Some("toolu_w1"),);
+        assert_eq!(
+            pj.get("toolName").and_then(|v| v.as_str()),
+            Some("write_file"),
+        );
+        assert_eq!(
+            pj.get("toolUseId").and_then(|v| v.as_str()),
+            Some("toolu_w1"),
+        );
     }
 
     // ---- emit_permission_ask_resolved (RULE-WorkerAsk-001) ----
@@ -1369,7 +1410,10 @@ mod tests {
         assert_eq!(transcript.len(), 1);
         let entry = &transcript[0];
         assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
         assert_eq!(pj.get("rid").and_then(|v| v.as_str()), Some("ask-rid-deny"));
         assert_eq!(
             pj.get("outcome").and_then(|v| v.as_str()),
@@ -1384,7 +1428,10 @@ mod tests {
         assert_eq!(transcript.len(), 1);
         let entry = &transcript[0];
         assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
         assert_eq!(
             pj.get("rid").and_then(|v| v.as_str()),
             Some("ask-rid-timeout"),
@@ -1402,7 +1449,10 @@ mod tests {
         assert_eq!(transcript.len(), 1);
         let entry = &transcript[0];
         assert_eq!(entry.kind, TranscriptKind::PermissionAskResolved);
-        let pj = entry.payload_json.as_object().expect("payload_json is object");
+        let pj = entry
+            .payload_json
+            .as_object()
+            .expect("payload_json is object");
         assert_eq!(
             pj.get("rid").and_then(|v| v.as_str()),
             Some("ask-rid-cancel"),
@@ -1445,11 +1495,17 @@ mod tests {
         assert_eq!(transcript[0].kind, TranscriptKind::PermissionAskResolved);
         assert_eq!(transcript[1].kind, TranscriptKind::PermissionAskResolved);
         assert_eq!(
-            transcript[0].payload_json.get("outcome").and_then(|v| v.as_str()),
+            transcript[0]
+                .payload_json
+                .get("outcome")
+                .and_then(|v| v.as_str()),
             Some("allow"),
         );
         assert_eq!(
-            transcript[1].payload_json.get("outcome").and_then(|v| v.as_str()),
+            transcript[1]
+                .payload_json
+                .get("outcome")
+                .and_then(|v| v.as_str()),
             Some("deny"),
         );
     }

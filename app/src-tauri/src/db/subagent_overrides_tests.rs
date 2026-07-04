@@ -14,8 +14,8 @@ use sqlx::SqlitePool;
 use super::{
     migrations::run_migrations,
     subagent_overrides::{
-        clear_subagent_model_override, get_subagent_model_override,
-        list_subagent_model_overrides, set_subagent_model_override,
+        clear_subagent_model_override, get_subagent_model_override, list_subagent_model_overrides,
+        set_subagent_model_override,
     },
 };
 
@@ -119,9 +119,15 @@ async fn subagent_model_overrides_clear_removes_row() {
 async fn subagent_model_overrides_list_is_sorted_and_complete() {
     let pool = make_pool().await;
     // Insert in non-alphabetical order to verify ORDER BY agent_name.
-    set_subagent_model_override(&pool, "zeta", "m-z").await.unwrap();
-    set_subagent_model_override(&pool, "alpha", "m-a").await.unwrap();
-    set_subagent_model_override(&pool, "mid", "m-m").await.unwrap();
+    set_subagent_model_override(&pool, "zeta", "m-z")
+        .await
+        .unwrap();
+    set_subagent_model_override(&pool, "alpha", "m-a")
+        .await
+        .unwrap();
+    set_subagent_model_override(&pool, "mid", "m-m")
+        .await
+        .unwrap();
     let all = list_subagent_model_overrides(&pool).await.unwrap();
     assert_eq!(
         all,

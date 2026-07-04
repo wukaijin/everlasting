@@ -111,9 +111,7 @@ impl ReadGuard {
         // back to the original absolute path — the next verify_fresh
         // will fail anyway and surface a clear "file changed on disk"
         // error to the LLM.
-        let key = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let fp = match Fingerprint::capture(path).await {
             Ok(fp) => fp,
             Err(e) => {
@@ -134,17 +132,12 @@ impl ReadGuard {
     /// Check that the LLM read `path` in this session at some point.
     /// Returns `Ok(())` if the file was read; an error message otherwise.
     pub async fn verify_read(&self, session_id: &str, path: &Path) -> Result<(), String> {
-        let key = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let map = self.inner.lock().await;
         let session_map = map.get(session_id);
         match session_map.and_then(|m| m.get(&key)) {
             Some(_) => Ok(()),
-            None => Err(format!(
-                "You must read_file '{}' first.",
-                path.display()
-            )),
+            None => Err(format!("You must read_file '{}' first.", path.display())),
         }
     }
 
@@ -153,29 +146,18 @@ impl ReadGuard {
     /// against the stored fingerprint. Returns `Ok(())` if the file is
     /// unchanged; an error message otherwise.
     pub async fn verify_fresh(&self, session_id: &str, path: &Path) -> Result<(), String> {
-        let key = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let stored = {
             let map = self.inner.lock().await;
-            map.get(session_id)
-                .and_then(|m| m.get(&key))
-                .cloned()
+            map.get(session_id).and_then(|m| m.get(&key)).cloned()
         };
         let Some(stored) = stored else {
-            return Err(format!(
-                "You must read_file '{}' first.",
-                path.display()
-            ));
+            return Err(format!("You must read_file '{}' first.", path.display()));
         };
         let current = match Fingerprint::capture(path).await {
             Ok(fp) => fp,
             Err(e) => {
-                return Err(format!(
-                    "Failed to stat '{}': {}",
-                    path.display(),
-                    e
-                ));
+                return Err(format!("Failed to stat '{}': {}", path.display(), e));
             }
         };
         if current.size != stored.size {
@@ -199,9 +181,7 @@ impl ReadGuard {
             }
             _ => {}
         }
-        if current.head_hash != 0
-            && stored.head_hash != 0
-            && current.head_hash != stored.head_hash
+        if current.head_hash != 0 && stored.head_hash != 0 && current.head_hash != stored.head_hash
         {
             return Err(format!(
                 "File '{}' has changed on disk since you last read it \
@@ -216,9 +196,7 @@ impl ReadGuard {
     /// successful write, so the LLM is forced to re-read on the next
     /// edit attempt.
     pub async fn invalidate(&self, session_id: &str, path: &Path) {
-        let key = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let mut map = self.inner.lock().await;
         if let Some(session_map) = map.get_mut(session_id) {
             session_map.remove(&key);

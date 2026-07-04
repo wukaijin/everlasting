@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::db;
@@ -347,11 +347,7 @@ pub const INCOMPLETE_MARKER: &str = "[未完成]";
 /// [`crate::agent::chat_loop::run_chat_loop`] (P1 RULE-A-006
 /// closure, 2026-06-15). Every chat-event emit on the agent
 /// loop's per-event select! arm goes through this helper.
-pub fn emit_chat_event_via_sink(
-    sink: &Arc<dyn ChatEventSink>,
-    rid: &str,
-    event: &ChatEvent,
-) {
+pub fn emit_chat_event_via_sink(sink: &Arc<dyn ChatEventSink>, rid: &str, event: &ChatEvent) {
     let payload = ChatEventPayload {
         request_id: rid.to_string(),
         event: event.clone(),

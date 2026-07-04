@@ -95,14 +95,10 @@ impl WireCapabilities {
     ///   (only Anthropic can carry the signature blob; OpenAI
     ///   drops it on cross-protocol send)
     #[allow(dead_code)] // consumed by future PRs that thread capabilities through Provider::send
-    pub fn from_model_row(
-        model: &crate::db::ModelRow,
-        provider_protocol: &str,
-    ) -> Self {
+    pub fn from_model_row(model: &crate::db::ModelRow, provider_protocol: &str) -> Self {
         let supports_thinking = model.supports_thinking;
         let supports_reasoning_effort = model.thinking_effort.is_some();
-        let supports_thinking_signatures =
-            supports_thinking && provider_protocol == "anthropic";
+        let supports_thinking_signatures = supports_thinking && provider_protocol == "anthropic";
         Self {
             supports_thinking,
             supports_reasoning_effort,
@@ -183,7 +179,8 @@ pub enum WireBlock {
     /// Anthropic-only opaque signature blob. Always paired with a
     /// preceding `Reasoning` block. Dropped on cross-protocol send
     /// to OpenAI (opaque — cannot be mapped).
-    #[allow(dead_code)] // constructed by Anthropic-side wire parser; cross-protocol strip can drop
+    #[allow(dead_code)]
+    // constructed by Anthropic-side wire parser; cross-protocol strip can drop
     Signature { data: String },
     /// Anthropic-only `redacted_thinking` opaque payload. Dropped
     /// on cross-protocol send to OpenAI.
@@ -224,10 +221,7 @@ pub struct WireTool {
 ///   into a `WireMessage::Tool` (Anthropic's `tool_result` lives
 ///   inside a `role: "user"` message with content blocks; OpenAI's
 ///   `role: "tool"` is a separate message).
-pub fn chat_request_to_wire(
-    req: ChatRequest,
-    system: Option<String>,
-) -> WireRequest {
+pub fn chat_request_to_wire(req: ChatRequest, system: Option<String>) -> WireRequest {
     // Orphan guard (llm-contract.md §469 tool_use↔tool_result Pair
     // Atomicity): scan the Anthropic-shaped messages BEFORE fan-out
     // for any assistant `tool_use` whose `tool_use_id` has no matching
@@ -303,7 +297,9 @@ pub(crate) fn orphan_tool_use_ids(messages: &[ChatMessage]) -> Vec<String> {
             }
         }
     }
-    uses.into_iter().filter(|id| !results.contains(id)).collect()
+    uses.into_iter()
+        .filter(|id| !results.contains(id))
+        .collect()
 }
 
 /// Wire-layer **order** guard for the OpenAI "tool_calls must be
@@ -363,7 +359,11 @@ pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
                         WireMessage::User { content } => {
                             let kind = format!("User({:?})", truncate(content, 40));
                             let missing: Vec<String> = remaining.iter().cloned().collect();
-                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            let which = if first {
+                                "immediately"
+                            } else {
+                                "before all tool_call_ids were satisfied"
+                            };
                             violations.push(format!(
                                 "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
                                 i, tool_uses, kind, j, which, missing
@@ -373,7 +373,11 @@ pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
                         WireMessage::UserBlocks { .. } => {
                             let kind = "UserBlocks(...)".to_string();
                             let missing: Vec<String> = remaining.iter().cloned().collect();
-                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            let which = if first {
+                                "immediately"
+                            } else {
+                                "before all tool_call_ids were satisfied"
+                            };
                             violations.push(format!(
                                 "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
                                 i, tool_uses, kind, j, which, missing
@@ -383,7 +387,11 @@ pub(crate) fn orphan_tool_call_order(messages: &[WireMessage]) -> Vec<String> {
                         WireMessage::Assistant { .. } => {
                             let kind = "Assistant(...)".to_string();
                             let missing: Vec<String> = remaining.iter().cloned().collect();
-                            let which = if first { "immediately" } else { "before all tool_call_ids were satisfied" };
+                            let which = if first {
+                                "immediately"
+                            } else {
+                                "before all tool_call_ids were satisfied"
+                            };
                             violations.push(format!(
                                 "assistant at index {} emitted tool_use_ids {:?}; a non-Tool wire message ({}) appears at index {} {} — OpenAI requires the assistant(tool_calls) be followed by role:tool messages with no interleaving (missing: {:?})",
                                 i, tool_uses, kind, j, which, missing
@@ -548,7 +556,10 @@ fn content_block_to_wire_block(block: ContentBlock) -> Vec<WireBlock> {
             text,
             cache_control,
         }],
-        ContentBlock::Thinking { thinking, signature } => {
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => {
             // The Anthropic-side Thinking block carries both
             // `thinking` text and an opaque `signature`. We split
             // the signature out into a separate `Signature` block
@@ -668,9 +679,7 @@ pub fn strip_unsupported(
 fn block_supported(block: &WireBlock, caps: &WireCapabilities) -> bool {
     match block {
         WireBlock::Text { .. } | WireBlock::ToolUse { .. } => true,
-        WireBlock::Reasoning { .. } => {
-            caps.supports_thinking || caps.supports_reasoning_effort
-        }
+        WireBlock::Reasoning { .. } => caps.supports_thinking || caps.supports_reasoning_effort,
         WireBlock::Signature { .. } | WireBlock::RedactedThinking { .. } => {
             caps.supports_thinking_signatures
         }
@@ -703,18 +712,16 @@ pub fn wire_block_to_chat_event(block: &WireBlock) -> Option<ChatEvent> {
         // Anthropic-specific `Signature` blob is handled
         // separately by the SSE parser (it's the only path that
         // can deliver it; OpenAI reasoning has no signature).
-        WireBlock::Reasoning { text } => {
-            Some(ChatEvent::ThinkingDelta { text: text.clone() })
-        }
+        WireBlock::Reasoning { text } => Some(ChatEvent::ThinkingDelta { text: text.clone() }),
         // The `Signature` blob is consumed at the agent-loop
         // boundary, not in the streaming ChatEvent — but for
         // cross-protocol symmetry we expose it as a
         // `SignatureDelta` when the parser hands us one. The
         // OpenAI parser never produces a `Signature`, so this
         // branch is Anthropic-only in practice.
-        WireBlock::Signature { data } => {
-            Some(ChatEvent::SignatureDelta { signature: data.clone() })
-        }
+        WireBlock::Signature { data } => Some(ChatEvent::SignatureDelta {
+            signature: data.clone(),
+        }),
         WireBlock::RedactedThinking { data } => {
             Some(ChatEvent::RedactedThinkingDelta { data: data.clone() })
         }
@@ -895,9 +902,7 @@ fn wire_block_to_content_block(block: WireBlock) -> ContentBlock {
             signature: data,
         },
         WireBlock::RedactedThinking { data } => ContentBlock::RedactedThinking { data },
-        WireBlock::ToolUse { id, name, input } => {
-            ContentBlock::ToolUse { id, name, input }
-        }
+        WireBlock::ToolUse { id, name, input } => ContentBlock::ToolUse { id, name, input },
     }
 }
 
@@ -910,10 +915,7 @@ mod tests {
     use super::*;
     use crate::db::ModelRow;
 
-    fn model(
-        supports_thinking: bool,
-        thinking_effort: Option<&str>,
-    ) -> ModelRow {
+    fn model(supports_thinking: bool, thinking_effort: Option<&str>) -> ModelRow {
         ModelRow {
             id: "mid".to_string(),
             provider_id: "pid".to_string(),
@@ -1312,11 +1314,7 @@ mod tests {
             violations.len(),
             1,
             "the User at index 2 is the only violation: {}",
-            violations
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n")
+            violations.iter().cloned().collect::<Vec<_>>().join("\n")
         );
         assert!(
             violations[0].contains("toolu_2"),
@@ -1395,12 +1393,20 @@ mod tests {
         let wire = chat_request_to_wire(req, None);
         // Expect: [User("looking at result:"), Tool, User("and another:"), Tool]
         assert_eq!(wire.messages.len(), 4);
-        assert!(matches!(&wire.messages[0], WireMessage::User { content } if content == "looking at result:"));
-        assert!(matches!(&wire.messages[1], WireMessage::Tool { tool_call_id, content }
-            if tool_call_id == "toolu_1" && content == "127.0.0.1 localhost"));
-        assert!(matches!(&wire.messages[2], WireMessage::User { content } if content == "and another:"));
-        assert!(matches!(&wire.messages[3], WireMessage::Tool { tool_call_id, .. }
-            if tool_call_id == "toolu_2"));
+        assert!(
+            matches!(&wire.messages[0], WireMessage::User { content } if content == "looking at result:")
+        );
+        assert!(
+            matches!(&wire.messages[1], WireMessage::Tool { tool_call_id, content }
+            if tool_call_id == "toolu_1" && content == "127.0.0.1 localhost")
+        );
+        assert!(
+            matches!(&wire.messages[2], WireMessage::User { content } if content == "and another:")
+        );
+        assert!(
+            matches!(&wire.messages[3], WireMessage::Tool { tool_call_id, .. }
+            if tool_call_id == "toolu_2")
+        );
     }
 
     #[test]
@@ -1572,7 +1578,9 @@ mod tests {
         let stripped = strip_unsupported(messages, &caps);
         assert_eq!(stripped.len(), 2);
         assert!(matches!(&stripped[0], WireMessage::User { content } if content == "hi"));
-        assert!(matches!(&stripped[1], WireMessage::Tool { tool_call_id, .. } if tool_call_id == "t1"));
+        assert!(
+            matches!(&stripped[1], WireMessage::Tool { tool_call_id, .. } if tool_call_id == "t1")
+        );
     }
 
     #[test]
@@ -1689,12 +1697,19 @@ mod tests {
         // The 1:1 invariant: the round-tripped assistant message
         // has the same block set as the original.
         assert_eq!(back.len(), 1);
-        let ChatMessage { content: MessageContent::Blocks(blocks), .. } = &back[0] else {
+        let ChatMessage {
+            content: MessageContent::Blocks(blocks),
+            ..
+        } = &back[0]
+        else {
             panic!("expected Blocks content");
         };
         assert_eq!(blocks.len(), 2);
         match &blocks[0] {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "let me think");
                 assert_eq!(signature, "sig_abc");
             }
@@ -1727,12 +1742,19 @@ mod tests {
         };
         let wire = chat_request_to_wire(req, None);
         let back = wire_messages_to_chat_messages(wire.messages);
-        let ChatMessage { content: MessageContent::Blocks(blocks), .. } = &back[0] else {
+        let ChatMessage {
+            content: MessageContent::Blocks(blocks),
+            ..
+        } = &back[0]
+        else {
             panic!("expected Blocks content");
         };
         assert_eq!(blocks.len(), 1);
         match &blocks[0] {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking, "thought");
                 assert_eq!(signature, "");
             }
@@ -1811,7 +1833,11 @@ mod tests {
         // cache_control survives the inverse path.
         let back = wire_messages_to_chat_messages(wire.messages);
         assert_eq!(back.len(), 1);
-        let ChatMessage { content: MessageContent::Blocks(blocks), .. } = &back[0] else {
+        let ChatMessage {
+            content: MessageContent::Blocks(blocks),
+            ..
+        } = &back[0]
+        else {
             panic!("expected Blocks content");
         };
         assert_eq!(blocks.len(), 2);
@@ -1870,6 +1896,8 @@ mod tests {
         // separate User messages — both blocks belong to the same
         // user message).
         assert_eq!(wire.messages.len(), 1);
-        assert!(matches!(&wire.messages[0], WireMessage::UserBlocks { blocks } if blocks.len() == 2));
+        assert!(
+            matches!(&wire.messages[0], WireMessage::UserBlocks { blocks } if blocks.len() == 2)
+        );
     }
 }

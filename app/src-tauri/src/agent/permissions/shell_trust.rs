@@ -127,57 +127,44 @@ pub(crate) fn max_of(a: ShellTrust, b: ShellTrust) -> ShellTrust {
 /// no recoverable side effects the user would need to gate.
 const READ_ONLY_WHITELIST: &[&str] = &[
     // Directory / file inspection
-    "ls",        // list dir
-    "cat",       // read file
-    "head",      // read file head
-    "tail",      // read file tail
-    "wc",        // word count
-    "stat",      // file metadata
-    "file",      // file type
-    "find",      // find is overwhelmingly read-only; `-delete`
-                 // is technically a side effect but the user
-                 // recovers via worktree + git history, and Tier
-                 // 2 catches catastrophic patterns separately.
-    "tree",      // directory tree
-    "less",      // paging
-    "more",
-    // Search
-    "grep",      // grep inside repo
-    "rg",        // ripgrep
-    "ag",        // silver searcher
-    "fd",        // fd (find alternative)
+    "ls",   // list dir
+    "cat",  // read file
+    "head", // read file head
+    "tail", // read file tail
+    "wc",   // word count
+    "stat", // file metadata
+    "file", // file type
+    "find", // find is overwhelmingly read-only; `-delete`
+    // is technically a side effect but the user
+    // recovers via worktree + git history, and Tier
+    // 2 catches catastrophic patterns separately.
+    "tree", // directory tree
+    "less", // paging
+    "more", // Search
+    "grep", // grep inside repo
+    "rg",   // ripgrep
+    "ag",   // silver searcher
+    "fd",   // fd (find alternative)
     // Diffing / dumping
-    "diff",      // diff a.txt b.txt
-    "xxd",       // hex dump
-    "od",        // octal dump
+    "diff", // diff a.txt b.txt
+    "xxd",  // hex dump
+    "od",   // octal dump
     // Text processing (read-only variants; `sed -i` is in-place
     // but the overwhelmingly common case is `sed -n`. Recovery
     // via worktree + git history.)
-    "sed",       // sed -n (read-only flag)
-    "awk",       // awk read-only
-    "cut",
-    "sort",
-    "uniq",
-    "tr",
+    "sed", // sed -n (read-only flag)
+    "awk", // awk read-only
+    "cut", "sort", "uniq", "tr",
     // No-op / inspection builtins
-    "echo",      // echo "hello" — no side effect
-    "printf",
-    "true",
-    "false",
-    "test",      // test -f / -d etc.
-    "[",         // [ -f ... ]
-    "pwd",       // print working dir
-    "env",       // env vars (read)
-    "whoami",
-    "date",
-    "cal",
-    "uname",
-    "which",
-    "type",
+    "echo", // echo "hello" — no side effect
+    "printf", "true", "false", "test", // test -f / -d etc.
+    "[",    // [ -f ... ]
+    "pwd",  // print working dir
+    "env",  // env vars (read)
+    "whoami", "date", "cal", "uname", "which", "type",
     // Structured-data readers
-    "jq",        // jq '.foo' data.json
-    "yq",
-    "xmllint",
+    "jq", // jq '.foo' data.json
+    "yq", "xmllint",
 ];
 
 /// Whitelist of prefixes with **recoverable** side effects
@@ -193,43 +180,38 @@ const READ_ONLY_WHITELIST: &[&str] = &[
 /// the old whitelist and allows silently.
 const SIDE_EFFECT_WHITELIST: &[&str] = &[
     // Project-local safe side effects (recoverable via worktree + git)
-    "mkdir",     // mkdir -p (inside repo)
-    "touch",     // touch newfile
-    "cp",        // cp src dst
-    "mv",        // rename a project file (the common case)
-    "ln",        // ln -s
-    "tar",       // tar -xzf / -czf (project archives)
-    "zip",
-    "unzip",
-    "gzip",
-    "gunzip",
+    "mkdir", // mkdir -p (inside repo)
+    "touch", // touch newfile
+    "cp",    // cp src dst
+    "mv",    // rename a project file (the common case)
+    "ln",    // ln -s
+    "tar",   // tar -xzf / -czf (project archives)
+    "zip", "unzip", "gzip", "gunzip",
     // Build & test (project-local side effects: write target/,
     // node_modules/, run arbitrary code under the project)
-    "cargo",     // cargo build / test / check / run / fmt
-    "rustc",     // rare direct rustc invocations
-    "pnpm",      // pnpm install / run / test
-    "npm",       // npm install / test / run-script
-    "yarn",      // yarn install / run / test
-    "bun",       // bun install / test / run
-    "node",      // node script.js (project-local scripts)
-    "tsc",       // tsc --noEmit (typecheck, still writes .tsbuildinfo)
-    "npx",       // npx <command> (project-local)
-    "make",      // make <target> (project Makefile)
-    "cmake",     // cmake --build
-    "meson",     // meson compile
-    "ninja",     // ninja <target>
-    "go",        // go build / test
-    "python",    // python script.py
-    "python3",
-    "pytest",
-    "rustup",    // rustup update / show
+    "cargo",  // cargo build / test / check / run / fmt
+    "rustc",  // rare direct rustc invocations
+    "pnpm",   // pnpm install / run / test
+    "npm",    // npm install / test / run-script
+    "yarn",   // yarn install / run / test
+    "bun",    // bun install / test / run
+    "node",   // node script.js (project-local scripts)
+    "tsc",    // tsc --noEmit (typecheck, still writes .tsbuildinfo)
+    "npx",    // npx <command> (project-local)
+    "make",   // make <target> (project Makefile)
+    "cmake",  // cmake --build
+    "meson",  // meson compile
+    "ninja",  // ninja <target>
+    "go",     // go build / test
+    "python", // python script.py
+    "python3", "pytest", "rustup", // rustup update / show
     // VCS / DevOps — read/write polymorphic at the first token.
-    "gh",        // gh pr view (read) / gh pr merge (write)
+    "gh", // gh pr view (read) / gh pr merge (write)
     // Network egress: interactive mode treats a `curl`/`wget` to a
     // known endpoint as intentional. Tier 2 still catches
     // `curl ... | bash` (pipe → structural downgrade to Ask first).
-    "curl",      // curl https://...
-    "wget",      // wget -qO- ...
+    "curl", // curl https://...
+    "wget", // wget -qO- ...
 ];
 
 /// Reference list of command prefixes whose side effects the user
@@ -246,70 +228,70 @@ const SIDE_EFFECT_WHITELIST: &[&str] = &[
 #[allow(dead_code)]
 const SHELL_ASKLIST: &[&str] = &[
     // Privilege escalation
-    "sudo",      // sudo anything — always confirm
-    "su",        // switch user
-    "doas",      // OpenBSD sudo
+    "sudo", // sudo anything — always confirm
+    "su",   // switch user
+    "doas", // OpenBSD sudo
     // Dangerous file mutation (these are not in the whitelist
     // by being absent; we list them explicitly for visibility).
-    "rm",        // rm <file> — confirm before delete
-    "rmdir",     // rmdir <dir>
-    "chmod",     // chmod / chown (permission change)
+    "rm",    // rm <file> — confirm before delete
+    "rmdir", // rmdir <dir>
+    "chmod", // chmod / chown (permission change)
     "chown",
     "chgrp",
-    "dd",        // dd if=... of=... (catastrophic patterns caught
-                 // by Tier 2; this entry ensures the user sees the
-                 // modal for non-catastrophic dd).
+    "dd", // dd if=... of=... (catastrophic patterns caught
+    // by Tier 2; this entry ensures the user sees the
+    // modal for non-catastrophic dd).
     // Process control
-    "kill",      // kill <pid> / kill -9
+    "kill", // kill <pid> / kill -9
     "killall",
     "pkill",
-    "shutdown",  // system power
+    "shutdown", // system power
     "reboot",
     "halt",
     "poweroff",
     // System / network administration
-    "iptables",  // firewall rules
+    "iptables", // firewall rules
     "ufw",
     "firewalld",
-    "mount",     // mount / umount
+    "mount", // mount / umount
     "umount",
-    "fsck",      // filesystem check
-    "fdisk",     // partition table
+    "fsck",  // filesystem check
+    "fdisk", // partition table
     "parted",
     "swapon",
     "swapoff",
     // Package install
-    "apt",       // apt install / remove
+    "apt", // apt install / remove
     "apt-get",
     "yum",
     "dnf",
     "pacman",
-    "brew",      // brew install
+    "brew", // brew install
     "snap",
-    "pip",       // pip install
+    "pip", // pip install
     "pip3",
-    "gem",       // gem install
+    "gem", // gem install
     // Service control
     "systemctl", // systemctl start/stop/restart
     "service",
     "launchctl", // macOS
     "sc",        // Windows
     // Network binding / server start
-    "ssh",       // ssh user@host
-    "scp",       // scp src dst
-    "rsync",     // rsync (network copy)
-    "nc",        // netcat
+    "ssh",   // ssh user@host
+    "scp",   // scp src dst
+    "rsync", // rsync (network copy)
+    "nc",    // netcat
     "ncat",
     "socat",
     // Pipe-to-shell — Tier 2 catches `curl | bash`, but
     // `bash <(curl ...)` / explicit `eval` go through here.
-    "bash",      // bash -c / bash <(...)
-    "sh",        // sh -c / sh <(...)
+    "bash", // bash -c / bash <(...)
+    "sh",   // sh -c / sh <(...)
     "zsh",
     "fish",
-    "eval",      // eval "string"
-    "source",    // source script.sh
-    "exec",      // exec command
+    "eval",   // eval "string"
+    "source", // source script.sh
+    "exec",   // exec command
 ];
 
 /// git subcommands that are pure reads. Used only when the first
@@ -326,31 +308,31 @@ const SHELL_ASKLIST: &[&str] = &[
 const GIT_READONLY_SUBCOMMANDS: &[&str] = &[
     // The high-frequency investigation set — these are the
     // commands Plan mode most needs to run.
-    "diff",        // git diff [<path>]
-    "log",         // git log
-    "status",      // git status
-    "show",        // git show <ref>
-    "blame",       // git blame <file>
-    "annotate",    // synonym for blame
+    "diff",     // git diff [<path>]
+    "log",      // git log
+    "status",   // git status
+    "show",     // git show <ref>
+    "blame",    // git blame <file>
+    "annotate", // synonym for blame
     // Object database / refs (read-only inspection)
-    "cat-file",    // git cat-file -p <ref>
-    "ls-files",    // git ls-files
-    "ls-tree",     // git ls-tree <ref>
-    "rev-parse",   // git rev-parse <ref>
-    "rev-list",    // git rev-list <ref>
-    "reflog",      // git reflog
-    "describe",    // git describe
-    "shortlog",    // git shortlog
-    "name-rev",    // git name-rev <ref>
+    "cat-file",     // git cat-file -p <ref>
+    "ls-files",     // git ls-files
+    "ls-tree",      // git ls-tree <ref>
+    "rev-parse",    // git rev-parse <ref>
+    "rev-list",     // git rev-list <ref>
+    "reflog",       // git reflog
+    "describe",     // git describe
+    "shortlog",     // git shortlog
+    "name-rev",     // git name-rev <ref>
     "for-each-ref", // git for-each-ref
-    "cherry",      // git cherry (unpushed commits)
-    "merge-base",  // git merge-base
-    "range-diff",  // git range-diff
+    "cherry",       // git cherry (unpushed commits)
+    "merge-base",   // git merge-base
+    "range-diff",   // git range-diff
     // Misc read-only
-    "var",         // git var GIT_AUTHOR_IDENT
-    "version",     // git version
-    "help",        // git help <cmd>
-    "grep",        // git grep <pattern> (searches tracked files)
+    "var",     // git var GIT_AUTHOR_IDENT
+    "version", // git version
+    "help",    // git help <cmd>
+    "grep",    // git grep <pattern> (searches tracked files)
 ];
 
 /// Classify a shell command into one of three trust tiers. See
@@ -835,8 +817,8 @@ mod tests {
     #[test]
     fn classify_readonly_known() {
         for prefix in [
-            "ls", "cat", "head", "tail", "find", "grep", "rg",
-            "diff", "tree", "pwd", "env", "jq", "sed", "awk",
+            "ls", "cat", "head", "tail", "find", "grep", "rg", "diff", "tree", "pwd", "env", "jq",
+            "sed", "awk",
         ] {
             assert_eq!(
                 classify_prefix(prefix),
@@ -850,9 +832,8 @@ mod tests {
     #[test]
     fn classify_sideeffect_known() {
         for prefix in [
-            "mkdir", "touch", "cp", "mv", "ln", "tar",
-            "cargo", "pnpm", "npm", "node", "make", "go",
-            "gh", "curl", "wget", "rustup", "pytest",
+            "mkdir", "touch", "cp", "mv", "ln", "tar", "cargo", "pnpm", "npm", "node", "make",
+            "go", "gh", "curl", "wget", "rustup", "pytest",
         ] {
             assert_eq!(
                 classify_prefix(prefix),
@@ -866,8 +847,7 @@ mod tests {
     #[test]
     fn classify_asklist_known() {
         for prefix in [
-            "rm", "sudo", "kill", "shutdown", "reboot",
-            "chmod", "chown", "dd", "ssh", "bash", "sh",
+            "rm", "sudo", "kill", "shutdown", "reboot", "chmod", "chown", "dd", "ssh", "bash", "sh",
         ] {
             assert_eq!(
                 classify_prefix(prefix),
@@ -904,9 +884,20 @@ mod tests {
     #[test]
     fn classify_git_readonly_subcommands() {
         for sub in [
-            "diff", "log", "status", "show", "blame", "annotate",
-            "cat-file", "ls-files", "ls-tree", "rev-parse",
-            "rev-list", "reflog", "describe", "grep",
+            "diff",
+            "log",
+            "status",
+            "show",
+            "blame",
+            "annotate",
+            "cat-file",
+            "ls-files",
+            "ls-tree",
+            "rev-parse",
+            "rev-list",
+            "reflog",
+            "describe",
+            "grep",
         ] {
             assert_eq!(
                 classify_prefix(&format!("git {}", sub)),
@@ -921,10 +912,27 @@ mod tests {
     fn classify_git_write_subcommands_are_sideeffect() {
         // Write / mutating subcommands fall through to SideEffect.
         for sub in [
-            "push", "commit", "reset", "checkout", "merge", "rebase",
-            "add", "cherry-pick", "revert", "rm", "mv", "fetch",
-            "pull", "init", "clone", "stash", "tag", "branch",
-            "config", "gc", "clean",
+            "push",
+            "commit",
+            "reset",
+            "checkout",
+            "merge",
+            "rebase",
+            "add",
+            "cherry-pick",
+            "revert",
+            "rm",
+            "mv",
+            "fetch",
+            "pull",
+            "init",
+            "clone",
+            "stash",
+            "tag",
+            "branch",
+            "config",
+            "gc",
+            "clean",
         ] {
             assert_eq!(
                 classify_prefix(&format!("git {} foo", sub)),
@@ -939,7 +947,10 @@ mod tests {
     fn classify_git_with_path_args_still_readonly() {
         // Read-only subcommands keep their tier with extra args.
         assert_eq!(classify_prefix("git diff HEAD~1"), ShellTrust::ReadOnly);
-        assert_eq!(classify_prefix("git log --oneline -5"), ShellTrust::ReadOnly);
+        assert_eq!(
+            classify_prefix("git log --oneline -5"),
+            ShellTrust::ReadOnly
+        );
         assert_eq!(classify_prefix("git status --short"), ShellTrust::ReadOnly);
     }
 
@@ -973,7 +984,10 @@ mod tests {
         // Two read-only segments → ReadOnly (was: Ask under one-size-
         // fits-all downgrade). This is the R2 Plan-mode win.
         assert_eq!(classify_prefix("ls | grep foo"), ShellTrust::ReadOnly);
-        assert_eq!(classify_prefix("git status | head -5"), ShellTrust::ReadOnly);
+        assert_eq!(
+            classify_prefix("git status | head -5"),
+            ShellTrust::ReadOnly
+        );
         assert_eq!(classify_prefix("cat x | head"), ShellTrust::ReadOnly);
         assert_eq!(classify_prefix("git diff | head"), ShellTrust::ReadOnly);
         assert_eq!(classify_prefix("cat x | wc -l"), ShellTrust::ReadOnly);
@@ -996,10 +1010,7 @@ mod tests {
         // ENV=noop: first_token returns the whole `ENV=noop` token
         // (no whitespace inside), which is NOT in any whitelist → Ask.
         // max(Ask, SideEffect) = Ask.
-        assert_eq!(
-            classify_prefix("ENV=noop && cargo check"),
-            ShellTrust::Ask
-        );
+        assert_eq!(classify_prefix("ENV=noop && cargo check"), ShellTrust::Ask);
     }
 
     #[test]
@@ -1007,7 +1018,10 @@ mod tests {
         // cargo fmt (SideEffect) || true (ReadOnly) → SideEffect.
         assert_eq!(classify_prefix("cargo fmt || true"), ShellTrust::SideEffect);
         // git diff (ReadOnly) || echo nope (ReadOnly) → ReadOnly.
-        assert_eq!(classify_prefix("git diff || echo nope"), ShellTrust::ReadOnly);
+        assert_eq!(
+            classify_prefix("git diff || echo nope"),
+            ShellTrust::ReadOnly
+        );
     }
 
     #[test]
@@ -1026,7 +1040,10 @@ mod tests {
     fn classify_write_redirect_bumps_to_sideeffect() {
         // A read-only prefix + write redirect → SideEffect (was: ReadOnly,
         // silently writing files in Plan mode — the R3 hole).
-        assert_eq!(classify_prefix("git diff > patch.txt"), ShellTrust::SideEffect);
+        assert_eq!(
+            classify_prefix("git diff > patch.txt"),
+            ShellTrust::SideEffect
+        );
         assert_eq!(classify_prefix("echo hi >> log"), ShellTrust::SideEffect);
         // `echo` is ReadOnly; `&>` writes both stdout+stderr to f.
         assert_eq!(classify_prefix("echo hi &> f"), ShellTrust::SideEffect);
@@ -1133,22 +1150,13 @@ mod tests {
 
     #[test]
     fn split_top_level_sequence_splits() {
-        assert_eq!(
-            split_top_level("echo a; echo b"),
-            vec!["echo a", " echo b"]
-        );
+        assert_eq!(split_top_level("echo a; echo b"), vec!["echo a", " echo b"]);
     }
 
     #[test]
     fn split_top_level_quoted_metachar_does_not_split() {
-        assert_eq!(
-            split_top_level("echo \"a;b\""),
-            vec!["echo \"a;b\""]
-        );
-        assert_eq!(
-            split_top_level("grep 'a|b' f"),
-            vec!["grep 'a|b' f"]
-        );
+        assert_eq!(split_top_level("echo \"a;b\""), vec!["echo \"a;b\""]);
+        assert_eq!(split_top_level("grep 'a|b' f"), vec!["grep 'a|b' f"]);
     }
 
     #[test]
@@ -1158,10 +1166,7 @@ mod tests {
         // double quotes we don't split anyway. The state machine just
         // has to consume the next char and return to Double/Normal
         // without misclassifying.
-        assert_eq!(
-            split_top_level("echo \"a\\;b\""),
-            vec!["echo \"a\\;b\""]
-        );
+        assert_eq!(split_top_level("echo \"a\\;b\""), vec!["echo \"a\\;b\""]);
     }
 
     #[test]
@@ -1178,10 +1183,7 @@ mod tests {
             vec!["echo a ", " echo b"]
         );
         // Whitespace-only segments also skipped.
-        assert_eq!(
-            split_top_level("ls   ;   ;   pwd"),
-            vec!["ls   ", "   pwd"]
-        );
+        assert_eq!(split_top_level("ls   ;   ;   pwd"), vec!["ls   ", "   pwd"]);
     }
 
     #[test]
@@ -1311,14 +1313,38 @@ mod tests {
 
     #[test]
     fn max_of_returns_more_dangerous_tier() {
-        assert_eq!(max_of(ShellTrust::ReadOnly, ShellTrust::ReadOnly), ShellTrust::ReadOnly);
-        assert_eq!(max_of(ShellTrust::ReadOnly, ShellTrust::SideEffect), ShellTrust::SideEffect);
-        assert_eq!(max_of(ShellTrust::SideEffect, ShellTrust::ReadOnly), ShellTrust::SideEffect);
-        assert_eq!(max_of(ShellTrust::ReadOnly, ShellTrust::Ask), ShellTrust::Ask);
-        assert_eq!(max_of(ShellTrust::Ask, ShellTrust::ReadOnly), ShellTrust::Ask);
-        assert_eq!(max_of(ShellTrust::SideEffect, ShellTrust::Ask), ShellTrust::Ask);
-        assert_eq!(max_of(ShellTrust::Ask, ShellTrust::SideEffect), ShellTrust::Ask);
-        assert_eq!(max_of(ShellTrust::SideEffect, ShellTrust::SideEffect), ShellTrust::SideEffect);
+        assert_eq!(
+            max_of(ShellTrust::ReadOnly, ShellTrust::ReadOnly),
+            ShellTrust::ReadOnly
+        );
+        assert_eq!(
+            max_of(ShellTrust::ReadOnly, ShellTrust::SideEffect),
+            ShellTrust::SideEffect
+        );
+        assert_eq!(
+            max_of(ShellTrust::SideEffect, ShellTrust::ReadOnly),
+            ShellTrust::SideEffect
+        );
+        assert_eq!(
+            max_of(ShellTrust::ReadOnly, ShellTrust::Ask),
+            ShellTrust::Ask
+        );
+        assert_eq!(
+            max_of(ShellTrust::Ask, ShellTrust::ReadOnly),
+            ShellTrust::Ask
+        );
+        assert_eq!(
+            max_of(ShellTrust::SideEffect, ShellTrust::Ask),
+            ShellTrust::Ask
+        );
+        assert_eq!(
+            max_of(ShellTrust::Ask, ShellTrust::SideEffect),
+            ShellTrust::Ask
+        );
+        assert_eq!(
+            max_of(ShellTrust::SideEffect, ShellTrust::SideEffect),
+            ShellTrust::SideEffect
+        );
         assert_eq!(max_of(ShellTrust::Ask, ShellTrust::Ask), ShellTrust::Ask);
     }
 
@@ -1333,7 +1359,10 @@ mod tests {
         assert_eq!(classify_prefix("./ls -la"), ShellTrust::ReadOnly);
         // SideEffect via basename.
         assert_eq!(classify_prefix("./cargo test"), ShellTrust::SideEffect);
-        assert_eq!(classify_prefix("/usr/bin/mkdir foo"), ShellTrust::SideEffect);
+        assert_eq!(
+            classify_prefix("/usr/bin/mkdir foo"),
+            ShellTrust::SideEffect
+        );
         // Ask via basename.
         assert_eq!(classify_prefix("./rm foo"), ShellTrust::Ask);
     }
@@ -1380,7 +1409,10 @@ mod tests {
 
     #[test]
     fn whitelists_have_no_overlap_with_asklist() {
-        for w in READ_ONLY_WHITELIST.iter().chain(SIDE_EFFECT_WHITELIST.iter()) {
+        for w in READ_ONLY_WHITELIST
+            .iter()
+            .chain(SIDE_EFFECT_WHITELIST.iter())
+        {
             assert!(
                 !SHELL_ASKLIST.contains(w),
                 "prefix '{}' is in a whitelist AND the asklist",

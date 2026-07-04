@@ -71,13 +71,10 @@ const OFFICE_EXTS: &[&str] = &[
 /// opencode's list and common archive/executable/object formats. A hit
 /// short-circuits before any content sniff.
 const BINARY_EXTS: &[&str] = &[
-    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".7z", ".rar",
-    ".exe", ".dll", ".so", ".dylib", ".o", ".a", ".lib",
-    ".class", ".jar", ".war",
-    ".wasm", ".pyc", ".pyo",
-    ".bin", ".dat", ".obj",
-    ".mp3", ".mp4", ".mov", ".avi", ".mkv", ".flac", ".ogg", ".wav",
-    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".o",
+    ".a", ".lib", ".class", ".jar", ".war", ".wasm", ".pyc", ".pyo", ".bin", ".dat", ".obj",
+    ".mp3", ".mp4", ".mov", ".avi", ".mkv", ".flac", ".ogg", ".wav", ".ttf", ".otf", ".woff",
+    ".woff2", ".eot",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,7 +370,12 @@ async fn expand_single(rel_path: &str, ctx: &ToolContext) -> (Option<String>, In
     // `Unreadable` distinction based on the `read` call's
     // outcome below.
     if !lexical_within_root(ctx, &resolved) {
-        return (None, InjectionAction::Skipped { reason: SkipReason::OutOfRoot });
+        return (
+            None,
+            InjectionAction::Skipped {
+                reason: SkipReason::OutOfRoot,
+            },
+        );
     }
     // Lexically inside the project: try to read the bytes
     // directly. We do NOT call `assert_within_root` here
@@ -387,10 +389,20 @@ async fn expand_single(rel_path: &str, ctx: &ToolContext) -> (Option<String>, In
     let bytes = match tokio::fs::read(&resolved).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return (None, InjectionAction::Skipped { reason: SkipReason::Missing });
+            return (
+                None,
+                InjectionAction::Skipped {
+                    reason: SkipReason::Missing,
+                },
+            );
         }
         Err(_) => {
-            return (None, InjectionAction::Skipped { reason: SkipReason::Unreadable });
+            return (
+                None,
+                InjectionAction::Skipped {
+                    reason: SkipReason::Unreadable,
+                },
+            );
         }
     };
     let kind = classify(&resolved, &bytes);
@@ -491,10 +503,7 @@ fn expand_for_kind(rel_path: &str, kind: FileKind, bytes: &[u8]) -> String {
             "[binary: {} — 二进制文档未注入；可 shell 运行 pandoc {} -t plain 转文本后引用]",
             rel_path, rel_path
         ),
-        FileKind::Binary => format!(
-            "[binary: {} — 二进制文件，无法注入文本内容]",
-            rel_path
-        ),
+        FileKind::Binary => format!("[binary: {} — 二进制文件，无法注入文本内容]", rel_path),
     }
 }
 
@@ -591,7 +600,10 @@ mod tests {
     #[test]
     fn classify_unknown_ext_falls_back_to_content() {
         assert_eq!(classify(Path::new("noext"), &[0, 1, 2]), FileKind::Binary);
-        assert_eq!(classify(Path::new("weird.dat2"), b"plain text"), FileKind::Text);
+        assert_eq!(
+            classify(Path::new("weird.dat2"), b"plain text"),
+            FileKind::Text
+        );
     }
 
     // --- expand_at_tokens: injection ---
@@ -637,7 +649,11 @@ mod tests {
         let line = "x".repeat(80) + "\n";
         std::fs::write(tmp.path().join("big.txt"), line.repeat(700)).unwrap();
         let (out, records) = expand_at_tokens("@big.txt", &ctx_at(&tmp)).await;
-        assert!(out.contains("<truncated:"), "expected truncation marker, got: {:?}", out);
+        assert!(
+            out.contains("<truncated:"),
+            "expected truncation marker, got: {:?}",
+            out
+        );
         assert!(out.contains("<file path=\"big.txt\">"));
         // `lines` is the pre-truncation count (the file on disk
         // has 700 lines; truncate doesn't change the manifest —
@@ -655,11 +671,20 @@ mod tests {
         std::fs::write(tmp.path().join("pic.png"), b"\x89PNG\r\n\x1a\n fake").unwrap();
         let (out, records) = expand_at_tokens("@pic.png", &ctx_at(&tmp)).await;
         assert!(out.contains("[image: pic.png"), "got: {:?}", out);
-        assert!(!out.contains("<file"), "image must not inject as text, got: {:?}", out);
+        assert!(
+            !out.contains("<file"),
+            "image must not inject as text, got: {:?}",
+            out
+        );
         // Manifest records Degraded(Image) for the frontend hint.
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].path, "pic.png");
-        assert_eq!(records[0].action, InjectionAction::Degraded { file_kind: FileKind::Image });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Image
+            }
+        );
     }
 
     #[tokio::test]
@@ -670,7 +695,12 @@ mod tests {
         assert!(out.contains("[binary: doc.pdf"), "got: {:?}", out);
         assert!(out.contains("pdftotext"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].action, InjectionAction::Degraded { file_kind: FileKind::Pdf });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Pdf
+            }
+        );
     }
 
     #[tokio::test]
@@ -681,7 +711,12 @@ mod tests {
         assert!(out.contains("[binary: spec.docx"), "got: {:?}", out);
         assert!(out.contains("pandoc"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].action, InjectionAction::Degraded { file_kind: FileKind::Office });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Office
+            }
+        );
     }
 
     #[tokio::test]
@@ -691,7 +726,12 @@ mod tests {
         let (out, records) = expand_at_tokens("@app.zip", &ctx_at(&tmp)).await;
         assert!(out.contains("[binary: app.zip"), "got: {:?}", out);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].action, InjectionAction::Degraded { file_kind: FileKind::Binary });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Degraded {
+                file_kind: FileKind::Binary
+            }
+        );
     }
 
     // --- expand_at_tokens: invalid path keeps original token ---
@@ -706,7 +746,12 @@ mod tests {
         // skipped entry in the hint row.
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].path, "nope.txt");
-        assert_eq!(records[0].action, InjectionAction::Skipped { reason: SkipReason::Missing });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Skipped {
+                reason: SkipReason::Missing
+            }
+        );
     }
 
     #[tokio::test]
@@ -717,7 +762,9 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].action,
-            InjectionAction::Skipped { reason: SkipReason::OutOfRoot }
+            InjectionAction::Skipped {
+                reason: SkipReason::OutOfRoot
+            }
         );
     }
 
@@ -735,7 +782,12 @@ mod tests {
         // part of an email address).
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].path, "b.com");
-        assert_eq!(records[0].action, InjectionAction::Skipped { reason: SkipReason::Missing });
+        assert_eq!(
+            records[0].action,
+            InjectionAction::Skipped {
+                reason: SkipReason::Missing
+            }
+        );
     }
 
     #[tokio::test]
@@ -766,9 +818,13 @@ mod tests {
         ];
         let (last_expanded, records) = inject_at_tokens(&mut messages, &ctx).await;
         // user expanded
-        assert!(matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"foo.txt\">")));
+        assert!(
+            matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"foo.txt\">"))
+        );
         // assistant left verbatim
-        assert!(matches!(&messages[1].content, MessageContent::Text(t) if t == "@foo.txt must NOT be touched"));
+        assert!(
+            matches!(&messages[1].content, MessageContent::Text(t) if t == "@foo.txt must NOT be touched")
+        );
         // B2 PR3: the function reports the LAST user text message
         // (only one user in this list) — its expanded content +
         // its manifest.
@@ -830,8 +886,12 @@ mod tests {
         // Both user messages are expanded in place (the function
         // walks every user text row), but the manifest only
         // describes the LAST one.
-        assert!(matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"a.txt\">")));
-        assert!(matches!(&messages[2].content, MessageContent::Text(t) if t.contains("<file path=\"b.txt\">")));
+        assert!(
+            matches!(&messages[0].content, MessageContent::Text(t) if t.contains("<file path=\"a.txt\">"))
+        );
+        assert!(
+            matches!(&messages[2].content, MessageContent::Text(t) if t.contains("<file path=\"b.txt\">"))
+        );
         let exp = last_expanded.expect("expected last_expanded");
         assert!(exp.contains("<file path=\"b.txt\">"), "got: {:?}", exp);
         assert_eq!(records.len(), 1);

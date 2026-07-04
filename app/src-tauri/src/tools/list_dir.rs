@@ -10,7 +10,6 @@
 //!   tell file from dir at a glance.
 //! - Default limit 500 entries.
 
-
 use crate::llm::types::ToolDef;
 use crate::tools::ToolContext;
 
@@ -124,10 +123,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     entries.sort();
 
     if entries.is_empty() {
-        return (
-            format!("(empty directory: {})", validated.display()),
-            false,
-        );
+        return (format!("(empty directory: {})", validated.display()), false);
     }
 
     let mut out = entries.join("\n");
@@ -169,11 +165,7 @@ mod tests {
         std::fs::write(tmp.path().join("b.txt"), "x").unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
 
-        let (content, is_err) = execute(
-            &serde_json::json!({}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) = execute(&serde_json::json!({}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         // Alphabetical order, with `/` on dirs.
         assert!(content.contains("a.txt\nb.txt\nsub/") || content.contains("a.txt\nb.txt"));
@@ -193,11 +185,7 @@ mod tests {
         assert!(!content.contains(".hidden"));
 
         // show_hidden: true → both.
-        let (content, is_err) = execute(
-            &serde_json::json!({"show_hidden": true}),
-            &ctx,
-        )
-        .await;
+        let (content, is_err) = execute(&serde_json::json!({"show_hidden": true}), &ctx).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("a.txt"));
         assert!(content.contains(".hidden"));
@@ -211,11 +199,7 @@ mod tests {
         std::fs::write(tmp.path().join("b.txt"), "x").unwrap();
         std::fs::write(tmp.path().join("c.txt"), "x").unwrap();
 
-        let (content, is_err) = execute(
-            &serde_json::json!({"limit": 2}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) = execute(&serde_json::json!({"limit": 2}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("more entries hidden"));
     }
@@ -233,11 +217,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
         std::fs::write(tmp.path().join("sub").join("a.txt"), "x").unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"path": "sub"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) = execute(&serde_json::json!({"path": "sub"}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("a.txt"));
     }
@@ -245,11 +225,8 @@ mod tests {
     #[tokio::test]
     async fn nonexistent_path() {
         let tmp = tempdir().unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"path": "no-such-dir"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"path": "no-such-dir"}), &test_ctx(&tmp)).await;
         assert!(is_err);
         assert!(content.contains("rejected") || content.contains("Failed to read"));
     }
@@ -260,11 +237,8 @@ mod tests {
         // rejects project-outside paths (permission layer gates them).
         // /etc exists + is outside tempdir → listing succeeds.
         let tmp = tempdir().unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"path": "/etc"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"path": "/etc"}), &test_ctx(&tmp)).await;
         assert!(!is_err, "project-outside listing must succeed: {content}");
     }
 }

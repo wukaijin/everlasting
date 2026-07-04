@@ -218,5 +218,7 @@ pub enum PermissionResponse {
     /// "拒绝并说明" path). Empty string = plain deny. The agent
     /// loop surfaces this as the `tool_result(is_error)` content
     /// so the LLM learns *why* it was denied.
-    Deny { reason: String },
+    Deny {
+        reason: String,
+    },
 }
