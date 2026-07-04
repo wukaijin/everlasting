@@ -1961,3 +1961,36 @@ read 族(read_file/grep/glob/list_dir)的 tool 层 assert_within_root 与权限�
 
 - 设计迭代轨迹: expo-out → standard decel → emphasized decel → ease；scale 0.96 → 0.1；mask 有动画 → 无动画。全部由用户实机反馈驱动。
 - 坑: Vite scoped keyframe HMR 偶发 animation-name 与 @keyframes hash 不同步导致动画失效，硬刷新/重启 dev 解决。
+
+## 2026-07-05 — A5+ LLM 网络健壮性收尾 (07-04-a5plus-llm-network-resilience, Step 6-9)
+
+dispatch trellis-implement 做 Step 6+7+8,主会话 Step 9 文档 + trellis-check + 四段式 commit。
+
+### Main Changes
+
+- **Step 7 前端 retrying (R8)**: `ChatEvent::Retrying{attempt,max_attempts,wait_ms,reason}`(wire `kind="retrying"`)+ `LlmRetrySink` 从 tracing 占位改造为持有 `Arc<dyn ChatEventSink>` 真 emit;streamController `case 'retrying'` 挂瞬态字段(不入 messages/rehydrate);MessageItem 渲染 ↩ 重试中 chip(`var(--color-status-warn)` token)。
+- **Step 6 R9 不变量**: 3 集成测试(token 不重复直查 SQL `last_input_tokens == success_usage` / Retrying emit + rid 路由 / 终态同位)。
+- **Step 8 R6 熔断**: retry.rs 4 边界测试(budget-先 / max_retries-先 / budget_remaining=0 / advisory clamp 不 overshoot)。
+- **Step 5 cancel timing 回归修复**: `agent_loop_ask_user_question_session_cancel` 从固定 80ms 改"等 call_count>=1 再 cancel"。retry_open 入口 `is_cancelled` short-circuit 让 cancel 在 send 前触发是预期语义(早响应不浪费请求),旧测试 80ms 假设脆弱。
+- **Step 9 文档**: llm-contract.md 完整 Scenario + agent-loop-architecture.md Pattern + ROADMAP §1.2 落地条目(计数 14→15) + IMPLEMENTATION §4 ADR(9 决策点) + DESIGN §5.1 风险表勾销。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d984b4f` | feat(llm): A5+ Step 6-8 retrying 前后端 + 不变量回归 + Step 5 cancel timing 修复 |
+| `015b759` | docs(llm): A5+ Step 9 spec/ROADMAP/ADR/DESIGN 收尾 |
+| (auto) `0955441` | chore(task): archive 07-04-a5plus-llm-network-resilience |
+
+### Testing
+
+[OK] `cargo test --lib` 1274 / `pnpm test` 718 / vue-tsc 0 err;trellis-check 无 blocker,R1-R9 + AC 16 全覆盖,1 warn(CSS `--color-warn`→`--color-status-warn`)已修。
+
+### Status
+
+[OK] **Completed** + 已归档
+
+### Notes
+
+- 核实 sub-agent"预存 flaky": `session_cancel` 实为 Step 5 引入回归(commit msg "1266 全绿"不准,Step 5 后即 fail,本次修);`loader_mtime_fence` 真预存 mtime flaky;`highlight.js`/`marked-highlight` 依赖未装是环境问题(`pnpm install` 修复),非代码改动。
+- 命名演进: design 写 `retry_send`/`RetryOutcome`/`ChatEventSink`,实现演化为 `retry_open`/`OpenOutcome`/`RetrySink`(故意做窄 — 只 emit retrying 不透传 ChatEvent,透传靠 `OpenOutcome::Stream` 让 chat_loop select loop 零改动)。
