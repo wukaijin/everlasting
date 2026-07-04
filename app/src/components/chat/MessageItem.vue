@@ -661,6 +661,44 @@ const showEditedLabel = computed<boolean>(
       :thinking-duration-ms="message.thinkingDurationMs"
     />
 
+    <!--
+      A5+ (2026-07-04, R8): transient retry notice. While the
+      agent loop's `LlmRetrySink` sleeps between retry attempts
+      (Full Jitter backoff or honored retry-after advisory),
+      the in-flight assistant placeholder carries a `retrying`
+      object. We render a small chip above the bubble so the
+      user understands the stream is paused, not dead — without
+      this row a multi-second backoff looks identical to a
+      frozen UI (the user can't tell whether to wait or ressend).
+
+      Visibility rules:
+        - Only when `retrying` is set (the controller clears it
+          on the next `start` / `delta` / `done` / `error`, so
+          the row naturally disappears the moment the retry
+          resolves or fails terminally).
+        - Assistant rows only (the field is never attached to
+          user bubbles).
+        - NOT persisted to DB: `rehydrateMessages` does not
+          copy `retrying`, so a session reload drops the chip.
+
+      The text is Chinese (对齐 L3b PR4 风格 — no i18n key, the
+      project is single-locale). The arrow ↩ mirrors the chat
+      affordance icon the user already knows from MessageActionsMenu.
+    -->
+    <div
+      v-if="message.role === 'assistant' && message.retrying"
+      class="msg__retrying"
+      data-testid="msg-retrying"
+      :title="`重试中 ${message.retrying.attempt}/${message.retrying.maxAttempts},${(message.retrying.waitMs / 1000).toFixed(1)}s 后重发`"
+    >
+      <Icon name="refresh" :size="12" icon-class="msg__retrying-icon" />
+      <span class="msg__retrying-text">
+        重试中 {{ message.retrying.attempt }}/{{ message.retrying.maxAttempts }},{{
+          (message.retrying.waitMs / 1000).toFixed(1)
+        }}s 后重发…({{ message.retrying.reason }})
+      </span>
+    </div>
+
     <div
       v-if="message.redactedThinkingData && message.redactedThinkingData.length"
       class="msg__redacted"
@@ -931,6 +969,51 @@ const showEditedLabel = computed<boolean>(
 .msg__redacted-icon {
   flex-shrink: 0;
   color: var(--color-text-secondary);
+}
+
+/*
+  A5+ (2026-07-04): retry notice row. Visually a small inline chip
+  above the bubble — same family as `msg__redacted` (dashed border,
+  mono font, muted text) but with an amber/warning tint to signal
+  "transient degraded state". Spins the icon via CSS animation so
+  the user sees live progress (the icon's rotation period is
+  decoupled from the wait_ms — it's just a "this is alive"
+  affordance, not a precise countdown).
+*/
+.msg__retrying {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border: 1px dashed var(--color-status-warn, #f0ad4e);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.msg__retrying-icon {
+  flex-shrink: 0;
+  color: var(--color-status-warn, #f0ad4e);
+  animation: msg__retrying-spin 1.4s linear infinite;
+}
+
+@keyframes msg__retrying-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.msg__retrying-text {
+  /* mono font already set on the parent; keep this span plain so
+     the reason text wraps naturally on narrow viewports. */
+  white-space: normal;
+  word-break: break-word;
 }
 
 .msg__tools {

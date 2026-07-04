@@ -608,4 +608,139 @@ mod tests {
         assert_eq!(mock.call_count(), 0);
         assert_eq!(retrying_count(&sink), 0);
     }
+
+    // -------- Step 8: budget / max_retries circuit-breaker edges (R6) --------
+
+    /// Budget fires BEFORE max_retries: with `budget = 12ms` and a
+    /// 10s advisory on each failure, the first retry's wait clamps
+    /// to budget_remaining (12ms), `total_elapsed` becomes 12ms,
+    /// and the second failure sees `budget_remaining == 0` →
+    /// returns Err without emitting another retrying notice. Total:
+    /// 2 sends, 1 retrying event. Proves R6's "budget circuit-
+    /// breaker trips independent of max_retries" (max_retries=10
+    /// here would otherwise allow 10 retries).
+    #[tokio::test]
+    async fn retry_open_budget_breaks_before_max_retries() {
+        // max_retries=10 (generous) so budget is the only ceiling.
+        let policy = RetryPolicy {
+            max_retries: 10,
+            base: Duration::from_millis(1),
+            cap: Duration::from_millis(5),
+            budget: Duration::from_millis(12),
+            retry_after_cap: Duration::from_secs(60),
+        };
+        // Each failure carries a 10s advisory so wait() clamps to
+        // budget_remaining rather than jittering into sub-ms territory.
+        let mock = MockProvider::new(vec![
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+        ]);
+        let sink = MockSink::default();
+        let mut rng = fastrand::Rng::with_seed(0);
+        let token = CancellationToken::new();
+        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err after budget trip)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(RateLimit)");
+        assert!(matches!(first, LlmError::RateLimit { .. }));
+        // 1 initial send + 1 retry (the retry's 10s advisory
+        // clamped to the 12ms budget, so total_elapsed = 12ms).
+        // The 2nd retry sees budget_remaining=0 and stops without
+        // emitting a notice. Budget tripped at attempt=1 even
+        // though max_retries=10.
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "budget should trip after 1 retry, got {}",
+            mock.call_count()
+        );
+        assert_eq!(retrying_count(&sink), 1);
+    }
+
+    /// max_retries fires BEFORE budget: with the default fast
+    /// policy (max_retries=3, budget=20ms, cap=5ms), 4 consecutive
+    /// 503s exhaust max_retries. The cumulative sleep (3 jitters
+    /// ≤ 5ms each) is well under the 20ms budget — max_retries is
+    /// the binding constraint. Proves the two ceilings are
+    /// independent and either can trip first.
+    #[tokio::test]
+    async fn retry_open_max_retries_breaks_before_budget() {
+        let policy = fast_policy(); // max_retries=3, budget=20ms
+        let mock = MockProvider::new(vec![
+            MockResponse::ErrThenEnd(server_503()),
+            MockResponse::ErrThenEnd(server_503()),
+            MockResponse::ErrThenEnd(server_503()),
+            MockResponse::ErrThenEnd(server_503()),
+        ]);
+        let sink = MockSink::default();
+        let mut rng = fastrand::Rng::with_seed(0);
+        let token = CancellationToken::new();
+        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(Server)");
+        assert!(matches!(first, LlmError::Server { .. }));
+        // 1 initial + 3 retries = 4 sends (max_retries exhausted).
+        assert_eq!(mock.call_count(), 4);
+        assert_eq!(retrying_count(&sink), 3);
+    }
+
+    /// wait() clamps advisory to budget_remaining: when the next
+    /// retry's advisory would overshoot the remaining budget, the
+    /// wait is truncated. This is the "circuit-breaker clamp" that
+    /// prevents the final retry's backoff from blowing past the
+    /// budget ceiling — prd R6 + research §6.1.
+    #[test]
+    fn wait_clamps_advisory_to_remaining_budget_so_total_does_not_overshoot() {
+        let p = policy();
+        let mut rng = fastrand::Rng::with_seed(0);
+        // 30s advisory, only 5s remaining → wait must clamp to 5s
+        // (NOT the 30s advisory, NOT the policy's 60s cap).
+        let wait = p.wait(0, Some(Duration::from_secs(30)), Duration::from_secs(5), &mut rng);
+        assert_eq!(wait, Duration::from_secs(5));
+    }
+
+    /// Budget exhausted between retries: when budget_remaining
+    /// hits exactly zero, retry_open returns Stream(Err) on the
+    /// next failure WITHOUT emitting another retrying event — even
+    /// though attempt < max_retries. This is the precise boundary
+    /// the circuit breaker enforces.
+    #[tokio::test]
+    async fn retry_open_zero_budget_remaining_stops_without_emitting_retry_notice() {
+        // budget=10ms, single 10s advisory → first retry sleep
+        // clamps to 10ms (= budget), total_elapsed becomes 10ms.
+        // Second failure sees budget_remaining = 0 → immediate Err.
+        let policy = RetryPolicy {
+            max_retries: 5,
+            base: Duration::from_millis(1),
+            cap: Duration::from_millis(5),
+            budget: Duration::from_millis(10),
+            retry_after_cap: Duration::from_secs(60),
+        };
+        let mock = MockProvider::new(vec![
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+            MockResponse::ErrThenEnd(rate_limit_advisory(Duration::from_secs(10))),
+        ]);
+        let sink = MockSink::default();
+        let mut rng = fastrand::Rng::with_seed(0);
+        let token = CancellationToken::new();
+        let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(RateLimit)");
+        assert!(matches!(first, LlmError::RateLimit { .. }));
+        // 1 initial + 1 retry (the 1st advisory clamped to budget
+        // 10ms). The 2nd retry sees budget_remaining=0 and stops.
+        assert_eq!(mock.call_count(), 2);
+        assert_eq!(retrying_count(&sink), 1);
+    }
 }

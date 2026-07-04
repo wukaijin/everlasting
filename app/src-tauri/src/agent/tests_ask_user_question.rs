@@ -503,11 +503,25 @@ async fn agent_loop_ask_user_question_session_cancel() {
 
     let token = CancellationToken::new();
     let token_clone = token.clone();
-    // Fire the cancel after a brief delay — the blocking tool
-    // is mid-`tokio::select!` at this point (stream still
-    // pending, register/emit done).
+    // Wait until turn 1's `provider.send` has actually executed
+    // before firing the cancel. A5+ (Step 5) wrapped
+    // `provider.send` in `retry_open`, which checks
+    // `token.is_cancelled()` *before* the first send; a fixed
+    // 80 ms delay races chat_loop's turn-1 setup (system prompt
+    // + instructions + memory recall), so cancel can short-
+    // circuit the send and leave `call_count == 0`. Keying off
+    // `call_count >= 1` puts the cancel deterministically in the
+    // "stream pending, send done" window the test means to
+    // exercise, and stays correct regardless of host speed.
+    let call_count = mock.call_count_handle();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        let start = std::time::Instant::now();
+        while call_count.load(std::sync::atomic::Ordering::SeqCst) < 1 {
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("cancel test: turn-1 send never observed (call_count stayed 0)");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         token_clone.cancel();
     });
 

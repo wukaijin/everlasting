@@ -418,6 +418,29 @@ pub enum ChatEvent {
         message: String,
         category: LlmErrorCategory,
     },
+    /// A5+ (2026-07-04, R8): emitted before each retry backoff sleep so
+    /// the frontend can surface "↩ retrying 2/3, 2s … (reason)" instead
+    /// of looking frozen. Transient UX signal — does NOT enter the DB
+    /// (no AuditKind, no per-turn persist). The agent loop's
+    /// `LlmRetrySink` forwards this through the regular `chat-event`
+    /// channel alongside the other variants. Frontend display attaches
+    /// the row to the in-flight assistant placeholder's transient
+    /// `retrying` field (NOT the `messages` array, to avoid polluting
+    /// the persisted history); the next `delta` / `start` / `done`
+    /// clears it.
+    ///
+    /// Fields mirror Rust `llm::retry::RetryingEvent`:
+    /// - `attempt` — 1-indexed (1 = first retry after the initial fail).
+    /// - `max_attempts` — `RetryPolicy.max_retries` (the ceiling).
+    /// - `wait_ms` — the computed backoff (Full Jitter or honored
+    ///   server advisory), already clamped to the budget remaining.
+    /// - `reason` — `LlmError::user_message()` (Chinese, user-facing).
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        wait_ms: u64,
+        reason: String,
+    },
     /// B2 PR3: per-token `@relpath` injection manifest, emitted
     /// once per user turn (right after `inject_at_tokens` runs on
     /// the last user message). The frontend `streamController`
@@ -1069,5 +1092,27 @@ mod tests {
         assert_eq!(v["injections"][0]["path"], "foo.txt");
         assert_eq!(v["injections"][0]["action"]["kind"], "injected");
         assert_eq!(v["injections"][0]["action"]["lines"], 12);
+    }
+
+    /// A5+ (2026-07-04, R8): verify `ChatEvent::Retrying` wire shape.
+    /// The frontend `streamController` `case 'retrying'` arm reads
+    /// `attempt` / `max_attempts` / `wait_ms` / `reason` off the IPC
+    /// payload. The `kind` discriminator is snake_case (`retrying`)
+    /// from the enum-level `#[serde(rename_all = "snake_case")]` tag.
+    #[test]
+    fn a5plus_chat_event_retrying_wire_shape() {
+        let ev = ChatEvent::Retrying {
+            attempt: 2,
+            max_attempts: 3,
+            wait_ms: 1500,
+            reason: "服务器错误 (HTTP 503)".to_string(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["kind"], "retrying");
+        assert_eq!(v["attempt"], 2);
+        assert_eq!(v["max_attempts"], 3);
+        assert_eq!(v["wait_ms"], 1500);
+        assert_eq!(v["reason"], "服务器错误 (HTTP 503)");
     }
 }

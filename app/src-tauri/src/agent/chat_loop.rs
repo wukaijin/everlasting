@@ -132,18 +132,41 @@ use crate::tools::ToolContext;
 /// StillOver). The chat command's pre-flight inserts those
 /// entries; the agent loop's own RAII Drop cleans them up.
 #[allow(clippy::too_many_arguments)]
-/// A5+ (2026-07-04): minimal `RetrySink` that logs retry notices. Step 7
-/// (frontend retrying UI) replaces this with a `chat-event` adapter so the
-/// user sees "↩ retrying 2/3, 2s …" instead of a frozen-looking stream.
-struct LlmRetrySink;
+/// A5+ (2026-07-04, R8): `RetrySink` adapter that forwards retry
+/// notices onto the regular `chat-event` IPC channel as a
+/// `ChatEvent::Retrying` payload. The frontend `streamController`
+/// routes them through its `case 'retrying'` arm and shows a small
+/// "↩ 重试中 N/M, Ts 后重发… (reason)" row above the in-flight
+/// assistant bubble — without this the user sees a multi-second
+/// frozen-looking stream while the backoff sleeps.
+///
+/// Holds a clone of the chat sink + the request id so each retry
+/// notice maps onto the right active request on the frontend.
+struct LlmRetrySink {
+    sink: Arc<dyn ChatEventSink>,
+    rid: String,
+}
 impl RetrySink for LlmRetrySink {
     fn emit_retrying(&self, event: RetryingEvent) {
+        // Trace-log alongside the IPC emit so server-side debugging
+        // can grep retry timing without the frontend open.
         tracing::info!(
+            request_id = %self.rid,
             attempt = event.attempt,
             max_attempts = event.max_attempts,
             wait_ms = event.wait_ms,
             reason = %event.reason,
             "chat: LLM retry (A5+)"
+        );
+        emit_chat_event_via_sink(
+            &self.sink,
+            &self.rid,
+            &ChatEvent::Retrying {
+                attempt: event.attempt,
+                max_attempts: event.max_attempts,
+                wait_ms: event.wait_ms,
+                reason: event.reason,
+            },
         );
     }
 }
@@ -1421,6 +1444,10 @@ pub async fn run_chat_loop(
         // execute after the stream completes, so pre-first-byte retry is
         // provably side-effect-free, no idempotency key needed).
         let mut rng = fastrand::Rng::new();
+        let retry_sink = LlmRetrySink {
+            sink: sink.clone(),
+            rid: rid.clone(),
+        };
         let outcome = retry_open(
             provider.as_ref(),
             Some(system_prompt.clone()),
@@ -1428,7 +1455,7 @@ pub async fn run_chat_loop(
             turn_tool_defs,
             &RetryPolicy::default(),
             &token,
-            &LlmRetrySink,
+            &retry_sink,
             &mut rng,
         )
         .await;
@@ -1627,6 +1654,19 @@ pub async fn run_chat_loop(
                             tracing::warn!(
                                 request_id = %rid,
                                 "chat: unexpected FileInjections in LLM stream (ignoring — already emitted pre-turn)"
+                            );
+                        }
+                        // A5+ (2026-07-04): `Retrying` is emitted
+                        // directly by `LlmRetrySink` (NOT via this
+                        // per-event stream loop), so reaching this
+                        // arm means a provider somehow re-emitted a
+                        // retrying notice we already pushed to the
+                        // frontend. Drop it (the legitimate one
+                        // already shipped via `LlmRetrySink::emit_retrying`).
+                        ChatEvent::Retrying { .. } => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                "chat: unexpected Retrying in LLM stream (ignoring — emitted via LlmRetrySink)"
                             );
                         }
                     }
