@@ -47,7 +47,10 @@ use futures_util::StreamExt;
 use sqlx::SqlitePool;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
+use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
+// A5+ (2026-07-04): LLM first-byte-safe retry open.
+use crate::llm::retry::{retry_open, OpenOutcome, RetryingEvent, RetryPolicy, RetrySink};
 
 use crate::agent::helpers::{
     build_synthetic_tool_result_message, emit_chat_event_via_sink, persist_turn_cwd,
@@ -129,6 +132,22 @@ use crate::tools::ToolContext;
 /// StillOver). The chat command's pre-flight inserts those
 /// entries; the agent loop's own RAII Drop cleans them up.
 #[allow(clippy::too_many_arguments)]
+/// A5+ (2026-07-04): minimal `RetrySink` that logs retry notices. Step 7
+/// (frontend retrying UI) replaces this with a `chat-event` adapter so the
+/// user sees "↩ retrying 2/3, 2s …" instead of a frozen-looking stream.
+struct LlmRetrySink;
+impl RetrySink for LlmRetrySink {
+    fn emit_retrying(&self, event: RetryingEvent) {
+        tracing::info!(
+            attempt = event.attempt,
+            max_attempts = event.max_attempts,
+            wait_ms = event.wait_ms,
+            reason = %event.reason,
+            "chat: LLM retry (A5+)"
+        );
+    }
+}
+
 pub async fn run_chat_loop(
     tool_defs: Vec<ToolDef>,
     provider: Arc<dyn Provider>,
@@ -1385,22 +1404,6 @@ pub async fn run_chat_loop(
             turn_tool_defs.push(dispatch_def);
         }
         let turn_tool_defs = turn_tool_defs;
-        let mut stream = provider.send(
-            Some(system_prompt.clone()),
-            turn_messages,
-            turn_tool_defs,
-        );
-        // P2 RULE-A-009 (2026-06-24, fix 2b of 3 P2 open rules):
-        // declare + initialize `turn_send_at` here (where it's first
-        // written) instead of carrying a dead `None` initial value at
-        // the top of the loop body that needed a `let _ =` suppressor
-        // (pre-fix line 816). The other 4 `turn_*_at` vars
-        // (first_delta / thinking_start / thinking_done / done_at)
-        // stay declared at the top because they're conditionally
-        // assigned in event-handler arms and the `None` default is
-        // load-bearing for the `is_none()` checks.
-        let turn_send_at = Some(Instant::now());
-
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut finalized_thinking: Vec<(String, String)> = Vec::new();
@@ -1410,6 +1413,44 @@ pub async fn run_chat_loop(
         let mut last_usage: Option<crate::llm::types::TokenUsage> = None;
         let mut had_error = false;
         let mut cancelled = false;
+        // A5+ (2026-07-04): first-byte-safe retry around `provider.send`.
+        // See llm/retry.rs + docs/research/llm-network-resilience-survey.md.
+        // On retryable first-byte failure (Network/Server/RateLimit) the
+        // request is re-issued with Full Jitter backoff, bounded by budget;
+        // the instant any Ok event arrives retry stops (prd R3 — tools only
+        // execute after the stream completes, so pre-first-byte retry is
+        // provably side-effect-free, no idempotency key needed).
+        let mut rng = fastrand::Rng::new();
+        let outcome = retry_open(
+            provider.as_ref(),
+            Some(system_prompt.clone()),
+            turn_messages,
+            turn_tool_defs,
+            &RetryPolicy::default(),
+            &token,
+            &LlmRetrySink,
+            &mut rng,
+        )
+        .await;
+        // P2 RULE-A-009: `turn_send_at` marks when the LLM stream became
+        // ready (post-retry). The other 4 `turn_*_at` vars stay declared at
+        // the top of the loop body (conditionally assigned; `None` default
+        // is load-bearing for `is_none()` checks).
+        let turn_send_at = Some(Instant::now());
+        let mut stream: Pin<Box<dyn futures_util::Stream<Item = Result<crate::llm::types::ChatEvent, crate::llm::error::LlmError>> + Send>> =
+            match outcome {
+                OpenOutcome::Stream(s) => s,
+                OpenOutcome::Cancelled => {
+                    // Retry gave up because the user cancelled during open
+                    // or backoff. Set the cancel flag and feed an empty
+                    // stream so the per-event loop below exits immediately
+                    // (None arm); the post-loop persist handles
+                    // CANCELLED_MARKER. The biased `token.cancelled()` arm
+                    // also fires on the first select iteration as backup.
+                    cancelled = true;
+                    Box::pin(futures_util::stream::empty())
+                }
+            };
 
         loop {
             tokio::select! {

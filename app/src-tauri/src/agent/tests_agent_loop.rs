@@ -1323,9 +1323,9 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         .collect();
     assert_eq!(error_events.len(), 1, "one error event expected");
     let (msg, _cat) = &error_events[0];
-    assert!(msg.contains("服务") || msg.contains("服务器"));
-    // Server category for HTTP 5xx.
-    assert_eq!(error_events[0].1, crate::llm::LlmErrorCategory::Server);
+    assert!(msg.contains("请求无效"), "expected InvalidRequest message, got: {}", msg);
+    // InvalidRequest category (non-retryable 4xx-class).
+    assert_eq!(error_events[0].1, crate::llm::LlmErrorCategory::InvalidRequest);
 }
 
 // ---------------------------------------------------------------------------

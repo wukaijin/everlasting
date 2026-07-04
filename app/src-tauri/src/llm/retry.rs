@@ -21,12 +21,6 @@
 //! boundary (Claude Code's "before visible output" rule; OpenCode's
 //! infinite-retry cautionary tale).
 
-// A5+ (2026-07-04): this whole module lands ahead of its production consumer.
-// `retry_open` is wired into `chat_loop` in Step 5; until then every item
-// here is dead code from the non-test build's perspective. Drop this allow
-// once Step 5 (chat_loop integration) lands.
-#![allow(dead_code)]
-
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -113,7 +107,13 @@ impl RetryPolicy {
         budget_remaining: Duration,
         rng: &mut fastrand::Rng,
     ) -> Duration {
+        // `retry_after` was already capped at `RETRY_AFTER_CAP_SECS` (60s)
+        // inside `classify_error_response`; `retry_after_cap` is a second,
+        // policy-configurable ceiling (default 60s — parity — but a stricter
+        // policy can clamp further). Then Full Jitter fallback, then the
+        // circuit-breaker budget.
         let raw = advisory
+            .map(|a| a.min(self.retry_after_cap))
             .unwrap_or_else(|| self.full_jitter(attempt, rng))
             .min(budget_remaining);
         raw
@@ -143,23 +143,31 @@ pub trait RetrySink {
 }
 
 /// Outcome of opening a (possibly retried) LLM stream.
+///
+/// Both success and terminal failure surface as [`OpenOutcome::Stream`]:
+/// - **first byte OK** → the stream is reassembled (`first` re-prepended via
+///   `once(..).chain(rest)`) so the caller's existing per-event loop sees the
+///   full sequence unchanged;
+/// - **first byte failed terminally** (non-retryable, or `max_retries` /
+///   `budget` exhausted) → a synthetic one-item `Err(e)` stream, which the
+///   caller's loop handles via its normal `had_error` arm (RULE-A-007).
+///
+/// This keeps the caller (`chat_loop`) change-minimal: it replaces
+/// `provider.send(..)` with `retry_open(..)` and matches `Stream | Cancelled`
+/// — the per-event `select!` loop is untouched.
 pub enum OpenOutcome {
-    /// First byte received — the stream is live. The caller consumes `first`
-    /// then drains `rest` with its normal per-event loop. **No retry happens
-    /// after this point** (prd R3): a mid-stream error from `rest` is
-    /// partial-turn territory and goes through the existing `had_error`
-    /// path, since re-issuing could execute already-emitted tool calls twice.
-    Ok {
-        first: ChatEvent,
-        rest: Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send>>,
-    },
-    /// First byte failed and the error is either non-retryable (`Auth` /
-    /// `InvalidRequest`) or the retry budget / attempt count is exhausted.
-    Err(LlmError),
-    /// Cancelled (prd R7) — either while awaiting the first byte or during a
-    /// backoff sleep. The caller treats this as the existing cancel path
-    /// (`cancelled = true`, no `had_error`).
+    Stream(Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send>>),
+    /// Cancelled during retry open (prd R7). The caller sets its cancel flag
+    /// and the post-loop persist handles `CANCELLED_MARKER`.
     Cancelled,
+}
+
+/// Build a one-item `Err` stream — used when retry is exhausted or the error
+/// is non-retryable. The caller's per-event loop sees this as a normal
+/// `Some(Err(e))` and runs its existing `had_error` path (so ERROR_MARKER +
+/// partial-turn persist work without specialization).
+fn once_err(err: LlmError) -> Pin<Box<dyn Stream<Item = Result<ChatEvent, LlmError>> + Send>> {
+    Box::pin(futures_util::stream::once(async move { Err(err) }))
 }
 
 /// Open a Provider stream with first-byte-safe retry.
@@ -199,20 +207,23 @@ pub async fn retry_open(
         };
         let err = match first {
             Some(Ok(ev)) => {
-                // First byte OK — hand off the live stream + first event.
-                return OpenOutcome::Ok { first: ev, rest: stream };
+                // First byte OK — re-prepend the event so the caller's
+                // per-event loop sees the full sequence unchanged.
+                return OpenOutcome::Stream(Box::pin(
+                    futures_util::stream::once(async move { Ok(ev) }).chain(stream),
+                ));
             }
             Some(Err(e)) => e,
             None => LlmError::Network("stream ended before any event".into()),
         };
         // First byte failed. Decide whether to retry.
         if !err.is_retryable() || attempt >= policy.max_retries {
-            return OpenOutcome::Err(err);
+            return OpenOutcome::Stream(once_err(err));
         }
         let budget_remaining = policy.budget.checked_sub(total_elapsed).unwrap_or_default();
         if budget_remaining == Duration::ZERO {
             // Circuit breaker tripped (prd R6).
-            return OpenOutcome::Err(err);
+            return OpenOutcome::Stream(once_err(err));
         }
         let wait = policy.wait(attempt, err.retry_after(), budget_remaining, rng);
         sink.emit_retrying(RetryingEvent {
@@ -403,10 +414,12 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
-        match outcome {
-            OpenOutcome::Ok { first, .. } => assert!(matches!(first, ChatEvent::Start)),
-            _ => panic!("expected Ok after retry"),
-        }
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream after retry"),
+        };
+        let first = stream.next().await.unwrap().expect("Ok(Start)");
+        assert!(matches!(first, ChatEvent::Start));
         assert_eq!(mock.call_count(), 2); // initial fail + 1 retry
         assert_eq!(retrying_count(&sink), 1);
     }
@@ -421,10 +434,12 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
-        match outcome {
-            OpenOutcome::Err(LlmError::Auth(_)) => {}
-            _ => panic!("expected Err(Auth) without retry"),
-        }
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(Auth)");
+        assert!(matches!(first, LlmError::Auth(_)));
         assert_eq!(mock.call_count(), 1);
         assert_eq!(retrying_count(&sink), 0);
     }
@@ -442,7 +457,12 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
-        assert!(matches!(outcome, OpenOutcome::Err(LlmError::Server { .. })));
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(Server)");
+        assert!(matches!(first, LlmError::Server { .. }));
         assert_eq!(mock.call_count(), 4); // 1 initial + 3 retries
         assert_eq!(retrying_count(&sink), 3);
     }
@@ -464,15 +484,15 @@ mod tests {
         let mut rng = fastrand::Rng::with_seed(0);
         let token = CancellationToken::new();
         let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
-        let mut rest = match outcome {
-            OpenOutcome::Ok { first, rest } => {
-                assert!(matches!(first, ChatEvent::Start));
-                rest
-            }
-            _ => panic!("expected Ok (first byte succeeded)"),
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (first byte succeeded)"),
         };
-        // The next item in rest is the mid-stream Err.
-        let next = rest.next().await;
+        // First event (re-prepended): Ok(Start).
+        let first = stream.next().await.unwrap().expect("Ok(Start)");
+        assert!(matches!(first, ChatEvent::Start));
+        // Next item is the mid-stream Err — carried through, NOT retried.
+        let next = stream.next().await;
         assert!(matches!(next, Some(Err(LlmError::Server { .. }))));
         assert_eq!(mock.call_count(), 1); // NO retry — first byte was OK
         assert_eq!(retrying_count(&sink), 0);
@@ -495,7 +515,7 @@ mod tests {
         let start = Instant::now();
         let outcome = retry_open(&mock, None, vec![], vec![], &fast_policy(), &token, &sink, &mut rng).await;
         let elapsed = start.elapsed();
-        assert!(matches!(outcome, OpenOutcome::Ok { .. }));
+        assert!(matches!(outcome, OpenOutcome::Stream(_)));
         assert!(
             elapsed >= Duration::from_millis(15),
             "advisory 15ms not honored, elapsed {:?}",
@@ -564,7 +584,12 @@ mod tests {
             ..fast_policy()
         };
         let outcome = retry_open(&mock, None, vec![], vec![], &policy, &token, &sink, &mut rng).await;
-        assert!(matches!(outcome, OpenOutcome::Err(LlmError::RateLimit { .. })));
+        let mut stream = match outcome {
+            OpenOutcome::Stream(s) => s,
+            _ => panic!("expected Stream (terminal Err)"),
+        };
+        let first = stream.next().await.unwrap().expect_err("Err(RateLimit)");
+        assert!(matches!(first, LlmError::RateLimit { .. }));
         assert_eq!(mock.call_count(), 2); // initial + 1 retry, then budget tripped
         assert_eq!(retrying_count(&sink), 1); // only the first retry emitted a notice
     }

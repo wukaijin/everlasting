@@ -74,7 +74,6 @@ impl LlmError {
     /// `AppError::retryable()`'s default category derivation
     /// (`Server` / `Network` / `RateLimit` → retryable). `Auth` /
     /// `InvalidRequest` are deterministic — retrying burns token budget.
-    #[allow(dead_code)] // consumed by llm::retry::retry_open (A5+ Step 5)
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.category(),
@@ -85,7 +84,6 @@ impl LlmError {
     /// Server-advised retry delay, if any. `None` for non-retryable variants
     /// and when no advisory header was present. `llm/retry.rs` honors this
     /// over Full Jitter when set.
-    #[allow(dead_code)] // consumed by llm::retry::retry_open (A5+ Step 5)
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
             LlmError::RateLimit { retry_after, .. }
