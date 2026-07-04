@@ -1320,6 +1320,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
+ "fastrand",
  "flate2",
  "futures-util",
  "git2",

@@ -18,6 +18,7 @@
 
 pub mod error;
 pub mod provider;
+pub mod retry;
 pub mod sse;
 pub mod types;
 

@@ -606,9 +606,12 @@ impl Provider for OpenAIProvider {
 
             let status = resp.status();
             if !status.is_success() {
+                // Snapshot headers before `resp.text()` consumes the response —
+                // `retry_after` advisory parsing needs them (A5+ retry support).
+                let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
                 tracing::warn!(status = %status, body = %body, "← LLM error (openai)");
-                yield Err(classify_error_response(status.as_u16(), &body));
+                yield Err(classify_error_response(status.as_u16(), &body, Some(&headers)));
                 return;
             }
 
@@ -1546,28 +1549,28 @@ mod tests {
         // OpenAI uses `code` (not `type`) in the error body.
         // The wire shape: { error: { message, type, code, param } }.
         let body = r#"{"error":{"message":"Incorrect API key provided","type":"error","code":"invalid_api_key"}}"#;
-        let err = classify_error_response(401, body);
+        let err = classify_error_response(401, body, None);
         assert!(matches!(err, LlmError::Auth(_)));
     }
 
     #[test]
     fn openai_429_classified_as_rate_limit() {
         let body = r#"{"error":{"message":"Rate limit reached","type":"error","code":"rate_limit_exceeded"}}"#;
-        let err = classify_error_response(429, body);
-        assert!(matches!(err, LlmError::RateLimit(_)));
+        let err = classify_error_response(429, body, None);
+        assert!(matches!(err, LlmError::RateLimit { .. }));
     }
 
     #[test]
     fn openai_400_with_invalid_request_code_is_invalid() {
         let body = r#"{"error":{"message":"Invalid tool definition","type":"invalid_request_error","code":"invalid_request_error"}}"#;
-        let err = classify_error_response(400, body);
+        let err = classify_error_response(400, body, None);
         assert!(matches!(err, LlmError::InvalidRequest(_)));
     }
 
     #[test]
     fn openai_500_classified_as_server() {
         let body = r#"{"error":{"message":"Internal server error","type":"server_error","code":"server_error"}}"#;
-        let err = classify_error_response(500, body);
+        let err = classify_error_response(500, body, None);
         assert!(matches!(err, LlmError::Server { status: 500, .. }));
     }
 

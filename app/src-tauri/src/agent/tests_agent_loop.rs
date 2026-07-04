@@ -1242,6 +1242,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
+            retry_after: None,
         },
     )]));
 
@@ -1867,6 +1868,7 @@ async fn agent_loop_error_persists_partial_text() {
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
+            retry_after: None,
         }),
     ])]));
 
@@ -1977,6 +1979,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
+            retry_after: None,
         },
     )]));
 
@@ -2081,6 +2084,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         Err(LlmError::Server {
             status: 500,
             message: "boom".into(),
+            retry_after: None,
         }),
     ])]));
 
@@ -2219,6 +2223,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
+            retry_after: None,
         }),
     ])]));
 
@@ -2325,6 +2330,7 @@ async fn agent_loop_error_emits_turn_complete() {
         Err(LlmError::Server {
             status: 503,
             message: "service unavailable".into(),
+            retry_after: None,
         }),
     ])]));
 

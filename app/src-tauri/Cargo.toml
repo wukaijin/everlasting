@@ -67,6 +67,12 @@ dirs = "5"
 #   `.trellis/tasks/06-12-feat-tools-web-fetch-agent-api-p1/research/html-to-markdown-rust.md`.
 htmd = "0.5"
 
+# A5+ LLM retry backoff (2026-07-04):
+# - `fastrand` 2.x for Full Jitter RNG. Near-zero deps, no std required.
+#   `fastrand::Rng` lets tests inject a fixed seed for deterministic backoff
+#   (pure exponential would make retry tests flaky).
+fastrand = "2"
+
 # A2 + B7 (Permission system + per-session Mode, 2026-06-13):
 # - `libc` for the `geteuid()` root check (Unix) + `#[cfg]` branch
 #   for Windows. Avoids pulling the full `nix` crate for one call.

@@ -274,9 +274,12 @@ impl AnthropicProvider {
 
             let status = resp.status();
             if !status.is_success() {
+                // Snapshot headers before `resp.text()` consumes the response —
+                // `retry_after` advisory parsing needs them (A5+ retry support).
+                let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
                 tracing::warn!(status = %status, body = %body, "← LLM error");
-                yield Err(classify_error_response(status.as_u16(), &body));
+                yield Err(classify_error_response(status.as_u16(), &body, Some(&headers)));
                 return;
             }
 

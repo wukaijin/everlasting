@@ -556,6 +556,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
             Err(LlmError::Server {
                 status: 503,
                 message: "worker upstream failed".into(),
+                retry_after: None,
             }),
         ]),
         // Parent turn 2: final text (worker exited with error →
@@ -728,6 +729,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
             Err(LlmError::Server {
                 status: 503,
                 message: "worker upstream failed".into(),
+                retry_after: None,
             }),
         ]),
         // Parent turn 2: final text.
