@@ -1,5 +1,7 @@
 # Everlasting
 
+[![CI](https://github.com/wukaijin/everlasting/actions/workflows/ci.yml/badge.svg)](https://github.com/wukaijin/everlasting/actions/workflows/ci.yml)
+
 > 个人使用的 vibe coding workbench。基于 Tauri + 自研 agent core,WSL 优先。
 
 ## 这是什么
