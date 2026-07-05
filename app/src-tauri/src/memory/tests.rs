@@ -283,8 +283,36 @@ async fn loader_mtime_fence_sees_file_change() {
     // the RULE-C-001 contract; the old watcher-debounce path
     // would have served stale "v1" for up to 1s (or forever, if
     // the watcher was dropped — see RULE-C-004).
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "v2").unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    //
+    // Spin until the file's mtime actually advances past the
+    // first load. Filesystem mtime precision varies (ext4 is
+    // nanosecond, but overlay/tmpfs surfaces — and parallel test
+    // load — can coarsen the visible delta enough that two writes
+    // < 1ms apart share an mtime, which would make a fixed sleep
+    // flaky). The loop is deterministic: it rewrites + re-stats
+    // until the mtime moves, and bails if the FS genuinely can't
+    // distinguish writes at all (which would itself invalidate
+    // the fence contract the test exists to guard).
+    let changed_path = user_claude_dir.path().join("CLAUDE.md");
+    let first_mtime = std::fs::metadata(&changed_path)
+        .unwrap()
+        .modified()
+        .unwrap();
+    let mtime_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        std::fs::write(&changed_path, "v2").unwrap();
+        let new_mtime = std::fs::metadata(&changed_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        if new_mtime != first_mtime {
+            break;
+        }
+        if tokio::time::Instant::now() >= mtime_deadline {
+            panic!("mtime did not advance in 2s — FS precision too coarse for fence test");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert!(
