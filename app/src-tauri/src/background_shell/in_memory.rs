@@ -355,11 +355,59 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
     }
 
     async fn drain_notifications(&self, session_id: &str) -> Vec<BackgroundShellNotification> {
-        let mut g = self.inner.lock().await;
-        g.notifications
-            .remove(session_id)
-            .map(|q| q.into_iter().collect())
-            .unwrap_or_default()
+        // Fast path: queue already has pending notifications →
+        // return immediately (original behavior, unchanged).
+        //
+        // Slow path (race fix, 2026-07-05, surfaced by E1 CI on the
+        // ubuntu runner): if the queue is empty but a shell for this
+        // session was spawned very recently, it may be ABOUT to push
+        // its completion notification. The spawned task's
+        // `child.wait()` (SIGCHLD) + lock + enqueue can outlast the
+        // caller's turn boundary — μs-scale mock-driven turn switches
+        // in tests, or the production turn boundary for fast shells
+        // like `echo`. Without the wait, drain pops the queue before
+        // the push lands and the notification is missed (delayed to a
+        // later turn, or lost if the loop terminates).
+        //
+        // We yield once + sleep briefly, then re-check, so an
+        // in-flight shell gets a window to land its push. Caps:
+        // (a) only shells younger than `RECENT_SHELL_MS` get the wait
+        //     — a long-lived dev server (24h) does NOT stall every
+        //     turn;
+        // (b) total wait bounded by `WAIT_DEADLINE_MS` so a wedged
+        //     shell can't block the agent loop indefinitely.
+        // Production impact in the common case is zero: drains almost
+        // always find the queue either non-empty (immediate return)
+        // or with no recent running shell (immediate empty return,
+        // since LLM turn latency ≫ shell completion).
+        const RECENT_SHELL_MS: MonotonicMs = 200;
+        const WAIT_DEADLINE_MS: u64 = 100;
+        const POLL_INTERVAL_MS: u64 = 5;
+
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(WAIT_DEADLINE_MS);
+        loop {
+            {
+                let mut g = self.inner.lock().await;
+                if let Some(q) = g.notifications.remove(session_id) {
+                    return q.into_iter().collect();
+                }
+                let now = now_ms();
+                let has_recent_running = g.shells.iter().any(|((sid, _), e)| {
+                    sid == session_id
+                        && matches!(e.state, ShellState::Running { .. })
+                        && now.saturating_sub(e.started_at) < RECENT_SHELL_MS
+                });
+                if !has_recent_running || tokio::time::Instant::now() >= deadline {
+                    return vec![];
+                }
+            }
+            // Drop the lock + yield so the spawned shell task (waiting
+            // on `child.wait()`) can run to completion and enqueue its
+            // notification before we re-poll.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
     }
 
     async fn kill_all(&self) -> Result<(), BackgroundShellError> {
