@@ -150,7 +150,10 @@ async fn run_hygiene_pass_inner(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 /// free merge to avoid a second UPDATE per pair (the keeper's count
 /// already reflects its recall hits; the loser's hits are rare and
 /// the dedup is best-effort).
-async fn dedup_pass(pool: &SqlitePool, all: &[crate::db::memories::MemoryRow]) -> Result<(), sqlx::Error> {
+async fn dedup_pass(
+    pool: &SqlitePool,
+    all: &[crate::db::memories::MemoryRow],
+) -> Result<(), sqlx::Error> {
     for scope in [MemoryScope::User, MemoryScope::Project] {
         for kind in [
             MemoryKind::Pitfall,
@@ -214,7 +217,10 @@ async fn dedup_pass(pool: &SqlitePool, all: &[crate::db::memories::MemoryRow]) -
 /// `path_globs` all equal. Both fields `None`/`null` count as equal
 /// (two path-agnostic, command-agnostic pitfalls on the same tool
 /// are duplicates).
-fn trigger_key_equal(a: &crate::db::memories::MemoryRow, b: &crate::db::memories::MemoryRow) -> bool {
+fn trigger_key_equal(
+    a: &crate::db::memories::MemoryRow,
+    b: &crate::db::memories::MemoryRow,
+) -> bool {
     a.tool_name == b.tool_name
         && a.command_pattern == b.command_pattern
         && a.path_globs == b.path_globs
@@ -224,7 +230,10 @@ fn trigger_key_equal(a: &crate::db::memories::MemoryRow, b: &crate::db::memories
 fn pick_keeper<'a>(
     a: &'a crate::db::memories::MemoryRow,
     b: &'a crate::db::memories::MemoryRow,
-) -> (&'a crate::db::memories::MemoryRow, &'a crate::db::memories::MemoryRow) {
+) -> (
+    &'a crate::db::memories::MemoryRow,
+    &'a crate::db::memories::MemoryRow,
+) {
     // Higher confidence wins.
     if a.confidence > b.confidence {
         return (a, b);
@@ -252,7 +261,10 @@ fn pick_keeper<'a>(
 /// `last_used_at` is more than [`AGE_OUT_DAYS`] days ago AND
 /// `hit_count < AGE_OUT_MIN_HITS`. Verified rows are exempt (they've
 /// earned their keep; only age out unverified noise).
-async fn age_out_pass(pool: &SqlitePool, all: &[crate::db::memories::MemoryRow]) -> Result<(), sqlx::Error> {
+async fn age_out_pass(
+    pool: &SqlitePool,
+    all: &[crate::db::memories::MemoryRow],
+) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::days(AGE_OUT_DAYS);
     for row in all {
@@ -374,7 +386,10 @@ mod tests {
     fn jaccard_chinese_overlap_above_threshold() {
         // Two short Chinese sentences sharing the key phrase
         // "PKG_CONFIG_PATH" should score above the dedup threshold.
-        let v = jaccard("设置 PKG_CONFIG_PATH 环境变量", "PKG_CONFIG_PATH 环境变量的坑");
+        let v = jaccard(
+            "设置 PKG_CONFIG_PATH 环境变量",
+            "PKG_CONFIG_PATH 环境变量的坑",
+        );
         assert!(
             v >= DEDUP_JACCARD_THRESHOLD,
             "got {v}, expected >= {DEDUP_JACCARD_THRESHOLD}"
@@ -436,7 +451,14 @@ mod tests {
         let b = row("b", 0.5, 0, Some("shell"), Some("cargo"), Some(r#"["x"]"#));
         assert!(trigger_key_equal(&a, &b));
         // Different tool → not equal.
-        let c = row("c", 0.5, 0, Some("edit_file"), Some("cargo"), Some(r#"["x"]"#));
+        let c = row(
+            "c",
+            0.5,
+            0,
+            Some("edit_file"),
+            Some("cargo"),
+            Some(r#"["x"]"#),
+        );
         assert!(!trigger_key_equal(&a, &c));
         // Different cmd → not equal.
         let d = row("d", 0.5, 0, Some("shell"), Some("npm"), Some(r#"["x"]"#));

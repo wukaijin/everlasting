@@ -45,8 +45,7 @@
 //! in O(1). Non-pitfall kinds ignore these fields.
 
 use crate::db::memories::{
-    count_memories_for_session, insert_memory, MemoryInput, MemoryKind, MemoryScope,
-    MemoryStatus,
+    count_memories_for_session, insert_memory, MemoryInput, MemoryKind, MemoryScope, MemoryStatus,
 };
 use crate::llm::types::ToolDef;
 use crate::tools::ToolContext;
@@ -210,10 +209,13 @@ fn build_input(
             .get("command_pattern")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let path_globs = input.get("path_globs").and_then(|v| v.as_array()).map(|arr| {
-            let strs: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
-            serde_json::to_string(&strs).unwrap_or_else(|_| "[]".to_string())
-        });
+        let path_globs = input
+            .get("path_globs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                let strs: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+                serde_json::to_string(&strs).unwrap_or_else(|_| "[]".to_string())
+            });
         (tool_name, command_pattern, path_globs)
     } else {
         (None, None, None)

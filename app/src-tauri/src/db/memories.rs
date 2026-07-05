@@ -285,13 +285,7 @@ const SENSITIVE_PATTERN: &str = r"(?i)(api[_-]?key|secret|password|token=|bearer
 /// secret location). The deny-list is matched on path-component
 /// equality (split on `/`), so `/home/user/.ssh/foo` matches but
 /// `/home/user/.sshd-config` does NOT (false-positive avoidance).
-const SENSITIVE_PATH_COMPONENTS: &[&str] = &[
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    "credentials",
-    "id_rsa",
-];
+const SENSITIVE_PATH_COMPONENTS: &[&str] = &[".ssh", ".aws", ".gnupg", "credentials", "id_rsa"];
 
 /// Temporary-path deny-list. These paths are ephemeral (process-
 /// scoped, not durable across reboots) so a memory referencing
@@ -402,9 +396,7 @@ fn find_temporary_path(text: &str) -> Option<&'static str> {
 /// a glob the recall path matches against, so generalizing it would
 /// break the match). They ARE checked for sensitive-path
 /// components (`/home/user/.ssh` in path_globs is still rejected).
-fn apply_safety_net(
-    input: &MemoryInput,
-) -> Result<(String, String), MemoryInsertError> {
+fn apply_safety_net(input: &MemoryInput) -> Result<(String, String), MemoryInsertError> {
     // 1. Empty-value rejection (B1/2.2).
     let title_trimmed = input.title.trim();
     if title_trimmed.is_empty() {
@@ -418,9 +410,7 @@ fn apply_safety_net(
     // 2. Length caps (B1) — DB CHECK is the backstop; reject early
     //    so the error message is actionable.
     if input.title.chars().count() > MAX_TITLE_LEN {
-        return Err(MemoryInsertError::TitleTooLong(
-            input.title.chars().count(),
-        ));
+        return Err(MemoryInsertError::TitleTooLong(input.title.chars().count()));
     }
     if input.content.chars().count() > MAX_CONTENT_LEN {
         return Err(MemoryInsertError::ContentTooLong(
@@ -430,8 +420,7 @@ fn apply_safety_net(
 
     // 3. Sensitive-content regex (spike-005 §4). Anchored on
     //    title + content (the free-form text the LLM produces).
-    let sensitive_re =
-        regex::Regex::new(SENSITIVE_PATTERN).expect("sensitive pattern compiles");
+    let sensitive_re = regex::Regex::new(SENSITIVE_PATTERN).expect("sensitive pattern compiles");
     if sensitive_re.is_match(&input.title) || sensitive_re.is_match(&input.content) {
         return Err(MemoryInsertError::SensitiveContent);
     }
@@ -583,8 +572,7 @@ pub async fn insert_memory(
     // under `cargo test`. Production builds run the trigger.
     if !cfg!(test) {
         const HYGIENE_TRIGGER_EVERY: i64 = 10;
-        let bucket_count =
-            count_memories_by_scope_kind(pool, input.scope, input.kind).await;
+        let bucket_count = count_memories_by_scope_kind(pool, input.scope, input.kind).await;
         if bucket_count > 0 && bucket_count % HYGIENE_TRIGGER_EVERY == 0 {
             tokio::spawn(crate::agent::memory_hygiene::run_hygiene_pass(pool.clone()));
         }
@@ -697,10 +685,7 @@ pub async fn list_memories(
 /// (`am_fts_delete`) removes the row's FTS index entries
 /// automatically. Returns the number of rows deleted (0 if the
 /// memory_id didn't exist — caller decides whether that's an error).
-pub async fn delete_memory(
-    pool: &SqlitePool,
-    memory_id: &str,
-) -> Result<u64, sqlx::Error> {
+pub async fn delete_memory(pool: &SqlitePool, memory_id: &str) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM autonomous_memories WHERE memory_id = ?")
         .bind(memory_id)
         .execute(pool)
@@ -719,18 +704,14 @@ pub async fn delete_memory(
 /// soft guard — a DB hiccup shouldn't block a legitimate write;
 /// the worst case is one extra row over the cap, which the next
 /// hygiene job / manual delete fixes).
-pub async fn count_memories_for_session(
-    pool: &SqlitePool,
-    session_id: &str,
-) -> i64 {
-    let count: Option<i64> = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM autonomous_memories WHERE source_session_id = ?",
-    )
-    .bind(session_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+pub async fn count_memories_for_session(pool: &SqlitePool, session_id: &str) -> i64 {
+    let count: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM autonomous_memories WHERE source_session_id = ?")
+            .bind(session_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
     count.unwrap_or(0)
 }
 
@@ -746,15 +727,14 @@ pub async fn count_memories_by_scope_kind(
     scope: MemoryScope,
     kind: MemoryKind,
 ) -> i64 {
-    let count: Option<i64> = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM autonomous_memories WHERE scope = ? AND kind = ?",
-    )
-    .bind(scope.as_str())
-    .bind(kind.as_str())
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let count: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM autonomous_memories WHERE scope = ? AND kind = ?")
+            .bind(scope.as_str())
+            .bind(kind.as_str())
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
     count.unwrap_or(0)
 }
 
@@ -839,7 +819,8 @@ pub async fn search_memories_fts(
     let (sql, bind_project_id) = match scope {
         Some(MemoryScope::User) => (
             // (a)
-            format!(r#"
+            format!(
+                r#"
             SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                    m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                    m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -852,7 +833,8 @@ pub async fn search_memories_fts(
               AND m.status IN ({status_in})
             ORDER BY bm25(autonomous_memories_fts)
             LIMIT ?
-            "#),
+            "#
+            ),
             false,
         ),
         Some(MemoryScope::Project) => {
@@ -861,7 +843,8 @@ pub async fn search_memories_fts(
             }
             (
                 // (b)
-                format!(r#"
+                format!(
+                    r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -875,7 +858,8 @@ pub async fn search_memories_fts(
                   AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#),
+                "#
+                ),
                 true,
             )
         }
@@ -885,7 +869,8 @@ pub async fn search_memories_fts(
                 return Err(MemoryInsertError::ProjectScopeMissingId);
             }
             (
-                format!(r#"
+                format!(
+                    r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -899,7 +884,8 @@ pub async fn search_memories_fts(
                   AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#),
+                "#
+                ),
                 true,
             )
         }
@@ -938,11 +924,11 @@ pub(crate) fn build_recall_fts_query(text: &str) -> String {
     // goal is to drop high-frequency function words that would
     // match too many rows, not to be a complete NLP stoplist.
     const STOPWORDS: &[&str] = &[
-        "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "for",
-        "is", "are", "was", "were", "be", "been", "being", "this", "that", "these",
-        "those", "it", "its", "with", "as", "by", "how", "what", "when", "why",
-        "i", "you", "we", "they", "he", "she", "my", "your", "our",
-        "的", "了", "是", "在", "和", "与", "或", "我", "你", "他", "她", "这", "那",
+        "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "for", "is", "are",
+        "was", "were", "be", "been", "being", "this", "that", "these", "those", "it", "its",
+        "with", "as", "by", "how", "what", "when", "why", "i", "you", "we", "they", "he", "she",
+        "my", "your", "our", "的", "了", "是", "在", "和", "与", "或", "我", "你", "他", "她",
+        "这", "那",
     ];
     const MAX_TOKENS: usize = 8;
 
@@ -994,7 +980,8 @@ pub async fn search_memories_fts_recall(
 
     let (sql, bind_project_id) = match scope {
         Some(MemoryScope::User) => (
-            format!(r#"
+            format!(
+                r#"
             SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                    m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                    m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -1007,7 +994,8 @@ pub async fn search_memories_fts_recall(
               AND m.status IN ({status_in})
             ORDER BY bm25(autonomous_memories_fts)
             LIMIT ?
-            "#),
+            "#
+            ),
             false,
         ),
         Some(MemoryScope::Project) => {
@@ -1015,7 +1003,8 @@ pub async fn search_memories_fts_recall(
                 return Err(MemoryInsertError::ProjectScopeMissingId);
             }
             (
-                format!(r#"
+                format!(
+                    r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -1029,7 +1018,8 @@ pub async fn search_memories_fts_recall(
                   AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#),
+                "#
+                ),
                 true,
             )
         }
@@ -1038,7 +1028,8 @@ pub async fn search_memories_fts_recall(
                 return Err(MemoryInsertError::ProjectScopeMissingId);
             }
             (
-                format!(r#"
+                format!(
+                    r#"
                 SELECT m.id, m.memory_id, m.scope, m.project_id, m.kind, m.status,
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
@@ -1052,7 +1043,8 @@ pub async fn search_memories_fts_recall(
                   AND m.status IN ({status_in})
                 ORDER BY bm25(autonomous_memories_fts)
                 LIMIT ?
-                "#),
+                "#
+                ),
                 true,
             )
         }
@@ -1134,11 +1126,8 @@ pub async fn find_pitfalls_by_trigger(
                 Some(p) => {
                     // Parse the JSON array; if it fails or is empty,
                     // treat as "no match" (precision-first).
-                    let globs: Vec<String> =
-                        serde_json::from_str(globs_json).unwrap_or_default();
-                    let matched = globs
-                        .iter()
-                        .any(|g| glob_matches_path(g, p));
+                    let globs: Vec<String> = serde_json::from_str(globs_json).unwrap_or_default();
+                    let matched = globs.iter().any(|g| glob_matches_path(g, p));
                     if !matched {
                         continue;
                     }
@@ -1208,11 +1197,8 @@ pub async fn find_pitfalls_by_trigger_all_status(
         if let Some(globs_json) = &mem.path_globs {
             match path {
                 Some(p) => {
-                    let globs: Vec<String> =
-                        serde_json::from_str(globs_json).unwrap_or_default();
-                    let matched = globs
-                        .iter()
-                        .any(|g| glob_matches_path(g, p));
+                    let globs: Vec<String> = serde_json::from_str(globs_json).unwrap_or_default();
+                    let matched = globs.iter().any(|g| glob_matches_path(g, p));
                     if !matched {
                         continue;
                     }
@@ -1362,10 +1348,7 @@ pub const ACTIVE_TO_VERIFIED_AGE_DAYS: i64 = 3;
 /// Best-effort: a `warn!` on failure (matches the project's
 /// "audit/metadata writes are best-effort" pattern). The recall
 /// return value is unaffected by a hit-count bump failure.
-pub async fn bump_hit_count(
-    pool: &SqlitePool,
-    memory_id: &str,
-) -> Result<(), sqlx::Error> {
+pub async fn bump_hit_count(pool: &SqlitePool, memory_id: &str) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         r#"
@@ -1441,16 +1424,13 @@ pub async fn promote_if_eligible(
 
     let current = MemoryStatus::from_str_opt(&row.status);
     let target = match current {
-        MemoryStatus::Candidate if row.hit_count >= CANDIDATE_TO_ACTIVE_AT => {
-            MemoryStatus::Active
-        }
+        MemoryStatus::Candidate if row.hit_count >= CANDIDATE_TO_ACTIVE_AT => MemoryStatus::Active,
         MemoryStatus::Active if row.hit_count >= ACTIVE_TO_VERIFIED_AT => {
             // Age gate: created_at must be ≥ N days old.
             let Ok(created) = chrono::DateTime::parse_from_rfc3339(&row.created_at) else {
                 return Ok(()); // unparseable timestamp → skip promotion
             };
-            let age_days =
-                (Utc::now() - created.with_timezone(&Utc)).num_days();
+            let age_days = (Utc::now() - created.with_timezone(&Utc)).num_days();
             if age_days >= ACTIVE_TO_VERIFIED_AGE_DAYS {
                 MemoryStatus::Verified
             } else {
@@ -1509,13 +1489,13 @@ pub async fn update_status(
     let mut tx = pool.begin().await?;
 
     // Read current status inside the transaction.
-    let current_str: Option<String> = sqlx::query_scalar(
-        "SELECT status FROM autonomous_memories WHERE memory_id = ?",
-    )
-    .bind(memory_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let current_str = current_str.ok_or_else(|| StatusTransitionError::NotFound(memory_id.to_string()))?;
+    let current_str: Option<String> =
+        sqlx::query_scalar("SELECT status FROM autonomous_memories WHERE memory_id = ?")
+            .bind(memory_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let current_str =
+        current_str.ok_or_else(|| StatusTransitionError::NotFound(memory_id.to_string()))?;
     let current = MemoryStatus::from_str_opt(&current_str);
 
     // Validate the transition.

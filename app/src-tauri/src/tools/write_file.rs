@@ -97,10 +97,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
                     error = %e,
                     "write_file path rejected: outside project root (existing target)"
                 );
-                return (
-                    format!("path '{}' rejected: {}", raw_path, e),
-                    true,
-                );
+                return (format!("path '{}' rejected: {}", raw_path, e), true);
             }
         }
     } else {
@@ -133,10 +130,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
                     error = %e,
                     "write_file path rejected: outside project root (missing target)"
                 );
-                return (
-                    format!("path '{}' rejected: {}", raw_path, e),
-                    true,
-                );
+                return (format!("path '{}' rejected: {}", raw_path, e), true);
             }
         };
         // Re-attach the missing tail in original order.
@@ -161,10 +155,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
                     error = %e,
                     "write_file failed to create parent directories"
                 );
-                return (
-                    format!("Failed to create parent directories: {}", e),
-                    true,
-                );
+                return (format!("Failed to create parent directories: {}", e), true);
             }
         }
     }

@@ -214,8 +214,7 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_session_id_returns_error() {
         let (ctx, _tmp) = test_ctx();
-        let (content, is_error, _) =
-            execute(&serde_json::json!({}), &ctx, Some("s1")).await;
+        let (content, is_error, _) = execute(&serde_json::json!({}), &ctx, Some("s1")).await;
         assert!(is_error);
         assert!(content.contains("Missing required parameter"));
     }

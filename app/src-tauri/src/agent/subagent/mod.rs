@@ -72,11 +72,11 @@ use crate::llm::types::MessageContent;
 use crate::llm::{ChatMessage, Role, ToolDef};
 use crate::memory::MemoryCache;
 
+pub(crate) mod dispatch;
+mod loader;
 mod sink;
 mod transcript;
 mod truncate_summary;
-mod loader;
-pub(crate) mod dispatch;
 
 // L3d PR2 (2026-06-25): re-export the loader's public surface so
 // callers reach it via `crate::agent::subagent::{SubagentCache,
@@ -95,9 +95,9 @@ pub use transcript::TranscriptEntry;
 // `TranscriptKind` is referenced only from `cfg(test)` code
 // (`db/tests.rs`, `agent/tests.rs`); production callers reach it via
 // the module-internal `super::transcript::TranscriptKind` path.
+pub(crate) use transcript::build_subagent_finished_payload;
 #[cfg(test)]
 pub use transcript::TranscriptKind;
-pub(crate) use transcript::build_subagent_finished_payload;
 pub use truncate_summary::{
     format_dispatch_result_with_model, format_final_text, summarize_worker_tool_actions,
     truncate_transcript_for_persistence, TRANSCRIPT_MAX_BYTES,
@@ -640,10 +640,7 @@ const STRUCTURALLY_DISABLED: &[&str] = &[
 /// - Then strip [`STRUCTURALLY_DISABLED`] unconditionally (so a
 ///   future frontmatter can't accidentally re-enable nesting or
 ///   the L1a trio).
-pub fn filter_tools_for_subagent(
-    all_tools: Vec<ToolDef>,
-    def: &SubagentDef,
-) -> Vec<ToolDef> {
+pub fn filter_tools_for_subagent(all_tools: Vec<ToolDef>, def: &SubagentDef) -> Vec<ToolDef> {
     let allow: Option<std::collections::HashSet<&str>> = if def.tools.is_empty() {
         None
     } else {
@@ -687,7 +684,8 @@ pub fn filter_tools_for_subagent(
 /// concurrent branch's tool discovery surface aligned with its
 /// read-only contract so the LLM never even sees a write tool in
 /// the concurrent path.
-pub const READONLY_TOOL_ALLOWLIST: &[&str] = &["read_file", "grep", "glob", "list_dir", "web_fetch"];
+pub const READONLY_TOOL_ALLOWLIST: &[&str] =
+    &["read_file", "grep", "glob", "list_dir", "web_fetch"];
 
 /// Force a worker's toolset down to read-only tools only (L3a,
 /// 2026-06-24). Applied by the concurrent dispatch branch in
@@ -845,9 +843,7 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
-        let prev = crate::memory::file::set_user_dir_for_test(
-            Some(user_tmp.path().to_path_buf()),
-        );
+        let prev = crate::memory::file::set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SubagentCache::arc();
 
         // Initially only builtins.
@@ -898,10 +894,7 @@ mod tests {
         // project > user > builtin precedence: a project .md with the
         // same name as a builtin shows source: project.
         let proj_tmp = tempfile::TempDir::new().unwrap();
-        let proj_agents = proj_tmp
-            .path()
-            .join(".everlasting")
-            .join("agents");
+        let proj_agents = proj_tmp.path().join(".everlasting").join("agents");
         std::fs::create_dir_all(&proj_agents).unwrap();
         std::fs::write(
             proj_agents.join("researcher.md"),

@@ -177,6 +177,23 @@ export interface ChatMessage {
   content: string; // accumulated text content
   streaming?: boolean;
   error?: { message: string; category: ErrorCategory };
+  /**
+   * A5+ (2026-07-04, R8): transient retry notice attached to the
+   * in-flight assistant placeholder while `LlmRetrySink` is in a
+   * backoff sleep. Set by `streamController`'s `case 'retrying'`
+   * handler; cleared by the next `start` / `delta` / `done` /
+   * `error` event. NOT persisted to DB (the field lives on the
+   * in-memory placeholder only) and NOT part of the rehydrate
+   * shape — `rehydrateMessages` skips it (a reloaded message can't
+   * be mid-retry). The MessageItem renders a small
+   * "↩ 重试中 N/M, Ts 后重发… (reason)" row above the bubble when set.
+   */
+  retrying?: {
+    attempt: number;
+    maxAttempts: number;
+    waitMs: number;
+    reason: string;
+  };
   toolCalls?: ToolCallInfo[];
   toolResults?: ToolResultInfo[];
   /** All thinking blocks emitted by the model for this message, in

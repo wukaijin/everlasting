@@ -42,11 +42,11 @@ use super::error::LlmError;
 use super::types::{ChatEvent, ChatMessage, ToolDef};
 use crate::db::{ModelRow, ProviderRow};
 
+pub use crate::db::ProviderProtocol;
 #[allow(unused_imports)]
 pub use anthropic::AnthropicProvider;
 #[allow(unused_imports)]
 pub use openai::OpenAIProvider;
-pub use crate::db::ProviderProtocol;
 
 // ---------------------------------------------------------------------------
 // Provider trait

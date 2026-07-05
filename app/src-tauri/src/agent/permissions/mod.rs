@@ -70,29 +70,29 @@
 //! for the 10 re-grill decisions; see
 //! `docs/IMPLEMENTATION.md §4` for the ADR.
 
-pub mod dangerous;
-pub mod sensitive;
-pub mod shell_trust;
-pub mod types;
-pub mod store;
-pub mod payload;
-pub mod mode;
+pub mod ask;
 pub mod audit;
 pub mod check;
-pub mod ask;
+pub mod dangerous;
+pub mod mode;
+pub mod payload;
 pub mod run_grant;
+pub mod sensitive;
+pub mod shell_trust;
+pub mod store;
+pub mod types;
 
 // Test files (flat layout — aligned with `agent/tests_*.rs` style
 // from the 2026-06-23 split batch).
-pub mod tests_common;
-pub mod tests_types;
-pub mod tests_store;
-pub mod tests_payload;
-pub mod tests_mode;
+pub mod tests_ask;
 pub mod tests_audit;
 pub mod tests_check;
-pub mod tests_ask;
+pub mod tests_common;
+pub mod tests_mode;
+pub mod tests_payload;
 pub mod tests_run_grant;
+pub mod tests_store;
+pub mod tests_types;
 
 // Re-export — keeps the `permissions::<item>` short path stable for
 // external callers (`state.rs` / `chat_loop.rs` / `commands/*` /
@@ -132,7 +132,9 @@ pub use check::PitfallRecall;
 pub use mode::{filter_tools_for_mode, mode_system_prefix};
 pub use payload::PermissionAskPayload;
 #[allow(unused_imports)]
-pub use store::{cancel_session_asks, new_permission_store, register_ask, resolve_ask, PermissionStore};
+pub use store::{
+    cancel_session_asks, new_permission_store, register_ask, resolve_ask, PermissionStore,
+};
 #[allow(unused_imports)]
 pub use types::{risk_for_tool, Decision, PermissionContext, PermissionResponse, Risk};
 // `RunGrantCache` is re-exported for `run_chat_loop`'s signature +

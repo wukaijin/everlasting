@@ -145,11 +145,7 @@ pub fn walk_system(root: &Path, max_depth: usize) -> Vec<String> {
 /// and the tests (small caps so a count/depth assertion doesn't create
 /// thousands of files). `pub(crate)` because the bounded signature is
 /// an internal detail — callers go through the two named wrappers.
-pub(crate) fn walk_files_bounded(
-    root: &Path,
-    max_depth: usize,
-    max_files: usize,
-) -> Vec<String> {
+pub(crate) fn walk_files_bounded(root: &Path, max_depth: usize, max_files: usize) -> Vec<String> {
     walk_files_bounded_with_excludes(root, max_depth, max_files, DEFAULT_EXCLUDE)
 }
 

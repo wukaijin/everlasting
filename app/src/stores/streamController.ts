@@ -146,6 +146,14 @@ interface ChatEventPayload {
     | "done"
     | "turn_complete"
     | "error"
+    // A5+ (2026-07-04, R8): transient retry notice. Emitted by
+    // `LlmRetrySink` BEFORE each backoff sleep so the frontend
+    // can show "↩ 重试中 2/3, 2s …" instead of looking frozen.
+    // The handler attaches the payload to the in-flight
+    // assistant placeholder's `retrying` field (NOT into the
+    // `messages` array — it must not pollute the persisted DB
+    // shape); the next `start` / `delta` / `done` clears it.
+    | "retrying"
     // B2 PR3: per-user-turn `@relpath` injection manifest,
     // emitted ONCE per user turn (right after `inject_at_tokens`
     // runs on the last user message). Mirrors Rust
@@ -193,6 +201,14 @@ interface ChatEventPayload {
   // through the DB and matches the rehydrated key.
   message_seq?: number;
   injections?: InjectionEntry[];
+  // A5+ (2026-07-04): only present when `kind === "retrying"`.
+  // Mirrors Rust `ChatEvent::Retrying`. The handler attaches
+  // the four fields to the in-flight assistant placeholder's
+  // transient `retrying` field for the MessageItem to render.
+  attempt?: number;
+  max_attempts?: number;
+  wait_ms?: number;
+  reason?: string;
 }
 
 /** A4: 4-field token usage payload from the LLM. Mirrors Rust
@@ -781,6 +797,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         req.currentTurnIndex++;
         last.streaming = true;
         last.error = undefined;
+        // A5+ (2026-07-04): a fresh turn started — the prior
+        // retry notice (if any) is stale. Clear it so the
+        // MessageItem row disappears the moment the stream
+        // resumes after a successful retry.
+        last.retrying = undefined;
         break;
       case "delta":
         // F5: capture the first-delta timestamp exactly once,
@@ -789,6 +810,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // The TTFB is computed in the `done` handler as
         // `firstDeltaAt - sendAt`.
         if (event.text) last.content += event.text;
+        // A5+ (2026-07-04): real content arrived — the retry
+        // succeeded. Clear the transient notice so the
+        // MessageItem row disappears (the bubble takes over).
+        if (last.retrying) last.retrying = undefined;
         if (req.firstDeltaAt === null) {
           req.firstDeltaAt = Date.now();
         }
@@ -977,6 +1002,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // blinking forever after the stream completes — a
         // regression that violates AC6.3 ("streaming=false,光标消失").
         last.streaming = false;
+        // A5+ (2026-07-04): terminal event — the retry row (if
+        // somehow still set, e.g. the last attempt succeeded but
+        // no `delta` ever arrived — a pure tool_use turn) MUST
+        // clear so the chip doesn't linger post-stream.
+        last.retrying = undefined;
         // Stream is over — the four deep-payload arrays stop
         // mutating. markRaw them now so future reads (and the
         // rehydrate path on session reload) skip the reactive
@@ -1023,6 +1053,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           message: event.message ?? "未知错误",
           category: event.category ?? "server",
         };
+        // A5+ (2026-07-04): terminal event — clear the retry
+        // chip on terminal failure too (otherwise the row
+        // would linger on the bubble even though `last.error`
+        // is now showing).
+        last.retrying = undefined;
         // F5: error path. The `totalMs` is still recorded
         // (user wants to see "在 X 秒时断了"), but `ttfbMs`
         // and `genMs` may be `null` (no delta arrived).
@@ -1125,6 +1160,37 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // `rehydrateMessages` rebuilds it post-`done`
         // from the DB and picks up the manifest from
         // `messages.metadata` there.
+        break;
+      }
+      case "retrying": {
+        // A5+ (2026-07-04, R8): the agent loop's `LlmRetrySink`
+        // emitted this notice before the next backoff sleep. The
+        // user sees "↩ 重试中 N/M, Ts 后重发… (reason)" instead of a
+        // multi-second frozen-looking stream. Attach to the
+        // in-flight assistant placeholder's transient `retrying`
+        // field — the MessageItem renders the row above the
+        // bubble. The field is cleared by the next `start` /
+        // `delta` / `done` / `error` event (the retry either
+        // succeeds and resumes the stream, fails terminally, or
+        // the user cancels).
+        if (
+          typeof event.attempt !== "number" ||
+          typeof event.max_attempts !== "number" ||
+          typeof event.wait_ms !== "number" ||
+          typeof event.reason !== "string"
+        ) {
+          // Defensive — the Rust side always sends all four
+          // fields for `retrying`, but a future wire change
+          // dropping one would crash the renderer on `.toFixed`
+          // etc. Drop the event rather than risk it.
+          break;
+        }
+        last.retrying = {
+          attempt: event.attempt,
+          maxAttempts: event.max_attempts,
+          waitMs: event.wait_ms,
+          reason: event.reason,
+        };
         break;
       }
     }

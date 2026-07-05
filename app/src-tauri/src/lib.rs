@@ -92,11 +92,7 @@ async fn sweep_stale_workers(db: sqlx::SqlitePool, app_data_dir: std::path::Path
         }
     }
     if total_destroyed > 0 {
-        tracing::info!(
-            total_destroyed,
-            cleanup_days,
-            "startup sweep: complete"
-        );
+        tracing::info!(total_destroyed, cleanup_days, "startup sweep: complete");
     }
 }
 

@@ -1,0 +1,86 @@
+name: CI
+
+# E1 CI 自动化管线 — 防回归 (cargo test + fmt + vitest + vue-tsc)
+# design/task: .trellis/tasks/07-05-ci-test-automation/
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.trellis/**'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.trellis/**'
+  workflow_dispatch:
+
+# 同一分支重复 push 取消旧的 in-flight run,省 GH Actions 分钟数
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (cargo test --lib + fmt)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri 2 在 Linux 上 build.rs 编译期就要 pkg-config 找到 webkit/gtk,
+      # 即使只跑 `cargo test --lib` 也必须装。reqwest 用 rustls 故省 libssl-dev。
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      # rust-cache 兜住 vendored-libgit2 的 C 编译产物 (~60s/次)
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'app/src-tauri'
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo test --lib
+        run: cargo test --lib
+
+  frontend:
+    name: Frontend (vitest + vue-tsc)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: 'app/pnpm-lock.yaml'
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build

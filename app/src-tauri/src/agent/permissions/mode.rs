@@ -11,26 +11,34 @@ use crate::db::Mode;
 /// other two are tool-list filtering and runtime intercept).
 pub fn mode_system_prefix(mode: Mode) -> &'static str {
     match mode {
-        Mode::Plan => "\
+        Mode::Plan => {
+            "\
 You are in Plan mode. You may read files, search, and run readonly \
 commands (cat / grep / git log / etc.) to understand the codebase, \
 but you CANNOT execute any write tool (write_file, edit_file, shell \
 with side effects). If the user asks for an edit, propose the \
-change as a diff and ask them to switch to Edit mode to apply it.",
-        Mode::Yolo => "\
+change as a diff and ask them to switch to Edit mode to apply it."
+        }
+        Mode::Yolo => {
+            "\
 You are in Yolo mode. All user-confirmation modals are \
 automatically skipped. Hard-deny rules (rm -rf /, mkfs, dd if=, \
 fork bombs, write-to-disk, chmod 777 /, force-push to protected \
 branches, curl|bash) are STILL enforced and will be silently \
-denied. Operate with care.",
-        Mode::Background => "\
+denied. Operate with care."
+        }
+        Mode::Background => {
+            "\
 You are in Background mode. (Reserved — not currently exposed in \
-the UI.)",
-        Mode::Edit => "\
+the UI.)"
+        }
+        Mode::Edit => {
+            "\
 You are in Edit mode (the default). You have full access to all \
 tools. Destructive shell commands are silently denied; other \
 commands trigger a one-time confirmation modal the first time the \
-user sees them per session.",
+user sees them per session."
+        }
     }
 }
 
@@ -48,11 +56,17 @@ pub fn filter_tools_for_mode(
     match mode {
         Mode::Plan => tools
             .into_iter()
-            .filter(|t| !matches!(
-                t.name.as_str(),
-                "write_file" | "edit_file" | "shell" | "run_background_shell"
-                    | "merge_worker" | "discard_worker"
-            ))
+            .filter(|t| {
+                !matches!(
+                    t.name.as_str(),
+                    "write_file"
+                        | "edit_file"
+                        | "shell"
+                        | "run_background_shell"
+                        | "merge_worker"
+                        | "discard_worker"
+                )
+            })
             .collect(),
         _ => tools,
     }

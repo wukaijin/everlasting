@@ -75,7 +75,8 @@ fn permission_ask_payload_omits_path_for_shell() {
         tool_input: serde_json::json!({"command": "rm -rf /tmp/foo"}),
         risk: Risk::High,
         reason: Some(
-            "The tool shell requires your confirmation (risk: 高, command: rm -rf /tmp/foo).".to_string(),
+            "The tool shell requires your confirmation (risk: 高, command: rm -rf /tmp/foo)."
+                .to_string(),
         ),
         // Mirrors the new `ask_path` body: `path_for_modal = None`
         // for shell, so the payload's `path` field is `None`.
@@ -91,7 +92,11 @@ fn permission_ask_payload_omits_path_for_shell() {
     );
     // The other fields are still present and correctly camelCased.
     assert!(s.contains("\"toolName\":\"shell\""), "toolName: {}", s);
-    assert!(s.contains("\"command\":\"rm -rf /tmp/foo\""), "toolInput echoed: {}", s);
+    assert!(
+        s.contains("\"command\":\"rm -rf /tmp/foo\""),
+        "toolInput echoed: {}",
+        s
+    );
     assert!(s.contains("\"reason\":"), "reason still present: {}", s);
 }
 
@@ -183,7 +188,11 @@ fn permission_ask_payload_carries_session_and_tool_use_id() {
         worker_run_id: None,
     };
     let s = serde_json::to_string(&p).unwrap();
-    assert!(s.contains("\"sessionId\":\"sess-42\""), "sessionId camelCase: {}", s);
+    assert!(
+        s.contains("\"sessionId\":\"sess-42\""),
+        "sessionId camelCase: {}",
+        s
+    );
     assert!(
         s.contains("\"toolUseId\":\"tooluse_abc\""),
         "toolUseId camelCase: {}",

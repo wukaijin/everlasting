@@ -89,17 +89,12 @@ pub enum ContentBlock {
     /// produces while reasoning; `signature` is the opaque, encrypted blob
     /// the model emits at the end of the block and which MUST be echoed
     /// back verbatim in subsequent turns — otherwise the API returns 400.
-    Thinking {
-        thinking: String,
-        signature: String,
-    },
+    Thinking { thinking: String, signature: String },
     /// Anthropic `redacted_thinking` block: emitted when the server
     /// encrypts part of a thinking block (e.g. for safety reasons). The
     /// `data` field is opaque, undisplayable, and MUST be echoed back
     /// verbatim in subsequent turns.
-    RedactedThinking {
-        data: String,
-    },
+    RedactedThinking { data: String },
     ToolUse {
         id: String,
         name: String,
@@ -237,10 +232,7 @@ impl ToolDef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingConfig {
-    Adaptive {
-        display: String,
-        effort: String,
-    },
+    Adaptive { display: String, effort: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +410,29 @@ pub enum ChatEvent {
         message: String,
         category: LlmErrorCategory,
     },
+    /// A5+ (2026-07-04, R8): emitted before each retry backoff sleep so
+    /// the frontend can surface "↩ retrying 2/3, 2s … (reason)" instead
+    /// of looking frozen. Transient UX signal — does NOT enter the DB
+    /// (no AuditKind, no per-turn persist). The agent loop's
+    /// `LlmRetrySink` forwards this through the regular `chat-event`
+    /// channel alongside the other variants. Frontend display attaches
+    /// the row to the in-flight assistant placeholder's transient
+    /// `retrying` field (NOT the `messages` array, to avoid polluting
+    /// the persisted history); the next `delta` / `start` / `done`
+    /// clears it.
+    ///
+    /// Fields mirror Rust `llm::retry::RetryingEvent`:
+    /// - `attempt` — 1-indexed (1 = first retry after the initial fail).
+    /// - `max_attempts` — `RetryPolicy.max_retries` (the ceiling).
+    /// - `wait_ms` — the computed backoff (Full Jitter or honored
+    ///   server advisory), already clamped to the budget remaining.
+    /// - `reason` — `LlmError::user_message()` (Chinese, user-facing).
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        wait_ms: u64,
+        reason: String,
+    },
     /// B2 PR3: per-token `@relpath` injection manifest, emitted
     /// once per user turn (right after `inject_at_tokens` runs on
     /// the last user message). The frontend `streamController`
@@ -529,8 +544,12 @@ mod tests {
         match &msg.content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 2);
-                assert!(matches!(&blocks[0], ContentBlock::Text { text, .. } if text == "let me read that"));
-                assert!(matches!(&blocks[1], ContentBlock::ToolUse { name, .. } if name == "read_file"));
+                assert!(
+                    matches!(&blocks[0], ContentBlock::Text { text, .. } if text == "let me read that")
+                );
+                assert!(
+                    matches!(&blocks[1], ContentBlock::ToolUse { name, .. } if name == "read_file")
+                );
             }
             _ => panic!("expected Blocks"),
         }
@@ -545,8 +564,10 @@ mod tests {
         match &msg.content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 1);
-                assert!(matches!(&blocks[0], ContentBlock::ToolResult { content, is_error, .. }
-                    if content == "127.0.0.1 localhost" && !is_error));
+                assert!(
+                    matches!(&blocks[0], ContentBlock::ToolResult { content, is_error, .. }
+                    if content == "127.0.0.1 localhost" && !is_error)
+                );
             }
             _ => panic!("expected Blocks"),
         }
@@ -733,8 +754,10 @@ mod tests {
         match &msg2.content {
             MessageContent::Blocks(blocks) => {
                 assert_eq!(blocks.len(), 3);
-                assert!(matches!(&blocks[0], ContentBlock::Thinking { thinking, signature }
-                    if thinking == "need to read the file" && signature == "sig_abc"));
+                assert!(
+                    matches!(&blocks[0], ContentBlock::Thinking { thinking, signature }
+                    if thinking == "need to read the file" && signature == "sig_abc")
+                );
             }
             _ => panic!("expected Blocks"),
         }
@@ -798,10 +821,7 @@ mod tests {
             v.get("kind").and_then(|s| s.as_str()),
             Some("signature_delta")
         );
-        assert_eq!(
-            v.get("signature").and_then(|s| s.as_str()),
-            Some("sig_xyz")
-        );
+        assert_eq!(v.get("signature").and_then(|s| s.as_str()), Some("sig_xyz"));
     }
 
     #[test]
@@ -857,10 +877,7 @@ mod tests {
         // on the struct, but lock the contract explicitly since
         // the field is the canonical frontend "% of context_window"
         // numerator — a rename here would silently break the UI).
-        assert_eq!(
-            v.get("context_input_tokens"),
-            Some(&serde_json::json!(130))
-        );
+        assert_eq!(v.get("context_input_tokens"), Some(&serde_json::json!(130)));
     }
 
     #[test]
@@ -894,8 +911,9 @@ mod tests {
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 20
         }"#;
-        let u: TokenUsage = serde_json::from_str(legacy_json)
-            .expect("legacy 4-field JSON must deserialize (#[serde(default)] on context_input_tokens)");
+        let u: TokenUsage = serde_json::from_str(legacy_json).expect(
+            "legacy 4-field JSON must deserialize (#[serde(default)] on context_input_tokens)",
+        );
         assert_eq!(u.input_tokens, 100);
         assert_eq!(u.output_tokens, 50);
         assert_eq!(u.cache_creation_input_tokens, 10);
@@ -939,7 +957,10 @@ mod tests {
         );
         let usage = v.get("usage").expect("usage key present");
         assert_eq!(usage.get("input_tokens"), Some(&serde_json::json!(100)));
-        assert_eq!(usage.get("cache_read_input_tokens"), Some(&serde_json::json!(25)));
+        assert_eq!(
+            usage.get("cache_read_input_tokens"),
+            Some(&serde_json::json!(25))
+        );
     }
 
     #[test]
@@ -977,9 +998,7 @@ mod tests {
     /// round-trip through both `String` and `Value` is verified.
     #[test]
     fn b2_pr3_injection_record_wire_shape() {
-        use crate::agent::at_file::{
-            FileKind, InjectionAction, InjectionRecord, SkipReason,
-        };
+        use crate::agent::at_file::{FileKind, InjectionAction, InjectionRecord, SkipReason};
         let records = vec![
             InjectionRecord {
                 path: "src/foo.ts".to_string(),
@@ -987,31 +1006,45 @@ mod tests {
             },
             InjectionRecord {
                 path: "bar.png".to_string(),
-                action: InjectionAction::Degraded { file_kind: FileKind::Image },
+                action: InjectionAction::Degraded {
+                    file_kind: FileKind::Image,
+                },
             },
             InjectionRecord {
                 path: "doc.pdf".to_string(),
-                action: InjectionAction::Degraded { file_kind: FileKind::Pdf },
+                action: InjectionAction::Degraded {
+                    file_kind: FileKind::Pdf,
+                },
             },
             InjectionRecord {
                 path: "doc.docx".to_string(),
-                action: InjectionAction::Degraded { file_kind: FileKind::Office },
+                action: InjectionAction::Degraded {
+                    file_kind: FileKind::Office,
+                },
             },
             InjectionRecord {
                 path: "x.zip".to_string(),
-                action: InjectionAction::Degraded { file_kind: FileKind::Binary },
+                action: InjectionAction::Degraded {
+                    file_kind: FileKind::Binary,
+                },
             },
             InjectionRecord {
                 path: "missing.txt".to_string(),
-                action: InjectionAction::Skipped { reason: SkipReason::Missing },
+                action: InjectionAction::Skipped {
+                    reason: SkipReason::Missing,
+                },
             },
             InjectionRecord {
                 path: "../../etc/passwd".to_string(),
-                action: InjectionAction::Skipped { reason: SkipReason::OutOfRoot },
+                action: InjectionAction::Skipped {
+                    reason: SkipReason::OutOfRoot,
+                },
             },
             InjectionRecord {
                 path: "/etc/shadow".to_string(),
-                action: InjectionAction::Skipped { reason: SkipReason::Unreadable },
+                action: InjectionAction::Skipped {
+                    reason: SkipReason::Unreadable,
+                },
             },
         ];
         let json = serde_json::to_string(&records).unwrap();
@@ -1069,5 +1102,27 @@ mod tests {
         assert_eq!(v["injections"][0]["path"], "foo.txt");
         assert_eq!(v["injections"][0]["action"]["kind"], "injected");
         assert_eq!(v["injections"][0]["action"]["lines"], 12);
+    }
+
+    /// A5+ (2026-07-04, R8): verify `ChatEvent::Retrying` wire shape.
+    /// The frontend `streamController` `case 'retrying'` arm reads
+    /// `attempt` / `max_attempts` / `wait_ms` / `reason` off the IPC
+    /// payload. The `kind` discriminator is snake_case (`retrying`)
+    /// from the enum-level `#[serde(rename_all = "snake_case")]` tag.
+    #[test]
+    fn a5plus_chat_event_retrying_wire_shape() {
+        let ev = ChatEvent::Retrying {
+            attempt: 2,
+            max_attempts: 3,
+            wait_ms: 1500,
+            reason: "服务器错误 (HTTP 503)".to_string(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["kind"], "retrying");
+        assert_eq!(v["attempt"], 2);
+        assert_eq!(v["max_attempts"], 3);
+        assert_eq!(v["wait_ms"], 1500);
+        assert_eq!(v["reason"], "服务器错误 (HTTP 503)");
     }
 }

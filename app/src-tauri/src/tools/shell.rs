@@ -91,15 +91,7 @@ const MAX_TIMEOUT_MS: u64 = 600_000;
 /// decision: it becomes readable by every command the LLM runs.
 /// API keys / tokens / secrets MUST stay out of this list.
 const SAFE_ENV_VARS: &[&str] = &[
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "LANG",
-    "LANGUAGE",
-    "LC_ALL",
-    "TERM",
-    "TZ",
-    "TMPDIR",
+    "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL", "TERM", "TZ", "TMPDIR",
 ];
 
 /// Apply a safe-allowlist environment to `cmd`.
@@ -478,7 +470,10 @@ pub async fn execute(
 
     // 7. If timed out, prepend marker with the timeout duration.
     if result.timed_out {
-        combined = format!("[timeout after {}ms, partial output]\n{}", timeout_ms, combined);
+        combined = format!(
+            "[timeout after {}ms, partial output]\n{}",
+            timeout_ms, combined
+        );
         return (combined, true, update, reported_exit_code);
     }
 
@@ -510,7 +505,12 @@ pub async fn execute(
     }
 
     // 9. Inline path: apply the 50 KB head+tail truncation.
-    (truncate_output(combined), is_error, update, reported_exit_code)
+    (
+        truncate_output(combined),
+        is_error,
+        update,
+        reported_exit_code,
+    )
 }
 
 /// Write `contents` to `<cwd>/.everlasting/outputs/<uuid>.txt`,
@@ -642,11 +642,7 @@ mod tests {
         // Schema field description mirrors the guidance.
         let props = def.input_schema.get("properties").unwrap();
         let timeout_field = props.get("timeout").unwrap();
-        let to_desc = timeout_field
-            .get("description")
-            .unwrap()
-            .as_str()
-            .unwrap();
+        let to_desc = timeout_field.get("description").unwrap().as_str().unwrap();
         assert!(
             to_desc.contains("300000-600000"),
             "schema timeout description should suggest a longer value, got: {to_desc}"
@@ -828,7 +824,11 @@ mod tests {
         .await;
         assert!(!is_error, "{}", &content[..200.min(content.len())]);
         // Tool result should mention the saved file.
-        assert!(content.contains("Output saved to"), "got: {}", &content[..300.min(content.len())]);
+        assert!(
+            content.contains("Output saved to"),
+            "got: {}",
+            &content[..300.min(content.len())]
+        );
         assert!(content.contains(".everlasting/outputs/"));
         assert!(content.contains("preview"));
         // The actual file should exist on disk.
@@ -843,7 +843,11 @@ mod tests {
             .next()
             .unwrap();
         let path = std::path::Path::new(path_str);
-        assert!(path.exists(), "spill file should exist at {}", path.display());
+        assert!(
+            path.exists(),
+            "spill file should exist at {}",
+            path.display()
+        );
         // The file should contain all the original output (not just preview).
         let saved = tokio::fs::read_to_string(path).await.unwrap();
         assert!(saved.len() > DISK_SPILL_THRESHOLD);
@@ -1048,7 +1052,10 @@ mod tests {
         .await;
         assert!(!is_error, "{}", content);
         assert!(content.contains("hello"));
-        assert!(!content.contains("timeout"), "should not have timeout marker");
+        assert!(
+            !content.contains("timeout"),
+            "should not have timeout marker"
+        );
     }
 
     /// timeout=0 is treated as default (120s). Fast command completes.
@@ -1154,10 +1161,7 @@ mod tests {
         // The script writes sleep's PID to a file, then `wait`s on it.
         // `$!` is the PID of the most-recent backgrounded process.
         let pid_file = tmp.path().join("sleep.pid");
-        let cmd = format!(
-            "sleep 60 & echo $! > {}; wait $!",
-            pid_file.display()
-        );
+        let cmd = format!("sleep 60 & echo $! > {}; wait $!", pid_file.display());
 
         let handle = tokio::spawn(async move {
             execute(
@@ -1246,11 +1250,7 @@ mod tests {
         )
         .await;
         assert!(is_error, "{}", content);
-        assert!(
-            content.contains("[timeout after 200ms"),
-            "got: {}",
-            content
-        );
+        assert!(content.contains("[timeout after 200ms"), "got: {}", content);
         assert!(
             pids_file.exists(),
             "pids file should have been written: {}",
@@ -1305,7 +1305,9 @@ mod tests {
         // via `remove_var` even on assertion failure paths below.
         // If a parallel test ever touches this key, run with
         // `--test-threads=1`.
-        unsafe { std::env::set_var(key, secret); }
+        unsafe {
+            std::env::set_var(key, secret);
+        }
         let tmp = tempdir().unwrap();
         let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "printenv ANTHROPIC_API_KEY || echo __EMPTY__"}),
@@ -1314,7 +1316,9 @@ mod tests {
             &fresh_token(),
         )
         .await;
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
 
         assert!(!is_error, "{}", content);
         assert!(
@@ -1339,7 +1343,9 @@ mod tests {
     async fn execute_env_does_not_leak_openai_key() {
         let secret = "sk-openai-secret-do-not-leak-67890";
         let key = "OPENAI_API_KEY";
-        unsafe { std::env::set_var(key, secret); }
+        unsafe {
+            std::env::set_var(key, secret);
+        }
         let tmp = tempdir().unwrap();
         let (content, is_error, _, _) = execute(
             &serde_json::json!({"command": "printenv OPENAI_API_KEY || echo __EMPTY__"}),
@@ -1348,7 +1354,9 @@ mod tests {
             &fresh_token(),
         )
         .await;
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
 
         assert!(!is_error, "{}", content);
         assert!(

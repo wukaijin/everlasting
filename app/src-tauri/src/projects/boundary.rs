@@ -248,10 +248,7 @@ mod tests {
         let dir = make_layout();
         let root = dir.path();
         let real = assert_within_root(root, root).expect("root contains itself");
-        assert_eq!(
-            real.canonicalize().unwrap(),
-            root.canonicalize().unwrap()
-        );
+        assert_eq!(real.canonicalize().unwrap(), root.canonicalize().unwrap());
     }
 
     /// Edge case 2: cwd == root/subdir  →  ✅

@@ -96,11 +96,7 @@ pub fn worker_worktree_path(data_dir: &Path, project_id: &str, run_id: &str) -> 
 ///
 /// On success, the worktree is a fully checked-out working tree
 /// the user (and the LLM's tools) can read/write.
-pub fn create(
-    project_path: &Path,
-    worktree_path: &Path,
-    session_id: &str,
-) -> Result<(), GitError> {
+pub fn create(project_path: &Path, worktree_path: &Path, session_id: &str) -> Result<(), GitError> {
     // 1. Repo sanity check. We accept both bare (.git/ directory)
     //    and linked-worktree (.git file pointing at parent's
     //    .git/worktrees/<name>/) layouts. The cheap probe avoids
@@ -133,13 +129,7 @@ pub fn create(
     //    worker variant (`create_worker`) instead bases the branch
     //    off an arbitrary commit (the parent session worktree's HEAD).
     let head_commit = repo.head()?.peel_to_commit()?;
-    create_worktree_add(
-        &repo,
-        worktree_path,
-        session_id,
-        &branch_full,
-        &head_commit,
-    )?;
+    create_worktree_add(&repo, worktree_path, session_id, &branch_full, &head_commit)?;
 
     tracing::info!(
         project = %project_path.display(),
@@ -434,9 +424,7 @@ pub async fn attach_session(
                 // uncommitted changes: <path1>, <path2>, ..."`.
                 let paths: Vec<String> = msg
                     .rsplit_once(": ")
-                    .map(|(_, rest)| {
-                        rest.split(", ").map(String::from).take(10).collect()
-                    })
+                    .map(|(_, rest)| rest.split(", ").map(String::from).take(10).collect())
                     .unwrap_or_default();
                 return Err(GitError::Dirty {
                     path: project_path.display().to_string(),
@@ -465,14 +453,12 @@ pub async fn attach_session(
             path: project_path.display().to_string(),
             source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
         })?
-        .ok_or_else(|| {
-            GitError::Io {
-                path: project_path.display().to_string(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("session '{}' not found", session_id),
-                ),
-            }
+        .ok_or_else(|| GitError::Io {
+            path: project_path.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("session '{}' not found", session_id),
+            ),
         })?;
     let last_wt = prev
         .session
@@ -488,11 +474,9 @@ pub async fn attach_session(
         last_wt,
     )
     .await
-    .map_err(|e| {
-        GitError::Io {
-            path: project_path.display().to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
-        }
+    .map_err(|e| GitError::Io {
+        path: project_path.display().to_string(),
+        source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
     })?;
 
     // Inject the system event. Best-effort (tracing::warn! on
@@ -501,8 +485,11 @@ pub async fn attach_session(
     // by one turn (next-turn reload + system prompt rebuild fills
     // the gap).
     let branch = branch_name(session_id);
-    let event_text =
-        format!("worktree attached: {} on branch {}", wt_path.display(), branch);
+    let event_text = format!(
+        "worktree attached: {} on branch {}",
+        wt_path.display(),
+        branch
+    );
     if let Err(e) =
         crate::db::sessions::insert_system_event(db, session_id, &event_text, "attached").await
     {
@@ -927,10 +914,7 @@ pub fn sweep_stale_worker_worktrees(
         // future libgit2 changes (e.g. an in-process lock
         // mode that doesn't write the file).
         let locked = match repo.find_worktree(&run_id) {
-            Ok(wt) => matches!(
-                wt.is_locked(),
-                Ok(git2::WorktreeLockStatus::Locked(_))
-            ),
+            Ok(wt) => matches!(wt.is_locked(), Ok(git2::WorktreeLockStatus::Locked(_))),
             Err(_) => {
                 // Worktree metadata not found (the on-disk
                 // dir exists but libgit2 doesn't know about
@@ -1367,7 +1351,10 @@ mod tests {
             .peel_to_commit()
             .expect("HEAD should peel to a commit");
         // The orphan dir contents are gone — `stale.txt` is no more.
-        assert!(!wt.join("stale.txt").exists(), "orphan contents should be wiped");
+        assert!(
+            !wt.join("stale.txt").exists(),
+            "orphan contents should be wiped"
+        );
 
         // And the worktree's HEAD points at the project's HEAD.
         let project_head = git2::Repository::open(project)
@@ -1377,7 +1364,11 @@ mod tests {
             .peel_to_commit()
             .unwrap()
             .id();
-        assert_eq!(wt_head.id(), project_head, "worktree HEAD should match project HEAD");
+        assert_eq!(
+            wt_head.id(),
+            project_head,
+            "worktree HEAD should match project HEAD"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1412,8 +1403,7 @@ mod tests {
         // Make an extra commit on the parent session branch so the
         // worker's base-commit inheritance is observable (the worker
         // should see this commit, the project main should not).
-        std::fs::write(parent_wt.join("parent_only.txt"), "from parent session")
-            .unwrap();
+        std::fs::write(parent_wt.join("parent_only.txt"), "from parent session").unwrap();
         let add = StdCommand::new("git")
             .args(["add", "-A"])
             .current_dir(&parent_wt)
@@ -1425,7 +1415,11 @@ mod tests {
             .current_dir(&parent_wt)
             .output()
             .unwrap();
-        assert!(commit.status.success(), "parent commit failed: {:?}", commit);
+        assert!(
+            commit.status.success(),
+            "parent commit failed: {:?}",
+            commit
+        );
 
         parent_wt
     }
@@ -1470,7 +1464,10 @@ mod tests {
         let parent_head = parent_repo.head().unwrap().peel_to_commit().unwrap().id();
         let project_repo = git2::Repository::open(project).unwrap();
         let project_head = project_repo.head().unwrap().peel_to_commit().unwrap().id();
-        assert_ne!(parent_head, project_head, "parent must be ahead of project main");
+        assert_ne!(
+            parent_head, project_head,
+            "parent must be ahead of project main"
+        );
 
         let run_id = "run-bases-off-parent";
         let worker_wt = tmp.path().join("worker_wt_off_parent");
@@ -1519,8 +1516,8 @@ mod tests {
         let repo = git2::Repository::open(&worker_wt).unwrap();
         let tip_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
-        let new_oid = commit_worker_changes(&worker_wt, run_id)
-            .expect("auto-commit should succeed");
+        let new_oid =
+            commit_worker_changes(&worker_wt, run_id).expect("auto-commit should succeed");
 
         // The branch tip advanced — the load-bearing invariant: probe
         // sees working-tree edits but merge_worker merges branch tips;
@@ -1556,8 +1553,7 @@ mod tests {
             .expect("create_worker should succeed");
         assert!(worker_wt.exists());
 
-        destroy_worker(project, &worker_wt, run_id)
-            .expect("destroy_worker should succeed");
+        destroy_worker(project, &worker_wt, run_id).expect("destroy_worker should succeed");
 
         // Directory is gone.
         assert!(!worker_wt.exists(), "worker worktree dir should be removed");
@@ -1597,10 +1593,7 @@ mod tests {
         assert_eq!(WORKER_BRANCH_PREFIX, "worker/");
         let data_dir = Path::new("/data");
         let p = worker_worktree_path(data_dir, "proj-uuid", "run-123");
-        assert_eq!(
-            p,
-            Path::new("/data/worktrees/proj-uuid/worker/run-123")
-        );
+        assert_eq!(p, Path::new("/data/worktrees/proj-uuid/worker/run-123"));
     }
 
     // -----------------------------------------------------------------------
@@ -1649,12 +1642,8 @@ mod tests {
             .as_secs();
         // Convert to (year, month, day, hour, minute) for
         // `touch -t` (which expects YYYYMMDDhhmm).
-        let (year, month, day, hour, minute) =
-            epoch_secs_to_ymdhms(secs_since_epoch);
-        let touch_arg = format!(
-            "{:04}{:02}{:02}{:02}{:02}",
-            year, month, day, hour, minute
-        );
+        let (year, month, day, hour, minute) = epoch_secs_to_ymdhms(secs_since_epoch);
+        let touch_arg = format!("{:04}{:02}{:02}{:02}{:02}", year, month, day, hour, minute);
         let out = std::process::Command::new("touch")
             .args(["-t", &touch_arg])
             .arg(path)
@@ -1739,13 +1728,8 @@ mod tests {
         backdate_dir(&worker_wt, 30);
 
         // Run the sweep with a 7-day cleanup period.
-        let destroyed = sweep_stale_worker_worktrees(
-            &app_data_dir,
-            &project_uuid,
-            &project,
-            7,
-        )
-        .expect("sweep should succeed");
+        let destroyed = sweep_stale_worker_worktrees(&app_data_dir, &project_uuid, &project, 7)
+            .expect("sweep should succeed");
         assert_eq!(destroyed, 1, "exactly 1 stale worktree destroyed");
 
         // The worker worktree dir + branch are gone.
@@ -1760,7 +1744,8 @@ mod tests {
 
     #[test]
     fn sweep_skips_locked_worker_worktrees() {
-        let (tmp, project, project_uuid) = setup_project_with_worker("sweep-lock-sess", "sweep-locked");
+        let (tmp, project, project_uuid) =
+            setup_project_with_worker("sweep-lock-sess", "sweep-locked");
         let app_data_dir = tmp.path().join("data");
         let run_id = "sweep-locked";
         let worker_wt = worker_worktree_path(&app_data_dir, &project_uuid, run_id);
@@ -1774,7 +1759,11 @@ mod tests {
         // for us; we re-add it (it should still be there
         // from `create_worker`, but we re-touch to be safe
         // — the test asserts the sweep sees the lock).
-        let lock_path = project.join(".git").join("worktrees").join(run_id).join("locked");
+        let lock_path = project
+            .join(".git")
+            .join("worktrees")
+            .join(run_id)
+            .join("locked");
         // The `create_worker` function already created
         // this — let's just assert it exists.
         assert!(
@@ -1782,13 +1771,8 @@ mod tests {
             "create_worker should have left a lock file"
         );
 
-        let destroyed = sweep_stale_worker_worktrees(
-            &app_data_dir,
-            &project_uuid,
-            &project,
-            7,
-        )
-        .expect("sweep should succeed");
+        let destroyed = sweep_stale_worker_worktrees(&app_data_dir, &project_uuid, &project, 7)
+            .expect("sweep should succeed");
         assert_eq!(destroyed, 0, "locked worktree MUST be skipped");
 
         // Worker worktree dir + branch preserved.
@@ -1805,7 +1789,8 @@ mod tests {
     fn sweep_keeps_recent_worker_worktrees() {
         // A worker that's only 1 day old should NOT be
         // destroyed by a 7-day sweep.
-        let (tmp, project, project_uuid) = setup_project_with_worker("sweep-recent-sess", "sweep-recent");
+        let (tmp, project, project_uuid) =
+            setup_project_with_worker("sweep-recent-sess", "sweep-recent");
         let app_data_dir = tmp.path().join("data");
         let run_id = "sweep-recent";
         let worker_wt = worker_worktree_path(&app_data_dir, &project_uuid, run_id);
@@ -1827,13 +1812,9 @@ mod tests {
         // non-existent project path — sweep returns 0
         // because the worker dir check fails first.
         let bogus_project = std::path::Path::new("/tmp/does-not-exist");
-        let destroyed = sweep_stale_worker_worktrees(
-            &app_data_dir,
-            "no-such-project",
-            bogus_project,
-            7,
-        )
-        .expect("sweep should succeed (no work to do)");
+        let destroyed =
+            sweep_stale_worker_worktrees(&app_data_dir, "no-such-project", bogus_project, 7)
+                .expect("sweep should succeed (no work to do)");
         assert_eq!(destroyed, 0);
     }
 
@@ -1879,9 +1860,7 @@ mod tests {
     /// sharing the helper would couple git-test compile to
     /// db-test compile.
     async fn attach_session_test_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&pool)
             .await
@@ -1935,8 +1914,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let project_dir = tmp.path().join("proj");
         let pool = attach_session_test_pool().await;
-        let (project, session_id, data_dir) =
-            attach_session_setup(&project_dir, &pool, true).await;
+        let (project, session_id, data_dir) = attach_session_setup(&project_dir, &pool, true).await;
         // First commit done — project root is clean.
 
         let result = attach_session(&pool, &project, &session_id, &data_dir).await;
@@ -1944,7 +1922,10 @@ mod tests {
 
         // Helper contract: returns the worktree path it built.
         let expected = worktree_path(&data_dir, &project.id, &session_id);
-        assert_eq!(wt_path, expected, "returned path should match canonical layout");
+        assert_eq!(
+            wt_path, expected,
+            "returned path should match canonical layout"
+        );
 
         // Libgit2 effect: the on-disk worktree exists and points
         // at a fresh `session/<sid>` branch.
@@ -1964,8 +1945,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::Active);
-        assert_eq!(reloaded.session.worktree_path.as_deref(), Some(expected.to_str().unwrap()));
+        assert_eq!(
+            reloaded.session.worktree_state,
+            crate::db::WorktreeState::Active
+        );
+        assert_eq!(
+            reloaded.session.worktree_path.as_deref(),
+            Some(expected.to_str().unwrap())
+        );
 
         // DB effect 2: a system-event row should be appended
         // (the [worktree event] attached: <path> on branch
@@ -2000,8 +1987,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::None);
-        assert!(reloaded.messages.is_empty(), "no system event on rejected attach");
+        assert_eq!(
+            reloaded.session.worktree_state,
+            crate::db::WorktreeState::None
+        );
+        assert!(
+            reloaded.messages.is_empty(),
+            "no system event on rejected attach"
+        );
     }
 
     #[tokio::test]
@@ -2009,8 +2002,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let project_dir = tmp.path().join("proj");
         let pool = attach_session_test_pool().await;
-        let (project, session_id, data_dir) =
-            attach_session_setup(&project_dir, &pool, true).await;
+        let (project, session_id, data_dir) = attach_session_setup(&project_dir, &pool, true).await;
         // Now make the project root dirty: add an uncommitted
         // file (NOT stage+commit).
         std::fs::write(project_dir.join("dirty.txt"), "stale").unwrap();
@@ -2032,12 +2024,17 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(reloaded.session.worktree_state, crate::db::WorktreeState::None);
-        assert!(reloaded.messages.is_empty(), "no system event on rejected attach");
+        assert_eq!(
+            reloaded.session.worktree_state,
+            crate::db::WorktreeState::None
+        );
+        assert!(
+            reloaded.messages.is_empty(),
+            "no system event on rejected attach"
+        );
 
         // No worktree directory should be created on disk.
         let expected = worktree_path(&data_dir, &project.id, &session_id);
         assert!(!expected.exists(), "no worktree dir on rejected attach");
     }
 }
-

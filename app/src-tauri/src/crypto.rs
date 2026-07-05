@@ -60,7 +60,13 @@ pub fn encrypt(master_key: &[u8; 32], plaintext: &str, aad: &str) -> anyhow::Res
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(master_key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ct = cipher
-        .encrypt(&nonce, Payload { msg: plaintext.as_bytes(), aad: aad.as_bytes() })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|e| anyhow::anyhow!("aes-gcm encrypt: {e}"))?;
     let mut blob = Vec::with_capacity(1 + NONCE_LEN + ct.len());
     blob.push(VERSION);
@@ -83,7 +89,9 @@ pub fn decrypt(master_key: &[u8; 32], stored: &str, aad: &str) -> anyhow::Result
     if blob.len() < MIN_BLOB_LEN {
         anyhow::bail!("ciphertext blob too short ({} bytes)", blob.len());
     }
-    let (&version, rest) = blob.split_first().ok_or_else(|| anyhow::anyhow!("empty blob"))?;
+    let (&version, rest) = blob
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty blob"))?;
     if version != VERSION {
         anyhow::bail!(
             "unknown ciphertext version 0x{:02x} (expected 0x{:02x})",
@@ -96,7 +104,10 @@ pub fn decrypt(master_key: &[u8; 32], stored: &str, aad: &str) -> anyhow::Result
     let pt = cipher
         .decrypt(
             Nonce::from_slice(nonce_bytes),
-            Payload { msg: ct, aad: aad.as_bytes() },
+            Payload {
+                msg: ct,
+                aad: aad.as_bytes(),
+            },
         )
         .map_err(|e| anyhow::anyhow!("aes-gcm decrypt (aad mismatch or tamper): {e}"))?;
     String::from_utf8(pt).map_err(|e| anyhow::anyhow!("plaintext utf8: {e}"))
@@ -115,8 +126,14 @@ mod tests {
     fn roundtrip_with_aad() {
         let k = mk();
         let ct = encrypt(&k, "sk-ant-test-12345", "provider-abc").unwrap();
-        assert_ne!(ct, "sk-ant-test-12345", "ciphertext must differ from plaintext");
-        assert_eq!(decrypt(&k, &ct, "provider-abc").unwrap(), "sk-ant-test-12345");
+        assert_ne!(
+            ct, "sk-ant-test-12345",
+            "ciphertext must differ from plaintext"
+        );
+        assert_eq!(
+            decrypt(&k, &ct, "provider-abc").unwrap(),
+            "sk-ant-test-12345"
+        );
     }
 
     #[test]
@@ -160,7 +177,10 @@ mod tests {
         let mut bytes = B64.decode(&ct).unwrap();
         bytes[0] = 0x99; // 篡改版本字节
         let bad = B64.encode(&bytes);
-        assert!(decrypt(&k, &bad, "p").is_err(), "unknown version must be rejected");
+        assert!(
+            decrypt(&k, &bad, "p").is_err(),
+            "unknown version must be rejected"
+        );
     }
 
     #[test]

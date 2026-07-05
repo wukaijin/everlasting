@@ -15,13 +15,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::llm::types::{CacheControl, ContentBlock};
 #[allow(unused_imports)]
 use crate::memory::file::{load_file, load_layer};
 use crate::memory::loader::{
-    all_paths, build_banner, build_instructions_blocks, load_for_session,
-    MemoryCache,
+    all_paths, build_banner, build_instructions_blocks, load_for_session, MemoryCache,
 };
-use crate::llm::types::{CacheControl, ContentBlock};
 use crate::memory::tokens::{count_tokens, ensure_initialized};
 use crate::memory::types::{LayerStatus, MemoryKind, MemorySource};
 use crate::memory::MAX_FILE_SIZE;
@@ -163,7 +162,11 @@ async fn file_load_oversize_returns_error() {
     let big = vec![b'x'; (MAX_FILE_SIZE + 1) as usize];
     std::fs::write(&p, &big).unwrap();
     let (content, tokens, status) = load_file_for_test(&p).await;
-    assert!(matches!(status, LayerStatus::Error { .. }), "got {:?}", status);
+    assert!(
+        matches!(status, LayerStatus::Error { .. }),
+        "got {:?}",
+        status
+    );
     assert!(content.is_empty());
     assert_eq!(tokens, 0);
 }
@@ -175,7 +178,11 @@ async fn file_load_non_utf8_returns_error() {
     // 0xFF 0xFE is not valid UTF-8.
     std::fs::write(&p, [0xFFu8, 0xFEu8, 0xFDu8]).unwrap();
     let (content, tokens, status) = load_file_for_test(&p).await;
-    assert!(matches!(status, LayerStatus::Error { .. }), "got {:?}", status);
+    assert!(
+        matches!(status, LayerStatus::Error { .. }),
+        "got {:?}",
+        status
+    );
     assert!(content.is_empty());
     assert_eq!(tokens, 0);
 }
@@ -276,8 +283,36 @@ async fn loader_mtime_fence_sees_file_change() {
     // the RULE-C-001 contract; the old watcher-debounce path
     // would have served stale "v1" for up to 1s (or forever, if
     // the watcher was dropped — see RULE-C-004).
-    std::fs::write(user_claude_dir.path().join("CLAUDE.md"), "v2").unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    //
+    // Spin until the file's mtime actually advances past the
+    // first load. Filesystem mtime precision varies (ext4 is
+    // nanosecond, but overlay/tmpfs surfaces — and parallel test
+    // load — can coarsen the visible delta enough that two writes
+    // < 1ms apart share an mtime, which would make a fixed sleep
+    // flaky). The loop is deterministic: it rewrites + re-stats
+    // until the mtime moves, and bails if the FS genuinely can't
+    // distinguish writes at all (which would itself invalidate
+    // the fence contract the test exists to guard).
+    let changed_path = user_claude_dir.path().join("CLAUDE.md");
+    let first_mtime = std::fs::metadata(&changed_path)
+        .unwrap()
+        .modified()
+        .unwrap();
+    let mtime_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        std::fs::write(&changed_path, "v2").unwrap();
+        let new_mtime = std::fs::metadata(&changed_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        if new_mtime != first_mtime {
+            break;
+        }
+        if tokio::time::Instant::now() >= mtime_deadline {
+            panic!("mtime did not advance in 2s — FS precision too coarse for fence test");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 
     let second = load_for_session(&cache, "proj-1", project_dir.path().to_str().unwrap()).await;
     assert!(
@@ -441,8 +476,7 @@ async fn resolve_path_user_claude_uses_override_dir() {
     // resolved User CLAUDE.md path must live under that tempdir.
     let user_claude_dir = tempfile::tempdir().unwrap();
     let _guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
-    let resolved =
-        crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Claude, None);
+    let resolved = crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Claude, None);
     let path = resolved.expect("resolve_path should yield Some when override is set");
     assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("CLAUDE.md"));
     assert_eq!(path.parent(), Some(user_claude_dir.path()));
@@ -458,8 +492,7 @@ async fn resolve_path_user_agents_keeps_user_dir_override() {
     let user_agents_dir = tempfile::tempdir().unwrap();
     let _claude_guard = UserClaudeDirGuard::new(user_claude_dir.path().to_path_buf());
     let _agents_guard = UserDirGuard::new(user_agents_dir.path().to_path_buf());
-    let resolved =
-        crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Agents, None);
+    let resolved = crate::memory::file::resolve_path(MemoryKind::User, MemorySource::Agents, None);
     let path = resolved.expect("resolve_path should yield Some when override is set");
     assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("AGENTS.md"));
     assert_eq!(path.parent(), Some(user_agents_dir.path()));
@@ -559,12 +592,27 @@ fn instructions_blocks_empty_when_no_layer_loaded() {
 fn instructions_blocks_marks_only_first_block_as_cacheable() {
     let layers = vec![
         // First loaded: User CLAUDE.md → goes in block 1 as <reference>
-        loaded_layer(MemoryKind::User, MemorySource::Claude, "user-claude-body", 5),
+        loaded_layer(
+            MemoryKind::User,
+            MemorySource::Claude,
+            "user-claude-body",
+            5,
+        ),
         // Second loaded: User AGENTS.md → block 2 as <primary>
-        loaded_layer(MemoryKind::User, MemorySource::Agents, "user-agents-body", 5),
+        loaded_layer(
+            MemoryKind::User,
+            MemorySource::Agents,
+            "user-agents-body",
+            5,
+        ),
         missing_layer(MemoryKind::Project, MemorySource::Claude),
         // Fourth loaded: Project AGENTS.md → block 3 as <primary>
-        loaded_layer(MemoryKind::Project, MemorySource::Agents, "project-agents-body", 5),
+        loaded_layer(
+            MemoryKind::Project,
+            MemorySource::Agents,
+            "project-agents-body",
+            5,
+        ),
     ];
     let blocks = build_instructions_blocks(&layers);
     // 1 banner + 3 loaded = 4 blocks
@@ -572,7 +620,10 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
 
     // Block 0: banner + cache_control: Ephemeral
     match &blocks[0] {
-        ContentBlock::Text { text, cache_control } => {
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => {
             assert!(text.starts_with("<system>已加载"));
             assert!(text.contains("User CLAUDE.md"));
             assert!(text.contains("User AGENTS.md"));
@@ -584,7 +635,10 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
 
     // Block 1: User CLAUDE.md → <reference> wrapper, no cache_control
     match &blocks[1] {
-        ContentBlock::Text { text, cache_control } => {
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => {
             assert!(text.starts_with("<reference>"));
             assert!(text.contains("user-claude-body"));
             assert!(text.ends_with("</reference>"));
@@ -595,7 +649,10 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
 
     // Block 2: User AGENTS.md → <primary> wrapper, no cache_control
     match &blocks[2] {
-        ContentBlock::Text { text, cache_control } => {
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => {
             assert!(text.starts_with("<primary instructions>"));
             assert!(text.contains("user-agents-body"));
             assert!(text.ends_with("</primary instructions>"));
@@ -606,7 +663,10 @@ fn instructions_blocks_marks_only_first_block_as_cacheable() {
 
     // Block 3: Project AGENTS.md → <primary> wrapper, no cache_control
     match &blocks[3] {
-        ContentBlock::Text { text, cache_control } => {
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => {
             assert!(text.starts_with("<primary instructions>"));
             assert!(text.contains("project-agents-body"));
             assert_eq!(*cache_control, None);

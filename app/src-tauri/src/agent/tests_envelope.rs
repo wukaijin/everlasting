@@ -69,4 +69,3 @@ fn flush_pending_thinking_noop_when_already_flushed() {
     assert!(pending.is_none());
     assert!(finalized.is_empty());
 }
-

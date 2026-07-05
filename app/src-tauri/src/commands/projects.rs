@@ -36,10 +36,7 @@ pub async fn list_projects(
     state: State<'_, Arc<AppState>>,
     filter: Option<ListProjectsFilter>,
 ) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
-    let include_hidden = filter
-        .as_ref()
-        .and_then(|f| f.hidden)
-        .unwrap_or(false);
+    let include_hidden = filter.as_ref().and_then(|f| f.hidden).unwrap_or(false);
     db::list_projects(&state.db, include_hidden)
         .await
         .map_err(|e| anyhow::anyhow!("list_projects failed: {}", e).into())

@@ -172,10 +172,17 @@ pub async fn execute(
 
     // 2. Parse max_runtime_ms. Zero or negative → default; no
     //    upper clamp (PRD Q6 decision: "no upper cap").
-    let max_runtime_ms: Option<u64> = input
-        .get("max_runtime_ms")
-        .and_then(|v| v.as_i64())
-        .map(|n| if n <= 0 { DEFAULT_MAX_RUNTIME_MS } else { n as u64 });
+    let max_runtime_ms: Option<u64> =
+        input
+            .get("max_runtime_ms")
+            .and_then(|v| v.as_i64())
+            .map(|n| {
+                if n <= 0 {
+                    DEFAULT_MAX_RUNTIME_MS
+                } else {
+                    n as u64
+                }
+            });
 
     // 3. Session-scope check: the tool layer always has `session_id`
     //    from the dispatch (`tools/mod.rs::execute_tool` passes it
@@ -185,8 +192,7 @@ pub async fn execute(
         Some(s) => s,
         None => {
             return (
-                "run_background_shell called without a session_id; this is a bug."
-                    .to_string(),
+                "run_background_shell called without a session_id; this is a bug.".to_string(),
                 true,
                 ToolContextUpdate::default(),
             );
@@ -196,7 +202,12 @@ pub async fn execute(
     // 4. Start the background shell.
     match ctx
         .background_shells
-        .start(chat_session_id, command.clone(), validated_cwd.clone(), max_runtime_ms)
+        .start(
+            chat_session_id,
+            command.clone(),
+            validated_cwd.clone(),
+            max_runtime_ms,
+        )
         .await
     {
         Ok(shell_session_id) => (
@@ -284,7 +295,13 @@ mod tests {
         assert!(!is_error, "{}", content);
         assert!(content.contains("Started background shell"));
         assert!(content.contains("bsh_"));
-        assert!(content.contains(tmp.path().canonicalize().unwrap().to_string_lossy().as_ref()));
+        assert!(content.contains(
+            tmp.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        ));
         // Update carries the validated cwd (matches shell::execute UX).
         assert!(update.new_cwd.is_some());
     }
@@ -325,12 +342,8 @@ mod tests {
     async fn execute_without_session_id_returns_bug_marker() {
         let tmp = tempdir().unwrap();
         let ctx = test_ctx(&tmp);
-        let (content, is_error, _) = execute(
-            &serde_json::json!({"command": "echo hi"}),
-            &ctx,
-            None,
-        )
-        .await;
+        let (content, is_error, _) =
+            execute(&serde_json::json!({"command": "echo hi"}), &ctx, None).await;
         assert!(is_error);
         assert!(content.contains("without a session_id"));
     }
@@ -343,12 +356,8 @@ mod tests {
     async fn returned_shell_id_is_queryable_via_registry() {
         let tmp = tempdir().unwrap();
         let ctx = test_ctx(&tmp);
-        let (content, is_error, _) = execute(
-            &serde_json::json!({"command": "echo hi"}),
-            &ctx,
-            Some("s1"),
-        )
-        .await;
+        let (content, is_error, _) =
+            execute(&serde_json::json!({"command": "echo hi"}), &ctx, Some("s1")).await;
         assert!(!is_error, "{}", content);
         // The format string is `"Started background shell {id} (cwd: ...)"`,
         // so the shell id is the 4th whitespace-separated token

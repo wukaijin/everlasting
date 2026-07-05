@@ -35,7 +35,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::AppCommandError;
-use crate::resource_loader::{BUILTIN_COMMANDS, CommandInfo, list_all as list_commands_all};
+use crate::resource_loader::{list_all as list_commands_all, CommandInfo, BUILTIN_COMMANDS};
 use crate::skill::loader::list_skill_infos;
 use crate::state::AppState;
 
@@ -50,15 +50,15 @@ use crate::state::AppState;
 /// - `skill` → `get_skill_body` → user message
 #[derive(Serialize, Clone)]
 pub struct PanelItem {
- pub name: String,
- pub description: String,
- pub argument_hint: Option<String>,
- /// `"builtin"` | `"command"` | `"skill"`.
- pub source: String,
- /// True only for `source == "builtin"`. Mirrors `CommandInfo`'s
- /// `is_builtin` so the frontend can keep using the same dispatcher
- /// logic (B3 PR2).
- pub is_builtin: bool,
+    pub name: String,
+    pub description: String,
+    pub argument_hint: Option<String>,
+    /// `"builtin"` | `"command"` | `"skill"`.
+    pub source: String,
+    /// True only for `source == "builtin"`. Mirrors `CommandInfo`'s
+    /// `is_builtin` so the frontend can keep using the same dispatcher
+    /// logic (B3 PR2).
+    pub is_builtin: bool,
 }
 
 /// List the merged `/`-trigger panel: builtins (always) + custom
@@ -199,8 +199,7 @@ pub async fn get_skill_body(
     project_id: Option<String>,
 ) -> Result<Option<String>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
-    match crate::skill::loader::find_skill(&state.skill_cache, &name, project_path.as_deref())
-        .await
+    match crate::skill::loader::find_skill(&state.skill_cache, &name, project_path.as_deref()).await
     {
         Some(skill) => {
             tracing::info!(
@@ -368,11 +367,7 @@ mod tests {
     fn dedup_no_collisions_all_three_types_present() {
         // Each type gets its own slot. Names are all distinct so
         // no dedup fires.
-        let out = dedup_panel(
-            &[b("clear")],
-            &[c("commit")],
-            &[s("review-pr")],
-        );
+        let out = dedup_panel(&[b("clear")], &[c("commit")], &[s("review-pr")]);
         let names: Vec<&str> = out.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["clear", "commit", "review-pr"]);
         let sources: Vec<&str> = out.iter().map(|i| i.source.as_str()).collect();
@@ -382,11 +377,7 @@ mod tests {
     #[test]
     fn dedup_sorted_alphabetically() {
         // Stable alphabetical order for panel display.
-        let out = dedup_panel(
-            &[b("zeta")],
-            &[c("alpha"), c("mike")],
-            &[s("beta")],
-        );
+        let out = dedup_panel(&[b("zeta")], &[c("alpha"), c("mike")], &[s("beta")]);
         let names: Vec<&str> = out.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta", "mike", "zeta"]);
     }
@@ -397,11 +388,7 @@ mod tests {
     /// when the names are distinct (no false-positive collision).
     #[test]
     fn dedup_distinct_skill_and_command_coexist() {
-        let out = dedup_panel(
-            &[],
-            &[c("commit")],
-            &[s("review-pr")],
-        );
+        let out = dedup_panel(&[], &[c("commit")], &[s("review-pr")]);
         assert_eq!(out.len(), 2);
         let sources: std::collections::HashSet<&str> =
             out.iter().map(|i| i.source.as_str()).collect();

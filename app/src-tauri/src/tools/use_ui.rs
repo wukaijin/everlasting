@@ -258,7 +258,10 @@ mod tests {
         let desc = definition().description.expect("description set");
         assert!(desc.contains("PREFERRED"), "missing PREFERRED marker");
         assert!(desc.contains("ACCEPTED"), "missing ACCEPTED marker");
-        assert!(desc.contains("`diff_text`"), "must name the `diff_text` field");
+        assert!(
+            desc.contains("`diff_text`"),
+            "must name the `diff_text` field"
+        );
     }
 
     // ---- execute: happy paths ----

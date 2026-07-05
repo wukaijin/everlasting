@@ -160,10 +160,7 @@ pub(super) async fn record_audit(
 ) -> Result<(), sqlx::Error> {
     // Map audit kind to critical flag: only Tier 2 hard-kill
     // denials are critical. Everything else is a "normal" path.
-    let critical = matches!(
-        kind,
-        AuditKind::ToolDenied | AuditKind::ToolDeniedYolo
-    );
+    let critical = matches!(kind, AuditKind::ToolDenied | AuditKind::ToolDeniedYolo);
     let payload = serde_json::json!({
         "tool_name": tool_name,
         "tool_input": tool_input,
@@ -172,13 +169,7 @@ pub(super) async fn record_audit(
         "critical": critical,
     });
     let payload_str = payload.to_string();
-    crate::db::record_audit_event(
-        db,
-        &ctx.session_id,
-        kind.as_str(),
-        Some(&payload_str),
-    )
-    .await
+    crate::db::record_audit_event(db, &ctx.session_id, kind.as_str(), Some(&payload_str)).await
 }
 
 /// C4 PR1 (2026-06-14): record a `tool_executed` audit row. Unlike

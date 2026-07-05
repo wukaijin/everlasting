@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::error::AppCommandError;
-use crate::resource_loader::{CommandInfo, list_all};
+use crate::resource_loader::{list_all, CommandInfo};
 use crate::state::AppState;
 
 /// List all commands available to the command palette: builtins

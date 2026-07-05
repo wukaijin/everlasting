@@ -47,7 +47,13 @@ pub async fn register_ask(
 ) -> oneshot::Receiver<PermissionResponse> {
     let (tx, rx) = oneshot::channel();
     let mut map = store.lock().await;
-    map.insert(rid, PendingAsk { session_id: session_id.to_string(), tx });
+    map.insert(
+        rid,
+        PendingAsk {
+            session_id: session_id.to_string(),
+            tx,
+        },
+    );
     rx
 }
 
@@ -55,11 +61,7 @@ pub async fn register_ask(
 /// IPC handler. Returns `true` if the rid was found and the
 /// sender accepted the response; `false` if the rid was missing
 /// (already timed out, or duplicate response).
-pub async fn resolve_ask(
-    store: &PermissionStore,
-    rid: &str,
-    response: PermissionResponse,
-) -> bool {
+pub async fn resolve_ask(store: &PermissionStore, rid: &str, response: PermissionResponse) -> bool {
     let mut map = store.lock().await;
     if let Some(ask) = map.remove(rid) {
         ask.tx.send(response).is_ok()

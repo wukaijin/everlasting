@@ -30,7 +30,6 @@
 //! - The ReadGuard fingerprint still covers the full file (offset/
 //!   limit only affect the output slice, not the guard).
 
-
 use crate::llm::types::ToolDef;
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
@@ -101,8 +100,7 @@ pub async fn execute(
     };
 
     // 1. Resolve (with `~` home expansion; see boundary::resolve_path).
-    let requested: std::path::PathBuf =
-        crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
+    let requested: std::path::PathBuf = crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
 
     // 2. read-side boundary decouple (2026-07-01): tool-layer
     //    assert_within_root removed for read 族 — project-outside
@@ -112,14 +110,8 @@ pub async fn execute(
     let validated = requested;
 
     // 3. Parse offset and limit parameters.
-    let offset = input
-        .get("offset")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1) as usize;
-    let limit = input
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(2000) as usize;
+    let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
 
     match tokio::fs::read_to_string(&validated).await {
         Ok(content) => {
@@ -220,10 +212,7 @@ pub(crate) fn truncate_full_output(content: &str) -> String {
     let omitted = content.len() - MAX_OUTPUT_BYTES;
     let head = add_line_numbers(&content[..head_end]);
     let tail = add_line_numbers(&content[tail_start..]);
-    format!(
-        "{}\n<truncated: omitted {} bytes>\n{}",
-        head, omitted, tail
-    )
+    format!("{}\n<truncated: omitted {} bytes>\n{}", head, omitted, tail)
 }
 
 /// Add `cat -n` style line numbers to `text`, starting from line 1.
@@ -385,7 +374,10 @@ mod tests {
             None,
         )
         .await;
-        assert!(!is_error, "project-outside read must succeed (boundary moved to permission layer): {msg}");
+        assert!(
+            !is_error,
+            "project-outside read must succeed (boundary moved to permission layer): {msg}"
+        );
         assert!(!msg.is_empty());
     }
 
@@ -413,7 +405,8 @@ mod tests {
     #[tokio::test]
     async fn execute_missing_path_param() {
         let tmp = tempdir().unwrap();
-        let (content, is_error) = execute(&serde_json::json!({}), &test_ctx(&tmp), None, None).await;
+        let (content, is_error) =
+            execute(&serde_json::json!({}), &test_ctx(&tmp), None, None).await;
         assert!(is_error);
         assert!(content.contains("Missing"));
     }
@@ -450,7 +443,10 @@ mod tests {
         .await;
         assert!(!is_error, "{}", content);
         // The guard should now know about this path.
-        guard.verify_read("s1", &tmp.path().join("a.txt")).await.unwrap();
+        guard
+            .verify_read("s1", &tmp.path().join("a.txt"))
+            .await
+            .unwrap();
     }
 
     /// add_line_numbers unit test — empty trailing newline doesn't add a phantom line.
@@ -473,7 +469,11 @@ mod tests {
     #[tokio::test]
     async fn offset_limit_reads_correct_range() {
         let tmp = tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.txt"), "line1\nline2\nline3\nline4\nline5\n").unwrap();
+        std::fs::write(
+            tmp.path().join("a.txt"),
+            "line1\nline2\nline3\nline4\nline5\n",
+        )
+        .unwrap();
         let (content, is_error) = execute(
             &serde_json::json!({
                 "path": tmp.path().join("a.txt").to_string_lossy(),
@@ -603,7 +603,10 @@ mod tests {
         .await;
         assert!(!is_error, "{}", content);
         assert!(content.contains("\t1\tfirst"), "got: {:?}", content);
-        assert!(!content.contains("second"), "limit=1 should only return 1 line");
+        assert!(
+            !content.contains("second"),
+            "limit=1 should only return 1 line"
+        );
     }
 
     /// RULE-E-009: truncating a >50KB multibyte (CJK) file must not

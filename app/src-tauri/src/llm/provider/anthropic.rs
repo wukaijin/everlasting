@@ -81,8 +81,8 @@ impl LlmConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_MAX_TOKENS);
-        let thinking_effort = std::env::var("LLM_THINKING_EFFORT")
-            .unwrap_or_else(|_| "high".to_string());
+        let thinking_effort =
+            std::env::var("LLM_THINKING_EFFORT").unwrap_or_else(|_| "high".to_string());
         Ok(Self {
             base_url,
             model,
@@ -163,9 +163,7 @@ enum BlockState {
     /// Inside a redacted_thinking block. The block carries only an opaque
     /// `data` payload (no streaming deltas); we treat the buffer as the
     /// fully-assembled payload once `content_block_stop` fires.
-    RedactedThinking {
-        data_buf: String,
-    },
+    RedactedThinking { data_buf: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +272,12 @@ impl AnthropicProvider {
 
             let status = resp.status();
             if !status.is_success() {
+                // Snapshot headers before `resp.text()` consumes the response —
+                // `retry_after` advisory parsing needs them (A5+ retry support).
+                let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
                 tracing::warn!(status = %status, body = %body, "← LLM error");
-                yield Err(classify_error_response(status.as_u16(), &body));
+                yield Err(classify_error_response(status.as_u16(), &body, Some(&headers)));
                 return;
             }
 
@@ -685,7 +686,8 @@ impl AnthropicProvider {
 /// `deepseek_reasoning_fix_tests::*` — see the test module at the
 /// bottom of this file.
 pub(crate) fn apply_deepseek_reasoning_fix(req: &ChatRequest) -> serde_json::Value {
-    let mut body = serde_json::to_value(req).expect("ChatRequest → serde_json::Value is infallible");
+    let mut body =
+        serde_json::to_value(req).expect("ChatRequest → serde_json::Value is infallible");
     let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
         Some(arr) => arr,
         None => return body,
@@ -931,8 +933,8 @@ impl Provider for AnthropicProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::types::ChatRequest;
     use crate::db;
+    use crate::llm::types::ChatRequest;
 
     #[test]
     fn default_max_tokens_is_16384_not_1024() {
@@ -1168,9 +1170,7 @@ mod tests {
     /// every case. The `model` / `max_tokens` / `system` / `tools`
     /// fields are fixed at benign values; the fix doesn't touch any
     /// of them.
-    fn chat_request_with_messages(
-        messages: Vec<serde_json::Value>,
-    ) -> ChatRequest {
+    fn chat_request_with_messages(messages: Vec<serde_json::Value>) -> ChatRequest {
         let parsed: Vec<ChatMessage> = messages
             .into_iter()
             .map(|m| serde_json::from_value(m).expect("message JSON parses"))
@@ -1213,7 +1213,9 @@ mod tests {
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
         // ALL 3 blocks survive (2 thinking + 1 text). No drops.
         assert_eq!(content.len(), 3);
         assert_eq!(content[0]["type"], "thinking");
@@ -1250,7 +1252,9 @@ mod tests {
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
         // ALL 3 blocks survive — empty signatures are NOT a drop signal.
         assert_eq!(content.len(), 3);
         assert_eq!(content[0]["type"], "thinking");
@@ -1309,7 +1313,9 @@ mod tests {
         // input, then assert the fix produces V2.
         let input = chat_request_with_messages(vec![turn2_assistant]);
         let body = apply_deepseek_reasoning_fix(&input);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
 
         // V1 invariant: NOT this — would be `content.len() == 1` with
         // only the text block. We assert against it explicitly.
@@ -1363,7 +1369,9 @@ mod tests {
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
         assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"], "thinking");
         assert_eq!(content[0]["signature"], "uuid-xyz");
@@ -1389,7 +1397,9 @@ mod tests {
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
         // Both thinking blocks preserved.
         assert_eq!(content.len(), 3);
         assert_eq!(content[0]["signature"], "sig-1");
@@ -1451,7 +1461,9 @@ mod tests {
             ]
         })]);
         let body = apply_deepseek_reasoning_fix(&req);
-        let content = body["messages"][0]["content"].as_array().expect("content array");
+        let content = body["messages"][0]["content"]
+            .as_array()
+            .expect("content array");
         // Unchanged: text + tool_use, no thinking blocks.
         assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"], "text");
@@ -1478,7 +1490,8 @@ mod tests {
                     {"type": "thinking", "thinking": "deep", "signature": "sig-abc"},
                     {"type": "text", "text": "answer"}
                 ]
-            })).unwrap()],
+            }))
+            .unwrap()],
             system: Some("You are a coding agent".to_string()),
             stream: true,
             tools: vec![],

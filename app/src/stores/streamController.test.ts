@@ -1407,3 +1407,207 @@ describe("getMessages — pure read (regression: computed mutate-own-deps recurs
     expect(stream.getMessages("session-a")).toBe(stored);
   });
 });
+
+// A5+ (2026-07-04, R8): retrying event handling. The agent loop's
+// `LlmRetrySink` emits a `retrying` chat-event before each backoff
+// sleep; the controller attaches it to the in-flight assistant
+// placeholder's transient `retrying` field so the MessageItem can
+// show "↩ 重试中 N/M, Ts 后重发… (reason)" instead of a frozen-
+// looking stream. The field is cleared on the next start / delta /
+// done / error — the retry either succeeds (resumes stream), fails
+// terminally, or the user cancels.
+describe("streamController — A5+ retrying event handling", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  // Drive `handleChatEvent` directly (same pattern as the F5
+  // thinking-timing tests above): inject the request state, inject
+  // the message buffer, then push events through the handler.
+  function setupReqAndAssistant(sid: string, rid: string) {
+    const stream = useStreamControllerStore();
+    const req = {
+      requestId: rid,
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(rid, req);
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "go"), asst(1, "", [])]),
+      false,
+    );
+    return { stream, req };
+  }
+
+  function evt(stream: unknown) {
+    return (
+      stream as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          attempt?: number;
+          max_attempts?: number;
+          wait_ms?: number;
+          reason?: string;
+          text?: string;
+          message?: string;
+          category?: string;
+          stop_reason?: string;
+        }) => void;
+      }
+    ).handleChatEvent;
+  }
+
+  it("attaches `retrying` to the in-flight assistant placeholder on retrying event", () => {
+    const sid = "a5plus-retrying-sid";
+    const rid = "a5plus-retrying-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+    expect(last.retrying).toBeUndefined();
+
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 2,
+      max_attempts: 3,
+      wait_ms: 1500,
+      reason: "服务器错误 (HTTP 503)",
+    });
+
+    expect(last.retrying).toEqual({
+      attempt: 2,
+      maxAttempts: 3,
+      waitMs: 1500,
+      reason: "服务器错误 (HTTP 503)",
+    });
+  });
+
+  it("clears `retrying` on the next `delta` (retry succeeded)", () => {
+    const sid = "a5plus-retrying-clear-delta-sid";
+    const rid = "a5plus-retrying-clear-delta-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 1,
+      max_attempts: 3,
+      wait_ms: 800,
+      reason: "网络错误",
+    });
+    expect(last.retrying).toBeDefined();
+
+    // The retry succeeded — a fresh delta arrives. The retry chip
+    // MUST disappear so the bubble takes over.
+    evt(stream)({ request_id: rid, kind: "delta", text: "h" });
+    expect(last.retrying).toBeUndefined();
+  });
+
+  it("clears `retrying` on `start` of the next turn", () => {
+    const sid = "a5plus-retrying-clear-start-sid";
+    const rid = "a5plus-retrying-clear-start-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 3,
+      max_attempts: 3,
+      wait_ms: 5000,
+      reason: "rate limited",
+    });
+    expect(last.retrying).toBeDefined();
+
+    evt(stream)({ request_id: rid, kind: "start" });
+    expect(last.retrying).toBeUndefined();
+  });
+
+  it("clears `retrying` on terminal `done` (last retry succeeded but no delta, e.g. pure tool_use)", () => {
+    const sid = "a5plus-retrying-clear-done-sid";
+    const rid = "a5plus-retrying-clear-done-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 1,
+      max_attempts: 3,
+      wait_ms: 200,
+      reason: "5xx",
+    });
+    expect(last.retrying).toBeDefined();
+
+    // The last retry returned a pure tool_use turn (no text delta).
+    // The done event terminates the stream — the chip must NOT
+    // linger on the bubble post-stream.
+    evt(stream)({
+      request_id: rid,
+      kind: "done",
+      stop_reason: "tool_use",
+    });
+    expect(last.retrying).toBeUndefined();
+  });
+
+  it("clears `retrying` on terminal `error` (retries exhausted)", () => {
+    const sid = "a5plus-retrying-clear-error-sid";
+    const rid = "a5plus-retrying-clear-error-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 3,
+      max_attempts: 3,
+      wait_ms: 5000,
+      reason: "5xx",
+    });
+    expect(last.retrying).toBeDefined();
+
+    evt(stream)({
+      request_id: rid,
+      kind: "error",
+      message: "服务器错误",
+      category: "server",
+    });
+    expect(last.retrying).toBeUndefined();
+    expect(last.error).toBeDefined();
+  });
+
+  it("drops a malformed retrying event missing required fields", () => {
+    const sid = "a5plus-retrying-malformed-sid";
+    const rid = "a5plus-retrying-malformed-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const msgs = stream.getMessages(sid)!;
+    const last = msgs[msgs.length - 1];
+
+    // Missing `wait_ms` — handler should drop the event rather
+    // than crash the renderer on `.toFixed` later.
+    evt(stream)({
+      request_id: rid,
+      kind: "retrying",
+      attempt: 1,
+      max_attempts: 3,
+      reason: "x",
+    });
+    expect(last.retrying).toBeUndefined();
+  });
+});

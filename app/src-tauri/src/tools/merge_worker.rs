@@ -210,7 +210,10 @@ pub async fn execute(
         Ok(Some(s)) => s,
         Ok(None) => {
             return (
-                format!("merge_worker: parent session '{}' disappeared", parent_session_id),
+                format!(
+                    "merge_worker: parent session '{}' disappeared",
+                    parent_session_id
+                ),
                 true,
                 ToolContextUpdate::default(),
                 None,
@@ -257,11 +260,7 @@ pub async fn execute(
     let session_id_for_task = parent_session_id.clone();
     let run_id_for_task = run_id.clone();
     let merge_result = tokio::task::spawn_blocking(move || {
-        do_merge_blocking(
-            &parent_wt_for_task,
-            &session_id_for_task,
-            &run_id_for_task,
-        )
+        do_merge_blocking(&parent_wt_for_task, &session_id_for_task, &run_id_for_task)
     })
     .await
     .unwrap_or_else(|e| Err(format!("merge_worker task panicked: {}", e)));
@@ -273,8 +272,7 @@ pub async fn execute(
             // consistent "merged" result regardless of any
             // cleanup hiccup. `finalize_merge` is best-effort
             // (failures log + continue).
-            if let Err(e) = finalize_merge(&ctx.db, &parent_session_id, &run_id).await
-            {
+            if let Err(e) = finalize_merge(&ctx.db, &parent_session_id, &run_id).await {
                 tracing::warn!(
                     run_id = %run_id,
                     error = %e,
@@ -360,10 +358,7 @@ pub async fn ensure_parent_worktree_attached(
                 .await
                 .map_err(|e| format!("failed to load parent project: {}", e))?
                 .ok_or_else(|| {
-                    format!(
-                        "parent project '{}' not found",
-                        loaded.session.project_id
-                    )
+                    format!("parent project '{}' not found", loaded.session.project_id)
                 })?;
             crate::git::worktree::attach_session(db, &project, parent_session_id, data_dir)
                 .await
@@ -430,12 +425,10 @@ pub fn do_merge_blocking(
                 parent_branch_name, e
             )
         })?;
-    let parent_tip_oid = parent_branch.get().peel_to_commit().map_err(|e| {
-        format!(
-            "merge_worker: could not resolve parent branch tip: {}",
-            e
-        )
-    })?;
+    let parent_tip_oid = parent_branch
+        .get()
+        .peel_to_commit()
+        .map_err(|e| format!("merge_worker: could not resolve parent branch tip: {}", e))?;
 
     let worker_branch_name = git::worktree::worker_branch_name(run_id);
     let worker_branch = repo
@@ -446,12 +439,10 @@ pub fn do_merge_blocking(
                 worker_branch_name, e
             )
         })?;
-    let worker_tip_oid = worker_branch.get().peel_to_commit().map_err(|e| {
-        format!(
-            "merge_worker: could not resolve worker branch tip: {}",
-            e
-        )
-    })?;
+    let worker_tip_oid = worker_branch
+        .get()
+        .peel_to_commit()
+        .map_err(|e| format!("merge_worker: could not resolve worker branch tip: {}", e))?;
 
     // Fast-forward path: if the parent branch tip is an
     // ancestor of the worker branch tip, we just move the
@@ -472,12 +463,7 @@ pub fn do_merge_blocking(
                 true,
                 "merge_worker: fast-forward",
             )
-            .map_err(|e| {
-                format!(
-                    "merge_worker: could not fast-forward parent branch: {}",
-                    e
-                )
-            })?;
+            .map_err(|e| format!("merge_worker: could not fast-forward parent branch: {}", e))?;
         // Touch the variable so the compiler doesn't warn
         // about the unused mut (the `repo.reference` call
         // itself performs the write; the handle is just a
@@ -490,12 +476,7 @@ pub fn do_merge_blocking(
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
         checkout_opts.force();
         repo.checkout_head(Some(&mut checkout_opts))
-            .map_err(|e| {
-                format!(
-                    "merge_worker: post-fast-forward checkout failed: {}",
-                    e
-                )
-            })?;
+            .map_err(|e| format!("merge_worker: post-fast-forward checkout failed: {}", e))?;
         return Ok(format!(
             "merged {} (fast-forward, 0 merge commit)",
             worker_branch_name
@@ -511,12 +492,13 @@ pub fn do_merge_blocking(
     // `Reference` is the branch's tip ref.
     let worker_annotated = {
         let worker_ref = worker_branch.get();
-        repo.reference_to_annotated_commit(&worker_ref).map_err(|e| {
-            format!(
-                "merge_worker: could not build annotated commit for worker branch: {}",
-                e
-            )
-        })?
+        repo.reference_to_annotated_commit(&worker_ref)
+            .map_err(|e| {
+                format!(
+                    "merge_worker: could not build annotated commit for worker branch: {}",
+                    e
+                )
+            })?
     };
 
     // Set up merge options with conflict-style detection
@@ -546,12 +528,9 @@ pub fn do_merge_blocking(
     // conflicts (`index.has_conflicts()` is true). We
     // detect this and return a structured error WITHOUT
     // committing — the user must resolve manually.
-    let mut index = repo.index().map_err(|e| {
-        format!(
-            "merge_worker: could not load index after merge: {}",
-            e
-        )
-    })?;
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("merge_worker: could not load index after merge: {}", e))?;
     if index.has_conflicts() {
         // Collect the conflict paths so the LLM can
         // surface them to the user.
@@ -585,7 +564,11 @@ pub fn do_merge_blocking(
         let mut reset_checkout = git2::build::CheckoutBuilder::new();
         reset_checkout.force();
         reset_checkout.remove_untracked(true);
-        if let Err(e) = repo.reset(&parent_obj, git2::ResetType::Hard, Some(&mut reset_checkout)) {
+        if let Err(e) = repo.reset(
+            &parent_obj,
+            git2::ResetType::Hard,
+            Some(&mut reset_checkout),
+        ) {
             tracing::warn!(
                 error = %e,
                 "merge_worker: post-conflict reset failed (worktree may be in half-merged state)"
@@ -622,7 +605,10 @@ pub fn do_merge_blocking(
             Some(&format!("refs/heads/{}", parent_branch_name)),
             &sig,
             &sig,
-            &format!("merge_worker: merge {} into {}", worker_branch_name, parent_branch_name),
+            &format!(
+                "merge_worker: merge {} into {}",
+                worker_branch_name, parent_branch_name
+            ),
             &tree,
             &[&parent_commit, &worker_commit],
         )
@@ -654,10 +640,7 @@ pub fn do_merge_blocking(
 /// `main` to a clean HEAD (no half-merged dirty state — same contract
 /// as `do_merge_blocking`). The session worktree is left untouched
 /// (the user can keep working in the session; only `main` advances).
-pub fn merge_session_into_main(
-    project_path: &Path,
-    session_id: &str,
-) -> Result<String, String> {
+pub fn merge_session_into_main(project_path: &Path, session_id: &str) -> Result<String, String> {
     // Per-session lock mirrors `do_merge_blocking` (prevents the same
     // session racing two publishes; cross-session main races are
     // acceptable — last writer wins, git ref move is atomic).
@@ -676,7 +659,12 @@ pub fn merge_session_into_main(
 
     let main_branch = repo
         .find_branch(main_branch_name, git2::BranchType::Local)
-        .map_err(|e| format!("merge_session: '{}' branch not found: {}", main_branch_name, e))?;
+        .map_err(|e| {
+            format!(
+                "merge_session: '{}' branch not found: {}",
+                main_branch_name, e
+            )
+        })?;
     let main_tip = main_branch
         .get()
         .peel_to_commit()
@@ -727,8 +715,17 @@ pub fn merge_session_into_main(
     checkout_opts.allow_conflicts(true);
     checkout_opts.conflict_style_diff3(false);
     checkout_opts.force();
-    repo.merge(&[&session_annotated], Some(&mut merge_opts), Some(&mut checkout_opts))
-        .map_err(|e| format!("merge_session: libgit2 merge failed: {} (likely a conflict)", e))?;
+    repo.merge(
+        &[&session_annotated],
+        Some(&mut merge_opts),
+        Some(&mut checkout_opts),
+    )
+    .map_err(|e| {
+        format!(
+            "merge_session: libgit2 merge failed: {} (likely a conflict)",
+            e
+        )
+    })?;
 
     let mut index = repo
         .index()
@@ -928,9 +925,7 @@ mod tests {
     use tempfile::tempdir;
 
     async fn test_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
-            .await
-            .unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&pool)
             .await
@@ -1164,8 +1159,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result =
-            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        let result = ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
         assert_eq!(result, Ok(false), "Active parent must be no-op");
 
         // DB row's worktree_path must be UNCHANGED (we did nothing).
@@ -1173,7 +1167,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.session.worktree_path.as_deref(), Some("/data/fake_wt"));
+        assert_eq!(
+            loaded.session.worktree_path.as_deref(),
+            Some("/data/fake_wt")
+        );
     }
 
     #[tokio::test]
@@ -1196,8 +1193,7 @@ mod tests {
         .await
         .unwrap();
 
-        let result =
-            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        let result = ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
         assert_eq!(result, Ok(false), "Detached parent must skip attach");
 
         // DB row stays Detached; no new worktree_path written.
@@ -1205,7 +1201,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.session.worktree_state, crate::db::WorktreeState::Detached);
+        assert_eq!(
+            loaded.session.worktree_state,
+            crate::db::WorktreeState::Detached
+        );
         assert!(loaded.session.worktree_path.is_none());
     }
 
@@ -1217,8 +1216,7 @@ mod tests {
         let (project, session_id, data_dir) = make_session(&pool, &project_dir).await;
 
         // Initial state is None (create_session doesn't attach).
-        let result =
-            ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
+        let result = ensure_parent_worktree_attached(&pool, &data_dir, &session_id).await;
         assert_eq!(result, Ok(true), "None parent must trigger lazy attach");
 
         // Side effects: DB row flipped to Active with the new
@@ -1227,19 +1225,25 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.session.worktree_state, crate::db::WorktreeState::Active);
+        assert_eq!(
+            loaded.session.worktree_state,
+            crate::db::WorktreeState::Active
+        );
         let wt_path = loaded
             .session
             .worktree_path
             .as_deref()
             .expect("worktree_path should be set after lazy attach");
-        let expected =
-            crate::git::worktree::worktree_path(&data_dir, &project.id, &session_id);
+        let expected = crate::git::worktree::worktree_path(&data_dir, &project.id, &session_id);
         assert_eq!(wt_path, expected.to_str().unwrap());
 
         // The directory exists on disk and points at the new branch.
         assert!(std::path::Path::new(wt_path).exists());
-        assert_eq!(loaded.messages.len(), 1, "exactly one system event expected");
+        assert_eq!(
+            loaded.messages.len(),
+            1,
+            "exactly one system event expected"
+        );
         assert_eq!(loaded.messages[0].role, "user");
     }
 }

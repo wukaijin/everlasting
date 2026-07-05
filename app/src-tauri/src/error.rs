@@ -109,10 +109,7 @@ impl AppCommandError {
 
 fn kind_of<E: ?Sized>(_e: &E) -> String {
     let full = std::any::type_name::<E>();
-    full.rsplit("::")
-        .next()
-        .unwrap_or(full)
-        .to_string()
+    full.rsplit("::").next().unwrap_or(full).to_string()
 }
 
 fn build<E: AppError>(e: &E) -> AppCommandError {
@@ -135,7 +132,7 @@ impl AppError for LlmError {
         // 重新 match 而非调 inherent,避免 trait/inherent 同名方法歧义。
         match self {
             LlmError::Auth(_) => ErrorCategory::Auth,
-            LlmError::RateLimit(_) => ErrorCategory::RateLimit,
+            LlmError::RateLimit { .. } => ErrorCategory::RateLimit,
             LlmError::InvalidRequest(_) => ErrorCategory::InvalidRequest,
             LlmError::Server { .. } => ErrorCategory::Server,
             LlmError::Network(_) => ErrorCategory::Network,
@@ -145,7 +142,7 @@ impl AppError for LlmError {
         // 与 inherent user_message()(llm/error.rs)文案保持一致;改文案时同步两侧(测试兜底)。
         match self {
             LlmError::Auth(_) => "API key 无效或已过期,请检查 ANTHROPIC_API_KEY".to_string(),
-            LlmError::RateLimit(_) => "请求过于频繁,请稍后再试".to_string(),
+            LlmError::RateLimit { .. } => "请求过于频繁,请稍后再试".to_string(),
             LlmError::InvalidRequest(m) => format!("请求无效: {}", m),
             LlmError::Server { status, .. } => format!("服务器错误 (HTTP {})", status),
             LlmError::Network(_) => "网络错误:无法连接到 LLM 服务".to_string(),
@@ -228,9 +225,7 @@ impl AppError for QuestionStoreError {
     }
     fn user_message(&self) -> String {
         match self {
-            QuestionStoreError::AlreadyPending => {
-                "该会话已有待答问题,请先完成当前回答".to_string()
-            }
+            QuestionStoreError::AlreadyPending => "该会话已有待答问题,请先完成当前回答".to_string(),
             QuestionStoreError::NotFound => "该会话没有待答问题".to_string(),
         }
     }
@@ -464,7 +459,10 @@ mod tests {
             ErrorCategory::Auth
         );
         assert_eq!(
-            AppError::category(&LlmError::RateLimit("x".into())),
+            AppError::category(&LlmError::RateLimit {
+                message: "x".into(),
+                retry_after: None
+            }),
             ErrorCategory::RateLimit
         );
         assert_eq!(
@@ -474,7 +472,8 @@ mod tests {
         assert_eq!(
             AppError::category(&LlmError::Server {
                 status: 502,
-                message: "x".into()
+                message: "x".into(),
+                retry_after: None
             }),
             ErrorCategory::Server
         );
@@ -482,16 +481,13 @@ mod tests {
             AppError::category(&LlmError::Network("x".into())),
             ErrorCategory::Network
         );
-        assert!(
-            AppError::user_message(&LlmError::Auth("x".into())).contains("API key")
-        );
-        assert!(
-            AppError::user_message(&LlmError::Network("x".into())).contains("网络")
-        );
+        assert!(AppError::user_message(&LlmError::Auth("x".into())).contains("API key"));
+        assert!(AppError::user_message(&LlmError::Network("x".into())).contains("网络"));
         // retryable 默认派生(LlmError 无 inherent retryable)
         assert!(AppError::retryable(&LlmError::Server {
             status: 500,
-            message: "".into()
+            message: "".into(),
+            retry_after: None
         }));
         assert!(!AppError::retryable(&LlmError::Auth("x".into())));
     }
@@ -500,26 +496,21 @@ mod tests {
     #[test]
     fn git_error_categories() {
         assert_eq!(
-            GitError::NotARepo {
-                path: "/x".into()
-            }
-            .category(),
+            GitError::NotARepo { path: "/x".into() }.category(),
             ErrorCategory::InvalidRequest
         );
         assert!(matches!(
             GitError::Git2(git2::Error::from_str("x")).category(),
             ErrorCategory::Server
         ));
-        assert!(
-            matches!(
-                GitError::Dirty {
-                    path: "/x".into(),
-                    paths: vec![]
-                }
-                .category(),
-                ErrorCategory::InvalidRequest
-            )
-        );
+        assert!(matches!(
+            GitError::Dirty {
+                path: "/x".into(),
+                paths: vec![]
+            }
+            .category(),
+            ErrorCategory::InvalidRequest
+        ));
     }
 
     // ---- MemoryInsertError(Db → Server,其余 → InvalidRequest)----
@@ -544,11 +535,7 @@ mod tests {
             ErrorCategory::InvalidRequest
         );
         assert_eq!(
-            StatusTransitionError::Illegal {
-                from: "a",
-                to: "b"
-            }
-            .category(),
+            StatusTransitionError::Illegal { from: "a", to: "b" }.category(),
             ErrorCategory::InvalidRequest
         );
     }
@@ -584,7 +571,10 @@ mod tests {
             .category(),
             ErrorCategory::Auth
         );
-        assert_eq!(PreFlightError::NoModel.category(), ErrorCategory::InvalidRequest);
+        assert_eq!(
+            PreFlightError::NoModel.category(),
+            ErrorCategory::InvalidRequest
+        );
         assert!(PreFlightError::EmptyApiKey {
             provider_display_name: "P".into()
         }
@@ -616,7 +606,10 @@ mod tests {
             ReflectError::Llm("x".into()).category(),
             ErrorCategory::Server
         );
-        assert_eq!(ReflectError::NoText.category(), ErrorCategory::InvalidRequest);
+        assert_eq!(
+            ReflectError::NoText.category(),
+            ErrorCategory::InvalidRequest
+        );
     }
 
     // ---- WebFetchError(HttpStatus 4xx/5xx 分流 + Network 边界)----
@@ -654,7 +647,11 @@ mod tests {
     // ---- From<E> for AppCommandError ----
     #[test]
     fn from_llm_error_preserves_category_and_kind() {
-        let err: AppCommandError = LlmError::RateLimit("slow".into()).into();
+        let err: AppCommandError = LlmError::RateLimit {
+            message: "slow".into(),
+            retry_after: None,
+        }
+        .into();
         assert_eq!(err.category, ErrorCategory::RateLimit);
         assert_eq!(err.kind, "LlmError");
         assert_eq!(err.message, "请求过于频繁,请稍后再试");
@@ -695,7 +692,11 @@ mod tests {
     // ---- wire shape serialize(camelCase)----
     #[test]
     fn wire_shape_serializes_camel_case() {
-        let err: AppCommandError = LlmError::RateLimit("x".into()).into();
+        let err: AppCommandError = LlmError::RateLimit {
+            message: "x".into(),
+            retry_after: None,
+        }
+        .into();
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("\"category\":\"RateLimit\""));
         assert!(json.contains("\"kind\":\"LlmError\""));

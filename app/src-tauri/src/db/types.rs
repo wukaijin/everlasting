@@ -10,9 +10,9 @@
 use serde::{Deserialize, Serialize, Serializer};
 
 impl Serialize for WorktreeState {
- fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
- s.serialize_str(self.as_str())
- }
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -33,39 +33,39 @@ impl Serialize for WorktreeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderProtocol {
- Anthropic,
- Openai,
- /// P1 RULE-A-006 (2026-06-14): test-only protocol. The
- /// `MockProvider` (in `llm/provider/mock.rs`, `#[cfg(test)]`
- /// only) reports this so the agent loop can dispatch through
- /// the catalog in integration tests without needing a real
- /// network round-trip. `#[cfg(test)]` ensures the variant is
- /// invisible to production serde — the wire format is
- /// unaffected.
- #[cfg(test)]
- Mock,
+    Anthropic,
+    Openai,
+    /// P1 RULE-A-006 (2026-06-14): test-only protocol. The
+    /// `MockProvider` (in `llm/provider/mock.rs`, `#[cfg(test)]`
+    /// only) reports this so the agent loop can dispatch through
+    /// the catalog in integration tests without needing a real
+    /// network round-trip. `#[cfg(test)]` ensures the variant is
+    /// invisible to production serde — the wire format is
+    /// unaffected.
+    #[cfg(test)]
+    Mock,
 }
 
 #[allow(dead_code)]
 impl ProviderProtocol {
- pub fn as_str(&self) -> &'static str {
- match self {
- Self::Anthropic => "anthropic",
- Self::Openai => "openai",
- #[cfg(test)]
- Self::Mock => "mock",
- }
- }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+            #[cfg(test)]
+            Self::Mock => "mock",
+        }
+    }
 
- /// Lenient parse for DB values. Unknown values fall back to
- /// `Anthropic` so a future schema migration that adds a new
- /// protocol doesn't crash an older binary reading a newer DB.
- pub fn from_str_opt(s: &str) -> Self {
- match s {
- "openai" => Self::Openai,
- _ => Self::Anthropic,
- }
- }
+    /// Lenient parse for DB values. Unknown values fall back to
+    /// `Anthropic` so a future schema migration that adds a new
+    /// protocol doesn't crash an older binary reading a newer DB.
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "openai" => Self::Openai,
+            _ => Self::Anthropic,
+        }
+    }
 }
 
 /// A user-managed LLM provider entry. Multiple rows may share the
@@ -75,20 +75,20 @@ impl ProviderProtocol {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRow {
- pub id: String,
- pub protocol: String,
- pub display_name: String,
- pub base_url: String,
- /// 解密后的明文 api_key (内部消费: `build_provider` / catalog 构造).
- /// RULE-D-001 (2026-06-24): `#[serde(skip)]` 切断 IPC 明文回传 ——
- /// 前端只见 [`ProviderRow::has_key`], 永不持有明文 key.
- #[serde(skip)]
- pub api_key: String,
- /// 是否设置了 api_key (基于 `api_key_enc` 非空, 与能否解密无关).
- /// 机器变化导致解密失败时 `api_key` 为空但 `has_key = true`.
- pub has_key: bool,
- pub created_at: String,
- pub updated_at: String,
+    pub id: String,
+    pub protocol: String,
+    pub display_name: String,
+    pub base_url: String,
+    /// 解密后的明文 api_key (内部消费: `build_provider` / catalog 构造).
+    /// RULE-D-001 (2026-06-24): `#[serde(skip)]` 切断 IPC 明文回传 ——
+    /// 前端只见 [`ProviderRow::has_key`], 永不持有明文 key.
+    #[serde(skip)]
+    pub api_key: String,
+    /// 是否设置了 api_key (基于 `api_key_enc` 非空, 与能否解密无关).
+    /// 机器变化导致解密失败时 `api_key` 为空但 `has_key = true`.
+    pub has_key: bool,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// A user-managed LLM model entry. Always bound to one
@@ -98,16 +98,16 @@ pub struct ProviderRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRow {
- pub id: String,
- pub provider_id: String,
- pub model_name: String,
- pub display_name: String,
- pub max_tokens: Option<u32>,
- pub thinking_effort: Option<String>,
- pub supports_thinking: bool,
- pub context_window: u32,
- pub created_at: String,
- pub updated_at: String,
+    pub id: String,
+    pub provider_id: String,
+    pub model_name: String,
+    pub display_name: String,
+    pub max_tokens: Option<u32>,
+    pub thinking_effort: Option<String>,
+    pub supports_thinking: bool,
+    pub context_window: u32,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// `ModelRow` denormalized with the parent provider's `display_name`
@@ -118,10 +118,10 @@ pub struct ModelRow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelWithProvider {
- #[serde(flatten)]
- pub model: ModelRow,
- pub provider_display_name: String,
- pub provider_protocol: String,
+    #[serde(flatten)]
+    pub model: ModelRow,
+    pub provider_display_name: String,
+    pub provider_protocol: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -150,30 +150,30 @@ pub struct ModelWithProvider {
 /// attached session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorktreeState {
- None,
- Active,
- Detached,
+    None,
+    Active,
+    Detached,
 }
 
 impl WorktreeState {
- pub fn as_str(&self) -> &'static str {
- match self {
- WorktreeState::None => "none",
- WorktreeState::Active => "active",
- WorktreeState::Detached => "detached",
- }
- }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorktreeState::None => "none",
+            WorktreeState::Active => "active",
+            WorktreeState::Detached => "detached",
+        }
+    }
 
- /// Lenient parse for DB values. Unknown values are treated as
- /// `None` so a future schema migration that adds a new state
- /// doesn't crash an older binary reading a newer DB.
- pub fn from_str_opt(s: &str) -> Self {
- match s {
- "active" => WorktreeState::Active,
- "detached" => WorktreeState::Detached,
- _ => WorktreeState::None,
- }
- }
+    /// Lenient parse for DB values. Unknown values are treated as
+    /// `None` so a future schema migration that adds a new state
+    /// doesn't crash an older binary reading a newer DB.
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "active" => WorktreeState::Active,
+            "detached" => WorktreeState::Detached,
+            _ => WorktreeState::None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,39 +202,39 @@ impl WorktreeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
- Edit,
- Plan,
- Yolo,
- /// Reserved for a future PR (per BACKLOG §4.2). MVP UI does
- /// not expose this; the enum position keeps the schema stable
- /// if Background is ever promoted.
- #[allow(dead_code)]
- Background,
+    Edit,
+    Plan,
+    Yolo,
+    /// Reserved for a future PR (per BACKLOG §4.2). MVP UI does
+    /// not expose this; the enum position keeps the schema stable
+    /// if Background is ever promoted.
+    #[allow(dead_code)]
+    Background,
 }
 
 impl Mode {
- pub fn as_str(&self) -> &'static str {
- match self {
- Mode::Edit => "edit",
- Mode::Plan => "plan",
- Mode::Yolo => "yolo",
- Mode::Background => "background",
- }
- }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Mode::Edit => "edit",
+            Mode::Plan => "plan",
+            Mode::Yolo => "yolo",
+            Mode::Background => "background",
+        }
+    }
 
- /// Lenient parse: unknown / empty strings fall back to `Edit`
- /// (the most permissive policy, matches the migration backfill).
- /// Old 'chat' / 'review' strings are NOT aliased — they fall
- /// through to `Edit` (and a startup backfill rewrites them in
- /// the DB on first run).
- pub fn from_str_opt(s: &str) -> Self {
- match s {
- "plan" => Mode::Plan,
- "yolo" => Mode::Yolo,
- "background" => Mode::Background,
- _ => Mode::Edit,
- }
- }
+    /// Lenient parse: unknown / empty strings fall back to `Edit`
+    /// (the most permissive policy, matches the migration backfill).
+    /// Old 'chat' / 'review' strings are NOT aliased — they fall
+    /// through to `Edit` (and a startup backfill rewrites them in
+    /// the DB on first run).
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "plan" => Mode::Plan,
+            "yolo" => Mode::Yolo,
+            "background" => Mode::Background,
+            _ => Mode::Edit,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,127 +244,127 @@ impl Mode {
 /// A session as stored in the DB.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionRow {
- pub id: String,
- pub title: String,
- pub created_at: String,
- pub updated_at: String,
- pub model: String,
- pub project_id: String,
- pub current_cwd: String,
- pub worktree_path: Option<String>,
- pub worktree_state: WorktreeState,
- pub last_worktree_path: Option<String>,
- pub model_id: Option<String>,
- pub input_tokens_total: Option<i64>,
- pub output_tokens_total: Option<i64>,
- pub cache_creation_total: Option<i64>,
- pub cache_read_total: Option<i64>,
- /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
- /// token usage snapshot. Overwritten on every LLM turn Done
- /// (NOT cumulative). `last_context_input_tokens` is the
- /// cross-provider-normalized numerator the frontend hint uses
- /// for the "% of context_window" line; the other four are the
- /// provider-native breakdowns for the tooltip detail rows. All
- /// five are NULL on pre-snapshot sessions (the migration is
- /// non-destructive).
- ///
- /// The four `*_total` fields above are FROZEN (kept for legacy
- /// reads / non-destructive migration; no longer written by
- /// production code).
- pub last_context_input_tokens: Option<i64>,
- pub last_input_tokens: Option<i64>,
- pub last_output_tokens: Option<i64>,
- pub last_cache_creation: Option<i64>,
- pub last_cache_read: Option<i64>,
- /// D1 (Color Tag): palette index 0-7, NULL = no mark.
- pub color_tag: Option<i32>,
- /// A2 + B7 (Permission system + per-session Mode, 2026-06-13):
- /// the session's current mode. Defaults to `Chat` for legacy
- /// sessions via the migration backfill (see
- /// `db::migrations::run_migrations`). Persisted on every
- /// `set_session_mode` IPC call.
- pub mode: Mode,
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub model: String,
+    pub project_id: String,
+    pub current_cwd: String,
+    pub worktree_path: Option<String>,
+    pub worktree_state: WorktreeState,
+    pub last_worktree_path: Option<String>,
+    pub model_id: Option<String>,
+    pub input_tokens_total: Option<i64>,
+    pub output_tokens_total: Option<i64>,
+    pub cache_creation_total: Option<i64>,
+    pub cache_read_total: Option<i64>,
+    /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+    /// token usage snapshot. Overwritten on every LLM turn Done
+    /// (NOT cumulative). `last_context_input_tokens` is the
+    /// cross-provider-normalized numerator the frontend hint uses
+    /// for the "% of context_window" line; the other four are the
+    /// provider-native breakdowns for the tooltip detail rows. All
+    /// five are NULL on pre-snapshot sessions (the migration is
+    /// non-destructive).
+    ///
+    /// The four `*_total` fields above are FROZEN (kept for legacy
+    /// reads / non-destructive migration; no longer written by
+    /// production code).
+    pub last_context_input_tokens: Option<i64>,
+    pub last_input_tokens: Option<i64>,
+    pub last_output_tokens: Option<i64>,
+    pub last_cache_creation: Option<i64>,
+    pub last_cache_read: Option<i64>,
+    /// D1 (Color Tag): palette index 0-7, NULL = no mark.
+    pub color_tag: Option<i32>,
+    /// A2 + B7 (Permission system + per-session Mode, 2026-06-13):
+    /// the session's current mode. Defaults to `Chat` for legacy
+    /// sessions via the migration backfill (see
+    /// `db::migrations::run_migrations`). Persisted on every
+    /// `set_session_mode` IPC call.
+    pub mode: Mode,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
 /// user message so the sidebar can show context without re-loading.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSummary {
- pub id: String,
- pub title: String,
- pub updated_at: String,
- pub preview: String,
- pub project_id: String,
- pub current_cwd: String,
- pub worktree_path: Option<String>,
- pub worktree_state: WorktreeState,
- pub last_worktree_path: Option<String>,
- pub model_id: Option<String>,
- pub input_tokens_total: Option<i64>,
- pub output_tokens_total: Option<i64>,
- pub cache_creation_total: Option<i64>,
- pub cache_read_total: Option<i64>,
- /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
- /// snapshot. See `SessionRow::last_*` for field semantics. The
- /// sidebar / hint area read `last_context_input_tokens` to
- /// render "% of context_window" (NULL → "—"). `*_total` above
- /// is FROZEN (kept for non-destructive migration).
- pub last_context_input_tokens: Option<i64>,
- pub last_input_tokens: Option<i64>,
- pub last_output_tokens: Option<i64>,
- pub last_cache_creation: Option<i64>,
- pub last_cache_read: Option<i64>,
- /// D1 (Color Tag): palette index 0-7, NULL = no mark.
- pub color_tag: Option<i32>,
- /// A2 + B7: per-session Mode (see `SessionRow::mode`). The
- /// sidebar uses this for the mode badge / chip without a
- /// per-session IPC round-trip.
- pub mode: Mode,
+    pub id: String,
+    pub title: String,
+    pub updated_at: String,
+    pub preview: String,
+    pub project_id: String,
+    pub current_cwd: String,
+    pub worktree_path: Option<String>,
+    pub worktree_state: WorktreeState,
+    pub last_worktree_path: Option<String>,
+    pub model_id: Option<String>,
+    pub input_tokens_total: Option<i64>,
+    pub output_tokens_total: Option<i64>,
+    pub cache_creation_total: Option<i64>,
+    pub cache_read_total: Option<i64>,
+    /// 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
+    /// snapshot. See `SessionRow::last_*` for field semantics. The
+    /// sidebar / hint area read `last_context_input_tokens` to
+    /// render "% of context_window" (NULL → "—"). `*_total` above
+    /// is FROZEN (kept for non-destructive migration).
+    pub last_context_input_tokens: Option<i64>,
+    pub last_input_tokens: Option<i64>,
+    pub last_output_tokens: Option<i64>,
+    pub last_cache_creation: Option<i64>,
+    pub last_cache_read: Option<i64>,
+    /// D1 (Color Tag): palette index 0-7, NULL = no mark.
+    pub color_tag: Option<i32>,
+    /// A2 + B7: per-session Mode (see `SessionRow::mode`). The
+    /// sidebar uses this for the mode badge / chip without a
+    /// per-session IPC round-trip.
+    pub mode: Mode,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageRow {
- pub id: i64,
- pub session_id: String,
- pub role: String,
- pub content: serde_json::Value,
- pub text: String,
- pub has_tool_calls: bool,
- pub has_tool_results: bool,
- pub created_at: String,
- pub seq: i64,
- /// Optional structured metadata. `None` for chat history rows;
- /// `Some(json)` for system events injected by the worktree
- /// commands. Used by rehydrate to filter or specially render.
- pub metadata: Option<serde_json::Value>,
- /// F5 (LLM Latency Tracking): per-message latency breakdown.
- /// All three fields are `null` for pre-F5 rows (the columns
- /// are nullable; a legacy message's first post-upgrade turn
- /// will have them set by the new `update_message_latency` IPC
- /// fired at `done`). The UI reads these to render the
- /// assistant bubble's bottom-right total + hover tooltip
- /// (TTFB / 生成 / 端到端 breakdown). See
- /// `.trellis/spec/backend/llm-contract.md` "Scenario: Latency
- /// Tracking" for the field semantics.
- pub ttfb_ms: Option<i64>,
- pub gen_ms: Option<i64>,
- pub total_ms: Option<i64>,
- /// F5 follow-up: thinking-phase wall-clock duration (ms).
- /// First `thinking_delta` → first non-thinking boundary
- /// (text `delta`, `tool:call`, `done`, or `error`).
- /// `None` for messages that never entered the thinking
- /// phase. Drives the "Thought for X.Xs" header in
- /// `ThinkingBlock.vue` (replaces the previous "X tokens"
- /// estimate). Persisted by the `update_message_thinking`
- /// IPC fired at stream end, same shape as
- /// `update_message_latency`.
- pub thinking_ms: Option<i64>,
+    pub id: i64,
+    pub session_id: String,
+    pub role: String,
+    pub content: serde_json::Value,
+    pub text: String,
+    pub has_tool_calls: bool,
+    pub has_tool_results: bool,
+    pub created_at: String,
+    pub seq: i64,
+    /// Optional structured metadata. `None` for chat history rows;
+    /// `Some(json)` for system events injected by the worktree
+    /// commands. Used by rehydrate to filter or specially render.
+    pub metadata: Option<serde_json::Value>,
+    /// F5 (LLM Latency Tracking): per-message latency breakdown.
+    /// All three fields are `null` for pre-F5 rows (the columns
+    /// are nullable; a legacy message's first post-upgrade turn
+    /// will have them set by the new `update_message_latency` IPC
+    /// fired at `done`). The UI reads these to render the
+    /// assistant bubble's bottom-right total + hover tooltip
+    /// (TTFB / 生成 / 端到端 breakdown). See
+    /// `.trellis/spec/backend/llm-contract.md` "Scenario: Latency
+    /// Tracking" for the field semantics.
+    pub ttfb_ms: Option<i64>,
+    pub gen_ms: Option<i64>,
+    pub total_ms: Option<i64>,
+    /// F5 follow-up: thinking-phase wall-clock duration (ms).
+    /// First `thinking_delta` → first non-thinking boundary
+    /// (text `delta`, `tool:call`, `done`, or `error`).
+    /// `None` for messages that never entered the thinking
+    /// phase. Drives the "Thought for X.Xs" header in
+    /// `ThinkingBlock.vue` (replaces the previous "X tokens"
+    /// estimate). Persisted by the `update_message_thinking`
+    /// IPC fired at stream end, same shape as
+    /// `update_message_latency`.
+    pub thinking_ms: Option<i64>,
 }
 
 /// Result of `load_session` — session meta + all messages ordered by `seq`.
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadedSession {
- pub session: SessionRow,
- pub messages: Vec<MessageRow>,
+    pub session: SessionRow,
+    pub messages: Vec<MessageRow>,
 }

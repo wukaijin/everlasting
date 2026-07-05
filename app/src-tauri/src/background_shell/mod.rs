@@ -289,10 +289,7 @@ pub trait BackgroundShellRegistry: Send + Sync {
     /// Called from the agent loop at the start of every turn
     /// (before `provider.send`); the agent loop prepends each
     /// notification as a user-role message.
-    async fn drain_notifications(
-        &self,
-        session_id: &str,
-    ) -> Vec<BackgroundShellNotification>;
+    async fn drain_notifications(&self, session_id: &str) -> Vec<BackgroundShellNotification>;
 
     /// Kill EVERY background shell across every session. Called
     /// from the Tauri `RunEvent::Exit` hook so app shutdown

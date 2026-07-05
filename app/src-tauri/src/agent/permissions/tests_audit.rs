@@ -58,6 +58,12 @@ fn audit_kind_round_trip() {
     // these strings verbatim into `session_audit_events.kind`.
     assert_eq!(AuditKind::WorkerAskAllowed.as_str(), "worker_ask_allowed");
     assert_eq!(AuditKind::WorkerAskDenied.as_str(), "worker_ask_denied");
-    assert_eq!(AuditKind::WorkerAskTimedOut.as_str(), "worker_ask_timed_out");
-    assert_eq!(AuditKind::WorkerAskCancelled.as_str(), "worker_ask_cancelled");
+    assert_eq!(
+        AuditKind::WorkerAskTimedOut.as_str(),
+        "worker_ask_timed_out"
+    );
+    assert_eq!(
+        AuditKind::WorkerAskCancelled.as_str(),
+        "worker_ask_cancelled"
+    );
 }

@@ -71,10 +71,7 @@ impl PreFlightError {
             PreFlightError::EmptyApiKey {
                 provider_display_name,
             } => (
-                format!(
-                    "请到 Settings 填 {} 的 api_key",
-                    provider_display_name
-                ),
+                format!("请到 Settings 填 {} 的 api_key", provider_display_name),
                 LlmErrorCategory::Auth,
             ),
             PreFlightError::DecryptFailed {
@@ -189,8 +186,8 @@ pub async fn resolve_chat_provider(
     //    (unknown protocol), in which case we surface the typed
     //    `ProviderBuildError` for the chat command to wrap as an
     //    `InvalidRequest` IPC error.
-    let provider = llm::build_provider(&provider_row, &mwp.model)
-        .map_err(PreFlightError::BuildFailed)?;
+    let provider =
+        llm::build_provider(&provider_row, &mwp.model).map_err(PreFlightError::BuildFailed)?;
 
     Ok(ResolvedChatProvider {
         provider,

@@ -134,10 +134,7 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     let glob_filter = input.get("glob").and_then(|v| v.as_str());
 
     // 1. Resolve the search root against ctx.cwd.
-    let raw_path = input
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(".");
+    let raw_path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let requested = crate::projects::boundary::resolve_path(raw_path, &ctx.cwd);
     // read-side boundary decouple (2026-07-01): tool-layer
     // assert_within_root removed for read 族 — project-outside reads
@@ -228,17 +225,17 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
     if !output.status.success() {
         // Real error (rg exit 2 or signal). Include stderr.
         let snippet = stderr.trim();
-        let first_lines: String = snippet
-            .lines()
-            .take(5)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let first_lines: String = snippet.lines().take(5).collect::<Vec<_>>().join("\n");
         return (
             format!(
                 "ripgrep failed (exit {}): {}{}",
                 exit_code,
                 first_lines,
-                if snippet.lines().count() > 5 { "\n..." } else { "" }
+                if snippet.lines().count() > 5 {
+                    "\n..."
+                } else {
+                    ""
+                }
             ),
             true,
         );
@@ -273,7 +270,10 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         String::new()
     };
 
-    (format!("{}{}", formatted.trim_end_matches('\n'), tail), false)
+    (
+        format!("{}{}", formatted.trim_end_matches('\n'), tail),
+        false,
+    )
 }
 
 /// Truncate any line longer than `cap` to `cap` chars (with a marker).
@@ -367,11 +367,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.rs"), "fn foo() {}\nfn bar() {}\n").unwrap();
         std::fs::write(tmp.path().join("b.rs"), "fn baz() {}\n").unwrap();
-        let (content, is_err) = execute(
-            &serde_json::json!({"pattern": "fn foo"}),
-            &test_ctx(&tmp),
-        )
-        .await;
+        let (content, is_err) =
+            execute(&serde_json::json!({"pattern": "fn foo"}), &test_ctx(&tmp)).await;
         assert!(!is_err, "{}", content);
         assert!(content.contains("a.rs"));
         assert!(!content.contains("b.rs"));

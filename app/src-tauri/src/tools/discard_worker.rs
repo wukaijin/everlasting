@@ -125,10 +125,7 @@ pub async fn execute(
 /// follow-up"). The function is fail-fast: if the row has
 /// no worktree, we surface the error to the LLM so it
 /// doesn't silently no-op a retry.
-pub async fn do_discard(
-    pool: &sqlx::SqlitePool,
-    run_id: &str,
-) -> Result<String, String> {
+pub async fn do_discard(pool: &sqlx::SqlitePool, run_id: &str) -> Result<String, String> {
     // ----- Load the run row -----
     let run_row = db::subagent_runs::get_run(pool, run_id)
         .await
@@ -136,9 +133,10 @@ pub async fn do_discard(
         .ok_or_else(|| format!("worker run not found: {}", run_id))?;
 
     // Fail-fast: already destroyed or never had a worktree.
-    let worktree_path_str = run_row.worktree_path.as_deref().ok_or_else(|| {
-        "worker already destroyed".to_string()
-    })?;
+    let worktree_path_str = run_row
+        .worktree_path
+        .as_deref()
+        .ok_or_else(|| "worker already destroyed".to_string())?;
     let worker_wt = PathBuf::from(worktree_path_str);
 
     // ----- Load the project row for the destroy_worker call -----

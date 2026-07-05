@@ -54,10 +54,7 @@ const RECALL_RESULT_LIMIT: i64 = 10;
 /// Format one memory row as a single bullet line in the recall
 /// block. Pure function — exposed for tests.
 pub fn format_memory_line(mem: &MemoryRow) -> String {
-    format!(
-        "- [{}] {}: {}",
-        mem.kind, mem.title, mem.content
-    )
+    format!("- [{}] {}: {}", mem.kind, mem.title, mem.content)
 }
 
 /// Search + format the recall block for the given user query.
@@ -77,11 +74,7 @@ pub fn format_memory_line(mem: &MemoryRow) -> String {
 /// Side effect: each surfaced memory's `hit_count` is bumped
 /// (best-effort; failures log `warn!` and continue — the recall
 /// return value is unaffected).
-pub async fn build_recall_text(
-    pool: &SqlitePool,
-    project_id: &str,
-    query: &str,
-) -> Option<String> {
+pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str) -> Option<String> {
     if query.trim().is_empty() {
         return None;
     }
@@ -190,10 +183,7 @@ pub fn recall_block(text: String) -> ContentBlock {
 /// **Mutates `turn_messages`** (the request clone), NOT the
 /// persisted `messages`. The persisted Vec is byte-identical
 /// across turns (the recall block is per-turn-only).
-pub fn inject_recall_into_turn(
-    turn_messages: &mut Vec<ChatMessage>,
-    recall_text: String,
-) {
+pub fn inject_recall_into_turn(turn_messages: &mut Vec<ChatMessage>, recall_text: String) {
     let block = recall_block(recall_text);
     if let Some(first) = turn_messages.first_mut() {
         if first.role == Role::User {
@@ -225,9 +215,7 @@ pub(crate) const TEST_CACHE_CONTROL_MARKER: Option<crate::llm::types::CacheContr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::memories::{
-        insert_memory, MemoryInput, MemoryKind, MemoryScope, MemoryStatus,
-    };
+    use crate::db::memories::{insert_memory, MemoryInput, MemoryKind, MemoryScope, MemoryStatus};
 
     async fn make_pool() -> sqlx::SqlitePool {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -291,19 +279,26 @@ mod tests {
     async fn build_recall_text_returns_none_for_empty_query() {
         let pool = make_pool().await;
         assert!(build_recall_text(&pool, "/repo/proj", "").await.is_none());
-        assert!(build_recall_text(&pool, "/repo/proj", "   ").await.is_none());
+        assert!(build_recall_text(&pool, "/repo/proj", "   ")
+            .await
+            .is_none());
     }
 
     #[tokio::test]
     async fn build_recall_text_returns_none_when_no_matches() {
         let pool = make_pool().await;
-        insert_memory(&pool, &mem_input("tabs", "user prefers tabs", MemoryKind::Preference))
-            .await
-            .unwrap();
+        insert_memory(
+            &pool,
+            &mem_input("tabs", "user prefers tabs", MemoryKind::Preference),
+        )
+        .await
+        .unwrap();
         // Unrelated query → no match.
-        assert!(build_recall_text(&pool, "/repo/proj", "completely unrelated topic xyz")
-            .await
-            .is_none());
+        assert!(
+            build_recall_text(&pool, "/repo/proj", "completely unrelated topic xyz")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -311,7 +306,11 @@ mod tests {
         let pool = make_pool().await;
         insert_memory(
             &pool,
-            &mem_input("WSL cargo", "set PKG_CONFIG_PATH for cargo in wsl", MemoryKind::Fact),
+            &mem_input(
+                "WSL cargo",
+                "set PKG_CONFIG_PATH for cargo in wsl",
+                MemoryKind::Fact,
+            ),
         )
         .await
         .unwrap();
@@ -347,11 +346,7 @@ mod tests {
                     "this is memory number {} about cargo build configuration in wsl",
                     i
                 ),
-                ..mem_input(
-                    &format!("t{}", i),
-                    "placeholder",
-                    MemoryKind::Fact,
-                )
+                ..mem_input(&format!("t{}", i), "placeholder", MemoryKind::Fact)
             };
             insert_memory(&pool, &inp).await.unwrap();
         }

@@ -22,18 +22,18 @@ use super::{
 };
 
 async fn test_pool() -> SqlitePool {
- let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
- // Mirror what `init_pool` does.
- sqlx::query("PRAGMA foreign_keys = ON")
- .execute(&pool)
- .await
- .unwrap();
- run_migrations(&pool).await.unwrap();
- pool
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    // Mirror what `init_pool` does.
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    pool
 }
 
 async fn make_pool() -> SqlitePool {
- test_pool().await // alias for readability inside this section
+    test_pool().await // alias for readability inside this section
 }
 // ---------------------------------------------------------------------------
 // A2 + B7 (2026-06-13): permission DB CRUD tests
@@ -41,133 +41,176 @@ async fn make_pool() -> SqlitePool {
 
 #[tokio::test]
 async fn update_session_mode_persists_and_round_trips() {
- // The migration backfill sets mode='edit' on legacy rows; the
- // `set_session_mode` IPC call must flip it to any of the 3
- // valid modes and survive a re-load.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- // Default after create_session = 'edit'.
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.mode, crate::db::Mode::Edit);
+    // The migration backfill sets mode='edit' on legacy rows; the
+    // `set_session_mode` IPC call must flip it to any of the 3
+    // valid modes and survive a re-load.
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // Default after create_session = 'edit'.
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.mode, crate::db::Mode::Edit);
 
- update_session_mode(&pool, &s.id, crate::db::Mode::Plan).await.unwrap();
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.mode, crate::db::Mode::Plan);
+    update_session_mode(&pool, &s.id, crate::db::Mode::Plan)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.mode, crate::db::Mode::Plan);
 
- update_session_mode(&pool, &s.id, crate::db::Mode::Yolo).await.unwrap();
- let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
- assert_eq!(loaded.session.mode, crate::db::Mode::Yolo);
+    update_session_mode(&pool, &s.id, crate::db::Mode::Yolo)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &s.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.mode, crate::db::Mode::Yolo);
 }
 
 #[tokio::test]
 async fn update_session_mode_on_missing_session_is_noop() {
- let pool = make_pool().await;
- // UPDATE with a non-matching id matches 0 rows; no error.
- update_session_mode(&pool, "nonexistent-session-id", crate::db::Mode::Plan)
- .await
- .unwrap();
+    let pool = make_pool().await;
+    // UPDATE with a non-matching id matches 0 rows; no error.
+    update_session_mode(&pool, "nonexistent-session-id", crate::db::Mode::Plan)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn list_sessions_includes_mode_field() {
- // The mode field on SessionSummary must round-trip through
- // the SELECT path so the sidebar / mode badge reads it
- // without a per-session IPC.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- update_session_mode(&pool, &s.id, crate::db::Mode::Yolo).await.unwrap();
+    // The mode field on SessionSummary must round-trip through
+    // the SELECT path so the sidebar / mode badge reads it
+    // without a per-session IPC.
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    update_session_mode(&pool, &s.id, crate::db::Mode::Yolo)
+        .await
+        .unwrap();
 
- let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
- let found = list.iter().find(|x| x.id == s.id).expect("session in list");
- assert_eq!(found.mode, crate::db::Mode::Yolo);
+    let list = list_sessions(&pool, DEFAULT_PROJECT_ID).await.unwrap();
+    let found = list.iter().find(|x| x.id == s.id).expect("session in list");
+    assert_eq!(found.mode, crate::db::Mode::Yolo);
 }
 
 #[tokio::test]
 async fn grant_tool_permission_round_trip_and_has_check() {
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- // Fresh session: no permissions yet.
- assert!(!has_tool_permission(&pool, &s.id, "shell").await.unwrap());
- assert!(!has_tool_permission(&pool, &s.id, "write_file").await.unwrap());
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // Fresh session: no permissions yet.
+    assert!(!has_tool_permission(&pool, &s.id, "shell").await.unwrap());
+    assert!(!has_tool_permission(&pool, &s.id, "write_file")
+        .await
+        .unwrap());
 
- grant_tool_permission(&pool, &s.id, "shell", "tool", None)
- .await
- .unwrap();
- assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
- // Different tool: still no permission.
- assert!(!has_tool_permission(&pool, &s.id, "write_file").await.unwrap());
+    grant_tool_permission(&pool, &s.id, "shell", "tool", None)
+        .await
+        .unwrap();
+    assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
+    // Different tool: still no permission.
+    assert!(!has_tool_permission(&pool, &s.id, "write_file")
+        .await
+        .unwrap());
 
- // Re-granting the same tool is a no-op (UPSERT semantics —
- // the `granted_at` is updated, but the row count stays 1).
- grant_tool_permission(&pool, &s.id, "shell", "tool", None)
- .await
- .unwrap();
- assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
+    // Re-granting the same tool is a no-op (UPSERT semantics —
+    // the `granted_at` is updated, but the row count stays 1).
+    grant_tool_permission(&pool, &s.id, "shell", "tool", None)
+        .await
+        .unwrap();
+    assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
 }
 
 #[tokio::test]
 async fn grant_tool_permission_cascades_on_session_delete() {
- // ON DELETE CASCADE: deleting the session must clean up its
- // permission rows. PRAGMA foreign_keys = ON is set in
- // test_pool — without it the cascade silently no-ops.
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- grant_tool_permission(&pool, &s.id, "shell", "tool", None)
- .await
- .unwrap();
- assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
+    // ON DELETE CASCADE: deleting the session must clean up its
+    // permission rows. PRAGMA foreign_keys = ON is set in
+    // test_pool — without it the cascade silently no-ops.
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    grant_tool_permission(&pool, &s.id, "shell", "tool", None)
+        .await
+        .unwrap();
+    assert!(has_tool_permission(&pool, &s.id, "shell").await.unwrap());
 
- delete_session(&pool, &s.id).await.unwrap();
- // Session row is gone — the (sid, tool_name) lookup must
- // return false (the permission row was CASCADE-deleted).
- assert!(!has_tool_permission(&pool, &s.id, "shell").await.unwrap());
+    delete_session(&pool, &s.id).await.unwrap();
+    // Session row is gone — the (sid, tool_name) lookup must
+    // return false (the permission row was CASCADE-deleted).
+    assert!(!has_tool_permission(&pool, &s.id, "shell").await.unwrap());
 }
 
 #[tokio::test]
 async fn record_audit_event_inserts_and_cascades_on_delete() {
- let pool = make_pool().await;
- let s = create_session(&pool, &Uuid::new_v4().to_string(), DEFAULT_PROJECT_ID, "/tmp", "GLM-4.7", None)
- .await
- .unwrap();
- record_audit_event(
- &pool,
- &s.id,
- "tool_allowed",
- Some(r#"{"tool_name":"shell","reason":null}"#),
- )
- .await
- .unwrap();
- record_audit_event(&pool, &s.id, "mode_changed", Some(r#"{"new_mode":"yolo"}"#))
- .await
- .unwrap();
- // Verify the rows are present by SELECTing directly.
- let count: i64 = sqlx::query_scalar(
- "SELECT COUNT(*) FROM session_audit_events WHERE session_id = ?",
- )
- .bind(&s.id)
- .fetch_one(&pool)
- .await
- .unwrap();
- assert_eq!(count, 2);
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    record_audit_event(
+        &pool,
+        &s.id,
+        "tool_allowed",
+        Some(r#"{"tool_name":"shell","reason":null}"#),
+    )
+    .await
+    .unwrap();
+    record_audit_event(&pool, &s.id, "mode_changed", Some(r#"{"new_mode":"yolo"}"#))
+        .await
+        .unwrap();
+    // Verify the rows are present by SELECTing directly.
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM session_audit_events WHERE session_id = ?")
+            .bind(&s.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 2);
 
- // Cascade on session delete.
- delete_session(&pool, &s.id).await.unwrap();
- let count: i64 = sqlx::query_scalar(
- "SELECT COUNT(*) FROM session_audit_events WHERE session_id = ?",
- )
- .bind(&s.id)
- .fetch_one(&pool)
- .await
- .unwrap();
- assert_eq!(count, 0);
+    // Cascade on session delete.
+    delete_session(&pool, &s.id).await.unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM session_audit_events WHERE session_id = ?")
+            .bind(&s.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
 }
 
 /// C4 PR1 (2026-06-14): the new `tool_executed` audit kind writes
@@ -359,23 +402,26 @@ async fn audit_event_row_serializes_to_camel_case_wire_shape() {
 
     // Round-trip the value to confirm the non-renamed fields are intact.
     assert_eq!(obj.get("id").and_then(|v| v.as_i64()), Some(42));
-    assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("tool_executed"));
+    assert_eq!(
+        obj.get("kind").and_then(|v| v.as_str()),
+        Some("tool_executed")
+    );
 }
 
 #[tokio::test]
 async fn mode_backfill_legacy_null_to_edit() {
- // Simulate a pre-A2 session with `mode IS NULL` (column was
- // added but the backfill hasn't run yet). Mirrors what a
- // real upgrade path looks like between the ALTER and the
- // UPDATE in `run_migrations`.
- let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
- sqlx::query("PRAGMA foreign_keys = ON")
- .execute(&pool)
- .await
- .unwrap();
- // Minimal pre-A2 schema: sessions row without `mode`.
- sqlx::query(
- r#"
+    // Simulate a pre-A2 session with `mode IS NULL` (column was
+    // added but the backfill hasn't run yet). Mirrors what a
+    // real upgrade path looks like between the ALTER and the
+    // UPDATE in `run_migrations`.
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Minimal pre-A2 schema: sessions row without `mode`.
+    sqlx::query(
+        r#"
  CREATE TABLE sessions (
  id TEXT PRIMARY KEY, title TEXT NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -383,12 +429,12 @@ async fn mode_backfill_legacy_null_to_edit() {
  current_cwd TEXT NOT NULL DEFAULT ''
  )
  "#,
- )
- .execute(&pool)
- .await
- .unwrap();
- sqlx::query(
- r#"
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
  CREATE TABLE projects (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
  is_git_repo INTEGER NOT NULL DEFAULT 0, is_legacy INTEGER NOT NULL DEFAULT 0,
@@ -396,32 +442,33 @@ async fn mode_backfill_legacy_null_to_edit() {
  hidden INTEGER NOT NULL DEFAULT 0, metadata TEXT
  )
  "#,
- )
- .execute(&pool)
- .await
- .unwrap();
- sqlx::query(
- "INSERT INTO projects (id, name, path, is_legacy, created_at, updated_at, hidden) \
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO projects (id, name, path, is_legacy, created_at, updated_at, hidden) \
  VALUES ('__default__', 'legacy', '/tmp', 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 0)",
- )
- .execute(&pool)
- .await
- .unwrap();
- sqlx::query(
- "INSERT INTO sessions (id, title, created_at, updated_at, model) \
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sessions (id, title, created_at, updated_at, model) \
  VALUES ('legacy-1', 't', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'GLM-4.7')",
- )
- .execute(&pool)
- .await
- .unwrap();
- // Run the full migration (adds the `mode` column + backfills).
- run_migrations(&pool).await.unwrap();
- // Verify the backfill set mode='edit' on the legacy row.
- let mode: Option<String> = sqlx::query_scalar("SELECT mode FROM sessions WHERE id = 'legacy-1'")
- .fetch_one(&pool)
- .await
- .unwrap();
- assert_eq!(mode.as_deref(), Some("edit"));
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Run the full migration (adds the `mode` column + backfills).
+    run_migrations(&pool).await.unwrap();
+    // Verify the backfill set mode='edit' on the legacy row.
+    let mode: Option<String> =
+        sqlx::query_scalar("SELECT mode FROM sessions WHERE id = 'legacy-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(mode.as_deref(), Some("edit"));
 }
 
 // ---------------------------------------------------------------------------
@@ -492,8 +539,14 @@ async fn list_tool_permissions_returns_all_three_match_kinds() {
         find("tool", "web_fetch").match_value.is_none(),
         "tool kind match_value must be NULL"
     );
-    assert_eq!(find("path", "read_file").match_value.as_deref(), Some("src/*"));
-    assert_eq!(find("prefix", "shell").match_value.as_deref(), Some("cargo"));
+    assert_eq!(
+        find("path", "read_file").match_value.as_deref(),
+        Some("src/*")
+    );
+    assert_eq!(
+        find("prefix", "shell").match_value.as_deref(),
+        Some("cargo")
+    );
 }
 
 /// **design D2 — the NULL match_value pitfall**: revoking a
@@ -517,13 +570,17 @@ async fn revoke_tool_permission_null_value_tool_kind() {
     grant_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
         .await
         .unwrap();
-    assert!(has_tool_permission(&pool, &s.id, "web_fetch").await.unwrap());
+    assert!(has_tool_permission(&pool, &s.id, "web_fetch")
+        .await
+        .unwrap());
 
     revoke_tool_permission(&pool, &s.id, "web_fetch", "tool", None)
         .await
         .unwrap();
     assert!(
-        !has_tool_permission(&pool, &s.id, "web_fetch").await.unwrap(),
+        !has_tool_permission(&pool, &s.id, "web_fetch")
+            .await
+            .unwrap(),
         "revoking a tool-kind (NULL match_value) grant must actually delete it (design D2)"
     );
     let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
@@ -565,18 +622,19 @@ async fn revoke_tool_permission_preserves_sibling_grants() {
     let rows = list_tool_permissions(&pool, &s.id).await.unwrap();
     assert_eq!(rows.len(), 2, "only the src/* row must be deleted");
     assert!(
-        !rows.iter().any(|r| r.tool_name == "read_file"
-            && r.match_value.as_deref() == Some("src/*")),
+        !rows
+            .iter()
+            .any(|r| r.tool_name == "read_file" && r.match_value.as_deref() == Some("src/*")),
         "the revoked src/* row must be gone"
     );
     assert!(
-        rows.iter().any(|r| r.tool_name == "read_file"
-            && r.match_value.as_deref() == Some("docs/*")),
+        rows.iter()
+            .any(|r| r.tool_name == "read_file" && r.match_value.as_deref() == Some("docs/*")),
         "the sibling docs/* row must survive"
     );
     assert!(
-        rows.iter().any(|r| r.tool_name == "shell"
-            && r.match_value.as_deref() == Some("cargo")),
+        rows.iter()
+            .any(|r| r.tool_name == "shell" && r.match_value.as_deref() == Some("cargo")),
         "the unrelated shell prefix row must survive"
     );
 }
@@ -616,10 +674,13 @@ async fn revoke_tool_permission_is_session_scoped() {
     revoke_tool_permission(&pool, &a.id, "web_fetch", "tool", None)
         .await
         .unwrap();
-    assert!(!has_tool_permission(&pool, &a.id, "web_fetch").await.unwrap());
+    assert!(!has_tool_permission(&pool, &a.id, "web_fetch")
+        .await
+        .unwrap());
     assert!(
-        has_tool_permission(&pool, &b.id, "web_fetch").await.unwrap(),
+        has_tool_permission(&pool, &b.id, "web_fetch")
+            .await
+            .unwrap(),
         "session B's grant must survive revoking session A's"
     );
 }
-

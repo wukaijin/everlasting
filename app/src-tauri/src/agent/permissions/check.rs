@@ -81,7 +81,7 @@ pub async fn check(
             reason = %reason,
             "permission::check: Tier 2 deny"
         );
-        let _ = record_audit( db, ctx, kind, tool_name, tool_input, Some(&reason)).await;
+        let _ = record_audit(db, ctx, kind, tool_name, tool_input, Some(&reason)).await;
         return Decision::Deny { reason, critical };
     }
 
@@ -188,7 +188,7 @@ pub async fn check(
         );
         // Tier 6 audit for the Allow path (Tier 2 / Tier 3 deny paths
         // already wrote their own audit rows above).
-        let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+        let _ = record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
         return Decision::Allow;
     }
 
@@ -210,14 +210,24 @@ pub async fn check(
                     let inside = crate::projects::boundary::is_within_root(&ctx.cwd, &abs_path);
                     // Tier 4.1: check session_tool_permissions
                     // match_kind='path' for a grant. If hit, Allow.
-                    if let Ok(true) = check_path_grant(db, &ctx.session_id, tool_name, &abs_path).await {
+                    if let Ok(true) =
+                        check_path_grant(db, &ctx.session_id, tool_name, &abs_path).await
+                    {
                         tracing::info!(
                             session_id = %ctx.session_id,
                             tool = %tool_name,
                             path = %abs_path.display(),
                             "permission::check: Tier 4 path grant hit"
                         );
-                        let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                        let _ = record_audit(
+                            db,
+                            ctx,
+                            AuditKind::ToolAllowed,
+                            tool_name,
+                            tool_input,
+                            None,
+                        )
+                        .await;
                         return Decision::Allow;
                     }
                     // 2026-06-26 (task 06-26-subagent-per-run-grant):
@@ -236,7 +246,15 @@ pub async fn check(
                                 path = %abs_path.display(),
                                 "permission::check: Tier 4 worker run-grant hit (path)"
                             );
-                            let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                            let _ = record_audit(
+                                db,
+                                ctx,
+                                AuditKind::ToolAllowed,
+                                tool_name,
+                                tool_input,
+                                None,
+                            )
+                            .await;
                             return Decision::Allow;
                         }
                     }
@@ -249,7 +267,15 @@ pub async fn check(
                             path = %abs_path.display(),
                             "permission::check: Tier 4 path inside root, silent Allow"
                         );
-                        let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                        let _ = record_audit(
+                            db,
+                            ctx,
+                            AuditKind::ToolAllowed,
+                            tool_name,
+                            tool_input,
+                            None,
+                        )
+                        .await;
                         return Decision::Allow;
                     }
                     // read-side decouple (2026-07-01): 受信项目外 allow-list
@@ -272,10 +298,18 @@ pub async fn check(
                     // Outside the project, no grant → modal.
                     let path_owned = abs_path.to_string_lossy().to_string();
                     return ask_path(
-                        sink, db, store, ctx,
-                        tool_name, tool_input,
-                        &path_owned, Some(&path_owned), tool_use_id, token,
-                    ).await;
+                        sink,
+                        db,
+                        store,
+                        ctx,
+                        tool_name,
+                        tool_input,
+                        &path_owned,
+                        Some(&path_owned),
+                        tool_use_id,
+                        token,
+                    )
+                    .await;
                 }
                 None => {
                     // Path tool without a `path` arg is a malformed
@@ -284,13 +318,18 @@ pub async fn check(
                     // the permission layer, default to Allow
                     // (the tool layer's schema validation is the
                     // real gate).
-                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
             }
         }
         ToolKind::Shell => {
-            let cmd = tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let cmd = tool_input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             // (a) "始终允许" prefix-grant hit → silent Allow. Closes the
             // old gap: match_value_for_allow_always wrote match_kind='prefix'
             // rows for shell but Tier 4 never queried them — a user's
@@ -307,8 +346,16 @@ pub async fn check(
             // and produces the right tier). The user's grant still
             // applies to single-segment `ls`.
             if !super::shell_trust::has_structural_metachar(cmd) {
-                if let Ok(true) = check_prefix_grant(db, &ctx.session_id, &super::shell_trust::first_token_for_allow_always(cmd)).await {
-                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                if let Ok(true) = check_prefix_grant(
+                    db,
+                    &ctx.session_id,
+                    &super::shell_trust::first_token_for_allow_always(cmd),
+                )
+                .await
+                {
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
                 // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
@@ -331,7 +378,15 @@ pub async fn check(
                             first_token = %first_token,
                             "permission::check: Tier 4 worker run-grant hit (prefix)"
                         );
-                        let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                        let _ = record_audit(
+                            db,
+                            ctx,
+                            AuditKind::ToolAllowed,
+                            tool_name,
+                            tool_input,
+                            None,
+                        )
+                        .await;
                         return Decision::Allow;
                     }
                 }
@@ -345,17 +400,33 @@ pub async fn check(
             match super::shell_trust::classify_prefix(cmd) {
                 super::shell_trust::ShellTrust::ReadOnly => {
                     // Pure read — allow silently in every mode (Plan included).
-                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
                 super::shell_trust::ShellTrust::SideEffect => {
                     if ctx.mode == Mode::Plan {
                         // Plan is read-only; surface the side effect to the
                         // user instead of silently allowing it.
-                        return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, tool_use_id, token).await;
+                        return ask_path(
+                            sink,
+                            db,
+                            store,
+                            ctx,
+                            tool_name,
+                            tool_input,
+                            cmd,
+                            None,
+                            tool_use_id,
+                            token,
+                        )
+                        .await;
                     }
                     // Edit: silent Allow (old whitelist behaviour).
-                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
                 super::shell_trust::ShellTrust::Ask => {
@@ -366,7 +437,19 @@ pub async fn check(
                     // None` keeps the `path` field OFF the wire so the
                     // frontend's `v-if="hasPath"` does not render a
                     // misleading scope row for a shell ask.
-                    return ask_path(sink, db, store, ctx, tool_name, tool_input, cmd, None, tool_use_id, token).await;
+                    return ask_path(
+                        sink,
+                        db,
+                        store,
+                        ctx,
+                        tool_name,
+                        tool_input,
+                        cmd,
+                        None,
+                        tool_use_id,
+                        token,
+                    )
+                    .await;
                 }
             }
         }
@@ -375,7 +458,8 @@ pub async fn check(
             // session_tool_permissions match_kind='tool' for
             // `web_fetch`. If hit, Allow; else modal.
             if let Ok(true) = check_tool_grant(db, &ctx.session_id, "web_fetch").await {
-                let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                let _ = record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                    .await;
                 return Decision::Allow;
             }
             // 2026-06-26 (task 06-26-subagent-per-run-grant): worker
@@ -390,13 +474,19 @@ pub async fn check(
                         session_id = %ctx.session_id,
                         "permission::check: Tier 4 worker run-grant hit (tool: web_fetch)"
                     );
-                    let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
             }
             return ask_path(
-                sink, db, store, ctx,
-                tool_name, tool_input,
+                sink,
+                db,
+                store,
+                ctx,
+                tool_name,
+                tool_input,
                 tool_input.get("url").and_then(|v| v.as_str()).unwrap_or(""),
                 // Web fetch is always external — the modal renders
                 // the URL inline via `toolInput` (no "path scope"
@@ -405,8 +495,11 @@ pub async fn check(
                 // not render a misleading scope row for a web_fetch
                 // ask (it would otherwise show "仓库外" against a URL,
                 // which is wrong — the URL is not a filesystem path).
-                None, tool_use_id, token,
-            ).await;
+                None,
+                tool_use_id,
+                token,
+            )
+            .await;
         }
         ToolKind::GitMutation => {
             // merge_worker / discard_worker — tool-level grant + ask
@@ -416,10 +509,8 @@ pub async fn check(
             // `tool_name` (not a literal) so a grant on discard_worker
             // is not confused with merge_worker.
             if let Ok(true) = check_tool_grant(db, &ctx.session_id, tool_name).await {
-                let _ = record_audit(
-                    db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None,
-                )
-                .await;
+                let _ = record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                    .await;
                 return Decision::Allow;
             }
             if let Some(cache) = &ctx.run_grants {
@@ -429,18 +520,26 @@ pub async fn check(
                         tool = %tool_name,
                         "permission::check: Tier 4 worker run-grant hit (tool: git-mutation)"
                     );
-                    let _ = record_audit(
-                        db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None,
-                    )
-                    .await;
+                    let _ =
+                        record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                            .await;
                     return Decision::Allow;
                 }
             }
             return ask_path(
-                sink, db, store, ctx,
-                tool_name, tool_input,
-                tool_input.get("run_id").and_then(|v| v.as_str()).unwrap_or(""),
-                None, tool_use_id, token,
+                sink,
+                db,
+                store,
+                ctx,
+                tool_name,
+                tool_input,
+                tool_input
+                    .get("run_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                None,
+                tool_use_id,
+                token,
             )
             .await;
         }
@@ -448,7 +547,8 @@ pub async fn check(
             // Unknown / future tool — default Allow (Tier 5).
             // The tool layer's own boundary checks (e.g.
             // ReadGuard for edit_file) are the real gate.
-            let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+            let _ =
+                record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
             return Decision::Allow;
         }
     }
@@ -479,9 +579,7 @@ pub(crate) enum ToolKind {
 
 pub(crate) fn classify_tool(tool_name: &str) -> ToolKind {
     match tool_name {
-        "read_file" | "write_file" | "edit_file" | "list_dir" | "grep" | "glob" => {
-            ToolKind::Path
-        }
+        "read_file" | "write_file" | "edit_file" | "list_dir" | "grep" | "glob" => ToolKind::Path,
         // L1a: `run_background_shell` runs the SAME `sh -c <command>` shape
         // as `shell`, so the Tier 4 shell branch (kill-list + 3-tier
         // classify_prefix + prefix grants) applies uniformly. Routing it to
@@ -826,10 +924,7 @@ pub async fn recall_pitfall_footnote(
     .await?;
 
     // Step 3: filter to active rows only (verified → P5).
-    let active_rows: Vec<_> = rows
-        .into_iter()
-        .filter(|r| r.status == "active")
-        .collect();
+    let active_rows: Vec<_> = rows.into_iter().filter(|r| r.status == "active").collect();
 
     if active_rows.is_empty() {
         return Ok(None);

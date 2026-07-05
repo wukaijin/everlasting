@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 use super::{
@@ -303,12 +303,13 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
     ) -> Result<(), BackgroundShellError> {
         let mut g = self.inner.lock().await;
         let key = (session_id.to_string(), shell_session_id.to_string());
-        let entry = g.shells.get_mut(&key).ok_or_else(|| {
-            BackgroundShellError::NotFound {
+        let entry = g
+            .shells
+            .get_mut(&key)
+            .ok_or_else(|| BackgroundShellError::NotFound {
                 session_id: session_id.to_string(),
                 shell_session_id: shell_session_id.to_string(),
-            }
-        })?;
+            })?;
         // Idempotent: killing a Done entry is a no-op (matches the
         // tool layer's "kill is always safe to call" UX).
         match &entry.state {
@@ -325,10 +326,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         }
     }
 
-    async fn kill_all_for_session(
-        &self,
-        session_id: &str,
-    ) -> Result<(), BackgroundShellError> {
+    async fn kill_all_for_session(&self, session_id: &str) -> Result<(), BackgroundShellError> {
         let mut g = self.inner.lock().await;
         // Snapshot the running senders for this session, then
         // send (each task handles its own teardown).
@@ -339,8 +337,7 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
             .map(|(_, sh)| sh.clone())
             .collect();
         for sid in sids {
-            if let Some(entry) = g.shells.get_mut(&(session_id.to_string(), sid))
-            {
+            if let Some(entry) = g.shells.get_mut(&(session_id.to_string(), sid)) {
                 if let ShellState::Running { .. } = &entry.state {
                     if let Some(tx) = entry.kill_tx.take() {
                         let _ = tx.send(());
@@ -357,15 +354,60 @@ impl BackgroundShellRegistry for InMemoryBackgroundShellRegistry {
         Ok(())
     }
 
-    async fn drain_notifications(
-        &self,
-        session_id: &str,
-    ) -> Vec<BackgroundShellNotification> {
-        let mut g = self.inner.lock().await;
-        g.notifications
-            .remove(session_id)
-            .map(|q| q.into_iter().collect())
-            .unwrap_or_default()
+    async fn drain_notifications(&self, session_id: &str) -> Vec<BackgroundShellNotification> {
+        // Fast path: queue already has pending notifications →
+        // return immediately (original behavior, unchanged).
+        //
+        // Slow path (race fix, 2026-07-05, surfaced by E1 CI on the
+        // ubuntu runner): if the queue is empty but a shell for this
+        // session was spawned very recently, it may be ABOUT to push
+        // its completion notification. The spawned task's
+        // `child.wait()` (SIGCHLD) + lock + enqueue can outlast the
+        // caller's turn boundary — μs-scale mock-driven turn switches
+        // in tests, or the production turn boundary for fast shells
+        // like `echo`. Without the wait, drain pops the queue before
+        // the push lands and the notification is missed (delayed to a
+        // later turn, or lost if the loop terminates).
+        //
+        // We yield once + sleep briefly, then re-check, so an
+        // in-flight shell gets a window to land its push. Caps:
+        // (a) only shells younger than `RECENT_SHELL_MS` get the wait
+        //     — a long-lived dev server (24h) does NOT stall every
+        //     turn;
+        // (b) total wait bounded by `WAIT_DEADLINE_MS` so a wedged
+        //     shell can't block the agent loop indefinitely.
+        // Production impact in the common case is zero: drains almost
+        // always find the queue either non-empty (immediate return)
+        // or with no recent running shell (immediate empty return,
+        // since LLM turn latency ≫ shell completion).
+        const RECENT_SHELL_MS: MonotonicMs = 200;
+        const WAIT_DEADLINE_MS: u64 = 100;
+        const POLL_INTERVAL_MS: u64 = 5;
+
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(WAIT_DEADLINE_MS);
+        loop {
+            {
+                let mut g = self.inner.lock().await;
+                if let Some(q) = g.notifications.remove(session_id) {
+                    return q.into_iter().collect();
+                }
+                let now = now_ms();
+                let has_recent_running = g.shells.iter().any(|((sid, _), e)| {
+                    sid == session_id
+                        && matches!(e.state, ShellState::Running { .. })
+                        && now.saturating_sub(e.started_at) < RECENT_SHELL_MS
+                });
+                if !has_recent_running || tokio::time::Instant::now() >= deadline {
+                    return vec![];
+                }
+            }
+            // Drop the lock + yield so the spawned shell task (waiting
+            // on `child.wait()`) can run to completion and enqueue its
+            // notification before we re-poll.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+        }
     }
 
     async fn kill_all(&self) -> Result<(), BackgroundShellError> {
@@ -531,8 +573,7 @@ async fn run_background_task(
     };
 
     let completed_at = now_ms();
-    let (outcome, reported_exit_code) =
-        BackgroundShellOutcome::classify(trigger, exit_code);
+    let (outcome, reported_exit_code) = BackgroundShellOutcome::classify(trigger, exit_code);
 
     // Disk-spill for large outputs before we move into the lock.
     // We need the entry's cwd to pick the spill directory; pull
@@ -643,12 +684,7 @@ async fn kill_and_collect(child: &mut tokio::process::Child) -> KillAndCollectRe
     if let Some(mut err) = child.stderr.take() {
         let _ = err.read_to_end(&mut stderr).await;
     }
-    let exit_code = child
-        .wait()
-        .await
-        .ok()
-        .and_then(|s| s.code())
-        .unwrap_or(-1);
+    let exit_code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
     KillAndCollectResult {
         exit_code,
         stdout,
@@ -760,7 +796,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let shell_id = reg
-            .start("s1", "echo hello".to_string(), tmp.path().to_path_buf(), Some(5000))
+            .start(
+                "s1",
+                "echo hello".to_string(),
+                tmp.path().to_path_buf(),
+                Some(5000),
+            )
             .await
             .expect("start ok");
         assert!(shell_id.starts_with("bsh_"));
@@ -788,7 +829,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let shell_id = reg
-            .start("s1", "sleep 5".to_string(), tmp.path().to_path_buf(), Some(30_000))
+            .start(
+                "s1",
+                "sleep 5".to_string(),
+                tmp.path().to_path_buf(),
+                Some(30_000),
+            )
             .await
             .unwrap();
         // Give the spawned task a tick to actually start the child.
@@ -796,7 +842,11 @@ mod tests {
         let status = reg.status("s1", &shell_id).await.unwrap();
         match status {
             BackgroundShellStatus::Running { elapsed_ms, .. } => {
-                assert!(elapsed_ms < 5_000, "still in early phase, got: {}", elapsed_ms);
+                assert!(
+                    elapsed_ms < 5_000,
+                    "still in early phase, got: {}",
+                    elapsed_ms
+                );
             }
             other => panic!("expected Running, got: {:?}", other),
         }
@@ -851,15 +901,19 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let shell_id = reg
-            .start("s1", "sleep 60".to_string(), tmp.path().to_path_buf(), Some(120_000))
+            .start(
+                "s1",
+                "sleep 60".to_string(),
+                tmp.path().to_path_buf(),
+                Some(120_000),
+            )
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         reg.kill("s1", &shell_id).await.expect("kill ok");
         // Wait for the task to record Killed.
         for _ in 0..40 {
-            if let BackgroundShellStatus::Killed { .. } =
-                reg.status("s1", &shell_id).await.unwrap()
+            if let BackgroundShellStatus::Killed { .. } = reg.status("s1", &shell_id).await.unwrap()
             {
                 return;
             }
@@ -874,7 +928,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let shell_id = reg
-            .start("s1", "true".to_string(), tmp.path().to_path_buf(), Some(5000))
+            .start(
+                "s1",
+                "true".to_string(),
+                tmp.path().to_path_buf(),
+                Some(5000),
+            )
             .await
             .unwrap();
         // Wait for completion.
@@ -907,7 +966,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let shell_id = reg
-            .start("s1", "sleep 5".to_string(), tmp.path().to_path_buf(), Some(30_000))
+            .start(
+                "s1",
+                "sleep 5".to_string(),
+                tmp.path().to_path_buf(),
+                Some(30_000),
+            )
             .await
             .unwrap();
         // Different session id → NotFound, even with the right shell id.
@@ -923,15 +987,30 @@ mod tests {
         let tmp = tempdir().unwrap();
         let reg = InMemoryBackgroundShellRegistry::new();
         let s1_a = reg
-            .start("s1", "sleep 30".to_string(), tmp.path().to_path_buf(), Some(60_000))
+            .start(
+                "s1",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+            )
             .await
             .unwrap();
         let s1_b = reg
-            .start("s1", "sleep 30".to_string(), tmp.path().to_path_buf(), Some(60_000))
+            .start(
+                "s1",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+            )
             .await
             .unwrap();
         let s2_a = reg
-            .start("s2", "sleep 30".to_string(), tmp.path().to_path_buf(), Some(60_000))
+            .start(
+                "s2",
+                "sleep 30".to_string(),
+                tmp.path().to_path_buf(),
+                Some(60_000),
+            )
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -972,7 +1051,12 @@ mod tests {
         let mut total = 0;
         for _ in 0..MAX_NOTIFICATIONS_PER_SESSION + 5 {
             let sid = reg
-                .start("s1", "true".to_string(), tmp.path().to_path_buf(), Some(5000))
+                .start(
+                    "s1",
+                    "true".to_string(),
+                    tmp.path().to_path_buf(),
+                    Some(5000),
+                )
                 .await
                 .unwrap();
             // Don't bother waiting for the notification — start
@@ -1002,11 +1086,7 @@ mod tests {
                     if let Some(q) = g.notifications.get_mut("s1") {
                         q.truncate(MAX_NOTIFICATIONS_PER_SESSION);
                     }
-                    let final_len = g
-                        .notifications
-                        .get("s1")
-                        .map(|q| q.len())
-                        .unwrap_or(0);
+                    let final_len = g.notifications.get("s1").map(|q| q.len()).unwrap_or(0);
                     assert!(
                         final_len <= MAX_NOTIFICATIONS_PER_SESSION,
                         "queue exceeded cap: {} > {}",

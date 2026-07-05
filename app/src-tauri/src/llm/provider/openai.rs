@@ -63,7 +63,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use super::wire::{
-    self, chat_request_to_wire, strip_unsupported, WireCapabilities, WireBlock, WireRequest,
+    self, chat_request_to_wire, strip_unsupported, WireBlock, WireCapabilities, WireRequest,
 };
 use super::{Provider, ProviderCapabilities, ProviderProtocol};
 use crate::llm::error::classify_error_response;
@@ -116,10 +116,7 @@ impl OpenAIConfig {
     /// state (with the user message only in DB — exactly the
     /// symptom the user reported as "新 session 发送消息，闪一下变空").
     pub fn endpoint(&self) -> String {
-        format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        )
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 }
 
@@ -146,10 +143,7 @@ impl OpenAIProvider {
     /// The HTTP + SSE body for one OpenAI request. Pure
     /// function over the (post-strip) [`WireRequest`] so the
     /// conversion is testable without a real HTTP client.
-    fn build_http_body(
-        wire: &WireRequest,
-        config: &OpenAIConfig,
-    ) -> Value {
+    fn build_http_body(wire: &WireRequest, config: &OpenAIConfig) -> Value {
         // 1. messages array
         let mut msgs: Vec<Value> = Vec::new();
 
@@ -195,8 +189,7 @@ impl OpenAIProvider {
                     msgs.push(json!({ "role": "user", "content": content }));
                 }
                 super::wire::WireMessage::Assistant { blocks } => {
-                    let (text_parts, tool_calls, reasoning) =
-                        assistant_blocks_to_openai(blocks);
+                    let (text_parts, tool_calls, reasoning) = assistant_blocks_to_openai(blocks);
                     let mut msg = json!({ "role": "assistant" });
                     if !text_parts.is_empty() {
                         msg["content"] = json!(text_parts.join(""));
@@ -260,8 +253,8 @@ impl OpenAIProvider {
                     // reasoning-capable model (o1/o3, deepseek with
                     // reasoning_effort set), the field is expected by the
                     // upstream and DeepSeek-v4 requires it non-empty.
-                    let is_reasoning_model = config.reasoning_effort.is_some()
-                        || is_o1_family(&config.model);
+                    let is_reasoning_model =
+                        config.reasoning_effort.is_some() || is_o1_family(&config.model);
                     if is_reasoning_model {
                         let rc = match reasoning {
                             Some(text) if !text.is_empty() => text,
@@ -399,9 +392,7 @@ impl OpenAIProvider {
 /// marker every turn) and didn't satisfy DeepSeek v4's
 /// `reasoning_content` round-trip contract. PR1 lifts it to a
 /// dedicated top-level field instead.
-fn assistant_blocks_to_openai(
-    blocks: &[WireBlock],
-) -> (Vec<String>, Vec<Value>, Option<String>) {
+fn assistant_blocks_to_openai(blocks: &[WireBlock]) -> (Vec<String>, Vec<Value>, Option<String>) {
     let mut text_parts: Vec<String> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut reasoning_parts: Vec<String> = Vec::new();
@@ -606,9 +597,12 @@ impl Provider for OpenAIProvider {
 
             let status = resp.status();
             if !status.is_success() {
+                // Snapshot headers before `resp.text()` consumes the response —
+                // `retry_after` advisory parsing needs them (A5+ retry support).
+                let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
                 tracing::warn!(status = %status, body = %body, "← LLM error (openai)");
-                yield Err(classify_error_response(status.as_u16(), &body));
+                yield Err(classify_error_response(status.as_u16(), &body, Some(&headers)));
                 return;
             }
 
@@ -986,12 +980,12 @@ fn parse_openai_usage(v: &Value) -> Option<TokenUsage> {
 mod tests {
     use super::*;
     use crate::llm::error::LlmError;
-    use crate::llm::types::{
-        ChatEvent, ChatMessage, ChatRequest, ContentBlock, MessageContent, Role,
-    };
     use crate::llm::provider::wire::{
         chat_request_to_wire, strip_unsupported, wire_block_to_chat_event, WireBlock,
         WireCapabilities, WireMessage, WireRequest, WireTool,
+    };
+    use crate::llm::types::{
+        ChatEvent, ChatMessage, ChatRequest, ContentBlock, MessageContent, Role,
     };
 
     fn cfg() -> OpenAIConfig {
@@ -1534,8 +1528,12 @@ mod tests {
             panic!("expected Assistant")
         };
         // Reasoning kept (reasoning_effort=true), Signature dropped.
-        assert!(blocks.iter().any(|b| matches!(b, WireBlock::Reasoning { .. })));
-        assert!(!blocks.iter().any(|b| matches!(b, WireBlock::Signature { .. })));
+        assert!(blocks
+            .iter()
+            .any(|b| matches!(b, WireBlock::Reasoning { .. })));
+        assert!(!blocks
+            .iter()
+            .any(|b| matches!(b, WireBlock::Signature { .. })));
         assert!(blocks.iter().any(|b| matches!(b, WireBlock::Text { .. })));
     }
 
@@ -1546,28 +1544,28 @@ mod tests {
         // OpenAI uses `code` (not `type`) in the error body.
         // The wire shape: { error: { message, type, code, param } }.
         let body = r#"{"error":{"message":"Incorrect API key provided","type":"error","code":"invalid_api_key"}}"#;
-        let err = classify_error_response(401, body);
+        let err = classify_error_response(401, body, None);
         assert!(matches!(err, LlmError::Auth(_)));
     }
 
     #[test]
     fn openai_429_classified_as_rate_limit() {
         let body = r#"{"error":{"message":"Rate limit reached","type":"error","code":"rate_limit_exceeded"}}"#;
-        let err = classify_error_response(429, body);
-        assert!(matches!(err, LlmError::RateLimit(_)));
+        let err = classify_error_response(429, body, None);
+        assert!(matches!(err, LlmError::RateLimit { .. }));
     }
 
     #[test]
     fn openai_400_with_invalid_request_code_is_invalid() {
         let body = r#"{"error":{"message":"Invalid tool definition","type":"invalid_request_error","code":"invalid_request_error"}}"#;
-        let err = classify_error_response(400, body);
+        let err = classify_error_response(400, body, None);
         assert!(matches!(err, LlmError::InvalidRequest(_)));
     }
 
     #[test]
     fn openai_500_classified_as_server() {
         let body = r#"{"error":{"message":"Internal server error","type":"server_error","code":"server_error"}}"#;
-        let err = classify_error_response(500, body);
+        let err = classify_error_response(500, body, None);
         assert!(matches!(err, LlmError::Server { status: 500, .. }));
     }
 
@@ -2170,6 +2168,10 @@ mod tests {
         }
         assert!(saw_start, "expected Start event");
         assert!(saw_done, "expected Done event");
-        assert!(!accumulated.is_empty(), "expected non-empty text, got: {:?}", accumulated);
+        assert!(
+            !accumulated.is_empty(),
+            "expected non-empty text, got: {:?}",
+            accumulated
+        );
     }
 }

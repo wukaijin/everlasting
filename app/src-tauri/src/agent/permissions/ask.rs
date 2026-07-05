@@ -445,7 +445,8 @@ pub(super) async fn ask_path(
         };
         match resp {
             Ok(PermissionResponse::AllowOnce) => {
-                let _ = record_audit( db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None).await;
+                let _ = record_audit(db, ctx, AuditKind::ToolAllowed, tool_name, tool_input, None)
+                    .await;
                 Decision::Allow
             }
             Ok(PermissionResponse::AllowAlways) => {
@@ -454,7 +455,8 @@ pub(super) async fn ask_path(
                 // computed by `match_value_for_allow_always`
                 // (path → parent/* glob; shell → first token;
                 // web_fetch → tool/NULL).
-                let (kind, value) = match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
+                let (kind, value) =
+                    match_value_for_allow_always(tool_name, tool_input, path_or_cmd);
                 if let Err(e) = crate::db::grant_tool_permission(
                     db,
                     &ctx.session_id,
@@ -469,7 +471,15 @@ pub(super) async fn ask_path(
                         "permission::check: grant_tool_permission failed (non-fatal)"
                     );
                 }
-                let _ = record_audit( db, ctx, AuditKind::PermissionGranted, tool_name, tool_input, None).await;
+                let _ = record_audit(
+                    db,
+                    ctx,
+                    AuditKind::PermissionGranted,
+                    tool_name,
+                    tool_input,
+                    None,
+                )
+                .await;
                 Decision::Allow
             }
             Ok(PermissionResponse::Deny { reason }) => {
@@ -496,7 +506,8 @@ pub(super) async fn ask_path(
                 }
             }
             Err(_) => {
-                let _ = record_audit( db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
+                let _ =
+                    record_audit(db, ctx, AuditKind::ToolDenied, tool_name, tool_input, None).await;
                 Decision::Deny {
                     reason: "permission ask cancelled before response".to_string(),
                     critical: false,

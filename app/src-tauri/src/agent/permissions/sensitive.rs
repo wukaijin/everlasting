@@ -196,7 +196,9 @@ mod tests {
 
     #[test]
     fn private_key_extensions_are_sensitive() {
-        assert!(is_sensitive_path(std::path::Path::new("/home/x/secret/server.pem")));
+        assert!(is_sensitive_path(std::path::Path::new(
+            "/home/x/secret/server.pem"
+        )));
         assert!(is_sensitive_path(std::path::Path::new("/home/x/k.pfx")));
         assert!(is_sensitive_path(std::path::Path::new("/home/x/k.key")));
         assert!(is_sensitive_path(std::path::Path::new("/home/x/k.p12")));
@@ -208,17 +210,27 @@ mod tests {
     fn dotenv_is_sensitive_but_example_is_not() {
         assert!(is_sensitive_path(std::path::Path::new("/repo/.env")));
         assert!(is_sensitive_path(std::path::Path::new("/repo/.env.local")));
-        assert!(is_sensitive_path(std::path::Path::new("/repo/.env.production")));
+        assert!(is_sensitive_path(std::path::Path::new(
+            "/repo/.env.production"
+        )));
         assert!(is_sensitive_path(std::path::Path::new("/repo/sub/.env")));
         // example / sample / template 不是真凭证,不命中。
-        assert!(!is_sensitive_path(std::path::Path::new("/repo/.env.example")));
-        assert!(!is_sensitive_path(std::path::Path::new("/repo/.env.sample")));
-        assert!(!is_sensitive_path(std::path::Path::new("/repo/.env.template")));
+        assert!(!is_sensitive_path(std::path::Path::new(
+            "/repo/.env.example"
+        )));
+        assert!(!is_sensitive_path(std::path::Path::new(
+            "/repo/.env.sample"
+        )));
+        assert!(!is_sensitive_path(std::path::Path::new(
+            "/repo/.env.template"
+        )));
     }
 
     #[test]
     fn credentials_filenames_are_sensitive() {
-        assert!(is_sensitive_path(std::path::Path::new("/repo/aws-credentials.yaml")));
+        assert!(is_sensitive_path(std::path::Path::new(
+            "/repo/aws-credentials.yaml"
+        )));
         assert!(is_sensitive_path(std::path::Path::new("/repo/secrets.txt")));
         assert!(is_sensitive_path(&home().join(".aws/credentials")));
         assert!(is_sensitive_path(&home().join(".netrc")));
@@ -239,7 +251,9 @@ mod tests {
             "/usr/local/code/repo/src/main.rs"
         )));
         assert!(!is_sensitive_path(std::path::Path::new("/repo/README.md")));
-        assert!(!is_sensitive_path(std::path::Path::new("/repo/package.json")));
+        assert!(!is_sensitive_path(std::path::Path::new(
+            "/repo/package.json"
+        )));
         assert!(!is_sensitive_path(std::path::Path::new("/repo/.gitignore")));
     }
 
@@ -249,7 +263,9 @@ mod tests {
         assert!(is_trusted_external(
             &home().join(".config/everlasting/commands/test-b3.md")
         ));
-        assert!(is_trusted_external(&home().join(".config/everlasting/memory/x.md")));
+        assert!(is_trusted_external(
+            &home().join(".config/everlasting/memory/x.md")
+        ));
         // 子目录也命中(**)
         assert!(is_trusted_external(
             &home().join(".config/everlasting/deep/nested/file")
@@ -258,9 +274,13 @@ mod tests {
 
     #[test]
     fn other_paths_not_trusted_external() {
-        assert!(!is_trusted_external(&home().join(".config/other-app/config")));
+        assert!(!is_trusted_external(
+            &home().join(".config/other-app/config")
+        ));
         assert!(!is_trusted_external(&home().join(".ssh/id_rsa")));
-        assert!(!is_trusted_external(std::path::Path::new("/usr/local/code/repo/x")));
+        assert!(!is_trusted_external(std::path::Path::new(
+            "/usr/local/code/repo/x"
+        )));
     }
 
     // === 优先级文档化:allow 与 deny pattern 集合无交集 ===

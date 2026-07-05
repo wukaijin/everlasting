@@ -538,10 +538,7 @@ pub async fn set_worktree_path(
 /// principle race; `try_get` on a NULL TEXT returns `Ok(None)`
 /// either way).
 #[allow(dead_code)]
-pub async fn get_run(
-    pool: &SqlitePool,
-    id: &str,
-) -> Result<Option<SubagentRunRow>, sqlx::Error> {
+pub async fn get_run(pool: &SqlitePool, id: &str) -> Result<Option<SubagentRunRow>, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT id, parent_session_id, parent_request_id, subagent_name,
@@ -733,4 +730,3 @@ pub async fn reap_orphaned_runs(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     .await?;
     Ok(result.rows_affected())
 }
-

@@ -90,10 +90,7 @@ pub fn truncate_transcript_for_persistence(
         // Concatenate head[..h] + tail[tail_trim_start..] wrapped in
         // a synthetic array. The two halves are JSON-serialized
         // TranscriptEntry values; we wrap them in a JSON array.
-        format!(
-            "[{}]",
-            [&json[..h], &json[tail_trim_start..]].join(",")
-        )
+        format!("[{}]", [&json[..h], &json[tail_trim_start..]].join(","))
     } else if let Some(h) = head_trim {
         // Tail parse failed; keep just the head (truncated).
         format!("[{}]", &json[..h])
@@ -611,12 +608,8 @@ mod tests {
     #[test]
     fn format_with_model_empty_display_omits_line() {
         // model_display=Some("") → treated as none (no empty [model:] line).
-        let (content, _) = format_dispatch_result_with_model(
-            SubagentStatus::Completed,
-            "done",
-            None,
-            Some(""),
-        );
+        let (content, _) =
+            format_dispatch_result_with_model(SubagentStatus::Completed, "done", None, Some(""));
         assert!(!content.contains("[model:"));
     }
 
@@ -670,7 +663,10 @@ mod tests {
         let body = format_final_text(SubagentStatus::Cancelled, "partial result");
         assert_eq!(
             body,
-            format!("partial result\n\n{}", crate::agent::helpers::CANCELLED_MARKER)
+            format!(
+                "partial result\n\n{}",
+                crate::agent::helpers::CANCELLED_MARKER
+            )
         );
     }
 
@@ -719,7 +715,10 @@ mod tests {
         let body = format_final_text(SubagentStatus::Incomplete, "partial result");
         assert_eq!(
             body,
-            format!("partial result\n\n{}", crate::agent::helpers::INCOMPLETE_MARKER)
+            format!(
+                "partial result\n\n{}",
+                crate::agent::helpers::INCOMPLETE_MARKER
+            )
         );
     }
 
@@ -803,33 +802,69 @@ mod tests {
         let transcript = vec![
             tc_entry("t-read", "read_file", serde_json::json!({"path": "r.rs"})),
             tr_entry("t-read", false),
-            tc_entry("t-write", "write_file", serde_json::json!({"path": "w.rs", "content": "x"})),
+            tc_entry(
+                "t-write",
+                "write_file",
+                serde_json::json!({"path": "w.rs", "content": "x"}),
+            ),
             tr_entry("t-write", false),
             tc_entry("t-edit", "edit_file", serde_json::json!({"path": "e.rs"})),
             tr_entry("t-edit", false),
             tc_entry("t-list", "list_dir", serde_json::json!({"path": "d"})),
             tr_entry("t-list", false),
-            tc_entry("t-grep", "grep", serde_json::json!({"pattern": "TODO", "path": "d"})),
+            tc_entry(
+                "t-grep",
+                "grep",
+                serde_json::json!({"pattern": "TODO", "path": "d"}),
+            ),
             tr_entry("t-grep", false),
             tc_entry("t-glob", "glob", serde_json::json!({"pattern": "**/*.rs"})),
             tr_entry("t-glob", false),
             tc_entry("t-shell", "shell", serde_json::json!({"command": "ls"})),
             tr_entry("t-shell", false),
-            tc_entry("t-web", "web_fetch", serde_json::json!({"url": "https://x"})),
+            tc_entry(
+                "t-web",
+                "web_fetch",
+                serde_json::json!({"url": "https://x"}),
+            ),
             tr_entry("t-web", false),
-            tc_entry("t-skill", "use_skill", serde_json::json!({"skill_name": "code-review"})),
+            tc_entry(
+                "t-skill",
+                "use_skill",
+                serde_json::json!({"skill_name": "code-review"}),
+            ),
             tr_entry("t-skill", false),
         ];
         let out = summarize_worker_tool_actions(&transcript);
-        assert!(out.contains("- read_file(r.rs): ok"), "read_file path: {}", out);
-        assert!(out.contains("- write_file(w.rs): ok"), "write_file path: {}", out);
-        assert!(out.contains("- edit_file(e.rs): ok"), "edit_file path: {}", out);
+        assert!(
+            out.contains("- read_file(r.rs): ok"),
+            "read_file path: {}",
+            out
+        );
+        assert!(
+            out.contains("- write_file(w.rs): ok"),
+            "write_file path: {}",
+            out
+        );
+        assert!(
+            out.contains("- edit_file(e.rs): ok"),
+            "edit_file path: {}",
+            out
+        );
         assert!(out.contains("- list_dir(d): ok"), "list_dir path: {}", out);
         assert!(out.contains("- grep(TODO): ok"), "grep pattern: {}", out);
         assert!(out.contains("- glob(**/*.rs): ok"), "glob pattern: {}", out);
         assert!(out.contains("- shell(ls): ok"), "shell command: {}", out);
-        assert!(out.contains("- web_fetch(https://x): ok"), "web_fetch url: {}", out);
-        assert!(out.contains("- use_skill(code-review): ok"), "use_skill skill_name: {}", out);
+        assert!(
+            out.contains("- web_fetch(https://x): ok"),
+            "web_fetch url: {}",
+            out
+        );
+        assert!(
+            out.contains("- use_skill(code-review): ok"),
+            "use_skill skill_name: {}",
+            out
+        );
     }
 
     #[test]
@@ -843,7 +878,11 @@ mod tests {
         let out = summarize_worker_tool_actions(&transcript);
         assert!(out.contains("- update_checklist: ok"), "no param: {}", out);
         assert!(out.contains("- mystery_tool: ok"), "unknown tool: {}", out);
-        assert!(!out.contains("update_checklist("), "no parens for update_checklist: {}", out);
+        assert!(
+            !out.contains("update_checklist("),
+            "no parens for update_checklist: {}",
+            out
+        );
     }
 
     #[test]
@@ -907,7 +946,11 @@ mod tests {
             tr_entry("c-2", false),
         ];
         let out = summarize_worker_tool_actions(&transcript);
-        assert!(!out.contains("actions omitted"), "no marker under cap: {}", out);
+        assert!(
+            !out.contains("actions omitted"),
+            "no marker under cap: {}",
+            out
+        );
     }
 
     #[test]
@@ -961,9 +1004,7 @@ mod tests {
 
     #[test]
     fn truncate_over_cap_marks_truncated_and_keeps_entries() {
-        let entries: Vec<TranscriptEntry> = (0..200)
-            .map(|_| make_entry(&"x".repeat(40)))
-            .collect();
+        let entries: Vec<TranscriptEntry> = (0..200).map(|_| make_entry(&"x".repeat(40))).collect();
         let json = serde_json::to_string(&entries).unwrap();
         assert!(json.len() > 1024, "test setup: should exceed 1KiB");
         let (out, truncated) = truncate_transcript_for_persistence(entries, 1024);

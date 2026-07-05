@@ -153,7 +153,7 @@
 | Tauri 2 在 WSLg 下的 bug       | 低(✅ spike-001 已验证可用) | 准备 fallback 到 WSL 内部启动 + VNC/X11 转发  |
 | Git2-rs worktree API 不全      | 中     | 必要时 spawn `git worktree` 命令              |
 | Linux sandbox (bwrap/landlock) | 高     | WSL2 默认禁 user namespace,bwrap 实际不可用;退路:landlock(内核 5.13+,需 WSL2 内核版本对齐)/ firejail / 应用层黑名单(rm -rf /、curl \| sh 之类)。这是 [⑨ Tool 权限](./ARCHITECTURE.md#9-工具权限检查) 实施的前提 |
-| LLM 流式 token 断连            | 低     | 实现重连,断点续传用 message ID                |
+| LLM 流式 token 断连            | 低 (✅ A5+ 07-05 落地) | ✅ **首字节前重试**(Full Jitter + retry-after advisory + 双向熔断 max_retries×budget)。SSE 协议无 resumption(research §5.4),"断点续传用 message ID"退路不可行,改走整请求重发的安全边界 — tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key。spec 见 [llm-contract A5+](../.trellis/spec/backend/llm-contract.md),决策见 [IMPLEMENTATION §4 2026-07-05](./IMPLEMENTATION.md#4-决策日志) |
 | 上下文爆炸                    | 高     | ✅ C3 context 压缩(0.80→0.50,B5 保护)+ 消息裁剪 + tool result 截断 |
 | 循环检测(agent 死循环)        | 高     | ✅ C2 分级触发 — L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;软提示注入 hint 不打断,MAX_TURNS=200 兜底 |
 
