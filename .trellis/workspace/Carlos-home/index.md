@@ -7,9 +7,9 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-3.md`
-- **Total Sessions**: 88
-- **Last Active**: 2026-07-01
+- **Active File**: `journal-4.md`
+- **Total Sessions**: 89
+- **Last Active**: 2026-07-05
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-3.md` | ~1881 | Active |
+| `journal-4.md` | ~71 | Active |
+| `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
 <!-- @@@/auto:active-documents -->
@@ -31,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 89 | 2026-07-05 | E1 CI 测试自动化管线(双 job + drain race / mtime fence 2 flaky 修复) | `314702f`, `c64df6c`, `84d607e`, `7eb5e81`, `c2ba7ce`, `20b71b9`, `e1764d3` | `main` |
 | 88 | 2026-07-01 | read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list | `87c91f0` | `main` |
 | 87 | 2026-06-30 | AskUserQuestion 阻塞反问 tool 落地 | `cfdf177`, `064fbbc` | `main` |
 | 86 | 2026-06-30 | sub-agent worktree 链路顺滑化 epic (A+B+C+D) | `cda336c`, `91968e5`, `16fccf9` | `main` |
