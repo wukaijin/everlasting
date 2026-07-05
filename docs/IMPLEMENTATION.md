@@ -30,6 +30,23 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-07-05 — E1 CI 测试自动化管线(双 job + 首跑暴露 2 个预存 flaky 修复)
+
+**Context**: V2 第三档 E1。项目积累 1274 cargo + 718 vitest + vue-tsc 全靠手动跑(`PKG_CONFIG_PATH=... cargo test` + `pnpm test` + `vue-tsc`),无防回归;最近 A5+ 一轮(1274/718)已现手动验证摩擦,journal 记"1266 全绿不准,Step 5 后即 fail"——正是 CI 该堵的回归类型。DEBT.md 0 open items,纯前瞻性基建。
+
+**决策**:
+
+1. **scope A(test+type,不出包)**:CI 核心使命是防回归;`cargo test --lib` 编译期已编全 crate + 1274 单测 + 718 vitest + vue-tsc 覆盖 95%+。出包留独立 release.yml(tag-triggered),不进 PR。**否决 A+B**:每个 PR 多 10-15min 产没人用的 .deb。
+2. **双 job 并行(rust + frontend)**:frontend 不需 webkit,独立快跑;总时长 ≈ rust job。
+3. **cargo fmt gate + 全量 fmt 前置**:Q3 决议 C。fmt 当前不干净(at_file.rs 等),加 gate 必先全量 fmt(118 文件机械改动,单独 commit)。clippy 留 follow-up(首次状态未知 + 修复含判断,先本地清再加 gate)。
+4. **apt 系统依赖清单**:即使只跑 `cargo test --lib`,build.rs(`tauri_build::build()`)编译期就要 pkg-config 找 webkit → apt install 必选,与 scope 无关。`libwebkit2gtk-4.1-dev`(Tauri 2 用 4.1 非 4.0)+ build-essential + libxdo-dev + librsvg2-dev + libayatana-appindicator3-dev;reqwest 用 rustls 故省 libssl-dev。
+5. **paths-ignore + concurrency**:忽略 `**/*.md`/`docs/**`/`.trellis/**` 纯文档改动(每次 task 收尾改 .trellis,触发 CI 是浪费 GH 免费分钟);`concurrency cancel-in-progress` 同 ref 重复 push 取消旧 run。
+6. **CI 首跑暴露 2 个预存 flaky**(项目此前无 CI,本地 N 次侥幸过):
+   - **background shell drain race**(生产代码修复 `in_memory.rs::drain_notifications`)— destructive pop 与 shell 完成 push 竞速;echo fork+exec+exit+push(几 ms)可能晚于 turn 切换(μs),drain pop 空队列。**真实生产 race**(快 shell + loop 早结束 → notification 永不 drain,LLM 不知道 shell 完成),不只测试 flaky。修复 = 队列空 + 近期(<200ms)running shell 时 yield+poll(5ms,cap 100ms),dev server(>200ms)不受影响,队列非空/无 running 立即返回(原行为保留)。
+   - **loader mtime fence 精度**(测试侧修复 `memory/tests.rs`)— 两次连续 fs::write 间隔过短 FS mtime 精度不足区分(ext4 ns 但 overlay/tmpfs + 并行负载弱化 delta);原 sleep 15ms 在写 v2 之后对 v2 自身 mtime 无效(只保证落盘,不保证推进);改 spin until mtime 真推进(cap 2s,确定性,失败 panic = FS 精度不足本身是 fence-invalidating bug)。
+
+**结果**:CI 双 job 全绿(rust ~5min / frontend ~2min);drain race 修复 10/10 单跑 + 3x 全量 1274/1274 稳定;mtime fence 3x 全量稳定。clippy gate 记 follow-up(ROADMAP §2)。
+
 ### 2026-07-05 — A5+ LLM 网络健壮性(retry_open wrapper + Full Jitter + 首字节前重试 + headers 字段扩展)
 
 **Context**: A5(07-02)错误契约落地 5 类 LlmError 分类,但 provider 层无重试 — 单次 503 / 429 / 网络抖动就让整轮 turn 失败,长会话(多 Provider 中转 + 国内网络)脆。DESIGN §5.1 风险表原列"LLM 流式 token 断连 → 实现重连,断点续传用 message ID"作退路,但调研(`docs/research/llm-network-resilience-survey.md` §5.4)证实 SSE 协议无 resumption,message ID 续传不可行,只能整请求重发。
