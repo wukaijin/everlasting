@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-07-04
+- **Total Sessions**: 23
+- **Last Active**: 2026-07-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1048 | Active |
+| `journal-1.md` | ~1082 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-07 | B6+ B subagent dispatch 动态选模型 | `996aa2e`, `dc3e422` | `main` |
 | 22 | 2026-07-04 | A2+ shell P1+P2:复合命令拆分取 max + grant 短路收紧 | `2658cc4` | `main` |
 | 21 | 2026-07-01 | Tool description 顺手清理 + CLAUDE.md/AGENTS.md 索引 | `6361fec`, `5c5f475`, `c160411`, `4373c4e` | `main` |
 | 20 | 2026-06-26 | Session 74 user CLAUDE.md home dir 完结 | `5ddccb1`, `a7c323b` | `main` |

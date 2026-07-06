@@ -1046,3 +1046,37 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: B6+ B subagent dispatch 动态选模型
+
+**Date**: 2026-07-07
+**Task**: B6+ B subagent dispatch 动态选模型
+**Branch**: `main`
+
+### Summary
+
+把 subagent 多模型优先级链延伸到 dispatch > DB > frontmatter > parent。两条入口(LLM dispatch_subagent({model}) + user @@agent --model=<X>)汇合到 run_subagent 的 input.model。核心改动一行叠加(final_model = dispatch_model.or(resolved_lower)),resolve_final_model/resolve_worker_provider 签名与既有测试全不动(A/C 零回归)。新增 resolve_model_by_name_or_id 做 display_name→id 反查。schema model enum 动态构建(display_name 值,chat_loop turn loop 外 list_models 快照)。ForcedDispatch 加 model_id。关键修正(用户抓):system prompt 不列 model,故 schema enum 是 LLM 唯一发现通道,推翻原'不做 enum'决策。1316 cargo + 771 vitest + vue-tsc + fmt 全绿;trellis-check PASS。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `996aa2e` | (see git log) |
+| `dc3e422` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
