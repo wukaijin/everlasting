@@ -12,8 +12,9 @@
 > - [multi-provider-contract.md](./multi-provider-contract.md) — Provider trait + catalog + Anthropic/OpenAI 分发
 > - [test-model-contract.md](./test-model-contract.md) — `test_model` IPC
 > - [memory.md](./memory.md) §Scenario: Autonomous Memories —`remember` 完整契约(DB schema / 安全网 / 频率控制 / silent-allow 权限模型)
+> - [memory.md](./memory.md) §Scenario: V2-2+ Observability & Management(2026-07-06)— `update_autonomous_memory` / `update_autonomous_memory_status` IPC + `ChatEvent::Recall` + `validate_memory_text` helper + `edited_by_user` provenance + 状态机矩阵(前端只读副本 / 后端硬墙)
 >
-> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` / `remember`(silent-allow 自主记忆写)时。
+> **何时读本文**:涉及 `builtin_tools()` / `edit_file` / `ReadGuard` / `shell` spillover / `grep` / `glob` / `list_dir` / `remember`(silent-allow 自主记忆写)/ `update_autonomous_memory{,_status}` IPC / `ChatEvent::Recall` 时。
 >
 > **⑨ 关 Permission Layer 设计合约**:[permission-layer.md](./permission-layer.md)(A2 + B7, 2026-06-13,2026-06-21 移入)。
 

@@ -30,7 +30,45 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
-### 2026-07-05 — E1 CI 测试自动化管线(双 job + 首跑暴露 2 个预存 flaky 修复)
+### 2026-07-06 — V2-2+ 自主记忆可观测性 + 管理面板(A1-A11 后端 + B1-B5 前端)
+
+**Context**: V2 2 期自主记忆(06-29)全是 agent 自主闭环 —— 写(`remember`)/ 召回(FTS + pitfall)/ 反思(P4 auto-reflect)/ 提升(P5 状态机)/ 卫生(dedup + age-out)。用户面对的是黑盒:看不到命中、改不了内容、转不了状态、删不了过时项。V2-2+ 补**人**的入口。任务 `.trellis/tasks/07-06-am-observability-panel/`,PRD R1-R5 + design D1-D7。
+
+**决策(D1-D7 + 实施)**:
+
+1. **`edited_by_user` provenance 列(D1)**:autonomous_memories 加 `BOOLEAN NOT NULL DEFAULT 0`。0=agent 写(`remember`/P4),1=人工编辑(`update_memory`)。migration 复用 `add_autonomous_memories_column_if_missing` helper(PRAGMA table_info 检查,非破坏,旧行回填 0)。`MemoryRow` 加 `#[serde(default)]` 向后兼容。UI 据此渲染「人工编辑」徽标。
+2. **`validate_memory_text` 安全网提取(D2)**:从 `insert_memory` 抽出 empty/超长/sensitive-regex/sensitive-path/temp-path + home 泛化为单源 helper,`insert_memory` + `update_memory` 共用。**否决**两条独立安全网 —— 人工编辑必须复用 agent 写入的护栏,否则用户手改能绕过 sensitive 检查。回归测试 `insert_memory_still_safe_after_helper_extract` 锁基线(P4/P5 依赖)。
+3. **`ChatEvent::Recall` 只读 / 非持久化(D4/A7)**:新 `Recall { hits: Vec<RecallHit> }` 变体,跟 `Retrying` 同类(transient,不写 messages DB shape)。`RecallHit { memory_id, title, kind, source }` **无 `rename_all`**(snake_case),对齐既有 ChatEvent nested-payload 约定(`Retrying`/`FileInjections` 均 snake)。与 `MemoryRow`(独立 `#[serde(rename_all="camelCase")]`)是两个类型,勿混。
+4. **sibling 重构,原 fn 退化为 thin wrapper(A8/A9)**:`build_recall_text_with_rows` 返 `(text, rows)`;`recall_pitfall_with_hits` 返 `(PitfallRecall, Vec<MemoryRow>)`。**关键约束**:原 `build_recall_text` / `recall_pitfall` 保留为 wrapper(`.map(|(t,_)| t)` / `.0`),只为 P2/P3 既有测试零回归 — production 走 with_rows。`PitfallRecall` enum 字节不变(Footnote/SoftBlock/None)→ P3/P4/P5 闭环零回归。4 个 dead-code 警告加 `#[allow(dead_code)]`(镜像 `recall_pitfall_footnote` 先例)。
+5. **worker sink 结构隔离(AC7)**:`SubagentBufferSink.emit_chat_event` 只调 `self.record()`(→ `subagent:event` channel),**无 `chat-event` emit 路径**。结构性锁定:测试 `worker_sink_does_not_forward_recall_to_main_chat`。worker 子记忆命中永不冒泡到用户聊天。
+6. **状态机矩阵 — 前端只读副本 + 后端硬墙(D6)**:前端 `LEGAL_STATUS_TRANSITIONS`(memory.ts 导出)= backend `update_status` 矩阵的只读副本。RuntimeMemoryModal dropdown 只 OFFER 合法目标;**backend 永远 re-validate**(transactional 二次校验),race / stale dropdown 也兜得住。前端**不**做合法性检查(会跟 backend 漂移)。转 demoted 弹内联 reason input(矩阵仅 →demoted 接受 reason)。
+7. **recall 状态归 feature store(D7/B1)**:`recallHitsBySession: reactive(new Map)` 落 `useMemoryStore`,**不**归 streamController —— `state-management.md:131-139` 跨切面领域状态归 feature store,controller 只路由(checklist-routing 先例 `streamController.ts:1216-1222`)。`handleChatEvent` 的 `case "recall"` 调 `pushRecallHits`;`startRequest` 清空(per-turn 累积,新 user message 清空 — chip 显示「本次召回」非累计)。`recallHitsForSession` 是纯读 computed(getter 不 mutate 自己 track 的 deps — `state-management.md:166-212` 硬规则)。
+
+**Recall event emit 点(3 处)+ defensive arm**:
+- FTS 召回(turn start,`chat_loop.rs:1391`)
+- pitfall 召回(tool dispatch,`:2496` / `:3267`)
+- LLM stream 路径 defensive match arm(`:1710`)丢弃漏过来的 Recall(只读事件不该来自 LLM)
+- `emit_recall_event` helper 集中 emit 逻辑
+
+**前端 UI(B2-B4)**:
+- `MemoryPreview.vue` runtime row:hitCount/lastUsedAt chip(AC1,仅 hitCount>0)+ 「人工编辑」徽标 + 行点击 emit `manage`(宿主决定开哪个 modal,避免 MemoryPreview 硬绑)。delete 按钮 `@click.stop` 不冒泡。
+- `RuntimeMemoryModal.vue`(新建):reka-ui Dialog 6 件套(复刻 MemoryModal sizing 80vw/min640/max900/80vh + zoom 动画)。嵌套在 MemoryModal Dialog 内(reka-ui 2.9.9 支持嵌套,焦点陷阱移到最内层)。统计区 + 状态 Select(复刻 ModelForm 模式,portal 子元素 `:deep()`)+ 编辑(native input/textarea,reka-ui 2.9.9 无 TextField)+ 删除(复用 ConfirmDialog,portal 到 body,z-index 1100 < Dialog 2000 层叠正确)。
+- `ChatPanel.vue` recall chip(header 下、main 上方;MessageList 无 banner slot,ChatPanel 是跨切面 overlay 宿主)。折叠「本次召回 N 条」→ 展开 按源分组(语义/fts + 陷阱/pitfall)。
+
+**Consequences**:
+- 用户能看 agent 召回了什么(recall chip)、改写错记忆(RuntimeMemoryModal 编辑,带安全网)、手动转状态(矩阵驱动 dropdown,backend 硬墙)、删过时记忆。
+- `insert_memory` 安全网单源化(P4/P5 未来扩展只改一处);P3/P4/P5 自动闭环零回归(31 + 7 + 7 既有测试全绿)。
+- worker 隔离结构性锁定,未来加新 ChatEvent 变体也继承(chat-event channel 永不来自 worker sink)。
+- recall hits per-session 累积,session 关闭不清(同 messagesBySession LRU 语义);每条 ~80 字节,内存可接受。
+
+**非阻塞观察(trellis-check 评估「可接受」)**:
+- `RecallHit.memory_id` 是 SQLite auto-id(对齐 `MemoryRow.id`),非 UUID — RuntimeMemoryModal 用它开 row,删除仍走 UUID。
+- reka-ui Select popper 在 jsdom 不渲染 items 直到 open,矩阵逻辑改测导出常量(`LEGAL_STATUS_TRANSITIONS`)而非 DOM — 矩阵是 unit under test,Select 交互是 reka-ui 的责任。
+- IPC-level 合法/非法转换 roundtrip 测试缺失 — 项目惯例 IPC 层薄包裹、逻辑在 db 层测(矩阵已被现有 `update_status_*` 测试覆盖)。
+
+**关联**: PRD `.trellis/tasks/07-06-am-observability-panel/`(prd + design + implement)+ spec [backend/memory.md §V2-2+](../.trellis/spec/backend/memory.md) + [frontend/chat.md §V2-2+](../.trellis/spec/frontend/chat.md);1300 后端(`cargo test --lib`)+ 757 前端(`pnpm test`)+ vue-tsc 0 err + fmt 干净。2 commits(Phase A `08fb30a` / Phase B `a0c2c4f`),分支 `feat/am-observability-panel-phase-a`。
+
+### 2026-07-06 — C2+ 循环检测主动干预(per-run-local count + QuestionStore 复用 + 三分支 + worker 直接 break)
 
 **Context**: V2 第三档 E1。项目积累 1274 cargo + 718 vitest + vue-tsc 全靠手动跑(`PKG_CONFIG_PATH=... cargo test` + `pnpm test` + `vue-tsc`),无防回归;最近 A5+ 一轮(1274/718)已现手动验证摩擦,journal 记"1266 全绿不准,Step 5 后即 fail"——正是 CI 该堵的回归类型。DEBT.md 0 open items,纯前瞻性基建。
 
