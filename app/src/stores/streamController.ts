@@ -54,6 +54,7 @@ import {
   useChecklistStore,
   CHECKLIST_TOOL_NAME,
 } from "./checklist";
+import { useMemoryStore } from "./memory";
 import {
   useQuestionCardsStore,
 } from "./questionCards";
@@ -164,7 +165,17 @@ interface ChatEventPayload {
     // shape is the wire-format tagged union — see
     // `InjectionEntry.action` for the `kind` discriminator
     // rules.
-    | "file_injections";
+    | "file_injections"
+    // 07-06 (am-observability-panel R2b/A7): read-only recall
+    // notice. Emitted by the agent loop at the FTS recall site
+    // (turn start) and at each pitfall-recall site (on tool-call
+    // dispatch). The controller does NOT attach this to the
+    // message buffer (it must not pollute the persisted shape);
+    // it routes the hits into `useMemoryStore().pushRecallHits`
+    // so the ChatPanel recall chip renders "本次召回 N 条".
+    // Worker sinks never emit on `chat-event` (AC7), so a hit
+    // arriving here is always from the main chat loop.
+    | "recall";
   text?: string;
   signature?: string;
   data?: string;
@@ -209,6 +220,26 @@ interface ChatEventPayload {
   max_attempts?: number;
   wait_ms?: number;
   reason?: string;
+  // 07-06 (am-observability-panel A7): only present when
+  // `kind === "recall"`. Mirrors Rust `ChatEvent::Recall { hits }`.
+  // The handler routes the array into
+  // `useMemoryStore().pushRecallHits(sessionId, hits)`. snake_case
+  // fields match the Rust `RecallHit` (no `rename_all`) — consistent
+  // with `Retrying` / `FileInjections` nested payloads.
+  hits?: RecallHitWire[];
+}
+
+/** 07-06 (am-observability-panel A7): the wire shape of a single
+ *  element in `ChatEvent::Recall { hits }`. Mirrors the Rust
+ *  `RecallHit` struct (snake_case, no `rename_all`). Local to this
+ *  file (not re-exported) because the memory store owns the
+ *  canonical frontend `RecallHit` type — this is just the raw wire
+ *  payload the controller validates before handing off. */
+interface RecallHitWire {
+  memory_id: number;
+  title: string;
+  kind: string;
+  source: "fts" | "pitfall";
 }
 
 /** A4: 4-field token usage payload from the LLM. Mirrors Rust
@@ -1193,6 +1224,25 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         };
         break;
       }
+      case "recall": {
+        // 07-06 (am-observability-panel R2b/A7): the agent loop
+        // emitted a recall notice (FTS at turn start, or pitfall on
+        // a tool-call dispatch). Route the hits into the memory
+        // store — the ChatPanel recall chip reads
+        // `recallHitsForSession(currentSessionId)`. We do NOT attach
+        // anything to the message buffer (the hit list is transient,
+        // per-turn; it must not pollute the persisted DB shape —
+        // same rationale as `retrying`). The store accumulates; a
+        // new user message (`startRequest`) clears the slice.
+        if (!Array.isArray(event.hits)) {
+          // Defensive — the Rust side always sends `hits` for
+          // `recall`, but a future wire change dropping it would
+          // push `undefined` into the store. Drop the event.
+          break;
+        }
+        useMemoryStore().pushRecallHits(req.sessionId, event.hits);
+        break;
+      }
     }
   }
 
@@ -1851,6 +1901,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // Pin the session while streaming — it cannot be evicted
     // even if the user visits 20+ other sessions.
     pinnedSessions.add(args.sessionId);
+    // 07-06 (am-observability-panel B1/D7): a new user message starts
+    // a fresh turn — clear the prior turn's accumulated recall hits
+    // so the ChatPanel chip shows "本次召回" (this turn), not a
+    // running total across the whole conversation. The store owns the
+    // slice; the controller only triggers the clear here (single
+    // ownership point — every user-message send funnels through
+    // startRequest).
+    useMemoryStore().clearRecallHits(args.sessionId);
     // Touch the session's messages (in case it was just loaded)
     // so it sits at MRU.
     const msgs = messagesBySession.get(args.sessionId);

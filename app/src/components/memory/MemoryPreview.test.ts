@@ -77,6 +77,7 @@ function makeMemory(overrides: Partial<AutonomousMemory> = {}): AutonomousMemory
     createdAt: "2026-06-29T12:34:56.789+00:00",
     updatedAt: "2026-06-29T12:34:56.789+00:00",
     demotedReason: null,
+    editedByUser: false,
     ...overrides,
   };
 }
@@ -366,6 +367,110 @@ describe("MemoryPreview — instruction-file section is unchanged (regression lo
     expect(refs.layers.value).toHaveLength(4);
     expect(w.text()).toContain("0 loaded");
     expect(w.text()).toContain("4 missing");
+    w.unmount();
+  });
+});
+
+// 07-06 (am-observability-panel B2): the runtime row now carries a
+// recall-stats chip (hitCount/lastUsedAt), an editedByUser badge,
+// and emits `manage` on row click (the host opens RuntimeMemoryModal).
+describe("MemoryPreview — 07-06 runtime row observability", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") return [];
+      if (cmd === "delete_autonomous_memory") return 1;
+      return null;
+    });
+    const projects = useProjectsStore();
+    projects.currentProjectId = "proj-1";
+  });
+
+  it("renders the hitCount + lastUsedAt chip only when hitCount > 0", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [
+          makeMemory({
+            id: 1,
+            hitCount: 3,
+            lastUsedAt: "2026-07-05T08:00:00.000+00:00",
+          }),
+          makeMemory({ id: 2, hitCount: 0, lastUsedAt: null }),
+        ];
+      }
+      return null;
+    });
+
+    const w = mountPreview();
+    await flushPromises();
+    const rows = w.findAll(".runtime-memory");
+    const stats = w.findAll(".runtime-memory__stat");
+
+    // Row 1 (hitCount=3) shows the stat chip; row 2 (hitCount=0)
+    // does not.
+    expect(stats).toHaveLength(1);
+    expect(rows[0]?.text()).toContain("3 次");
+    expect(rows[0]?.text()).toContain("2026-07-05 08:00");
+    w.unmount();
+  });
+
+  it("renders the 人工编辑 badge only when editedByUser is true", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [
+          makeMemory({ id: 1, editedByUser: true }),
+          makeMemory({ id: 2, editedByUser: false }),
+        ];
+      }
+      return null;
+    });
+
+    const w = mountPreview();
+    await flushPromises();
+    const badges = w.findAll(".runtime-memory__badge--edited");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.text()).toContain("人工编辑");
+    w.unmount();
+  });
+
+  it("emits `manage` with the row's auto-id on row click", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [makeMemory({ id: 42 })];
+      }
+      return null;
+    });
+
+    const w = mountPreview();
+    await flushPromises();
+    const row = w.find(".runtime-memory");
+    await row.trigger("click");
+    const manageEvents = w.emitted("manage");
+    expect(manageEvents).toBeDefined();
+    expect(manageEvents?.[0]?.[0]).toBe(42);
+    w.unmount();
+  });
+
+  it("delete click does NOT bubble to the row (stop propagation)", async () => {
+    invokeMock.mockImplementation(async (cmd: string): Promise<unknown> => {
+      if (cmd === "read_memory_layers") return [];
+      if (cmd === "list_autonomous_memories") {
+        return [makeMemory({ id: 42 })];
+      }
+      return null;
+    });
+
+    const w = mountPreview();
+    await flushPromises();
+    const deleteBtn = w.find(".runtime-memory__delete");
+    await deleteBtn.trigger("click");
+    // The delete button must stop propagation — no `manage` event.
+    expect(w.emitted("manage")).toBeUndefined();
     w.unmount();
   });
 });

@@ -27,6 +27,14 @@ import MemoryPreview from "./MemoryPreview.vue";
 const open = defineModel<boolean>("open", { required: true });
 
 const projectsStore = useProjectsStore();
+
+// 07-06 (am-observability-panel B3): forward MemoryPreview's
+// `manage` event up to the host (ChatPanel) so it can open
+// RuntimeMemoryModal. MemoryModal is a thin shell around
+// MemoryPreview; the row-click semantics belong to the host.
+const emit = defineEmits<{
+  manage: [id: number];
+}>();
 </script>
 
 <template>
@@ -53,6 +61,7 @@ const projectsStore = useProjectsStore();
           <MemoryPreview
             kind="project"
             :project-id="projectsStore.currentProjectId"
+            @manage="emit('manage', $event)"
           />
         </div>
       </DialogContent>

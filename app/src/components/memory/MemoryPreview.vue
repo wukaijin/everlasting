@@ -161,6 +161,20 @@ const headerHint = computed<string>(() => {
 // UUID `memoryId` — see `store.deleteMemory` for the resolution.
 const pendingDeleteId = ref<number | null>(null);
 
+// 07-06 (am-observability-panel B2/R3): row-click emits `manage`
+// with the row's SQLite auto-id; the host decides which modal to
+// open (ChatPanel's MemoryModal opens RuntimeMemoryModal; the
+// Settings entry ignores the event). Bubbles up rather than
+// hard-binding a modal here so MemoryPreview stays reusable across
+// the two mount contexts.
+const emit = defineEmits<{
+  manage: [id: number];
+}>();
+
+function onRowClick(mem: AutonomousMemory) {
+  emit("manage", mem.id);
+}
+
 function onDeleteClick(id: number) {
   pendingDeleteId.value = id;
 }
@@ -379,6 +393,12 @@ function formatTimestamp(rfc3339: string): string {
           v-for="mem in store.runtimeMemories"
           :key="mem.id"
           class="runtime-memory"
+          :class="{ 'runtime-memory--clickable': true }"
+          role="button"
+          tabindex="0"
+          @click="onRowClick(mem)"
+          @keydown.enter.prevent="onRowClick(mem)"
+          @keydown.space.prevent="onRowClick(mem)"
         >
           <div class="runtime-memory__main">
             <div class="runtime-memory__head">
@@ -401,11 +421,38 @@ function formatTimestamp(rfc3339: string): string {
               >
                 {{ statusBadgeText(mem.status) }}
               </span>
+              <!-- 07-06 (am-observability-panel B2/R4): provenance
+                   marker — the row was last touched by a human via
+                   `update_autonomous_memory` (vs. agent-written).
+                   Only rendered when true. -->
+              <span
+                v-if="mem.editedByUser"
+                class="runtime-memory__badge runtime-memory__badge--edited"
+                title="此记忆由人工编辑过"
+              >
+                人工编辑
+              </span>
             </div>
             <p class="runtime-memory__content">{{ contentPreview(mem) }}</p>
             <div class="runtime-memory__meta">
               <span class="runtime-memory__timestamp">
                 {{ formatTimestamp(mem.createdAt) }}
+              </span>
+              <!-- 07-06 (am-observability-panel B2/AC1): recall
+                   stats — hit count + last-used timestamp. Only
+                   rendered when the memory has been recalled at
+                   least once (hitCount > 0). Zero-hit memories
+                   (never recalled) omit the chip to avoid noise. -->
+              <span
+                v-if="mem.hitCount > 0"
+                class="runtime-memory__stat"
+                title="召回次数 / 上次召回时间"
+              >
+                <Icon name="refresh" :size="11" />
+                {{ mem.hitCount }} 次
+                <template v-if="mem.lastUsedAt">
+                  · {{ formatTimestamp(mem.lastUsedAt) }}
+                </template>
               </span>
               <span
                 v-for="tag in parseTags(mem.tags)"
@@ -421,7 +468,7 @@ function formatTimestamp(rfc3339: string): string {
             class="runtime-memory__delete"
             aria-label="删除记忆"
             title="删除记忆"
-            @click="onDeleteClick(mem.id)"
+            @click.stop="onDeleteClick(mem.id)"
           >
             <Icon name="trash" :size="12" />
           </button>
@@ -731,6 +778,15 @@ function formatTimestamp(rfc3339: string): string {
   border-color: color-mix(in srgb, var(--color-status-warn) 40%, transparent);
 }
 
+/* 07-06 (am-observability-panel B2/R4): provenance badge for
+   human-edited rows. Uses the warn hue (amber) so it's visually
+   distinct from the kind/scope/status badges but still muted. */
+.runtime-memory__badge--edited {
+  color: var(--color-status-warn);
+  border-color: color-mix(in srgb, var(--color-status-warn) 40%, transparent);
+  background: color-mix(in srgb, var(--color-status-warn) 8%, transparent);
+}
+
 /* scope + status badges stay neutral (the kind badge already
    carries the primary hue). */
 
@@ -759,6 +815,32 @@ function formatTimestamp(rfc3339: string): string {
   font-size: var(--text-2xs);
   font-family: var(--font-mono);
   color: var(--color-accent);
+}
+
+/* 07-06 (am-observability-panel B2/AC1): recall-stats chip (hit
+   count + last-used). Sits in the meta row alongside the timestamp;
+   mono font + accent tint to read as a "stat" rather than a tag. */
+.runtime-memory__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+  opacity: 0.85;
+}
+
+/* 07-06 (am-observability-panel B2/R3): the whole row is now a
+   button (click → manage emit → host opens RuntimeMemoryModal).
+   Pointer cursor + a focus-visible outline for keyboard users; the
+   hover lift already exists above. `focus-visible` (not `focus`)
+   avoids the outline on mouse click. */
+.runtime-memory--clickable {
+  cursor: pointer;
+}
+.runtime-memory--clickable:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .runtime-memory__delete {

@@ -38,7 +38,7 @@
 // crashing. The frontend never propagates a Rust `Err` to the panel.
 
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, reactive } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { extractErrorMessage } from "../utils/useErrorBus";
 
@@ -112,6 +112,16 @@ export interface MemoryLayerInfo {
 //   - `createdAt`    : RFC 3339 string.
 //   - `updatedAt`    : RFC 3339 string.
 //   - `demotedReason`: free-form reason set when status → demoted.
+//   - `editedByUser`: 07-06 (am-observability-panel A4). True iff the
+//                      row was last touched by a human via
+//                      `update_autonomous_memory` (vs. written by the
+//                      agent's `remember` tool / P4 auto-reflect).
+//                      The runtime row + RuntimeMemoryModal render a
+//                      "人工编辑" badge when true so the provenance is
+//                      visible at a glance. The DB column defaults to
+//                      0 (all agent-written rows), backfilled by the
+//                      A1 migration; only the `update_memory` path
+//                      sets it to 1.
 export interface AutonomousMemory {
   id: number;
   memoryId: string;
@@ -133,7 +143,63 @@ export interface AutonomousMemory {
   createdAt: string;
   updatedAt: string;
   demotedReason: string | null;
+  editedByUser: boolean;
 }
+
+// 07-06 (am-observability-panel A7/B1): a single recalled memory hit
+// piggybacked on the `chat-event` channel as `kind: "recall"` (Phase A
+// `ChatEvent::Recall { hits: Vec<RecallHit> }`). Field names are
+// snake_case on the wire — the Rust `RecallHit` struct intentionally
+// does NOT carry `#[serde(rename_all = "camelCase")]`, mirroring the
+// existing `ChatEvent` nested-payload convention (`Retrying`,
+// `FileInjections` all use snake_case fields). The runtime-memory
+// `MemoryRow` is a separate type (camelCase via its own
+// `rename_all`); do NOT conflate the two — `memory_id` here is the
+// SQLite auto-id (the same `id` field on `AutonomousMemory`), used by
+// RuntimeMemoryModal to open the matching row.
+//
+// `source` discriminates the recall path:
+//   - "fts"     : full-text search hit (semantic-ish match on the
+//                 query text — R2b `build_recall_text`).
+//   - "pitfall" : tool-input pattern match (R2b `recall_pitfall`).
+// The ChatPanel recall chip groups hits by this field (design D7).
+export interface RecallHit {
+  memory_id: number;
+  title: string;
+  kind: string;
+  source: "fts" | "pitfall";
+}
+
+// 07-06 (am-observability-panel B1/D6): the legal status-transition
+// targets for a given current status. Mirrors the Rust P5 status
+// machine matrix (`db/memories.rs` `update_status` — the closed-loop
+// backend is the hard wall; this map is the frontend's source of
+// truth for which options the RuntimeMemoryModal dropdown should
+// OFFER, but the backend re-validates and rejects any illegal move).
+// Kept in sync with the matrix by hand; if the two drift the backend
+// catches it (StatusTransitionError → InvalidRequest).
+//
+// Self-transitions (active→active etc.) are intentionally excluded —
+// the dropdown only shows *transitions*, never the current status as
+// a no-op option.
+export const LEGAL_STATUS_TRANSITIONS: Record<string, string[]> = {
+  candidate: ["active", "verified", "demoted"],
+  active: ["verified", "demoted"],
+  verified: ["demoted"],
+  demoted: ["candidate", "active", "verified"],
+};
+
+/** The set of status strings the UI treats as valid. Mirrors the
+ *  Rust `MemoryStatus` enum. Used by RuntimeMemoryModal to validate
+ *  the dropdown value before sending (defensive — the backend matrix
+ *  is the real authority). */
+export const VALID_MEMORY_STATUSES = [
+  "candidate",
+  "active",
+  "verified",
+  "demoted",
+] as const;
+export type MemoryStatus = (typeof VALID_MEMORY_STATUSES)[number];
 
 export const useMemoryStore = defineStore("memory", () => {
   // ---------------------------------------------------------------------
@@ -153,6 +219,25 @@ export const useMemoryStore = defineStore("memory", () => {
   const runtimeMemories = ref<AutonomousMemory[]>([]);
   const runtimeMemoriesLoading = ref<boolean>(false);
   const runtimeMemoriesError = ref<string | null>(null);
+
+  // ---------------------------------------------------------------------
+  // State — recall hits (07-06 am-observability-panel B1/R2b)
+  // ---------------------------------------------------------------------
+  // `recallHitsBySession` accumulates the `ChatEvent::Recall` payloads
+  // routed in by `streamController.handleChatEvent`. Per-session keyed
+  // (the chip in ChatPanel reads the current session's slice). We
+  // accumulate within a user turn — a new user message (startRequest)
+  // clears that session's slice so the chip reflects "本次召回" not
+  // "累计召回". `reactive(new Map())` per state-management.md:252-257
+  // (template-subscribed per-key Map → reactive, not shallowRef).
+  //
+  // The store — NOT streamController — owns this state
+  // (state-management.md:131-139: cross-cutting domain state belongs
+  // in the feature store; the controller only routes). The chip reads
+  // `recallHitsForSession(chatStore.currentSessionId)` (a pure-read
+  // computed — state-management.md:166-212 hard rule: getters must not
+  // mutate their tracked deps).
+  const recallHitsBySession = reactive(new Map<string, RecallHit[]>());
 
   // ---------------------------------------------------------------------
   // Fetching — instruction-file section (unchanged)
@@ -367,6 +452,160 @@ export const useMemoryStore = defineStore("memory", () => {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // 07-06 (am-observability-panel B1/R1): status transitions
+  // ---------------------------------------------------------------------
+
+  /** Transition a runtime memory's P5 status via the
+   *  `update_autonomous_memory_status` IPC. Optimistic: the local
+   *  row's `status` + `demotedReason` are patched BEFORE the IPC
+   *  resolves so the dropdown snaps; on failure the patch is rolled
+   *  back and the error lands in `runtimeMemoriesError`.
+   *
+   *  The backend's status matrix is the hard wall — this store does
+   *  NOT replicate the legality check (RuntimeMemoryModal's dropdown
+   *  only OFFERS legal targets via `LEGAL_STATUS_TRANSITIONS`, but a
+   *  race or a stale dropdown could still send an illegal move; the
+   *  backend rejects it with `StatusTransitionError` →
+   *  `InvalidRequest`). The rollback restores the pre-patch status
+   *  so the UI reflects the rejected transition.
+   *
+   *  `demotedReason` is only honored when `newStatus === "demoted"`
+   *  (mirrors the Rust matrix: only the `→ demoted` edges accept a
+   *  reason; other transitions ignore it). */
+  async function updateMemoryStatus(
+    id: number,
+    newStatus: string,
+    demotedReason: string | null = null,
+  ): Promise<boolean> {
+    const idx = runtimeMemories.value.findIndex((m) => m.id === id);
+    if (idx === -1) return false;
+    const prev = runtimeMemories.value[idx];
+    const prevStatus = prev.status;
+    const prevReason = prev.demotedReason;
+    // Optimistic patch (shallow-clone the row so Vue notices the
+    // change — the array element is a plain object, not reactive per
+    // field).
+    runtimeMemories.value[idx] = {
+      ...prev,
+      status: newStatus,
+      // Only carry the reason forward when transitioning INTO demoted;
+      // leaving demoted (or any non-demoted target) clears it.
+      demotedReason: newStatus === "demoted" ? demotedReason : null,
+    };
+    try {
+      await invoke("update_autonomous_memory_status", {
+        memoryId: prev.memoryId,
+        newStatus,
+        demotedReason: newStatus === "demoted" ? demotedReason : null,
+      });
+      runtimeMemoriesError.value = null;
+      return true;
+    } catch (e) {
+      // Rollback the optimistic patch.
+      runtimeMemories.value[idx] = {
+        ...prev,
+        status: prevStatus,
+        demotedReason: prevReason,
+      };
+      runtimeMemoriesError.value = extractErrorMessage(e);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // 07-06 (am-observability-panel B1/R4): user-initiated edit
+  // ---------------------------------------------------------------------
+
+  /** Edit a runtime memory's title + content via the
+   *  `update_autonomous_memory` IPC. Optimistic: patches
+   *  `title`/`content`/`editedByUser=true`/`updatedAt` locally before
+   *  the IPC resolves; on failure the row is rolled back from the
+   *  saved snapshot. On success the IPC returns the authoritative
+   *  post-update `MemoryRow` (with the backend's `updated_at`
+   *  timestamp), which we apply over the optimistic patch — this
+   *  avoids client/server clock drift on `updatedAt`.
+   *
+   *  The backend re-runs the same safety net as `insert_memory`
+   *  (empty / oversize / sensitive-regex / sensitive-path / temp-path
+   *  + home generalization) via the shared `validate_memory_text`
+   *  helper (A2). A rejection surfaces as `MemoryUpdateError` →
+   *  `InvalidRequest`; we roll back and store the message in
+   *  `runtimeMemoriesError`. Returns true on success. */
+  async function updateMemory(
+    id: number,
+    title: string,
+    content: string,
+  ): Promise<boolean> {
+    const idx = runtimeMemories.value.findIndex((m) => m.id === id);
+    if (idx === -1) return false;
+    const prev = runtimeMemories.value[idx];
+    // Snapshot for rollback.
+    const snapshot = { ...prev };
+    // Optimistic patch — `updatedAt` set to now() client-side as a
+    // placeholder; the IPC response carries the server's value and
+    // overwrites it below.
+    runtimeMemories.value[idx] = {
+      ...prev,
+      title,
+      content,
+      editedByUser: true,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      const updated = await invoke<AutonomousMemory>(
+        "update_autonomous_memory",
+        { memoryId: prev.memoryId, title, content },
+      );
+      // Apply the authoritative row (server's `updated_at` etc.).
+      // Preserve the `id` (the IPC echoes the DB row, whose `id`
+      // matches), but guard defensively in case the backend ever
+      // returns a re-keyed row.
+      runtimeMemories.value[idx] = { ...updated, id: prev.id };
+      runtimeMemoriesError.value = null;
+      return true;
+    } catch (e) {
+      runtimeMemories.value[idx] = snapshot;
+      runtimeMemoriesError.value = extractErrorMessage(e);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // 07-06 (am-observability-panel B1/R2b): recall-hit accumulation
+  // ---------------------------------------------------------------------
+
+  /** Accumulate recall hits for a session (called by
+   *  `streamController.handleChatEvent`'s `case "recall"` arm). We
+   *  APPEND, not replace — a single user turn can emit multiple
+   *  `recall` events (one FTS recall at turn start + N pitfall
+   *  recalls interspersed as tool calls fire). The chip renders the
+   *  union. A new user message clears the slice (`clearRecallHits`,
+   *  wired from `startRequest`). Defensive: if `hits` is empty or
+   *  malformed the slice is left untouched. */
+  function pushRecallHits(sessionId: string, hits: RecallHit[]): void {
+    if (!Array.isArray(hits) || hits.length === 0) return;
+    const prev = recallHitsBySession.get(sessionId) ?? [];
+    recallHitsBySession.set(sessionId, [...prev, ...hits]);
+  }
+
+  /** Clear a session's recall-hits slice. Called by
+   *  `streamController.startRequest` when a new user message is sent
+   *  (per-turn accumulation — the chip should show "本次召回", not a
+   *  running total across the whole conversation). */
+  function clearRecallHits(sessionId: string): void {
+    recallHitsBySession.delete(sessionId);
+  }
+
+  /** Pure-read accessor for the ChatPanel recall chip. Returns the
+   *  accumulated hits for the given session, or `[]` if none. MUST
+   *  be a pure read (state-management.md:166-212: no mutation inside
+   *  a getter that tracks the same deps it reads). */
+  function recallHitsForSession(sessionId: string | null): RecallHit[] {
+    if (!sessionId) return [];
+    return recallHitsBySession.get(sessionId) ?? [];
+  }
+
   return {
     // instruction-file state
     layers,
@@ -385,5 +624,12 @@ export const useMemoryStore = defineStore("memory", () => {
     runtimeMemoriesError,
     fetchMemories,
     deleteMemory,
+    // 07-06 (am-observability-panel B1): status + edit + recall
+    updateMemoryStatus,
+    updateMemory,
+    recallHitsBySession,
+    recallHitsForSession,
+    pushRecallHits,
+    clearRecallHits,
   };
 });

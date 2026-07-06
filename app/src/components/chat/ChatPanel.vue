@@ -40,12 +40,14 @@ import { useChatStore } from "../../stores/chat";
 import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
+import { useMemoryStore } from "../../stores/memory";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
 import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
+import RuntimeMemoryModal from "../memory/RuntimeMemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
@@ -55,6 +57,7 @@ import Icon from "../Icon.vue";
 const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const checklistStore = useChecklistStore();
+const memoryStore = useMemoryStore();
 
 const emit = defineEmits<{
   send: [text: string];
@@ -341,6 +344,54 @@ function onDeleteCancel() {
 const memoryModalOpen = ref(false);
 
 // -----------------------------------------------------------------------
+// 07-06 (am-observability-panel B4/R2b): real-time recall chip
+// -----------------------------------------------------------------------
+//
+// The agent loop emits `ChatEvent::Recall { hits }` at the FTS
+// recall site (turn start) + each pitfall-recall site (on tool
+// dispatch). `streamController.handleChatEvent` routes the hits
+// into `memoryStore.recallHitsBySession`; this chip reads the
+// current session's slice. The chip renders ABOVE MessageList
+// (MessageList has no banner slot — see chat.md; ChatPanel is the
+// designated host for cross-cutting overlays).
+//
+// The chip is collapsed by default ("🧠 本次召回 N 条"); clicking
+// expands a per-source group (fts / pitfall) of titles (design D7).
+// The slice is cleared on each new user message (startRequest), so
+// it reflects "本次召回" not a running total.
+const recallHits = computed(() =>
+  memoryStore.recallHitsForSession(chatStore.currentSessionId),
+);
+const recallExpanded = ref(false);
+const ftsHits = computed(() =>
+  recallHits.value.filter((h) => h.source === "fts"),
+);
+const pitfallHits = computed(() =>
+  recallHits.value.filter((h) => h.source === "pitfall"),
+);
+
+// 07-06 (am-observability-panel B3/R3): the RuntimeMemoryModal host
+// wiring. MemoryPreview emits `manage(id)` on row click; the
+// `onMemoryManage` handler resolves the row + opens this modal.
+// `runtimeMemoryModalOpen` gates the dialog; `managedMemoryId`
+// carries the row's SQLite auto-id (resolved to the full row via
+// computed `managedMemory`). The modal closes if the row vanishes
+// (e.g. deleted from another surface).
+const runtimeMemoryModalOpen = ref(false);
+const managedMemoryId = ref<number | null>(null);
+const managedMemory = computed(
+  () =>
+    memoryStore.runtimeMemories.find(
+      (m) => m.id === managedMemoryId.value,
+    ) ?? null,
+);
+
+function onMemoryManage(id: number) {
+  managedMemoryId.value = id;
+  runtimeMemoryModalOpen.value = true;
+}
+
+// -----------------------------------------------------------------------
 // Audit entry (C4 audit-log UI, 2026-06-14 PR2)
 // -----------------------------------------------------------------------
 //
@@ -522,6 +573,59 @@ if (typeof window !== "undefined") {
       </div>
     </header>
 
+    <!-- 07-06 (am-observability-panel B4/R2b): real-time recall
+         chip. Renders only when the current session has accumulated
+         recall hits this turn (hitCount > 0). Sits between the
+         header and the message list — a thin banner so it doesn't
+         push the conversation down. Collapsed by default; click
+         expands per-source groups (fts / pitfall) of titles.
+         Cleared on each new user message (startRequest). -->
+    <div
+      v-if="recallHits.length > 0"
+      class="chat-panel__recall"
+      :class="{ 'chat-panel__recall--expanded': recallExpanded }"
+    >
+      <button
+        type="button"
+        class="chat-panel__recall-toggle"
+        @click="recallExpanded = !recallExpanded"
+      >
+        <Icon name="brain" :size="12" />
+        本次召回 {{ recallHits.length }} 条
+        <Icon :name="recallExpanded ? 'chevron-up' : 'chevron-down'" :size="10" />
+      </button>
+      <div v-if="recallExpanded" class="chat-panel__recall-groups">
+        <div v-if="ftsHits.length > 0" class="chat-panel__recall-group">
+          <span class="chat-panel__recall-source chat-panel__recall-source--fts">
+            语义
+          </span>
+          <ul class="chat-panel__recall-list">
+            <li
+              v-for="(h, i) in ftsHits"
+              :key="`fts-${i}-${h.memory_id}`"
+              class="chat-panel__recall-item"
+            >
+              {{ h.title }}
+            </li>
+          </ul>
+        </div>
+        <div v-if="pitfallHits.length > 0" class="chat-panel__recall-group">
+          <span class="chat-panel__recall-source chat-panel__recall-source--pitfall">
+            陷阱
+          </span>
+          <ul class="chat-panel__recall-list">
+            <li
+              v-for="(h, i) in pitfallHits"
+              :key="`pitfall-${i}-${h.memory_id}`"
+              class="chat-panel__recall-item"
+            >
+              {{ h.title }}
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
     <main class="chat-panel__main">
       <!-- F4: loading state while switching sessions.
            PR-3e (2026-06-27): replaced the 0.6s rotating 20px
@@ -607,7 +711,18 @@ if (typeof window !== "undefined") {
           for context. The modal handles its own focus trap / ESC /
           outside-click close via reka-ui Dialog.
         -->
-    <MemoryModal v-model:open="memoryModalOpen" />
+    <MemoryModal v-model:open="memoryModalOpen" @manage="onMemoryManage" />
+
+    <!-- 07-06 (am-observability-panel B3): runtime-memory detail +
+         management modal. Opened when the user clicks a runtime row
+         inside MemoryModal (MemoryPreview emits `manage` → MemoryModal
+         forwards → `onMemoryManage` here resolves the row + opens).
+         Nested inside MemoryModal's Dialog portal; reka-ui 2.9.9
+         supports nested Dialogs (focus trap moves to the innermost). -->
+    <RuntimeMemoryModal
+      v-model:open="runtimeMemoryModalOpen"
+      :memory="managedMemory"
+    />
 
     <!--
           C4 audit-log modal (2026-06-14 PR2). See the script
@@ -1013,5 +1128,74 @@ if (typeof window !== "undefined") {
   gap: var(--space-1);
   color: var(--color-tool-shell);
   font-size: var(--text-xs);
+}
+
+/* 07-06 (am-observability-panel B4/R2b): real-time recall chip.
+   Thin banner between header + message list. Compact (single row
+   collapsed); expands a grouped title list on click. Uses accent
+   tint so it reads as informational, not an error. */
+.chat-panel__recall {
+  border-bottom: 1px solid var(--color-bg-border);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+  font-size: var(--text-xs);
+}
+.chat-panel__recall-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 16px;
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-family: inherit;
+}
+.chat-panel__recall-toggle:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+.chat-panel__recall-groups {
+  padding: 0 16px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-panel__recall-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.chat-panel__recall-source {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+.chat-panel__recall-source--fts {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.chat-panel__recall-source--pitfall {
+  color: var(--color-tool-error);
+  background: color-mix(in srgb, var(--color-tool-error) 12%, transparent);
+}
+.chat-panel__recall-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.chat-panel__recall-item {
+  font-size: var(--text-2xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

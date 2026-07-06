@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 import { setActivePinia, createPinia, storeToRefs } from "pinia";
 import { effectScope, nextTick, watch } from "vue";
 import { rehydrateMessages, useStreamControllerStore } from "./streamController";
+import { useMemoryStore } from "./memory";
 import { useChatStore } from "./chat";
 
 // RULE-FrontTest-001 (2026-06-25): `reloadAfterFinalize` fires
@@ -1610,4 +1611,130 @@ describe("streamController — A5+ retrying event handling", () => {
     });
     expect(last.retrying).toBeUndefined();
   });
+});
+
+// 07-06 (am-observability-panel B1/R2b): the `recall` chat-event
+// routes hits into `useMemoryStore().pushRecallHits`. Mirrors the A5+
+// retrying block above — inject the request state + message buffer,
+// then push events through the private `handleChatEvent`.
+describe("streamController — 07-06 recall event routing", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  function setupReqAndAssistant(sid: string, rid: string) {
+    const stream = useStreamControllerStore();
+    const req = {
+      requestId: rid,
+      sessionId: sid,
+      projectId: null,
+      userMsgId: "u1",
+      assistantMsgId: "a1",
+      history: [],
+      sendAt: 0,
+      firstDeltaAt: null,
+      toolStartedAt: new Map<string, number>(),
+      currentTurnIndex: -1,
+      latencyByTurn: new Map(),
+    };
+    (stream as unknown as { activeRequests: Map<string, typeof req> })
+      .activeRequests.set(rid, req);
+    stream.putMessages(
+      sid,
+      rehydrateMessages([usrTyped(0, "go"), asst(1, "", [])]),
+      false,
+    );
+    return { stream, req };
+  }
+
+  function evt(stream: unknown) {
+    return (
+      stream as {
+        handleChatEvent: (e: {
+          request_id: string;
+          kind: string;
+          hits?: unknown[];
+        }) => void;
+      }
+    ).handleChatEvent;
+  }
+
+  it("routes recall hits into useMemoryStore for the event's session", () => {
+    const sid = "recall-route-sid";
+    const rid = "recall-route-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const memory = useMemoryStore();
+    expect(memory.recallHitsForSession(sid)).toHaveLength(0);
+
+    evt(stream)({
+      request_id: rid,
+      kind: "recall",
+      hits: [
+        { memory_id: 11, title: "FTS hit", kind: "preference", source: "fts" },
+        {
+          memory_id: 12,
+          title: "Pitfall hit",
+          kind: "pitfall",
+          source: "pitfall",
+        },
+      ],
+    });
+
+    expect(memory.recallHitsForSession(sid)).toHaveLength(2);
+    expect(memory.recallHitsForSession(sid)[0]?.memory_id).toBe(11);
+  });
+
+  it("accumulates across multiple recall events in the same turn", () => {
+    const sid = "recall-accum-sid";
+    const rid = "recall-accum-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const memory = useMemoryStore();
+
+    evt(stream)({
+      request_id: rid,
+      kind: "recall",
+      hits: [{ memory_id: 1, title: "a", kind: "preference", source: "fts" }],
+    });
+    evt(stream)({
+      request_id: rid,
+      kind: "recall",
+      hits: [
+        { memory_id: 2, title: "b", kind: "pitfall", source: "pitfall" },
+      ],
+    });
+
+    expect(memory.recallHitsForSession(sid)).toHaveLength(2);
+  });
+
+  it("drops a malformed recall event missing the hits array", () => {
+    const sid = "recall-malformed-sid";
+    const rid = "recall-malformed-rid";
+    const { stream } = setupReqAndAssistant(sid, rid);
+    const memory = useMemoryStore();
+
+    // No `hits` field — handler must drop rather than push undefined.
+    evt(stream)({ request_id: rid, kind: "recall" });
+    expect(memory.recallHitsForSession(sid)).toHaveLength(0);
+  });
+
+  it("drops a recall event for an unknown request (no active request)", () => {
+    const sid = "recall-unknown-req-sid";
+    setupReqAndAssistant(sid, "real-rid");
+    const stream = useStreamControllerStore();
+    const memory = useMemoryStore();
+
+    // request_id that was never registered — handler early-returns.
+    evt(stream)({ request_id: "phantom-rid", kind: "recall", hits: [] });
+    expect(memory.recallHitsForSession(sid)).toHaveLength(0);
+  });
+
+  // NOTE: the `startRequest → clearRecallHits` wiring (design D7:
+  // a new user message clears the prior turn's recall slice) is
+  // verified by code inspection + the `clearRecallHits` unit test in
+  // memory.test.ts. An end-to-end startRequest test would require
+  // mocking Tauri's `listen` (the `start()` guard lives at module
+  // scope, not on the store instance), which this suite does not do.
+  // The single-line wiring (`useMemoryStore().clearRecallHits(sid)`
+  // in `startRequest`, right after `pinnedSessions.add`) is trivial
+  // and the action itself is unit-tested.
 });

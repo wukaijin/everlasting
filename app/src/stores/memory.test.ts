@@ -37,7 +37,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: async () => () => {},
 }));
 
-import { useMemoryStore, type AutonomousMemory } from "./memory";
+import { useMemoryStore, type AutonomousMemory, type RecallHit } from "./memory";
 
 function makeMemory(overrides: Partial<AutonomousMemory> = {}): AutonomousMemory {
   return {
@@ -61,6 +61,7 @@ function makeMemory(overrides: Partial<AutonomousMemory> = {}): AutonomousMemory
     createdAt: "2026-06-29T12:34:56.789+00:00",
     updatedAt: "2026-06-29T12:34:56.789+00:00",
     demotedReason: null,
+    editedByUser: false,
     ...overrides,
   };
 }
@@ -388,5 +389,176 @@ describe("useMemoryStore — fetchLayers clears the runtime list on project chan
     // stale USER_MEMORY). This proves the clear-on-switch contract.
     expect(store.runtimeMemories).toHaveLength(1);
     expect(store.runtimeMemories[0]?.memoryId).toBe("pid-b-1");
+  });
+});
+
+// 07-06 (am-observability-panel B1): status transitions + edits +
+// recall-hit accumulation. Mirrors the optimistic + rollback pattern
+// of the existing `deleteMemory` tests — IPC failure must leave the
+// row (or recall slice) at its pre-patch state and surface the error
+// in `runtimeMemoriesError`.
+describe("useMemoryStore — 07-06 status / edit / recall", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+  });
+
+  function makeHit(overrides: Partial<RecallHit> = {}): RecallHit {
+    return {
+      memory_id: 1,
+      title: "Pitfall hit",
+      kind: "pitfall",
+      source: "pitfall",
+      ...overrides,
+    };
+  }
+
+  // -----------------------------------------------------------------
+  // updateMemoryStatus
+  // -----------------------------------------------------------------
+
+  it("updateMemoryStatus patches the row optimistically and clears error on success", async () => {
+    const store = useMemoryStore();
+    // Seed a candidate row directly via the runtime list.
+    store.runtimeMemories = [makeMemory({ id: 5, status: "candidate" })];
+    invokeMock.mockResolvedValue(undefined);
+    const ok = await store.updateMemoryStatus(5, "active");
+    expect(ok).toBe(true);
+    expect(store.runtimeMemories[0]?.status).toBe("active");
+    expect(store.runtimeMemoriesError).toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith("update_autonomous_memory_status", {
+      memoryId: store.runtimeMemories[0]?.memoryId,
+      newStatus: "active",
+      demotedReason: null,
+    });
+  });
+
+  it("updateMemoryStatus → demoted carries the demoteReason", async () => {
+    const store = useMemoryStore();
+    store.runtimeMemories = [makeMemory({ id: 5, status: "active" })];
+    invokeMock.mockResolvedValue(undefined);
+    await store.updateMemoryStatus(5, "demoted", "stale advice");
+    expect(store.runtimeMemories[0]?.status).toBe("demoted");
+    expect(store.runtimeMemories[0]?.demotedReason).toBe("stale advice");
+    expect(invokeMock).toHaveBeenCalledWith("update_autonomous_memory_status", {
+      memoryId: store.runtimeMemories[0]?.memoryId,
+      newStatus: "demoted",
+      demotedReason: "stale advice",
+    });
+  });
+
+  it("updateMemoryStatus rolls back on IPC failure (illegal transition / network)", async () => {
+    const store = useMemoryStore();
+    store.runtimeMemories = [
+      makeMemory({ id: 5, status: "active", demotedReason: null }),
+    ];
+    invokeMock.mockRejectedValue(new Error("illegal transition"));
+    const ok = await store.updateMemoryStatus(5, "candidate");
+    expect(ok).toBe(false);
+    // Rolled back to pre-patch status.
+    expect(store.runtimeMemories[0]?.status).toBe("active");
+    expect(store.runtimeMemoriesError).toContain("illegal transition");
+  });
+
+  it("updateMemoryStatus on an unknown id is a no-op (returns false)", async () => {
+    const store = useMemoryStore();
+    store.runtimeMemories = [makeMemory({ id: 5 })];
+    const ok = await store.updateMemoryStatus(999, "active");
+    expect(ok).toBe(false);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------
+  // updateMemory
+  // -----------------------------------------------------------------
+
+  it("updateMemory patches title/content/editedByUser optimistically and applies the IPC response on success", async () => {
+    const store = useMemoryStore();
+    store.runtimeMemories = [
+      makeMemory({ id: 5, title: "Old", content: "old body", editedByUser: false }),
+    ];
+    // The IPC returns the authoritative post-update row.
+    const authoritative = makeMemory({
+      id: 5,
+      title: "New",
+      content: "new body",
+      editedByUser: true,
+      updatedAt: "2026-07-06T10:00:00.000+00:00",
+    });
+    invokeMock.mockResolvedValue(authoritative);
+    const ok = await store.updateMemory(5, "New", "new body");
+    expect(ok).toBe(true);
+    expect(store.runtimeMemories[0]?.title).toBe("New");
+    expect(store.runtimeMemories[0]?.content).toBe("new body");
+    expect(store.runtimeMemories[0]?.editedByUser).toBe(true);
+    // The server's `updated_at` wins over the optimistic placeholder.
+    expect(store.runtimeMemories[0]?.updatedAt).toBe(
+      "2026-07-06T10:00:00.000+00:00",
+    );
+    expect(store.runtimeMemoriesError).toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith("update_autonomous_memory", {
+      memoryId: store.runtimeMemories[0]?.memoryId,
+      title: "New",
+      content: "new body",
+    });
+  });
+
+  it("updateMemory rolls back on IPC failure (sensitive content rejected)", async () => {
+    const store = useMemoryStore();
+    const original = makeMemory({
+      id: 5,
+      title: "Old",
+      content: "old body",
+      editedByUser: false,
+    });
+    store.runtimeMemories = [{ ...original }];
+    invokeMock.mockRejectedValue(new Error("sensitive pattern detected"));
+    const ok = await store.updateMemory(5, "New", "SECRET_KEY=...");
+    expect(ok).toBe(false);
+    // Fully rolled back to the snapshot.
+    expect(store.runtimeMemories[0]?.title).toBe("Old");
+    expect(store.runtimeMemories[0]?.content).toBe("old body");
+    expect(store.runtimeMemories[0]?.editedByUser).toBe(false);
+    expect(store.runtimeMemoriesError).toContain("sensitive pattern");
+  });
+
+  // -----------------------------------------------------------------
+  // recall-hit accumulation
+  // -----------------------------------------------------------------
+
+  it("pushRecallHits accumulates per-session (append, not replace)", () => {
+    const store = useMemoryStore();
+    store.pushRecallHits("sess-1", [makeHit({ memory_id: 1 })]);
+    store.pushRecallHits("sess-1", [makeHit({ memory_id: 2 })]);
+    expect(store.recallHitsForSession("sess-1")).toHaveLength(2);
+  });
+
+  it("pushRecallHits isolates sessions (sess-1 ≠ sess-2)", () => {
+    const store = useMemoryStore();
+    store.pushRecallHits("sess-1", [makeHit({ memory_id: 1 })]);
+    store.pushRecallHits("sess-2", [makeHit({ memory_id: 2 })]);
+    expect(store.recallHitsForSession("sess-1")).toHaveLength(1);
+    expect(store.recallHitsForSession("sess-2")).toHaveLength(1);
+  });
+
+  it("pushRecallHits ignores empty / malformed payloads (defensive)", () => {
+    const store = useMemoryStore();
+    store.pushRecallHits("sess-1", []);
+    // @ts-expect-error — defensive against a future wire change
+    store.pushRecallHits("sess-1", undefined);
+    expect(store.recallHitsForSession("sess-1")).toHaveLength(0);
+  });
+
+  it("clearRecallHits clears the session's slice", () => {
+    const store = useMemoryStore();
+    store.pushRecallHits("sess-1", [makeHit({ memory_id: 1 })]);
+    store.clearRecallHits("sess-1");
+    expect(store.recallHitsForSession("sess-1")).toHaveLength(0);
+  });
+
+  it("recallHitsForSession is a pure read (returns [] for null / unknown)", () => {
+    const store = useMemoryStore();
+    expect(store.recallHitsForSession(null)).toEqual([]);
+    expect(store.recallHitsForSession("never-seen")).toEqual([]);
   });
 });
