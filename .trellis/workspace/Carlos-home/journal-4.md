@@ -69,3 +69,37 @@ V2 第三档 E1 落地,首次上 CI。双 job 并行。CI 首跑暴露 2 个预�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 90: C2+ 循环检测主动干预(loop_hit_count + QuestionStore 复用 + 三分支)
+
+**Date**: 2026-07-06
+**Task**: C2+ 循环检测主动干预(loop_hit_count + QuestionStore 复用 + 三分支)
+**Branch**: `main`
+
+### Summary
+
+C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 loop,MAX_TURNS=200 是唯一硬兜底,死循环烧满 200 turn 敞口未堵。补中间主动层:per-run-local loop_hit_count 连续 3 轮 detect 命中 → chat_loop 顶层(harness-driven,非 LLM tool 路径)复用 QuestionStore + emit_tool_question + 前端 AskUserQuestionCard 询问是否终止。Hard/Soft 共用 N=3 单一计数器,verdict None 一轮即归零。select! 三分支:终止→Done{loop_terminated}/继续→count 清零+增强 hint/cancel→Done{cancelled}。worker effective_is_worker gate 直接 break(dispatch_result caller-append 告知父,不写 audit)。新增 AuditKind::LoopIntervention 无 migration(payload hit_count/verdict_kind/action/run_id)。AlreadyPending 降级走原 hint。run_chat_loop 28 参签名零改动。3 偏差(run_id 占位 future-proof / dispatch caller-append 不加 format 第 5 参 / worker 复用 SubagentStatus::Incomplete 避免 migration)trellis-check 评估可接受+代码注释。1282 后端 cargo test --lib + 728 前端 pnpm test + vue-tsc 0 err + fmt 干净。loop_detection.rs 零改动(31 单测)。trellis-check 零 finding 一次过关。完整 PRD 走 archive/2026-07/07-05-c2-loop-active-intervention/。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `943d951` | (see git log) |
+| `212aa1b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
