@@ -47,6 +47,34 @@
 
 **结果**:CI 双 job 全绿(rust ~5min / frontend ~2min);drain race 修复 10/10 单跑 + 3x 全量 1274/1274 稳定;mtime fence 3x 全量稳定。clippy gate 记 follow-up(ROADMAP §2)。
 
+### 2026-07-06 — C2+ 循环检测主动干预(per-run-local count + QuestionStore 复用 + 三分支 + worker 直接 break)
+
+**Context**: C2(06-24)循环检测命中只注入软提示 hint 到 tool_result,不终止 loop,MAX_TURNS=200 是唯一硬兜底。死循环(反复 `read_file` 同路径 / `edit_file` 同一失败 `old_string` / 近似 `shell`)烧满 200 turn 的敞口未堵。C2+ 补中间主动层:软提示连续失效 N 次后,harness 主动询问用户是否终止。
+
+**决策**:
+
+1. **N=3 + Hard/Soft 共用单一计数器**:不区别对待。Hard 零假阳(~5 连 byte-identical 才问),Soft 同 3 轮。两套计数器增状态机复杂度无收益。
+2. **per-`run_chat_loop`-local `loop_hit_count`**:跟 `loop_window` 同生命周期,跨 turn 累积,worker 复用 `run_chat_loop` 自动继承。不落 DB(loop 是当次行为)。`verdict==None` 一轮即归零(连续性重置)。
+3. **复用 QuestionStore 全链而非新 tool**:chat_loop 顶层 caller(harness-driven,非 LLM tool 路径)— `register(session_id, "loop_intervention_<turn>", payload)` + `emit_tool_question` + `resolve_tool_question` IPC + 前端 `<AskUserQuestionCard>`。否决「合成 ask_user_question tool_use」(伪造 LLM 没发起的 tool_use 语义混乱)+ 否决「新独立 oneshot+event」(违反 DRY,前端要新组件)。chat_loop 已有 `question_store` + `sink` 参数(**28 参签名零改动** — 关键可行性确认,PR2 前摸清 `chat_loop.rs:392`)。
+4. **三分支 select!**:`biased` 第一位 `token.cancelled()`(用户 Stop 期间不悬挂)。终止 → `Done{stop_reason="loop_terminated"}`(区分 cancel)/ 继续 → count 清零 + 增强 hint 注入 result message / cancel → `Done{cancelled}`。`QuestionResponse::Cancelled`(用户跳过 card)归「终止」分支(安全默认停止)。
+5. **worker `effective_is_worker` gate 直接 break**:不弹 banner(避免占父 QuestionStore slot + 避免打扰用户),`dispatch_result` caller-append `[loop terminated: ...]` 告知父 agent。worker 烧钱风险本就小(独立 token 预算 + 更短 max_turns)。否决「WorkerAskBanner round-trip」。
+6. **`AuditKind::LoopIntervention` 无 migration**:enum 变体 + `as_str()` 走现成 `kind` TEXT 列 + `record_loop_intervention_audit`(仿 `record_message_resend_audit`,best-effort 非事务内)。payload `{hit_count, verdict_kind, action, run_id}`。C2+ 是用户可见行为(比 C2 被动 hint 高一级),应落审计 + 为 E2 trace viewer 铺路。worker 路径不写 audit(R5,worker 无独立审计 surface)。
+7. **`AlreadyPending` 降级**:LLM 并发 `ask_user_question` 占 slot 时,`register` 返 `AlreadyPending` → C2+ 本轮跳过(走原 hint,不阻塞),下轮再试。QuestionStore 单 pending gate 天然消解。
+
+**3 个实现偏差(trellis-check 评估「可接受」+ 有代码注释)**:
+- `run_id: Option<&str>` 第 4 字段(design 原 3 字段):future-proofing,主 loop 传 None,worker 未来 audit surface 传 Some。additive,不违反 R4 三字段契约。
+- dispatch caller-append(不加 `format_dispatch_result_with_model` 第 5 参):通过 sink `was_loop_terminated: AtomicBool`(同 `was_cancelled` 模式)在 `run_subagent` 追加,跟 `worker_changes_summary` 同款 tail-append。format 函数签名稳定。
+- worker 路由复用 `SubagentStatus::Incomplete`(不加 `LoopTerminated` 变体):避免 DB CHECK 约束 + migration + 前端 drawer 状态胶囊波及。`[loop terminated: ...]` tool_result 行已让父 LLM 看到终止,专门 DB 列是 over-engineering。符合 R5。
+
+**Consequences**:
+- agent 死循环时(~5 连相同 call),用户在第 3 次 detect 命中拿到显式终止入口,不再被动烧满 200 turn 或手动 Stop。
+- C2 原 hint 路径不变(loop_hit_count < 3 时走原 `loop_hint`);`ask_user_question` LLM tool 路径不变;`loop_detection.rs` 零改动(31 单测)。
+- worker 死循环自动终止 + 告知父,父 agent 决策重试/换路径/接受。
+- `Done.stop_reason` 三态:`loop_terminated` / `cancelled` / `end_turn`,前端 `WorkerTextTimeline.vue` 当 opaque 字符串渲染,无新 case。
+- `tests_agent_loop::agent_loop_max_turns_emits_done_marker` 加「继续」resolver 循环(200 连相同 list_dir 现在第 3 轮触发 C2+ 阻塞,这正是 C2+ 设计目的)。
+
+**关联**: PRD `.trellis/tasks/07-05-c2-loop-active-intervention/`(prd + design + implement)+ spec [tool-contract "C2+ loop intervention"](../.trellis/spec/backend/tool-contract.md);1282 后端(`cargo test --lib`)+ 728 前端(`pnpm test`)+ vue-tsc 0 err;clippy gate 受预存 rustc 1.82 vs deps 1.85+ 环境阻塞(E1 follow-up,非 C2+ 引入)。
+
 ### 2026-07-05 — A5+ LLM 网络健壮性(retry_open wrapper + Full Jitter + 首字节前重试 + headers 字段扩展)
 
 **Context**: A5(07-02)错误契约落地 5 类 LlmError 分类,但 provider 层无重试 — 单次 503 / 429 / 网络抖动就让整轮 turn 失败,长会话(多 Provider 中转 + 国内网络)脆。DESIGN §5.1 风险表原列"LLM 流式 token 断连 → 实现重连,断点续传用 message ID"作退路,但调研(`docs/research/llm-network-resilience-survey.md` §5.4)证实 SSE 协议无 resumption,message ID 续传不可行,只能整请求重发。
