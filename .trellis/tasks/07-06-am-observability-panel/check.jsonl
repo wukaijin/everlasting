@@ -1,0 +1,15 @@
+{"file": ".trellis/tasks/07-06-am-observability-panel/prd.md", "reason": "R1-R5 需求 + 8 个 AC(AC1 hitCount chip / AC2 modal 全文统计 / AC3 状态转换下拉 / AC4 IPC 转换 roundtrip + 非法报错 / AC5 编辑走安全网 + provenance 标记 / AC6 实时 recall event / AC7 worker sink 隔离 / AC8 回归 P3/P4/P5)check agent 验收基线。"}
+{"file": ".trellis/tasks/07-06-am-observability-panel/design.md", "reason": "D1-D7 技术决策(D1 edited_by_user 新列 / D2 validate_memory_text 提取 / D3 update_status IPC 暴露 / D4 复用 chat-event channel + Recall 变体 / D5 RuntimeMemoryModal 新建 / D6 状态转换矩阵驱动下拉 / D7 实时召回 chip 形态)验证实施一致性 + 边界(不动 P3/P4/P5 / worker sink 天然隔离)。"}
+{"file": ".trellis/tasks/07-06-am-observability-panel/implement.md", "reason": "Phase A 后端(A1-A11) + Phase B 前端(B1-B5) + Phase C 收尾(C1-C3)ordered checklist + 11+5 类测试清单 + validation commands(cargo test --lib / pnpm test / pnpm build / cargo fmt)+ 风险点 + 回滚点。"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "验证 Recall 事件 emit 不污染 P3/P4/P5 自动闭环 + bump_hit_count 仍 fire-and-forget + StatusTransitionError 矩阵严格不放松 + 卫生 job 不被新 IPC 误触。"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "验证 ChatEvent Recall 变体序列化 snake_case + 不参与 Anthropic request 协议(单向 chat-event emit)+ 与 Retrying 变体同 emit_chat_event 路径(emit_retrying 先例)。"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验证 3 处 emit 位置不影响 chat_loop 主循环 + sink 隔离在 worker 路径(SubagentBufferSink 不 forward chat-event)+ per-event loop 顺序不变。"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验证 recall_pitfall 扩展返伴随 rows 不污染 PitfallRecall enum 变体(只加伴随返回)+ SoftBlock 行为不变 + already_blocked D1 防循环不破坏。"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验证 edited_by_user migration 走 add_column_if_missing helper(PRAGMA table_info)+ 不破坏旧行(默认 0)+ FK / 索引约定不漏。"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "验证 2 新 IPC 命名(update_autonomous_memory_status / update_autonomous_memory)与现有 command 一致 + AppCommandError 映射合法。"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 MemoryUpdateError 复用 MemoryWriteError 变体 + NotFound 路径 + tracing::warn! 模式 + 边界 thiserror vs anyhow 区分。"}
+{"file": ".trellis/spec/frontend/memory-ui.md", "reason": "验证 MemoryPreview runtime section 扩展 + 新 RuntimeMemoryModal 与 MemoryModal 视觉一致(共享样式 token)+ stores/memory.ts actions 一致。"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "验证 RuntimeMemoryModal 用 reka-ui Dialog 正确包 + Teleport + Esc 关闭 + 视觉 token 复用。"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "验证 lastRecallHits 生命周期(per-turn 累积 + 新 user message 清空)+ listener 注册在 streamController.ts:1578 + optimistic patch + 错误回滚。"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "验证实时召回 chip 渲染在 ChatPanel / MessageList 顶部 + 按 source 分组(FTS / pitfall)不与现有 chip 冲突。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 IPC wire shape 跨前后端一致 + 错误显示 + audit 边界(Recall event 不入 audit,与 Retrying event 同)。"}

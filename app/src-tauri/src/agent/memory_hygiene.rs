@@ -441,6 +441,7 @@ mod tests {
             created_at: "2026-06-29T00:00:00+00:00".into(),
             updated_at: "2026-06-29T00:00:00+00:00".into(),
             demoted_reason: None,
+            edited_by_user: false,
         }
     }
 

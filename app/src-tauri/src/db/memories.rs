@@ -207,6 +207,14 @@ impl MemoryStatus {
 /// wire exposes them as the raw JSON string (P2's frontend parses
 /// them). The CRUD layer round-trips them verbatim — no schema
 /// validation beyond "valid JSON" (P1 scope).
+///
+/// `edited_by_user` (07-06, am-observability-panel D1) is a
+/// provenance marker the management modal renders as a chip —
+/// `true` means the user has manually edited title/content via
+/// `update_memory` (R4), distinguishing from agent-written
+/// memories (P2 `remember` tool / P4 `reflect_to_pitfall`).
+/// Default `false` for all existing rows (the migration is
+/// `BOOLEAN NOT NULL DEFAULT 0`).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -231,6 +239,8 @@ pub struct MemoryRow {
     pub created_at: String,
     pub updated_at: String,
     pub demoted_reason: Option<String>,
+    #[serde(default)]
+    pub edited_by_user: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +334,35 @@ pub enum MemoryInsertError {
     Db(#[from] sqlx::Error),
 }
 
+/// 07-06 (am-observability-panel D2): write-safety-net error for
+/// [`update_memory`]. Re-uses the same validation as
+/// [`MemoryInsertError`] (the safety net is a single source of
+/// truth — both writers go through [`validate_memory_text`]) +
+/// adds a `NotFound` variant when the target `memory_id` doesn't
+/// exist (the frontend should surface a clean "row vanished"
+/// error, not a generic DB error).
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryUpdateError {
+    #[error("title is empty")]
+    EmptyTitle,
+    #[error("content is empty")]
+    EmptyContent,
+    #[error("title length {0} exceeds {MAX_TITLE_LEN}")]
+    TitleTooLong(usize),
+    #[error("content length {0} exceeds {MAX_CONTENT_LEN}")]
+    ContentTooLong(usize),
+    #[error("content matches sensitive pattern (api_key/secret/password/token/bearer)")]
+    SensitiveContent,
+    #[error("content references sensitive path component: {0}")]
+    SensitivePath(String),
+    #[error("content references temporary path: {0}")]
+    TemporaryPath(String),
+    #[error("memory {0} not found")]
+    NotFound(String),
+    #[error("DB error: {0}")]
+    Db(#[from] sqlx::Error),
+}
+
 /// Generalize a `/home/<user>/...` absolute path to `~/...` so the
 /// stored memory doesn't leak the local username. Only applies to
 /// the `content` / `title` fields (the user-visible experience text);
@@ -397,41 +436,68 @@ fn find_temporary_path(text: &str) -> Option<&'static str> {
 /// break the match). They ARE checked for sensitive-path
 /// components (`/home/user/.ssh` in path_globs is still rejected).
 fn apply_safety_net(input: &MemoryInput) -> Result<(String, String), MemoryInsertError> {
+    let (title, content) = validate_memory_text(
+        &input.title,
+        &input.content,
+        input.command_pattern.as_deref(),
+        input.path_globs.as_deref(),
+    )?;
+    Ok((title, content))
+}
+
+/// Write-safety-net validator (07-06, am-observability-panel D2).
+/// Single source of truth for the title / content / path-globs
+/// write rules — shared by `insert_memory` (P1/P2 write path) and
+/// `update_memory` (R4 user-edit path). Keeps the safety net from
+/// drifting between the two entry points.
+///
+/// Returns `Ok((generalized_title, generalized_content))` on
+/// success, or the first rejection encountered. Path generalization
+/// (`/home/<user>/` → `~/`) is applied to `title` + `content` on
+/// the success path so the stored memory is username-agnostic.
+///
+/// `command_pattern` and `path_globs` are optional structured
+/// fields — pass `None` for the `update_memory` path (no structured
+/// field edits in R4; title + content are the only editable text).
+pub fn validate_memory_text(
+    title: &str,
+    content: &str,
+    command_pattern: Option<&str>,
+    path_globs: Option<&str>,
+) -> Result<(String, String), MemoryInsertError> {
     // 1. Empty-value rejection (B1/2.2).
-    let title_trimmed = input.title.trim();
+    let title_trimmed = title.trim();
     if title_trimmed.is_empty() {
         return Err(MemoryInsertError::EmptyTitle);
     }
-    let content_trimmed = input.content.trim();
+    let content_trimmed = content.trim();
     if content_trimmed.is_empty() {
         return Err(MemoryInsertError::EmptyContent);
     }
 
     // 2. Length caps (B1) — DB CHECK is the backstop; reject early
     //    so the error message is actionable.
-    if input.title.chars().count() > MAX_TITLE_LEN {
-        return Err(MemoryInsertError::TitleTooLong(input.title.chars().count()));
+    if title.chars().count() > MAX_TITLE_LEN {
+        return Err(MemoryInsertError::TitleTooLong(title.chars().count()));
     }
-    if input.content.chars().count() > MAX_CONTENT_LEN {
-        return Err(MemoryInsertError::ContentTooLong(
-            input.content.chars().count(),
-        ));
+    if content.chars().count() > MAX_CONTENT_LEN {
+        return Err(MemoryInsertError::ContentTooLong(content.chars().count()));
     }
 
     // 3. Sensitive-content regex (spike-005 §4). Anchored on
     //    title + content (the free-form text the LLM produces).
     let sensitive_re = regex::Regex::new(SENSITIVE_PATTERN).expect("sensitive pattern compiles");
-    if sensitive_re.is_match(&input.title) || sensitive_re.is_match(&input.content) {
+    if sensitive_re.is_match(title) || sensitive_re.is_match(content) {
         return Err(MemoryInsertError::SensitiveContent);
     }
 
     // 4. Sensitive-path deny-list (2.3). Check every path-like
     //    field; reject on the first hit.
     for field in [
-        &input.title,
-        &input.content,
-        input.command_pattern.as_deref().unwrap_or(""),
-        input.path_globs.as_deref().unwrap_or(""),
+        title,
+        content,
+        command_pattern.unwrap_or(""),
+        path_globs.unwrap_or(""),
     ] {
         if let Some(deny) = find_sensitive_path(field) {
             return Err(MemoryInsertError::SensitivePath(deny.to_string()));
@@ -440,10 +506,10 @@ fn apply_safety_net(input: &MemoryInput) -> Result<(String, String), MemoryInser
 
     // 5. Temporary-path deny-list.
     for field in [
-        &input.title,
-        &input.content,
-        input.command_pattern.as_deref().unwrap_or(""),
-        input.path_globs.as_deref().unwrap_or(""),
+        title,
+        content,
+        command_pattern.unwrap_or(""),
+        path_globs.unwrap_or(""),
     ] {
         if let Some(prefix) = find_temporary_path(field) {
             return Err(MemoryInsertError::TemporaryPath(prefix.to_string()));
@@ -453,8 +519,8 @@ fn apply_safety_net(input: &MemoryInput) -> Result<(String, String), MemoryInser
     // 6. Path generalization (`/home/<user>/` → `~/`). Applied
     //    AFTER the deny-list checks (a path under `/home/<user>/.ssh`
     //    is rejected by step 4 before reaching here).
-    let title = generalize_home_path(&input.title);
-    let content = generalize_home_path(&input.content);
+    let title = generalize_home_path(title);
+    let content = generalize_home_path(content);
 
     Ok((title, content))
 }
@@ -516,13 +582,17 @@ pub async fn insert_memory(
 
     let memory_id = Uuid::now_v7().to_string();
     let now = Utc::now().to_rfc3339();
+    // `edited_by_user` defaults to 0 (false) for agent-written
+    // memories; only `update_memory` flips it to 1 (the user-edit
+    // trail per D1).
     sqlx::query(
         r#"
         INSERT INTO autonomous_memories
         (memory_id, scope, project_id, kind, status, title, content, tags,
          tool_name, command_pattern, path_globs, source_session_id, source_ref,
-         confidence, hit_count, last_used_at, created_at, updated_at, demoted_reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.5, 0, NULL, ?, ?, NULL)
+         confidence, hit_count, last_used_at, created_at, updated_at, demoted_reason,
+         edited_by_user)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.5, 0, NULL, ?, ?, NULL, 0)
         "#,
     )
     .bind(&memory_id)
@@ -594,7 +664,7 @@ pub async fn get_memory_by_id(
         SELECT id, memory_id, scope, project_id, kind, status, title, content,
                tags, tool_name, command_pattern, path_globs, source_session_id,
                source_ref, confidence, hit_count, last_used_at, created_at,
-               updated_at, demoted_reason
+               updated_at, demoted_reason, edited_by_user
         FROM autonomous_memories
         WHERE memory_id = ?
         "#,
@@ -638,7 +708,7 @@ pub async fn list_memories(
                 SELECT id, memory_id, scope, project_id, kind, status, title, content,
                        tags, tool_name, command_pattern, path_globs, source_session_id,
                        source_ref, confidence, hit_count, last_used_at, created_at,
-                       updated_at, demoted_reason
+                       updated_at, demoted_reason, edited_by_user
                 FROM autonomous_memories
                 WHERE scope = 'user'
                 ORDER BY created_at DESC
@@ -653,7 +723,7 @@ pub async fn list_memories(
                 SELECT id, memory_id, scope, project_id, kind, status, title, content,
                        tags, tool_name, command_pattern, path_globs, source_session_id,
                        source_ref, confidence, hit_count, last_used_at, created_at,
-                       updated_at, demoted_reason
+                       updated_at, demoted_reason, edited_by_user
                 FROM autonomous_memories
                 WHERE scope = 'project' AND project_id = ?
                 ORDER BY created_at DESC
@@ -669,7 +739,7 @@ pub async fn list_memories(
                 SELECT id, memory_id, scope, project_id, kind, status, title, content,
                        tags, tool_name, command_pattern, path_globs, source_session_id,
                        source_ref, confidence, hit_count, last_used_at, created_at,
-                       updated_at, demoted_reason
+                       updated_at, demoted_reason, edited_by_user
                 FROM autonomous_memories
                 ORDER BY created_at DESC
                 "#,
@@ -825,7 +895,7 @@ pub async fn search_memories_fts(
                    m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                    m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                    m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                   m.demoted_reason
+                   m.demoted_reason, m.edited_by_user
             FROM autonomous_memories_fts f
             JOIN autonomous_memories m ON m.id = f.rowid
             WHERE autonomous_memories_fts MATCH ?
@@ -849,7 +919,7 @@ pub async fn search_memories_fts(
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                        m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                       m.demoted_reason
+                       m.demoted_reason, m.edited_by_user
                 FROM autonomous_memories_fts f
                 JOIN autonomous_memories m ON m.id = f.rowid
                 WHERE autonomous_memories_fts MATCH ?
@@ -875,7 +945,7 @@ pub async fn search_memories_fts(
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                        m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                       m.demoted_reason
+                       m.demoted_reason, m.edited_by_user
                 FROM autonomous_memories_fts f
                 JOIN autonomous_memories m ON m.id = f.rowid
                 WHERE autonomous_memories_fts MATCH ?
@@ -986,7 +1056,7 @@ pub async fn search_memories_fts_recall(
                    m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                    m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                    m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                   m.demoted_reason
+                   m.demoted_reason, m.edited_by_user
             FROM autonomous_memories_fts f
             JOIN autonomous_memories m ON m.id = f.rowid
             WHERE autonomous_memories_fts MATCH ?
@@ -1009,7 +1079,7 @@ pub async fn search_memories_fts_recall(
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                        m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                       m.demoted_reason
+                       m.demoted_reason, m.edited_by_user
                 FROM autonomous_memories_fts f
                 JOIN autonomous_memories m ON m.id = f.rowid
                 WHERE autonomous_memories_fts MATCH ?
@@ -1034,7 +1104,7 @@ pub async fn search_memories_fts_recall(
                        m.title, m.content, m.tags, m.tool_name, m.command_pattern,
                        m.path_globs, m.source_session_id, m.source_ref, m.confidence,
                        m.hit_count, m.last_used_at, m.created_at, m.updated_at,
-                       m.demoted_reason
+                       m.demoted_reason, m.edited_by_user
                 FROM autonomous_memories_fts f
                 JOIN autonomous_memories m ON m.id = f.rowid
                 WHERE autonomous_memories_fts MATCH ?
@@ -1094,7 +1164,7 @@ pub async fn find_pitfalls_by_trigger(
         SELECT id, memory_id, scope, project_id, kind, status, title, content,
                tags, tool_name, command_pattern, path_globs, source_session_id,
                source_ref, confidence, hit_count, last_used_at, created_at,
-               updated_at, demoted_reason
+               updated_at, demoted_reason, edited_by_user
         FROM autonomous_memories
         WHERE tool_name = ?
           AND kind = 'pitfall'
@@ -1171,7 +1241,7 @@ pub async fn find_pitfalls_by_trigger_all_status(
         SELECT id, memory_id, scope, project_id, kind, status, title, content,
                tags, tool_name, command_pattern, path_globs, source_session_id,
                source_ref, confidence, hit_count, last_used_at, created_at,
-               updated_at, demoted_reason
+               updated_at, demoted_reason, edited_by_user
         FROM autonomous_memories
         WHERE tool_name = ?
           AND kind = 'pitfall'
@@ -1408,7 +1478,7 @@ pub async fn promote_if_eligible(
         SELECT id, memory_id, scope, project_id, kind, status, title, content,
                tags, tool_name, command_pattern, path_globs, source_session_id,
                source_ref, confidence, hit_count, last_used_at, created_at,
-               updated_at, demoted_reason
+               updated_at, demoted_reason, edited_by_user
         FROM autonomous_memories
         WHERE memory_id = ?
         "#,
@@ -1446,6 +1516,113 @@ pub async fn promote_if_eligible(
     // Transition. Illegal (e.g. somehow already at target) is a
     // benign no-op via `update_status`'s identity transition.
     update_status(pool, memory_id, target, None).await
+}
+
+/// 07-06 (am-observability-panel R4 + A3): update an existing
+/// memory's `title` + `content`. Reuses [`validate_memory_text`] —
+/// the single source of truth for the write safety net (500-char
+/// cap + sensitive-content regex + sensitive-path deny-list +
+/// temporary-path deny-list + path generalization).
+///
+/// Side effects:
+/// - Sets `edited_by_user = 1` (the provenance marker — D1 design
+///   decision; this is the ONLY write that flips the column).
+/// - Bumps `updated_at` to `now` (the row's edit timestamp; P5
+///   state-machine reads `updated_at` for hygiene-job ordering).
+///
+/// `tool_name` / `command_pattern` / `path_globs` are NOT editable
+/// in R4 (PRD scope) — they're the pitfall's trigger key and are
+/// set at insert time. The frontend can re-insert + delete to
+/// re-set them in a future PR if needed.
+///
+/// Returns:
+/// - `Ok(MemoryRow)` — the post-update row (with the new
+///   `edited_by_user = 1` and `updated_at`).
+/// - `Err(MemoryUpdateError::NotFound)` — `memory_id` doesn't
+///   exist (frontend should surface a clean "row vanished" error).
+/// - `Err(MemoryUpdateError::EmptyTitle/EmptyContent/...)` —
+///   safety-net rejection (see [`validate_memory_text`]).
+pub async fn update_memory(
+    pool: &SqlitePool,
+    memory_id: &str,
+    title: &str,
+    content: &str,
+) -> Result<MemoryRow, MemoryUpdateError> {
+    // Step 1: run the write safety net (rejects empty / over-length /
+    // sensitive / temp-path; generalizes /home/<user>/ to ~/). Same
+    // helper as `insert_memory` — single source of truth. The
+    // mapping from `MemoryInsertError` to `MemoryUpdateError` is
+    // manual (rather than a `From` impl) so the
+    // `MemoryInsertError::ProjectScopeMissingId` /
+    // `UserScopeHasProjectId` variants are NOT reachable here (the
+    // R4 edit path only takes `title` + `content`; the
+    // `scope` / `project_id` columns are immutable in this
+    // command).
+    let (safe_title, safe_content) =
+        validate_memory_text(title, content, None, None).map_err(|e| match e {
+            MemoryInsertError::EmptyTitle => MemoryUpdateError::EmptyTitle,
+            MemoryInsertError::EmptyContent => MemoryUpdateError::EmptyContent,
+            MemoryInsertError::TitleTooLong(n) => MemoryUpdateError::TitleTooLong(n),
+            MemoryInsertError::ContentTooLong(n) => MemoryUpdateError::ContentTooLong(n),
+            MemoryInsertError::SensitiveContent => MemoryUpdateError::SensitiveContent,
+            MemoryInsertError::SensitivePath(p) => MemoryUpdateError::SensitivePath(p),
+            MemoryInsertError::TemporaryPath(p) => MemoryUpdateError::TemporaryPath(p),
+            // ProjectScope / UserScope variants are unreachable
+            // here (R4 doesn't take a scope); fold into a DB error
+            // for safety.
+            other @ MemoryInsertError::ProjectScopeMissingId
+            | other @ MemoryInsertError::UserScopeHasProjectId(_) => {
+                tracing::error!(
+                    error = %other,
+                    "update_memory: unexpected scope/project_id safety-net variant"
+                );
+                MemoryUpdateError::Db(sqlx::Error::Protocol(
+                    format!("unexpected scope variant: {}", other).into(),
+                ))
+            }
+            MemoryInsertError::Db(e) => MemoryUpdateError::Db(e),
+        })?;
+
+    // Step 2: update the row. `edited_by_user = 1` is the ONLY
+    // signature of a user-initiated edit (vs the agent's `remember`
+    // tool write or P4 reflection write, both of which leave
+    // `edited_by_user` at the default 0). `updated_at` is bumped to
+    // the moment of edit.
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE autonomous_memories
+        SET title = ?,
+            content = ?,
+            edited_by_user = 1,
+            updated_at = ?
+        WHERE memory_id = ?
+        "#,
+    )
+    .bind(&safe_title)
+    .bind(&safe_content)
+    .bind(&now)
+    .bind(memory_id)
+    .execute(pool)
+    .await?;
+
+    // Step 3: map a 0-row UPDATE to `NotFound` (defensive — the
+    // caller should not pass an unknown `memory_id`, but a race
+    // with `delete_autonomous_memory` could land here).
+    if result.rows_affected() == 0 {
+        return Err(MemoryUpdateError::NotFound(memory_id.to_string()));
+    }
+
+    // Step 4: read back the post-update row so the caller (and
+    // the IPC) gets the new `updated_at` / `edited_by_user`
+    // stamped in one round trip. Falls through the `NotFound`
+    // branch above if the row vanished between UPDATE and
+    // SELECT (single-writer SQLite makes this near-impossible,
+    // but the safety-net contract says production code never
+    // `.unwrap()`s).
+    get_memory_by_id(pool, memory_id)
+        .await?
+        .ok_or_else(|| MemoryUpdateError::NotFound(memory_id.to_string()))
 }
 
 /// Transition a memory to a new status, wrapped in a transaction.

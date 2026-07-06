@@ -36,8 +36,9 @@
 use crate::db::memories::{
     bump_hit_count, search_memories_fts_recall, MemoryRow, RecallStatusFilter,
 };
-use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
+use crate::llm::types::{ChatEvent, ChatMessage, ContentBlock, MessageContent, RecallHit, Role};
 use crate::memory::tokens::count_tokens;
+use crate::state::{ChatEventPayload, ChatEventSink};
 use sqlx::SqlitePool;
 
 /// Hard token cap on the injected recall body (PRD decision 2 /
@@ -74,7 +75,40 @@ pub fn format_memory_line(mem: &MemoryRow) -> String {
 /// Side effect: each surfaced memory's `hit_count` is bumped
 /// (best-effort; failures log `warn!` and continue — the recall
 /// return value is unaffected).
+///
+/// 07-06 (am-observability-panel D4): this is now a thin wrapper
+/// over [`build_recall_text_with_rows`] that drops the
+/// accompanying row details. The wrapper preserves the original
+/// signature so the 4 P2 unit tests (`build_recall_text_*`)
+/// continue to pass without modification. New code that needs
+/// the row details (the R2b chat-event emit) calls
+/// `build_recall_text_with_rows` directly. Production routes
+/// through the rows-aware sibling; `build_recall_text` itself is
+/// only reached from the test suite, so it carries
+/// `#[allow(dead_code)]` to silence the lib-build warning (the
+/// test consumers aren't visible to `cargo build --lib`).
+#[allow(dead_code)]
 pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str) -> Option<String> {
+    let (text, _rows) = build_recall_text_with_rows(pool, project_id, query).await?;
+    Some(text)
+}
+
+/// Sibling of [`build_recall_text`] that returns the row
+/// details alongside the formatted text. Used by the chat loop's
+/// recall-event emit site (R2b) so the frontend can show
+/// "本次召回" chip with the hit titles + memory_ids.
+///
+/// Returns `Some((text, rows))` on a hit, `None` otherwise.
+/// `rows` is the **bumped** set (post-`bump_hit_count`); the
+/// order is the same as `text`'s bullet order
+/// (`created_at DESC`, post token-budget truncation). Empty
+/// `rows` is mapped to `None` to match the wrapper's
+/// short-circuit.
+pub async fn build_recall_text_with_rows(
+    pool: &SqlitePool,
+    project_id: &str,
+    query: &str,
+) -> Option<(String, Vec<MemoryRow>)> {
     if query.trim().is_empty() {
         return None;
     }
@@ -123,6 +157,11 @@ pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str)
     // wrapper.
     const HEADER_BUDGET: u32 = 10;
     used += HEADER_BUDGET;
+    // Track which rows survived the budget cut — these are the
+    // rows we expose to the R2b chat-event emit site. Bumping
+    // hit_count is best-effort + non-blocking; a failure here
+    // doesn't invalidate the recall.
+    let mut surfaced_rows: Vec<MemoryRow> = Vec::new();
     for mem in &sorted {
         let line = format_memory_line(mem);
         let line_tokens = count_tokens(&line).await;
@@ -141,6 +180,7 @@ pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str)
             );
         }
         lines.push(line);
+        surfaced_rows.push(mem.clone());
     }
 
     if lines.is_empty() {
@@ -151,9 +191,10 @@ pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str)
         let line = format_memory_line(mem);
         let _ = bump_hit_count(pool, &mem.memory_id).await;
         lines.push(line);
+        surfaced_rows.push(mem.clone());
     }
 
-    Some(format!(
+    let text = format!(
         "<relevant-memories>\n\
          The following are your previously-remembered experiences that may be \
          relevant to the user's latest message. Treat them as EXPERIENCE hints, \
@@ -161,7 +202,39 @@ pub async fn build_recall_text(pool: &SqlitePool, project_id: &str, query: &str)
          {}\n\
          </relevant-memories>",
         lines.join("\n")
-    ))
+    );
+    Some((text, surfaced_rows))
+}
+
+/// Emit a `ChatEvent::Recall` for the FTS-recall hit set, if
+/// any. The emit goes through the chat-event channel — the
+/// worker sink (B6 `SubagentBufferSink`) does NOT forward it to
+/// the main chat IPC, so worker recalls are naturally isolated
+/// (AC7 by sink abstraction). Called from the chat loop's
+/// per-turn ⑤a stage right after the recall block is appended
+/// to the request clone.
+///
+/// `rid` is the chat-loop request id (used to wire the event to
+/// the in-flight assistant placeholder; the frontend
+/// `lastRecallHits` chip keys off the request id, not the
+/// session id, so concurrent requests don't bleed).
+pub fn emit_recall_event(sink: &dyn ChatEventSink, rid: &str, rows: &[MemoryRow], source: &str) {
+    if rows.is_empty() {
+        return;
+    }
+    let hits: Vec<RecallHit> = rows
+        .iter()
+        .map(|r| RecallHit {
+            memory_id: r.memory_id.clone(),
+            title: r.title.clone(),
+            kind: r.kind.clone(),
+            source: source.to_string(),
+        })
+        .collect();
+    sink.emit_chat_event(&ChatEventPayload {
+        request_id: rid.to_string(),
+        event: ChatEvent::Recall { hits },
+    });
 }
 
 /// Wrap the recall text as a `ContentBlock::Text` (no cache_control
@@ -268,6 +341,7 @@ mod tests {
             created_at: "2026-06-29T00:00:00Z".into(),
             updated_at: "2026-06-29T00:00:00Z".into(),
             demoted_reason: None,
+            edited_by_user: false,
         };
         let line = format_memory_line(&row);
         assert!(line.contains("[preference]"));

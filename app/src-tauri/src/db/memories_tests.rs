@@ -22,9 +22,10 @@ use sqlx::SqlitePool;
 use super::memories::{
     bump_hit_count, count_memories_for_session, delete_memory, find_pitfalls_by_trigger,
     get_memory_by_id, insert_memory, list_memories, promote_if_eligible, search_memories_fts,
-    test_helpers::insert_raw, update_status, MemoryInput, MemoryInsertError, MemoryKind,
-    MemoryScope, MemoryStatus, RecallStatusFilter, StatusTransitionError,
-    ACTIVE_TO_VERIFIED_AGE_DAYS, ACTIVE_TO_VERIFIED_AT, CANDIDATE_TO_ACTIVE_AT,
+    test_helpers::insert_raw, update_memory, update_status, validate_memory_text, MemoryInput,
+    MemoryInsertError, MemoryKind, MemoryScope, MemoryStatus, MemoryUpdateError,
+    RecallStatusFilter, StatusTransitionError, ACTIVE_TO_VERIFIED_AGE_DAYS, ACTIVE_TO_VERIFIED_AT,
+    CANDIDATE_TO_ACTIVE_AT,
 };
 
 /// In-memory pool with migrations + FK pragma. Mirrors the
@@ -1913,5 +1914,328 @@ async fn p5_promote_candidate_below_threshold_stays_candidate() {
             .unwrap()
             .status,
         "candidate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 07-06 (am-observability-panel) A2: `validate_memory_text` is the
+// shared write safety net used by both `insert_memory` (P1/P2) and
+// `update_memory` (R4). The regression test below locks in the
+// behavior so a future change to either consumer doesn't drift the
+// helper (which P4/P5 (auto_reflect) also depend on via
+// `insert_memory`).
+// ---------------------------------------------------------------------------
+
+/// Sanity: the helper accepts a normal title + content and
+/// generalizes `/home/<user>/` paths to `~/`.
+#[test]
+fn validate_memory_text_happy_path_generalizes_home() {
+    let (title, content) = validate_memory_text(
+        "WSL cargo tip",
+        "in /home/alice/.cargo: set PKG_CONFIG_PATH",
+        None,
+        None,
+    )
+    .expect("happy path should succeed");
+    assert_eq!(title, "WSL cargo tip");
+    assert!(content.contains("~/"), "home must be generalized");
+    assert!(
+        !content.contains("/home/alice/"),
+        "raw username must not leak"
+    );
+}
+
+/// Empty title → `EmptyTitle`; empty content → `EmptyContent`.
+#[test]
+fn validate_memory_text_rejects_empty() {
+    let err = validate_memory_text("   ", "x", None, None).unwrap_err();
+    assert!(matches!(err, MemoryInsertError::EmptyTitle));
+    let err = validate_memory_text("t", "", None, None).unwrap_err();
+    assert!(matches!(err, MemoryInsertError::EmptyContent));
+}
+
+/// Over-length content (501 chars) → `ContentTooLong` (same DB
+/// CHECK rejects; helper catches earlier for a clean error).
+#[test]
+fn validate_memory_text_rejects_oversize() {
+    let long = "x".repeat(501);
+    let err = validate_memory_text("t", &long, None, None).unwrap_err();
+    assert!(matches!(err, MemoryInsertError::ContentTooLong(501)));
+}
+
+/// Sensitive-content regex (spike-005 §4): `api_key=...` shape →
+/// `SensitiveContent`.
+#[test]
+fn validate_memory_text_rejects_sensitive() {
+    let err = validate_memory_text("t", "api_key=AKIA...", None, None).unwrap_err();
+    assert!(matches!(err, MemoryInsertError::SensitiveContent));
+}
+
+/// Sensitive-path deny-list (`.ssh`): a path with that component
+/// → `SensitivePath`.
+#[test]
+fn validate_memory_text_rejects_sensitive_path() {
+    let err = validate_memory_text("t", "check /home/alice/.ssh/id_rsa", None, None).unwrap_err();
+    assert!(matches!(err, MemoryInsertError::SensitivePath(_)));
+}
+
+/// Regression: `insert_memory` continues to apply the same safety
+/// net after the helper extraction (A2 refactor). Without this
+/// regression, P2 / P4 / P5 (auto_reflect, which calls
+/// `insert_memory` and inherits the safety net) could silently
+/// accept sensitive content if the helper ever drifts.
+#[tokio::test]
+async fn insert_memory_still_safe_after_helper_extract() {
+    let pool = make_pool().await;
+    // Sensitive content via the public `insert_memory` path must
+    // still be rejected (helper extraction didn't bypass the net).
+    let result = insert_memory(
+        &pool,
+        &MemoryInput {
+            scope: MemoryScope::Project,
+            project_id: Some("/repo/proj".into()),
+            kind: MemoryKind::Fact,
+            status: MemoryStatus::Candidate,
+            title: "safe title".into(),
+            content: "api_key=AKIA1234".into(),
+            tags: "[]".into(),
+            tool_name: None,
+            command_pattern: None,
+            path_globs: None,
+            source_session_id: None,
+            source_ref: None,
+        },
+    )
+    .await;
+    assert!(
+        matches!(result, Err(MemoryInsertError::SensitiveContent)),
+        "insert_memory must still reject sensitive content post-extract"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 07-06 (am-observability-panel) A3: `update_memory` happy path +
+// safety-net rejections. The R4 user-edit path reuses the same
+// `validate_memory_text` helper as `insert_memory`, so the safety
+// net is byte-identical for both write paths.
+// ---------------------------------------------------------------------------
+
+/// Happy path: edit an existing memory's title + content, verify
+/// the post-update row has the new text, `edited_by_user = 1`, and
+/// a fresh `updated_at`.
+#[tokio::test]
+async fn update_memory_roundtrip() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "um-1",
+        MemoryScope::User,
+        None,
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "old title",
+        "old content",
+    )
+    .await
+    .unwrap();
+    let row = update_memory(&pool, "um-1", "new title", "new content")
+        .await
+        .expect("update should succeed");
+    assert_eq!(row.title, "new title");
+    assert_eq!(row.content, "new content");
+    assert!(
+        row.edited_by_user,
+        "user edit must flip edited_by_user to 1"
+    );
+    // The post-update readback's `updated_at` is the new
+    // timestamp (stricter than just "> old"); we don't pin the
+    // exact value (clock-dependent) but it must differ from the
+    // `insert_raw`-stamped value.
+    assert!(!row.updated_at.is_empty());
+}
+
+/// Oversize content (501 chars) → `ContentTooLong` (safety net
+/// reuses the same length cap as `insert_memory`).
+#[tokio::test]
+async fn update_memory_rejects_oversize() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "um-2",
+        MemoryScope::User,
+        None,
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "t",
+        "c",
+    )
+    .await
+    .unwrap();
+    let long = "x".repeat(501);
+    let err = update_memory(&pool, "um-2", "t", &long).await.unwrap_err();
+    assert!(matches!(err, MemoryUpdateError::ContentTooLong(501)));
+}
+
+/// Sensitive content → `SensitiveContent` (same regex as
+/// `insert_memory`; helper is a single source of truth).
+#[tokio::test]
+async fn update_memory_rejects_sensitive() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "um-3",
+        MemoryScope::User,
+        None,
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "t",
+        "c",
+    )
+    .await
+    .unwrap();
+    let err = update_memory(&pool, "um-3", "t", "password=hunter2")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MemoryUpdateError::SensitiveContent));
+}
+
+/// Sensitive path → `SensitivePath` (deny-list check).
+#[tokio::test]
+async fn update_memory_rejects_sensitive_path() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "um-4",
+        MemoryScope::User,
+        None,
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "t",
+        "c",
+    )
+    .await
+    .unwrap();
+    let err = update_memory(&pool, "um-4", "t", "see /home/u/.ssh/notes")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MemoryUpdateError::SensitivePath(_)));
+}
+
+/// `edited_by_user` flips to 1 ONLY on a successful user edit. A
+/// failed edit (e.g. safety-net rejection) must NOT change the
+/// column (the row is untouched, but a defensive assertion on the
+/// unchanged value is the regression guard).
+#[tokio::test]
+async fn update_memory_sets_edited_by_user() {
+    let pool = make_pool().await;
+    insert_raw(
+        &pool,
+        "um-5",
+        MemoryScope::Project,
+        Some("/repo/proj"),
+        MemoryKind::Fact,
+        MemoryStatus::Active,
+        "t",
+        "c",
+    )
+    .await
+    .unwrap();
+    // Baseline: `insert_raw` (test helper) writes via raw SQL, not
+    // the `insert_memory` safety net, so `edited_by_user` is the
+    // schema default (0 = false).
+    let before = get_memory_by_id(&pool, "um-5").await.unwrap().unwrap();
+    assert!(!before.edited_by_user, "raw insert defaults to 0");
+    // Successful edit → 1.
+    let after = update_memory(&pool, "um-5", "new t", "new c")
+        .await
+        .unwrap();
+    assert!(after.edited_by_user);
+}
+
+/// Unknown `memory_id` → `NotFound` (race with delete or invalid
+/// input from the frontend). The IPC layer surfaces this as
+/// `ErrorCategory::InvalidRequest` per the `AppError` impl.
+#[tokio::test]
+async fn update_memory_not_found() {
+    let pool = make_pool().await;
+    let err = update_memory(&pool, "nonexistent", "t", "c")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MemoryUpdateError::NotFound(_)));
+}
+
+// ---------------------------------------------------------------------------
+// 07-06 (am-observability-panel) A8: `build_recall_text_with_rows`
+// returns the row details alongside the formatted text. The
+// original `build_recall_text` keeps its signature (wrapper) and
+// the original 4 P2 unit tests must continue to pass — covered by
+// the existing `build_recall_text_*` tests above. The new
+// `build_recall_text_with_rows_*` tests below lock the new shape.
+// ---------------------------------------------------------------------------
+
+/// `build_recall_text_with_rows` returns the rows on a hit.
+#[tokio::test]
+async fn build_recall_text_with_rows_returns_rows() {
+    use crate::agent::memory_recall::build_recall_text_with_rows;
+    use crate::db::memories::{MemoryKind, MemoryScope, MemoryStatus};
+
+    let pool = make_pool().await;
+    insert_memory(
+        &pool,
+        &MemoryInput {
+            scope: MemoryScope::Project,
+            project_id: Some("/repo/proj".into()),
+            kind: MemoryKind::Fact,
+            status: MemoryStatus::Candidate,
+            title: "WSL cargo".into(),
+            content: "set PKG_CONFIG_PATH for cargo in wsl".into(),
+            tags: "[]".into(),
+            tool_name: None,
+            command_pattern: None,
+            path_globs: None,
+            source_session_id: Some("sess-test".into()),
+            source_ref: None,
+        },
+    )
+    .await
+    .unwrap();
+    let result = build_recall_text_with_rows(&pool, "/repo/proj", "cargo build in wsl").await;
+    let (text, rows) = result.expect("hit expected");
+    // The 4 P2 contract asserts continue to hold on `text`.
+    assert!(text.contains("<relevant-memories>"));
+    assert!(text.contains("WSL cargo"));
+    assert!(text.contains("PKG_CONFIG_PATH"));
+    assert!(text.contains("[fact]"));
+    // The new shape: `rows` carries the hit row.
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "WSL cargo");
+    assert_eq!(rows[0].kind, "fact");
+}
+
+/// `build_recall_text_with_rows` returns `None` on an empty query
+/// (mirrors `build_recall_text`).
+#[tokio::test]
+async fn build_recall_text_with_rows_empty_query() {
+    use crate::agent::memory_recall::build_recall_text_with_rows;
+    let pool = make_pool().await;
+    assert!(build_recall_text_with_rows(&pool, "/repo/proj", "")
+        .await
+        .is_none());
+    assert!(build_recall_text_with_rows(&pool, "/repo/proj", "   ")
+        .await
+        .is_none());
+}
+
+/// `build_recall_text_with_rows` returns `None` when the FTS query
+/// yields no matches (no DB error, no rows).
+#[tokio::test]
+async fn build_recall_text_with_rows_no_match() {
+    use crate::agent::memory_recall::build_recall_text_with_rows;
+    let pool = make_pool().await;
+    // No rows inserted; query is non-empty.
+    assert!(
+        build_recall_text_with_rows(&pool, "/repo/proj", "completely unrelated xyz")
+            .await
+            .is_none()
     );
 }

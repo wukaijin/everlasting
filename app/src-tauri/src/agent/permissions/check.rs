@@ -1054,6 +1054,15 @@ pub const PITFALL_SOFT_BLOCK_ENABLED: bool = true;
 /// does NOT count as a full match for soft-block purposes (it would
 /// soft-block too broadly — e.g. "always pass --offline to cargo"
 /// would soft-block any cargo invocation).
+///
+/// 07-06 (am-observability-panel A9): production now routes
+/// through [`recall_pitfall_with_hits`] (the R2b recall-event emit
+/// site needs the rows). This wrapper is retained for the P3-era
+/// tests in `tests_check.rs` (the 7 `p5_recall_*` cases call it
+/// directly); `#[allow(dead_code)]` mirrors
+/// [`recall_pitfall_footnote`]'s annotation (lib build doesn't
+/// see the test consumers).
+#[allow(dead_code)]
 pub async fn recall_pitfall(
     db: &SqlitePool,
     tool_name: &str,
@@ -1072,12 +1081,67 @@ pub async fn recall_pitfall(
         })
 }
 
+/// 07-06 (am-observability-panel D4 + A9): sibling of
+/// [`recall_pitfall`] that ALSO returns the raw row set that drove
+/// the recall decision. The chat loop uses the rows to emit a
+/// `ChatEvent::Recall` (R2b) so the frontend's "本次召回" chip
+/// shows pre-tool pitfall hits separately from FTS hits.
+///
+/// **Returns `(PitfallRecall, Vec<MemoryRow>)`** — the first
+/// element is byte-identical to [`recall_pitfall`]'s return
+/// (same classification logic, same `PitfallRecall` enum), the
+/// second is the raw hit set (post the same in-memory
+/// `is_full_match` filter applied to determine
+/// `SoftBlock` vs `Footnote`). Empty `rows` is paired with
+/// `PitfallRecall::None`; otherwise the rows are the full
+/// pre-filter set (one per hit) regardless of whether they went
+/// into the SoftBlock or Footnote bucket.
+///
+/// `PitfallRecall` enum shape is **unchanged** — the sibling
+/// only ADDS the rows; P3/P4/P5 callers and tests do not break.
+pub async fn recall_pitfall_with_hits(
+    db: &SqlitePool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    already_blocked: &HashSet<String>,
+) -> (PitfallRecall, Vec<crate::db::memories::MemoryRow>) {
+    recall_pitfall_inner_with_rows(db, tool_name, tool_input, already_blocked)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                tool = tool_name,
+                "recall_pitfall_with_hits: DB error (non-fatal, returning None)"
+            );
+            (PitfallRecall::None, Vec::new())
+        })
+}
+
+/// 07-06 (am-observability-panel A9): the rows-aware
+/// [`recall_pitfall_inner_with_rows`] is the single source of
+/// truth. This rows-dropping variant exists only to back
+/// [`recall_pitfall`] (the test-only wrapper); `#[allow(dead_code)]`
+/// silences the lib-build warning for the same reason
+/// [`recall_pitfall`] carries it (test consumers aren't visible
+/// to `cargo build --lib`).
+#[allow(dead_code)]
 async fn recall_pitfall_inner(
     db: &SqlitePool,
     tool_name: &str,
     tool_input: &serde_json::Value,
     already_blocked: &HashSet<String>,
 ) -> Result<PitfallRecall, sqlx::Error> {
+    let (recall, _rows) =
+        recall_pitfall_inner_with_rows(db, tool_name, tool_input, already_blocked).await?;
+    Ok(recall)
+}
+
+async fn recall_pitfall_inner_with_rows(
+    db: &SqlitePool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    already_blocked: &HashSet<String>,
+) -> Result<(PitfallRecall, Vec<crate::db::memories::MemoryRow>), sqlx::Error> {
     let (command_pattern, path) = extract_probe_args(tool_name, tool_input);
     let rows = crate::db::memories::find_pitfalls_by_trigger_all_status(
         db,
@@ -1088,7 +1152,7 @@ async fn recall_pitfall_inner(
     .await?;
 
     if rows.is_empty() {
-        return Ok(PitfallRecall::None);
+        return Ok((PitfallRecall::None, rows));
     }
 
     // bump_hit_count per hit, fire-and-forget (best-effort). Same
@@ -1147,13 +1211,16 @@ async fn recall_pitfall_inner(
         } else {
             format!("{}\n{}", hint, build_footnote_body(&footnote_rows))
         };
-        return Ok(PitfallRecall::SoftBlock { hint, memory_id });
+        return Ok((PitfallRecall::SoftBlock { hint, memory_id }, rows));
     }
 
     if footnote_rows.is_empty() {
-        return Ok(PitfallRecall::None);
+        return Ok((PitfallRecall::None, rows));
     }
-    Ok(PitfallRecall::Footnote(build_footnote_body(&footnote_rows)))
+    Ok((
+        PitfallRecall::Footnote(build_footnote_body(&footnote_rows)),
+        rows,
+    ))
 }
 
 /// Build the multi-bullet footnote body (without the leading header).

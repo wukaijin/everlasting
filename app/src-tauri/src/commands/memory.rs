@@ -341,3 +341,87 @@ pub async fn delete_autonomous_memory(
         .await
         .map_err(|e| anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into())
 }
+
+// ---------------------------------------------------------------------------
+// 07-06 (am-observability-panel): management IPCs for the runtime
+// memory panel — state-machine transitions + user-initiated edit.
+// Both are user-driven direct IPCs (NOT LLM tool invocations), so
+// the ⑨ 关 permission layer does NOT apply (same precedent as
+// `list_autonomous_memories` / `delete_autonomous_memory`).
+//
+// Project isolation: `list_autonomous_memories` already restricts
+// what the user can see to the current project. The `memory_id`
+// is globally unique (UUID v7), so the update / status commands
+// don't need an extra `project_id` check — the same pattern as
+// `delete_autonomous_memory`.
+// ---------------------------------------------------------------------------
+
+/// P5 status-machine transition driven by the management modal
+/// (R1 / AC3 / AC4). Wraps [`crate::db::memories::update_status`]
+/// with a string parse for the `new_status` argument (the IPC
+/// wire is snake_case `"candidate" | "active" | "verified" |
+/// "demoted"`, matching the Rust enum's `as_str()` shape).
+///
+/// `demoted_reason` is required for `new_status = "demoted"`
+/// (the P5 transition matrix writes it on the row); it's
+/// optional for every other transition (the underlying
+/// `update_status` silently drops it for non-demoted targets).
+///
+/// Errors:
+/// - `StatusTransitionError::Illegal` — the transition is not in
+///   the P5 matrix (e.g. `candidate → active` is legal, but
+///   `active → candidate` is not). Surfaces as
+///   `ErrorCategory::InvalidRequest` per the `StatusTransitionError`
+///   `AppError` impl.
+/// - `StatusTransitionError::NotFound` — the `memory_id` doesn't
+///   exist (likely a race with `delete_autonomous_memory`).
+/// - DB error → `ErrorCategory::Server`.
+#[tauri::command]
+pub async fn update_autonomous_memory_status(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+    new_status: String,
+    demoted_reason: Option<String>,
+) -> Result<(), AppCommandError> {
+    // Lenient parse — unknown status strings fall back to
+    // `Candidate` per `MemoryStatus::from_str_opt`. The
+    // transition matrix then checks the (current, target) pair
+    // for legality; a nonsense target like `"foo"` becomes
+    // `"candidate"` and the matrix returns `Illegal`. This
+    // matches the DB-side CHECK constraint behavior (unknown
+    // strings would fail the CHECK at the storage layer; we
+    // catch them earlier at the parse site for cleaner errors).
+    let target = crate::db::memories::MemoryStatus::from_str_opt(&new_status);
+    crate::db::memories::update_status(&state.db, &memory_id, target, demoted_reason.as_deref())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("update_autonomous_memory_status: transition failed: {}", e).into()
+        })
+}
+
+/// User-initiated edit of a memory's `title` + `content` (R4 /
+/// AC5). Wraps [`crate::db::memories::update_memory`] which
+/// re-applies the same write safety net as `insert_memory`
+/// (500-char content cap + sensitive-content regex + sensitive-
+/// path deny-list + temp-path deny-list) and sets
+/// `edited_by_user = 1` (the D1 provenance marker).
+///
+/// Errors:
+/// - `MemoryUpdateError::EmptyTitle/EmptyContent/TitleTooLong/
+///   ContentTooLong/SensitiveContent/SensitivePath/
+///   TemporaryPath` — safety-net rejection (all map to
+///   `ErrorCategory::InvalidRequest`).
+/// - `MemoryUpdateError::NotFound` — the `memory_id` doesn't
+///   exist.
+/// - `MemoryUpdateError::Db` — generic DB error.
+#[tauri::command]
+pub async fn update_autonomous_memory(
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+    title: String,
+    content: String,
+) -> Result<crate::db::memories::MemoryRow, AppCommandError> {
+    crate::db::memories::update_memory(&state.db, &memory_id, &title, &content)
+        .await
+        .map_err(|e| anyhow::anyhow!("update_autonomous_memory: update failed: {}", e).into())
+}

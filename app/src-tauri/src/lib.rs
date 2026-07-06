@@ -242,6 +242,10 @@ pub fn run() {
             // P2 (2026-06-29): runtime autonomous-memory CRUD.
             commands::memory::list_autonomous_memories,
             commands::memory::delete_autonomous_memory,
+            // 07-06 (am-observability-panel): management IPCs for
+            // the runtime memory panel — state transitions + user edit.
+            commands::memory::update_autonomous_memory_status,
+            commands::memory::update_autonomous_memory,
             // B3 /command palette (2026-06-16)
             commands::command_palette::list_commands,
             commands::command_palette::get_command_body,

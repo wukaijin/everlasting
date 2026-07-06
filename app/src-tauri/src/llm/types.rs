@@ -452,6 +452,47 @@ pub enum ChatEvent {
         message_seq: i64,
         injections: Vec<InjectionRecord>,
     },
+    /// 07-06 (am-observability-panel, R2b / AC6): emitted when
+    /// the agent loop's recall path surfaces one or more
+    /// autonomous memories on the way to the LLM. The variant is
+    /// **read-only / non-persistent** (like `Retrying`) — the
+    /// `hits` are an observation, not an LLM request. The
+    /// frontend uses it to drive the "本次召回" chip in the
+    /// ChatPanel header so the user can see what the agent
+    /// recalled (and was influenced by) during this turn.
+    ///
+    /// Two recall sources share this event:
+    /// - `source: "fts"` — session-start FTS5 recall
+    ///   (`agent::memory_recall::build_recall_text_with_rows`).
+    /// - `source: "pitfall"` — pre-tool pitfall recall
+    ///   (`permissions::recall_pitfall_with_hits`).
+    ///
+    /// Worker subagents (B6) **do not** propagate this event to
+    /// the main chat — the `SubagentBufferSink` does not forward
+    /// `chat-event` to the IPC channel (same isolation as
+    /// `Retrying` / `Error` / `Done`; design D4). The worker's
+    /// own recall still happens (it surfaces memories to the
+    /// worker's LLM via `inject_recall_into_turn`), but the
+    /// main chat's `lastRecallHits` chip is unaffected — AC7.
+    Recall { hits: Vec<RecallHit> },
+}
+
+/// One hit row in [`ChatEvent::Recall`]. Mirrors the
+/// `MemoryRow` fields the management modal needs to render a
+/// per-hit chip + the recall-event list on the main panel. The
+/// `title` / `kind` are the only fields the frontend renders;
+/// the `memory_id` is the join key for the modal's
+/// `update_autonomous_memory_status` / `update_autonomous_memory`
+/// actions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecallHit {
+    pub memory_id: String,
+    pub title: String,
+    pub kind: String,
+    /// "fts" (session-start FTS5 recall) or "pitfall"
+    /// (pre-tool pitfall recall). Drives the chip's group label
+    /// on the main panel.
+    pub source: String,
 }
 
 // ---------------------------------------------------------------------------

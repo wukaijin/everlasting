@@ -14,7 +14,7 @@ use crate::agent::auto_reflect::ReflectError;
 use crate::agent::provider::PreFlightError;
 use crate::agent::question_store::QuestionStoreError;
 use crate::background_shell::BackgroundShellError;
-use crate::db::memories::{MemoryInsertError, StatusTransitionError};
+use crate::db::memories::{MemoryInsertError, MemoryUpdateError, StatusTransitionError};
 use crate::git::error::GitError;
 use crate::llm::error::LlmError;
 use crate::llm::provider::ProviderBuildError;
@@ -219,6 +219,33 @@ impl AppError for StatusTransitionError {
     }
 }
 
+impl AppError for MemoryUpdateError {
+    fn category(&self) -> ErrorCategory {
+        match self {
+            MemoryUpdateError::Db(_) => ErrorCategory::Server,
+            // 7 个校验 variant + NotFound 全部归 InvalidRequest
+            // —— 与 MemoryInsertError 的路由一致(7 校验 variant
+            // 是同一组 safety-net 拒绝信号)。
+            _ => ErrorCategory::InvalidRequest,
+        }
+    }
+    fn user_message(&self) -> String {
+        match self {
+            MemoryUpdateError::EmptyTitle => "记忆标题不能为空".to_string(),
+            MemoryUpdateError::EmptyContent => "记忆内容不能为空".to_string(),
+            MemoryUpdateError::TitleTooLong(_) => "记忆标题过长".to_string(),
+            MemoryUpdateError::ContentTooLong(_) => "记忆内容过长".to_string(),
+            MemoryUpdateError::SensitiveContent => {
+                "记忆内容包含敏感信息(api_key/secret/password 等),已拒绝".to_string()
+            }
+            MemoryUpdateError::SensitivePath(p) => format!("记忆内容引用了敏感路径: {}", p),
+            MemoryUpdateError::TemporaryPath(p) => format!("记忆内容引用了临时路径: {}", p),
+            MemoryUpdateError::NotFound(id) => format!("记忆 {} 不存在", id),
+            MemoryUpdateError::Db(_) => "记忆数据库错误".to_string(),
+        }
+    }
+}
+
 impl AppError for QuestionStoreError {
     fn category(&self) -> ErrorCategory {
         ErrorCategory::InvalidRequest // AlreadyPending / NotFound 均归 InvalidRequest
@@ -370,6 +397,11 @@ impl From<StatusTransitionError> for AppCommandError {
         build(&e)
     }
 }
+impl From<MemoryUpdateError> for AppCommandError {
+    fn from(e: MemoryUpdateError) -> Self {
+        build(&e)
+    }
+}
 impl From<QuestionStoreError> for AppCommandError {
     fn from(e: QuestionStoreError) -> Self {
         build(&e)
@@ -415,6 +447,9 @@ impl From<anyhow::Error> for AppCommandError {
             return build(x);
         }
         if let Some(x) = e.downcast_ref::<StatusTransitionError>() {
+            return build(x);
+        }
+        if let Some(x) = e.downcast_ref::<MemoryUpdateError>() {
             return build(x);
         }
         if let Some(x) = e.downcast_ref::<QuestionStoreError>() {

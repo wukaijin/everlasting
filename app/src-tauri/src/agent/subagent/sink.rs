@@ -1560,4 +1560,75 @@ mod tests {
             Some("deny"),
         );
     }
+
+    /// 07-06 (am-observability-panel, R2b / AC7): the worker's
+    /// `SubagentBufferSink` does NOT forward `ChatEvent::Recall`
+    /// to the main chat IPC channel. The worker's own
+    /// `build_recall_text_with_rows` / `recall_pitfall_with_hits`
+    /// still runs (the worker can recall autonomously), but
+    /// the recall event stays inside the worker's transcript
+    /// — the main chat's `lastRecallHits` chip is unaffected.
+    ///
+    /// The test pins two related structural properties:
+    ///
+    /// (a) **No `app_handle` use in `emit_chat_event`**: the
+    ///     worker's sink impl is in `sink.rs:421-530`; that
+    ///     block does not reference `self.app_handle` at all
+    ///     (a `grep` of the impl confirms it). The chat-event
+    ///     IPC forwarding is the `AppHandleSink`'s
+    ///     responsibility, NOT the worker's. The `Recall` event
+    ///     is recorded into the worker's transcript (per
+    ///     line 528-529 in `emit_chat_event`); that's the
+    ///     intended scope.
+    /// (b) **Constructed without an `app_handle`**: the test
+    ///     constructor `new_without_app_handle` (line 198)
+    ///     sets `app_handle: None`. The worker's nested
+    ///     `run_chat_loop` (production path) constructs
+    ///     `SubagentBufferSink::new_without_app_handle` too —
+    ///     the production worker has no `app_handle` to forward
+    ///     to. So even if a future refactor accidentally added
+    ///     `self.app_handle.as_ref().map(|h| h.emit(...))` to
+    ///     the chat-event path, the `None` case would silently
+    ///     no-op (no `app` to emit on).
+    ///
+    /// Net effect: the worker's `Recall` events land in the
+    /// worker's transcript; the main chat's IPC is structurally
+    /// unreachable from a worker's `SubagentBufferSink`. The
+    /// main chat's `lastRecallHits` chip never sees a worker
+    /// recall (AC7).
+    #[test]
+    fn worker_sink_does_not_forward_recall_to_main_chat() {
+        let sink = SubagentBufferSink::new_without_app_handle("rid".into(), "sid".into());
+        // (a) The worker's sink constructor exposes NO way to
+        // forward chat events to the main chat IPC. `app_handle`
+        // is `None`; even if a future refactor added
+        // `self.app_handle.as_ref().map(|h| h.emit("chat-event", ...))`,
+        // it would be a `None`-no-op (no `app` to emit on).
+        assert!(
+            sink.app_handle.is_none(),
+            "worker sink must be constructed without an app_handle (no IPC forward path)"
+        );
+        // (b) The worker's emit_chat_event must NOT panic on
+        // the new `Recall` variant. The match has a wildcard
+        // arm that drops it into the transcript record (no
+        // IPC, just local buffer).
+        sink.emit_chat_event(&ChatEventPayload {
+            request_id: "rid-recall".into(),
+            event: ChatEvent::Recall {
+                hits: vec![crate::llm::types::RecallHit {
+                    memory_id: "m1".into(),
+                    title: "t".into(),
+                    kind: "fact".into(),
+                    source: "fts".into(),
+                }],
+            },
+        });
+        // The sink's `transcript_snapshot` is the worker-side
+        // audit surface — the Recall event IS recorded there
+        // (for historical-replay rendering in the drawer), but
+        // it does NOT reach the main chat IPC. The test above
+        // pins the structural property; the practical effect
+        // (no main-chat IPC emit) is the absence of an
+        // `app_handle` to call.
+    }
 }

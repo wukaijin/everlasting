@@ -1381,11 +1381,33 @@ pub async fn run_chat_loop(
                     .map(|m| m.content.to_text())
                     .unwrap_or_default();
                 if !query.trim().is_empty() {
-                    if let Some(recall_text) =
-                        crate::agent::memory_recall::build_recall_text(&db, &project.id, &query)
-                            .await
+                    // 07-06 (am-observability-panel R2b / A8): use
+                    // the rows-aware sibling so we can emit a
+                    // `ChatEvent::Recall` after the recall block
+                    // is appended. The original 4 P2 unit tests
+                    // keep working because `build_recall_text` is
+                    // a thin wrapper that drops the rows.
+                    if let Some((recall_text, recall_rows)) =
+                        crate::agent::memory_recall::build_recall_text_with_rows(
+                            &db,
+                            &project.id,
+                            &query,
+                        )
+                        .await
                     {
                         crate::agent::memory_recall::inject_recall_into_turn(&mut req, recall_text);
+                        // Emit the R2b chat-event for the frontend's
+                        // "本次召回" chip. Worker sink
+                        // (SubagentBufferSink) does not forward
+                        // to the IPC channel — AC7 is enforced by
+                        // the sink abstraction, not by an extra
+                        // check here.
+                        crate::agent::memory_recall::emit_recall_event(
+                            sink.as_ref(),
+                            &rid,
+                            &recall_rows,
+                            "fts",
+                        );
                     }
                 }
             }
@@ -1674,6 +1696,21 @@ pub async fn run_chat_loop(
                             tracing::warn!(
                                 request_id = %rid,
                                 "chat: unexpected Retrying in LLM stream (ignoring — emitted via LlmRetrySink)"
+                            );
+                        }
+                        // 07-06 (am-observability-panel R2b): `Recall`
+                        // is emitted via `emit_recall_event` at the
+                        // recall-injection seam (FTS) and the
+                        // pre-tool pitfall seam (per tool_use).
+                        // Reaching this arm means the LLM stream
+                        // somehow re-emitted a recall notice we
+                        // already pushed. Drop it (the legitimate
+                        // one is on the chat-event channel; the
+                        // controller will dedup by `rid`).
+                        ChatEvent::Recall { .. } => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                "chat: unexpected Recall in LLM stream (ignoring — emitted via emit_recall_event)"
                             );
                         }
                     }
@@ -2448,10 +2485,31 @@ pub async fn run_chat_loop(
                         // hit on the same SoftBlock'd pitfall
                         // degrades to Footnote because the memory_id
                         // is now in `soft_blocked`.
+                        // 07-06 (am-observability-panel R2b / A9):
+                        // the rows-aware sibling carries the raw hit
+                        // set so we can emit a `ChatEvent::Recall`
+                        // for the frontend's "本次召回" chip.
+                        // Worker isolation: this chat loop is the
+                        // PARENT path — worker's `SubagentBufferSink`
+                        // does not forward to the main chat IPC.
                         let blocked_snapshot = soft_blocked.lock().await.clone();
-                        let pitfall_recall =
-                            permissions::recall_pitfall(&db, &name, &input, &blocked_snapshot)
-                                .await;
+                        let (pitfall_recall, pitfall_rows) = permissions::recall_pitfall_with_hits(
+                            &db,
+                            &name,
+                            &input,
+                            &blocked_snapshot,
+                        )
+                        .await;
+                        // Emit pre-tool pitfall recall hit (R2b).
+                        // None → skip (no rows).
+                        if !pitfall_rows.is_empty() {
+                            crate::agent::memory_recall::emit_recall_event(
+                                sink.as_ref(),
+                                &rid,
+                                &pitfall_rows,
+                                "pitfall",
+                            );
+                        }
                         // SoftBlock: short-circuit. The tool is NOT
                         // executed; we surface the hint as a non-error
                         // tool_result so the LLM re-judges (adjust /
@@ -3200,9 +3258,27 @@ pub async fn run_chat_loop(
                         // The dead-loop guard (design D1): the second hit on the
                         // same SoftBlock'd pitfall degrades to Footnote because
                         // the memory_id is now in `soft_blocked`.
+                        // 07-06 (am-observability-panel R2b / A9): the
+                        // rows-aware sibling carries the raw hit set so we
+                        // can emit a `ChatEvent::Recall` for the frontend's
+                        // "本次召回" chip. Worker isolation is the same as
+                        // the parallel path above.
                         let blocked_snapshot = soft_blocked.lock().await.clone();
-                        let pitfall_recall =
-                            permissions::recall_pitfall(&db, name, input, &blocked_snapshot).await;
+                        let (pitfall_recall, pitfall_rows) = permissions::recall_pitfall_with_hits(
+                            &db,
+                            name,
+                            input,
+                            &blocked_snapshot,
+                        )
+                        .await;
+                        if !pitfall_rows.is_empty() {
+                            crate::agent::memory_recall::emit_recall_event(
+                                sink.as_ref(),
+                                &rid,
+                                &pitfall_rows,
+                                "pitfall",
+                            );
+                        }
                         // SoftBlock: short-circuit. The tool is NOT executed; we
                         // surface the hint as a non-error tool_result so the LLM
                         // re-judges (adjust / abandon / insist). `is_error=false`

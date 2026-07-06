@@ -863,6 +863,19 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // --- 07-06 (am-observability-panel): `edited_by_user` provenance
+    // marker. New column on `autonomous_memories` so the frontend
+    // management modal (R5) can distinguish agent-written memories
+    // from user-edited ones. `BOOLEAN NOT NULL DEFAULT 0` is
+    // non-destructive (existing rows backfill to 0 = "not yet
+    // user-edited"). The D1 design decision in
+    // `.trellis/tasks/07-06-am-observability-panel/design.md` is
+    // "新列,不复用 `source_ref`" — keeping the two concerns
+    // (`source_ref` for P4 reflection provenance, `edited_by_user`
+    // for the human-edit trail) cleanly separated.
+    add_autonomous_memories_column_if_missing(pool, "edited_by_user", "BOOLEAN NOT NULL DEFAULT 0")
+        .await?;
+
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the
     // insert on subsequent boots. Backfills `sessions.model_id`
@@ -1099,6 +1112,32 @@ pub(crate) async fn add_subagent_runs_column_if_missing(
             .try_get(0)?;
     if exists == 0 {
         let stmt = format!("ALTER TABLE subagent_runs ADD COLUMN {} {}", column, decl);
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Add a column to `autonomous_memories` if it doesn't already
+/// exist. Mirrors [`add_session_column_if_missing`]. Added for
+/// 07-06 (am-observability-panel) — the `edited_by_user`
+/// provenance marker that the management modal uses to distinguish
+/// agent-written memories from user-edited ones.
+pub(crate) async fn add_autonomous_memories_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 =
+        sqlx::query("SELECT COUNT(*) FROM pragma_table_info('autonomous_memories') WHERE name = ?")
+            .bind(column)
+            .fetch_one(pool)
+            .await?
+            .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!(
+            "ALTER TABLE autonomous_memories ADD COLUMN {} {}",
+            column, decl
+        );
         sqlx::query(&stmt).execute(pool).await?;
     }
     Ok(())

@@ -122,7 +122,23 @@ pub use audit::{
     AuditKind,
 };
 pub use check::check;
+// 07-06 (am-observability-panel A9): `recall_pitfall` is now a
+// thin wrapper over `recall_pitfall_with_hits` (drops the
+// accompanying rows). Production routes through the rows-aware
+// sibling (the R2b emit site needs the rows); `recall_pitfall`
+// stays for the P3-era tests in `tests_check.rs` (the 7
+// `p5_recall_*` + `recall_pitfall_footnote_*` cases call it
+// directly). `#[allow(unused_imports)]` mirrors
+// `recall_pitfall_footnote`'s annotation below — the lib build
+// doesn't see the test consumers.
+#[allow(unused_imports)]
 pub use check::recall_pitfall;
+// 07-06 (am-observability-panel R2b / A9): rows-aware sibling
+// for the chat loop's recall-event emit site. The new function
+// is the preferred entry point for the parent path; the older
+// `recall_pitfall` stays for the P3-era tests + any future
+// consumer that only needs the `PitfallRecall` discriminant.
+pub use check::recall_pitfall_with_hits;
 // `recall_pitfall_footnote` is retained as the P3-era Footnote-tier
 // reference (see `check.rs` doc comment). Tests in `tests_check.rs`
 // + `auto_reflect.rs` reach it via the full `check::` path; the
