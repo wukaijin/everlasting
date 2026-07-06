@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "PR2 核心：C2+ 接入 chat_loop 的 run_chat_loop 共享入口（23 参签名不动）+ detect 接入点（§ ⑬ 循环检测）+ worker subagent 复用 run_chat_loop 继承检测 + CancellationGuard cancel/break 单源"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "PR1 AuditKind 新增契约 + PR2 QuestionStore 复用（ask_user_question Scenario 的 ToolQuestionPayload/QuestionResponse 形状）+ PR3 worker dispatch_result 跨层契约（format_dispatch_result_with_model 追加 loop terminated 行）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PR1 record_loop_intervention_audit 仿 record_message_resend_audit 的 best-effort 落表模式 + AuditKind enum as_str 走 kind TEXT 列（migration-free 验证）+ sqlx idempotent 模式"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "PR2 select!{token.cancelled(), oneshot} 阻塞期间 cancel token lifecycle（session cancel / worker cancel propagation）+ Done stop_reason 三态契约"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "PR3 前端：worker dispatch_result 在 SubagentDrawer 渲染 + <AskUserQuestionCard> 复用（C2+ 询问卡片）+ audit kind 分发"}
