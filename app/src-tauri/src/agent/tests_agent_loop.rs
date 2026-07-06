@@ -699,6 +699,48 @@ async fn agent_loop_max_turns_emits_done_marker() {
     }
     let mock = Arc::new(MockProvider::new(script));
 
+    // C2+ (2026-07-05): 200 identical `list_dir({path: "."})`
+    // calls also feed the C2 hard-loop detector (HARD_WINDOW =
+    // 5 trailing identical signatures). Without intervention,
+    // the C2+ state machine would trigger a QuestionStore ask
+    // at turn 3 and block forever (no resolver attached).
+    // We spawn a "continue-all" resolver that loops: each time
+    // a pending entry appears, it resolves with「继续」so the
+    // test exercises the MAX_TURNS backstop (not C2+ early
+    // termination). The C2+ path is covered by the dedicated
+    // tests in `tests_c2plus.rs`.
+    let store_for_resolver = h.question_store.clone();
+    let session_for_resolver = h.session_id.clone();
+    tokio::spawn(async move {
+        loop {
+            if store_for_resolver
+                .get_payload(&session_for_resolver)
+                .await
+                .is_some()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                let _ = store_for_resolver
+                    .resolve(
+                        &session_for_resolver,
+                        crate::agent::question_store::QuestionResponse::Answered(vec![
+                            crate::agent::question_store::QuestionAnswer {
+                                question: String::new(),
+                                header: None,
+                                options: vec!["继续".into()],
+                                multi_select: false,
+                            },
+                        ]),
+                    )
+                    .await;
+                // Brief yield so the agent loop's select! arm
+                // observes the resolve before we re-poll.
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                continue;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    });
+
     run_chat_loop(
         vec![],
         mock.clone(),

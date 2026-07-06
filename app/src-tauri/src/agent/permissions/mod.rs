@@ -117,7 +117,10 @@ pub mod tests_types;
 // (which doesn't compile the test files) without losing the
 // short-path re-export that tests need.
 #[allow(unused_imports)]
-pub use audit::{record_message_resend_audit, record_tool_executed_audit, AuditKind};
+pub use audit::{
+    record_loop_intervention_audit, record_message_resend_audit, record_tool_executed_audit,
+    AuditKind,
+};
 pub use check::check;
 pub use check::recall_pitfall;
 // `recall_pitfall_footnote` is retained as the P3-era Footnote-tier

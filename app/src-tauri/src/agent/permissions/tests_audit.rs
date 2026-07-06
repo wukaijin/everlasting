@@ -34,6 +34,11 @@ fn audit_kind_round_trip() {
         AuditKind::WorkerAskDenied,
         AuditKind::WorkerAskTimedOut,
         AuditKind::WorkerAskCancelled,
+        // C2+ (2026-07-05): 循环检测主动干预 kind. Wire string
+        // stable — `record_loop_intervention_audit` writes
+        // `AuditKind::LoopIntervention.as_str()` verbatim; both
+        // ends of the contract must agree on this string.
+        AuditKind::LoopIntervention,
     ] {
         let s = k.as_str();
         assert!(!s.is_empty());
@@ -66,4 +71,9 @@ fn audit_kind_round_trip() {
         AuditKind::WorkerAskCancelled.as_str(),
         "worker_ask_cancelled"
     );
+    // C2+ (2026-07-05): pin the wire string for the new loop
+    // intervention kind. The DB layer's `record_loop_intervention_audit`
+    // helper writes `AuditKind::LoopIntervention.as_str()` verbatim —
+    // both ends of the contract must agree on this string.
+    assert_eq!(AuditKind::LoopIntervention.as_str(), "loop_intervention");
 }

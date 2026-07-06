@@ -1110,6 +1110,15 @@ pub async fn run_chat_loop(
     // inherits detection too (with its own shorter max_turns budget).
     let mut loop_window: VecDeque<loop_detection::ToolCall> =
         VecDeque::with_capacity(loop_detection::SOFT_WINDOW);
+    // C2+ (2026-07-05): per-`run_chat_loop`-local consecutive-hit
+    // counter for the active-intervention state machine. Lives next
+    // to `loop_window` so it accumulates across turns the same way
+    // (and the worker inherits it via its nested `run_chat_loop`
+    // call, with its own independent count). Reset to 0 on any
+    // `LoopVerdict::None` turn (consecutiveness is the signal);
+    // incremented on any `HardLoop` / `SoftLoop` verdict; triggers
+    // active intervention (QuestionStore ask) at >= 3.
+    let mut loop_hit_count: u32 = 0;
 
     let turn_limit = max_turns.unwrap_or(MAX_TURNS);
     for turn in 1..=turn_limit {
@@ -1978,9 +1987,312 @@ pub async fn run_chat_loop(
             loop_window.pop_front();
         }
         let loop_verdict = loop_detection::detect(&loop_window.iter().cloned().collect::<Vec<_>>());
-        let loop_hint: Option<String> = loop_verdict.hint_text();
-        if loop_hint.is_some() {
+        // C2+ (2026-07-05): maintain the consecutive-hit counter and
+        // trigger active intervention at >= 3. The counter is
+        // per-`run_chat_loop`-local (declared next to `loop_window`
+        // outside the turn loop) so it accumulates across turns; on
+        // any non-loop turn it resets to 0 (consecutiveness is the
+        // signal). See `design.md §2` for the full state machine.
+        let verdict_kind_str: Option<&'static str> = match &loop_verdict {
+            loop_detection::LoopVerdict::HardLoop { .. } => Some("hard"),
+            loop_detection::LoopVerdict::SoftLoop { .. } => Some("soft"),
+            loop_detection::LoopVerdict::None => None,
+        };
+        let mut loop_hint: Option<String> = loop_verdict.hint_text();
+        if verdict_kind_str.is_some() {
             tracing::warn!(verdict = ?loop_verdict, "agent loop ⑬: loop detected (soft hint)");
+        }
+
+        // C2+ active-intervention state machine. Only the main loop
+        // drives the QuestionStore ask — worker subagents (which
+        // reuse `run_chat_loop` with `effective_is_worker = true`)
+        // take a direct-break short-circuit below so they don't
+        // occupy the parent's QuestionStore slot or interrupt the
+        // user. The worker's break surfaces to the parent via its
+        // `Done { stop_reason: "loop_terminated" }` and the parent
+        // sees the result in `dispatch_subagent`'s tool_result.
+        if verdict_kind_str.is_some() {
+            loop_hit_count = loop_hit_count.saturating_add(1);
+        } else {
+            loop_hit_count = 0;
+        }
+
+        if loop_hit_count >= 3 && verdict_kind_str.is_some() {
+            // Reached the consecutive-hit threshold on a loop turn.
+            // Worker path: direct break (R5) — no QuestionStore
+            // round-trip, no audit row. The worker's loop_terminated
+            // Done will be observed by `run_subagent` and surfaced
+            // to the parent LLM via `format_dispatch_result*` (PR3
+            // extends the formatter to detect `loop_terminated` and
+            // append the "worker 因循环被终止" line; for PR2 we
+            // only need the stop_reason itself to terminate the
+            // worker's loop cleanly).
+            if effective_is_worker {
+                tracing::info!(
+                    hit_count = loop_hit_count,
+                    verdict = ?loop_verdict,
+                    "C2+ worker path: breaking loop (direct break, no ask)"
+                );
+                if !skip_persist {
+                    persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                    let _ = crate::db::touch_session(&db, &session_id).await;
+                }
+                emit_chat_event_via_sink(
+                    &sink,
+                    &rid,
+                    &ChatEvent::Done {
+                        stop_reason: Some("loop_terminated".to_string()),
+                        usage: last_usage.clone(),
+                    },
+                );
+                return;
+            }
+
+            // Main loop: build the fixed payload (PRD R2) and drive
+            // the QuestionStore round-trip.
+            let verdict_kind_str_expect =
+                verdict_kind_str.expect("non-None verdict at C2+ trigger");
+            let payload = crate::agent::question_store::ToolQuestionPayload {
+                session_id: session_id.clone(),
+                tool_use_id: format!("loop_intervention_{}", turn),
+                questions: vec![crate::agent::question_store::Question {
+                    question: "检测到 agent 似乎在循环重复相同操作（已连续 3 次触发循环检测，\
+                               注入的软提示未能让模型纠正）。是否终止本次 agent loop？"
+                        .to_string(),
+                    header: Some("循环检测干预".to_string()),
+                    options: vec![
+                        crate::agent::question_store::QuestionOption {
+                            label: "终止 loop".into(),
+                            description: Some("停止本次 agent loop，保留已生成的内容".to_string()),
+                            preview: None,
+                        },
+                        crate::agent::question_store::QuestionOption {
+                            label: "继续".into(),
+                            description: Some(
+                                "清零计数器继续，给模型再次自我纠正的机会".to_string(),
+                            ),
+                            preview: None,
+                        },
+                    ],
+                    multi_select: false,
+                }],
+                ts: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
+            };
+
+            // Audit: action = "asked" lands immediately after
+            // register succeeds (best-effort; helper is warn+swallow
+            // on DB error — matches record_audit / record_tool_executed_audit).
+            let _ = crate::agent::permissions::audit::record_loop_intervention_audit(
+                &db,
+                &session_id,
+                None,
+                loop_hit_count,
+                verdict_kind_str_expect,
+                "asked",
+            )
+            .await;
+
+            // Try to register the pending question. `AlreadyPending`
+            // (the LLM concurrently drove an `ask_user_question`
+            // tool_use that's still waiting on a resolve) → log +
+            // fall through to the original hint path (don't block
+            // the loop; next turn we'll try again).
+            match question_store
+                .register(
+                    &session_id,
+                    &format!("loop_intervention_{}", turn),
+                    payload.clone(),
+                )
+                .await
+            {
+                Ok(rx) => {
+                    sink.emit_tool_question(&payload);
+                    tracing::info!(
+                        hit_count = loop_hit_count,
+                        verdict = ?loop_verdict,
+                        "C2+ active intervention: question asked"
+                    );
+                    // Three-arm select: cancel / answer / dropped.
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            // User hit Stop while the question was
+                            // pending. Same cancel-cleanup as the
+                            // ask_user_question tool path: clear the
+                            // slot, emit Done{cancelled} (NOT
+                            // Done{loop_terminated} — the user
+                            // initiated this exit, not the C2+
+                            // intervention).
+                            question_store.remove(&session_id).await;
+                            if !skip_persist {
+                                persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                                let _ = crate::db::touch_session(&db, &session_id).await;
+                            }
+                            emit_chat_event_via_sink(
+                                &sink,
+                                &rid,
+                                &ChatEvent::Done {
+                                    stop_reason: Some("cancelled".to_string()),
+                                    usage: None,
+                                },
+                            );
+                            return;
+                        }
+                        resp = rx => {
+                            match resp {
+                                Ok(crate::agent::question_store::QuestionResponse::Answered(answers)) => {
+                                    // Inspect the first answer's
+                                    // selected options. Treat
+                                    // "终止 loop" (or empty / no
+                                    // match) as terminate, "继续"
+                                    // as continue. `Cancelled` is
+                                    // handled in the next arm.
+                                    let chosen = answers
+                                        .first()
+                                        .map(|a| a.options.first().cloned().unwrap_or_default())
+                                        .unwrap_or_default();
+                                    if chosen == "继续" {
+                                        let _ = crate::agent::permissions::audit::record_loop_intervention_audit(
+                                            &db,
+                                            &session_id,
+                                            None,
+                                            loop_hit_count,
+                                            verdict_kind_str_expect,
+                                            "continued",
+                                        ).await;
+                                        // Reset the counter so the
+                                        // model gets a fresh 3-strike
+                                        // budget. Replace the soft
+                                        // hint with a stronger one
+                                        // that tells the model the
+                                        // user explicitly confirmed
+                                        // the loop — repeating the
+                                        // same call will not make
+                                        // progress.
+                                        loop_hit_count = 0;
+                                        loop_hint = Some(
+                                            "loop intervention: 用户已确认你在循环重复操作并选择继续。\
+                                             请立即改变策略或停止 — 重复相同调用不会取得进展。"
+                                                .to_string(),
+                                        );
+                                        // Fall through to the
+                                        // normal result_blocks
+                                        // construction (the
+                                        // enhanced hint above will
+                                        // be prepended like any
+                                        // other loop hint).
+                                    } else {
+                                        // "终止 loop" (or any
+                                        // non-"继续" selection —
+                                        // defensive: defaults to
+                                        // terminate so a malformed
+                                        // payload doesn't loop
+                                        // forever).
+                                        let _ = crate::agent::permissions::audit::record_loop_intervention_audit(
+                                            &db,
+                                            &session_id,
+                                            None,
+                                            loop_hit_count,
+                                            verdict_kind_str_expect,
+                                            "terminated",
+                                        ).await;
+                                        if !skip_persist {
+                                            persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                                            let _ = crate::db::touch_session(&db, &session_id).await;
+                                        }
+                                        emit_chat_event_via_sink(
+                                            &sink,
+                                            &rid,
+                                            &ChatEvent::Done {
+                                                stop_reason: Some("loop_terminated".to_string()),
+                                                usage: None,
+                                            },
+                                        );
+                                        return;
+                                    }
+                                }
+                                Ok(crate::agent::question_store::QuestionResponse::Cancelled) => {
+                                    // User clicked "跳过" on the
+                                    // intervention card → treat as
+                                    // "终止 loop" (same rationale
+                                    // as the cancel arm of
+                                    // ask_user_question: the user
+                                    // dismissed the question, the
+                                    // safe default is to stop).
+                                    let _ = crate::agent::permissions::audit::record_loop_intervention_audit(
+                                        &db,
+                                        &session_id,
+                                        None,
+                                        loop_hit_count,
+                                        verdict_kind_str_expect,
+                                        "terminated",
+                                    ).await;
+                                    if !skip_persist {
+                                        persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                                        let _ = crate::db::touch_session(&db, &session_id).await;
+                                    }
+                                    emit_chat_event_via_sink(
+                                        &sink,
+                                        &rid,
+                                        &ChatEvent::Done {
+                                            stop_reason: Some("loop_terminated".to_string()),
+                                            usage: None,
+                                        },
+                                    );
+                                    return;
+                                }
+                                Err(_recv_err) => {
+                                    // Sender dropped (e.g. resolve
+                                    // ran on a stale session id
+                                    // after the cancel arm cleaned
+                                    // the entry). Treat as session-
+                                    // cancelled — safe default
+                                    // matching the permission-store /
+                                    // ask_user_question parity.
+                                    tracing::warn!(
+                                        "C2+ oneshot dropped without response — treating as cancelled"
+                                    );
+                                    if !skip_persist {
+                                        persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
+                                        let _ = crate::db::touch_session(&db, &session_id).await;
+                                    }
+                                    emit_chat_event_via_sink(
+                                        &sink,
+                                        &rid,
+                                        &ChatEvent::Done {
+                                            stop_reason: Some("cancelled".to_string()),
+                                            usage: None,
+                                        },
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(crate::agent::question_store::QuestionStoreError::AlreadyPending) => {
+                    // LLM concurrently drove an ask_user_question
+                    // that's still pending — the single-pending gate
+                    // refuses our register. Per design §5 we
+                    // gracefully degrade: skip C2+ this turn (the
+                    // soft hint still lands), try again next turn.
+                    tracing::warn!(
+                        session_id = %session_id,
+                        "C2+ skipped: a question is already pending (LLM-driven ask_user_question)"
+                    );
+                }
+                Err(e) => {
+                    // `NotFound` is not reachable from `register`
+                    // (defensive branch matching ask_user_question).
+                    tracing::error!(
+                        error = %e,
+                        "C2+ register: unexpected store error"
+                    );
+                }
+            }
         }
 
         let mut result_blocks: Vec<ContentBlock> = Vec::new();

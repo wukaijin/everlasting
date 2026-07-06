@@ -88,6 +88,18 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
     // the user sees a single visual signal for "resend".
     case "message-resend":
       return { iconName: "refresh", colorVar: "var(--color-accent)" };
+    // C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`):
+    // harness-driven 循环检测主动干预 — 3 consecutive loop-
+    // detection hits triggered a QuestionStore round-trip with
+    // the user (asked / terminated / continued action). Renders
+    // an alert-triangle icon in the amber shell color (matches
+    // the existing "timeout" / "ask" family tone — the loop
+    // intervention is a soft warning, not a critical deny).
+    case "loop-intervention":
+      return {
+        iconName: "warn",
+        colorVar: "var(--color-tool-shell)",
+      };
     default:
       return { iconName: "info", colorVar: "var(--color-text-muted)" };
   }
@@ -178,6 +190,29 @@ const modeTransition = computed<string>(() => {
   return `${prev} → ${next}`;
 });
 
+/** C2+ (2026-07-05): loop-intervention summary line. Format:
+ *  `循环检测干预 · 硬/软触发 · 第 N 次命中 · 询问/已终止/已继续`.
+ *  Renders empty for non-loop_intervention kinds. */
+const loopInterventionSummary = computed<string>(() => {
+  if (parsed.value.kind !== "loop_intervention") return "";
+  const p = parsed.value.payload;
+  const kindLabel = p.verdict_kind === "hard" ? "硬触发" : "软触发";
+  const hit = p.hit_count ?? 0;
+  const actionLabel = (() => {
+    switch (p.action) {
+      case "asked":
+        return "询问";
+      case "terminated":
+        return "已终止";
+      case "continued":
+        return "已继续";
+      default:
+        return p.action ?? "?";
+    }
+  })();
+  return `循环检测干预 · ${kindLabel} · 第 ${hit} 次命中 · ${actionLabel}`;
+});
+
 /** Whether the payload was malformed / unknown — render a raw
  *  blob fallback row. */
 const isRawPayload = computed<boolean>(() => parsed.value.kind === "raw");
@@ -257,6 +292,10 @@ const isCritical = computed<boolean>(() => {
 
       <div v-if="modeTransition" class="audit-item__mode">
         {{ modeTransition }}
+      </div>
+
+      <div v-if="loopInterventionSummary" class="audit-item__loop">
+        {{ loopInterventionSummary }}
       </div>
 
       <div v-if="isRawPayload && rawPayloadText" class="audit-item__raw">
@@ -393,6 +432,13 @@ const isCritical = computed<boolean>(() => {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--color-tool-thinking);
+}
+
+.audit-item__loop {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--color-tool-shell);
+  line-height: 1.4;
 }
 
 .audit-item__raw {

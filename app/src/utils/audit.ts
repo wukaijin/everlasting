@@ -87,6 +87,36 @@ export interface ModeAuditPayload {
   new_mode?: string;
 }
 
+/** C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`):
+ *  payload for the harness-driven 循环检测主动干预 path's
+ *  `loop_intervention` audit rows. Mirrors the Rust-side
+ *  `record_loop_intervention_audit` helper's
+ *  `{ hit_count, verdict_kind, action, run_id }` shape. The
+ *  `action` field discriminates the three C2+ state-machine
+ *  branches: `"asked"` (the `QuestionStore` registration
+ *  succeeded and the question was emitted to the user),
+ *  `"terminated"` (the user picked「终止 loop」), `"continued"`
+ *  (the user picked「继续」). Worker runs do NOT write this row
+ *  (R5 — worker path takes a direct-break short-circuit with no
+ *  audit surface); only main-loop C2+ triggers land here. */
+export interface LoopInterventionAuditPayload {
+  /** Consecutive loop-detection hit count at the trigger point
+   *  (always ≥ 3 — that's the C2+ threshold). */
+  hit_count?: number;
+  /** `"hard"` for `LoopVerdict::HardLoop` / `"soft"` for
+   *  `LoopVerdict::SoftLoop` (caller-side match in
+   *  `chat_loop.rs`). */
+  verdict_kind?: string;
+  /** `"asked"` / `"terminated"` / `"continued"` — see the
+   *  C2+ state-machine docstring above. */
+  action?: string;
+  /** `null` for the main loop (no worker attribution). The
+   *  field is reserved for a future worker-audit surface (PR1
+   *  future-proofing — current worker path defers to the worker
+   *  run's own transcript). */
+  run_id?: string | null;
+}
+
 /** Union of all parsed payload shapes + a `raw` fallback for
  *  malformed / unknown kinds. The renderer switches on the
  *  parsed shape's kind via the `kind` field on the row, not on
@@ -96,6 +126,7 @@ export type ParsedPayload =
   | { kind: "tool"; payload: ToolAuditPayload }
   | { kind: "tool_executed"; payload: ToolExecutedPayload }
   | { kind: "mode"; payload: ModeAuditPayload }
+  | { kind: "loop_intervention"; payload: LoopInterventionAuditPayload }
   | { kind: "raw"; raw: unknown }
   | { kind: "empty" };
 
@@ -123,6 +154,7 @@ const MODE_KINDS = new Set<string>([
 ]);
 
 const TOOL_EXECUTED_KIND = "tool_executed";
+const LOOP_INTERVENTION_KIND = "loop_intervention";
 
 /** Parse the raw `payloadJson` for a row into a typed shape.
  *  Never throws — malformed / null / unknown shapes degrade
@@ -145,6 +177,12 @@ export function parseAuditPayload(
   }
   if (kind === TOOL_EXECUTED_KIND) {
     return { kind: "tool_executed", payload: parsed as ToolExecutedPayload };
+  }
+  if (kind === LOOP_INTERVENTION_KIND) {
+    return {
+      kind: "loop_intervention",
+      payload: parsed as LoopInterventionAuditPayload,
+    };
   }
   if (MODE_KINDS.has(kind)) {
     return { kind: "mode", payload: parsed as ModeAuditPayload };
@@ -195,6 +233,17 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   // prompt" when reviewing a session's history. Wire string is
   // locked by `AuditKind::ResendMessage.as_str()`.
   { value: "resend_message", label: "重新发送" },
+  // C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`):
+  // harness-driven 循环检测主动干预 — when the C2 soft-prompt
+  // consecutive-hit counter reaches N=3, the harness asks the
+  // user via QuestionStore whether to terminate the loop or
+  // continue. Three actions land here: `asked` (question
+  // emitted), `terminated` (user picked「终止 loop」),
+  // `continued` (user picked「继续」). Worker subagents do NOT
+  // write this row (R5 — direct-break short-circuit, no audit
+  // surface). Wire string is locked by
+  // `AuditKind::LoopIntervention.as_str()` in the Rust side.
+  { value: "loop_intervention", label: "循环检测干预" },
 ];
 
 /** Visual family for the list row's leading icon. The renderer
@@ -211,6 +260,7 @@ export type AuditIconFamily =
   | "mode"
   | "message-edit"
   | "message-resend"
+  | "loop-intervention"
   | "unknown";
 
 /** Map a wire `kind` to the icon family the modal renders.
@@ -247,6 +297,13 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     // D3 PR3 (2026-06-17): user-initiated message resend.
     case "resend_message":
       return "message-resend";
+    // C2+ (2026-07-05): harness-driven 循环检测主动干预 —
+    // 3 consecutive loop-detection hits triggered a user-ask.
+    // Distinct family so the icon reads "loop intervention"
+    // (alert-triangle / warn, amber) instead of falling into
+    // the generic "unknown / gray" bucket.
+    case "loop_intervention":
+      return "loop-intervention";
     default:
       return "unknown";
   }

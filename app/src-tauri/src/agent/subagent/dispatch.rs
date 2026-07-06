@@ -911,6 +911,15 @@ pub(crate) async fn run_subagent(
     // mutually exclusive in practice (the agent loop's max_turns
     // branch is reached only when no cancel or error fired).
     let worker_text = worker_sink.final_text();
+    // C2+ (2026-07-05, task `07-05-c2-loop-active-intervention` PR3):
+    // capture the worker's loop-terminated signal BEFORE the status
+    // picker so we can route it to `Incomplete` (the worker did not
+    // cleanly finish — it was force-stopped by the harness mid-loop
+    // after consecutive loop-detection hits ≥ 3). Kept as a separate
+    // bool from the status so the `format_dispatch_result_with_model`
+    // call + the loop-terminated line append below can read it
+    // without re-parsing the status enum.
+    let worker_loop_terminated = worker_sink.was_loop_terminated();
     let status = if worker_sink.was_cancelled() {
         SubagentStatus::Cancelled
     } else if worker_sink.had_error() {
@@ -923,6 +932,16 @@ pub(crate) async fn run_subagent(
         // the task"; the `[status: incomplete]\n<partial>\n
         // [INCOMPLETE_MARKER]` wire shape makes it visible in
         // the parent's tool_result.
+        SubagentStatus::Incomplete
+    } else if worker_loop_terminated {
+        // C2+ (PR3): the worker's loop-detection state machine
+        // hit the consecutive-hits threshold and the worker
+        // path took the direct-break short-circuit (no
+        // `QuestionStore` round-trip, no audit row — R5).
+        // Treat as `Incomplete`: the worker did useful partial
+        // work but was force-stopped before completing the
+        // task. The `[loop terminated: ...]` line appended
+        // below carries the harness signal to the parent LLM.
         SubagentStatus::Incomplete
     } else {
         SubagentStatus::Completed
@@ -1164,6 +1183,35 @@ pub(crate) async fn run_subagent(
         partial_actions.as_deref(),
         worker_display.as_deref(),
     );
+
+    // C2+ (2026-07-05, task `07-05-c2-loop-active-intervention` PR3):
+    // when the worker exited via the C2+ direct-break short-circuit
+    // (loop detection fired 3 turns in a row), append a
+    // harness-generated line to the dispatch_result content so the
+    // parent LLM sees the loop-termination signal and can decide
+    // whether to retry / change strategy / accept (R5). The line is
+    // appended AFTER `format_dispatch_result_with_model` so the
+    // existing `[status: incomplete]` prefix + partial-actions
+    // section stay unchanged; the loop-terminated line is a new
+    // trailing signal.
+    //
+    // Why a trailing line (vs a new `SubagentStatus::LoopTerminated`
+    // variant): adding a 5th status would ripple through
+    // `format_final_text` / `format_dispatch_result` /
+    // `SubagentStatusDb` (DB CHECK constraint + migration) /
+    // frontend drawer status pill. C2+ R5 explicitly defers that
+    // (worker runs have their own transcript; the parent only needs
+    // to know the worker was force-stopped). The trailing-line
+    // approach matches the existing `worker_changes_summary`
+    // pattern below (also a trailing append on a non-clean exit).
+    let content = if worker_loop_terminated {
+        format!(
+            "{}\n\n{}",
+            content, "[loop terminated: worker 因循环重复操作被自动终止，未完成全部步骤]"
+        )
+    } else {
+        content
+    };
 
     // L3b (2026-06-27): append the worker-changes summary to the
     // tool_result content when the worker left changes on its branch.

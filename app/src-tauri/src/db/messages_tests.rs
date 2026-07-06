@@ -449,3 +449,123 @@ async fn resend_message_audit_on_deleted_session_returns_error() {
     let result = record_message_resend_audit(&pool, &s.id, 0, "after-delete").await;
     assert!(result.is_err(), "audit insert must fail on missing session");
 }
+
+// =====================================================================
+// C2+ (2026-07-05): record_loop_intervention_audit round-trip
+//
+// Mirrors `resend_message_audit_round_trips_via_list_audit_events`
+// shape — the audit row written by `record_loop_intervention_audit`
+// must round-trip through `list_audit_events` with the documented
+// payload (`hit_count` / `verdict_kind` / `action` / `run_id`) so
+// the C4 audit-log UI can dispatch on the kind string without
+// further coordination.
+// =====================================================================
+
+/// C2+ (2026-07-05): the `loop_intervention` row written by the
+/// `record_loop_intervention_audit` helper round-trips through
+/// `list_audit_events`. Covers the three `action` variants
+/// (`asked` / `terminated` / `continued`) + both `verdict_kind`
+/// variants (`hard` / `soft`) + the `run_id: Option` shape
+/// (main-loop path passes `None`; worker path passes `Some(id)`).
+#[tokio::test]
+async fn loop_intervention_audit_round_trips_via_list_audit_events() {
+    use crate::agent::permissions::record_loop_intervention_audit;
+
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Case 1: main-loop path, action="asked", verdict_kind="hard".
+    record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked")
+        .await
+        .unwrap();
+
+    // Case 2: main-loop path, action="terminated", verdict_kind="soft".
+    record_loop_intervention_audit(&pool, &s.id, None, 5, "soft", "terminated")
+        .await
+        .unwrap();
+
+    // Case 3: worker path, action="continued", run_id=Some. PR1
+    // ships before the worker path actually fires this helper
+    // (worker C2+ goes through transcript, not the audit log —
+    // PRD R5 / design §3.2), but the helper signature must accept
+    // `Some(run_id)` so the future worker surface can opt in
+    // without another signature change.
+    record_loop_intervention_audit(
+        &pool,
+        &s.id,
+        Some("worker-run-uuid-1234"),
+        3,
+        "hard",
+        "continued",
+    )
+    .await
+    .unwrap();
+
+    let events = list_audit_events(&pool, &s.id).await.unwrap();
+    assert_eq!(events.len(), 3);
+    for ev in &events {
+        assert_eq!(ev.kind, "loop_intervention");
+    }
+
+    // Case 1 payload.
+    let p1: serde_json::Value =
+        serde_json::from_str(events[0].payload_json.as_deref().unwrap()).unwrap();
+    assert_eq!(p1["hit_count"], 3);
+    assert_eq!(p1["verdict_kind"], "hard");
+    assert_eq!(p1["action"], "asked");
+    assert!(
+        p1["run_id"].is_null(),
+        "main-loop run_id is None → JSON null"
+    );
+
+    // Case 2 payload.
+    let p2: serde_json::Value =
+        serde_json::from_str(events[1].payload_json.as_deref().unwrap()).unwrap();
+    assert_eq!(p2["hit_count"], 5);
+    assert_eq!(p2["verdict_kind"], "soft");
+    assert_eq!(p2["action"], "terminated");
+    assert!(p2["run_id"].is_null());
+
+    // Case 3 payload (worker run_id surfaces verbatim).
+    let p3: serde_json::Value =
+        serde_json::from_str(events[2].payload_json.as_deref().unwrap()).unwrap();
+    assert_eq!(p3["hit_count"], 3);
+    assert_eq!(p3["verdict_kind"], "hard");
+    assert_eq!(p3["action"], "continued");
+    assert_eq!(p3["run_id"], "worker-run-uuid-1234");
+}
+
+/// C2+ (2026-07-05): the loop-intervention audit helper returns
+/// `Result<(), sqlx::Error>` like the other audit helpers; a DB
+/// write failure surfaces to the caller (the agent loop
+/// log-and-swallow path). Asserted by inserting into a deleted
+/// session (FK constraint fires; helper returns `Err`). Mirrors
+/// `resend_message_audit_on_deleted_session_returns_error`.
+#[tokio::test]
+async fn loop_intervention_audit_on_deleted_session_returns_error() {
+    use crate::agent::permissions::record_loop_intervention_audit;
+
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    delete_session(&pool, &s.id).await.unwrap();
+    let result = record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked").await;
+    assert!(result.is_err(), "audit insert must fail on missing session");
+}

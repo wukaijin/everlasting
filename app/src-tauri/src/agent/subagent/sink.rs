@@ -107,6 +107,26 @@ pub struct SubagentBufferSink {
     /// when the worker exhausts its turn budget, which is not
     /// a cancel or an error path.
     was_incomplete: std::sync::atomic::AtomicBool,
+    /// C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`
+    /// PR3): set when the worker emitted a terminal
+    /// `Done { stop_reason: "loop_terminated" }` event. C2+
+    /// triggers after `loop_hit_count >= 3` consecutive loop-
+    /// detection verdicts; the worker path takes a direct
+    /// short-circuit (no `QuestionStore` round-trip, no audit
+    /// row) and emits the `loop_terminated` stop_reason. The
+    /// `run_subagent` caller reads this to:
+    ///   1. pick the `status: incomplete` prefix (the worker
+    ///      didn't cleanly finish — it was force-stopped by
+    ///      the harness mid-loop),
+    ///   2. append the
+    ///      `[loop terminated: worker 因循环重复操作被自动终止]`
+    ///      line to the `dispatch_result` content so the parent
+    ///      LLM sees the loop-termination signal and can decide
+    ///      whether to retry / change strategy / accept.
+    /// Mutually exclusive with `was_cancelled`, `had_error`, and
+    /// `was_incomplete` in practice — the worker's C2+ branch
+    /// (`chat_loop.rs`) emits exactly one terminal `Done` event.
+    was_loop_terminated: std::sync::atomic::AtomicBool,
     /// 2026-06-22 (RULE-FrontSubagent-004): count of REAL per-turn
     /// `Done` events the worker received. Incremented once per
     /// completed LLM turn iteration (the natural per-turn Done
@@ -162,6 +182,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: Some(app_handle),
             run_id,
@@ -182,6 +203,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: None,
             run_id,
@@ -215,6 +237,7 @@ impl SubagentBufferSink {
             had_error: std::sync::atomic::AtomicBool::new(false),
             was_cancelled: std::sync::atomic::AtomicBool::new(false),
             was_incomplete: std::sync::atomic::AtomicBool::new(false),
+            was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
             turns_completed: std::sync::atomic::AtomicU64::new(0),
             app_handle: None,
             run_id,
@@ -299,6 +322,17 @@ impl SubagentBufferSink {
     /// `Completed` for the natural end_turn exit).
     pub fn was_incomplete(&self) -> bool {
         self.was_incomplete
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// C2+ (2026-07-05, task `07-05-c2-loop-active-intervention`
+    /// PR3): set when the worker emitted a terminal
+    /// `Done { stop_reason: "loop_terminated" }` event. The
+    /// `run_subagent` caller reads this to pick the
+    /// `status: incomplete` prefix and append the
+    /// `[loop terminated: ...]` line to the dispatch_result.
+    pub fn was_loop_terminated(&self) -> bool {
+        self.was_loop_terminated
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -470,6 +504,23 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
                         self.was_incomplete
                             .store(true, std::sync::atomic::Ordering::SeqCst);
                     }
+                } else if stop_reason.as_deref() == Some("loop_terminated") {
+                    // C2+ (2026-07-05, task `07-05-c2-loop-active-
+                    // intervention` PR3): the worker took the
+                    // C2+ direct-break short-circuit (consecutive
+                    // loop-detection hits ≥ 3). Mutually exclusive
+                    // with `was_cancelled` / `was_incomplete` /
+                    // `had_error` in practice — the worker's C2+
+                    // branch emits exactly one terminal `Done`.
+                    // `run_subagent` reads this to (1) pick the
+                    // `status: incomplete` prefix (the worker did
+                    // not cleanly finish — it was force-stopped by
+                    // the harness mid-loop) and (2) append the
+                    // `[loop terminated: ...]` line to the
+                    // dispatch_result content so the parent LLM
+                    // sees the loop-termination signal.
+                    self.was_loop_terminated
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             }
             _ => {}

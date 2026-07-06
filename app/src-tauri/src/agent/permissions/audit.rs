@@ -1,13 +1,13 @@
 //! `AuditKind` enum + audit-row writers. Split out of `mod.rs`
 //! on 2026-06-23.
 //!
-//! `AuditKind` is intentionally a **single enum** (17 variants),
+//! `AuditKind` is intentionally a **single enum** (18 variants),
 //! NOT split into per-domain enums: `record_audit`'s signature,
 //! the serde tag landing in `session_audit_events.kind`, and the
 //! frontend C4 audit-log UI all key off the flat lowercase wire
 //! strings. The variants are grouped below by domain
-//! (Tool / Permission / Mode / Message / Worker) using section
-//! comments for readability — the grouping is cosmetic.
+//! (Tool / Permission / Mode / Message / Loop / Worker) using
+//! section comments for readability — the grouping is cosmetic.
 
 use sqlx::SqlitePool;
 
@@ -18,7 +18,7 @@ use super::types::PermissionContext;
 // ---------------------------------------------------------------------------
 
 /// Audit event kinds. Serialized lowercase (matches DB column).
-/// 17 variants — see the module-level docstring above (variant count
+/// 18 variants — see the module-level docstring above (variant count
 /// grouped by domain) + PRD `## A2 后端` "审计 `kind` 枚举" section.
 ///
 /// `ModeChanged` / `YoloEntered` / `YoloExited` are written
@@ -83,6 +83,18 @@ pub enum AuditKind {
     /// 主流程)。
     ResendMessage,
 
+    // === Loop 域 (2026-07-05, C2+ 循环检测主动干预) ===
+    /// C2+ (2026-07-05): harness 主动干预循环检测。当 C2 软提示
+    /// 连续命中 N=3 次仍未能让 LLM 自我纠正时,harness 通过
+    /// `QuestionStore` 主动询问用户「是否终止本次 agent loop」。
+    /// payload 携带 `hit_count` / `verdict_kind` ("hard"|"soft") /
+    /// `action` ("asked"|"terminated"|"continued")。落表点在
+    /// chat_loop.rs 的 C2+ 状态机三个分支:register 成功后立即
+    /// 落 `asked`;用户选「终止」落 `terminated`;用户选「继续」
+    /// 落 `continued`。worker 触发不落本表(worker 无独立审计
+    /// surface,worker run 自有 transcript 记录)。
+    LoopIntervention,
+
     // === Worker 域 (2026-06-22, RULE-FrontSubagent-003 fix) ===
     /// worker subagent 在 Tier 4 交互式 ask 后,user 选了"Allow"
     /// / "仅一次"。payload 携带 `worker_run_id` / `tool_name` /
@@ -124,6 +136,7 @@ impl AuditKind {
             Self::ToolExecuted => "tool_executed",
             Self::EditMessage => "edit_message",
             Self::ResendMessage => "resend_message",
+            Self::LoopIntervention => "loop_intervention",
             Self::WorkerAskAllowed => "worker_ask_allowed",
             Self::WorkerAskDenied => "worker_ask_denied",
             Self::WorkerAskTimedOut => "worker_ask_timed_out",
@@ -262,6 +275,61 @@ pub async fn record_message_resend_audit(
         db,
         session_id,
         AuditKind::ResendMessage.as_str(),
+        Some(&payload_str),
+    )
+    .await
+}
+
+/// C2+ (2026-07-05): record a `loop_intervention` audit row.
+/// Mirrors [`record_message_resend_audit`] / [`record_tool_executed_audit`]
+/// but for the harness-driven 循环检测主动干预 path: when C2 软提示
+/// 连续命中 N=3 次仍未能让 LLM 自我纠正,harness 通过 `QuestionStore`
+/// 主动询问用户「是否终止本次 agent loop」。This helper is fired at
+/// the three C2+ state-machine branches in `chat_loop.rs`:
+///
+/// - `action = "asked"` —— `QuestionStore::register` 成功后立即落
+/// - `action = "terminated"` —— 用户选「终止 loop」分支
+/// - `action = "continued"` —— 用户选「继续」分支
+///
+/// **Best-effort** (same contract as `record_audit` /
+/// `record_tool_executed_audit` / `record_message_resend_audit`):
+/// a DB write failure is logged at `warn!` and swallowed — the
+/// agent loop never sees the error and continues normally.
+/// Audit loss is acceptable because the user has already seen
+/// the visual confirmation (the question card / the loop break);
+/// the audit row is only for after-the-fact review.
+///
+/// `run_id: Option<&str>` is the worker run id when the audit is
+/// fired from a worker subagent path (future-proofing — C2+ PR1
+/// ships before the worker path lands the audit; main loop passes
+/// `None`). The frontend C4 audit-log UI can use this to attribute
+/// the intervention to a specific worker run when present.
+///
+/// `verdict_kind` is `"hard"` for `LoopVerdict::HardLoop` /
+/// `"soft"` for `LoopVerdict::SoftLoop` (caller-side match —
+/// `loop_detection.rs` is unchanged by C2+).
+///
+/// `action` is one of `"asked"` / `"terminated"` / `"continued"`
+/// (see the state-machine docstring above).
+pub async fn record_loop_intervention_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    run_id: Option<&str>,
+    hit_count: u32,
+    verdict_kind: &str,
+    action: &str,
+) -> Result<(), sqlx::Error> {
+    let payload = serde_json::json!({
+        "hit_count": hit_count,
+        "verdict_kind": verdict_kind,
+        "action": action,
+        "run_id": run_id,
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::LoopIntervention.as_str(),
         Some(&payload_str),
     )
     .await
