@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "dispatch 优先级链（dispatch > DB > frontmatter > parent）+ worker provider 解析路径；§'Concurrent readonly dispatch' race-dissolution + 优先级表是核心约束"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "dispatch_subagent tool schema 契约（加 model 属性）+ tool_use/tool_result 配对不变量（RULE-A-007）+ 失效兜底语义"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "model_display 列语义（catalog hit=Some / 其他=None）—— dispatch path 共用，不改 schema 但需遵循既有写入规则"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "catalog = HashMap<model_id, Provider> 结构 + provider caps（supports_thinking）跟随 provider；resolve_worker_provider 失效兜底契约"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "@@agent forced dispatch 前缀解析契约（turn-1 short-circuit）+ ForcedDispatch wire；加 --model= flag 须遵循既有 @@ 解析约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "streamController forcedDispatch 类型 + useModelsStore（display_name→id 反查数据源）；per-input reactive 模式"}
+{"file": ".trellis/tasks/archive/2026-07/07-03-subagent-frontmatter-model/design.md", "reason": "前序 A 任务设计：resolve_worker_provider 纯函数契约 + format_dispatch_result_with_model 的 [model:] 行语义（dispatch path 必须一致）"}
+{"file": ".trellis/tasks/archive/2026-07/07-03-subagent-per-agent-model-ui/design.md", "reason": "前序 C 任务设计：resolve_final_model（DB > frontmatter）签名 + 优先级叠加点；本 task 在其之前插 dispatch override"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check dispatch_subagent schema 契约一致性（model 属性新增后）+ tool_use/tool_result 配对 + 失效兜底语义合规"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "check 优先级链 dispatch > DB > frontmatter > parent 与既有 race-dissolution / worker 取消传播不变量不冲突"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "check catalog hit/miss 兜底 + provider caps（thinking）跨 dispatch path 一致"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "check @@agent --model= flag 解析位置约束 + ForcedDispatch wire shape + 前端解析容错（不误解析 task 文本）"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "check streamController forcedDispatch 类型变更 + useModelsStore 反查不引入额外 IPC / 响应式副作用"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 段（lint/type/test/cross-layer）—— 验收前对照"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend Quality Check 段（vue-tsc/vitest/跨层一致性）—— 验收前对照"}

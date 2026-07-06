@@ -209,6 +209,7 @@ re-running all 36 integration tests + cargo check.
 | 2026-06-21 | 23 | `06-21-fix-worker-system-prompt-dead-code` (B6 review defect A) | `system_prompt_override: Option<String>` | thread the worker's `SubagentDef.system_prompt` through as the override (pre-fix `_worker_system_prompt` was dead code; the worker silently inherited the parent's `assemble_system_prompt` output, causing prompt/permission contradictions in Edit/Plan mode); production + 36 `agent_loop_*` tests pass `None`, the worker nested call passes `Some(assemble_subagent_prompt(def, &task))` |
 | 2026-06-30 | 24 | `06-30-explicit-agent-dispatch` | `forced_dispatch: Option<ForcedDispatch>` | user `@@<agent> <task>` prefix → turn-1 short-circuit bypasses `provider.stream` (parent LLM zero calls) + reuses `run_subagent` directly; production passes the parsed `ForcedDispatch` (or `None`), worker nested + all tests pass `None` |
 | 2026-07-03 | 25 | `07-03-subagent-per-agent-model-ui` (B6+ C) | (no new `run_chat_loop` param) | per-agent model priority chain `DB override > frontmatter > parent` lives in `agent::subagent::dispatch::resolve_final_model`, called by `run_subagent` BEFORE `resolve_worker_provider`; the resolver itself is **unchanged** (6 existing tests stay green); the new `subagent_model_overrides` table (`db::subagent_overrides`) is the global DB row that wins over the file-declared `model:` |
+| 2026-07-07 | 26 | `07-06-b6plus-b-dispatch-model-arg` (B6+ B) | (no new `run_chat_loop` param) | per-dispatch model override extends the priority chain to **`dispatch > DB > frontmatter > parent`**. The overlay is one line in `run_subagent`: `final_model = dispatch_model.or(resolved_lower)` where `dispatch_model` is parsed from `input.model` (LLM path sends a display_name from the schema enum; user `@@agent --model=` path sends an id resolved by the frontend). A new `resolve_model_by_name_or_id(db, input)` does display_name→id reverse-lookup (id passthrough first, then `list_models` first-match on display_name; miss → `None` → falls through to `resolve_final_model`). `resolve_final_model` / `resolve_worker_provider` are **unchanged** (their tests stay green). The `dispatch_subagent` schema gains a `model` property with a dynamic enum built from a per-`run_chat_loop` `list_models` snapshot (`Vec<ModelBrief>`, display_name values — the system prompt does not list models so the enum is the LLM's only discovery channel). `ForcedDispatch` gains `model_id: Option<String>` (`#[serde(default)]`, wire snake_case). |
 
 The B6 cluster (PR1a + PR1b + PR2b + PR3, adding 5 params across 4 sub-PRs in a
 single 2-week window) is the largest single jump. It is justified because
@@ -240,6 +241,27 @@ in this task — the upstream priority resolution is the architectural
 decision; the alternative (adding a `model_override` param to
 `run_chat_loop` so the parent path could also benefit from per-session
 overrides) is deferred to a follow-up.
+
+**B6+ B (2026-07-07, task `07-06-b6plus-b-dispatch-model-arg`) also
+does NOT add a `run_chat_loop` param** — it extends the C priority
+chain upward by one tier to `dispatch > DB > frontmatter > parent`.
+The overlay is `final_model = dispatch_model.or(resolved_lower)` in
+`run_subagent` (one line; `dispatch_model=None` collapses to C's
+behavior, so A/C zero-regression). `dispatch_model` is parsed from
+`input.get("model")` — both entry points converge on this field:
+the LLM-driven `dispatch_subagent({model})` path sends a display_name
+(the schema `model` enum lists display_names), and the user `@@agent
+--model=<X>` path sends an id (the frontend's `resolveModelInput`
+reverse-resolves display_name→id before IPC). The display_name→id
+reverse-lookup is `resolve_model_by_name_or_id(db, input)` (id
+passthrough first, then `list_models` first-match; miss → `None` →
+graceful degrade to `resolve_final_model`). A miss / typo does NOT
+fail the dispatch — it logs `warn!` and falls through to the agent's
+configured default. The `dispatch_subagent` schema `model` enum is
+fed by a per-`run_chat_loop` snapshot of `list_models` projected into
+`Vec<ModelBrief>` (display_name values; built once outside the turn
+loop — CRUD during a session reflects next session + catalog-miss
+fallback covers the lag).
 
 ### Production + test call site parity
 

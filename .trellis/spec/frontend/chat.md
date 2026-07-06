@@ -359,6 +359,14 @@ per-row spinner:仿 `WorkerMergeControls` 的 reactive Map 模式(本任务用 `
 
 失效 model 兜底:DB override 指向已删 model(catalog miss)→ 下拉显示该 id + 红字"模型已删除,将降级";dispatch 走 `resolve_worker_provider` warn + parent fallback,不报错。
 
+## B6+ B — per-dispatch model override via `@@agent --model=` (2026-07-07)
+
+`chat.ts::send()` 的 `@@agent <task>` 前缀解析扩展为 `@@agent [--model=<X>] <task>`(`parseForcedDispatchPrefix` 纯函数,导出可单测)。flag 位置必须紧跟 agent 名之后、task 之前(git/cargo flag 语义);task 中间的 `--model=` **不**误解析(整段当 task)。`<X>` 支持两种值,经 `resolveModelInput(raw, models)` 纯函数反查 `useModelsStore().models`:① 精确 id 直返;② display_name 匹配取首(多同名 `console.warn`);③ 未命中 → 返 `undefined` + `console.warn`(dispatch 走 agent 默认,**不报错、不弹 toast**;raw `--model=` 文本留在输入框可改正重发)。
+
+wire 形状:`ForcedDispatchPayload = { subagent, task, model_id? }`,字段 **snake_case**(`model_id` 非 `modelId`)—— 嵌套 IPC struct 字段经 serde verbatim,不像顶层 Tauri command arg 那样 auto-camel(项目惯例:顶层 arg camelCase 如 `forcedDispatch` / `resendSeq`;嵌套 struct 字段 snake_case 跟 Rust struct 一致)。`streamController.ts::StartRequestArgs.forcedDispatch` 类型同步加 `model_id?: string`。后端 `ForcedDispatch` 加 `#[serde(default)] model_id: Option<String>`,旧前端(无该字段)→ `None`(serde 容错)。
+
+后端两条入口汇合:`run_subagent` 解析 `input.get("model")` —— LLM path 传 display_name(schema enum 值,见 `tool-contract.md` "B6+ B"),user `@@` path 传 id(前端已反查);统一经 `resolve_model_by_name_or_id(db, input)` 收敛成 id。优先级 `dispatch > DB > frontmatter > parent`,叠加逻辑见 `agent-loop-architecture.md` row 26。单测 `app/src/stores/chat.test.ts`(14 cases:flag 位置 / id+display_name 反查 / task 中间不误解析 / 未命中降级 / 多行 task 保留)。
+
 ### 数据流契约(per-row 改动)
 
 ```
