@@ -145,6 +145,41 @@ pub struct ForcedDispatch {
     /// the `@@<agent>` prefix). Written into the synthesized
     /// tool_use's `input.task` verbatim.
     pub task: String,
+    /// B6+ B (task 07-06-b6plus-b-dispatch-model-arg): optional
+    /// per-dispatch model override. Parsed from an
+    /// `@@agent --model=<X> <task>` prefix by the frontend; `<X>`
+    /// may be a model id or display_name, and the frontend resolves
+    /// it to a model **id** via `useModelsStore` before sending
+    /// (the wire carries only ids — same shape as the LLM path
+    /// after its display_name reverse-lookup in
+    /// `resolve_model_by_name_or_id`). `None` = no per-dispatch
+    /// override (worker uses its configured default: Settings
+    /// per-agent override > frontmatter `model:` > parent's model).
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
+/// B6+ B (task 07-06-b6plus-b-dispatch-model-arg): a minimal
+/// (id, display_name) projection of a model row, used to build the
+/// dynamic `model` enum on the `dispatch_subagent` tool schema. The
+/// enum values are display_names (human-readable) so the LLM does
+/// not have to guess UUIDs — the system prompt does not list models,
+/// so the tool schema's enum is the LLM's only discovery channel.
+/// Built once per `run_chat_loop` invocation from `list_models`
+/// (a session-level snapshot; model CRUD during a session is
+/// reflected next session and covered by the catalog-miss fallback
+/// in `resolve_worker_provider`).
+#[derive(Clone, Debug)]
+pub struct ModelBrief {
+    /// The model's catalog key (UUID). Currently only `display_name`
+    /// feeds the schema enum, so non-test lib code writes but does
+    /// not read `id`; it is kept on the struct so the snapshot
+    /// carries the full id↔display_name pairing for tests and future
+    /// callers (e.g. a debug panel listing models by id). Tests read
+    /// it via the `ModelBrief` constructor.
+    #[allow(dead_code)]
+    pub id: String,
+    pub display_name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +245,17 @@ pub fn definition() -> ToolDef {
                                     write-capable workers. `true` forces a worktree even \
                                     for a single dispatch; `false` forces shared-cwd. Omit \
                                     for the system default."
+                },
+                "model": {
+                    "type": "string",
+                    "enum": [],
+                    "description": "Override the worker's model for THIS dispatch only \
+                                    (does not persist). The dynamic enum lists available \
+                                    model display names; this static `definition()` has \
+                                    no model context so its enum is empty. When omitted, \
+                                    the worker uses its configured default (Settings \
+                                    per-agent override > frontmatter `model:` > parent's \
+                                    model). Use this for cross-model adversarial review."
                 }
             },
             "required": ["subagent", "task"]
@@ -243,9 +289,18 @@ pub const DISPATCH_TOOL_NAME: &str = "dispatch_subagent";
 /// `worktree_path`). The cache is read-through + mtime-fenced, so
 /// adding / editing / deleting a `.md` is picked up on the next
 /// chat turn without a reload command.
-pub async fn definition_with_cache(cache: &SubagentCache, project_path: &str) -> ToolDef {
+pub async fn definition_with_cache(
+    cache: &SubagentCache,
+    project_path: &str,
+    models: &[ModelBrief],
+) -> ToolDef {
     let loaded = cache.list(project_path).await;
     let names: Vec<String> = loaded.iter().map(|l| l.def.name.clone()).collect();
+    // B6+ B: the `model` enum values are display_names (human-readable;
+    // the system prompt does not list models, so this enum is the
+    // LLM's only discovery channel). The id↔display_name mapping is
+    // resolved at dispatch time by `resolve_model_by_name_or_id`.
+    let model_names: Vec<String> = models.iter().map(|m| m.display_name.clone()).collect();
 
     // Build the `Available subagents:` line. Each entry carries
     // the source tag + the subagent's own description (truncated
@@ -323,6 +378,17 @@ pub async fn definition_with_cache(cache: &SubagentCache, project_path: &str) ->
                                     write-capable workers. `true` forces a worktree even \
                                     for a single dispatch; `false` forces shared-cwd. Omit \
                                     for the system default."
+                },
+                "model": {
+                    "type": "string",
+                    "enum": model_names,
+                    "description": "Override the worker's model for THIS dispatch only \
+                                    (does not persist). Pick a value from the enum (a model \
+                                    display name). When omitted, the worker uses its \
+                                    configured default (Settings per-agent override > \
+                                    frontmatter `model:` > parent's model). Use this for \
+                                    cross-model adversarial review (e.g. dispatch reviewer \
+                                    with a stronger / different-family model)."
                 }
             },
             "required": ["subagent", "task"]
@@ -788,7 +854,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let cache = SubagentCache::arc();
         let project_path = tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path).await;
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
         assert_eq!(def.name, DISPATCH_TOOL_NAME);
         let enum_vals: Vec<String> = def
             .input_schema
@@ -812,7 +878,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let cache = SubagentCache::arc();
         let project_path = tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path).await;
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
         let desc = def.description.expect("description present");
         assert!(
             desc.contains("Available subagents:"),
@@ -847,7 +913,7 @@ mod tests {
         let cache = SubagentCache::arc();
 
         // Initially only builtins.
-        let def = definition_with_cache(&cache, &project_path).await;
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
         let enum_vals: Vec<String> = def
             .input_schema
             .pointer("/properties/subagent/enum")
@@ -866,7 +932,7 @@ mod tests {
         )
         .unwrap();
 
-        let def = definition_with_cache(&cache, &project_path).await;
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
         let enum_vals: Vec<String> = def
             .input_schema
             .pointer("/properties/subagent/enum")
@@ -904,7 +970,7 @@ mod tests {
 
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path).await;
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
         let desc = def.description.expect("description");
         // project researcher wins, source tag is project.
         assert!(
@@ -918,6 +984,70 @@ mod tests {
             "builtin tag should be overridden: {}",
             desc
         );
+    }
+
+    // ---- definition_with_cache model enum (B6+ B) ----
+
+    #[tokio::test]
+    async fn definition_with_cache_model_enum_from_briefs() {
+        // B6+ B (task 07-06-b6plus-b-dispatch-model-arg): the `model`
+        // property's enum is built from the `models: &[ModelBrief]`
+        // argument — display_name values, so the LLM can discover
+        // available models without guessing UUIDs.
+        let cache = SubagentCache::arc();
+        let project_path = std::env::temp_dir().to_string_lossy().to_string();
+        let briefs = vec![
+            ModelBrief {
+                id: "uuid-1".into(),
+                display_name: "GPT-4o".into(),
+            },
+            ModelBrief {
+                id: "uuid-2".into(),
+                display_name: "Claude Sonnet 4.5".into(),
+            },
+        ];
+        let def = definition_with_cache(&cache, &project_path, &briefs).await;
+        let model_enum: Vec<String> = def
+            .input_schema
+            .pointer("/properties/model/enum")
+            .and_then(|v| v.as_array())
+            .expect("model enum present")
+            .iter()
+            .map(|v| v.as_str().expect("string").to_string())
+            .collect();
+        assert_eq!(
+            model_enum,
+            vec!["GPT-4o".to_string(), "Claude Sonnet 4.5".to_string()],
+            "model enum must mirror the briefs' display_names in order"
+        );
+        // `model` is NOT in `required` (optional override).
+        let required: Vec<String> = def
+            .input_schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .expect("required present")
+            .iter()
+            .map(|v| v.as_str().expect("string").to_string())
+            .collect();
+        assert!(
+            !required.contains(&"model".to_string()),
+            "model must not be required"
+        );
+    }
+
+    #[tokio::test]
+    async fn definition_with_cache_empty_briefs_yields_empty_model_enum() {
+        // Empty briefs (no models / list_models failed) → empty enum,
+        // not a missing property (defensive — keeps the schema shape).
+        let cache = SubagentCache::arc();
+        let project_path = std::env::temp_dir().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let model_enum = def
+            .input_schema
+            .pointer("/properties/model/enum")
+            .and_then(|v| v.as_array())
+            .expect("model enum present even when empty");
+        assert!(model_enum.is_empty(), "empty briefs → empty model enum");
     }
 
     // ---- builtin_subagents ----

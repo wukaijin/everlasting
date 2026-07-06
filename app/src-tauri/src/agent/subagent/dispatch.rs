@@ -400,6 +400,42 @@ pub(crate) async fn run_subagent(
     // future explicit read-only call site preserve the old
     // "read-only + shared cwd" semantics.
     let dispatch_isolation = input.get("isolation").and_then(|v| v.as_bool());
+    // B6+ B (task 07-06-b6plus-b-dispatch-model-arg): per-dispatch
+    // model override. The LLM path sends a display_name (the schema
+    // `model` enum's values are display_names); the user `@@ --model=`
+    // path sends an id (the frontend resolves display_name→id before
+    // IPC). Both converge here: `resolve_model_by_name_or_id` accepts
+    // either form. A miss (deleted model / typo / empty) → `None`,
+    // which means "no dispatch override" — the dispatch then falls
+    // through to `resolve_final_model` (DB > frontmatter > parent),
+    // preserving A/C zero-regression. A `warn!` makes the silent
+    // fallback visible in logs.
+    let dispatch_model_raw: Option<&str> = input
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let dispatch_model: Option<String> = match dispatch_model_raw {
+        Some(raw) => match resolve_model_by_name_or_id(db, raw).await {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                tracing::warn!(
+                    input = raw,
+                    "dispatch model not found (deleted / typo); ignoring, using agent default"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    input = raw,
+                    error = %e,
+                    "dispatch model lookup failed; ignoring, using agent default"
+                );
+                None
+            }
+        },
+        None => None,
+    };
     let isolated = if force_readonly {
         // Serial-only switch; force isolation off so the read-only +
         // shared-cwd scope is preserved (L3a legacy compat).
@@ -551,17 +587,29 @@ pub(crate) async fn run_subagent(
     // `resolve_worker_provider`, which is **unchanged** (its 6
     // existing unit tests stay green; the priority change is
     // upstream of the resolver).
-    let final_model = match resolve_final_model(db, def.name.as_str(), def.model.as_deref()).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(
-                agent_name = %def.name,
-                error = %e,
-                "run_subagent: resolve_final_model failed; falling back to frontmatter-only"
-            );
-            def.model.clone()
-        }
-    };
+    //
+    // 2026-07-07 (task 07-06-b6plus-b-dispatch-model-arg, B6+ B):
+    // the per-dispatch override (`dispatch_model`, parsed above from
+    // `input.model`) sits ABOVE `resolve_final_model` in the priority
+    // chain: dispatch > DB > frontmatter > parent. The overlay is a
+    // single `Option::or`, so `dispatch_model=None` (no per-dispatch
+    // override) collapses to exactly the prior behavior (A/C
+    // zero-regression). `dispatch_model` is always an id by the time
+    // it reaches here (display_name reverse-lookup already happened
+    // during parsing).
+    let resolved_lower =
+        match resolve_final_model(db, def.name.as_str(), def.model.as_deref()).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    agent_name = %def.name,
+                    error = %e,
+                    "run_subagent: resolve_final_model failed; falling back to frontmatter-only"
+                );
+                def.model.clone()
+            }
+        };
+    let final_model = dispatch_model.clone().or(resolved_lower);
     let cat_guard = match &catalog {
         Some(c) => Some(c.read().await),
         None => None,
@@ -1264,6 +1312,47 @@ pub(crate) async fn run_subagent(
 /// works on a stable DB; a transient error is rare and the
 /// frontmatter is a sensible "default to file" fallback for
 /// the duration of the error.
+/// B6+ B (task 07-06-b6plus-b-dispatch-model-arg): resolve a model
+/// id from either an id (passthrough) or a display_name (reverse
+/// lookup). Serves the LLM-driven dispatch path where the
+/// `dispatch_subagent` schema's `model` enum values are
+/// display_names (human-readable; the LLM has no other way to learn
+/// which models exist — `build_system_prompt` does not list models).
+///
+/// - Exact id match first (`get_model`, O(1)).
+/// - Miss → `list_models` reverse-lookup on `display_name`; first
+///   match wins (display_name should be unique but DB does not
+///   enforce it — the rare ambiguity takes the first row, which is
+///   deterministic for a given DB state).
+/// - Empty / whitespace-only input → `Ok(None)`.
+/// - Not found → `Ok(None)` (NOT an error): the caller treats `None`
+///   as "no dispatch override" and falls through to
+///   `resolve_final_model`, so a deleted model / typo degrades
+///   gracefully to the agent's configured default.
+///
+/// Returns the resolved model id (catalog key) for the caller to
+/// feed into [`resolve_worker_provider`].
+pub(crate) async fn resolve_model_by_name_or_id(
+    db: &SqlitePool,
+    input: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    // ① exact id match (passthrough — the LLM may legitimately send
+    //    an id it learned from another tool's description).
+    if let Some(row) = crate::db::models::get_model(db, trimmed).await? {
+        return Ok(Some(row.id));
+    }
+    // ② display_name reverse lookup (first match wins).
+    let models = crate::db::list_models(db).await?;
+    Ok(models
+        .into_iter()
+        .find(|m| m.model.display_name == trimmed)
+        .map(|m| m.model.id))
+}
+
 pub(crate) async fn resolve_final_model(
     db: &SqlitePool,
     agent_name: &str,
@@ -1880,5 +1969,268 @@ mod tests {
         // `resolve_worker_provider_miss_falls_back_to_parent` above
         // (the same `model-id-not-in-catalog` case there covers the
         // downstream half of AC9).
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_model_by_name_or_id (task 07-06-b6plus-b-dispatch-model-arg)
+    //
+    // B6+ B: the display_name→id reverse-lookup for the LLM-driven
+    // dispatch path (schema `model` enum values are display_names).
+    // AC1 (display_name→id) / id passthrough / miss→None.
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a provider + model row, return the model row.
+    async fn create_provider_and_model(
+        pool: &SqlitePool,
+        display_name: &str,
+        model_name: &str,
+        ctx: u32,
+    ) -> crate::db::ModelRow {
+        let provider_row = crate::db::providers::create_provider(
+            pool,
+            "anthropic",
+            "Anthropic",
+            "https://api.anthropic.com",
+            "sk-test",
+        )
+        .await
+        .unwrap();
+        crate::db::models::create_model(
+            pool,
+            &provider_row.id,
+            model_name,
+            display_name,
+            None,
+            None,
+            false,
+            ctx,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn resolve_model_by_name_or_id_id_passthrough() {
+        // An exact model id is returned verbatim.
+        let pool = test_pool().await;
+        let row = create_provider_and_model(&pool, "Claude Test", "claude-test", 50_000).await;
+        let got = resolve_model_by_name_or_id(&pool, &row.id).await.unwrap();
+        assert_eq!(got.as_deref(), Some(row.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn resolve_model_by_name_or_id_display_name_lookup() {
+        // A display_name resolves to the corresponding id.
+        let pool = test_pool().await;
+        let row = create_provider_and_model(&pool, "GPT-4o", "gpt-4o", 128_000).await;
+        let got = resolve_model_by_name_or_id(&pool, "GPT-4o").await.unwrap();
+        assert_eq!(got.as_deref(), Some(row.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn resolve_model_by_name_or_id_display_name_first_match_wins() {
+        // Multiple models share a display_name → first match (by
+        // list_models ordering) wins. Deterministic for a given DB
+        // state; the design accepts this (display_name should be
+        // unique but DB does not enforce it).
+        let pool = test_pool().await;
+        let _row_a = create_provider_and_model(&pool, "Dup", "dup-a", 50_000).await;
+        let _row_b = create_provider_and_model(&pool, "Dup", "dup-b", 60_000).await;
+        let got = resolve_model_by_name_or_id(&pool, "Dup").await.unwrap();
+        assert!(got.is_some(), "duplicate display_name must still resolve");
+    }
+
+    #[tokio::test]
+    async fn resolve_model_by_name_or_id_miss_returns_none() {
+        // Unknown display_name / id → Ok(None) (NOT an error).
+        let pool = test_pool().await;
+        let _row = create_provider_and_model(&pool, "Real", "real", 50_000).await;
+        let got = resolve_model_by_name_or_id(&pool, "nonexistent")
+            .await
+            .unwrap();
+        assert!(
+            got.is_none(),
+            "unknown input must resolve to None, not error"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_model_by_name_or_id_empty_returns_none() {
+        // Empty / whitespace input → None (the parser filters these,
+        // but the function is defensive).
+        let pool = test_pool().await;
+        assert!(resolve_model_by_name_or_id(&pool, "")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(resolve_model_by_name_or_id(&pool, "   ")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Priority overlay (task 07-06-b6plus-b-dispatch-model-arg)
+    //
+    // The overlay `final_model = dispatch_model.or(resolved_lower)` lives
+    // inside `run_subagent` as a one-liner; these tests pin the priority
+    // semantics by exercising the composition directly. The dispatch_model
+    // arm is the reverse-lookup result; resolved_lower is
+    // `resolve_final_model`. Together: dispatch > DB > frontmatter > parent.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn priority_overlay_dispatch_overrides_db_override() {
+        // AC2: dispatch_model=X + DB override=Y → final=X.
+        let pool = test_pool().await;
+        let row_x = create_provider_and_model(&pool, "X", "x", 50_000).await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-from-db-y",
+        )
+        .await
+        .unwrap();
+        let dispatch_model = Some(row_x.id.clone());
+        let resolved_lower = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert_eq!(final_model.as_deref(), Some(row_x.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_dispatch_overrides_frontmatter() {
+        // AC3: dispatch_model=X + frontmatter=Y (no DB) → final=X.
+        let pool = test_pool().await;
+        let row_x = create_provider_and_model(&pool, "X", "x", 50_000).await;
+        let dispatch_model = Some(row_x.id.clone());
+        let resolved_lower = resolve_final_model(&pool, "researcher", Some("fm-y"))
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert_eq!(final_model.as_deref(), Some(row_x.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_none_dispatch_falls_to_db() {
+        // AC4 zero-regression: no dispatch_model + DB override=Y → final=Y.
+        let pool = test_pool().await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-from-db-y",
+        )
+        .await
+        .unwrap();
+        let dispatch_model: Option<String> = None;
+        let resolved_lower = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert_eq!(final_model.as_deref(), Some("model-from-db-y"));
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_none_dispatch_none_db_falls_to_frontmatter() {
+        // AC4: no dispatch + no DB → frontmatter.
+        let pool = test_pool().await;
+        let dispatch_model: Option<String> = None;
+        let resolved_lower = resolve_final_model(&pool, "researcher", Some("fm-y"))
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert_eq!(final_model.as_deref(), Some("fm-y"));
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_all_none_inherits_parent() {
+        // AC4: no dispatch + no DB + no frontmatter → None (parent).
+        let pool = test_pool().await;
+        let dispatch_model: Option<String> = None;
+        let resolved_lower = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert!(final_model.is_none());
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_unknown_dispatch_display_name_becomes_none() {
+        // AC7: the LLM sends a display_name that reverse-lookup misses
+        // → dispatch_model=None → final falls to resolve_final_model.
+        let pool = test_pool().await;
+        crate::db::subagent_overrides::set_subagent_model_override(
+            &pool,
+            "researcher",
+            "model-from-db-y",
+        )
+        .await
+        .unwrap();
+        let dispatch_model = resolve_model_by_name_or_id(&pool, "nonexistent-display")
+            .await
+            .unwrap();
+        assert!(dispatch_model.is_none(), "miss must produce None");
+        let resolved_lower = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert_eq!(
+            final_model.as_deref(),
+            Some("model-from-db-y"),
+            "miss dispatch must degrade to the DB override, not parent"
+        );
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_dispatch_miss_inherits_parent_when_no_lower() {
+        // AC7: miss dispatch + no DB/frontmatter → None (parent).
+        let pool = test_pool().await;
+        let dispatch_model = resolve_model_by_name_or_id(&pool, "ghost").await.unwrap();
+        assert!(dispatch_model.is_none());
+        let resolved_lower = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        let final_model = dispatch_model.or(resolved_lower);
+        assert!(final_model.is_none());
+    }
+
+    #[tokio::test]
+    async fn priority_overlay_idempotent_across_dispatches() {
+        // R3: per-dispatch override does NOT persist. Two identical
+        // resolve_final_model calls (no DB write between) return the
+        // same value — the dispatch overlay is per-call only.
+        let pool = test_pool().await;
+        let row = create_provider_and_model(&pool, "X", "x", 50_000).await;
+        let resolved_1 = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        // Simulate a dispatch with model X (does not write DB/frontmatter).
+        let _final_1 = Some(row.id.clone()).or(resolved_1.clone());
+        let resolved_2 = resolve_final_model(&pool, "researcher", None)
+            .await
+            .unwrap();
+        assert_eq!(resolved_1, resolved_2, "dispatch must not persist");
+    }
+
+    #[tokio::test]
+    async fn dispatch_input_model_field_parsed_as_dispatch_model() {
+        // §3.2: `input.model` (a display_name, as the LLM would send
+        // from the schema enum) reverse-resolves to an id. This mirrors
+        // the parse logic in run_subagent: input.model → raw →
+        // resolve_model_by_name_or_id → dispatch_model.
+        let pool = test_pool().await;
+        let row = create_provider_and_model(&pool, "GPT-4o", "gpt-4o", 128_000).await;
+        let input = serde_json::json!({ "model": "GPT-4o" });
+        let raw: Option<&str> = input
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let dispatch_model = match raw {
+            Some(r) => resolve_model_by_name_or_id(&pool, r).await.unwrap(),
+            None => None,
+        };
+        assert_eq!(dispatch_model.as_deref(), Some(row.id.as_str()));
     }
 }

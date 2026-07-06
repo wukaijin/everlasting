@@ -1847,8 +1847,15 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     /** explicit-agent-dispatch (2026-06-30): when set, the backend
      *  short-circuits the LLM and dispatches the named subagent
      *  directly (the `@@<agent> <task>` prefix the user typed).
-     *  `undefined` for normal sends + resends. */
-    forcedDispatch?: { subagent: string; task: string };
+     *  `undefined` for normal sends + resends.
+     *
+     *  B6+ B (2026-07-07): `model_id` carries an optional per-dispatch
+     *  model override (a model id; the frontend resolves display_name→id
+     *  via `resolveModelInput` before sending). Field name is
+     *  `model_id` (snake_case) to match the backend `ForcedDispatch`
+     *  struct — nested IPC struct fields pass through serde verbatim
+     *  (no Tauri arg auto-camel). Omitted when no `--model=` flag. */
+    forcedDispatch?: { subagent: string; task: string; model_id?: string };
   }
 
   /** Kick off a new stream. The caller is responsible for

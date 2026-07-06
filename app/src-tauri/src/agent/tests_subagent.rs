@@ -94,6 +94,7 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         Some(crate::agent::subagent::ForcedDispatch {
             subagent: "researcher".into(),
             task: "Find all .rs files under src/.".into(),
+            model_id: None,
         }),
         // 2026-06-30 (ask_user_question task): per-test
         // QuestionStore. The forced-dispatch test exercises the

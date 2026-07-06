@@ -642,6 +642,37 @@ pub async fn run_chat_loop(
     };
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
+    // B6+ B (task 07-06-b6plus-b-dispatch-model-arg): snapshot the
+    // model list once per `run_chat_loop` invocation to build the
+    // dynamic `model` enum on the `dispatch_subagent` tool schema
+    // (display_name values — the system prompt does not list models,
+    // so the enum is the LLM's only discovery channel). Placed here
+    // (after `effective_is_worker` is known and `db` is in scope)
+    // but still OUTSIDE the turn loop (1511), so it runs once per
+    // chat invocation regardless of turn count. The worker path
+    // snapshots too (harmless — `definition_with_cache` is gated on
+    // `effective_is_worker == false` below, so the worker never
+    // consumes the snapshot). Models change at low frequency; CRUD
+    // during a session is reflected next session and covered by the
+    // catalog-miss fallback in `resolve_worker_provider`.
+    let model_briefs: Vec<crate::agent::subagent::ModelBrief> =
+        match crate::db::list_models(&db).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|mwp| crate::agent::subagent::ModelBrief {
+                    id: mwp.model.id,
+                    display_name: mwp.model.display_name,
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "list_models snapshot failed; dispatch_subagent `model` enum will be empty"
+                );
+                vec![]
+            }
+        };
+
     // B5 memory is empty in tests (no memory files written to the
     // temp project dir). Skip the synthetic user/assistant
     // inserts when `load_for_session` returns no layers.
@@ -934,10 +965,18 @@ pub async fn run_chat_loop(
         // per-request, seq is per-turn) and the `forced_` prefix
         // namespaces it away from any LLM-emitted tool_use id.
         let tool_use_id = format!("forced_{}-{}", rid, seq);
-        let input = serde_json::json!({
+        let mut input = serde_json::json!({
             "subagent": fd.subagent,
             "task": fd.task,
         });
+        // B6+ B: thread the per-dispatch model override (resolved to
+        // an id by the frontend's `resolveModelInput`) into the
+        // synthesized tool_use's input so `run_subagent` picks it up
+        // via `input.get("model")` — same code path as the LLM-driven
+        // dispatch (`resolve_model_by_name_or_id` accepts the id).
+        if let Some(mid) = &fd.model_id {
+            input["model"] = serde_json::Value::String(mid.clone());
+        }
         let dispatch_name = crate::agent::subagent::DISPATCH_TOOL_NAME;
 
         // ① open the assistant message + emit the synthetic
@@ -1446,8 +1485,12 @@ pub async fn run_chat_loop(
         // with the project's other namespace dirs.
         if !effective_is_worker {
             let project_path = worktree_path.to_string_lossy().to_string();
-            let dispatch_def =
-                crate::agent::subagent::definition_with_cache(&subagent_cache, &project_path).await;
+            let dispatch_def = crate::agent::subagent::definition_with_cache(
+                &subagent_cache,
+                &project_path,
+                &model_briefs,
+            )
+            .await;
             turn_tool_defs.push(dispatch_def);
         }
         let turn_tool_defs = turn_tool_defs;

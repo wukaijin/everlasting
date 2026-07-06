@@ -42,6 +42,7 @@ import { useProjectsStore } from "./projects";
 import { useConfigStore } from "./config";
 import { useStreamControllerStore } from "./streamController";
 import { useChecklistStore } from "./checklist";
+import { useModelsStore, type ModelWithProvider } from "./models";
 import { simplifyPath } from "../utils/path";
 import {
   type ChatMessage,
@@ -55,6 +56,101 @@ import {
 } from "./chat.types";
 
 type Role = "user" | "assistant";
+
+/**
+ * B6+ B (task 07-06-b6plus-b-dispatch-model-arg): resolve a
+ * `--model=<X>` flag value (from `@@agent --model=<X> <task>`) to a
+ * model id. `<X>` may be a model id (passthrough) or a display_name
+ * (reverse-lookup via the loaded models list). Exported for unit
+ * testing (pure over the `models` arg).
+ *
+ * - Exact id match first.
+ * - Miss → display_name match (first wins; display_name should be
+ *   unique but the DB does not enforce it). On duplicate, logs a
+ *   `console.warn` so the ambiguity is visible in devtools.
+ * - Not found → `undefined` (the caller omits `modelId`, so the
+ *   dispatch falls back to the agent's configured default). No
+ *   thrown error — the raw `--model=` text stays in the input so the
+ *   user can correct it.
+ */
+export function resolveModelInput(
+  raw: string,
+  models: ModelWithProvider[],
+): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  // ① exact id match.
+  const byId = models.find((m) => m.id === trimmed);
+  if (byId) return byId.id;
+  // ② display_name reverse lookup (first match wins).
+  const matches = models.filter((m) => m.displayName === trimmed);
+  if (matches.length === 1) return matches[0].id;
+  if (matches.length > 1) {
+    console.warn(
+      `[resolveModelInput] multiple models share display_name "${trimmed}"; using the first match (${matches[0].id})`,
+    );
+    return matches[0].id;
+  }
+  // ③ not found.
+  console.warn(
+    `[resolveModelInput] no model matches id or display_name "${trimmed}"; ignoring --model override`,
+  );
+  return undefined;
+}
+
+/** Shape of a forced-dispatch payload threaded through the `chat`
+ *  IPC. Field names are snake_case to match the backend
+ *  `ForcedDispatch` struct (nested IPC struct fields pass through
+ *  serde verbatim — no Tauri arg auto-camel). */
+export interface ForcedDispatchPayload {
+  subagent: string;
+  task: string;
+  model_id?: string;
+}
+
+/** B6+ B: parse a `@@<agent> [--model=<X>] <task>` prefix from the
+ *  trimmed input text. Pure over `(trimmed, models)` so it is
+ *  unit-testable without the pinia store.
+ *
+ *  Returns:
+ *  - `{ forcedDispatch: {...}, body }` when a valid `@@` prefix is
+ *    present and the task is non-empty.
+ *  - `null` when a `@@` prefix is present but the task is empty
+ *    (the caller should abort the send — no dispatch without a
+ *    brief).
+ *  - `{ forcedDispatch: undefined, body: trimmed }` when NO `@@`
+ *    prefix is present (a normal message).
+ *
+ *  The `--model=<X>` flag is optional and must sit BETWEEN the agent
+ *  name and the task (git/cargo flag semantics); a `--model=` token
+ *  elsewhere in the task body is NOT extracted. An unresolved `<X>`
+ *  yields no `model_id` (the dispatch falls back to the agent's
+ *  configured default); the raw `--model=` text stays in the input.
+ */
+export function parseForcedDispatchPrefix(
+  trimmed: string,
+  models: ModelWithProvider[],
+):
+  | { forcedDispatch: ForcedDispatchPayload; body: string }
+  | { forcedDispatch: undefined; body: string }
+  | null {
+  const atAt = trimmed.match(
+    /^@@([A-Za-z0-9_-]+)[ \t]+(?:--model=(\S+)[ \t]+)?([\s\S]+)$/,
+  );
+  if (!atAt) {
+    return { forcedDispatch: undefined, body: trimmed };
+  }
+  const task = atAt[3].trim();
+  if (!task) return null;
+  const rawModel = atAt[2]; // undefined when no --model= flag
+  const modelId = rawModel ? resolveModelInput(rawModel, models) : undefined;
+  const payload: ForcedDispatchPayload = {
+    subagent: atAt[1],
+    task,
+    ...(modelId ? { model_id: modelId } : {}),
+  };
+  return { forcedDispatch: payload, body: task };
+}
 
 /** Wire-format content sent to the Rust `chat` command. Mirrors
  *  Rust's `MessageContent`: a plain string for text-only messages,
@@ -868,15 +964,25 @@ export const useChatStore = defineStore("chat", () => {
     // surfaces it as an error tool_result (cache.lookup miss). An
     // empty task after the prefix is rejected (no dispatch without a
     // brief). Only one leading `@@` prefix is honored.
-    let forcedDispatch: { subagent: string; task: string } | undefined;
-    let body = trimmed;
-    const atAt = trimmed.match(/^@@([A-Za-z0-9_-]+)[ \t]+([\s\S]+)$/);
-    if (atAt) {
-      const task = atAt[2].trim();
-      if (!task) return;
-      forcedDispatch = { subagent: atAt[1], task };
-      body = task;
-    }
+    //
+    // B6+ B (2026-07-07): an optional `--model=<X>` flag may appear
+    // BETWEEN the agent name and the task (git/cargo flag semantics):
+    //   `@@<agent> --model=<X> <task>`
+    // `<X>` may be a model id or display_name; `resolveModelInput`
+    // reverse-resolves display_name→id via `useModelsStore`. A `--model=`
+    // flag appearing in the task body (not in the flag position) is NOT
+    // extracted — it stays part of the task text. An unresolved name
+    // yields `model_id: undefined` (the dispatch falls back to the
+    // agent's configured default); the raw `--model=` text remains
+    // visible in the input so the user can correct it. The wire field
+    // is `model_id` (snake_case) to match the backend `ForcedDispatch`
+    // struct (no serde rename — nested IPC struct fields pass through
+    // verbatim, unlike top-level Tauri command args which auto-camel).
+    const models = useModelsStore().models;
+    const parsed = parseForcedDispatchPrefix(trimmed, models);
+    if (parsed === null) return; // empty task after prefix
+    let forcedDispatch = parsed.forcedDispatch;
+    let body = parsed.body;
 
     // Lazily create a session if there isn't one yet. `createNewSession`
     // throws if no project is active, so the chat area is expected
