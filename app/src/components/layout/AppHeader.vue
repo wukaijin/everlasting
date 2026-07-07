@@ -29,6 +29,7 @@ import { useStreamControllerStore } from "../../stores/streamController";
 import TitleBar from "./TitleBar.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
+import PendingBadge from "./PendingBadge.vue";
 
 const streamController = useStreamControllerStore();
 </script>
@@ -42,6 +43,10 @@ const streamController = useStreamControllerStore();
            when at least one hidden project exists; the menu itself
            loads the list on mount. -->
       <HiddenProjectsMenu />
+      <!-- 2026-07-08 cross-session-pending-indicator (B档): global
+           pending-interaction count across all sessions/projects.
+           Hidden when count === 0 (self-managed inside the badge). -->
+      <PendingBadge />
     </TitleBar>
   </header>
 </template>

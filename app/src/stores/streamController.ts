@@ -55,6 +55,7 @@ import {
   CHECKLIST_TOOL_NAME,
 } from "./checklist";
 import { useMemoryStore } from "./memory";
+import { useProjectsStore } from "./projects";
 import {
   useQuestionCardsStore,
 } from "./questionCards";
@@ -646,6 +647,33 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     if (m.injections) markRaw(m.injections);
   }
   return out;
+}
+
+/** Pure decision + message builder for the cross-session pending
+ *  toast (exported top-level so the Q3 gate "current session → no
+ *  toast" can be unit-tested without spinning up the store /
+ *  Tauri listener). Returns `null` when `sessionId ===
+ *  currentSessionId` (the inline card is already visible, so
+ *  toasting would only disrupt the active session), otherwise a
+ *  `{ message, sessionId }` toast payload. Title resolution: a
+ *  cross-project target is absent from `sessions` (which hold only
+ *  the current project's rows), so it falls back to the generic
+ *  "另一项目的会话" label — no session→project mapping (Q4). */
+export function buildPendingNotification(
+  sessionId: string,
+  kind: "mode_change" | "question",
+  currentSessionId: string | null,
+  sessions: { id: string; title: string }[],
+  targetMode?: "edit" | "plan" | "yolo",
+): { message: string; sessionId: string } | null {
+  if (sessionId === currentSessionId) return null;
+  const title = sessions.find((s) => s.id === sessionId)?.title;
+  const who = title ? `「${title}」` : "另一项目的会话";
+  const message =
+    kind === "mode_change"
+      ? `${who} 申请切换到 ${targetMode} 模式`
+      : `${who} 有问题等你回答`;
+  return { message, sessionId };
 }
 
 export const useStreamControllerStore = defineStore("streamController", () => {
@@ -1424,6 +1452,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       kind: "question",
       payload,
     });
+    maybeNotifyPending(payload.session_id, "question");
   }
 
   /** Phase B4 (2026-07-07, `request_mode_change` task): handler
@@ -1450,6 +1479,40 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       kind: "mode_change",
       payload,
     });
+    maybeNotifyPending(payload.session_id, "mode_change", payload.target_mode);
+  }
+
+  /** Cross-session pending-interaction toast (2026-07-08
+   *  `cross-session-pending-indicator`). When a pending mode_change
+   *  or question lands on a session OTHER than the current one,
+   *  surface a global toast so a user working in a different
+   *  session perceives it without switching. Current-session
+   *  pendings are NOT toasted — their inline card is already
+   *  visible (per Q3: minimize disruption to the active session).
+   *
+   *  Title: only the current project's sessions live in
+   *  `chatStore.sessions`, so a cross-project target falls back to
+   *  the generic "另一项目的会话" label (avoids session→project
+   *  mapping per Q4). The toast carries `sessionId` so AppShell's
+   *  click handler can same-project-jump. */
+  function maybeNotifyPending(
+    sessionId: string,
+    kind: "mode_change" | "question",
+    targetMode?: "edit" | "plan" | "yolo",
+  ): void {
+    const chatStore = useChatStore();
+    const n = buildPendingNotification(
+      sessionId,
+      kind,
+      chatStore.currentSessionId,
+      chatStore.sessions,
+      targetMode,
+    );
+    if (n) {
+      useProjectsStore().showToast(n.message, "info", 6000, {
+        sessionId: n.sessionId,
+      });
+    }
   }
 
   /** Mark a request as finished: drop from activeRequests, unpin

@@ -36,6 +36,7 @@ import type { SessionSummary } from "../stores/chat.types";
 import { useProjectsStore } from "../stores/projects";
 import { useStreamControllerStore } from "../stores/streamController";
 import { usePermissionsStore } from "../stores/permissions";
+import { useQuestionCardsStore } from "../stores/questionCards";
 import { COLOR_PALETTE, colorTagHex, hexToRgba } from "../utils/colorTag";
 import {
   BUCKET_LABELS,
@@ -64,6 +65,7 @@ const store = useChatStore();
 const projectsStore = useProjectsStore();
 const streamController = useStreamControllerStore();
 const permStore = usePermissionsStore();
+const qc = useQuestionCardsStore();
 
 // --- 2026-06-27 search/density/grouping state ---
 //
@@ -325,6 +327,47 @@ function cardStyle(s: SessionSummary): Record<string, string> {
   return { backgroundColor: hexToRgba(hex, 0.1), borderLeftColor: hex };
 }
 
+/** Pending interaction badge info (mode change / ask_user_question)
+ *  for the session-list row's cross-session indicator — A档 of
+ *  2026-07-08 `cross-session-pending-indicator`. Mirrors
+ *  `session-item__pending-approval` (permission asks → shield-check)
+ *  but sourced from the questionCards store. Returns null when the
+ *  session has no pending mode/question interaction.
+ *
+ *  Icon + color dispatch on `kind`: mode_change → `refresh` icon
+ *  tinted by target_mode MIRRORING `RequestModeChangeCard`'s
+ *  `mode-card--{edit,plan,yolo}` left-bar accents exactly (NOT the
+ *  PRD/design.md draft mapping, which had plan/edit swapped):
+ *    - edit  → var(--color-accent)     (blue)
+ *    - plan  → var(--color-tool-read)  (cyan)
+ *    - yolo  → var(--color-tool-error) (red)
+ *  so the row badge matches the inline card the user lands on after
+ *  switching sessions. question → `info` icon, neutral accent.
+ *  Title feeds the row's tooltip. */
+function pendingBadge(sid: string): {
+  icon: string;
+  title: string;
+  color?: string;
+} | null {
+  const entry = qc.getPending(sid);
+  if (!entry) return null;
+  if (entry.kind === "mode_change") {
+    const tm = entry.payload.target_mode;
+    // Mirrors `RequestModeChangeCard.modeColorClass` → `.mode-card--*`
+    // left-bar `border-left` colors. Verified against
+    // `RequestModeChangeCard.vue:432-439`. Keeping this in lockstep
+    // avoids a jarring "badge blue, card cyan" handoff on switch.
+    const color =
+      tm === "plan"
+        ? "var(--color-tool-read)"
+        : tm === "yolo"
+          ? "var(--color-tool-error)"
+          : "var(--color-accent)";
+    return { icon: "refresh", title: `申请切换到 ${tm} 模式`, color };
+  }
+  return { icon: "info", title: "有问题等你回答" };
+}
+
 function projectNameFor(s: SessionSummary): string {
   const p = projectsStore.projectById(s.project_id);
   return p?.name ?? "无标题";
@@ -444,6 +487,14 @@ watch(() => props.searchActive, (active) => {
           >
             <Icon name="shield-check" :size="12" />
           </span>
+          <span
+            v-if="qc.getPending(s.id)"
+            class="session-item__pending-interaction"
+            :title="pendingBadge(s.id)?.title"
+            :style="pendingBadge(s.id)?.color ? { color: pendingBadge(s.id)?.color } : undefined"
+          >
+            <Icon :name="pendingBadge(s.id)?.icon ?? 'info'" :size="12" />
+          </span>
         </div>
         <div class="session-item__meta">
           <span v-if="density === 'comfortable'" class="session-item__project">{{ projectNameFor(s) }}</span>
@@ -522,6 +573,14 @@ watch(() => props.searchActive, (active) => {
                   title="有待审批的工具调用，切到此会话处理"
                 >
                   <Icon name="shield-check" :size="12" />
+                </span>
+                <span
+                  v-if="qc.getPending(s.id)"
+                  class="session-item__pending-interaction"
+                  :title="pendingBadge(s.id)?.title"
+                  :style="pendingBadge(s.id)?.color ? { color: pendingBadge(s.id)?.color } : undefined"
+                >
+                  <Icon :name="pendingBadge(s.id)?.icon ?? 'info'" :size="12" />
                 </span>
               </div>
               <div class="session-item__meta">
@@ -796,6 +855,21 @@ watch(() => props.searchActive, (active) => {
   display: inline-flex;
   align-items: center;
   color: var(--color-tool-shell);
+  animation: pulseDot 1.5s ease-in-out infinite;
+}
+
+/* 2026-07-08 cross-session-pending-indicator (A档): mirrors
+   pending-approval's layout + pulse, but for questionCards
+   pending interactions (mode change / ask_user_question). Default
+   accent color is overridden per-row by the `:style` binding when
+   the pending is a mode_change (target_mode tint). Sits next to
+   pending-approval in the title row (a session can have at most
+   one of each — PermissionStore and QuestionStore are independent). */
+.session-item__pending-interaction {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-accent);
   animation: pulseDot 1.5s ease-in-out infinite;
 }
 

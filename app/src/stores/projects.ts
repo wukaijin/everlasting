@@ -43,6 +43,13 @@ export type ToastKind = "info" | "warn" | "error";
 export interface ToastMessage {
   message: string;
   kind: ToastKind;
+  /** Optional session id for clickable toasts (cross-session
+   *  pending-interaction notifications, 2026-07-08
+   *  `cross-session-pending-indicator`). When set AND the session
+   *  belongs to the current project, clicking the toast switches
+   *  to that session. Absent for project-operation toasts → they
+   *  just dismiss on click (existing behavior preserved). */
+  sessionId?: string;
 }
 
 let toastTimer: number | null = null;
@@ -72,8 +79,9 @@ export const useProjectsStore = defineStore("projects", () => {
     message: string,
     kind: ToastKind = "info",
     durationMs = 3500,
+    opts?: { sessionId?: string },
   ): void {
-    toast.value = { message, kind };
+    toast.value = { message, kind, sessionId: opts?.sessionId };
     if (toastTimer !== null) {
       window.clearTimeout(toastTimer);
     }

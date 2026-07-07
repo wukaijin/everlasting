@@ -11,13 +11,31 @@
 
 import { computed } from "vue";
 import { useProjectsStore } from "../../stores/projects";
+import { useChatStore } from "../../stores/chat";
 import AppHeader from "./AppHeader.vue";
 import Sidebar from "./Sidebar.vue";
 
 const projectsStore = useProjectsStore();
+const chatStore = useChatStore();
 const showSidebar = computed<boolean>(
   () => projectsStore.currentProjectId !== null,
 );
+
+/** Toast click handler. For cross-session pending-interaction
+ *  toasts (`sessionId` set): if the target session belongs to the
+ *  current project (present in `chatStore.sessions`), switch to it
+ *  before dismissing so the user lands on the inline card.
+ *  Project-operation toasts carry no `sessionId` and just dismiss —
+ *  preserving pre-existing behavior. Cross-project targets are NOT
+ *  in `sessions`, so they dismiss without jumping (per Q4:
+ *  same-project jump only; avoids needing session→project mapping). */
+async function onToastClick(): Promise<void> {
+  const sid = projectsStore.toast?.sessionId;
+  if (sid && chatStore.sessions.some((s) => s.id === sid)) {
+    await chatStore.switchSession(sid);
+  }
+  projectsStore.dismissToast();
+}
 </script>
 
 <template>
@@ -36,7 +54,7 @@ const showSidebar = computed<boolean>(
       <div
         v-if="projectsStore.toast"
         :class="['toast', `toast--${projectsStore.toast.kind}`]"
-        @click="projectsStore.dismissToast"
+        @click="onToastClick"
       >
         {{ projectsStore.toast.message }}
       </div>
