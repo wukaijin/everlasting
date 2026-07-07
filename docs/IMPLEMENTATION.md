@@ -30,6 +30,55 @@
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
 
+### 2026-07-07 — `request_mode_change` tool (B6+ A):复用 `set_session_mode` IPC + 共用 `QuestionStore` + Yolo 二次 modal 双 IPC
+
+**Context**: LLM 在主 loop 里无工具申请 mode 切换,只能在 plan 模式返回 "please switch me to Edit mode",由用户手动按 `Shift+Tab` 切。新 tool `request_mode_change` 让 LLM 在 turn N 通过 `tool_use` 申请,用户 inline card 二选一,允许路径修改 `sessions.mode`。任务 `.trellis/tasks/07-07-07-07-request-mode-change-tool/`,完整 PRD + design 5 时序 + 11 单测 + 5 集成测试 + 5 IPC 测试 + 23 前端测试。
+
+**关键决策(7 个,按"为什么"而非时间序)**:
+
+1. **新 tool 独立而非复用 `ask_user_question` 的 2 选项形态**:`ask_user_question` 是"信息询问"(收集 context),`request_mode_change` 是"写操作"(改 `sessions.mode`),职责根本不同。复用 ask_user_question 需要塞 "target_mode + reason + mode 颜色映射 + 二次 modal" 进 options 数组变成 ad-hoc 字段,schema 失去通用性。审计 kind 不同(`tool_executed` vs `mode_change_requested/allowed/denied` 3 类新增),IPC 链不同(resolve_tool_question 单纯回填 vs `resolve_mode_change` 走 `set_session_mode` 内部函数落库)。对齐 Claude Code 业界模式,写操作类申请都是独立 tool。
+
+2. **Yolo 二次 modal 守门完全沿用 `chatStore.pendingResolveRequest` + `confirmYolo` 路径**:`useChatStore.requestSetMode(sid, "yolo")` → `pendingYoloConfirm = true` → modal(显示 "切换到 Yolo 将跳过所有用户确认") → `confirmYolo` / `cancelYolo` action。**不**新写 modal 组件,**不**新写 store action。LLM 申请 Yolo 风险 = user 主动切 Yolo 风险,共用同一道守门避免"LLM 偷偷切 Yolo"风险高于"user 主动切 Yolo"的设计失衡。`<RequestModeChangeCard>` 的"允许"按钮 emit handler 分支:`if (targetMode === 'yolo') requestSetMode(); else resolveModeChange(allow=true)`。
+
+3. **共用 `QuestionStore` + 单 pending gate(`PendingInteraction` 互斥)**:扩展 `QuestionStore` 的 value 类型为 `PendingInteraction` tagged enum(`Question(ToolQuestionPayload) | ModeChange(ModeChangePayload)`),**不**新建独立 `ModeChangeStore`。`register` 接口扩展接受 `PendingInteraction`,`resolve` 保留原签名(oneshot 不区分 kind)。**否决**独立 store —— 双 store 互不感知,允许同 session 1 个 question + 1 个 mode_change 并发,UI 难管理 + LLM 行为不可预测。**否决**"只校验不互斥" —— 同 session 同时挂 2 张 card UI 堆叠,user 不知道先答哪个。`map.contains_key(session_id) -> AlreadyPending` 互斥语义天然,跟 ask_user_question 是同一类"user 决策驱动"交互,共享单 pending gate 语义最自然。新 IPC `get_pending_interaction(session_id) -> Option<PendingInteractionEntry>` 统一查询,旧 `get_pending_question` 软弃用保留 1 版本(向后兼容)。
+
+4. **IPC 链:`resolve_mode_change` → `set_session_mode` 内部函数落库,tool 内部不直接 `db::update_session_mode`**:第一稿 design §5.3 写"tool 内部直接调 `db::update_session_mode` 落库",实装时发现双路径漂移风险 —— Yolo root guard / Yolo 二次 modal / `mode_changed` audit 完整性都集中在 `set_session_mode` 内部函数,tool 单独落库会导致这 3 处副作用重复实现 + 行为漂移。改为:`resolve_mode_change` IPC handler 内部调 `set_session_mode` 内部函数(不开 IPC,直接调内部 helper)→ 落库 + audit + 返回 `SessionRow` → 调 `store.resolve(sid, Allow)` 让 agent loop oneshot 解除。**关键不变量**:`store.resolve` 必须在 `db::update_session_mode` **之后**调用(否则 agent loop 先收到 Allow 但 DB 未落库,出现不一致,design §7.2 风险段)。
+
+5. **Yolo 二段路径的"双 IPC 顺序"**:`set_session_mode` 落库 + `mode_changed` audit → `resolve_mode_change` 解 oneshot + `mode_change_allowed` audit。`set_session_mode` handler 检测"这是从 card dispatch 来的"(`pendingResolveRequest` 标记),额外调 `store.resolve(sid, Allow)`;前端 `confirmYolo` 拿到 `SessionRow` 后调 IPC B 解 oneshot(IPC B 第二次 resolve 是 no-op,`AlreadyResolved` 错误码 + warn log,return Ok 防双 audit)。Yolo 二次 modal "取消"路径 → 只调 IPC B(allow=false)→ `mode_change_denied { reason: "yolo_cancelled_confirm" }` audit + tool_result `{"cancelled_by_user": true, "reason": "user cancelled Yolo confirm"}`。
+
+6. **`PendingInteraction` tagged enum + `InteractionResponse` 统一 oneshot 通道类型**:oneshot 通道类型 `QuestionResponse` → `InteractionResponse` enum:`Answered { new_mode: SessionMode } | Cancelled`。`new_mode` 字段对 ask_user_question 语义无意义(取 None 即可),对 request_mode_change 是 `prev_mode` → `new_mode` 迁移记录,工具结果回填 `{"allowed": true, "prev_mode": "...", "new_mode": "..."}`。tagged enum 而非 trait object —— 简单、序列化、零 dyn 成本。
+
+7. **wire shape 共享 struct 豁免**:`ModeChangePayload` 走 `#[serde(rename_all = "snake_case")]` 序列化(共享 struct,**不**像顶层 Tauri arg 那样 auto-camel,跟 `ToolQuestionPayload` 同款)。前端 `getPendingInteraction` IPC 解析时按 snake_case 拿 `target_mode` / `current_mode` / `tool_use_id` / `session_id` / `reason` / `ts`。
+
+**审计种类(20 = 17 旧 + 3 新)**:
+
+- `mode_change_requested`(tool 入口;payload `{target_mode, reason, noop: bool}`,`noop=true` 是 LLM 申请切到当前 mode 的留痕)
+- `mode_change_allowed`(resolve 走允许路径;payload `{prev_mode, new_mode, target_mode}`,**不**含 `mode_changed` —— 由 `db::update_session_mode` 自动产生,职责分离)
+- `mode_change_denied`(resolve 走拒绝路径;payload `{target_mode, reason: "user denied"|"yolo_root_guard"|"yolo_cancelled_confirm"}`)
+
+**6 处副作用 + 3 偏差(trellis-check 评估「可接受」+ 代码注释)**:
+
+- `Pool<SqlitePool>` 参从 PRD R4 初稿进入 tool 签名,后从 design §6 决策变更里移除 —— 落库走 IPC,tool 不需要 pool。
+- `current_mode` 参保留:noop 判断需要;`chat_loop` turn 0 快照提供(`chat_loop.rs:600`)。
+- `noop_target_equals_current_returns_noop_marker` 单测验证 noop 路径不挂 store / 不发 IPC / 留痕 audit。
+- 第二次 `resolve_mode_change` invoke(rid 已 resolve)→ `AlreadyResolved` 错误码 + warn log + `Ok(())` no-op(防双 audit 写入 + 防 IPC handler panic)。
+- 旧 `get_pending_question` IPC 软弃用,保留兼容 1 版本,前端新代码用 `get_pending_interaction`;旧 IPC 标记 `@deprecated` 不删,下版本再删(对齐 BACKLOG §3.2 "废弃保留归档" 原则)。
+- `get_pending_interaction` 返回 `Option<PendingInteractionEntry>`,前端 `useQuestionCardsStore` 走 `Map<sid, PendingInteraction>` 路由 kind 派发。
+
+**Consequences**:
+
+- LLM 在 plan 模式可申请切到 edit 落代码(无需 user 手动 Shift+Tab),反向 edit 模式可申请切到 plan 提议架构,Yolo 高风险任务可申请(经二次 modal 守门)。
+- `QuestionStore` 升级为 `PendingInteraction` tagged enum 是破坏性签名变更,但仅 1 个 caller(`ask_user_question::execute_blocking`),改写为 `PendingInteraction::Question(parsed)` 即可,blast radius 极小(详见 design §7.1)。
+- Yolo root guard 行为集中(`is_running_as_root` 检测只在 `set_session_mode` 内部函数 + `resolve_mode_change` handler 各 1 次),复用 IPC 路径避免双路径漂移,审计完整性天然。
+- `set_session_mode` 仍为唯一 mode 落库入口(2026-07-07 决定,**不**回归到 PRD R4 初稿"tool 内部落库"路径),前端 IPC 双向兼容。
+
+**非阻塞观察**:
+
+- `current_mode` 陈旧风险:LLM 在 turn N 申请切到 X,noop 判断时 `current_mode` 是 turn 0 快照;若 user 在同 LLM 响应前手动改了 mode(罕见),`current_mode` 已陈旧 → noop 误判。可接受(误判最多 1 次"误以为切了但没切",下 turn user 调 mode 后 LLM 看到正确)。改进可选 v2:每次 `execute_blocking` 实时 `load_session(...).mode` 做 noop 判断(避免陈旧)。
+- IPC-level 双重 resolve 兜底存在,但前端 `useQuestionCardsStore.resolveModeChange` 内部已 dedupe(返回前先 `if (pendingBySession.get(sid)?.kind === 'mode_change')` 守卫),IPC 端 `AlreadyResolved` 是防御性兜底,正常运行不会触发。
+
+**关联**: PRD + design + implement `.trellis/tasks/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract.md §request_mode_change](../.trellis/spec/backend/tool-contract.md) + [permission-layer.md §5c](../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture.md §"Tool interception"](../.trellis/spec/backend/agent-loop-architecture.md) + [frontend/chat.md §request_mode_change](../.trellis/spec/frontend/chat.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
+
 ### 2026-07-06 — V2-2+ 自主记忆可观测性 + 管理面板(A1-A11 后端 + B1-B5 前端)
 
 **Context**: V2 2 期自主记忆(06-29)全是 agent 自主闭环 —— 写(`remember`)/ 召回(FTS + pitfall)/ 反思(P4 auto-reflect)/ 提升(P5 状态机)/ 卫生(dedup + age-out)。用户面对的是黑盒:看不到命中、改不了内容、转不了状态、删不了过时项。V2-2+ 补**人**的入口。任务 `.trellis/tasks/07-06-am-observability-panel/`,PRD R1-R5 + design D1-D7。
@@ -1069,3 +1118,31 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **关键教训 —「trait 超类型约束的隐藏工作量要先核实」**:`trait AppError: std::error::Error` 对 `PreFlightError` 不成立(它无 Display 也无 Error impl,只有 `auth_message()/invalid_request_message()` 分方法)。PR-A5-2 必须先补两个 impl。三个类型(LlmError/PreFlightError/QuestionStoreError)现有对外接口形态各异,非"一刀切迁移"。
 - **测试**:进行中(PR-A5-2 ~ A5-5 完成后补:10 类型 ~41 variant `category()/user_message()` 快照 + `HttpStatus` 4xx/5xx 分流 + `From<anyhow::Error>` 兜底 + grep `Result<String>` 残留 + `parseAppCommandError` 容错 + cargo/pnpm 全绿)。
 - **推后期**:多语言 i18n `user_message` / 自动重试策略 / Telemetry Metrics(request_id→Sentry/OTel)/ PermissionDenied·Cancelled·NotFound 独立 category / legacy `.catch(console.error)` 全量替换 / toast UI 接 reka-ui + 单条 dismiss·TTL / `ValidationError`(`pub(crate)`)纳入 impl AppError。
+
+### 2026-07-07 — `request_mode_change` tool(B6+ A:LLM 申请切 mode)
+
+- **Context**:LLM 在主 loop 无工具申请 mode 切换,Plan 模式只能返回 "please switch me to Edit mode" 由 user 手动 `Shift+Tab` 切;反向同理(Edit 模式想切 Plan 提议架构)。本档补一个 LLM-driven mode 申请工具,user 通过 inline card 二选一授权,沿用现有 `set_session_mode` IPC 副作用链(DB + 审计 + Yolo 二次 modal + root guard)避免双路径漂移。
+
+- **决策 D1 — 工具名 `request_mode_change`(snake_case 风格跟 `ask_user_question` 对称)**:语义清晰(申请,非直接改)。`target_mode` ∈ `{edit, plan, yolo}` 3 档 user-facing(`background` enum 永远不暴露)。schema 硬编码 enum,不动 LLM 动态 build。
+
+- **决策 D2 — 卡片形态 = inline message card,非 modal**(沿用 `ask_user_question` 范式):AC10 红线明确:无 portal / 无遮罩 / 无 reka-ui Dialog。**唯一例外**:Yolo 二次确认 modal 沿用既有 `useChatStore.pendingYoloConfirm`,不新写 modal 组件。
+
+- **决策 D3 — "允许" 路径 = 前端触发 IPC + `resolve_mode_change` handler 调 `set_session_mode_internal` 落库**(关键变更,对比 PRD R4 初稿"tool 内部直接调 `db::update_session_mode`"):否决直接落库方案,改走 IPC 复用,理由:① **单一落库入口** —— user 主动切 mode / LLM 申请切 mode 两条路径行为必须完全一致,共用 `set_session_mode_internal` 纯函数(`set_session_mode` IPC handler 抽出的,逻辑 1:1 搬迁);② **Yolo 二次 modal 在前端触发**(`chatStore.requestSetMode` → `pendingYoloConfirm` modal → `confirmYolo` 调双 IPC);③ **审计一致** —— `mode_changed` audit 由 `db::update_session_mode` 自动产生,`resolve_mode_change` 调一遍 `set_session_mode_internal` 是幂等的(二次 UPDATE 无副作用)。
+
+- **决策 D4 — Yolo 二次 modal 守门通过 `chatStore.pendingResolveRequest` + `confirmYolo(pendingResolve)` hook**:card "允许" + `targetMode === "yolo"` → 不直接调 `resolveModeChange`,而是 `useChatStore.requestSetMode(sid, "yolo")` → modal 弹 → `confirmYolo` 成功 → `resolveModeChange(allow=true)` 解 oneshot;modal 取消 → `resolveModeChange(allow=false)` 走拒绝路径。`pendingResolve?: { sessionId, toolUseId, targetMode }` 是 `confirmYolo` / `cancelYolo` 的可选参数,**user 主动切 Yolo 路径(Shift+Tab / popover)ref 为 null,完全不动既有代码**。`is_running_as_root` 时 modal "确认"按钮 disabled + 红字 "Cannot enable Yolo as root",后端 `set_session_mode` IPC 兜底再守一道。
+
+- **决策 D5 — `QuestionStore` 升级为 `PendingInteraction` tagged enum(`Question \| ModeChange`)**:单 pending gate 跨 kind 互斥(同 session 不能并发 2 个待决交互)。`register` 接受 `PendingInteraction`,`resolve` 返 `PendingInteractionEntry { kind, payload }` 让 caller 知道 resolve 了哪种 kind(决定写哪个 audit)。新 IPC `get_pending_interaction` 统一查询,旧 `get_pending_question` 软弃用保留兼容(`#[deprecated]`,`#[allow(deprecated)]` 在 `lib.rs` 注册处抑制警告)。
+
+- **决策 D6 — 3 类新 audit kind 跟 `mode_changed` 不重复**:`mode_change_requested`(LLM 调 tool 触发,记录 target_mode + reason)/ `mode_change_allowed`(user 允许 + DB UPDATE 成功,记录 prev → new)/ `mode_change_denied`(user 拒绝 / Yolo guard 触发,记录 target + reason)。`mode_changed` 由 `db::update_session_mode` 自动产生,**不重复写**。AuditKind 17 → 20。
+
+- **决策 D7 — `noop` 短路(target_mode == current_mode)**:tool 立即返 `{"noop": true, "current_mode": "..."}`(`is_error: false`),不弹 card、不发 IPC 事件。减少 round-trip,LLM 看到 noop 自决。同时写 1 条 `mode_change_requested{noop: true}` audit 保留 LLM 申请痕迹。
+
+- **决策 D8 — Worker subagent 禁用**:`STRUCTURALLY_DISABLED` 加 `request_mode_change`(跟 `update_checklist` 同档)。Worker 想切 mode 必须回 parent。**并行 eligibility 走默认 false**(整批 Serial,跟 `ask_user_question` / `dispatch_subagent` 同档)—— 白名单机制自动生效,不加显式 branch。
+
+- **关键教训 —「测试装配 vs 设计意图」**:Phase E1 集成测试写时漏了 session-cancel 路径的 `token.cancel()` 触发器,`HangingThenCancel` MockProvider 是永远挂起的 stream,`run_chat_loop` 永久挂起死等 oneshot。修正 = 加 watcher `poll mock.call_count >= 1 → token.cancel()`,**对齐 `agent_loop_ask_user_question_session_cancel` 既有范式**(PR2 已有同款测试,新文件漏抄)。**抄模板时核对每行**,特别 cancel / session-switch / race-prone fixture。
+
+- **关键教训 —「`stop_reason` 决定 chat_loop 行为」**:Tests 2/4/5 初版用 `stop_reason=end_turn`,LLM 发 `tool_use` 但 chat_loop 直接 exit(`chat_loop.rs:2017` `should_continue = stop_reason == "tool_use" && !tool_calls.is_empty()`),工具完全没触发。修正 = Turn 1 `stop_reason=tool_use` + 加 Turn 2(text + end_turn)收口。**测试 fixture 必须反映真实 LLM 协议**,end_turn 不带 tool_use,tool_use 必须带 tool_use(否则 loop 提前退出)。
+
+- **测试**:1348 后端(cargo test --lib)+ 794 前端(vitest)+ vue-tsc 0 err + pnpm build 成功。Phase E1 集成测试 5/5(AC1/AC7/AC9/AC12/AC16)+ Phase E2 IPC 测试 4/4 + Phase E3 IPC 测试 5/5(含 Yolo root guard,gated on `is_running_as_root()`)。前端组件测试 23/23(RequestModeChangeCard)。零回归。
+
+- **推后期**:Timeout + auto-decide / 多 mode 排队合并 / 自由文本 reason 编辑 / 跨 session mode 同步 / LLM 申请切到 `background` / 切回 user 上次手动 mode / App crash 恢复 pending / `for turn in 1..=turn_limit` 重构 while 循环零消耗 / 多语言 reason / `Resolve<Option<PendingInteraction>>` 在 `message_history_replay` 接入以展示历史 mode change 卡片。spec 增量(tool-contract / permission-layer / agent-loop-architecture / frontend/chat)已在 ROADMAP §1.2 行引用,内容 follow-up 补。

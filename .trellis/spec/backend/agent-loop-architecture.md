@@ -542,26 +542,44 @@ but the compiler can't prove this).
 
 ### Tool interception (NOT `execute_tool_inner`)
 
-`dispatch_subagent` is **registered** in `builtin_tools()` so the LLM
-can discover it + go through the ⑨ permission check, but its
+The following tools are **registered** in `builtin_tools()` so the LLM
+can discover them + go through the ⑨ permission check, but their
 **execution** is intercepted in `chat_loop.rs`'s tool_use handling loop
-(at ~:1380). Why: `execute_tool_inner` signature is
+(at ~:1380 for `dispatch_subagent`, ~:3110 for the blocking
+user-interaction pair). Why: `execute_tool_inner` signature is
 `(name, input, ctx, guard, session_id, skill_cache, cancel)` — it has no
-access to `provider` / `db` / `cancellations` / `session_active_request`
-/ `read_guard` / `memory_cache` / `permission_asks` /
-`background_shells`, all of which `run_subagent` needs (REVIEW-SUBAGENT-PRD
-#3 verified this empirically). Pushing them into `ToolContext` would
-blur the tool layer / agent layer boundary; the interception pattern
-keeps them at the agent loop layer where they naturally live.
+access to the agent-loop dependencies these tools need. Pushing them
+into `ToolContext` would blur the tool layer / agent layer boundary; the
+interception pattern keeps them at the agent loop layer where they
+naturally live.
+
+| Intercepted tool | Need that `execute_tool_inner` can't satisfy | What chat_loop does |
+|---|---|---|
+| `dispatch_subagent` | `provider` + `db` + `cancellations` + `session_active_request` + `read_guard` + `memory_cache` + `permission_asks` + `background_shells`(for nested `run_chat_loop`) | Calls `run_subagent(...)` recursively with 4 isolation flags + `system_prompt_override`; constructs `ContentBlock::ToolResult` with `[status: ...]` prefix from `format_dispatch_result` (see [tool-contract.md §dispatch_subagent §7](./tool-contract.md)) |
+| `ask_user_question` | `QuestionStore` oneshot + `current_session_id` (for `get_pending_question` IPC key) | Calls `ask_user_question::execute_blocking(...)` → `store.register` → `sink.emit_tool_question` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract.md §ask_user_question](./tool-contract.md) + [chat.md §B9/AskUserQuestionCard](../../frontend/chat.md)) |
+| `request_mode_change` (2026-07-07) | `QuestionStore` extended to `PendingInteraction` (kind = `question` \| `mode_change`) + `current_mode` snapshot (for noop check) + `ChatEventSink::emit_mode_change_request` + `CancellationToken` (for `tokio::select!` oneshot wait) | Calls `request_mode_change::execute_blocking(input, session_id, tool_use_id, current_mode, question_store, sink, cancel)` → noop check → `store.register(PendingInteraction::ModeChange(...))` → `sink.emit_mode_change_request` → `tokio::select!{cancel, oneshot}` → constructs `ContentBlock::ToolResult` (see [tool-contract.md §request_mode_change §7](./tool-contract.md)) |
 
 The interceptor builds a `ContentBlock::ToolResult` (with the
 `[status: completed|cancelled|error|incomplete]` prefix from
-`format_dispatch_result`) and pushes it into `result_blocks` — tool_use/
-tool_result pairing is preserved (same invariant as RULE-A-007). For
-non-completed terminal states, `format_dispatch_result` also appends a
+`format_dispatch_result` for `dispatch_subagent`; with the JSON
+`{"allowed": true, ...}` / `{"cancelled_by_user": true}` / `{"noop": true, ...}`
+shape for the user-interaction pair) and pushes it into `result_blocks` —
+tool_use/tool_result pairing is preserved (same invariant as RULE-A-007).
+For non-completed terminal states, `format_dispatch_result` also appends a
 `Worker partial actions:` summary of the worker's executed tool_calls so
 the parent can do compensatory repair (RULE-BackSubagent-001, 2026-06-22;
 wire shape + 2 KiB head+tail cap in `tool-contract.md` §dispatch_subagent).
+
+**Common rationale** (`ask_user_question` / `request_mode_change`):
+both are **blocking** tools — the agent loop must wait for user
+interaction before continuing. `execute_tool`'s per-tool batch
+execution path is designed for **non-blocking I/O** (`read_file` /
+`shell` / `grep` etc.) where the tool returns immediately; pushing
+oneshot waits through it would blur "execute and return" vs "wait for
+user" semantics and complicate the per-batch ordering / cancellation
+story. Routing them through chat_loop's interception point keeps
+the blocking contract at the agent loop layer (where `tokio::select!`
+already exists for cancel/timeout coordination).
 
 ### worker context (APPEND, never insert at 0)
 
@@ -585,7 +603,8 @@ breakpoint is never disturbed.
 - A new "control-flow tool" needs to be added to the agent loop (a tool
   whose execution path is *not* a pure I/O function but does manipulate
   agent-loop state). Examples that would qualify: a `delegate_to_user`
-  tool (asks the user a clarifying question mid-loop), a `spawn_parallel_workers`
+  tool (asks the user a clarifying question mid-loop — sibling of
+  `ask_user_question` / `request_mode_change`), a `spawn_parallel_workers`
   tool (PR2+ dispatch_subagents plural).
 - A new sub-mode of `run_chat_loop` is needed (e.g., a "headless"
   loop that doesn't go through the chat-event sink). Adding a new flag
