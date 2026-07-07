@@ -172,10 +172,40 @@ pub async fn resolve_mode_change(
     // Accepted for routing parity with the wire shape (the
     // store keys on session_id alone, single-pending gate).
     let _ = tool_use_id;
+    resolve_mode_change_internal(&state.db, &state.question_store, &session_id, &target_mode, allow)
+        .await
+}
 
+/// Pure-Rust core of [`resolve_mode_change`] — extracted into a
+/// free-standing function so it can be unit-tested WITHOUT a
+/// `tauri::test::mock_app` (which this project doesn't use; see
+/// the existing `permission_response` precedent). The IPC
+/// wrapper is a thin shell that just threads the `&Arc<AppState>`
+/// deps through.
+///
+/// `target_mode` is the raw IPC string ("plan" / "yolo" /
+/// "edit" / "background" / anything else). Lenient parse
+/// (unknown → Edit per `db::types::Mode::from_str_opt`).
+///
+/// `allow` is the user's decision. `false` skips
+/// `set_session_mode_internal` entirely (the deny path
+/// MUST NOT touch DB mode); `true` applies via the shared
+/// internal function (single source of truth for mode
+/// application + Yolo root guard + mode_changed audit).
+///
+/// In both paths the `QuestionStore` entry is resolved so the
+/// agent loop's `tokio::select!` arm fires — Cancelled on deny
+/// / root-guard / db-error, Answered on success.
+pub(crate) async fn resolve_mode_change_internal(
+    db_pool: &sqlx::SqlitePool,
+    store: &crate::agent::question_store::QuestionStore,
+    session_id: &str,
+    target_mode: &str,
+    allow: bool,
+) -> Result<db::SessionRow, AppCommandError> {
     // 1. Parse + validate the target_mode (lenient parse —
     //    unknown → Edit per `db::types::Mode::from_str_opt`).
-    let new_mode = match target_mode.as_str() {
+    let new_mode = match target_mode {
         "plan" => db::Mode::Plan,
         "yolo" => db::Mode::Yolo,
         "background" => db::Mode::Background,
@@ -192,8 +222,8 @@ pub async fn resolve_mode_change(
         })
         .to_string();
         if let Err(e) = db::record_audit_event(
-            &state.db,
-            &session_id,
+            db_pool,
+            session_id,
             crate::agent::permissions::AuditKind::ModeChangeDenied.as_str(),
             Some(&payload),
         )
@@ -202,13 +232,12 @@ pub async fn resolve_mode_change(
             tracing::warn!(error = %e, "resolve_mode_change: denied audit failed");
         }
         // Resolve the oneshot so the agent loop unblocks.
-        state
-            .question_store
-            .resolve(&session_id, InteractionResponse::Cancelled)
+        store
+            .resolve(session_id, InteractionResponse::Cancelled)
             .await?;
         // Reload the row so the IPC caller can refresh
         // `currentSession` (mode unchanged on the deny path).
-        return load_session_row(&state.db, &session_id).await;
+        return load_session_row(db_pool, session_id).await;
     }
 
     // 3. Allow path — apply the mode via the internal pure
@@ -217,7 +246,7 @@ pub async fn resolve_mode_change(
     //    user-driven IPC path; see design §5.5 "Yolo root
     //    guard 一致性").
     let apply_result =
-        set_session_mode_internal(&state.db, &session_id, new_mode).await;
+        set_session_mode_internal(db_pool, session_id, new_mode).await;
     match apply_result {
         Ok(row) => {
             // Allowed audit on top of the mode_changed audit
@@ -229,8 +258,8 @@ pub async fn resolve_mode_change(
             })
             .to_string();
             if let Err(e) = db::record_audit_event(
-                &state.db,
-                &session_id,
+                db_pool,
+                session_id,
                 crate::agent::permissions::AuditKind::ModeChangeAllowed.as_str(),
                 Some(&payload),
             )
@@ -239,9 +268,8 @@ pub async fn resolve_mode_change(
                 tracing::warn!(error = %e, "resolve_mode_change: allowed audit failed");
             }
             // Resolve the oneshot so the agent loop unblocks.
-            state
-                .question_store
-                .resolve(&session_id, InteractionResponse::Answered(serde_json::json!(true)))
+            store
+                .resolve(session_id, InteractionResponse::Answered(serde_json::json!(true)))
                 .await?;
             Ok(row.session)
         }
@@ -266,8 +294,8 @@ pub async fn resolve_mode_change(
             })
             .to_string();
             if let Err(e2) = db::record_audit_event(
-                &state.db,
-                &session_id,
+                db_pool,
+                session_id,
                 crate::agent::permissions::AuditKind::ModeChangeDenied.as_str(),
                 Some(&payload),
             )
@@ -281,9 +309,8 @@ pub async fn resolve_mode_change(
             // the tool layer formats the cancel wire as
             // `{"cancelled_by_user": true}` and the LLM
             // decides what to do).
-            let _ = state
-                .question_store
-                .resolve(&session_id, InteractionResponse::Cancelled)
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
                 .await;
             // Surface the apply error to the IPC caller (so
             // the frontend can toast it).
@@ -553,3 +580,27 @@ mod tests {
         assert_eq!(m.kind(), InteractionKind::ModeChange);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase E2 + E3 (07-07-request-mode-change-tool) — IPC handler unit tests.
+//
+// Two sibling test modules:
+// - `tests_get_pending_interaction` (E2) — covers the
+//   `get_pending_interaction` IPC behavior by exercising
+//   `QuestionStore::get_payload` directly (the IPC handler is
+//   a thin wrapper around it; `mock_app` is not used in this
+//   codebase per the `permission_response` precedent).
+// - `tests_resolve_mode_change` (E3) — covers the
+//   `resolve_mode_change` IPC behavior by exercising
+//   `resolve_mode_change_internal` (the pure-Rust core extracted
+//   from the IPC handler in this same module; the IPC wrapper
+//   threads `&state.db` + `&state.question_store` through).
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "tests_get_pending_interaction.rs"]
+mod tests_get_pending_interaction;
+
+#[cfg(test)]
+#[path = "tests_resolve_mode_change.rs"]
+mod tests_resolve_mode_change;
