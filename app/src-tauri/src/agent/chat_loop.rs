@@ -2184,7 +2184,7 @@ pub async fn run_chat_loop(
                 .register(
                     &session_id,
                     &format!("loop_intervention_{}", turn),
-                    payload.clone(),
+                    crate::agent::question_store::PendingInteraction::Question(payload.clone()),
                 )
                 .await
             {
@@ -2223,13 +2223,25 @@ pub async fn run_chat_loop(
                         }
                         resp = rx => {
                             match resp {
-                                Ok(crate::agent::question_store::QuestionResponse::Answered(answers)) => {
+                                Ok(crate::agent::question_store::InteractionResponse::Answered(value)) => {
                                     // Inspect the first answer's
                                     // selected options. Treat
                                     // "终止 loop" (or empty / no
                                     // match) as terminate, "继续"
                                     // as continue. `Cancelled` is
                                     // handled in the next arm.
+                                    //
+                                    // The `Answered` value is a
+                                    // `serde_json::Value` (unified
+                                    // `InteractionResponse`); the
+                                    // C2+ intervention uses the
+                                    // question shape (we registered
+                                    // `PendingInteraction::Question`
+                                    // above) so the value is a
+                                    // JSON-serialized
+                                    // `Vec<QuestionAnswer>`.
+                                    let answers: Vec<crate::agent::question_store::QuestionAnswer> =
+                                        serde_json::from_value(value).unwrap_or_default();
                                     let chosen = answers
                                         .first()
                                         .map(|a| a.options.first().cloned().unwrap_or_default())
@@ -2294,7 +2306,7 @@ pub async fn run_chat_loop(
                                         return;
                                     }
                                 }
-                                Ok(crate::agent::question_store::QuestionResponse::Cancelled) => {
+                                Ok(crate::agent::question_store::InteractionResponse::Cancelled) => {
                                     // User clicked "跳过" on the
                                     // intervention card → treat as
                                     // "终止 loop" (same rationale
@@ -3134,6 +3146,99 @@ pub async fn run_chat_loop(
                                 .await
                                 {
                                     tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for ask_user_question (non-fatal)");
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        // 2026-07-07 (`request_mode_change` task):
+                        // block the current turn on a mode-switch
+                        // request card. Same "control-flow tool"
+                        // interception pattern as `ask_user_question`
+                        // / `dispatch_subagent` below — the tool
+                        // needs `QuestionStore` + `ChatEventSink` +
+                        // `db` access that `execute_tool_inner`
+                        // doesn't have. We route to
+                        // `request_mode_change::execute_blocking`,
+                        // which internally:
+                        //   1. validates the schema (short-circuits
+                        //      with `is_error: true` on boundary
+                        //      violations),
+                        //   2. noop-checks `target == current` (skips
+                        //      card + IPC when nothing to do, PRD R7),
+                        //   3. records a `mode_change_requested`
+                        //      audit row,
+                        //   4. registers a oneshot in
+                        //      `QuestionStore` (tagged
+                        //      `PendingInteraction::ModeChange`),
+                        //   5. emits `mode:change:request` to the
+                        //      frontend,
+                        //   6. `tokio::select! { cancel | oneshot }`
+                        //      until resolve. The actual mode
+                        //      application happens in the
+                        //      `resolve_mode_change` IPC handler
+                        //      (single source of truth for mode
+                        //      change side effects, per design §5.5
+                        //      "Yolo 二次守门的一致性").
+                        //
+                        // `is_parallel_eligible` (the L2 whitelist
+                        // of `read_file` / `grep` / `glob` /
+                        // `list_dir` / `use_skill`) does NOT
+                        // include this name → mixed batches fall to
+                        // the serial path (this branch) automatically
+                        // (per design §6.3 + the `dispatch_subagent`
+                        // precedent).
+                        //
+                        // We accept +1 turn counter cost for the
+                        // blocking tool's recover (v1 trade-off —
+                        // see PRD §R3).
+                        if name == "request_mode_change" {
+                            let tool_exec_start = Instant::now();
+                            let (content, is_error, _update, exit_code) =
+                                crate::tools::request_mode_change::execute_blocking(
+                                    input,
+                                    &session_id,
+                                    id,
+                                    session_mode,
+                                    &db,
+                                    &question_store,
+                                    &sink,
+                                    &token,
+                                )
+                                .await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    exit_code,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for request_mode_change (non-fatal)");
                                 }
                             }
                             let envelope_str = crate::agent::helpers::tool_result_envelope(

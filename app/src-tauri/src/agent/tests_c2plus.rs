@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::tests_common::{make_harness, test_messages, MockEmitter};
 use crate::agent::chat_loop::run_chat_loop;
-use crate::agent::question_store::{QuestionResponse, ToolQuestionPayload};
+use crate::agent::question_store::{InteractionResponse, ToolQuestionPayload};
 use crate::llm::error::LlmError;
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, TokenUsage};
@@ -128,7 +128,7 @@ async fn run_loop(
 fn spawn_resolver(
     store: crate::agent::question_store::QuestionStore,
     session_id: String,
-    response: QuestionResponse,
+    response: InteractionResponse,
 ) {
     tokio::spawn(async move {
         let start = std::time::Instant::now();
@@ -191,12 +191,14 @@ async fn c2plus_terminates_after_3_consecutive_hard_loops() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Answered(vec![crate::agent::question_store::QuestionAnswer {
-            question: "ignored".into(),
-            header: None,
-            options: vec!["终止 loop".into()],
-            multi_select: false,
-        }]),
+        InteractionResponse::Answered(serde_json::to_value(vec![
+            crate::agent::question_store::QuestionAnswer {
+                question: "ignored".into(),
+                header: None,
+                options: vec!["终止 loop".into()],
+                multi_select: false,
+            },
+        ]).unwrap()),
     );
 
     let captured_session_id = h.session_id.clone();
@@ -296,12 +298,14 @@ async fn c2plus_continue_resets_count_and_injects_enhanced_hint() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Answered(vec![crate::agent::question_store::QuestionAnswer {
-            question: "ignored".into(),
-            header: None,
-            options: vec!["继续".into()],
-            multi_select: false,
-        }]),
+        InteractionResponse::Answered(serde_json::to_value(vec![
+            crate::agent::question_store::QuestionAnswer {
+                question: "ignored".into(),
+                header: None,
+                options: vec!["继续".into()],
+                multi_select: false,
+            },
+        ]).unwrap()),
     );
 
     let captured_db = h.db.clone();
@@ -418,12 +422,14 @@ async fn c2plus_none_resets_count() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Answered(vec![crate::agent::question_store::QuestionAnswer {
-            question: "ignored".into(),
-            header: None,
-            options: vec!["终止 loop".into()],
-            multi_select: false,
-        }]),
+        InteractionResponse::Answered(serde_json::to_value(vec![
+            crate::agent::question_store::QuestionAnswer {
+                question: "ignored".into(),
+                header: None,
+                options: vec!["终止 loop".into()],
+                multi_select: false,
+            },
+        ]).unwrap()),
     );
 
     run_loop(
@@ -570,28 +576,30 @@ async fn c2plus_already_pending_skips() {
         .register(
             &pre_session_id,
             "toolu_preexisting",
-            ToolQuestionPayload {
-                session_id: pre_session_id.clone(),
-                tool_use_id: "toolu_preexisting".into(),
-                questions: vec![crate::agent::question_store::Question {
-                    question: "preexisting".into(),
-                    header: None,
-                    options: vec![
-                        crate::agent::question_store::QuestionOption {
-                            label: "a".into(),
-                            description: None,
-                            preview: None,
-                        },
-                        crate::agent::question_store::QuestionOption {
-                            label: "b".into(),
-                            description: None,
-                            preview: None,
-                        },
-                    ],
-                    multi_select: false,
-                }],
-                ts: 0,
-            },
+            crate::agent::question_store::PendingInteraction::Question(
+                ToolQuestionPayload {
+                    session_id: pre_session_id.clone(),
+                    tool_use_id: "toolu_preexisting".into(),
+                    questions: vec![crate::agent::question_store::Question {
+                        question: "preexisting".into(),
+                        header: None,
+                        options: vec![
+                            crate::agent::question_store::QuestionOption {
+                                label: "a".into(),
+                                description: None,
+                                preview: None,
+                            },
+                            crate::agent::question_store::QuestionOption {
+                                label: "b".into(),
+                                description: None,
+                                preview: None,
+                            },
+                        ],
+                        multi_select: false,
+                    }],
+                    ts: 0,
+                },
+            ),
         )
         .await
         .expect("pre-register ok");
@@ -637,7 +645,16 @@ async fn c2plus_already_pending_skips() {
         .get_payload(&pre_session_id)
         .await
         .expect("pre-existing pending untouched");
-    assert_eq!(still.tool_use_id, "toolu_preexisting");
+    assert_eq!(
+        still.kind,
+        crate::agent::question_store::InteractionKind::Question
+    );
+    match still.payload {
+        crate::agent::question_store::PendingInteraction::Question(p) => {
+            assert_eq!(p.tool_use_id, "toolu_preexisting");
+        }
+        _ => panic!("expected Question payload"),
+    }
 
     // The loop completed normally (end_turn) — C2+ didn't terminate.
     let stop_reasons: Vec<String> = emitter

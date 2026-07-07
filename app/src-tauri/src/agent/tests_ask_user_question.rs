@@ -24,7 +24,7 @@
 //! emitted events. `QuestionStore` (per-test, via the harness) is
 //! resolved manually by a background task that polls
 //! `get_payload` for the session id and then calls `resolve` with
-//! `QuestionResponse::Answered` — this mirrors the production path
+//! `InteractionResponse::Answered` — this mirrors the production path
 //! where the frontend `tool:question_resolved` IPC would do the
 //! same. `tool_questions` (on `MockEmitter`) is asserted for the
 //! IPC emit site so we cover both sides of the bridge.
@@ -50,7 +50,7 @@ use tokio_util::sync::CancellationToken;
 use super::tests_common::{make_harness, test_messages, MockEmitter};
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::question_store::{
-    Question, QuestionAnswer, QuestionOption, QuestionResponse, ToolQuestionPayload,
+    InteractionResponse, Question, QuestionAnswer, QuestionOption, ToolQuestionPayload,
 };
 use crate::llm::provider::mock::{MockProvider, MockResponse};
 use crate::llm::types::{ChatEvent, TokenUsage};
@@ -112,9 +112,9 @@ fn unwrap_envelope(content: &str) -> String {
 
 /// Spawn a watcher task that polls the `QuestionStore` for a
 /// pending question on `session_id` and resolves it with the
-/// supplied `QuestionResponse` once the entry appears. The poll
-/// interval is 10 ms — fast enough to keep the test deterministic
-/// while not burning CPU.
+/// supplied `InteractionResponse` once the entry appears. The
+/// poll interval is 10 ms — fast enough to keep the test
+/// deterministic while not burning CPU.
 ///
 /// This mirrors the production path where the frontend's
 /// `tool:question_resolved` IPC would do the resolve; in the
@@ -123,7 +123,7 @@ fn unwrap_envelope(content: &str) -> String {
 fn spawn_resolver(
     store: crate::agent::question_store::QuestionStore,
     session_id: String,
-    response: QuestionResponse,
+    response: InteractionResponse,
 ) {
     tokio::spawn(async move {
         let start = std::time::Instant::now();
@@ -294,7 +294,7 @@ async fn agent_loop_ask_user_question_happy_path() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Answered(matching_answer()),
+        InteractionResponse::Answered(serde_json::to_value(matching_answer()).unwrap()),
     );
 
     // Capture the session id before `run_loop` consumes `h`.
@@ -405,7 +405,7 @@ async fn agent_loop_ask_user_question_user_skip() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Cancelled,
+        InteractionResponse::Cancelled,
     );
 
     run_loop(
@@ -618,7 +618,7 @@ async fn agent_loop_ask_user_question_already_pending() {
         .register(
             &pre_session_id,
             "toolu_preexisting",
-            ToolQuestionPayload {
+            crate::agent::question_store::PendingInteraction::Question(ToolQuestionPayload {
                 session_id: pre_session_id.clone(),
                 tool_use_id: "toolu_preexisting".into(),
                 questions: vec![Question {
@@ -639,7 +639,7 @@ async fn agent_loop_ask_user_question_already_pending() {
                     multi_select: false,
                 }],
                 ts: 0,
-            },
+            }),
         )
         .await
         .expect("pre-register ok");
@@ -688,7 +688,16 @@ async fn agent_loop_ask_user_question_already_pending() {
         .get_payload(&pre_session_id)
         .await
         .expect("pre-existing pending untouched");
-    assert_eq!(still.tool_use_id, "toolu_preexisting");
+    assert_eq!(
+        still.kind,
+        crate::agent::question_store::InteractionKind::Question
+    );
+    match still.payload {
+        crate::agent::question_store::PendingInteraction::Question(p) => {
+            assert_eq!(p.tool_use_id, "toolu_preexisting");
+        }
+        _ => panic!("expected Question payload"),
+    }
     // Drain for test isolation.
     let _ = pre_store.remove(&pre_session_id).await;
 }
@@ -837,7 +846,7 @@ async fn agent_loop_ask_user_question_serial_batch() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        QuestionResponse::Answered(matching_answer()),
+        InteractionResponse::Answered(serde_json::to_value(matching_answer()).unwrap()),
     );
 
     run_loop(
@@ -949,28 +958,41 @@ async fn get_pending_question_command_register_resolve_round_trip() {
         ts: 1_700_000_000_000,
     };
     store
-        .register(session_id, tool_use_id, payload.clone())
+        .register(
+            session_id,
+            tool_use_id,
+            crate::agent::question_store::PendingInteraction::Question(payload.clone()),
+        )
         .await
         .expect("register ok");
     let got = store
         .get_payload(session_id)
         .await
         .expect("Some(payload) after register");
-    assert_eq!(got.tool_use_id, tool_use_id);
-    assert_eq!(got.session_id, session_id);
-    assert_eq!(got.questions.len(), 1);
-    assert_eq!(got.questions[0].options.len(), 2);
+    assert_eq!(
+        got.kind,
+        crate::agent::question_store::InteractionKind::Question
+    );
+    match got.payload {
+        crate::agent::question_store::PendingInteraction::Question(p) => {
+            assert_eq!(p.tool_use_id, tool_use_id);
+            assert_eq!(p.session_id, session_id);
+            assert_eq!(p.questions.len(), 1);
+            assert_eq!(p.questions[0].options.len(), 2);
+        }
+        _ => panic!("expected Question payload"),
+    }
 
     // (3) After resolve → None.
     store
         .resolve(
             session_id,
-            QuestionResponse::Answered(vec![QuestionAnswer {
+            InteractionResponse::Answered(serde_json::to_value(vec![QuestionAnswer {
                 question: "Pick one".into(),
                 header: None,
                 options: vec!["A".into()],
                 multi_select: false,
-            }]),
+            }]).unwrap()),
         )
         .await
         .expect("resolve ok");
@@ -982,7 +1004,7 @@ async fn get_pending_question_command_register_resolve_round_trip() {
     // (4) Resolve clears the entry — a second resolve returns
     // NotFound (matches the question_store unit-test invariant).
     let err = store
-        .resolve(session_id, QuestionResponse::Cancelled)
+        .resolve(session_id, InteractionResponse::Cancelled)
         .await
         .expect_err("double-resolve errors");
     assert_eq!(
@@ -992,7 +1014,7 @@ async fn get_pending_question_command_register_resolve_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
-// F3 Test — `resolve_tool_question` scalar-arg → QuestionResponse mapping.
+// F3 Test — `resolve_tool_question` scalar-arg → InteractionResponse mapping.
 //
 // `resolve_tool_question` is a thin Tauri command whose only
 // non-trivial logic is the `cancelled`-vs-`answer` branch. That
@@ -1008,44 +1030,57 @@ async fn get_pending_question_command_register_resolve_round_trip() {
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn resolve_response_from_args_maps_scalar_inputs() {
-    use crate::agent::question_store::{QuestionAnswer, QuestionResponse};
+    use crate::agent::question_store::{InteractionResponse, QuestionAnswer};
     use crate::commands::question::resolve_response_from_args;
 
     // cancelled=true wins regardless of answer presence
     // (frontend's 跳过 button sends { cancelled: true }).
     assert!(matches!(
-        resolve_response_from_args(Some(true), None),
-        QuestionResponse::Cancelled
+        resolve_response_from_args(Some(true), None).expect("ok"),
+        InteractionResponse::Cancelled
     ));
     assert!(matches!(
-        resolve_response_from_args(Some(true), Some(vec![])),
-        QuestionResponse::Cancelled
+        resolve_response_from_args(Some(true), Some(vec![])).expect("ok"),
+        InteractionResponse::Cancelled
     ));
 
-    // cancelled=false + answer → Answered carries the answers.
+    // cancelled=false + answer → Answered carries the answers
+    // as a `serde_json::Value` (unified channel). The
+    // `execute_blocking` side re-parses this back into
+    // `Vec<QuestionAnswer>` (verified by the integration test
+    // `agent_loop_ask_user_question_happy_path`).
     let ans = vec![QuestionAnswer {
         question: "q".into(),
         header: None,
         options: vec!["a".into()],
         multi_select: false,
     }];
-    match resolve_response_from_args(Some(false), Some(ans.clone())) {
-        QuestionResponse::Answered(a) => assert_eq!(a, ans),
+    match resolve_response_from_args(Some(false), Some(ans.clone())).expect("ok") {
+        InteractionResponse::Answered(v) => {
+            let parsed: Vec<QuestionAnswer> = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, ans);
+        }
         other => panic!("expected Answered, got {:?}", other),
     }
 
     // cancelled=None (frontend omitted the field) → treated as
     // NOT cancelled → Answered with the supplied answer.
-    assert!(matches!(
-        resolve_response_from_args(None, Some(vec![])),
-        QuestionResponse::Answered(_)
-    ));
+    match resolve_response_from_args(None, Some(vec![])).expect("ok") {
+        InteractionResponse::Answered(v) => {
+            let parsed: Vec<QuestionAnswer> = serde_json::from_value(v).unwrap();
+            assert!(parsed.is_empty());
+        }
+        other => panic!("expected Answered, got {:?}", other),
+    }
 
     // Neither field (defensive — a frontend bug) → Answered
     // empty so the agent loop surfaces an empty answer array
     // rather than silently treating it as a cancel.
-    match resolve_response_from_args(None, None) {
-        QuestionResponse::Answered(a) => assert!(a.is_empty()),
+    match resolve_response_from_args(None, None).expect("ok") {
+        InteractionResponse::Answered(v) => {
+            let parsed: Vec<QuestionAnswer> = serde_json::from_value(v).unwrap();
+            assert!(parsed.is_empty());
+        }
         other => panic!("expected empty Answered, got {:?}", other),
     }
 }

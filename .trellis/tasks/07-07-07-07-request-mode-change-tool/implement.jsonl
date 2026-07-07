@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "request_mode_change 工具 schema 契约（snake_case + enum: edit/plan/yolo + reason ≤500）+ tool_use/tool_result 配对不变量；同 ask_user_question 范式"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "⑨ 关 Permission Layer + Mode 系统（Mode::Edit/Plan/Yolo/Background + per-turn system prompt + tool list filter）+ Tier 3 ask 形态；request_mode_change 跨接 mode 写操作"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "chat_loop blocking tool 拦截范式（ask_user_question / dispatch_subagent）+ 16 阶段请求生命周期；本工具复用同样拦截点（line 3110 旁新增）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "IPC checklist（scalar args vs struct payload）+ record_audit_event 17 类 AuditKind 入口 + 工具内部 vs IPC 落库的边界"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "STRUCTURALLY_DISABLED 列表位置（subagent/mod.rs，非 permissions/mode.rs）+ filter_tools_for_subagent 黑名单机制（实施记录纠正点）"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ToolDef 结构（name + description + input_schema）+ ContentBlock::ToolResult envelope（{result, cwd}）；同 ask_user_question 一致"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "ChatEventSink trait sync 设计（emit_tool_question 同步，理由）+ P3/P4 召回与本工具互不相关（request_mode_change 不触发 recall）"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "inline message card UI 红线（不弹 modal、不 portal、不遮罩）+ ask_user_question 既有规范；本 card 复用同样红线"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "streamController SSE 单源 + LRU 20 + activeRequests 架构；getPendingInteraction 替换 get_pending_question 不影响 LRU 淘汰语义"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "ModeSelect 已有 popover 形态 + Yolo 二次 modal 设计（pendingYoloConfirm flag + requestSetMode orchestrator）；本工具复用"}
+{"file": ".trellis/tasks/archive/2026-06/06-30-ask-user-question-tool/design.md", "reason": "ask_user_question 完整设计（QuestionStore + chat_loop 拦截 + inline card + session 保留 + 并行白名单）；本工具采用完全相同 dispatch 范式"}
+{"file": ".trellis/tasks/archive/2026-06/06-30-ask-user-question-tool/implement.md", "reason": "ask_user_question 31 步 ordered checklist + Phase A-G 划分 + 验证命令；本工具复用 Phase 划分 + 验证命令模板"}
+{"file": ".trellis/tasks/archive/2026-06/06-12-a2-b7-permission-and-mode/design.md", "reason": "PR2 set_session_mode IPC 完整设计（DB UPDATE + mode_changed audit + Yolo root guard + is_running_as_root 检测）；本工具 IPC 复用此路径"}

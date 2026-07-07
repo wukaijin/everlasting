@@ -64,6 +64,7 @@ pub mod tests_cancellation;
 pub mod tests_common;
 pub mod tests_envelope;
 pub mod tests_prompts;
+pub mod tests_request_mode_change;
 pub mod tests_subagent;
 pub mod thinking;
 

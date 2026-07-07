@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check request_mode_change tool schema 契约一致性（enum 严格 3 档 / reason ≤500 / snake_case）+ tool_use/tool_result 配对 + envelope 不变"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "check Mode 系统 4 档 enum（暴露 3 档，background 保留不暴露）+ Tier 3 ask 形态不被绕过 + Yolo root guard IPC 复用正确性"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "check chat_loop 拦截分支位置 + 16 阶段生命周期不被打乱 + 拦截后 LLM 下一轮 system prompt 自动应用新 mode"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "check IPC 协议稳定性（get_pending_interaction 替代 get_pending_question 软弃用）+ record_audit_event 新增 3 类 kind 一致性 + DB UPDATE 幂等性"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend Quality Check 段（lint/type/test/cross-layer）—— 验收前对照"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "frontend Quality Check 段（vue-tsc/vitest/跨层一致性）—— 验收前对照"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "check inline card UI 红线（无 modal/portal/遮罩）+ Yolo 二次 modal dispatch 路径不绕过现有 useChatStore.requestSetMode"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "check streamController listener 替换 + getPendingInteraction source-of-truth 合并 + LRU 淘汰语义不变"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "check Yolo 二次 modal 复用 + pendingYoloConfirm flag 行为不变 + confirmYolo 路径额外调 resolveModeChange 时序正确"}
+{"file": ".trellis/tasks/archive/2026-06/06-30-ask-user-question-tool/prd.md", "reason": "check 与 ask_user_question 既有设计一致（inline card / session 保留 / 并行白名单 / Worker 禁用 / 无 timeout 兜底）—— 零回归"}
+{"file": ".trellis/tasks/archive/2026-06/06-12-a2-b7-permission-and-mode/design.md", "reason": "check set_session_mode IPC 复用 + set_session_mode_internal 拆分不破坏 user 主动切 mode 路径（chatMode.test.ts 6 case）"}

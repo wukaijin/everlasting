@@ -131,5 +131,11 @@ pub fn all_command_names() -> Vec<&'static str> {
         // submit/跳过 + session-switch source-of-truth lookup).
         "resolve_tool_question",
         "get_pending_question",
+        // 2026-07-07 (`request_mode_change` task): tool
+        // mode-change IPCs (frontend `<RequestModeChangeCard>`
+        // allow/拒绝 + session-switch source-of-truth lookup
+        // via the unified `PendingInteraction` enum).
+        "resolve_mode_change",
+        "get_pending_interaction",
     ]
 }

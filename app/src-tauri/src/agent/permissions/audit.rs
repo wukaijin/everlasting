@@ -63,6 +63,30 @@ pub enum AuditKind {
     YoloEntered,
     /// 退出 Yolo (mode != Yolo 且之前是 Yolo)
     YoloExited,
+    /// 2026-07-07 (`request_mode_change` tool): LLM 调 tool
+    /// 触发(无论最后是 allow / deny / noop,每次 LLM 申请都落)。
+    /// payload 携带 `target_mode` / `reason` / `noop: bool`
+    /// (`noop=true` 表示 LLM 申请切到当前 mode,tool 立即返
+    /// `{"noop": true}`,无 IPC、无 card)。落表点在
+    /// `tools::request_mode_change::execute_blocking` 入口。
+    ModeChangeRequested,
+    /// 2026-07-07 (`request_mode_change` tool): user 在 card 上
+    /// 点"允许"+ DB UPDATE 成功。`set_session_mode` IPC
+    /// 路径会写 `mode_changed` (自动);`resolve_mode_change`
+    /// IPC handler 额外落本行(`mode_change_allowed` +
+    /// `mode_changed` 同时存在,职责:marker 表明这次 mode
+    /// 切换由 LLM 申请触发,而非 user 主动)。payload 携带
+    /// `prev_mode` / `new_mode` / `target_mode`。
+    ModeChangeAllowed,
+    /// 2026-07-07 (`request_mode_change` tool): user 在 card 上
+    /// 点"拒绝" / Yolo 二次 modal 取消 / Yolo root guard 触发
+    /// 拒绝。三种场景统一记 `mode_change_denied` 便于审计
+    /// 过滤;payload 的 `reason` 字段区分
+    /// `user denied` / `yolo_cancelled_confirm` /
+    /// `yolo_root_guard` / `db_error`。落表点在
+    /// `commands::question::resolve_mode_change` 三种
+    /// deny 路径(user 点拒绝 / apply 失败 / 二次 modal 取消)。
+    ModeChangeDenied,
 
     // === Message 域 ===
     /// D3 PR1 (2026-06-17): user 在 session 内编辑了一条 user 消息
@@ -130,6 +154,10 @@ impl AuditKind {
             Self::ModeChanged => "mode_changed",
             Self::YoloEntered => "yolo_entered",
             Self::YoloExited => "yolo_exited",
+            // 2026-07-07 (`request_mode_change` tool)
+            Self::ModeChangeRequested => "mode_change_requested",
+            Self::ModeChangeAllowed => "mode_change_allowed",
+            Self::ModeChangeDenied => "mode_change_denied",
             Self::ToolDeniedYolo => "tool_denied_yolo",
             Self::PermissionTimeout => "permission_timeout",
             Self::RequestCancelled => "request_cancelled",

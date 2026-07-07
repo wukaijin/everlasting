@@ -722,14 +722,17 @@ async fn agent_loop_max_turns_emits_done_marker() {
                 let _ = store_for_resolver
                     .resolve(
                         &session_for_resolver,
-                        crate::agent::question_store::QuestionResponse::Answered(vec![
-                            crate::agent::question_store::QuestionAnswer {
-                                question: String::new(),
-                                header: None,
-                                options: vec!["继续".into()],
-                                multi_select: false,
-                            },
-                        ]),
+                        crate::agent::question_store::InteractionResponse::Answered(
+                            serde_json::to_value(vec![
+                                crate::agent::question_store::QuestionAnswer {
+                                    question: String::new(),
+                                    header: None,
+                                    options: vec!["继续".into()],
+                                    multi_select: false,
+                                },
+                            ])
+                            .unwrap(),
+                        ),
                     )
                     .await;
                 // Brief yield so the agent loop's select! arm

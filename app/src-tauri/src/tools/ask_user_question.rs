@@ -63,7 +63,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::question_store::{
-    Question, QuestionResponse, QuestionStore, ToolQuestionPayload,
+    InteractionResponse, PendingInteraction, Question, QuestionStore, ToolQuestionPayload,
 };
 use crate::llm::types::ToolDef;
 use crate::state::ChatEventSink;
@@ -270,7 +270,7 @@ pub type BlockingToolResult = (
 /// 4. `tokio::select! { biased; cancel | oneshot }` —
 ///    - cancel arm → `QuestionStore::remove(session_id)`,
 ///      returns `(cancelled_by_session, true, _, None)`.
-///    - oneshot arm — `QuestionResponse` matched:
+///    - oneshot arm — `InteractionResponse` matched:
 ///      - `Answered(answers)` → return `(json answers, false,
 ///        _, None)`.
 ///      - `Cancelled` → return `({"cancelled": true}, true, _,
@@ -331,7 +331,11 @@ pub async fn execute_blocking(
 
     // ---- 3. Register + emit -----------------------------------------
     let rx = match store
-        .register(session_id, tool_use_id, payload.clone())
+        .register(
+            session_id,
+            tool_use_id,
+            PendingInteraction::Question(payload.clone()),
+        )
         .await
     {
         Ok(rx) => rx,
@@ -384,12 +388,13 @@ pub async fn execute_blocking(
         }
         resp = rx => {
             match resp {
-                Ok(QuestionResponse::Answered(answers)) => {
-                    // Standard success path. Serialize the answer
-                    // list as JSON so the LLM sees a structured
-                    // payload that matches the wire spec (PRD
-                    // §R4).
-                    let content = match serde_json::to_string(&answers) {
+                Ok(InteractionResponse::Answered(value)) => {
+                    // Standard success path. The `value` is the
+                    // JSON the resolver side set (usually a
+                    // `Vec<QuestionAnswer>` for this tool — the
+                    // IPC `resolve_tool_question` handler builds
+                    // it via `serde_json::to_value`).
+                    let content = match serde_json::to_string(&value) {
                         Ok(s) => s,
                         Err(e) => {
                             tracing::error!(
@@ -408,7 +413,7 @@ pub async fn execute_blocking(
                     };
                     (content, false, crate::tools::ToolContextUpdate::default(), None)
                 }
-                Ok(QuestionResponse::Cancelled) => {
+                Ok(InteractionResponse::Cancelled) => {
                     // User clicked 跳过 (PRD §R5).
                     let content =
                         serde_json::json!({"cancelled": true}).to_string();
@@ -652,7 +657,10 @@ mod tests {
             multi_select: false,
         }];
         store
-            .resolve("s1", QuestionResponse::Answered(answers.clone()))
+            .resolve(
+                "s1",
+                InteractionResponse::Answered(serde_json::to_value(&answers).unwrap()),
+            )
             .await
             .expect("resolve ok");
 
@@ -737,7 +745,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         store
-            .resolve("s1", QuestionResponse::Cancelled)
+            .resolve("s1", InteractionResponse::Cancelled)
             .await
             .expect("resolve ok");
         let (content, is_error, _, _) = exec.await.expect("exec ok");
@@ -760,7 +768,7 @@ mod tests {
             .register(
                 "s1",
                 "tu_pre",
-                ToolQuestionPayload {
+                PendingInteraction::Question(ToolQuestionPayload {
                     session_id: "s1".into(),
                     tool_use_id: "tu_pre".into(),
                     questions: vec![Question {
@@ -781,7 +789,7 @@ mod tests {
                         multi_select: false,
                     }],
                     ts: 0,
-                },
+                }),
             )
             .await
             .expect("pre-register ok");
@@ -796,12 +804,14 @@ mod tests {
         // No emit happened for the duplicate.
         assert!(sink.emitted.lock().unwrap().is_empty());
         // The first pending is still there.
-        assert!(store.get_payload("s1").await.is_some());
-        assert_eq!(
-            store.get_payload("s1").await.unwrap().tool_use_id,
-            "tu_pre",
-            "pre-existing pending untouched"
-        );
+        let got = store.get_payload("s1").await.expect("first pending still present");
+        assert_eq!(got.kind, crate::agent::question_store::InteractionKind::Question);
+        match got.payload {
+            PendingInteraction::Question(q) => {
+                assert_eq!(q.tool_use_id, "tu_pre", "pre-existing pending untouched");
+            }
+            _ => panic!("expected Question payload"),
+        }
 
         // Drain for test isolation.
         let _ = store.remove("s1").await;

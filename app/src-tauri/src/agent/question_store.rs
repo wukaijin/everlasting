@@ -1,7 +1,11 @@
-//! ⑨-b QuestionStore — in-flight `ask_user_question` oneshot
-//! registry, parallel to the A2+B7 `PermissionStore`. Split out
-//! from the agent-layer god-module on 2026-06-30 as part of the
-//! `ask_user_question` tool task.
+//! ⑨-b QuestionStore — in-flight `ask_user_question` + `request_mode_change`
+//! oneshot registry, parallel to the A2+B7 `PermissionStore`. Split
+//! out from the agent-layer god-module on 2026-06-30 as part of the
+//! `ask_user_question` tool task; extended on 2026-07-07 (task
+//! `07-07-request-mode-change-tool`) to host the `request_mode_change`
+//! interaction under the same store + single-pending gate (a session
+//! can't have both a pending question and a pending mode change
+//! at the same time — both are interactive user-blocked interactions).
 //!
 //! ## Why a parallel store, not a PermissionStore extension?
 //!
@@ -38,11 +42,29 @@
 //! frontend session-switch path uses `get_pending_question` to
 //! recover the live payload (so a switched-back session can
 //! render the still-pending card). The user-facing `取消` button
-//! resolves with `QuestionResponse::Cancelled`; the session
+//! resolves with `InteractionResponse::Cancelled`; the session
 //! cancel token (user Stop / app shutdown) is handled by the
 //! cancel arm dropping the receiver (`Err(RecvError)` →
 //! `cancelled_by_session` tool_result). Both are explicit
 //! user/chrome signals, never implicit session-switch.
+//!
+//! ## 2026-07-07 extension: PendingInteraction enum
+//!
+//! The same single-pending-per-session gate now covers BOTH the
+//! `ask_user_question` tool and the `request_mode_change` tool.
+//! Both are user-interaction-gated, both need the
+//! "switch-session keeps oneshot alive" semantic, and both want
+//! the same frontend "inline card with allow/deny" UX. We
+//! unify them under `PendingInteraction` (a tagged enum) so the
+//! store keys on `session_id` once and the IPC
+//! `get_pending_interaction` command returns a
+//! `PendingInteractionEntry` (kind + payload) the frontend can
+//! dispatch on. The wire-side split stays snake_case on both
+//! sides (same shared-struct exemption as `ToolQuestionPayload`).
+//! Mutation surface is `ask_user_question::execute_blocking` and
+//! the new `request_mode_change::execute_blocking`; both build a
+//! `PendingInteraction::Question(...)` or `::ModeChange(...)`
+//! variant before calling `register`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -130,45 +152,158 @@ pub struct QuestionAnswer {
     pub multi_select: bool,
 }
 
-/// Internal — what the oneshot delivers on resolve. Two
-/// states; downstream `execute_blocking` matches on these to
-/// produce the right `tool_result` content + `is_error` flag.
+/// IPC wire shape — the `request_mode_change` payload the frontend
+/// renders into `<RequestModeChangeCard>`.
 ///
-/// Session cancel is NOT a third variant — it's handled by
-/// `execute_blocking`'s `tokio::select!` cancel arm directly:
-/// the cancel arm calls `store.remove()`, dropping the sender,
-/// which makes the awaiting receiver yield `Err(RecvError)`;
-/// that arm maps to the `cancelled_by_session` tool_result.
-/// So only the two user-driven resolutions travel the oneshot.
+/// # Why snake_case (IPC `camelCase` rule exemption)
+///
+/// Same exemption as `ToolQuestionPayload`: the same kind is shared
+/// with `tools::request_mode_change::RequestModeChangeInput` (LLM
+/// tool input). The LLM schema (see `request_mode_change
+/// ::definition()`'s `input_schema`) is snake_case to match Claude
+/// Code's trained `request_mode_change` semantics. The entire emit
+/// chain stays snake_case on both sides of the IPC.
+///
+/// `current_mode` is the session's `mode` at the time the LLM
+/// invoked the tool (read off `loaded_session.session.mode` at the
+/// blocking tool's entry). The frontend uses it to color the
+/// "current mode → target mode" comparison pill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModeChangePayload {
+    pub session_id: String,
+    pub tool_use_id: String,
+    /// "edit" | "plan" | "yolo" (validated by the tool; the wire
+    /// enum is the source of truth — see
+    /// `request_mode_change::definition()`).
+    pub target_mode: String,
+    /// Session's current mode at the time the tool was invoked.
+    /// `None` is reserved for future "session pre-load not yet
+    /// resolved" edge cases; production always populates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_mode: Option<String>,
+    /// LLM-supplied explanation (≤500 chars). Optional; the card
+    /// renders it as a sub-title under the mode name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Unix epoch ms (backend authoritative). Lets the frontend
+    /// display "asked 3s ago" without re-deriving from the
+    /// `ChatEvent` log.
+    pub ts: i64,
+}
+
+/// The two interaction kinds the store gates. The `kind` tag
+/// drives both the IPC dispatch (the frontend's
+/// `<AskUserQuestionCard>` vs `<RequestModeChangeCard>`) AND the
+/// audit kind written by the resolve path. New kinds require
+/// adding a new `PendingInteraction` variant + a new `as_str()`
+/// arm + updating the frontend's `PendingInteraction` discriminated
+/// union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionKind {
+    Question,
+    ModeChange,
+}
+
+impl InteractionKind {
+    // Suppress `dead_code` on non-test builds: `as_str` is only
+    // referenced by `commands::question::tests::interaction_kind_round_trip`
+    // (the wire-shape round-trip sanity check). `cargo check`
+    // doesn't compile tests, so without this attribute the method
+    // is flagged as unused; in test builds the attribute is a
+    // no-op.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::ModeChange => "mode_change",
+        }
+    }
+}
+
+/// The store's gated entry shape. The `tag` is `"kind"`, the
+/// `content` carries the typed payload (snake_case on both
+/// sides — same shared-struct exemption as the question payload).
+/// The frontend dispatches on the outer `kind` to pick the right
+/// card component.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingInteraction {
+    Question(ToolQuestionPayload),
+    ModeChange(ModeChangePayload),
+}
+
+impl PendingInteraction {
+    pub fn kind(&self) -> InteractionKind {
+        match self {
+            Self::Question(_) => InteractionKind::Question,
+            Self::ModeChange(_) => InteractionKind::ModeChange,
+        }
+    }
+}
+
+/// IPC surface returned by `get_pending_interaction` — the
+/// `kind` is duplicated at the top level (so the frontend
+/// `getPendingInteraction` IPC caller can do
+/// `entry.kind === "mode_change"` without first parsing the
+/// tagged enum). The `payload` carries the typed variant
+/// (frontend code dispatches on `kind` and reads the matching
+/// fields from `payload`). The wrapper is also `Clone`-able so
+/// the test can copy a snapshot for assertions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingInteractionEntry {
+    pub kind: InteractionKind,
+    pub payload: PendingInteraction,
+}
+
+/// Internal — what the oneshot delivers on resolve. Unified
+/// across the two pending kinds (one channel, two callers).
+/// The `Answered` variant carries a generic JSON value so
+/// question answers (`Vec<QuestionAnswer>`) and mode-change
+/// accepts (`true` / `false`) both fit without per-kind
+/// variants. The `Cancelled` variant covers both "user clicked
+/// 跳过" (question) and "user clicked 拒绝" (mode change).
+///
+/// `execute_blocking` is responsible for the per-kind → wire
+/// shape mapping (e.g. serialize a `Vec<QuestionAnswer>` into
+/// the `Answered` JSON for the question case; pass `serde_json
+/// ::Value::Bool(true)` for mode-change allow).
 #[derive(Debug, Clone)]
-pub enum QuestionResponse {
-    /// User submitted the card with valid answers; the agent
-    /// loop receives `Vec<QuestionAnswer>` to serialize as
-    /// `tool_result` content (success).
-    Answered(Vec<QuestionAnswer>),
-    /// User clicked "跳过" on the card; tool_result is
-    /// `{"cancelled": true}` with `is_error: true`.
+pub enum InteractionResponse {
+    /// User accepted the prompt. The `serde_json::Value` is
+    /// either a JSON-serialized `Vec<QuestionAnswer>` (for
+    /// `PendingInteraction::Question`) or a simple `true`
+    /// boolean (for `PendingInteraction::ModeChange`). The
+    /// tool layer builds the per-kind wire shape.
+    Answered(serde_json::Value),
+    /// User rejected / cancelled the prompt. tool_result is
+    /// `{"cancelled": true}` (question) or
+    /// `{"cancelled_by_user": true}` (mode change).
     Cancelled,
 }
 
-/// One pending `ask_user_question`. The `oneshot` is `Option`
-/// because `resolve` clears it (so a second resolve is a
-/// no-op rather than a panic). The `payload` stays so
-/// `get_pending_question` can return it for session-switch
-/// recovery (frontend re-injects the card on the switched-back
-/// session).
+/// One pending `ask_user_question` OR `request_mode_change`. The
+/// `oneshot` is `Option` because `resolve` clears it (so a
+/// second resolve is a no-op rather than a panic). The `payload`
+/// stays so `get_pending_interaction` can return it for
+/// session-switch recovery (frontend re-injects the card on the
+/// switched-back session).
 ///
-/// `tool_use_id` / `session_id` / `ts` are kept for parity with
-/// the wire-side `ToolQuestionPayload` (frontend debugging
-/// traces), but are not currently read off this struct — they
-/// live on `payload` instead.
+/// 2026-07-07 (request_mode_change): the kind of the payload
+/// determines which card component the frontend renders
+/// (`AskUserQuestionCard` for Question / `RequestModeChangeCard`
+/// for ModeChange). The `kind` field is duplicated at the top
+/// level so the IPC consumer can do
+/// `entry.kind === "mode_change"` without first parsing the
+/// tagged enum.
 #[allow(dead_code)]
 pub struct PendingQuestion {
     pub tool_use_id: String,
     pub session_id: String,
     pub ts: i64,
-    pub oneshot: Option<oneshot::Sender<QuestionResponse>>,
-    pub payload: ToolQuestionPayload,
+    pub oneshot: Option<oneshot::Sender<InteractionResponse>>,
+    pub kind: InteractionKind,
+    pub payload: PendingInteraction,
 }
 
 /// In-flight `ask_user_question` registry. Wrapped in
@@ -187,33 +322,48 @@ impl QuestionStore {
         }
     }
 
-    /// Register a new pending question for `session_id`. Returns
-    /// `Err(AlreadyPending)` if a question for this session
-    /// already exists — the agent loop surfaces that as a
-    /// structured `tool_result(is_error: true)` so the LLM
-    /// understands it's a concurrency gate (and naturally
+    /// Register a new pending interaction (Question or
+    /// ModeChange) for `session_id`. Returns
+    /// `Err(AlreadyPending)` if an interaction for this
+    /// session already exists — the agent loop surfaces that
+    /// as a structured `tool_result(is_error: true)` so the
+    /// LLM understands it's a concurrency gate (and naturally
     /// serializes on the next turn).
     ///
     /// The returned `oneshot::Receiver` is held by `execute_blocking`
     /// inside `tokio::select!{cancel, oneshot}` (mirrors the
     /// `permission_asks` permission-store consumption pattern).
+    ///
+    /// 2026-07-07: the `payload: PendingInteraction` parameter
+    /// is the unified shape — both `ask_user_question` and
+    /// `request_mode_change` wrap their respective payloads in
+    /// the matching enum variant. The single-pending gate
+    /// applies across BOTH kinds (a pending question blocks a
+    /// pending mode change, and vice versa — only one
+    /// interactive UI element can be in flight per session).
     pub async fn register(
         &self,
         session_id: &str,
         tool_use_id: &str,
-        payload: ToolQuestionPayload,
-    ) -> Result<oneshot::Receiver<QuestionResponse>, QuestionStoreError> {
+        payload: PendingInteraction,
+    ) -> Result<oneshot::Receiver<InteractionResponse>, QuestionStoreError> {
         let mut map = self.inner.lock().await;
         if map.contains_key(session_id) {
             return Err(QuestionStoreError::AlreadyPending);
         }
         let (tx, rx) = oneshot::channel();
+        let kind = payload.kind();
+        let ts = match &payload {
+            PendingInteraction::Question(p) => p.ts,
+            PendingInteraction::ModeChange(p) => p.ts,
+        };
         map.insert(
             session_id.to_string(),
             PendingQuestion {
                 tool_use_id: tool_use_id.to_string(),
                 session_id: session_id.to_string(),
-                ts: payload.ts,
+                ts,
+                kind,
                 oneshot: Some(tx),
                 payload,
             },
@@ -221,20 +371,24 @@ impl QuestionStore {
         Ok(rx)
     }
 
-    /// Resolve a pending question. Called by the
-    /// `resolve_tool_question` Tauri command (frontend
-    /// invokes on submit / 跳过).
+    /// Resolve a pending interaction. Called by the
+    /// `resolve_tool_question` / `resolve_mode_change` Tauri
+    /// commands (frontend invokes on submit / 拒绝). Returns
+    /// the `PendingInteractionEntry` that was just resolved so
+    /// the caller (the IPC handler) can write the
+    /// per-kind `mode_change_*` audit row. The
+    /// `entry.kind` field tells the caller which path to take.
     ///
     /// Returns `NotFound` if the session has no pending
-    /// question — covers both "never registered" and the
+    /// interaction — covers both "never registered" and the
     /// already-resolved race (resolve removes the entry
     /// atomically with taking the oneshot, so a double-resolve
     /// finds no key and returns `NotFound`).
     pub async fn resolve(
         &self,
         session_id: &str,
-        response: QuestionResponse,
-    ) -> Result<(), QuestionStoreError> {
+        response: InteractionResponse,
+    ) -> Result<PendingInteractionEntry, QuestionStoreError> {
         let mut map = self.inner.lock().await;
         let pending = map
             .get_mut(session_id)
@@ -250,22 +404,42 @@ impl QuestionStore {
             .oneshot
             .take()
             .expect("oneshot present while entry exists");
-        // Take the entry out — the question is no longer
+        let kind = pending.kind;
+        let entry = PendingInteractionEntry {
+            kind,
+            payload: std::mem::replace(
+                &mut pending.payload,
+                // A sentinel placeholder — the entry is removed
+                // immediately below so the placeholder is
+                // unreachable. Wrapped in `Question` to satisfy
+                // the enum's `Question` variant being the
+                // zero-cost default; the real payload was
+                // captured into the `entry` above.
+                PendingInteraction::Question(ToolQuestionPayload {
+                    session_id: String::new(),
+                    tool_use_id: String::new(),
+                    questions: Vec::new(),
+                    ts: 0,
+                }),
+            ),
+        };
+        // Take the entry out — the interaction is no longer
         // pending. If the sender fails (receiver already
         // dropped because the cancel arm selected), the
-        // QuestionResponse is silently consumed; no audit /
+        // InteractionResponse is silently consumed; no audit /
         // no-op needed (the cancel path produced its own
         // tool_result already).
         map.remove(session_id);
         let _ = tx.send(response);
-        Ok(())
+        Ok(entry)
     }
 
-    /// Remove a pending question without sending through the
-    /// oneshot. Used by the cancel arm in `execute_blocking`'s
-    /// `tokio::select!` — the sender is dropped here (it lives
-    /// inside the removed `PendingQuestion`), which makes the
-    /// awaiting `oneshot::Receiver` return `Err(RecvError)`;
+    /// Remove a pending interaction without sending through
+    /// the oneshot. Used by the cancel arm in
+    /// `execute_blocking`'s `tokio::select!` — the sender is
+    /// dropped here (it lives inside the removed
+    /// `PendingQuestion`), which makes the awaiting
+    /// `oneshot::Receiver` return `Err(RecvError)`;
     /// `execute_blocking` maps that to the
     /// `cancelled_by_session` tool_result.
     pub async fn remove(&self, session_id: &str) -> Option<PendingQuestion> {
@@ -273,15 +447,44 @@ impl QuestionStore {
         map.remove(session_id)
     }
 
-    /// Read-only snapshot for `get_pending_question` (frontend
-    /// session-switch recovery). The `Payload` is the
-    /// `ToolQuestionPayload` directly (skipping the internal
-    /// `PendingQuestion` fields — frontend doesn't need
-    /// `oneshot` or `ts` mapped separately; `ts` is inside the
-    /// payload).
-    pub async fn get_payload(&self, session_id: &str) -> Option<ToolQuestionPayload> {
+    /// Read-only snapshot for `get_pending_interaction`
+    /// (frontend session-switch recovery). Returns
+    /// `Option<PendingInteractionEntry>` — `None` if no
+    /// pending interaction, `Some` with the typed
+    /// `kind` + payload otherwise. The frontend's
+    /// `getPendingInteraction` IPC binding is the source of
+    /// truth on session switch (the Pinia cache is corrected
+    /// to match).
+    pub async fn get_payload(
+        &self,
+        session_id: &str,
+    ) -> Option<PendingInteractionEntry> {
         let map = self.inner.lock().await;
-        map.get(session_id).map(|p| p.payload.clone())
+        map.get(session_id).map(|p| PendingInteractionEntry {
+            kind: p.kind,
+            payload: p.payload.clone(),
+        })
+    }
+
+    /// Back-compat shim: returns the `ToolQuestionPayload` for
+    /// a pending question OR `None` for anything else
+    /// (including pending mode changes). Used by the legacy
+    /// `get_pending_question` IPC command (kept for backward
+    /// compatibility; new code should use
+    /// `get_pending_interaction` + the
+    /// `PendingInteractionEntry` shape).
+    pub async fn get_question_payload(
+        &self,
+        session_id: &str,
+    ) -> Option<ToolQuestionPayload> {
+        let map = self.inner.lock().await;
+        match map.get(session_id) {
+            Some(p) => match &p.payload {
+                PendingInteraction::Question(qp) => Some(qp.clone()),
+                _ => None,
+            },
+            None => None,
+        }
     }
 
     /// List all pending question sessions (test-only
@@ -366,6 +569,21 @@ mod tests {
         }
     }
 
+    fn make_mode_change_payload(
+        session_id: &str,
+        tool_use_id: &str,
+        target_mode: &str,
+    ) -> ModeChangePayload {
+        ModeChangePayload {
+            session_id: session_id.to_string(),
+            tool_use_id: tool_use_id.to_string(),
+            target_mode: target_mode.to_string(),
+            current_mode: Some("plan".to_string()),
+            reason: Some("need to write code".to_string()),
+            ts: 1_700_000_000_001,
+        }
+    }
+
     /// Happy path: register returns a receiver, resolve with
     /// `Answered` makes the receiver yield the answers. The
     /// entry is cleared on resolve (subsequent get_payload
@@ -375,25 +593,48 @@ mod tests {
         let store = QuestionStore::new();
         let payload = make_payload("s1", "tu_1");
         let rx = store
-            .register("s1", "tu_1", payload.clone())
+            .register(
+                "s1",
+                "tu_1",
+                PendingInteraction::Question(payload.clone()),
+            )
             .await
             .expect("register ok");
         // get_payload returns it BEFORE resolve.
-        assert!(store.get_payload("s1").await.is_some());
+        let entry = store
+            .get_payload("s1")
+            .await
+            .expect("entry present before resolve");
+        assert_eq!(entry.kind, InteractionKind::Question);
+        match entry.payload {
+            PendingInteraction::Question(p) => {
+                assert_eq!(p.tool_use_id, "tu_1");
+            }
+            _ => panic!("expected Question payload"),
+        }
         let answers = vec![QuestionAnswer {
             question: "Pick one".into(),
             header: None,
             options: vec!["A".into()],
             multi_select: false,
         }];
-        store
-            .resolve("s1", QuestionResponse::Answered(answers.clone()))
+        let entry = store
+            .resolve(
+                "s1",
+                InteractionResponse::Answered(serde_json::to_value(&answers).unwrap()),
+            )
             .await
             .expect("resolve ok");
+        // The returned entry identifies what was resolved.
+        assert_eq!(entry.kind, InteractionKind::Question);
         // Receiver fires.
         let got = rx.await.expect("receiver ok");
         match got {
-            QuestionResponse::Answered(a) => assert_eq!(a, answers),
+            InteractionResponse::Answered(v) => {
+                let parsed: Vec<QuestionAnswer> =
+                    serde_json::from_value(v).expect("payload is Vec<QuestionAnswer>");
+                assert_eq!(parsed, answers);
+            }
             other => panic!("expected Answered, got {:?}", other),
         }
         // Entry cleared.
@@ -408,21 +649,91 @@ mod tests {
         let store = QuestionStore::new();
         let p1 = make_payload("s1", "tu_1");
         let _rx1 = store
-            .register("s1", "tu_1", p1.clone())
+            .register("s1", "tu_1", PendingInteraction::Question(p1))
             .await
             .expect("first register ok");
         let p2 = make_payload("s1", "tu_2");
         let err = store
-            .register("s1", "tu_2", p2)
+            .register("s1", "tu_2", PendingInteraction::Question(p2))
             .await
             .expect_err("second register errors");
         assert_eq!(err, QuestionStoreError::AlreadyPending);
         // First entry still present.
-        let got = store
-            .get_payload("s1")
+        let got = store.get_payload("s1").await.expect("first entry still present");
+        assert_eq!(got.kind, InteractionKind::Question);
+        match got.payload {
+            PendingInteraction::Question(p) => assert_eq!(p.tool_use_id, "tu_1"),
+            _ => panic!("expected Question payload"),
+        }
+    }
+
+    /// Cross-kind gate: a pending question blocks a pending
+    /// mode change (and vice versa). Both are "interactive
+    /// user-blocked" — only one can be in flight per session
+    /// (PRD §"Pending 互斥" / design §3.3).
+    #[tokio::test]
+    async fn register_question_then_mode_change_pending_returns_already_pending() {
+        let store = QuestionStore::new();
+        let _rx1 = store
+            .register(
+                "s1",
+                "tu_1",
+                PendingInteraction::Question(make_payload("s1", "tu_1")),
+            )
             .await
-            .expect("first entry still present");
-        assert_eq!(got.tool_use_id, "tu_1");
+            .expect("first register ok");
+        let err = store
+            .register(
+                "s1",
+                "tu_2",
+                PendingInteraction::ModeChange(make_mode_change_payload(
+                    "s1", "tu_2", "edit",
+                )),
+            )
+            .await
+            .expect_err("mode change blocked by existing question");
+        assert_eq!(err, QuestionStoreError::AlreadyPending);
+        // The pending question is untouched.
+        let got = store.get_payload("s1").await.expect("question still present");
+        assert_eq!(got.kind, InteractionKind::Question);
+    }
+
+    /// ModeChange resolve returns the typed entry so the
+    /// caller can branch on the kind.
+    #[tokio::test]
+    async fn resolve_mode_change_returns_entry_kind_mode_change() {
+        let store = QuestionStore::new();
+        let payload = make_mode_change_payload("s1", "tu_mc", "edit");
+        let rx = store
+            .register(
+                "s1",
+                "tu_mc",
+                PendingInteraction::ModeChange(payload.clone()),
+            )
+            .await
+            .expect("register ok");
+        let entry = store
+            .resolve("s1", InteractionResponse::Answered(serde_json::json!(true)))
+            .await
+            .expect("resolve ok");
+        assert_eq!(entry.kind, InteractionKind::ModeChange);
+        match entry.payload {
+            PendingInteraction::ModeChange(p) => {
+                assert_eq!(p.target_mode, "edit");
+                assert_eq!(p.tool_use_id, "tu_mc");
+            }
+            _ => panic!("expected ModeChange payload"),
+        }
+        // Receiver fires with the JSON value.
+        let got = rx.await.expect("receiver ok");
+        match got {
+            InteractionResponse::Answered(v) => {
+                assert_eq!(v, serde_json::json!(true));
+            }
+            other => panic!("expected Answered, got {:?}", other),
+        }
+        // Entry cleared.
+        assert!(store.get_payload("s1").await.is_none());
     }
 
     /// resolve on an unknown session returns `NotFound`.
@@ -430,7 +741,7 @@ mod tests {
     async fn resolve_not_found() {
         let store = QuestionStore::new();
         let err = store
-            .resolve("unknown", QuestionResponse::Cancelled)
+            .resolve("unknown", InteractionResponse::Cancelled)
             .await
             .expect_err("resolve unknown errors");
         assert_eq!(err, QuestionStoreError::NotFound);
@@ -445,15 +756,19 @@ mod tests {
     async fn resolve_twice_second_call_not_found() {
         let store = QuestionStore::new();
         store
-            .register("s1", "tu_1", make_payload("s1", "tu_1"))
+            .register(
+                "s1",
+                "tu_1",
+                PendingInteraction::Question(make_payload("s1", "tu_1")),
+            )
             .await
             .expect("register ok");
         store
-            .resolve("s1", QuestionResponse::Cancelled)
+            .resolve("s1", InteractionResponse::Cancelled)
             .await
             .expect("first resolve ok");
         let err = store
-            .resolve("s1", QuestionResponse::Cancelled)
+            .resolve("s1", InteractionResponse::Cancelled)
             .await
             .expect_err("second resolve errors");
         assert_eq!(err, QuestionStoreError::NotFound);
@@ -467,7 +782,11 @@ mod tests {
     async fn remove_clears_entry() {
         let store = QuestionStore::new();
         store
-            .register("s1", "tu_1", make_payload("s1", "tu_1"))
+            .register(
+                "s1",
+                "tu_1",
+                PendingInteraction::Question(make_payload("s1", "tu_1")),
+            )
             .await
             .expect("register ok");
         let pending = store.remove("s1").await.expect("remove returns pending");

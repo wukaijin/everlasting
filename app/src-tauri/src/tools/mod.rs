@@ -26,6 +26,7 @@ pub mod merge_worker;
 pub mod read_file;
 pub mod read_guard;
 pub mod remember;
+pub mod request_mode_change;
 pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
@@ -172,6 +173,13 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // same as remember). Child A wires plumbing + mock renderer;
         // Child B/C add the real code_block / diff renderers.
         use_ui::definition(),
+        // request_mode_change (2026-07-07): LLM-initiated
+        // mode-switch request. Same blocking-tool interception
+        // pattern as ask_user_question (chat_loop.rs recognizes
+        // the tool name and calls `execute_blocking` directly).
+        // Worker subagents are blocked from this tool via
+        // STRUCTURALLY_DISABLED.
+        request_mode_change::definition(),
     ]
 }
 

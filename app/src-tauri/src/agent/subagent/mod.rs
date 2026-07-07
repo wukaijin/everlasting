@@ -696,6 +696,14 @@ const STRUCTURALLY_DISABLED: &[&str] = &[
     // on `effective_is_worker == false` (mirroring the
     // `dispatch_subagent` no-nesting pattern).
     "ask_user_question",
+    // 2026-07-07 (`request_mode_change` task): same rationale as
+    // `ask_user_question` above — worker subagents must not block
+    // on user input (the worker has no UI sink, the blocking
+    // oneshot would hang the worker's tokio task until parent
+    // cancel). Worker subagents that want to suggest a mode
+    // change must return a result and let the parent surface
+    // the change request on the user's behalf.
+    "request_mode_change",
 ];
 
 /// Filter `builtin_tools()` for a worker.

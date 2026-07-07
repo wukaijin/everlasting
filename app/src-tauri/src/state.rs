@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::permissions::PermissionAskPayload;
 use crate::agent::permissions::PermissionStore;
+use crate::agent::question_store::ModeChangePayload;
 use crate::agent::question_store::QuestionStore;
 use crate::agent::subagent::SubagentCache;
 use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
@@ -599,6 +600,24 @@ pub trait ChatEventSink: Send + Sync + 'static {
     fn emit_tool_question(&self, _payload: &crate::agent::question_store::ToolQuestionPayload) {
         // Silent no-op — see the doc comment above.
     }
+    /// Emit a `ModeChangePayload` on the `mode:change:request`
+    /// channel (2026-07-07, `request_mode_change` task). Used by
+    /// `tools/request_mode_change::execute_blocking` to push the
+    /// pending mode change to the frontend so the user can render
+    /// an inline `<RequestModeChangeCard>` and allow / deny.
+    /// Default impl is a **silent** no-op (same shape as
+    /// `emit_tool_question`'s default — a noisy warn on every
+    /// call would spam logs if a future sink forgot to override).
+    /// Only `AppHandleSink` (production) and the test
+    /// `MockEmitter` implement it for real; `SubagentBufferSink`
+    /// inherits the no-op — but `request_mode_change` is
+    /// structurally disabled for workers (see
+    /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker
+    /// never reaches this method; the no-op is "defense in
+    /// depth" against a future config that re-enables it.
+    fn emit_mode_change_request(&self, _payload: &ModeChangePayload) {
+        // Silent no-op — see the doc comment above.
+    }
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
@@ -637,6 +656,19 @@ impl ChatEventSink for AppHandleSink {
         // payload into `questionCardsStore.pendingBySession`.
         if let Err(e) = self.app.emit("tool:question", payload.clone()) {
             tracing::warn!(error = %e, "AppHandleSink: tool:question emit failed");
+        }
+    }
+    fn emit_mode_change_request(&self, payload: &ModeChangePayload) {
+        // 2026-07-07 (`request_mode_change` task): production
+        // `AppHandleSink` forwards the mode-change payload to
+        // the Tauri `mode:change:request` channel. The
+        // frontend `streamController` listens on this channel
+        // (Phase B, task `07-07-request-mode-change-tool`) and
+        // inserts the payload into
+        // `questionCardsStore.pendingBySession` under the
+        // `kind: "mode_change"` discriminator.
+        if let Err(e) = self.app.emit("mode:change:request", payload.clone()) {
+            tracing::warn!(error = %e, "AppHandleSink: mode:change:request emit failed");
         }
     }
 }

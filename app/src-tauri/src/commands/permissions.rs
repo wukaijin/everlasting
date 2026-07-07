@@ -31,6 +31,16 @@ use crate::db;
 use crate::error::{AppCommandError, ErrorCategory};
 use crate::state::AppState;
 
+// Re-export the internal `set_session_mode_internal` from
+// `commands::question` so callers (incl. `set_session_mode`)
+// can use the same drop-in place for mode application. Kept
+// in `commands::question` because that file owns the
+// `request_mode_change` tool's `resolve_mode_change` IPC
+// handler — the two paths (user-driven IPC + LLM-driven
+// tool) must share a single mode-application point to avoid
+// audit / Yolo guard drift.
+pub(crate) use super::question::set_session_mode_internal;
+
 // ---------------------------------------------------------------------------
 // Root check (for Yolo safety guard)
 // ---------------------------------------------------------------------------
@@ -70,7 +80,10 @@ pub fn is_running_as_root() -> bool {
 /// `"Cannot enable Yolo as root"` (per PRD AC §后端 + audit
 /// §3.3).
 ///
-/// Side effects:
+/// Side effects (delegated to
+/// `set_session_mode_internal` to keep the user-driven IPC +
+/// LLM-driven `request_mode_change` tool paths in lockstep —
+/// RULE-A-006 single source of truth):
 /// 1. Update `sessions.mode` (UPDATE row, bump `updated_at`).
 /// 2. Write audit event(s):
 ///    - `mode_changed` (every call)
@@ -95,88 +108,11 @@ pub async fn set_session_mode(
         _ => db::Mode::Edit,
     };
 
-    // Yolo safety guard: refuse to enable Yolo when running as
-    // root. Yolo removes all user confirmations and the only
-    // remaining gate is Tier 2 (hard kill list). Running as root
-    // means `rm -rf /` could actually destroy the system before
-    // the kill list even matters (the kill list rejects it but
-    // other destructive commands are not enumerated). Refusing
-    // here is the simplest, safest guard.
-    if new_mode == db::Mode::Yolo && is_running_as_root() {
-        tracing::warn!(
-        session_id = %session_id,
-        "set_session_mode: refused to enable Yolo as root"
-        );
-        return Err(AppCommandError::new(
-            ErrorCategory::InvalidRequest,
-            "Cannot enable Yolo as root",
-        ));
-    }
-
-    // Read the current mode for the yolo_entered / yolo_exited
-    // audit dispatch.
-    let loaded = db::load_session(&state.db, &session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("set_session_mode: load_session failed: {}", e))?
-        .ok_or_else(|| {
-            AppCommandError::new(
-                ErrorCategory::InvalidRequest,
-                format!("set_session_mode: session '{}' not found", session_id),
-            )
-        })?;
-    let prev_mode = loaded.session.mode;
-
-    // Write the new mode.
-    db::update_session_mode(&state.db, &session_id, new_mode)
-        .await
-        .map_err(|e| anyhow::anyhow!("set_session_mode: db update failed: {}", e))?;
-
-    // Audit row: mode_changed (always).
-    let payload = serde_json::json!({
-    "prev_mode": prev_mode.as_str(),
-    "new_mode": new_mode.as_str(),
-    })
-    .to_string();
-    if let Err(e) =
-        db::record_audit_event(&state.db, &session_id, "mode_changed", Some(&payload)).await
-    {
-        tracing::warn!(error = %e, "set_session_mode: record_audit_event(mode_changed) failed");
-    }
-
-    // Audit row: yolo_entered / yolo_exited (only on the
-    // transition, not on every set_session_mode call).
-    let transition_kind = match (prev_mode, new_mode) {
-        (db::Mode::Yolo, db::Mode::Yolo) => None, // no-op toggle
-        (_, db::Mode::Yolo) => Some("yolo_entered"),
-        (db::Mode::Yolo, _) => Some("yolo_exited"),
-        _ => None,
-    };
-    if let Some(kind) = transition_kind {
-        if let Err(e) = db::record_audit_event(&state.db, &session_id, kind, Some(&payload)).await {
-            tracing::warn!(
-            error = %e,
-            kind = %kind,
-            "set_session_mode: record_audit_event(transition) failed"
-            );
-        }
-    }
-
-    // Re-load the row so the IPC return matches the typical
-    // CRUD shape (the frontend updates its `currentSession` with
-    // the returned row).
-    let updated = db::load_session(&state.db, &session_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("set_session_mode: re-load failed: {}", e))?
-        .ok_or_else(|| {
-            AppCommandError::new(
-                ErrorCategory::InvalidRequest,
-                format!(
-                    "set_session_mode: session '{}' disappeared mid-call",
-                    session_id
-                ),
-            )
-        })?;
-    Ok(updated.session)
+    // Delegate the apply + audit + Yolo root guard to the
+    // shared internal function. The IPC wrapper's only job is
+    // the lenient-parse + the IPC return shape.
+    let result = set_session_mode_internal(&state.db, &session_id, new_mode).await?;
+    Ok(result.session)
 }
 
 // ---------------------------------------------------------------------------
