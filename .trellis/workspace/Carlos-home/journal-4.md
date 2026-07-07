@@ -103,3 +103,45 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 91: 跨 session 待处理交互 UI 提醒(角标+徽章+toast 三档)
+
+**Date**: 2026-07-08
+**Task**: cross-session-pending-indicator
+**Branch**: `main`
+
+### Summary
+
+消除「session A 用着、session B 有 mode change/ask_user_question 申请却视觉感知不到」的盲区。三档提醒:A=SessionList 条目角标(按 `PendingInteraction.kind`:mode_change=`refresh`+target_mode 配色 / question=`info`,复用 `session-item__pending-approval` CSS+pulseDot);B=AppHeader 顶栏新建 `PendingBadge`(全局计数 `pendingBySession.size`,跨 project 天然成立,点击切当前 project 内 ts 最大 pending session);C=非当前 session 新 pending 到达 → 复用 `projectsStore.showToast`(扩展第四参 `opts.sessionId` 支持同 project 点击跳转,AppShell `onToastClick` 同 project 切 / 跨 project 仅 dismiss)。Q3 gate(当前 session 不 toast)抽为顶层纯函数 `buildPendingNotification` 单测。4 决策(Q1 mode+ask_user_question 不并入权限审批 / Q2 顶栏徽章 / Q3 仅非当前 session toast / Q4 仅同 project 跳转)全部**零后端改动**,复用既有 questionCards 全量缓存 + 角标范式 + toast。trellis-check 自修复 1 个 R5 偏差:角标 mode 配色原写反(plan=accent/edit=muted),沿用 `RequestModeChangeCard` 实际映射 edit=accent / plan=tool-read / yolo=error。806 vitest 全绿(+12 例)+ vue-tsc/vite build 零错。归档 archive/2026-07/07-08-cross-session-pending-indicator/。
+
+### Main Changes
+
+- `app/src/stores/projects.ts`:`ToastMessage` +`sessionId?`;`showToast` +第四参 `opts?:{sessionId?}`(durationMs 仍是第三参,向后兼容)
+- `app/src/stores/streamController.ts`:顶层导出纯函数 `buildPendingNotification`(Q3 gate 可单测)+ `handleModeChangeRequest`/`handleToolQuestion` 在 `addPending` 后触发 toast
+- `app/src/components/layout/AppShell.vue`:toast 点击改 `onToastClick`(同 project 切 session,跨 project / 无 sessionId 仅 dismiss)
+- `app/src/components/SessionList.vue`:`pendingBadge` helper(kind 分发)+ 两处 title-row 角标 + `.session-item__pending-interaction` CSS
+- `app/src/components/layout/PendingBadge.vue`:**新建**(全局计数徽章)
+- `app/src/components/layout/AppHeader.vue`:TitleBar slot 内挂 `<PendingBadge />`
+- 3 新测试:`pendingNotification.test.ts`(5)/ `PendingBadge.test.ts`(4)/ `projects.toast.test.ts`(3)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b95e8c5` | feat(pending-indicator): 跨 session 待处理交互 UI 提醒(角标+徽章+toast 三档) |
+| `802cde7` | chore(task): archive 07-08-cross-session-pending-indicator |
+
+### Testing
+
+- [OK] vitest 806 tests / 50 files 全绿(新增 12 例)
+- [OK] vue-tsc --noEmit + vite build 零类型错
+- [TODO] 手测 `pnpm tauri dev`(角标脉冲 / 徽章位置 / toast 文案 / compact 三角标并列)— 自动化测试覆盖核心逻辑,真实视觉待眼验
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete(手测眼验可随时补)
