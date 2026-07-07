@@ -53,6 +53,18 @@
  *  `<ToolCallCard>`. */
 export const ASK_USER_QUESTION_TOOL_NAME = "ask_user_question";
 
+/** Tool name for the blocking mode-change request tool (mirrors
+ *  the Rust `definition().name` in
+ *  `app/src-tauri/src/tools/request_mode_change.rs`). Frontend
+ *  consumers key on this constant for the MessageItem dispatch
+ *  (Phase D, 2026-07-07): tool_use blocks with `name === REQUEST_MODE_CHANGE_TOOL_NAME`
+ *  route to `<RequestModeChangeCard>`, everything else routes to
+ *  `<ToolCallCard>`. Mutually exclusive with
+ *  `ASK_USER_QUESTION_TOOL_NAME` — both tools share the same
+ *  per-session single-pending mutex on the backend's
+ *  QuestionStore (only one pending interaction per session). */
+export const REQUEST_MODE_CHANGE_TOOL_NAME = "request_mode_change";
+
 /** Tauri event channel name (backend → frontend). Distinct from
  *  `tool:call` / `tool:result` / `permission:ask` so the listener
  *  can be wired independently (per the design's §5.4 routing). */

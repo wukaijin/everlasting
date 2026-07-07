@@ -1374,6 +1374,22 @@ export const useChatStore = defineStore("chat", () => {
    *  is unmounted via `v-if` when this flips false. */
   const pendingYoloConfirm = ref(false);
 
+  /** 2026-07-07 (`request_mode_change` task): when the
+   *  inline `<RequestModeChangeCard>` opens the Yolo modal,
+   *  it writes this ref BEFORE calling `requestSetMode`. The
+   *  extended `confirmYolo(pendingResolveRequest)` /
+   *  `cancelYolo(pendingResolveRequest)` read this ref after
+   *  the Yolo IPC resolves and fire `resolveModeChange` for
+   *  the agent loop's oneshot. `null` when no request_mode_change
+   *  flow is in flight (the user-initiated Shift+Tab /
+   *  ModeSelect popover paths don't set this — they have no
+   *  agent-loop oneshot to unblock). */
+  const pendingResolveRequest = ref<{
+    sessionId: string;
+    toolUseId: string;
+    targetMode: "edit" | "plan" | "yolo";
+  } | null>(null);
+
   /** Orchestrator for a mode change. The caller passes the
    *  target mode; this method handles the Yolo gate. Returns
    *  `true` if the mode was applied (or already current),
@@ -1423,27 +1439,147 @@ export const useChatStore = defineStore("chat", () => {
    *  closes the modal. Returns `true` on successful IPC + DB
    *  write, `false` on no-op (no session) or IPC failure.
    *  No streaming guard — matches `requestSetMode`'s contract
-   *  that mode changes pass through unconditionally. */
-  async function confirmYolo(): Promise<boolean> {
+   *  that mode changes pass through unconditionally.
+   *
+   *  2026-07-07 (`request_mode_change` task): when invoked from
+   *  the inline `<RequestModeChangeCard>` via
+   *  `pendingResolveRequest` (set by the card before opening
+   *  the modal), this method ALSO fires `resolveModeChange`
+   *  after the Yolo IPC succeeds — the agent loop's oneshot is
+   *  unblocked with `allow=true` so the LLM sees the
+   *  `mode_change_allowed` audit + the `allowed: true` tool
+   *  result. Without this hook the user-initiated Yolo path
+   *  would update the DB but leave the agent loop frozen on
+   *  the request_mode_change tool's oneshot — the LLM would
+   *  never see the resolution. On IPC failure (Yolo root guard,
+   *  DB error), the resolveModeChange is fired with `allow=false`
+   *  so the user gets a `cancelled_by_user` tool result + a
+   *  `mode_change_denied` audit (the cleaner outcome — the user
+   *  was the one who tried to enable Yolo, the failure means
+   *  Yolo can't be applied). */
+  async function confirmYolo(
+    pendingResolve?: {
+      sessionId: string;
+      toolUseId: string;
+      targetMode: "edit" | "plan" | "yolo";
+    },
+  ): Promise<boolean> {
     pendingYoloConfirm.value = false;
-    const sid = currentSessionId.value;
+    const sid = pendingResolve?.sessionId ?? currentSessionId.value;
     if (!sid) return false;
+    // Clear the store ref up-front (before the IPC) — if the
+    // resolve itself somehow surfaces the Yolo modal again
+    // (it shouldn't, but defensive), we don't want a stale
+    // hook to recurse. The `pendingResolve` parameter still
+    // carries the data for the resolve call below.
+    if (pendingResolve) {
+      pendingResolveRequest.value = null;
+    }
     try {
       await invoke("set_session_mode", { sessionId: sid, mode: "yolo" });
       const summary = sessions.value.find((s) => s.id === sid);
       if (summary) {
         (summary as { mode: string }).mode = "yolo";
       }
-      return true;
     } catch (e) {
       console.error("Failed to confirm Yolo:", e);
+      // 2026-07-07: even on failure, unblock the agent loop
+      // oneshot (with allow=false) so the LLM doesn't freeze
+      // waiting. Only do this when we have a pending resolve
+      // hook (the user-initiated path doesn't need it).
+      if (pendingResolve) {
+        try {
+          // Lazy import to avoid a circular dependency with
+          // `questionCards.ts` (which already imports
+          // `useChatStore` lazily for the same reason — see
+          // `resolveModeChange` in that file).
+          const { useQuestionCardsStore } = await import(
+            "./questionCards"
+          );
+          await useQuestionCardsStore().resolveModeChange(
+            pendingResolve.sessionId,
+            pendingResolve.toolUseId,
+            pendingResolve.targetMode,
+            false,
+          );
+        } catch (resolveErr) {
+          // The resolve is best-effort: the DB write already
+          // failed; surfacing a second error here would only
+          // add noise. Log and move on.
+          console.error(
+            "Failed to resolve mode_change after Yolo IPC error:",
+            resolveErr,
+          );
+        }
+      }
       return false;
     }
+    // Success path — fire resolveModeChange with allow=true to
+    // unblock the agent loop oneshot. Only when we have the
+    // pendingResolve (the user-initiated Shift+Tab path has
+    // no request_mode_change oneshot to unblock).
+    if (pendingResolve) {
+      try {
+        const { useQuestionCardsStore } = await import(
+          "./questionCards"
+        );
+        await useQuestionCardsStore().resolveModeChange(
+          pendingResolve.sessionId,
+          pendingResolve.toolUseId,
+          pendingResolve.targetMode,
+          true,
+        );
+      } catch (e) {
+        console.error(
+          "Failed to resolve mode_change after Yolo IPC success:",
+          e,
+        );
+        // Don't surface as toast — the Yolo IPC succeeded; the
+        // resolve failure means the LLM will see the pending
+        // interaction (eventually timed out or rejected). Log
+        // for now; a follow-up can surface via the existing
+        // pending-card re-mount path.
+      }
+    }
+    return true;
   }
 
-  /** Cancel the pending Yolo confirm — no mode change. */
-  function cancelYolo(): void {
+  /** Cancel the pending Yolo confirm — no mode change.
+   *
+   *  2026-07-07: when invoked from the inline
+   *  `<RequestModeChangeCard>` via `pendingResolve`,
+   *  fires `resolveModeChange(allow=false)` so the agent loop
+   *  sees `cancelled_by_user` and the user sees
+   *  `mode_change_denied` audit. The user-initiated path
+   *  (`pendingResolve === undefined`) just closes the
+   *  modal — there's no agent-loop oneshot to unblock. */
+  async function cancelYolo(
+    pendingResolve?: {
+      sessionId: string;
+      toolUseId: string;
+      targetMode: "edit" | "plan" | "yolo";
+    },
+  ): Promise<void> {
     pendingYoloConfirm.value = false;
+    if (!pendingResolve) return;
+    // Clear the in-store ref so a subsequent user-initiated
+    // Yolo switch (Shift+Tab / popover) doesn't see a stale
+    // request_mode_change hook.
+    pendingResolveRequest.value = null;
+    try {
+      const { useQuestionCardsStore } = await import("./questionCards");
+      await useQuestionCardsStore().resolveModeChange(
+        pendingResolve.sessionId,
+        pendingResolve.toolUseId,
+        pendingResolve.targetMode,
+        false,
+      );
+    } catch (e) {
+      console.error(
+        "Failed to resolve mode_change after Yolo cancel:",
+        e,
+      );
+    }
   }
 
   return {
@@ -1515,6 +1651,7 @@ export const useChatStore = defineStore("chat", () => {
     // is held in `pendingYoloConfirm` and consumed by the
     // YoloConfirmModal mounted by `ModeSelect.vue`.
     pendingYoloConfirm,
+    pendingResolveRequest,
     requestSetMode,
     confirmYolo,
     cancelYolo,

@@ -188,9 +188,23 @@ async function onModePick(mode: SessionMode) {
  *  update, then surfaces the same "next-turn applies" toast
  *  the non-Yolo path emits — only when streaming. We route
  *  the toast here (rather than in `chat.ts`) so the modal's
- *  cancel path doesn't need a counter-handler. */
+ *  cancel path doesn't need a counter-handler.
+ *
+ *  2026-07-07 (`request_mode_change` task): when the
+ *  `<RequestModeChangeCard>` opened this modal, it stashed
+ *  its `pendingResolveRequest` on the chat store. We pass it
+ *  through to `confirmYolo` so the extended handler can fire
+ *  `resolveModeChange` AFTER the Yolo IPC — unblocking the
+ *  agent loop's oneshot for the request_mode_change tool.
+ *  When the modal is user-initiated (Shift+Tab / popover),
+ *  `pendingResolveRequest` is null and `confirmYolo` takes
+ *  the original code path (no resolve — there's no oneshot
+ *  to unblock). */
 async function onYoloConfirm() {
-  const applied = await chatStore.confirmYolo();
+  const pending = chatStore.pendingResolveRequest;
+  const applied = await chatStore.confirmYolo(
+    pending ?? undefined,
+  );
   if (applied && chatStore.isCurrentSessionStreaming) {
     projectsStore.showToast(
       "Mode 已切换，将在下一轮 turn 生效",
@@ -267,7 +281,7 @@ async function onYoloConfirm() {
          clicks can still open the modal and confirm. -->
     <YoloConfirmModal
       :open="chatStore.pendingYoloConfirm"
-      @cancel="chatStore.cancelYolo()"
+      @cancel="chatStore.cancelYolo(chatStore.pendingResolveRequest ?? undefined)"
       @confirm="onYoloConfirm"
     />
   </div>
