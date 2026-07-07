@@ -215,3 +215,123 @@ export interface PendingQuestion {
    *  during a transient cross-session race). */
   ts: number;
 }
+
+// -----------------------------------------------------------------------
+// `request_mode_change` tool wire types (07-07-07-07, 2026-07-07)
+// -----------------------------------------------------------------------
+
+/** `mode:change:request` event payload (backend → frontend).
+ *  Mirrors the Rust `ModeChangePayload` struct verbatim
+ *  (snake_case, no `rename_all`). The backend's
+ *  `request_mode_change::execute_blocking` emits this AFTER
+ *  QuestionStore.register + BEFORE the `tokio::select!{cancel,
+ *  oneshot.recv()}` wait — same interception pattern as the
+ *  question tool. The streamController listener routes it into
+ *  the `questionCards` store wrapped as
+ *  `{ kind: "mode_change", payload: ModeChangePayload }`.
+ *
+ *  Field-by-field:
+ *  - `session_id` — the session the pending change belongs to.
+ *  - `tool_use_id` — the LLM-assigned id matching the assistant
+ *    `ToolUse(request_mode_change)` block. MessageItem dispatch
+ *    uses this to pair the card with its tool_use row.
+ *  - `target_mode` — the mode the LLM wants (`"edit" | "plan" |
+ *    "yolo"`). Backend validates against `VALID_MODES` enum.
+ *  - `current_mode` — optional snapshot at tool-invocation time
+ *    (used to render the "当前: X → 目标: Y" comparison pill;
+ *    `null` is reserved for future "session pre-load not yet
+ *    resolved" edge cases — production always populates).
+ *  - `reason` — LLM-supplied explanation (≤500 chars). Optional.
+ *  - `ts` — unix ms (display ordering, "asked Xs ago"). */
+export interface ModeChangePayload {
+  session_id: string;
+  tool_use_id: string;
+  target_mode: "edit" | "plan" | "yolo";
+  current_mode?: "edit" | "plan" | "yolo" | null;
+  reason?: string;
+  ts: number;
+}
+
+/** `resolve_mode_change` IPC payload (frontend → backend). Routes
+ *  to `commands::question::resolve_mode_change` →
+ *  `QuestionStore.resolve(session_id, InteractionResponse)`.
+ *
+ *  `allow` is the user's decision: `true` = allow + apply mode +
+ *  write `mode_change_allowed` audit; `false` = deny + write
+ *  `mode_change_denied` audit + tool_result becomes
+ *  `{ cancelled_by_user: true }`. The backend resolves the
+ *  oneshot AFTER applying the mode change (see
+ *  `commands::question::resolve_mode_change` for the ordering
+ *  rationale) — the frontend doesn't need to await any second
+ *  IPC.
+ *
+ *  `targetMode` is sent separately (not extracted from the
+ *  original payload) because the backend's `resolve_mode_change`
+ *  IPC applies the mode internally via
+ *  `set_session_mode_internal` — it doesn't fetch the pending
+ *  payload first. This keeps the IPC self-contained.
+ *
+ *  CamelCase at the JS layer (Tauri auto-translates to Rust
+ *  snake_case at the IPC boundary). */
+export interface ModeChangeResolvePayload {
+  sessionId: string;
+  toolUseId: string;
+  targetMode: "edit" | "plan" | "yolo";
+  allow: boolean;
+}
+
+/** Tagged union carrying either a `ToolQuestionPayload` (the
+ *  existing `ask_user_question` flow) or a `ModeChangePayload`
+ *  (the new `request_mode_change` flow). Mirrors the Rust
+ *  `PendingInteraction` enum's wire shape — `#[serde(tag =
+ *  "kind", rename_all = "snake_case")]` — so the JSON arrives as
+ *  `{ kind: "question", questions: [...] }` or `{ kind:
+ *  "mode_change", target_mode: ... }`. Single-pending-mutex
+ *  semantics (only one variant per session) come from the
+ *  backend's QuestionStore; this type is the frontend's mirror.
+ *
+ *  The `pendingBySession` Pinia cache stores these directly —
+ *  callers read `getPending(sid)?.kind` to dispatch to the right
+ *  card component (`<AskUserQuestionCard>` vs
+ *  `<RequestModeChangeCard>`). */
+export type PendingInteraction =
+  | { kind: "question"; payload: ToolQuestionPayload }
+  | { kind: "mode_change"; payload: ModeChangePayload };
+
+/** IPC return shape of `get_pending_interaction`. Mirrors the
+ *  Rust `PendingInteractionEntry` struct (top-level `kind` +
+ *  nested tagged `payload`). The outer `kind` lets callers
+ *  short-circuit on `entry.kind === "mode_change"` without
+ *  parsing the tagged enum first; the `payload` carries the
+ *  typed variant (dispatch on `kind`, read matching fields).
+ *
+ *  Why a wrapper (not just `PendingInteraction` directly)? The
+ *  Rust side's `get_payload` returns
+ *  `PendingInteractionEntry { kind, payload }` so the IPC
+ *  caller can `entry.kind` without consuming the payload. The
+ *  frontend mirrors this 1:1. */
+export interface PendingInteractionEntry {
+  kind: "question" | "mode_change";
+  payload: PendingInteraction;
+}
+
+/** Tauri event channel name for `request_mode_change` (backend →
+ *  frontend). Distinct from `tool:question` so the listener can
+ *  be wired independently. Mirrors the Rust `app.emit("mode:change:request",
+ *  payload)` site in `state.rs::AppHandleSink::emit_mode_change_request`. */
+export const MODE_CHANGE_EVENT = "mode:change:request";
+
+/** Tauri command name for `resolve_mode_change` (frontend →
+ *  backend). Routes to `commands::question::resolve_mode_change`,
+ *  which calls `QuestionStore.resolve(session_id, response)`
+ *  AFTER applying the mode via `set_session_mode_internal`. */
+export const RESOLVE_MODE_CHANGE_CMD = "resolve_mode_change";
+
+/** Tauri command name for `get_pending_interaction` (frontend →
+ *  backend). Routes to `commands::question::get_pending_interaction`,
+ *  which calls `QuestionStore.get_payload(session_id)`. Returns
+ *  `Option<PendingInteractionEntry>` (snake_case payload), `null`
+ *  when no pending interaction exists for the session. The
+ *  streamController calls this on `ensureLoaded` to fetch the
+ *  authoritative backend state. */
+export const GET_PENDING_INTERACTION_CMD = "get_pending_interaction";

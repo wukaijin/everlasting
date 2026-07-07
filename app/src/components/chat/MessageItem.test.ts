@@ -153,11 +153,14 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
     ]);
     // Pre-populate the questionCards store so the card has a
     // pending entry (mirrors the live `tool:question` event flow).
-    questionCardsStore.addPending({
-      sessionId: "sess-1",
-      toolUseId: "tu-1",
-      questions: QUESTIONS,
-      ts: 1,
+    questionCardsStore.addPending("sess-1", {
+      kind: "question",
+      payload: {
+        session_id: "sess-1",
+        tool_use_id: "tu-1",
+        questions: QUESTIONS,
+        ts: 1,
+      },
     });
 
     const wrapper = mountItem(message, pinia);
@@ -217,11 +220,14 @@ describe("MessageItem — ask_user_question tool dispatch", () => {
         input: { command: "wc -l /tmp/foo.txt" },
       },
     ]);
-    questionCardsStore.addPending({
-      sessionId: "sess-1",
-      toolUseId: "tu-ask",
-      questions: QUESTIONS,
-      ts: 1,
+    questionCardsStore.addPending("sess-1", {
+      kind: "question",
+      payload: {
+        session_id: "sess-1",
+        tool_use_id: "tu-ask",
+        questions: QUESTIONS,
+        ts: 1,
+      },
     });
 
     const wrapper = mountItem(message, pinia);
@@ -247,11 +253,14 @@ describe("MessageItem — AskUserQuestionCard state resolution", () => {
         input: { questions: QUESTIONS },
       },
     ]);
-    questionCardsStore.addPending({
-      sessionId: "sess-1",
-      toolUseId: "tu-pending",
-      questions: QUESTIONS,
-      ts: 1,
+    questionCardsStore.addPending("sess-1", {
+      kind: "question",
+      payload: {
+        session_id: "sess-1",
+        tool_use_id: "tu-pending",
+        questions: QUESTIONS,
+        ts: 1,
+      },
     });
 
     const wrapper = mountItem(message, pinia);
@@ -391,11 +400,14 @@ describe("MessageItem — AskUserQuestionCard state resolution", () => {
         },
       ],
     );
-    questionCardsStore.addPending({
-      sessionId: "sess-1",
-      toolUseId: "tu-OTHER-pending",
-      questions: QUESTIONS,
-      ts: 1,
+    questionCardsStore.addPending("sess-1", {
+      kind: "question",
+      payload: {
+        session_id: "sess-1",
+        tool_use_id: "tu-OTHER-pending",
+        questions: QUESTIONS,
+        ts: 1,
+      },
     });
 
     const wrapper = mountItem(message, pinia);
@@ -422,11 +434,14 @@ describe("MessageItem — AC10 inherited (no modal / no portal)", () => {
         input: { questions: QUESTIONS },
       },
     ]);
-    questionCardsStore.addPending({
-      sessionId: "sess-1",
-      toolUseId: "tu-1",
-      questions: QUESTIONS,
-      ts: 1,
+    questionCardsStore.addPending("sess-1", {
+      kind: "question",
+      payload: {
+        session_id: "sess-1",
+        tool_use_id: "tu-1",
+        questions: QUESTIONS,
+        ts: 1,
+      },
     });
 
     const wrapper = mountItem(message, pinia);

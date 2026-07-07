@@ -204,14 +204,23 @@ function resolveAskCardState(toolUseId: string): {
   questions: import("../../stores/questionCards.types").Question[];
   selectedAnswer: ToolQuestionAnswer[] | undefined;
 } | null {
-  // 1. Live pending — match by session + tool_use_id.
+  // 1. Live pending — match by session + tool_use_id. The
+  //    `pendingBySession` value is a tagged `PendingInteraction`
+  //    union (Phase B, 2026-07-07) — we narrow to the Question
+  //    variant here because the AskUserQuestionCard only renders
+  //    for question flows; a pending mode change renders via
+  //    `<RequestModeChangeCard>` (dispatch added in Phase D).
   const sid = chatStore.currentSessionId;
   if (sid) {
     const pending = questionCardsStore.getPending(sid);
-    if (pending && pending.toolUseId === toolUseId) {
+    if (
+      pending &&
+      pending.kind === "question" &&
+      pending.payload.tool_use_id === toolUseId
+    ) {
       return {
         state: "pending",
-        questions: pending.questions,
+        questions: pending.payload.questions,
         selectedAnswer: undefined,
       };
     }
