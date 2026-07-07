@@ -226,52 +226,60 @@ async fn worker_ask_allowed_resolves_allow() {
 /// No audit row is written (RULE-A-016 lineage).
 #[tokio::test]
 async fn worker_ask_timeout_resolves_deny() {
-    let (pool, store, sink, ctx, _token) = worker_ctx_with_db().await;
-    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    // Scope a 50ms ask-timeout on this task so the natural timeout arm
+    // fires in milliseconds instead of the production 120s (which would
+    // dominate `cargo test --lib` wall time). task-local (not thread-
+    // local) so it survives the `ask_path` internal `.await`s. The
+    // outer 2s timeout is ample headroom while still failing fast if
+    // the timeout arm regresses. See `with_ask_timeout_for_test`.
+    crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        async {
+            let (pool, store, sink, ctx, _token) = worker_ctx_with_db().await;
+            let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
 
-    // Outer 130s timeout so the natural 120s ASK_TIMEOUT path
-    // runs to completion (instead of being killed by the test
-    // runner). If the timeout arm fails to fire, the outer
-    // timeout surfaces a clear panic message.
-    let decision = tokio::time::timeout(
-        std::time::Duration::from_secs(130),
-        ask_path(
-            &sink_arc,
-            &pool,
-            &store,
-            &ctx,
-            "write_file",
-            &serde_json::json!({"path": "/repo/outside/foo.rs"}),
-            "/repo/outside/foo.rs",
-            Some("/repo/outside/foo.rs"),
-            "tu-worker-timeout",
-            &tokio_util::sync::CancellationToken::new(),
-        ),
+            let decision = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                ask_path(
+                    &sink_arc,
+                    &pool,
+                    &store,
+                    &ctx,
+                    "write_file",
+                    &serde_json::json!({"path": "/repo/outside/foo.rs"}),
+                    "/repo/outside/foo.rs",
+                    Some("/repo/outside/foo.rs"),
+                    "tu-worker-timeout",
+                    &tokio_util::sync::CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("worker ask_path timed out (the ASK_TIMEOUT arm did not fire)");
+            assert!(
+                matches!(decision, Decision::Deny { .. }),
+                "expected Deny after timeout, got {:?}",
+                decision
+            );
+            if let Decision::Deny { reason, critical } = &decision {
+                assert!(reason.contains("timed out"), "reason: {}", reason);
+                assert!(!critical);
+            } else {
+                panic!("expected Deny");
+            }
+
+            // No audit row (RULE-A-016 lineage).
+            let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
+                .await
+                .expect("list_audit_events");
+            assert!(
+                events.is_empty(),
+                "RULE-A-016: worker timeout must NOT write any session_audit_events \
+                 row; got kinds: {:?}",
+                events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
+            );
+        },
     )
-    .await
-    .expect("worker ask_path timed out (the 120s ASK_TIMEOUT arm did not fire)");
-    assert!(
-        matches!(decision, Decision::Deny { .. }),
-        "expected Deny after timeout, got {:?}",
-        decision
-    );
-    if let Decision::Deny { reason, critical } = &decision {
-        assert!(reason.contains("timed out"), "reason: {}", reason);
-        assert!(!critical);
-    } else {
-        panic!("expected Deny");
-    }
-
-    // No audit row (RULE-A-016 lineage).
-    let events = crate::db::permissions::list_audit_events(&pool, "parent-sess")
-        .await
-        .expect("list_audit_events");
-    assert!(
-        events.is_empty(),
-        "RULE-A-016: worker timeout must NOT write any session_audit_events \
-         row; got kinds: {:?}",
-        events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>()
-    );
+    .await;
 }
 
 /// Worker ask cancelled by parent token (user Stop) →

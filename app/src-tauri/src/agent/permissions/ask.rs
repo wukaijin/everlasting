@@ -19,6 +19,72 @@ use super::types::{risk_for_tool, Decision, PermissionContext, PermissionRespons
 /// `### IPC 异常路径` "用户从不响应" → 120s auto-deny.
 pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+// ---------------------------------------------------------------------------
+// Test-only timeout override (tokio task-local, RAII)
+// ---------------------------------------------------------------------------
+//
+// Two tests (`worker_ask_timeout_resolves_deny` in tests_ask.rs and the
+// `rid_rule_a_014` worker-ask test in tests_subagent.rs) verify the
+// ASK_TIMEOUT auto-deny path by waiting for the *real* timeout to fire.
+// At 120s each, they alone cost ~240s of wall time per `cargo test --lib`
+// run, dominating the suite's runtime.
+//
+// Rather than thread an override through `PermissionContext` + the 50+
+// `run_chat_loop` call sites (the worker test reaches `ask_path` via the
+// chat loop's internally-built context, so a ctx field alone wouldn't
+// reach it without a new `run_chat_loop` parameter), we expose a
+// **tokio task-local** override read by [`ask_timeout`]. Production never
+// sets it (reads `ASK_TIMEOUT`); tests scope it via
+// [`with_ask_timeout_for_test`].
+//
+// Why task-local over thread-local: the `rid_rule_a_014` test runs under
+// `#[tokio::test(flavor = "multi_thread")]`, and the worker's `ask_path`
+// executes inside `run_chat_loop` → `run_subagent` on the *same task* but
+// potentially on a *different OS thread* after an `.await` resume. A
+// thread-local would be lost on thread migration; a task-local follows
+// the task across `await` points. The worker path is not `tokio::spawn`ed
+// (dispatch.rs `Box::pin(run_chat_loop(...))` is polled in-task), so the
+// parent test's task-local is visible all the way down to the worker's
+// `ask_path`.
+tokio::task_local! {
+    /// Test-only override for the ASK_TIMEOUT duration. Absent in
+    /// production builds' tasks (no test scopes it) → [`ask_timeout`]
+    /// falls back to [`ASK_TIMEOUT`].
+    static ASK_TIMEOUT_OVERRIDE: std::time::Duration;
+}
+
+/// Resolve the effective ask timeout: the task-local override if the
+/// current task has one scoped, else the production [`ASK_TIMEOUT`]
+/// constant. Called from both `tokio::select!` arms in [`ask_path`].
+///
+/// `try_get` (not `get`) so unscoped tasks — i.e. all production tasks
+/// and the majority of tests — read the const fallback without panic.
+fn ask_timeout() -> std::time::Duration {
+    // `try_get` returns `Result<Duration, AccessError>` (the task-local
+    // value type is `Duration`, handed back owned). Absent (production
+    // tasks + most tests never scope it) → production const.
+    ASK_TIMEOUT_OVERRIDE.try_get().unwrap_or(ASK_TIMEOUT)
+}
+
+/// Run `future` with a short ask-timeout scoped on the current task.
+/// Tests that exercise the ASK_TIMEOUT auto-deny path pass a small
+/// duration (e.g. 50ms) so the natural timeout arm fires in
+/// milliseconds instead of the production 120s.
+///
+/// Production code must not call this — there is no production caller
+/// (the fn is `#[cfg(test)]`). The task-local is cleared automatically
+/// when the returned future completes (RAII via `scope`).
+#[cfg(test)]
+pub(crate) async fn with_ask_timeout_for_test<F, R>(
+    d: std::time::Duration,
+    future: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    ASK_TIMEOUT_OVERRIDE.scope(d, future).await
+}
+
 /// Internal error type for the worker's `tokio::select!` arm
 /// (2026-06-22, RULE-FrontSubagent-003 fix). The 3-arm select
 /// in the worker branch of `ask_path` produces a
@@ -231,8 +297,10 @@ pub(super) async fn ask_path(
                     reason: "cancelled by parent session stop".to_string(),
                 })
             }
-            _ = tokio::time::sleep(ASK_TIMEOUT) => {
-                // 120s without user response → Deny.
+            _ = tokio::time::sleep(ask_timeout()) => {
+                // 120s (production default) without user response →
+                // Deny. The duration is resolved via [`ask_timeout`] so
+                // tests can shorten it via [`set_ask_timeout_for_test`].
                 // Drop the pending oneshot to free the map entry.
                 // No audit (RULE-A-016 lineage — see cancel arm).
                 let mut map = store.lock().await;
@@ -426,7 +494,13 @@ pub(super) async fn ask_path(
                     critical: false,
                 };
             }
-            _ = tokio::time::sleep(ASK_TIMEOUT) => {
+            _ = tokio::time::sleep(ask_timeout()) => {
+                // Resolved via [`ask_timeout`] (production 120s; tests
+                // may override via [`set_ask_timeout_for_test`]). The
+                // reason string below keeps the spec'd "120s" wording
+                // since it is the product contract, not the measured
+                // value — and the worker path string-compares against
+                // it (line ~402) to discriminate timeout from user-deny.
                 let mut map = store.lock().await;
                 map.remove(&rid);
                 drop(map);

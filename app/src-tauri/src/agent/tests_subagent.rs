@@ -1759,73 +1759,74 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
         .await
         .expect("list_audit_events before");
 
-    // Wrap the run in a `tokio::time::timeout` so a hang (the
-    // pre-PR2b symptom — oneshot never resolved) is caught and
-    // fails the test with a clear message instead of timing out
-    // the test runner at 60s.
+    // Wrap the run in a task-local 50ms ask-timeout scope so the
+    // worker's ASK_TIMEOUT arm fires in milliseconds (not the
+    // production 120s). task-local (not thread-local) because this
+    // test runs under `flavor = "multi_thread"` and the worker's
+    // `ask_path` may resume on a different OS thread after an
+    // `.await`; the worker runs in-task (dispatch.rs uses `Box::pin`,
+    // not `tokio::spawn`), so the parent task's scope is visible all
+    // the way down. See `with_ask_timeout_for_test` in `ask.rs`.
     //
-    // 2026-06-22 (RULE-FrontSubagent-003 fix): the worker now
-    // enters the interactive ask round-trip instead of auto-
-    // denying synchronously. Without anyone responding, the
-    // worker waits up to 120s for the ASK_TIMEOUT to fire (the
-    // post-fix behavior). The outer timeout is therefore raised
-    // to 130s so the test completes by the natural timeout
-    // path (not by the outer kill). The test's purpose (verify
-    // the worker does NOT hang forever on the oneshot) is
-    // preserved — the worker's auto-deny after 120s IS the
-    // "no hang" guarantee the test was originally asserting.
-    let run_result = tokio::time::timeout(
-        std::time::Duration::from_secs(130),
-        run_chat_loop(
-            vec![],
-            mock.clone(),
-            200_000,
-            "rid-rule-a-014".into(),
-            h.session_id.clone(),
-            test_messages(),
-            emitter.clone(),
-            h.db.clone(),
-            h.cancellations,
-            h.session_active_request,
-            h.read_guard,
-            h.memory_cache,
-            h.skill_cache,
-            h.permission_asks,
-            CancellationToken::new(),
-            None,
-            h.background_shells.clone(),
-            None,
-            false,
-            false,
-            // B6 Subagent PR2b (RULE-A-014, 2026-06-20):
-            // production-style caller → Some(false). The parent
-            // loop is NOT a worker; only the nested worker call
-            // passes Some(true) (at chat_loop.rs:2155). Mirrors
-            // the production chat.rs call site.
-            Some(false),
-            // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
-            // (no Tauri runtime).
-            None,
-            // 2026-06-21 fix (B6 review defect A): tests pass
-            // `None` (production-style caller — not a worker,
-            // so the parent's `assemble_system_prompt(mode_prefix,
-            // base_prompt)` path runs unchanged). The worker
-            // nested call in `run_subagent` passes `Some(...)` to
-            // fully replace the parent's prompt with the worker's
-            // `SubagentDef.system_prompt`.
-            None,
-            // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
-            // caller — no worker context — worker_run_id is None.
-            None,
-            h.subagent_cache.clone(),
-            None,
-            // L3b (2026-06-27): production-style caller → worktree_override = None.
-            None,
-            // L3b (2026-06-27): thread the test harness's app_data_dir.
-            h.app_data_dir.clone(),
-            None,
-            // 2026-06-30 (ask_user_question task): per-test QuestionStore.
-            h.question_store.clone(),
+    // The outer `tokio::time::timeout(2s)` is a hang backstop — ample
+    // headroom over the 50ms inner timeout while still failing fast if
+    // the worker's ask round-trip regresses into a real hang (the
+    // pre-PR2b symptom). Was 130s under the real-timeout design.
+    let run_result = crate::agent::permissions::ask::with_ask_timeout_for_test(
+        std::time::Duration::from_millis(50),
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_chat_loop(
+                vec![],
+                mock.clone(),
+                200_000,
+                "rid-rule-a-014".into(),
+                h.session_id.clone(),
+                test_messages(),
+                emitter.clone(),
+                h.db.clone(),
+                h.cancellations,
+                h.session_active_request,
+                h.read_guard,
+                h.memory_cache,
+                h.skill_cache,
+                h.permission_asks,
+                CancellationToken::new(),
+                None,
+                h.background_shells.clone(),
+                None,
+                false,
+                false,
+                // B6 Subagent PR2b (RULE-A-014, 2026-06-20):
+                // production-style caller → Some(false). The parent
+                // loop is NOT a worker; only the nested worker call
+                // passes Some(true) (at chat_loop.rs:2155). Mirrors
+                // the production chat.rs call site.
+                Some(false),
+                // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
+                // (no Tauri runtime).
+                None,
+                // 2026-06-21 fix (B6 review defect A): tests pass
+                // `None` (production-style caller — not a worker,
+                // so the parent's `assemble_system_prompt(mode_prefix,
+                // base_prompt)` path runs unchanged). The worker
+                // nested call in `run_subagent` passes `Some(...)` to
+                // fully replace the parent's prompt with the worker's
+                // `SubagentDef.system_prompt`.
+                None,
+                // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
+                // caller — no worker context — worker_run_id is None.
+                None,
+                h.subagent_cache.clone(),
+                None,
+                // L3b (2026-06-27): production-style caller → worktree_override = None.
+                None,
+                // L3b (2026-06-27): thread the test harness's app_data_dir.
+                h.app_data_dir.clone(),
+                None,
+                // 2026-06-30 (ask_user_question task): per-test QuestionStore.
+                h.question_store.clone(),
+            ),
         ),
     )
     .await;
