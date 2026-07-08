@@ -516,6 +516,68 @@ mod tests {
         }
     }
 
+    /// Step 1.4 — artifact 查阅机制:`task.json` 元数据(id/title/
+    /// slug/status)+ breadcrumb 文本 + prd/design/progress path pointer
+    /// 必须随 state breadcrumb 一起进 messages[0],让 LLM 知道当前
+    /// task + 全文去哪读。
+    #[test]
+    fn breadcrumb_includes_task_meta_and_artifact_paths() {
+        let mut msgs = vec![fresh_user_message()];
+        append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
+        let text = match &msgs[0].content {
+            MessageContent::Blocks(bs) => match bs.last().unwrap() {
+                ContentBlock::Text { text, .. } => text.clone(),
+                _ => panic!("expected text block"),
+            },
+            _ => panic!("messages[0] content shape corrupted"),
+        };
+
+        // task.json meta 全部进 breadcrumb
+        assert!(text.contains("task_id: t1"), "missing task_id, got: {}", text);
+        assert!(
+            text.contains("title: Sample task"),
+            "missing title, got: {}",
+            text
+        );
+        assert!(text.contains("slug: sample"), "missing slug, got: {}", text);
+        assert!(
+            text.contains("status: implement"),
+            "missing status, got: {}",
+            text
+        );
+
+        // artifact path pointer — prd/design/progress 全文路径都给
+        // LLM 走 read_file 自取,engine 不预加载
+        assert!(
+            text.contains(".everlasting/tasks/sample/"),
+            "missing task_dir pointer, got: {}",
+            text
+        );
+        assert!(
+            text.contains("prd.md"),
+            "missing prd.md path, got: {}",
+            text
+        );
+        assert!(
+            text.contains("design.md"),
+            "missing design.md path, got: {}",
+            text
+        );
+        assert!(
+            text.contains("progress.md"),
+            "missing progress.md path, got: {}",
+            text
+        );
+
+        // meta 容器包裹(便于 LLM parse)
+        assert!(
+            text.contains("<workflow-task-meta>")
+                && text.contains("</workflow-task-meta>"),
+            "missing <workflow-task-meta> wrapper, got: {}",
+            text
+        );
+    }
+
     // --- S-B guard -----------------------------------------------------
 
     #[test]
