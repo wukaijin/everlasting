@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::workflow::WorkflowCtx;
 use crate::db::subagent_overrides::get_subagent_model_override;
 use crate::llm::Provider;
 use crate::memory::MemoryCache;
@@ -331,6 +332,18 @@ pub(crate) async fn run_subagent(
     // `filter_tools_for_subagent`), so the store is unused on
     // this path.
     parent_question_store: &crate::agent::question_store::QuestionStore,
+    // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+    // the workflow session's context. The role-gate
+    // check (see `check_workflow_role_gate` below) reads
+    // `workflow_def.roles_by_state` and
+    // `current_task.status` from this param. `None` for
+    // non-workflow sessions — the gate short-circuits
+    // (legacy dispatch shape preserved end-to-end).
+    //
+    // Step 2.5 will read `workflow_def.delegation_templates`
+    // from the same param to inject the delegation
+    // template; no signature change at Step 2.5.
+    workflow_ctx: Option<&WorkflowCtx>,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input.get("subagent").and_then(|v| v.as_str()).unwrap_or("");
@@ -375,6 +388,40 @@ pub(crate) async fn run_subagent(
         let content = "Missing or empty 'task' parameter. The delegation task must be a                        non-empty string."
             .to_string();
         return (content, true, false, None);
+    }
+
+    // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+    // workflow state-machine gate. Pure check extracted
+    // into `check_workflow_role_gate` (see below) so the
+    // logic is unit-testable without standing up the full
+    // `run_subagent` signature.
+    //
+    // **Why a gate**: the workflow session is a guided
+    // state machine — the agent SHOULD follow the
+    // breadcrumb (planning → implement → check → done)
+    // and dispatch the role that matches the current
+    // state. Without a gate, an agent in `planning` could
+    // dispatch `implementer` early and skip the research
+    // step, breaking the workflow contract.
+    //
+    // **One-shot bypass via `force: true`**: the LLM (or
+    // a power-user via the dispatch tool UI) can pass
+    // `force: true` to override the gate for a single
+    // dispatch — useful when the user explicitly wants to
+    // run a researcher task while in `implement` (e.g.
+    // "go back and re-research this decision"). The
+    // bypass is one-shot (no persistence) and logs a
+    // `warn!` so the audit log captures the overstep.
+    //
+    // **Non-workflow callers / no active task**:
+    // `workflow_ctx = None` OR `current_task = None`
+    // short-circuits the gate — same as pre-Step-2.4
+    // behavior (legacy dispatch shape preserved
+    // end-to-end).
+    if let Some(denial) =
+        check_workflow_role_gate(workflow_ctx, subagent_name, input)
+    {
+        return (denial, true, false, None);
     }
 
     // L3b (2026-06-27): resolve the worktree-isolation decision.
@@ -1530,6 +1577,75 @@ async fn create_worker_worktree(
     Ok(worker_wt_path)
 }
 
+// ---------------------------------------------------------------------------
+// W1 (Workflow integration, Step 2.4 — 2026-07-08):
+// pure workflow role-gate. Lives outside `run_subagent`
+// so the gate logic is unit-testable without standing up
+// the 25-arg signature.
+//
+// **Returns**: `Some(content)` when the dispatch must be
+// denied (content is the tool_error body — the agent
+// reads it and self-corrects on the next turn);
+// `None` when the dispatch is allowed to proceed.
+//
+// **Side effect**: a single `tracing::warn!` per denial
+// + per `force=true` bypass, so the audit log captures
+// the overstep. No I/O, no LLM, no DB.
+// ---------------------------------------------------------------------------
+pub(crate) fn check_workflow_role_gate(
+    workflow_ctx: Option<&WorkflowCtx>,
+    subagent_name: &str,
+    input: &serde_json::Value,
+) -> Option<String> {
+    let ctx = workflow_ctx?;
+    // State derived from current_task.status; no
+    // task → no gate (matches the breadcrumb-less
+    // state at task bootstrap).
+    let state = ctx.current_task.as_ref()?.status.as_str();
+
+    let allowed = crate::agent::workflow::allowed_roles(&ctx.workflow_def, state)
+        .iter()
+        .any(|r| r == subagent_name);
+    let forced = input
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if allowed {
+        return None;
+    }
+    if forced {
+        tracing::warn!(
+            subagent = %subagent_name,
+            state = %state,
+            "run_subagent: role gate bypassed via force=true"
+        );
+        return None;
+    }
+
+    let allowed_in_state: Vec<String> =
+        crate::agent::workflow::allowed_roles(&ctx.workflow_def, state).to_vec();
+    let allowed_str = if allowed_in_state.is_empty() {
+        "(none)".to_string()
+    } else {
+        allowed_in_state.join(", ")
+    };
+    tracing::warn!(
+        subagent = %subagent_name,
+        state = %state,
+        "run_subagent: role gate denied (workflow session)"
+    );
+    Some(format!(
+        "Role gate denied: '{subagent}' is not allowed in state '{state}' \
+         (allowed: {allowed_str}). Either transition to a state that \
+         allows this role, or re-dispatch with force: true for a one-shot \
+         override. Current breadcrumb: see messages[0].",
+        subagent = subagent_name,
+        state = state,
+        allowed_str = allowed_str,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2238,5 +2354,158 @@ mod tests {
             None => None,
         };
         assert_eq!(dispatch_model.as_deref(), Some(row.id.as_str()));
+    }
+
+    // ---- Step 2.4: workflow role-gate (pure helper) ----
+    //
+    // These tests target `check_workflow_role_gate`
+    // directly — the gate logic is a pure function so
+    // no LLM mocks / provider wiring are required. The
+    // integration with `run_subagent` is verified by
+    // the existing dispatch tests + the manual end-to-end
+    // checklist in `implement.md` Step 2.4 validation.
+
+    use crate::agent::workflow::{
+        Coordination, TaskJson, TaskStatus, WorkflowCtx, WorkflowDef,
+    };
+
+    fn dev_workflow_def() -> WorkflowDef {
+        WorkflowDef {
+            name: "dev".to_string(),
+            description: "test".to_string(),
+            states: vec![
+                "planning".into(),
+                "implement".into(),
+                "check".into(),
+                "done".into(),
+            ],
+            initial: "planning".into(),
+            transitions: vec![],
+            roles_by_state: HashMap::from([
+                ("planning".to_string(), vec!["researcher".to_string()]),
+                ("implement".to_string(), vec!["implementer".to_string()]),
+                ("check".to_string(), vec!["checker".to_string()]),
+                ("done".to_string(), vec![]),
+            ]),
+            breadcrumb: HashMap::new(),
+            delegation_templates: HashMap::new(),
+            coordination: Coordination::Pipeline,
+            gather_strategy: HashMap::new(),
+        }
+    }
+
+    fn ctx_with_status(status: TaskStatus) -> WorkflowCtx {
+        WorkflowCtx {
+            workflow_def: dev_workflow_def(),
+            current_task: Some(TaskJson {
+                id: "t1".into(),
+                title: "x".into(),
+                slug: "x".into(),
+                status,
+                created_at: "2026-07-08T00:00:00Z".into(),
+                updated_at: "2026-07-08T00:00:00Z".into(),
+                parent: None,
+                summary: String::new(),
+                items: vec![],
+            }),
+        }
+    }
+
+    /// Gate denial: planning session dispatching a role
+    /// not in planning's allowed list → tool_error body.
+    #[test]
+    fn gate_denies_role_not_allowed_in_current_state() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        let msg = denial.expect("gate must deny general-purpose in planning");
+        assert!(msg.contains("Role gate denied"), "got: {msg}");
+        assert!(msg.contains("general-purpose"), "must name role");
+        assert!(msg.contains("planning"), "must name state");
+        assert!(msg.contains("researcher"), "must enumerate allowed");
+    }
+
+    /// Gate allowance: planning session dispatching
+    /// `researcher` (in planning's allowed list) → None.
+    #[test]
+    fn gate_allows_role_in_current_state() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"subagent": "researcher"});
+        let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
+        assert!(denial.is_none(), "researcher IS allowed in planning");
+    }
+
+    /// One-shot bypass: `force: true` overrides denial.
+    #[test]
+    fn gate_force_bypass_overrides_denial() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"force": true});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "force=true must bypass the gate (got: {:?})",
+            denial
+        );
+    }
+
+    /// State-driven enforcement: same role, different
+    /// states → different verdicts. Confirms the gate
+    /// consults `current_task.status`, not just the role.
+    #[test]
+    fn gate_enforcement_is_state_driven() {
+        let input = serde_json::json!({"subagent": "implementer"});
+
+        // implement + implementer → allowed
+        let ctx_impl = ctx_with_status(TaskStatus::Implement);
+        assert!(check_workflow_role_gate(Some(&ctx_impl), "implementer", &input).is_none());
+
+        // planning + implementer → denied
+        let ctx_plan = ctx_with_status(TaskStatus::Planning);
+        let denial =
+            check_workflow_role_gate(Some(&ctx_plan), "implementer", &input);
+        assert!(denial.is_some(), "implementer must be denied in planning");
+    }
+
+    /// Non-workflow short-circuit: `workflow_ctx = None`
+    /// → gate does not engage (legacy dispatch
+    /// behavior preserved).
+    #[test]
+    fn gate_short_circuits_when_no_workflow_ctx() {
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(None, "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "non-workflow session must short-circuit the gate",
+        );
+    }
+
+    /// No-active-task short-circuit: workflow session with
+    /// `current_task = None` (task bootstrap state) → no
+    /// enforcement, no error.
+    #[test]
+    fn gate_short_circuits_when_no_current_task() {
+        let ctx = WorkflowCtx {
+            workflow_def: dev_workflow_def(),
+            current_task: None,
+        };
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "no current_task (bootstrap state) must short-circuit the gate",
+        );
+    }
+
+    /// Done-state enforcement: planning's `done` state
+    /// has empty allowed roles; ANY dispatch is denied
+    /// (mirrors the dev plugin's "done triggers archive"
+    /// semantics — no further sub-agent work after done).
+    #[test]
+    fn gate_done_state_has_no_allowed_roles() {
+        let ctx = ctx_with_status(TaskStatus::Done);
+        let input = serde_json::json!({"subagent": "researcher"});
+        let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
+        let msg = denial.expect("researcher must be denied in done");
+        assert!(msg.contains("(none)"), "done's allowed list is empty: {msg}");
     }
 }

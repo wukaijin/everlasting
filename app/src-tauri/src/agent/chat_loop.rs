@@ -1063,6 +1063,12 @@ pub async fn run_chat_loop(
                 // 2026-06-30 (`ask_user_question`): thread the
                 // parent's QuestionStore. Worker can't reach it.
                 &question_store,
+                // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+                // workflow role-gate enforcement. Pass the
+                // session's WorkflowCtx (None for non-workflow
+                // sessions → gate short-circuits → legacy
+                // dispatch shape preserved).
+                workflow_ctx.as_ref(),
             )
             .await;
         let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -2960,6 +2966,32 @@ pub async fn run_chat_loop(
                             let app_handle = app_handle.clone();
                             let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
+                            // W1 Step 2.4: workflow role-gate
+                            // needs WorkflowCtx inside the
+                            // closure (the concurrent batch
+                            // path). Clone like the other
+                            // captured variables so the
+                            // closure doesn't move the
+                            // outer-scope `workflow_ctx`
+                            // (which is also borrowed by the
+                            // per-turn breadcrumb injection
+                            // on line 1532 — moving would
+                            // break that site on iteration
+                            // N+1).
+                            let workflow_ctx = workflow_ctx.clone();
+                            // W1 Step 2.4: workflow role-gate
+                            // needs WorkflowCtx inside the
+                            // closure (the concurrent batch
+                            // path). Clone like the other
+                            // captured variables so the
+                            // closure doesn't move the
+                            // outer-scope `workflow_ctx`
+                            // (which is also borrowed by the
+                            // per-turn breadcrumb injection
+                            // on line 1532 — moving would
+                            // break that site on iteration
+                            // N+1).
+                            let workflow_ctx = workflow_ctx.clone();
                             let subagent_cache = subagent_cache.clone();
                             let app_data_dir = app_data_dir.clone();
                             // 2026-06-30 (`ask_user_question` task):
@@ -3067,6 +3099,12 @@ pub async fn run_chat_loop(
                                         // STRUCTURALLY_DISABLED) — pass-
                                         // through only.
                                         &question_store,
+                                        // W1 Step 2.4: workflow
+                                        // role-gate. Same as the
+                                        // forced-dispatch path: pass
+                                        // the session's WorkflowCtx
+                                        // (None for non-workflow).
+                                        workflow_ctx.as_ref(),
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -3414,6 +3452,12 @@ pub async fn run_chat_loop(
                                     // (STRUCTURALLY_DISABLED) but the signature
                                     // requires it.
                                     &question_store,
+                                    // W1 Step 2.4: workflow role-gate.
+                                    // Serial dispatch — same contract
+                                    // as the concurrent + forced paths:
+                                    // pass the session's WorkflowCtx
+                                    // (None for non-workflow sessions).
+                                    workflow_ctx.as_ref(),
                                 )
                                 .await;
                             let duration_ms = tool_exec_start.elapsed().as_millis();
