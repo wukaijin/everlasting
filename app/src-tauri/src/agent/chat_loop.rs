@@ -730,9 +730,24 @@ pub async fn run_chat_loop(
     // canonicalize above, so symlinks are resolved consistently on
     // both sides; `SkillCache` keys by the path string, so the L0
     // + L1 cache slots line up.)
+    //
+    // Step 1.1 (07-08-workflow-integration): when the session is a
+    // workflow session, also consult the plugin layer (highest
+    // precedence: plugin > project > user). The plugin layer reads
+    // `<project>/.everlasting/workflow/<name>/skills/` and silently
+    // falls through to project / user when the plugin dir is absent
+    // — non-workflow callers get the old project-overrides-user
+    // behavior byte-identical (see skill::loader::merge_skill_layers).
     let skill_listing_path = worktree_path.to_string_lossy().to_string();
-    let skill_infos =
-        crate::skill::loader::list_skill_infos(&skill_cache, Some(&skill_listing_path)).await;
+    let skill_wf_name = workflow_ctx
+        .as_ref()
+        .map(|ctx| ctx.workflow_def.name.clone());
+    let skill_infos = crate::skill::loader::list_skill_infos_with_workflow(
+        &skill_cache,
+        Some(&skill_listing_path),
+        skill_wf_name.as_deref(),
+    )
+    .await;
     let skill_blocks = crate::skill::loader::build_skill_listing_block(&skill_infos);
     if !skill_blocks.is_empty() {
         // Insert after the memory user/assistant pair (pos 2) when
