@@ -9,7 +9,7 @@
 | Phase | 状态 | 提交 |
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
-| Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.4) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 |
+| Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
 | Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ⏳ 待开始 | — |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
@@ -89,6 +89,16 @@ APP="cd /usr/local/code/github/everlasting/app"
 - [ ] task.json 元数据(title/slug/status/summary)+ state breadcrumb append messages[0](per-turn)
 - [ ] prd/design/progress 全文只给 path,agent read_file 自取
 - **验证**:集成测试——messages[0] 含 task meta;agent read_file prd 成功
+
+### Step 1.5 — ToolContext 加 workflow_name + use_skill 走 plugin 层(桥接步)
+
+- [x] `tools/mod.rs`:`ToolContext` 加 `pub workflow_name: Option<String>` + 注释
+- [x] `skill/loader.rs`:移除 `find_skill_with_workflow` 上的 `#[allow(dead_code)]`,更新 doc 注释指向 use_skill 这个新 consumer
+- [x] `tools/use_skill.rs::execute`:改调 `find_skill_with_workflow(skill_cache, name, Some(&project_path), ctx.workflow_name.as_deref())`
+- [x] `agent/chat_loop.rs`:`ToolContext` 构造处补 `workflow_name: workflow_ctx.as_ref().map(|c| c.workflow_def.name.clone())`
+- [x] 13 个 `test_ctx` helper + 5 个 tests_subagent 桩 + remember/use_ui 站点补 `workflow_name: None`
+- **为什么补这步**:Phase 1 留的 `find_skill_with_workflow` 在 workflow session 里还是查不到 wf-* skills(`ToolContext` 没传 plugin 名,use_skill 走的是非 workflow 路径);Phase 2 六步里没有一步接这个,留到 Phase 2 开工前补
+- **验证**:`use_skill_resolves_plugin_layer_when_workflow_name_set` + `use_skill_empty_workflow_name_treated_as_none`(新增 2 个 wiring 测试);`cargo test --lib`:1397 pass(+2 new),零回归
 
 **Phase 1 完成标志**:进 workflow agent 读 wf-overview;planning 用 wf-brainstorm;各 skill body 可读;task meta 注入可见。
 
