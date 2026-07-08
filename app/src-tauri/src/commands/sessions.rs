@@ -312,6 +312,44 @@ pub async fn set_session_color(
         .map_err(|e| anyhow::anyhow!("set_session_color failed: {}", e).into())
 }
 
+/// W1 (Workflow integration, Step 0.2 — 2026-07-08):
+/// per-session workflow opt-in toggle. Mirrors
+/// `set_session_color`'s contract — a plain column flip,
+/// no audit row. Used by the frontend's `WorkflowToggle.vue`
+/// (mounted in `ChatInput.vue` next to `ModeSelect`).
+///
+/// **State change semantics (READ THIS BEFORE TOUCHING):**
+/// the toggle takes effect IMMEDIATELY for the next agent
+/// turn boundary, matching `set_session_mode`'s "applies on
+/// the next turn" contract (see `agent/chat_loop.rs:396`).
+/// Mid-stream flips do NOT abort the in-flight loop — the
+/// breadcrumb + state-machine injection (Phase 0 Step 0.5
+/// + Phase 2 Step 2.5) only kicks in for subsequent turns.
+///
+/// **No Yolo / root guard**: workflow toggling is a UI
+/// preference, not a privileged operation. Unlike
+/// `set_session_mode` we do NOT consult `is_running_as_root`
+/// here.
+///
+/// **Audit deferred to Phase 3**: the `workflow_toggled`
+/// audit row lands with the state-transition hooks in Step
+/// 3.1; this command is intentionally audit-free in Step
+/// 0.2 to keep the toggle synchronous + light. The
+/// frontend's `WorkflowToggle.vue` optimistically updates
+/// its local `SessionSummary` before awaiting the IPC so
+/// the user sees the chip flip instantly even when the
+/// backend round-trip is slow.
+#[tauri::command]
+pub async fn set_session_workflow_enabled(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    enabled: bool,
+) -> Result<(), AppCommandError> {
+    db::set_session_workflow_enabled(&state.db, &session_id, enabled)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_workflow_enabled failed: {}", e).into())
+}
+
 // ---------------------------------------------------------------------------
 // F5 (LLM Latency Tracking): per-message latency + per-tool duration IPCs
 //

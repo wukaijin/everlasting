@@ -49,6 +49,7 @@ function seedSession(id: string, mode: "edit" | "plan" | "yolo" = "edit") {
       last_cache_read: null,
       color_tag: null,
       mode,
+      workflow_enabled: false,
     },
   ];
   store.currentSessionId = id;

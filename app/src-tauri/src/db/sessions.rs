@@ -513,6 +513,48 @@ pub async fn set_session_color(
     Ok(())
 }
 
+/// W1 (Workflow integration, Step 0.2 — 2026-07-08):
+/// per-session workflow opt-in toggle. `true` = the agent
+/// follows the active plugin's state machine; `false` =
+/// default behavior (the existing chat loop, unchanged).
+///
+/// Mirrors `set_session_color`'s contract: a single column
+/// flip, no audit row. Workflow *toggling* is a UI preference
+/// (akin to color tag); the audit-grade events for the
+/// workflow machinery itself — `workflow_toggled`,
+/// `state_transition`, `spec_distilled`, etc. — land in
+/// Phase 3 alongside `set_task_state`'s Rust fixed hook
+/// (Step 3.1). The DB column is `INTEGER NOT NULL DEFAULT 0`
+/// (see `db::migrations::run_migrations`); we bind the
+/// boolean as `i64 1/0` to match the column type and the
+/// `try_get` readers in `list_sessions` /
+/// `load_session`.
+///
+/// Returns `Ok(())` even when `session_id` matches no row —
+/// `sqlx::query::execute` reports `rows_affected == 0` but
+/// does NOT raise an error, so an unknown id is a silent
+/// no-op rather than a surface-level failure. Mirrors
+/// `set_session_color`'s lenient contract.
+pub async fn set_session_workflow_enabled(
+    pool: &SqlitePool,
+    session_id: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let value: i64 = if enabled { 1 } else { 0 };
+    sqlx::query(
+        r#"
+ UPDATE sessions SET workflow_enabled = ?, updated_at = ? WHERE id = ?
+ "#,
+    )
+    .bind(value)
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // System event injection (step4 follow-up)
 // ---------------------------------------------------------------------------

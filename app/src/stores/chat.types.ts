@@ -319,6 +319,20 @@ export interface SessionSummary {
    *  `set_session_mode` IPC. See
    *  `app/src-tauri/src/db/types.rs::Mode`. */
   mode: "edit" | "plan" | "yolo" | "background";
+  /** W1 (Workflow integration, 2026-07-08): per-session workflow
+   *  opt-in flag. `false` = workflow OFF (default; existing
+   *  chat-loop behavior unchanged), `true` = workflow ON (the
+   *  agent follows the active plugin's state machine — Phase 0
+   *  Step 0.5 will start injecting the state breadcrumb; Phase 2
+   *  wires up delegation + checklist persistence). Persisted via
+   *  `set_session_workflow_enabled` IPC; rehydrated from the
+   *  `sessions.workflow_enabled` INTEGER column (booleans travel
+   *  over the wire as `true` / `false` here; Rust side casts
+   *  `i64 1/0` via `try_get`). The closure-safe default for
+   *  pre-Step-0.2 sessions is `false` (the migration backfills
+   *  `DEFAULT 0` for every row, so legacy sessions also land
+   *  here until the user actively toggles the feature on). */
+  workflow_enabled: boolean;
 }
 
 /** User-facing mode subset — the three modes the MVP UI exposes.

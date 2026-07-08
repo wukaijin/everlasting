@@ -128,6 +128,7 @@ beforeEach(() => {
       last_cache_read: null,
       color_tag: null,
       mode: "edit",
+      workflow_enabled: false,
     },
   ];
 });

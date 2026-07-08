@@ -177,6 +177,12 @@ pub fn run() {
             commands::sessions::diff_worktree,
             commands::sessions::rename_session,
             commands::sessions::set_session_color,
+            // W1 (Workflow integration, Step 0.2 — 2026-07-08):
+            // per-session workflow opt-in toggle. UI preference
+            // (no audit row in Step 0.2); the audit-grade
+            // `workflow_toggled` event lands with Phase 3's
+            // state-transition hook (Step 3.1).
+            commands::sessions::set_session_workflow_enabled,
             // A2 + B7 (Permission system + per-session Mode, 2026-06-13)
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,

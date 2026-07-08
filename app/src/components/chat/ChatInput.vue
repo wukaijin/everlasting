@@ -81,6 +81,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import Icon from "../Icon.vue";
 import ModeSelect from "./ModeSelect.vue";
+// W1 (Workflow integration, Step 0.2 — 2026-07-08):
+// per-session workflow opt-in chip. Sibling to
+// `<ModeSelect>` on the same input row (B7 +
+// workflow share the chat-input-row real estate per
+// the 2026-07-08 grill decide-position step).
+import WorkflowToggle from "./WorkflowToggle.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
 import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
@@ -559,6 +565,15 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
            the hint row, per Q4 P2 in the 2026-06-13 mode-redesign
            grill-with-docs session. -->
       <ModeSelect />
+      <!-- W1 (Workflow integration, Step 0.2 — 2026-07-08):
+           per-session workflow opt-in chip. Sibling to
+           `<ModeSelect>` on the same flex row; reads as "B7
+           Mode + W1 Workflow" together form the session's
+           configuration surface on the chat input row. The
+           component itself owns its visibility (only renders
+           when there's a current session) and its IPC
+           round-trip; this parent just mounts the tag. -->
+      <WorkflowToggle />
       <!-- B3 (PR2) + B4 (Stretch 2, 2026-06-18): merged
            command + skill palette. Anchored to the input row
            (position: relative on the row makes it the

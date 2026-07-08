@@ -1582,6 +1582,70 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** W1 (Workflow integration, Step 0.2 — 2026-07-08):
+   *  per-session workflow opt-in toggle. Mirrors
+   *  `requestSetMode`'s optimistic-update + IPC pattern:
+   *
+   *  1. **No-op fast path**: if the requested state matches the
+   *     current `SessionSummary.workflow_enabled`, return
+   *     `true` immediately without an IPC round-trip. Keeps the
+   *     toggle snappy when a re-render accidentally fires a
+   *     duplicate click (RULE-Front-Mode-001 symmetrical fix for
+   *     the workflow chip).
+   *
+   *  2. **Optimistic update**: flip the local `SessionSummary`
+   *     BEFORE awaiting the IPC so the chip lights up
+   *     instantly. Same trade-off as `setSessionColor` and the
+   *     pre-PR2 `setMode` path: a backend failure (DB locked /
+   *     network blip) leaves the local state out-of-sync; we
+   *     restore the prior value in the catch block below.
+   *
+   *  3. **No streaming guard**: matches `set_session_mode`'s
+   *     contract — the flip applies on the next turn boundary
+   *     (see `agent/chat_loop.rs:396`), so mid-stream calls
+   *     are safe. The next turn's `build_instructions_blocks`
+   *     rehydrates the workflow state from
+   *     `SessionRow.workflow_enabled` (Phase 0 Step 0.5).
+   *
+   *  4. **No Yolo / root gate**: workflow toggling is a UI
+   *     preference (NOT a privileged operation like `yolo`).
+   *     Mirrors `setSessionColor`'s no-gate contract.
+   *
+   *  Returns `true` on success (or no-op), `false` on IPC
+   *  failure. The caller (`WorkflowToggle.vue`) does not
+   *  surface a toast on `false` — the local state was already
+   *  reverted in the catch block, so the chip + DB converge
+   *  back to the prior state silently (matching the color-tag
+   *  toggle UX). */
+  async function requestSetWorkflowEnabled(
+    sessionId: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (!summary) return false;
+    if (summary.workflow_enabled === enabled) return true;
+
+    // Snapshot prior value for rollback on IPC failure.
+    const prior = summary.workflow_enabled;
+    (summary as { workflow_enabled: boolean }).workflow_enabled = enabled;
+    try {
+      await invoke("set_session_workflow_enabled", {
+        sessionId,
+        enabled,
+      });
+      return true;
+    } catch (e) {
+      // Restore the local state so the chip matches the DB.
+      // We log + return false but don't toast — the
+      // WorkflowToggle caller's UI feedback is the chip
+      // returning to its prior color.
+      console.error("Failed to update session workflow_enabled:", e);
+      (summary as { workflow_enabled: boolean }).workflow_enabled = prior;
+      return false;
+    }
+  }
+
   return {
     // Reactive state (computed projections)
     messages,
@@ -1655,6 +1719,12 @@ export const useChatStore = defineStore("chat", () => {
     requestSetMode,
     confirmYolo,
     cancelYolo,
+    // W1 (Workflow integration, Step 0.2 — 2026-07-08):
+    // per-session workflow opt-in toggle. Wired by
+    // `<WorkflowToggle>` (mounted next to `<ModeSelect>` in
+    // `ChatInput.vue`); optimistic-update + rollback on IPC
+    // failure, no streaming guard, no Yolo gate.
+    requestSetWorkflowEnabled,
     // D3 PR2 (2026-06-17): user message edit + cascade delete
     // bridge to the backend `edit_user_message` IPC. Called by
     // `MessageItem.vue`'s Save handler; the parent catches
