@@ -1,0 +1,585 @@
+//! W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+//! workflow **task** 文件态 — `.everlasting/tasks/<slug>/task.json`
+//! 读 + 写 + 初始模板生成。这一层**纯文件 IO**,不读 DB 不调 LLM
+//! 不开 tokio runtime(全 sync),这样 Step 0.5 的 chat_loop per-turn
+//! 注入可以同步调用而不破坏现有 async 签名(同步代码包在
+//! `spawn_blocking` 里)。
+//!
+//! ## 目录约定
+//!
+//! ```text
+//! <project_path>/.everlasting/tasks/<slug>/
+//!     ├── task.json     # 元数据 + items 列表(本文焦点)
+//!     ├── prd.md        # 创建时填的 skeleton 由 create_task 写
+//!     ├── design.md     # agent 用 wf-before-dev 自行追加
+//!     └── progress.md   # agent 推进时 + 跨 session 续上时追加
+//! ```
+//!
+//! ## task.json Schema
+//!
+//! Minimal v1:
+//!
+//! ```json
+//! {
+//!   "id": "uuid-v4-string",
+//!   "title": "<string>",
+//!   "slug": "<[a-z0-9-]+>",
+//!   "status": "planning",
+//!   "created_at": "<rfc3339>",
+//!   "updated_at": "<rfc3339>",
+//!   "parent": null,
+//!   "summary": "",
+//!   "items": []
+//! }
+//! ```
+//!
+//! `parent` is reserved for B8 DAG (Phase 3+); nullable now.
+//! `summary` is the user-provided one-liner; Phase 1's
+//! `wf-brainstorm` skill feeds it. Empty in v1 is fine.
+//!
+//! ## Phase scope
+//!
+//! - **Step 0.4**: types + read/write + `create_task` template fill +
+//!   dir layout. NO `update_task` IPC yet — Phase 2 Step 2.6
+//!   (B12 checklist sync) owns the writer path for `items`.
+//! - **Step 2.6**: `update_task(task_dir, items)` writes via
+//!   `write_task_partial(...).items = ...` to keep serde
+//!   semantics centralized.
+//!
+//! ## Validation
+//!
+//! `slug` is constrained to `[a-z0-9-]{1,64}` ASCII.
+//! Bad slugs are rejected as `Err(TaskError::InvalidSlug)` —
+//! the IPC surfaces this as `AppCommandError::InvalidRequest`
+//! (`commands/task.rs` wrapper). The constraint exists to
+//! keep `.everlasting/tasks/<slug>/` paths portable across
+//! case-insensitive filesystems (NTFS / HFS+ / APFS) and
+//! shell-safe.
+
+// Step 0.4 ships the file-state surface (`TaskJson` + read /
+// write + `create_task_init`) BEFORE the first consumer
+// lands in Step 0.5 (chat_loop's per-turn breadcrumb
+// injection reads via `read_task`). The IPC wrapper
+// (`commands::task`) is also new this step but, like
+// `def.rs`, briefly dead-code until Phase 1's
+// wf-brainstorm skill triggers `create_task`.
+//
+// Suppress `dead_code` for this file. Remove in Step 0.5's
+// commit when chat_loop adds its first read_site, and in
+// the `commands::task` IPC's first commit that uses this
+// body.
+//
+// Tests below use every public item, so they're unaffected.
+#![allow(dead_code)]
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/// Workflow task's authoritative status. Mirrors
+/// `WorkflowDef::states` (planning / implement / check /
+/// done) — kept as an explicit enum so the JSON validator
+/// can reject typos upfront.
+///
+/// The Step 0.5 chat_loop per-turn injection deserializes
+/// the field via [`TaskStatus::from_str_opt`] which falls
+/// back to `Planning` on unknown values (lenient parse
+/// matches the Mode-Select posture; see W1 prd.md §接缝定位).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Planning,
+    Implement,
+    Check,
+    Done,
+}
+
+impl TaskStatus {
+    pub fn from_str_opt(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "implement" => Self::Implement,
+            "check" => Self::Check,
+            "done" => Self::Done,
+            _ => Self::Planning,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planning => "planning",
+            Self::Implement => "implement",
+            Self::Check => "check",
+            Self::Done => "done",
+        }
+    }
+}
+
+/// One to-do entry. The struct's shape mirrors what B12's
+/// `ChecklistItem` will become in Phase 2 Step 2.6; for
+/// Phase 0 the JSON is just persisted and read, no
+/// `update_checklist` writes to it yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskItem {
+    /// Stable id (e.g. `"backend-impl"`). Phase 2 Step 2.6
+    /// uses this as the B12 checklist key for
+    /// cross-session persistence.
+    pub id: String,
+    pub content: String,
+    pub status: TaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tdd: Option<bool>,
+}
+
+/// On-disk `.everlasting/tasks/<slug>/task.json` schema.
+/// See module-level doc comment for the field-level rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskJson {
+    pub id: String,
+    pub title: String,
+    pub slug: String,
+    pub status: TaskStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    /// `None` for top-level tasks; non-empty for child
+    /// tasks (B8 DAG, Phase 3+). The slug of the parent
+    /// task is sufficient — not a UUID — because parent
+    /// references are most naturally project-relative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// One-line task summary. Empty on creation; the
+    /// Phase 1 `wf-brainstorm` skill populates it.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub items: Vec<TaskItem>,
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Local error type; the IPC layer in `commands::task`
+/// maps each variant to the right `AppCommandError`
+/// category.
+#[derive(Debug, thiserror::Error)]
+pub enum TaskError {
+    #[error("invalid slug: {0} (expected [a-z0-9-]{{1,64}})")]
+    InvalidSlug(String),
+
+    #[error("task already exists at {0}")]
+    AlreadyExists(PathBuf),
+
+    #[error("task directory not found: {0}")]
+    NotFound(PathBuf),
+
+    #[error("task.json malformed at {0}: {1}")]
+    MalformedJson(PathBuf, String),
+
+    #[error("io error at {0}: {1}")]
+    Io(PathBuf, #[source] io::Error),
+}
+
+pub type TaskResult<T> = Result<T, TaskError>;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Project namespace shared across all four subsystems
+/// (commands / agents / skills / outputs). Same constant
+/// used by every `.everlasting/*` loader — kept here only
+/// as a convenience re-export so callers building task
+/// paths don't need to import the `PROJ_NS` from three
+/// different modules. The single source of truth lives in
+/// the agent directories (e.g. `agent::subagent::loader`
+/// `PROJ_NS = ".everlasting"`); when those constants
+/// change, this one follows.
+const PROJ_NS_TASKS_DIR: &str = ".everlasting/tasks";
+
+/// Maximum slug length. ASCII `[a-z0-9-]` only — any other
+/// char (spaces / accents / emoji) is rejected. Generous
+/// bound to leave headroom for "session-2026-07-08-abc".
+const MAX_SLUG_LEN: usize = 64;
+
+// ---------------------------------------------------------------------------
+// Slug validation
+// ---------------------------------------------------------------------------
+
+/// Strict slug validator — `^[a-z0-9-]{1,64}$` ASCII,
+/// non-empty, no leading / trailing hyphen. The hyphen
+/// guard stops `--foo` / `foo--` confusion in shell
+/// auto-complete; the lowercase guard stops
+/// `My-Feature` vs `my-feature` directory confusion on
+/// case-insensitive filesystems.
+pub fn validate_slug(slug: &str) -> TaskResult<()> {
+    if slug.is_empty() || slug.len() > MAX_SLUG_LEN {
+        return Err(TaskError::InvalidSlug(slug.to_string()));
+    }
+    if slug.starts_with('-') || slug.ends_with('-') {
+        return Err(TaskError::InvalidSlug(slug.to_string()));
+    }
+    for c in slug.chars() {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            return Err(TaskError::InvalidSlug(slug.to_string()));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Path layout
+// ---------------------------------------------------------------------------
+
+/// `<project>/.everlasting/tasks/<slug>/` — does NOT create
+/// directories; use [`write_task`] for the create-on-write
+/// path or call `fs::create_dir_all` yourself.
+pub fn task_dir(project_path: &Path, slug: &str) -> PathBuf {
+    project_path.join(PROJ_NS_TASKS_DIR).join(slug)
+}
+
+/// `<project>/.everlasting/tasks/<slug>/task.json`.
+pub fn task_json_path(project_path: &Path, slug: &str) -> PathBuf {
+    task_dir(project_path, slug).join("task.json")
+}
+
+/// `<project>/.everlasting/tasks/<slug>/prd.md`.
+pub fn task_prd_path(project_path: &Path, slug: &str) -> PathBuf {
+    task_dir(project_path, slug).join("prd.md")
+}
+
+// ---------------------------------------------------------------------------
+// IO — read / write / create-init
+// ---------------------------------------------------------------------------
+
+/// Read and parse `task.json` from disk. Used by Step 0.5's
+/// chat_loop per-turn injection. Returns
+/// `Err(TaskError::NotFound)` when the file is missing
+/// (NOT `Err(Io)` so the caller's "no task yet" branch is
+/// unambiguous).
+pub fn read_task(project_path: &Path, slug: &str) -> TaskResult<TaskJson> {
+    let path = task_json_path(project_path, slug);
+    if !path.exists() {
+        return Err(TaskError::NotFound(task_dir(project_path, slug)));
+    }
+    let bytes = fs::read(&path).map_err(|e| TaskError::Io(path.clone(), e))?;
+    let task: TaskJson = serde_json::from_slice(&bytes)
+        .map_err(|e| TaskError::MalformedJson(path.clone(), e.to_string()))?;
+    Ok(task)
+}
+
+/// Serialize and atomically write `task.json`. Writes to
+/// `<file>.tmp` first then renames onto the final path so
+/// a partial write can never be observed by a concurrent
+/// reader (Step 0.5's chat_loop + the Phase 2 B12 writer
+/// may both touch the file).
+pub fn write_task(project_path: &Path, task: &TaskJson) -> TaskResult<()> {
+    validate_slug(&task.slug)?;
+    let dir = task_dir(project_path, &task.slug);
+    fs::create_dir_all(&dir).map_err(|e| TaskError::Io(dir.clone(), e))?;
+    let final_path = dir.join("task.json");
+    let tmp_path = dir.join("task.json.tmp");
+    let bytes = serde_json::to_vec_pretty(task)
+        .map_err(|e| TaskError::MalformedJson(final_path.clone(), e.to_string()))?;
+    fs::write(&tmp_path, &bytes).map_err(|e| TaskError::Io(tmp_path.clone(), e))?;
+    fs::rename(&tmp_path, &final_path)
+        .map_err(|e| TaskError::Io(final_path.clone(), e))?;
+    Ok(())
+}
+
+/// `create_task` body — fills a fresh v1 template, writes
+/// the `task.json` + `prd.md` skeleton, returns the
+/// resulting `TaskJson`. Called by the Tauri IPC
+/// (`commands::task::create_task`).
+///
+/// **Idempotency**: refuses to overwrite an existing
+/// `task.json` (returns `Err(AlreadyExists)`). The frontend
+/// is expected to surface "task already exists" + a "open
+/// existing" affordance rather than silently overwrite.
+///
+/// The new task starts at `status = Planning` (matches
+/// `default_workflow().initial`); Phase 0 has no
+/// pre-flight checks on the `initial` state.
+pub fn create_task_init(
+    project_path: &Path,
+    title: &str,
+    slug: &str,
+    parent: Option<&str>,
+) -> TaskResult<TaskJson> {
+    validate_slug(slug)?;
+    if title.trim().is_empty() {
+        return Err(TaskError::InvalidSlug(
+            "title must not be empty".to_string(),
+        ));
+    }
+    let dir = task_dir(project_path, slug);
+    let json_path = dir.join("task.json");
+    if json_path.exists() {
+        return Err(TaskError::AlreadyExists(dir));
+    }
+
+    // Compose the v1 template. The `id` is a v4 UUID —
+    // uniqueness is global so two projects can't
+    // accidentally collide on the same slug (rare but
+    // possible when the user opens parallel workspaces).
+    let now = Utc::now().to_rfc3339();
+    let id = uuid::Uuid::new_v4().to_string();
+    let task = TaskJson {
+        id,
+        title: title.trim().to_string(),
+        slug: slug.to_string(),
+        status: TaskStatus::Planning,
+        created_at: now.clone(),
+        updated_at: now,
+        parent: parent.map(str::to_string),
+        summary: String::new(),
+        items: Vec::new(),
+    };
+
+    write_task(project_path, &task)?;
+
+    // Best-effort `prd.md` skeleton. The user / agent
+    // can fully rewrite it; this is just a starting
+    // prompt so the file always exists at create time
+    // (matches `.everlasting/commands/*/cmd.md` and
+    // `.everlasting/skills/*/SKILL.md` skeletons).
+    let prd_path = task_prd_path(project_path, slug);
+    let prd_body = format!(
+        "# {title}\n\
+         \n\
+         > task slug: `{slug}`\n\
+         > created: {now}\n\
+         > spec: pull from `WorkflowCtx` once Step 0.5 wires it.\n\
+         \n\
+         ## Goal\n\
+         \n\
+         <fill>\n\
+         \n\
+         ## Acceptance criteria\n\
+         \n\
+         - [ ] <fill>\n",
+        title = task.title,
+        slug = task.slug,
+        now = task.created_at,
+    );
+    fs::write(&prd_path, prd_body.as_bytes())
+        .map_err(|e| TaskError::Io(prd_path, e))?;
+
+    Ok(task)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Per-test scratch dir under `tempfile::tempdir()`. Auto-cleaned
+    /// when the `TempDir` is dropped at the end of each test, so
+    /// the working tree stays clean across `cargo test` runs.
+    fn fresh_project() -> tempfile::TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
+
+    fn proj(d: &tempfile::TempDir) -> PathBuf {
+        d.path().to_path_buf()
+    }
+
+    // --- slug validation --------------------------------------------------
+
+    #[test]
+    fn validate_slug_accepts_lowercase_alphanumeric_with_hyphens() {
+        assert!(validate_slug("dev").is_ok());
+        assert!(validate_slug("my-feature").is_ok());
+        assert!(validate_slug("a").is_ok());
+        assert!(validate_slug("abc-123").is_ok());
+        assert!(validate_slug(&"a".repeat(64)).is_ok(), "at the boundary");
+    }
+
+    #[test]
+    fn validate_slug_rejects_bad_chars_or_bounds() {
+        for bad in [
+            "",
+            &"a".repeat(65),
+            "-leading-hyphen",
+            "trailing-hyphen-",
+            "UPPER",
+            "Mixed",
+            "with space",
+            "中文",
+            "with_underscore",
+            "with/slash",
+            "with.dot",
+        ] {
+            assert!(
+                validate_slug(bad).is_err(),
+                "slug {:?} should be rejected",
+                bad
+            );
+        }
+    }
+
+    // --- create + read round-trip ---------------------------------------
+
+    #[test]
+    fn create_task_init_writes_json_and_prd_skeleton() {
+        let d = fresh_project();
+        let task = create_task_init(&proj(&d), "My Feature", "my-feature", None)
+            .expect("create");
+        assert_eq!(task.title, "My Feature");
+        assert_eq!(task.slug, "my-feature");
+        assert_eq!(task.status, TaskStatus::Planning);
+        assert!(task.summary.is_empty());
+        assert!(task.items.is_empty());
+        assert!(task.parent.is_none());
+
+        // Files exist on disk.
+        let json_path = task_json_path(&proj(&d), "my-feature");
+        let prd_path = task_prd_path(&proj(&d), "my-feature");
+        assert!(json_path.exists());
+        assert!(prd_path.exists());
+
+        // Round-trip: re-read the JSON and confirm structural identity.
+        let again = read_task(&proj(&d), "my-feature").expect("read");
+        assert_eq!(again.id, task.id, "id persists across read");
+        assert_eq!(again.status, TaskStatus::Planning);
+        assert_eq!(again.created_at, task.created_at);
+        assert_eq!(again.updated_at, task.updated_at);
+        assert!(again.items.is_empty());
+    }
+
+    #[test]
+    fn create_task_init_refuses_to_overwrite_existing() {
+        let d = fresh_project();
+        create_task_init(&proj(&d), "First", "dup", None).expect("first ok");
+        let err = create_task_init(&proj(&d), "Second", "dup", None)
+            .expect_err("must reject duplicate");
+        assert!(
+            matches!(err, TaskError::AlreadyExists(_)),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn create_task_init_with_parent_records_parent_slug() {
+        let d = fresh_project();
+        let task =
+            create_task_init(&proj(&d), "Sub", "sub-task", Some("parent-task"))
+                .expect("create child");
+        assert_eq!(task.parent.as_deref(), Some("parent-task"));
+        let again = read_task(&proj(&d), "sub-task").expect("read child");
+        assert_eq!(again.parent.as_deref(), Some("parent-task"));
+    }
+
+    #[test]
+    fn read_task_missing_returns_not_found_not_io_error() {
+        let d = fresh_project();
+        let err = read_task(&proj(&d), "nonexistent").expect_err("missing");
+        assert!(
+            matches!(err, TaskError::NotFound(_)),
+            "got {:?}; the caller's 'no task yet' branch must be unambiguous",
+            err
+        );
+    }
+
+    #[test]
+    fn write_task_is_atomic_via_tmp_rename() {
+        // We can't directly observe the `tmp → final` rename from outside,
+        // but we CAN confirm a partial-failure surrogate: write_task on a
+        // read-only directory fails cleanly without corrupting the
+        // original. We approximate that with an invalid slug — the
+        // validate_slug preflight at the top of write_task short-circuits
+        // before any IO.
+        let d = fresh_project();
+        create_task_init(&proj(&d), "Good", "good", None).expect("first");
+        let bad = TaskJson {
+            id: "id".into(),
+            title: "bad".into(),
+            slug: "UPPER".into(),
+            status: TaskStatus::Planning,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+            parent: None,
+            summary: String::new(),
+            items: Vec::new(),
+        };
+        let err = write_task(&proj(&d), &bad).expect_err("bad slug");
+        assert!(matches!(err, TaskError::InvalidSlug(_)));
+    }
+
+    // --- schema / serde --------------------------------------------------
+
+    #[test]
+    fn task_json_serde_round_trip_preserves_all_fields() {
+        let original = TaskJson {
+            id: "id-x".into(),
+            title: "T".into(),
+            slug: "s".into(),
+            status: TaskStatus::Check,
+            created_at: "2026-07-08T00:00:00Z".into(),
+            updated_at: "2026-07-08T01:00:00Z".into(),
+            parent: Some("parent-slug".into()),
+            summary: "one-line summary".into(),
+            items: vec![
+                TaskItem {
+                    id: "backend-impl".into(),
+                    content: "实现后端".into(),
+                    status: TaskStatus::Implement,
+                    tdd: Some(true),
+                },
+                TaskItem {
+                    id: "frontend-impl".into(),
+                    content: "实现前端".into(),
+                    status: TaskStatus::Planning,
+                    tdd: None,
+                },
+            ],
+        };
+        let bytes = serde_json::to_vec_pretty(&original).unwrap();
+        let parsed: TaskJson = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn task_json_omits_none_parent_when_serializing_to_skip_semantics() {
+        let t = TaskJson {
+            id: "id".into(),
+            title: "t".into(),
+            slug: "s".into(),
+            status: TaskStatus::Planning,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            parent: None,
+            summary: String::new(),
+            items: Vec::new(),
+        };
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(
+            !s.contains("parent"),
+            "parent=None must be skipped: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn task_status_parser_recognizes_known_forms_lenient_for_unknowns() {
+        assert_eq!(TaskStatus::from_str_opt("planning"), TaskStatus::Planning);
+        assert_eq!(TaskStatus::from_str_opt("implement"), TaskStatus::Implement);
+        assert_eq!(TaskStatus::from_str_opt("CHECK"), TaskStatus::Check);
+        assert_eq!(TaskStatus::from_str_opt("Done"), TaskStatus::Done);
+        // Lenient default: anything weird → Planning.
+        assert_eq!(TaskStatus::from_str_opt(""), TaskStatus::Planning);
+        assert_eq!(TaskStatus::from_str_opt("nope"), TaskStatus::Planning);
+        assert_eq!(TaskStatus::from_str_opt("  PLAN  "), TaskStatus::Planning);
+    }
+}

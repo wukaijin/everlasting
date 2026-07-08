@@ -34,6 +34,11 @@ pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod subagents;
+// W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+// task IPC surface. Phase 0 ships `create_task` only;
+// Phase 2 Step 2.6 adds `update_task` (B12 checklist
+// sync); Phase 3 Step 3.3 adds `archive_task`.
+pub mod task;
 pub mod worktree;
 
 /// The full set of Tauri commands, used by `lib.rs::run` to

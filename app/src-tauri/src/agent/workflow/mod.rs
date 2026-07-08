@@ -41,13 +41,17 @@
 /// `WorkflowDef` + accessors + `default_workflow()`.
 pub mod def;
 
+/// `TaskJson` + read / write + `create_task_init()`. Phase 0
+/// ships this; Phase 2 Step 2.6 adds the partial-write path
+/// that B12's `update_checklist` (workflow session branch)
+/// will reuse to mutate `task.json.items` instead of the
+/// loop-local `Vec<ChecklistItem>`.
+pub mod task;
+
 // `task` + `state` slots are reserved for Phase 0 Step 0.4
-// and Phase 3 Step 3.1 respectively — they don't exist
-// yet in Phase 0 Step 0.3. The `#[allow(unused_imports)]`
-// on the future siblings would be needed; for now we just
-// comment-out the `pub mod task;` / `pub mod state;` lines.
+// and Phase 3 Step 3.1 respectively. The first (`task`) is
+// live now; the second (`state`) lands later.
 //
-// pub mod task;  // Phase 0 Step 0.4
 // pub mod state; // Phase 3 Step 3.1
 
 // Re-export the public surface at the `agent::workflow::*`
@@ -72,6 +76,20 @@ pub mod def;
 pub use def::{
     allowed_roles, breadcrumb_for, can_transition, default_workflow,
     delegation_template_for, Coordination, Transition, WorkflowDef,
+};
+
+// Re-export the task types + helpers at the workflow root.
+// Tauri commands and chat_loop's per-turn injection
+// consume these via `agent::workflow::{read_task, ...}` —
+// same flatten-the-surface principle as the def side above.
+//
+// `task_json_path` / `task_prd_path` / `task_dir` are kept
+// as `pub use`s so the IPC layer (`commands::task`) and
+// test code can build paths without re-namespace hunting.
+#[allow(unused_imports)]
+pub use task::{
+    create_task_init, read_task, task_dir, task_json_path, task_prd_path, validate_slug,
+    write_task, TaskError, TaskItem, TaskJson, TaskResult, TaskStatus,
 };// ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
 // ---------------------------------------------------------------------------

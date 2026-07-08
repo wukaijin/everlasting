@@ -183,6 +183,13 @@ pub fn run() {
             // `workflow_toggled` event lands with Phase 3's
             // state-transition hook (Step 3.1).
             commands::sessions::set_session_workflow_enabled,
+            // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+            // `create_task` — seed `.everlasting/tasks/<slug>/`
+            // with v1 `task.json` + `prd.md` skeleton. Phase 0
+            // ships this only; Phase 2 Step 2.6 adds
+            // `update_task`; Phase 3 Step 3.3 adds
+            // `archive_task`.
+            commands::task::create_task,
             // A2 + B7 (Permission system + per-session Mode, 2026-06-13)
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,
