@@ -67,6 +67,11 @@ pub mod tests_prompts;
 pub mod tests_request_mode_change;
 pub mod tests_subagent;
 pub mod thinking;
+// W1 (Workflow integration, Phase 0 Step 0.3 — 2026-07-08):
+// engine's content layer (WorkflowDef struct + 4 accessors +
+// `default_workflow()` dev plugin constant). Phase 2 will add
+// `task` / `state` sidecar submodules alongside `def`.
+pub mod workflow;
 
 /// Maximum agent loop turns before forced stop (safety limit).
 ///
