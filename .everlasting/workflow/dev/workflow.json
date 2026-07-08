@@ -1,0 +1,42 @@
+{
+  "name": "dev",
+  "description": "Standard dev workflow: planning → implement → check → done with researcher / implementer / checker roles",
+  "states": ["planning", "implement", "check", "done"],
+  "initial": "planning",
+  "transitions": [
+    {
+      "from": "planning",
+      "to": "implement",
+      "requires_user_confirm": true
+    },
+    {
+      "from": "implement",
+      "to": "check",
+      "requires_user_confirm": true
+    },
+    {
+      "from": "check",
+      "to": "done",
+      "requires_user_confirm": true
+    }
+  ],
+  "roles_by_state": {
+    "planning": ["researcher"],
+    "implement": ["implementer"],
+    "check": ["checker"],
+    "done": []
+  },
+  "breadcrumb": {
+    "planning": "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 implement",
+    "implement": "[Wf · implement · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范;完成后请用户确认转 check",
+    "check": "[Wf · check · dev] 校验 + 测试;checker 跑 review(加载 wf-check);完成后请用户确认转 done",
+    "done": "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地)"
+  },
+  "delegation_templates": {
+    "researcher": "你是 dev workflow 的 researcher 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请调研这个 task 的实现方案;返回 findings(关键决策点 + 风险 + 推荐路径)给主 LLM。",
+    "implementer": "你是 dev workflow 的 implementer 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请推进 task.items 里 status=in_progress 的项(用 update_checklist 改写 task.json.items,非 loop-local Vec);改动前 read 相关 spec;改完 cargo check + cargo test --lib 确认不破坏现有行为。",
+    "checker": "你是 dev workflow 的 checker 子代理。当前 task: {title}\nSummary: {summary}\nState: {state}\n相关 spec 路径: {relevant_specs}\n\n请跑 cargo test --lib + cargo clippy + 检查 spec 合规;返回 PASS / FAIL + 具体原因给主 LLM。"
+  },
+  "coordination": "pipeline",
+  "gather_strategy": {}
+}

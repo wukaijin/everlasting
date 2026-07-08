@@ -20,32 +20,47 @@
 //! ## Module split (06-23-style "def + accessors in one
 //! place, side files in submodules")
 //!
-//! This file owns TYPES + ACCESSORS + `default_workflow()`.
+//! This file owns TYPES + ACCESSORS + `default_workflow()` +
+//! the Phase 2 Step 2.1 `load_workflow()` extension.
 //! Sister files (when Phase 2 lands) live alongside:
 //! - `task.rs` — task.json read/write (`Step 0.4`)
 //! - `state.rs` — `set_task_state` + Rust hook (`Step 3.1`)
 //!
-//! ## Phase 0 scope
+//! ## Phase 0 → Phase 2 scope change
 //!
-//! - `WorkflowDef` is **plain**, no `Deserialize` derive
-//!   yet (Phase 2 Step 2.1 adds serde).
-//! - `default_workflow()` returns a hard-coded `dev`
-//!   constant; `load_workflow(name, path)` (Phase 2) reads
-//!   `<project>/.everlasting/workflow/<name>/workflow.json`
-//!   and falls back to `default_workflow()` on any failure.
-//! - All four accessors are infallible (return empty /
-//!   `false` / `None` on missing keys) so the agent loop
-//!   never panics on a malformed `WorkflowDef` during
-//!   Phase 0 development.
+//! Phase 2 Step 2.1 (`07-08-workflow-integration`):
+//! - `WorkflowDef` + `Transition` now `#[derive(Deserialize)]`.
+//! - `Coordination` gets a custom `Deserialize` impl that
+//!   delegates to the lenient `from_str_opt` parser
+//!   (`"pipeline"` / `"synthesis_round"` /
+//!   `"synthesis-round"`, case-insensitive, unknown →
+//!   `Pipeline`).
+//! - `load_workflow(name, project_path)` reads
+//!   `.everlasting/workflow/<name>/workflow.json` and
+//!   returns `default_workflow()` on any failure
+//!   (file missing / malformed JSON / validation error).
+//!   `default_workflow()` is now the **fallback** shape;
+//!   the on-disk JSON is the source of truth for a real
+//!   plugin.
 //!
-//! ## Validation contract (Phase 2 Step 2.1, deferred)
+//! ## Validation contract (Phase 2 Step 2.1, lands here)
 //!
-//! Phase 2's loader validates: `states` non-empty,
-//! `initial ∈ states`, every `from` / `to` ∈ `states`, every
-//! key in `roles_by_state` ⊆ `states`, every key in
-//! `breadcrumb` ⊆ `states`. `delegation_templates` /
-//! `breadcrumb` MAY have missing keys (no blocking;
-//! fallback accessor behavior is documented above).
+//! `validate()` enforces (M6 of design §5.4):
+//! - `states` non-empty
+//! - `initial ∈ states`
+//! - every `Transition.from` / `Transition.to` ∈ `states`
+//! - every key of `roles_by_state` ⊆ `states`
+//! - every key of `breadcrumb` ⊆ `states`
+//!
+//! Failure → warn + return `default_workflow()` (the caller
+//! gets a working engine; the on-disk plugin is rejected
+//! wholesale rather than partially applied — partial
+//! application is the worst failure mode because the
+//! engine's invariants are violated mid-session). Missing
+//! keys in `delegation_templates` / `breadcrumb` are NOT
+//! blocking — they map to empty / `None` accessor returns
+//! (already documented above).
+//!
 //! `gather_strategy` MAY be empty when
 //! `coordination = Pipeline`.
 
@@ -69,6 +84,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,7 +98,12 @@ use std::collections::HashMap;
 /// `requires_user_confirm = false` is reserved for future
 /// auto-progress edges (e.g. an `error` state machine); the
 /// dev plugin currently uses `true` for every transition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Phase 2 Step 2.1: `Deserialize` lands here so
+/// `load_workflow` can read `workflow.json` arrays of
+/// transitions. Serde field names match the JSON keys
+/// verbatim (`from` / `to` / `requires_user_confirm`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Transition {
     pub from: String,
     pub to: String,
@@ -98,7 +119,10 @@ pub struct Transition {
 /// review plugin's likely shape).
 ///
 /// JSON deserialization (Phase 2 Step 2.1) accepts
-/// `"pipeline"` / `"synthesis_round"` case-insensitively.
+/// `"pipeline"` / `"synthesis_round"` case-insensitively
+/// via the custom `Deserialize` impl below (delegating to
+/// `from_str_opt` — same lenient behavior the manual
+/// `from_str_opt` exposes for the in-memory constant).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Coordination {
     #[default]
@@ -128,15 +152,41 @@ impl Coordination {
     }
 }
 
+/// Custom `Deserialize` for `Coordination` so the JSON form
+/// matches the lenient `from_str_opt` parser. Without this,
+/// serde's default `#[derive(Deserialize)]` would reject
+/// `"synthesis-round"` / mixed case, forcing the on-disk
+/// schema to a single canonical form — the design wants
+/// `from_str_opt` to own that decision (one source of truth
+/// for "what does the loader accept").
+impl<'de> serde::Deserialize<'de> for Coordination {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_str_opt(&s))
+    }
+}
+
 /// The engine's view of a workflow plugin. Owned by the
 /// session for the duration of the workflow session;
 /// reloaded on every turn boundary so plugin hot-swaps
 /// (Phase 2 Step 2.2 UI switcher) pick up without restart.
 ///
 /// See `docs/WORKFLOW-INTEGRATION.md §5.4` for the full
-/// contract; see `default_workflow()` for the only currently
-/// populated instance.
-#[derive(Debug, Clone)]
+/// contract; see `default_workflow()` for the in-memory
+/// fallback; see `load_workflow()` (Phase 2 Step 2.1) for
+/// the on-disk source of truth.
+///
+/// Phase 2 Step 2.1: `Deserialize` lands here. JSON field
+/// names match the Rust field names 1:1 (no `#[serde(rename)]`).
+/// Optional fields use `#[serde(default)]` so a partial
+/// `workflow.json` (e.g. one missing `gather_strategy` when
+/// `coordination = Pipeline`) still parses — the validator
+/// below rejects the structurally-broken cases, but the
+/// cosmetic / empty-default cases ride through.
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct WorkflowDef {
     /// Stable plugin identifier (e.g. `"dev"`). Matches
     /// the trailing path segment of
@@ -169,11 +219,13 @@ pub struct WorkflowDef {
     /// in each state. The Phase 2 Step 2.4 gate
     /// (`run_subagent` drop-in check) reads this map and
     /// asks the user via `ask_user_question` on miss.
+    #[serde(default)]
     pub roles_by_state: HashMap<String, Vec<String>>,
 
     /// State → breadcrumb text. Step 0.5's per-turn
     /// injection appends this to `messages[0]`. Missing
     /// keys → empty string (see [`breadcrumb_for`]).
+    #[serde(default)]
     pub breadcrumb: HashMap<String, String>,
 
     /// `role` → worker-system-prompt template. Substitution
@@ -182,9 +234,13 @@ pub struct WorkflowDef {
     /// these in and appends the result to `messages[0]`
     /// on dispatch turns. Missing keys → `None` (template
     /// is optional per role; see [`delegation_template_for`]).
+    #[serde(default)]
     pub delegation_templates: HashMap<String, String>,
 
     /// Cross-role orchestration strategy. See [`Coordination`].
+    /// Defaults to `Pipeline` (dev plugin's case) when the
+    /// field is absent.
+    #[serde(default)]
     pub coordination: Coordination,
 
     /// `state` → list of role-results to gather when
@@ -193,6 +249,7 @@ pub struct WorkflowDef {
     /// `roles_by_state` still defines who MAY dispatch;
     /// `gather_strategy` defines WHO contributes to the
     /// reduce step.
+    #[serde(default)]
     pub gather_strategy: HashMap<String, Vec<String>>,
 }
 
@@ -369,4 +426,201 @@ pub fn default_workflow() -> WorkflowDef {
         coordination: Coordination::Pipeline,
         gather_strategy: HashMap::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 Step 2.1 — `load_workflow` + `validate` + path helper
+// ---------------------------------------------------------------------------
+
+/// Path to a workflow plugin's `workflow.json`:
+/// `<project>/.everlasting/workflow/<name>/workflow.json`.
+///
+/// Mirrors the plugin-skills layout from [`crate::skill::loader::plugin_skills_dir`]
+/// (same `.everlasting/workflow/<name>/` root) so plugin
+/// authors only have to memorize one directory shape.
+pub fn workflow_json_path(workflow_name: &str, project_path: &str) -> PathBuf {
+    Path::new(project_path)
+        .join(".everlasting")
+        .join("workflow")
+        .join(workflow_name)
+        .join("workflow.json")
+}
+
+/// Validation errors from [`validate`]. Each variant
+/// carries enough context for the loader's `warn!` to point
+/// at the offending field — the on-disk JSON is the
+/// plugin author's first debugging surface.
+///
+/// Step 2.1 ships 5 error categories (M6). Future variants
+/// (e.g. role references outside the role registry) land
+/// here as Step 2.x discovers them; the `warn!` in
+/// `load_workflow` already iterates the error list, so
+/// adding a variant doesn't ripple.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationError {
+    /// `states` was empty — the engine has no concept of
+    /// "current state" without at least one.
+    StatesEmpty,
+    /// `initial` was not present in `states`.
+    InitialNotInStates { initial: String },
+    /// A transition's `from` / `to` references a state not
+    /// in `states`.
+    TransitionUnknownState {
+        transition: (String, String),
+        unknown: String,
+    },
+    /// A key in `roles_by_state` doesn't correspond to a
+    /// declared state.
+    RoleKeyUnknownState { key: String },
+    /// A key in `breadcrumb` doesn't correspond to a
+    /// declared state.
+    BreadcrumbKeyUnknownState { key: String },
+}
+
+/// Enforce the structural invariants documented in the
+/// module-level "Validation contract" section. Pure
+/// function — no I/O, no logging — so the test layer can
+/// assert against it directly.
+///
+/// Missing keys in `delegation_templates` / `breadcrumb` /
+/// `gather_strategy` are NOT validation errors (they map
+/// to empty / `None` accessor returns, per the accessor
+/// docstrings). The validator only catches structurally-
+/// broken defs.
+pub fn validate(def: &WorkflowDef) -> Result<(), Vec<ValidationError>> {
+    let mut errs = Vec::new();
+
+    if def.states.is_empty() {
+        errs.push(ValidationError::StatesEmpty);
+    }
+
+    // Initial ∈ states (only meaningful when states is non-empty).
+    if !def.states.is_empty() && !def.states.iter().any(|s| s == &def.initial) {
+        errs.push(ValidationError::InitialNotInStates {
+            initial: def.initial.clone(),
+        });
+    }
+
+    // Transitions: every from/to ∈ states.
+    for t in &def.transitions {
+        if !def.states.iter().any(|s| s == &t.from) {
+            errs.push(ValidationError::TransitionUnknownState {
+                transition: (t.from.clone(), t.to.clone()),
+                unknown: t.from.clone(),
+            });
+        }
+        if !def.states.iter().any(|s| s == &t.to) {
+            errs.push(ValidationError::TransitionUnknownState {
+                transition: (t.from.clone(), t.to.clone()),
+                unknown: t.to.clone(),
+            });
+        }
+    }
+
+    // roles_by_state keys ⊆ states.
+    for key in def.roles_by_state.keys() {
+        if !def.states.iter().any(|s| s == key) {
+            errs.push(ValidationError::RoleKeyUnknownState { key: key.clone() });
+        }
+    }
+
+    // breadcrumb keys ⊆ states. Missing keys are fine (the
+    // accessor returns ""), but keys claiming a state that
+    // doesn't exist would silently never fire — that's
+    // validation-worthy.
+    for key in def.breadcrumb.keys() {
+        if !def.states.iter().any(|s| s == key) {
+            errs.push(ValidationError::BreadcrumbKeyUnknownState {
+                key: key.clone(),
+            });
+        }
+    }
+
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs)
+    }
+}
+
+/// Load a workflow plugin from
+/// `<project>/.everlasting/workflow/<name>/workflow.json`.
+///
+/// **Failure mode**: returns `default_workflow()` on any
+/// failure (file missing / I/O error / malformed JSON /
+/// validation error). Each failure logs a `warn!` with
+/// enough context for the plugin author to debug —
+/// `name`, the offending JSON field if available, and a
+/// short reason. **Never panics** — the engine consumer
+/// (chat_loop) needs a working `WorkflowDef` for every
+/// turn, even if the on-disk plugin is broken.
+///
+/// Why wholesale fallback (not partial application):
+/// partial application violates the engine's invariants
+/// mid-session (e.g. transitions to non-existent states),
+/// and a session that re-enters with a different code path
+/// depending on which JSON fields parsed would be very
+/// hard to debug. Rejecting the file wholesale matches
+/// the "engine never panics on a malformed WorkflowDef"
+/// rule from Phase 0.
+///
+/// Step 2.1 ships the read + validate + fallback; the
+/// hot-reload seam (reload on every turn boundary) is
+/// wired in Step 2.2 (UI plugin switcher).
+pub fn load_workflow(workflow_name: &str, project_path: &str) -> WorkflowDef {
+    let path = workflow_json_path(workflow_name, project_path);
+
+    // Read attempt — missing file is the common case
+    // (projects without `.everlasting/workflow/` simply get
+    // the default dev workflow). Trace at debug, not warn,
+    // because missing-file is expected for new projects.
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(
+                workflow = %workflow_name,
+                path = %path.display(),
+                "load_workflow: workflow.json not found, falling back to default_workflow()",
+            );
+            return default_workflow();
+        }
+        Err(e) => {
+            tracing::warn!(
+                workflow = %workflow_name,
+                path = %path.display(),
+                error = %e,
+                "load_workflow: read failed, falling back to default_workflow()",
+            );
+            return default_workflow();
+        }
+    };
+
+    // JSON parse.
+    let parsed: WorkflowDef = match serde_json::from_str(&raw) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                workflow = %workflow_name,
+                path = %path.display(),
+                error = %e,
+                "load_workflow: JSON parse failed, falling back to default_workflow()",
+            );
+            return default_workflow();
+        }
+    };
+
+    // Structural validation.
+    if let Err(errs) = validate(&parsed) {
+        for err in &errs {
+            tracing::warn!(
+                workflow = %workflow_name,
+                path = %path.display(),
+                error = ?err,
+                "load_workflow: validation failed, falling back to default_workflow()",
+            );
+        }
+        return default_workflow();
+    }
+
+    parsed
 }

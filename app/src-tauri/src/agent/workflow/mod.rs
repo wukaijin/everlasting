@@ -83,7 +83,8 @@ pub mod inject;
 #[allow(unused_imports)]
 pub use def::{
     allowed_roles, breadcrumb_for, can_transition, default_workflow,
-    delegation_template_for, Coordination, Transition, WorkflowDef,
+    delegation_template_for, load_workflow, validate, workflow_json_path, Coordination,
+    Transition, ValidationError, WorkflowDef,
 };
 
 // Re-export the task types + helpers at the workflow root.
@@ -313,5 +314,201 @@ mod tests {
         for c in [Coordination::Pipeline, Coordination::SynthesisRound] {
             assert_eq!(Coordination::from_str_opt(c.as_str()), c);
         }
+    }
+
+    // --- Phase 2 Step 2.1: load_workflow + validate -----------------------
+
+    /// Tiny helper: write `body` to a temp project dir at the
+    /// canonical plugin path (`<tmp>/.everlasting/workflow/<wf>/workflow.json`)
+    /// and return the tmp's project path. Mirrors
+    /// `write_plugin_skill` in `skill::loader::tests`.
+    fn write_workflow(project: &std::path::Path, wf: &str, body: &str) {
+        let path = workflow_json_path(wf, &project.to_string_lossy());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+    }
+
+    #[test]
+    fn workflow_json_path_lands_under_workflow_subdir() {
+        let p = workflow_json_path("dev", "/tmp/proj");
+        assert_eq!(
+            p,
+            std::path::PathBuf::from(
+                "/tmp/proj/.everlasting/workflow/dev/workflow.json",
+            ),
+            "workflow_json_path must resolve to `<project>/.everlasting/workflow/<wf>/workflow.json`",
+        );
+    }
+
+    #[test]
+    fn load_workflow_missing_file_falls_back_to_default() {
+        // No file written — the loader must silently fall
+        // back to `default_workflow()` (matches the
+        // pre-Step-2.1 behavior: non-workflow callers got
+        // the default, workflow callers also got the
+        // default, no plugin JSON existed yet).
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let path = proj_tmp.path().to_string_lossy().to_string();
+
+        let loaded = load_workflow("dev", &path);
+        assert_eq!(loaded.name, "dev");
+        assert_eq!(loaded.initial, "planning");
+        assert_eq!(loaded.states.len(), 4);
+    }
+
+    #[test]
+    fn load_workflow_valid_json_overrides_default() {
+        // Write a workflow with a non-default state name
+        // (`intake` instead of `planning`) — the loader
+        // must pick it up so the per-state breadcrumb /
+        // roles track the file.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        write_workflow(
+            proj_tmp.path(),
+            "review",
+            r#"{
+  "name": "review",
+  "description": "slim review plugin",
+  "states": ["intake", "synth", "done"],
+  "initial": "intake",
+  "transitions": [
+    {"from": "intake", "to": "synth", "requires_user_confirm": true},
+    {"from": "synth", "to": "done", "requires_user_confirm": true}
+  ],
+  "roles_by_state": {
+    "intake": ["researcher"],
+    "synth": ["synthesizer"],
+    "done": []
+  },
+  "breadcrumb": {
+    "intake": "REVIEW-INTAKE",
+    "synth": "REVIEW-SYNTH",
+    "done": "REVIEW-DONE"
+  },
+  "delegation_templates": {
+    "synthesizer": "synth template"
+  },
+  "coordination": "synthesis_round",
+  "gather_strategy": {"synth": ["researcher", "synthesizer"]}
+}"#,
+        );
+        let path = proj_tmp.path().to_string_lossy().to_string();
+
+        let loaded = load_workflow("review", &path);
+        assert_eq!(loaded.name, "review");
+        assert_eq!(loaded.states, vec!["intake", "synth", "done"]);
+        assert_eq!(loaded.initial, "intake");
+        assert_eq!(loaded.coordination, Coordination::SynthesisRound);
+        assert_eq!(breadcrumb_for(&loaded, "intake"), "REVIEW-INTAKE");
+        assert_eq!(breadcrumb_for(&loaded, "synth"), "REVIEW-SYNTH");
+        assert_eq!(allowed_roles(&loaded, "synth"), &["synthesizer".to_string()]);
+        assert!(can_transition(&loaded, "intake", "synth"));
+        assert!(!can_transition(&loaded, "synth", "intake"));
+        assert_eq!(
+            delegation_template_for(&loaded, "synthesizer"),
+            Some("synth template"),
+        );
+    }
+
+    #[test]
+    fn load_workflow_malformed_json_falls_back_with_warn() {
+        // Trailing garbage → serde_json::from_str fails →
+        // loader returns default_workflow(). We can't
+        // easily assert the warn! line here (tracing
+        // subscriber isn't initialized in tests), but the
+        // observable contract is "fallback returned".
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        write_workflow(proj_tmp.path(), "broken", "{ not valid json");
+        let path = proj_tmp.path().to_string_lossy().to_string();
+
+        let loaded = load_workflow("broken", &path);
+        // Default's name is "dev" — proof we fell back.
+        assert_eq!(loaded.name, "dev");
+        assert_eq!(loaded.initial, "planning");
+    }
+
+    #[test]
+    fn load_workflow_validation_failure_falls_back() {
+        // `initial` not in `states` → validate() returns Err
+        // → loader falls back to default.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        write_workflow(
+            proj_tmp.path(),
+            "bad",
+            r#"{
+  "name": "bad",
+  "description": "x",
+  "states": ["a", "b"],
+  "initial": "missing",
+  "transitions": [],
+  "roles_by_state": {},
+  "breadcrumb": {},
+  "delegation_templates": {},
+  "coordination": "pipeline",
+  "gather_strategy": {}
+}"#,
+        );
+        let path = proj_tmp.path().to_string_lossy().to_string();
+
+        let loaded = load_workflow("bad", &path);
+        assert_eq!(loaded.name, "dev", "validation failure must fallback");
+    }
+
+    // --- validate() direct unit tests ------------------------------------
+
+    #[test]
+    fn validate_passes_on_default_workflow() {
+        let w = dev();
+        assert!(validate(&w).is_ok(), "default_workflow() must self-validate");
+    }
+
+    #[test]
+    fn validate_rejects_empty_states() {
+        let mut w = dev();
+        w.states.clear();
+        let errs = validate(&w).expect_err("empty states must fail");
+        assert!(errs.iter().any(|e| matches!(e, ValidationError::StatesEmpty)));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_transition_state() {
+        let mut w = dev();
+        w.transitions.push(Transition {
+            from: "planning".to_string(),
+            to: "nowhere".to_string(),
+            requires_user_confirm: true,
+        });
+        let errs = validate(&w).expect_err("unknown transition target must fail");
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ValidationError::TransitionUnknownState { .. })),
+            "expected TransitionUnknownState, got: {errs:?}",
+        );
+    }
+
+    #[test]
+    fn validate_rejects_unknown_role_key() {
+        let mut w = dev();
+        w.roles_by_state
+            .insert("ghost_state".to_string(), vec!["researcher".to_string()]);
+        let errs = validate(&w).expect_err("unknown role key must fail");
+        assert!(
+            errs.iter().any(|e| matches!(e, ValidationError::RoleKeyUnknownState { .. })),
+            "expected RoleKeyUnknownState, got: {errs:?}",
+        );
+    }
+
+    #[test]
+    fn validate_allows_missing_breadcrumb_keys() {
+        // Missing keys in breadcrumb are NOT validation
+        // errors — the accessor returns "" on miss. Only
+        // keys claiming a non-existent state would be
+        // silently-dead-fire and thus validation-worthy.
+        let mut w = dev();
+        w.breadcrumb.remove("planning");
+        assert!(
+            validate(&w).is_ok(),
+            "missing breadcrumb keys are non-blocking (accessor returns empty string)",
+        );
     }
 }
