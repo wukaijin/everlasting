@@ -1,0 +1,10 @@
+{"file": "docs/WORKFLOW-INTEGRATION.md", "reason": "单一引用源:完整设计 + 9 Q 对齐 + 两轮评审修正(S-A/S-B/M-A~E) + §9.5 分步指导 + §A dev plugin 完整示例"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 29 参签名 + build_instructions_blocks ⑤a seam + tool 拦截 pattern(门控下沉 run_subagent 参考)"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "inject_recall_into_turn append seam(§6.6.1 delegation 模板注入复用)+ cache_control: None 不变量 + messages[0] user-role Blocks 前置约束(S-B)"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "run_subagent 签名 + 3 处调用点(forced-dispatch 1000 / L3b 并发 2937 / 串行 3286);S-A 门控下沉的目标位置"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "现有 5 层权限 + STRUCTURALLY_DISABLED;implementer/checker tools 子集定义 + dispatch 拦截点参考"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "ToolDef / ToolContext 结构;B12 update_checklist loop-local handle + update_task 专用 tool 设计参考"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "sessions 表 migration 模式(add_session_column_if_missing 探针);workflow_enabled 列照 color_tag/mode 模式加"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "provider/stream 契约;workflow 注入不破坏现有 cache breakpoint 的约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "workflow.json validate 失败 / task.json 损坏 / plugin loader 失败的回退策略(M6 + 小问题6)"}
+{"file": "CLAUDE.md", "reason": "项目总览 + WSL PKG_CONFIG_PATH 用法 + 架构技术栈;HACKING-wsl cargo 命令前置常量来源"}
