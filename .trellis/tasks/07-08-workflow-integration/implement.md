@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 1/6 | 38391c1 (Step 2.1) |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 2/6 | 38391c1 (Step 2.1) / b999803 (Step 2.2) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -118,9 +118,14 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.2 — UI plugin 切换
 
-- [ ] 顶栏 plugin 名点击 → 切换(此时只有 dev 但机制就位)
-- [ ] 切 plugin = 改会话内 in-memory plugin 选择 + 重新注入对应 breadcrumb
-- **验证**:手动切 plugin → breadcrumb 重新注入
+- [x] 顶栏 plugin 名点击 → 切换(此时只有 dev 但机制就位)
+- [x] 切 plugin = 改会话内 in-memory plugin 选择 + 重新注入对应 breadcrumb
+  - DB 层:新增 `sessions.plugin_name` 列(TEXT NOT NULL DEFAULT 'dev',additive migration)
+  - DB 函数:`set_session_plugin_name(session_id, name)`
+  - IPC:`set_session_plugin_name`(空字符串拒绝)+ `list_workflow_plugins`(discovery)
+  - engine:`build_workflow_ctx` 改调 `load_workflow(plugin_name, project_path)` 替代硬编码 `default_workflow()`
+  - 前端:`PluginSelect.vue`(workflow ON 时显示当前 plugin 名,点击弹 popover 列出 `list_workflow_plugins` 结果);`chat.ts` 加 `requestSetPluginName` + `listWorkflowPlugins` action
+- **验证**:✅ 手动——切 plugin(`dev` ↔ 假设的 `review`)→ DB 列翻转 → 下一轮 `build_workflow_ctx` 调 `load_workflow` → breadcrumb 跟着 plugin 走。`cargo test --lib` 1412 pass(+5 new);`pnpm test` 794 pass(零回归);`vue-tsc --noEmit` clean;clippy 被改文件 0 新警告
 
 ### 批 B:sub-agent 角色 + 门控 + 注入(4 步,2.4/2.5/2.6 可并行)
 
