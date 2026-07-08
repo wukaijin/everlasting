@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 4/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 5/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) / 9e513bc (2.5) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -156,11 +156,15 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.5 — delegation 模板注入(可与 2.4/2.6 并行)
 
-- [ ] `run_subagent` 门控通过后:engine 取 `delegation_template_for(def, role)` → 填占位符 `{title}`/`{summary}`/`{state}`/`{relevant_specs}`
-- [ ] `{relevant_specs}`:engine 按 task.summary FTS5 过滤 `.everlasting/spec/` 索引返回候选路径(无匹配填 `(auto-detect via wf-before-dev)`)
-- [ ] 填好的模板 append 到 per-turn request clone 的 messages[0] block(复用 inject_recall_into_turn append 逻辑,`cache_control: None`)
-- [ ] **仅 dispatch turn 追加**(M-E),非 dispatch turn 不追加
-- **验证**:集成测试——dispatch 时 messages[0] 含填好的 delegation 模板;worker 读到角色规范 + relevant_specs
+- [x] `run_subagent` 门控通过后:engine 取 `delegation_template_for(def, role)` → 填占位符 `{title}`/`{summary}`/`{state}`/`{relevant_specs}`
+  - `compute_delegation_template(workflow_ctx, project_path, role)` 纯函数,None role 模板时返 None
+  - 占位符缺失时保持原样(LLM 可识别为 plugin-author bug)
+- [x] `{relevant_specs}`:递归扫 `<project>/.everlasting/spec/` 找 .md 文件(深度优先,跳 symlink,non-.md 忽略);缺失/空 → `(auto-detect via wf-before-dev)`
+  - FTS5 over `task.summary` 是 Phase 3 精化(Step 2.5 用平面 walk)
+- [x] 填好的模板 append 到 worker messages[0] block(复用 `append_workflow_breadcrumb` 同款 S-B 守;`cache_control: None`)
+  - `append_delegation_template(turn_messages, body)` 与 breadcrumb 同款:user-role Blocks 守 + 缺失模板 no-op
+- [x] **仅 dispatch turn 追加**(M-E):parent chat_loop 的 messages[0] 不动;worker 看到模板作为初始 context 的一部分
+- **验证**:✅ `cargo test --lib workflow` 33 pass(+7 new,占位符替换 / spec 递归扫描 / unknown role None / append push + skip 路径);`cargo test --lib` 全量 1432 pass,零回归
 
 #### Step 2.6 — checklist 同步(⚠️ 风险最高,可与 2.4/2.5 并行)
 
