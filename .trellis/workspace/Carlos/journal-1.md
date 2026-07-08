@@ -1080,3 +1080,48 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 07-08-workflow-integration — Phase 1 wrap-up
+
+**Date**: 2026-07-08
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+从 Phase 0 已完状态接续,完成 Phase 1 全部 4 步(skill 规范包 + plugin skill loader)。Step 1.1 plugin skill loader 实现 `SkillSource::Plugin` 变体 + workflow-aware 入口,保留旧入口做后向兼容;chat_loop L0 listing 接 plugin 层。Step 1.2-1.3 把设计文档 §A.4 / §A.5 的 5 个 wf-* skill body 落地到 `.everlasting/workflow/dev/skills/`。Step 1.4 加 artifact 查阅机制测试(task meta + prd/design/progress path 进 messages[0])。质量检查 approve-with-suggestions,无高优先级问题。每个 step 独立 commit。Phase 1 完成标志满足。
+
+### Main Changes
+
+- `app/src-tauri/src/skill/loader.rs`:`SkillSource::Plugin` 变体 + `plugin_skills_dir()` 路径解析 + `SkillCache::list_plugin` + `list_skill_infos_with_workflow` / `find_skill_with_workflow` workflow-aware 入口 + 9 个新单元测试
+- `app/src-tauri/src/agent/chat_loop.rs`:L0 skill listing 调用方切到 workflow-aware 入口(workflow_ctx=Some 时传 workflow_name;None 走老逻辑)
+- `app/src-tauri/src/agent/workflow/inject.rs`:`breadcrumb_includes_task_meta_and_artifact_paths` 新单元测试,断言 task.json meta(id/title/slug/status)+ prd.md / design.md / progress.md path 全部进 messages[0]
+- `.everlasting/workflow/dev/skills/wf-overview/SKILL.md` + 4 个 wf-* skill body(§A.4 完整 + §A.5 outline 填肉)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b7e8b74` | feat(workflow): Step 1.1 — plugin skill loader (SkillSource::Plugin + workflow-aware entry) |
+| `d3b8494` | feat(workflow): Step 1.2 — wf-overview skill body (§A.4 完整填,dev plugin 自带 skills) |
+| `0decc2c` | feat(workflow): Step 1.3 — wf-brainstorm / wf-before-dev / wf-check / wf-update-spec 4 skill body |
+| `c2698d4` | feat(workflow): Step 1.4 — artifact 查阅机制测试(task meta + prd/design/progress path 验证) |
+| `2fe8046` | docs(task): 07-08-workflow-integration — Phase 0+1 完成状态表 |
+
+### Testing
+
+- [OK] cargo test --lib -- skill:: agent::workflow:: → 105 passed
+- [OK] cargo test --lib (全量) → 1395 passed, 0 failed, 0 regression
+- [OK] cargo check / cargo clippy --lib → 0 新警告
+- [OK] trellis-check on Step 1.1 → approve-with-suggestions(无高优先级问题)
+
+### Status
+
+[OK] **Phase 1 完成,Phase 2 待开始**
+
+### Next Steps
+
+- Phase 2 批 A:Step 2.1 workflow.json 外置 + load_workflow + validate + fallback
+- Phase 2 批 B:Step 2.3-2.6 plugin agents + 门控 + delegation + checklist(2.4/2.6 风险最高,中间必跑全量 test)
+- Phase 3:hook + 沉淀闭环 + archive_task
