@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 3/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 4/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -143,13 +143,16 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.4 — 门控下沉 run_subagent(⚠️ 风险最高)
 
-- [ ] `agent/subagent/dispatch.rs:233` `run_subagent` 签名加 `current_state: Option<&WorkflowState>`(24→25 参)
-- [ ] 三处调用点补传:chat_loop.rs:1000(forced-dispatch)/ 2937(L3b 并发)/ 3286(串行)传同一 task state(workflow session)或 None(非 workflow)
-- [ ] `run_subagent` 入口加门控:查 `allowed_roles(def, current_state)` 含目标 role?
-  - 允许 → 注入 delegation 模板(§6.6.1)→ 继续原 dispatch
-  - 不允许 → engine 调 `ask_user_question` 协商(统一协商档,Q3+S3);用户允许放行(一次性越权),拒绝返 tool_error 提示回 breadcrumb
-- [ ] **做完立即跑全量测试**
-- **验证**:`$CD && env $PKG cargo test 2>&1 | tail -30`(零回归);集成测试——planning 派 implementer → 弹协商;并发 dispatch path 也拦截;允许 → 放行;拒绝 → breadcrumb
+- [x] `run_subagent` 签名加 `workflow_ctx: Option<&WorkflowCtx>`(24→25 参) — 比 implement.md 原始 `current_state: Option<&WorkflowState>` 更通用,Step 2.5 复用同一 param 读 `workflow_def.delegation_templates`
+- [x] 三处调用点补传(chat_loop.rs:1039 forced / 3016 L3b 并发 / 3365 串行)— L3b 并发 closure 内显式 `clone()`,避免与 line 1532 breadcrumb 注入处的 borrow 冲突
+- [x] 抽 `check_workflow_role_gate(workflow_ctx, role, input) -> Option<String>` 纯函数(便于单测,无 IO/无 LLM),`run_subagent` 入口在 task 校验后立即调
+- [x] 允许 → 继续原 dispatch(workflow_ctx 透传到 Step 2.5 模板注入)
+- [x] 不允许 → 返 tool_error 含 attempted role / current state / allowed roles / 建议路径(transition or force:true);breadcrumb 在 messages[0] 可见
+- [x] `input.force: true` 一次性越权 + warn!(无持久化,audit log 可见)
+- [x] `workflow_ctx = None` OR `current_task = None` 短路 → legacy / bootstrap 路径零影响
+- [x] **全量 cargo test 零回归**(1425 pass,+7 new gate tests)
+- **验证**:✅ 集成测试 — `gate_denies_role_not_allowed_in_current_state` / `gate_allows_role_in_current_state` / `gate_force_bypass_overrides_denial` / `gate_enforcement_is_state_driven` / `gate_short_circuits_when_no_workflow_ctx` / `gate_short_circuits_when_no_current_task` / `gate_done_state_has_no_allowed_roles`;clippy 被改文件 0 新警告
+- **Q3+S3 协商档** 留给 Phase 3 统一处理(`resolve_task_state_transition` IPC 落地时一并接入);Step 2.4 走同步 denial 路径就足够 engine 工作
 
 #### Step 2.5 — delegation 模板注入(可与 2.4/2.6 并行)
 
