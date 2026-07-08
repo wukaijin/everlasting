@@ -250,6 +250,19 @@ pub async fn set_subagent_model(
                 )
             })?;
         }
+        // Step 2.3 (`07-08-workflow-integration`): plugin
+        // agent model is not yet writable from the UI — the
+        // plugin layer is currently read-only (mirrors the
+        // skills plugin layer's read-only contract).
+        // Surfaces as `InvalidRequest` so the frontend's
+        // optimistic-update rollback can fire cleanly rather
+        // than silently no-op'ing.
+        SubagentSource::Plugin => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "set_subagent_model: plugin agents are read-only; edit the .md under <project>/.everlasting/workflow/<wf>/agents/ directly",
+            ));
+        }
     }
 
     // Re-read the cache so the returned row reflects the
