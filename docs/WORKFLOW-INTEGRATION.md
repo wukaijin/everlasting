@@ -38,7 +38,7 @@
 
 | engine 能力 | 已有零件(可复用) | 缺口(机制) |
 |---|---|---|
-> 注:本表引用 `.trellis/spec/` 路径是过渡期(本项目用 Trellis 开发,现有 spec 在那)。未来 `.everlasting/spec/`(Q7)沉淀起来后,新 spec 进 `.everlasting/spec/`,现有引用逐步迁移;两目录共存期(见 Q7)引用 `.trellis/spec/` 有效。
+> 注:本表引用 `.trellis/spec/` 路径是过渡期(本项目用 Trellis 开发,现有 spec 在那)。`.everlasting/spec/`(Q7)起来后**过渡期两份共存**(各自管各自职责:Trellis spec 管工具用法,Everlasting spec 管项目代码规范),不是"现有引用逐步迁移"——两目录独立演进。
 | breadcrumb 注入 seam | [`build_instructions_blocks`](../.trellis/spec/backend/agent-loop-architecture.md) + [`memory_recall::inject_recall_into_turn`](../.trellis/spec/backend/memory.md)(append 到 messages[0],`cache_control: None`) | engine 读 plugin 配置 → 拼 breadcrumb → 注入 |
 | skill 规范 | [B4 skill](./ROADMAP.md)(`use_skill` + `.everlasting/skills/` 三层覆盖) | wf-* skill 包(plugin 自带 `.everlasting/workflow/dev/skills/`,见 §6.3) |
 | sub-agent 角色 | [B6 subagent](./ROADMAP.md) + [L3d loader](./ROADMAP.md)(`builtin_subagents()` 已有 researcher / general-purpose) | checker 角色 + state→角色映射(plugin 配置) |
@@ -151,6 +151,8 @@ Trellis 的 `workflow.md` / `spec/` / `skills/` / `agents/` 全是文件态可�
 | **(B) 真正实时群聊**(持久 agent + 共享 channel) | reviewer 是持久 agent,实时看到彼此消息(像群聊) | 需要**新通讯原语**——可移植 Trellis `trellis-channel` 概念("cross-agent review" 跟本流程几乎一字不差);是 Everlasting 没有的新子系统,独立大件 |
 
 > ❓ **延迟讨论**:评审流走 A 还是 B,何时立项。本阶段只把愿景写入,不展开。A 可在 engine 稳定后作为 Phase 4-5 的第二个 plugin 落地;B 若需要则单独立项(新通讯架构),不阻塞主 workflow。
+>
+> **立项 trigger(小问题4)**:dev plugin 跑通 ≥1 个完整 task(planning→done 全程)+ 沉淀 spec 起见过收益后,再决定评审流立项时机 + A/B 路径。即"先验证 dev 机制闭环有效,再投入第二个 plugin"。
 
 ### 4.3 plugin 化的最大价值就在这里
 
@@ -173,9 +175,9 @@ Trellis 的 `workflow.md` / `spec/` / `skills/` / `agents/` 全是文件态可�
 ### 5.2 engine 能力(engine 对所有 plugin 通用)
 
 1. **读 plugin 配置** → 拿到 states / transitions / breadcrumb 模板 / 角色映射 / 协调模型
-2. **注入**:task 元数据 + summary → append `messages[0]`(常驻);state breadcrumb → append per-turn request clone(复用 [`inject_recall_into_turn`](../.trellis/spec/backend/memory.md) seam,`cache_control: None`)
-3. **门控(统一协商档)**:dispatch 时按"当前 state→允许角色映射"校验;不允许时**不硬拒**,而是触发协商——engine 调 `ask_user_question` 问用户"允许这次破例 / 确认推进 state 吗"(Q3 + S3 决定:所有门控违规统一走协商,不分角色门控/state 转移)。执行点在 `chat_loop.rs` 的 dispatch_subagent 拦截处(`run_subagent` 前,见 §6.6.2)
-4. **state 转移**:用户确认门(复用 `ask_user_question`);转移触发 task.json 更新
+2. **注入**:task 元数据 + summary → append `messages[0]`(**per-turn,持久化不动**;非"常驻同步");state breadcrumb → append per-turn request clone(复用 [`inject_recall_into_turn`](../.trellis/spec/backend/memory.md) seam,`cache_control: None`)
+3. **门控(统一协商档)**:dispatch 时按"当前 state→允许角色映射"校验;不允许时**不硬拒**,而是触发协商——engine 调 `ask_user_question` 问用户"允许这次破例 / 确认推进 state 吗"(Q3 + S3 决定:所有门控违规统一走协商,不分角色门控/state 转移)。**执行点下沉到 `run_subagent` 内部**(S-A 评审修正,见 §6.6.2)——三处调用点(串行/并发/测试)都过,避免并发 dispatch 绕过门控
+4. **state 转移**:用户确认门(agent 用 `ask_user_question` 发起,带 `purpose="task_state_transition"` 标记;前端路由到专用 IPC `resolve_task_state_transition` 自动调 `set_task_state`,M-A);转移触发 task.json 更新 + hook
 5. **task 文件 IO**:agent 通过专用 tool 写 task.json/prd/checklist/progress
 6. **plugin 列表/切换**:扫 `.everlasting/workflow/*/`;UI 选/切
 
@@ -213,14 +215,20 @@ Trellis 的 `workflow.md` / `spec/` / `skills/` / `agents/` 全是文件态可�
     "done":      "task 完成。把本次决策/教训提炼写进 .everlasting/spec/..."
   },
   "delegation_templates": {
-    "researcher":  "你正在为 task「{title}」调研(state={state})。{summary}\n调研范围: ...\n不要写代码。产出: ...",
-    "implementer": "你正在为 task「{title}」实现一项(state={state})。{summary}\n约束: ...\n验收标准: ...",
-    "checker":     "你正在为 task「{title}」验收(state={state})。{summary}\n验收维度: lint/typecheck/跨层一致性\n通过标准: ..."
-  }
+    "researcher":  "你正在为 task「{title}」调研(state={state})。{summary}\n相关 spec: {relevant_specs}\n调研范围: ...\n不要写代码。产出: ...",
+    "implementer": "你正在为 task「{title}」实现一项(state={state})。{summary}\n相关 spec(必读): {relevant_specs}\n约束: ...\n验收标准: ...",
+    "checker":     "你正在为 task「{title}」验收(state={state})。{summary}\n相关 spec: {relevant_specs}\n验收维度: lint/typecheck/跨层一致性\n通过标准: ..."
+  },
+  "coordination": "pipeline",
+  "gather_strategy": {}
 }
 ```
 
 **Trade-off 已接受**:JSON 多行文本(breadcrumb)需 `\n` 转义,人手改门槛比 markdown 高。接受理由:workflow.json 低频手改(定义流程,不是日常产出)、高频被 engine 严格解析,机器友好 > 人友好。breadcrumb 模板较长时,可用 `\n` 拼接;engine 加载后渲染时自然换行。
+
+**占位符全集(M-B)**:`delegation_templates` 支持 `{title}` / `{summary}` / `{state}` / `{relevant_specs}` 四个占位符。前三个从 task.json 直接取;`{relevant_specs}` 由 engine 按 task.summary 做 FTS5 过滤 `.everlasting/spec/` 索引返回候选 spec 路径列表(无匹配填 `(auto-detect via wf-before-dev)`)。这让 worker 进场就知道该读哪些 spec,贯彻"不靠自觉"(见 §6.6.1)。
+
+**coordination 字段(M-C 修正)**:`"pipeline"`(默认,dev 用,串行/并发 dispatch 后各自返回)/ `"synthesis_round"`(review 用,每轮 dispatch 后必须 gather-reduce 再决定下一轮)。`gather_strategy: HashMap<state, Vec<Role>>` 声明每 state 收集哪些角色结果(仅 `synthesis_round` 用,`pipeline` 留空 `{}`)。原 M5 用 `"round-robin"` 字面是"轮流",但 review A 路径实质是"gather-reduce 再 dispatch",语义不贴;改 `synthesis_round` 更准(见 §4.2)。JSON 层是字符串,serde 反序列化到 Rust `enum Coordination { Pipeline, SynthesisRound }`(见 §5.4 struct),非法值走 M6 validate fallback。
 
 **跟现有四子系统的关系**:commands/agents/skills 是"人手写、高频读"的规范文件,保 frontmatter+body;workflow.json 是"低频手写、高频精确解析"的配置文件,选 JSON。两者不冲突,各自贴其使用模式。
 
@@ -250,9 +258,12 @@ struct WorkflowDef {
     transitions: Vec<Transition>,
     roles_by_state: HashMap<String, Vec<String>>,
     breadcrumb: HashMap<String, String>,
-    delegation_templates: HashMap<String, String>,   // M1: role → 模板(Q6)
-    coordination: String,                             // M5: 默认 "pipeline";review 用 "round-robin"/"fan-out-gather"(Q8 待决)
+    delegation_templates: HashMap<String, String>,   // M1: role → 模板(Q6);占位符 {title}/{summary}/{state}/{relevant_specs}(M-B)
+    coordination: Coordination,                       // M-C: enum { Pipeline, SynthesisRound };默认 Pipeline(dev),review 用 SynthesisRound
+    gather_strategy: HashMap<String, Vec<String>>,   // M-C: state → 收集哪些 role 结果(仅 SynthesisRound 用,Pipeline 留空)
 }
+
+enum Coordination { Pipeline, SynthesisRound }   // M-C: 替代原 String,语义明确
 
 // Phase 0:数据源是硬编码常量(dev 四态)
 fn default_workflow() -> WorkflowDef { /* 常量值 */ }
@@ -287,12 +298,15 @@ fn delegation_template_for(def: &WorkflowDef, role: &str) -> Option<&str>;   // 
 |---|---|---|
 | Phase 2 外置默认 | `default_workflow()` → `load_workflow()`(含 validate) | ❌ 零改动 |
 | Phase 2 加 UI 切换 | 加 plugin 列表/选择器,多加载几个 WorkflowDef | ❌ 零改动 |
-| 评审流加入(回合制 A) | 放第二个 workflow.json(`coordination` ≠ pipeline) | ⚠️ engine 内部加 `coordination` 分发分支(非接口改动,是 engine 内部能力扩展) |
+| 评审流加入(回合制 A) | 放第二个 workflow.json(`coordination: SynthesisRound` + `gather_strategy`) | ⚠️ engine 内部加 `Coordination` 分发分支(非接口改动,是 engine 内部能力扩展);接口 Phase 0 已预留 |
 | 评审流加入(实时群聊 B,Q8) | 同上 + 新通讯原语 | ⚠️ 若 Q8 选 B 需独立立项(新通讯架构) |
 
-> 注:`coordination` 字段在 WorkflowDef 里**Phase 0 就预留**(默认 "pipeline"),review 加入时**接口不变**,只 engine 内部加分发分支——这是 M5 评审建议的"扩展不是重构"。
+> 注:`coordination` + `gather_strategy` 字段在 WorkflowDef 里**Phase 0 就预留**(默认 `Pipeline` + 空 map),review 加入时**接口不变**,只 engine 内部加 `Coordination` 分发分支——这是 M5/M-C 评审建议的"扩展不是重构"。
 
-**fallback 策略**:builtin 默认 plugin `dev` 随 app 分发(Phase 0 = `default_workflow()` 常量);项目无 `.everlasting/workflow/` 时用默认;项目放 `.everlasting/workflow/dev/workflow.json` → 覆盖默认(validate 失败回退默认);放第二个 `.everlasting/workflow/review/workflow.json` → 多一套可选(Phase 2 后)。
+**fallback 策略 + 优先级**(小问题2 明示):
+- **Phase 0**:builtin = `default_workflow()` 硬编码常量(写死在 engine);无 `.everlasting/workflow/` 时唯一数据源
+- **Phase 2 起**:数据源优先级 = 项目 `.everlasting/workflow/<plugin>/workflow.json`(validate 通过)→ builtin `default_workflow()`(最后兜底)。builtin 此时降为"项目无 workflow.json 或 validate 失败时的兜底",不再是唯一数据源
+- 项目放 `.everlasting/workflow/dev/workflow.json` → 覆盖 builtin;放第二个 `.everlasting/workflow/review/workflow.json` → 多一套可选
 
 ### 5.5 UI:workflow 切换(≠ task picker)
 
@@ -386,7 +400,7 @@ skill 是**描述性规范**(markdown body),agent 通过 `use_skill` 加载,不�
 
 ### 6.4 artifact 查阅(已定:两条机制)
 
-1. **加载机制**:task.json 元数据 + `summary` → append `messages[0]`(常驻,小)。prd/design/progress **全文不放**,只给 path,agent `read_file` 自取(避免大文件撑爆 context,复用 [`RECALL_TOKEN_BUDGET`](../.trellis/spec/backend/memory.md) 预算思维)。
+1. **加载机制**:task.json 元数据 + `summary` → append `messages[0]`(**per-turn 注入,持久化不动**;小,~50 tokens)。prd/design/progress **全文不放**,只给 path,agent `read_file` 自取(避免大文件撑爆 context,复用 [`RECALL_TOKEN_BUDGET`](../.trellis/spec/backend/memory.md) 预算思维)。
 2. **skill 查阅**:agent 通过 wf-* skill 知道"该读哪些 artifact";也通过通用 read_file 主动查。
 
 ### 6.5 sub-agent 三角色(plugin 专属,自带 agents/ 子目录)
@@ -457,28 +471,35 @@ plugin 目录有的角色用 plugin 的;没有的 fallback 到全局。用户想
 
 **解决了 Trellis 的 jsonl 注入空洞**:Trellis 靠平台 hook 把 spec + prd + design 自动注入 sub-agent prompt;Everlasting 没有 hook,这里用"plugin 模板 + task meta + 主 LLM 填委托"达成等价效果——worker 进场就知道角色规范 + task 上下文,不再只收到 main agent 一段手写描述。
 
-#### 6.6.1 模板注入机制(S1 评审修正)
+#### 6.6.1 模板注入机制(S1 评审修正 + S-B 前置约束 + M-E 时机明确 + M-B 占位符扩展)
 
 **问题**:engine 填好 task meta 占位符后,模板文本如何到达 agent 上下文?
 
 **决定**:走方案 (a)——engine 把填好的 delegation 模板 append 到 **per-turn request clone 的 `messages[0]` block 数组**(复用 [`inject_recall_into_turn`](../.trellis/spec/backend/memory.md) 同款 seam,`cache_control: None`)。
 
-**注入时机**:当 turn 内出现 `dispatch_subagent` tool_use 时,engine 在拦截执行点(见 §6.6.2)解析目标 role → 取 `delegation_templates[role]` → 填 `{title}`/`{summary}`/`{state}` 占位符 → append 到 messages[0]。主 LLM 下一轮看到模板,照框架写委托语。
+**注入时机(M-E 评审修正)**:**仅 dispatch turn 追加**。当 turn 内出现 `dispatch_subagent` tool_use 时,engine 在 `run_subagent` 内部拦截点(见 §6.6.2)解析目标 role → 取 `delegation_templates[role]` → 填占位符 → append messages[0]。**非 dispatch turn 不追加 delegation 模板**(只有 breadcrumb + task meta,见 §6.4)。这与 §10.7"per-turn 都 append,但内容因 turn 而异"一致:大多数 turn 只有 breadcrumb+meta,dispatch turn 多一块 delegation 模板。
+
+**占位符全集(M-B 评审修正)**:`{title}` / `{summary}` / `{state}` / `{relevant_specs}`。前三个从 task.json 直接取;`{relevant_specs}` 由 engine 按 task.summary 做轻量 FTS5 过滤 `.everlasting/spec/` 索引,返回候选 spec 路径列表(无匹配则填 `(auto-detect via wf-before-dev)`)。这让 implementer 进场就知道该读哪些 spec,贯彻"不靠自觉"——否则 worker 只收到"实现 item X"却不知项目有哪些规范可读。
+
+**前置约束(S-B 评审修正)**:本机制依赖 `messages[0]` 存在 user instruction message(workflow session 默认满足:B5 指令文件 CLAUDE.md/AGENTS.md 固定加载,`build_instructions_blocks` 产出非空 → messages[0] 是 user-role Blocks message)。`inject_recall_into_turn` 在 `messages[0]` 非 user instruction 时会 **prepend 新建 synthetic user message,破坏 prompt cache breakpoint**(memory_recall.rs:259-278 fallback 分支)——**本工作流不允许触发该 fallback**。实施时 `load_for_session` 返回空 layers 的 workflow session 属配置异常,engine 应 warn 并降级到非 workflow 行为(不注入 breadcrumb),不走 fallback prepend。
 
 **为什么不靠 agent use_skill 自觉加载**(否决评审 S1 方案 b):delegation 模板是 dispatch 的**基础设施**(类似 system prompt 的角色规范),不是按需知识。靠 agent 自觉 = agent 可能漏加载 → worker 收到无框架的 delegation,角色化失效。engine 注入保证 worker 进场一定有角色规范。
 
 **跟 Q4 不冲突**:Q4 决定不自动 inject **skill body**(wf-* 是按需知识,保 B4 三层渐进披露);delegation 模板是 dispatch 基础设施,性质不同,engine 注入。
 
-#### 6.6.2 门控执行点(M3 评审修正)
+#### 6.6.2 门控执行点(M3 + S-A 评审修正:门控下沉 run_subagent 内部)
 
-**dispatch 拦截点**:`chat_loop.rs` 的 `dispatch_subagent` 拦截处(`run_subagent` 调用前,对标 [agent-loop-architecture.md "Tool interception"](../.trellis/spec/backend/agent-loop-architecture.md) 的现有 pattern)。engine 在此:
+**问题(S-A)**:`run_subagent` 在 `chat_loop.rs` 有 **3 处调用点**——串行 path(~3286)、L3b 并发 dispatch path(~2937,`FuturesUnordered` batch)、测试/内部显式派(~1000)。原 §6.6.2 只锁"chat_loop.rs dispatch 拦截处"= 仅串行 path,**并发 dispatch path 完全绕过门控** = 角色违规可经并发 path 逃逸。Q8 评审流 A 路径(synthesis_round fan-out)本质就用 L3b 并发,门控不覆盖 = 评审流一上就漏。
 
-1. 解析 tool_use input → 拿到目标 role
-2. 查 `roles_by_state[当前 task.state]` 是否含该 role
-3. **允许** → 注入 delegation 模板(§6.6.1)→ 调 `run_subagent`
-4. **不允许** → 触发协商档(§6.1 Q3):engine 调 `ask_user_question` 问用户"这个 task 还在 {state},允许派 {role} 吗 / 确认推进 state 吗" → 用户允许则放行(一次性越权,不改 workflow.json)→ 拒绝则回 breadcrumb 提示
+**决定(拍板 2 选 i)**:**门控下沉到 `run_subagent` 内部**(`subagent/dispatch.rs`),三处调用点都过。`run_subagent` 签名追加 `current_state: &WorkflowState` 参数(对标 Q2"扩展不是重构"——只增参不改结构);调用方传当前 task state。门控逻辑在 `run_subagent` 入口:
 
-**不改 `run_subagent` 签名**:门控 + 模板注入都在拦截点完成,`run_subagent` 收到的是已放行 + 已带模板上下文的 dispatch。
+1. 查 `allowed_roles(def, current_state)` 是否含目标 role
+2. **允许** → 注入 delegation 模板(§6.6.1,engine 在 dispatch.rs 内 append 调用方的 turn_messages)→ 继续原 dispatch 逻辑
+3. **不允许** → 触发协商档(§6.1 Q3):engine 调 `ask_user_question` 问用户"这个 task 还在 {state},允许派 {role} 吗 / 确认推进 state 吗" → 用户允许则放行(一次性越权,不改 workflow.json)→ 拒绝则返 tool_error 提示回 breadcrumb
+
+**为什么不三处各放一份 gate**(否决拍板 2 选 ii):三处复制 = 漏改一处就漏门控(S-A 正是此问题);下沉 `run_subagent` 内部是单一真相,新增调用点自动覆盖。
+
+**`run_subagent` 签名变更**:`fn run_subagent(..., current_state: &WorkflowState)` —— 三个调用点(chat_loop.rs:1000/2937/3286)传同一 task state。这是 Q2"扩展不是重构"的体现:加参数不破坏现有调用语义。
 
 ### 6.7 沉淀闭环(长跑价值)
 
@@ -566,17 +587,24 @@ python3 .everlasting/scripts/task.py archive <slug> [--no-commit]
 >
 > **跟 Q2 接口的关系**:hook 嵌在 state 转移函数里,该函数是 Q2 锁定的 engine 接口一部分。Phase 3 加 hook = 给 `set_task_state` 加几个 match 分支,不破坏 WorkflowDef 接口。**hook 动作是机制核心(沉淀),不是流程内容**(不由 plugin 配);未来 plugin 若要自定义 hook 动作,再做 trait 抽象,但默认 hook(沉淀)仍 Rust 固定。Phase 3 实施。
 >
-> **hook 触发路径(M2 评审修正,决定3)**:`set_task_state` **由 user 确认门自动调用,不由 agent tool 调用**。理由(对标 Q9"不靠 agent 自觉"):若由 agent 调用,agent 可能忘记 → 沉淀闭环断。现有 `ask_user_question` 是纯问答,resolve 后只返回 answer JSON 无副作用([`tools/ask_user_question.rs`](../STRUCTURE.md) + `question_store.rs::resolve`)。改造:engine 在 state 转移确认门的 resolve handler 里,**返回确认答案后**主动调 `set_task_state(task, new_state)` → 触发 hook。调用链:
+> **hook 触发路径(M2 + M-A 评审修正,拍板 1 选 i)**:`set_task_state` **由专用 IPC 自动调用,不由 agent tool 调用**。理由(对标 Q9"不靠 agent 自觉"):若由 agent 调用,agent 可能忘记 → 沉淀闭环断。
+>
+> **M-A 修正**:原 M2 写"复用 ask_user_question 的 resolve handler"——但 `resolve_tool_question`(commands/question.rs:92)当前签名 `(session_id, tool_use_id, answer, cancelled)` **无字段区分"普通询问" vs "state 转移申请"**;`question_store.rs::resolve`(line 387)仅 oneshot 送答案无副作用。两种在现有系统是同一种 tool,形态无法区分。强行在 ask_user_question resolve 里加分支 = 污染通用问答 tool 的 schema。
+>
+> **决定(拍板 1 选 i)**:**新开 IPC `resolve_task_state_transition`**,对标现有 `resolve_mode_change`(commands/question.rs:137-176)的双 IPC pattern——该 pattern 已验证"apply 副作用 + resolve oneshot 同一处收口"(line 140-150 设计注释明说"apply mode BEFORE resolve")。state 转移确认门走同款:
 >
 > ```
-> agent ask_user_question("确认进 implement?")
+> agent ask_user_question("确认进 implement?", purpose="task_state_transition")  ← 普通问答 tool,带 purpose 标记
 >   → user 确认
->     → engine resolve handler
->       → set_task_state(task, Implement)   ← 自动,不依赖 agent
+>     → 前端调 resolve_task_state_transition IPC(非 resolve_tool_question)
+>       → engine: set_task_state(task, Implement)   ← apply 副作用,自动
 >         → write_task_json + hook 分支(preflight_implement_check)
+>       → resolve oneshot(把答案送回 agent turn)
 > ```
 >
-> 这把 state 转移 + hook 触发都收敛到 engine 的确认门 resolve 路径,agent 只负责"申请转移"(ask_user_question),不负责"执行转移"。跟 §6.6.2 门控执行点一致(都是 engine 在 dispatch/resolve 拦截处主动作为)。
+> **跟 `resolve_mode_change` 的差异**:mode change 是改 session 权限旋钮;task state transition 是改 task 生命周期 + 触发 hook。两者结构同款(双 IPC + apply-before-resolve),但作用对象不同,故各开一个 IPC 而非共用。
+>
+> **agent 侧**:agent 仍用 `ask_user_question` 发起确认(purpose 字段标识"这是 state 转移申请"),前端按 purpose 路由到 `resolve_task_state_transition`。agent 不调 `set_task_state`,只发起申请。跟 §6.6.2 门控一致(engine 主动作为,agent 只申请)。
 
 ---
 
@@ -594,7 +622,7 @@ python3 .everlasting/scripts/task.py archive <slug> [--no-commit]
 - task.json 读写 + `.everlasting/tasks/<slug>/` 目录约定
 - state breadcrumb 注入(复用 `inject_recall_into_turn` append seam)
 - agent 在 workflow session 自动起/续 task
-- state 转移用户确认门(复用 ask_user_question)
+- state 转移用户确认门(agent ask_user_question 带 purpose + 专用 IPC `resolve_task_state_transition`,M-A)
 
 **完成标准**:开 workflow → agent 自动起 task 写 task.json → 推进 state(用户确认)→ breadcrumb 随 state 变化可见。
 
@@ -614,7 +642,7 @@ python3 .everlasting/scripts/task.py archive <slug> [--no-commit]
 
 - 硬编码默认外置成 `.everlasting/workflow/dev/workflow.json`;engine 改读配置驱动(`default_workflow()` → `load_workflow()`,engine 主体零改动,见 §5.4)
 - plugin agents/ 落地(Q5:plugin 自带 researcher/implementer/checker 三角色;builtin general-purpose 不动)
-- state 门控 dispatch(统一协商档,见 §5.2.3 + §6.6.2;执行点 chat_loop dispatch 拦截处)
+- state 门控 dispatch(统一协商档,见 §5.2.3 + §6.6.2;**执行点下沉 `run_subagent` 内部**,S-A)
 - worker 上下文注入(Q6:delegation 模板,engine 填 task meta 占位符 + 主 LLM 填委托细节)
 - checklist 同步(S2 选 c):`update_checklist` 在 workflow session 内改写 task.json.items(非 loop-local Vec);B12 coerce 逻辑保留;非 workflow session 行为不变
 - UI:plugin 切换(此时只有一个 plugin,但切换机制就位)
@@ -682,7 +710,7 @@ python3 .everlasting/scripts/task.py archive <slug> [--no-commit]
 | 步 | 内容 | 验证手段 | 依赖 |
 |---|---|---|---|
 | **2.3** | plugin agents/ 落地(researcher/implementer/checker frontmatter + body,§A.3);loader 加 plugin agents 解析层(Q5) | cargo test:workflow session 解析 implementer 用 plugin 的;非 workflow 用全局 | 2.1 |
-| **2.4** | 门控执行点(§6.6.2):chat_loop dispatch 拦截处加 role×state 校验 + 协商档(ask_user_question) | 集成测试:planning 派 implementer → 弹协商;用户允许 → 放行;拒绝 → breadcrumb | 2.3 |
+| **2.4** | 门控执行点(§6.6.2):**下沉 `run_subagent` 内部**加 role×state 校验 + 协商档(S-A:三处调用点都过);签名追加 `current_state` 参数 | 集成测试:planning 派 implementer → 弹协商;并发 dispatch path 也拦截;用户允许 → 放行;拒绝 → breadcrumb | 2.3 |
 | **2.5** | delegation 模板注入(§6.6.1):engine 填 task meta 占位符 → append messages[0] | 集成测试:dispatch 时 messages[0] 含填好的 delegation 模板;worker 读到角色规范 | 2.3 |
 | **2.6** | checklist 同步(S2):`update_checklist` workflow session 内改写 task.json.items;B12 coerce 保留 | 集成测试:跨 session 续 task → items 进度持久;worker 读 task.json 拿进度 | 2.3 |
 
@@ -715,7 +743,7 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
 
 **关键并行点**:Phase 2 批 B 的 2.4(门控)/ 2.5(delegation 注入)/ 2.6(checklist)三步都只依赖 2.3,可并行做。
 
-**风险最高的步**:2.4(门控执行点,改 chat_loop 拦截)、2.6(checklist 同步,改 B12 写路径)——这两步碰现有稳定代码,做完立即跑全量 cargo test + vitest。
+**风险最高的步**:2.4(门控执行点,**下沉 `run_subagent` 内部**,改签名 + 三处调用点,S-A)、2.6(checklist 同步,改 B12 写路径)——这两步碰现有稳定代码,做完立即跑全量 cargo test + vitest。
 
 ---
 
@@ -749,9 +777,13 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
 
 **决策**:planning→implement / implement→check / check→done 需用户确认。agent 自翻 = 流程失去外部校验,可能跳过验收直接 done。
 
+**M-A 修正**:确认门走专用 IPC `resolve_task_state_transition`(对标 `resolve_mode_change` 双 IPC pattern),agent 用 ask_user_question 发起(purpose 标记),engine 在 IPC 内 apply `set_task_state` + resolve oneshot。agent 只申请不执行(见 §8)。
+
 ### 10.7 注入一律 append 到 messages[0],不碰持久化
 
 **决策**:所有 workflow 注入 append 到 per-turn request clone 的 messages[0],`cache_control: None`,绝不新开 user message。保 Anthropic prompt cache breakpoint 不失效(5-10× 成本)。这是 [`memory_recall`](../.trellis/spec/backend/memory.md) + [B12 checklist](../.trellis/spec/backend/agent-loop-architecture.md) 已验证的硬规则。
+
+**S-B 评审加注**:`inject_recall_into_turn` 在 `messages[0]` 非 user instruction 时有 **fallback 分支会 prepend 新建 synthetic user message**(memory_recall.rs:259-278),破坏 cache。**本工作流不允许触发该 fallback**——workflow session 默认 B5 指令文件加载保证 messages[0] 是 user-role Blocks message(见 §6.6.1 前置约束);`load_for_session` 返回空 layers 的 workflow session 属配置异常,engine warn + 降级非 workflow 行为,不走 fallback prepend。
 
 ### 10.8 UI workflow 切换 ≠ task picker
 
@@ -776,13 +808,13 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
 
 | 注入项 | per-turn 估算 | cache 命中时成本 |
 |---|---|---|
-| breadcrumb(state 模板) | ~400 tokens | 0(append 到 messages[0],cache_control: None,不破坏缓存) |
+| breadcrumb(state 模板) | ~300-700 tokens(按 §A.2 中文 breadcrumb 实测 250-500 字) | 0(append 到 messages[0],cache_control: None,不破坏缓存) |
 | task.json metadata(title/summary/state) | ~50 tokens | 0(同 messages[0] block append) |
 | delegation template(dispatch 时,见 §6.6.1) | ~200 tokens | 0(同上,仅 dispatch turn) |
 | checklist items(task.json.items,agent 主动 read_file) | 按需,不入常驻 | N/A |
 | memory recall(已有) | ≤[`RECALL_TOKEN_BUDGET`](../.trellis/spec/backend/memory.md) | 0(已有预算约束) |
 
-**结论**:常驻注入(breadcrumb + task meta)~450 tokens,dispatch turn 额外 +200。全部 cache_control: None 不破坏 prompt cache breakpoint。可控,无需特殊预算机制。
+**结论**:per-turn 注入(breadcrumb + task meta)~350-750 tokens,dispatch turn 额外 +200。全部 cache_control: None 不破坏 prompt cache breakpoint。可控,无需特殊预算机制。
 
 ### 11.2 工程权衡
 
@@ -806,7 +838,7 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
 | task state 转移 | (新) | `set_task_state` 由确认门 resolve handler 自动调(M2,§8),非 agent tool |
 | 内置 skill | B4 `skill/loader.rs` | wf-* skill 随 plugin 分发(放 `.everlasting/workflow/dev/skills/`),非全局 builtin;loader 加 plugin skills 解析层 |
 | sub-agent 角色 | `builtin_subagents()`([`subagent/mod.rs:463`](../.trellis/spec/backend/agent-loop-architecture.md)) | plugin 自带 agents/(Q5);workflow session 里 plugin agents 优先于全局,builtin general-purpose/researcher 不动作 fallback |
-| state 门控 dispatch | `chat_loop.rs` dispatch_subagent 拦截处(`run_subagent` 前,见 §6.6.2) | 统一协商档(Q3+S3):不允许时 engine 调 ask_user_question,不硬拒 |
+| state 门控 dispatch | `subagent/dispatch.rs::run_subagent` 内部(S-A 下沉) | 统一协商档(Q3+S3);三处调用点(串行~3286/并发~2937/测试~1000)都过;签名追加 `current_state` 参数 |
 | checklist 升格(S2) | `tools/update_checklist.rs`(B12 loop-local) | workflow session 内改写 task.json.items(非 loop-local Vec);B12 coerce 保留;非 workflow session 行为不变 |
 | state 转移 hook | (无现有 hook runner) | Phase 3 新建 Rust 固定逻辑(Q9 选 b) |
 | spec 沉淀 | (无) | `.everlasting/spec/` 新目录 + wf-update-spec skill |
@@ -838,7 +870,7 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
 | ~~Q5~~ | ~~implementer 改名还是新增?~~ | ✅ **workflow plugin 自带 `agents/` 子目录**定义三角色(researcher/implementer/checker);plugin agents 在 workflow session 优先于全局;builtin general-purpose 不动。命名:plugin 目录/builtin 一律英文(`dev`/`review`,非中文) |
 | ~~Q6~~ | ~~worker 上下文注入深度?~~ | ✅ **plugin delegation 模板**:task meta(`{title}`/`{summary}`/`{state}`,engine 填)+ delegation 模板(plugin 定义,指导主 LLM 写委托语)。不用 `{current_item}`(主 LLM 写委托细节)。prd 全文给 path。跟 checklist 升格解耦 |
 | ~~Q7~~ | ~~spec 沉淀进 .everlasting/spec/ 还是合并 .trellis/spec/?~~ | ✅ **新目录 `.everlasting/spec/`**(职责独立于 .trellis/spec/;借鉴结构不借鉴位置;过渡期两份共存) |
-| Q8(延迟) | 评审流走回合制 A 还是实时群聊 B,何时立项? | 延迟讨论 |
+| Q8(延迟) | 评审流走回合制 A 还是实时群聊 B,何时立项? | 延迟讨论。**立项 trigger**:dev plugin 跑通 ≥1 完整 task + 沉淀 spec 起见过收益后再决 |
 | ~~Q9~~ | ~~hook 选 (a)纯skill/(b)Rust固定/(c)runner?~~ | ✅ **(b) Rust 固定逻辑**(嵌在 `set_task_state` 写入路径;沉淀闭环是机制保证不靠 agent 自觉;不做脚本 runner 避免安全面)。Phase 3 |
 
 ---
@@ -894,10 +926,12 @@ Phase 3 (3 步):  3.1 → 3.2 → 3.3
     "done":      "[dev workflow · done] task 完成。\n- use_skill wf-update-spec 把本次决策/坑/新 pattern 提炼进 .everlasting/spec/\n- 更新 progress.md 写交接叙述\n- 归档 task(移动到 .everlasting/tasks/archive/)"
   },
   "delegation_templates": {
-    "researcher":  "你正在为 task「{title}」做调研(state={state})。\nTask 摘要: {summary}\n\n你的角色是 researcher(只读,不能写代码)。请:\n- 调研 [主 LLM 在此填本次委托的具体调研方向]\n- 读 .everlasting/tasks/<slug>/prd.md 了解需求(用 read_file)\n- 产出调研结论(技术方案/踩坑点/相关 spec 引用)\n- 不要修改任何文件\n\n验收:产出结构化调研报告,main agent 据此写 prd/checklist。",
-    "implementer": "你正在为 task「{title}」实现一项(state={state})。\nTask 摘要: {summary}\n\n你的角色是 implementer。请:\n- 实现 [主 LLM 在此填本次委托的具体 item]\n- 读 .everlasting/tasks/<slug>/prd.md 和 design.md 了解上下文(用 read_file)\n- 遵守项目 spec 规范(若未加载,先 use_skill wf-before-dev)\n- 不要 dispatch_subagent(防嵌套)\n\n验收:[主 LLM 在此填该项验收标准]。",
-    "checker":     "你正在为 task「{title}」验收(state={state})。\nTask 摘要: {summary}\n\n你的角色是 checker(只读 + 可跑 shell 测试)。请:\n- 验收 [主 LLM 在此填本次委托的验收对象]\n- 跑 lint / typecheck / 相关测试(用 shell tool)\n- 检查跨层一致性 / spec 合规\n- 不要修改文件,只产出验收报告(通过/不通过 + 具体问题)\n\n验收维度:lint、typecheck、测试通过率、跨层一致性、spec 合规。"
-  }
+    "researcher":  "你正在为 task「{title}」做调研(state={state})。\nTask 摘要: {summary}\n相关 spec: {relevant_specs}\n\n你的角色是 researcher(只读,不能写代码)。请:\n- 调研 [主 LLM 在此填本次委托的具体调研方向]\n- 读 .everlasting/tasks/<slug>/prd.md 了解需求(用 read_file)\n- 产出调研结论(技术方案/踩坑点/相关 spec 引用)\n- 不要修改任何文件\n\n验收:产出结构化调研报告,main agent 据此写 prd/checklist。",
+    "implementer": "你正在为 task「{title}」实现一项(state={state})。\nTask 摘要: {summary}\n相关 spec(必读): {relevant_specs}\n\n你的角色是 implementer。请:\n- 实现 [主 LLM 在此填本次委托的具体 item]\n- 读 .everlasting/tasks/<slug>/prd.md 和 design.md 了解上下文(用 read_file)\n- 遵守项目 spec 规范(若未加载,先 use_skill wf-before-dev)\n- 不要 dispatch_subagent(防嵌套)\n\n验收:[主 LLM 在此填该项验收标准]。",
+    "checker":     "你正在为 task「{title}」验收(state={state})。\nTask 摘要: {summary}\n相关 spec: {relevant_specs}\n\n你的角色是 checker(只读 + 可跑 shell 测试)。请:\n- 验收 [主 LLM 在此填本次委托的验收对象]\n- 跑 lint / typecheck / 相关测试(用 shell tool)\n- 检查跨层一致性 / spec 合规\n- 不要修改文件,只产出验收报告(通过/不通过 + 具体问题)\n\n验收维度:lint、typecheck、测试通过率、跨层一致性、spec 合规。"
+  },
+  "coordination": "pipeline",
+  "gather_strategy": {}
 }
 ```
 
@@ -936,7 +970,10 @@ tools: [read_file, grep, glob, list_dir, web_fetch]
 ---
 name: implementer
 description: 实施 agent,用于 implement 阶段按 checklist item 实现代码
-tools: []   # 空数组 = 全集(同 general-purpose 语义);engine 在 workflow dispatch 拦截处自动剥离 dispatch_subagent(防嵌套),实际可用 = 全集减 STRUCTURALLY_DISABLED。与 general-purpose 仅靠 system_prompt 区分角色
+tools: []   # 空数组 = 全集(同 general-purpose 语义);engine 在 run_subagent 内部自动剥离 dispatch_subagent(防嵌套,见 §6.6.2 S-A),实际可用 = 全集减 STRUCTURALLY_DISABLED
+# M-D 评审 follow-up(不阻塞 Phase 0):implementer 与 general-purpose 同 toolset,仅靠 system_prompt 区分角色——
+# 违背"角色 = tools + body"。未来可加 SubagentDef.tools_negation: Vec<String> 字段(空白名单 + 减号表达"全集去掉 X"),
+# 或 frontmatter 列显式白名单(全部 builtin 工具名,但脆:工具增减要改)。Phase 0 暂留此注释,实测角色混淆再改 L3d。
 ---
 
 # Implementer
@@ -965,6 +1002,8 @@ tools: []   # 空数组 = 全集(同 general-purpose 语义);engine 在 workflow
 name: checker
 description: 验收 agent,只读 + 可跑测试,用于 implement 每项后 / check 阶段全量验收
 tools: [read_file, grep, glob, list_dir, shell]
+# 小问题7 follow-up:shell 命令前缀白名单(可选字段,engine 在 §6.6.2 dispatch 校验时叠加一层)
+# 当前 frontmatter 不强制,Phase 2 实测 checker 跑危险命令再考虑加 shell_allow_prefixes: ["cargo ", "pnpm ", "pytest"]
 ---
 
 # Checker
