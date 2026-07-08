@@ -327,6 +327,17 @@ pub fn can_transition(def: &WorkflowDef, from: &str, to: &str) -> bool {
 ///
 /// **Lifetime**: returned `&str` is borrowed from `def`,
 /// not from `role` (just a key).
+///
+/// **Substitution placeholders** (Step 2.5): the
+/// dispatcher (in `inject.rs::compute_delegation_template`)
+/// substitutes `{title}` / `{summary}` / `{state}` /
+/// `{relevant_specs}` before passing the result to the
+/// worker. The accessor here only returns the raw
+/// template text; the dispatcher owns the substitution
+/// logic so the same engine can plug in different
+/// placeholder strategies (Phase 3 FTS5 over
+/// `task.summary` for `relevant_specs`, etc.) without
+/// touching this module.
 pub fn delegation_template_for<'a>(def: &'a WorkflowDef, role: &str) -> Option<&'a str> {
     def.delegation_templates.get(role).map(String::as_str)
 }

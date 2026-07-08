@@ -615,8 +615,33 @@ pub(crate) async fn run_subagent(
     // C (2026-06-30): append an isolation environment hint to the
     // delegation task when the worker runs isolated (shared: raw task).
     let final_task = task_with_env_hint(task, isolated, &worker_run_id);
-    let worker_messages =
+    let mut worker_messages =
         build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await;
+
+    // W1 (Workflow integration, Step 2.5 — 2026-07-08):
+    // append the filled delegation template to
+    // `worker_messages[0]`'s block list. Only fires when:
+    // - workflow session (`workflow_ctx.is_some()`)
+    // - plugin defines a template for the dispatched role
+    //
+    // The helper handles both guards (`append_delegation_template`
+    // returns `false` on `None` template; the S-B guard inside
+    // catches the not-a-user-Blocks-message case). On
+    // non-workflow callers OR no plugin template → no-op
+    // (legacy behavior preserved).
+    //
+    // **Per M-E**: this is a dispatch-turn-only injection.
+    // The parent's chat_loop's messages[0] is untouched; we
+    // only mutate the worker's messages[0]. The worker
+    // sees the template as part of its initial context.
+    let filled = workflow_ctx.and_then(|ctx| {
+        crate::agent::workflow::compute_delegation_template(
+            ctx,
+            &project_path,
+            subagent_name,
+        )
+    });
+    crate::agent::workflow::append_delegation_template(&mut worker_messages, filled);
 
     // task 07-03-subagent-frontmatter-model: resolve the worker's
     // provider / context_window / display from `def.model` via

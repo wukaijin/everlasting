@@ -62,7 +62,10 @@ use sqlx::SqlitePool;
 // below; silencing the warning at the import site keeps the
 // production binary warning-free.
 #[allow(unused_imports)]
-use crate::agent::workflow::{breadcrumb_for, default_workflow, load_workflow, read_task, TaskJson, WorkflowDef};
+use crate::agent::workflow::{
+    breadcrumb_for, delegation_template_for, default_workflow, load_workflow, read_task,
+    TaskJson, WorkflowDef,
+};
 use crate::db;
 use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
 
@@ -336,6 +339,222 @@ pub fn append_workflow_breadcrumb(
         "append_workflow_breadcrumb: messages[0] is not a user-role Blocks message; \
          S-B guard forbids prepending a synthetic user message. Breadcrumb skipped \
          (turn proceeds without state reminder)."
+    );
+    false
+}
+
+// ---------------------------------------------------------------------------
+// W1 (Workflow integration, Step 2.5 — 2026-07-08):
+// delegation template — filled plugin-role system prompt
+// for a worker turn. Lives in `inject.rs` next to
+// `append_workflow_breadcrumb` because both target the
+// same messages[0] block list with the same S-B guard.
+//
+// **Step 2.5 contract**:
+// - `compute_delegation_template` substitutes `{title}`
+//   / `{summary}` / `{state}` / `{relevant_specs}` from
+//   the workflow_ctx + project_path. Returns `None`
+//   when the plugin doesn't define a template for the
+//   role (caller falls back to the sub-agent's own
+//   system prompt).
+// - `append_delegation_template` mutates `messages[0]`
+//   to push the filled template as a Text block. The
+//   same S-B guard as the breadcrumb helper: must be a
+//   user-role Blocks message or the append is silently
+//   skipped (with a `warn!`).
+// - `cache_control: None` — delegation templates are
+//   per-dispatch (not per-turn stable), so they MUST
+//   NOT mark a cache breakpoint.
+// ---------------------------------------------------------------------------
+
+/// Compute the filled delegation template for `role` in
+/// the current `workflow_ctx`. Returns `None` when the
+/// plugin doesn't define a template for the role.
+///
+/// **Substitution placeholders**:
+/// - `{title}` → `current_task.title` (empty when no task)
+/// - `{summary}` → `current_task.summary` (empty when no task)
+/// - `{state}` → `current_task.status` string (e.g.
+///   `"planning"` / `"implement"` / `"check"` / `"done"`)
+///
+/// **`{relevant_specs}`** (Step 2.5): scans
+/// `<project>/.everlasting/spec/` for `.md` files when
+/// the directory exists. The scan is a flat listing for
+/// now (FTS5 over `task.summary` is a Phase 3 refinement).
+/// When the spec dir is missing (Phase 3.2 not yet
+/// landed), or no files match, the placeholder resolves
+/// to `(auto-detect via wf-before-dev)` so the worker
+/// always gets an actionable hint.
+///
+/// The placeholder substitution is intentionally
+/// permissive — a missing placeholder in the template
+/// text stays verbatim (the LLM sees the literal
+/// `{title}` and can flag it as a plugin-author bug).
+pub fn compute_delegation_template(
+    workflow_ctx: &WorkflowCtx,
+    project_path: &str,
+    role: &str,
+) -> Option<String> {
+    let raw = delegation_template_for(&workflow_ctx.workflow_def, role)?;
+    let title = workflow_ctx
+        .current_task
+        .as_ref()
+        .map(|t| t.title.as_str())
+        .unwrap_or("");
+    let summary = workflow_ctx
+        .current_task
+        .as_ref()
+        .map(|t| t.summary.as_str())
+        .unwrap_or("");
+    let state = workflow_ctx
+        .current_task
+        .as_ref()
+        .map(|t| t.status.as_str())
+        .unwrap_or("");
+    let relevant_specs = resolve_relevant_specs(project_path);
+    Some(
+        raw.replace("{title}", title)
+            .replace("{summary}", summary)
+            .replace("{state}", state)
+            .replace("{relevant_specs}", &relevant_specs),
+    )
+}
+
+/// Scan `<project>/.everlasting/spec/` for `.md` files
+/// and return a comma-separated path list (relative to
+/// project root). Missing dir or no files →
+/// `(auto-detect via wf-before-dev)`.
+///
+/// Step 2.5 ships a flat listing (no FTS5 over
+/// `task.summary` yet — that's a Phase 3 refinement per
+/// the design doc §5.4). The hint text tells the worker
+/// to use the `wf-before-dev` skill as a fallback when
+/// the spec index is empty, matching the workflow
+/// breadcrumb's "use wf-before-dev when nothing's
+/// pinned" convention.
+fn resolve_relevant_specs(project_path: &str) -> String {
+    let spec_dir = std::path::Path::new(project_path)
+        .join(".everlasting")
+        .join("spec");
+    if !spec_dir.exists() {
+        return "(auto-detect via wf-before-dev)".to_string();
+    }
+    // Recursive walk: the spec tree is structured
+    // (`<package>/<layer>/index.md` + guideline files,
+    // per `.trellis/spec/...` convention). A flat
+    // top-level listing would miss any `.md` nested in
+    // package subdirs. Step 2.5 ships a depth-first walk
+    // without following symlinks (defensive — the spec
+    // tree should not contain any).
+    let mut paths: Vec<String> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![spec_dir.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(it) => it,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = entry.file_type().ok();
+            let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
+            let is_file = file_type.as_ref().map(|t| t.is_file()).unwrap_or(false);
+            let is_symlink =
+                file_type.as_ref().map(|t| t.is_symlink()).unwrap_or(false);
+            if is_symlink {
+                // Skip symlinks — the spec tree is a
+                // plain directory hierarchy; any
+                // symlink is a misconfiguration and
+                // could escape the project root.
+                continue;
+            }
+            if is_dir {
+                stack.push(path);
+                continue;
+            }
+            if !is_file {
+                continue;
+            }
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            // Path relative to project root so the
+            // template text is portable (works whether
+            // project_path is absolute or relative).
+            //
+            // `strip_prefix` requires both sides to be
+            // canonically equivalent. Fall back to
+            // canonicalize-and-strip when the paths
+            // diverge (e.g. on macOS where `/tmp` is a
+            // symlink to `/private/tmp`).
+            let rel: String = match path.strip_prefix(project_path) {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(_) => {
+                    let canon_path = path.canonicalize().ok();
+                    let canon_root = std::path::Path::new(project_path)
+                        .canonicalize()
+                        .ok();
+                    match (canon_path, canon_root) {
+                        (Some(p), Some(r)) => p
+                            .strip_prefix(&r)
+                            .map(|x| x.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| {
+                                p.to_string_lossy().into_owned()
+                            }),
+                        _ => path.to_string_lossy().into_owned(),
+                    }
+                }
+            };
+            paths.push(rel);
+        }
+    }
+    paths.sort();
+    if paths.is_empty() {
+        "(auto-detect via wf-before-dev)".to_string()
+    } else {
+        paths.join(", ")
+    }
+}
+
+/// Push the filled delegation template (a Text block) to
+/// `messages[0]`'s block list. Same S-B guard as
+/// `append_workflow_breadcrumb` — silently skipped +
+/// `warn!` when messages[0] isn't a user-role Blocks
+/// message.
+///
+/// `cache_control: None` — delegation templates are
+/// per-dispatch (not per-turn stable), so they MUST NOT
+/// become a cache breakpoint marker. They live alongside
+/// the breadcrumb on messages[0], but never participate
+/// in the worker's prompt-cache breakpoint.
+///
+/// Returns `true` when appended, `false` when the guard
+/// tripped or the template is `None` (no plugin
+/// template for this role → caller falls back to the
+/// sub-agent's own system prompt).
+pub fn append_delegation_template(
+    turn_messages: &mut Vec<ChatMessage>,
+    body: Option<String>,
+) -> bool {
+    let body = match body {
+        Some(b) => b,
+        None => return false,
+    };
+    let block = ContentBlock::Text {
+        text: body,
+        cache_control: None,
+    };
+    if let Some(first) = turn_messages.first_mut() {
+        if first.role == Role::User {
+            if let MessageContent::Blocks(ref mut blocks) = first.content {
+                blocks.push(block);
+                return true;
+            }
+        }
+    }
+    tracing::warn!(
+        "append_delegation_template: messages[0] is not a user-role Blocks message; \
+         S-B guard forbids prepending a synthetic user message. Template skipped \
+         (worker proceeds without plugin role customization)."
     );
     false
 }

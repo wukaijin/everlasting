@@ -109,7 +109,8 @@ pub use task::{
 // the consumers' use-list.
 #[allow(unused_imports)]
 pub use inject::{
-    append_workflow_breadcrumb, build_workflow_ctx, WorkflowCtx,
+    append_delegation_template, append_workflow_breadcrumb, build_workflow_ctx,
+    compute_delegation_template, WorkflowCtx,
 };// ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
 // ---------------------------------------------------------------------------
@@ -550,5 +551,202 @@ mod tests {
         .unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
         assert_eq!(list_plugins(&path), vec!["real"]);
+    }
+
+    // ---- Step 2.5: delegation template helpers ------------------------
+
+    /// Minimal `WorkflowCtx` carrying the dev plugin's
+    /// delegation_templates (researcher / implementer /
+    /// checker). Tests can mutate `current_task` to drive
+    /// the placeholder substitution.
+    fn dev_ctx_with_task(
+        title: &str,
+        summary: &str,
+        status: TaskStatus,
+    ) -> WorkflowCtx {
+        WorkflowCtx {
+            workflow_def: default_workflow(),
+            current_task: Some(TaskJson {
+                id: "t1".into(),
+                title: title.into(),
+                slug: "s1".into(),
+                status,
+                created_at: "2026-07-09T00:00:00Z".into(),
+                updated_at: "2026-07-09T00:00:00Z".into(),
+                parent: None,
+                summary: summary.into(),
+                items: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn delegation_template_substitutes_placeholders() {
+        let ctx = dev_ctx_with_task(
+            "add wf-overview skill",
+            "investigate skill loader plugin layer",
+            TaskStatus::Planning,
+        );
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_path = tmp.path().to_string_lossy().to_string();
+
+        let filled = compute_delegation_template(&ctx, &project_path, "researcher")
+            .expect("dev plugin defines researcher template");
+        assert!(
+            filled.contains("add wf-overview skill"),
+            "{{title}} must substitute (got: {filled})",
+        );
+        assert!(
+            filled.contains("investigate skill loader plugin layer"),
+            "{{summary}} must substitute",
+        );
+        assert!(
+            filled.contains("planning"),
+            "{{state}} must substitute",
+        );
+        assert!(
+            !filled.contains("{title}"),
+            "no unsubstituted placeholders should remain (got: {filled})",
+        );
+        assert!(
+            !filled.contains("{relevant_specs}"),
+            "relevant_specs placeholder should be resolved (got: {filled})",
+        );
+    }
+
+    #[test]
+    fn delegation_template_relevant_specs_falls_back_when_dir_missing() {
+        // Project with no `.everlasting/spec/` → fallback
+        // hint text. The fallback message names the
+        // `wf-before-dev` skill so the worker has an
+        // actionable next step.
+        let ctx = dev_ctx_with_task("t", "s", TaskStatus::Planning);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_path = tmp.path().to_string_lossy().to_string();
+
+        let filled = compute_delegation_template(&ctx, &project_path, "implementer")
+            .expect("dev plugin defines implementer template");
+        assert!(
+            filled.contains("(auto-detect via wf-before-dev)"),
+            "missing spec dir → fallback hint text (got: {filled})",
+        );
+    }
+
+    #[test]
+    fn delegation_template_relevant_specs_lists_md_files() {
+        // Project with `.everlasting/spec/agents/backend/index.md`
+        // → that path appears (relative to project root) in
+        // the filled template. The recursive walk must
+        // descend into subdirs (`agents/backend/`) to find
+        // nested .md files; a flat top-level listing would
+        // miss them.
+        let ctx = dev_ctx_with_task("t", "s", TaskStatus::Check);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let spec_dir = tmp.path().join(".everlasting").join("spec");
+        std::fs::create_dir_all(spec_dir.join("agents/backend")).unwrap();
+        std::fs::write(
+            spec_dir.join("agents/backend/index.md"),
+            "# backend spec",
+        )
+        .unwrap();
+        std::fs::write(spec_dir.join("agents/backend/style.md"), "# style");
+        // A non-.md file should be ignored.
+        std::fs::write(spec_dir.join("README.txt"), "ignored");
+        // Top-level .md too — should also appear.
+        std::fs::write(spec_dir.join("top.md"), "# top");
+
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let filled = compute_delegation_template(&ctx, &project_path, "checker")
+            .expect("dev plugin defines checker template");
+        assert!(
+            filled.contains(".everlasting/spec/agents/backend/index.md"),
+            "nested spec file path must appear in filled template (got: {filled})",
+        );
+        assert!(
+            filled.contains(".everlasting/spec/agents/backend/style.md"),
+            "second nested spec file must also appear (got: {filled})",
+        );
+        assert!(
+            filled.contains(".everlasting/spec/top.md"),
+            "top-level spec file must also appear (got: {filled})",
+        );
+        assert!(
+            !filled.contains("README.txt"),
+            "non-.md files must be ignored (got: {filled})",
+        );
+    }
+
+    #[test]
+    fn delegation_template_unknown_role_returns_none() {
+        // Plugin doesn't define a template for this role
+        // → None (caller falls back to the sub-agent's
+        // own system prompt).
+        let ctx = dev_ctx_with_task("t", "s", TaskStatus::Planning);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let filled = compute_delegation_template(&ctx, &project_path, "general-purpose");
+        assert!(
+            filled.is_none(),
+            "general-purpose has no dev-plugin template; expected None (got: {:?})",
+            filled
+        );
+    }
+
+    #[test]
+    fn append_delegation_template_pushes_to_user_blocks() {
+        // Pure block-append: messages[0] is a user-role
+        // Blocks message → template block pushed.
+        use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
+        let mut messages = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "memory block".into(),
+                cache_control: None,
+            }]),
+        }];
+        let ok =
+            append_delegation_template(&mut messages, Some("PLUGIN_TEMPLATE".to_string()));
+        assert!(ok, "append must succeed for user-role Blocks messages");
+        if let MessageContent::Blocks(blocks) = &messages[0].content {
+            assert_eq!(blocks.len(), 2, "should have 2 blocks (memory + template)");
+            if let ContentBlock::Text { text, .. } = &blocks[1] {
+                assert_eq!(text, "PLUGIN_TEMPLATE");
+            } else {
+                panic!("expected Text block at index 1");
+            }
+        } else {
+            panic!("messages[0] should still be Blocks");
+        }
+    }
+
+    #[test]
+    fn append_delegation_template_skips_on_none_template() {
+        // No plugin template → no-op (returns false,
+        // messages untouched).
+        use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
+        let mut messages = vec![ChatMessage {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "memory".into(),
+                cache_control: None,
+            }]),
+        }];
+        let ok = append_delegation_template(&mut messages, None);
+        assert!(!ok, "None template → returns false");
+        if let MessageContent::Blocks(blocks) = &messages[0].content {
+            assert_eq!(blocks.len(), 1, "no template → blocks unchanged");
+        } else {
+            panic!("messages[0] should still be Blocks");
+        }
+    }
+
+    #[test]
+    fn append_delegation_template_skips_when_messages_empty() {
+        // S-B guard: no messages → can't append.
+        use crate::llm::types::ChatMessage;
+        let mut messages: Vec<ChatMessage> = vec![];
+        let ok =
+            append_delegation_template(&mut messages, Some("body".to_string()));
+        assert!(!ok, "empty messages → no-op");
     }
 }
