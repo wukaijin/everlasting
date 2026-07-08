@@ -284,6 +284,12 @@ pub struct SessionRow {
     /// `db::migrations::run_migrations`). Persisted on every
     /// `set_session_mode` IPC call.
     pub mode: Mode,
+    /// W1 (Workflow integration, 2026-07-08): per-session workflow opt-in.
+    /// `false` = workflow off (default, existing behavior unchanged),
+    /// `true` = workflow on (agent follows the active plugin's state
+    /// machine). Persisted via `set_session_workflow_enabled` IPC
+    /// (Step 0.2). DB column is `INTEGER NOT NULL DEFAULT 0`.
+    pub workflow_enabled: bool,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -320,6 +326,8 @@ pub struct SessionSummary {
     /// sidebar uses this for the mode badge / chip without a
     /// per-session IPC round-trip.
     pub mode: Mode,
+    /// W1: per-session workflow opt-in (see `SessionRow::workflow_enabled`).
+    pub workflow_enabled: bool,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).

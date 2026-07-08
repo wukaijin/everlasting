@@ -40,8 +40,8 @@ pub async fn create_session(
         r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat')
+ worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0)
  "#,
     )
     .bind(session_id)
@@ -78,6 +78,7 @@ pub async fn create_session(
         last_cache_read: None,
         color_tag: None,
         mode: crate::db::Mode::Edit,
+        workflow_enabled: false,
     })
 }
 
@@ -96,7 +97,7 @@ pub async fn list_sessions(
  s.cache_creation_total, s.cache_read_total,
  s.last_context_input_tokens, s.last_input_tokens,
  s.last_output_tokens, s.last_cache_creation, s.last_cache_read,
- s.color_tag, s.mode,
+ s.color_tag, s.mode, s.workflow_enabled,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -146,6 +147,7 @@ pub async fn list_sessions(
                 last_cache_read: r.try_get("last_cache_read")?,
                 color_tag,
                 mode: crate::db::Mode::from_str_opt(&mode_str),
+                workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
             })
         })
         .collect()
@@ -165,7 +167,7 @@ pub async fn load_session(
  cache_creation_total, cache_read_total,
  last_context_input_tokens, last_input_tokens,
  last_output_tokens, last_cache_creation, last_cache_read,
- color_tag, mode
+ color_tag, mode, workflow_enabled
  FROM sessions
  WHERE id = ?
  "#,
@@ -201,6 +203,7 @@ pub async fn load_session(
                 last_cache_read: r.try_get("last_cache_read")?,
                 color_tag: r.try_get("color_tag")?,
                 mode: crate::db::Mode::from_str_opt(&mode_str),
+                workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
             }
         }
         None => return Ok(None),

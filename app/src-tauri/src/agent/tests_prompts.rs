@@ -43,6 +43,7 @@ fn make_session_row(
         last_cache_read: None,
         color_tag: None,
         mode: db::Mode::Edit,
+        workflow_enabled: false,
     }
 }
 
