@@ -390,6 +390,20 @@ pub async fn run_chat_loop(
     // need only add a final positional `h.question_store.clone()
     // // 29` (or `None` for legacy 28-arg tests).
     question_store: crate::agent::question_store::QuestionStore,
+    // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+    // per-session workflow context. `None` for non-workflow
+    // sessions (zero overhead — the per-turn loop short-
+    // circuits). When `Some(ctx)`, `messages[0]` gets the
+    // state breadcrumb + current-task metadata appended on
+    // every turn (mirrors `memory_recall`'s per-turn
+    // injection seam; same S-B guard — no prepend of
+    // synthetic user messages).
+    //
+    // 29→30 arg. Still appended at the tail per the same
+    // convention as `question_store` (keeps existing
+    // test fixtures on one-line edits when they upgrade
+    // from 29 to 30).
+    workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -1448,6 +1462,46 @@ pub async fn run_chat_loop(
                             "fts",
                         );
                     }
+                }
+
+                // W1 (Workflow integration, Phase 0 Step 0.5
+                // — 2026-07-08): per-turn breadcrumb injection.
+                // Sibling to the recall-injection block above
+                // (not nested inside `if
+                // !query.trim().is_empty()`) because the
+                // breadcrumb is unconditional on recall state
+                // — even when there's no user query, a
+                // workflow session opening a new turn still
+                // wants the state breadcrumb in front of the
+                // LLM.
+                //
+                // Runs AFTER `inject_recall_into_turn` so the
+                // recall text (when present) lands at the
+                // head of `messages[0]`'s block list
+                // (chronologically first per-turn) and the
+                // breadcrumb sits just below it
+                // (chronologically last).
+                //
+                // Both injectors share `messages[0]` and rely
+                // on the SAME S-B guard (skip-not-prepend);
+                // see
+                // `agent::workflow::inject::append_workflow_breadcrumb`
+                // for the rationale.
+                //
+                // Nested inside `if !skip_persist` because
+                // workers reuse the parent's session_id and
+                // the parent's workflow state is NOT what
+                // the worker should be reminded of. Workers
+                // call this function with `workflow_ctx =
+                // None`, so the inner `if workflow_ctx` gate
+                // would also short-circuit — keeping them
+                // together makes the intent clear in one
+                // block ("non-worker path mutations on
+                // messages[0]").
+                if let Some(ref ctx) = workflow_ctx {
+                    crate::agent::workflow::inject::append_workflow_breadcrumb(
+                        &mut req, ctx,
+                    );
                 }
             }
             req

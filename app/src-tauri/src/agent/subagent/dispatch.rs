@@ -944,6 +944,12 @@ pub(crate) async fn run_subagent(
         // re-enables the tool for workers, the same store is
         // already wired in (no further changes needed).
         parent_question_store.clone(),
+        // W1 (Workflow integration, Phase 0 Step 0.5
+        // — 2026-07-08): worker nested call passes `None`
+        // — the worker focuses on its dispatched task, NOT
+        // the parent session's workflow state. Workflow
+        // breadcrumbs stay parent-scoped.
+        None,
     ))
     .await;
 

@@ -48,6 +48,14 @@ pub mod def;
 /// loop-local `Vec<ChecklistItem>`.
 pub mod task;
 
+/// Per-session workflow context + per-turn breadcrumb
+/// injection seam (`WorkflowCtx` / `build_workflow_ctx` /
+/// `append_workflow_breadcrumb`). Phase 0 Step 0.5 ships
+/// this; Phase 2 Step 2.5 will add
+/// `append_delegation_template` as a sibling helper that
+/// composes onto the same `messages[0]` block list.
+pub mod inject;
+
 // `task` + `state` slots are reserved for Phase 0 Step 0.4
 // and Phase 3 Step 3.1 respectively. The first (`task`) is
 // live now; the second (`state`) lands later.
@@ -90,6 +98,17 @@ pub use def::{
 pub use task::{
     create_task_init, read_task, task_dir, task_json_path, task_prd_path, validate_slug,
     write_task, TaskError, TaskItem, TaskJson, TaskResult, TaskStatus,
+};
+
+// Re-export the injection surface at the workflow root.
+// `agent::chat::chat` (the IPC entry) imports
+// `build_workflow_ctx`; `agent::chat_loop::run_chat_loop`
+// imports `append_workflow_breadcrumb`. Keeping both
+// under the same `agent::workflow` namespace simplifies
+// the consumers' use-list.
+#[allow(unused_imports)]
+pub use inject::{
+    append_workflow_breadcrumb, build_workflow_ctx, WorkflowCtx,
 };// ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
 // ---------------------------------------------------------------------------
