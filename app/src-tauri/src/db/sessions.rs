@@ -40,8 +40,8 @@ pub async fn create_session(
         r#"
  INSERT INTO sessions
  (id, title, created_at, updated_at, model, metadata, project_id, current_cwd,
- worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled)
- VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0)
+ worktree_path, worktree_state, last_worktree_path, model_id, color_tag, mode, workflow_enabled, plugin_name)
+ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, NULL, 'none', NULL, ?, NULL, 'chat', 0, 'dev')
  "#,
     )
     .bind(session_id)
@@ -79,6 +79,14 @@ pub async fn create_session(
         color_tag: None,
         mode: crate::db::Mode::Edit,
         workflow_enabled: false,
+        // Step 2.2: default plugin is `dev`. The migration
+        // column also has DEFAULT 'dev', so the bare INSERT
+        // above is consistent with the SELECT-without-bind
+        // fallback; we set the field explicitly here so the
+        // returned struct matches the row verbatim (no
+        // round-trip race for callers that read the return
+        // value before any SELECT).
+        plugin_name: "dev".to_string(),
     })
 }
 
@@ -97,7 +105,7 @@ pub async fn list_sessions(
  s.cache_creation_total, s.cache_read_total,
  s.last_context_input_tokens, s.last_input_tokens,
  s.last_output_tokens, s.last_cache_creation, s.last_cache_read,
- s.color_tag, s.mode, s.workflow_enabled,
+ s.color_tag, s.mode, s.workflow_enabled, s.plugin_name,
  COALESCE(
  (SELECT text FROM messages m
  WHERE m.session_id = s.id AND m.role = 'user'
@@ -148,6 +156,7 @@ pub async fn list_sessions(
                 color_tag,
                 mode: crate::db::Mode::from_str_opt(&mode_str),
                 workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
+                plugin_name: r.try_get("plugin_name")?,
             })
         })
         .collect()
@@ -167,7 +176,7 @@ pub async fn load_session(
  cache_creation_total, cache_read_total,
  last_context_input_tokens, last_input_tokens,
  last_output_tokens, last_cache_creation, last_cache_read,
- color_tag, mode, workflow_enabled
+ color_tag, mode, workflow_enabled, plugin_name
  FROM sessions
  WHERE id = ?
  "#,
@@ -204,6 +213,7 @@ pub async fn load_session(
                 color_tag: r.try_get("color_tag")?,
                 mode: crate::db::Mode::from_str_opt(&mode_str),
                 workflow_enabled: r.try_get::<i64, _>("workflow_enabled")? != 0,
+                plugin_name: r.try_get("plugin_name")?,
             }
         }
         None => return Ok(None),
@@ -548,6 +558,50 @@ pub async fn set_session_workflow_enabled(
  "#,
     )
     .bind(value)
+    .bind(&now)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// W1 (Workflow integration, Step 2.2 — 2026-07-08):
+/// per-session workflow plugin name. The frontend's
+/// `PluginSelect.vue` chip writes this on click; the
+/// engine's `build_workflow_ctx` reads it on every IPC
+/// entry to call `load_workflow(plugin_name, project_path)`
+/// — so the breadcrumb reflects whatever plugin is
+/// currently selected by the next turn.
+///
+/// **No validation here** — the column accepts any non-empty
+/// string. The loader (`load_workflow`) is responsible for
+/// validating the on-disk JSON shape; if `plugin_name`
+/// doesn't match a real plugin dir, the loader falls back
+/// to `default_workflow()` (which is itself `dev` per
+/// `WorkflowDef::name`), so a stale name never breaks the
+/// engine — it just gets the dev workflow until the user
+/// picks a real one.
+///
+/// **Naming rules**: ASCII snake_case, English (per W1 AC
+/// §非功能). Empty string is rejected at the IPC layer
+/// (see `commands::sessions::set_session_plugin_name`).
+///
+/// Returns `Ok(())` even when `session_id` matches no row —
+/// mirrors `set_session_workflow_enabled`'s lenient contract
+/// (unknown id is a silent no-op rather than a surfaced
+/// error).
+pub async fn set_session_plugin_name(
+    pool: &SqlitePool,
+    session_id: &str,
+    plugin_name: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+ UPDATE sessions SET plugin_name = ?, updated_at = ? WHERE id = ?
+ "#,
+    )
+    .bind(plugin_name)
     .bind(&now)
     .bind(session_id)
     .execute(pool)

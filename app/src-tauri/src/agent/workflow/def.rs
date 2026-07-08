@@ -446,6 +446,48 @@ pub fn workflow_json_path(workflow_name: &str, project_path: &str) -> PathBuf {
         .join("workflow.json")
 }
 
+/// Discover available workflow plugins under
+/// `<project>/.everlasting/workflow/<dir>/workflow.json`.
+///
+/// Returns the list of valid plugin names (alphabetical).
+/// A directory is a valid plugin iff `workflow.json` exists
+/// inside it. Empty directories are ignored without warning
+/// (typical scratch state). Missing root dir → empty list
+/// (no plugins = just the default dev workflow on next
+/// `load_workflow` call).
+///
+/// Step 2.2: backs `list_workflow_plugins` IPC → the
+/// `PluginSelect.vue` popover data source. Lives next to
+/// `workflow_json_path` so the discovery logic and the
+/// path arithmetic are in the same module (easier to keep
+/// in sync if the layout changes — e.g. when Step 3.2
+/// adds `.everlasting/spec/`).
+pub fn list_plugins(project_path: &str) -> Vec<String> {
+    let root = Path::new(project_path)
+        .join(".everlasting")
+        .join("workflow");
+    let entries = match std::fs::read_dir(&root) {
+        Ok(it) => it,
+        Err(_) => return Vec::new(),
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let workflow_json = path.join("workflow.json");
+            if !workflow_json.is_file() {
+                return None;
+            }
+            entry.file_name().into_string().ok()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 /// Validation errors from [`validate`]. Each variant
 /// carries enough context for the loader's `warn!` to point
 /// at the offending field — the on-disk JSON is the

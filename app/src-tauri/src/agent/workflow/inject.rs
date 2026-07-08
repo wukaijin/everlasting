@@ -58,7 +58,11 @@ use std::path::Path;
 
 use sqlx::SqlitePool;
 
-use crate::agent::workflow::{breadcrumb_for, default_workflow, read_task, TaskJson, WorkflowDef};
+// `default_workflow` is only used by `#[cfg(test)] mod tests`
+// below; silencing the warning at the import site keeps the
+// production binary warning-free.
+#[allow(unused_imports)]
+use crate::agent::workflow::{breadcrumb_for, default_workflow, load_workflow, read_task, TaskJson, WorkflowDef};
 use crate::db;
 use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
 
@@ -170,8 +174,14 @@ pub async fn build_workflow_ctx(
                 project_id = %loaded.session.project_id,
                 "build_workflow_ctx: project not found; returning ctx with no current_task",
             );
+            // Step 2.2: still consult `load_workflow` (now
+            // parametrized on the session's plugin_name) —
+            // missing project is a task-resolution failure,
+            // not a plugin-resolution failure.
+            let plugin_name = &loaded.session.plugin_name;
+            let project_path = std::path::PathBuf::new();
             return Ok(Some(WorkflowCtx {
-                workflow_def: default_workflow(),
+                workflow_def: load_workflow(plugin_name, &project_path.to_string_lossy()),
                 current_task: None,
             }));
         }
@@ -180,8 +190,19 @@ pub async fn build_workflow_ctx(
     let project_path = std::path::PathBuf::from(&project.path);
     let current_task = resolve_current_task(&project_path).await;
 
+    // Step 2.2 (2026-07-08): load the on-disk plugin
+    // (`<project>/.everlasting/workflow/<plugin_name>/workflow.json`)
+    // instead of the in-memory `default_workflow()` constant.
+    // The loader validates and falls back to `default_workflow()`
+    // on any failure (missing file / malformed JSON / validation
+    // error), so a stale `plugin_name` never breaks the engine —
+    // it just gets the dev workflow until the user picks a real
+    // one via `PluginSelect.vue`.
+    let plugin_name = &loaded.session.plugin_name;
+    let workflow_def = load_workflow(plugin_name, &project.path);
+
     Ok(Some(WorkflowCtx {
-        workflow_def: default_workflow(),
+        workflow_def,
         current_task,
     }))
 }

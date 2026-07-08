@@ -183,6 +183,14 @@ pub fn run() {
             // `workflow_toggled` event lands with Phase 3's
             // state-transition hook (Step 3.1).
             commands::sessions::set_session_workflow_enabled,
+            // W1 (Workflow integration, Step 2.2 — 2026-07-08):
+            // per-session active plugin name. The frontend
+            // `PluginSelect.vue` writes this; `build_workflow_ctx`
+            // reads it on the next IPC entry to reload the
+            // workflow JSON. `list_workflow_plugins` backs the
+            // popover data source.
+            commands::sessions::set_session_plugin_name,
+            commands::sessions::list_workflow_plugins,
             // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
             // `create_task` — seed `.everlasting/tasks/<slug>/`
             // with v1 `task.json` + `prd.md` skeleton. Phase 0

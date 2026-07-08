@@ -333,6 +333,15 @@ export interface SessionSummary {
    *  `DEFAULT 0` for every row, so legacy sessions also land
    *  here until the user actively toggles the feature on). */
   workflow_enabled: boolean;
+  /** W1 (Workflow integration, Step 2.2 — 2026-07-08):
+   *  per-session active workflow plugin name (e.g. `"dev"`).
+   *  Surfaced in the `PluginSelect.vue` chip + popover; read
+   *  by `build_workflow_ctx` on the next IPC entry to call
+   *  `load_workflow(name, project_path)`. Defaults to
+   *  `"dev"` for pre-Step-2.2 sessions via the migration
+   *  column `DEFAULT 'dev'`. Persisted via
+   *  `set_session_plugin_name` IPC. */
+  plugin_name: string;
 }
 
 /** User-facing mode subset — the three modes the MVP UI exposes.

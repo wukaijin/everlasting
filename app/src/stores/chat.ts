@@ -1646,6 +1646,91 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** W1 (Workflow integration, Step 2.2 — 2026-07-08):
+   *  per-session workflow plugin name flip. Mirrors
+   *  `requestSetWorkflowEnabled`'s optimistic-update + IPC
+   *  pattern:
+   *
+   *  1. **No-op fast path**: if the requested name matches
+   *     the current `SessionSummary.plugin_name`, return
+   *     `true` immediately (handles duplicate clicks).
+   *
+   *  2. **Optimistic update**: write the local
+   *     `SessionSummary.plugin_name` BEFORE awaiting the
+   *     IPC so the chip label flips instantly. On IPC
+   *     failure (DB locked / network blip), restore the
+   *     prior value in the catch block.
+   *
+   *  3. **No streaming guard**: matches
+   *     `set_session_workflow_enabled`'s contract — the
+   *     name flip applies on the next turn boundary (the
+   *     next `build_workflow_ctx` call reads the persisted
+   *     name from `SessionRow.plugin_name`). Mid-stream
+   *     flips are safe; the new breadcrumb surfaces on the
+   *     next turn.
+   *
+   *  4. **No validation here**: the backend
+   *     `set_session_plugin_name` IPC rejects empty
+   *     strings with an `AppCommandError` — we surface the
+   *     rejection via `console.error` (matching
+   *     `requestSetWorkflowEnabled`'s no-toast policy; the
+   *     chip's UI feedback IS the rollback).
+   *
+   *  Returns `true` on success (or no-op), `false` on IPC
+   *  failure. */
+  async function requestSetPluginName(
+    sessionId: string,
+    name: string,
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (!summary) return false;
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    if (summary.plugin_name === trimmed) return true;
+
+    const prior = summary.plugin_name;
+    summary.plugin_name = trimmed;
+    try {
+      await invoke("set_session_plugin_name", {
+        sessionId,
+        name: trimmed,
+      });
+      return true;
+    } catch (e) {
+      console.error("Failed to update session plugin_name:", e);
+      summary.plugin_name = prior;
+      return false;
+    }
+  }
+
+  /** W1 (Workflow integration, Step 2.2 — 2026-07-08):
+   *  discover available workflow plugins under
+   *  `<project>/.everlasting/workflow/<dir>/workflow.json`.
+   *  Thin wrapper around the `list_workflow_plugins` IPC.
+   *
+   *  Returns `[]` on IPC failure (frontend logs + falls
+   *  back to the empty list — the `PluginSelect` chip
+   *  still works with just the active plugin showing in
+   *  the trigger; the popover simply has no entries to
+   *  offer).
+   *
+   *  Callers should memoize on `project_id` (the project
+   *  root only changes when the user switches active
+   *  project, which is rare). The `PluginSelect.vue`
+   *  component does the caching. */
+  async function listWorkflowPlugins(projectPath: string): Promise<string[]> {
+    try {
+      const names = await invoke<string[]>("list_workflow_plugins", {
+        projectPath,
+      });
+      return Array.isArray(names) ? names : [];
+    } catch (e) {
+      console.error("list_workflow_plugins failed:", e);
+      return [];
+    }
+  }
+
   return {
     // Reactive state (computed projections)
     messages,
@@ -1725,6 +1810,16 @@ export const useChatStore = defineStore("chat", () => {
     // `ChatInput.vue`); optimistic-update + rollback on IPC
     // failure, no streaming guard, no Yolo gate.
     requestSetWorkflowEnabled,
+    // W1 (Workflow integration, Step 2.2 — 2026-07-08):
+    // per-session active workflow plugin name flip. Wired
+    // by `<PluginSelect>` (mounted next to `<WorkflowToggle>`
+    // in `ChatInput.vue`); mirrors `requestSetWorkflowEnabled`'s
+    // optimistic-update + rollback contract.
+    requestSetPluginName,
+    // W1 Step 2.2: discover available plugins under
+    // `<project>/.everlasting/workflow/`. Backs the
+    // `PluginSelect.vue` popover data source.
+    listWorkflowPlugins,
     // D3 PR2 (2026-06-17): user message edit + cascade delete
     // bridge to the backend `edit_user_message` IPC. Called by
     // `MessageItem.vue`'s Save handler; the parent catches

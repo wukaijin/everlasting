@@ -429,6 +429,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_session_column_if_missing(pool, "workflow_enabled", "INTEGER NOT NULL DEFAULT 0")
         .await?;
 
+    // W1 (Workflow integration, 2026-07-08) Step 2.2: per-session
+    // active workflow plugin name. TEXT NOT NULL DEFAULT 'dev'
+    // so pre-Step-2.2 sessions resolve to the dev plugin on the
+    // first workflow-enabled turn (no migration backfill needed —
+    // the DEFAULT handles it). Mirrors the `workflow_enabled`
+    // additive pattern: existing rows survive the upgrade.
+    add_session_column_if_missing(pool, "plugin_name", "TEXT NOT NULL DEFAULT 'dev'")
+        .await?;
+
     sqlx::query(
         r#"
  CREATE TABLE IF NOT EXISTS session_tool_permissions (

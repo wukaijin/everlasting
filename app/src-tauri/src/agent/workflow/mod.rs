@@ -83,8 +83,8 @@ pub mod inject;
 #[allow(unused_imports)]
 pub use def::{
     allowed_roles, breadcrumb_for, can_transition, default_workflow,
-    delegation_template_for, load_workflow, validate, workflow_json_path, Coordination,
-    Transition, ValidationError, WorkflowDef,
+    delegation_template_for, list_plugins, load_workflow, validate, workflow_json_path,
+    Coordination, Transition, ValidationError, WorkflowDef,
 };
 
 // Re-export the task types + helpers at the workflow root.
@@ -510,5 +510,45 @@ mod tests {
             validate(&w).is_ok(),
             "missing breadcrumb keys are non-blocking (accessor returns empty string)",
         );
+    }
+
+    // --- Phase 2 Step 2.2: list_plugins discovery -----------------------
+
+    #[test]
+    fn list_plugins_returns_empty_when_root_missing() {
+        // No `.everlasting/workflow/` directory → empty list
+        // (matches `load_workflow`'s not-found contract:
+        // no plugins = default dev on next load).
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let path = proj_tmp.path().to_string_lossy().to_string();
+        assert_eq!(list_plugins(&path), Vec::<String>::new());
+    }
+
+    #[test]
+    fn list_plugins_discovers_alphabetical() {
+        // Two plugins written out-of-order; `list_plugins`
+        // must sort alphabetically (deterministic popover
+        // order in `PluginSelect.vue`).
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        write_workflow(proj_tmp.path(), "zulu", "{}");
+        write_workflow(proj_tmp.path(), "alpha", "{}");
+        let path = proj_tmp.path().to_string_lossy().to_string();
+        assert_eq!(list_plugins(&path), vec!["alpha", "zulu"]);
+    }
+
+    #[test]
+    fn list_plugins_ignores_dirs_without_workflow_json() {
+        // A directory without `workflow.json` is not a
+        // plugin — silently ignored (matches the scratch
+        // state contract: empty dirs are typical).
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        write_workflow(proj_tmp.path(), "real", "{}");
+        // Empty sibling dir — no workflow.json
+        std::fs::create_dir_all(
+            proj_tmp.path().join(".everlasting/workflow/scratch"),
+        )
+        .unwrap();
+        let path = proj_tmp.path().to_string_lossy().to_string();
+        assert_eq!(list_plugins(&path), vec!["real"]);
     }
 }

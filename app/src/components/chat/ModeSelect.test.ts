@@ -50,6 +50,7 @@ function seedSession(id: string, mode: "edit" | "plan" | "yolo" = "edit") {
       color_tag: null,
       mode,
       workflow_enabled: false,
+        plugin_name: "dev",
     },
   ];
   store.currentSessionId = id;

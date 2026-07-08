@@ -87,6 +87,13 @@ import ModeSelect from "./ModeSelect.vue";
 // workflow share the chat-input-row real estate per
 // the 2026-07-08 grill decide-position step).
 import WorkflowToggle from "./WorkflowToggle.vue";
+// W1 (Workflow integration, Step 2.2 — 2026-07-08):
+// per-session active workflow plugin chip. Sibling to
+// `<WorkflowToggle>`; only renders when workflow is ON
+// (the chip itself is gated by `workflowEnabled`). The
+// popover lists discovered plugins under
+// `<project>/.everlasting/workflow/`.
+import PluginSelect from "./PluginSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
 import { useChatInputCodeMirror, type FileViewMode } from "../../utils/chatInputCodeMirror";
@@ -574,6 +581,13 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
            when there's a current session) and its IPC
            round-trip; this parent just mounts the tag. -->
       <WorkflowToggle />
+      <!-- W1 Step 2.2: per-session workflow plugin
+           picker. Sibling to `<WorkflowToggle>`; only
+           shows when workflow is ON (the chip is
+           meaningless without an active workflow
+           session). Hidden by the component itself —
+           this parent just mounts the tag. -->
+      <PluginSelect />
       <!-- B3 (PR2) + B4 (Stretch 2, 2026-06-18): merged
            command + skill palette. Anchored to the input row
            (position: relative on the row makes it the

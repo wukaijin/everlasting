@@ -290,6 +290,16 @@ pub struct SessionRow {
     /// machine). Persisted via `set_session_workflow_enabled` IPC
     /// (Step 0.2). DB column is `INTEGER NOT NULL DEFAULT 0`.
     pub workflow_enabled: bool,
+    /// W1 Step 2.2 (2026-07-08): active workflow plugin name
+    /// (e.g. `"dev"`). Defaults to `"dev"` for pre-Step-2.2
+    /// sessions via the migration `DEFAULT 'dev'` clause.
+    /// Persisted via `set_session_plugin_name` IPC. Read by
+    /// `build_workflow_ctx` to call
+    /// `load_workflow(plugin_name, project_path)` instead of
+    /// the in-memory `default_workflow()` constant — the
+    /// plugin author controls the workflow shape by editing
+    /// `<project>/.everlasting/workflow/<name>/workflow.json`.
+    pub plugin_name: String,
 }
 
 /// Summary used by `list_sessions` — includes a preview of the most recent
@@ -328,6 +338,10 @@ pub struct SessionSummary {
     pub mode: Mode,
     /// W1: per-session workflow opt-in (see `SessionRow::workflow_enabled`).
     pub workflow_enabled: bool,
+    /// W1 Step 2.2: per-session active workflow plugin
+    /// name. The sidebar's workflow chip / the top-bar
+    /// `PluginSelect` reads this without an IPC round-trip.
+    pub plugin_name: String,
 }
 
 /// A message as stored in the DB. `content` is JSON (`Vec<ContentBlock>`).
