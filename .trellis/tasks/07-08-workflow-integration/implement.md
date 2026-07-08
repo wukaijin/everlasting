@@ -4,6 +4,15 @@
 >
 > 全程遵守:**每个小步独立提交**;碰现有稳定代码的步(2.4/2.6)做完立即跑全量测试。
 
+## 实施状态(2026-07-08)
+
+| Phase | 状态 | 提交 |
+|---|---|---|
+| Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
+| Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.4) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ⏳ 待开始 | — |
+| Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
+
 ## 前置常量
 
 ```bash
