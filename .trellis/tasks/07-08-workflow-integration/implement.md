@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ⏳ 待开始 | — |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 1/6 | 38391c1 (Step 2.1) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -108,12 +108,13 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.1 — workflow.json 外置 + load_workflow + validate + fallback
 
-- [ ] `WorkflowDef` 加 `#[derive(Deserialize)]`
-- [ ] `load_workflow(name, project_path) -> WorkflowDef`:serde_json 读 `.everlasting/workflow/<name>/workflow.json`
-- [ ] validate(M6):serde 失败 → warn + 回退 default;解析成功 → 校验 states 非空 / initial∈states / transitions from/to∈states / roles_by_state keys⊆states;任一失败回退 default
-- [ ] delegation_templates / breadcrumb 某键缺失 → 空字符串(warn),不阻塞
-- [ ] `default_workflow()` 降为"项目无 workflow.json 或 validate 失败时的兜底"
-- **验证**:`$CD && env $PKG cargo test --lib workflow 2>&1 | tail -20`(改 workflow.json states → breadcrumb 跟着变;malformed JSON → fallback default + warn)
+- [x] `WorkflowDef` 加 `#[derive(Deserialize)]`
+- [x] `load_workflow(name, project_path) -> WorkflowDef`:serde_json 读 `.everlasting/workflow/<name>/workflow.json`
+- [x] validate(M6):serde 失败 → warn + 回退 default;解析成功 → 校验 states 非空 / initial∈states / transitions from/to∈states / roles_by_state keys⊆states;任一失败回退 default
+- [x] delegation_templates / breadcrumb 某键缺失 → 空字符串(warn),不阻塞
+- [x] `default_workflow()` 降为"项目无 workflow.json 或 validate 失败时的兜底"
+- [x] `.everlasting/workflow/dev/workflow.json` 落地(镜像 default_workflow 形状)
+- **验证**:`$CD && env $PKG cargo test --lib workflow 2>&1 | tail -20` ✅ 45 pass(+10 new);合法 JSON 改 states → breadcrumb 跟着变(`load_workflow_valid_json_overrides_default`);malformed JSON → fallback default + warn(`load_workflow_malformed_json_falls_back_with_warn`)
 
 #### Step 2.2 — UI plugin 切换
 
