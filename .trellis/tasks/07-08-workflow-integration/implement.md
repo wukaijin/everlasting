@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 2/6 | 38391c1 (Step 2.1) / b999803 (Step 2.2) |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 3/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -131,12 +131,15 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.3 — plugin agents/ 落地 + loader 加层
 
-- [ ] 创建 `.everlasting/workflow/dev/agents/researcher.md` / `implementer.md` / `checker.md`(frontmatter + body 见 §A.3)
-- [ ] `agent/subagent/loader.rs`:`SubagentSource` 加 `Plugin` 变体(@ 84)
-- [ ] `list()`(@ 623)加 plugin 层 push(优先级:plugin > project > user > builtin)
-- [ ] `merge_with_inheritance`(@ 943)source-agnostic 不改
-- [ ] workflow session 里解析 implementer 用 plugin 的;非 workflow 用全局/builtin
-- **验证**:`$CD && env $PKG cargo test --lib subagent::loader 2>&1 | tail -20`
+- [x] 创建 `.everlasting/workflow/dev/agents/researcher.md` / `implementer.md` / `checker.md`(frontmatter + body)
+- [x] `agent/subagent/loader.rs`:`SubagentSource` 加 `Plugin` 变体 + `as_str`
+- [x] `plugin_agents_dir(workflow_name, project_path)` → `<project>/.everlasting/workflow/<wf>/agents/`
+- [x] `SubagentCache` 加 plugin cache 层(`RwLock<HashMap<(project, wf), CachedScan>>`)
+- [x] `list_with_workflow(project, workflow_name)` + `lookup_with_workflow(project, wf, name)` — workflow-aware variant,优先级 plugin > project > user > builtin
+- [x] `merge_with_inheritance` 不改(source-agnostic)
+- [x] legacy `list()` / `lookup()` 不动;`locate_agent_file` Plugin 分支返回 Err(插件只读)
+- [x] `commands/subagents.rs` 的 `set_subagent_model` Plugin 分支返回 InvalidRequest
+- **验证**:✅ `cargo test --lib subagent::loader` 63 pass(+6 new,plugin 层 / 空名回退 / lookup);`cargo test --lib` 全量 1418 pass,零回归
 
 #### Step 2.4 — 门控下沉 run_subagent(⚠️ 风险最高)
 
