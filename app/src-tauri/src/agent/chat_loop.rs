@@ -570,6 +570,16 @@ pub async fn run_chat_loop(
         // clone the `app_data_dir` parameter that's already in
         // scope on the chat_loop function.
         data_dir: app_data_dir.clone(),
+        // Step 1.5 (07-08-workflow-integration): propagate the
+        // active plugin name so `tools::use_skill` can load
+        // plugin-layer skills (e.g. `wf-overview`). `None` for
+        // non-workflow sessions — the loader treats that as
+        // "no plugin layer, fall through to project/user".
+        // `workflow_ctx` is already in scope (declared on the
+        // `run_chat_loop` signature at line 406) and is
+        // populated by `lib.rs::chat` from the session's
+        // `workflow_enabled` toggle + the active plugin.
+        workflow_name: workflow_ctx.as_ref().map(|c| c.workflow_def.name.clone()),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;

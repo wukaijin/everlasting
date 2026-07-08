@@ -646,18 +646,14 @@ pub async fn find_skill(
 /// layer first when `workflow_name` is `Some`, then project, then
 /// user. `workflow_name = Some("")` is treated as `None`.
 ///
-/// Step 1.1 of `07-08-workflow-integration`. Note: as of this
-/// commit, the only call site is `tools::use_skill` which is still
-/// on the non-workflow path — `ToolContext` does not yet carry
-/// `workflow_ctx` (that's a Phase 2 follow-up: `use_skill` needs
-/// the workflow flag in its tool context). The function is
-/// exported now so the wiring is one-line when `ToolContext`
-/// gains the field.
-///
-/// `#[allow(dead_code)]`: Step 1.1 ships the API surface ahead of
-/// the consumer; the allow is removed in the Phase 2 commit that
-/// wires `use_skill`'s tool context.
-#[allow(dead_code)]
+/// Step 1.1 of `07-08-workflow-integration`. The consumer is
+/// `tools::use_skill::execute`, which now reads
+/// `workflow_name` off the per-turn `ToolContext` and passes
+/// it through here so workflow sessions can load plugin-layer
+/// skills (`wf-overview` / `wf-brainstorm` / `wf-before-dev` /
+/// `wf-check` / `wf-update-spec`) without falling back to
+/// "Skill not found". The Step 1.1 `#[allow(dead_code)]`
+/// was lifted in Step 1.5 (also `07-08-workflow-integration`).
 pub async fn find_skill_with_workflow(
     cache: &SkillCache,
     name: &str,

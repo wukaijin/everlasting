@@ -3809,6 +3809,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
+    workflow_name: None,
     };
 
     // Invoke merge_worker.
@@ -3971,6 +3972,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
+    workflow_name: None,
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -4056,6 +4058,7 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
+    workflow_name: None,
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) =
@@ -4126,6 +4129,7 @@ async fn l3b_discard_worker_happy_path() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
+    workflow_name: None,
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -4195,6 +4199,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
+    workflow_name: None,
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) =

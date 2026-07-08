@@ -3,7 +3,7 @@
   "name": "workflow-integration",
   "title": "Workflow 集成:工作流引擎 + plugin(dev/review)",
   "description": "session 级 opt-in 工作流引擎,engine/content 分离;MVP plugin dev(planning→implement→check→done),愿景 plugin review。设计文档 docs/WORKFLOW-INTEGRATION.md(两轮评审已过)",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

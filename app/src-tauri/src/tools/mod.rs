@@ -257,6 +257,18 @@ pub struct ToolContext {
     /// placeholder since the worktree tools under test don't
     /// depend on the data dir layout.
     pub data_dir: PathBuf,
+    /// Step 1.5 of `07-08-workflow-integration` (2026-07-08):
+    /// the active plugin's workflow name (e.g. `"dev"`), or
+    /// `None` for non-workflow sessions. Wakes up the
+    /// `find_skill_with_workflow` API on the `use_skill` tool
+    /// path so workflow sessions can load plugin-layer skills
+    /// (e.g. `wf-overview`, `wf-brainstorm`); non-workflow
+    /// sessions still fall through to project-overrides-user
+    /// via the `None` branch. `Some("")` is treated as `None`
+    /// by the loader — the chat loop never produces an empty
+    /// string here (it pulls `workflow_def.name` which is
+    /// validated non-empty at plugin-load time).
+    pub workflow_name: Option<String>,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
