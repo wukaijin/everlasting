@@ -79,6 +79,8 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         last_cache_read: null,
         color_tag: null,
         mode: opts.mode ?? "edit",
+        workflow_enabled: false,
+        plugin_name: "dev",
       },
     ];
     store.currentSessionId = opts.id;
@@ -185,6 +187,8 @@ describe("useChatStore — requestSetMode / confirmYolo / cancelYolo (PR2 B7)", 
         last_cache_read: null,
         color_tag: null,
         mode: "edit",
+        workflow_enabled: false,
+        plugin_name: "dev",
       },
     ];
     invokeMock.mockResolvedValue({});

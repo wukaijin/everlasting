@@ -390,6 +390,20 @@ pub async fn run_chat_loop(
     // need only add a final positional `h.question_store.clone()
     // // 29` (or `None` for legacy 28-arg tests).
     question_store: crate::agent::question_store::QuestionStore,
+    // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+    // per-session workflow context. `None` for non-workflow
+    // sessions (zero overhead — the per-turn loop short-
+    // circuits). When `Some(ctx)`, `messages[0]` gets the
+    // state breadcrumb + current-task metadata appended on
+    // every turn (mirrors `memory_recall`'s per-turn
+    // injection seam; same S-B guard — no prepend of
+    // synthetic user messages).
+    //
+    // 29→30 arg. Still appended at the tail per the same
+    // convention as `question_store` (keeps existing
+    // test fixtures on one-line edits when they upgrade
+    // from 29 to 30).
+    workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -556,6 +570,16 @@ pub async fn run_chat_loop(
         // clone the `app_data_dir` parameter that's already in
         // scope on the chat_loop function.
         data_dir: app_data_dir.clone(),
+        // Step 1.5 (07-08-workflow-integration): propagate the
+        // active plugin name so `tools::use_skill` can load
+        // plugin-layer skills (e.g. `wf-overview`). `None` for
+        // non-workflow sessions — the loader treats that as
+        // "no plugin layer, fall through to project/user".
+        // `workflow_ctx` is already in scope (declared on the
+        // `run_chat_loop` signature at line 406) and is
+        // populated by `lib.rs::chat` from the session's
+        // `workflow_enabled` toggle + the active plugin.
+        workflow_name: workflow_ctx.as_ref().map(|c| c.workflow_def.name.clone()),
     };
     let mut current_ctx = turn_ctx;
     let mut last_cwd: Option<PathBuf> = None;
@@ -716,9 +740,24 @@ pub async fn run_chat_loop(
     // canonicalize above, so symlinks are resolved consistently on
     // both sides; `SkillCache` keys by the path string, so the L0
     // + L1 cache slots line up.)
+    //
+    // Step 1.1 (07-08-workflow-integration): when the session is a
+    // workflow session, also consult the plugin layer (highest
+    // precedence: plugin > project > user). The plugin layer reads
+    // `<project>/.everlasting/workflow/<name>/skills/` and silently
+    // falls through to project / user when the plugin dir is absent
+    // — non-workflow callers get the old project-overrides-user
+    // behavior byte-identical (see skill::loader::merge_skill_layers).
     let skill_listing_path = worktree_path.to_string_lossy().to_string();
-    let skill_infos =
-        crate::skill::loader::list_skill_infos(&skill_cache, Some(&skill_listing_path)).await;
+    let skill_wf_name = workflow_ctx
+        .as_ref()
+        .map(|ctx| ctx.workflow_def.name.clone());
+    let skill_infos = crate::skill::loader::list_skill_infos_with_workflow(
+        &skill_cache,
+        Some(&skill_listing_path),
+        skill_wf_name.as_deref(),
+    )
+    .await;
     let skill_blocks = crate::skill::loader::build_skill_listing_block(&skill_infos);
     if !skill_blocks.is_empty() {
         // Insert after the memory user/assistant pair (pos 2) when
@@ -1024,6 +1063,12 @@ pub async fn run_chat_loop(
                 // 2026-06-30 (`ask_user_question`): thread the
                 // parent's QuestionStore. Worker can't reach it.
                 &question_store,
+                // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+                // workflow role-gate enforcement. Pass the
+                // session's WorkflowCtx (None for non-workflow
+                // sessions → gate short-circuits → legacy
+                // dispatch shape preserved).
+                workflow_ctx.as_ref(),
             )
             .await;
         let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -1448,6 +1493,46 @@ pub async fn run_chat_loop(
                             "fts",
                         );
                     }
+                }
+
+                // W1 (Workflow integration, Phase 0 Step 0.5
+                // — 2026-07-08): per-turn breadcrumb injection.
+                // Sibling to the recall-injection block above
+                // (not nested inside `if
+                // !query.trim().is_empty()`) because the
+                // breadcrumb is unconditional on recall state
+                // — even when there's no user query, a
+                // workflow session opening a new turn still
+                // wants the state breadcrumb in front of the
+                // LLM.
+                //
+                // Runs AFTER `inject_recall_into_turn` so the
+                // recall text (when present) lands at the
+                // head of `messages[0]`'s block list
+                // (chronologically first per-turn) and the
+                // breadcrumb sits just below it
+                // (chronologically last).
+                //
+                // Both injectors share `messages[0]` and rely
+                // on the SAME S-B guard (skip-not-prepend);
+                // see
+                // `agent::workflow::inject::append_workflow_breadcrumb`
+                // for the rationale.
+                //
+                // Nested inside `if !skip_persist` because
+                // workers reuse the parent's session_id and
+                // the parent's workflow state is NOT what
+                // the worker should be reminded of. Workers
+                // call this function with `workflow_ctx =
+                // None`, so the inner `if workflow_ctx` gate
+                // would also short-circuit — keeping them
+                // together makes the intent clear in one
+                // block ("non-worker path mutations on
+                // messages[0]").
+                if let Some(ref ctx) = workflow_ctx {
+                    crate::agent::workflow::inject::append_workflow_breadcrumb(
+                        &mut req, ctx,
+                    );
                 }
             }
             req
@@ -2881,6 +2966,32 @@ pub async fn run_chat_loop(
                             let app_handle = app_handle.clone();
                             let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
+                            // W1 Step 2.4: workflow role-gate
+                            // needs WorkflowCtx inside the
+                            // closure (the concurrent batch
+                            // path). Clone like the other
+                            // captured variables so the
+                            // closure doesn't move the
+                            // outer-scope `workflow_ctx`
+                            // (which is also borrowed by the
+                            // per-turn breadcrumb injection
+                            // on line 1532 — moving would
+                            // break that site on iteration
+                            // N+1).
+                            let workflow_ctx = workflow_ctx.clone();
+                            // W1 Step 2.4: workflow role-gate
+                            // needs WorkflowCtx inside the
+                            // closure (the concurrent batch
+                            // path). Clone like the other
+                            // captured variables so the
+                            // closure doesn't move the
+                            // outer-scope `workflow_ctx`
+                            // (which is also borrowed by the
+                            // per-turn breadcrumb injection
+                            // on line 1532 — moving would
+                            // break that site on iteration
+                            // N+1).
+                            let workflow_ctx = workflow_ctx.clone();
                             let subagent_cache = subagent_cache.clone();
                             let app_data_dir = app_data_dir.clone();
                             // 2026-06-30 (`ask_user_question` task):
@@ -2988,6 +3099,12 @@ pub async fn run_chat_loop(
                                         // STRUCTURALLY_DISABLED) — pass-
                                         // through only.
                                         &question_store,
+                                        // W1 Step 2.4: workflow
+                                        // role-gate. Same as the
+                                        // forced-dispatch path: pass
+                                        // the session's WorkflowCtx
+                                        // (None for non-workflow).
+                                        workflow_ctx.as_ref(),
                                     )
                                     .await;
                                 let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -3262,6 +3379,111 @@ pub async fn run_chat_loop(
                             continue;
                         }
 
+                        // 2026-07-08 (`07-08-workflow-integration`
+                        // Phase 3 Step 3.1): block the current turn
+                        // on a workflow state-transition request
+                        // card. Mirrors the `request_mode_change`
+                        // interception branch above — same blocking-
+                        // tool pattern, same
+                        // `name == "..."` short-circuit BEFORE the
+                        // normal `execute_tool` path.
+                        //
+                        // The tool needs (a) the
+                        // `current_state` + `current_slug` from
+                        // the active workflow session's
+                        // `WorkflowCtx.current_task` (read once per
+                        // turn at the top of the loop), (b) the
+                        // `QuestionStore` + `ChatEventSink
+                        // ::emit_task_state_transition` (already
+                        // threaded through), and (c) the DB pool for
+                        // audit. The actual `task.json` mutation +
+                        // `from → to` Rust hook dispatch happens in
+                        // the `resolve_task_state_transition` IPC
+                        // handler (single source of truth for
+                        // state-transition side effects — see design
+                        // §5.2 M-A / Q9). The tool stays a "request
+                        // → wait → return" carrier.
+                        //
+                        // `is_parallel_eligible` does NOT include
+                        // this name → mixed batches fall to the
+                        // serial path (this branch) automatically
+                        // (mirrors the `request_mode_change`
+                        // posture).
+                        //
+                        // We accept +1 turn counter cost for the
+                        // blocking tool's recover (v1 trade-off —
+                        // matches the request_mode_change branch).
+                        if name == "request_task_state_transition" {
+                            let tool_exec_start = Instant::now();
+                            // Pull the workflow session's current
+                            // task state + slug for the noop check.
+                            // `build_workflow_ctx` is called once
+                            // per turn at the top of the loop; we
+                            // reuse the snapshot here. When the
+                            // session is non-workflow the
+                            // `WorkflowCtx` is `None` and the tool
+                            // gates with `is_error: true` (the
+                            // structured message
+                            // "no active workflow task").
+                            let (current_state, current_slug) =
+                                match &workflow_ctx {
+                                    Some(ctx) => (
+                                        ctx.current_task.as_ref().map(|t| t.status),
+                                        ctx.current_task.as_ref().map(|t| t.slug.clone()),
+                                    ),
+                                    None => (None, None),
+                                };
+                            let (content, is_error, _update, exit_code) =
+                                crate::tools::request_task_state_transition::execute_blocking(
+                                    input,
+                                    &session_id,
+                                    id,
+                                    current_state,
+                                    current_slug,
+                                    &db,
+                                    &question_store,
+                                    &sink,
+                                    &token,
+                                )
+                                .await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    exit_code,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for request_task_state_transition (non-fatal)");
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+
                         // B6 Subagent (2026-06-19): intercept dispatch_subagent
                         // BEFORE the normal execute_tool path. This is an
                         // agent-layer control-flow tool — it needs the parent
@@ -3335,6 +3557,12 @@ pub async fn run_chat_loop(
                                     // (STRUCTURALLY_DISABLED) but the signature
                                     // requires it.
                                     &question_store,
+                                    // W1 Step 2.4: workflow role-gate.
+                                    // Serial dispatch — same contract
+                                    // as the concurrent + forced paths:
+                                    // pass the session's WorkflowCtx
+                                    // (None for non-workflow sessions).
+                                    workflow_ctx.as_ref(),
                                 )
                                 .await;
                             let duration_ms = tool_exec_start.elapsed().as_millis();

@@ -30,6 +30,7 @@ use crate::agent::permissions::PermissionAskPayload;
 use crate::agent::permissions::PermissionStore;
 use crate::agent::question_store::ModeChangePayload;
 use crate::agent::question_store::QuestionStore;
+use crate::agent::question_store::TaskStateTransitionPayload;
 use crate::agent::subagent::SubagentCache;
 use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
 use crate::memory::MemoryCache;
@@ -618,6 +619,27 @@ pub trait ChatEventSink: Send + Sync + 'static {
     fn emit_mode_change_request(&self, _payload: &ModeChangePayload) {
         // Silent no-op — see the doc comment above.
     }
+    /// Emit a `TaskStateTransitionPayload` on the
+    /// `task:state:transition:request` channel (2026-07-08,
+    /// task `07-08-workflow-integration` Phase 3 Step 3.1).
+    /// Used by `tools/request_task_state_transition::execute_blocking`
+    /// to push the pending state-transition request to the
+    /// frontend so the user can render an inline
+    /// `<RequestTaskStateTransitionCard>` and allow / deny.
+    /// Default impl is a **silent** no-op (same shape as
+    /// `emit_tool_question` / `emit_mode_change_request` —
+    /// a noisy warn on every call would spam logs if a future
+    /// sink forgot to override). Only `AppHandleSink`
+    /// (production) and the test `MockEmitter` implement it for
+    /// real; `SubagentBufferSink` inherits the no-op — but
+    /// `request_task_state_transition` is structurally disabled
+    /// for workers (see
+    /// `agent::subagent::STRUCTURALLY_DISABLED`), so the worker
+    /// never reaches this method; the no-op is "defense in
+    /// depth" against a future config that re-enables it.
+    fn emit_task_state_transition(&self, _payload: &TaskStateTransitionPayload) {
+        // Silent no-op — see the doc comment above.
+    }
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in
@@ -669,6 +691,21 @@ impl ChatEventSink for AppHandleSink {
         // `kind: "mode_change"` discriminator.
         if let Err(e) = self.app.emit("mode:change:request", payload.clone()) {
             tracing::warn!(error = %e, "AppHandleSink: mode:change:request emit failed");
+        }
+    }
+    fn emit_task_state_transition(&self, payload: &TaskStateTransitionPayload) {
+        // 2026-07-08 (`07-08-workflow-integration` Phase 3
+        // Step 3.1): production `AppHandleSink` forwards the
+        // task-state-transition payload to the Tauri
+        // `task:state:transition:request` channel. The frontend
+        // will listen on this channel and insert the payload
+        // into `questionCardsStore.pendingBySession` under
+        // the `kind: "task_state_transition"` discriminator.
+        if let Err(e) = self
+            .app
+            .emit("task:state:transition:request", payload.clone())
+        {
+            tracing::warn!(error = %e, "AppHandleSink: task:state:transition:request emit failed");
         }
     }
 }

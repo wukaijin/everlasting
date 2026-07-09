@@ -197,6 +197,7 @@ mod tests {
             db: sqlx::SqlitePool::connect_lazy("sqlite::memory:").expect("lazy pool"),
             project_id: "/repo/proj".to_string(),
             data_dir: std::path::PathBuf::from("/repo"),
+        workflow_name: None,
         }
     }
 

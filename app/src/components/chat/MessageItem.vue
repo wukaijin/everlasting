@@ -46,6 +46,7 @@ import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import RequestModeChangeCard from "./RequestModeChangeCard.vue";
+import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue";
 import UiCard from "./UiCard.vue";
 import FileInjectionsHint from "./FileInjectionsHint.vue";
 import MessageActionsMenu from "./MessageActionsMenu.vue";
@@ -55,7 +56,9 @@ import Icon from "../Icon.vue";
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   REQUEST_MODE_CHANGE_TOOL_NAME,
+  REQUEST_TASK_STATE_TRANSITION_TOOL_NAME,
 } from "../../stores/questionCards.types";
+import type { WorkflowState } from "../../stores/questionCards.types";
 import { USE_UI_TOOL_NAME } from "./uiCard.types";
 import {
   useQuestionCardsStore,
@@ -530,6 +533,168 @@ function modeChangeCardPropsFor(tc: { id: string; name: string }):
   return resolveModeChangeCardProps(tc.id);
 }
 
+// --- task_state_transition card dispatch (07-09-workflow-transition-card) --
+// Mirrors the mode_change dispatch above. The envelope shapes differ:
+//   allowed  → `{"allowed": true, "prev_state": "...", "new_state": "..."}`
+//   denied   → `{"cancelled_by_user": true, "target_state": "..."}`
+//   cancelled by session → `{"cancelled_by_session": true}`
+// (vs mode_change's prev_mode/new_mode + no target_state on deny).
+
+/** Parse a `request_task_state_transition` tool_result envelope
+ *  (historical / rehydrate path). Returns the discriminated shape
+ *  or `undefined` when the content isn't a recognized envelope. */
+function parseTaskStateTransitionEnvelope(
+  content: string,
+):
+  | { allowed: true; prevState: WorkflowState; newState: WorkflowState }
+  | { denied: true; targetState: WorkflowState }
+  | { cancelled: true }
+  | undefined {
+  if (!content) return undefined;
+  const trimmed = content.trim();
+  if (trimmed[0] !== "{") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const obj = parsed as Record<string, unknown>;
+    if (obj.cancelled_by_session === true) {
+      return { cancelled: true };
+    }
+    if (obj.cancelled_by_user === true) {
+      const ts = obj.target_state;
+      if (ts === "planning" || ts === "implement" || ts === "check" || ts === "done") {
+        return { denied: true, targetState: ts };
+      }
+      return undefined;
+    }
+    if (obj.allowed === true) {
+      const ns = obj.new_state;
+      const ps = obj.prev_state;
+      // prev_state may be "" when the backend had no current task;
+      // fall back to new_state so the comparison row still renders.
+      const newState =
+        ns === "planning" || ns === "implement" || ns === "check" || ns === "done"
+          ? ns
+          : undefined;
+      if (newState === undefined) return undefined;
+      const prevState =
+        ps === "planning" || ps === "implement" || ps === "check" || ps === "done"
+          ? ps
+          : newState;
+      return { allowed: true, prevState, newState };
+    }
+  } catch {
+    // not JSON, fall through
+  }
+  return undefined;
+}
+
+/** Resolve the per-tool-call state for the
+ *  `<RequestTaskStateTransitionCard>` dispatch. Returns `null` when
+ *  no card should render (defensive guard — mirrors the
+ *  ask_user_question / mode_change analogues). The lookup walks:
+ *    1. live `pendingBySession` keyed by `toolUseId` AND
+ *       `kind === "task_state_transition"`;
+ *    2. DB tool_result content parsed for the envelope;
+ *    3. `null` (no card). */
+function resolveTaskStateTransitionCardState(toolUseId: string): {
+  state: "pending" | "allowed" | "denied";
+  targetState: WorkflowState;
+  currentState: WorkflowState | null;
+  slug: string;
+  reason: string | null;
+} | null {
+  // 1. Live pending — match by session + tool_use_id.
+  const sid = chatStore.currentSessionId;
+  if (sid) {
+    const pending = questionCardsStore.getPending(sid);
+    if (
+      pending &&
+      pending.kind === "task_state_transition" &&
+      pending.payload.tool_use_id === toolUseId
+    ) {
+      const p = pending.payload;
+      return {
+        state: "pending",
+        targetState: p.target_state,
+        currentState: p.current_state ?? null,
+        slug: p.slug ?? "",
+        reason: p.reason ?? null,
+      };
+    }
+  }
+  // 2. Historical — look up the matching tool_result (rehydrate).
+  const tr = getToolResult(props.message, toolUseId);
+  if (tr) {
+    const envelope = parseTaskStateTransitionEnvelope(tr.content);
+    if (envelope && "denied" in envelope) {
+      return {
+        state: "denied",
+        targetState: envelope.targetState,
+        currentState: null,
+        slug: "",
+        reason: null,
+      };
+    }
+    if (envelope && "allowed" in envelope) {
+      return {
+        state: "allowed",
+        targetState: envelope.newState,
+        currentState: envelope.prevState,
+        slug: "",
+        reason: null,
+      };
+    }
+    // cancelled-by-session: render nothing (no card for a session-
+    // cancel; the turn ended abnormally).
+  }
+  return null;
+}
+
+function resolveTaskStateTransitionCardProps(toolUseId: string):
+  | {
+      sessionId: string;
+      toolUseId: string;
+      targetState: WorkflowState;
+      currentState: WorkflowState | null;
+      slug: string;
+      reason: string | null;
+      state: "pending" | "allowed" | "denied";
+    }
+  | undefined {
+  const resolved = resolveTaskStateTransitionCardState(toolUseId);
+  if (!resolved) return undefined;
+  const sid = chatStore.currentSessionId ?? "";
+  return {
+    sessionId: sid,
+    toolUseId,
+    targetState: resolved.targetState,
+    currentState: resolved.currentState,
+    slug: resolved.slug,
+    reason: resolved.reason,
+    state: resolved.state,
+  };
+}
+
+/** Cached per-tool-call prop resolver used by the template's
+ *  `v-for`. Mirrors `modeChangeCardPropsFor`. */
+function taskStateTransitionCardPropsFor(tc: { id: string; name: string }):
+  | {
+      sessionId: string;
+      toolUseId: string;
+      targetState: WorkflowState;
+      currentState: WorkflowState | null;
+      slug: string;
+      reason: string | null;
+      state: "pending" | "allowed" | "denied";
+    }
+  | undefined {
+  if (tc.name !== REQUEST_TASK_STATE_TRANSITION_TOOL_NAME) return undefined;
+  return resolveTaskStateTransitionCardProps(tc.id);
+}
+
 // --- Streaming state ----------------------------------------------------
 // D3 PR2: the `MessageActionsMenu` greys out its trigger entirely
 // when a stream is in flight on the same session. We read the
@@ -950,6 +1115,18 @@ const showEditedLabel = computed<boolean>(
         <RequestModeChangeCard
           v-if="modeChangeCardPropsFor(tc) !== undefined"
           v-bind="modeChangeCardPropsFor(tc)!"
+        />
+        <!--
+          2026-07-09 (`07-09-workflow-transition-card`): per-tool
+          dispatch for `request_task_state_transition`. Inline
+          `<RequestTaskStateTransitionCard>` mounts directly BELOW
+          the matching ToolCallCard (sibling within the same
+          `msg__tools` flex column). Same no-portal / no-modal UI
+          red line as the two cards above.
+        -->
+        <RequestTaskStateTransitionCard
+          v-if="taskStateTransitionCardPropsFor(tc) !== undefined"
+          v-bind="taskStateTransitionCardPropsFor(tc)!"
         />
         <UiCard v-if="tc.name === USE_UI_TOOL_NAME" :call="tc" />
       </template>

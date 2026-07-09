@@ -990,3 +990,124 @@ async fn tier4_worker_run_grant_does_not_short_circuit_for_compound() {
          run-grant — expected a permission:ask emission (R1 worker coverage)"
     );
 }
+
+// =====================================================================
+// Isolated-worker inside-anchor regression (2026-07-09 bug fix)
+// =====================================================================
+
+/// Regression: an isolated worker's `cwd` is its worktree path
+/// (`<app_data_dir>/worktrees/.../worker/<run_id>`), NOT the project
+/// root. But the worker reads files by the project root's absolute
+/// path (e.g. `/usr/local/code/.../src/main.rs`). Pre-fix the Tier 4
+/// Path branch anchored the `is_within_root` inside check on
+/// `ctx.cwd` (the worktree) → `inside = false` → every read-only
+/// tool went to `ask_path` → the user saw a permission modal for
+/// each `read_file` / `grep` / `list_dir` call inside the project.
+///
+/// Fix: the inside anchor is `ctx.worktree_path` (project root),
+/// matching the Tier 2.5 sensitive-path check. This test pins that
+/// behavior: a PermissionContext with `cwd ≠ worktree_path` (the
+/// isolated-worker shape) reading a project-root file must return
+/// `Decision::Allow` WITHOUT emitting `permission:ask`. Wrapped in a
+/// 5s timeout so a regression (inside=false → ask_path waits oneshot
+/// 120s) fails fast instead of hanging the suite.
+#[tokio::test]
+async fn isolated_worker_read_project_root_skips_ask() {
+    use crate::agent::permissions::{new_permission_store, PermissionContext};
+    let pool = super::tests_common::worker_test_pool().await;
+    let store = new_permission_store();
+    let sink = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+    let sink_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink.clone();
+    let token = tokio_util::sync::CancellationToken::new();
+
+    // project root (the original repo the user opened)
+    let project = tempfile::tempdir().unwrap();
+    let project_root = project.path().canonicalize().unwrap();
+    // a file inside the project root the worker wants to read
+    let src_file = project_root.join("src/main.rs");
+    std::fs::create_dir_all(src_file.parent().unwrap()).unwrap();
+    std::fs::write(&src_file, "fn main() {}").unwrap();
+
+    // the worker's worktree — a SIBLING directory tree, simulating
+    // `<app_data_dir>/worktrees/.../worker/<run_id>`. The key property
+    // under test: `cwd` is NOT under `project_root` lexically.
+    let worktree = tempfile::tempdir().unwrap();
+    let worker_cwd = worktree.path().canonicalize().unwrap();
+
+    let ctx = PermissionContext {
+        session_id: "parent-sess".to_string(),
+        mode: crate::db::Mode::Edit,
+        cwd: worker_cwd.clone(),
+        is_worker: true,
+        worker_run_id: Some("worker-iso-regression".to_string()),
+        run_grants: None,
+        // worktree_path = project root (the inside-anchor, per fix)
+        worktree_path: project_root.clone(),
+    };
+
+    // The worker reads the project-root file by absolute path (the
+    // real-world shape: plugin researcher.md prompts the LLM to read
+    // the project's source files). Pre-fix this returned Ask/Deny.
+    let decision = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent::permissions::check::check(
+            &ctx,
+            &store,
+            &pool,
+            &sink_arc,
+            "read_file",
+            // absolute path inside project_root — the LLM-emitted form
+            &serde_json::json!({"path": src_file}),
+            "tu-iso-worker",
+            &token,
+        ),
+    )
+    .await
+    .expect("regression: inside=false would hang on ask_path oneshot 120s");
+
+    assert!(
+        matches!(decision, crate::agent::permissions::Decision::Allow),
+        "isolated worker reading a project-root file must Allow \
+         (inside-anchor = worktree_path = project root)"
+    );
+    assert!(
+        sink.asks.lock().unwrap().is_empty(),
+        "isolated worker reading a project-root file must NOT emit \
+         permission:ask"
+    );
+
+    // Same invariant for the other read-only path tools (grep / glob /
+    // list_dir). One representative assertion per tool is enough — they
+    // all share the Tier 4 Path branch.
+    for (tool, input) in [
+        ("grep", serde_json::json!({"path": project_root.join("src")})),
+        ("glob", serde_json::json!({"path": project_root})),
+        ("list_dir", serde_json::json!({"path": project_root})),
+    ] {
+        let sink2 = std::sync::Arc::new(super::tests_common::CaptureAskSink::default());
+        let sink2_arc: std::sync::Arc<dyn crate::state::ChatEventSink> = sink2.clone();
+        let decision = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::agent::permissions::check::check(
+                &ctx,
+                &store,
+                &pool,
+                &sink2_arc,
+                tool,
+                &input,
+                &format!("tu-iso-worker-{tool}"),
+                &token,
+            ),
+        )
+        .await
+        .expect("regression: inside=false would hang on ask_path oneshot 120s");
+        assert!(
+            matches!(decision, crate::agent::permissions::Decision::Allow),
+            "isolated worker {tool} on project-root path must Allow"
+        );
+        assert!(
+            sink2.asks.lock().unwrap().is_empty(),
+            "isolated worker {tool} on project-root path must NOT emit permission:ask"
+        );
+    }
+}

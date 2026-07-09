@@ -27,6 +27,7 @@ pub mod read_file;
 pub mod read_guard;
 pub mod remember;
 pub mod request_mode_change;
+pub mod request_task_state_transition;
 pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
@@ -180,6 +181,20 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // Worker subagents are blocked from this tool via
         // STRUCTURALLY_DISABLED.
         request_mode_change::definition(),
+        // request_task_state_transition (Phase 3 Step 3.1 of
+        // `07-08-workflow-integration`, 2026-07-08): LLM-
+        // initiated workflow state-transition request. Same
+        // blocking-tool interception pattern as
+        // request_mode_change (chat_loop.rs recognizes the
+        // tool name and calls `execute_blocking` directly).
+        // Worker subagents are blocked from this tool via
+        // STRUCTURALLY_DISABLED. The on-disk `task.json`
+        // mutation happens in the resolve IPC handler (apply
+        // BEFORE resolve), with the `from → to` Rust hook
+        // dispatch (trigger_spec_distillation on Check→Done,
+        // preflight_implement_check on Planning→Implement) —
+        // see design §5.2 / Q9.
+        request_task_state_transition::definition(),
     ]
 }
 
@@ -257,6 +272,18 @@ pub struct ToolContext {
     /// placeholder since the worktree tools under test don't
     /// depend on the data dir layout.
     pub data_dir: PathBuf,
+    /// Step 1.5 of `07-08-workflow-integration` (2026-07-08):
+    /// the active plugin's workflow name (e.g. `"dev"`), or
+    /// `None` for non-workflow sessions. Wakes up the
+    /// `find_skill_with_workflow` API on the `use_skill` tool
+    /// path so workflow sessions can load plugin-layer skills
+    /// (e.g. `wf-overview`, `wf-brainstorm`); non-workflow
+    /// sessions still fall through to project-overrides-user
+    /// via the `None` branch. `Some("")` is treated as `None`
+    /// by the loader — the chat loop never produces an empty
+    /// string here (it pulls `workflow_def.name` which is
+    /// validated non-empty at plugin-load time).
+    pub workflow_name: Option<String>,
 }
 
 /// Optional per-tool update to the tool context. The shell tool uses
@@ -396,7 +423,14 @@ async fn execute_tool_inner(
             // `execute_tool`'s `tokio::select!` cancel wrapper, so
             // the loop's RULE-A-004 ordering (audit AFTER cancel
             // check) automatically protects the checklist too.
-            let (out, is_err) = update_checklist::execute(input, &ctx.checklist).await;
+            //
+            // Phase 2 Step 2.6: when `ctx.workflow_name.is_some()`,
+            // the items are persisted to `task.json.items` (see
+            // `update_checklist::maybe_persist_to_task_json`). The
+            // in-memory handle is always updated — same shape as
+            // pre-Step-2.6.
+            let (out, is_err) =
+                update_checklist::execute(input, &ctx.checklist, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         "run_background_shell" => {

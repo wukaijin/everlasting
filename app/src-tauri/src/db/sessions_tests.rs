@@ -28,8 +28,9 @@ use super::{
     sessions::{
         create_session, delete_messages_by_session, delete_session, find_message_id_by_seq,
         insert_system_event, list_sessions, load_session, persist_turn, record_tool_duration,
-        set_worktree_state, touch_session, update_last_turn_usage, update_message_latency,
-        update_session_cwd, update_session_model_id, MessageLatency,
+        set_session_plugin_name, set_session_workflow_enabled, set_worktree_state, touch_session,
+        update_last_turn_usage, update_message_latency, update_session_cwd,
+        update_session_model_id, MessageLatency,
     },
     types::WorktreeState,
 };
@@ -353,6 +354,136 @@ async fn update_session_cwd_persists() {
         .unwrap();
     let reloaded = load_session(&pool, &session.id).await.unwrap().unwrap();
     assert_eq!(reloaded.session.current_cwd, "/tmp/end");
+}
+
+// ---------------------------------------------------------------------------
+// W1 (Workflow integration, Step 0.2 — 2026-07-08):
+// `set_session_workflow_enabled` round-trip — locks the
+// per-session opt-in column flip + load_session rehydrate.
+// Symmetric to `set_worktree_state` + `update_session_cwd`:
+// a plain setter that mirrors `SessionRow.workflow_enabled`
+// across the IPC boundary.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_session_workflow_enabled_round_trip() {
+    let pool = test_pool().await;
+    let session = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // New session: workflow_enabled defaults to false (per the
+    // `INTEGER NOT NULL DEFAULT 0` migration probe).
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert!(
+        !loaded.session.workflow_enabled,
+        "new session defaults to workflow_enabled=false"
+    );
+
+    // Flip ON.
+    set_session_workflow_enabled(&pool, &session.id, true)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert!(loaded.session.workflow_enabled);
+    // `list_sessions` rehydrate must also surface the new value
+    // — the sidebar / per-session IPC consumer reads from
+    // `SessionSummary.workflow_enabled`.
+    let listed = list_sessions(&pool, DEFAULT_PROJECT_ID)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == session.id)
+        .expect("session in list");
+    assert!(listed.workflow_enabled);
+
+    // Flip back OFF.
+    set_session_workflow_enabled(&pool, &session.id, false)
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert!(!loaded.session.workflow_enabled);
+}
+
+#[tokio::test]
+async fn set_session_workflow_enabled_on_missing_session_is_noop() {
+    // Symmetric to `update_session_model_id_on_missing_session_is_noop`:
+    // an unknown `session_id` is a silent no-op so a stale
+    // frontend (caching a deleted session's id) doesn't error.
+    let pool = test_pool().await;
+    set_session_workflow_enabled(&pool, "nonexistent-session-id", true)
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// W1 (Workflow integration, Step 2.2 — 2026-07-08):
+// `set_session_plugin_name` round-trip — locks the
+// per-session plugin_name flip + load_session rehydrate +
+// `list_sessions` rehydrate (the `PluginSelect.vue`
+// popover reads from `SessionSummary.plugin_name`).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_session_plugin_name_round_trip() {
+    let pool = test_pool().await;
+    let session = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // New session: plugin_name defaults to "dev" (per the
+    // migration `DEFAULT 'dev'` probe).
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert_eq!(
+        loaded.session.plugin_name, "dev",
+        "new session defaults to plugin_name=\"dev\""
+    );
+
+    // Switch to a (hypothetical) review plugin.
+    set_session_plugin_name(&pool, &session.id, "review")
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.plugin_name, "review");
+    let listed = list_sessions(&pool, DEFAULT_PROJECT_ID)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == session.id)
+        .expect("session in list");
+    assert_eq!(
+        listed.plugin_name, "review",
+        "list_sessions rehydrate must surface the new plugin_name"
+    );
+
+    // Switch back to dev.
+    set_session_plugin_name(&pool, &session.id, "dev")
+        .await
+        .unwrap();
+    let loaded = load_session(&pool, &session.id).await.unwrap().unwrap();
+    assert_eq!(loaded.session.plugin_name, "dev");
+}
+
+#[tokio::test]
+async fn set_session_plugin_name_on_missing_session_is_noop() {
+    // Symmetric to the workflow_enabled equivalent:
+    // an unknown session_id is a silent no-op.
+    let pool = test_pool().await;
+    set_session_plugin_name(&pool, "nonexistent-session-id", "dev")
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

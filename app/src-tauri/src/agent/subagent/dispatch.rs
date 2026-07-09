@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::workflow::WorkflowCtx;
 use crate::db::subagent_overrides::get_subagent_model_override;
 use crate::llm::Provider;
 use crate::memory::MemoryCache;
@@ -331,6 +332,18 @@ pub(crate) async fn run_subagent(
     // `filter_tools_for_subagent`), so the store is unused on
     // this path.
     parent_question_store: &crate::agent::question_store::QuestionStore,
+    // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+    // the workflow session's context. The role-gate
+    // check (see `check_workflow_role_gate` below) reads
+    // `workflow_def.roles_by_state` and
+    // `current_task.status` from this param. `None` for
+    // non-workflow sessions — the gate short-circuits
+    // (legacy dispatch shape preserved end-to-end).
+    //
+    // Step 2.5 will read `workflow_def.delegation_templates`
+    // from the same param to inject the delegation
+    // template; no signature change at Step 2.5.
+    workflow_ctx: Option<&WorkflowCtx>,
 ) -> (String, bool, bool, Option<i32>) {
     // Parse the LLM-supplied { subagent, task } arguments.
     let subagent_name = input.get("subagent").and_then(|v| v.as_str()).unwrap_or("");
@@ -349,16 +362,42 @@ pub(crate) async fn run_subagent(
     // builtin precedence). Replaces the static `lookup_subagent`.
     // Unknown name → error tool_result (keeps the
     // tool_use/tool_result pairing invariant).
-    let Some(loaded) = subagent_cache.lookup(&project_path, subagent_name).await else {
+    //
+    // W1 (Workflow integration, Step 2.7 — 2026-07-09):
+    // workflow sessions consult the *workflow-aware* lookup so the
+    // plugin `.everlasting/workflow/<wf>/agents/` layer
+    // (Step 2.3, highest precedence) is honored. Before this the
+    // dispatch path always used the legacy `lookup`, so a plugin's
+    // `researcher.md` / `implementer.md` / `checker.md` was never
+    // loaded — the role-gate (Step 2.4) would correctly *allow* the
+    // role but the worker fell back to the builtin/project/user body.
+    // Non-workflow callers (`workflow_ctx = None`) keep the legacy
+    // path byte-for-byte.
+    let wf_name = workflow_ctx.map(|c| c.workflow_def.name.as_str());
+    let Some(loaded) = (match wf_name {
+        Some(wf) => {
+            subagent_cache
+                .lookup_with_workflow(&project_path, Some(wf), subagent_name)
+                .await
+        }
+        None => subagent_cache.lookup(&project_path, subagent_name).await,
+    }) else {
         // Build a friendly "available" hint by re-listing (cheap;
         // the cache is mtime-fenced so this is a HashMap lookup
         // when nothing changed since the dispatch_def was built).
-        let available: Vec<String> = subagent_cache
-            .list(&project_path)
-            .await
-            .into_iter()
-            .map(|l| l.def.name)
-            .collect();
+        // Same workflow/legacy split as the lookup above so the
+        // hint reflects the plugin layer the caller is dispatching in.
+        let available: Vec<String> = match wf_name {
+            Some(wf) => {
+                subagent_cache
+                    .list_with_workflow(&project_path, Some(wf))
+                    .await
+            }
+            None => subagent_cache.list(&project_path).await,
+        }
+        .into_iter()
+        .map(|l| l.def.name)
+        .collect();
         let content = format!(
             "Unknown subagent '{}'. Available: {}.",
             subagent_name,
@@ -375,6 +414,40 @@ pub(crate) async fn run_subagent(
         let content = "Missing or empty 'task' parameter. The delegation task must be a                        non-empty string."
             .to_string();
         return (content, true, false, None);
+    }
+
+    // W1 (Workflow integration, Step 2.4 — 2026-07-08):
+    // workflow state-machine gate. Pure check extracted
+    // into `check_workflow_role_gate` (see below) so the
+    // logic is unit-testable without standing up the full
+    // `run_subagent` signature.
+    //
+    // **Why a gate**: the workflow session is a guided
+    // state machine — the agent SHOULD follow the
+    // breadcrumb (planning → implement → check → done)
+    // and dispatch the role that matches the current
+    // state. Without a gate, an agent in `planning` could
+    // dispatch `implementer` early and skip the research
+    // step, breaking the workflow contract.
+    //
+    // **One-shot bypass via `force: true`**: the LLM (or
+    // a power-user via the dispatch tool UI) can pass
+    // `force: true` to override the gate for a single
+    // dispatch — useful when the user explicitly wants to
+    // run a researcher task while in `implement` (e.g.
+    // "go back and re-research this decision"). The
+    // bypass is one-shot (no persistence) and logs a
+    // `warn!` so the audit log captures the overstep.
+    //
+    // **Non-workflow callers / no active task**:
+    // `workflow_ctx = None` OR `current_task = None`
+    // short-circuits the gate — same as pre-Step-2.4
+    // behavior (legacy dispatch shape preserved
+    // end-to-end).
+    if let Some(denial) =
+        check_workflow_role_gate(workflow_ctx, subagent_name, input)
+    {
+        return (denial, true, false, None);
     }
 
     // L3b (2026-06-27): resolve the worktree-isolation decision.
@@ -568,8 +641,33 @@ pub(crate) async fn run_subagent(
     // C (2026-06-30): append an isolation environment hint to the
     // delegation task when the worker runs isolated (shared: raw task).
     let final_task = task_with_env_hint(task, isolated, &worker_run_id);
-    let worker_messages =
+    let mut worker_messages =
         build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await;
+
+    // W1 (Workflow integration, Step 2.5 — 2026-07-08):
+    // append the filled delegation template to
+    // `worker_messages[0]`'s block list. Only fires when:
+    // - workflow session (`workflow_ctx.is_some()`)
+    // - plugin defines a template for the dispatched role
+    //
+    // The helper handles both guards (`append_delegation_template`
+    // returns `false` on `None` template; the S-B guard inside
+    // catches the not-a-user-Blocks-message case). On
+    // non-workflow callers OR no plugin template → no-op
+    // (legacy behavior preserved).
+    //
+    // **Per M-E**: this is a dispatch-turn-only injection.
+    // The parent's chat_loop's messages[0] is untouched; we
+    // only mutate the worker's messages[0]. The worker
+    // sees the template as part of its initial context.
+    let filled = workflow_ctx.and_then(|ctx| {
+        crate::agent::workflow::compute_delegation_template(
+            ctx,
+            &project_path,
+            subagent_name,
+        )
+    });
+    crate::agent::workflow::append_delegation_template(&mut worker_messages, filled);
 
     // task 07-03-subagent-frontmatter-model: resolve the worker's
     // provider / context_window / display from `def.model` via
@@ -944,6 +1042,12 @@ pub(crate) async fn run_subagent(
         // re-enables the tool for workers, the same store is
         // already wired in (no further changes needed).
         parent_question_store.clone(),
+        // W1 (Workflow integration, Phase 0 Step 0.5
+        // — 2026-07-08): worker nested call passes `None`
+        // — the worker focuses on its dispatched task, NOT
+        // the parent session's workflow state. Workflow
+        // breadcrumbs stay parent-scoped.
+        None,
     ))
     .await;
 
@@ -1522,6 +1626,75 @@ async fn create_worker_worktree(
     .map_err(|e| e.to_string())?;
 
     Ok(worker_wt_path)
+}
+
+// ---------------------------------------------------------------------------
+// W1 (Workflow integration, Step 2.4 — 2026-07-08):
+// pure workflow role-gate. Lives outside `run_subagent`
+// so the gate logic is unit-testable without standing up
+// the 25-arg signature.
+//
+// **Returns**: `Some(content)` when the dispatch must be
+// denied (content is the tool_error body — the agent
+// reads it and self-corrects on the next turn);
+// `None` when the dispatch is allowed to proceed.
+//
+// **Side effect**: a single `tracing::warn!` per denial
+// + per `force=true` bypass, so the audit log captures
+// the overstep. No I/O, no LLM, no DB.
+// ---------------------------------------------------------------------------
+pub(crate) fn check_workflow_role_gate(
+    workflow_ctx: Option<&WorkflowCtx>,
+    subagent_name: &str,
+    input: &serde_json::Value,
+) -> Option<String> {
+    let ctx = workflow_ctx?;
+    // State derived from current_task.status; no
+    // task → no gate (matches the breadcrumb-less
+    // state at task bootstrap).
+    let state = ctx.current_task.as_ref()?.status.as_str();
+
+    let allowed = crate::agent::workflow::allowed_roles(&ctx.workflow_def, state)
+        .iter()
+        .any(|r| r == subagent_name);
+    let forced = input
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if allowed {
+        return None;
+    }
+    if forced {
+        tracing::warn!(
+            subagent = %subagent_name,
+            state = %state,
+            "run_subagent: role gate bypassed via force=true"
+        );
+        return None;
+    }
+
+    let allowed_in_state: Vec<String> =
+        crate::agent::workflow::allowed_roles(&ctx.workflow_def, state).to_vec();
+    let allowed_str = if allowed_in_state.is_empty() {
+        "(none)".to_string()
+    } else {
+        allowed_in_state.join(", ")
+    };
+    tracing::warn!(
+        subagent = %subagent_name,
+        state = %state,
+        "run_subagent: role gate denied (workflow session)"
+    );
+    Some(format!(
+        "Role gate denied: '{subagent}' is not allowed in state '{state}' \
+         (allowed: {allowed_str}). Either transition to a state that \
+         allows this role, or re-dispatch with force: true for a one-shot \
+         override. Current breadcrumb: see messages[0].",
+        subagent = subagent_name,
+        state = state,
+        allowed_str = allowed_str,
+    ))
 }
 
 #[cfg(test)]
@@ -2232,5 +2405,219 @@ mod tests {
             None => None,
         };
         assert_eq!(dispatch_model.as_deref(), Some(row.id.as_str()));
+    }
+
+    // ---- Step 2.4: workflow role-gate (pure helper) ----
+    //
+    // These tests target `check_workflow_role_gate`
+    // directly — the gate logic is a pure function so
+    // no LLM mocks / provider wiring are required. The
+    // integration with `run_subagent` is verified by
+    // the existing dispatch tests + the manual end-to-end
+    // checklist in `implement.md` Step 2.4 validation.
+
+    use crate::agent::workflow::{
+        Coordination, TaskJson, TaskStatus, WorkflowCtx, WorkflowDef,
+    };
+
+    fn dev_workflow_def() -> WorkflowDef {
+        WorkflowDef {
+            name: "dev".to_string(),
+            description: "test".to_string(),
+            states: vec![
+                "planning".into(),
+                "implement".into(),
+                "check".into(),
+                "done".into(),
+            ],
+            initial: "planning".into(),
+            transitions: vec![],
+            roles_by_state: HashMap::from([
+                ("planning".to_string(), vec!["researcher".to_string()]),
+                ("implement".to_string(), vec!["implementer".to_string()]),
+                ("check".to_string(), vec!["checker".to_string()]),
+                ("done".to_string(), vec![]),
+            ]),
+            breadcrumb: HashMap::new(),
+            delegation_templates: HashMap::new(),
+            coordination: Coordination::Pipeline,
+            gather_strategy: HashMap::new(),
+        }
+    }
+
+    fn ctx_with_status(status: TaskStatus) -> WorkflowCtx {
+        WorkflowCtx {
+            workflow_def: dev_workflow_def(),
+            current_task: Some(TaskJson {
+                id: "t1".into(),
+                title: "x".into(),
+                slug: "x".into(),
+                status,
+                created_at: "2026-07-08T00:00:00Z".into(),
+                updated_at: "2026-07-08T00:00:00Z".into(),
+                parent: None,
+                summary: String::new(),
+                items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
+            }),
+        }
+    }
+
+    /// Gate denial: planning session dispatching a role
+    /// not in planning's allowed list → tool_error body.
+    #[test]
+    fn gate_denies_role_not_allowed_in_current_state() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        let msg = denial.expect("gate must deny general-purpose in planning");
+        assert!(msg.contains("Role gate denied"), "got: {msg}");
+        assert!(msg.contains("general-purpose"), "must name role");
+        assert!(msg.contains("planning"), "must name state");
+        assert!(msg.contains("researcher"), "must enumerate allowed");
+    }
+
+    /// Gate allowance: planning session dispatching
+    /// `researcher` (in planning's allowed list) → None.
+    #[test]
+    fn gate_allows_role_in_current_state() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"subagent": "researcher"});
+        let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
+        assert!(denial.is_none(), "researcher IS allowed in planning");
+    }
+
+    /// One-shot bypass: `force: true` overrides denial.
+    #[test]
+    fn gate_force_bypass_overrides_denial() {
+        let ctx = ctx_with_status(TaskStatus::Planning);
+        let input = serde_json::json!({"force": true});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "force=true must bypass the gate (got: {:?})",
+            denial
+        );
+    }
+
+    /// State-driven enforcement: same role, different
+    /// states → different verdicts. Confirms the gate
+    /// consults `current_task.status`, not just the role.
+    #[test]
+    fn gate_enforcement_is_state_driven() {
+        let input = serde_json::json!({"subagent": "implementer"});
+
+        // implement + implementer → allowed
+        let ctx_impl = ctx_with_status(TaskStatus::Implement);
+        assert!(check_workflow_role_gate(Some(&ctx_impl), "implementer", &input).is_none());
+
+        // planning + implementer → denied
+        let ctx_plan = ctx_with_status(TaskStatus::Planning);
+        let denial =
+            check_workflow_role_gate(Some(&ctx_plan), "implementer", &input);
+        assert!(denial.is_some(), "implementer must be denied in planning");
+    }
+
+    /// Non-workflow short-circuit: `workflow_ctx = None`
+    /// → gate does not engage (legacy dispatch
+    /// behavior preserved).
+    #[test]
+    fn gate_short_circuits_when_no_workflow_ctx() {
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(None, "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "non-workflow session must short-circuit the gate",
+        );
+    }
+
+    /// No-active-task short-circuit: workflow session with
+    /// `current_task = None` (task bootstrap state) → no
+    /// enforcement, no error.
+    #[test]
+    fn gate_short_circuits_when_no_current_task() {
+        let ctx = WorkflowCtx {
+            workflow_def: dev_workflow_def(),
+            current_task: None,
+        };
+        let input = serde_json::json!({"subagent": "general-purpose"});
+        let denial = check_workflow_role_gate(Some(&ctx), "general-purpose", &input);
+        assert!(
+            denial.is_none(),
+            "no current_task (bootstrap state) must short-circuit the gate",
+        );
+    }
+
+    /// Done-state enforcement: planning's `done` state
+    /// has empty allowed roles; ANY dispatch is denied
+    /// (mirrors the dev plugin's "done triggers archive"
+    /// semantics — no further sub-agent work after done).
+    #[test]
+    fn gate_done_state_has_no_allowed_roles() {
+        let ctx = ctx_with_status(TaskStatus::Done);
+        let input = serde_json::json!({"subagent": "researcher"});
+        let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
+        let msg = denial.expect("researcher must be denied in done");
+        assert!(msg.contains("(none)"), "done's allowed list is empty: {msg}");
+    }
+
+    // ---- Step 2.7: workflow-aware dispatch resolution wiring ----
+    //
+    // `run_subagent`'s lookup branch (dispatch.rs ~line 377) now
+    // routes to `lookup_with_workflow` when `workflow_ctx` carries
+    // a plugin name, so the plugin `.everlasting/workflow/<wf>/agents/`
+    // layer wins over builtin/user/project. Before Step 2.7 the
+    // dispatch path always used the legacy `lookup`, so a plugin's
+    // `researcher.md` (Step 2.3) was never loaded even though the
+    // role-gate (Step 2.4) correctly *allowed* the role.
+    //
+    // `run_subagent` itself needs 25+ args + a live provider/db, so
+    // a full end-to-end dispatch test is out of scope here. Instead
+    // this test pins the cache-level contract the dispatch branch
+    // depends on: a plugin-only agent body is reachable via
+    // `lookup_with_workflow` under the workflow name the dispatch
+    // branch reads from `workflow_ctx.workflow_def.name`. If this
+    // test regresses, the dispatch branch silently falls back to
+    // the builtin body (the exact Step 2.7 bug class).
+
+    #[tokio::test]
+    async fn workflow_dispatch_resolves_plugin_agent_body() {
+        use crate::agent::subagent::SubagentSource;
+
+        // Plugin agent lives ONLY in the workflow plugin layer.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let plugin_dir = proj_tmp
+            .path()
+            .join(".everlasting")
+            .join("workflow")
+            .join("dev")
+            .join("agents");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("researcher.md"),
+            "---\nname: researcher\ndescription: \"\"\n---\nPLUGIN_BODY_STEP27",
+        )
+        .unwrap();
+
+        let cache = SubagentCache::arc();
+        let project_path = proj_tmp.path().to_string_lossy().to_string();
+
+        // Workflow name pulled from `WorkflowCtx.workflow_def.name`
+        // exactly as dispatch.rs ~line 376 does.
+        let wf_name = dev_workflow_def().name; // "dev"
+        let loaded = cache
+            .lookup_with_workflow(&project_path, Some(&wf_name), "researcher")
+            .await
+            .expect("plugin researcher must resolve via lookup_with_workflow");
+        assert_eq!(
+            loaded.source,
+            SubagentSource::Plugin,
+            "dispatch branch must see the plugin layer, not the builtin",
+        );
+        assert!(
+            loaded.def.system_prompt.contains("PLUGIN_BODY_STEP27"),
+            "dispatch branch must load the plugin body, not the builtin body",
+        );
     }
 }

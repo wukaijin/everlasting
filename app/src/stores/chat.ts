@@ -1582,6 +1582,156 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  /** W1 (Workflow integration, Step 0.2 — 2026-07-08):
+   *  per-session workflow opt-in toggle. Mirrors
+   *  `requestSetMode`'s optimistic-update + IPC pattern:
+   *
+   *  1. **No-op fast path**: if the requested state matches the
+   *     current `SessionSummary.workflow_enabled`, return
+   *     `true` immediately without an IPC round-trip. Keeps the
+   *     toggle snappy when a re-render accidentally fires a
+   *     duplicate click (RULE-Front-Mode-001 symmetrical fix for
+   *     the workflow chip).
+   *
+   *  2. **Optimistic update**: flip the local `SessionSummary`
+   *     BEFORE awaiting the IPC so the chip lights up
+   *     instantly. Same trade-off as `setSessionColor` and the
+   *     pre-PR2 `setMode` path: a backend failure (DB locked /
+   *     network blip) leaves the local state out-of-sync; we
+   *     restore the prior value in the catch block below.
+   *
+   *  3. **No streaming guard**: matches `set_session_mode`'s
+   *     contract — the flip applies on the next turn boundary
+   *     (see `agent/chat_loop.rs:396`), so mid-stream calls
+   *     are safe. The next turn's `build_instructions_blocks`
+   *     rehydrates the workflow state from
+   *     `SessionRow.workflow_enabled` (Phase 0 Step 0.5).
+   *
+   *  4. **No Yolo / root gate**: workflow toggling is a UI
+   *     preference (NOT a privileged operation like `yolo`).
+   *     Mirrors `setSessionColor`'s no-gate contract.
+   *
+   *  Returns `true` on success (or no-op), `false` on IPC
+   *  failure. The caller (`PluginSelect.vue`, since the
+   *  2026-07-09 chip-merge) does not surface a toast on
+   *  `false` — the local state was already reverted in the
+   *  catch block, so the chip + DB converge back to the
+   *  prior state silently (matching the color-tag toggle
+   *  UX). */
+  async function requestSetWorkflowEnabled(
+    sessionId: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (!summary) return false;
+    if (summary.workflow_enabled === enabled) return true;
+
+    // Snapshot prior value for rollback on IPC failure.
+    const prior = summary.workflow_enabled;
+    (summary as { workflow_enabled: boolean }).workflow_enabled = enabled;
+    try {
+      await invoke("set_session_workflow_enabled", {
+        sessionId,
+        enabled,
+      });
+      return true;
+    } catch (e) {
+      // Restore the local state so the chip matches the DB.
+      // We log + return false but don't toast — the
+      // PluginSelect caller's UI feedback is the chip
+      // returning to its prior color.
+      console.error("Failed to update session workflow_enabled:", e);
+      (summary as { workflow_enabled: boolean }).workflow_enabled = prior;
+      return false;
+    }
+  }
+
+  /** W1 (Workflow integration, Step 2.2 — 2026-07-08):
+   *  per-session workflow plugin name flip. Mirrors
+   *  `requestSetWorkflowEnabled`'s optimistic-update + IPC
+   *  pattern:
+   *
+   *  1. **No-op fast path**: if the requested name matches
+   *     the current `SessionSummary.plugin_name`, return
+   *     `true` immediately (handles duplicate clicks).
+   *
+   *  2. **Optimistic update**: write the local
+   *     `SessionSummary.plugin_name` BEFORE awaiting the
+   *     IPC so the chip label flips instantly. On IPC
+   *     failure (DB locked / network blip), restore the
+   *     prior value in the catch block.
+   *
+   *  3. **No streaming guard**: matches
+   *     `set_session_workflow_enabled`'s contract — the
+   *     name flip applies on the next turn boundary (the
+   *     next `build_workflow_ctx` call reads the persisted
+   *     name from `SessionRow.plugin_name`). Mid-stream
+   *     flips are safe; the new breadcrumb surfaces on the
+   *     next turn.
+   *
+   *  4. **No validation here**: the backend
+   *     `set_session_plugin_name` IPC rejects empty
+   *     strings with an `AppCommandError` — we surface the
+   *     rejection via `console.error` (matching
+   *     `requestSetWorkflowEnabled`'s no-toast policy; the
+   *     chip's UI feedback IS the rollback).
+   *
+   *  Returns `true` on success (or no-op), `false` on IPC
+   *  failure. */
+  async function requestSetPluginName(
+    sessionId: string,
+    name: string,
+  ): Promise<boolean> {
+    if (!sessionId) return false;
+    const summary = sessions.value.find((s) => s.id === sessionId);
+    if (!summary) return false;
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    if (summary.plugin_name === trimmed) return true;
+
+    const prior = summary.plugin_name;
+    summary.plugin_name = trimmed;
+    try {
+      await invoke("set_session_plugin_name", {
+        sessionId,
+        name: trimmed,
+      });
+      return true;
+    } catch (e) {
+      console.error("Failed to update session plugin_name:", e);
+      summary.plugin_name = prior;
+      return false;
+    }
+  }
+
+  /** W1 (Workflow integration, Step 2.2 — 2026-07-08):
+   *  discover available workflow plugins under
+   *  `<project>/.everlasting/workflow/<dir>/workflow.json`.
+   *  Thin wrapper around the `list_workflow_plugins` IPC.
+   *
+   *  Returns `[]` on IPC failure (frontend logs + falls
+   *  back to the empty list — the `PluginSelect` chip
+   *  still works with just the active plugin showing in
+   *  the trigger; the popover simply has no entries to
+   *  offer).
+   *
+   *  Callers should memoize on `project_id` (the project
+   *  root only changes when the user switches active
+   *  project, which is rare). The `PluginSelect.vue`
+   *  component does the caching. */
+  async function listWorkflowPlugins(projectPath: string): Promise<string[]> {
+    try {
+      const names = await invoke<string[]>("list_workflow_plugins", {
+        projectPath,
+      });
+      return Array.isArray(names) ? names : [];
+    } catch (e) {
+      console.error("list_workflow_plugins failed:", e);
+      return [];
+    }
+  }
+
   return {
     // Reactive state (computed projections)
     messages,
@@ -1655,6 +1805,32 @@ export const useChatStore = defineStore("chat", () => {
     requestSetMode,
     confirmYolo,
     cancelYolo,
+    // W1 (Workflow integration, Step 0.2 + 2026-07-09
+    // chip-merge): per-session workflow opt-in toggle.
+    // Wired by `<PluginSelect>`'s top-of-popover toggle
+    // row (the former `<WorkflowToggle>` chip was deleted
+    // in task 07-09-07-09-workflow-chip-merge and folded
+    // into PluginSelect); optimistic-update + rollback on
+    // IPC failure, no streaming guard, no Yolo gate.
+    requestSetWorkflowEnabled,
+    // W1 (Workflow integration, Step 2.2 + 2026-07-09
+    // chip-merge): per-session active workflow plugin
+    // name flip. Wired by `<PluginSelect>`'s popover
+    // plugin list (sits below the toggle row in the same
+    // popover); mirrors `requestSetWorkflowEnabled`'s
+    // optimistic-update + rollback contract. Plugin rows
+    // are disabled in the UI when workflow is OFF — the
+    // store action itself does NOT guard on
+    // `workflow_enabled` because the backend
+    // `set_session_plugin_name` IPC intentionally accepts
+    // name writes independent of the workflow flag
+    // (lets a future flow pre-stage a plugin name before
+    // turning workflow on).
+    requestSetPluginName,
+    // W1 Step 2.2: discover available plugins under
+    // `<project>/.everlasting/workflow/`. Backs the
+    // `PluginSelect.vue` popover data source.
+    listWorkflowPlugins,
     // D3 PR2 (2026-06-17): user message edit + cascade delete
     // bridge to the backend `edit_user_message` IPC. Called by
     // `MessageItem.vue`'s Save handler; the parent catches

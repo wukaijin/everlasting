@@ -388,7 +388,13 @@ fn git_numstat(worktree: &Path, path: &str) -> Result<(usize, usize), std::io::E
     // stdout means the file has no workdir-vs-HEAD diff (which
     // shouldn't happen for files in the libgit2 delta list, but
     // is a safe no-op if it does).
-    for line in stdout.lines() {
+    // We only ever query one path, so the first line (if any) is
+    // the answer; an empty stdout means no workdir-vs-HEAD diff
+    // (shouldn't happen for files in the libgit2 delta list, but
+    // a safe no-op if it does). `if let` instead of `for` keeps
+    // clippy's `never_loop` lint happy — we never iterate past
+    // the first line.
+    if let Some(line) = stdout.lines().next() {
         let mut cols = line.split('\t');
         let a_raw = cols.next().unwrap_or("0");
         let r_raw = cols.next().unwrap_or("0");

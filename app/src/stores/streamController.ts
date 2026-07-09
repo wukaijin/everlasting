@@ -62,9 +62,11 @@ import {
 import {
   GET_PENDING_INTERACTION_CMD,
   MODE_CHANGE_EVENT,
+  TASK_STATE_TRANSITION_EVENT,
   TOOL_QUESTION_EVENT,
   type ModeChangePayload,
   type PendingInteraction,
+  type TaskStateTransitionPayload,
   type ToolQuestionPayload,
 } from "./questionCards.types";
 
@@ -372,6 +374,7 @@ let unlistenTC: UnlistenFn | null = null;
 let unlistenTR: UnlistenFn | null = null;
 let unlistenTQ: UnlistenFn | null = null;
 let unlistenMC: UnlistenFn | null = null;
+let unlistenTST: UnlistenFn | null = null;
 let listenerWired = false;
 
 // --- Wire-format rehydration ------------------------------------------
@@ -1515,6 +1518,24 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     }
   }
 
+  /** Push a `task:state:transition:request` event payload into the
+   *  questionCards store as a tagged-union
+   *  `{ kind: "task_state_transition", payload }`. Sibling of
+   *  `handleModeChangeRequest` (2026-07-09,
+   *  `07-09-workflow-transition-card`). Same single-pending gate +
+   *  same authoritative-pull reconciliation. The backend's event
+   *  payload is flat snake_case (no `kind` field); we wrap it into
+   *  the store's tagged union here — verbatim, no field rename at
+   *  the IPC boundary. */
+  function handleTaskStateTransition(
+    payload: TaskStateTransitionPayload,
+  ): void {
+    useQuestionCardsStore().addPending(payload.session_id, {
+      kind: "task_state_transition",
+      payload,
+    });
+  }
+
   /** Mark a request as finished: drop from activeRequests, unpin
    *  its session, and reload from DB to replace the streaming buffer
    *  with the per-turn persisted shape.
@@ -1759,6 +1780,19 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     unlistenMC = await listen<ModeChangePayload>(MODE_CHANGE_EVENT, (e) => {
       handleModeChangeRequest(e.payload);
     });
+    // 2026-07-09 (`07-09-workflow-transition-card`): the
+    // `request_task_state_transition` blocking tool emits a
+    // `task:state:transition:request` event when the backend
+    // registers a pending workflow state transition. Third sibling
+    // on the same single-pending gate — distinct channel so the
+    // listener wires independently. Handler pushes the payload as
+    // `{ kind: "task_state_transition", payload }` into the store.
+    unlistenTST = await listen<TaskStateTransitionPayload>(
+      TASK_STATE_TRANSITION_EVENT,
+      (e) => {
+        handleTaskStateTransition(e.payload);
+      },
+    );
     listenerWired = true;
     listenerReady.value = true;
   }
@@ -1772,11 +1806,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     unlistenTR?.();
     unlistenTQ?.();
     unlistenMC?.();
+    unlistenTST?.();
     unlistenChat = null;
     unlistenTC = null;
     unlistenTR = null;
     unlistenTQ = null;
     unlistenMC = null;
+    unlistenTST = null;
     listenerWired = false;
     listenerReady.value = false;
   }

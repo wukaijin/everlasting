@@ -34,6 +34,11 @@ pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod subagents;
+// W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+// task IPC surface. Phase 0 ships `create_task` only;
+// Phase 2 Step 2.6 adds `update_task` (B12 checklist
+// sync); Phase 3 Step 3.3 adds `archive_task`.
+pub mod task;
 pub mod worktree;
 
 /// The full set of Tauri commands, used by `lib.rs::run` to
@@ -67,7 +72,17 @@ pub fn all_command_names() -> Vec<&'static str> {
         "test_provider",
         "test_model",
         "list_sessions",
-        "create_session",
+        // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+        // `create_task` — seed `.everlasting/tasks/<slug>/`
+        // with v1 `task.json` + `prd.md` skeleton. Phase 3
+        // Step 3.3 adds the `archive_task` companion
+        // (move to `.everlasting/tasks/archive/<YYYY-MM>/`
+        // + `status=completed` + `completed_at` + (default)
+        // `git add` + commit). The two IPCs are the
+        // engine's authoritative task-CRUD pair; Step 2.6
+        // owns `update_task` for B12 checklist sync.
+        "create_task",
+        "archive_task",
         "load_session",
         "delete_session",
         "clear_session_messages",
@@ -137,5 +152,12 @@ pub fn all_command_names() -> Vec<&'static str> {
         // via the unified `PendingInteraction` enum).
         "resolve_mode_change",
         "get_pending_interaction",
+        // 2026-07-08 (`07-08-workflow-integration` Phase 3
+        // Step 3.1): tool state-transition IPC (frontend
+        // `<RequestTaskStateTransitionCard>` allow/拒绝).
+        // The frontend reuses `get_pending_interaction` for
+        // the unified session-switch source-of-truth lookup
+        // — only the new resolve IPC is unique to this kind.
+        "resolve_task_state_transition",
     ]
 }

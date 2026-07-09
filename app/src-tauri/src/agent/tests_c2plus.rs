@@ -118,7 +118,12 @@ async fn run_loop(
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-    )
+            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // workflow_ctx = None (tests don't exercise the workflow
+        // breadcrumb injection seam; that lives in separate
+        // `agent::workflow::inject` tests).
+        None,
+)
     .await;
 }
 
@@ -819,7 +824,12 @@ async fn c2plus_worker_breaks_and_notifies_parent() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-    )
+            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // workflow_ctx = None (tests don't exercise the workflow
+        // breadcrumb injection seam; that lives in separate
+        // `agent::workflow::inject` tests).
+        None,
+)
     .await;
 
     // The dispatch_subagent tool_result carries the loop-terminated

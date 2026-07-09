@@ -1,0 +1,11 @@
+{"file": "docs/WORKFLOW-INTEGRATION.md", "reason": "验收对照:§9.5 每步验证手段 + §14 待对齐表 + Acceptance Criteria(prd.md)"}
+{"file": "docs/WORKFLOW-INTEGRATION-REVIEW.md", "reason": "一轮评审记录:3 严重 + 7 中等 + 8 小问题修复点,验收时确认无回退"}
+{"file": "docs/WORKFLOW-INTEGRATION-REVIEW-2.md", "reason": "二轮评审记录:S-A(门控三处调用点)/S-B(注入 fallback)/M-A(IPC)/M-B(占位符)/M-C(coordination enum) 验收重点"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "验收:run_chat_loop 签名改动不破坏 26→29→30 参演化;注入不破坏 cache breakpoint"}
+{"file": ".trellis/spec/backend/memory.md", "reason": "验收:append 到 messages[0] 不新开 user message;cache_control: None;S-B fallback prepend 禁触发"}
+{"file": ".trellis/spec/backend/subagent-runs-schema.md", "reason": "验收:S-A 门控下沉后三处调用点(1000/2937/3286)都过;并发 path 不绕过门控"}
+{"file": ".trellis/spec/backend/permission-layer.md", "reason": "验收:opt-in session 内硬约束不污染普通 session;checker shell 只跑 lint/test 不写源码"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验收:migration 回退安全;workflow_enabled 列 default 0 不破坏现有 session"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收:workflow.json 损坏回退 default;task.json 专用 tool 保证 JSON 合法;plugin loader 失败不 crash"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验收:前后端 workflow toggle + IPC + Pinia store 数据流一致;跨层契约完整"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "验收:复用 inject_recall_into_turn / B12 coerce / resolve_mode_change pattern,不重新发明"}

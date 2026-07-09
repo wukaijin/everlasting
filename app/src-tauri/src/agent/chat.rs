@@ -102,6 +102,39 @@ pub async fn chat(
     // (the borrow checker rejects `state.foo` references inside
     // an `async move` block on `tauri::async_runtime::spawn`).
     let question_store = state.question_store.clone();
+    // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+    // build the per-session workflow context BEFORE the spawn.
+    // Async, resolves `sessions.workflow_enabled` from the DB
+    // (Step 0.1 column) plus a `.everlasting/tasks/` listing
+    // (Step 0.4). Returns `None` for non-workflow sessions —
+    // the agent loop's per-turn helper short-circuits and the
+    // session byte-identity vs. pre-Step-0.5 is preserved.
+    //
+    // We deliberately resolve BEFORE the spawn closure (vs.
+    // doing it inside `tauri::async_runtime::spawn`) so the
+    // resolved value can be moved into the closure by value
+    // without re-entering async land per IPC entry. The cost
+    // is bounded (~10 ms warm) — same shape as other
+    // pre-spawn clones (background_shells / subagent_cache).
+    let workflow_ctx = match crate::agent::workflow::build_workflow_ctx(&db, &session_id).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            // Defensive: DB error during context resolution
+            // MUST NOT abort the chat loop. The hook is
+            // session-level opt-in; if we can't resolve, we
+            // drop workflow context for this turn and the
+            // session behaves like a non-workflow session.
+            // The `e` carries DB error metadata we surface
+            // as a warn so the user can see it in the dev
+            // console / Phase 3 audit log.
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "build_workflow_ctx failed; this turn proceeds without workflow context (per-turn helper will short-circuit)",
+            );
+            None
+        }
+    };
     // L1a (2026-06-19): clone the cross-request background-shell
     // registry BEFORE the spawn so the move closure doesn't
     // capture a borrowed `state`. Threaded into `run_chat_loop` so
@@ -357,6 +390,16 @@ pub async fn chat(
             // won't (the tool is in `STRUCTURALLY_DISABLED` so
             // the worker's tool list strips it).
             question_store,
+            // W1 (Workflow integration, Phase 0 Step 0.5
+            // — 2026-07-08): per-session workflow context.
+            // Eagerly resolved at IPC entry (DB read + at
+            // most a handful of small task.json reads,
+            // ~10 ms cost on a warm pool); cached for the
+            // entire 200-turn loop. `None` for non-workflow
+            // sessions — the per-turn helper short-circuits
+            // and the session behaves byte-identically to
+            // pre-Step-0.5.
+            workflow_ctx,
         )
         .await;
         // RULE-E-005 (2026-06-15): the agent loop has fully exited.

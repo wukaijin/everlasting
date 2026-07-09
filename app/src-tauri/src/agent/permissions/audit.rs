@@ -142,6 +142,20 @@ pub enum AuditKind {
     /// `tokio::select!` 的 cancel 臂命中 (parent_token 取消 →
     /// worker_token child 取消)。
     WorkerAskCancelled,
+    // 2026-07-08 (`07-08-workflow-integration` Phase 3 Step 3.1):
+    // workflow task-state-transition request lifecycle. Tool
+    // (`request_task_state_transition::execute_blocking`) writes
+    // `*_requested`; the IPC handler
+    // (`commands::question::resolve_task_state_transition`)
+    // writes `*_allowed` / `*_denied` post-apply. Same shape as
+    // `ModeChangeRequested` / `ModeChangeAllowed` /
+    // `ModeChangeDenied` (the request_mode_change task on
+    // 2026-07-07). The payload shape carries
+    // `target_state` / `current_state` / `slug` instead of
+    // `target_mode` / `current_mode`.
+    TaskStateTransitionRequested,
+    TaskStateTransitionAllowed,
+    TaskStateTransitionDenied,
 }
 
 impl AuditKind {
@@ -169,6 +183,12 @@ impl AuditKind {
             Self::WorkerAskDenied => "worker_ask_denied",
             Self::WorkerAskTimedOut => "worker_ask_timed_out",
             Self::WorkerAskCancelled => "worker_ask_cancelled",
+            // 2026-07-08 (Phase 3 Step 3.1, see enum variant
+            // doc). Wire shape: snake_case lowercase, mirrors
+            // ModeChange* counterparts.
+            Self::TaskStateTransitionRequested => "task_state_transition_requested",
+            Self::TaskStateTransitionAllowed => "task_state_transition_allowed",
+            Self::TaskStateTransitionDenied => "task_state_transition_denied",
         }
     }
 }

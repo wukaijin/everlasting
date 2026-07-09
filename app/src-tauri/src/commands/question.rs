@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::agent::permissions::AuditKind;
 use crate::agent::question_store::{
     InteractionResponse, PendingInteractionEntry, QuestionAnswer, ToolQuestionPayload,
 };
@@ -43,7 +44,11 @@ use crate::agent::question_store::{
 // (e.g. `cargo check`) don't flag them as unused. `use super::*;`
 // inside `mod tests` then re-imports them via the parent scope.
 #[cfg(test)]
-use crate::agent::question_store::{InteractionKind, ModeChangePayload, PendingInteraction};
+use crate::agent::question_store::{
+    InteractionKind, ModeChangePayload, PendingInteraction, TaskStateTransitionPayload,
+};
+use crate::agent::workflow::state::{set_task_state as workflow_set_task_state, StateTransitionError};
+use crate::agent::workflow::task::read_task as read_workflow_task;
 use crate::db;
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -505,6 +510,364 @@ async fn load_session_row(
 }
 
 // ---------------------------------------------------------------------------
+// `resolve_task_state_transition` IPC (Phase 3 Step 3.1 of
+// `07-08-workflow-integration`, 2026-07-08).
+//
+// Mirrors the dual-IPC pattern of `resolve_mode_change`:
+// 1. Parse + validate the target state string.
+// 2. If denied, just resolve as `Cancelled`. No DB write.
+// 3. If allowed, look up the project + task slug →
+//    `workflow::set_task_state(...)` (apply BEFORE resolve) →
+//    resolve as `Answered(true)`.
+//
+// The actual `task.json` mutation + `from → to` Rust hook
+// dispatch (trigger_spec_distillation / preflight_implement_check)
+// happens in `set_task_state` — the IPC handler is the single
+// source of truth for state-transition side effects (per design
+// §5.2 M-A / Q9 "Rust 固定 hook 嵌入 set_task_state 写入路径").
+// ---------------------------------------------------------------------------
+
+/// Forward the user's allow / deny decision for a
+/// `request_task_state_transition` card to the `QuestionStore`
+/// oneshot AFTER applying the state transition via
+/// `workflow::set_task_state` (the single source of truth for
+/// `from → to` transitions + hook dispatch — design §5.2
+/// M-A). Mirrors `resolve_mode_change`'s apply-BEFORE-resolve
+/// pattern.
+///
+/// Why resolve AFTER applying:
+/// 1. The `from → to` hook dispatch (e.g.
+///    `trigger_spec_distillation` on `Check → Done`) is the
+///    function `set_task_state`'s job; the tool's
+///    `tokio::select!` arm awaits the resolution and sees the
+///    **authoritative** outcome (allowed / denied / hook fired).
+/// 2. If the user denies we skip `set_task_state` entirely and
+///    just resolve as `Cancelled`. No `task.json` write, no
+///    hook, no audit (other than `task_state_transition_denied`).
+/// 3. If the user allows but `set_task_state` fails (invalid
+///    target state / IO error) we still resolve as `Cancelled`
+///    so the agent loop doesn't hang — the failure surfaces
+///    via audit + `tool_result`.
+///
+/// The `session_id` arg targets the audit + DB writes (the
+/// `set_task_state` call's project is resolved off the session
+/// row, which we read with `db::load_session`).
+#[tauri::command]
+pub async fn resolve_task_state_transition(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    target_state: String,
+    slug: String,
+    allow: bool,
+) -> Result<db::SessionRow, AppCommandError> {
+    // Accepted for routing parity with the wire shape (the
+    // store keys on session_id alone, single-pending gate).
+    let _ = tool_use_id;
+    let project_path = state_to_project_path(&state, &session_id).await?;
+    resolve_task_state_transition_internal(
+        &state.db,
+        &state.question_store,
+        &session_id,
+        &target_state,
+        &slug,
+        allow,
+        project_path.as_deref(),
+    )
+    .await
+}
+
+/// Pure-Rust core of [`resolve_task_state_transition`].
+/// Extracted into a free-standing function so it can be
+/// unit-tested WITHOUT a `tauri::test::mock_app`.
+///
+/// `project_path` MUST be the absolute path to the project
+/// root (i.e. the directory containing `.everlasting/`). The
+/// IPC layer resolves this from the session's `project_id`.
+pub(crate) async fn resolve_task_state_transition_internal(
+    db_pool: &sqlx::SqlitePool,
+    store: &crate::agent::question_store::QuestionStore,
+    session_id: &str,
+    target_state: &str,
+    slug: &str,
+    allow: bool,
+    project_path: Option<&std::path::Path>,
+) -> Result<db::SessionRow, AppCommandError> {
+    // 1. Parse + validate target_state (lenient — unknown
+    //    → Err so the resolve can short-circuit).
+    let new_state = match crate::agent::workflow::parse_target_state(target_state) {
+        Ok(s) => s,
+        Err(e) => {
+            // Audited as denied (invalid target) — the user
+            // can't have authorized an invalid target.
+            record_state_transition_audit(
+                db_pool,
+                session_id,
+                target_state,
+                slug,
+                AuditKind::TaskStateTransitionDenied,
+                Some("invalid_target_state"),
+                None,
+            )
+            .await;
+            // Surface the error to the caller; resolve the
+            // oneshot as `Cancelled` so the agent loop
+            // unblocks.
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
+                .await;
+            return Err(AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                format!("resolve_task_state_transition: parse_target_state failed: {}", e),
+            ));
+        }
+    };
+
+    // 2. If denied, just resolve as `Cancelled` + write the
+    //    denied audit. No `set_task_state` call (the on-disk
+    //    `task.json` is NOT mutated).
+    if !allow {
+        record_state_transition_audit(
+            db_pool,
+            session_id,
+            target_state,
+            slug,
+            AuditKind::TaskStateTransitionDenied,
+            Some("user denied"),
+            None,
+        )
+        .await;
+        // Resolve the oneshot so the agent loop unblocks.
+        store
+            .resolve(session_id, InteractionResponse::Cancelled)
+            .await?;
+        // Reload the row so the IPC caller can refresh
+        // `currentSession` (state unchanged on the deny path).
+        return load_session_row(db_pool, session_id).await;
+    }
+
+    // 3. Allow path — apply the state transition via the
+    //    pure `workflow::set_task_state`. We need the
+    //    project's path + the current task's status.
+    let project_path = match project_path {
+        Some(p) => p,
+        None => {
+            // Without a project path we can't locate
+            // `<project>/.everlasting/tasks/<slug>/task.json`.
+            // Audit denied + surface error.
+            record_state_transition_audit(
+                db_pool,
+                session_id,
+                target_state,
+                slug,
+                AuditKind::TaskStateTransitionDenied,
+                Some("missing_project_path"),
+                None,
+            )
+            .await;
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
+                .await;
+            return Err(AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                "resolve_task_state_transition: project path not available \
+                 (no project loaded for the session)",
+            ));
+        }
+    };
+
+    // Resolve the current task so we know `from` for the
+    // set_task_state signature. Read fresh off disk (the
+    // IPC handler is the source of truth for the user's
+    // allow decision; the LLM-provided current_state in
+    // the payload is informational and may be stale under
+    // multi-session concurrent edits).
+    let current_status = match read_workflow_task(project_path, slug) {
+        Ok(t) => t.status,
+        Err(e) => {
+            // Audit denied (task not found / corrupted).
+            record_state_transition_audit(
+                db_pool,
+                session_id,
+                target_state,
+                slug,
+                AuditKind::TaskStateTransitionDenied,
+                Some("task_read_failed"),
+                Some(&format!("{:?}", e)),
+            )
+            .await;
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
+                .await;
+            return Err(AppCommandError::new(
+                crate::error::ErrorCategory::Server,
+                format!(
+                    "resolve_task_state_transition: read_task failed for slug {:?}: {}",
+                    slug, e
+                ),
+            ));
+        }
+    };
+
+    // Apply the state transition (single source of truth for
+    // the `from → to` hook dispatch).
+    let apply_result = workflow_set_task_state(project_path, slug, current_status, new_state);
+    match apply_result {
+        Ok(_updated_task) => {
+            // Allowed audit (on top of any side-effect audits
+            // written inside set_task_state — currently none,
+            // so this is the row that records "user allowed
+            // transition X→Y").
+            let audit_payload = serde_json::json!({
+                "target_state": target_state,
+                "from": current_status.as_str(),
+                "to": new_state.as_str(),
+                "slug": slug,
+            })
+            .to_string();
+            if let Err(e) = db::record_audit_event(
+                db_pool,
+                session_id,
+                AuditKind::TaskStateTransitionAllowed.as_str(),
+                Some(&audit_payload),
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    "resolve_task_state_transition: allowed audit failed"
+                );
+            }
+            // Resolve the oneshot so the agent loop unblocks.
+            store
+                .resolve(session_id, InteractionResponse::Answered(serde_json::json!(true)))
+                .await?;
+            // Reload the session row so the IPC caller can
+            // refresh `currentSession` (status is on the
+            // task.json, not the session row, but the
+            // SessionRow is the established return shape for
+            // the resolve-mode-change pattern).
+            load_session_row(db_pool, session_id).await
+        }
+        Err(StateTransitionError::InvalidTargetState(s)) => {
+            // Defensive — `parse_target_state` already
+            // validated above; should be unreachable.
+            record_state_transition_audit(
+                db_pool,
+                session_id,
+                target_state,
+                slug,
+                AuditKind::TaskStateTransitionDenied,
+                Some("set_task_state_invalid_target"),
+                Some(&s),
+            )
+            .await;
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
+                .await;
+            Err(AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                format!(
+                    "resolve_task_state_transition: set_task_state rejected target {:?}",
+                    s
+                ),
+            ))
+        }
+        Err(e) => {
+            // Apply failed (IO / malformed / not-found).
+            // The tool still needs to unblock — resolve as
+            // `Cancelled` + write the denied audit with the
+            // specific reason.
+            record_state_transition_audit(
+                db_pool,
+                session_id,
+                target_state,
+                slug,
+                AuditKind::TaskStateTransitionDenied,
+                Some("set_task_state_failed"),
+                Some(&format!("{}", e)),
+            )
+            .await;
+            let _ = store
+                .resolve(session_id, InteractionResponse::Cancelled)
+                .await;
+            Err(AppCommandError::new(
+                crate::error::ErrorCategory::Server,
+                format!(
+                    "resolve_task_state_transition: set_task_state failed: {}",
+                    e
+                ),
+            ))
+        }
+    }
+}
+
+/// Write a state-transition audit row. Best-effort (matches
+/// the rest of the audit surface — failures log + swallow so
+/// the user-facing flow isn't blocked). Extracted into a
+/// helper so the 4 call sites in
+/// `resolve_task_state_transition_internal` stay readable.
+async fn record_state_transition_audit(
+    db_pool: &sqlx::SqlitePool,
+    session_id: &str,
+    target_state: &str,
+    slug: &str,
+    kind: AuditKind,
+    reason: Option<&str>,
+    detail: Option<&str>,
+) {
+    let payload = serde_json::json!({
+        "target_state": target_state,
+        "slug": slug,
+        "reason": reason,
+        "detail": detail,
+    })
+    .to_string();
+    if let Err(e) = db::record_audit_event(db_pool, session_id, kind.as_str(), Some(&payload)).await
+    {
+        tracing::warn!(
+            error = %e,
+            kind = %kind.as_str(),
+            "resolve_task_state_transition: record_audit_event failed"
+        );
+    }
+}
+
+/// Resolve the project path from the session row. Used by the
+/// IPC handler to locate `<project>/.everlasting/tasks/<slug>/`
+/// for the `set_task_state` call. Returns
+/// `Err(InvalidRequest)` if the session has no project loaded
+/// (e.g. orphan session).
+async fn state_to_project_path(
+    state: &State<'_, Arc<AppState>>,
+    session_id: &str,
+) -> Result<Option<std::path::PathBuf>, AppCommandError> {
+    let loaded = db::load_session(&state.db, session_id)
+        .await
+        .map_err(|e| {
+            AppCommandError::new(
+                crate::error::ErrorCategory::Server,
+                format!("state_to_project_path: load_session failed: {}", e),
+            )
+        })?
+        .ok_or_else(|| {
+            AppCommandError::new(
+                crate::error::ErrorCategory::InvalidRequest,
+                format!("state_to_project_path: session '{}' not found", session_id),
+            )
+        })?;
+    let project = db::get_project(&state.db, &loaded.session.project_id)
+        .await
+        .map_err(|e| {
+            AppCommandError::new(
+                crate::error::ErrorCategory::Server,
+                format!("state_to_project_path: get_project failed: {}", e),
+            )
+        })?;
+    Ok(project.map(|p| std::path::PathBuf::from(p.path)))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -554,6 +917,10 @@ mod tests {
         // (the IPC consumer reads these as the `kind` field).
         assert_eq!(InteractionKind::Question.as_str(), "question");
         assert_eq!(InteractionKind::ModeChange.as_str(), "mode_change");
+        assert_eq!(
+            InteractionKind::TaskStateTransition.as_str(),
+            "task_state_transition"
+        );
     }
 
     #[test]
@@ -576,8 +943,18 @@ mod tests {
             reason: None,
             ts: 0,
         });
+        let t = PendingInteraction::TaskStateTransition(TaskStateTransitionPayload {
+            session_id: "s1".into(),
+            tool_use_id: "tu".into(),
+            target_state: "implement".into(),
+            current_state: Some("planning".into()),
+            slug: Some("my-feat".into()),
+            reason: None,
+            ts: 0,
+        });
         assert_eq!(q.kind(), InteractionKind::Question);
         assert_eq!(m.kind(), InteractionKind::ModeChange);
+        assert_eq!(t.kind(), InteractionKind::TaskStateTransition);
     }
 }
 

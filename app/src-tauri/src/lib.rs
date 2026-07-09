@@ -177,6 +177,36 @@ pub fn run() {
             commands::sessions::diff_worktree,
             commands::sessions::rename_session,
             commands::sessions::set_session_color,
+            // W1 (Workflow integration, Step 0.2 — 2026-07-08):
+            // per-session workflow opt-in toggle. UI preference
+            // (no audit row in Step 0.2); the audit-grade
+            // `workflow_toggled` event lands with Phase 3's
+            // state-transition hook (Step 3.1).
+            commands::sessions::set_session_workflow_enabled,
+            // W1 (Workflow integration, Step 2.2 — 2026-07-08):
+            // per-session active plugin name. The frontend
+            // `PluginSelect.vue` writes this; `build_workflow_ctx`
+            // reads it on the next IPC entry to reload the
+            // workflow JSON. `list_workflow_plugins` backs the
+            // popover data source.
+            commands::sessions::set_session_plugin_name,
+            commands::sessions::list_workflow_plugins,
+            // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+            // `create_task` — seed `.everlasting/tasks/<slug>/`
+            // with v1 `task.json` + `prd.md` skeleton. Phase 0
+            // ships this only; Phase 2 Step 2.6 adds
+            // `update_task`; Phase 3 Step 3.3 adds
+            // `archive_task`.
+            commands::task::create_task,
+            // W1 (Workflow integration, Phase 3 Step 3.3 — 2026-07-09):
+            // `archive_task` — finalize a workflow task by
+            // moving it under `.everlasting/tasks/archive/<YYYY-MM>/`
+            // + setting `status = completed` + `completed_at`
+            // + (default) `git add` + commit. Companion to
+            // `create_task`; together they are the engine's
+            // authoritative task-CRUD IPC pair (Step 2.6
+            // owns `update_task` for B12 checklist sync).
+            commands::task::archive_task,
             // A2 + B7 (Permission system + per-session Mode, 2026-06-13)
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,
@@ -276,6 +306,11 @@ pub fn run() {
             // command is kept for backward compat.
             commands::question::resolve_mode_change,
             commands::question::get_pending_interaction,
+            // 2026-07-08 (`07-08-workflow-integration` Phase 3
+            // Step 3.1): tool state-transition IPC. Frontend
+            // reuses `get_pending_interaction` for the
+            // unified session-switch source-of-truth lookup.
+            commands::question::resolve_task_state_transition,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

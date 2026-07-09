@@ -312,6 +312,104 @@ pub async fn set_session_color(
         .map_err(|e| anyhow::anyhow!("set_session_color failed: {}", e).into())
 }
 
+/// W1 (Workflow integration, Step 0.2 — 2026-07-08):
+/// per-session workflow opt-in toggle. Mirrors
+/// `set_session_color`'s contract — a plain column flip,
+/// no audit row. Used by the frontend's `WorkflowToggle.vue`
+/// (mounted in `ChatInput.vue` next to `ModeSelect`).
+///
+/// **State change semantics (READ THIS BEFORE TOUCHING):**
+/// the toggle takes effect IMMEDIATELY for the next agent
+/// turn boundary, matching `set_session_mode`'s "applies on
+/// the next turn" contract (see `agent/chat_loop.rs:396`).
+/// Mid-stream flips do NOT abort the in-flight loop — the
+/// breadcrumb + state-machine injection (Phase 0 Step 0.5
+/// + Phase 2 Step 2.5) only kicks in for subsequent turns.
+///
+/// **No Yolo / root guard**: workflow toggling is a UI
+/// preference, not a privileged operation. Unlike
+/// `set_session_mode` we do NOT consult `is_running_as_root`
+/// here.
+///
+/// **Audit deferred to Phase 3**: the `workflow_toggled`
+/// audit row lands with the state-transition hooks in Step
+/// 3.1; this command is intentionally audit-free in Step
+/// 0.2 to keep the toggle synchronous + light. The
+/// frontend's `WorkflowToggle.vue` optimistically updates
+/// its local `SessionSummary` before awaiting the IPC so
+/// the user sees the chip flip instantly even when the
+/// backend round-trip is slow.
+#[tauri::command]
+pub async fn set_session_workflow_enabled(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    enabled: bool,
+) -> Result<(), AppCommandError> {
+    db::set_session_workflow_enabled(&state.db, &session_id, enabled)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_workflow_enabled failed: {}", e).into())
+}
+
+/// W1 (Workflow integration, Step 2.2 — 2026-07-08):
+/// per-session workflow plugin name. Frontend
+/// `PluginSelect.vue` fires this on click; the engine's
+/// `build_workflow_ctx` reads the persisted name on the
+/// next IPC entry to call `load_workflow(name, project_path)`.
+///
+/// **Empty-string guard**: an empty `name` is rejected
+/// because the loader (`load_workflow`) treats `Some("")`
+/// and `None` identically (no plugin layer consulted), which
+/// would silently turn a workflow session into a
+/// non-workflow one in the breadcrumb injection — surprising
+/// behavior. Better to surface the invalid input.
+///
+/// **No disk-existence check**: the loader's
+/// `load_workflow` falls back to `default_workflow()` on
+/// missing-file, so a stale name never breaks the engine.
+/// We don't pre-validate the directory here — the
+/// `list_workflow_plugins` IPC is the canonical source of
+/// available names; the chip's popover only offers those.
+#[tauri::command]
+pub async fn set_session_plugin_name(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    name: String,
+) -> Result<(), AppCommandError> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(anyhow::anyhow!(
+            "set_session_plugin_name: plugin name must be non-empty"
+        )
+        .into());
+    }
+    db::set_session_plugin_name(&state.db, &session_id, &trimmed)
+        .await
+        .map_err(|e| anyhow::anyhow!("set_session_plugin_name failed: {}", e).into())
+}
+
+/// W1 (Workflow integration, Step 2.2 — 2026-07-08):
+/// discover available workflow plugins under
+/// `<project>/.everlasting/workflow/<dir>/workflow.json`.
+/// Returns the list of valid plugin names (alphabetical) so
+/// the frontend's `PluginSelect.vue` popover can populate
+/// itself without hard-coding "dev".
+///
+/// **Discovery rule**: a directory is a valid plugin iff
+/// `workflow.json` exists inside it. Empty directories
+/// are ignored (no warning — they're typical scratch
+/// state). Missing root dir → empty list (matches the
+/// `load_workflow` not-found contract: no plugins = just
+/// the default dev workflow).
+///
+/// Returns `Vec<String>` (just names, not full
+/// `WorkflowDef`s — `PluginSelect` only needs the
+/// identifier; `load_workflow` does the heavy lifting on
+/// the engine side).
+#[tauri::command]
+pub async fn list_workflow_plugins(project_path: String) -> Result<Vec<String>, AppCommandError> {
+    Ok(crate::agent::workflow::list_plugins(&project_path))
+}
+
 // ---------------------------------------------------------------------------
 // F5 (LLM Latency Tracking): per-message latency + per-tool duration IPCs
 //

@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/07-09-workflow-builtin-plugin/prd.md", "reason": "验收标准:内置 dev 三层齐备 / 两层查找 / 新项目开箱即用 / 架构保留 / 只读内置"}
+{"file": ".trellis/tasks/07-09-workflow-builtin-plugin/implement.md", "reason": "质量门:Step 0-4 全部测试通过 + Step 5.1 全量 cargo test --lib 绿 + Step 5.2 cargo check 无新 warning + 优先级链 4 场景测试全过 + 本项目仍用项目层 plugin"}
+{"file": "app/src-tauri/src/agent/workflow/builtin.rs", "reason": "3 个内置源测试(workflow_json validates / skills nonempty + frontmatter / agents nonempty + frontmatter)"}
+{"file": "app/src-tauri/src/agent/workflow/mod.rs", "reason": "list_plugins 3 个改断言(empty → [dev] / alphabetical + dev / ignores + dev)+ 2 个新测试(always_includes_builtin_dev / falls_back_to_builtin_when_project_missing)"}
+{"file": "app/src-tauri/src/skill/loader.rs", "reason": "3 个新 builtin_plugin 测试(loaded_for_dev_in_empty_project / project_plugin_overrides_builtin / builtin_beats_project_layer)+ 1 个改断言(list_infos_plugin_missing_dir 现在含 5 个 wf-* 内置项)"}
+{"file": "app/src-tauri/src/agent/subagent/loader.rs", "reason": "2 个新 builtin_plugin 测试(agent_loaded_for_dev_in_empty_project / project_plugin_agent_overrides_builtin)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "新增 BuiltinPlugin source layer scenario —— 文档化优先级链 + 接入点 + 测试覆盖 + out of scope"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Tool Contract 行更新 — 标记 2026-07-09 任务增量"}
+{"file": "app/src-tauri/resources/builtin-workflow/dev/README.md", "reason": "防漂移标注:内置源是 source of truth,与 .everlasting/workflow/dev/ 项目示例需保持同步"}

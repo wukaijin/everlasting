@@ -65,6 +65,18 @@ export const ASK_USER_QUESTION_TOOL_NAME = "ask_user_question";
  *  QuestionStore (only one pending interaction per session). */
 export const REQUEST_MODE_CHANGE_TOOL_NAME = "request_mode_change";
 
+/** Tool name for the blocking workflow state-transition request
+ *  tool (mirrors the Rust `definition().name` in
+ *  `app/src-tauri/src/tools/request_task_state_transition.rs`).
+ *  Frontend consumers key on this constant for the MessageItem
+ *  dispatch (2026-07-09, `07-09-workflow-transition-card`):
+ *  tool_use blocks with `name === REQUEST_TASK_STATE_TRANSITION_TOOL_NAME`
+ *  route to `<RequestTaskStateTransitionCard>`. Mutually exclusive
+ *  with the two tools above — all three share the same per-session
+ *  single-pending mutex on the backend's QuestionStore. */
+export const REQUEST_TASK_STATE_TRANSITION_TOOL_NAME =
+  "request_task_state_transition";
+
 /** Tauri event channel name (backend → frontend). Distinct from
  *  `tool:call` / `tool:result` / `permission:ask` so the listener
  *  can be wired independently (per the design's §5.4 routing). */
@@ -292,38 +304,119 @@ export interface ModeChangeResolvePayload {
   allow: boolean;
 }
 
-/** Tagged union carrying either a `ToolQuestionPayload` (the
- *  existing `ask_user_question` flow) or a `ModeChangePayload`
- *  (the new `request_mode_change` flow). Mirrors the Rust
+/** The four workflow state-machine states (mirrors the Rust
+ *  `WorkflowDef.states` for the dev plugin +
+ *  `TaskStatus::as_str`). Used by the task-state-transition
+ *  payload + card props. The literal union lets vue-tsc catch a
+ *  typo at the dispatch site (vs a bare `string`). */
+export type WorkflowState = "planning" | "implement" | "check" | "done";
+
+/** Backend → frontend payload emitted on the
+ *  `task:state:transition:request` channel (and returned inside
+ *  `PendingInteractionEntry.payload` by `get_pending_interaction`).
+ *  Mirrors the Rust `TaskStateTransitionPayload`
+ *  (`agent/question_store.rs`) which has NO `rename_all` — fields
+ *  are snake_case on the wire (shared IPC camelCase exemption,
+ *  same posture as `ModeChangePayload`).
+ *
+ *  Emitted by the `request_task_state_transition` blocking tool
+ *  when it registers a pending transition in the QuestionStore +
+ *  fires the event. The streamController listener wraps it into
+ *  the store's tagged-union `{ kind: "task_state_transition",
+ *  payload }`.
+ *
+ *  Field-by-field:
+ *  - `session_id` — the workflow session the transition belongs to.
+ *  - `tool_use_id` — matches the assistant
+ *    `ToolUse(request_task_state_transition)` block; MessageItem
+ *    dispatch pairs the card with its tool_use row via this.
+ *  - `target_state` — the state the agent wants to move to
+ *    (`planning`/`implement`/`check`/`done`). Backend validates
+ *    against the workflow's states.
+ *  - `current_state` — optional snapshot at tool-invocation time
+ *    (rendered in the "当前 → 目标" comparison row; omitted on the
+ *    wire when the backend had no workflow task resolved).
+ *  - `slug` — the task's slug (locates
+ *    `.everlasting/tasks/<slug>/task.json`). REQUIRED by the
+ *    resolve IPC (the handler has no WorkflowCtx, so it re-reads
+ *    `from` off disk via this slug). Omitted on the event wire only
+ *    when the backend couldn't resolve a slug (rare; the card
+ *    falls back to disabling allow).
+ *  - `reason` — agent-supplied explanation (≤500 chars). Optional.
+ *  - `ts` — unix ms (display ordering). */
+export interface TaskStateTransitionPayload {
+  session_id: string;
+  tool_use_id: string;
+  target_state: WorkflowState;
+  current_state?: WorkflowState | null;
+  slug?: string;
+  reason?: string;
+  ts: number;
+}
+
+/** `resolve_task_state_transition` IPC payload (frontend → backend).
+ *  Routes to `commands::question::resolve_task_state_transition` →
+ *  `workflow::set_task_state` (the single writer for task.json.status
+ *  + the `from → to` Rust hook, e.g. Check→Done triggers spec
+ *  distillation).
+ *
+ *  `allow` is the user's decision: `true` = apply the transition
+ *  (write task.json + dispatch hook) + write
+ *  `task_state_transition_allowed` audit; `false` = skip
+ *  `set_task_state` entirely + write `..._denied` audit +
+ *  tool_result becomes `{ cancelled_by_user: true }`.
+ *
+ *  Differs from `ModeChangeResolvePayload` in ONE field: **`slug`**
+ *  is required here because the IPC handler has no WorkflowCtx and
+ *  must locate `<project>/.everlasting/tasks/<slug>/task.json` to
+ *  read the current `from` state off disk. There is NO `fromState`
+ *  arg — the backend reads it fresh (the card does not echo it).
+ *
+ *  CamelCase at the JS layer (Tauri auto-translates to Rust
+ *  snake_case at the IPC boundary). */
+export interface TaskStateTransitionResolvePayload {
+  sessionId: string;
+  toolUseId: string;
+  targetState: WorkflowState;
+  slug: string;
+  allow: boolean;
+}
+
+/** Tagged union carrying a `ToolQuestionPayload` (the
+ *  `ask_user_question` flow), a `ModeChangePayload` (the
+ *  `request_mode_change` flow), or a `TaskStateTransitionPayload`
+ *  (the `request_task_state_transition` flow). Mirrors the Rust
  *  `PendingInteraction` enum's wire shape — `#[serde(tag =
  *  "kind", rename_all = "snake_case")]` — so the JSON arrives as
- *  `{ kind: "question", questions: [...] }` or `{ kind:
- *  "mode_change", target_mode: ... }`. Single-pending-mutex
+ *  `{ kind: "question", ... }` / `{ kind: "mode_change", ... }` /
+ *  `{ kind: "task_state_transition", ... }` with the variant's
+ *  fields flattened alongside `kind`. Single-pending-mutex
  *  semantics (only one variant per session) come from the
  *  backend's QuestionStore; this type is the frontend's mirror.
  *
  *  The `pendingBySession` Pinia cache stores these directly —
  *  callers read `getPending(sid)?.kind` to dispatch to the right
- *  card component (`<AskUserQuestionCard>` vs
- *  `<RequestModeChangeCard>`). */
+ *  card component (`<AskUserQuestionCard>` /
+ *  `<RequestModeChangeCard>` / `<RequestTaskStateTransitionCard>`). */
 export type PendingInteraction =
   | { kind: "question"; payload: ToolQuestionPayload }
-  | { kind: "mode_change"; payload: ModeChangePayload };
+  | { kind: "mode_change"; payload: ModeChangePayload }
+  | { kind: "task_state_transition"; payload: TaskStateTransitionPayload };
 
 /** IPC return shape of `get_pending_interaction`. Mirrors the
  *  Rust `PendingInteractionEntry` struct (top-level `kind` +
  *  nested tagged `payload`). The outer `kind` lets callers
- *  short-circuit on `entry.kind === "mode_change"` without
- *  parsing the tagged enum first; the `payload` carries the
- *  typed variant (dispatch on `kind`, read matching fields).
+ *  short-circuit on `entry.kind === "mode_change"` (etc.) without
+ *  parsing the tagged enum first; the `payload` carries the typed
+ *  variant (dispatch on `kind`, read matching fields).
  *
  *  Why a wrapper (not just `PendingInteraction` directly)? The
  *  Rust side's `get_payload` returns
- *  `PendingInteractionEntry { kind, payload }` so the IPC
- *  caller can `entry.kind` without consuming the payload. The
- *  frontend mirrors this 1:1. */
+ *  `PendingInteractionEntry { kind, payload }` so the IPC caller
+ *  can `entry.kind` without consuming the payload. The frontend
+ *  mirrors this 1:1. */
 export interface PendingInteractionEntry {
-  kind: "question" | "mode_change";
+  kind: "question" | "mode_change" | "task_state_transition";
   payload: PendingInteraction;
 }
 
@@ -338,6 +431,22 @@ export const MODE_CHANGE_EVENT = "mode:change:request";
  *  which calls `QuestionStore.resolve(session_id, response)`
  *  AFTER applying the mode via `set_session_mode_internal`. */
 export const RESOLVE_MODE_CHANGE_CMD = "resolve_mode_change";
+
+/** Tauri event channel name for `request_task_state_transition`
+ *  (backend → frontend, 2026-07-09). Distinct from the two channels
+ *  above so the listener wires independently. Mirrors the Rust
+ *  `app.emit("task:state:transition:request", payload)` site in
+ *  `state.rs::AppHandleSink::emit_task_state_transition`. */
+export const TASK_STATE_TRANSITION_EVENT = "task:state:transition:request";
+
+/** Tauri command name for `resolve_task_state_transition` (frontend
+ *  → backend). Routes to
+ *  `commands::question::resolve_task_state_transition`, which calls
+ *  `workflow::set_task_state` (BEFORE resolving the oneshot) when
+ *  allowed — the single writer for task.json.status + the
+ *  `from → to` Rust hook. */
+export const RESOLVE_TASK_STATE_TRANSITION_CMD =
+  "resolve_task_state_transition";
 
 /** Tauri command name for `get_pending_interaction` (frontend →
  *  backend). Routes to `commands::question::get_pending_interaction`,

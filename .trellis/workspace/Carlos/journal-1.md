@@ -1080,3 +1080,142 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: 07-08-workflow-integration — Phase 1 wrap-up
+
+**Date**: 2026-07-08
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+从 Phase 0 已完状态接续,完成 Phase 1 全部 4 步(skill 规范包 + plugin skill loader)。Step 1.1 plugin skill loader 实现 `SkillSource::Plugin` 变体 + workflow-aware 入口,保留旧入口做后向兼容;chat_loop L0 listing 接 plugin 层。Step 1.2-1.3 把设计文档 §A.4 / §A.5 的 5 个 wf-* skill body 落地到 `.everlasting/workflow/dev/skills/`。Step 1.4 加 artifact 查阅机制测试(task meta + prd/design/progress path 进 messages[0])。质量检查 approve-with-suggestions,无高优先级问题。每个 step 独立 commit。Phase 1 完成标志满足。
+
+### Main Changes
+
+- `app/src-tauri/src/skill/loader.rs`:`SkillSource::Plugin` 变体 + `plugin_skills_dir()` 路径解析 + `SkillCache::list_plugin` + `list_skill_infos_with_workflow` / `find_skill_with_workflow` workflow-aware 入口 + 9 个新单元测试
+- `app/src-tauri/src/agent/chat_loop.rs`:L0 skill listing 调用方切到 workflow-aware 入口(workflow_ctx=Some 时传 workflow_name;None 走老逻辑)
+- `app/src-tauri/src/agent/workflow/inject.rs`:`breadcrumb_includes_task_meta_and_artifact_paths` 新单元测试,断言 task.json meta(id/title/slug/status)+ prd.md / design.md / progress.md path 全部进 messages[0]
+- `.everlasting/workflow/dev/skills/wf-overview/SKILL.md` + 4 个 wf-* skill body(§A.4 完整 + §A.5 outline 填肉)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b7e8b74` | feat(workflow): Step 1.1 — plugin skill loader (SkillSource::Plugin + workflow-aware entry) |
+| `d3b8494` | feat(workflow): Step 1.2 — wf-overview skill body (§A.4 完整填,dev plugin 自带 skills) |
+| `0decc2c` | feat(workflow): Step 1.3 — wf-brainstorm / wf-before-dev / wf-check / wf-update-spec 4 skill body |
+| `c2698d4` | feat(workflow): Step 1.4 — artifact 查阅机制测试(task meta + prd/design/progress path 验证) |
+| `2fe8046` | docs(task): 07-08-workflow-integration — Phase 0+1 完成状态表 |
+
+### Testing
+
+- [OK] cargo test --lib -- skill:: agent::workflow:: → 105 passed
+- [OK] cargo test --lib (全量) → 1395 passed, 0 failed, 0 regression
+- [OK] cargo check / cargo clippy --lib → 0 新警告
+- [OK] trellis-check on Step 1.1 → approve-with-suggestions(无高优先级问题)
+
+### Status
+
+[OK] **Phase 1 完成,Phase 2 待开始**
+
+### Next Steps
+
+- Phase 2 批 A:Step 2.1 workflow.json 外置 + load_workflow + validate + fallback
+- Phase 2 批 B:Step 2.3-2.6 plugin agents + 门控 + delegation + checklist(2.4/2.6 风险最高,中间必跑全量 test)
+- Phase 3:hook + 沉淀闭环 + archive_task
+
+## Session 25: 07-08-workflow-integration — Step 3.2 沉淀闭环落地
+
+**Date**: 2026-07-09
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+从 Step 3.1 接续,完成 Step 3.2 `.everlasting/spec/` + `wf-update-spec` 落地(Phase 3 沉淀闭环第二档)。新建 `.everlasting/spec/` 目录约定(`README.md` + seed `backend/index.md`),借鉴 `.trellis/spec/` 结构但物理独立(Q7 决定)。`trigger_spec_distillation` 从 Step 3.1 的 marker-only stub 升级为完整交接路径:mkdir `.everlasting/spec/` 兜底 + 保留 marker + append `progress.md` "Spec distillation pending" hint 块(带哨兵)。Q9 Rust hook 不调 LLM,但 progress.md hint 把任务交接给 LLM 侧 done turn / 下次 session — agent 读 progress.md → 加载 wf-update-spec skill → 写正式 spec 到 `.everlasting/spec/<package>/<layer>/`。3 个新测试(spec dir 创建 / progress hint / marker-present idempotent)+ 全量 cargo test 1466 pass(0 regression)+ state.rs clippy 零新警告。Phase 3 进度 1/3 → 2/3。
+
+### Main Changes
+
+- `.everlasting/spec/README.md` — 顶层目录约定(Q7 + 结构 + 模板样板 + 写入 / 读取流程 + 与 `.trellis/spec/` 关系)
+- `.everlasting/spec/backend/index.md` — seed 索引(借鉴 `.trellis/spec/backend/index.md` 模板;规范表 + how to fill + 沉淀方向指引)
+- `app/src-tauri/src/agent/workflow/state.rs`:
+  - `PROJ_NS_SPEC_DIR` 常量:`.everlasting/spec`
+  - `trigger_spec_distillation` 升级:mkdir spec dir + marker 保留 + `build_distillation_hint` + `append_progress_hint`
+  - 哨兵:`<!-- wf:distillation-pending:<slug>:<ts> -->` ... `<!-- /wf:distillation-pending -->`
+  - 3 个新单元测试:`creates_spec_dir_when_missing` / `appends_progress_md_hint` / `idempotent_on_marker_presence`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3990463` | feat(workflow): Step 3.2 — .everlasting/spec/ + trigger_spec_distillation 触发沉淀路径 |
+| `ca74c9f` | docs(task): 07-08-workflow-integration — Step 3.2 完成状态表 + 详情勾选 |
+
+### Testing
+
+- [OK] cargo test --lib workflow::state:: → 14 passed(+3 new)
+- [OK] cargo test --lib (全量) → 1466 passed,0 failed,0 regression
+- [OK] cargo build --lib → 0 errors(1 unused import 警告为旧)
+- [OK] cargo clippy --lib state.rs → 0 新警告(其他 152 警告全为旧)
+
+### Status
+
+[OK] **Step 3.2 完成,Phase 3 2/3**
+
+### Next Steps
+
+- Phase 3 Step 3.3:progress.md 交接叙述 + archive_task command(task done 后移到 `.everlasting/tasks/archive/YYYY-MM/` + 写 status=completed + 可选 git commit)
+- Phase 3 完成后回到 ROADMAP 看 V2 第三档剩余项 + 第四档(B8 DAG / 全局 TDD 等)
+
+## Session 26: 07-08-workflow-integration — Step 3.3 archive_task + Phase 3 收官
+
+**Date**: 2026-07-09
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+完成 Phase 3 Step 3.3 `archive_task` IPC + 沉淀闭环最后一块。`TaskStatus` 加 `Completed` 变体(serde "completed";`from_str_opt` accept 避免被误降级为 Planning),`TaskJson` 加 `completed_at: Option<String>`(skip_serializing_if,向前兼容)。`archive_task_init(project_path, slug, no_commit)` Rust helper 走纯 sync IO:`fs::rename` 移动 `<slug>/` → `archive/<YYYY-MM>/<slug>/` + 写 task.json Completed + completed_at + (默认) `git add` + `git commit`。`TaskError` 加 `AlreadyArchived`(archive 目标已占用,拒覆盖)/ `NotInDoneStatus`(planning/implement/check 不让归档)。`inject::resolve_current_task` 防御性跳 `Completed`。所有 9 处 `TaskJson {...}` 初始化点补 `completed_at: None` 向后兼容。5 个新单元测试(moves / refuses non-done / refuses already-archived / missing / invalid slug)+ `task_json_omits_none_*` 扩展覆盖 completed_at skip。`cargo test --lib` 1471 pass(从 1466 +5,零回归);clippy 零新警告。Phase 3 3/3 ✅,跨 session 续 task 完整闭环。
+
+### Main Changes
+
+- `agent::workflow::task`:
+  - `TaskStatus::Completed` + `from_str_opt` accept + `as_str` 返 "completed"
+  - `TaskJson::completed_at: Option<String>` (serde default + skip_serializing_if)
+  - `TaskError::AlreadyArchived` / `NotInDoneStatus`
+  - `PROJ_NS_TASKS_ARCHIVE_DIR` 常量("archive")
+  - `archive_task_init(project_path, slug, no_commit) -> TaskResult<TaskJson>`
+  - `git_add_path` / `git_commit` spawn helper(继承开发者 identity + branch)
+  - 5 新单元测试
+- `agent::workflow::mod.rs`: re-export `archive_task_init` + `PROJ_NS_TASKS_ARCHIVE_DIR`
+- `agent::workflow::inject.rs`: `resolve_current_task` skip `Completed` + 测试 fixture 补 completed_at
+- `agent::subagent::dispatch.rs`: 测试 fixture 补 completed_at
+- `tools::update_checklist`: 2 处 fixture 补 completed_at
+- `commands::task::archive_task` IPC + `map_task_error` 覆盖新 variants
+- `commands::mod::all_command_names`: 注册 `"archive_task"`
+- `lib.rs::run`: invoke_handler 注册 `commands::task::archive_task`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bd3ce5f` | feat(workflow): Step 3.3 — archive_task IPC + TaskStatus::Completed + completed_at |
+| `65bb4f6` | docs(task): 07-08-workflow-integration — Step 3.3 完成状态表 + Phase 3 收官 |
+
+### Testing
+
+- [OK] cargo test --lib workflow::task:: → 15 passed(+5 new)
+- [OK] cargo test --lib (全量) → 1471 passed,0 failed,0 regression(从 1466 +5)
+- [OK] cargo build --lib --tests → 0 errors
+- [OK] cargo clippy --lib → state.rs/task.rs/inject.rs/commands/task.rs 零新警告(1 io::Error::other 已修)
+
+### Status
+
+[OK] **Phase 3 3/3 全部完成,跨 session 续 task 完整闭环**
+
+### Next Steps
+
+- 07-08-workflow-integration 任务收官(待 Phase 3 wrap-up journal + commit)
+- 下一档(V2 第三档剩余 / 第四档):B8 DAG / 全局 TDD / 强制全局 workflow 等见 ROADMAP §1.2

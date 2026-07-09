@@ -250,6 +250,28 @@ pub async fn set_subagent_model(
                 )
             })?;
         }
+        // Step 2.3 (`07-08-workflow-integration`): plugin
+        // agent model is not yet writable from the UI — the
+        // plugin layer is currently read-only (mirrors the
+        // skills plugin layer's read-only contract).
+        // Surfaces as `InvalidRequest` so the frontend's
+        // optimistic-update rollback can fire cleanly rather
+        // than silently no-op'ing.
+        SubagentSource::Plugin => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "set_subagent_model: plugin agents are read-only; edit the .md under <project>/.everlasting/workflow/<wf>/agents/ directly",
+            ));
+        }
+        // 07-09-workflow-builtin-plugin: 内置 plugin agents 是
+        // `include_str!` 编译期常量,无磁盘路径。要覆盖需在项目 plugin
+        // 目录放同名 .md(从而走 SubagentSource::Plugin 分支)。
+        SubagentSource::BuiltinPlugin => {
+            return Err(AppCommandError::new(
+                ErrorCategory::InvalidRequest,
+                "set_subagent_model: builtin-plugin agents are read-only compile-time constants; override by placing a same-named .md in <project>/.everlasting/workflow/dev/agents/",
+            ));
+        }
     }
 
     // Re-read the cache so the returned row reflects the

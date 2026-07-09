@@ -601,6 +601,7 @@ mod tests {
             db: crate::tools::test_default_pool(),
             project_id: "test-proj".to_string(),
             data_dir: tmp.path().to_path_buf(),
+        workflow_name: None,
         }
     }
 
@@ -780,6 +781,7 @@ mod tests {
             db: crate::tools::test_default_pool(),
             project_id: "test-proj".to_string(),
             data_dir: tmp.path().to_path_buf(),
+        workflow_name: None,
         };
         let (msg, is_error, _, _) = execute(
             &serde_json::json!({"command": "pwd"}),

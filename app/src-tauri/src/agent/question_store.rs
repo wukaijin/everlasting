@@ -50,10 +50,11 @@
 //!
 //! ## 2026-07-07 extension: PendingInteraction enum
 //!
-//! The same single-pending-per-session gate now covers BOTH the
-//! `ask_user_question` tool and the `request_mode_change` tool.
-//! Both are user-interaction-gated, both need the
-//! "switch-session keeps oneshot alive" semantic, and both want
+//! The same single-pending-per-session gate now covers the
+//! `ask_user_question` tool, the `request_mode_change` tool,
+//! and the `request_task_state_transition` tool (Phase 3 Step 3.1).
+//! All three are user-interaction-gated, all need the
+//! "switch-session keeps oneshot alive" semantic, and all want
 //! the same frontend "inline card with allow/deny" UX. We
 //! unify them under `PendingInteraction` (a tagged enum) so the
 //! store keys on `session_id` once and the IPC
@@ -61,10 +62,11 @@
 //! `PendingInteractionEntry` (kind + payload) the frontend can
 //! dispatch on. The wire-side split stays snake_case on both
 //! sides (same shared-struct exemption as `ToolQuestionPayload`).
-//! Mutation surface is `ask_user_question::execute_blocking` and
-//! the new `request_mode_change::execute_blocking`; both build a
-//! `PendingInteraction::Question(...)` or `::ModeChange(...)`
-//! variant before calling `register`.
+//! Mutation surface is `ask_user_question::execute_blocking`,
+//! `request_mode_change::execute_blocking`, and (Step 3.1)
+//! `request_task_state_transition::execute_blocking`; all three
+//! build a `PendingInteraction::Question(...)`, `ModeChange(...)`,
+//! or `TaskStateTransition(...)` variant before calling `register`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -191,18 +193,76 @@ pub struct ModeChangePayload {
     pub ts: i64,
 }
 
-/// The two interaction kinds the store gates. The `kind` tag
+/// IPC wire shape — the `request_task_state_transition` payload
+/// the frontend renders into `<RequestTaskStateTransitionCard>`.
+///
+/// # Why snake_case (IPC `camelCase` rule exemption)
+///
+/// Same exemption as `ToolQuestionPayload` + `ModeChangePayload`:
+/// the same kind is shared with
+/// `tools::request_task_state_transition::RequestTaskStateTransitionInput`
+/// (LLM tool input). The LLM schema (see
+/// `request_task_state_transition::definition()`'s `input_schema`)
+/// is snake_case to match the dev `WorkflowDef` state names
+/// (`planning` / `implement` / `check` / `done`). The entire emit
+/// chain stays snake_case on both sides of the IPC.
+///
+/// `current_state` is the task's `status` at the time the LLM
+/// invoked the tool (read off `workflow_ctx.current_task.status`
+/// at the blocking tool's entry). The frontend uses it to color
+/// the "current state → target state" comparison pill (same UX
+/// pattern as `<RequestModeChangeCard>`).
+///
+/// `slug` is the task identifier so the IPC handler
+/// (`commands::question::resolve_task_state_transition`) can
+/// locate `<project>/.everlasting/tasks/<slug>/task.json`
+/// without an additional `WorkflowCtx` reconstruction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskStateTransitionPayload {
+    pub session_id: String,
+    pub tool_use_id: String,
+    /// Target state name — must be one of `planning` /
+    /// `implement` / `check` / `done` (validated by the tool
+    /// via `agent::workflow::parse_target_state`; the IPC
+    /// re-validates on resolve). The wire enum mirrors
+    /// `WorkflowDef::states` so a plugin with custom states
+    /// would surface `to_string()` of each state — Step 3.1
+    /// only wires the dev `dev` plugin's 4-state set.
+    pub target_state: String,
+    /// Task's current status at the time the tool was invoked.
+    /// `None` is reserved for future "no current task" edge
+    /// cases; production always populates a workflow session
+    /// with a known current task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_state: Option<String>,
+    /// Task slug so the IPC handler can locate the on-disk
+    /// `task.json` to mutate (the IPC layer doesn't carry the
+    /// agent loop's `WorkflowCtx`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// LLM-supplied explanation (≤500 chars). Optional; the
+    /// card renders it as a sub-title under the target state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Unix epoch ms (backend authoritative). Lets the frontend
+    /// display "asked 3s ago" without re-deriving from the
+    /// `ChatEvent` log.
+    pub ts: i64,
+}
+
+/// The three interaction kinds the store gates. The `kind` tag
 /// drives both the IPC dispatch (the frontend's
-/// `<AskUserQuestionCard>` vs `<RequestModeChangeCard>`) AND the
-/// audit kind written by the resolve path. New kinds require
-/// adding a new `PendingInteraction` variant + a new `as_str()`
-/// arm + updating the frontend's `PendingInteraction` discriminated
-/// union.
+/// `<AskUserQuestionCard>` / `<RequestModeChangeCard>` /
+/// `<RequestTaskStateTransitionCard>`) AND the audit kind written
+/// by the resolve path. New kinds require adding a new
+/// `PendingInteraction` variant + a new `as_str()` arm + updating
+/// the frontend's `PendingInteraction` discriminated union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionKind {
     Question,
     ModeChange,
+    TaskStateTransition,
 }
 
 impl InteractionKind {
@@ -217,6 +277,7 @@ impl InteractionKind {
         match self {
             Self::Question => "question",
             Self::ModeChange => "mode_change",
+            Self::TaskStateTransition => "task_state_transition",
         }
     }
 }
@@ -231,6 +292,7 @@ impl InteractionKind {
 pub enum PendingInteraction {
     Question(ToolQuestionPayload),
     ModeChange(ModeChangePayload),
+    TaskStateTransition(TaskStateTransitionPayload),
 }
 
 impl PendingInteraction {
@@ -238,6 +300,7 @@ impl PendingInteraction {
         match self {
             Self::Question(_) => InteractionKind::Question,
             Self::ModeChange(_) => InteractionKind::ModeChange,
+            Self::TaskStateTransition(_) => InteractionKind::TaskStateTransition,
         }
     }
 }
@@ -356,6 +419,7 @@ impl QuestionStore {
         let ts = match &payload {
             PendingInteraction::Question(p) => p.ts,
             PendingInteraction::ModeChange(p) => p.ts,
+            PendingInteraction::TaskStateTransition(p) => p.ts,
         };
         map.insert(
             session_id.to_string(),
