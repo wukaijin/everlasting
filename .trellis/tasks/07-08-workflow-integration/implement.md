@@ -10,7 +10,7 @@
 |---|---|---|
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
-| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | 🟡 5/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) / 9e513bc (2.5) |
+| Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ✅ 6/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) / 9e513bc (2.5) / 64a9972 (2.6) |
 | Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
 
 ## 前置常量
@@ -168,11 +168,17 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 #### Step 2.6 — checklist 同步(⚠️ 风险最高,可与 2.4/2.5 并行)
 
-- [ ] `tools/update_checklist.rs:execute` 加分支:workflow session → 改写 task.json.items(非 loop-local Vec);非 workflow → 保持原 loop-local Vec 行为
-- [ ] B12 `coerce_at_most_one_in_progress` 逻辑保留(写目标从 Vec 换成 task.json.items)
-- [ ] `ChecklistItem` struct 加 `id: String` + `tdd: Option<bool>` 字段(对应 task.json.items)
-- [ ] **做完立即跑全量测试**
-- **验证**:集成测试——跨 session 续 task → items 进度持久;worker 读 task.json 拿进度;非 workflow session B12 原测试全过
+- [x] `tools/update_checklist.rs:execute` 加分支:workflow session → 改写 task.json.items;非 workflow → 保持原 loop-local Vec 行为
+  - 新签名 `execute(input, handle, ctx: &ToolContext)`(tools/mod.rs 调点同步更新)
+  - `maybe_persist_to_task_json` helper:workflow_name Some → 读 current task.json → 持久化;None → no-op
+  - legacy 完全不动(in-memory handle 始终被更新)
+- [x] B12 `coerce_at_most_one_in_progress` 逻辑保留(写目标从 Vec 换成 task.json.items)
+- [x] `ChecklistItem` struct 加 `id: String`(#[serde(default)])+ `tdd: Option<bool>` 字段(对应 TaskItem schema);LLM JSON schema 同步加
+- [x] ChecklistStatus → TaskStatus 映射(Pending→Planning / InProgress→Implement / Done→Done)— Phase 2 简化,Phase 3 可扩
+- [x] `derive_item_id` 用 FNV-1a content hash 处理 LLM 省略 id 的 legacy case
+- [x] `pick_first_unfinished_task` lex-by-slug,skip Done,corrupt skip
+- [x] **全量 cargo test 零回归**(1437 pass,+5 new)— B12 原测试全过
+- **验证**:✅ 集成测试 — `execute_workflow_persists_items_to_task_json`(全 round-trip,含 tdd)/ `execute_non_workflow_does_not_touch_task_json`(legacy 路径不变)/ `execute_workflow_derives_id_from_content_when_missing` / `checklist_item_parses_id_and_tdd_from_json` / `checklist_item_omitted_id_and_tdd_default_cleanly`;cross-session 续 task → 读 task.json.items 拿进度 OK;worker dispatch 读 task.json.items 拿进度 OK
 
 **Phase 2 完成标志**:改 workflow.json 改流程;planning 只派 researcher;delegation 模板注入;checklist 跨 session 持久。
 
