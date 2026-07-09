@@ -1168,3 +1168,54 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 
 - Phase 3 Step 3.3:progress.md 交接叙述 + archive_task command(task done 后移到 `.everlasting/tasks/archive/YYYY-MM/` + 写 status=completed + 可选 git commit)
 - Phase 3 完成后回到 ROADMAP 看 V2 第三档剩余项 + 第四档(B8 DAG / 全局 TDD 等)
+
+## Session 26: 07-08-workflow-integration — Step 3.3 archive_task + Phase 3 收官
+
+**Date**: 2026-07-09
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+完成 Phase 3 Step 3.3 `archive_task` IPC + 沉淀闭环最后一块。`TaskStatus` 加 `Completed` 变体(serde "completed";`from_str_opt` accept 避免被误降级为 Planning),`TaskJson` 加 `completed_at: Option<String>`(skip_serializing_if,向前兼容)。`archive_task_init(project_path, slug, no_commit)` Rust helper 走纯 sync IO:`fs::rename` 移动 `<slug>/` → `archive/<YYYY-MM>/<slug>/` + 写 task.json Completed + completed_at + (默认) `git add` + `git commit`。`TaskError` 加 `AlreadyArchived`(archive 目标已占用,拒覆盖)/ `NotInDoneStatus`(planning/implement/check 不让归档)。`inject::resolve_current_task` 防御性跳 `Completed`。所有 9 处 `TaskJson {...}` 初始化点补 `completed_at: None` 向后兼容。5 个新单元测试(moves / refuses non-done / refuses already-archived / missing / invalid slug)+ `task_json_omits_none_*` 扩展覆盖 completed_at skip。`cargo test --lib` 1471 pass(从 1466 +5,零回归);clippy 零新警告。Phase 3 3/3 ✅,跨 session 续 task 完整闭环。
+
+### Main Changes
+
+- `agent::workflow::task`:
+  - `TaskStatus::Completed` + `from_str_opt` accept + `as_str` 返 "completed"
+  - `TaskJson::completed_at: Option<String>` (serde default + skip_serializing_if)
+  - `TaskError::AlreadyArchived` / `NotInDoneStatus`
+  - `PROJ_NS_TASKS_ARCHIVE_DIR` 常量("archive")
+  - `archive_task_init(project_path, slug, no_commit) -> TaskResult<TaskJson>`
+  - `git_add_path` / `git_commit` spawn helper(继承开发者 identity + branch)
+  - 5 新单元测试
+- `agent::workflow::mod.rs`: re-export `archive_task_init` + `PROJ_NS_TASKS_ARCHIVE_DIR`
+- `agent::workflow::inject.rs`: `resolve_current_task` skip `Completed` + 测试 fixture 补 completed_at
+- `agent::subagent::dispatch.rs`: 测试 fixture 补 completed_at
+- `tools::update_checklist`: 2 处 fixture 补 completed_at
+- `commands::task::archive_task` IPC + `map_task_error` 覆盖新 variants
+- `commands::mod::all_command_names`: 注册 `"archive_task"`
+- `lib.rs::run`: invoke_handler 注册 `commands::task::archive_task`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bd3ce5f` | feat(workflow): Step 3.3 — archive_task IPC + TaskStatus::Completed + completed_at |
+| `65bb4f6` | docs(task): 07-08-workflow-integration — Step 3.3 完成状态表 + Phase 3 收官 |
+
+### Testing
+
+- [OK] cargo test --lib workflow::task:: → 15 passed(+5 new)
+- [OK] cargo test --lib (全量) → 1471 passed,0 failed,0 regression(从 1466 +5)
+- [OK] cargo build --lib --tests → 0 errors
+- [OK] cargo clippy --lib → state.rs/task.rs/inject.rs/commands/task.rs 零新警告(1 io::Error::other 已修)
+
+### Status
+
+[OK] **Phase 3 3/3 全部完成,跨 session 续 task 完整闭环**
+
+### Next Steps
+
+- 07-08-workflow-integration 任务收官(待 Phase 3 wrap-up journal + commit)
+- 下一档(V2 第三档剩余 / 第四档):B8 DAG / 全局 TDD / 强制全局 workflow 等见 ROADMAP §1.2
