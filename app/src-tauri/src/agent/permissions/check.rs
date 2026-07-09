@@ -207,7 +207,21 @@ pub async fn check(
                     // For the permission layer, we treat the path as
                     // relative to ctx.cwd unless it's already absolute.
                     let abs_path = crate::projects::boundary::resolve_path(&p, &ctx.cwd);
-                    let inside = crate::projects::boundary::is_within_root(&ctx.cwd, &abs_path);
+                    // read-side boundary decouple (2026-07-09, bug fix):
+                    // inside 判定锚点用 `ctx.worktree_path`(项目根),与
+                    // Tier 2.5 一致 —— 不用 `ctx.cwd`。隔离 worker 的 cwd
+                    // 是其 worktree 路径(`<app_data_dir>/worktrees/...
+                    // /worker/<run_id>`),但 worker 读文件用的是原始项目根
+                    // 的绝对路径;cwd 与原始项目根不在同一棵子树 →
+                    // is_within_root 误判 outside → 每个只读工具都进 ask_path
+                    // → 弹审批。改锚点为项目根后,隔离 worker 读项目根文件
+                    // 正确判 inside → 静默 Allow(隔离 worker 读源码是正常行为)。
+                    // 非隔离 worker / 父 session 的 cwd == worktree_path == 项目根
+                    // → 行为不变。
+                    let inside = crate::projects::boundary::is_within_root(
+                        &ctx.worktree_path,
+                        &abs_path,
+                    );
                     // Tier 4.1: check session_tool_permissions
                     // match_kind='path' for a grant. If hit, Allow.
                     if let Ok(true) =

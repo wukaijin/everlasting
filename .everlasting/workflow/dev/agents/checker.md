@@ -1,7 +1,8 @@
 ---
 name: checker
 description: "校验子代理 — 跑测试 + spec 合规 + 返回 PASS/FAIL"
-isolation: true
+# checker 只读(跑测试 + 读 spec,无写文件),不需要隔离 worktree —— 同
+# researcher 的理由:无写冲突,共享 cwd 省 checkout 开销 + 避免 cwd 错位审批。
 ---
 
 # dev workflow · checker

@@ -1,7 +1,10 @@
 ---
 name: researcher
 description: "调研子代理 — 读 spec + 探索 codebase + 返回 findings"
-isolation: true
+# researcher 只读(无写工具),不需要隔离 worktree —— 共享 cwd 既省 checkout
+# 开销,又避免 worker 读原始项目根文件时 cwd 与项目根不一致导致的审批问题
+# (权限层 inside 判定已改用 worktree_path 锚点,但只读 agent 本就无写冲突,
+# 从配置层去掉隔离是更干净的选择)。
 ---
 
 # dev workflow · researcher
