@@ -362,16 +362,42 @@ pub(crate) async fn run_subagent(
     // builtin precedence). Replaces the static `lookup_subagent`.
     // Unknown name → error tool_result (keeps the
     // tool_use/tool_result pairing invariant).
-    let Some(loaded) = subagent_cache.lookup(&project_path, subagent_name).await else {
+    //
+    // W1 (Workflow integration, Step 2.7 — 2026-07-09):
+    // workflow sessions consult the *workflow-aware* lookup so the
+    // plugin `.everlasting/workflow/<wf>/agents/` layer
+    // (Step 2.3, highest precedence) is honored. Before this the
+    // dispatch path always used the legacy `lookup`, so a plugin's
+    // `researcher.md` / `implementer.md` / `checker.md` was never
+    // loaded — the role-gate (Step 2.4) would correctly *allow* the
+    // role but the worker fell back to the builtin/project/user body.
+    // Non-workflow callers (`workflow_ctx = None`) keep the legacy
+    // path byte-for-byte.
+    let wf_name = workflow_ctx.map(|c| c.workflow_def.name.as_str());
+    let Some(loaded) = (match wf_name {
+        Some(wf) => {
+            subagent_cache
+                .lookup_with_workflow(&project_path, Some(wf), subagent_name)
+                .await
+        }
+        None => subagent_cache.lookup(&project_path, subagent_name).await,
+    }) else {
         // Build a friendly "available" hint by re-listing (cheap;
         // the cache is mtime-fenced so this is a HashMap lookup
         // when nothing changed since the dispatch_def was built).
-        let available: Vec<String> = subagent_cache
-            .list(&project_path)
-            .await
-            .into_iter()
-            .map(|l| l.def.name)
-            .collect();
+        // Same workflow/legacy split as the lookup above so the
+        // hint reflects the plugin layer the caller is dispatching in.
+        let available: Vec<String> = match wf_name {
+            Some(wf) => {
+                subagent_cache
+                    .list_with_workflow(&project_path, Some(wf))
+                    .await
+            }
+            None => subagent_cache.list(&project_path).await,
+        }
+        .into_iter()
+        .map(|l| l.def.name)
+        .collect();
         let content = format!(
             "Unknown subagent '{}'. Available: {}.",
             subagent_name,
@@ -2532,5 +2558,64 @@ mod tests {
         let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
         let msg = denial.expect("researcher must be denied in done");
         assert!(msg.contains("(none)"), "done's allowed list is empty: {msg}");
+    }
+
+    // ---- Step 2.7: workflow-aware dispatch resolution wiring ----
+    //
+    // `run_subagent`'s lookup branch (dispatch.rs ~line 377) now
+    // routes to `lookup_with_workflow` when `workflow_ctx` carries
+    // a plugin name, so the plugin `.everlasting/workflow/<wf>/agents/`
+    // layer wins over builtin/user/project. Before Step 2.7 the
+    // dispatch path always used the legacy `lookup`, so a plugin's
+    // `researcher.md` (Step 2.3) was never loaded even though the
+    // role-gate (Step 2.4) correctly *allowed* the role.
+    //
+    // `run_subagent` itself needs 25+ args + a live provider/db, so
+    // a full end-to-end dispatch test is out of scope here. Instead
+    // this test pins the cache-level contract the dispatch branch
+    // depends on: a plugin-only agent body is reachable via
+    // `lookup_with_workflow` under the workflow name the dispatch
+    // branch reads from `workflow_ctx.workflow_def.name`. If this
+    // test regresses, the dispatch branch silently falls back to
+    // the builtin body (the exact Step 2.7 bug class).
+
+    #[tokio::test]
+    async fn workflow_dispatch_resolves_plugin_agent_body() {
+        use crate::agent::subagent::SubagentSource;
+
+        // Plugin agent lives ONLY in the workflow plugin layer.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let plugin_dir = proj_tmp
+            .path()
+            .join(".everlasting")
+            .join("workflow")
+            .join("dev")
+            .join("agents");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("researcher.md"),
+            "---\nname: researcher\ndescription: \"\"\n---\nPLUGIN_BODY_STEP27",
+        )
+        .unwrap();
+
+        let cache = SubagentCache::arc();
+        let project_path = proj_tmp.path().to_string_lossy().to_string();
+
+        // Workflow name pulled from `WorkflowCtx.workflow_def.name`
+        // exactly as dispatch.rs ~line 376 does.
+        let wf_name = dev_workflow_def().name; // "dev"
+        let loaded = cache
+            .lookup_with_workflow(&project_path, Some(&wf_name), "researcher")
+            .await
+            .expect("plugin researcher must resolve via lookup_with_workflow");
+        assert_eq!(
+            loaded.source,
+            SubagentSource::Plugin,
+            "dispatch branch must see the plugin layer, not the builtin",
+        );
+        assert!(
+            loaded.def.system_prompt.contains("PLUGIN_BODY_STEP27"),
+            "dispatch branch must load the plugin body, not the builtin body",
+        );
     }
 }
