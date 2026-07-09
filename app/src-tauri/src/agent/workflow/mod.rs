@@ -62,6 +62,9 @@ pub mod inject;
 /// (Step 3.2) replaces the hook stub bodies.
 pub mod state;
 
+/// app 内置 plugin 源(`include_str!` 编译期常量)。07-09-workflow-builtin-plugin。
+pub mod builtin;
+
 // `task` + `state` slots are reserved for Phase 0 Step 0.4
 // and Phase 3 Step 3.1 respectively. The first (`task`) is
 // live since Step 0.4; the second (`state`) lands here.
@@ -128,6 +131,12 @@ pub use inject::{
 pub use state::{
     parse_target_state, preflight_implement_check, set_task_state, trigger_spec_distillation,
     StateResult, StateTransitionError,
+};
+
+// Re-export 内置源常量,供 skill/subagent loader 消费(07-09-workflow-builtin-plugin)。
+#[allow(unused_imports)]
+pub use builtin::{
+    builtin_workflow_json, BUILTIN_DEV_AGENTS, BUILTIN_DEV_SKILLS, BUILTIN_PLUGIN_NAMES,
 };
 // ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
@@ -535,24 +544,24 @@ mod tests {
 
     #[test]
     fn list_plugins_returns_empty_when_root_missing() {
-        // No `.everlasting/workflow/` directory → empty list
-        // (matches `load_workflow`'s not-found contract:
-        // no plugins = default dev on next load).
+        // 07-09-workflow-builtin-plugin:现在即使项目无 workflow 目录,
+        // 也返回内置 plugin 名(至少 dev),不再为空。
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), Vec::<String>::new());
+        assert_eq!(list_plugins(&path), vec!["dev".to_string()]);
     }
 
     #[test]
     fn list_plugins_discovers_alphabetical() {
         // Two plugins written out-of-order; `list_plugins`
         // must sort alphabetically (deterministic popover
-        // order in `PluginSelect.vue`).
+        // order in `PluginSelect.vue`). The builtin `dev`
+        // is always included (07-09-workflow-builtin-plugin).
         let proj_tmp = tempfile::TempDir::new().unwrap();
         write_workflow(proj_tmp.path(), "zulu", "{}");
         write_workflow(proj_tmp.path(), "alpha", "{}");
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["alpha", "zulu"]);
+        assert_eq!(list_plugins(&path), vec!["alpha", "dev", "zulu"]);
     }
 
     #[test]
@@ -560,6 +569,8 @@ mod tests {
         // A directory without `workflow.json` is not a
         // plugin — silently ignored (matches the scratch
         // state contract: empty dirs are typical).
+        // The builtin `dev` is always included
+        // (07-09-workflow-builtin-plugin).
         let proj_tmp = tempfile::TempDir::new().unwrap();
         write_workflow(proj_tmp.path(), "real", "{}");
         // Empty sibling dir — no workflow.json
@@ -568,7 +579,32 @@ mod tests {
         )
         .unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["real"]);
+        assert_eq!(list_plugins(&path), vec!["dev", "real"]);
+    }
+
+    #[test]
+    fn list_plugins_always_includes_builtin_dev() {
+        // 空项目目录 → 只有内置 dev(项目可覆盖 + 内置 fallback 的核心行为)。
+        // 07-09-workflow-builtin-plugin: 这是新增断言,与上面的修改独立。
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let path = proj_tmp.path().to_string_lossy().to_string();
+        let plugins = list_plugins(&path);
+        assert!(
+            plugins.contains(&"dev".to_string()),
+            "builtin dev always present: {plugins:?}"
+        );
+    }
+
+    #[test]
+    fn load_workflow_falls_back_to_builtin_when_project_missing() {
+        // 项目无 dev 目录 → 内置 dev(非 default_workflow 常量路径,但二者等价)。
+        // 07-09-workflow-builtin-plugin: 验证空项目能拿到内置 dev WorkflowDef。
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let path = proj_tmp.path().to_string_lossy().to_string();
+        let loaded = load_workflow("dev", &path);
+        assert_eq!(loaded.name, "dev");
+        assert_eq!(loaded.initial, "planning");
+        assert_eq!(loaded.states.len(), 4);
     }
 
     // ---- Step 2.5: delegation template helpers ------------------------

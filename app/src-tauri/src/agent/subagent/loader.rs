@@ -78,7 +78,7 @@ const PROJECT_NAMESPACE: &str = ".everlasting";
 const MAX_AGENT_FILE_SIZE: u64 = 64 * 1024; // 64 KiB
 
 /// Where a subagent definition came from. `Plugin` overrides
-/// `Project` (and `Project` overrides `User`, which overrides
+/// `BuiltinPlugin` (which overrides `Project` and `User` and
 /// `Builtin`) on a name collision.
 ///
 /// Step 2.3 (`07-08-workflow-integration`): added `Plugin`
@@ -89,12 +89,20 @@ const MAX_AGENT_FILE_SIZE: u64 = 64 * 1024; // 64 KiB
 /// the plugin's `workflow.json`. Non-workflow callers
 /// (using the existing `list` / `lookup` methods) never
 /// see the plugin layer.
+///
+/// 07-09-workflow-builtin-plugin: added `BuiltinPlugin` for
+/// app-bundled `include_str!` constants. Priority
+/// `Plugin > BuiltinPlugin > Project > User > Builtin`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubagentSource {
     Builtin,
     User,
     Project,
     Plugin,
+    /// app 内置 plugin agent(`include_str!` 常量)。
+    /// 07-09-workflow-builtin-plugin: 编译期常量,
+    /// workflow session 在项目 plugin 缺失时回退到这里。
+    BuiltinPlugin,
 }
 
 impl SubagentSource {
@@ -104,6 +112,7 @@ impl SubagentSource {
             Self::User => "user",
             Self::Project => "project",
             Self::Plugin => "plugin",
+            Self::BuiltinPlugin => "builtin-plugin",
         }
     }
 }
@@ -460,56 +469,28 @@ async fn scan_dir(dir: &Path, source: SubagentSource) -> Vec<LoadedAgentFile> {
     out
 }
 
-/// Load + parse one agent `.md`. Returns `Ok(None)` when the file is
-/// deliberately skipped (over-cap / missing or illegal `name`); `Err`
-/// for I/O failures.
-///
-/// **No file-stem fallback for `name`** (PRD R3 / Q2 — unlike B3
-/// commands and B4 skills, an agent MUST declare its `name`
-/// explicitly in frontmatter). This avoids surprises where a file
-/// renamed in the editor silently changes the dispatch enum.
-///
-/// Returns `LoadedAgentFile` so the precedence merge can see whether
-/// `tools` was declared (Q2 inheritance sentinel). The
-/// `SubagentDef.tools` field is always populated: declared → the
-/// parsed Vec (possibly empty); not declared → `vec![]` as a
-/// placeholder (overwritten by inheritance at merge time).
-async fn load_agent_file(
-    path: &Path,
-    source: SubagentSource,
-) -> std::io::Result<Option<LoadedAgentFile>> {
-    let meta = tokio::fs::metadata(path).await?;
-    if meta.len() > MAX_AGENT_FILE_SIZE {
-        tracing::warn!(
-            path = %path.display(),
-            size = meta.len(),
-            max = MAX_AGENT_FILE_SIZE,
-            "subagent: file exceeds size cap, skipping"
-        );
-        return Ok(None);
-    }
-    let content = tokio::fs::read_to_string(path).await?;
-    let (fm, body) = parse_frontmatter(&content);
+/// 纯解析:从 agent `.md` 文本构造 LoadedAgentFile(07-09-workflow-builtin-plugin)。
+/// name 校验 / description fallback / tools_declared / isolation_declared 逻辑
+/// 与原 `load_agent_file` 完全一致。磁盘层与内置层共用此函数,保证 frontmatter
+/// 解析行为完全一致。
+fn parse_agent_content(content: &str, source: SubagentSource) -> Option<LoadedAgentFile> {
+    let (fm, body) = parse_frontmatter(content);
 
     // name: frontmatter `name` is REQUIRED (no stem fallback). Empty
     // or whitespace-only → skip + warn.
     let name = match fm.name.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         Some(n) => n.to_string(),
         None => {
-            tracing::warn!(
-                path = %path.display(),
-                "subagent: missing or empty `name` field, skipping (name is required)"
-            );
-            return Ok(None);
+            tracing::warn!("subagent: missing or empty `name` field, skipping (name is required)");
+            return None;
         }
     };
     if !is_valid_agent_name(&name) {
         tracing::warn!(
-            path = %path.display(),
             name = %name,
             "subagent: `name` contains illegal characters (allowed: [a-zA-Z0-9_-]), skipping"
         );
-        return Ok(None);
+        return None;
     }
 
     // description: missing → empty string + warn (degraded but loads).
@@ -517,7 +498,6 @@ async fn load_agent_file(
         Some(d) => d,
         None => {
             tracing::warn!(
-                path = %path.display(),
                 name = %name,
                 "subagent: missing `description` field, falling back to empty string"
             );
@@ -547,11 +527,61 @@ async fn load_agent_file(
         model: fm.model,
     };
 
-    Ok(Some(LoadedAgentFile {
+    Some(LoadedAgentFile {
         loaded: LoadedSubagent { def, source },
         tools_declared,
         isolation_declared,
-    }))
+    })
+}
+
+/// 构造 app 内置 plugin 的 agents(07-09-workflow-builtin-plugin)。
+/// 仅 `workflow_name == "dev"` 时返回;其他返回空。
+/// 不走磁盘扫描 —— 内置源是 `include_str!` 常量,
+/// 用 `parse_agent_content` 直接解析(与磁盘层同一 parser)。
+fn builtin_plugin_agents(workflow_name: &str) -> Vec<LoadedAgentFile> {
+    if workflow_name != "dev" {
+        return Vec::new();
+    }
+    crate::agent::workflow::BUILTIN_DEV_AGENTS
+        .iter()
+        .filter_map(|(_role, body)| parse_agent_content(body, SubagentSource::BuiltinPlugin))
+        .collect()
+}
+
+/// Load + parse one agent `.md`. Returns `Ok(None)` when the file is
+/// deliberately skipped (over-cap / missing or illegal `name`); `Err`
+/// for I/O failures.
+///
+/// **No file-stem fallback for `name`** (PRD R3 / Q2 — unlike B3
+/// commands and B4 skills, an agent MUST declare its `name`
+/// explicitly in frontmatter). This avoids surprises where a file
+/// renamed in the editor silently changes the dispatch enum.
+///
+/// Returns `LoadedAgentFile` so the precedence merge can see whether
+/// `tools` was declared (Q2 inheritance sentinel). The
+/// `SubagentDef.tools` field is always populated: declared → the
+/// parsed Vec (possibly empty); not declared → `vec![]` as a
+/// placeholder (overwritten by inheritance at merge time).
+///
+/// 07-09-workflow-builtin-plugin: IO + size cap kept here; parse logic
+/// delegated to `parse_agent_content` so the builtin-plugin layer can
+/// reuse the exact same parser.
+async fn load_agent_file(
+    path: &Path,
+    source: SubagentSource,
+) -> std::io::Result<Option<LoadedAgentFile>> {
+    let meta = tokio::fs::metadata(path).await?;
+    if meta.len() > MAX_AGENT_FILE_SIZE {
+        tracing::warn!(
+            path = %path.display(),
+            size = meta.len(),
+            max = MAX_AGENT_FILE_SIZE,
+            "subagent: file exceeds size cap, skipping"
+        );
+        return Ok(None);
+    }
+    let content = tokio::fs::read_to_string(path).await?;
+    Ok(parse_agent_content(&content, source))
 }
 
 /// Internal helper carrying the parser's None/Some distinction
@@ -750,7 +780,7 @@ impl SubagentCache {
         workflow_name: Option<&str>,
     ) -> Vec<LoadedSubagent> {
         let wf = workflow_name.filter(|n| !n.is_empty());
-        let mut layers: Vec<Vec<LoadedAgentFile>> = Vec::with_capacity(4);
+        let mut layers: Vec<Vec<LoadedAgentFile>> = Vec::with_capacity(5);
 
         // 1. Builtins (always present, lowest priority).
         let builtin_files: Vec<LoadedAgentFile> = builtin_subagents()
@@ -773,7 +803,14 @@ impl SubagentCache {
         // 3. Project `.md` layer.
         layers.push(self.list_project_files(project_path).await);
 
-        // 4. Plugin `.md` layer (highest priority when present).
+        // 4. Builtin-plugin layer (07-09-workflow-builtin-plugin):
+        //    app-bundled `include_str!` agents, 插在 project 之后、
+        //    project-plugin 之前。后插优先 → project-plugin > builtin-plugin > project。
+        if let Some(wf) = wf {
+            layers.push(builtin_plugin_agents(wf));
+        }
+
+        // 5. Plugin `.md` layer (highest priority when present).
         if let Some(wf) = wf {
             layers.push(self.list_plugin_files(project_path, wf).await);
         }
@@ -869,6 +906,16 @@ pub fn locate_agent_file(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "plugin subagents use plugin_agents_dir(<wf>, project_path); pass workflow_name explicitly",
+            ));
+        }
+        // 07-09-workflow-builtin-plugin: 内置 plugin agents 是
+        // `include_str!` 编译期常量,无磁盘路径可写;要覆盖只能在项目
+        // plugin 目录 `<project>/.everlasting/workflow/<wf>/agents/`
+        // 放同名 .md。
+        SubagentSource::BuiltinPlugin => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "builtin-plugin subagents are read-only compile-time constants; to override, place a same-named .md in <project>/.everlasting/workflow/dev/agents/",
             ));
         }
     };
@@ -2179,5 +2226,49 @@ mod tests {
             .await
             .expect("builtin researcher exists");
         assert_eq!(legacy.source, SubagentSource::Builtin);
+    }
+
+    // --- 07-09-workflow-builtin-plugin: BuiltinPlugin agent layer ---
+
+    #[tokio::test]
+    async fn builtin_plugin_agent_loaded_for_dev_in_empty_project() {
+        // 空项目 + workflow=dev → researcher 命中内置 dev 角色
+        // (非 builtin researcher,语义不同)。
+        let cache = SubagentCache::arc();
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let pp = proj_tmp.path().to_string_lossy().to_string();
+        let l = cache
+            .lookup_with_workflow(&pp, Some("dev"), "researcher")
+            .await;
+        let l = l.expect("builtin dev researcher should load");
+        assert_eq!(l.def.name, "researcher");
+        assert_eq!(l.source, SubagentSource::BuiltinPlugin);
+        assert!(
+            !l.def.system_prompt.is_empty(),
+            "builtin dev researcher has system prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_plugin_agent_overrides_builtin() {
+        // 项目 .everlasting/workflow/dev/agents/researcher.md → 项目赢
+        // (Plugin > BuiltinPlugin)。
+        let cache = SubagentCache::arc();
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let proj = proj_tmp.path();
+        let agents_dir = proj.join(".everlasting/workflow/dev/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        write_agent(
+            &agents_dir,
+            "researcher",
+            "---\nname: researcher\ndescription: mine\ntools: [read_file]\n---\nCUSTOM_RESEARCHER",
+        );
+        let pp = proj.to_string_lossy().to_string();
+        let l = cache
+            .lookup_with_workflow(&pp, Some("dev"), "researcher")
+            .await
+            .expect("project plugin researcher must win");
+        assert_eq!(l.source, SubagentSource::Plugin);
+        assert_eq!(l.def.system_prompt, "CUSTOM_RESEARCHER");
     }
 }

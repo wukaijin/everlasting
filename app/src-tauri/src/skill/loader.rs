@@ -50,10 +50,10 @@ const SKILL_FILENAME: &str = "SKILL.md";
 const MAX_SKILL_FILE_SIZE: u64 = 64 * 1024; // 64 KiB
 
 /// Where a skill came from. On a name collision, the highest-priority
-/// layer wins: **plugin > project > user**. The `plugin` layer is
-/// workflow-scoped (see [`SkillSource::Plugin`]) and is only consulted
-/// when the caller passes a `workflow_name` — see `list_skill_infos
-/// _with_workflow` / `find_skill_with_workflow`.
+/// layer wins: **plugin > builtin-plugin > project > user**. The `plugin`
+/// and `builtin-plugin` layers are workflow-scoped and only consulted
+/// when the caller passes a `workflow_name` — see
+/// `list_skill_infos_with_workflow` / `find_skill_with_workflow`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillSource {
@@ -65,6 +65,10 @@ pub enum SkillSource {
     /// `07-08-workflow-integration`); non-workflow callers fall
     /// through to project-overrides-user.
     Plugin,
+    /// app 内置 plugin skill(`include_str!` 常量)。
+    /// 07-09-workflow-builtin-plugin: 编译期常量,优先级
+    /// `Plugin > BuiltinPlugin > Project > User`。
+    BuiltinPlugin,
 }
 
 /// A parsed skill directory: frontmatter + `SKILL.md` body. `body` is
@@ -380,6 +384,38 @@ async fn scan_skill_dir(dir: &Path, source: SkillSource) -> Vec<SkillResource> {
     out
 }
 
+/// 纯解析:从 SKILL.md 文本 + 目录名 + source 构造 SkillResource。
+/// 磁盘层(`load_skill_file`)和内置层(`builtin_plugin_skills`)共用此函数,
+/// 保证 frontmatter 解析行为完全一致(07-09-workflow-builtin-plugin)。
+fn parse_skill_content(
+    content: &str,
+    dir_name: &str,
+    source: SkillSource,
+) -> Option<SkillResource> {
+    let (fm, body) = parse_frontmatter(content);
+    // Name: frontmatter `name` wins; else the parent directory name.
+    // Require non-empty (dir_name always non-empty here, but frontmatter
+    // could be whitespace-only).
+    let name = fm
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| dir_name.to_string());
+    if name.trim().is_empty() {
+        return None;
+    }
+    Some(SkillResource {
+        name,
+        description: fm.description.unwrap_or_default(),
+        body,
+        // 内置层无磁盘路径,用虚拟标记(tracing 可读;locate/write 对内置层不适用)。
+        // 磁盘层调用方在 `load_skill_file` 中覆盖此字段。
+        path: PathBuf::new(),
+        source,
+        allowed_tools: fm.allowed_tools,
+    })
+}
+
 /// Load + parse one `<name>/SKILL.md`. Returns `Ok(None)` when the
 /// skill is deliberately skipped (subdir has no SKILL.md / over-cap /
 /// no name); `Err` for I/O failures other than NotFound.
@@ -403,30 +439,38 @@ async fn load_skill_file(
         return Ok(None);
     }
     let content = tokio::fs::read_to_string(skill_path).await?;
-    let (fm, body) = parse_frontmatter(&content);
-    // Name: frontmatter `name` wins; else the parent directory name.
-    // Require non-empty (dir_name always non-empty here, but frontmatter
-    // could be whitespace-only).
-    let name = fm
-        .name
-        .clone()
-        .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| dir_name.to_string());
-    if name.trim().is_empty() {
-        tracing::warn!(
-         path = %skill_path.display(),
-         "skills: no name (frontmatter + dir name both empty), skipping"
-        );
-        return Ok(None);
+    let mut res = match parse_skill_content(&content, dir_name, source) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(
+                path = %skill_path.display(),
+                "skills: no name (frontmatter + dir name both empty), skipping"
+            );
+            return Ok(None);
+        }
+    };
+    // 磁盘层:覆盖虚拟 path 为真实磁盘路径(07-09-workflow-builtin-plugin)。
+    res.path = skill_path.to_path_buf();
+    Ok(Some(res))
+}
+
+/// 构造 app 内置 plugin 的 skills(07-09-workflow-builtin-plugin)。
+/// 仅 `workflow_name == "dev"` 时返回;其他返回空。
+/// 不走磁盘扫描(`tokio::fs::read_dir`)—— 内置源是 `include_str!` 内存常量,
+/// 用 `parse_skill_content` 直接解析(与磁盘层同一 frontmatter parser)。
+/// `path` 用虚拟标记 `<builtin>/dev/skills/<slug>/SKILL.md`。
+fn builtin_plugin_skills(workflow_name: &str) -> Vec<SkillResource> {
+    if workflow_name != "dev" {
+        return Vec::new();
     }
-    Ok(Some(SkillResource {
-        name,
-        description: fm.description.unwrap_or_default(),
-        body,
-        path: skill_path.to_path_buf(),
-        source,
-        allowed_tools: fm.allowed_tools,
-    }))
+    crate::agent::workflow::BUILTIN_DEV_SKILLS
+        .iter()
+        .filter_map(|(slug, body)| {
+            let mut res = parse_skill_content(body, slug, SkillSource::BuiltinPlugin)?;
+            res.path = PathBuf::from(format!("<builtin>/dev/skills/{slug}/SKILL.md"));
+            Some(res)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +592,7 @@ fn resource_to_info(r: &SkillResource) -> SkillInfo {
             SkillSource::User => "user",
             SkillSource::Project => "project",
             SkillSource::Plugin => "plugin",
+            SkillSource::BuiltinPlugin => "builtin-plugin",
         }
         .to_string(),
         allowed_tools: r.allowed_tools.clone(),
@@ -615,6 +660,13 @@ async fn merge_skill_layers(
             by_name.insert(r.name.clone(), r);
         }
     }
+    // 07-09-workflow-builtin-plugin: 内置 plugin 层,在 project-plugin 之前插入
+    // (后插覆盖 → project-plugin 优先级高于 builtin-plugin)。
+    if let Some(wf) = workflow_name {
+        for r in builtin_plugin_skills(wf) {
+            by_name.insert(r.name.clone(), r);
+        }
+    }
     if let (Some(wf), Some(pp)) = (workflow_name, project_path) {
         for r in cache.list_plugin(pp, wf).await {
             by_name.insert(r.name.clone(), r);
@@ -665,7 +717,7 @@ pub async fn find_skill_with_workflow(
 }
 
 /// Shared resolution core: highest-priority layer first (plugin →
-/// project → user), so the first hit wins.
+/// builtin-plugin → project → user), so the first hit wins.
 async fn find_skill_in_layers(
     cache: &SkillCache,
     name: &str,
@@ -676,6 +728,15 @@ async fn find_skill_in_layers(
         if let Some(r) = cache
             .list_plugin(pp, wf)
             .await
+            .into_iter()
+            .find(|r| r.name == name)
+        {
+            return Some(r);
+        }
+    }
+    // 07-09-workflow-builtin-plugin: 内置 plugin 层,在 project 之前查。
+    if let Some(wf) = workflow_name {
+        if let Some(r) = builtin_plugin_skills(wf)
             .into_iter()
             .find(|r| r.name == name)
         {
@@ -1339,7 +1400,9 @@ mod tests {
     #[tokio::test]
     async fn list_infos_plugin_missing_dir_falls_back_silently() {
         // Design section 6 rollback: plugin dir absent → no warn,
-        // no error, just transparent fallthrough to project / user.
+        // no error, just transparent fallthrough to project / user /
+        // builtin-plugin (07-09: 内置 plugin 层也是 fallback 的一部分,
+        // 不需要 project 有 workflow 目录就出现)。
         let user_tmp = tempfile::TempDir::new().unwrap();
         let proj_tmp = tempfile::TempDir::new().unwrap();
         // Deliberately do NOT create .everlasting/workflow/dev/skills/.
@@ -1368,7 +1431,21 @@ mod tests {
         let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
         assert!(names.contains(&"global"));
         assert!(names.contains(&"project-only"));
-        assert_eq!(infos.len(), 2, "missing plugin dir must not surface phantom skills");
+        // 07-09-workflow-builtin-plugin: 内置 dev plugin 提供 5 个 wf-* skills
+        // (即使项目无 workflow 目录)。校验它们都在(没出现 phantom source path)。
+        for slug in ["wf-overview", "wf-brainstorm", "wf-before-dev", "wf-check", "wf-update-spec"] {
+            assert!(names.contains(&slug), "builtin {slug} should appear (got {names:?})");
+        }
+        // 来源校验:wf-* 来源是 builtin-plugin,user/project 来源不变。
+        for info in &infos {
+            if info.name.starts_with("wf-") {
+                assert_eq!(
+                    info.source, "builtin-plugin",
+                    "wf-* source must be builtin-plugin (got {})",
+                    info.source
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -1507,5 +1584,75 @@ mod tests {
         let resolved = resolved.expect("user skill must resolve when no project path");
         assert_eq!(resolved.body, "USER_BODY");
         assert_eq!(resolved.source, SkillSource::User);
+    }
+
+    // --- 07-09-workflow-builtin-plugin: BuiltinPlugin skill layer -----
+
+    #[tokio::test]
+    async fn builtin_plugin_skill_loaded_for_dev_in_empty_project() {
+        // 空项目目录 + workflow=dev → wf-brainstorm 命中内置层。
+        let user_tmp = tempfile::TempDir::new().unwrap();
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+        let cache = SkillCache::arc();
+        let pp = proj_tmp.path().to_string_lossy().to_string();
+        let r = find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
+        set_user_dir_for_test(prev);
+        let r = r.expect("builtin wf-brainstorm should load");
+        assert_eq!(r.source, SkillSource::BuiltinPlugin);
+        assert!(!r.body.is_empty());
+        assert!(r.path.to_string_lossy().contains("<builtin>"));
+    }
+
+    #[tokio::test]
+    async fn project_plugin_overrides_builtin_skill() {
+        // 项目 .everlasting/workflow/dev/skills/wf-brainstorm/SKILL.md → 项目赢(Plugin > BuiltinPlugin)。
+        let user_tmp = tempfile::TempDir::new().unwrap();
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let dir = proj_tmp
+            .path()
+            .join(".everlasting/workflow/dev/skills/wf-brainstorm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: wf-brainstorm\ndescription: mine\n---\nCUSTOM",
+        )
+        .unwrap();
+        let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+        let cache = SkillCache::arc();
+        let pp = proj_tmp.path().to_string_lossy().to_string();
+        let r =
+            find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
+        set_user_dir_for_test(prev);
+        let r = r.expect("project plugin wf-brainstorm must win");
+        assert_eq!(r.source, SkillSource::Plugin, "project plugin wins over builtin");
+        assert_eq!(r.body, "CUSTOM");
+    }
+
+    #[tokio::test]
+    async fn builtin_plugin_beats_project_layer_skill() {
+        // 项目普通 .everlasting/skills/wf-brainstorm → 内置赢(BuiltinPlugin > Project)。
+        let user_tmp = tempfile::TempDir::new().unwrap();
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let dir = proj_tmp.path().join(PROJECT_NAMESPACE).join("skills/wf-brainstorm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: wf-brainstorm\ndescription: mine\n---\nSHOULD_NOT_WIN",
+        )
+        .unwrap();
+        let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
+        let cache = SkillCache::arc();
+        let pp = proj_tmp.path().to_string_lossy().to_string();
+        let r =
+            find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
+        set_user_dir_for_test(prev);
+        let r = r.expect("builtin wf-brainstorm should win over project-layer same name");
+        assert_eq!(
+            r.source,
+            SkillSource::BuiltinPlugin,
+            "builtin beats project-layer skill"
+        );
+        assert_ne!(r.body, "SHOULD_NOT_WIN");
     }
 }

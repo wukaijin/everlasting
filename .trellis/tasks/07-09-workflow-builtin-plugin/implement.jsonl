@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/07-09-workflow-builtin-plugin/prd.md", "reason": "需求与 acceptance criteria —— app 内置 dev workflow + 优先级链 project-plugin > builtin-plugin > project > user"}
+{"file": ".trellis/tasks/07-09-workflow-builtin-plugin/design.md", "reason": "技术选型(include_str! 而非 bundle.resources)+ 三层模块改动 + 兼容性回归 + 防漂移约定"}
+{"file": ".trellis/tasks/07-09-workflow-builtin-plugin/implement.md", "reason": "执行清单 5 步(资源复制 / builtin.rs / workflow def / skill loader / subagent loader / 全量验证),含确切 file:line 锚点 + 可照抄代码骨架 + 验证命令"}
+{"file": "app/src-tauri/resources/builtin-workflow/dev/", "reason": "内置源文件目录(include_str! 编译期常量),源材料逐字复制自 .everlasting/workflow/dev/"}
+{"file": "app/src-tauri/src/agent/workflow/builtin.rs", "reason": "新建 module —— 暴露 BUILTIN_DEV_WORKFLOW_JSON/SKILLS/AGENTS + builtin_workflow_json() + 内置 plugin 清单"}
+{"file": "app/src-tauri/src/agent/workflow/def.rs", "reason": "load_workflow 4 降级点改 load_builtin_or_default;list_plugins 并入 BUILTIN_PLUGIN_NAMES"}
+{"file": "app/src-tauri/src/skill/loader.rs", "reason": "SkillSource::BuiltinPlugin + parse_skill_content 抽纯函数 + builtin_plugin_skills + merge/find 链插内置层"}
+{"file": "app/src-tauri/src/agent/subagent/loader.rs", "reason": "SubagentSource::BuiltinPlugin + parse_agent_content 抽纯函数 + builtin_plugin_agents + list_with_workflow 插内置层 + locate_agent_file 分支"}
+{"file": "app/src-tauri/src/commands/subagents.rs", "reason": "set_subagent_model match 加 SubagentSource::BuiltinPlugin 分支(只读错误)"}
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "新加 BuiltinPlugin source layer scenario,记录优先级链 + 接入点 + 测试覆盖 + out of scope"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Tool Contract 行更新 — 标记 2026-07-09 任务增量"}

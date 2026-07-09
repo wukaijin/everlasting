@@ -463,23 +463,25 @@ pub fn workflow_json_path(workflow_name: &str, project_path: &str) -> PathBuf {
 /// Returns the list of valid plugin names (alphabetical).
 /// A directory is a valid plugin iff `workflow.json` exists
 /// inside it. Empty directories are ignored without warning
-/// (typical scratch state). Missing root dir → empty list
-/// (no plugins = just the default dev workflow on next
-/// `load_workflow` call).
-///
-/// Step 2.2: backs `list_workflow_plugins` IPC → the
-/// `PluginSelect.vue` popover data source. Lives next to
-/// `workflow_json_path` so the discovery logic and the
-/// path arithmetic are in the same module (easier to keep
-/// in sync if the layout changes — e.g. when Step 3.2
-/// adds `.everlasting/spec/`).
+/// (typical scratch state). Missing root dir → still
+/// returns builtin plugin names (07-09-workflow-builtin-plugin):
+/// app-bundled plugins are always available, project-side
+/// plugins add on top.
 pub fn list_plugins(project_path: &str) -> Vec<String> {
     let root = Path::new(project_path)
         .join(".everlasting")
         .join("workflow");
     let entries = match std::fs::read_dir(&root) {
         Ok(it) => it,
-        Err(_) => return Vec::new(),
+        Err(_) => {
+            // 项目无 workflow 目录 → 只返回内置名(07-09-workflow-builtin-plugin)。
+            let mut names: Vec<String> = crate::agent::workflow::BUILTIN_PLUGIN_NAMES
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            names.sort();
+            return names;
+        }
     };
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
@@ -495,6 +497,12 @@ pub fn list_plugins(project_path: &str) -> Vec<String> {
             entry.file_name().into_string().ok()
         })
         .collect();
+    // 合并内置名,去重,字母序(07-09-workflow-builtin-plugin)。
+    for builtin in crate::agent::workflow::BUILTIN_PLUGIN_NAMES {
+        if !names.iter().any(|n| n == *builtin) {
+            names.push(builtin.to_string());
+        }
+    }
     names.sort();
     names
 }
@@ -620,12 +628,46 @@ pub fn validate(def: &WorkflowDef) -> Result<(), Vec<ValidationError>> {
 /// Step 2.1 ships the read + validate + fallback; the
 /// hot-reload seam (reload on every turn boundary) is
 /// wired in Step 2.2 (UI plugin switcher).
+/// 尝试加载 app 内置同名 plugin(07-09-workflow-builtin-plugin)。
+/// 内置源是 `include_str!` 编译期常量,理论永不出错;但走完整
+/// serde + validate 路径,与项目层行为一致,出问题时仍安全降级。
+/// 返回 `None` = 无此内置 plugin 或内置也坏(交由 caller 降级到 default_workflow)。
+fn load_builtin(workflow_name: &str) -> Option<WorkflowDef> {
+    let json = crate::agent::workflow::builtin_workflow_json(workflow_name)?;
+    match serde_json::from_str::<WorkflowDef>(json) {
+        Ok(parsed) if validate(&parsed).is_ok() => Some(parsed),
+        Ok(_) => {
+            tracing::error!(
+                workflow = %workflow_name,
+                "load_builtin: builtin workflow.json failed validation (this should not happen — it is a compile-time constant)"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::error!(
+                workflow = %workflow_name,
+                error = %e,
+                "load_builtin: builtin workflow.json failed to parse (this should not happen — it is a compile-time constant)"
+            );
+            None
+        }
+    }
+}
+
+/// 内置层 → default_workflow() 的最终降级。load_workflow 的 4 个失败点都走这里。
+fn load_builtin_or_default(workflow_name: &str) -> WorkflowDef {
+    if let Some(b) = load_builtin(workflow_name) {
+        return b;
+    }
+    default_workflow()
+}
+
 pub fn load_workflow(workflow_name: &str, project_path: &str) -> WorkflowDef {
     let path = workflow_json_path(workflow_name, project_path);
 
     // Read attempt — missing file is the common case
     // (projects without `.everlasting/workflow/` simply get
-    // the default dev workflow). Trace at debug, not warn,
+    // the builtin dev workflow). Trace at debug, not warn,
     // because missing-file is expected for new projects.
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -633,18 +675,18 @@ pub fn load_workflow(workflow_name: &str, project_path: &str) -> WorkflowDef {
             tracing::debug!(
                 workflow = %workflow_name,
                 path = %path.display(),
-                "load_workflow: workflow.json not found, falling back to default_workflow()",
+                "load_workflow: workflow.json not found, falling back to builtin or default",
             );
-            return default_workflow();
+            return load_builtin_or_default(workflow_name);
         }
         Err(e) => {
             tracing::warn!(
                 workflow = %workflow_name,
                 path = %path.display(),
                 error = %e,
-                "load_workflow: read failed, falling back to default_workflow()",
+                "load_workflow: read failed, falling back to builtin or default",
             );
-            return default_workflow();
+            return load_builtin_or_default(workflow_name);
         }
     };
 
@@ -656,9 +698,9 @@ pub fn load_workflow(workflow_name: &str, project_path: &str) -> WorkflowDef {
                 workflow = %workflow_name,
                 path = %path.display(),
                 error = %e,
-                "load_workflow: JSON parse failed, falling back to default_workflow()",
+                "load_workflow: JSON parse failed, falling back to builtin or default",
             );
-            return default_workflow();
+            return load_builtin_or_default(workflow_name);
         }
     };
 
@@ -669,10 +711,10 @@ pub fn load_workflow(workflow_name: &str, project_path: &str) -> WorkflowDef {
                 workflow = %workflow_name,
                 path = %path.display(),
                 error = ?err,
-                "load_workflow: validation failed, falling back to default_workflow()",
+                "load_workflow: validation failed, falling back to builtin or default",
             );
         }
-        return default_workflow();
+        return load_builtin_or_default(workflow_name);
     }
 
     parsed
