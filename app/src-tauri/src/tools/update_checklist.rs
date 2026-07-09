@@ -34,7 +34,7 @@
 //! `write_file` / `edit_file` / `shell`. Checklist mutation has
 //! no side-effect on the user's filesystem.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -399,9 +399,7 @@ async fn maybe_persist_to_task_json(
     // `write_task` expects the PROJECT ROOT (it appends
     // `.everlasting/tasks/<slug>` internally). Passing the
     // task dir directly would double-nest the path.
-    if let Err(e) =
-        crate::agent::workflow::write_task(&project_path, &updated)
-    {
+    if let Err(e) = crate::agent::workflow::write_task(&project_path, &updated) {
         return format!("[persist] ⚠️ task.json write failed: {}\n", e);
     }
     format!(
@@ -445,10 +443,7 @@ fn pick_first_unfinished_task(
             Err(_) => continue,
         };
         // "Done" maps to TaskStatus::Done — skip.
-        if matches!(
-            task.status,
-            crate::agent::workflow::TaskStatus::Done
-        ) {
+        if matches!(task.status, crate::agent::workflow::TaskStatus::Done) {
             continue;
         }
         return Ok(Some(task));
@@ -493,6 +488,7 @@ fn derive_item_id(item: &ChecklistItem) -> String {
 mod tests {
     use super::*;
     use crate::tools::ToolContext;
+    use std::path::PathBuf;
 
     fn item(content: &str, status: ChecklistStatus) -> ChecklistItem {
         ChecklistItem {
@@ -768,9 +764,7 @@ mod tests {
 
     // ---- Phase 2 Step 2.6: workflow persistence ----------------------
 
-    use crate::agent::workflow::{
-        TaskItem, TaskJson, TaskStatus, WorkflowCtx,
-    };
+    use crate::agent::workflow::{TaskItem, TaskJson, TaskStatus, WorkflowCtx};
 
     /// Workflow-session `ToolContext` factory. Builds a
     /// task.json under a temp project root + returns a
@@ -826,11 +820,8 @@ mod tests {
         // Workflow session → update_checklist writes through
         // to task.json.items. The in-memory handle is also
         // updated (B12 contract preserved).
-        let (ctx, proj_tmp) =
-            workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
-        let task_dir = proj_tmp
-            .path()
-            .join(".everlasting/tasks/step26-fixture");
+        let (ctx, proj_tmp) = workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
+        let task_dir = proj_tmp.path().join(".everlasting/tasks/step26-fixture");
 
         let handle = new_handle();
         let input = serde_json::json!({
@@ -868,9 +859,7 @@ mod tests {
         // (`workflow_name = None`) mutates the in-memory
         // handle but does NOT touch task.json.
         let proj_tmp = tempfile::TempDir::new().unwrap();
-        let task_dir = proj_tmp
-            .path()
-            .join(".everlasting/tasks/legacy-fixture");
+        let task_dir = proj_tmp.path().join(".everlasting/tasks/legacy-fixture");
         std::fs::create_dir_all(&task_dir).unwrap();
         let task = TaskJson {
             id: "t-legacy".into(),
@@ -931,11 +920,8 @@ mod tests {
         // LLM omits `id` → writer derives one from the
         // content hash so the on-disk item still has a
         // stable key for cross-session lookups.
-        let (ctx, proj_tmp) =
-            workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
-        let task_dir = proj_tmp
-            .path()
-            .join(".everlasting/tasks/step26-fixture");
+        let (ctx, proj_tmp) = workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
+        let task_dir = proj_tmp.path().join(".everlasting/tasks/step26-fixture");
 
         let handle = new_handle();
         let input = serde_json::json!({
