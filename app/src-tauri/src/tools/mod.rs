@@ -408,7 +408,14 @@ async fn execute_tool_inner(
             // `execute_tool`'s `tokio::select!` cancel wrapper, so
             // the loop's RULE-A-004 ordering (audit AFTER cancel
             // check) automatically protects the checklist too.
-            let (out, is_err) = update_checklist::execute(input, &ctx.checklist).await;
+            //
+            // Phase 2 Step 2.6: when `ctx.workflow_name.is_some()`,
+            // the items are persisted to `task.json.items` (see
+            // `update_checklist::maybe_persist_to_task_json`). The
+            // in-memory handle is always updated — same shape as
+            // pre-Step-2.6.
+            let (out, is_err) =
+                update_checklist::execute(input, &ctx.checklist, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         "run_background_shell" => {

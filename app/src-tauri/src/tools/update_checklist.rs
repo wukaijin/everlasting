@@ -34,6 +34,7 @@
 //! `write_file` / `edit_file` / `shell`. Checklist mutation has
 //! no side-effect on the user's filesystem.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -67,10 +68,41 @@ pub enum ChecklistStatus {
 }
 
 /// One checklist item.
-#[derive(Debug, Clone, PartialEq, Eq, serde :: Serialize, serde :: Deserialize)]
+///
+/// Phase 2 Step 2.6 (2026-07-08): added `id` and
+/// `tdd: Option<bool>` to match `TaskItem` (the
+/// on-disk `task.json.items[i]` schema). The `id`
+/// is the cross-session persistence key — a workflow
+/// session's checklist writes through to `task.json`
+/// keyed by `id`, so an item's progress survives
+/// across chat-loop invocations (and across worker
+/// dispatches). `tdd` is optional; the plugin author
+/// or implementer uses it to flag items that should
+/// be done test-first.
+///
+/// **Backward compat**: `id` is `#[serde(default)]`
+/// (empty string when missing) so existing LLM-emitted
+/// items without an `id` still parse. The downstream
+/// `task.json.items` writer (`task.rs::write_task`
+/// with the updated items Vec) tolerates empty
+/// `id`s by deriving one from the content hash.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChecklistItem {
+    /// Stable id (Phase 2 Step 2.6). When the
+    /// checklist is written through to `task.json.items`,
+    /// this is the lookup key. Empty string for legacy
+    /// items.
+    #[serde(default)]
+    pub id: String,
     pub content: String,
     pub status: ChecklistStatus,
+    /// `Some(true)` / `Some(false)` = TDD flag set by
+    /// plugin author / implementer; `None` = not
+    /// declared. Phase 2 Step 2.6 surfaces this on
+    /// `task.json.items[].tdd` so the workflow's
+    /// implementer can flag test-first items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tdd: Option<bool>,
 }
 
 /// The `update_checklist` tool definition registered in
@@ -81,8 +113,10 @@ pub fn definition() -> ToolDef {
         description: Some(
             "Update your running progress checklist for this task. Pass the FULL list of \
              items every call — the new list replaces the old one atomically (not append). \
-             Each item has `content` (short description) and `status` \
-             (`pending` / `in_progress` / `done`). At most one item should be \
+             Each item has `id` (stable identifier for cross-session persistence — see \
+             checklist guidance), `content` (short description), `status` \
+             (`pending` / `in_progress` / `done`), and optional `tdd` (set true \
+             for items that must be done test-first). At most one item should be \
              `in_progress` at a time; if you pass multiple, only the last is kept as \
              `in_progress` and the rest are demoted to `pending`. Call this whenever \
              your plan changes — the current list is re-injected into your context \
@@ -98,6 +132,10 @@ pub fn definition() -> ToolDef {
                     "items": {
                         "type": "object",
                         "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Stable identifier for this item (kebab-case, e.g. 'backend-impl'). Used for cross-session persistence when the session is a workflow session."
+                            },
                             "content": {
                                 "type": "string",
                                 "description": "Short description of the step."
@@ -106,6 +144,10 @@ pub fn definition() -> ToolDef {
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "done"],
                                 "description": "Current state of the item."
+                            },
+                            "tdd": {
+                                "type": "boolean",
+                                "description": "Optional. Set true for items that must be done test-first (Phase 2 Step 2.6)."
                             }
                         },
                         "required": ["content", "status"]
@@ -167,9 +209,21 @@ fn parse_and_coerce(input: &serde_json::Value) -> Vec<ChecklistItem> {
             // Unknown / missing / "pending" / anything else → pending.
             _ => ChecklistStatus::Pending,
         };
+        // Phase 2 Step 2.6: pull the optional `id` +
+        // `tdd` from the entry. `id` defaults to "" so
+        // legacy items still parse (the on-disk writer
+        // derives one from the content hash).
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let tdd = entry.get("tdd").and_then(|v| v.as_bool());
         parsed.push(ChecklistItem {
+            id,
             content: content.to_string(),
             status,
+            tdd,
         });
     }
     coerce_at_most_one_in_progress(&parsed)
@@ -201,7 +255,26 @@ pub fn render_checklist(items: &[ChecklistItem]) -> String {
 /// Execute `update_checklist`: parse + coerce + atomically replace
 /// the loop's Vec via the handle; return the full resulting list as
 /// the tool_result (`is_error: false`).
-pub async fn execute(input: &serde_json::Value, handle: &ChecklistHandle) -> (String, bool) {
+///
+/// **Phase 2 Step 2.6 (`07-08-workflow-integration`)**: when
+/// `ctx.workflow_name` is `Some`, the items are persisted to
+/// `task.json.items` (the on-disk workflow task file) in
+/// addition to the in-memory Vec. Non-workflow callers
+/// keep the legacy loop-local Vec behavior — the on-disk
+/// write is skipped.
+///
+/// **Why both?**: the in-memory Vec drives the per-turn
+/// ephemeral injection (B12), which is what the LLM sees
+/// this turn. The on-disk write is what a *future* session
+/// (or a worker dispatch) reads when resuming the task.
+/// Splitting the two keeps the per-turn contract
+/// byte-identical with the pre-Step-2.6 behavior while
+/// adding the cross-session persistence layer.
+pub async fn execute(
+    input: &serde_json::Value,
+    handle: &ChecklistHandle,
+    ctx: &crate::tools::ToolContext,
+) -> (String, bool) {
     let new_items = parse_and_coerce(input);
     // Atomic full-replace. The lock is held only for the swap; no
     // I/O inside the critical section.
@@ -210,6 +283,23 @@ pub async fn execute(input: &serde_json::Value, handle: &ChecklistHandle) -> (St
         guard.clear();
         guard.extend(new_items.iter().cloned());
     }
+
+    // Phase 2 Step 2.6: workflow sessions persist items to
+    // `task.json.items`. The mapping from ChecklistStatus
+    // → TaskStatus (Pending→Planning, InProgress→Implement,
+    // Done→Done) is a deliberate Phase 2 simplification —
+    // the workflow task.json uses the workflow state
+    // machine's status set, which is coarser than B12's
+    // checklist. Phase 3 may extend TaskStatus to recover
+    // the finer "check" state.
+    //
+    // On any failure (no active task / read error / write
+    // error), we log a `warn!` and return a tool_result
+    // that surfaces the failure reason. The in-memory
+    // handle is already updated above — that path is
+    // unchanged from pre-Step-2.6.
+    let persist_msg = maybe_persist_to_task_json(&new_items, ctx).await;
+
     let body = render_checklist(&new_items);
     let done_count = new_items
         .iter()
@@ -220,23 +310,215 @@ pub async fn execute(input: &serde_json::Value, handle: &ChecklistHandle) -> (St
         .filter(|i| i.status == ChecklistStatus::InProgress)
         .count();
     let summary = format!(
-        "Checklist updated ({} items, {} done, {} in_progress).\n\n{}",
+        "Checklist updated ({} items, {} done, {} in_progress).\n\n{}{}",
         new_items.len(),
         done_count,
         in_progress_count,
-        body
+        body,
+        // Step 2.6: append a `[persist]` line for workflow
+        // sessions so the LLM sees the on-disk write
+        // outcome in the same tool_result. For
+        // non-workflow callers this is empty (legacy body
+        // shape preserved).
+        persist_msg,
     );
     (summary, false)
+}
+
+/// Phase 2 Step 2.6: persist `items` to the workflow's
+/// active task.json when the caller is a workflow session
+/// (`ctx.workflow_name.is_some()`). Returns a human-
+/// readable suffix for the tool_result body — empty
+/// string when no persistence was attempted (non-workflow
+/// caller), a one-liner on success, a warning line on
+/// failure.
+///
+/// **No-op cases** (returns `""`):
+/// - `ctx.workflow_name` is `None`
+/// - no project bound to the session
+///
+/// **Failure cases** (returns `"[persist] ⚠️ {reason}\n"`):
+/// - cannot resolve the active task
+/// - cannot read `task.json`
+/// - cannot write `task.json` (atomic rename fails)
+///
+/// The function deliberately does NOT mutate the
+/// in-memory `ChecklistHandle` (that's the caller's job,
+/// already done). The on-disk write is a "best effort"
+/// persistence layer; the loop-local Vec remains the
+/// authoritative per-turn state. A failed disk write
+/// degrades to "in-memory only this session" rather than
+/// failing the whole tool call.
+async fn maybe_persist_to_task_json(
+    items: &[ChecklistItem],
+    ctx: &crate::tools::ToolContext,
+) -> String {
+    if ctx.workflow_name.is_none() {
+        return String::new();
+    }
+    // Locate the active task under the project root.
+    // `ctx.worktree_path` is the session's worktree root
+    // (or project root for non-worktree sessions); the
+    // workflow task dir lives at `<root>/.everlasting/tasks/`.
+    let project_path = ctx.worktree_path.clone();
+    let tasks_root = project_path.join(".everlasting").join("tasks");
+    if !tasks_root.exists() {
+        return "[persist] ⚠️ no tasks dir (task bootstrap pending)\n".to_string();
+    }
+    // Find the first unfinished task (matches
+    // `agent/workflow/inject.rs::resolve_current_task`'s
+    // ordering: lexicographic by slug). We re-implement
+    // the lookup here to avoid pulling the inject module
+    // into a leaf helper (and to keep the per-task lookup
+    // synchronous-and-fast for the tool's hot path).
+    let current_task = match pick_first_unfinished_task(&tasks_root) {
+        Ok(Some(t)) => t,
+        Ok(None) => return "[persist] ⚠️ no active task\n".to_string(),
+        Err(e) => return format!("[persist] ⚠️ task lookup failed: {}\n", e),
+    };
+
+    // Map ChecklistStatus → TaskStatus (Phase 2 simplification).
+    let mapped: Vec<crate::agent::workflow::TaskItem> = items
+        .iter()
+        .map(|i| crate::agent::workflow::TaskItem {
+            id: derive_item_id(i),
+            content: i.content.clone(),
+            status: map_status(i.status),
+            tdd: i.tdd,
+        })
+        .collect();
+
+    // Write the updated task.json. We rebuild the whole
+    // struct to keep the persistence layer simple —
+    // partial updates would need a writer API for the
+    // items slice (Phase 3 candidate).
+    let updated = crate::agent::workflow::TaskJson {
+        items: mapped,
+        ..current_task
+    };
+    // `write_task` expects the PROJECT ROOT (it appends
+    // `.everlasting/tasks/<slug>` internally). Passing the
+    // task dir directly would double-nest the path.
+    if let Err(e) =
+        crate::agent::workflow::write_task(&project_path, &updated)
+    {
+        return format!("[persist] ⚠️ task.json write failed: {}\n", e);
+    }
+    format!(
+        "[persist] → task.json updated ({} items)\n",
+        updated.items.len()
+    )
+}
+
+/// Pick the first unfinished task from `<root>/.everlasting/tasks/`
+/// by lexicographic slug order. Mirrors
+/// `agent/workflow/inject.rs::resolve_current_task` (which is
+/// not pub-exposable without leaking more surface area
+/// than Step 2.6 needs).
+fn pick_first_unfinished_task(
+    tasks_root: &Path,
+) -> std::io::Result<Option<crate::agent::workflow::TaskJson>> {
+    let entries = std::fs::read_dir(tasks_root)?;
+    let mut slugs: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let p = entry.path();
+            if !p.is_dir() {
+                return None;
+            }
+            entry.file_name().into_string().ok()
+        })
+        .collect();
+    slugs.sort();
+    for slug in slugs {
+        let task_dir = tasks_root.join(&slug);
+        let json_path = task_dir.join("task.json");
+        if !json_path.is_file() {
+            continue;
+        }
+        let raw = match std::fs::read_to_string(&json_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let task: crate::agent::workflow::TaskJson = match serde_json::from_str(&raw) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        // "Done" maps to TaskStatus::Done — skip.
+        if matches!(
+            task.status,
+            crate::agent::workflow::TaskStatus::Done
+        ) {
+            continue;
+        }
+        return Ok(Some(task));
+    }
+    Ok(None)
+}
+
+/// Phase 2 Step 2.6 ChecklistStatus → TaskStatus mapping.
+/// Deliberately coarse — `Done` collapses the workflow
+/// state machine's `check` and `done` (Phase 3 may refine
+/// to a 5-state TaskStatus).
+fn map_status(s: ChecklistStatus) -> crate::agent::workflow::TaskStatus {
+    use crate::agent::workflow::TaskStatus;
+    match s {
+        ChecklistStatus::Pending => TaskStatus::Planning,
+        ChecklistStatus::InProgress => TaskStatus::Implement,
+        ChecklistStatus::Done => TaskStatus::Done,
+    }
+}
+
+/// Derive a stable `id` for the persisted `TaskItem`:
+/// prefer the LLM-supplied `id`; fall back to a hash of
+/// `content` (so legacy items with empty `id` still get
+/// a stable cross-session key).
+fn derive_item_id(item: &ChecklistItem) -> String {
+    if !item.id.is_empty() {
+        return item.id.clone();
+    }
+    // Tiny FNV-1a hash — the content is short, no need for
+    // a full cryptographic hash. The id is only used as a
+    // cross-session persistence key; uniqueness within
+    // the checklist is "good enough" not "guaranteed".
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in item.content.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("auto-{:016x}", h)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolContext;
 
     fn item(content: &str, status: ChecklistStatus) -> ChecklistItem {
         ChecklistItem {
+            id: String::new(),
             content: content.to_string(),
             status,
+            tdd: None,
+        }
+    }
+
+    /// Non-workflow `ToolContext` for the legacy loop-local
+    /// tests (the B12 path that doesn't touch `task.json`).
+    /// Mirrors the `test_ctx` shape used by other tool
+    /// tests; the exact path values don't matter for
+    /// `update_checklist` because `maybe_persist_to_task_json`
+    /// is gated on `workflow_name.is_some()`.
+    fn legacy_ctx() -> ToolContext {
+        ToolContext {
+            worktree_path: PathBuf::from("/tmp/test-proj"),
+            cwd: PathBuf::from("/tmp/test-proj"),
+            checklist: new_handle(),
+            background_shells: crate::background_shell::default_registry(),
+            db: crate::tools::test_default_pool(),
+            project_id: "test-proj".to_string(),
+            data_dir: PathBuf::from("/tmp"),
+            workflow_name: None,
         }
     }
 
@@ -332,7 +614,7 @@ mod tests {
                 {"content": "c", "status": "pending"}
             ]
         });
-        let (out1, is_err1) = execute(&input1, &handle).await;
+        let (out1, is_err1) = execute(&input1, &handle, &legacy_ctx()).await;
         assert!(!is_err1, "{}", out1);
         assert_eq!(handle.lock().await.len(), 3);
 
@@ -343,7 +625,7 @@ mod tests {
                 {"content": "y", "status": "pending"}
             ]
         });
-        let (out2, is_err2) = execute(&input2, &handle).await;
+        let (out2, is_err2) = execute(&input2, &handle, &legacy_ctx()).await;
         assert!(!is_err2, "{}", out2);
         // Vec must be the SECOND call's list (2 items), not 5.
         let after = handle.lock().await.clone();
@@ -379,7 +661,7 @@ mod tests {
                 {"content": "last", "status": "in_progress"}
             ]
         });
-        let (out, is_err) = execute(&input, &handle).await;
+        let (out, is_err) = execute(&input, &handle, &legacy_ctx()).await;
         assert!(!is_err, "coerce must NOT error");
         let stored = handle.lock().await.clone();
         assert_eq!(stored.len(), 2);
@@ -403,12 +685,12 @@ mod tests {
         let seed = serde_json::json!({
             "items": [{"content": "a", "status": "pending"}]
         });
-        execute(&seed, &handle).await;
+        execute(&seed, &handle, &legacy_ctx()).await;
         assert_eq!(handle.lock().await.len(), 1);
 
         // Now empty.
         let input = serde_json::json!({"items": []});
-        let (out, is_err) = execute(&input, &handle).await;
+        let (out, is_err) = execute(&input, &handle, &legacy_ctx()).await;
         assert!(!is_err);
         assert!(
             handle.lock().await.is_empty(),
@@ -422,7 +704,7 @@ mod tests {
         let handle = new_handle();
         // Completely missing `items` — defensive parse returns empty.
         let input = serde_json::json!({});
-        let (_out, is_err) = execute(&input, &handle).await;
+        let (_out, is_err) = execute(&input, &handle, &legacy_ctx()).await;
         assert!(!is_err, "missing items key is not an error");
         assert!(handle.lock().await.is_empty());
     }
@@ -435,7 +717,7 @@ mod tests {
                 {"content": "weird", "status": "blocked"}
             ]
         });
-        let (_out, is_err) = execute(&input, &handle).await;
+        let (_out, is_err) = execute(&input, &handle, &legacy_ctx()).await;
         assert!(!is_err);
         let stored = handle.lock().await.clone();
         assert_eq!(stored.len(), 1);
@@ -453,7 +735,7 @@ mod tests {
                 {"content": "todo", "status": "pending"}
             ]
         });
-        let (out, _) = execute(&input, &handle).await;
+        let (out, _) = execute(&input, &handle, &legacy_ctx()).await;
         assert!(out.contains("4 items"), "summary: {}", out);
         assert!(out.contains("2 done"), "summary: {}", out);
         assert!(out.contains("1 in_progress"), "summary: {}", out);
@@ -482,5 +764,221 @@ mod tests {
     fn render_empty_list() {
         let rendered = render_checklist(&[]);
         assert_eq!(rendered, "(empty checklist)");
+    }
+
+    // ---- Phase 2 Step 2.6: workflow persistence ----------------------
+
+    use crate::agent::workflow::{
+        TaskItem, TaskJson, TaskStatus, WorkflowCtx,
+    };
+
+    /// Workflow-session `ToolContext` factory. Builds a
+    /// task.json under a temp project root + returns a
+    /// ctx pointing at that root with `workflow_name =
+    /// Some("dev")`.
+    async fn workflow_ctx_with_task(
+        initial_items: Vec<TaskItem>,
+        status: TaskStatus,
+    ) -> (ToolContext, tempfile::TempDir) {
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let task_dir = proj_tmp
+            .path()
+            .join(".everlasting")
+            .join("tasks")
+            .join("step26-fixture");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let task = TaskJson {
+            id: "t-step26".into(),
+            title: "Step 2.6 fixture".into(),
+            slug: "step26-fixture".into(),
+            status,
+            created_at: "2026-07-09T00:00:00Z".into(),
+            updated_at: "2026-07-09T00:00:00Z".into(),
+            parent: None,
+            summary: "test".into(),
+            items: initial_items,
+        };
+        crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
+
+        let ctx = ToolContext {
+            worktree_path: proj_tmp.path().to_path_buf(),
+            cwd: proj_tmp.path().to_path_buf(),
+            checklist: new_handle(),
+            background_shells: crate::background_shell::default_registry(),
+            db: crate::tools::test_default_pool(),
+            project_id: "step26".into(),
+            data_dir: proj_tmp.path().to_path_buf(),
+            workflow_name: Some("dev".to_string()),
+        };
+        (ctx, proj_tmp)
+    }
+
+    fn read_persisted_items(task_dir: &Path) -> Vec<TaskItem> {
+        let raw = std::fs::read_to_string(task_dir.join("task.json")).unwrap();
+        let task: TaskJson = serde_json::from_str(&raw).unwrap();
+        task.items
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_persists_items_to_task_json() {
+        // Workflow session → update_checklist writes through
+        // to task.json.items. The in-memory handle is also
+        // updated (B12 contract preserved).
+        let (ctx, proj_tmp) =
+            workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
+        let task_dir = proj_tmp
+            .path()
+            .join(".everlasting/tasks/step26-fixture");
+
+        let handle = new_handle();
+        let input = serde_json::json!({
+            "items": [
+                {"id": "research", "content": "调研", "status": "done"},
+                {"id": "implement", "content": "实现", "status": "in_progress"},
+                {"id": "test", "content": "测试", "status": "pending", "tdd": true},
+            ]
+        });
+        let (_out, is_err) = execute(&input, &handle, &ctx).await;
+        assert!(!is_err, "execute must succeed for workflow session");
+
+        // In-memory handle updated.
+        let in_mem = handle.lock().await.clone();
+        assert_eq!(in_mem.len(), 3);
+
+        // On-disk task.json updated.
+        let persisted = read_persisted_items(&task_dir);
+        assert_eq!(persisted.len(), 3, "all 3 items must persist");
+        assert_eq!(persisted[0].id, "research");
+        assert_eq!(persisted[0].status, TaskStatus::Done);
+        assert_eq!(persisted[1].id, "implement");
+        assert_eq!(persisted[1].status, TaskStatus::Implement);
+        assert_eq!(persisted[2].id, "test");
+        assert_eq!(
+            persisted[2].tdd,
+            Some(true),
+            "tdd flag must round-trip to task.json",
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_non_workflow_does_not_touch_task_json() {
+        // Legacy B12 contract: non-workflow caller
+        // (`workflow_name = None`) mutates the in-memory
+        // handle but does NOT touch task.json.
+        let proj_tmp = tempfile::TempDir::new().unwrap();
+        let task_dir = proj_tmp
+            .path()
+            .join(".everlasting/tasks/legacy-fixture");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let task = TaskJson {
+            id: "t-legacy".into(),
+            title: "Legacy".into(),
+            slug: "legacy-fixture".into(),
+            status: TaskStatus::Implement,
+            created_at: "2026-07-09T00:00:00Z".into(),
+            updated_at: "2026-07-09T00:00:00Z".into(),
+            parent: None,
+            summary: "legacy".into(),
+            items: vec![TaskItem {
+                id: "preexisting".into(),
+                content: "pre-existing item".into(),
+                status: TaskStatus::Planning,
+                tdd: None,
+            }],
+        };
+        crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
+
+        let ctx = ToolContext {
+            worktree_path: proj_tmp.path().to_path_buf(),
+            cwd: proj_tmp.path().to_path_buf(),
+            checklist: new_handle(),
+            background_shells: crate::background_shell::default_registry(),
+            db: crate::tools::test_default_pool(),
+            project_id: "legacy".into(),
+            data_dir: proj_tmp.path().to_path_buf(),
+            workflow_name: None, // <- non-workflow
+        };
+        let handle = new_handle();
+        let input = serde_json::json!({
+            "items": [{"content": "x", "status": "in_progress"}]
+        });
+        let (_out, is_err) = execute(&input, &handle, &ctx).await;
+        assert!(!is_err);
+
+        // In-memory handle updated (B12 contract).
+        let in_mem = handle.lock().await.clone();
+        assert_eq!(in_mem.len(), 1);
+
+        // On-disk task.json UNTOUCHED — still has the
+        // pre-existing item from before execute().
+        let persisted = read_persisted_items(&task_dir);
+        assert_eq!(
+            persisted.len(),
+            1,
+            "non-workflow must not modify task.json.items",
+        );
+        assert_eq!(persisted[0].id, "preexisting");
+    }
+
+    #[tokio::test]
+    async fn execute_workflow_derives_id_from_content_when_missing() {
+        // LLM omits `id` → writer derives one from the
+        // content hash so the on-disk item still has a
+        // stable key for cross-session lookups.
+        let (ctx, proj_tmp) =
+            workflow_ctx_with_task(vec![], TaskStatus::Planning).await;
+        let task_dir = proj_tmp
+            .path()
+            .join(".everlasting/tasks/step26-fixture");
+
+        let handle = new_handle();
+        let input = serde_json::json!({
+            "items": [{"content": "build prototype", "status": "in_progress"}]
+        });
+        let (_out, _is_err) = execute(&input, &handle, &ctx).await;
+
+        let persisted = read_persisted_items(&task_dir);
+        assert_eq!(persisted.len(), 1);
+        assert!(
+            persisted[0].id.starts_with("auto-"),
+            "missing id must derive to auto-{{hash}} (got: {})",
+            persisted[0].id,
+        );
+        assert!(persisted[0].id.len() > 5, "hash must be non-trivial");
+    }
+
+    #[test]
+    fn checklist_item_parses_id_and_tdd_from_json() {
+        // The LLM-facing schema now exposes `id` + `tdd`
+        // (optional). Parse must round-trip both fields.
+        let input = serde_json::json!({
+            "items": [
+                {
+                    "id": "backend-impl",
+                    "content": "implement backend",
+                    "status": "in_progress",
+                    "tdd": true
+                }
+            ]
+        });
+        let items = parse_and_coerce(&input);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "backend-impl");
+        assert_eq!(items[0].tdd, Some(true));
+        assert_eq!(items[0].status, ChecklistStatus::InProgress);
+    }
+
+    #[test]
+    fn checklist_item_omitted_id_and_tdd_default_cleanly() {
+        // Backward compat: legacy items without `id` /
+        // `tdd` must still parse (id="" / tdd=None).
+        let input = serde_json::json!({
+            "items": [{"content": "x", "status": "done"}]
+        });
+        let items = parse_and_coerce(&input);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "");
+        assert_eq!(items[0].tdd, None);
+        assert_eq!(items[0].status, ChecklistStatus::Done);
     }
 }
