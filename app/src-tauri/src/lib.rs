@@ -198,6 +198,15 @@ pub fn run() {
             // `update_task`; Phase 3 Step 3.3 adds
             // `archive_task`.
             commands::task::create_task,
+            // W1 (Workflow integration, Phase 3 Step 3.3 — 2026-07-09):
+            // `archive_task` — finalize a workflow task by
+            // moving it under `.everlasting/tasks/archive/<YYYY-MM>/`
+            // + setting `status = completed` + `completed_at`
+            // + (default) `git add` + commit. Companion to
+            // `create_task`; together they are the engine's
+            // authoritative task-CRUD IPC pair (Step 2.6
+            // owns `update_task` for B12 checklist sync).
+            commands::task::archive_task,
             // A2 + B7 (Permission system + per-session Mode, 2026-06-13)
             commands::permissions::set_session_mode,
             commands::permissions::permission_response,

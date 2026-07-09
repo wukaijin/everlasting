@@ -72,7 +72,17 @@ pub fn all_command_names() -> Vec<&'static str> {
         "test_provider",
         "test_model",
         "list_sessions",
-        "create_session",
+        // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
+        // `create_task` — seed `.everlasting/tasks/<slug>/`
+        // with v1 `task.json` + `prd.md` skeleton. Phase 3
+        // Step 3.3 adds the `archive_task` companion
+        // (move to `.everlasting/tasks/archive/<YYYY-MM>/`
+        // + `status=completed` + `completed_at` + (default)
+        // `git add` + commit). The two IPCs are the
+        // engine's authoritative task-CRUD pair; Step 2.6
+        // owns `update_task` for B12 checklist sync.
+        "create_task",
+        "archive_task",
         "load_session",
         "delete_session",
         "clear_session_messages",

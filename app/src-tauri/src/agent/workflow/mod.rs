@@ -101,8 +101,9 @@ pub use def::{
 // test code can build paths without re-namespace hunting.
 #[allow(unused_imports)]
 pub use task::{
-    create_task_init, read_task, task_dir, task_json_path, task_prd_path, validate_slug,
-    write_task, TaskError, TaskItem, TaskJson, TaskResult, TaskStatus,
+    archive_task_init, create_task_init, read_task, task_dir, task_json_path, task_prd_path,
+    validate_slug, write_task, PROJ_NS_TASKS_ARCHIVE_DIR, TaskError, TaskItem, TaskJson,
+    TaskResult, TaskStatus,
 };
 
 // Re-export the injection surface at the workflow root.
@@ -593,6 +594,8 @@ mod tests {
                 parent: None,
                 summary: summary.into(),
                 items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
             }),
         }
     }

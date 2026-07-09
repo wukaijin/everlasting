@@ -11,7 +11,7 @@
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
 | Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ✅ 6/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) / 9e513bc (2.5) / 64a9972 (2.6) |
-| Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | 🟡 1/3 (3.1 ✅ / 3.2 ✅ / 3.3 ⏳) | 08eca73 (3.1) / 3990463 (3.2) |
+| Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ✅ 3/3 (Phase 3 完成) | 08eca73 (3.1) / 3990463 (3.2) / <pending> (3.3) |
 
 ## 前置常量
 
@@ -214,10 +214,27 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 ### Step 3.3 — progress.md 交接叙述 + archive_task
 
-- [ ] state 转移时 agent 更新 progress.md(交接叙述,a+b 方案的 b)
-- [ ] `commands/` 加 `archive_task(slug, no_commit)` Tauri command:移动 `.everlasting/tasks/<slug>/` → `.everlasting/tasks/archive/<YYYY-MM>/<slug>/`;task.json.status=completed + completedAt;(默认)git add + commit
-- [ ] 新 session 续 task:agent 读 progress.md + task.json.items 接上
-- **验证**:手动——done → task 移到 archive/YYYY-MM/;新 session 读 progress 续上
+- [x] state 转移时 agent 更新 progress.md(交接叙述)— Step 3.2 已通过 `trigger_spec_distillation` 的 progress.md hint 落地 hint 块,完整 handover 由 `wf-update-spec` skill body 引导 LLM 写
+- [x] `commands/task.rs` 加 `archive_task(project_id, slug, no_commit)` Tauri command:
+  - 移动 `.everlasting/tasks/<slug>/` → `.everlasting/tasks/archive/<YYYY-MM>/<slug>/`
+  - `task.json.status = "completed"` + `completed_at = now()`
+  - 默认 `git add` + `git commit`(no_commit=true 跳过)
+- [x] `TaskStatus` 加 `Completed` 变体(serde "completed";`from_str_opt` accept;`as_str` 返 "completed")
+- [x] `TaskJson` 加 `completed_at: Option<String>` 字段(serde default + skip_serializing_if)
+- [x] `TaskError` 加 `AlreadyArchived` / `NotInDoneStatus` 变体
+- [x] `archive_task_init(project_path, slug, no_commit)` Rust helper(纯 sync IO,跟 `write_task` 一致)
+- [x] `inject.rs::resolve_current_task` 跳过 `Completed`(防御性,archive 自然在 archive/ 下)
+- [x] `commands/mod.rs` 注册 `"archive_task"`
+- [x] `lib.rs` invoke_handler 注册 `commands::task::archive_task`
+- [x] 5 个新单元测试(`archive_task_init`):moves done / refuses non-done / refuses already-archived / missing returns not-found / rejects invalid slug
+- [x] `task_json_omits_none_*` 测试扩展:`completed_at=None` 也走 skip_serializing_if
+- [x] 所有 9 处 `TaskJson {...}` 初始化点补 `completed_at: None`(向后兼容 serde default)
+- **验证**:
+  - `cargo test --lib workflow::task::` → 15 passed(+5 new)
+  - `cargo test --lib` → 1471 passed,0 failed,0 regression(从 1466 + Step 3.3 +5)
+  - `cargo clippy --lib` state.rs / task.rs / inject.rs / commands/task.rs 零新警告(1 io::Error::other 已修;159 总警告全为历史 doc 缩进)
+
+### Step 3.4+ (future / Phase 4+)
 
 **Phase 3 完成标志**:done 自动沉淀 spec + 归档;跨 session 续 task 完整闭环。
 

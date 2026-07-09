@@ -2458,6 +2458,8 @@ mod tests {
                 parent: None,
                 summary: String::new(),
                 items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
             }),
         }
     }

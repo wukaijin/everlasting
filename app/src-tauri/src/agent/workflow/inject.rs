@@ -278,7 +278,25 @@ async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
     for (slug, json_path) in slugs {
         match read_task(project_path, &slug) {
             Ok(task) => {
-                if task.status != crate::agent::workflow::TaskStatus::Done {
+                // Skip terminal statuses. Step 3.3 added
+                // `Completed` (= post-archive state) to the
+                // skip list alongside `Done`. Two reasons:
+                //   1. A `Completed` task lives under
+                //      `tasks/archive/<YYYY-MM>/<slug>/`,
+                //      not `tasks/<slug>/`, so
+                //      `read_task` will normally fail
+                //      with `NotFound` and the error
+                //      branch swallows + continues. The
+                //      explicit skip is defensive — if a
+                //      future change moves archive back
+                //      under the live tree (or someone
+                //      hand-edits status), we still skip.
+                //   2. Symmetry: `Done` and `Completed`
+                //      are both terminal — neither
+                //      should be auto-resumed.
+                if task.status != crate::agent::workflow::TaskStatus::Done
+                    && task.status != crate::agent::workflow::TaskStatus::Completed
+                {
                     return Some(task);
                 }
             }
@@ -658,6 +676,8 @@ mod tests {
                 parent: None,
                 summary: "demo".into(),
                 items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
             }),
         }
     }
@@ -950,6 +970,8 @@ mod tests {
                 parent: None,
                 summary: String::new(),
                 items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
             };
             crate::agent::workflow::write_task(project.path(), &task).unwrap();
         }
@@ -977,6 +999,8 @@ mod tests {
                 parent: None,
                 summary: String::new(),
                 items: vec![],
+                // Step 3.3: pre-archive fixture.
+                completed_at: None,
             };
             crate::agent::workflow::write_task(project.path(), &task).unwrap();
         }
@@ -1009,6 +1033,8 @@ mod tests {
             parent: None,
             summary: String::new(),
             items: vec![],
+            // Step 3.3: pre-archive fixture.
+            completed_at: None,
         };
         crate::agent::workflow::write_task(project.path(), &task).unwrap();
 
