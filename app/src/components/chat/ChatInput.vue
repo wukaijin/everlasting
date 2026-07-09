@@ -82,17 +82,17 @@ import { extractErrorMessage } from "../../utils/useErrorBus";
 import Icon from "../Icon.vue";
 import ModeSelect from "./ModeSelect.vue";
 // W1 (Workflow integration, Step 0.2 — 2026-07-08):
-// per-session workflow opt-in chip. Sibling to
-// `<ModeSelect>` on the same input row (B7 +
-// workflow share the chat-input-row real estate per
-// the 2026-07-08 grill decide-position step).
-import WorkflowToggle from "./WorkflowToggle.vue";
-// W1 (Workflow integration, Step 2.2 — 2026-07-08):
-// per-session active workflow plugin chip. Sibling to
-// `<WorkflowToggle>`; only renders when workflow is ON
-// (the chip itself is gated by `workflowEnabled`). The
-// popover lists discovered plugins under
-// `<project>/.everlasting/workflow/`.
+// W1 (Workflow integration, Step 2.2 + 2026-07-09
+// chip-merge): merged workflow opt-in + plugin picker
+// into a single `<PluginSelect>` chip + popover. The
+// former `<WorkflowToggle>` chip was deleted (task
+// 07-09-07-09-workflow-chip-merge) because it was a
+// conditionally-dependent sibling — its presence was
+// meaningless when workflow was OFF (PluginSelect hid
+// itself) and redundant when ON (two chips reading as
+// the same concept). Now this parent just mounts
+// PluginSelect, which owns the toggle + popover + IPC
+// round-trip and the per-session `hasSession` gate.
 import PluginSelect from "./PluginSelect.vue";
 import TriggerMenu, { type TriggerMenuItem } from "./TriggerMenu.vue";
 import ChatInputHintRow from "./ChatInputHintRow.vue";
@@ -572,21 +572,18 @@ async function onAgentSelect(item: TriggerMenuItem): Promise<void> {
            the hint row, per Q4 P2 in the 2026-06-13 mode-redesign
            grill-with-docs session. -->
       <ModeSelect />
-      <!-- W1 (Workflow integration, Step 0.2 — 2026-07-08):
-           per-session workflow opt-in chip. Sibling to
-           `<ModeSelect>` on the same flex row; reads as "B7
-           Mode + W1 Workflow" together form the session's
-           configuration surface on the chat input row. The
-           component itself owns its visibility (only renders
-           when there's a current session) and its IPC
-           round-trip; this parent just mounts the tag. -->
-      <WorkflowToggle />
-      <!-- W1 Step 2.2: per-session workflow plugin
-           picker. Sibling to `<WorkflowToggle>`; only
-           shows when workflow is ON (the chip is
-           meaningless without an active workflow
-           session). Hidden by the component itself —
-           this parent just mounts the tag. -->
+      <!-- W1 (Workflow integration, Step 2.2 + 2026-07-09
+           chip-merge): per-session workflow + plugin
+           picker merged into a single chip + popover.
+           Sibling to `<ModeSelect>` on the same flex row;
+           reads as "B7 Mode + W1 Workflow" together form
+           the session's configuration surface on the chat
+           input row. The component itself owns its
+           visibility (only renders when there's a current
+           session) and the toggle + plugin IPC round-trips;
+           this parent just mounts the tag. The former
+           `<WorkflowToggle />` chip was removed in task
+           07-09-07-09-workflow-chip-merge. -->
       <PluginSelect />
       <!-- B3 (PR2) + B4 (Stretch 2, 2026-06-18): merged
            command + skill palette. Anchored to the input row

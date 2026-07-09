@@ -1,57 +1,77 @@
 <script setup lang="ts">
-// PluginSelect — W1 (Workflow integration, Step 2.2 —
-// 2026-07-08): per-session active workflow plugin chip.
-// Sibling to `<WorkflowToggle>` on the chat input row;
-// click opens a popover listing the discovered plugins
-// under `<project>/.everlasting/workflow/`.
+// PluginSelect — W1 (Workflow integration, Step 2.2 +
+// 2026-07-09 chip-merge): per-session workflow + active
+// plugin merged into ONE chip + popover, replacing the
+// former `WorkflowToggle` + `PluginSelect` two-chip layout
+// (task 07-09-07-09-workflow-chip-merge).
+//
+// **What it replaces**:
+// - `WorkflowToggle.vue` (deleted in this task) — was the
+//   bare `Wf` / `Wf ●` chip, click flipped workflow on/off.
+// - The previous `PluginSelect.vue` — was the
+//   `Wf · <plugin> ▾` chip + plugin-list popover, gated
+//   behind `workflowEnabled` so it disappeared when
+//   workflow was off.
 //
 // **Visual states**:
-// - workflow OFF → chip hidden (the chip is meaningless
-//   without a workflow session; mirrors the
-//   `PluginSelect` chip being conditional on the parent
-//   `workflowEnabled` flag, same as the agent toggle's
-//   `hasSession` gate).
-// - workflow ON, no popover open → ghost-style chip
-//   showing the current plugin name (e.g. `Wf: dev`).
-//   Same chip shape as `<ModeSelect>` for sibling
-//   readability; only the leading label differs (`Wf`
-//   prefix instead of empty).
-// - workflow ON, popover open → accent-tinted chip +
-//   popover listing every discovered plugin; the active
-//   one is checked. Click an entry → IPC + chip label
-//   flips → popover closes.
+// - workflow OFF → ghost chip `Wf ▾` (mirrors the old
+//   `WorkflowToggle`'s OFF state, but with a chevron so
+//   the user can see it's a dropdown). The popover's
+//   plugin list renders in a disabled row group below the
+//   toggle so the user can SEE what plugins exist before
+//   committing to enable.
+// - workflow ON  → accent chip `Wf · <plugin> ▾` (matches
+//   the old `WorkflowToggle`'s ON accent + the old
+//   `PluginSelect`'s label). The popover's plugin list is
+//   fully active and clickable.
 //
-// **Why a chip + popover (and not a direct cycle like
-// Shift+Tab)**: the plugin list is open-ended
-// (`list_workflow_plugins` discovers whatever's on disk)
-// and we want plugin authors to be able to add a plugin
-// without UI changes. A popover scales; a cycle doesn't.
+// **Popover shape**:
+// ┌────────────────────────────────┐
+// │ ● Workflow              ON >  │  ← top toggle row
+// ├────────────────────────────────┤
+// │ dev                       ✓   │  ← plugin list (greyed
+// │ experimental                  │     when OFF)
+// └────────────────────────────────┘
 //
-// **Streaming / mid-turn semantics**: matches
-// `WorkflowToggle`'s contract — the flip applies on the
-// next turn boundary (the next `build_workflow_ctx` call
-// reads the persisted name from `SessionRow.plugin_name`).
-// The chip label + popover state flip immediately for
-// snappy feedback.
+// **Why keep the plugin list visible when OFF** (vs hide
+// it): the list is the onboarding signal — first-time
+// users see "ah, `dev` is available" before they commit.
+// Hiding it would force an extra click for the same info.
+// The "disabled" treatment is unambiguous (reduced opacity
+// + `not-allowed` cursor + ignore clicks).
 //
-// **Discovery caching**: `listWorkflowPlugins` is
-// fire-and-forget on popover open (no global cache here
-// — the call is cheap, the popover is rare). The IPC
-// reads `<project>/.everlasting/workflow/<dir>/workflow.json`
-// for each subdirectory, returning the directory names.
+// **Streaming / mid-turn semantics**: matches both former
+// components' contract — both flags flip in the DB
+// immediately (optimistic) but the agent's
+// `build_workflow_ctx` reads the persisted flags on the
+// NEXT turn boundary, so mid-stream flips don't surprise
+// the user with an instant state-machine change.
+//
+// **Open direction**: UPWARD (`bottom: calc(100% + 4px);
+// top: auto;`). The chat-input row sits at the bottom of
+// the chat panel (above the viewport bottom), so a
+// downward popover would overlap the textarea below the
+// chips and feel "trapped under the row". Upward matches
+// `<ModeSelect>` and `<ModelSelect>` (also in the same
+// input row, see `popover-pattern.md` §"Position
+// Direction Rule"), giving the user one consistent
+// "popovers open up from this row" mental model.
 
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, onUnmounted, ref } from "vue";
 
 import { useChatStore } from "../../stores/chat";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
 
-/** Same gate as `<WorkflowToggle>` — no point showing the
- *  chip if there's no active session or workflow isn't on. */
-const hasSession = computed<boolean>(
-  () => !!chatStore.currentSessionId,
-);
+/** Same `hasSession` gate as the former `WorkflowToggle`
+ *  — no point showing the chip without an active session
+ *  to bind the workflow flag to. Mirrors `<ModeSelect>`. */
+const hasSession = computed<boolean>(() => !!chatStore.currentSessionId);
+
+/** Workflow opt-in for the active session. Defensive
+ *  default `false` when `hasSession` is false or the
+ *  summary row is missing. */
 const workflowEnabled = computed<boolean>(() => {
   const sid = chatStore.currentSessionId;
   if (!sid) return false;
@@ -59,8 +79,11 @@ const workflowEnabled = computed<boolean>(() => {
   return s?.workflow_enabled ?? false;
 });
 
-/** Current plugin name for the active session, or null
- *  when there's no session. */
+/** Active plugin name for the current session. May be
+ *  `null` when workflow has never been turned ON for
+ *  this session (the backend's `plugin_name` column
+ *  defaults to NULL until the first set call); the chip
+ *  renders `Wf · — ▾` in that case. */
 const currentPlugin = computed<string | null>(() => {
   const sid = chatStore.currentSessionId;
   if (!sid) return null;
@@ -68,50 +91,66 @@ const currentPlugin = computed<string | null>(() => {
   return s?.plugin_name ?? null;
 });
 
-/** Popover state. Lazy-loaded on first open. */
-const open = ref<boolean>(false);
-const plugins = ref<string[]>([]);
-const loading = ref<boolean>(false);
-const rootEl = ref<HTMLElement | null>(null);
-
-/** Project path for the active session. Read from the
- *  `SessionSummary.current_cwd` parent directory — for
- *  the chip's purposes, the project root is "where
- *  `.everlasting/workflow/` would live". When the project
- *  hasn't been set up yet (no session / no project_id),
- *  return empty string → IPC returns `[]` → popover shows
- *  an empty list. */
+/** Project root for plugin discovery. Mirrors the prior
+ *  `PluginSelect.projectPath` semantics verbatim — reads
+ *  `current_cwd` directly. The IPC reads
+ *  `.everlasting/workflow/<dir>/workflow.json` under this
+ *  path verbatim (no parent walk). For the dev plugin
+ *  (the only shipped one) this is fine because it lives
+ *  at the repo root = `current_cwd`. Project-binding work
+ *  (Phase 3 archive) will refine this to read
+ *  `projects.path` directly. */
 const projectPath = computed<string>(() => {
   const sid = chatStore.currentSessionId;
   if (!sid) return "";
   const s = chatStore.sessions.find((x) => x.id === sid);
-  // current_cwd is the worktree-or-project root; the
-  // discovery IPC only needs any path that has
-  // `.everlasting/workflow/` somewhere up the tree.
-  // The IPC reads the directory verbatim (no parent walk),
-  // so we MUST pass the project root, not the worktree
-  // sub-path. For now we use current_cwd verbatim; this
-  // is fine because the dev plugin (the only one today)
-  // lives at the repo root, which is also current_cwd.
-  // Phase 3's archive + project-binding work will refine
-  // this to read `projects.path` directly.
   return s?.current_cwd ?? "";
 });
 
-/** Toggle the popover. Closes on outside-click via the
- *  document listener installed below. */
+/** Popover state. Lazy-loaded: `plugins` is fetched on
+ *  first open via `listWorkflowPlugins`. Subsequent opens
+ *  reuse the cached list — it only changes when the user
+ *  adds a new plugin directory on disk, which is rare
+ *  enough that a watcher isn't worth it. */
+const open = ref<boolean>(false);
+const plugins = ref<string[]>([]);
+const loaded = ref<boolean>(false);
+const loading = ref<boolean>(false);
+const rootEl = ref<HTMLElement | null>(null);
+
+/** Toggle the popover. Closes on outside-click / Esc via
+ *  the document + window listeners below. */
 async function onTriggerClick() {
   if (open.value) {
     open.value = false;
     return;
   }
   open.value = true;
-  loading.value = true;
-  plugins.value = await chatStore.listWorkflowPlugins(projectPath.value);
-  loading.value = false;
+  if (!loaded.value) {
+    loading.value = true;
+    plugins.value = await chatStore.listWorkflowPlugins(projectPath.value);
+    loaded.value = true;
+    loading.value = false;
+  }
 }
 
+/** Toggle row click → flip workflow_enabled. Does NOT
+ *  close the popover — the user is interacting with the
+ *  popover and may want to immediately pick a plugin
+ *  after enabling. This mirrors the prior `WorkflowToggle`
+ *  behavior (click did nothing else). */
+async function onToggleWorkflow() {
+  const sid = chatStore.currentSessionId;
+  if (!sid) return;
+  await chatStore.requestSetWorkflowEnabled(sid, !workflowEnabled.value);
+}
+
+/** Plugin row click → set plugin_name + close popover.
+ *  Only callable when `workflowEnabled === true` (the
+ *  row is rendered as a non-clickable display when OFF,
+ *  see template). */
 async function onPick(name: string) {
+  if (!workflowEnabled.value) return;
   const sid = chatStore.currentSessionId;
   if (!sid) return;
   await chatStore.requestSetPluginName(sid, name);
@@ -121,40 +160,55 @@ async function onPick(name: string) {
 function onDocClick(ev: MouseEvent) {
   if (!open.value) return;
   const target = ev.target as Node | null;
-  if (rootEl.value && target && rootEl.value.contains(target)) {
-    return;
+  if (rootEl.value && target && !rootEl.value.contains(target)) {
+    open.value = false;
   }
-  open.value = false;
 }
 
 function onEsc(ev: KeyboardEvent) {
-  if (ev.key === "Escape") open.value = false;
+  if (open.value && ev.key === "Escape") {
+    open.value = false;
+  }
 }
 
-document.addEventListener("click", onDocClick);
-document.addEventListener("keydown", onEsc);
+if (typeof document !== "undefined") {
+  document.addEventListener("click", onDocClick);
+}
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", onEsc);
+}
 onBeforeUnmount(() => {
-  document.removeEventListener("click", onDocClick);
-  document.removeEventListener("keydown", onEsc);
+  if (typeof document !== "undefined") {
+    document.removeEventListener("click", onDocClick);
+  }
+});
+onUnmounted(() => {
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", onEsc);
+  }
 });
 
-/** Aria label flips based on state. */
-const ariaLabel = computed<string>(() =>
-  workflowEnabled.value
-    ? `Workflow plugin: ${currentPlugin.value ?? "unknown"}. Click to switch.`
-    : "Workflow plugin (workflow OFF — toggle workflow to enable plugin switching)",
+/** Aria label combines workflow state + current plugin so
+ *  screen reader users hear the full picture, not just
+ *  "Workflow chip". */
+const ariaLabel = computed<string>(() => {
+  const state = workflowEnabled.value ? "ON" : "OFF";
+  const plugin = currentPlugin.value ?? "none";
+  return `Workflow ${state}, plugin ${plugin}. Click to open menu.`;
+});
+
+const titleText = computed<string>(() =>
+  open.value
+    ? "Workflow 菜单"
+    : workflowEnabled.value
+      ? `Workflow ON · 当前 plugin: ${currentPlugin.value ?? "—"}`
+      : "Workflow OFF · 点开选择 plugin",
 );
-
-/** Title flips between "currently X" and "click to choose". */
-const titleText = computed<string>(() => {
-  if (open.value) return "选择一个 workflow plugin";
-  return `当前 plugin: ${currentPlugin.value ?? "—"}`;
-});
 </script>
 
 <template>
   <div
-    v-if="hasSession && workflowEnabled"
+    v-if="hasSession"
     ref="rootEl"
     class="plugin-select"
   >
@@ -162,59 +216,119 @@ const titleText = computed<string>(() => {
       type="button"
       class="plugin-select__chip"
       :class="{
+        'plugin-select__chip--on': workflowEnabled,
         'plugin-select__chip--open': open,
       }"
+      :aria-haspopup="'menu'"
       :aria-expanded="open"
       :aria-label="ariaLabel"
       :title="titleText"
       @click="onTriggerClick"
     >
+      <!-- Brand prefix — same `Wf` mnemonic the deleted
+           WorkflowToggle used, so muscle memory carries
+           over. When ON, an inline bolt icon (mirrors the
+           deleted toggle's ON state dot) reinforces the
+           "workflow is engaged" cue without taking extra
+           horizontal space. -->
+      <Icon
+        v-if="workflowEnabled"
+        name="bolt"
+        :size="12"
+        class="plugin-select__icon"
+      />
       <span class="plugin-select__prefix">Wf</span>
-      <span class="plugin-select__sep">·</span>
-      <span class="plugin-select__name">{{ currentPlugin ?? "—" }}</span>
+      <template v-if="workflowEnabled">
+        <span class="plugin-select__sep">·</span>
+        <span class="plugin-select__name">{{ currentPlugin ?? "—" }}</span>
+      </template>
       <Icon
         name="chevron-down"
         :size="10"
         class="plugin-select__chevron"
       />
     </button>
+
     <div
       v-if="open"
       class="plugin-select__popover"
       role="menu"
     >
-      <div
-        v-if="loading"
-        class="plugin-select__empty"
-      >
-        loading…
-      </div>
-      <div
-        v-else-if="plugins.length === 0"
-        class="plugin-select__empty"
-      >
-        暂无可用 plugin
-      </div>
+      <!-- Top row: workflow master toggle. Rendered as a
+           role="switch" button (per WAI-ARIA switch pattern)
+           with aria-checked so screen readers announce the
+           state. The right-side pill is a visual indicator
+           only — clicks bubble to the button. -->
       <button
-        v-for="name in plugins"
-        v-else
-        :key="name"
         type="button"
-        role="menuitem"
-        class="plugin-select__item"
-        :class="{
-          'plugin-select__item--active': name === currentPlugin,
-        }"
-        @click="onPick(name)"
+        role="switch"
+        :aria-checked="workflowEnabled"
+        class="plugin-select__toggle-row"
+        @click="onToggleWorkflow"
       >
-        <span class="plugin-select__item-name">{{ name }}</span>
-        <Icon
-          v-if="name === currentPlugin"
-          name="check"
-          :size="12"
-          class="plugin-select__item-check"
-        />
+        <span class="plugin-select__toggle-label">Workflow</span>
+        <span
+          class="plugin-select__toggle-pill"
+          :class="{
+            'plugin-select__toggle-pill--on': workflowEnabled,
+          }"
+          aria-hidden="true"
+        >
+          <span class="plugin-select__toggle-knob" />
+        </span>
       </button>
+
+      <div
+        class="plugin-select__divider"
+        aria-hidden="true"
+      />
+
+      <!-- Plugin list. When workflow is OFF, the entire
+           group is visually dimmed + cursor-not-allowed +
+           non-clickable. The `disabled` group semantics
+           mean click handlers short-circuit (see
+           `onPick`'s `workflowEnabled` guard). -->
+      <div
+        class="plugin-select__plugin-group"
+        :class="{
+          'plugin-select__plugin-group--disabled': !workflowEnabled,
+        }"
+        :aria-disabled="!workflowEnabled"
+      >
+        <div
+          v-if="loading"
+          class="plugin-select__empty"
+        >
+          loading…
+        </div>
+        <div
+          v-else-if="plugins.length === 0"
+          class="plugin-select__empty"
+        >
+          暂无可用 plugin
+        </div>
+        <button
+          v-for="name in plugins"
+          v-else
+          :key="name"
+          type="button"
+          role="menuitem"
+          class="plugin-select__item"
+          :class="{
+            'plugin-select__item--active': name === currentPlugin,
+          }"
+          :disabled="!workflowEnabled"
+          @click="onPick(name)"
+        >
+          <span class="plugin-select__item-name">{{ name }}</span>
+          <Icon
+            v-if="name === currentPlugin"
+            name="check"
+            :size="12"
+            class="plugin-select__item-check"
+          />
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -225,11 +339,15 @@ const titleText = computed<string>(() => {
   display: inline-flex;
 }
 
-/* Chip shape mirrors <WorkflowToggle>'s ghost-pill so
-   the two chips read as siblings on the input row.
-   Same recipe: mono font, radius-md, transparent
-   background, slim margin-left to separate from
-   WorkflowToggle. */
+/* Chip shape unifies the old WorkflowToggle + PluginSelect
+   chips into one. Same recipe (mono font, radius-md,
+   transparent → bg-elevated on hover, slim margin-left to
+   separate from ModeSelect). Three modifier classes:
+   - default  : OFF, ghost (text-secondary)
+   - --on     : workflow ON, accent border + text
+   - --open   : popover open, accent border + bg-elevated
+                (overrides --on when both apply — same as
+                the prior PluginSelect) */
 .plugin-select__chip {
   display: inline-flex;
   align-items: center;
@@ -245,9 +363,9 @@ const titleText = computed<string>(() => {
   font-family: var(--font-mono);
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  /* "Wf · dev ▾" max ~80px; cap so the chip doesn't
-     asymmetrically stretch the row when a plugin name
-     is unusually long (e.g. "experimental-v2"). */
+  /* OFF: "Wf ▾" ~38px; ON: "Wf · dev ▾" ~80px; cap at
+     120px (matches the prior PluginSelect cap) so long
+     plugin names don't asymmetrically stretch the row. */
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -263,6 +381,20 @@ const titleText = computed<string>(() => {
   color: var(--color-text-primary);
 }
 
+.plugin-select__chip--on {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.plugin-select__chip--on:hover:not(:disabled) {
+  /* Keep accent border on hover — losing it on hover
+     would make the active state look unstable (same
+     reasoning as the deleted WorkflowToggle's --on:hover
+     rule). */
+  background: var(--color-bg-elevated);
+  color: var(--color-accent);
+}
+
 .plugin-select__chip--open {
   background: var(--color-bg-elevated);
   border-color: var(--color-accent);
@@ -276,11 +408,12 @@ const titleText = computed<string>(() => {
   white-space: nowrap;
 }
 
-/* Slim separator between "Wf" prefix and plugin name —
-   visual cue that the prefix is metadata, not part of
-   the plugin name. */
 .plugin-select__sep {
   color: var(--color-text-tertiary);
+}
+
+.plugin-select__icon {
+  flex-shrink: 0;
 }
 
 .plugin-select__chevron {
@@ -288,18 +421,20 @@ const titleText = computed<string>(() => {
   opacity: 0.7;
 }
 
-/* Popover: standard menu styling. Anchored below the
-   chip with the same z-index family as ModeSelect's
-   popover (which is shared via TriggerMenu but the
-   chip is not a Trigger — this is a sibling popover
-   model, not the command palette). */
+/* Popover — opens UPWARD from the chip. Per
+   `popover-pattern.md` §"Position Direction Rule":
+   triggers at the bottom of the viewport open upward.
+   ChatInput's chip row sits at the bottom of the chat
+   panel, matching ModeSelect / ModelSelect's geometry
+   — same `bottom: calc(100% + 4px); top: auto;` recipe
+   so the three popovers read as one family. */
 .plugin-select__popover {
   position: absolute;
-  top: calc(100% + 4px);
+  bottom: calc(100% + 4px);
+  top: auto;
   left: 0;
   z-index: 20;
-  min-width: 160px;
-  max-width: 240px;
+  min-width: 220px;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-bg-border);
   border-radius: var(--radius-md);
@@ -308,6 +443,97 @@ const titleText = computed<string>(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* Toggle row (top of popover). Full-width button
+   styled as a row, with a switch-pill on the right.
+   Uses role="switch" + aria-checked for screen-reader
+   semantics. */
+.plugin-select__toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.plugin-select__toggle-row:hover:not(:disabled) {
+  background: var(--color-bg-overlay);
+}
+
+.plugin-select__toggle-label {
+  flex: 1;
+}
+
+.plugin-select__toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--color-text-secondary);
+  background: transparent;
+  padding: 0 1px;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.plugin-select__toggle-pill--on {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  /* Justify-content flips when ON so the knob hugs the
+     right edge; otherwise it sits left. */
+  justify-content: flex-end;
+}
+
+.plugin-select__toggle-knob {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.plugin-select__toggle-pill--on .plugin-select__toggle-knob {
+  background: var(--color-bg-elevated);
+}
+
+/* Slim divider between toggle row and plugin list.
+   Inset 8px on each side to align with the row content. */
+.plugin-select__divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--color-bg-border);
+}
+
+/* Plugin group — wrapping div instead of a raw fragment
+   so the disabled state can style the whole group at once
+   (opacity + cursor). The individual `.plugin-select__item`
+   buttons inside use `:disabled` for the actual click
+   block (button[disabled] doesn't fire click events). */
+.plugin-select__plugin-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.plugin-select__plugin-group--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .plugin-select__item {
@@ -330,6 +556,10 @@ const titleText = computed<string>(() => {
 
 .plugin-select__item:hover:not(:disabled) {
   background: var(--color-bg-overlay);
+}
+
+.plugin-select__item:disabled {
+  cursor: not-allowed;
 }
 
 .plugin-select__item--active {

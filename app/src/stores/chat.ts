@@ -1612,11 +1612,12 @@ export const useChatStore = defineStore("chat", () => {
    *     Mirrors `setSessionColor`'s no-gate contract.
    *
    *  Returns `true` on success (or no-op), `false` on IPC
-   *  failure. The caller (`WorkflowToggle.vue`) does not
-   *  surface a toast on `false` — the local state was already
-   *  reverted in the catch block, so the chip + DB converge
-   *  back to the prior state silently (matching the color-tag
-   *  toggle UX). */
+   *  failure. The caller (`PluginSelect.vue`, since the
+   *  2026-07-09 chip-merge) does not surface a toast on
+   *  `false` — the local state was already reverted in the
+   *  catch block, so the chip + DB converge back to the
+   *  prior state silently (matching the color-tag toggle
+   *  UX). */
   async function requestSetWorkflowEnabled(
     sessionId: string,
     enabled: boolean,
@@ -1638,7 +1639,7 @@ export const useChatStore = defineStore("chat", () => {
     } catch (e) {
       // Restore the local state so the chip matches the DB.
       // We log + return false but don't toast — the
-      // WorkflowToggle caller's UI feedback is the chip
+      // PluginSelect caller's UI feedback is the chip
       // returning to its prior color.
       console.error("Failed to update session workflow_enabled:", e);
       (summary as { workflow_enabled: boolean }).workflow_enabled = prior;
@@ -1804,17 +1805,27 @@ export const useChatStore = defineStore("chat", () => {
     requestSetMode,
     confirmYolo,
     cancelYolo,
-    // W1 (Workflow integration, Step 0.2 — 2026-07-08):
-    // per-session workflow opt-in toggle. Wired by
-    // `<WorkflowToggle>` (mounted next to `<ModeSelect>` in
-    // `ChatInput.vue`); optimistic-update + rollback on IPC
-    // failure, no streaming guard, no Yolo gate.
+    // W1 (Workflow integration, Step 0.2 + 2026-07-09
+    // chip-merge): per-session workflow opt-in toggle.
+    // Wired by `<PluginSelect>`'s top-of-popover toggle
+    // row (the former `<WorkflowToggle>` chip was deleted
+    // in task 07-09-07-09-workflow-chip-merge and folded
+    // into PluginSelect); optimistic-update + rollback on
+    // IPC failure, no streaming guard, no Yolo gate.
     requestSetWorkflowEnabled,
-    // W1 (Workflow integration, Step 2.2 — 2026-07-08):
-    // per-session active workflow plugin name flip. Wired
-    // by `<PluginSelect>` (mounted next to `<WorkflowToggle>`
-    // in `ChatInput.vue`); mirrors `requestSetWorkflowEnabled`'s
-    // optimistic-update + rollback contract.
+    // W1 (Workflow integration, Step 2.2 + 2026-07-09
+    // chip-merge): per-session active workflow plugin
+    // name flip. Wired by `<PluginSelect>`'s popover
+    // plugin list (sits below the toggle row in the same
+    // popover); mirrors `requestSetWorkflowEnabled`'s
+    // optimistic-update + rollback contract. Plugin rows
+    // are disabled in the UI when workflow is OFF — the
+    // store action itself does NOT guard on
+    // `workflow_enabled` because the backend
+    // `set_session_plugin_name` IPC intentionally accepts
+    // name writes independent of the workflow flag
+    // (lets a future flow pre-stage a plugin name before
+    // turning workflow on).
     requestSetPluginName,
     // W1 Step 2.2: discover available plugins under
     // `<project>/.everlasting/workflow/`. Backs the
