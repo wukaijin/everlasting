@@ -444,9 +444,7 @@ pub(crate) async fn run_subagent(
     // short-circuits the gate — same as pre-Step-2.4
     // behavior (legacy dispatch shape preserved
     // end-to-end).
-    if let Some(denial) =
-        check_workflow_role_gate(workflow_ctx, subagent_name, input)
-    {
+    if let Some(denial) = check_workflow_role_gate(workflow_ctx, subagent_name, input) {
         return (denial, true, false, None);
     }
 
@@ -661,11 +659,7 @@ pub(crate) async fn run_subagent(
     // only mutate the worker's messages[0]. The worker
     // sees the template as part of its initial context.
     let filled = workflow_ctx.and_then(|ctx| {
-        crate::agent::workflow::compute_delegation_template(
-            ctx,
-            &project_path,
-            subagent_name,
-        )
+        crate::agent::workflow::compute_delegation_template(ctx, &project_path, subagent_name)
     });
     crate::agent::workflow::append_delegation_template(&mut worker_messages, filled);
 
@@ -2416,9 +2410,7 @@ mod tests {
     // the existing dispatch tests + the manual end-to-end
     // checklist in `implement.md` Step 2.4 validation.
 
-    use crate::agent::workflow::{
-        Coordination, TaskJson, TaskStatus, WorkflowCtx, WorkflowDef,
-    };
+    use crate::agent::workflow::{Coordination, TaskJson, TaskStatus, WorkflowCtx, WorkflowDef};
 
     fn dev_workflow_def() -> WorkflowDef {
         WorkflowDef {
@@ -2514,8 +2506,7 @@ mod tests {
 
         // planning + implementer → denied
         let ctx_plan = ctx_with_status(TaskStatus::Planning);
-        let denial =
-            check_workflow_role_gate(Some(&ctx_plan), "implementer", &input);
+        let denial = check_workflow_role_gate(Some(&ctx_plan), "implementer", &input);
         assert!(denial.is_some(), "implementer must be denied in planning");
     }
 
@@ -2559,7 +2550,10 @@ mod tests {
         let input = serde_json::json!({"subagent": "researcher"});
         let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
         let msg = denial.expect("researcher must be denied in done");
-        assert!(msg.contains("(none)"), "done's allowed list is empty: {msg}");
+        assert!(
+            msg.contains("(none)"),
+            "done's allowed list is empty: {msg}"
+        );
     }
 
     // ---- Step 2.7: workflow-aware dispatch resolution wiring ----

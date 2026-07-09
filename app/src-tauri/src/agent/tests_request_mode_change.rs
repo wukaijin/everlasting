@@ -162,12 +162,12 @@ async fn run_loop(
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 }
 
@@ -328,7 +328,9 @@ async fn agent_loop_request_mode_change_noop_skips_card() {
         // a final text.
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "noop ok".into() }),
+            Ok(ChatEvent::Delta {
+                text: "noop ok".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -365,7 +367,10 @@ async fn agent_loop_request_mode_change_noop_skips_card() {
 
     // The store has no pending entry (noop didn't register).
     assert!(
-        captured_store.get_payload(&captured_session_id).await.is_none(),
+        captured_store
+            .get_payload(&captured_session_id)
+            .await
+            .is_none(),
         "noop must NOT register a pending mode change"
     );
 }
@@ -400,7 +405,9 @@ async fn agent_loop_request_mode_change_session_cancel_returns_cancelled_marker(
             {
                 // Wait for the cancel arm to clear the entry.
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let after = store_for_cancel_loop.get_payload(&session_id_for_cancel_loop).await;
+                let after = store_for_cancel_loop
+                    .get_payload(&session_id_for_cancel_loop)
+                    .await;
                 assert!(
                     after.is_none(),
                     "QuestionStore entry was cleared by the cancel arm"
@@ -548,7 +555,10 @@ async fn agent_loop_request_mode_change_already_pending_returns_structured_error
         .iter()
         .find(|r| r.tool_use_id == "toolu_mode_blocked")
         .expect("blocked tool produced a tool_result");
-    assert!(mode_result.is_error, "blocked by AlreadyPending → is_error: true");
+    assert!(
+        mode_result.is_error,
+        "blocked by AlreadyPending → is_error: true"
+    );
     let raw = unwrap_envelope(&mode_result.content);
     assert!(
         raw.contains("已有 pending"),

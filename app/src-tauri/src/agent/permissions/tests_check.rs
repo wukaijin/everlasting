@@ -1080,7 +1080,10 @@ async fn isolated_worker_read_project_root_skips_ask() {
     // list_dir). One representative assertion per tool is enough — they
     // all share the Tier 4 Path branch.
     for (tool, input) in [
-        ("grep", serde_json::json!({"path": project_root.join("src")})),
+        (
+            "grep",
+            serde_json::json!({"path": project_root.join("src")}),
+        ),
         ("glob", serde_json::json!({"path": project_root})),
         ("list_dir", serde_json::json!({"path": project_root})),
     ] {

@@ -545,11 +545,7 @@ impl SkillCache {
     /// `workflow_name` is the plugin's identifier (e.g. `"dev"`).
     /// Empty string is normalized to `None` here so the cache slot
     /// never gets a poisoned "" key from a stray empty-name call.
-    pub async fn list_plugin(
-        &self,
-        project_path: &str,
-        workflow_name: &str,
-    ) -> Vec<SkillResource> {
+    pub async fn list_plugin(&self, project_path: &str, workflow_name: &str) -> Vec<SkillResource> {
         if workflow_name.is_empty() {
             return Vec::new();
         }
@@ -1293,8 +1289,7 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let infos =
-            list_skill_infos_with_workflow(&cache, Some(&project_path), Some("dev")).await;
+        let infos = list_skill_infos_with_workflow(&cache, Some(&project_path), Some("dev")).await;
         set_user_dir_for_test(prev);
 
         let by_name: std::collections::HashMap<&str, &SkillInfo> =
@@ -1387,8 +1382,7 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let infos =
-            list_skill_infos_with_workflow(&cache, Some(&project_path), Some("")).await;
+        let infos = list_skill_infos_with_workflow(&cache, Some(&project_path), Some("")).await;
         set_user_dir_for_test(prev);
 
         assert!(
@@ -1424,8 +1418,7 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let infos =
-            list_skill_infos_with_workflow(&cache, Some(&project_path), Some("dev")).await;
+        let infos = list_skill_infos_with_workflow(&cache, Some(&project_path), Some("dev")).await;
         set_user_dir_for_test(prev);
 
         let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
@@ -1433,8 +1426,17 @@ mod tests {
         assert!(names.contains(&"project-only"));
         // 07-09-workflow-builtin-plugin: 内置 dev plugin 提供 5 个 wf-* skills
         // (即使项目无 workflow 目录)。校验它们都在(没出现 phantom source path)。
-        for slug in ["wf-overview", "wf-brainstorm", "wf-before-dev", "wf-check", "wf-update-spec"] {
-            assert!(names.contains(&slug), "builtin {slug} should appear (got {names:?})");
+        for slug in [
+            "wf-overview",
+            "wf-brainstorm",
+            "wf-before-dev",
+            "wf-check",
+            "wf-update-spec",
+        ] {
+            assert!(
+                names.contains(&slug),
+                "builtin {slug} should appear (got {names:?})"
+            );
         }
         // 来源校验:wf-* 来源是 builtin-plugin,user/project 来源不变。
         for info in &infos {
@@ -1467,8 +1469,10 @@ mod tests {
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
-        let with_wf = find_skill_with_workflow(&cache, "wf-check", Some(&project_path), Some("dev")).await;
-        let without_wf = find_skill_with_workflow(&cache, "wf-check", Some(&project_path), None).await;
+        let with_wf =
+            find_skill_with_workflow(&cache, "wf-check", Some(&project_path), Some("dev")).await;
+        let without_wf =
+            find_skill_with_workflow(&cache, "wf-check", Some(&project_path), None).await;
         let baseline = find_skill(&cache, "wf-check", Some(&project_path)).await;
         set_user_dir_for_test(prev);
 
@@ -1508,13 +1512,8 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let resolved = find_skill_with_workflow(
-            &cache,
-            "shared",
-            Some(&project_path),
-            Some("dev"),
-        )
-        .await;
+        let resolved =
+            find_skill_with_workflow(&cache, "shared", Some(&project_path), Some("dev")).await;
         set_user_dir_for_test(prev);
 
         let resolved = resolved.expect("shared must resolve under plugin override");
@@ -1549,13 +1548,8 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let resolved = find_skill_with_workflow(
-            &cache,
-            "review-pr",
-            Some(&project_path),
-            Some("dev"),
-        )
-        .await;
+        let resolved =
+            find_skill_with_workflow(&cache, "review-pr", Some(&project_path), Some("dev")).await;
         set_user_dir_for_test(prev);
 
         let resolved = resolved.expect("project-only skill must still resolve");
@@ -1621,11 +1615,14 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let pp = proj_tmp.path().to_string_lossy().to_string();
-        let r =
-            find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
+        let r = find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
         set_user_dir_for_test(prev);
         let r = r.expect("project plugin wf-brainstorm must win");
-        assert_eq!(r.source, SkillSource::Plugin, "project plugin wins over builtin");
+        assert_eq!(
+            r.source,
+            SkillSource::Plugin,
+            "project plugin wins over builtin"
+        );
         assert_eq!(r.body, "CUSTOM");
     }
 
@@ -1634,7 +1631,10 @@ mod tests {
         // 项目普通 .everlasting/skills/wf-brainstorm → 内置赢(BuiltinPlugin > Project)。
         let user_tmp = tempfile::TempDir::new().unwrap();
         let proj_tmp = tempfile::TempDir::new().unwrap();
-        let dir = proj_tmp.path().join(PROJECT_NAMESPACE).join("skills/wf-brainstorm");
+        let dir = proj_tmp
+            .path()
+            .join(PROJECT_NAMESPACE)
+            .join("skills/wf-brainstorm");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("SKILL.md"),
@@ -1644,8 +1644,7 @@ mod tests {
         let prev = set_user_dir_for_test(Some(user_tmp.path().to_path_buf()));
         let cache = SkillCache::arc();
         let pp = proj_tmp.path().to_string_lossy().to_string();
-        let r =
-            find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
+        let r = find_skill_with_workflow(&cache, "wf-brainstorm", Some(&pp), Some("dev")).await;
         set_user_dir_for_test(prev);
         let r = r.expect("builtin wf-brainstorm should win over project-layer same name");
         assert_eq!(

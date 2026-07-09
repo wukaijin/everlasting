@@ -118,12 +118,12 @@ async fn run_loop(
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 }
 
@@ -196,14 +196,15 @@ async fn c2plus_terminates_after_3_consecutive_hard_loops() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        InteractionResponse::Answered(serde_json::to_value(vec![
-            crate::agent::question_store::QuestionAnswer {
+        InteractionResponse::Answered(
+            serde_json::to_value(vec![crate::agent::question_store::QuestionAnswer {
                 question: "ignored".into(),
                 header: None,
                 options: vec!["终止 loop".into()],
                 multi_select: false,
-            },
-        ]).unwrap()),
+            }])
+            .unwrap(),
+        ),
     );
 
     let captured_session_id = h.session_id.clone();
@@ -303,14 +304,15 @@ async fn c2plus_continue_resets_count_and_injects_enhanced_hint() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        InteractionResponse::Answered(serde_json::to_value(vec![
-            crate::agent::question_store::QuestionAnswer {
+        InteractionResponse::Answered(
+            serde_json::to_value(vec![crate::agent::question_store::QuestionAnswer {
                 question: "ignored".into(),
                 header: None,
                 options: vec!["继续".into()],
                 multi_select: false,
-            },
-        ]).unwrap()),
+            }])
+            .unwrap(),
+        ),
     );
 
     let captured_db = h.db.clone();
@@ -427,14 +429,15 @@ async fn c2plus_none_resets_count() {
     spawn_resolver(
         h.question_store.clone(),
         h.session_id.clone(),
-        InteractionResponse::Answered(serde_json::to_value(vec![
-            crate::agent::question_store::QuestionAnswer {
+        InteractionResponse::Answered(
+            serde_json::to_value(vec![crate::agent::question_store::QuestionAnswer {
                 question: "ignored".into(),
                 header: None,
                 options: vec!["终止 loop".into()],
                 multi_select: false,
-            },
-        ]).unwrap()),
+            }])
+            .unwrap(),
+        ),
     );
 
     run_loop(
@@ -581,30 +584,28 @@ async fn c2plus_already_pending_skips() {
         .register(
             &pre_session_id,
             "toolu_preexisting",
-            crate::agent::question_store::PendingInteraction::Question(
-                ToolQuestionPayload {
-                    session_id: pre_session_id.clone(),
-                    tool_use_id: "toolu_preexisting".into(),
-                    questions: vec![crate::agent::question_store::Question {
-                        question: "preexisting".into(),
-                        header: None,
-                        options: vec![
-                            crate::agent::question_store::QuestionOption {
-                                label: "a".into(),
-                                description: None,
-                                preview: None,
-                            },
-                            crate::agent::question_store::QuestionOption {
-                                label: "b".into(),
-                                description: None,
-                                preview: None,
-                            },
-                        ],
-                        multi_select: false,
-                    }],
-                    ts: 0,
-                },
-            ),
+            crate::agent::question_store::PendingInteraction::Question(ToolQuestionPayload {
+                session_id: pre_session_id.clone(),
+                tool_use_id: "toolu_preexisting".into(),
+                questions: vec![crate::agent::question_store::Question {
+                    question: "preexisting".into(),
+                    header: None,
+                    options: vec![
+                        crate::agent::question_store::QuestionOption {
+                            label: "a".into(),
+                            description: None,
+                            preview: None,
+                        },
+                        crate::agent::question_store::QuestionOption {
+                            label: "b".into(),
+                            description: None,
+                            preview: None,
+                        },
+                    ],
+                    multi_select: false,
+                }],
+                ts: 0,
+            }),
         )
         .await
         .expect("pre-register ok");
@@ -824,12 +825,12 @@ async fn c2plus_worker_breaks_and_notifies_parent() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The dispatch_subagent tool_result carries the loop-terminated

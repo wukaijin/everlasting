@@ -429,8 +429,7 @@ async fn execute_tool_inner(
             // `update_checklist::maybe_persist_to_task_json`). The
             // in-memory handle is always updated — same shape as
             // pre-Step-2.6.
-            let (out, is_err) =
-                update_checklist::execute(input, &ctx.checklist, ctx).await;
+            let (out, is_err) = update_checklist::execute(input, &ctx.checklist, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         "run_background_shell" => {

@@ -48,6 +48,8 @@ function makeSession(id: string, title: string): SessionSummary {
     last_cache_creation: null,
     last_cache_read: null,
     color_tag: null,
+    workflow_enabled: false,
+    plugin_name: "",
     mode: "edit",
   };
 }

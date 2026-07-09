@@ -89,9 +89,9 @@ pub mod builtin;
 // removes the allow when the first consumer appears.
 #[allow(unused_imports)]
 pub use def::{
-    allowed_roles, breadcrumb_for, can_transition, default_workflow,
-    delegation_template_for, list_plugins, load_workflow, validate, workflow_json_path,
-    Coordination, Transition, ValidationError, WorkflowDef,
+    allowed_roles, breadcrumb_for, can_transition, default_workflow, delegation_template_for,
+    list_plugins, load_workflow, validate, workflow_json_path, Coordination, Transition,
+    ValidationError, WorkflowDef,
 };
 
 // Re-export the task types + helpers at the workflow root.
@@ -105,8 +105,8 @@ pub use def::{
 #[allow(unused_imports)]
 pub use task::{
     archive_task_init, create_task_init, read_task, task_dir, task_json_path, task_prd_path,
-    validate_slug, write_task, PROJ_NS_TASKS_ARCHIVE_DIR, TaskError, TaskItem, TaskJson,
-    TaskResult, TaskStatus,
+    validate_slug, write_task, TaskError, TaskItem, TaskJson, TaskResult, TaskStatus,
+    PROJ_NS_TASKS_ARCHIVE_DIR,
 };
 
 // Re-export the injection surface at the workflow root.
@@ -304,7 +304,10 @@ mod tests {
     fn allowed_roles_for_unknown_state_returns_empty_slice() {
         let w = dev();
         let roles = allowed_roles(&w, "nonexistent");
-        assert!(roles.is_empty(), "missing state MUST return empty slice, not panic");
+        assert!(
+            roles.is_empty(),
+            "missing state MUST return empty slice, not panic"
+        );
         // The slice's lifetime is tied to the def borrow —
         // explicitly test it to catch accidental `&'static`
         // shortcuts.
@@ -315,7 +318,10 @@ mod tests {
 
     #[test]
     fn coordination_parser_recognizes_known_forms() {
-        assert_eq!(Coordination::from_str_opt("pipeline"), Coordination::Pipeline);
+        assert_eq!(
+            Coordination::from_str_opt("pipeline"),
+            Coordination::Pipeline
+        );
         assert_eq!(
             Coordination::from_str_opt("synthesis_round"),
             Coordination::SynthesisRound
@@ -429,7 +435,10 @@ mod tests {
         assert_eq!(loaded.coordination, Coordination::SynthesisRound);
         assert_eq!(breadcrumb_for(&loaded, "intake"), "REVIEW-INTAKE");
         assert_eq!(breadcrumb_for(&loaded, "synth"), "REVIEW-SYNTH");
-        assert_eq!(allowed_roles(&loaded, "synth"), &["synthesizer".to_string()]);
+        assert_eq!(
+            allowed_roles(&loaded, "synth"),
+            &["synthesizer".to_string()]
+        );
         assert!(can_transition(&loaded, "intake", "synth"));
         assert!(!can_transition(&loaded, "synth", "intake"));
         assert_eq!(
@@ -487,7 +496,10 @@ mod tests {
     #[test]
     fn validate_passes_on_default_workflow() {
         let w = dev();
-        assert!(validate(&w).is_ok(), "default_workflow() must self-validate");
+        assert!(
+            validate(&w).is_ok(),
+            "default_workflow() must self-validate"
+        );
     }
 
     #[test]
@@ -495,7 +507,9 @@ mod tests {
         let mut w = dev();
         w.states.clear();
         let errs = validate(&w).expect_err("empty states must fail");
-        assert!(errs.iter().any(|e| matches!(e, ValidationError::StatesEmpty)));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::StatesEmpty)));
     }
 
     #[test]
@@ -521,7 +535,8 @@ mod tests {
             .insert("ghost_state".to_string(), vec!["researcher".to_string()]);
         let errs = validate(&w).expect_err("unknown role key must fail");
         assert!(
-            errs.iter().any(|e| matches!(e, ValidationError::RoleKeyUnknownState { .. })),
+            errs.iter()
+                .any(|e| matches!(e, ValidationError::RoleKeyUnknownState { .. })),
             "expected RoleKeyUnknownState, got: {errs:?}",
         );
     }
@@ -574,10 +589,7 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         write_workflow(proj_tmp.path(), "real", "{}");
         // Empty sibling dir — no workflow.json
-        std::fs::create_dir_all(
-            proj_tmp.path().join(".everlasting/workflow/scratch"),
-        )
-        .unwrap();
+        std::fs::create_dir_all(proj_tmp.path().join(".everlasting/workflow/scratch")).unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
         assert_eq!(list_plugins(&path), vec!["dev", "real"]);
     }
@@ -613,11 +625,7 @@ mod tests {
     /// delegation_templates (researcher / implementer /
     /// checker). Tests can mutate `current_task` to drive
     /// the placeholder substitution.
-    fn dev_ctx_with_task(
-        title: &str,
-        summary: &str,
-        status: TaskStatus,
-    ) -> WorkflowCtx {
+    fn dev_ctx_with_task(title: &str, summary: &str, status: TaskStatus) -> WorkflowCtx {
         WorkflowCtx {
             workflow_def: default_workflow(),
             current_task: Some(TaskJson {
@@ -656,10 +664,7 @@ mod tests {
             filled.contains("investigate skill loader plugin layer"),
             "{{summary}} must substitute",
         );
-        assert!(
-            filled.contains("planning"),
-            "{{state}} must substitute",
-        );
+        assert!(filled.contains("planning"), "{{state}} must substitute",);
         assert!(
             !filled.contains("{title}"),
             "no unsubstituted placeholders should remain (got: {filled})",
@@ -700,11 +705,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let spec_dir = tmp.path().join(".everlasting").join("spec");
         std::fs::create_dir_all(spec_dir.join("agents/backend")).unwrap();
-        std::fs::write(
-            spec_dir.join("agents/backend/index.md"),
-            "# backend spec",
-        )
-        .unwrap();
+        std::fs::write(spec_dir.join("agents/backend/index.md"), "# backend spec").unwrap();
         std::fs::write(spec_dir.join("agents/backend/style.md"), "# style");
         // A non-.md file should be ignored.
         std::fs::write(spec_dir.join("README.txt"), "ignored");
@@ -760,8 +761,7 @@ mod tests {
                 cache_control: None,
             }]),
         }];
-        let ok =
-            append_delegation_template(&mut messages, Some("PLUGIN_TEMPLATE".to_string()));
+        let ok = append_delegation_template(&mut messages, Some("PLUGIN_TEMPLATE".to_string()));
         assert!(ok, "append must succeed for user-role Blocks messages");
         if let MessageContent::Blocks(blocks) = &messages[0].content {
             assert_eq!(blocks.len(), 2, "should have 2 blocks (memory + template)");
@@ -801,8 +801,7 @@ mod tests {
         // S-B guard: no messages → can't append.
         use crate::llm::types::ChatMessage;
         let mut messages: Vec<ChatMessage> = vec![];
-        let ok =
-            append_delegation_template(&mut messages, Some("body".to_string()));
+        let ok = append_delegation_template(&mut messages, Some("body".to_string()));
         assert!(!ok, "empty messages → no-op");
     }
 }

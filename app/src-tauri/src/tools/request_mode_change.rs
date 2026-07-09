@@ -334,7 +334,12 @@ pub async fn execute_blocking(
             "current_mode": target_mode,
         })
         .to_string();
-        return (content, false, crate::tools::ToolContextUpdate::default(), None);
+        return (
+            content,
+            false,
+            crate::tools::ToolContextUpdate::default(),
+            None,
+        );
     }
 
     // ---- 3. Build payload + requested audit ------------------------
@@ -481,8 +486,8 @@ pub async fn execute_blocking(
 mod tests {
     use super::*;
     use crate::agent::question_store::{
-        InteractionResponse, PendingInteraction, QuestionStore, ToolQuestionPayload, Question,
-        QuestionOption,
+        InteractionResponse, PendingInteraction, Question, QuestionOption, QuestionStore,
+        ToolQuestionPayload,
     };
     use sqlx::SqlitePool;
 
@@ -507,7 +512,10 @@ mod tests {
             self.emitted_question.lock().unwrap().push(payload.clone());
         }
         fn emit_mode_change_request(&self, payload: &ModeChangePayload) {
-            self.emitted_mode_change.lock().unwrap().push(payload.clone());
+            self.emitted_mode_change
+                .lock()
+                .unwrap()
+                .push(payload.clone());
         }
     }
 
@@ -900,7 +908,10 @@ mod tests {
         // No emit happened for the duplicate.
         assert!(sink.emitted_mode_change.lock().unwrap().is_empty());
         // The first pending is still there.
-        let got = store.get_payload("s1").await.expect("pre-existing pending still present");
+        let got = store
+            .get_payload("s1")
+            .await
+            .expect("pre-existing pending still present");
         assert_eq!(
             got.kind,
             crate::agent::question_store::InteractionKind::Question

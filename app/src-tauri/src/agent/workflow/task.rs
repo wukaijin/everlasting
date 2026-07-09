@@ -343,8 +343,7 @@ pub fn write_task(project_path: &Path, task: &TaskJson) -> TaskResult<()> {
     let bytes = serde_json::to_vec_pretty(task)
         .map_err(|e| TaskError::MalformedJson(final_path.clone(), e.to_string()))?;
     fs::write(&tmp_path, &bytes).map_err(|e| TaskError::Io(tmp_path.clone(), e))?;
-    fs::rename(&tmp_path, &final_path)
-        .map_err(|e| TaskError::Io(final_path.clone(), e))?;
+    fs::rename(&tmp_path, &final_path).map_err(|e| TaskError::Io(final_path.clone(), e))?;
     Ok(())
 }
 
@@ -426,8 +425,7 @@ pub fn create_task_init(
         slug = task.slug,
         now = task.created_at,
     );
-    fs::write(&prd_path, prd_body.as_bytes())
-        .map_err(|e| TaskError::Io(prd_path, e))?;
+    fs::write(&prd_path, prd_body.as_bytes()).map_err(|e| TaskError::Io(prd_path, e))?;
 
     Ok(task)
 }
@@ -489,11 +487,7 @@ pub const PROJ_NS_TASKS_ARCHIVE_DIR: &str = "archive";
 /// will not pick the task up again because (a) the live
 /// tree no longer has the slug, and (b) the archive tree
 /// has `status = Completed` which `inject.rs` also skips.
-pub fn archive_task_init(
-    project_path: &Path,
-    slug: &str,
-    no_commit: bool,
-) -> TaskResult<TaskJson> {
+pub fn archive_task_init(project_path: &Path, slug: &str, no_commit: bool) -> TaskResult<TaskJson> {
     use std::fmt::Write;
 
     validate_slug(slug)?;
@@ -512,12 +506,7 @@ pub fn archive_task_init(
     let ym = now_dt.format("%Y-%m").to_string();
     let dst_dir = src_dir
         .parent()
-        .ok_or_else(|| {
-            TaskError::Io(
-                src_dir.clone(),
-                io::Error::other("task dir has no parent"),
-            )
-        })?
+        .ok_or_else(|| TaskError::Io(src_dir.clone(), io::Error::other("task dir has no parent")))?
         .join(PROJ_NS_TASKS_ARCHIVE_DIR)
         .join(&ym)
         .join(slug);
@@ -720,8 +709,7 @@ mod tests {
     #[test]
     fn create_task_init_writes_json_and_prd_skeleton() {
         let d = fresh_project();
-        let task = create_task_init(&proj(&d), "My Feature", "my-feature", None)
-            .expect("create");
+        let task = create_task_init(&proj(&d), "My Feature", "my-feature", None).expect("create");
         assert_eq!(task.title, "My Feature");
         assert_eq!(task.slug, "my-feature");
         assert_eq!(task.status, TaskStatus::Planning);
@@ -748,21 +736,16 @@ mod tests {
     fn create_task_init_refuses_to_overwrite_existing() {
         let d = fresh_project();
         create_task_init(&proj(&d), "First", "dup", None).expect("first ok");
-        let err = create_task_init(&proj(&d), "Second", "dup", None)
-            .expect_err("must reject duplicate");
-        assert!(
-            matches!(err, TaskError::AlreadyExists(_)),
-            "got {:?}",
-            err
-        );
+        let err =
+            create_task_init(&proj(&d), "Second", "dup", None).expect_err("must reject duplicate");
+        assert!(matches!(err, TaskError::AlreadyExists(_)), "got {:?}", err);
     }
 
     #[test]
     fn create_task_init_with_parent_records_parent_slug() {
         let d = fresh_project();
-        let task =
-            create_task_init(&proj(&d), "Sub", "sub-task", Some("parent-task"))
-                .expect("create child");
+        let task = create_task_init(&proj(&d), "Sub", "sub-task", Some("parent-task"))
+            .expect("create child");
         assert_eq!(task.parent.as_deref(), Some("parent-task"));
         let again = read_task(&proj(&d), "sub-task").expect("read child");
         assert_eq!(again.parent.as_deref(), Some("parent-task"));
@@ -858,11 +841,7 @@ mod tests {
             completed_at: None,
         };
         let s = serde_json::to_string(&t).unwrap();
-        assert!(
-            !s.contains("parent"),
-            "parent=None must be skipped: {}",
-            s
-        );
+        assert!(!s.contains("parent"), "parent=None must be skipped: {}", s);
         assert!(
             !s.contains("completed_at"),
             "completed_at=None must be skipped: {}",
@@ -942,7 +921,10 @@ mod tests {
             archived_dir.display()
         );
         let archived_json = archived_dir.join("task.json");
-        assert!(archived_json.exists(), "task.json must be at the archive dir");
+        assert!(
+            archived_json.exists(),
+            "task.json must be at the archive dir"
+        );
         let disk = read_task_at(&archived_json);
         assert_eq!(disk.status, TaskStatus::Completed);
         assert_eq!(disk.completed_at, archived.completed_at);
@@ -961,8 +943,7 @@ mod tests {
         ] {
             let d = tempfile::tempdir().expect("tempdir");
             let path = d.path();
-            let mut task =
-                create_task_init(path, "My Feature", "my-feat", None).expect("create");
+            let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");
             task.status = non_done;
             write_task(path, &task).expect("write");
 

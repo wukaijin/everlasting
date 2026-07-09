@@ -75,10 +75,7 @@ fn ask_timeout() -> std::time::Duration {
 /// (the fn is `#[cfg(test)]`). The task-local is cleared automatically
 /// when the returned future completes (RAII via `scope`).
 #[cfg(test)]
-pub(crate) async fn with_ask_timeout_for_test<F, R>(
-    d: std::time::Duration,
-    future: F,
-) -> R
+pub(crate) async fn with_ask_timeout_for_test<F, R>(d: std::time::Duration, future: F) -> R
 where
     F: std::future::Future<Output = R>,
 {

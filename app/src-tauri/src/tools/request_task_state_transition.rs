@@ -343,10 +343,7 @@ pub async fn execute_blocking(
     let parsed: RequestTaskStateTransitionInput = match serde_json::from_value(input.clone()) {
         Ok(p) => p,
         Err(e) => {
-            let msg = format!(
-                "request_task_state_transition: invalid input JSON: {}",
-                e
-            );
+            let msg = format!("request_task_state_transition: invalid input JSON: {}", e);
             tracing::warn!(
                 session_id = %session_id,
                 tool_use_id = %tool_use_id,
@@ -415,7 +412,12 @@ pub async fn execute_blocking(
                     tool_use_id = %tool_use_id,
                     "request_task_state_transition: no current_slug supplied and no workflow task"
                 );
-                return (msg.to_string(), true, crate::tools::ToolContextUpdate::default(), None);
+                return (
+                    msg.to_string(),
+                    true,
+                    crate::tools::ToolContextUpdate::default(),
+                    None,
+                );
             }
         }
     };
@@ -476,7 +478,12 @@ pub async fn execute_blocking(
             "current_state": target_state_str,
         })
         .to_string();
-        return (content, false, crate::tools::ToolContextUpdate::default(), None);
+        return (
+            content,
+            false,
+            crate::tools::ToolContextUpdate::default(),
+            None,
+        );
     }
 
     // ---- 3. Build payload + requested audit ------------------------
@@ -541,10 +548,7 @@ pub async fn execute_blocking(
             // `NotFound` is not reachable from `register` —
             // defensive branch (register only ever returns
             // `AlreadyPending`). Kept for exhaustiveness.
-            let msg = format!(
-                "request_task_state_transition: store error: {}",
-                e
-            );
+            let msg = format!("request_task_state_transition: store error: {}", e);
             tracing::error!(
                 session_id = %session_id,
                 tool_use_id = %tool_use_id,
@@ -657,12 +661,9 @@ mod tests {
         fn emit_chat_event(&self, _payload: &crate::state::ChatEventPayload) {}
         fn emit_tool_call(&self, _payload: &crate::state::ToolCallPayload) {}
         fn emit_tool_result(&self, _payload: &crate::state::ToolResultPayload) {}
-        fn emit_permission_ask(
-            &self,
-            _payload: crate::agent::permissions::PermissionAskPayload,
-        ) {
+        fn emit_permission_ask(&self, _payload: crate::agent::permissions::PermissionAskPayload) {}
+        fn emit_tool_question(&self, _payload: &crate::agent::question_store::ToolQuestionPayload) {
         }
-        fn emit_tool_question(&self, _payload: &crate::agent::question_store::ToolQuestionPayload) {}
         fn emit_mode_change_request(&self, _payload: &ModeChangePayload) {}
         fn emit_task_state_transition(&self, payload: &TaskStateTransitionPayload) {
             self.emitted_task_state_transition
@@ -773,12 +774,11 @@ mod tests {
         .await;
         assert!(is_error);
         assert!(content.contains("schema validation failed"));
-        assert!(
-            sink.emitted_task_state_transition
-                .lock()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(sink
+            .emitted_task_state_transition
+            .lock()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -829,12 +829,11 @@ mod tests {
         .await;
         assert!(is_error);
         assert!(content.contains("schema validation failed"));
-        assert!(
-            sink.emitted_task_state_transition
-                .lock()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(sink
+            .emitted_task_state_transition
+            .lock()
+            .unwrap()
+            .is_empty());
     }
 
     // ----- slug mismatch / missing context short-circuits -----
@@ -895,8 +894,7 @@ mod tests {
             .await
         });
 
-        let register_wait_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered the pending state transition");
@@ -964,15 +962,17 @@ mod tests {
             &cancel,
         )
         .await;
-        assert!(!is_error, "noop is NOT an error (matches request_mode_change noop)");
+        assert!(
+            !is_error,
+            "noop is NOT an error (matches request_mode_change noop)"
+        );
         assert!(content.contains("noop"));
         // No IPC emit on noop (matches request_mode_change).
-        assert!(
-            sink.emitted_task_state_transition
-                .lock()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(sink
+            .emitted_task_state_transition
+            .lock()
+            .unwrap()
+            .is_empty());
         assert!(store.get_payload("s1").await.is_none());
     }
 
@@ -1008,8 +1008,7 @@ mod tests {
         });
 
         // Wait for register.
-        let register_wait_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered the pending state transition");
@@ -1070,8 +1069,7 @@ mod tests {
             .await
         });
 
-        let register_wait_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered");
@@ -1116,8 +1114,7 @@ mod tests {
             .await
         });
 
-        let register_wait_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let register_wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while store.get_payload("s1").await.is_none() {
             if std::time::Instant::now() > register_wait_deadline {
                 panic!("executor never registered");
@@ -1176,12 +1173,11 @@ mod tests {
         .await;
         assert!(is_error);
         assert!(content.contains("已有 pending"));
-        assert!(
-            sink.emitted_task_state_transition
-                .lock()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(sink
+            .emitted_task_state_transition
+            .lock()
+            .unwrap()
+            .is_empty());
         // Drain for isolation.
         let _ = store.remove("s1").await;
     }

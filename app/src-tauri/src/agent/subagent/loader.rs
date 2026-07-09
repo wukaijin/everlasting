@@ -2085,7 +2085,10 @@ mod tests {
     #[test]
     fn locate_agent_file_plugin_errors() {
         let res = locate_agent_file(SubagentSource::Plugin, "researcher", "/tmp/proj");
-        assert!(res.is_err(), "plugin agents are read-only; locate should refuse");
+        assert!(
+            res.is_err(),
+            "plugin agents are read-only; locate should refuse"
+        );
     }
 
     #[tokio::test]
@@ -2097,14 +2100,16 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let plugin_dir = plugin_agents_dir("dev", &proj_tmp.path().to_string_lossy());
         std::fs::create_dir_all(&plugin_dir).unwrap();
-        write_agent(&plugin_dir, "researcher", "---\nname: researcher\n---\nPLUGIN_RESEARCHER");
+        write_agent(
+            &plugin_dir,
+            "researcher",
+            "---\nname: researcher\n---\nPLUGIN_RESEARCHER",
+        );
 
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
-        let with_wf = cache
-            .list_with_workflow(&project_path, Some("dev"))
-            .await;
+        let with_wf = cache.list_with_workflow(&project_path, Some("dev")).await;
         let researcher = with_wf
             .iter()
             .find(|l| l.def.name == "researcher")
@@ -2137,17 +2142,23 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let project_agents = project_agents_dir(&proj_tmp.path().to_string_lossy());
         std::fs::create_dir_all(&project_agents).unwrap();
-        write_agent(&project_agents, "researcher", "---\nname: researcher\n---\nPROJECT_BODY");
+        write_agent(
+            &project_agents,
+            "researcher",
+            "---\nname: researcher\n---\nPROJECT_BODY",
+        );
         let plugin_dir = plugin_agents_dir("dev", &proj_tmp.path().to_string_lossy());
         std::fs::create_dir_all(&plugin_dir).unwrap();
-        write_agent(&plugin_dir, "researcher", "---\nname: researcher\n---\nPLUGIN_BODY");
+        write_agent(
+            &plugin_dir,
+            "researcher",
+            "---\nname: researcher\n---\nPLUGIN_BODY",
+        );
 
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
-        let merged = cache
-            .list_with_workflow(&project_path, Some("dev"))
-            .await;
+        let merged = cache.list_with_workflow(&project_path, Some("dev")).await;
         let researcher = merged
             .iter()
             .find(|l| l.def.name == "researcher")
@@ -2169,14 +2180,16 @@ mod tests {
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let plugin_dir = plugin_agents_dir("dev", &proj_tmp.path().to_string_lossy());
         std::fs::create_dir_all(&plugin_dir).unwrap();
-        write_agent(&plugin_dir, "researcher", "---\nname: researcher\n---\nPLUGIN_BODY");
+        write_agent(
+            &plugin_dir,
+            "researcher",
+            "---\nname: researcher\n---\nPLUGIN_BODY",
+        );
 
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
-        let merged = cache
-            .list_with_workflow(&project_path, Some(""))
-            .await;
+        let merged = cache.list_with_workflow(&project_path, Some("")).await;
         let researcher = merged
             .iter()
             .find(|l| l.def.name == "researcher")

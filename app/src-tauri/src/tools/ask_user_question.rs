@@ -804,8 +804,14 @@ mod tests {
         // No emit happened for the duplicate.
         assert!(sink.emitted.lock().unwrap().is_empty());
         // The first pending is still there.
-        let got = store.get_payload("s1").await.expect("first pending still present");
-        assert_eq!(got.kind, crate::agent::question_store::InteractionKind::Question);
+        let got = store
+            .get_payload("s1")
+            .await
+            .expect("first pending still present");
+        assert_eq!(
+            got.kind,
+            crate::agent::question_store::InteractionKind::Question
+        );
         match got.payload {
             PendingInteraction::Question(q) => {
                 assert_eq!(q.tool_use_id, "tu_pre", "pre-existing pending untouched");

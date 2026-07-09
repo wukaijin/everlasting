@@ -37,9 +37,7 @@
 #![cfg(test)]
 
 use crate::agent::permissions::AuditKind;
-use crate::agent::question_store::{
-    ModeChangePayload, PendingInteraction, QuestionStore,
-};
+use crate::agent::question_store::{ModeChangePayload, PendingInteraction, QuestionStore};
 use crate::commands::permissions::is_running_as_root;
 use crate::commands::question::resolve_mode_change_internal;
 use crate::db;
@@ -71,9 +69,15 @@ async fn seed_session(pool: &SqlitePool) -> (String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let project_path = dir.path().to_path_buf();
     let project_id = format!("proj-{}", Uuid::new_v4());
-    db::create_project(pool, &project_id, project_path.to_str().unwrap(), false, None)
-        .await
-        .expect("create_project");
+    db::create_project(
+        pool,
+        &project_id,
+        project_path.to_str().unwrap(),
+        false,
+        None,
+    )
+    .await
+    .expect("create_project");
     let session_id = Uuid::new_v4().to_string();
     db::create_session(
         pool,
@@ -154,7 +158,11 @@ async fn resolve_mode_change_internal_allow_plan_updates_mode_and_writes_allowed
         .await
         .expect("resolve ok");
 
-    assert_eq!(row.mode.as_str(), "plan", "session row.mode flipped to plan");
+    assert_eq!(
+        row.mode.as_str(),
+        "plan",
+        "session row.mode flipped to plan"
+    );
 
     // DB side: reload + assert.
     let loaded = db::load_session(&pool, &session_id)
@@ -171,16 +179,11 @@ async fn resolve_mode_change_internal_allow_plan_updates_mode_and_writes_allowed
     // Audit side: at least 1 mode_change_allowed row + at least
     // 1 mode_changed row (the latter from
     // set_session_mode_internal).
-    let allowed_count = audit_count(
-        &pool,
-        AuditKind::ModeChangeAllowed.as_str(),
-        &session_id,
-    )
-    .await;
+    let allowed_count =
+        audit_count(&pool, AuditKind::ModeChangeAllowed.as_str(), &session_id).await;
     assert_eq!(allowed_count, 1, "exactly 1 mode_change_allowed audit row");
 
-    let mode_changed_count =
-        audit_count(&pool, AuditKind::ModeChanged.as_str(), &session_id).await;
+    let mode_changed_count = audit_count(&pool, AuditKind::ModeChanged.as_str(), &session_id).await;
     assert_eq!(
         mode_changed_count, 1,
         "exactly 1 mode_changed audit row (from set_session_mode_internal)"
@@ -226,20 +229,15 @@ async fn resolve_mode_change_internal_allow_yolo_non_root_updates_mode() {
 
     // yolo_entered audit is written on the prev!=Yolo, new==Yolo
     // transition (set_session_mode_internal).
-    let yolo_entered_count =
-        audit_count(&pool, AuditKind::YoloEntered.as_str(), &session_id).await;
+    let yolo_entered_count = audit_count(&pool, AuditKind::YoloEntered.as_str(), &session_id).await;
     assert_eq!(
         yolo_entered_count, 1,
         "exactly 1 yolo_entered audit row on edit→yolo transition"
     );
 
     // mode_change_allowed row written by the IPC handler.
-    let allowed_count = audit_count(
-        &pool,
-        AuditKind::ModeChangeAllowed.as_str(),
-        &session_id,
-    )
-    .await;
+    let allowed_count =
+        audit_count(&pool, AuditKind::ModeChangeAllowed.as_str(), &session_id).await;
     assert_eq!(allowed_count, 1);
 }
 
@@ -293,8 +291,7 @@ async fn resolve_mode_change_internal_allow_yolo_root_denies() {
     );
 
     // mode_change_denied audit with reason="yolo_root_guard".
-    let denied_count =
-        audit_count(&pool, AuditKind::ModeChangeDenied.as_str(), &session_id).await;
+    let denied_count = audit_count(&pool, AuditKind::ModeChangeDenied.as_str(), &session_id).await;
     assert_eq!(
         denied_count, 1,
         "exactly 1 mode_change_denied audit row on root guard"
@@ -346,28 +343,22 @@ async fn resolve_mode_change_internal_deny_writes_denied_audit_and_returns_sessi
     assert_eq!(loaded.mode.as_str(), "edit");
 
     // mode_change_denied audit (1 row).
-    let denied_count =
-        audit_count(&pool, AuditKind::ModeChangeDenied.as_str(), &session_id).await;
+    let denied_count = audit_count(&pool, AuditKind::ModeChangeDenied.as_str(), &session_id).await;
     assert_eq!(
         denied_count, 1,
         "exactly 1 mode_change_denied audit row on user deny"
     );
 
     // NO mode_change_allowed on the deny path.
-    let allowed_count = audit_count(
-        &pool,
-        AuditKind::ModeChangeAllowed.as_str(),
-        &session_id,
-    )
-    .await;
+    let allowed_count =
+        audit_count(&pool, AuditKind::ModeChangeAllowed.as_str(), &session_id).await;
     assert_eq!(
         allowed_count, 0,
         "no mode_change_allowed audit row on deny path"
     );
 
     // NO mode_changed on the deny path (DB write was skipped).
-    let mode_changed_count =
-        audit_count(&pool, AuditKind::ModeChanged.as_str(), &session_id).await;
+    let mode_changed_count = audit_count(&pool, AuditKind::ModeChanged.as_str(), &session_id).await;
     assert_eq!(
         mode_changed_count, 0,
         "no mode_changed audit row on deny path"

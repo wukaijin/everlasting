@@ -208,12 +208,12 @@ async fn run_loop(
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 }
 
@@ -992,12 +992,15 @@ async fn get_pending_question_command_register_resolve_round_trip() {
     store
         .resolve(
             session_id,
-            InteractionResponse::Answered(serde_json::to_value(vec![QuestionAnswer {
-                question: "Pick one".into(),
-                header: None,
-                options: vec!["A".into()],
-                multi_select: false,
-            }]).unwrap()),
+            InteractionResponse::Answered(
+                serde_json::to_value(vec![QuestionAnswer {
+                    question: "Pick one".into(),
+                    header: None,
+                    options: vec!["A".into()],
+                    multi_select: false,
+                }])
+                .unwrap(),
+            ),
         )
         .await
         .expect("resolve ok");

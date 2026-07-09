@@ -321,11 +321,7 @@ const PROJ_NS_SPEC_DIR: &str = ".everlasting/spec";
 /// progress hint write happen via sync `fs` calls (the same
 /// posture as `write_task`'s atomic-rename helper — see the
 /// module-level "同步 IO + 不阻塞 IPC" doc comment).
-pub fn trigger_spec_distillation(
-    project_path: &Path,
-    slug: &str,
-    task: &mut TaskJson,
-) {
+pub fn trigger_spec_distillation(project_path: &Path, slug: &str, task: &mut TaskJson) {
     if has_marker(&task.summary, SPEC_DISTILLED_MARKER_PREFIX) {
         tracing::debug!(
             slug = %slug,
@@ -445,11 +441,7 @@ fn append_progress_hint(progress_path: &Path, hint: &str) {
 /// Phase 4 (or a future task) replaces it with the actual
 /// preflight logic (e.g. confirm `task.items` is non-empty,
 /// `task.summary` is non-empty, etc.).
-pub fn preflight_implement_check(
-    project_path: &Path,
-    slug: &str,
-    task: &mut TaskJson,
-) {
+pub fn preflight_implement_check(project_path: &Path, slug: &str, task: &mut TaskJson) {
     if has_marker(&task.summary, IMPLEMENT_PREFLIGHT_MARKER_PREFIX) {
         tracing::debug!(
             slug = %slug,
@@ -506,8 +498,14 @@ mod tests {
 
     #[test]
     fn parse_target_state_accepts_known_forms() {
-        assert_eq!(parse_target_state("planning").unwrap(), TaskStatus::Planning);
-        assert_eq!(parse_target_state("IMPLEMENT").unwrap(), TaskStatus::Implement);
+        assert_eq!(
+            parse_target_state("planning").unwrap(),
+            TaskStatus::Planning
+        );
+        assert_eq!(
+            parse_target_state("IMPLEMENT").unwrap(),
+            TaskStatus::Implement
+        );
         assert_eq!(
             parse_target_state("  Done  ").unwrap(),
             TaskStatus::Done,
@@ -542,13 +540,8 @@ mod tests {
         // that RFC3339 truncates to (some FSes are very fast).
         std::thread::sleep(std::time::Duration::from_millis(5));
 
-        let updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::Implement,
-        )
-        .expect("ok");
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+            .expect("ok");
 
         assert_eq!(updated.status, TaskStatus::Implement);
         assert_ne!(
@@ -568,7 +561,9 @@ mod tests {
         // table) → summary gets a `[wf:implement-preflight …]`
         // marker prepended.
         assert!(
-            updated.summary.starts_with(IMPLEMENT_PREFLIGHT_MARKER_PREFIX),
+            updated
+                .summary
+                .starts_with(IMPLEMENT_PREFLIGHT_MARKER_PREFIX),
             "summary must lead with the preflight marker after Planning→Implement; got: {:?}",
             updated.summary,
         );
@@ -590,13 +585,8 @@ mod tests {
         t.status = TaskStatus::Check;
         write_task(path, &t).expect("write");
 
-        let updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Check,
-            TaskStatus::Done,
-        )
-        .expect("ok");
+        let updated =
+            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
         assert_eq!(updated.status, TaskStatus::Done);
         assert!(
             updated.summary.starts_with(SPEC_DISTILLED_MARKER_PREFIX),
@@ -616,15 +606,12 @@ mod tests {
         let path = proj(&d);
         let _ = create_seed(path, "my-feat");
 
-        let updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::Implement,
-        )
-        .expect("ok");
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+            .expect("ok");
         assert!(
-            updated.summary.starts_with(IMPLEMENT_PREFLIGHT_MARKER_PREFIX),
+            updated
+                .summary
+                .starts_with(IMPLEMENT_PREFLIGHT_MARKER_PREFIX),
             "summary must lead with the preflight marker; got: {:?}",
             updated.summary,
         );
@@ -670,13 +657,8 @@ mod tests {
 
         // Apply Check → Done again; the hook should detect the
         // pre-existing marker and skip.
-        let updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Check,
-            TaskStatus::Done,
-        )
-        .expect("ok");
+        let updated =
+            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
         let marker_count = updated
             .summary
             .lines()
@@ -698,13 +680,8 @@ mod tests {
         t.status = TaskStatus::Planning;
         write_task(path, &t).expect("write");
 
-        let updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::Implement,
-        )
-        .expect("ok");
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+            .expect("ok");
         let marker_count = updated
             .summary
             .lines()
@@ -741,13 +718,8 @@ mod tests {
             "precondition: spec dir must not exist yet"
         );
 
-        let _updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Check,
-            TaskStatus::Done,
-        )
-        .expect("ok");
+        let _updated =
+            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
 
         assert!(
             spec_dir.exists(),
@@ -784,13 +756,8 @@ mod tests {
             "precondition: progress.md must not exist before trigger"
         );
 
-        let _updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Check,
-            TaskStatus::Done,
-        )
-        .expect("ok");
+        let _updated =
+            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
 
         assert!(
             progress_path.exists(),
@@ -846,13 +813,8 @@ mod tests {
         std::fs::create_dir_all(progress_path.parent().unwrap()).unwrap();
         std::fs::write(&progress_path, "preexisting body\n").unwrap();
 
-        let _updated = set_task_state(
-            path,
-            "my-feat",
-            TaskStatus::Check,
-            TaskStatus::Done,
-        )
-        .expect("ok");
+        let _updated =
+            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
 
         let content = std::fs::read_to_string(&progress_path).expect("read progress");
         // The idempotent short-circuit must NOT append the

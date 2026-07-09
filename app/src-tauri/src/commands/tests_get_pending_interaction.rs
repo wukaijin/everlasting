@@ -87,11 +87,7 @@ async fn get_pending_interaction_register_question_returns_question_entry() {
     let store = QuestionStore::new();
     let payload = make_question_payload("s1", "tu_1");
     store
-        .register(
-            "s1",
-            "tu_1",
-            PendingInteraction::Question(payload.clone()),
-        )
+        .register("s1", "tu_1", PendingInteraction::Question(payload.clone()))
         .await
         .expect("register ok");
 

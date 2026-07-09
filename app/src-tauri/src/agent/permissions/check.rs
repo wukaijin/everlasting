@@ -218,10 +218,8 @@ pub async fn check(
                     // 正确判 inside → 静默 Allow(隔离 worker 读源码是正常行为)。
                     // 非隔离 worker / 父 session 的 cwd == worktree_path == 项目根
                     // → 行为不变。
-                    let inside = crate::projects::boundary::is_within_root(
-                        &ctx.worktree_path,
-                        &abs_path,
-                    );
+                    let inside =
+                        crate::projects::boundary::is_within_root(&ctx.worktree_path, &abs_path);
                     // Tier 4.1: check session_tool_permissions
                     // match_kind='path' for a grant. If hit, Allow.
                     if let Ok(true) =

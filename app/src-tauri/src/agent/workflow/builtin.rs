@@ -18,19 +18,43 @@ pub const BUILTIN_DEV_WORKFLOW_JSON: &str =
 /// (slug, SKILL.md body) —— 内置 dev 的 5 个 wf-* skill。
 /// slug 必须等于 SKILL.md 所在子目录名(skill loader 用目录名做 fallback name)。
 pub const BUILTIN_DEV_SKILLS: &[(&str, &str)] = &[
-    ("wf-overview", include_str!("../../../resources/builtin-workflow/dev/skills/wf-overview/SKILL.md")),
-    ("wf-brainstorm", include_str!("../../../resources/builtin-workflow/dev/skills/wf-brainstorm/SKILL.md")),
-    ("wf-before-dev", include_str!("../../../resources/builtin-workflow/dev/skills/wf-before-dev/SKILL.md")),
-    ("wf-check", include_str!("../../../resources/builtin-workflow/dev/skills/wf-check/SKILL.md")),
-    ("wf-update-spec", include_str!("../../../resources/builtin-workflow/dev/skills/wf-update-spec/SKILL.md")),
+    (
+        "wf-overview",
+        include_str!("../../../resources/builtin-workflow/dev/skills/wf-overview/SKILL.md"),
+    ),
+    (
+        "wf-brainstorm",
+        include_str!("../../../resources/builtin-workflow/dev/skills/wf-brainstorm/SKILL.md"),
+    ),
+    (
+        "wf-before-dev",
+        include_str!("../../../resources/builtin-workflow/dev/skills/wf-before-dev/SKILL.md"),
+    ),
+    (
+        "wf-check",
+        include_str!("../../../resources/builtin-workflow/dev/skills/wf-check/SKILL.md"),
+    ),
+    (
+        "wf-update-spec",
+        include_str!("../../../resources/builtin-workflow/dev/skills/wf-update-spec/SKILL.md"),
+    ),
 ];
 
 /// (role_name, agent.md body) —— 内置 dev 的 3 个角色 agent。
 /// role_name 必须等于 frontmatter 的 `name:` 字段(agent loader 要求显式 name)。
 pub const BUILTIN_DEV_AGENTS: &[(&str, &str)] = &[
-    ("researcher", include_str!("../../../resources/builtin-workflow/dev/agents/researcher.md")),
-    ("implementer", include_str!("../../../resources/builtin-workflow/dev/agents/implementer.md")),
-    ("checker", include_str!("../../../resources/builtin-workflow/dev/agents/checker.md")),
+    (
+        "researcher",
+        include_str!("../../../resources/builtin-workflow/dev/agents/researcher.md"),
+    ),
+    (
+        "implementer",
+        include_str!("../../../resources/builtin-workflow/dev/agents/implementer.md"),
+    ),
+    (
+        "checker",
+        include_str!("../../../resources/builtin-workflow/dev/agents/checker.md"),
+    ),
 ];
 
 /// 内置 plugin 名清单。`list_plugins` 用它做并集发现。
@@ -55,7 +79,10 @@ mod tests {
     fn builtin_dev_workflow_json_validates() {
         let def: WorkflowDef =
             serde_json::from_str(BUILTIN_DEV_WORKFLOW_JSON).expect("builtin dev JSON parses");
-        assert!(validate(&def).is_ok(), "builtin dev JSON must self-validate");
+        assert!(
+            validate(&def).is_ok(),
+            "builtin dev JSON must self-validate"
+        );
         assert_eq!(def.name, "dev");
         assert_eq!(def.initial, "planning");
     }

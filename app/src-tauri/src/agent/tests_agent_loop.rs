@@ -104,12 +104,12 @@ async fn agent_loop_basic_text_only_completes() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(mock.call_count(), 1, "expected exactly 1 send call");
@@ -238,12 +238,12 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(
@@ -376,12 +376,12 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(
@@ -499,12 +499,12 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     let results = emitter.tool_results_snapshot();
@@ -662,12 +662,12 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -834,12 +834,12 @@ async fn agent_loop_max_turns_emits_done_marker() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(
@@ -942,12 +942,12 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The agent loop's error path emits one `ChatEvent::Error`
@@ -1024,12 +1024,12 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Error path taken: one error event, exactly one send.
@@ -1217,12 +1217,12 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // (1) Clean compaction (None) lets the turn proceed — the
@@ -1409,12 +1409,12 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     let error_events: Vec<_> = emitter
@@ -1582,12 +1582,12 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // (1) `provider.send` was NEVER called — the C3 guard
@@ -1755,12 +1755,12 @@ async fn agent_loop_persist_failure_emits_error() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // (1) provider.send was never called — the initial user-message
@@ -1930,12 +1930,12 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -2066,12 +2066,12 @@ async fn agent_loop_error_persists_partial_text() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Exactly one Error event (the pre-emit from the per-event
@@ -2183,12 +2183,12 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(emitter.error_event_count(), 1);
@@ -2294,12 +2294,12 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(emitter.error_event_count(), 1);
@@ -2439,12 +2439,12 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The single Error event is the pre-emit from the per-event
@@ -2552,12 +2552,12 @@ async fn agent_loop_error_emits_turn_complete() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Exactly one TurnComplete, pointing at the persisted
@@ -2707,12 +2707,12 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // 2 turns = 2 send calls.
@@ -2894,12 +2894,12 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     let results = emitter.tool_results_snapshot();
@@ -3061,12 +3061,12 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -3467,12 +3467,12 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(
@@ -3664,12 +3664,12 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(mock.call_count(), 2, "serial path drives 2 turns");
@@ -3881,12 +3881,12 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -4050,12 +4050,12 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Two turns → two `send` calls.
@@ -4232,12 +4232,12 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     let sent = mock.sent_messages();
@@ -4367,12 +4367,12 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // All 4 turns ran — the hint is soft and never terminates.
@@ -4489,12 +4489,12 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(mock.call_count(), 3);
@@ -4623,12 +4623,12 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Turn 1 (tool_use) + Turn 2 (final text) = 2 sends.
@@ -4755,12 +4755,12 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(
@@ -4886,12 +4886,12 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // 3 sends: 1 initial + 2 retries (then the 3rd succeeded).
@@ -4987,12 +4987,12 @@ async fn a5plus_retry_emits_retrying_chat_events() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     assert_eq!(mock.call_count(), 2, "1 fail + 1 success");
@@ -5093,12 +5093,12 @@ async fn a5plus_retry_terminal_state_matches_no_retry_path() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Same terminal state as `agent_loop_basic_text_only_completes`:
@@ -5226,12 +5226,12 @@ async fn agent_loop_emits_recall_on_fts_hit() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The Recall event must be present in the chat-event stream
@@ -5375,12 +5375,12 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The Recall event must be present with `source: "pitfall"`.

@@ -102,12 +102,12 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         // STRUCTURALLY_DISABLED — the store sits unused on this
         // thread but is signature-required.
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // ONLY the worker's single turn — the parent contributed ZERO
@@ -268,12 +268,12 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Parent turn count: parent_t1 + worker_t1 + parent_t2 = 3 sends.
@@ -491,12 +491,12 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -646,12 +646,12 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // 3 sends: parent_t1 + worker_t1 (errored) + parent_t2.
@@ -804,12 +804,12 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // 4 sends: parent_t1 + worker_t1 (tool_use) + worker_t2 (errored) + parent_t2.
@@ -1071,12 +1071,12 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     cancel_handle.await.unwrap();
 
@@ -1207,12 +1207,12 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Verify the worker run is in `subagent_runs` and the row
@@ -1361,12 +1361,12 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
     let _ = cancel_task.await;
 
@@ -1497,12 +1497,12 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     let audit_after = crate::db::permissions::list_audit_events(&h.db, &h.session_id)
@@ -1641,12 +1641,12 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The parent's session snapshot should reflect ONLY the last
@@ -1876,12 +1876,12 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 None,
                 // 2026-06-30 (ask_user_question task): per-test QuestionStore.
                 h.question_store.clone(),
-                    // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
-        // workflow_ctx = None (tests don't exercise the workflow
-        // breadcrumb injection seam; that lives in separate
-        // `agent::workflow::inject` tests).
-        None,
-),
+                // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+                // workflow_ctx = None (tests don't exercise the workflow
+                // breadcrumb injection seam; that lives in separate
+                // `agent::workflow::inject` tests).
+                None,
+            ),
         ),
     )
     .await;
@@ -2109,12 +2109,12 @@ async fn system_prompt_override_worker_path_sends_override() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // The override must reach the LLM verbatim.
@@ -2201,12 +2201,12 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 
     // Recompute what the parent path should send. We mirror the
@@ -2297,12 +2297,12 @@ async fn run_loop(
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
         h.question_store.clone(),
-            // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
+        // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
         // workflow_ctx = None (tests don't exercise the workflow
         // breadcrumb injection seam; that lives in separate
         // `agent::workflow::inject` tests).
         None,
-)
+    )
     .await;
 }
 
@@ -3809,7 +3809,7 @@ async fn l3b_merge_worker_happy_path_fast_forward() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
-    workflow_name: None,
+        workflow_name: None,
     };
 
     // Invoke merge_worker.
@@ -3972,7 +3972,7 @@ async fn l3b_merge_worker_conflict_returns_error() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
-    workflow_name: None,
+        workflow_name: None,
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -4058,7 +4058,7 @@ async fn l3b_merge_worker_no_parent_worktree_errors() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
-    workflow_name: None,
+        workflow_name: None,
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) =
@@ -4129,7 +4129,7 @@ async fn l3b_discard_worker_happy_path() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
-    workflow_name: None,
+        workflow_name: None,
     };
 
     let input = serde_json::json!({"run_id": run_id});
@@ -4199,7 +4199,7 @@ async fn l3b_discard_worker_already_destroyed_errors() {
         db: h.db.clone(),
         project_id: "test-proj".to_string(),
         data_dir: h.app_data_dir.clone(),
-    workflow_name: None,
+        workflow_name: None,
     };
     let input = serde_json::json!({"run_id": run_id});
     let (msg, is_err, _update, _exit_code) =

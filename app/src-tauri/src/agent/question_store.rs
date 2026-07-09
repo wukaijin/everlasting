@@ -519,10 +519,7 @@ impl QuestionStore {
     /// `getPendingInteraction` IPC binding is the source of
     /// truth on session switch (the Pinia cache is corrected
     /// to match).
-    pub async fn get_payload(
-        &self,
-        session_id: &str,
-    ) -> Option<PendingInteractionEntry> {
+    pub async fn get_payload(&self, session_id: &str) -> Option<PendingInteractionEntry> {
         let map = self.inner.lock().await;
         map.get(session_id).map(|p| PendingInteractionEntry {
             kind: p.kind,
@@ -537,10 +534,7 @@ impl QuestionStore {
     /// compatibility; new code should use
     /// `get_pending_interaction` + the
     /// `PendingInteractionEntry` shape).
-    pub async fn get_question_payload(
-        &self,
-        session_id: &str,
-    ) -> Option<ToolQuestionPayload> {
+    pub async fn get_question_payload(&self, session_id: &str) -> Option<ToolQuestionPayload> {
         let map = self.inner.lock().await;
         match map.get(session_id) {
             Some(p) => match &p.payload {
@@ -657,11 +651,7 @@ mod tests {
         let store = QuestionStore::new();
         let payload = make_payload("s1", "tu_1");
         let rx = store
-            .register(
-                "s1",
-                "tu_1",
-                PendingInteraction::Question(payload.clone()),
-            )
+            .register("s1", "tu_1", PendingInteraction::Question(payload.clone()))
             .await
             .expect("register ok");
         // get_payload returns it BEFORE resolve.
@@ -723,7 +713,10 @@ mod tests {
             .expect_err("second register errors");
         assert_eq!(err, QuestionStoreError::AlreadyPending);
         // First entry still present.
-        let got = store.get_payload("s1").await.expect("first entry still present");
+        let got = store
+            .get_payload("s1")
+            .await
+            .expect("first entry still present");
         assert_eq!(got.kind, InteractionKind::Question);
         match got.payload {
             PendingInteraction::Question(p) => assert_eq!(p.tool_use_id, "tu_1"),
@@ -750,15 +743,16 @@ mod tests {
             .register(
                 "s1",
                 "tu_2",
-                PendingInteraction::ModeChange(make_mode_change_payload(
-                    "s1", "tu_2", "edit",
-                )),
+                PendingInteraction::ModeChange(make_mode_change_payload("s1", "tu_2", "edit")),
             )
             .await
             .expect_err("mode change blocked by existing question");
         assert_eq!(err, QuestionStoreError::AlreadyPending);
         // The pending question is untouched.
-        let got = store.get_payload("s1").await.expect("question still present");
+        let got = store
+            .get_payload("s1")
+            .await
+            .expect("question still present");
         assert_eq!(got.kind, InteractionKind::Question);
     }
 

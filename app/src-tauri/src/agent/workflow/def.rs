@@ -137,9 +137,7 @@ impl Coordination {
     /// plugin's natural default).
     pub fn from_str_opt(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
-            "synthesis_round" | "synthesis-round" | "synthesisround" => {
-                Self::SynthesisRound
-            }
+            "synthesis_round" | "synthesis-round" | "synthesisround" => Self::SynthesisRound,
             _ => Self::Pipeline,
         }
     }
@@ -306,9 +304,7 @@ pub fn allowed_roles<'a>(def: &'a WorkflowDef, state: &str) -> &'a [String] {
 /// O(transitions) which is tiny relative to the LLM
 /// round-trip cost.
 pub fn can_transition(def: &WorkflowDef, from: &str, to: &str) -> bool {
-    def.transitions
-        .iter()
-        .any(|t| t.from == from && t.to == to)
+    def.transitions.iter().any(|t| t.from == from && t.to == to)
 }
 
 /// Worker system-prompt template for `role`, or `None` if
@@ -591,9 +587,7 @@ pub fn validate(def: &WorkflowDef) -> Result<(), Vec<ValidationError>> {
     // validation-worthy.
     for key in def.breadcrumb.keys() {
         if !def.states.iter().any(|s| s == key) {
-            errs.push(ValidationError::BreadcrumbKeyUnknownState {
-                key: key.clone(),
-            });
+            errs.push(ValidationError::BreadcrumbKeyUnknownState { key: key.clone() });
         }
     }
 

@@ -377,10 +377,9 @@ pub async fn set_session_plugin_name(
 ) -> Result<(), AppCommandError> {
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
-        return Err(anyhow::anyhow!(
-            "set_session_plugin_name: plugin name must be non-empty"
-        )
-        .into());
+        return Err(
+            anyhow::anyhow!("set_session_plugin_name: plugin name must be non-empty").into(),
+        );
     }
     db::set_session_plugin_name(&state.db, &session_id, &trimmed)
         .await

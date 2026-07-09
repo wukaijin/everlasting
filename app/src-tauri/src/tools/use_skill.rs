@@ -159,10 +159,7 @@ mod tests {
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
         // Workflow ctx → plugin layer hit.
-        let ctx_wf = make_ctx(
-            std::path::Path::new(&project_path),
-            Some("dev".to_string()),
-        );
+        let ctx_wf = make_ctx(std::path::Path::new(&project_path), Some("dev".to_string()));
         let (body, is_err) = execute(
             &serde_json::json!({"skill_name": "wf-overview"}),
             &cache,
@@ -204,12 +201,8 @@ mod tests {
         let project_path = proj_tmp.path().to_string_lossy().to_string();
 
         let ctx = make_ctx(std::path::Path::new(&project_path), Some(String::new()));
-        let (_body, is_err) = execute(
-            &serde_json::json!({"skill_name": "anything"}),
-            &cache,
-            &ctx,
-        )
-        .await;
+        let (_body, is_err) =
+            execute(&serde_json::json!({"skill_name": "anything"}), &cache, &ctx).await;
         assert!(is_err, "empty workflow_name must behave like None");
         set_user_dir_for_test(prev);
     }

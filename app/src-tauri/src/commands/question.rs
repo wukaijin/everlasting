@@ -47,7 +47,9 @@ use crate::agent::question_store::{
 use crate::agent::question_store::{
     InteractionKind, ModeChangePayload, PendingInteraction, TaskStateTransitionPayload,
 };
-use crate::agent::workflow::state::{set_task_state as workflow_set_task_state, StateTransitionError};
+use crate::agent::workflow::state::{
+    set_task_state as workflow_set_task_state, StateTransitionError,
+};
 use crate::agent::workflow::task::read_task as read_workflow_task;
 use crate::db;
 use crate::error::AppCommandError;
@@ -130,11 +132,12 @@ pub(crate) fn resolve_response_from_args(
         // channel can carry it. The `execute_blocking` side
         // re-parses this back into `Vec<QuestionAnswer>` (or
         // surfaces a serialize error).
-        let value = serde_json::to_value(answer.unwrap_or_default())
-            .map_err(|e| AppCommandError::new(
+        let value = serde_json::to_value(answer.unwrap_or_default()).map_err(|e| {
+            AppCommandError::new(
                 crate::error::ErrorCategory::InvalidRequest,
                 format!("resolve_response_from_args: serialize error: {}", e),
-            ))?;
+            )
+        })?;
         Ok(InteractionResponse::Answered(value))
     }
 }
@@ -177,8 +180,14 @@ pub async fn resolve_mode_change(
     // Accepted for routing parity with the wire shape (the
     // store keys on session_id alone, single-pending gate).
     let _ = tool_use_id;
-    resolve_mode_change_internal(&state.db, &state.question_store, &session_id, &target_mode, allow)
-        .await
+    resolve_mode_change_internal(
+        &state.db,
+        &state.question_store,
+        &session_id,
+        &target_mode,
+        allow,
+    )
+    .await
 }
 
 /// Pure-Rust core of [`resolve_mode_change`] — extracted into a
@@ -250,8 +259,7 @@ pub(crate) async fn resolve_mode_change_internal(
     //    `set_session_mode_internal` (mirrors the
     //    user-driven IPC path; see design §5.5 "Yolo root
     //    guard 一致性").
-    let apply_result =
-        set_session_mode_internal(db_pool, session_id, new_mode).await;
+    let apply_result = set_session_mode_internal(db_pool, session_id, new_mode).await;
     match apply_result {
         Ok(row) => {
             // Allowed audit on top of the mode_changed audit
@@ -274,7 +282,10 @@ pub(crate) async fn resolve_mode_change_internal(
             }
             // Resolve the oneshot so the agent loop unblocks.
             store
-                .resolve(session_id, InteractionResponse::Answered(serde_json::json!(true)))
+                .resolve(
+                    session_id,
+                    InteractionResponse::Answered(serde_json::json!(true)),
+                )
                 .await?;
             Ok(row.session)
         }
@@ -366,7 +377,10 @@ pub(crate) async fn set_session_mode_internal(
         .ok_or_else(|| {
             AppCommandError::new(
                 crate::error::ErrorCategory::InvalidRequest,
-                format!("set_session_mode_internal: session '{}' not found", session_id),
+                format!(
+                    "set_session_mode_internal: session '{}' not found",
+                    session_id
+                ),
             )
         })?;
     let prev_mode = loaded.session.mode;
@@ -387,9 +401,7 @@ pub(crate) async fn set_session_mode_internal(
         "new_mode": new_mode.as_str(),
     })
     .to_string();
-    if let Err(e) =
-        db::record_audit_event(pool, session_id, "mode_changed", Some(&payload)).await
-    {
+    if let Err(e) = db::record_audit_event(pool, session_id, "mode_changed", Some(&payload)).await {
         tracing::warn!(error = %e, "set_session_mode_internal: record_audit_event(mode_changed) failed");
     }
 
@@ -618,7 +630,10 @@ pub(crate) async fn resolve_task_state_transition_internal(
                 .await;
             return Err(AppCommandError::new(
                 crate::error::ErrorCategory::InvalidRequest,
-                format!("resolve_task_state_transition: parse_target_state failed: {}", e),
+                format!(
+                    "resolve_task_state_transition: parse_target_state failed: {}",
+                    e
+                ),
             ));
         }
     };
@@ -740,7 +755,10 @@ pub(crate) async fn resolve_task_state_transition_internal(
             }
             // Resolve the oneshot so the agent loop unblocks.
             store
-                .resolve(session_id, InteractionResponse::Answered(serde_json::json!(true)))
+                .resolve(
+                    session_id,
+                    InteractionResponse::Answered(serde_json::json!(true)),
+                )
                 .await?;
             // Reload the session row so the IPC caller can
             // refresh `currentSession` (status is on the

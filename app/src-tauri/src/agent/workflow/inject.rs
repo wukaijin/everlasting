@@ -63,8 +63,8 @@ use sqlx::SqlitePool;
 // production binary warning-free.
 #[allow(unused_imports)]
 use crate::agent::workflow::{
-    breadcrumb_for, delegation_template_for, default_workflow, load_workflow, read_task,
-    TaskJson, WorkflowDef,
+    breadcrumb_for, default_workflow, delegation_template_for, load_workflow, read_task, TaskJson,
+    WorkflowDef,
 };
 use crate::db;
 use crate::llm::types::{ChatMessage, ContentBlock, MessageContent, Role};
@@ -340,10 +340,7 @@ async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
 /// Returns `true` when the breadcrumb was appended,
 /// `false` when the S-B guard tripped (caller doesn't
 /// branch on this — the log line is the signal).
-pub fn append_workflow_breadcrumb(
-    turn_messages: &mut Vec<ChatMessage>,
-    ctx: &WorkflowCtx,
-) -> bool {
+pub fn append_workflow_breadcrumb(turn_messages: &mut Vec<ChatMessage>, ctx: &WorkflowCtx) -> bool {
     let block = build_breadcrumb_block(ctx);
     if let Some(first) = turn_messages.first_mut() {
         if first.role == Role::User {
@@ -476,8 +473,7 @@ fn resolve_relevant_specs(project_path: &str) -> String {
             let file_type = entry.file_type().ok();
             let is_dir = file_type.as_ref().map(|t| t.is_dir()).unwrap_or(false);
             let is_file = file_type.as_ref().map(|t| t.is_file()).unwrap_or(false);
-            let is_symlink =
-                file_type.as_ref().map(|t| t.is_symlink()).unwrap_or(false);
+            let is_symlink = file_type.as_ref().map(|t| t.is_symlink()).unwrap_or(false);
             if is_symlink {
                 // Skip symlinks — the spec tree is a
                 // plain directory hierarchy; any
@@ -508,16 +504,12 @@ fn resolve_relevant_specs(project_path: &str) -> String {
                 Ok(p) => p.to_string_lossy().into_owned(),
                 Err(_) => {
                     let canon_path = path.canonicalize().ok();
-                    let canon_root = std::path::Path::new(project_path)
-                        .canonicalize()
-                        .ok();
+                    let canon_root = std::path::Path::new(project_path).canonicalize().ok();
                     match (canon_path, canon_root) {
                         (Some(p), Some(r)) => p
                             .strip_prefix(&r)
                             .map(|x| x.to_string_lossy().into_owned())
-                            .unwrap_or_else(|_| {
-                                p.to_string_lossy().into_owned()
-                            }),
+                            .unwrap_or_else(|_| p.to_string_lossy().into_owned()),
                         _ => path.to_string_lossy().into_owned(),
                     }
                 }
@@ -793,7 +785,11 @@ mod tests {
         };
 
         // task.json meta 全部进 breadcrumb
-        assert!(text.contains("task_id: t1"), "missing task_id, got: {}", text);
+        assert!(
+            text.contains("task_id: t1"),
+            "missing task_id, got: {}",
+            text
+        );
         assert!(
             text.contains("title: Sample task"),
             "missing title, got: {}",
@@ -831,8 +827,7 @@ mod tests {
 
         // meta 容器包裹(便于 LLM parse)
         assert!(
-            text.contains("<workflow-task-meta>")
-                && text.contains("</workflow-task-meta>"),
+            text.contains("<workflow-task-meta>") && text.contains("</workflow-task-meta>"),
             "missing <workflow-task-meta> wrapper, got: {}",
             text
         );
@@ -864,7 +859,11 @@ mod tests {
         }];
         let appended = append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
         assert!(!appended);
-        assert_eq!(msgs.len(), 1, "S-B: no synthetic prepend; assistant stays at index 0");
+        assert_eq!(
+            msgs.len(),
+            1,
+            "S-B: no synthetic prepend; assistant stays at index 0"
+        );
         match &msgs[0].content {
             MessageContent::Blocks(bs) => assert_eq!(bs.len(), 1, "no block appended"),
             _ => panic!("messages[0] content shape corrupted"),
@@ -922,7 +921,10 @@ mod tests {
                 }
                 // New third block is the breadcrumb.
                 match &bs[2] {
-                    ContentBlock::Text { text, cache_control } => {
+                    ContentBlock::Text {
+                        text,
+                        cache_control,
+                    } => {
                         assert!(cache_control.is_none());
                         assert!(text.contains("workflow-task-meta"));
                     }

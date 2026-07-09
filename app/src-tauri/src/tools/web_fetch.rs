@@ -1037,7 +1037,7 @@ mod tests {
             db: crate::tools::test_default_pool(),
             project_id: "test-proj".to_string(),
             data_dir: std::path::PathBuf::from("/tmp/everlasting-tool-test"),
-        workflow_name: None,
+            workflow_name: None,
         }
     }
 

@@ -80,7 +80,10 @@ fn map_task_error(e: TaskError) -> AppCommandError {
         TaskError::InvalidSlug(msg) => AppCommandError::new(ErrorCategory::InvalidRequest, msg),
         TaskError::AlreadyExists(path) => AppCommandError::new(
             ErrorCategory::InvalidRequest,
-            format!("create_task: task directory already exists at {}", path.display()),
+            format!(
+                "create_task: task directory already exists at {}",
+                path.display()
+            ),
         ),
         TaskError::NotFound(path) => AppCommandError::new(
             ErrorCategory::InvalidRequest,
@@ -103,11 +106,7 @@ fn map_task_error(e: TaskError) -> AppCommandError {
         ),
         TaskError::MalformedJson(path, msg) => AppCommandError::new(
             ErrorCategory::Server,
-            format!(
-                "task: malformed task.json at {}: {}",
-                path.display(),
-                msg
-            ),
+            format!("task: malformed task.json at {}: {}", path.display(), msg),
         ),
         TaskError::Io(path, src) => AppCommandError::new(
             ErrorCategory::Server,
@@ -179,8 +178,7 @@ pub async fn create_task(
     };
 
     let project_path = PathBuf::from(&project.path);
-    create_task_init(&project_path, &title, &slug, parent.as_deref())
-        .map_err(map_task_error)
+    create_task_init(&project_path, &title, &slug, parent.as_deref()).map_err(map_task_error)
 }
 
 /// W1 (Workflow integration, Phase 3 Step 3.3 — 2026-07-09):

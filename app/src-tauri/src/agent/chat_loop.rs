@@ -1530,9 +1530,7 @@ pub async fn run_chat_loop(
                 // block ("non-worker path mutations on
                 // messages[0]").
                 if let Some(ref ctx) = workflow_ctx {
-                    crate::agent::workflow::inject::append_workflow_breadcrumb(
-                        &mut req, ctx,
-                    );
+                    crate::agent::workflow::inject::append_workflow_breadcrumb(&mut req, ctx);
                 }
             }
             req
@@ -3425,14 +3423,13 @@ pub async fn run_chat_loop(
                             // gates with `is_error: true` (the
                             // structured message
                             // "no active workflow task").
-                            let (current_state, current_slug) =
-                                match &workflow_ctx {
-                                    Some(ctx) => (
-                                        ctx.current_task.as_ref().map(|t| t.status),
-                                        ctx.current_task.as_ref().map(|t| t.slug.clone()),
-                                    ),
-                                    None => (None, None),
-                                };
+                            let (current_state, current_slug) = match &workflow_ctx {
+                                Some(ctx) => (
+                                    ctx.current_task.as_ref().map(|t| t.status),
+                                    ctx.current_task.as_ref().map(|t| t.slug.clone()),
+                                ),
+                                None => (None, None),
+                            };
                             let (content, is_error, _update, exit_code) =
                                 crate::tools::request_task_state_transition::execute_blocking(
                                     input,
