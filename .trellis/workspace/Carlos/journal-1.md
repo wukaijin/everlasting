@@ -1125,3 +1125,46 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 - Phase 2 批 A:Step 2.1 workflow.json 外置 + load_workflow + validate + fallback
 - Phase 2 批 B:Step 2.3-2.6 plugin agents + 门控 + delegation + checklist(2.4/2.6 风险最高,中间必跑全量 test)
 - Phase 3:hook + 沉淀闭环 + archive_task
+
+## Session 25: 07-08-workflow-integration — Step 3.2 沉淀闭环落地
+
+**Date**: 2026-07-09
+**Task**: 07-08-workflow-integration
+**Branch**: `main`
+
+### Summary
+
+从 Step 3.1 接续,完成 Step 3.2 `.everlasting/spec/` + `wf-update-spec` 落地(Phase 3 沉淀闭环第二档)。新建 `.everlasting/spec/` 目录约定(`README.md` + seed `backend/index.md`),借鉴 `.trellis/spec/` 结构但物理独立(Q7 决定)。`trigger_spec_distillation` 从 Step 3.1 的 marker-only stub 升级为完整交接路径:mkdir `.everlasting/spec/` 兜底 + 保留 marker + append `progress.md` "Spec distillation pending" hint 块(带哨兵)。Q9 Rust hook 不调 LLM,但 progress.md hint 把任务交接给 LLM 侧 done turn / 下次 session — agent 读 progress.md → 加载 wf-update-spec skill → 写正式 spec 到 `.everlasting/spec/<package>/<layer>/`。3 个新测试(spec dir 创建 / progress hint / marker-present idempotent)+ 全量 cargo test 1466 pass(0 regression)+ state.rs clippy 零新警告。Phase 3 进度 1/3 → 2/3。
+
+### Main Changes
+
+- `.everlasting/spec/README.md` — 顶层目录约定(Q7 + 结构 + 模板样板 + 写入 / 读取流程 + 与 `.trellis/spec/` 关系)
+- `.everlasting/spec/backend/index.md` — seed 索引(借鉴 `.trellis/spec/backend/index.md` 模板;规范表 + how to fill + 沉淀方向指引)
+- `app/src-tauri/src/agent/workflow/state.rs`:
+  - `PROJ_NS_SPEC_DIR` 常量:`.everlasting/spec`
+  - `trigger_spec_distillation` 升级:mkdir spec dir + marker 保留 + `build_distillation_hint` + `append_progress_hint`
+  - 哨兵:`<!-- wf:distillation-pending:<slug>:<ts> -->` ... `<!-- /wf:distillation-pending -->`
+  - 3 个新单元测试:`creates_spec_dir_when_missing` / `appends_progress_md_hint` / `idempotent_on_marker_presence`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3990463` | feat(workflow): Step 3.2 — .everlasting/spec/ + trigger_spec_distillation 触发沉淀路径 |
+| `ca74c9f` | docs(task): 07-08-workflow-integration — Step 3.2 完成状态表 + 详情勾选 |
+
+### Testing
+
+- [OK] cargo test --lib workflow::state:: → 14 passed(+3 new)
+- [OK] cargo test --lib (全量) → 1466 passed,0 failed,0 regression
+- [OK] cargo build --lib → 0 errors(1 unused import 警告为旧)
+- [OK] cargo clippy --lib state.rs → 0 新警告(其他 152 警告全为旧)
+
+### Status
+
+[OK] **Step 3.2 完成,Phase 3 2/3**
+
+### Next Steps
+
+- Phase 3 Step 3.3:progress.md 交接叙述 + archive_task command(task done 后移到 `.everlasting/tasks/archive/YYYY-MM/` + 写 status=completed + 可选 git commit)
+- Phase 3 完成后回到 ROADMAP 看 V2 第三档剩余项 + 第四档(B8 DAG / 全局 TDD 等)
