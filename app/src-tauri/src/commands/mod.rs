@@ -142,5 +142,12 @@ pub fn all_command_names() -> Vec<&'static str> {
         // via the unified `PendingInteraction` enum).
         "resolve_mode_change",
         "get_pending_interaction",
+        // 2026-07-08 (`07-08-workflow-integration` Phase 3
+        // Step 3.1): tool state-transition IPC (frontend
+        // `<RequestTaskStateTransitionCard>` allow/拒绝).
+        // The frontend reuses `get_pending_interaction` for
+        // the unified session-switch source-of-truth lookup
+        // — only the new resolve IPC is unique to this kind.
+        "resolve_task_state_transition",
     ]
 }

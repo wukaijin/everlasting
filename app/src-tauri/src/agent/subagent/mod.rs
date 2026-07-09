@@ -704,6 +704,15 @@ const STRUCTURALLY_DISABLED: &[&str] = &[
     // change must return a result and let the parent surface
     // the change request on the user's behalf.
     "request_mode_change",
+    // 2026-07-08 (`07-08-workflow-integration` Phase 3 Step 3.1):
+    // same rationale as `ask_user_question` /
+    // `request_mode_change` above — worker subagents must not
+    // block on user input (no UI sink, the blocking oneshot
+    // would hang the worker's tokio task until parent cancel).
+    // Worker subagents that want to suggest a state transition
+    // must return a result and let the parent surface the
+    // transition request on the user's behalf.
+    "request_task_state_transition",
 ];
 
 /// Filter `builtin_tools()` for a worker.

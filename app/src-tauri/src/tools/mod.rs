@@ -27,6 +27,7 @@ pub mod read_file;
 pub mod read_guard;
 pub mod remember;
 pub mod request_mode_change;
+pub mod request_task_state_transition;
 pub mod run_background_shell;
 pub mod shell;
 pub mod shell_kill;
@@ -180,6 +181,20 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // Worker subagents are blocked from this tool via
         // STRUCTURALLY_DISABLED.
         request_mode_change::definition(),
+        // request_task_state_transition (Phase 3 Step 3.1 of
+        // `07-08-workflow-integration`, 2026-07-08): LLM-
+        // initiated workflow state-transition request. Same
+        // blocking-tool interception pattern as
+        // request_mode_change (chat_loop.rs recognizes the
+        // tool name and calls `execute_blocking` directly).
+        // Worker subagents are blocked from this tool via
+        // STRUCTURALLY_DISABLED. The on-disk `task.json`
+        // mutation happens in the resolve IPC handler (apply
+        // BEFORE resolve), with the `from → to` Rust hook
+        // dispatch (trigger_spec_distillation on Check→Done,
+        // preflight_implement_check on Planning→Implement) —
+        // see design §5.2 / Q9.
+        request_task_state_transition::definition(),
     ]
 }
 

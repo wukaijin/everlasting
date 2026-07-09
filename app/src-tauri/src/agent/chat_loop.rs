@@ -3379,6 +3379,111 @@ pub async fn run_chat_loop(
                             continue;
                         }
 
+                        // 2026-07-08 (`07-08-workflow-integration`
+                        // Phase 3 Step 3.1): block the current turn
+                        // on a workflow state-transition request
+                        // card. Mirrors the `request_mode_change`
+                        // interception branch above — same blocking-
+                        // tool pattern, same
+                        // `name == "..."` short-circuit BEFORE the
+                        // normal `execute_tool` path.
+                        //
+                        // The tool needs (a) the
+                        // `current_state` + `current_slug` from
+                        // the active workflow session's
+                        // `WorkflowCtx.current_task` (read once per
+                        // turn at the top of the loop), (b) the
+                        // `QuestionStore` + `ChatEventSink
+                        // ::emit_task_state_transition` (already
+                        // threaded through), and (c) the DB pool for
+                        // audit. The actual `task.json` mutation +
+                        // `from → to` Rust hook dispatch happens in
+                        // the `resolve_task_state_transition` IPC
+                        // handler (single source of truth for
+                        // state-transition side effects — see design
+                        // §5.2 M-A / Q9). The tool stays a "request
+                        // → wait → return" carrier.
+                        //
+                        // `is_parallel_eligible` does NOT include
+                        // this name → mixed batches fall to the
+                        // serial path (this branch) automatically
+                        // (mirrors the `request_mode_change`
+                        // posture).
+                        //
+                        // We accept +1 turn counter cost for the
+                        // blocking tool's recover (v1 trade-off —
+                        // matches the request_mode_change branch).
+                        if name == "request_task_state_transition" {
+                            let tool_exec_start = Instant::now();
+                            // Pull the workflow session's current
+                            // task state + slug for the noop check.
+                            // `build_workflow_ctx` is called once
+                            // per turn at the top of the loop; we
+                            // reuse the snapshot here. When the
+                            // session is non-workflow the
+                            // `WorkflowCtx` is `None` and the tool
+                            // gates with `is_error: true` (the
+                            // structured message
+                            // "no active workflow task").
+                            let (current_state, current_slug) =
+                                match &workflow_ctx {
+                                    Some(ctx) => (
+                                        ctx.current_task.as_ref().map(|t| t.status),
+                                        ctx.current_task.as_ref().map(|t| t.slug.clone()),
+                                    ),
+                                    None => (None, None),
+                                };
+                            let (content, is_error, _update, exit_code) =
+                                crate::tools::request_task_state_transition::execute_blocking(
+                                    input,
+                                    &session_id,
+                                    id,
+                                    current_state,
+                                    current_slug,
+                                    &db,
+                                    &question_store,
+                                    &sink,
+                                    &token,
+                                )
+                                .await;
+                            let duration_ms = tool_exec_start.elapsed().as_millis();
+                            if token.is_cancelled() {
+                                cancelled = true;
+                            } else if !skip_persist {
+                                if let Err(e) = permissions::record_tool_executed_audit(
+                                    &db,
+                                    &session_id,
+                                    name,
+                                    input,
+                                    duration_ms,
+                                    exit_code,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "chat: record_tool_executed_audit failed for request_task_state_transition (non-fatal)");
+                                }
+                            }
+                            let envelope_str = crate::agent::helpers::tool_result_envelope(
+                                &content,
+                                &current_ctx.worktree_path,
+                            );
+                            sink.emit_tool_result(&crate::state::ToolResultPayload {
+                                request_id: rid.clone(),
+                                tool_use_id: id.clone(),
+                                content: envelope_str.clone(),
+                                is_error,
+                            });
+                            result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: envelope_str,
+                                is_error,
+                            });
+                            if cancelled {
+                                break;
+                            }
+                            continue;
+                        }
+
                         // B6 Subagent (2026-06-19): intercept dispatch_subagent
                         // BEFORE the normal execute_tool path. This is an
                         // agent-layer control-flow tool — it needs the parent

@@ -297,6 +297,11 @@ pub fn run() {
             // command is kept for backward compat.
             commands::question::resolve_mode_change,
             commands::question::get_pending_interaction,
+            // 2026-07-08 (`07-08-workflow-integration` Phase 3
+            // Step 3.1): tool state-transition IPC. Frontend
+            // reuses `get_pending_interaction` for the
+            // unified session-switch source-of-truth lookup.
+            commands::question::resolve_task_state_transition,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

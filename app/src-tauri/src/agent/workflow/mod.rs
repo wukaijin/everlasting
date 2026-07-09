@@ -56,11 +56,15 @@ pub mod task;
 /// composes onto the same `messages[0]` block list.
 pub mod inject;
 
+/// State transition + Rust 固定 hook (`set_task_state` +
+/// `trigger_spec_distillation` + `preflight_implement_check`).
+/// Phase 3 Step 3.1 ships this; the LLM-side distillation call
+/// (Step 3.2) replaces the hook stub bodies.
+pub mod state;
+
 // `task` + `state` slots are reserved for Phase 0 Step 0.4
 // and Phase 3 Step 3.1 respectively. The first (`task`) is
-// live now; the second (`state`) lands later.
-//
-// pub mod state; // Phase 3 Step 3.1
+// live since Step 0.4; the second (`state`) lands here.
 
 // Re-export the public surface at the `agent::workflow::*`
 // path so callers don't need to know about the `def` split.
@@ -111,7 +115,20 @@ pub use task::{
 pub use inject::{
     append_delegation_template, append_workflow_breadcrumb, build_workflow_ctx,
     compute_delegation_template, WorkflowCtx,
-};// ---------------------------------------------------------------------------
+};
+
+// Re-export the state-transition surface at the workflow
+// root. The IPC layer (`commands::question`) and the new
+// `request_task_state_transition` tool consume these via
+// `agent::workflow::{set_task_state, ...}` — same
+// flatten-the-surface principle as the `def` / `task` /
+// `inject` sides above.
+#[allow(unused_imports)]
+pub use state::{
+    parse_target_state, preflight_implement_check, set_task_state, trigger_spec_distillation,
+    StateResult, StateTransitionError,
+};
+// ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
 // ---------------------------------------------------------------------------
 
