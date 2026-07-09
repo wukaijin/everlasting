@@ -49,7 +49,7 @@
 import { defineStore } from "pinia";
 import { reactive } from "vue";
 
-import type { PendingInteraction } from "./questionCards.types";
+import type { PendingInteraction, WorkflowState } from "./questionCards.types";
 import type { SessionMode } from "./chat.types";
 
 export const useQuestionCardsStore = defineStore("questionCards", () => {
@@ -221,6 +221,49 @@ export const useQuestionCardsStore = defineStore("questionCards", () => {
     removePending(sessionId);
   }
 
+  /** Resolve a pending workflow state-transition request
+   *  (`request_task_state_transition`). Frontend → backend via the
+   *  `resolve_task_state_transition` IPC.
+   *
+   *  Simpler than `resolveModeChange`: a workflow state transition
+   *  does NOT change the session's edit/plan/yolo mode, so there's
+   *  no `currentModeBySession` patch + no session-summary mode
+   *  mutation. The backend's `set_task_state` (called inside the
+   *  IPC handler when `allow === true`) writes task.json.status +
+   *  dispatches the `from → to` Rust hook; the next LLM turn's
+   *  `WorkflowCtx` re-resolves the new state via
+   *  `build_workflow_ctx`, so the breadcrumb picks it up
+   *  automatically. The frontend only needs to clear the card.
+   *
+   *  `slug` is required (the IPC handler has no WorkflowCtx and
+   *  locates `<project>/.everlasting/tasks/<slug>/task.json` to read
+   *  the current `from` state off disk). The card passes through the
+   *  slug it received in the event payload.
+   *
+   *  On error: throws (caller toasts via `useErrorBus`); the cache
+   *  entry is left intact so the user can retry. */
+  async function resolveTaskStateTransition(
+    sessionId: string,
+    toolUseId: string,
+    targetState: WorkflowState,
+    slug: string,
+    allow: boolean,
+  ): Promise<void> {
+    const { resolveTaskStateTransition: invokeResolve } = await import(
+      "../utils/toolTaskStateTransition"
+    );
+    await invokeResolve({
+      sessionId,
+      toolUseId,
+      targetState,
+      slug,
+      allow,
+    });
+    // Backend already wrote task.json + audit + resolved the
+    // oneshot. Drop the card.
+    removePending(sessionId);
+  }
+
   /** Fetch the authoritative pending interaction from the
    *  backend's QuestionStore via the `get_pending_interaction`
    *  IPC and merge into the `pendingBySession` cache. Returns
@@ -256,6 +299,7 @@ export const useQuestionCardsStore = defineStore("questionCards", () => {
     list,
     clearAll,
     resolveModeChange,
+    resolveTaskStateTransition,
     getPendingInteractionAction,
   };
 });
