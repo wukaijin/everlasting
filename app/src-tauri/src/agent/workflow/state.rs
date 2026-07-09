@@ -275,22 +275,52 @@ fn dispatch_hook(
 }
 
 // ---------------------------------------------------------------------------
-// Hooks — stubs (Step 3.1 → Step 3.2 / Phase 4 wiring)
+// Hooks
 // ---------------------------------------------------------------------------
 
-/// Hook for `(Check, Done)`. Step 3.1 stub: append a
-/// `wf:spec-distilled` marker to `task.summary` so the next
-/// transition can detect "spec distillation already ran for this
-/// task". The Step 3.2 PR will replace the stub body with an
-/// LLM-side distillation call routed through `wf-update-spec`.
+/// Path constant for the project-scoped spec tree. Mirrors
+/// `.trellis/spec/` layout (`<package>/<layer>/index.md` +
+/// guideline files) but lives under the project's
+/// `.everlasting/spec/` (Q7 decision — `.trellis/spec/` is for
+/// "how to use Trellis"; `.everlasting/spec/` is for "this
+/// project's code conventions"). See
+/// `docs/WORKFLOW-INTEGRATION.md` §6.7.
+const PROJ_NS_SPEC_DIR: &str = ".everlasting/spec";
+
+/// Hook for `(Check, Done)`.
 ///
-/// Idempotency: if a marker is already present (e.g. the hook
+/// Step 3.1 stub only wrote a marker to `task.summary`. Step 3.2
+/// replaces the stub with a concrete "engine primes the
+/// distillation" action:
+///
+/// 1. Ensure `<project>/.everlasting/spec/` exists (mkdir -p
+///    idempotent). Without this, the very first task done in a
+///    fresh project leaves the agent with no writable spec tree
+///    when it loads `wf-update-spec` — wasting the distillation
+///    turn on a "directory doesn't exist" report.
+/// 2. Append `[wf:spec-distilled <ts>]` marker to
+///    `task.summary`. Kept from Step 3.1 — provides the
+///    idempotency probe + audit trail.
+/// 3. Append a "Spec distillation pending" hint section to
+///    `<project>/.everlasting/tasks/<slug>/progress.md`. The
+///    next session (or the in-progress `done` turn) reads
+///    `progress.md` and sees the hint, then loads
+///    `wf-update-spec` to do the actual content distillation.
+///    This is the bridge between the Rust fixed hook (Q9:
+///    no agent self-trigger) and the agent-side LLM work
+///    (§6.7: agent writes spec content).
+///
+/// Idempotency: if the marker is already present (e.g. the hook
 /// ran but the disk write failed afterward and the user
-/// re-triggered), this call is a no-op — the caller's bookkeeping
-/// is the source of truth.
+/// re-triggered), this call is a no-op — the marker's presence
+/// is the source of truth, and the spec dir / progress hint are
+/// only ever created on the first invocation.
 ///
-/// `task` is mutated in-place to append the marker line; the
-/// caller persists with `write_task`.
+/// `task` is mutated in-place to prepend the marker line; the
+/// caller persists with `write_task`. The spec-dir creation +
+/// progress hint write happen via sync `fs` calls (the same
+/// posture as `write_task`'s atomic-rename helper — see the
+/// module-level "同步 IO + 不阻塞 IPC" doc comment).
 pub fn trigger_spec_distillation(
     project_path: &Path,
     slug: &str,
@@ -304,16 +334,109 @@ pub fn trigger_spec_distillation(
         return;
     }
     let ts = Utc::now().to_rfc3339();
+
+    // 1. Ensure `<project>/.everlasting/spec/` exists. We
+    //    don't write any files here — the LLM, guided by
+    //    `wf-update-spec`, decides what content to write. The
+    //    hook's job is only to guarantee the directory is
+    //    writable so the next LLM turn doesn't bounce on a
+    //    missing-path error.
+    let spec_dir = project_path.join(PROJ_NS_SPEC_DIR);
+    if let Err(e) = std::fs::create_dir_all(&spec_dir) {
+        tracing::warn!(
+            slug = %slug,
+            spec_dir = %spec_dir.display(),
+            error = %e,
+            "trigger_spec_distillation: failed to create .everlasting/spec/ \
+             directory; LLM-side distillation will surface the error."
+        );
+        // Don't bail — still write the marker + progress
+        // hint. The agent can mkdir itself if it sees fit.
+    } else {
+        tracing::debug!(
+            slug = %slug,
+            spec_dir = %spec_dir.display(),
+            "trigger_spec_distillation: ensured .everlasting/spec/ exists"
+        );
+    }
+
+    // 2. Marker bookkeeping (carried over from Step 3.1).
     let marker = marker_line(SPEC_DISTILLED_MARKER_PREFIX, &ts);
     task.summary = format!("{}{}", marker, task.summary);
+
+    // 3. Append a "Spec distillation pending" hint to
+    //    progress.md so the agent (in the next session or the
+    //    done turn) sees the bridge between the Rust hook and
+    //    the LLM-side content write. We don't overwrite
+    //    progress.md — we append a fenced marker block. If
+    //    progress.md doesn't exist yet, create it (the file is
+    //    optional per task.json schema; many tasks won't have
+    //    one before the first done transition).
+    let progress_path = super::task::task_dir(project_path, slug).join("progress.md");
+    let hint = build_distillation_hint(slug, &ts);
+    append_progress_hint(&progress_path, &hint);
+
     tracing::info!(
         slug = %slug,
         project_path = %project_path.display(),
         ts = %ts,
-        "trigger_spec_distillation: marker appended; \
-         Step 3.2 will replace this stub with an actual \
-         wf-update-spec distillation call."
+        "trigger_spec_distillation: marker + spec dir + progress hint written; \
+         ready for LLM-side wf-update-spec distillation"
     );
+}
+
+/// Build the "Spec distillation pending" hint block written to
+/// `progress.md`. Kept short on purpose — the LLM is told
+/// **what to do** (load the skill, write spec) and **where to
+/// write** (`.everlasting/spec/<package>/<layer>/`), not how to
+/// think (the `wf-update-spec` skill body fills in the
+/// method). The hint is bracketed with start/end sentinels so a
+/// later re-trigger can detect + replace rather than append
+/// duplicates.
+fn build_distillation_hint(slug: &str, ts: &str) -> String {
+    format!(
+        "<!-- wf:distillation-pending:{slug}:{ts} -->\n\
+         ## Spec distillation pending (Step 3.2)\n\n\
+         Task 已达 `done`。下一步沉淀:\n\n\
+         1. `use_skill wf-update-spec` 加载沉淀指引\n\
+         2. 读 `.everlasting/spec/README.md` 看目录约定\n\
+         3. 提炼本次决策 / 坑 / 新 pattern,写进 `.everlasting/spec/<package>/<layer>/<topic>.md`\n\
+         4. 更新 `<package>/<layer>/index.md` 规范列表\n\n\
+         提示:Rust 固定 hook 不调 LLM — 沉淀靠 agent 自觉但有 progress.md 提示。\n\
+         <!-- /wf:distillation-pending -->\n"
+    )
+}
+
+/// Append `hint` to `progress_path`. If the file doesn't exist
+/// yet, create it. The hint carries bracketed sentinels — if a
+/// block for the same `(slug, ts)` is already present (i.e. a
+/// prior partial write), we still append (the LLM dedupes by
+/// sentinel on read). New sessions reading `progress.md` will
+/// see the most recent hint and follow it.
+fn append_progress_hint(progress_path: &Path, hint: &str) {
+    use std::io::Write;
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(progress_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(
+                path = %progress_path.display(),
+                error = %e,
+                "trigger_spec_distillation: failed to open progress.md; hint dropped"
+            );
+            return;
+        }
+    };
+    if let Err(e) = file.write_all(hint.as_bytes()) {
+        tracing::warn!(
+            path = %progress_path.display(),
+            error = %e,
+            "trigger_spec_distillation: failed to append progress.md hint"
+        );
+    }
 }
 
 /// Hook for `(Planning, Implement)`. Same shape as
@@ -591,6 +714,152 @@ mod tests {
             marker_count, 1,
             "preflight marker must NOT double-append; got: {:?}",
             updated.summary
+        );
+    }
+
+    // --- Step 3.2 — spec distillation wiring ---------------------------
+
+    /// `trigger_spec_distillation` (Step 3.2) creates
+    /// `<project>/.everlasting/spec/` if missing so the next
+    /// agent turn (loading `wf-update-spec`) has a writable
+    /// target. Without this, a fresh project's first task done
+    /// leaves the agent with no spec tree to write into.
+    #[test]
+    fn trigger_spec_distillation_creates_spec_dir_when_missing() {
+        let d = fresh_project();
+        let path = proj(&d);
+        let task = create_seed(path, "my-feat");
+        let mut t = task;
+        t.status = TaskStatus::Check;
+        write_task(path, &t).expect("write");
+
+        // Sanity: spec dir does NOT exist before the
+        // transition.
+        let spec_dir = path.join(".everlasting").join("spec");
+        assert!(
+            !spec_dir.exists(),
+            "precondition: spec dir must not exist yet"
+        );
+
+        let _updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Check,
+            TaskStatus::Done,
+        )
+        .expect("ok");
+
+        assert!(
+            spec_dir.exists(),
+            "spec dir must exist after Check → Done transition"
+        );
+        assert!(
+            spec_dir.is_dir(),
+            "spec dir must be a directory (not a file)"
+        );
+    }
+
+    /// `trigger_spec_distillation` (Step 3.2) appends a
+    /// "Spec distillation pending" hint to
+    /// `<project>/.everlasting/tasks/<slug>/progress.md` so
+    /// the agent (next session or in-progress done turn)
+    /// sees the bridge between the Rust hook and the
+    /// `wf-update-spec` content write.
+    ///
+    /// Also covers: progress.md is **created** if it
+    /// doesn't exist yet (the file is optional per
+    /// task.json schema).
+    #[test]
+    fn trigger_spec_distillation_appends_progress_md_hint() {
+        let d = fresh_project();
+        let path = proj(&d);
+        let task = create_seed(path, "my-feat");
+        let mut t = task;
+        t.status = TaskStatus::Check;
+        write_task(path, &t).expect("write");
+
+        let progress_path = super::super::task::task_dir(path, "my-feat").join("progress.md");
+        assert!(
+            !progress_path.exists(),
+            "precondition: progress.md must not exist before trigger"
+        );
+
+        let _updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Check,
+            TaskStatus::Done,
+        )
+        .expect("ok");
+
+        assert!(
+            progress_path.exists(),
+            "progress.md must be created by trigger_spec_distillation"
+        );
+        let content = std::fs::read_to_string(&progress_path).expect("read progress");
+        assert!(
+            content.contains("Spec distillation pending (Step 3.2)"),
+            "progress.md must carry the distillation hint header; got: {content}"
+        );
+        assert!(
+            content.contains("wf-update-spec"),
+            "progress.md must reference the wf-update-spec skill name; got: {content}"
+        );
+        assert!(
+            content.contains(".everlasting/spec/"),
+            "progress.md must point at the spec directory; got: {content}"
+        );
+        // Sentinels: bracketed markers so a re-trigger can
+        // detect + dedup.
+        assert!(
+            content.contains("<!-- wf:distillation-pending:my-feat:"),
+            "progress.md must carry the start sentinel; got: {content}"
+        );
+        assert!(
+            content.contains("<!-- /wf:distillation-pending -->"),
+            "progress.md must carry the end sentinel; got: {content}"
+        );
+    }
+
+    /// Step 3.2 hook is idempotent: when the marker is
+    /// already on `task.summary`, **no** new spec-dir creation
+    /// attempt and **no** new progress hint append happen. This
+    /// keeps the hint count stable across re-applies of the
+    /// same transition (e.g. if the IPC layer retries after a
+    /// transient write failure).
+    #[test]
+    fn trigger_spec_distillation_idempotent_on_marker_presence() {
+        let d = fresh_project();
+        let path = proj(&d);
+        let task = create_seed(path, "my-feat");
+        let mut t = task;
+        t.status = TaskStatus::Check;
+        // Pre-existing marker + pre-existing progress.md with
+        // one hint already.
+        t.summary = format!(
+            "{}{}",
+            marker_line(SPEC_DISTILLED_MARKER_PREFIX, "2026-01-01T00:00:00+00:00"),
+            t.summary
+        );
+        write_task(path, &t).expect("write");
+        let progress_path = super::super::task::task_dir(path, "my-feat").join("progress.md");
+        std::fs::create_dir_all(progress_path.parent().unwrap()).unwrap();
+        std::fs::write(&progress_path, "preexisting body\n").unwrap();
+
+        let _updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Check,
+            TaskStatus::Done,
+        )
+        .expect("ok");
+
+        let content = std::fs::read_to_string(&progress_path).expect("read progress");
+        // The idempotent short-circuit must NOT append the
+        // hint block. Existing body should be unchanged.
+        assert_eq!(
+            content, "preexisting body\n",
+            "progress.md body must be unchanged when marker is already present; got: {content}"
         );
     }
 

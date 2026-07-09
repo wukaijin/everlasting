@@ -11,7 +11,7 @@
 | Phase 0 — engine 骨架 (Step 0.1-0.5) | ✅ 完成 | 2727ef5 / 8da332c / e28f420 / e0c5657 / 788fbbb + c9f926d (clippy fix) |
 | Phase 1 — skill 规范包 + plugin skill loader (Step 1.1-1.5) | ✅ 完成 | b7e8b74 / d3b8494 / 0decc2c / c2698d4 / c3bb28f |
 | Phase 2 — plugin 外置 + sub-agent 角色 + 门控 + 注入 (Step 2.1-2.6) | ✅ 6/6 | 38391c1 (2.1) / b999803 (2.2) / e73f58b (2.3) / fa09858 (2.4) / 9e513bc (2.5) / 64a9972 (2.6) |
-| Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | ⏳ 待开始 | — |
+| Phase 3 — hook + 沉淀闭环 (Step 3.1-3.3) | 🟡 1/3 (3.1 ✅ / 3.2 ✅ / 3.3 ⏳) | 08eca73 (3.1) / <pending> (3.2) |
 
 ## 前置常量
 
@@ -197,10 +197,20 @@ APP="cd /usr/local/code/github/everlasting/app"
 
 ### Step 3.2 — .everlasting/spec/ + wf-update-spec 落地
 
-- [ ] 创建 `.everlasting/spec/` 目录约定(`<package>/<layer>/index.md` + guideline 文件,借鉴 `.trellis/spec/` 结构)
-- [ ] `trigger_spec_distillation`:engine 调用 agent(在 wf-update-spec skill 指导下)把决策/坑/新 pattern 提炼写进 `.everlasting/spec/`
-- [ ] wf-update-spec skill body 落地(§A.5)
-- **验证**:手动——task done → spec 文件生成;下次 implement 读得到
+- [x] 创建 `.everlasting/spec/` 目录约定(`<package>/<layer>/index.md` + guideline 文件,借鉴 `.trellis/spec/` 结构)
+  - `README.md` 顶层目录说明(Q7 + 结构 + 模板样板 + 写入 / 读取流程)
+  - `backend/index.md` seed 索引(借鉴 `.trellis/spec/backend/index.md` 模板;状态表 + how to fill)
+- [x] `trigger_spec_distillation`:engine 触发 spec 沉淀路径(Q9 Rust hook 不调 LLM,但把任务交接给 LLM)
+  - mkdir `<project>/.everlasting/spec/` 兜底(LLM 加载 wf-update-spec 时有可写目标)
+  - 写 `[wf:spec-distilled <ts>]` marker 到 `task.summary`(Step 3.1 保留)
+  - append "Spec distillation pending (Step 3.2)" hint 块到 `progress.md`(带 `<!-- wf:distillation-pending:slug:ts -->` 哨兵)
+  - LLM 侧:done state turn / 下次 session 读 progress.md → 加载 wf-update-spec → 写正式 spec
+- [x] wf-update-spec skill body 落地(§A.5)— 已在 Step 1.3 落地(`dev/skills/wf-update-spec/SKILL.md`)
+- **验证**:
+  - `cargo test --lib workflow::state::` → 14 passed(+3 new: `creates_spec_dir_when_missing` / `appends_progress_md_hint` / `idempotent_on_marker_presence`)
+  - `cargo test --lib` → 1466 passed,0 failed,0 regression
+  - `cargo clippy --lib` state.rs 零新警告(项目其他模块 152 警告为旧)
+  - 手动:跑一个 dev workflow task 到 done → progress.md 应含 "Spec distillation pending" 块 + `.everlasting/spec/` 应存在
 
 ### Step 3.3 — progress.md 交接叙述 + archive_task
 
