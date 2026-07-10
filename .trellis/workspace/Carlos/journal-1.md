@@ -1283,4 +1283,75 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 
 - 建下一轮任务 `07-XX-docs-sync-round-2` 跑 P1(CLAUDE Architecture 段 / ARCHITECTURE Tool Registry + Workflow 子节 / DESIGN §3.1 B8 迁移至已具备)+ P2(TECH / HACKING-llm retry 策略 / HACKING-wsl pkgconfig + 版本注脚)
 - 本任务 `task.py finish` 收官
+
+---
+
+## Session 28: 07-10-docs-sync-round-2 — 正式文档同步 P1+P2
+
+**Date**: 2026-07-10
+**Task**: 07-10-docs-sync-round-2(P1 + P2,共 6 commit)
+**Branch**: `main`
+
+### Summary
+
+P0(07-10-docs-sync-sweep)收尾后跑 P1+P2。复用 P0 父任务的 prd/design/implement 作 round-2 plan,新建 round-2 任务目录 + 简化版 prd 引用 P0 artifact。6 commit 全部独立可 revert,**零代码改动**,cargo check 0 err。
+
+**6 commit**:
+
+1. **`docs(claude)`** — Architecture 段补 `agent/workflow/`(6 文件)+ `background_shell/`(顶层)+ `commands/{task,subagents,question}` + `llm/retry.rs` + tools 19→21(含 `create_task` / `request_task_state_transition` / `request_mode_change`);修正 `LLM_MODEL` 默认值 `GLM-4.7` → **`MiniMax-M2.7`**(`app/src-tauri/src/llm/provider/anthropic.rs:79` 实际 default,GLM-4.7 是 HACKING-llm 测试用)。+25 -11。
+2. **`docs(architecture)`** — §1.1 进程拓扑图 Tool Registry "19 builtin" → "21 builtin";`merge_worker` / `discard_worker` 标 `ToolKind::GitMutation`;新增 **Workflow Engine box**(workflow.json 外置 + builtin dev plugin + task 状态机 + breadcrumb + delegation + spec 蒸馏)。+15 -5。
+3. **`docs(design)`** — §3.1 工具集 19→21;`B8` 移至"已具备"段(完整 workflow.json / builtin dev plugin / task 状态机 / breadcrumb / delegation / Step 0.1~3.3 / plugin agents/ / B12→task.json.items / spec 蒸馏描述);**整段重建"未做"段到只剩 B10 / B11 / A2+ P3**(原 B2 / B3 / B4 / B5 / B6 / B9 / C2 已落地,加脚注说明)。+11 -11。
+4. **`docs(tech)`** — §1.4 加"已落地但不引入新 crate 的基础设施模块"小表(LLM retry / background_shell / workflow / use_ui / autonomous_memories 5 项,**零新增依赖**,用既有 `serde` + `tokio` + `sqlx` FTS5 + `rand`)。+10。
+5. **`docs(hacking-llm)`** — 加**差异 6 A5+ 网络健壮性 retry 策略**(`retry_open` wrapper + Full Jitter + 首字节前重试 + retry-after + 双向熔断;7 条决策按"为什么");checklist 第 154 行同步更新"指数退避"→"Full Jitter + retry-after + 60s 二次封顶"。+25 -1。
+6. **`docs(hacking-wsl)`** — 顶部环境戳加"截至 2026-07-10";坑 1 补**一次性 `PKG_CONFIG_PATH` 用法 + `cargo check`/`cargo test --lib` 命令**(CLAUDE.md §Common Commands 跨引用)。+15 -2。
+
+**关键决策**:
+- **DESIGN.md "未做"段整段重建**——原段把已落地的 B2 / B3 / B4 / B5 / B6 / B9 / C2 全列着,自相矛盾(同时在"已具备"段)。用户选"整段重建到只剩 B10 / B11 / A2+ P3",加脚注说明迁移历史。
+- **`LLM_MODEL` 默认值修正**——`CLAUDE.md` 写的 `GLM-4.7` 是 HACKING-llm 的测试环境(用户实测走 `<your-anthropic-compat-host>`),代码 `anthropic.rs:79` 实际 default 是 `MiniMax-M2.7`。HACKING-llm 保留 GLM-4.7(那是 user 的真实使用环境描述),CLAUDE.md 改到代码真相。
+- **TECH.md 加"零新增依赖"小表**——workflow / retry / background_shell / V2 2 期记忆均无新 crate,§1.4 原只列 candidate deps,加这个表才能反映"已落地的基础设施"。
+- **HACKING-wsl 坑 1 加重 cargo 命令**——CLAUDE.md §Common Commands 的 cargo check / test 命令本身就有 PKG_CONFIG_PATH,但 HACKING-wsl 坑 1 只描述 env var 持久化。加一次性命令 + 跨引用让两边对齐。
+
+**踩坑**:
+- HACKING-llm.md 太长(460+ 行),原来"差异 4 / 5"在文末(180 行后),新加"差异 6"接在文末陷阱段之前。grep 定位 + 确认锚点"未来防护"段尾
+- DESIGN.md "未做"段超出 P1 plan 范围(B8 移除) —— 实际看发现整段都过期了,问了用户才做整段重建
+
+### Main Changes
+
+- `CLAUDE.md`:Architecture 段后端树 + tools 21 + LLM_MODEL 默认修正(+25 -11)
+- `docs/ARCHITECTURE.md`:§1.1 Tool Registry + Workflow Engine box(+15 -5)
+- `docs/DESIGN.md`:§3.1 工具集 21 + B8 移入已具备 + 未做段重建(+11 -11)
+- `docs/TECH.md`:§1.4 加已落地基础设施表(+10)
+- `docs/HACKING-llm.md`:差异 6 A5+ retry + checklist 同步(+25 -1)
+- `docs/HACKING-wsl.md`:顶部戳 + 坑 1 一次性命令(+15 -2)
+- `.trellis/tasks/07-10-docs-sync-round-2/`:新建 + 简化 prd 引用 P0 artifact
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4288e9c` | docs(hacking-wsl): 顶部环境戳加「截至 2026-07-10」;坑 1 补一次性 PKG_CONFIG_PATH 用法 + cargo check/test 命令 + CLAUDE.md §Common Commands 跨引用 |
+| `efa4a5f` | docs(hacking-llm): 加差异 6 A5+ 网络健壮性 retry 策略(retry_open / Full Jitter / 首字节前重试 / retry-after / 双向熔断);checklist 重试行同步更新 |
+| `8dda11b` | docs(tech): §1.4 补「已落地但不引入新 crate 的基础设施模块」表(retry.rs / background_shell / workflow / use_ui / autonomous_memories) |
+| `32d8645` | docs(design): §3.1 工具集 19→21 builtin + B8 移至已具备段(完整 workflow 描述);未做段重建到只剩 B10/B11/A2+ P3(原 B2/B3/B4/B5/B6/B9/C2 已落地迁出) |
+| `14afe42` | docs(architecture): §1.1 Tool Registry 19→21 builtin + merge/discard worker 标 ToolKind::GitMutation + 新增 Workflow Engine box (07-08~10 workflow.json 外置 + task 状态机 + breadcrumb + delegation + spec 蒸馏) |
+| `e6817a4` | docs(claude): Architecture 补 agent/workflow/ + background_shell/ + commands/task\|subagents\|question + llm/retry.rs + tools 21 个(含 create_task/request_task_state_transition/request_mode_change);LLM_MODEL 默认 GLM-4.7 → MiniMax-M2.7 |
+
+### Testing
+
+- [OK] `cargo check` → 0 err(1.44s,缓存命中)
+- [OK] 跨文档 4 项 grep consistency review 全过:
+  - B8 全在"已落地"语境(7 处跨 5 文档:ROADMAP / IMPLEMENTATION / DESIGN / CLAUDE / STRUCTURE,无"未做"段残留)
+  - "21 builtin" 在 CLAUDE / DESIGN / STRUCTURE / ARCHITECTURE 4 处一致
+  - workflow 模块在 CLAUDE(8)/ ARCHITECTURE(6)/ DESIGN(5)/ TECH(1)/ STRUCTURE(13)齐全
+  - LLM_MODEL 默认值统一:`CLAUDE.md` 改 `MiniMax-M2.7` + 引用 `anthropic.rs:79` + 注明 HACKING-llm 用 GLM-4.7 是用户测试环境(非 default)
+
+### Status
+
+[OK] **P1+P2 6/6 完成,6 commit 独立可 revert**;总 diff +101 / -30 行 < 1400 上限
+
+### Next Steps
+
+- 本任务 `task.py finish` 收官
+- `docs/HANDOFF.md` 同步历来滞后,见 memory `handoff-lags-behind-commits`,作为单独 follow-up(不在本任务范围)
+- 全部 9 份正式文档已对齐 2026-07-10 代码基线(CLAUDE / STRUCTURE / ROADMAP / IMPLEMENTATION / ARCHITECTURE / DESIGN / TECH / HACKING-llm / HACKING-wsl),零代码改动
 - docs/HANDOFF.md 同步历来滞后,见 memory `handoff-lags-behind-commits`,作为单独 follow-up(不在本任务范围)
