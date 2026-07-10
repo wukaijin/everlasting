@@ -51,17 +51,27 @@
 │  │  │  - 手写 SSE 状态机                         │    │    │
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  Tool Registry (19 builtin,mod.rs::builtin_tools() 注册)
+│  │  │  Tool Registry (21 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
 │  │  │  - 读 / 写:read_file / write_file / edit_file (ReadGuard 三道 check)
 │  │  │  - 只读:grep / glob / list_dir
 │  │  │  - Shell:shell / run_background_shell / shell_status / shell_kill (L1a)
 │  │  │  - 联网:web_fetch (06-12 落地,SSRF 拦截 + 5 MiB body cap)
-│  │  │  - Skill / Memory / UI:use_skill (B4) / remember (V2 2 期) / use_ui (B9)
-│  │  │  - 自跟踪:update_checklist (B12)
-│  │  │  - 交互:ask_user_question (selector 复用)
-│  │  │  - Subagent:dispatch_subagent (B6) / merge_worker / discard_worker (L3b)
+│  │  │  - Skill / Memory / UI:use_skill (B4,workflow-aware) / remember (V2 2 期) / use_ui (B9)
+│  │  │  - 自跟踪:update_checklist (B12,workflow 分支同步 task.json.items)
+│  │  │  - 交互:ask_user_question (selector 复用,query_store 配对) / request_mode_change (B6+ A,07-07)
+│  │  │  - Workflow (07-08~10,workflow_enabled session 可见,filter_tools_for_workflow 白名单):
+│  │  │    create_task / request_task_state_transition
+│  │  │  - Subagent:dispatch_subagent (B6) / merge_worker / discard_worker (L3b,ToolKind::GitMutation)
 │  │  └─────────────────────────────────────────┘    │    │
 │  │  ┌─────────────────────────────────────────┐    │    │
+│  │  │  Workflow Engine (07-08~10)              │    │    │
+│  │  │  - workflow.json 外置(load + validate + fallback)
+│  │  │  - builtin dev workflow plugin(开箱即用)
+│  │  │  - 任务状态机:Planning → Implement → Check → Done
+│  │  │  - breadcrumb 注入(per-turn,synthetic user message + cache_control)
+│  │  │  - delegation 模板(run_subagent 时注入 worker)
+│  │  │  - TaskStatus → Done 触发 trigger_spec_distillation
+│  │  └─────────────────────────────────────────┘    │    │
 │  │  │  Agent Loop                              │    │    │
 │  │  │  - 上下文管理 / 压缩 / 优先级裁剪         │    │    │
 │  │  │  - 权限检查 (per-tool, per-mode)         │    │    │
