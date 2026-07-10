@@ -226,7 +226,7 @@ pub async fn build_workflow_ctx(
 /// doesn't break the whole list. The function returns
 /// the first VALID unfinished task, not the first
 /// encountered file.
-async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
+pub async fn resolve_current_task(project_path: &Path) -> Option<TaskJson> {
     let tasks_root = project_path.join(".everlasting").join("tasks");
     if !tasks_root.exists() {
         return None;
@@ -614,12 +614,16 @@ fn build_breadcrumb_block(ctx: &WorkflowCtx) -> ContentBlock {
         }
         None => {
             // Bootstrap branch: hint the LLM to call
-            // list_dir / create_task. NOT empty — the
-            // user enabled workflow, so the LLM needs to
-            // know it should bootstrap the machinery.
+            // the create_task tool (NOT a hand-written
+            // write_file — resilience is on the read side
+            // via lenient read_task, but create_task is the
+            // lower-effort, lower-drift path). NOT empty —
+            // the user enabled workflow, so the LLM needs
+            // to know it should bootstrap the machinery.
             format!(
                 "<workflow-task-meta>\n\
-                 no active task — list `.everlasting/tasks/` or call create_task IPC to start one.\n\
+                 no active task — call the create_task tool to start one (省事、字段全、自带 prd skeleton)。\\n\
+                 (write_file 也行,但 task.json schema 有约束;read_task 会 lenient 兜底,优先用 create_task tool 更稳。)\n\
                  </workflow-task-meta>\n\n\
                  {breadcrumb}\n",
             )
@@ -730,9 +734,8 @@ mod tests {
                             "bootstrap hint must include the meta marker"
                         );
                         assert!(
-                            text.contains("list `.everlasting/tasks/`")
-                                || text.contains("call create_task"),
-                            "bootstrap hint must point at list_dir or create_task"
+                            text.contains("create_task"),
+                            "bootstrap hint must point at the create_task tool (got: {text})"
                         );
                     }
                     _ => panic!("expected text block"),

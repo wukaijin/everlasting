@@ -17,6 +17,7 @@
 //! step 2 tools.
 
 pub mod ask_user_question;
+pub mod create_task;
 pub mod discard_worker;
 pub mod edit_file;
 pub mod glob;
@@ -195,7 +196,42 @@ pub fn builtin_tools() -> Vec<ToolDef> {
         // preflight_implement_check on Planning→Implement) —
         // see design §5.2 / Q9.
         request_task_state_transition::definition(),
+        // 07-10-workflow-task-json-hardening R2: LLM-facing task
+        // creation tool. Convenience helper (reuses create_task_init
+        // for a schema-correct seed), NOT a write gate — write_file
+        // remains allowed (read_task parses leniently per R1).
+        // Stripped from non-workflow sessions by
+        // `filter_tools_for_workflow` below.
+        create_task::definition(),
     ]
+}
+
+/// 07-10-workflow-task-json-hardening R2: strip workflow-only tools
+/// from non-workflow sessions so the LLM never sees their schema.
+///
+/// Whitelist of workflow-only tools: `create_task`,
+/// `request_task_state_transition`. Both are meaningless without an
+/// active workflow task; showing them in a plain (non-workflow)
+/// session just tempts the model to misuse them. Mirrors
+/// [`crate::agent::permissions::filter_tools_for_mode`]'s shape — a
+/// pure `Vec<ToolDef>` filter chained at the turn-tool-build site.
+///
+/// `request_task_state_transition`'s `execute_blocking` ALSO gates on
+/// `workflow_ctx = None` (defense-in-depth), but filtering at the
+/// schema layer is cleaner than "call it, then eat an error".
+pub fn filter_tools_for_workflow(tools: Vec<ToolDef>, workflow_enabled: bool) -> Vec<ToolDef> {
+    if workflow_enabled {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| {
+            !matches!(
+                t.name.as_str(),
+                "create_task" | "request_task_state_transition"
+            )
+        })
+        .collect()
 }
 
 /// Per-turn context passed to every tool execution. Built once per
@@ -430,6 +466,17 @@ async fn execute_tool_inner(
             // in-memory handle is always updated — same shape as
             // pre-Step-2.6.
             let (out, is_err) = update_checklist::execute(input, &ctx.checklist, ctx).await;
+            (out, is_err, ToolContextUpdate::default(), None)
+        }
+        "create_task" => {
+            // 07-10-workflow-task-json-hardening R2: seed a workflow
+            // task via the schema-correct create_task_init (same
+            // writer as the Tauri IPC). Non-blocking, no guard /
+            // session_id needed. Risk::Low (write under the
+            // project's .everlasting/tasks/, same boundary as
+            // update_checklist). Only visible in workflow sessions
+            // (filter_tools_for_workflow strips it otherwise).
+            let (out, is_err) = create_task::execute(input, ctx).await;
             (out, is_err, ToolContextUpdate::default(), None)
         }
         "run_background_shell" => {

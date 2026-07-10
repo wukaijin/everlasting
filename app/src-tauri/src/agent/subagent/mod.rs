@@ -674,6 +674,11 @@ pub async fn build_worker_messages(
 ///   parent's next-turn drain.
 const STRUCTURALLY_DISABLED: &[&str] = &[
     "update_checklist",
+    // 07-10-workflow-task-json-hardening R2: only the parent LLM
+    // creates workflow tasks — a worker must not seed a new
+    // `.everlasting/tasks/<slug>/` (same rationale as update_checklist:
+    // task lifecycle is the orchestrator's, not a worker's).
+    "create_task",
     "dispatch_subagent",
     "run_background_shell",
     "shell_status",

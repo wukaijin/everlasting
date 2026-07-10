@@ -403,7 +403,7 @@ pub async fn run_chat_loop(
     // convention as `question_store` (keeps existing
     // test fixtures on one-line edits when they upgrade
     // from 29 to 30).
-    workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
+    mut workflow_ctx: Option<crate::agent::workflow::WorkflowCtx>,
 ) {
     // RAII: removes the (rid → token) AND (session_id → rid)
     // entries on every exit path. Mirrors the original closure's
@@ -1529,6 +1529,21 @@ pub async fn run_chat_loop(
                 // together makes the intent clear in one
                 // block ("non-worker path mutations on
                 // messages[0]").
+                // R4 (07-10-workflow-task-json-hardening): refresh
+                // `current_task` off disk at turn top so the breadcrumb
+                // reflects mid-loop state changes from the previous turn
+                // (a transition the user allowed, or a create_task tool
+                // call). `workflow_ctx` is an owned `Option` param (mut-
+                // bound); the mut borrow ends at the block's `}`, before
+                // the `append_workflow_breadcrumb` read below — so the
+                // immutable re-borrow there is fine. Only workflow
+                // sessions have a ctx to refresh; non-workflow stays None.
+                if let Some(ref mut ctx) = workflow_ctx {
+                    ctx.current_task = crate::agent::workflow::inject::resolve_current_task(
+                        &current_ctx.worktree_path,
+                    )
+                    .await;
+                }
                 if let Some(ref ctx) = workflow_ctx {
                     crate::agent::workflow::inject::append_workflow_breadcrumb(&mut req, ctx);
                 }
@@ -1536,8 +1551,10 @@ pub async fn run_chat_loop(
             req
         };
 
-        let mut turn_tool_defs =
-            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode);
+        let mut turn_tool_defs = crate::tools::filter_tools_for_workflow(
+            permissions::filter_tools_for_mode(tool_defs.clone(), session_mode),
+            workflow_ctx.is_some(),
+        );
         // L3d (2026-06-25): append the dynamic `dispatch_subagent`
         // ToolDef so the enum reflects builtin + user + project
         // subagents merged by `SubagentCache` (mtime-fenced scan).
@@ -3423,12 +3440,28 @@ pub async fn run_chat_loop(
                             // gates with `is_error: true` (the
                             // structured message
                             // "no active workflow task").
-                            let (current_state, current_slug) = match &workflow_ctx {
-                                Some(ctx) => (
-                                    ctx.current_task.as_ref().map(|t| t.status),
-                                    ctx.current_task.as_ref().map(|t| t.slug.clone()),
-                                ),
-                                None => (None, None),
+                            // R3 (07-10-workflow-task-json-hardening):
+                            // resolve fresh off disk instead of the frozen
+                            // workflow_ctx.current_task snapshot. The agent may
+                            // have created / mutated the task earlier in this
+                            // same loop (create_task tool / write_file), and the
+                            // transition gate must see the real on-disk state —
+                            // matches the apply-side resolve_task_state_transition
+                            // "read fresh off disk" posture (question.rs). Only
+                            // workflow sessions can transition; a workflow session
+                            // with no on-disk task short-circuits to (None, None)
+                            // → "no active workflow task".
+                            let (current_state, current_slug) = if workflow_ctx.is_some() {
+                                let fresh = crate::agent::workflow::inject::resolve_current_task(
+                                    &current_ctx.worktree_path,
+                                )
+                                .await;
+                                match fresh {
+                                    Some(t) => (Some(t.status), Some(t.slug.clone())),
+                                    None => (None, None),
+                                }
+                            } else {
+                                (None, None)
                             };
                             let (content, is_error, _update, exit_code) =
                                 crate::tools::request_task_state_transition::execute_blocking(

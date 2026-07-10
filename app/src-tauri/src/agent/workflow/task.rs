@@ -108,7 +108,7 @@ use serde::{Deserialize, Serialize};
 /// `Completed` is in the `from_str_opt` accept-list so an
 /// archive file accidentally re-read by the chat loop
 /// doesn't silently demote to `Planning`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     Planning,
@@ -140,6 +140,25 @@ impl TaskStatus {
     }
 }
 
+/// Lenient `Deserialize` — unknown / typo'd status strings fall back
+/// to `Planning` via [`TaskStatus::from_str_opt`], so a hand-written
+/// `task.json` with e.g. `"status": "in_progress"` or `"pending"`
+/// (checklist-style values the LLM naturally emits) does NOT break
+/// `read_task`. 07-10-workflow-task-json-hardening R1: the derive
+/// `Deserialize` was strict and rejected any variant outside the
+/// 5-state enum, which made every direct `write_file` of task.json
+/// fatal. Resilience lives on the read side, not by gating writes.
+/// Mirrors `def.rs::Coordination`'s custom Deserialize posture.
+impl<'de> serde::Deserialize<'de> for TaskStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from_str_opt(&s))
+    }
+}
+
 /// One to-do entry. The struct's shape mirrors what B12's
 /// `ChecklistItem` will become in Phase 2 Step 2.6; for
 /// Phase 0 the JSON is just persisted and read, no
@@ -150,6 +169,7 @@ pub struct TaskItem {
     /// uses this as the B12 checklist key for
     /// cross-session persistence.
     pub id: String,
+    #[serde(default)]
     pub content: String,
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,7 +190,9 @@ pub struct TaskJson {
     pub title: String,
     pub slug: String,
     pub status: TaskStatus,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
     /// `None` for top-level tasks; non-empty for child
     /// tasks (B8 DAG, Phase 3+). The slug of the parent
@@ -760,6 +782,124 @@ mod tests {
             "got {:?}; the caller's 'no task yet' branch must be unambiguous",
             err
         );
+    }
+
+    // --- lenient parse (07-10-workflow-task-json-hardening R1) ------------
+    // task.json is a file the LLM can `write_file` directly, so the
+    // read side must tolerate hand-written schema drift (missing
+    // fields, checklist-style status values like "in_progress" /
+    // "pending") rather than crashing the whole workflow. Resilience
+    // lives on the read side, NOT by gating writes.
+
+    /// Write a raw (possibly hand-written / schema-drifting) task.json
+    /// for `slug`, creating the task dir. Simulates an LLM editing
+    /// task.json via write_file without going through create_task /
+    /// update_checklist — the exact pattern that crashed the workflow
+    /// twice during 07-10 dogfooding.
+    fn write_raw_task_json(project: &Path, slug: &str, body: &str) {
+        let dir = task_dir(project, slug);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("task.json"), body).unwrap();
+    }
+
+    #[test]
+    fn read_task_lenient_missing_created_at_and_updated_at() {
+        // Crash #1: LLM hand-wrote task.json without created_at /
+        // updated_at. #[serde(default)] now fills empty strings.
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"planning","summary":"","items":[]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("lenient parse must succeed");
+        assert_eq!(task.slug, "my-feat");
+        assert_eq!(task.status, TaskStatus::Planning);
+        assert!(
+            task.created_at.is_empty(),
+            "missing created_at → empty default"
+        );
+        assert!(
+            task.updated_at.is_empty(),
+            "missing updated_at → empty default"
+        );
+    }
+
+    #[test]
+    fn read_task_lenient_top_level_unknown_status_falls_back_to_planning() {
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"blocked","created_at":"","updated_at":"","items":[]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("lenient parse");
+        assert_eq!(
+            task.status,
+            TaskStatus::Planning,
+            "unknown top-level status → Planning (from_str_opt)"
+        );
+    }
+
+    #[test]
+    fn read_task_lenient_item_status_in_progress_falls_back_to_planning() {
+        // Crash #2: LLM hand-edited items[].status = "in_progress"
+        // (a checklist-style value not in the TaskStatus enum).
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"implement","created_at":"","updated_at":"","items":[{"id":"a","content":"do thing","status":"in_progress"}]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("lenient item status");
+        assert_eq!(task.items.len(), 1);
+        assert_eq!(
+            task.items[0].status,
+            TaskStatus::Planning,
+            "in_progress → Planning fallback"
+        );
+        assert_eq!(task.items[0].content, "do thing");
+    }
+
+    #[test]
+    fn read_task_lenient_item_status_pending_falls_back_to_planning() {
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"planning","created_at":"","updated_at":"","items":[{"id":"a","content":"x","status":"pending"}]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("lenient");
+        assert_eq!(
+            task.items[0].status,
+            TaskStatus::Planning,
+            "pending → Planning"
+        );
+    }
+
+    #[test]
+    fn read_task_lenient_item_missing_content_defaults_empty() {
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"planning","created_at":"","updated_at":"","items":[{"id":"a","status":"done"}]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("missing content → empty default");
+        assert_eq!(task.items[0].content, "", "missing content → empty string");
+        assert_eq!(task.items[0].status, TaskStatus::Done);
+    }
+
+    #[test]
+    fn read_task_still_rejects_truly_malformed_json() {
+        // Lenient status/defaults do NOT mean "accept any garbage" —
+        // structurally broken JSON still fails so genuinely corrupt
+        // files surface loudly (the `resolve_current_task` skip-on-
+        // error contract depends on a real Err here).
+        let d = fresh_project();
+        write_raw_task_json(&proj(&d), "my-feat", "not json at all {");
+        let err = read_task(&proj(&d), "my-feat").expect_err("garbage must still fail");
+        assert!(matches!(err, TaskError::MalformedJson(..)), "got {:?}", err);
     }
 
     #[test]
