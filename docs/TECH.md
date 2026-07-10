@@ -63,6 +63,16 @@
 | 工作流可视化 | `@vue-flow/core` | DAG 编辑器(后期再加) | BACKLOG §4 编排 |
 | 云端 | Cloudflare Workers + D1 (SQLite) | REST API + 状态存储 | BACKLOG §7 |
 
+**已落地但不引入新 crate 的基础设施模块**(07-02~07-10):
+
+| 模块 | 路径 | 备注 |
+|------|------|------|
+| LLM 网络健壮性(A5+)| `app/src-tauri/src/llm/retry.rs` | `retry_open` wrapper(Full Jitter + 首字节前重试 + retry-after 解析);07-05 落地,**零新增依赖**(用既有 `tokio` + `reqwest` + `rand`) |
+| 后台 shell(L1a)| `app/src-tauri/src/background_shell/` | `BackgroundShellRegistry` trait + `InMemoryBackgroundShellRegistry` 进程内 impl;tokio `Child` + `tokio::select!`,**零新增依赖** |
+| Workflow 系统(B8)| `app/src-tauri/src/agent/workflow/` | workflow.json 外置 + builtin dev plugin + task 状态机 + breadcrumb + delegation;`create_task` / `request_task_state_transition` LLM tool;07-08~10 落地,**零新增依赖**(用既有 `serde` + `tokio::fs` + `notify`) |
+| 生成式 UI(B9)| `app/src-tauri/src/tools/use_ui.rs` | non-blocking execute + UiPrimitive registry;07-02 部分落地,推后期(button+action 白名单 / diff 应用 / session 开关) |
+| 自主记忆(V2 2 期)| `app/src-tauri/src/agent/{auto_reflect,memory_recall,memory_hygiene,remember}.rs` + `db::autonomous_memories` 表 | FTS5 + pitfall trigger_key + 状态机(candidate→active→verified)+ 异步卫生 job;06-29 落地,**零新增依赖**(用既有 `sqlx` FTS5) |
+
 **说明**:
 - `image`、`libheif-rs`、`nucleo`、`ignore`、`notify` 都是轻量、跨平台、纯 Rust 实现(除了 `libheif-rs` 需要系统 libheif)
 - **`serde_yml` 已废弃(2026-06-16 发现)**:`serde_yml` + 前代 `serde_yaml` 均在 crates.io 标 "Deprecated"(`0.0.13` 仅 compat shim)。B3 `/command` 的 frontmatter(`name` / `description` / `argument-hint` 单行标量)改用**手写 parser**(`app/src-tauri/src/resource_loader.rs::parse_frontmatter`,~40 行,split `---` + `key:value`),零依赖。未来 Skill / Memory / Role frontmatter 字段复杂化(多行 / 数组)时再上 maintained fork(候选 `serde_yaml_neo`)——§5 共享 loader 契约仍成立(parser 隔在 `parse_frontmatter` 函数后,替换局部)。
