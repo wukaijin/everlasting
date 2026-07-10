@@ -1,6 +1,6 @@
 # HACKING-wsl: WSL + Ubuntu 22.04 环境坑笔记
 
-> 本机环境:WSL 2 (`6.6.114.1-microsoft-standard-WSL2`) + Ubuntu 22.04.2 LTS,linuxbrew 装在 `/home/linuxbrew/`,以 `carlos` 用户运行(`root` 是 sudo 临时升的)。
+> **本机环境**(截至 **2026-07-10** 验证):WSL 2 (`6.6.114.1-microsoft-standard-WSL2`) + Ubuntu 22.04.2 LTS,linuxbrew 装在 `/home/linuxbrew/`,以 `carlos` 用户运行(`root` 是 sudo 临时升的)。
 >
 > 写给未来的自己(或下个 session),撞到类似问题能 30 秒定位。
 >
@@ -336,7 +336,7 @@ invoke("create_session", { projectId, initialCwd })  // 正确
 
 ## 坑 1:linuxbrew 的 pkg-config 不搜系统路径
 
-**现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。
+**现象**:`pkg-config --modversion webkit2gtk-4.1` 报 not found,即使 `apt install libwebkit2gtk-4.1-dev` 装过了。`ls /usr/lib/x86_64-linux-gnu/pkgconfig/` 能看到 `webkit2gtk-4.1.pc`。**同样症状**:`cargo check` / `cargo test --lib` 在 `app/src-tauri/` 下报 `gdk-pixbuf-2.0` / `webkit2gtk-4.1` not found。
 
 **根因**:linuxbrew 的 pkg-config 把搜索路径**完全覆盖**到 `/home/linuxbrew/.linuxbrew/{lib,share,...}/pkgconfig`,不搜系统标准路径。
 
@@ -346,10 +346,23 @@ invoke("create_session", { projectId, initialCwd })  // 正确
 export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
 ```
 
+**一次性使用**(避免改 shell rc,适合 CI 或临时验证):
+```bash
+cd app/src-tauri && \
+  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo check
+# 或
+cd app/src-tauri && \
+  PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" cargo test --lib
+```
+
+**注意**:**完整 Tauri runtime 需要 `pnpm tauri dev/build`**(走 `.cargo/config` 路径),`cargo test` 和 `cargo test --lib` 都需带 `PKG_CONFIG_PATH`,否则撞 `gdk-pixbuf not found`。
+
 **验证**:
 ```bash
 pkg-config --modversion webkit2gtk-4.1   # 应返回 2.50.x
 ```
+
+**关联**:CLAUDE.md §Common Commands 同步记录了 `PKG_CONFIG_PATH=...` 的 cargo check / test 命令,与本坑修法等价。
 
 ---
 
