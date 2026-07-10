@@ -83,46 +83,60 @@ app/
 │       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
 │       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs
 │       │   ├── tests.rs    # (06-23 拆)6 个 `*_tests.rs` 按 SQL 域(无 common,test_pool 6 份复制)
-│       ├── llm/            # LLM 客户端模块 + 自研 Provider trait
+│       ├── llm/            # LLM 客户端模块 + 自研 Provider trait + A5+ 网络健壮性
 │       │   ├── provider/   # Provider trait + AnthropicProvider + OpenAIProvider + wire.rs + mock.rs
+│       │   ├── retry.rs    # A5+ retry_open wrapper(Full Jitter + 首字节前重试 + retry-after 解析;07-05)
 │       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析
 │       │   ├── error.rs    # LlmError 5 类错误分类、中文用户消息
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
 │       ├── memory/         # Memory/指令文件系统(4 文件加载 + cache_control 注入)
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
-│       ├── agent/          # Agent Loop(8-PR1 拆分;06-23 续拆 subagent/ + chat_loop + tests;06-24 后增 loop_detection + memory_*)
+│       ├── agent/          # Agent Loop(8-PR1;06-23 subagent/ + chat_loop + tests;06-24 loop_detection / memory_*;07-07 question_store;07-08~10 workflow/)
 │       │   ├── chat.rs / chat_loop.rs    # 主循环 + run_subagent 串联
 │       │   ├── context.rs               # C3 context 压缩(token 阈值 + 降级 + B5 保护)
-│       │   ├── loop_detection.rs        # C2 循环检测分级触发(L1 精确 N=3 + L2 Jaccard N=5/0.85)
+│       │   ├── loop_detection.rs        # C2/C2+ 循环检测分级触发 + 主动干预(per-run-local count + QuestionStore)
 │       │   ├── system_prompt.rs / behavior_prompt.rs / thinking.rs # prompt 与 thinking 块处理
 │       │   ├── auto_reflect.rs / memory_recall.rs / memory_hygiene.rs # V2 2 期自主记忆:反思 / 召回 / 卫生 job
-│       │   ├── question_store.rs        # ask_user_question 跨 turn 状态
+│       │   ├── question_store.rs        # ask_user_question / request_mode_change 跨 turn 状态(PendingInteraction tagged enum)
 │       │   ├── helpers.rs / provider.rs / at_file.rs # 工具级辅助
 │       │   ├── subagent/   # (06-23 拆 4 文件 + dispatch.rs)
 │       │   │   ├── mod.rs / sink.rs / transcript.rs / truncate_summary.rs
 │       │   │   └── dispatch.rs  # (06-23 抽自 chat_loop.rs)run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
+│       │   ├── workflow/   # ★ NEW (07-08~10) — workflow 系统核心(workflow.json 外置 + task 状态机 + breadcrumb 注入)
+│       │   │   ├── mod.rs (re-exports) / def.rs (WorkflowDef + 4 访问函数 + default_workflow)
+│       │   │   ├── builtin.rs (builtin dev workflow plugin loader)
+│       │   │   ├── inject.rs (per-turn breadcrumb + bootstrap hint + resolve_current_task 即时读盘)
+│       │   │   ├── state.rs (TaskStatus state machine helpers)
+│       │   │   └── task.rs (TaskJson schema + read_task lenient + create_task_init + archive_task_init)
 │       │   ├── permissions/  # (06-23 拆 mod.rs → 8 模块 + 6 tests_*.rs)
 │       │   │   ├── mod.rs (纯 re-exports) / types.rs / store.rs / payload.rs
 │       │   │   ├── mode.rs / audit.rs / check.rs / ask.rs
 │       │   │   ├── dangerous.rs / shell_trust.rs (sibling 不动)
 │       │   │   └── tests_*.rs (6 个 + tests_common.rs)
-│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs;后续追加 tests_agent_loop / tests_ask_user_question / tests_cancellation / tests_envelope / tests_prompts / tests_subagent)
+│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs;后续追加 tests_agent_loop / tests_ask_user_question / tests_c2plus / tests_cancellation / tests_envelope / tests_prompts / tests_request_mode_change / tests_subagent)
+│       ├── background_shell/  # ★ NEW (06-19 L1a) — BackgroundShellRegistry trait + InMemory impl(tokio 后台 task + drain_notifications)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
-│       ├── commands/       # Tauri commands(8-PR1 拆分: sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs 等)
+│       ├── commands/       # Tauri commands(8-PR1 拆分;07-03 subagents / 07-07 question / 07-08~10 task)
+│       │   ├── task.rs # ★ NEW (07-08~10) — task.json CRUD IPC(create_task / read_task / set_task_state / archive_task)
+│       │   ├── subagents.rs # ★ NEW (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
+│       │   ├── question.rs # ★ NEW (07-07) — get_pending_interaction + resolve_mode_change
+│       │   └── 其他: sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
-│       └── tools/          # Tool 定义与执行(19 个 builtin,mod.rs::builtin_tools() 注册)
+│       └── tools/          # Tool 定义与执行(21 个 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
 │           ├── mod.rs       # builtin_tools()、execute_tool() 分发、ToolKind/GitMutation(WebFetch式 tool-level grant)
 │           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs  # L2 并发只读集
 │           ├── shell.rs / run_background_shell.rs / shell_status.rs / shell_kill.rs  # L1a 后台 shell(tokio Child,无 PTY)
 │           ├── web_fetch.rs   # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
-│           ├── use_skill.rs   # B4 Skill 调用 tool(三层渐进披露 L0/L1/L2)
+│           ├── use_skill.rs   # B4 Skill 调用 tool(三层渐进披露 L0/L1/L2,workflow-aware)
 │           ├── use_ui.rs      # B9 生成式 UI(non-blocking execute + UiPrimitive registry)
-│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool(loop-local,不入持久化)
+│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool(loop-local + workflow 分支同步 task.json.items)
 │           ├── remember.rs    # V2 2 期自主记忆写入 tool
 │           ├── ask_user_question.rs  # 跨 turn 问题(selector 复用,query_store 配对)
 │           ├── dispatch_subagent.rs # B6 派 worker agent
-│           ├── merge_worker.rs / discard_worker.rs  # L3b worker worktree 收口
+│           ├── merge_worker.rs / discard_worker.rs  # L3b worker worktree 收口(ToolKind::GitMutation)
+│           ├── create_task.rs / request_task_state_transition.rs  # ★ NEW (07-08/10) workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
+│           ├── request_mode_change.rs  # ★ NEW (07-07 B6+ A) LLM 申请切 mode(用户 inline card 授权)
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```
@@ -147,7 +161,7 @@ ANTHROPIC_API_KEY=xxx        # 或 ANTHROPIC_AUTH_TOKEN(必需,用于真实 LLM)
 ANTHROPIC_BASE_URL=xxx       # 默认 https://api.anthropic.com
 OPENAI_API_KEY=xxx           # 多 Provider 模式下使用(可选)
 OPENAI_BASE_URL=xxx          # 默认 https://api.openai.com/v1
-LLM_MODEL=xxx                # 默认 GLM-4.7 (与 HACKING-llm.md 一致)
+LLM_MODEL=xxx                # 默认 MiniMax-M2.7 (anthropic.rs:79 from_env;用户实测可改 env,HACKING-llm.md 用 GLM-4.7 走 <your-anthropic-compat-host> 转发)
 LLM_MAX_TOKENS=1024          # 默认 1024
 ```
 
