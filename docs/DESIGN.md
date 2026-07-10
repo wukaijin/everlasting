@@ -56,13 +56,14 @@
 - Tauri 2 + Vue 3 桌面应用,WSL 优先
 - 自研 agent core:Agent Loop + Tool Calling + 流式 SSE + 16 关卡请求生命周期(详见 [ARCHITECTURE.md §2](./ARCHITECTURE.md#2-harness-设计从用户输入到文件变更的-16-道关卡))
 - 多项目 / 多 session 管理(SQLite 持久化)
-- 工具集(19 个 builtin,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册):
+- 工具集(21 个 builtin,`app/src-tauri/src/tools/mod.rs::builtin_tools()` 注册;filter_tools_for_mode/subagent/workflow 三层过滤):
   - 读 / 写:`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置)/ `grep` / `glob` / `list_dir`
   - Shell:`shell`(Bash 落盘 + cat -n)/ `run_background_shell` / `shell_status` / `shell_kill`(L1a 后台 shell,tokio Child 不带 PTY)
   - 联网:`web_fetch`(SSRF 拦截 + 5 MiB body cap,attribution prefix)
-  - Skill / Memory / UI:`use_skill`(B4 三层渐进披露)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local)/ `remember`(V2 2 期自主记忆写入)
-  - 交互:`ask_user_question`(跨 turn,B9 selector 复用)
-  - Subagent:`dispatch_subagent`(B6)/ `merge_worker` / `discard_worker`(L3b worker worktree 收口)
+  - Skill / Memory / UI:`use_skill`(B4 三层渐进披露,workflow-aware)/ `use_ui`(B9 生成式 UI,non-blocking)/ `update_checklist`(B12 loop-local + workflow 分支同步 task.json.items)/ `remember`(V2 2 期自主记忆写入)
+  - 交互:`ask_user_question`(跨 turn,B9 selector 复用)/ `request_mode_change`(B6+ A,07-07,LLM 申请切 mode 用户 inline card 授权)
+  - Workflow(07-08~10,workflow_enabled session 可见,filter_tools_for_workflow 白名单):`create_task` / `request_task_state_transition`
+  - Subagent:`dispatch_subagent`(B6)/ `merge_worker` / `discard_worker`(L3b worker worktree 收口,`ToolKind::GitMutation`)
 - Git 集成:worktree 解耦 + opt-in attach / detach / delete;**L3b PR1-PR4 worker worktree 隔离**(branch 前缀 `worker/<run_id>` + `git worktree lock` + libgit2 fast-forward / 3-way merge + 启动 sweep 清理过期 worker)
 - 多 LLM Provider(自研 `Provider` trait,Anthropic / OpenAI 双 Provider;rig-core 已弃用 2026-06-09)
 - 顶层 GUI:三栏(Vue sub-components)+ SessionList + 顶部 Tabs + 流式指示器 + B9 `<UiCard>` + L3b PR4 `<WorkerBranchBadge>` + `<WorkerMergeControls>`
@@ -80,15 +81,14 @@
 - **L3a-d** Subagent 全套:并发只读 dispatch / worker worktree 隔离 / worker 联网 / frontmatter loader(`~/.config/everlasting/agents/*.md` + `<project>/.everlasting/agents/*.md`)
 - **B9** 生成式 UI(部分落地:selector / diff / code_block):`use_ui` tool + `<UiCard>` + component registry + `WorkerBranchBadge` / `WorkerMergeControls` for L3b PR4
 - **RULE-D-001** provider api_key 加密存储:AES-256-GCM + HKDF(machine-id),`api_key_enc` 列 + `key_migrated_at` 哨兵,IPC 切断明文
+- **B8** Workflow 编排层(07-08~10 完整落地):`workflow.json` 外置(`.everlasting/workflow.json` + `load_workflow` + `validate` + `fallback`)+ builtin dev workflow plugin(`resources/workflows/dev-workflow.json` 开箱即用)+ 任务状态机(Planning → Implement → Check → Done 四态单向)+ per-turn breadcrumb 注入(synthetic user message + `cache_control: ephemeral`)+ delegation 模板(`run_subagent` 时注入 worker)+ Step 0.1~3.3 完整 9 阶段管线(`workflow_enabled` 列 / 顶栏 toggle / `WorkflowDef` struct / `task.json` 读写 / `create_task` IPC / plugin skill loader / `set_task_state` + `archive_task` IPC)+ plugin agents/ 落点(`SubagentSource::Plugin`)+ `B12 Checklist → task.json.items` 同步 + `TaskStatus → Done` 触发 `trigger_spec_distillation` 沉淀 spec 到 `.everlasting/spec/`
 
-**未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排),技术评估见 [BACKLOG.md](./BACKLOG.md)):
+**未做**(排期归 [ROADMAP.md §2](./ROADMAP.md#2-v2-路线图分类2026-06-10-重排) 第四档,技术评估见 [BACKLOG.md](./BACKLOG.md)):
 
-- 输入层扩展:图片粘贴 / @文件补全(B2)/ /command 命令面板(B3)
-- 指令层:Skill 系统(B4);Runtime Memory 与 Session Memory(B5 留位未启用)
-- 拓扑层:Subagent(B6,依赖 B5 Session Memory)/ DAG workflow(B8)
-- 输出层:生成式 UI 4 primitives(B9)
-- 触达层:飞书 IM(B10)/ 云端同步(B11)
-- 循环检测(C2)/ 大输出截断统一(C6)
+- 触达层:`B10` 飞书 IM(**触发 daemon 化**,重大架构变更)/ `B11` 云端同步(Cloudflare Workers + D1,个人远程遥控通道)
+- 安全:`A2+ P3` shell 执行期沙盒兜底(bubblewrap/overlayfs/firejail,前置 WSL userns spike;详见 [A2-SHELL-CLASSIFICATION.md](./A2-SHELL-CLASSIFICATION.md) §4)
+
+> **2026-07-10 同步**:本节此前列出 B2 / B3 / B4 / B5 / B6 / B9 / C2 等均已落地,迁移至"已具备"列表上方;`DAG workflow(B8)` 07-10 完整落地移至上文。剩余 2 项 + A2+ P3 归 ROADMAP §2 第四档。
 
 ### 3.2 明确不做(硬约束)
 
