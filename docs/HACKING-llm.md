@@ -151,7 +151,7 @@ message_stop
 - [ ] **不在客户端做 max_tokens 上限预检**(让 server 报)
 - [ ] **流式断连处理**:`bytes_stream` 提前断 → 记 partial content + 报错,不要静默
 - [ ] **超时**:每个请求设 timeout(connect 10s + total 60s?),超时后归类 `Network`
-- [ ] **重试**:5xx + Network 类可以重试(指数退避),4xx 不重试(无效)
+- [ ] **重试**:5xx + Network 类可以重试(**Full Jitter 退避 + retry-after advisory 优先 + 60s 二次封顶,详见差异 6**),4xx 不重试(无效)
 - [ ] **abort / cancel**:用户停生成时,通过 `tokio::sync::watch` 或类似机制 cancel reqwest future(给前端按钮"停止"用)
 
 ---
@@ -458,3 +458,27 @@ EVERLASTING_RUN_LIVE_OPENAI_TEST=1 \
 **未来防护**:
 - OpenAI / Anthropic 各抽一个 `pub fn chat_completions_url(base_url: &str) -> String` / `pub fn anthropic_messages_url(base_url: &str) -> String` helper,在 `lib.rs::test_model` / `test_provider` 和 `provider::*` adapter 里都调它,保证单一来源。
 - `openai::tests::live_openai_compat_smoke_test` 在 CI 上默认开(env-driven,不泄露真 api_key / 私人 endpoint;只对 staging 仓库,对 prod 关,避免烧钱)
+
+---
+
+## 差异 6:A5+ 网络健壮性 retry 策略(2026-07-05,07-04-a5plus-llm-network-resilience)
+
+**背景**:A5(07-02)错误契约落地 5 类 `LlmError` 分类,但 provider 层无重试 — 单次 503 / 429 / 网络抖动就让整轮 turn 失败,长会话(多 Provider 中转 + 国内网络)脆。DESIGN §5.1 风险表原列"LLM 流式 token 断连 → 实现重连,断点续传用 message ID"作退路,但调研(`docs/research/llm-network-resilience-survey.md` §5.4)证实 SSE 协议无 resumption,message ID 续传不可行,只能整请求重发。
+
+**关键决策**(7 条,按"为什么"):
+
+1. **外层 wrapper 落点**(`llm/retry.rs::retry_open`)而非 Provider trait 内:Provider 应专注协议转换不感知 retry;单一 source of retry 逻辑可单测;wrapper 可见 chat_loop 的 `token`(R7 取消)与 `sink`(R8 前端事件)。**Provider trait 签名零改动**。
+2. **Full Jitter**(`uniform(0, min(cap, base·2^attempt))`)而非纯指数:AWS Architecture Blog 共识 — 纯指数让并发客户端聚集(同步退避 thundering herd)。`RetryPolicy::default()`:`max=3 / base=0.5s / cap=30s / budget=60s / retry_after_cap=60s`。
+3. **首字节前重试边界**(对齐 Claude Code "before visible output"):`retry_open` 一旦收到任何 `Ok(ChatEvent)` 即返回 `OpenOutcome::Stream`,之后所有 stream Err 在 chat_loop per-event loop 处理(`had_error` + `ERROR_MARKER` + partial tool),**不回 retry**。因 everlasting tool 执行在 stream 完成后,首字节前重发 = 零 tool 副作用,不需幂等 key / 去重表。比 Claude Code(流中可能有 visible output)更彻底。
+4. **`LlmError` 加 `headers: HeaderMap` 字段**(`RateLimit`/`Server`):为 `parse_retry_after` 解析 advisory 提供 source。**5 类名称与分类逻辑不变**(非破坏);headers 不入序列化(无 DB migration)。`Auth`/`InvalidRequest`/`Network` 不带 header(网络错误无 response,4xx 非 429 不重试)。
+5. **retry-after 优先 + 60s 二次封顶**:advisory 命中覆盖 jitter(尊重服务端意图),但封顶 `retry_after_cap=60s`(SDK parity — Anthropic / OpenAI 都 60s),更长 advisory fallthrough 到 jitter。解析 5 格式:`retry-after-ms` / `retry-after`(秒 / HTTP-date)/ OpenAI `x-ratelimit-reset-requests` / `-tokens`(Go duration,自写 parser 不引 humantime)。
+6. **双向独立熔断**(`max_retries` 次数 + `budget` 总 sleep):任一触达即停。budget(60s)防 OpenCode 式"session 死几小时"失败模式。Step 8 测试覆盖 budget-先 / max-先 两路径。
+7. **取消语义**:`retry_open` 两个 select(首字节 await / backoff sleep)都 `biased` 第一位 `token.cancelled()` — sleep 中取消立即响应(返回 `Cancelled`,chat_loop 走 C1 路径不 had_error)。**这改变了 Step 5 前的 cancel 时序**(`agent_loop_ask_user_question_session_cancel` 测试相应从固定 80ms 改为"等 call_count>=1 再 cancel"精确同步到"stream pending, send done"窗口)。
+
+**客户端对策**(已实施于 `llm/retry.rs` + 集成 chat_loop):
+- `retry_open` 走外层 wrapper,Provider trait 不感知
+- 前端 `ChatEvent::Retrying` chip 显示"↩ 重试中 N/M, Ts 后重发…(reason)",瞬态不入 messages / rehydrate
+- token 统计不重复(R9):retry_open 首字节前失败不消费 stream → 不 emit `Done` → `update_last_turn_usage` 只记最终成功 turn 一次(集成测试直查 SQL `sessions.last_input_tokens == <success_usage>` 验证)
+- Retry 不入审计(transient UX,不入 AuditKind;prd grill §4 锁定,避免 17 类 AuditKind 膨胀)
+
+**经验沉淀**:DESIGN §5.1 风险表原列"message ID 续传"作退路,**已被研究否定**。SSE 协议无 resumption,只能整请求重发;靠 `cache_control: ephemeral` 的 prompt cache + LLM 对"重复 user message"的容错性扛过去。详见 `docs/research/llm-network-resilience-survey.md` + 完整 PRD `07-04-a5plus-llm-network-resilience/` + ADR `IMPLEMENTATION §4 2026-07-05`。
