@@ -1219,3 +1219,68 @@ A2+ P1+P2 同 PR 落地(child a2-shell-p1p2-classify)。P1 堵安全缺口:has_s
 
 - 07-08-workflow-integration 任务收官(待 Phase 3 wrap-up journal + commit)
 - 下一档(V2 第三档剩余 / 第四档):B8 DAG / 全局 TDD / 强制全局 workflow 等见 ROADMAP §1.2
+
+---
+
+## Session 27: 07-10-docs-sync-sweep — 正式文档同步 P0
+
+**Date**: 2026-07-10
+**Task**: 07-10-docs-sync-sweep(P0 only;P1+P2 拆下一轮 07-XX-docs-sync-round-2)
+**Branch**: `main`
+
+### Summary
+
+诊断 + 修复正式文档相对 07-10 代码基线的滞后。诊断 9 份正式文档共 **4 滞后 + 21 遗漏 + 3 错误**;本轮只跑 P0 三份(IMPLEMENTATION / ROADMAP / STRUCTURE),P1(CLAUDE / ARCHITECTURE / DESIGN)+ P2(TECH / HACKING-llm / HACKING-wsl)推到 `07-XX-docs-sync-round-2`。探索阶段用 Explore sub-agent 并行扫 9 份文档 + 对照代码,产出完整诊断表。
+
+**P0 三 commit**:
+
+1. **`docs(impl)`** — §4 决策日志补 5 条 07-08~10 ADR(workflow 系统总览 / pending-indicator / chip-merge / transition-card / task-json hardening R1-R5),每条沿用既有格式(`### YYYY-MM-DD — title` + Context + 关键决策按"为什么"+ Consequences + 关联 task paths + commit hashes)。+116 行。
+
+2. **`docs(roadmap)`** — §1.2 已实施列表补 2 条(B8 workflow 系统全貌 07-08~10 + pending-indicator 07-08);§2 第四档删 B8 行(整段 "(4 项)" → "(3 项, B8 已于 2026-07-10 迁至 §1.2)");§1.2 头部 18 项 → 19 项已实施。+4 -3。
+
+3. **`docs(structure)`** — 基线注释 `7f2553b (06-24)` → `f08d61e (07-10)`(精简压缩避免长串);§3 后端树补 5 块:llm/retry.rs(A5+)+ agent/workflow/(6 文件:mod/def/builtin/inject/state/task)+ agent/{loop_detection, question_store, auto_reflect, memory_recall, memory_hygiene} 散落新文件 + commands/{task, subagents, question} 3 新 IPC + tools/(10 个 → 21 个 builtin,分组列:L1a shell_*3 / workflow create_task+request_task_state_transition / merge+discard_worker / B9 use_ui / V2 2 期 remember / B6+ request_mode_change)+ 顶层 background_shell/(mod + in_memory)。+38 -11。
+
+**关键决策**:
+- **P0/P1/P2 分组 + 单父任务** — 9 份文档分 3 组,父任务 + 3 个 P0 commit;P1+P2 拆下一轮避免一次 commit 过大(用户确认)
+- **新增 ADR 不动既有 ADR** — 只在 §4 顶部 2026-07-07 之前插入,既有 ADR 一行不改(沿用"§4 只追加不删除"约定)
+- **tools 列表分组而非逐行** — 21 个文件全列会让 §3 视觉膨胀,改按组分类(L1a / workflow / merge+discard / B9 / V2 2 期 / B6+)保留可读性(用户选择)
+- **background_shell/ 放顶层** — 跟代码现状一致(ls 验证过 src/ 顶层而非 tools/ 下),与 CLAUDE.md 当前架构描述一致
+- **跨文档引用一致性** — ROADMAP §1.2 引 `[IMPLEMENTATION §4 2026-07-08 xxx]` 命中 2 处 ADR,反之 IMPLEMENTATION §4 5 条 ADR 标题与各 task dir / commit 对得上
+
+**踩坑**:
+- 中途把基线注释写成超长 1 行(列出所有历史 feature 名),被用户"啊哈?"提醒后收回,改成跟原版同等紧凑度的简洁版
+- 树编辑分 5 处定向 Edit(llm / agent / commands / tools / background_shell),未触整体重写,降低误伤风险
+
+### Main Changes
+
+- `docs/IMPLEMENTATION.md`: §4 决策日志 5 条新 ADR(116 行新增)
+- `docs/ROADMAP.md`: §1.2 补 2 条已实施 + §2 第四档删 B8 + 头部 18→19 项 note
+- `STRUCTURE.md`: 基线 `f08d61e` + 后端树 5 块增补(agent/workflow/ 6 文件 / background_shell/ 顶层 / commands 3 新 IPC / tools 21 个 builtin / llm/retry.rs)
+- `.trellis/tasks/07-10-docs-sync-sweep/`: 新建(prd 141 行 + design 184 行 + implement 185 行),3 份 artifact 全含 P1+P2 完整 plan 作为 round-2 reference
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4b20e56` | docs(structure): 基线 07-10 + 后端树补 agent/workflow/ + background_shell/ + commands/task/subagents/question + tools 21 个 builtin + llm/retry.rs |
+| `93a7b80` | docs(roadmap): §1.2 补 B8 workflow 系统 + pending-indicator;§2 第四档 B8 迁移至已实施 (3 项) |
+| `37e403f` | docs(impl): §4 决策日志补 2026-07-08~07-10 五条 ADR (workflow 系统 / pending-indicator / chip-merge / transition-card / task-json hardening) |
+
+### Testing
+
+- [OK] `cargo check` → 0 err(57s,纯文档改动无 Rust 影响 sanity)
+- [OK] 跨文档 4 项 grep consistency review 全过:
+  - B8 仅在 ROADMAP §1.2 line 88 + IMPLEMENTATION §4 line 117 + DESIGN line 88(P1 范围)+ IMPLEMENTATION line 967(2026-06-10 历史 ADR 提及)出现,无遗漏错位
+  - 2026-07-08~10 双向引用对齐:ROADMAP §1.2 引 `[IMPLEMENTATION §4 2026-07-08 workflow 系统总览]` + `[§4 2026-07-08 pending-indicator]` 命中 IMPLEMENTATION line 115 + line 95
+  - STRUCTURE.md 树自洽:`ls app/src-tauri/src/agent/workflow/` (6 文件含 builtin.rs)+ `ls app/src-tauri/src/background_shell/` (2 文件)+ `ls app/src-tauri/src/llm/retry.rs` + 实际 tool 数 = 21
+  - IMPLEMENTATION §4 ADR 标题(`workflow task.json hardening` / `workflow chip merge` / `task_state_transition` / `pending-indicator` / `workflow 系统总览`)与各 .trellis/tasks/ 子目录命名一致
+
+### Status
+
+[OK] **P0 3/3 完成,3 commit 独立可 revert**;总 diff +158 / -14 行 < 600 上限
+
+### Next Steps
+
+- 建下一轮任务 `07-XX-docs-sync-round-2` 跑 P1(CLAUDE Architecture 段 / ARCHITECTURE Tool Registry + Workflow 子节 / DESIGN §3.1 B8 迁移至已具备)+ P2(TECH / HACKING-llm retry 策略 / HACKING-wsl pkgconfig + 版本注脚)
+- 本任务 `task.py finish` 收官
+- docs/HANDOFF.md 同步历来滞后,见 memory `handoff-lags-behind-commits`,作为单独 follow-up(不在本任务范围)
