@@ -1,10 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-06-24 commit `7f2553b`(包含 8-PR1/2/3/4 + 10 个文件 split:chat-types / subagent / chat-loop / agent-tests / permissions / subagent-runs / message-item / subagent-drawer / db-tests / chat-input)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split
-> **状态**: 由 CLAUDE.md §Architecture段引用
+> **基线**:2026-07-10 commit `f08d61e`(包含 8-PR1/2/3/4 + 06-23/24 split + 06-08/09 多 Provider + 06-19 L1a 后台 shell + 06-29 V2 2 期 自主记忆 + 07-02 B9 + 07-05 E1 CI + 07-08~10 workflow 大集成)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成
+> **状态**: 由 CLAUDE.md §Architecture 段引用
 >
-> **2026-06-24 同步**:10 个 split 已全部合 main,本文件目录树 / §2/§3 / §5/§6 / §9 已重校反映 split 后真实文件结构。下次重大重构后再次校准。
+> **2026-07-10 同步**:workflow 大集成收官(workflow.json 外置 + builtin dev plugin + Step 0.1~3.3 + 07-09 chip merge + transition-card + 07-10 task.json hardening R1-R5),目录树 / §2/§3 / §5/§6 / §9 已重校反映新模块。下次重大重构后再次校准。
 >
 > **历史快照标注约定**:本任务对 split 前路径保留 + 加 (拆分自 X, 2026-06-23/24) 标注,git blame 可追溯。
 
@@ -138,11 +138,12 @@ app/src-tauri/src/
 │ ├── permissions_tests.rs / messages_tests.rs / subagent_runs_tests.rs
 ├── llm/
 │ ├── mod.rs / client.rs (BlockState状态机) / sse.rs / error.rs / types.rs
+│ ├── retry.rs # ★ NEW (07-05 A5+) — retry_open wrapper(Full Jitter + 首字节前重试)
 │ └── provider/ # 多 provider (06-08/09引入)
 │ ├── mod.rs (Provider trait + build_provider工厂)
 │ ├── anthropic.rs / openai.rs / mock.rs
 │ └── wire.rs # WireMessage中间层(1109 行,高内聚不拆)
-├── agent/ # ★ NEW (8-PR1;06-23/24 拆 subagent/ + chat_loop + tests)
+├── agent/ # ★ NEW (8-PR1;06-23/24 拆 subagent/ + chat_loop + tests;07-08~10 加 workflow/)
 │ ├── mod.rs
 │ ├── chat.rs # Agent Loop entry(IPC 入口)
 │ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
@@ -152,10 +153,20 @@ app/src-tauri/src/
 │ │ ├── transcript.rs # transcript 类型 (219 行)
 │ │ ├── truncate_summary.rs # 4 MiB cap + format_dispatch_result (910 行)
 │ │ └── dispatch.rs # ★ (06-23 抽自 chat_loop.rs)~520 行 run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
+│ ├── workflow/ # ★ NEW (07-08~10) — workflow 系统核心(workflow.json 外置 + task state machine)
+│ │ ├── mod.rs (re-exports + 公共类型)
+│ │ ├── def.rs (WorkflowDef struct + 4 访问函数 + default_workflow)
+│ │ ├── builtin.rs (builtin dev workflow plugin loader)
+│ │ ├── inject.rs (per-turn breadcrumb + bootstrap hint + resolve_current_task 即时读盘)
+│ │ ├── state.rs (TaskStatus state machine helpers)
+│ │ └── task.rs (TaskJson schema + read_task lenient + create_task_init)
 │ ├── provider.rs (resolve_chat_provider + PreFlightError)
 │ ├── system_prompt.rs / thinking.rs / helpers.rs / behavior_prompt.rs
 │ ├── at_file.rs # B2 @文件补全
 │ ├── context.rs # C3 context 压缩
+│ ├── loop_detection.rs # ★ (06-24 C2 + 07-06 C2+) — 分级触发 + per-run-local count + worker break
+│ ├── question_store.rs # ★ (07-07) — ask_user_question 跨 turn 状态
+│ ├── auto_reflect.rs / memory_recall.rs / memory_hygiene.rs # ★ V2 2 期 自主记忆(06-29)
 │ ├── permissions/ # ★ (06-23 拆 mod.rs → 8 模块 + 6 测试文件)
 │ │ ├── mod.rs # 纯 re-exports(原 2814 → ~50 行)
 │ │ ├── types.rs # Risk / Decision / AuditKind / WorkerAskTerminal + PermissionContext/Response/PendingAsk/ToolKind
@@ -171,24 +182,40 @@ app/src-tauri/src/
 │ │ └── tests_store.rs / tests_payload.rs / tests_types.rs / tests_mode.rs
 │ ├── tests_common.rs / tests_cancellation.rs / tests_envelope.rs # ★ (06-23 拆 tests.rs → 6 文件)
 │ ├── tests_prompts.rs / tests_agent_loop.rs / tests_subagent.rs
-├── commands/ # ★ NEW (8-PR1) — Tauri commands按域拆
+├── commands/ # ★ NEW (8-PR1) — Tauri commands按域拆(07-03/07/08 加 task/subagents/question)
 │ ├── mod.rs / cancel.rs / config.rs
 │ ├── providers.rs (Provider/Model CRUD + test_provider + test_model)
 │ ├── sessions.rs (Session CRUD + diff_worktree)
 │ ├── worktree.rs (attach/detach/delete + cancel_inflight)
 │ ├── projects.rs (Project CRUD + pick_project_dir)
 │ ├── permissions.rs / memory.rs / command_palette.rs / panel.rs / files.rs / subagent_runs.rs
-├── tools/ # 内置工具 (10 个:read_file / write_file / edit_file / shell / grep / glob / list_dir / web_fetch / use_skill / update_checklist)
-│ ├── mod.rs (builtin_tools + execute_tool分发)
+│ ├── task.rs # ★ (07-08~10) — task.json CRUD IPC(create_task / read_task / list_tasks / set_task_state / archive_task)
+│ ├── subagents.rs # ★ (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
+│ └── question.rs # ★ (07-07) — get_pending_interaction + resolve_mode_change(QuestionStore 升级)
+├── tools/ # 内置工具 (21 个 builtin;07-08~10 加 workflow + B6+ 等)
+│ ├── mod.rs (builtin_tools + execute_tool 分发 + filter_tools_for_mode/subagent/workflow)
 │ ├── read_file.rs / write_file.rs / edit_file.rs (644L)
-│ ├── shell.rs (5min超时 +30K spill) / grep.rs / glob.rs / list_dir.rs
+│ ├── shell.rs (5min超时 +30K spill)
+│ ├── shell_kill.rs / shell_status.rs / run_background_shell.rs # L1a 后台 shell(06-19)
+│ ├── grep.rs / glob.rs / list_dir.rs # L2 并发只读集
 │ ├── web_fetch.rs # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
-│ ├── use_skill.rs # Skill 调用 tool(B4)
+│ ├── use_skill.rs # B4 Skill 调用(workflow-aware 三层渐进披露)
+│ ├── use_ui.rs # ★ (07-02 B9) 生成式 UI(non-blocking execute + UiCard registry)
+│ ├── update_checklist.rs # B12 agent 自跟踪 checklist(workflow 分支同步 task.json.items)
+│ ├── remember.rs # ★ (06-29 V2 2 期) 自主记忆写入 tool
+│ ├── ask_user_question.rs # 跨 turn 问题(selector 复用 ask_user_question 路径)
+│ ├── dispatch_subagent.rs # B6 派 worker agent
+│ ├── merge_worker.rs / discard_worker.rs # ★ L3b PR3 worker worktree 收口(ToolKind::GitMutation)
+│ ├── request_mode_change.rs # ★ (07-07 B6+ A) LLM 申请切 mode(用户 inline card 授权)
+│ ├── create_task.rs / request_task_state_transition.rs # ★ (07-08/10) workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
 │ └── read_guard.rs (session隔离读权限,edit_file前置)
 ├── skill/ # B4 Skill 系统
 │ ├── mod.rs / loader.rs (SkillCache + 17 单测)
-├── memory/ # B5 Memory 指令文件系统
+├── memory/ # B5 Memory 指令文件系统 + V2 2 期 自主记忆存储
 │ ├── mod.rs / loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
+├── background_shell/ # ★ NEW (06-19 L1a) — BackgroundShellRegistry trait + InMemory impl
+│ ├── mod.rs (trait 定义 + 公共类型)
+│ └── in_memory.rs (tokio 后台 task + 进程内 registry + drain_notifications)
 ├── git/
 │ ├── mod.rs / worktree.rs (745L) / diff.rs (git --numstat) / error.rs
 └── projects/
