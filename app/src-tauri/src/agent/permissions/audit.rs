@@ -156,6 +156,20 @@ pub enum AuditKind {
     TaskStateTransitionRequested,
     TaskStateTransitionAllowed,
     TaskStateTransitionDenied,
+    // === UI 域 (2026-07-13, B9+ D4) ===
+    /// B9+ D4 (2026-07-13): user 在 DiffPrimitive / ButtonPrimitive
+    /// 点「应用」按钮,后端 `apply_ui_diff` IPC 解析 unified diff 并
+    /// 写文件成功后落本行。payload 携带
+    /// `files: [{path, added, removed}]` + `total_files`。
+    /// **失败** 路径(boundary / parse / conflict / io / empty)**不**落
+    /// 审计 — 前端 inline error 反馈即可,失败不是"apply 行为"。
+    /// 落表点是 `commands::ui::apply_ui_diff` 全文件写完后;
+    /// 任意 file 写失败时前面已写的文件也 rollback(io 出错时不能
+    /// 半落表,本 audit 整批撤)。
+    /// 与 `ToolExecuted` 区分:本 IPC 由 **user 点击** 触发(非 LLM tool);
+    /// `session_id` 共享,C4 audit log UI 据此 disambiguate
+    /// "用户主动写" vs "LLM 工具调用"。
+    UiDiffApplied,
 }
 
 impl AuditKind {
@@ -189,6 +203,12 @@ impl AuditKind {
             Self::TaskStateTransitionRequested => "task_state_transition_requested",
             Self::TaskStateTransitionAllowed => "task_state_transition_allowed",
             Self::TaskStateTransitionDenied => "task_state_transition_denied",
+            // 2026-07-13 (B9+ D4): user-triggered diff apply.
+            // Wire shape: snake_case lowercase, mirrors
+            // ToolExecuted counterparts (payload carries `files`
+            // instead of `tool_name`/`tool_input`/`duration_ms`/
+            // `exit_code`).
+            Self::UiDiffApplied => "ui_diff_applied",
         }
     }
 }
@@ -378,6 +398,65 @@ pub async fn record_loop_intervention_audit(
         db,
         session_id,
         AuditKind::LoopIntervention.as_str(),
+        Some(&payload_str),
+    )
+    .await
+}
+
+/// B9+ D4 (2026-07-13): record a `ui_diff_applied` audit row.
+///
+/// Mirrors [`record_tool_executed_audit`] / [`record_message_resend_audit`]
+/// but for the **user-triggered** "应用 diff" path: user clicks Apply on a
+/// `DiffPrimitive` / `ButtonPrimitive`, the frontend invokes
+/// `apply_ui_diff`, the backend parses the unified diff and writes one or
+/// more files. After all writes succeed, this helper records the success
+/// audit row with the affected file list.
+///
+/// **Best-effort** (same contract as the other audit helpers): DB write
+/// failures are `warn!`-logged and never propagated. The user has
+/// already seen the visual confirmation (toast / card "已应用"); audit
+/// loss is acceptable.
+///
+/// **Distinct from `ToolExecuted`**: the source is **user click**, not
+/// LLM `tool_use`. `session_id` is the same, but the C4 audit log UI
+/// can disambiguate via the `kind` discriminator + the `files` payload
+/// (no `tool_name` / `tool_input` / `duration_ms` / `exit_code`).
+///
+/// `files` is the success summary from the apply handler:
+/// `&[(path, added, removed)]`. Each entry's `path` is the
+/// canonical-form path the boundary check accepted (post-canonicalize).
+/// `added` / `removed` are `usize` from `apply_to_file`.
+///
+/// Files are capped at 32 entries in the audit row to match the
+/// audit-log UI's row-size budget (a pathological 100-file diff is
+/// still readable; the audit row just doesn't list every entry).
+/// `total_files` records the true count so the UI can show "+N more"
+/// when truncated.
+pub async fn record_ui_diff_applied_audit(
+    db: &SqlitePool,
+    session_id: &str,
+    files: &[(String, usize, usize)],
+) -> Result<(), sqlx::Error> {
+    let files_summary: Vec<serde_json::Value> = files
+        .iter()
+        .take(32)
+        .map(|(path, added, removed)| {
+            serde_json::json!({
+                "path": path,
+                "added": added,
+                "removed": removed,
+            })
+        })
+        .collect();
+    let payload = serde_json::json!({
+        "files": files_summary,
+        "total_files": files.len(),
+    });
+    let payload_str = payload.to_string();
+    crate::db::record_audit_event(
+        db,
+        session_id,
+        AuditKind::UiDiffApplied.as_str(),
         Some(&payload_str),
     )
     .await

@@ -1,5 +1,6 @@
 // uiPrimitiveRegistry.ts — component registry for B9 generative UI
-// primitives (Child A of 07-02-b9-generative-ui, 2026-07-02).
+// primitives (Child A of 07-02-b9-generative-ui, 2026-07-02; B9+ D3
+// added the `button` entry on 2026-07-13).
 //
 // Maps `primitive.type` → Vue component. `<UiCard>` resolves the
 // renderer here; an unknown type degrades to the fallback (not a
@@ -10,19 +11,24 @@
 // can be validated end-to-end before real renderers exist. Child B
 // (code_block → hljs) and Child C (diff → reuses DiffView) each
 // replace their entry with the real component; MockPrimitive stays
-// as the fallback for unknown types.
+// as the fallback for unknown types. B9+ D3 adds the `button` entry
+// for `<ButtonPrimitive>` (D-Q2a/b: predefined action enum dispatch).
 
 import type { Component } from "vue";
 
+import ButtonPrimitive from "./primitives/ButtonPrimitive.vue";
 import CodeBlockPrimitive from "./primitives/CodeBlockPrimitive.vue";
 import DiffPrimitive from "./primitives/DiffPrimitive.vue";
 import MockPrimitive from "./primitives/MockPrimitive.vue";
 
 /** `type` → component. Child B replaced `code_block`, Child C replaced
- *  `diff`. MockPrimitive stays as the fallback for unknown types. */
+ *  `diff`. B9+ D3 (2026-07-13) replaced `button` with the real
+ *  renderer. MockPrimitive stays as the fallback for unknown types. */
 export const UI_PRIMITIVE_REGISTRY: Record<string, Component> = {
   diff: DiffPrimitive,
   code_block: CodeBlockPrimitive,
+  // B9+ D3: action dispatcher (apply_diff / copy / dismiss).
+  button: ButtonPrimitive,
 };
 
 /** Fallback for types not in the registry (e.g. a hallucinated type

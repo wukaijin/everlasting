@@ -39,6 +39,13 @@ pub mod subagents;
 // Phase 2 Step 2.6 adds `update_task` (B12 checklist
 // sync); Phase 3 Step 3.3 adds `archive_task`.
 pub mod task;
+// B9+ D4 (2026-07-13): user-triggered IPC surface for
+// the generative-UI flow. `apply_ui_diff` is the human-in-
+// the-loop "apply proposed diff to disk" command; NOT
+// registered as an LLM tool (no `builtin_tools()` entry)
+// so `filter_tools_for_mode` doesn't see it — Plan mode
+// users can still apply diffs the LLM proposes.
+pub mod ui;
 pub mod worktree;
 
 /// The full set of Tauri commands, used by `lib.rs::run` to
@@ -159,5 +166,14 @@ pub fn all_command_names() -> Vec<&'static str> {
         // the unified session-switch source-of-truth lookup
         // — only the new resolve IPC is unique to this kind.
         "resolve_task_state_transition",
+        // 2026-07-13 (B9+ D4): user-triggered diff apply IPC.
+        // Sibling to `merge_worker_run` — NOT a tool, NOT in
+        // `builtin_tools()`. Frontend `<DiffPrimitive>` /
+        // `<ButtonPrimitive>` (apply_diff action) invoke
+        // this on user click. Returns
+        // `{ok, files?, kind?, error?}` — `kind` ∈
+        // {"boundary", "parse", "conflict", "io", "empty"}
+        // drives the inline error UX.
+        "apply_ui_diff",
     ]
 }

@@ -56,7 +56,7 @@ import {
   ClockIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -139,6 +139,11 @@ const map = {
   // weight matches the existing shield-x / clipboard-list
   // family already pulled in.
   "git-merge": GitMerge,
+  // B9+ D4 (2026-07-13): AuditLogItem renders a "file-check"
+  // icon for `ui_diff_applied` rows. lucide ships the variant
+  // directly; reuses the same lucide family as `shield-x` /
+  // `git-merge` above.
+  "file-check": FileCheck,
 } as const;
 
 const Component = computed(() => {

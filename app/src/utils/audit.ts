@@ -117,6 +117,30 @@ export interface LoopInterventionAuditPayload {
   run_id?: string | null;
 }
 
+/** B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
+ *  payload for the user-triggered `apply_ui_diff` IPC's success
+ *  audit rows. Mirrors the Rust-side
+ *  `record_ui_diff_applied_audit` helper's
+ *  `{ files: [{path, added, removed}], total_files }` shape.
+ *  Distinct from `ToolExecuted`: this IPC is user-click-driven,
+ *  not LLM-tool-driven. `files` is capped at 32 entries (the
+ *  audit-log row UI budget); `total_files` records the true
+ *  count so the UI can show "+N more" when truncated.
+ *
+ *  Failure paths (boundary / parse / conflict / io / empty) do
+ *  NOT write this row — the apply handler returns the failure
+ *  inline to the frontend without audit. So seeing a
+ *  `ui_diff_applied` row in the audit log means at least one
+ *  file was successfully written. */
+export interface UiDiffAppliedAuditPayload {
+  files?: Array<{
+    path?: string;
+    added?: number;
+    removed?: number;
+  }>;
+  total_files?: number;
+}
+
 /** Union of all parsed payload shapes + a `raw` fallback for
  *  malformed / unknown kinds. The renderer switches on the
  *  parsed shape's kind via the `kind` field on the row, not on
@@ -127,6 +151,7 @@ export type ParsedPayload =
   | { kind: "tool_executed"; payload: ToolExecutedPayload }
   | { kind: "mode"; payload: ModeAuditPayload }
   | { kind: "loop_intervention"; payload: LoopInterventionAuditPayload }
+  | { kind: "ui_diff_applied"; payload: UiDiffAppliedAuditPayload }
   | { kind: "raw"; raw: unknown }
   | { kind: "empty" };
 
@@ -155,6 +180,10 @@ const MODE_KINDS = new Set<string>([
 
 const TOOL_EXECUTED_KIND = "tool_executed";
 const LOOP_INTERVENTION_KIND = "loop_intervention";
+// 2026-07-13 (B9+ D4): user-triggered diff apply audit kind.
+// Wire string is locked by `AuditKind::UiDiffApplied.as_str()`
+// in `agent/permissions/audit.rs`.
+const UI_DIFF_APPLIED_KIND = "ui_diff_applied";
 
 /** Parse the raw `payloadJson` for a row into a typed shape.
  *  Never throws — malformed / null / unknown shapes degrade
@@ -182,6 +211,15 @@ export function parseAuditPayload(
     return {
       kind: "loop_intervention",
       payload: parsed as LoopInterventionAuditPayload,
+    };
+  }
+  // 2026-07-13 (B9+ D4): user-triggered diff apply success.
+  // The payload is `{files: [...], total_files}` — see
+  // `record_ui_diff_applied_audit` on the Rust side.
+  if (kind === UI_DIFF_APPLIED_KIND) {
+    return {
+      kind: "ui_diff_applied",
+      payload: parsed as UiDiffAppliedAuditPayload,
     };
   }
   if (MODE_KINDS.has(kind)) {
@@ -244,6 +282,16 @@ export const AUDIT_KIND_OPTIONS: ReadonlyArray<{ value: string | null; label: st
   // surface). Wire string is locked by
   // `AuditKind::LoopIntervention.as_str()` in the Rust side.
   { value: "loop_intervention", label: "循环检测干预" },
+  // B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
+  // user-triggered diff apply success. The user clicked
+  // 应用 on a `<DiffPrimitive>` (or `<ButtonPrimitive>` with
+  // action="apply_diff"); the backend `apply_ui_diff` IPC
+  // parsed the unified diff and wrote one+ files. Wire string
+  // is locked by `AuditKind::UiDiffApplied.as_str()`. Failure
+  // paths (boundary / parse / conflict / io / empty) do NOT
+  // write this row — the apply handler returns inline errors
+  // to the frontend without audit.
+  { value: "ui_diff_applied", label: "应用 diff" },
 ];
 
 /** Visual family for the list row's leading icon. The renderer
@@ -261,6 +309,7 @@ export type AuditIconFamily =
   | "message-edit"
   | "message-resend"
   | "loop-intervention"
+  | "ui-diff-applied"
   | "unknown";
 
 /** Map a wire `kind` to the icon family the modal renders.
@@ -304,6 +353,14 @@ export function iconFamilyForKind(kind: string): AuditIconFamily {
     // the generic "unknown / gray" bucket.
     case "loop_intervention":
       return "loop-intervention";
+    // B9+ D4 (2026-07-13): user-triggered diff apply success.
+    // Reuses the `--color-tool-write` emerald (same as executed-
+    // success) because the user just successfully wrote files
+    // to disk. Distinct family so the icon reads "apply"
+    // (file-check icon) rather than the generic "executed"
+    // checkmark that `tool_executed` uses.
+    case "ui_diff_applied":
+      return "ui-diff-applied";
     default:
       return "unknown";
   }

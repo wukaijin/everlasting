@@ -1282,3 +1282,31 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **测试**:1348 后端(cargo test --lib)+ 794 前端(vitest)+ vue-tsc 0 err + pnpm build 成功。Phase E1 集成测试 5/5(AC1/AC7/AC9/AC12/AC16)+ Phase E2 IPC 测试 4/4 + Phase E3 IPC 测试 5/5(含 Yolo root guard,gated on `is_running_as_root()`)。前端组件测试 23/23(RequestModeChangeCard)。零回归。
 
 - **推后期**:Timeout + auto-decide / 多 mode 排队合并 / 自由文本 reason 编辑 / 跨 session mode 同步 / LLM 申请切到 `background` / 切回 user 上次手动 mode / App crash 恢复 pending / `for turn in 1..=turn_limit` 重构 while 循环零消耗 / 多语言 reason / `Resolve<Option<PendingInteraction>>` 在 `message_history_replay` 接入以展示历史 mode change 卡片。spec 增量(tool-contract / permission-layer / agent-loop-architecture / frontend/chat)已在 ROADMAP §1.2 行引用,内容 follow-up 补。
+
+### 2026-07-13 — B9+ 生成式 UI 收尾(D3 通用 button + D4 diff 应用)
+
+- **Context**:B9(07-02)落地只读(silent-allow `use_ui` + `<DiffPrimitive>` 复用 `DiffView` + `<CodeBlockPrimitive>` hljs + selector 复用 `ask_user_question`),parent PRD 把 D3 通用 button + D4 diff 应用 + D5 session 开关推迟。`use_ui` 当前是纯展示(零副作用);引入"用户动作 → 后端写"后,核心命门 = "应用动作"的权限归属 — 既不能破坏 plan 模式语义,也不能与 `edit_file` 形成"两种修改模型"冲突。
+
+- **决策 D-Q1 — D4 定位 = 用户确认 UI(LLM 提议 + 用户应用,不走 LLM tool 权限链)**:LLM 用 `diff`/`button` primitive 提议修改,用户点"应用"才写文件。应用动作是**用户触发的前端 IPC**(`apply_ui_diff`),**不是** LLM tool — 故不注册进 `builtin_tools()`、`filter_tools_for_mode` 看不见它 → plan 模式天然可用(plan 约束 LLM 不约束 user)。**vs `edit_file`**:`edit_file` = LLM 自主改(走 `builtin_tools()` + Tier/PermissionStore),`apply_ui_diff` = 用户拍板(走 IPC + `assert_within_root` + audit,无 Tier / 无 PermissionStore)。两类工具适用场景用 `use_ui::definition().description` 写清(`edit_file` 默认改 / `use_ui` 该让用户看的场景),LLM 自分流。
+
+- **决策 D-Q2a — action 模型 = 预定义枚举,不复用既有 tool 引用 / 不自定义 payload**:否决"action = 引用既有 LLM tool 名"(与 D-Q1 矛盾,会让用户点击触发 LLM tool 链)、否决"自定义 payload"(安全面过大,个人工具无必要)。**枚举首批边界 = `apply_diff`(后端 IPC 写文件) + `copy`(剪贴板) + `dismiss`(本地隐藏)**;`run_command` 等命令类动作**不在本批**(与 shell tool 重复触发路径,安全面陡增)。
+
+- **决策 D-Q2b — `apply_diff` 是 Tauri IPC,不弹 modal,做 boundary + 审计,不走 LLM tool 权限链**:用户点"应用"= 显式意图(同 `merge_worker_run` L3b PR3 前例)。`assert_within_root(worktree_path, path)`(同 `edit_file:116`)做项目边界校验;`AuditKind::UiDiffApplied`(payload `{files: [{path, added, removed}], total_files}`)落表;不弹权限 modal(DiffView 已展示变更预览)。
+
+- **决策 D-Q3 — scope = D4 + D3,不做 D5**:`D5` session `allow_generative_ui` 开关继续推迟(本批 D3+D4 已让 `use_ui` 从"只读展示"升"可交互提议",用户点击授权的语义边界够清晰;D5 是 product 决策不是架构缺口,留 follow-up)。`form` / `chart` / `table` primitive 同步推迟(无关本批安全面)。
+
+- **决策 D-Q4 — `apply_ui_diff` 权限形态**:不弹 modal + `assert_within_root` + 审计落表(详见 D-Q2b)。**写目标 = `session.worktree_path` ?? `session.current_cwd` fallback**(同 `edit_file` / `chat_loop` 既有约定;无 worktree 不拒绝,落到 project 原目录)。
+
+- **决策 D-Q5 — 手写 unified diff parser/applier,零新增依赖**(否决引入 `diffy` crate):TECH §1.4 "零新增依赖"硬约束;算法小(~250 LOC + 24 单测覆盖:parse / 多文件多 hunk / context 匹配 / 冲突 fail-fast / 行号偏移 / 空 diff / 无路径头);项目自研调性一致(对照 `read_file::cat_n_format`、`llm::sse` 手写状态机)。**行号语义**:`@@ -oldStart,oldLines +newStart,newLines @@` 中 `oldStart` 是**原始文件** 1-indexed 行号,apply 时跟踪 `cumulative_offset = Σ (newLines - oldLines)` over applied hunks,在 modified buffer 定位 `oldStart - 1 + cumulative_offset`。
+
+- **决策 D-Q6 — 失败语义 = 整失败不部分写**(design §2.3):parse 整 diff → 逐 FilePatch read → apply_to_file(纯函数 text→text)→ 全成功才 `tokio::fs::write` 任一文件。任一 hunk context 不匹配 → 全失败,前端 inline error,不写任何文件。**Audit 仅在写全部成功后落**(中间失败不污染审计表;失败次数可由前端日志追踪)。
+
+- **决策 D-Q7 — `use_ui` 始终 Silent Allow(Tier 5)+ `Risk::Low`**:展示本身无副作用未变;button 的"动作"由前端按 `action` 分发,`use_ui::execute` 不执行 action,仍返"已渲染 N 个 primitive"。**plan/edit/yolo 三档 mode 都不影响 use_ui 可见性**,只影响用户应用按钮 click 后的写路径(走 `apply_ui_diff` IPC,IPC 不进 LLM tool 链)。
+
+- **决策 D-Q8 — Raw fallback 形式(无 `---`/`+++` 头)禁用 Apply 按钮**:`DiffPrimitive` 加 `hasUnifiedHeaders` 谓词(/^--- /m + /^\+\+\+ /m),无头时 Apply 按钮 `disabled` + tooltip「该 diff 格式不可应用(需带 ---/+++ 路径头的标准 unified diff)」。后端 parser 二次兜底(无路径头 → `kind="parse"` 拒绝),前端禁用避免无意义 round-trip。
+
+- **关键教训 —「手写文本协议先期只测单一 case 易漏 corner」**:`diff_apply.rs` 写完第一版,parse 测试 `parse_missing_headers_returns_missing_header` 期望 `-old\n+new` 返 `MissingHeader`,实际返 `IncompleteHeader`(parser 优先看 `-old` 当 removed hunk line,无 hunk → IncompleteHeader)。两 variant 在 IPC 端都映射到 `kind="parse"`,UX 等价,但测试断言要 align 实际行为。**后续手写协议类(任何 text-based state machine)首版单测应枚举所有 4 corner + 接受真实分支**,而非"按 PRD 期望断言"。
+
+- **测试**:1531 后端(cargo test --lib)+ 842 前端(vitest)+ vue-tsc 0 err + cargo fmt clean。本批新增:24 `diff_apply::tests`(parse / apply / 多 hunk offset / context conflict / raw fallback)+ 4 `commands::ui::tests`(ParseError → IPC `kind` 映射 + 成功/失败结果序列化 + Mode enum import 守门)+ 7 `use_ui::tests::execute_button_*`(3 action 验证 + 缺 action / 未知 action / apply_diff 缺 diff_text / 空 diff_text 拒绝)+ 17 `DiffPrimitive.test.ts` B9+ D4 段(IPC invoke spy + 成功 toast + kind 文案 + raw fallback disabled + 无 session disabled + 异常错误归 `io` + reject 隐藏)+ 11 `ButtonPrimitive.test.ts`(3 action 分发 + 默认 label + 自定义 label override + apply_diff 走 IPC + copy 走 clipboard + dismiss 本地 + 无 session disabled + 未知 action defensive)。零回归。
+
+- **推后期**:D5 session `allow_generative_ui` 开关(产品决策非架构缺口)/ `run_command` 等命令类 button action(安全面陡增,follow-up 安全评估后单独立项)/ `form` / `chart` / `table` primitive(独立需求)/ patch 三方合并或 rename / 二进制 diff 探测 / 行级权限(n 行确认 vs 整文件)/ 多文件 diff 跨 project 边界(目前每个文件 boundary 单独校验)/ 文件创建(`oldLines=0` 暗示)/ App crash 恢复 pending apply / `apply_ui_diff` 进度流式报告(目前整批写完才返;长 diff 可走 L1a 同样的 handle + 通知模式)。

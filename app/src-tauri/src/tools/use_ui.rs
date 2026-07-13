@@ -34,13 +34,19 @@
 //! keeps the tool (it writes nothing — not the filesystem, not the
 //! DB), mirroring `remember`.
 //!
+//! **B9+ D3/D4 (2026-07-13)**: the `button` primitive's `apply_diff`
+//! action triggers a user-driven `apply_ui_diff` IPC at click-time.
+//! `use_ui` itself STILL does no writes — it's pure display. The
+//! write path is `commands::ui::apply_ui_diff`, a separate IPC that's
+//! NOT in `builtin_tools()` (D-Q1: user-triggered, not LLM tool).
+//!
 //! # Schema
 //!
-//! `primitives: [{ type: "diff" | "code_block", title?, ... }]`.
+//! `primitives: [{ type: "diff" | "code_block" | "button", title?, ... }]`.
 //! Child A validates only `type` (non-empty array + known type);
-//! type-specific fields (`diff_text` / `code` / `language`) are added
-//! by Child B/C and pass through here unchecked
-//! (`additionalProperties: true`).
+//! type-specific fields (`diff_text` / `code` / `language` /
+//! `button.action` / `button.payload`) are added by Child B/C/D3
+//! and pass through here unchecked (`additionalProperties: true`).
 //!
 //! `diff_text` accepts two formats (see `definition().description`
 //! and `frontend/chat.md` "DiffPrimitive raw fallback contract"):
@@ -62,7 +68,30 @@ use crate::tools::ToolContext;
 ///
 /// Kept in sync with the `enum` in `definition()`'s `input_schema`
 /// (the `definition_schema_type_enum_*` test guards the sync).
-const KNOWN_TYPES: &[&str] = &["diff", "code_block"];
+///
+/// # B9+ D3 (2026-07-13, `07-13-b9plus-generative-ui-followup`):
+/// `button` joins the allowlist. The renderer is `<ButtonPrimitive>`
+/// (D3 sibling to `<DiffPrimitive>` / `<CodeBlockPrimitive>`).
+/// `button.action ∈ {"apply_diff", "copy", "dismiss"}` is a
+/// **predefined enum** (D-Q2a/b); the renderer dispatches the action
+/// at click-time. `apply_diff` routes to the same `apply_ui_diff`
+/// IPC that DiffPrimitive uses (D-Q1: user-triggered, not LLM
+/// tool-driven). `copy` / `dismiss` are pure-frontend with no
+/// backend touch.
+const KNOWN_TYPES: &[&str] = &["diff", "code_block", "button"];
+
+/// The action enum for `type: "button"` primitives. Mirrors the
+/// frontend `<ButtonPrimitive>` action dispatch table (D3 sibling
+/// to `tools::use_ui::execute`); the renderer is the source of
+/// truth for click-time behavior, this constant is the backend's
+/// authoritative validation set.
+///
+/// `apply_diff` requires the LLM to provide `payload.diff_text` in
+/// the button's JSON — the same payload shape as
+/// `<DiffPrimitive>`'s `diff_text`. We validate the field is
+/// present (string, non-empty) here; the actual file write is the
+/// `apply_ui_diff` IPC's responsibility.
+const KNOWN_BUTTON_ACTIONS: &[&str] = &["apply_diff", "copy", "dismiss"];
 
 /// Max primitives per call (anti-abuse: one turn shouldn't flood the
 /// chat with cards). Mirrors the `maxItems: 8` in the schema.
@@ -81,16 +110,36 @@ pub fn definition() -> ToolDef {
                required). Two accepted formats:\n\
                • PREFERRED: standard unified-diff with `--- a/path` / `+++ b/path` / \
                  `@@ -oldStart,oldLines +newStart,newLines @@` headers. Renders as \
-                 colored hunks with line numbers + collapse.\n\
+                 colored hunks with line numbers + collapse. The card also exposes an \
+                 Apply button (user-triggered `apply_ui_diff` IPC; see 2026-07-13 B9+ D4).\n\
                • ACCEPTED: plain +/-/context-line fragment WITHOUT `---`/`+++` headers \
                  (the natural \"show old vs new\" writeup). Renders as raw fallback — \
-                 each `+` line gets a green tint, each `-` line a red tint, header shows \
-                 real `+N/-M` counts. Either form is fine; preferred gives richer rendering.\n\
+                 Apply button is disabled for this form.\n\
              - `code_block` — a syntax-highlighted code snippet the user can copy. Fields: `code`\n\
-               (string, required), `language` (optional, e.g. 'rust'/'python'; omit for auto-detect).\n\n\
+               (string, required), `language` (optional, e.g. 'rust'/'python'; omit for auto-detect).\n\
+             - `button` — a user-clickable action button (B9+ D3, 2026-07-13). **Human-in-the-loop\n\
+               intent**: use this when the LLM wants the user to confirm / apply / dismiss a\n\
+               suggested action. NOT a way for the LLM to write files directly — that's what\n\
+               `edit_file` is for in edit/yolo mode. Fields:\n\
+               • `action` (string, required) ∈ `{\"apply_diff\", \"copy\", \"dismiss\"}`:\n\
+                 - `apply_diff` — apply the proposed diff to disk (user-triggered IPC).\n\
+                   `payload.diff_text` (string, required) carries the standard unified diff.\n\
+                 - `copy` — copy `payload.text` to the user's clipboard (pure frontend).\n\
+                 - `dismiss` — close / hide this card (pure frontend).\n\
+               • `label` (string, optional) — the button text. Defaults to a sensible per-action label.\n\
+               • `payload` (object, optional) — type-specific payload (see above).\n\n\
              Do NOT use `use_ui` for:\n\
              - Asking the user to choose → use `ask_user_question` (single/multi select).\n\
-             - Modifying files → use `edit_file` / `write_file`.\n\n\
+             - Modifying files directly → use `edit_file` / `write_file` (those are LLM-driven,\n\
+               run via the permission layer; the user doesn't have to click).\n\n\
+             When to use which (LLM behavior guide):\n\
+             - Edit/Yolo mode + the LLM is authorized to change the file → use `edit_file`.\n\
+               Don't make the user click a button when they're already in a permissive mode.\n\
+             - Plan mode + the LLM wants to propose a change → use `use_ui({type:\"diff\"})` or\n\
+               `use_ui({type:\"button\",action:\"apply_diff\", payload:{diff_text:\"...\"}})`.\n\
+               Plan mode blocks `edit_file`; use_ui diff/button is the **only** way to suggest\n\
+               a write for the user to approve.\n\
+             - Compare multiple alternatives → render multiple `diff` primitives side-by-side.\n\n\
              Pass `primitives: [{ type, title?, ...type-specific fields }]`. The frontend \
              renders each card by `type`."
                 .to_string(),
@@ -107,12 +156,21 @@ pub fn definition() -> ToolDef {
                         "properties": {
                             "type": {
                                 "type": "string",
-                                "enum": ["diff", "code_block"],
+                                "enum": ["diff", "code_block", "button"],
                                 "description": "The primitive kind; the frontend dispatches its renderer by this value."
                             },
                             "title": {
                                 "type": "string",
                                 "description": "Optional card title."
+                            },
+                            "action": {
+                                "type": "string",
+                                "enum": ["apply_diff", "copy", "dismiss"],
+                                "description": "(button only) The action the user triggers by clicking. Predefined enum — see description."
+                            },
+                            "label": {
+                                "type": "string",
+                                "description": "(button only) Optional override for the button label."
                             }
                         },
                         "required": ["type"],
@@ -175,6 +233,67 @@ pub async fn execute(
                 ),
                 true,
             );
+        }
+        // B9+ D3 (2026-07-13): for `button` primitives, additionally
+        // validate `action ∈ KNOWN_BUTTON_ACTIONS` so a hallucinated
+        // action surfaces as an actionable LLM-facing error (rather
+        // than a silent frontend no-op or — worse — arbitrary code
+        // path on click).
+        if t == "button" {
+            let action = p.get("action").and_then(|v| v.as_str());
+            match action {
+                None => {
+                    return (
+                        format!(
+                            "use_ui 的 primitives[{}] (`type=button`) 缺少 `action` 字段",
+                            i
+                        ),
+                        true,
+                    );
+                }
+                Some(a) if !KNOWN_BUTTON_ACTIONS.contains(&a) => {
+                    return (
+                        format!(
+                            "use_ui 的 primitives[{}] (`type=button`) `action`='{}' 不在支持列表 {:?} 内",
+                            i, a, KNOWN_BUTTON_ACTIONS
+                        ),
+                        true,
+                    );
+                }
+                // `apply_diff` requires `payload.diff_text` to be a
+                // non-empty string (the renderer dispatches it to
+                // `apply_ui_diff` IPC on click). We catch the missing
+                // field here so the LLM gets immediate feedback
+                // rather than a click-time IPC error.
+                Some("apply_diff") => {
+                    let diff_text = p
+                        .get("payload")
+                        .and_then(|p| p.get("diff_text"))
+                        .and_then(|v| v.as_str());
+                    match diff_text {
+                        None => {
+                            return (
+                                format!(
+                                    "use_ui 的 primitives[{}] (`type=button`, `action=apply_diff`) 缺少 `payload.diff_text` 字符串字段",
+                                    i
+                                ),
+                                true,
+                            );
+                        }
+                        Some(s) if s.trim().is_empty() => {
+                            return (
+                                format!(
+                                    "use_ui 的 primitives[{}] (`type=button`, `action=apply_diff`) 的 `payload.diff_text` 不能为空",
+                                    i
+                                ),
+                                true,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
     }
     (format!("已渲染 {} 个 primitive", n), false)
@@ -329,12 +448,108 @@ mod tests {
 
     #[tokio::test]
     async fn execute_rejects_unknown_type() {
-        // `button` is intentionally NOT in the MVP allowlist (D3:
-        // independent button primitive is post-MVP).
-        let v = serde_json::json!({ "primitives": [{ "type": "button" }] });
+        // B9+ D3 (2026-07-13): `button` is now a known type (was
+        // intentionally NOT in the MVP allowlist pre-D3, see
+        // `git log 07-02-b9-generative-ui`); use `chart` here as
+        // the still-unknown example.
+        let v = serde_json::json!({ "primitives": [{ "type": "chart" }] });
         let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
         assert!(is_err);
-        assert!(out.contains("button"), "{}", out);
+        assert!(out.contains("chart"), "{}", out);
+    }
+
+    // ---- execute: button primitive (B9+ D3, 2026-07-13) ----
+
+    #[tokio::test]
+    async fn execute_button_apply_diff_happy() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "apply_diff",
+                "label": "Apply proposed fix",
+                "payload": { "diff_text": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n" }
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(!is_err, "{}", out);
+        assert!(out.contains("1"), "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_copy_happy() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "copy",
+                "payload": { "text": "hello" }
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(!is_err, "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_dismiss_happy() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "dismiss"
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(!is_err, "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_missing_action_rejected() {
+        let v = serde_json::json!({
+            "primitives": [{ "type": "button", "label": "no action" }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(is_err);
+        assert!(out.contains("action"), "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_unknown_action_rejected() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "run_command",
+                "payload": { "command": "rm -rf /" }
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(is_err);
+        assert!(out.contains("run_command"), "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_apply_diff_missing_payload_rejected() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "apply_diff",
+                "label": "Apply"
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(is_err);
+        assert!(out.contains("diff_text"), "{}", out);
+    }
+
+    #[tokio::test]
+    async fn execute_button_apply_diff_empty_diff_rejected() {
+        let v = serde_json::json!({
+            "primitives": [{
+                "type": "button",
+                "action": "apply_diff",
+                "payload": { "diff_text": "   " }
+            }]
+        });
+        let (out, is_err) = execute(&v, &dummy_ctx(), None).await;
+        assert!(is_err);
+        assert!(out.contains("不能为空"), "{}", out);
     }
 
     #[tokio::test]

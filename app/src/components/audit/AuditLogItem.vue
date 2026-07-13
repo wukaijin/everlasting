@@ -100,6 +100,17 @@ const meta = computed<{ iconName: string; colorVar: string }>(() => {
         iconName: "warn",
         colorVar: "var(--color-tool-shell)",
       };
+    // B9+ D4 (2026-07-13, task `07-13-b9plus-generative-ui-followup`):
+    // user-triggered diff apply success. Renders a file-check
+    // icon in `--color-tool-write` (emerald) — same color as
+    // executed-success because the user just successfully wrote
+    // files. Distinct icon so the audit row reads "applied a
+    // diff" rather than "executed a tool".
+    case "ui-diff-applied":
+      return {
+        iconName: "file-check",
+        colorVar: "var(--color-tool-write)",
+      };
     default:
       return { iconName: "info", colorVar: "var(--color-text-muted)" };
   }
@@ -213,6 +224,26 @@ const loopInterventionSummary = computed<string>(() => {
   return `循环检测干预 · ${kindLabel} · 第 ${hit} 次命中 · ${actionLabel}`;
 });
 
+/** B9+ D4 (2026-07-13): user-triggered diff apply summary. Format:
+ *  `应用 diff · N 个文件 (+A / -B) [+M more]`. Lists up to 32 file
+ *  paths inline (mirrors the backend `record_ui_diff_applied_audit`
+ *  32-row cap); beyond that the row shows `+N more`. Empty for
+ *  non-ui_diff_applied kinds. */
+const uiDiffAppliedSummary = computed<string>(() => {
+  if (parsed.value.kind !== "ui_diff_applied") return "";
+  const p = parsed.value.payload;
+  const files = p.files ?? [];
+  const total = p.total_files ?? files.length;
+  if (files.length === 0) {
+    return total > 0 ? `应用 diff · ${total} 个文件` : "应用 diff";
+  }
+  const totalAdded = files.reduce((acc, f) => acc + (f.added ?? 0), 0);
+  const totalRemoved = files.reduce((acc, f) => acc + (f.removed ?? 0), 0);
+  const shown = files.slice(0, 3).map((f) => f.path ?? "?").join(", ");
+  const more = total > files.length ? ` +${total - files.length} more` : "";
+  return `应用 diff · ${total} 个文件 (+${totalAdded} / -${totalRemoved}) · ${shown}${more}`;
+});
+
 /** Whether the payload was malformed / unknown — render a raw
  *  blob fallback row. */
 const isRawPayload = computed<boolean>(() => parsed.value.kind === "raw");
@@ -296,6 +327,10 @@ const isCritical = computed<boolean>(() => {
 
       <div v-if="loopInterventionSummary" class="audit-item__loop">
         {{ loopInterventionSummary }}
+      </div>
+
+      <div v-if="uiDiffAppliedSummary" class="audit-item__ui-diff">
+        {{ uiDiffAppliedSummary }}
       </div>
 
       <div v-if="isRawPayload && rawPayloadText" class="audit-item__raw">
@@ -439,6 +474,18 @@ const isCritical = computed<boolean>(() => {
   font-size: var(--text-sm);
   color: var(--color-tool-shell);
   line-height: 1.4;
+}
+
+/* B9+ D4 (2026-07-13): user-triggered diff apply row.
+   Uses the same emerald as `--color-tool-write` because the user
+   just successfully wrote files; the line lists affected paths +
+   +/- counts so the user can see at a glance what got applied. */
+.audit-item__ui-diff {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-tool-write);
+  line-height: 1.4;
+  word-break: break-all;
 }
 
 .audit-item__raw {

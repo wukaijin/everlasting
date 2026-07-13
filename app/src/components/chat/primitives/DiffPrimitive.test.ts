@@ -1,5 +1,6 @@
 // Tests for DiffPrimitive.vue — B9 Child C (07-02-b9-diff-primitive,
-// 2026-07-02).
+// 2026-07-02) + B9+ D4 apply/reject buttons
+// (07-13-b9plus-generative-ui-followup, 2026-07-13).
 //
 // Coverage:
 //   1. Renders DiffView for a unified diff (file card + +/- lines).
@@ -8,12 +9,51 @@
 //   4. Multi-file unified diff → multiple file cards.
 //   5. Empty / unparseable diff_text → raw fallback (no crash).
 //   6. Copy button → navigator.clipboard.writeText with the raw diff.
+//   7. B9+ D4: Apply button invokes `apply_ui_diff` IPC with the
+//      raw `diff_text`; success → toast + 「已应用」 tag + button
+//      disables.
+//   8. B9+ D4: Reject button hides the card.
+//   9. B9+ D4: Raw-fallback (no `---`/`+++` headers) → Apply
+//      button is `disabled` + tooltip「该 diff 格式不可应用」.
+//  10. B9+ D4: Backend failure surfaces inline error keyed by `kind`.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { nextTick } from "vue";
 
 import DiffPrimitive from "./DiffPrimitive.vue";
 import type { UiPrimitive } from "../uiCard.types";
+
+// Mock @tauri-apps/api/core so we can spy on the invoke call without
+// touching the real backend. Mirrors the chat store test pattern.
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args),
+}));
+
+// Mock the chat + projects stores. We need:
+// - currentSessionId (apply requires it)
+// - showToast (success path)
+// Both are imported by DiffPrimitive via useChatStore / useProjectsStore.
+// The mock paths are relative to this test file (sitting under
+// `src/components/chat/primitives/`); `../../../stores/<name>` lands
+// on `src/stores/<name>`.
+const showToastMock = vi.fn();
+const chatState: { currentSessionId: string | null } = {
+  currentSessionId: "sess-1",
+};
+vi.mock("../../../stores/chat", () => ({
+  useChatStore: () => ({
+    get currentSessionId() {
+      return chatState.currentSessionId;
+    },
+  }),
+}));
+vi.mock("../../../stores/projects", () => ({
+  useProjectsStore: () => ({
+    showToast: showToastMock,
+  }),
+}));
 
 const writeTextMock = vi.fn();
 
@@ -23,6 +63,9 @@ beforeEach(() => {
   Object.assign(navigator, {
     clipboard: { writeText: writeTextMock },
   });
+  invokeMock.mockReset();
+  showToastMock.mockReset();
+  chatState.currentSessionId = "sess-1";
 });
 
 const SINGLE_FILE_DIFF = `--- a/foo.rs
@@ -154,5 +197,114 @@ describe("DiffPrimitive — copy button", () => {
     await flushPromises();
     expect(writeTextMock).toHaveBeenCalledTimes(1);
     expect(writeTextMock).toHaveBeenCalledWith(SINGLE_FILE_DIFF);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B9+ D4 (2026-07-13): Apply / Reject buttons.
+// ---------------------------------------------------------------------------
+
+describe("DiffPrimitive — Apply button (B9+ D4)", () => {
+  it("invokes apply_ui_diff with (sessionId, diffText) on click", async () => {
+    invokeMock.mockResolvedValue({
+      ok: true,
+      files: [{ path: "foo.rs", added: 1, removed: 1 }],
+    });
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    await w.find(".ui-prim__apply").trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("apply_ui_diff", {
+      sessionId: "sess-1",
+      diffText: SINGLE_FILE_DIFF,
+    });
+  });
+
+  it("surfaces success as a toast + 「已应用」 tag + disables buttons", async () => {
+    invokeMock.mockResolvedValue({
+      ok: true,
+      files: [
+        { path: "foo.rs", added: 1, removed: 1 },
+        { path: "bar.rs", added: 2, removed: 0 },
+      ],
+    });
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    await w.find(".ui-prim__apply").trigger("click");
+    await flushPromises();
+    // Toast with file count.
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock).toHaveBeenCalledWith(
+      "已应用 2 个文件",
+      "info",
+      3000,
+    );
+    // Tag visible; apply + reject buttons gone (only the
+    // post-apply state shows the tag + copy).
+    expect(w.find(".ui-prim__applied-tag").exists()).toBe(true);
+    expect(w.find(".ui-prim__apply").exists()).toBe(false);
+    expect(w.find(".ui-prim__reject").exists()).toBe(false);
+  });
+
+  it("surfaces backend failure as inline error keyed by `kind`", async () => {
+    invokeMock.mockResolvedValue({
+      ok: false,
+      kind: "conflict",
+      error: "context mismatch at line 5",
+    });
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    await w.find(".ui-prim__apply").trigger("click");
+    await flushPromises();
+    // Inline error rendered (Chinese text from APPLY_UI_DIFF_ERROR_TEXT).
+    const errorEl = w.find(".ui-prim__error");
+    expect(errorEl.exists()).toBe(true);
+    expect(errorEl.text()).toContain("文件已变");
+    // Apply button stays available for retry.
+    expect(w.find(".ui-prim__apply").exists()).toBe(true);
+    expect(w.find(".ui-prim__applied-tag").exists()).toBe(false);
+    // No toast on failure (failure lives in the card for retry-ability).
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+
+  it("disables Apply for raw-fallback fragments (no `---`/`+++` headers)", async () => {
+    const llmStyle = "-old\n+new\n";
+    const w = mountPrim(llmStyle);
+    const applyBtn = w.find(".ui-prim__apply");
+    expect(applyBtn.exists()).toBe(true);
+    expect((applyBtn.element as HTMLButtonElement).disabled).toBe(true);
+    expect(applyBtn.attributes("title")).toContain("不可应用");
+    // Click does nothing — invoke never called.
+    await applyBtn.trigger("click");
+    await flushPromises();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("disables Apply when there is no active session", async () => {
+    chatState.currentSessionId = null;
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    const applyBtn = w.find(".ui-prim__apply");
+    expect((applyBtn.element as HTMLButtonElement).disabled).toBe(true);
+    expect(applyBtn.attributes("title")).toContain("无活跃会话");
+  });
+
+  it("treats unexpected IPC errors (network / serialization) as `io`", async () => {
+    invokeMock.mockRejectedValue(new Error("network exploded"));
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    await w.find(".ui-prim__apply").trigger("click");
+    await flushPromises();
+    // `console.error` is called but we don't assert on it here;
+    // the inline error is what matters.
+    const errorEl = w.find(".ui-prim__error");
+    expect(errorEl.exists()).toBe(true);
+    expect(errorEl.text()).toContain("文件读写失败");
+  });
+});
+
+describe("DiffPrimitive — Reject button (B9+ D4)", () => {
+  it("hides the card on click (no IPC)", async () => {
+    const w = mountPrim(SINGLE_FILE_DIFF);
+    await w.find(".ui-prim__reject").trigger("click");
+    await nextTick();
+    expect(w.find(".ui-prim--diff").exists()).toBe(false);
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

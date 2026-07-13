@@ -29,6 +29,12 @@ mod background_shell;
 mod commands;
 mod crypto;
 mod db;
+// B9+ D4 (2026-07-13): hand-written unified-diff parser + hunk
+// applier. Zero new dependency (TECH §1.4). Lives at top level (not
+// under `tools/`) because it's the structural backbone of the
+// `apply_ui_diff` IPC, not a standalone tool — the IPC handler does
+// the I/O, this module owns only the textual transformation.
+mod diff_apply;
 mod error;
 mod files;
 mod git;
@@ -311,6 +317,14 @@ pub fn run() {
             // reuses `get_pending_interaction` for the
             // unified session-switch source-of-truth lookup.
             commands::question::resolve_task_state_transition,
+            // 2026-07-13 (B9+ D4): user-triggered diff apply
+            // IPC. Sibling to `merge_worker_run` — NOT a tool,
+            // NOT in `builtin_tools()`; lives outside the LLM
+            // tool registry so `filter_tools_for_mode` doesn't
+            // see it. Plan-mode users can still apply proposed
+            // diffs. See `commands/ui.rs::apply_ui_diff` for
+            // the boundary check + audit shape.
+            commands::ui::apply_ui_diff,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

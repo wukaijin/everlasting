@@ -12,12 +12,34 @@
 // No Tauri mock needed: UiCard + MockPrimitive are pure display
 // (no invoke). Child B/C tests will cover the real renderers and
 // their type-specific payloads.
+//
+// 2026-07-13 (B9+ D4 follow-up): the `diff` entry resolves to
+// `<DiffPrimitive>`, which now reads `useChatStore` for the
+// `currentSessionId` gate on the Apply button. That store needs an
+// active Pinia; we mock it out so UiCard tests stay focused on
+// registry dispatch + don't depend on real store state.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
 
 import UiCard from "./UiCard.vue";
 import type { ToolCallInfo } from "../../stores/chat.types";
+
+// Mock the chat + projects stores so DiffPrimitive (mounted
+// transitively via the registry for `type: "diff"`) can read
+// `currentSessionId` / `showToast` without spinning up real Pinia
+// state. Mirrors the mock pattern in DiffPrimitive.test.ts.
+vi.mock("../../stores/chat", () => ({
+  useChatStore: () => ({
+    currentSessionId: "sess-mock",
+  }),
+}));
+vi.mock("../../stores/projects", () => ({
+  useProjectsStore: () => ({
+    showToast: vi.fn(),
+  }),
+}));
 
 function makeCall(input: Record<string, unknown>): ToolCallInfo {
   return { id: "tool-use-1", name: "use_ui", input };
@@ -26,6 +48,10 @@ function makeCall(input: Record<string, unknown>): ToolCallInfo {
 function mountCard(input: Record<string, unknown>) {
   return mount(UiCard, { props: { call: makeCall(input) } });
 }
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+});
 
 describe("UiCard — primitive rendering", () => {
   it("renders one mock primitive per entry in primitives", () => {
