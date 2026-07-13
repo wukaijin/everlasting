@@ -559,8 +559,13 @@ mod tests {
         // that RFC3339 truncates to (some FSes are very fast).
         std::thread::sleep(std::time::Duration::from_millis(5));
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
-            .expect("ok");
+        let updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Planning,
+            TaskStatus::InProgress,
+        )
+        .expect("ok");
 
         assert_eq!(updated.status, TaskStatus::InProgress);
         assert_ne!(
@@ -625,8 +630,13 @@ mod tests {
         let path = proj(&d);
         let _ = create_seed(path, "my-feat");
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
-            .expect("ok");
+        let updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Planning,
+            TaskStatus::InProgress,
+        )
+        .expect("ok");
         assert!(
             updated
                 .summary
@@ -699,8 +709,13 @@ mod tests {
         t.status = TaskStatus::Planning;
         write_task(path, &t).expect("write");
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
-            .expect("ok");
+        let updated = set_task_state(
+            path,
+            "my-feat",
+            TaskStatus::Planning,
+            TaskStatus::InProgress,
+        )
+        .expect("ok");
         let marker_count = updated
             .summary
             .lines()

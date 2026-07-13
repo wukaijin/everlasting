@@ -489,10 +489,10 @@ pub const PROJ_NS_TASKS_ARCHIVE_DIR: &str = "archive";
 /// - `<slug>/task.json` exists and parses (`NotFound` /
 ///   `MalformedJson`).
 /// - `status == Done` (`NotInDoneStatus`). Archive must
-    ///   follow the workflow's `in_progress → done` hook (Step 3.1)
-    ///   so the spec-distillation hint + items close-out have
-    ///   already happened; archiving a planning / in_progress
-    ///   task would orphan in-flight work.
+///   follow the workflow's `in_progress → done` hook (Step 3.1)
+///   so the spec-distillation hint + items close-out have
+///   already happened; archiving a planning / in_progress
+///   task would orphan in-flight work.
 /// - archive target dir does **not** already exist
 ///   (`AlreadyArchived`). This makes the call idempotent
 ///   against retries: a partial-write + retry won't
@@ -1031,10 +1031,19 @@ mod tests {
     #[test]
     fn task_status_parser_recognizes_known_forms_lenient_for_unknowns() {
         assert_eq!(TaskStatus::from_str_opt("planning"), TaskStatus::Planning);
-        assert_eq!(TaskStatus::from_str_opt("in_progress"), TaskStatus::InProgress);
-        assert_eq!(TaskStatus::from_str_opt("IN_PROGRESS"), TaskStatus::InProgress);
+        assert_eq!(
+            TaskStatus::from_str_opt("in_progress"),
+            TaskStatus::InProgress
+        );
+        assert_eq!(
+            TaskStatus::from_str_opt("IN_PROGRESS"),
+            TaskStatus::InProgress
+        );
         // Legacy pre-merge values migrate to InProgress.
-        assert_eq!(TaskStatus::from_str_opt("implement"), TaskStatus::InProgress);
+        assert_eq!(
+            TaskStatus::from_str_opt("implement"),
+            TaskStatus::InProgress
+        );
         assert_eq!(TaskStatus::from_str_opt("CHECK"), TaskStatus::InProgress);
         assert_eq!(TaskStatus::from_str_opt("Done"), TaskStatus::Done);
         // Step 3.3: "completed" parses as Completed (NOT
@@ -1118,10 +1127,7 @@ mod tests {
     /// so the engine refuses upfront.
     #[test]
     fn archive_task_init_refuses_non_done_status() {
-        for non_done in [
-            TaskStatus::Planning,
-            TaskStatus::InProgress,
-        ] {
+        for non_done in [TaskStatus::Planning, TaskStatus::InProgress] {
             let d = tempfile::tempdir().expect("tempdir");
             let path = d.path();
             let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");

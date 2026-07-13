@@ -2416,11 +2416,7 @@ mod tests {
         WorkflowDef {
             name: "dev".to_string(),
             description: "test".to_string(),
-            states: vec![
-                "planning".into(),
-                "in_progress".into(),
-                "done".into(),
-            ],
+            states: vec!["planning".into(), "in_progress".into(), "done".into()],
             initial: "planning".into(),
             transitions: vec![],
             roles_by_state: HashMap::from([
