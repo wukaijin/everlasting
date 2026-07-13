@@ -146,7 +146,7 @@
 
 **关联**: 主任务 `.trellis/tasks/07-08-workflow-integration/`(9 阶段)+ 延伸 `.trellis/tasks/07-09-workflow-builtin-plugin/`(commit `7c22a6d`)+ `.trellis/tasks/07-09-workflow-transition-card/`(commit `969466b`)+ `.trellis/tasks/07-09-07-09-workflow-chip-merge/`(commit `5db27be`)+ `.trellis/tasks/07-10-workflow-task-json-hardening/`(commit `c6a983e`)+ pending-indicator(commit `b95e8c5`);spec 增量待建 `.trellis/spec/backend/workflow.md` + `.trellis/spec/backend/task-state-machine.md`(07-08 后续沉淀);1348+ 后端 + 794+ 前端 tests passed(0 failed,跨 25 commit 累积)。
 
-### 2026-07-07 — `request_mode_change` tool (B6+ A):复用 `set_session_mode` IPC + 共用 `QuestionStore` + Yolo 二次 modal 双 IPC
+### 2026-07-07 — `request_mode_change` tool:复用 `set_session_mode` IPC + 共用 `QuestionStore` + Yolo 二次 modal 双 IPC
 
 **Context**: LLM 在主 loop 里无工具申请 mode 切换,只能在 plan 模式返回 "please switch me to Edit mode",由用户手动按 `Shift+Tab` 切。新 tool `request_mode_change` 让 LLM 在 turn N 通过 `tool_use` 申请,用户 inline card 二选一,允许路径修改 `sessions.mode`。任务 `.trellis/tasks/07-07-07-07-request-mode-change-tool/`,完整 PRD + design 5 时序 + 11 单测 + 5 集成测试 + 5 IPC 测试 + 23 前端测试。
 
@@ -194,6 +194,26 @@
 - IPC-level 双重 resolve 兜底存在,但前端 `useQuestionCardsStore.resolveModeChange` 内部已 dedupe(返回前先 `if (pendingBySession.get(sid)?.kind === 'mode_change')` 守卫),IPC 端 `AlreadyResolved` 是防御性兜底,正常运行不会触发。
 
 **关联**: PRD + design + implement `.trellis/tasks/07-07-07-07-request-mode-change-tool/`;spec 增量 [tool-contract.md §request_mode_change](../.trellis/spec/backend/tool-contract.md) + [permission-layer.md §5c](../.trellis/spec/backend/permission-layer.md) + [agent-loop-architecture.md §"Tool interception"](../.trellis/spec/backend/agent-loop-architecture.md) + [frontend/chat.md §request_mode_change](../.trellis/spec/frontend/chat.md);1348 后端(`cargo test --lib`)+ 794 前端(`pnpm test`)+ vue-tsc 0 err + pnpm build 成功,4 commit(后端 / IPC + audit / 前端 / 集成测试)。
+
+### 2026-07-06/07 — B6+ B subagent dispatch 动态选模型(优先级链收口 `dispatch > DB > frontmatter > parent`)
+
+**Context**: B6+ A(07-03 frontmatter `model:` 声明)+ C(07-03 DB override + Settings UI)都是**声明性** —— 写一次,所有 dispatch 该 agent 都用那个 model。缺**临时性**单次覆盖:parent 用 Claude 写代码,dispatch reviewer 时临时指定 GPT-4o 做跨模型对抗性 review,不想改 reviewer 的全局默认。两条入口:LLM path(`dispatch_subagent` 加 `model` 参)+ user path(`@@agent --model=<X> <task>` 前缀)。任务 `.trellis/tasks/archive/2026-07/07-06-b6plus-b-dispatch-model-arg/`,PRD R1-R6 + AC1-12。
+
+**关键决策(5 个)**:
+
+1. **优先级链单点接入(`Option::or` 一行)**:`dispatch_model.clone().or(resolved_lower)` —— dispatch override 在最高位,`None` 时 `Option::or` 短路到 A/C 的 `resolve_final_model`(DB > frontmatter)。`resolve_final_model` / `resolve_worker_provider` **签名零改动**(两者既有单测零回归,A/C 零回归)。否决"改 `resolve_final_model` 签名加 dispatch 参" —— 会污染 A/C 纯函数边界,且 dispatch override 生命周期与 DB/frontmatter 不同(临时 vs 持久),不应塞进同一解析器。
+
+2. **display_name 反查而非强求 id**:LLM path 的 schema `model` enum 值 = display_name(system prompt 不列模型,LLM 无从猜 UUID);user path 的 `--model=<X>` 接受 id 或 display_name。后端 `resolve_model_by_name_or_id` 先 id passthrough(`get_model` O(1)),miss 再 `list_models` 反查 display_name(多同名取首 + `warn!`,deterministic;DB 不强约束 display_name 唯一)。比强求 UUID 友好,成本 ~20 行 + 测试。
+
+3. **`--model=` flag 位置约束(紧跟 agent 名、task 之前)**:git/cargo flag 语义。task 中间的 `--model=` 不误解析(task 文本常含 flag);`chat.ts` 扩展原 `@@<name> <task>` 正则,在 name 与 task 之间可选插入 `--model=<X>`。`@@agent --model=` 后无值 → 解析失败报清晰错误(不静默丢弃,也不误解析 task 文本)。
+
+4. **失效兜底而非报错**:dispatch 指定的 model 不在 catalog(被删 / display_name 拼错 / id 不存在 / 反查无果)→ 不失败,`warn!` + 降级到 `resolve_final_model` 结果(再无则 parent)。临时 override 不持久化(不写 DB/frontmatter,永久改走 Settings UI / C)。
+
+5. **可观测零特例**:`subagent_runs.model_display` + tool_result `[model:]` 行复用 A/C 既有的 `worker_display`(`resolve_worker_provider` 第三项),dispatch 临时命中也走同一路径,无特例分支;`format_dispatch_result_with_model` 不改。
+
+**Consequences**: B6+ A/B/C 三档完整,优先级链 `dispatch > DB > frontmatter > parent` 收口。会话内 CRUD model 的 schema enum 滞后(下会话刷新,失效兜底兜住)。worker 自身不能选 model(`dispatch_subagent` 被 `STRUCTURALLY_DISABLED`,no nesting),model 选择权只在 parent(LLM 或 user)。
+
+**关联**: PRD + design + implement `.trellis/tasks/archive/2026-07/07-06-b6plus-b-dispatch-model-arg/`;代码 commit `996aa2e`(`dispatch.rs` +374 核心优先级接入 + `resolve_model_by_name_or_id` / `mod.rs` +142 schema `model` enum + `ForcedDispatch.model_id` + `ModelOption` / `chat_loop.rs` +49 / `chat.ts` +124 `@@ --model=` 解析 / `chat.test.ts` +182,7 文件 +852/-31)+ spec commit `dc3e422`(agent-loop 优先级表 row26 + tool-contract §B6+B + frontend/chat `@@ --model=` 解析);复用 A 的 `resolve_worker_provider` + C 的 `resolve_final_model`(两者签名零改动)。
 
 ### 2026-07-06 — V2-2+ 自主记忆可观测性 + 管理面板(A1-A11 后端 + B1-B5 前端)
 
@@ -1235,7 +1255,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **测试**:进行中(PR-A5-2 ~ A5-5 完成后补:10 类型 ~41 variant `category()/user_message()` 快照 + `HttpStatus` 4xx/5xx 分流 + `From<anyhow::Error>` 兜底 + grep `Result<String>` 残留 + `parseAppCommandError` 容错 + cargo/pnpm 全绿)。
 - **推后期**:多语言 i18n `user_message` / 自动重试策略 / Telemetry Metrics(request_id→Sentry/OTel)/ PermissionDenied·Cancelled·NotFound 独立 category / legacy `.catch(console.error)` 全量替换 / toast UI 接 reka-ui + 单条 dismiss·TTL / `ValidationError`(`pub(crate)`)纳入 impl AppError。
 
-### 2026-07-07 — `request_mode_change` tool(B6+ A:LLM 申请切 mode)
+### 2026-07-07 — `request_mode_change` tool(LLM 申请切 mode)
 
 - **Context**:LLM 在主 loop 无工具申请 mode 切换,Plan 模式只能返回 "please switch me to Edit mode" 由 user 手动 `Shift+Tab` 切;反向同理(Edit 模式想切 Plan 提议架构)。本档补一个 LLM-driven mode 申请工具,user 通过 inline card 二选一授权,沿用现有 `set_session_mode` IPC 副作用链(DB + 审计 + Yolo 二次 modal + root guard)避免双路径漂移。
 
