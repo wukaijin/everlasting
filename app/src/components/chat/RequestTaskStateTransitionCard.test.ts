@@ -34,7 +34,7 @@ import RequestTaskStateTransitionCard from "./RequestTaskStateTransitionCard.vue
 // Fixtures + helpers
 // ---------------------------------------------------------------------
 
-type WfState = "planning" | "implement" | "check" | "done";
+type WfState = "planning" | "in_progress" | "done";
 
 const baseProps = (): {
   sessionId: string;
@@ -47,10 +47,10 @@ const baseProps = (): {
 } => ({
   sessionId: "sess-1",
   toolUseId: "tool-use-1",
-  targetState: "implement",
+  targetState: "in_progress",
   slug: "my-feature",
   currentState: "planning",
-  reason: "调研完成,准备开始实现",
+  reason: "调研完成,准备开始实施",
   state: "pending",
 });
 
@@ -93,7 +93,7 @@ beforeEach(async () => {
     await warmupStore.resolveTaskStateTransition(
       "__warmup__",
       "tu",
-      "implement",
+      "in_progress",
       "warmup-slug",
       true,
     );
@@ -118,30 +118,30 @@ describe("RequestTaskStateTransitionCard — pending rendering", () => {
   });
 
   it("renders the header chip with the target state label", () => {
-    wrapper = mountCard({ targetState: "check" });
+    wrapper = mountCard({ targetState: "in_progress" });
     const head = wrapper.find(".wf-state-card__head-title");
     expect(head.text()).toContain("工作流状态转移");
-    expect(head.text()).toContain("校验");
+    expect(head.text()).toContain("进行中");
   });
 
   it("renders the reason text when provided", () => {
-    wrapper = mountCard({ reason: "Need to move to check state" });
+    wrapper = mountCard({ reason: "Need to move to in_progress state" });
     const reason = wrapper.find("[data-testid='wf-state-card-reason']");
     expect(reason.exists()).toBe(true);
-    expect(reason.text()).toBe("Need to move to check state");
+    expect(reason.text()).toBe("Need to move to in_progress state");
   });
 
   it("renders the state comparison row (current → target)", () => {
     wrapper = mountCard({
       currentState: "planning",
-      targetState: "implement",
+      targetState: "in_progress",
     });
     const compare = wrapper.find(
       "[data-testid='wf-state-card-compare']",
     );
     expect(compare.exists()).toBe(true);
     expect(compare.text()).toContain("规划");
-    expect(compare.text()).toContain("实现");
+    expect(compare.text()).toContain("进行中");
   });
 
   it("hides the comparison row when currentState is null", () => {
@@ -185,7 +185,7 @@ describe("RequestTaskStateTransitionCard — allow", () => {
   });
 
   it("click 允许 flips the card to the allowed state", async () => {
-    wrapper = mountCard({ targetState: "implement" });
+    wrapper = mountCard({ targetState: "in_progress" });
     await wrapper
       .find("[data-testid='wf-state-card-allow']")
       .trigger("click");
@@ -203,7 +203,7 @@ describe("RequestTaskStateTransitionCard — allow", () => {
   });
 
   it("click 允许 emits 'allowed' with the new state", async () => {
-    wrapper = mountCard({ targetState: "check" });
+    wrapper = mountCard({ targetState: "in_progress" });
     await wrapper
       .find("[data-testid='wf-state-card-allow']")
       .trigger("click");
@@ -212,7 +212,7 @@ describe("RequestTaskStateTransitionCard — allow", () => {
     await flushPromises();
     expect(wrapper.emitted("allowed")).toBeTruthy();
     expect(wrapper.emitted("allowed")!.length).toBe(1);
-    expect(wrapper.emitted("allowed")![0]).toEqual(["check"]);
+    expect(wrapper.emitted("allowed")![0]).toEqual(["in_progress"]);
   });
 
   it("calls resolve_task_state_transition with targetState + slug (wire payload)", async () => {
@@ -248,7 +248,7 @@ describe("RequestTaskStateTransitionCard — allow", () => {
 
   it("surfaces an inline error row when invoke rejects", async () => {
     invokeMock.mockRejectedValueOnce("backend down");
-    wrapper = mountCard({ targetState: "implement" });
+    wrapper = mountCard({ targetState: "in_progress" });
     await wrapper
       .find("[data-testid='wf-state-card-allow']")
       .trigger("click");
@@ -282,7 +282,7 @@ describe("RequestTaskStateTransitionCard — deny", () => {
   });
 
   it("click 拒绝 flips the card to the denied state", async () => {
-    wrapper = mountCard({ targetState: "implement" });
+    wrapper = mountCard({ targetState: "in_progress" });
     await wrapper
       .find("[data-testid='wf-state-card-deny']")
       .trigger("click");
@@ -308,7 +308,7 @@ describe("RequestTaskStateTransitionCard — deny", () => {
   });
 
   it("click 拒绝 emits 'denied'", async () => {
-    wrapper = mountCard({ targetState: "implement" });
+    wrapper = mountCard({ targetState: "in_progress" });
     await wrapper
       .find("[data-testid='wf-state-card-deny']")
       .trigger("click");
@@ -348,7 +348,7 @@ describe("RequestTaskStateTransitionCard — allowed / denied state pills", () =
   it("renders the allowed pill + comparison row when state='allowed'", () => {
     wrapper = mountCard({
       state: "allowed",
-      targetState: "implement",
+      targetState: "in_progress",
       currentState: "planning",
       reason: null,
     });
@@ -367,7 +367,7 @@ describe("RequestTaskStateTransitionCard — allowed / denied state pills", () =
   it("renders the denied pill + note when state='denied'", () => {
     wrapper = mountCard({
       state: "denied",
-      targetState: "implement",
+      targetState: "in_progress",
       reason: "ignored in denied state",
     });
     expect(
@@ -383,7 +383,7 @@ describe("RequestTaskStateTransitionCard — allowed / denied state pills", () =
   });
 
   it("does NOT render action buttons in non-pending states", () => {
-    wrapper = mountCard({ state: "allowed", targetState: "check" });
+    wrapper = mountCard({ state: "allowed", targetState: "in_progress" });
     expect(
       wrapper.find("[data-testid='wf-state-card-allow']").exists(),
     ).toBe(false);

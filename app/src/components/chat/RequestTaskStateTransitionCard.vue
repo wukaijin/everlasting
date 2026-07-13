@@ -113,13 +113,13 @@ const submitError = ref<string | null>(null);
 // ---------------------------------------------------------------------
 
 /** Display label for a workflow state value. Matches the dev
- *  plugin's breadcrumb Chinese (planning=规划 / implement=实现 /
- *  check=校验 / done=完成) so the card stays consistent with the
- *  breadcrumb the agent sees in the same turn. */
+ *  plugin's breadcrumb Chinese (planning=规划 / in_progress=进行中 /
+ *  done=完成) so the card stays consistent with the breadcrumb the
+ *  agent sees in the same turn. (2026-07-10 merge: implement+check
+ *  → in_progress=进行中.) */
 function stateLabel(state: WorkflowState): string {
   if (state === "planning") return "规划";
-  if (state === "implement") return "实现";
-  if (state === "check") return "校验";
+  if (state === "in_progress") return "进行中";
   return "完成";
 }
 
@@ -352,7 +352,7 @@ async function onDeny(): Promise<void> {
   word-break: break-word;
 }
 
-/* State comparison row — "规划 → 实现" style. Two pills separated
+/* State comparison row — "规划 → 进行中" style. Two pills separated
    by an arrow icon. Uses the same color tokens as the head icon. */
 .wf-state-card__compare {
   display: inline-flex;

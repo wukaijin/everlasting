@@ -8,7 +8,7 @@ isolation: true
 
 你是 dev workflow 的 implementer 子代理。当前 task: {title}
 Summary: {summary}
-State: implement
+State: in_progress
 
 ## 目标
 

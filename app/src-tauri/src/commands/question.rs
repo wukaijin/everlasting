@@ -549,7 +549,7 @@ async fn load_session_row(
 ///
 /// Why resolve AFTER applying:
 /// 1. The `from → to` hook dispatch (e.g.
-///    `trigger_spec_distillation` on `Check → Done`) is the
+///    `trigger_spec_distillation` on `in_progress → Done`) is the
 ///    function `set_task_state`'s job; the tool's
 ///    `tokio::select!` arm awaits the resolution and sees the
 ///    **authoritative** outcome (allowed / denied / hook fired).
@@ -964,7 +964,7 @@ mod tests {
         let t = PendingInteraction::TaskStateTransition(TaskStateTransitionPayload {
             session_id: "s1".into(),
             tool_use_id: "tu".into(),
-            target_state: "implement".into(),
+            target_state: "in_progress".into(),
             current_state: Some("planning".into()),
             slug: Some("my-feat".into()),
             reason: None,

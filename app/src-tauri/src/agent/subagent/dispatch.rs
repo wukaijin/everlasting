@@ -2418,16 +2418,17 @@ mod tests {
             description: "test".to_string(),
             states: vec![
                 "planning".into(),
-                "implement".into(),
-                "check".into(),
+                "in_progress".into(),
                 "done".into(),
             ],
             initial: "planning".into(),
             transitions: vec![],
             roles_by_state: HashMap::from([
                 ("planning".to_string(), vec!["researcher".to_string()]),
-                ("implement".to_string(), vec!["implementer".to_string()]),
-                ("check".to_string(), vec!["checker".to_string()]),
+                (
+                    "in_progress".to_string(),
+                    vec!["implementer".to_string(), "checker".to_string()],
+                ),
                 ("done".to_string(), vec![]),
             ]),
             breadcrumb: HashMap::new(),
@@ -2500,9 +2501,15 @@ mod tests {
     fn gate_enforcement_is_state_driven() {
         let input = serde_json::json!({"subagent": "implementer"});
 
-        // implement + implementer → allowed
-        let ctx_impl = ctx_with_status(TaskStatus::Implement);
+        // in_progress + implementer → allowed
+        let ctx_impl = ctx_with_status(TaskStatus::InProgress);
         assert!(check_workflow_role_gate(Some(&ctx_impl), "implementer", &input).is_none());
+
+        // in_progress + checker → also allowed (post-merge: both roles valid in in_progress)
+        assert!(
+            check_workflow_role_gate(Some(&ctx_impl), "checker", &input).is_none(),
+            "checker must be allowed in in_progress post-merge"
+        );
 
         // planning + implementer → denied
         let ctx_plan = ctx_with_status(TaskStatus::Planning);

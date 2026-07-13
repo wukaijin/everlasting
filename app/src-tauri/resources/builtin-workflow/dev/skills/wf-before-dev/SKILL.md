@@ -1,10 +1,10 @@
 ---
 name: wf-before-dev
-description: implement 入口加载项目 spec 规范,确保按标准写代码
+description: in_progress 入口加载项目 spec 规范,确保按标准写代码
 allowed-tools: []
 ---
 
-# 写代码前加载 spec(implement)
+# 写代码前加载 spec(in_progress)
 
 ## 必读
 - `list_dir .everlasting/spec/` 看有哪些规范

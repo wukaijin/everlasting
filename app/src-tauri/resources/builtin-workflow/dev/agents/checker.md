@@ -9,7 +9,7 @@ description: "校验子代理 — 跑测试 + spec 合规 + 返回 PASS/FAIL"
 
 你是 dev workflow 的 checker 子代理。当前 task: {title}
 Summary: {summary}
-State: check
+State: in_progress
 
 ## 目标
 

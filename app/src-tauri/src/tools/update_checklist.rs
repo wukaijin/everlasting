@@ -286,12 +286,11 @@ pub async fn execute(
 
     // Phase 2 Step 2.6: workflow sessions persist items to
     // `task.json.items`. The mapping from ChecklistStatus
-    // → TaskStatus (Pending→Planning, InProgress→Implement,
-    // Done→Done) is a deliberate Phase 2 simplification —
-    // the workflow task.json uses the workflow state
-    // machine's status set, which is coarser than B12's
-    // checklist. Phase 3 may extend TaskStatus to recover
-    // the finer "check" state.
+    // → TaskStatus (Pending→Planning, InProgress→InProgress,
+    // Done→Done) mirrors B12's checklist status onto the
+    // workflow state machine's status set. After the
+    // 2026-07-10 merge (Implement+Check collapsed into
+    // InProgress), the mapping is 1:1 — no coarsening.
     //
     // On any failure (no active task / read error / write
     // error), we log a `warn!` and return a tool_result
@@ -452,14 +451,13 @@ fn pick_first_unfinished_task(
 }
 
 /// Phase 2 Step 2.6 ChecklistStatus → TaskStatus mapping.
-/// Deliberately coarse — `Done` collapses the workflow
-/// state machine's `check` and `done` (Phase 3 may refine
-/// to a 5-state TaskStatus).
+/// After the 2026-07-10 merge the mapping is 1:1
+/// (Pending→Planning, InProgress→InProgress, Done→Done).
 fn map_status(s: ChecklistStatus) -> crate::agent::workflow::TaskStatus {
     use crate::agent::workflow::TaskStatus;
     match s {
         ChecklistStatus::Pending => TaskStatus::Planning,
-        ChecklistStatus::InProgress => TaskStatus::Implement,
+        ChecklistStatus::InProgress => TaskStatus::InProgress,
         ChecklistStatus::Done => TaskStatus::Done,
     }
 }
@@ -844,7 +842,7 @@ mod tests {
         assert_eq!(persisted[0].id, "research");
         assert_eq!(persisted[0].status, TaskStatus::Done);
         assert_eq!(persisted[1].id, "implement");
-        assert_eq!(persisted[1].status, TaskStatus::Implement);
+        assert_eq!(persisted[1].status, TaskStatus::InProgress);
         assert_eq!(persisted[2].id, "test");
         assert_eq!(
             persisted[2].tdd,
@@ -865,7 +863,7 @@ mod tests {
             id: "t-legacy".into(),
             title: "Legacy".into(),
             slug: "legacy-fixture".into(),
-            status: TaskStatus::Implement,
+            status: TaskStatus::InProgress,
             created_at: "2026-07-09T00:00:00Z".into(),
             updated_at: "2026-07-09T00:00:00Z".into(),
             parent: None,

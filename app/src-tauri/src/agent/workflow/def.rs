@@ -342,58 +342,63 @@ pub fn delegation_template_for<'a>(def: &'a WorkflowDef, role: &str) -> Option<&
 // dev plugin — the only workflow currently defined
 // ---------------------------------------------------------------------------
 
-/// The hard-coded `dev` workflow. Four states — `planning`
-/// → `implement` → `check` → `done` — with role-rotated
-/// dispatch (`researcher` / `implementer` / `checker`)
-/// per the dev plugin's documented shape (see
-/// `docs/WORKFLOW-INTEGRATION.md §A.1`).
+/// The hard-coded `dev` workflow. Three states — `planning`
+/// → `in_progress` → `done`. The `in_progress` state allows
+/// both `implementer` and `checker` roles; the main LLM
+/// orchestrates them — implementer writes, checker does
+/// adversarial review per item (fail → back to implementer).
 ///
-/// Phase 2 will replace this with `load_workflow("dev", project_path)`
+/// This is the post-2026-07-10 shape: the former 4-state
+/// machine (`planning → implement → check → done`) collapsed
+/// `implement` + `check` into `in_progress` so the state
+/// machine doesn't model the implementation's internal
+/// "write → test → fix" loop. Complex multi-step work
+/// (backend → test → frontend → test → e2e) lives in
+/// `task.json.items`, advanced by the orchestrator LLM.
+///
+/// Phase 2 replaced this with `load_workflow("dev", project_path)`
 /// which serde-deserializes the JSON file with the same
-/// shape. Until then, every workflow session runs against
-/// this in-memory constant.
+/// shape. This constant is now the **fallback** when the
+/// on-disk plugin is missing or malformed.
 ///
-/// **All three transitions require user confirmation** —
+/// **Both transitions require user confirmation** —
 /// the agent cannot self-advance the state; the gate IPC
 /// `resolve_task_state_transition` (Phase 3) fires on
 /// every requested move.
 ///
-/// **Coordination**: `Pipeline` (single role per state).
-/// `gather_strategy` is therefore empty. A future
-/// `review` plugin will flip the coordination to
-/// `SynthesisRound` and start populating `gather_strategy`.
+/// **Coordination**: `Pipeline` (roles run sequentially
+/// in declared order). `gather_strategy` is therefore
+/// empty. A future `review` plugin will flip the
+/// coordination to `SynthesisRound` and start populating
+/// `gather_strategy`.
 pub fn default_workflow() -> WorkflowDef {
     WorkflowDef {
         name: "dev".to_string(),
-        description: "Standard dev workflow: planning → implement → check → done with researcher / implementer / checker roles".to_string(),
+        description: "Standard dev workflow: planning → in_progress → done with researcher / implementer / checker roles".to_string(),
         states: vec![
             "planning".to_string(),
-            "implement".to_string(),
-            "check".to_string(),
+            "in_progress".to_string(),
             "done".to_string(),
         ],
         initial: "planning".to_string(),
         transitions: vec![
             Transition {
                 from: "planning".to_string(),
-                to: "implement".to_string(),
+                to: "in_progress".to_string(),
                 requires_user_confirm: true,
             },
             Transition {
-                from: "implement".to_string(),
-                to: "check".to_string(),
-                requires_user_confirm: true,
-            },
-            Transition {
-                from: "check".to_string(),
+                from: "in_progress".to_string(),
                 to: "done".to_string(),
                 requires_user_confirm: true,
             },
         ],
         roles_by_state: HashMap::from([
             ("planning".to_string(), vec!["researcher".to_string()]),
-            ("implement".to_string(), vec!["implementer".to_string()]),
-            ("check".to_string(), vec!["checker".to_string()]),
+            (
+                "in_progress".to_string(),
+                vec!["implementer".to_string(), "checker".to_string()],
+            ),
             // `done` has no per-state role — it triggers the
             // spec-distillation + archive hooks (Phase 3).
             ("done".to_string(), vec![]),
@@ -401,15 +406,11 @@ pub fn default_workflow() -> WorkflowDef {
         breadcrumb: HashMap::from([
             (
                 "planning".to_string(),
-                "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 implement".to_string(),
+                "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress".to_string(),
             ),
             (
-                "implement".to_string(),
-                "[Wf · implement · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范;完成后请用户确认转 check".to_string(),
-            ),
-            (
-                "check".to_string(),
-                "[Wf · check · dev] 校验 + 测试;checker 跑 review(加载 wf-check);完成后请用户确认转 done".to_string(),
+                "in_progress".to_string(),
+                "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后请用户确认转 done".to_string(),
             ),
             (
                 "done".to_string(),

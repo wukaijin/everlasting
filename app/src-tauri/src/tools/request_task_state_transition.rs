@@ -5,8 +5,8 @@
 //! Subagent-clone of the workflow state-machine's user-confirmation
 //! gate. Lets the agent ask the user to move the current task's
 //! `task.json.status` from one workflow state to another
-//! (`planning` → `implement` → `check` → `done` for the dev
-//! plugin). The execution is **blocking** (the agent loop's turn
+//! (`planning` → `in_progress` → `done` for the dev plugin). The
+//! execution is **blocking** (the agent loop's turn
 //! suspends until the user allows / denies), mirroring
 //! `request_mode_change`'s structure.
 //!
@@ -58,8 +58,8 @@
 //! `resolve_task_state_transition` IPC handler (apply BEFORE
 //! resolve — the "double-IPC pattern" of `resolve_mode_change`).
 //! This keeps the `from → to` hook dispatch (`trigger_spec_distillation`
-//! on `Check → Done`; `preflight_implement_check` on
-//! `Planning → Implement`) in a single place — the IPC handler.
+//! on `in_progress → Done`; `preflight_implement_check` on
+//! `Planning → in_progress`) in a single place — the IPC handler.
 //! Without this separation, hooks would fire BEFORE the user
 //! confirms (a regression that the Q9 design explicitly rules out:
 //! "Rust 固定 hook 嵌入 set_task_state 写入路径").
@@ -68,14 +68,14 @@
 //!
 //! ```json
 //! {
-//!   "target_state": "implement",
+//!   "target_state": "in_progress",
 //!   "slug": "my-feat",
 //!   "reason": "research complete; ready to implement"
 //! }
 //! ```
 //!
 //! Schema validation is **strict** — boundary violations
-//! (`target_state` not in `planning`/`implement`/`check`/`done` /
+//! (`target_state` not in `planning`/`in_progress`/`done` /
 //! empty / not a valid slug / `reason` > 500 chars) are
 //! `is_error: true` and do NOT enter the blocking wait.
 
@@ -99,7 +99,7 @@ use crate::state::ChatEventSink;
 // ---------------------------------------------------------------------------
 
 /// The valid `target_state` strings. Mirrors the dev plugin's
-/// `WorkflowDef::states` (planning / implement / check / done).
+/// `WorkflowDef::states` (planning / in_progress / done).
 /// Mirroring the `request_mode_change`'s `VALID_MODES` posture —
 /// hard-coded set because (a) the LLM can't request transitions
 /// the workflow doesn't declare, and (b) the wire schema is the
@@ -107,9 +107,12 @@ use crate::state::ChatEventSink;
 ///
 /// A future plugin with custom states (e.g. the review plugin's
 /// `intake` / `synth` / `done`) would extend this list. Until
-/// then, hard-coding the 4 dev states matches the dev plugin's
-/// locked 4-state machine (matches `WorkflowDef::states`).
-const VALID_STATES: &[&str] = &["planning", "implement", "check", "done"];
+/// then, hard-coding the 3 dev states matches the dev plugin's
+/// locked 3-state machine (matches `WorkflowDef::states`).
+///
+/// (2026-07-10 merge: was 4 states `planning/implement/check/done`;
+/// `implement` + `check` collapsed into `in_progress`.)
+const VALID_STATES: &[&str] = &["planning", "in_progress", "done"];
 
 /// Max `reason` text length (same as `request_mode_change`'s
 /// `MAX_REASON_LEN`). Reasons longer than this are rejected with
@@ -133,9 +136,9 @@ const MAX_REASON_LEN: usize = 500;
 /// matches against the workflow_ctx-loaded task).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestTaskStateTransitionInput {
-    /// Required. Must be one of `planning` / `implement` /
-    /// `check` / `done` (matches `WorkflowDef::states` for the
-    /// `dev` plugin — the dev plugin's locked 4-state
+    /// Required. Must be one of `planning` / `in_progress` /
+    /// `done` (matches `WorkflowDef::states` for the
+    /// `dev` plugin — the dev plugin's locked 3-state
     /// machine is the SchemaOfTruth for this tool).
     pub target_state: String,
     /// Required. The slug of the current task. The tool
@@ -165,12 +168,12 @@ pub fn definition() -> ToolDef {
         name: "request_task_state_transition".to_string(),
         description: Some(
             "Ask the user to transition the current task to a new workflow state \
-             (planning → implement → check → done for the dev plugin). The user \
+             (planning → in_progress → done for the dev plugin). The user \
              sees an inline card with the target state, the current state, and \
              your reason; they choose Allow or Deny. On Allow, the on-disk \
              task.json is updated and the per-transition Rust hook \
-             (spec-distillation on Check→Done, preflight on \
-             Planning→Implement) fires automatically. On Deny, you get \
+             (spec-distillation on in_progress→done, preflight on \
+             planning→in_progress) fires automatically. On Deny, you get \
              {\"cancelled_by_user\": true} and should adapt.\n\n\
              Only available in workflow sessions. If the target state is the \
              current state, the call returns {\"noop\": true} and no card is \
@@ -186,8 +189,8 @@ pub fn definition() -> ToolDef {
             "properties": {
                 "target_state": {
                     "type": "string",
-                    "enum": ["planning", "implement", "check", "done"],
-                    "description": "The state to transition to. Must be one of: planning | implement | check | done."
+                    "enum": ["planning", "in_progress", "done"],
+                    "description": "The state to transition to. Must be one of: planning | in_progress | done."
                 },
                 "slug": {
                     "type": "string",
@@ -219,7 +222,7 @@ pub fn definition() -> ToolDef {
 pub(crate) enum ValidationError {
     #[error("`target_state` must be non-empty")]
     EmptyTargetState,
-    #[error("`target_state` must be one of: planning | implement | check | done (got: {got:?})")]
+    #[error("`target_state` must be one of: planning | in_progress | done (got: {got:?})")]
     UnknownTargetState { got: String },
     #[error("`slug` is empty — pass the current workflow task's slug explicitly, or set it via WorkflowCtx")]
     EmptySlug,
@@ -786,7 +789,7 @@ mod tests {
         let pool = fresh_db().await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = serde_json::json!({"target_state": "implement", "slug": "UPPER"});
+        let input = serde_json::json!({"target_state": "in_progress", "slug": "UPPER"});
         let cancel = CancellationToken::new();
         let (content, is_error, _, _) = execute_blocking(
             &input,
@@ -810,7 +813,7 @@ mod tests {
         let store = QuestionStore::new();
         let sink = make_sink();
         let input = serde_json::json!({
-            "target_state": "implement",
+            "target_state": "in_progress",
             "slug": "my-feat",
             "reason": "x".repeat(501), // 501 > 500
         });
@@ -843,7 +846,7 @@ mod tests {
         let pool = fresh_db().await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = serde_json::json!({"target_state": "implement", "slug": "wrong-slug"});
+        let input = serde_json::json!({"target_state": "in_progress", "slug": "wrong-slug"});
         let cancel = CancellationToken::new();
         let (content, is_error, _, _) = execute_blocking(
             &input,
@@ -871,7 +874,7 @@ mod tests {
         seed_session(&pool, "s1").await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = serde_json::json!({"target_state": "implement"});
+        let input = serde_json::json!({"target_state": "in_progress"});
         let cancel = CancellationToken::new();
         let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
 
@@ -919,7 +922,7 @@ mod tests {
         let pool = fresh_db().await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = serde_json::json!({"target_state": "implement"});
+        let input = serde_json::json!({"target_state": "in_progress"});
         let cancel = CancellationToken::new();
         let (content, is_error, _, _) = execute_blocking(
             &input,
@@ -948,13 +951,13 @@ mod tests {
         let pool = fresh_db().await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = make_valid_input("implement", "my-feat");
+        let input = make_valid_input("in_progress", "my-feat");
         let cancel = CancellationToken::new();
         let (content, is_error, _, _) = execute_blocking(
             &input,
             "s1",
             "tu_1",
-            Some(TaskStatus::Implement),
+            Some(TaskStatus::InProgress),
             Some("my-feat".into()),
             &pool,
             &store,
@@ -984,7 +987,7 @@ mod tests {
         seed_session(&pool, "s1").await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = make_valid_input("implement", "my-feat");
+        let input = make_valid_input("in_progress", "my-feat");
         let cancel = CancellationToken::new();
         let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
 
@@ -1020,7 +1023,7 @@ mod tests {
         assert_eq!(emitted.len(), 1, "emit_task_state_transition called once");
         assert_eq!(emitted[0].session_id, "s1");
         assert_eq!(emitted[0].tool_use_id, "tu_1");
-        assert_eq!(emitted[0].target_state, "implement");
+        assert_eq!(emitted[0].target_state, "in_progress");
         assert_eq!(emitted[0].current_state.as_deref(), Some("planning"));
         assert_eq!(emitted[0].slug.as_deref(), Some("my-feat"));
         drop(emitted);
@@ -1035,7 +1038,7 @@ mod tests {
         assert!(!is_error, "allowed returns is_error: false");
         assert!(content.contains("allowed"));
         assert!(content.contains("new_state"));
-        assert!(content.contains("implement"));
+        assert!(content.contains("in_progress"));
     }
 
     // ----- cancel arm -----
@@ -1046,7 +1049,7 @@ mod tests {
         seed_session(&pool, "s1").await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = make_valid_input("implement", "my-feat");
+        let input = make_valid_input("in_progress", "my-feat");
         let cancel = CancellationToken::new();
         let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
 
@@ -1091,7 +1094,7 @@ mod tests {
         seed_session(&pool, "s1").await;
         let store = QuestionStore::new();
         let sink = make_sink();
-        let input = make_valid_input("implement", "my-feat");
+        let input = make_valid_input("in_progress", "my-feat");
         let cancel = CancellationToken::new();
         let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
 
@@ -1147,8 +1150,8 @@ mod tests {
                 PendingInteraction::TaskStateTransition(TaskStateTransitionPayload {
                     session_id: "s1".into(),
                     tool_use_id: "tu_pre".into(),
-                    target_state: "check".into(),
-                    current_state: Some("implement".into()),
+                    target_state: "in_progress".into(),
+                    current_state: Some("planning".into()),
                     slug: Some("my-feat".into()),
                     reason: None,
                     ts: 0,
@@ -1157,7 +1160,7 @@ mod tests {
             .await
             .expect("pre-register ok");
 
-        let input = make_valid_input("implement", "my-feat");
+        let input = make_valid_input("in_progress", "my-feat");
         let cancel = CancellationToken::new();
         let (content, is_error, _, _) = execute_blocking(
             &input,
@@ -1186,7 +1189,7 @@ mod tests {
     #[test]
     fn validate_accepts_well_formed_input() {
         let input = RequestTaskStateTransitionInput {
-            target_state: "implement".into(),
+            target_state: "in_progress".into(),
             slug: "my-feat".into(),
             reason: Some("ok".into()),
         };

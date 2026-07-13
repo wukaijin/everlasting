@@ -1,35 +1,28 @@
 {
   "name": "dev",
-  "description": "Standard dev workflow: planning → implement → check → done with researcher / implementer / checker roles",
-  "states": ["planning", "implement", "check", "done"],
+  "description": "Standard dev workflow: planning → in_progress → done with researcher / implementer / checker roles",
+  "states": ["planning", "in_progress", "done"],
   "initial": "planning",
   "transitions": [
     {
       "from": "planning",
-      "to": "implement",
+      "to": "in_progress",
       "requires_user_confirm": true
     },
     {
-      "from": "implement",
-      "to": "check",
-      "requires_user_confirm": true
-    },
-    {
-      "from": "check",
+      "from": "in_progress",
       "to": "done",
       "requires_user_confirm": true
     }
   ],
   "roles_by_state": {
     "planning": ["researcher"],
-    "implement": ["implementer"],
-    "check": ["checker"],
+    "in_progress": ["implementer", "checker"],
     "done": []
   },
   "breadcrumb": {
-    "planning": "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 implement",
-    "implement": "[Wf · implement · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范;完成后请用户确认转 check",
-    "check": "[Wf · check · dev] 校验 + 测试;checker 跑 review(加载 wf-check);完成后请用户确认转 done",
+    "planning": "[Wf · planning · dev] 调研 + 拆 task items;加载 wf-brainstorm skill;完成后请用户确认转 in_progress",
+    "in_progress": "[Wf · in_progress · dev] 推进 task items(update_checklist 改 task.json);用 wf-before-dev 检查规范。\n复杂任务请分步:每完成一个 item 派 checker 对抗 review(checker 用 wf-check skill);FAIL 则派 implementer 修,直到 PASS 再推进下一项。简单任务自检即可。\n完成后请用户确认转 done",
     "done": "[Wf · done · dev] 触发 spec 沉淀 + task 归档(spec-distillation 在 Phase 3 落地)"
   },
   "delegation_templates": {

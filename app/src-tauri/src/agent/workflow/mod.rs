@@ -155,7 +155,7 @@ mod tests {
     // --- shape ----------------------------------------------------------
 
     #[test]
-    fn default_workflow_is_dev_with_four_states_in_order() {
+    fn default_workflow_is_dev_with_three_states_in_order() {
         let w = dev();
         assert_eq!(w.name, "dev");
         assert_eq!(w.initial, "planning");
@@ -163,8 +163,7 @@ mod tests {
             w.states,
             vec![
                 "planning".to_string(),
-                "implement".to_string(),
-                "check".to_string(),
+                "in_progress".to_string(),
                 "done".to_string(),
             ],
             "states MUST be ordered so the UI breadcrumb sequence reads top-down",
@@ -172,9 +171,9 @@ mod tests {
     }
 
     #[test]
-    fn default_workflow_has_three_declarative_transitions() {
+    fn default_workflow_has_two_declarative_transitions() {
         let w = dev();
-        assert_eq!(w.transitions.len(), 3);
+        assert_eq!(w.transitions.len(), 2);
         for t in &w.transitions {
             assert!(
                 t.requires_user_confirm,
@@ -186,12 +185,13 @@ mod tests {
     #[test]
     fn default_workflow_maps_each_state_to_expected_role() {
         let w = dev();
-        // Symmetric: each non-terminal state has exactly one
-        // role; `done` has none (it triggers spec distillation,
-        // not a dispatch).
         assert_eq!(allowed_roles(&w, "planning"), &["researcher".to_string()]);
-        assert_eq!(allowed_roles(&w, "implement"), &["implementer".to_string()]);
-        assert_eq!(allowed_roles(&w, "check"), &["checker".to_string()]);
+        // Post-merge: in_progress allows BOTH implementer + checker
+        // (orchestrator LLM rotates them for adversarial review).
+        assert_eq!(
+            allowed_roles(&w, "in_progress"),
+            &["implementer".to_string(), "checker".to_string()]
+        );
         let done_roles = allowed_roles(&w, "done");
         assert!(done_roles.is_empty(), "done has no dispatchable roles");
     }
@@ -211,19 +211,21 @@ mod tests {
     #[test]
     fn can_transition_recognizes_declared_edges() {
         let w = dev();
-        assert!(can_transition(&w, "planning", "implement"));
-        assert!(can_transition(&w, "implement", "check"));
-        assert!(can_transition(&w, "check", "done"));
+        assert!(can_transition(&w, "planning", "in_progress"));
+        assert!(can_transition(&w, "in_progress", "done"));
     }
 
     #[test]
     fn can_transition_rejects_undeclared_edges() {
         let w = dev();
         // Skip-ahead: not in the dev plugin's declaration.
-        assert!(!can_transition(&w, "planning", "check"));
         assert!(!can_transition(&w, "planning", "done"));
         // Reverse: not declared.
-        assert!(!can_transition(&w, "implement", "planning"));
+        assert!(!can_transition(&w, "in_progress", "planning"));
+        assert!(!can_transition(&w, "done", "in_progress"));
+        // Legacy pre-merge states are no longer valid edges.
+        assert!(!can_transition(&w, "planning", "implement"));
+        assert!(!can_transition(&w, "check", "done"));
         // Unknown states.
         assert!(!can_transition(&w, "nope", "planning"));
         assert!(!can_transition(&w, "planning", "nope"));
@@ -242,13 +244,13 @@ mod tests {
         assert!(p.contains("planning"));
         assert!(p.contains("wf-brainstorm"));
 
-        let i = breadcrumb_for(&w, "implement");
-        assert!(i.contains("implement"));
+        let i = breadcrumb_for(&w, "in_progress");
+        assert!(i.contains("in_progress"));
         assert!(i.contains("wf-before-dev"));
-
-        let c = breadcrumb_for(&w, "check");
-        assert!(c.contains("check"));
-        assert!(c.contains("wf-check"));
+        // Post-merge: the in_progress breadcrumb also references
+        // the adversarial checker workflow.
+        assert!(i.contains("checker"));
+        assert!(i.contains("wf-check"));
 
         let d = breadcrumb_for(&w, "done");
         assert!(d.contains("done"));
@@ -387,7 +389,7 @@ mod tests {
         let loaded = load_workflow("dev", &path);
         assert_eq!(loaded.name, "dev");
         assert_eq!(loaded.initial, "planning");
-        assert_eq!(loaded.states.len(), 4);
+        assert_eq!(loaded.states.len(), 3);
     }
 
     #[test]
@@ -616,7 +618,7 @@ mod tests {
         let loaded = load_workflow("dev", &path);
         assert_eq!(loaded.name, "dev");
         assert_eq!(loaded.initial, "planning");
-        assert_eq!(loaded.states.len(), 4);
+        assert_eq!(loaded.states.len(), 3);
     }
 
     // ---- Step 2.5: delegation template helpers ------------------------
@@ -701,7 +703,7 @@ mod tests {
         // descend into subdirs (`agents/backend/`) to find
         // nested .md files; a flat top-level listing would
         // miss them.
-        let ctx = dev_ctx_with_task("t", "s", TaskStatus::Check);
+        let ctx = dev_ctx_with_task("t", "s", TaskStatus::InProgress);
         let tmp = tempfile::TempDir::new().unwrap();
         let spec_dir = tmp.path().join(".everlasting").join("spec");
         std::fs::create_dir_all(spec_dir.join("agents/backend")).unwrap();

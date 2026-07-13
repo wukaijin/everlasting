@@ -564,7 +564,7 @@ function parseTaskStateTransitionEnvelope(
     }
     if (obj.cancelled_by_user === true) {
       const ts = obj.target_state;
-      if (ts === "planning" || ts === "implement" || ts === "check" || ts === "done") {
+      if (ts === "planning" || ts === "in_progress" || ts === "done") {
         return { denied: true, targetState: ts };
       }
       return undefined;
@@ -575,12 +575,12 @@ function parseTaskStateTransitionEnvelope(
       // prev_state may be "" when the backend had no current task;
       // fall back to new_state so the comparison row still renders.
       const newState =
-        ns === "planning" || ns === "implement" || ns === "check" || ns === "done"
+        ns === "planning" || ns === "in_progress" || ns === "done"
           ? ns
           : undefined;
       if (newState === undefined) return undefined;
       const prevState =
-        ps === "planning" || ps === "implement" || ps === "check" || ps === "done"
+        ps === "planning" || ps === "in_progress" || ps === "done"
           ? ps
           : newState;
       return { allowed: true, prevState, newState };

@@ -12,10 +12,13 @@
 //!
 //! ## 当前实现的钩子(Step 3.1)
 //!
-//! - `(Check, Done)` → `trigger_spec_distillation(task)` — Step 3.1
+//! - `(InProgress, Done)` → `trigger_spec_distillation(task)` — Step 3.1
 //!   落地钩子 stub,Step 3.2 会接上 wf-update-spec skill 落地 spec。
-//! - `(Planning, Implement)` → `preflight_implement_check(task)` —
+//!   (2026-07-10 merge: formerly `(Check, Done)`；implement+check
+//!   合并为 in_progress 后,done 前的 spec 沉淀从这里触发。)
+//! - `(Planning, InProgress)` → `preflight_implement_check(task)` —
 //!   可选前置(in this step it's a logging stub;full impl in Phase 4)。
+//!   (2026-07-10 merge: formerly `(Planning, Implement)`。)
 //! - 其他转移 → 不触发钩子(no-op)
 //!
 //! ## 同步 IO + 不阻塞 IPC
@@ -62,7 +65,7 @@ use super::task::{read_task, write_task, TaskJson, TaskStatus};
 /// `AppCommandError` category.
 #[derive(Debug, Error)]
 pub enum StateTransitionError {
-    #[error("target state `{0}` is not a valid state for this workflow (expected one of: planning | implement | check | done)")]
+    #[error("target state `{0}` is not a valid state for this workflow (expected one of: planning | in_progress | done)")]
     InvalidTargetState(String),
 
     #[error(
@@ -136,8 +139,13 @@ fn has_marker(summary: &str, prefix: &str) -> bool {
 pub fn parse_target_state(s: &str) -> StateResult<TaskStatus> {
     match s.trim().to_ascii_lowercase().as_str() {
         "planning" => Ok(TaskStatus::Planning),
-        "implement" => Ok(TaskStatus::Implement),
-        "check" => Ok(TaskStatus::Check),
+        "in_progress" => Ok(TaskStatus::InProgress),
+        // Legacy pre-merge values — accept + migrate (same
+        // posture as TaskStatus::from_str_opt). The IPC layer
+        // only gets here from the LLM's tool call or the
+        // resolve_task_state_transition handler; old persisted
+        // values should not be rejected post-merge.
+        "implement" | "check" => Ok(TaskStatus::InProgress),
         "done" => Ok(TaskStatus::Done),
         other => Err(StateTransitionError::InvalidTargetState(other.to_string())),
     }
@@ -256,10 +264,10 @@ fn dispatch_hook(
     task: &mut TaskJson,
 ) {
     match (from, to) {
-        (TaskStatus::Check, TaskStatus::Done) => {
+        (TaskStatus::InProgress, TaskStatus::Done) => {
             trigger_spec_distillation(project_path, slug, task);
         }
-        (TaskStatus::Planning, TaskStatus::Implement) => {
+        (TaskStatus::Planning, TaskStatus::InProgress) => {
             preflight_implement_check(project_path, slug, task);
         }
         _ => {
@@ -287,7 +295,7 @@ fn dispatch_hook(
 /// `docs/WORKFLOW-INTEGRATION.md` §6.7.
 const PROJ_NS_SPEC_DIR: &str = ".everlasting/spec";
 
-/// Hook for `(Check, Done)`.
+/// Hook for `(InProgress, Done)`.
 ///
 /// Step 3.1 stub only wrote a marker to `task.summary`. Step 3.2
 /// replaces the stub with a concrete "engine primes the
@@ -435,7 +443,7 @@ fn append_progress_hint(progress_path: &Path, hint: &str) {
     }
 }
 
-/// Hook for `(Planning, Implement)`. Same shape as
+/// Hook for `(Planning, InProgress)`. Same shape as
 /// `trigger_spec_distillation`: append an
 /// `wf:implement-preflight` marker. Step 3.1 keeps it as a stub;
 /// Phase 4 (or a future task) replaces it with the actual
@@ -486,7 +494,7 @@ mod tests {
         t.items = vec![TaskItem {
             id: "i1".into(),
             content: "do thing".into(),
-            status: TaskStatus::Implement,
+            status: TaskStatus::InProgress,
             tdd: None,
         }];
         write_task(path, &t).expect("write");
@@ -503,8 +511,19 @@ mod tests {
             TaskStatus::Planning
         );
         assert_eq!(
-            parse_target_state("IMPLEMENT").unwrap(),
-            TaskStatus::Implement
+            parse_target_state("IN_PROGRESS").unwrap(),
+            TaskStatus::InProgress
+        );
+        // Legacy pre-merge values migrate.
+        assert_eq!(
+            parse_target_state("implement").unwrap(),
+            TaskStatus::InProgress,
+            "legacy implement → InProgress"
+        );
+        assert_eq!(
+            parse_target_state("CHECK").unwrap(),
+            TaskStatus::InProgress,
+            "legacy check → InProgress"
         );
         assert_eq!(
             parse_target_state("  Done  ").unwrap(),
@@ -540,10 +559,10 @@ mod tests {
         // that RFC3339 truncates to (some FSes are very fast).
         std::thread::sleep(std::time::Duration::from_millis(5));
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
             .expect("ok");
 
-        assert_eq!(updated.status, TaskStatus::Implement);
+        assert_eq!(updated.status, TaskStatus::InProgress);
         assert_ne!(
             updated.updated_at, original.updated_at,
             "updated_at must bump (got original={}, updated={})",
@@ -556,7 +575,7 @@ mod tests {
         assert_eq!(updated.created_at, original.created_at);
         assert_eq!(updated.items.len(), 1);
         assert_eq!(updated.items[0].id, "i1");
-        // Planning → Implement DOES fire the
+        // Planning → InProgress DOES fire the
         // `preflight_implement_check` hook (Step 3.1 design
         // table) → summary gets a `[wf:implement-preflight …]`
         // marker prepended.
@@ -564,29 +583,29 @@ mod tests {
             updated
                 .summary
                 .starts_with(IMPLEMENT_PREFLIGHT_MARKER_PREFIX),
-            "summary must lead with the preflight marker after Planning→Implement; got: {:?}",
+            "summary must lead with the preflight marker after Planning→InProgress; got: {:?}",
             updated.summary,
         );
         assert!(updated.summary.contains("initial line\n"));
         // Disk reflects the same change.
         let disk = read_task(path, "my-feat").unwrap();
-        assert_eq!(disk.status, TaskStatus::Implement);
+        assert_eq!(disk.status, TaskStatus::InProgress);
         assert_eq!(disk.updated_at, updated.updated_at);
     }
 
     // --- hook dispatch -------------------------------------------------
 
     #[test]
-    fn set_task_state_check_to_done_invokes_spec_distillation_hook() {
+    fn set_task_state_in_progress_to_done_invokes_spec_distillation_hook() {
         let d = fresh_project();
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Check;
+        t.status = TaskStatus::InProgress;
         write_task(path, &t).expect("write");
 
         let updated =
-            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
         assert_eq!(updated.status, TaskStatus::Done);
         assert!(
             updated.summary.starts_with(SPEC_DISTILLED_MARKER_PREFIX),
@@ -601,12 +620,12 @@ mod tests {
     }
 
     #[test]
-    fn set_task_state_planning_to_implement_invokes_preflight_hook() {
+    fn set_task_state_planning_to_in_progress_invokes_preflight_hook() {
         let d = fresh_project();
         let path = proj(&d);
         let _ = create_seed(path, "my-feat");
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
             .expect("ok");
         assert!(
             updated
@@ -619,20 +638,20 @@ mod tests {
 
     #[test]
     fn set_task_state_unknown_transition_does_not_invoke_hook() {
-        // implement -> implement is not a declared edge (it IS
+        // in_progress -> in_progress is not a declared edge (it IS
         // a valid status change but no hook fires for it).
         let d = fresh_project();
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Implement;
+        t.status = TaskStatus::InProgress;
         write_task(path, &t).expect("write");
 
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::Implement,
-            TaskStatus::Implement,
+            TaskStatus::InProgress,
+            TaskStatus::InProgress,
         )
         .expect("ok");
         // Summary unchanged (no marker, no log line produced anything).
@@ -647,7 +666,7 @@ mod tests {
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Check;
+        t.status = TaskStatus::InProgress;
         t.summary = format!(
             "{}{}",
             marker_line(SPEC_DISTILLED_MARKER_PREFIX, "2026-01-01T00:00:00+00:00"),
@@ -655,10 +674,10 @@ mod tests {
         );
         write_task(path, &t).expect("write");
 
-        // Apply Check → Done again; the hook should detect the
+        // Apply InProgress → Done again; the hook should detect the
         // pre-existing marker and skip.
         let updated =
-            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
         let marker_count = updated
             .summary
             .lines()
@@ -680,7 +699,7 @@ mod tests {
         t.status = TaskStatus::Planning;
         write_task(path, &t).expect("write");
 
-        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::Implement)
+        let updated = set_task_state(path, "my-feat", TaskStatus::Planning, TaskStatus::InProgress)
             .expect("ok");
         let marker_count = updated
             .summary
@@ -707,7 +726,7 @@ mod tests {
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Check;
+        t.status = TaskStatus::InProgress;
         write_task(path, &t).expect("write");
 
         // Sanity: spec dir does NOT exist before the
@@ -719,7 +738,7 @@ mod tests {
         );
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
 
         assert!(
             spec_dir.exists(),
@@ -747,7 +766,7 @@ mod tests {
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Check;
+        t.status = TaskStatus::InProgress;
         write_task(path, &t).expect("write");
 
         let progress_path = super::super::task::task_dir(path, "my-feat").join("progress.md");
@@ -757,7 +776,7 @@ mod tests {
         );
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
 
         assert!(
             progress_path.exists(),
@@ -800,7 +819,7 @@ mod tests {
         let path = proj(&d);
         let task = create_seed(path, "my-feat");
         let mut t = task;
-        t.status = TaskStatus::Check;
+        t.status = TaskStatus::InProgress;
         // Pre-existing marker + pre-existing progress.md with
         // one hint already.
         t.summary = format!(
@@ -814,7 +833,7 @@ mod tests {
         std::fs::write(&progress_path, "preexisting body\n").unwrap();
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::Check, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
 
         let content = std::fs::read_to_string(&progress_path).expect("read progress");
         // The idempotent short-circuit must NOT append the
@@ -834,7 +853,7 @@ mod tests {
             d.path(),
             "ghost",
             TaskStatus::Planning,
-            TaskStatus::Implement,
+            TaskStatus::InProgress,
         )
         .expect_err("missing task must fail");
         assert!(
@@ -858,11 +877,11 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::Check, // stale: actual status = Planning
-            TaskStatus::Implement,
+            TaskStatus::InProgress, // stale: actual status = Planning
+            TaskStatus::InProgress,
         )
         .expect("ok");
-        assert_eq!(updated.status, TaskStatus::Implement);
+        assert_eq!(updated.status, TaskStatus::InProgress);
     }
 
     #[test]

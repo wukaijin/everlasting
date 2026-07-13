@@ -101,7 +101,7 @@ fn map_task_error(e: TaskError) -> AppCommandError {
             ErrorCategory::InvalidRequest,
             format!(
                 "archive_task: task is in status `{status}`; \
-                 finish the workflow (Check → Done) before archiving"
+                 finish the workflow (in_progress → done) before archiving"
             ),
         ),
         TaskError::MalformedJson(path, msg) => AppCommandError::new(
@@ -271,7 +271,7 @@ mod tests {
         let _ = map_task_error(TaskError::AlreadyExists(PathBuf::from("/x")));
         let _ = map_task_error(TaskError::NotFound(PathBuf::from("/y")));
         let _ = map_task_error(TaskError::AlreadyArchived(PathBuf::from("/z/archive")));
-        let _ = map_task_error(TaskError::NotInDoneStatus("implement".into()));
+        let _ = map_task_error(TaskError::NotInDoneStatus("in_progress".into()));
 
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope");
         let _ = map_task_error(TaskError::MalformedJson(

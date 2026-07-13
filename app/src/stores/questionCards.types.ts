@@ -304,12 +304,15 @@ export interface ModeChangeResolvePayload {
   allow: boolean;
 }
 
-/** The four workflow state-machine states (mirrors the Rust
+/** The three workflow state-machine states (mirrors the Rust
  *  `WorkflowDef.states` for the dev plugin +
  *  `TaskStatus::as_str`). Used by the task-state-transition
  *  payload + card props. The literal union lets vue-tsc catch a
- *  typo at the dispatch site (vs a bare `string`). */
-export type WorkflowState = "planning" | "implement" | "check" | "done";
+ *  typo at the dispatch site (vs a bare `string`).
+ *
+ *  (2026-07-10 merge: was four states `planning/implement/check/
+ *  done`; `implement` + `check` collapsed into `in_progress`.) */
+export type WorkflowState = "planning" | "in_progress" | "done";
 
 /** Backend → frontend payload emitted on the
  *  `task:state:transition:request` channel (and returned inside
@@ -331,7 +334,7 @@ export type WorkflowState = "planning" | "implement" | "check" | "done";
  *    `ToolUse(request_task_state_transition)` block; MessageItem
  *    dispatch pairs the card with its tool_use row via this.
  *  - `target_state` — the state the agent wants to move to
- *    (`planning`/`implement`/`check`/`done`). Backend validates
+ *    (`planning`/`in_progress`/`done`). Backend validates
  *    against the workflow's states.
  *  - `current_state` — optional snapshot at tool-invocation time
  *    (rendered in the "当前 → 目标" comparison row; omitted on the

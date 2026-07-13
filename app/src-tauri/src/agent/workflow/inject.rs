@@ -390,7 +390,7 @@ pub fn append_workflow_breadcrumb(turn_messages: &mut Vec<ChatMessage>, ctx: &Wo
 /// - `{title}` → `current_task.title` (empty when no task)
 /// - `{summary}` → `current_task.summary` (empty when no task)
 /// - `{state}` → `current_task.status` string (e.g.
-///   `"planning"` / `"implement"` / `"check"` / `"done"`)
+///   `"planning"` / `"in_progress"` / `"done"`)
 ///
 /// **`{relevant_specs}`** (Step 2.5): scans
 /// `<project>/.everlasting/spec/` for `.md` files when
@@ -666,7 +666,7 @@ mod tests {
                 id: "t1".into(),
                 title: "Sample task".into(),
                 slug: "sample".into(),
-                status: TaskStatus::Implement,
+                status: TaskStatus::InProgress,
                 created_at: "2026-07-08T00:00:00Z".into(),
                 updated_at: "2026-07-08T00:00:00Z".into(),
                 parent: None,
@@ -750,18 +750,18 @@ mod tests {
         // Confirms the per-turn reflective intent: the
         // block's text mentions the dev plugin's state
         // breadcrumb for the current task's status
-        // (`implement`).
+        // (`in_progress`).
         let mut msgs = vec![fresh_user_message()];
         append_workflow_breadcrumb(&mut msgs, &sample_ctx_with_task());
         match &msgs[0].content {
             MessageContent::Blocks(bs) => match bs.last().unwrap() {
                 ContentBlock::Text { text, .. } => {
-                    // dev plugin's `implement` breadcrumb
+                    // dev plugin's `in_progress` breadcrumb
                     // references `wf-before-dev`; cheap
                     // identity probe.
                     assert!(
                         text.contains("wf-before-dev"),
-                        "implement-state breadcrumb text missing: {}",
+                        "in_progress-state breadcrumb text missing: {}",
                         text
                     );
                 }
@@ -800,7 +800,7 @@ mod tests {
         );
         assert!(text.contains("slug: sample"), "missing slug, got: {}", text);
         assert!(
-            text.contains("status: implement"),
+            text.contains("status: in_progress"),
             "missing status, got: {}",
             text
         );
@@ -960,7 +960,7 @@ mod tests {
         let tasks = project.path().join(".everlasting/tasks");
         for (slug, status) in [
             ("archived-task", TaskStatus::Done),
-            ("do-this-now", TaskStatus::Implement),
+            ("do-this-now", TaskStatus::InProgress),
             ("zzz-other", TaskStatus::Planning),
         ] {
             let dir = tasks.join(slug);
@@ -984,7 +984,7 @@ mod tests {
         let resolved = resolve_current_task(project.path()).await;
         let resolved = resolved.expect("at least one unfinished task exists");
         assert_eq!(resolved.slug, "do-this-now");
-        assert_eq!(resolved.status, TaskStatus::Implement);
+        assert_eq!(resolved.status, TaskStatus::InProgress);
     }
 
     #[tokio::test]

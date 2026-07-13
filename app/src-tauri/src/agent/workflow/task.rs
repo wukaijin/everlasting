@@ -84,9 +84,18 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Workflow task's authoritative status. Mirrors
-/// `WorkflowDef::states` (planning / implement / check /
-/// done) — kept as an explicit enum so the JSON validator
-/// can reject typos upfront.
+/// `WorkflowDef::states` (planning / in_progress / done) —
+/// kept as an explicit enum so the JSON validator can reject
+/// typos upfront.
+///
+/// **Merge (2026-07-10)**: the former `Implement` + `Check`
+/// variants collapsed into a single `InProgress`. The dev
+/// workflow became 3 states (`planning → in_progress → done`);
+/// within `in_progress` the main LLM orchestrates
+/// implementer + checker roles (adversarial review per item).
+/// Old `task.json` files with `"status": "implement"` or
+/// `"status": "check"` are silently migrated to `InProgress`
+/// by [`from_str_opt`] (lenient parse).
 ///
 /// **Step 3.3 (2026-07-09)**: added the `Completed` terminal
 /// variant, set by [`archive_task_init`] after moving the
@@ -109,11 +118,10 @@ use serde::{Deserialize, Serialize};
 /// archive file accidentally re-read by the chat loop
 /// doesn't silently demote to `Planning`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Planning,
-    Implement,
-    Check,
+    InProgress,
     Done,
     Completed,
 }
@@ -121,8 +129,11 @@ pub enum TaskStatus {
 impl TaskStatus {
     pub fn from_str_opt(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
-            "implement" => Self::Implement,
-            "check" => Self::Check,
+            "in_progress" => Self::InProgress,
+            // Legacy values from the pre-merge 4-state
+            // workflow — migrated to InProgress (see the enum
+            // doc comment on the 2026-07-10 merge).
+            "implement" | "check" => Self::InProgress,
             "done" => Self::Done,
             "completed" => Self::Completed,
             _ => Self::Planning,
@@ -132,8 +143,7 @@ impl TaskStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Planning => "planning",
-            Self::Implement => "implement",
-            Self::Check => "check",
+            Self::InProgress => "in_progress",
             Self::Done => "done",
             Self::Completed => "completed",
         }
@@ -142,13 +152,17 @@ impl TaskStatus {
 
 /// Lenient `Deserialize` — unknown / typo'd status strings fall back
 /// to `Planning` via [`TaskStatus::from_str_opt`], so a hand-written
-/// `task.json` with e.g. `"status": "in_progress"` or `"pending"`
+/// `task.json` with e.g. `"status": "pending"` or `"blocked"`
 /// (checklist-style values the LLM naturally emits) does NOT break
 /// `read_task`. 07-10-workflow-task-json-hardening R1: the derive
 /// `Deserialize` was strict and rejected any variant outside the
-/// 5-state enum, which made every direct `write_file` of task.json
+/// enum, which made every direct `write_file` of task.json
 /// fatal. Resilience lives on the read side, not by gating writes.
 /// Mirrors `def.rs::Coordination`'s custom Deserialize posture.
+///
+/// Note: the legacy `"implement"` / `"check"` values are accepted and
+/// migrated to `InProgress` (2026-07-10 merge), NOT demoted — see
+/// [`TaskStatus::from_str_opt`].
 impl<'de> serde::Deserialize<'de> for TaskStatus {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -249,7 +263,7 @@ pub enum TaskError {
     AlreadyArchived(PathBuf),
 
     /// Step 3.3: archive requires `status == Done`. We
-    /// refuse to archive a planning / implement / check
+    /// refuse to archive a planning / in_progress
     /// task because (a) the workflow hasn't finished
     /// producing spec content yet, and (b) archiving
     /// would orphan in-flight items + progress.md.
@@ -475,10 +489,10 @@ pub const PROJ_NS_TASKS_ARCHIVE_DIR: &str = "archive";
 /// - `<slug>/task.json` exists and parses (`NotFound` /
 ///   `MalformedJson`).
 /// - `status == Done` (`NotInDoneStatus`). Archive must
-///   follow the workflow's `Check → Done` hook (Step 3.1)
-///   so the spec-distillation hint + items close-out have
-///   already happened; archiving a planning / implement /
-///   check task would orphan in-flight work.
+    ///   follow the workflow's `in_progress → done` hook (Step 3.1)
+    ///   so the spec-distillation hint + items close-out have
+    ///   already happened; archiving a planning / in_progress
+    ///   task would orphan in-flight work.
 /// - archive target dir does **not** already exist
 ///   (`AlreadyArchived`). This makes the call idempotent
 ///   against retries: a partial-write + retry won't
@@ -842,23 +856,48 @@ mod tests {
     }
 
     #[test]
-    fn read_task_lenient_item_status_in_progress_falls_back_to_planning() {
-        // Crash #2: LLM hand-edited items[].status = "in_progress"
-        // (a checklist-style value not in the TaskStatus enum).
+    fn read_task_lenient_item_status_in_progress_now_maps_to_in_progress() {
+        // After the 2026-07-10 merge, "in_progress" is a valid
+        // TaskStatus (the former Implement+Check collapsed into one).
+        // Previously this was a checklist-style value that fell back
+        // to Planning; now it parses correctly.
         let d = fresh_project();
         write_raw_task_json(
             &proj(&d),
             "my-feat",
-            r#"{"id":"t1","title":"T","slug":"my-feat","status":"implement","created_at":"","updated_at":"","items":[{"id":"a","content":"do thing","status":"in_progress"}]}"#,
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"in_progress","created_at":"","updated_at":"","items":[{"id":"a","content":"do thing","status":"in_progress"}]}"#,
         );
         let task = read_task(&proj(&d), "my-feat").expect("lenient item status");
         assert_eq!(task.items.len(), 1);
         assert_eq!(
             task.items[0].status,
-            TaskStatus::Planning,
-            "in_progress → Planning fallback"
+            TaskStatus::InProgress,
+            "in_progress → InProgress (post-merge)"
         );
         assert_eq!(task.items[0].content, "do thing");
+    }
+
+    #[test]
+    fn read_task_lenient_legacy_implement_and_check_migrate_to_in_progress() {
+        // Old task.json files with pre-merge "implement" / "check"
+        // values silently migrate to InProgress (not demoted to
+        // Planning) so dogfooded tasks don't lose their progress.
+        let d = fresh_project();
+        write_raw_task_json(
+            &proj(&d),
+            "my-feat",
+            r#"{"id":"t1","title":"T","slug":"my-feat","status":"implement","created_at":"","updated_at":"","items":[]}"#,
+        );
+        let task = read_task(&proj(&d), "my-feat").expect("legacy implement");
+        assert_eq!(task.status, TaskStatus::InProgress);
+
+        write_raw_task_json(
+            &proj(&d),
+            "other",
+            r#"{"id":"t2","title":"O","slug":"other","status":"check","created_at":"","updated_at":"","items":[]}"#,
+        );
+        let task = read_task(&proj(&d), "other").expect("legacy check");
+        assert_eq!(task.status, TaskStatus::InProgress);
     }
 
     #[test]
@@ -937,7 +976,7 @@ mod tests {
             id: "id-x".into(),
             title: "T".into(),
             slug: "s".into(),
-            status: TaskStatus::Check,
+            status: TaskStatus::InProgress,
             created_at: "2026-07-08T00:00:00Z".into(),
             updated_at: "2026-07-08T01:00:00Z".into(),
             parent: Some("parent-slug".into()),
@@ -946,7 +985,7 @@ mod tests {
                 TaskItem {
                     id: "backend-impl".into(),
                     content: "实现后端".into(),
-                    status: TaskStatus::Implement,
+                    status: TaskStatus::InProgress,
                     tdd: Some(true),
                 },
                 TaskItem {
@@ -992,8 +1031,11 @@ mod tests {
     #[test]
     fn task_status_parser_recognizes_known_forms_lenient_for_unknowns() {
         assert_eq!(TaskStatus::from_str_opt("planning"), TaskStatus::Planning);
-        assert_eq!(TaskStatus::from_str_opt("implement"), TaskStatus::Implement);
-        assert_eq!(TaskStatus::from_str_opt("CHECK"), TaskStatus::Check);
+        assert_eq!(TaskStatus::from_str_opt("in_progress"), TaskStatus::InProgress);
+        assert_eq!(TaskStatus::from_str_opt("IN_PROGRESS"), TaskStatus::InProgress);
+        // Legacy pre-merge values migrate to InProgress.
+        assert_eq!(TaskStatus::from_str_opt("implement"), TaskStatus::InProgress);
+        assert_eq!(TaskStatus::from_str_opt("CHECK"), TaskStatus::InProgress);
         assert_eq!(TaskStatus::from_str_opt("Done"), TaskStatus::Done);
         // Step 3.3: "completed" parses as Completed (NOT
         // demoted to Planning) so an archived task re-read
@@ -1071,15 +1113,14 @@ mod tests {
     }
 
     /// Step 3.3: archiving a non-Done task is refused.
-    /// Archiving a planning / implement / check task would
+    /// Archiving a planning / in_progress task would
     /// orphan in-flight work + the spec-distillation hint,
     /// so the engine refuses upfront.
     #[test]
     fn archive_task_init_refuses_non_done_status() {
         for non_done in [
             TaskStatus::Planning,
-            TaskStatus::Implement,
-            TaskStatus::Check,
+            TaskStatus::InProgress,
         ] {
             let d = tempfile::tempdir().expect("tempdir");
             let path = d.path();
