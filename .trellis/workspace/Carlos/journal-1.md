@@ -1355,3 +1355,37 @@ P0(07-10-docs-sync-sweep)收尾后跑 P1+P2。复用 P0 父任务的 prd/design/
 - `docs/HANDOFF.md` 同步历来滞后,见 memory `handoff-lags-behind-commits`,作为单独 follow-up(不在本任务范围)
 - 全部 9 份正式文档已对齐 2026-07-10 代码基线(CLAUDE / STRUCTURE / ROADMAP / IMPLEMENTATION / ARCHITECTURE / DESIGN / TECH / HACKING-llm / HACKING-wsl),零代码改动
 - docs/HANDOFF.md 同步历来滞后,见 memory `handoff-lags-behind-commits`,作为单独 follow-up(不在本任务范围)
+
+
+## Session 24: B9+ 生成式 UI 收尾(button+action / diff 应用)
+
+**Date**: 2026-07-14
+**Task**: B9+ 生成式 UI 收尾(button+action / diff 应用)
+**Branch**: `main`
+
+### Summary
+
+B9+ 生成式 UI 收尾(D4 diff 应用 + D3 通用 button)。Phase 1 brainstorm 收敛 4 产品决策(D-Q1 用户确认 UI 定位 / D-Q3 D4+D3 scope / D-Q2 action 预定义枚举 apply_diff+copy+dismiss / D-Q4 不弹 modal+boundary+审计),产出 prd+design+implement。另一模型实施,trellis-check 全面检查发现并修复 P0 bug(parse_unified_diff 同文件多 hunk 拆成多 FilePatch → apply_ui_diff IPC 逐 FilePatch 读原始+写盘 last-write-wins 静默丢 hunk;apply_to_file 的 cumulative_offset 多 hunk 逻辑因此永不触发),方案 A 修(parser push_or_merge_hunk 合并同 path hunk 到单 FilePatch)+ 端到端回归测试 parse_then_apply_multi_hunk_same_file。核心设计=三角色分离:LLM use_ui 只展示(silent Allow Tier 5 不变)+ 用户点击触发 apply_ui_diff IPC(无 Tier/PermissionStore,assert_within_root boundary + 审计 UiDiffApplied + all-or-nothing 写盘)+ plan 模式天然可用(apply 是用户 IPC 不受 filter_tools_for_mode 影响)。零依赖手写 diff_apply.rs hunk apply。验证:cargo test --lib 1532 / vitest 842 / vue-tsc 0 err / fmt clean。AuditKind 20→21 类。spec 补 parser load-bearing 不变性。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ac7bac` | (see git log) |
+| `9e03d3c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
