@@ -1310,3 +1310,27 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
 - **测试**:1531 后端(cargo test --lib)+ 842 前端(vitest)+ vue-tsc 0 err + cargo fmt clean。本批新增:24 `diff_apply::tests`(parse / apply / 多 hunk offset / context conflict / raw fallback)+ 4 `commands::ui::tests`(ParseError → IPC `kind` 映射 + 成功/失败结果序列化 + Mode enum import 守门)+ 7 `use_ui::tests::execute_button_*`(3 action 验证 + 缺 action / 未知 action / apply_diff 缺 diff_text / 空 diff_text 拒绝)+ 17 `DiffPrimitive.test.ts` B9+ D4 段(IPC invoke spy + 成功 toast + kind 文案 + raw fallback disabled + 无 session disabled + 异常错误归 `io` + reject 隐藏)+ 11 `ButtonPrimitive.test.ts`(3 action 分发 + 默认 label + 自定义 label override + apply_diff 走 IPC + copy 走 clipboard + dismiss 本地 + 无 session disabled + 未知 action defensive)。零回归。
 
 - **推后期**:D5 session `allow_generative_ui` 开关(产品决策非架构缺口)/ `run_command` 等命令类 button action(安全面陡增,follow-up 安全评估后单独立项)/ `form` / `chart` / `table` primitive(独立需求)/ patch 三方合并或 rename / 二进制 diff 探测 / 行级权限(n 行确认 vs 整文件)/ 多文件 diff 跨 project 边界(目前每个文件 boundary 单独校验)/ 文件创建(`oldLines=0` 暗示)/ App crash 恢复 pending apply / `apply_ui_diff` 进度流式报告(目前整批写完才返;长 diff 可走 L1a 同样的 handle + 通知模式)。
+
+### 2026-07-14 — E2 turn-level harness trace viewer(后端 trace 管道 + 前端独立面板)
+
+- **Context**:ROADMAP 第三档 E2("per-turn 决策时间线 / harness 学习教具")。调研确认 4 维度(C3 压缩 / per-turn token / C2 soft hint / workflow breadcrumb)里只有"工具执行+延迟"有完整 per-turn 持久化,其余三维几乎零持久化 — C3 `CompactResult{tokens_before/after,dropped_count,degradation}` 只在 `tracing`;per-turn token `update_last_turn_usage` OVERWRITE session snapshot 列丢历史;C2 soft hint 1-2 连击无事件(仅 ≥3 intervention 落 `loop_intervention` 审计);breadcrumb `append_workflow_breadcrumb` 注入 `messages[0]` 后丢弃。加审计表无 `turn_seq` 列。核心矛盾 = scope(动不动后端 trace 管道)。
+
+- **决策 D1 — scope = 完整版**(否决"纯前端聚合 MVP" / "折中"):纯前端只覆盖 ~1.5 维,教具价值低对不起 E2 定位;完整版补全 4 维 + 审计 turn_seq。parent `07-14-e2-harness-trace-viewer` + 2 child(后端管道 child-1 先 / 前端面板 child-2 依赖 child-1 的 event+IPC+数据结构)。
+
+- **决策 D2 — viewer = 独立面板 live+回看**(否决"升级 AuditLogModal 事后刷新" / "侧栏 drawer"):教具定位要能看 harness 实时压缩/循环/工具调用;独立面板可常驻不挡 chat。约束后端:必须实时 emit ChatEvent(live)+ 必须落盘(回看)。
+
+- **决策 D3 — 落盘 = always-on + 清理入口**(否决 opt-in debug / emit-only):个人 SQLite 工作台写入开销可忽略;opt-in 痛点 = 出问题后才想回看但没开,违背调试器定位。emit always-on(live 面板随时可用)+ 落盘 always-on(回看任何历史 session)+ 清理入口兜底 DB 增长。
+
+- **决策 D4 — 新表 `turn_trace` 而非 messages 加列**:一个 turn 多维 trace(token/compaction/loop/breadcrumb)在不同写点到达,`UNIQUE(session_id,seq)` + UPSERT 累积各列;messages 是对话内容,trace 是观测,语义隔离不污染 messages schema 稳定性。
+
+- **决策 D5 — `record_audit_event` 加 `turn_seq` 参数(不取 thread-local 上下文)**:精确对齐是 viewer 核心价值;21 类调用点机械扩散,chat_loop 传 `Some(seq)` / IPC handler 传 None;编译器强制 + grep 防漏。漏传 → 审计行 `turn_seq` NULL 回看时游离(可接受,前端 UNGROUPED 虚拟 seq footer 兜底)。
+
+- **决策 D6 — trace 旁路观测,不动 agent 决策逻辑**:C3 仍按 `CompactResult` 降级/终止;C2 仍按 `loop_hit_count` 干预;breadcrumb 仍注入 prompt。trace 只在已有写点旁 emit + 落盘,不改决策分支。best-effort 落盘失败 `warn!` 吞不传播(同 `record_*_audit`)。worker gate 复用 `!skip_persist`(RULE-A-015),worker turn_trace 不冲 parent。
+
+- **决策 D7 — `request_mode_change`/`request_task_state_transition` 的 `execute_blocking` 补 seq 参数**:初版传 None(execute_blocking 签名无 seq);trellis-check 判断补 seq 简单(签名加 `turn_seq` + chat_loop 拦截调用点传 `Some(seq)`),让这两个 turn 内 LLM 触发的审计也归 turn。`record_message_resend_audit` 保持 None(pre-turn-loop 事件,seq 是下一个未开始 turn)。
+
+- **关键教训 —「文档状态表滞后是常态」**:代码先行(另一 session 完成 child-1/child-2 + commit + archive),文档(ROADMAP §2 状态行 / CLAUDE / STRUCTURE / frontend spec / IMPLEMENTATION §4)滞后,需独立 doc-sync follow-up。符合 memory `handoff-lags-behind-commits`。
+
+- **测试**:1539 后端(cargo test --lib,新增 7:`turn_trace` upsert 累积/顺序/清除/覆盖/空值/级联 + `turn_seq` 审计)+ 863 前端(vitest,含 `trace.test.ts` 8 + `traceStore.test.ts`)+ vue-tsc 0 err + cargo fmt clean。零回归(现有审计/C3/C2/breadcrumb 行为不变)。
+
+- **推后期**:筛选(按维度/turn/工具过滤)/ 导出(JSON)/ worker trace 隔离(`is_worker` 列,MVP 接受混入 parent session_id)/ C2 `loop_window` 滑动窗口中间态可视化(只 emit hit_count+verdict 摘要)/ workflow from→to hook 独立审计行(维持 `task.json.summary` marker)。

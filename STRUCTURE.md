@@ -77,6 +77,7 @@ app/src/
 │ │ ├── SubagentDrawerErrorCard.vue # ★ NEW (06-23 拆,~100 行,R25 错误卡)
 │ │ ├── WorktreeChip.vue # ★ NEW (8-PR3拆出)
 │ │ └── DiffModal.vue # ★ NEW (8-PR3拆出)
+│ ├── trace/ # ★ NEW (07-14 E2) — harness trace viewer (TracePanel drawer / TurnTimeline / TurnCard / TraceEventItem)
 │ ├── settings/ # (8-PR3拆分后)
 │ │ ├── SettingsModal.vue / DefaultTab.vue / ProvidersTab.vue
 │ │ ├── ModelsTab.vue # ★容器(364 行,954→364)
@@ -95,7 +96,9 @@ app/src/
 │ ├── subagentRuns.types.ts # ★ NEW (06-23 拆,~354 行)
 │ ├── runAccumulator.ts # ★ NEW (06-23 拆,~537 行 RunAccumulator + parseTranscriptJson)
 │ ├── config.ts / projects.ts / models.ts / providers.ts
-│ └── permissions.ts / audit.ts / memory.ts / checklist.ts
+│ ├── permissions.ts / audit.ts / memory.ts / checklist.ts
+│ ├── traceStore.ts # ★ NEW (07-14 E2) — harness trace store (live+回看同构 TurnTrace)
+│ └── traceStore.test.ts
 └── utils/ # (Opus §4.2漏看,8-PR4阶段补;06-23 加 chatInputCodeMirror)
  ├── lru.ts + .test.ts / markdown.ts + .test.ts
  ├── messageFormat.ts + .test.ts / path.ts + .test.ts
@@ -134,6 +137,7 @@ app/src-tauri/src/
 │ ├── mod.rs / types.rs / migrations.rs
 │ ├── projects.rs / sessions.rs / providers.rs / models.rs / config.rs
 │ ├── subagent_runs.rs / permissions.rs
+│ ├── trace.rs # ★ NEW (07-14 E2) — turn_trace 表 CRUD + 4 UPSERT + list/clear
 │ ├── projects_tests.rs / sessions_tests.rs / providers_tests.rs # ★ (06-23 拆,无 common,test_pool 6 份复制)
 │ ├── permissions_tests.rs / messages_tests.rs / subagent_runs_tests.rs
 ├── llm/
@@ -146,6 +150,7 @@ app/src-tauri/src/
 ├── agent/ # ★ NEW (8-PR1;06-23/24 拆 subagent/ + chat_loop + tests;07-08~10 加 workflow/)
 │ ├── mod.rs
 │ ├── chat.rs # Agent Loop entry(IPC 入口)
+│ ├── trace.rs # ★ NEW (07-14 E2) — trace pipeline(3 record_* 双写 emit+upsert)
 │ ├── chat_loop.rs # (06-23 抽 run_subagent 后)2586→~2064 行,主循环 + 主循环辅助
 │ ├── subagent/ # ★ NEW (06-23 拆 4 文件,06-23/24 续拆 dispatch)
 │ │ ├── mod.rs # 类型 + helpers(lookup / assemble / filter / build_messages)

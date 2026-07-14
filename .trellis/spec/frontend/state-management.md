@@ -1273,3 +1273,24 @@ backtracking.
   from `document.body` to prevent cross-test leak.
 
 ---
+
+## traceStore (E2 harness trace viewer, 2026-07-14)
+
+E2 turn-level harness trace viewer 的前端 store。**核心模式 = live + 回看同构**:两个数据源(live ChatEvent / 历史 IPC)都映射到统一的 `currentSessionTraces: Map<seq, TurnTrace>`,面板代码单路径(不区分数据源)。
+
+| 文件 | 职责 |
+|---|---|
+| `app/src/stores/traceStore.ts` | Pinia setup-store:`currentSessionTraces: reactive(Map<seq, TurnTrace>)` + `panelOpen` + `loading`/`error` |
+| `app/src/types/turnTrace.ts` | `TurnTrace` / `TurnTraceRow` / 3 event 类型 + `parseTurnTraceRow` |
+| `app/src/components/trace/TracePanel.vue` | AppShell drawer shell(右滑入,`v-if` gated on `panelOpen`) |
+| `app/src/components/trace/TurnTimeline.vue` | seq 主轴,每 turn 一 `<TurnCard>` |
+| `app/src/components/trace/TurnCard.vue` | latency + token 分布 + compaction + loop + breadcrumb + tool calls 点开 |
+| `app/src/components/trace/TraceEventItem.vue` | 复用 `parseAuditPayload` + icon family 渲染审计事件 |
+
+**API**:
+- `applyEvent(event)` — live 路径。streamController `handleChatEvent` 把 3 新 ChatEvent(`context_compacted` / `loop_hint` / `workflow_breadcrumb`)路由到此,内部 switch upsert 对应列(compaction / loopHint / breadcrumb)。同 seq 多 event 安全合并(UPSERT 语义)。
+- `loadHistory(sessionId)` — 回看路径。`Promise.all([list_turn_traces, list_session_audit_events])`,审计按 `turnSeq` 归组到 `TurnTrace.auditEvents`;`turnSeq === null`(pre-v7 历史 / IPC handler 审计)进 `UNGROUPED_SEQ = Number.MAX_SAFE_INTEGER` 虚拟 seq,渲染为 timeline footer「无 turn 上下文的审计事件」。
+- `clearSessionTrace(sessionId)` — 清理 IPC + 刷新(ConfirmDialog 二次确认)。
+- `resetForNewSession(sessionId)` — session 切换 / `startRequest` 清空 + `loadHistory`(复用 `useMemoryStore().clearRecallHits` 模式)。
+
+**Pattern — live + 回看同构**:不维护独立 live buffer;live event 直接 upsert 同一个 Map,回看从 IPC 重建同一个 Map。面板只读 Map。`reactive(Map)` 的 `.get`/`.has` 触发 UI 更新;per-field 更新用 `.set(key, {...existing, ...patch})` 替换对象(不 wrap `TurnTrace` 在 `reactive()`,同 `recallHitsBySession` 模式)。

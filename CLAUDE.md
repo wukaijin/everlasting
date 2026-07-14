@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 agent core（非 SDK 包装），WSL-first 设计。目标：与 Claude Code 同等能力（聊天、编辑代码、运行命令），但用自研的 agent harness 实现以学习 harness 工程。
 
-**当前状态(2026-07-02)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统(4 文件加载 + cache_control 注入)+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 200)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 17 类 AuditKind)已全部落地;V2 路线图第一档 + 第二档 7/7 全部完成,第三档已落地 B4 Skill / B6 Subagent(06-21 收尾)/ B12 Checklist / C2 循环检测 / L1 后台 shell / L2 并行只读 / L3a-d subagent 全套 / RULE-D-001 api_key 加密 / V2 2 期自主记忆(06-29)/ B9 生成式 UI(07-02 部分),详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。position bug(2026-06-14 ✅ 已解决,A7 收尾):根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,非 Tauri bug),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`;RDP 双屏已验证通过,详见 [IMPLEMENTATION §4 2026-06-14](./docs/IMPLEMENTATION.md#4-决策日志)。
+**当前状态(2026-07-15)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统(4 文件加载 + cache_control 注入)+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 200)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 17 类 AuditKind)已全部落地;V2 路线图第一档 + 第二档 7/7 全部完成,第三档已落地 B4 Skill / B6 Subagent(06-21 收尾)/ B12 Checklist / C2 循环检测 / L1 后台 shell / L2 并行只读 / L3a-d subagent 全套 / RULE-D-001 api_key 加密 / V2 2 期自主记忆(06-29)/ B9 生成式 UI(07-02 部分)/ B9+ 收尾(07-13)/ E2 harness trace viewer(07-14),详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。position bug(2026-06-14 ✅ 已解决,A7 收尾):根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,非 Tauri bug),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`;RDP 双屏已验证通过,详见 [IMPLEMENTATION §4 2026-06-14](./docs/IMPLEMENTATION.md#4-决策日志)。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
@@ -56,6 +56,7 @@ app/
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
 │   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
 │   │   ├── audit/          # C4 审计日志查询 UI (AuditLogModal / AuditLogItem)
+│   │   ├── trace/          # E2 harness trace viewer (TracePanel / TurnTimeline / TurnCard / TraceEventItem)
 │   │   ├── common/         # 通用组件 (TriggerMenu 等 @文件/命令触发器)
 │   │   ├── ChatWindow.vue  # 顶层容器(纯组合)
 │   │   ├── SessionList.vue / ProjectTabs.vue / Icon.vue
@@ -70,6 +71,7 @@ app/
 │   │   ├── memory.ts       # memory/指令文件 UI 状态
 │   │   ├── permissions.ts   # A2+B7 权限 / Mode (edit/plan/yolo) 状态
 │   │   ├── audit.ts         # C4 审计日志查询 store
+│   │   ├── trace.ts         # E2 harness trace store (live+回看同构 TurnTrace)
 │   │   └── checklist.ts     # B12 agent 自跟踪 checklist store
 │   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror (06-23 拆 composable)
 ├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后;06-23 续拆 subagent/ + chat_loop + tests)
@@ -81,7 +83,7 @@ app/
 │       ├── files.rs        # 文件操作辅助
 │       ├── db/             # SQLite 持久化(8-PR2 拆分, CRUD 函数分散到子模块)
 │       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
-│       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs
+│       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs / trace.rs  # E2 turn_trace CRUD
 │       │   ├── tests.rs    # (06-23 拆)6 个 `*_tests.rs` 按 SQL 域(无 common,test_pool 6 份复制)
 │       ├── llm/            # LLM 客户端模块 + 自研 Provider trait + A5+ 网络健壮性
 │       │   ├── provider/   # Provider trait + AnthropicProvider + OpenAIProvider + wire.rs + mock.rs
@@ -93,6 +95,7 @@ app/
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
 │       ├── agent/          # Agent Loop(8-PR1;06-23 subagent/ + chat_loop + tests;06-24 loop_detection / memory_*;07-07 question_store;07-08~10 workflow/)
 │       │   ├── chat.rs / chat_loop.rs    # 主循环 + run_subagent 串联
+│       │   ├── trace.rs                 # E2 trace pipeline(3 record_* 双写:emit + upsert turn_trace)
 │       │   ├── context.rs               # C3 context 压缩(token 阈值 + 降级 + B5 保护)
 │       │   ├── loop_detection.rs        # C2/C2+ 循环检测分级触发 + 主动干预(per-run-local count + QuestionStore)
 │       │   ├── system_prompt.rs / behavior_prompt.rs / thinking.rs # prompt 与 thinking 块处理
