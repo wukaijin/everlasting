@@ -1416,3 +1416,28 @@ B9+ 生成式 UI 收尾(D4 diff 应用 + D3 通用 button)。Phase 1 brainstorm 
 ### 待办
 - 等 trellis-check agent 报告
 - 通过后进入 Phase 3.3 spec update + 3.4 commit
+
+---
+
+## Session — child-1 收官 + child-2 启动(2026-07-14)
+
+### child-1 收官
+3 个 commit:
+- 6120267 feat(e2): backend trace pipeline (29 files, 1240 ins, 2 new modules)
+- 26706df chore: record journal + 07-14 E2 trace task artifacts
+- 920cbc3 chore(task): mark child-1 completed
+task.json: status in_progress → completed, completedAt: 2026-07-14
+
+### child-2 启动
+- prd.md:填充 R2 + AC5/AC6/AC7 + scope/edge cases + 风险(start 前 follow-up 全部 ✅)
+- implement.md:F1-F9 ordered checklist + 验证命令 + 风险/回滚点(start 前 follow-up 全部 ✅)
+- implement.jsonl / check.jsonl:8 + 8 真实 spec/research 入口(repo-root 相对路径,validate pass)
+- validate 全部通过
+- task.py start child-2: status planning → in_progress
+- 派遣 trellis-implement sub-agent(a639da698eaa108fc)按 F1-F9 推进
+- 等 sub-agent 完成通知后再 commit + check
+
+### 已知 issue(留 child-1 记录)
+- 旧 jsonl `../` 路径问题(child-1 的 jsonl 也有,validate 不强阻,只对未来 validate 显示 warning)
+  - child-2 已修
+  - child-1 留作 housekeeping(低优先)
