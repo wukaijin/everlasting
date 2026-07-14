@@ -1441,3 +1441,33 @@ task.json: status in_progress → completed, completedAt: 2026-07-14
 - 旧 jsonl `../` 路径问题(child-1 的 jsonl 也有,validate 不强阻,只对未来 validate 显示 warning)
   - child-2 已修
   - child-1 留作 housekeeping(低优先)
+
+---
+
+## Session — child-2 收官 + parent 集成(2026-07-14)
+
+### child-2 实施
+- 派遣 trellis-implement sub-agent(API 429 在最后一次 cargo fmt 跑前失败,但 F1-F9 全部产出已落地)
+- 主 session 接力跑验证:cargo check ✅ / pnpm build ✅ / pnpm vitest run 863 pass ✅
+- 派遣 trellis-check sub-agent:pass with 2 minor
+- 修 2 项:
+  1. ⚠️ TracePanel.vue 加 `watch(panelOpen)` + boundSessionId watcher 去守卫(check 1 中等)
+  2. ⚠️ useAudit() re-export + useAuditStore import 是死代码(check 1 minor,删)
+- 复跑 pnpm build + vitest:vue-tsc 0 err / 863 pass
+
+### 4 commit
+- 6800dd4 feat(e2): frontend trace panel (14 files, 2617 ins, 5 new modules)
+- 2fbeca3 chore: record journal + child-2 task artifacts + mark child-2 completed
+- c57de71 chore(task): mark child-2 completed (linter 干扰后重做)
+- archive 3 个任务(archive command auto-commit)
+  - 07-14-e2-frontend-trace-panel
+  - 07-14-e2-backend-trace-pipeline
+  - 07-14-e2-harness-trace-viewer(parent)
+
+### E2 完整交付
+- 5 个 AC(AC1-AC4 child-1 + AC5-AC7 child-2)+ AC8 零回归 全通过
+- 4 份 spec 文档更新:database-guidelines / llm-contract / agent-loop-architecture / index
+- 2 模块(agent/trace + db/trace) + 1 store(useTraceStore) + 4 组件(TracePanel/TurnTimeline/TurnCard/TraceEventItem)
+- 1 新表 turn_trace + 1 审计列 turn_seq + 3 ChatEvent 变体 + 2 IPC
+- 19 个新测试(13 store + 8 components,8 重叠 = 21 unique 增量)
+- ROADMAP §2 E2 收口
