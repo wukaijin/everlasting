@@ -1389,3 +1389,30 @@ B9+ 生成式 UI 收尾(D4 diff 应用 + D3 通用 button)。Phase 1 brainstorm 
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session — child-1 E2 backend trace pipeline check(2026-07-14)
+
+**Task**: E2 backend trace pipeline(child-1 of 07-14-e2-harness-trace-viewer)
+**Status**: Step 2.2 quality check in progress
+
+### What was done before this session
+- child-1 实施完成但未 check(rough 28 个 dirty 路径,457 insertions,新文件 `agent/trace.rs` 164 行 + `db/trace.rs` 423 行)
+
+### Check pass progress
+1. 读 diff 复核写点接入:4 写点(record_compaction / record_loop_hint / record_breadcrumb / per-turn token)都正确接入;record_audit_event 21 类调用点全部传 turn_seq
+2. **cargo check** ✅(1 个 pre-existing unused import warning 在 commands/ui.rs:59 `ParseError`,与本 child 无关)
+3. **cargo test --lib** ⚠️→✅ — 起初 20 处 E0061(测试漏传 turn_seq):`request_mode_change.rs` 8 处 + `request_task_state_transition.rs` 12 处 `execute_blocking` 测试调用漏第 9/10 参 turn_seq。批量补 `None`(测试无 turn context)。修复后 1539 passed,0 failed,0 ignored
+4. **cargo fmt --check** ✅ clean
+5. **AC 跨层核对**:
+   - AC1 3 新 ChatEvent 变体在对应写点 emit + trace_pipeline 双写 + LLM stream 边界 drop 防重入 ✅
+   - AC2 `turn_trace` v7 + per-turn token 旁 upsert(`!skip_persist` gate 内,worker 不冲 parent)✅
+   - AC3 `session_audit_events.turn_seq` 列 + `record_audit_event` 签名 + `PermissionContext.turn_seq` 透传 ✅
+   - AC4 `list_turn_traces` IPC + 白名单 + 同模式回看 ✅
+   - AC8 1539 pass + fmt clean ✅
+6. dispatch trellis-check 全维度审查(后台跑)
+
+### 待办
+- 等 trellis-check agent 报告
+- 通过后进入 Phase 3.3 spec update + 3.4 commit

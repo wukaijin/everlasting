@@ -1,0 +1,29 @@
+{
+  "id": "e2-harness-trace-viewer",
+  "name": "e2-harness-trace-viewer",
+  "title": "E2 turn-level harness trace viewer",
+  "description": "把已有审计日志(21 类 AuditKind)/token 用量/workflow breadcrumb 按 turn 串成决策时间线可视化。既是调试器也是 harness 学习教具。ROADMAP 第三档 E2。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-07-14",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-14-e2-backend-trace-pipeline",
+    "07-14-e2-frontend-trace-panel"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

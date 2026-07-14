@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/07-14-e2-backend-trace-pipeline/research/trace-data-gap-audit.md", "reason": "本 child 调研结论:4 维数据缺口 + 精确写点行号(chat_loop.rs:1261/1800/2181 + inject.rs:343)+ CompactResult/loop_hit_count/WorkflowCtx/record_audit_event 签名 + v7 schema 基线 + worker gate。实施时每个写点的接入依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "v7 migration 幂等惯例(CREATE TABLE IF NOT EXISTS)+ UPSERT(ON CONFLICT)写法 + add_column helper 模式 + test_pool 设置。B1/B2 依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 23 参共享入口 + skip_persist 16 gate(RULE-A-015)+ worker 嵌套 pattern + is_worker 第 21 参。B5 写点接入 + per-turn token worker gate 依据"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "ChatEvent 枚举 + SSE lifecycle + emit 通道契约。B3 加 3 新变体 + wire snake_case 依据"}
+{"file": ".trellis/tasks/07-14-e2-harness-trace-viewer/design.md", "reason": "parent 权威技术设计:turn_trace 表 schema(§2)+ trace_pipeline helper 双写(§3.1)+ ChatEvent 3 变体字段(§4.1)+ record_audit_event 扩 turn_seq(§4.4)+ tradeoff/风险(§7/§9)"}
+{"file": ".trellis/tasks/07-14-e2-harness-trace-viewer/prd.md", "reason": "parent 全局决策(scope 完整版/viewer 独立面板/always-on 落盘)+ R1 后端 scope + AC1-AC4/AC8 验收。child-1 边界来源"}

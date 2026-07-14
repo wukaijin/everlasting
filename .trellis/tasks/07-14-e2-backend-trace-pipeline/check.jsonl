@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/07-14-e2-backend-trace-pipeline/research/trace-data-gap-audit.md", "reason": "验证 4 写点接入正确(chat_loop.rs:1261/1800/2181 + inject.rs:343,行号漂移 grep 复核)+ record_audit_event 21 类调用点无遗漏(漏传 turn_seq NULL)+ worker gate 不冲 parent"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验 v7 migration 幂等 + UPSERT 累积正确 + add_column 非破坏 + test_pool 覆盖"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "校验 skip_persist gate 零回归(worker turn_trace token 写入复用 RULE-A-015 gate)+ run_chat_loop 行为未改(trace 旁路观测,决策逻辑不动)"}
+{"file": ".trellis/spec/backend/llm-contract.md", "reason": "校验 3 新 ChatEvent 变体 wire snake_case + emit 通道 + 不破坏现有 SSE lifecycle"}
+{"file": ".trellis/tasks/07-14-e2-harness-trace-viewer/prd.md", "reason": "AC1-AC4/AC8 验收对齐:3 新 event always-on emit+落盘 / turn_trace token 不丢失 / turn_seq 填充 / list_turn_traces IPC / 零回归"}
