@@ -894,6 +894,56 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_autonomous_memories_column_if_missing(pool, "edited_by_user", "BOOLEAN NOT NULL DEFAULT 0")
         .await?;
 
+    // --- E2 (harness trace pipeline, 2026-07-14): v7 migration.
+    //
+    // Two additive schema changes for the per-turn harness trace
+    // viewer (ROADMAP E2). Both are non-destructive: existing rows
+    // survive, NULL / absent values are meaningful ("no trace data
+    // for this turn").
+    //
+    // 1. New table `turn_trace`: one row per (session_id, seq) pair,
+    //    accumulating trace dimensions via UPSERT as signals arrive
+    //    at different write points during a turn (C3 compaction /
+    //    C2 loop hint / workflow breadcrumb / per-turn token usage).
+    //    UNIQUE(session_id, seq) is the UPSERT anchor — each write
+    //    updates only its column, leaving the others untouched.
+    //    ON DELETE CASCADE → deleting a session cleans up its trace
+    //    rows (requires PRAGMA foreign_keys = ON, set by init_pool).
+    //
+    // 2. `session_audit_events.turn_seq INTEGER` — nullable column
+    //    so audit rows can be grouped by turn. NULL for historical
+    //    rows (pre-v7) and for IPC-handler audit writes that have no
+    //    turn-loop context (commands/question.rs resolve_* etc.).
+    //    The agent loop passes `Some(seq)` from inside the turn loop;
+    //    the `record_audit_event` signature gains a `turn_seq` param.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS turn_trace (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id        TEXT NOT NULL,
+            seq               INTEGER NOT NULL,
+            token_usage_json  TEXT,
+            compaction_json   TEXT,
+            loop_hint_json    TEXT,
+            breadcrumb_json   TEXT,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+            UNIQUE(session_id, seq)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_turn_trace_session_seq
+        ON turn_trace(session_id, seq)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    add_session_audit_events_column_if_missing(pool, "turn_seq", "INTEGER").await?;
+
     // --- PR1 of multi-model task: seed default providers + models
     // if the catalog is empty. Idempotent:0-row check skips the
     // insert on subsequent boots. Backfills `sessions.model_id`
@@ -1154,6 +1204,32 @@ pub(crate) async fn add_autonomous_memories_column_if_missing(
     if exists == 0 {
         let stmt = format!(
             "ALTER TABLE autonomous_memories ADD COLUMN {} {}",
+            column, decl
+        );
+        sqlx::query(&stmt).execute(pool).await?;
+    }
+    Ok(())
+}
+
+/// Add a column to `session_audit_events` if it doesn't already
+/// exist. Mirrors [`add_session_column_if_missing`]. Added for E2
+/// (harness trace pipeline, 2026-07-14) — the `turn_seq` column
+/// that lets audit rows be grouped by turn for the trace viewer.
+pub(crate) async fn add_session_audit_events_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    decl: &str,
+) -> Result<(), sqlx::Error> {
+    let exists: i64 = sqlx::query(
+        "SELECT COUNT(*) FROM pragma_table_info('session_audit_events') WHERE name = ?",
+    )
+    .bind(column)
+    .fetch_one(pool)
+    .await?
+    .try_get(0)?;
+    if exists == 0 {
+        let stmt = format!(
+            "ALTER TABLE session_audit_events ADD COLUMN {} {}",
             column, decl
         );
         sqlx::query(&stmt).execute(pool).await?;

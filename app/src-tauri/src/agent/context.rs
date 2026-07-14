@@ -83,6 +83,19 @@ pub enum DegradationKind {
     },
 }
 
+impl DegradationKind {
+    /// Stable string for serialization (trace payload / audit). Mirrors
+    /// the enum variant names in snake_case — consumed by the E2 trace
+    /// pipeline (`agent::trace::record_compaction`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::NoCandidates => "no_candidates",
+            Self::StillOver { .. } => "still_over",
+        }
+    }
+}
+
 /// Result of [`compact_messages`]. Always returned — even when no
 /// compaction happened (in which case `dropped_count == 0` and
 /// `messages` is unchanged from the input). The `degradation` field

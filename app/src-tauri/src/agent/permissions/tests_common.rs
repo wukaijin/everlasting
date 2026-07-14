@@ -86,6 +86,7 @@ pub(super) async fn worker_ctx_with_db() -> (
         // construct their own PermissionContext with Some(Arc<...>).
         run_grants: None,
         worktree_path: std::path::PathBuf::from("/repo"),
+        turn_seq: None,
     };
     (
         pool,

@@ -225,6 +225,11 @@ pub fn run() {
             // command for the AuditLogModal. The write side (⑩
             // `tool_executed`) lands in the agent loop.
             commands::permissions::list_session_audit_events,
+            // E2 (harness trace pipeline, 2026-07-14): trace viewer
+            // IPCs — list_turn_traces for 回看, clear_session_trace
+            // for the manual cleanup button.
+            commands::permissions::list_turn_traces,
+            commands::permissions::clear_session_trace,
             // F5 (LLM Latency Tracking): per-message latency +
             // per-tool duration persistence. Called by the
             // frontend `streamController` on `done` / `tool:result`

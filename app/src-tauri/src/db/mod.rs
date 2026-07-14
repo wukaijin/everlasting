@@ -73,6 +73,7 @@ pub mod subagent_overrides;
 pub mod subagent_overrides_tests;
 pub mod subagent_runs;
 pub mod subagent_runs_tests;
+pub mod trace;
 pub mod types;
 
 // Re-export every public item from the submodules so callers can
@@ -90,4 +91,6 @@ pub use sessions::*;
 // `subagent_runs` is reachable as `db::subagent_runs::*` via the
 // `pub mod` declaration above; no `pub use` needed (and adding
 // one would conflict with the `pub mod subagent_runs` line).
+// `trace` is reachable as `db::trace::*` via the `pub mod` declaration
+// above; no `pub use` to avoid conflicts.
 pub use types::*;

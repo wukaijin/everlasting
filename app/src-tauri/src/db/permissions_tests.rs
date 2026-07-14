@@ -187,12 +187,19 @@ async fn record_audit_event_inserts_and_cascades_on_delete() {
         &s.id,
         "tool_allowed",
         Some(r#"{"tool_name":"shell","reason":null}"#),
+        None,
     )
     .await
     .unwrap();
-    record_audit_event(&pool, &s.id, "mode_changed", Some(r#"{"new_mode":"yolo"}"#))
-        .await
-        .unwrap();
+    record_audit_event(
+        &pool,
+        &s.id,
+        "mode_changed",
+        Some(r#"{"new_mode":"yolo"}"#),
+        None,
+    )
+    .await
+    .unwrap();
     // Verify the rows are present by SELECTing directly.
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM session_audit_events WHERE session_id = ?")
@@ -250,7 +257,7 @@ async fn tool_executed_audit_round_trips_via_list_audit_events() {
         "exit_code": 0_i32,
     })
     .to_string();
-    record_audit_event(&pool, &s.id, "tool_executed", Some(&payload_shell))
+    record_audit_event(&pool, &s.id, "tool_executed", Some(&payload_shell), None)
         .await
         .unwrap();
 
@@ -263,7 +270,7 @@ async fn tool_executed_audit_round_trips_via_list_audit_events() {
         "exit_code": serde_json::Value::Null,
     })
     .to_string();
-    record_audit_event(&pool, &s.id, "tool_executed", Some(&payload_read))
+    record_audit_event(&pool, &s.id, "tool_executed", Some(&payload_read), None)
         .await
         .unwrap();
 
@@ -342,7 +349,7 @@ async fn list_audit_events_tolerates_null_payload() {
     )
     .await
     .unwrap();
-    record_audit_event(&pool, &s.id, "tool_executed", None)
+    record_audit_event(&pool, &s.id, "tool_executed", None, None)
         .await
         .unwrap();
     let rows = list_audit_events(&pool, &s.id).await.unwrap();
@@ -373,6 +380,7 @@ async fn audit_event_row_serializes_to_camel_case_wire_shape() {
         ts: "2026-06-14T10:00:00Z".to_string(),
         kind: "tool_executed".to_string(),
         payload_json: Some("{\"tool_name\":\"shell\"}".to_string()),
+        turn_seq: Some(7),
     };
     let v: serde_json::Value = serde_json::to_value(&row).unwrap();
     let obj = v.as_object().expect("row must serialize to JSON object");
@@ -406,6 +414,14 @@ async fn audit_event_row_serializes_to_camel_case_wire_shape() {
         obj.get("kind").and_then(|v| v.as_str()),
         Some("tool_executed")
     );
+
+    // E2 (2026-07-14): turn_seq must serialize as camelCase `turnSeq`.
+    assert!(
+        obj.contains_key("turnSeq"),
+        "wire shape must use `turnSeq` (camelCase), got keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(obj.get("turnSeq").and_then(|v| v.as_i64()), Some(7));
 }
 
 #[tokio::test]
@@ -683,4 +699,57 @@ async fn revoke_tool_permission_is_session_scoped() {
             .unwrap(),
         "session B's grant must survive revoking session A's"
     );
+}
+
+/// E2 (2026-07-14): verify that `record_audit_event` with
+/// `turn_seq = Some(seq)` persists the value, and `list_audit_events`
+/// returns it. Also verifies `None` round-trips (IPC handlers without
+/// turn context).
+#[tokio::test]
+async fn record_audit_event_persists_turn_seq() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Write with Some(turn_seq) — simulates an in-turn-loop audit.
+    record_audit_event(
+        &pool,
+        &s.id,
+        "tool_executed",
+        Some(r#"{"tool_name":"shell"}"#),
+        Some(5),
+    )
+    .await
+    .unwrap();
+
+    // Write with None — simulates an IPC-handler audit.
+    record_audit_event(
+        &pool,
+        &s.id,
+        "mode_changed",
+        Some(r#"{"new_mode":"yolo"}"#),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let rows = list_audit_events(&pool, &s.id).await.unwrap();
+    assert_eq!(rows.len(), 2);
+
+    // Rows are ordered ts DESC — both inserted in the same second,
+    // so order by rowid (insertion order) as a stable tiebreaker.
+    // The tool_executed row was inserted first.
+    let tool_row = rows.iter().find(|r| r.kind == "tool_executed").unwrap();
+    assert_eq!(tool_row.turn_seq, Some(5));
+
+    let mode_row = rows.iter().find(|r| r.kind == "mode_changed").unwrap();
+    assert_eq!(mode_row.turn_seq, None);
 }

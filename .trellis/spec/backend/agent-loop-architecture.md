@@ -1192,3 +1192,63 @@ The 6 `agent_loop_*` integration tests in `tests_agent_loop.rs` thread `None, h.
 返回 `OpenOutcome::Stream(first_byte chained with rest)` 或 `Cancelled` — chat_loop 拿到 Stream 后用既有 per-event select loop 消费,**select loop 零改动**。两个 select(首字节 await / backoff sleep)都 `biased` 第一位 `token.cancelled()`,sleep 中取消立即响应。
 
 完整契约(retryable 分类 / Full Jitter 公式 / retry-after 解析 / `LlmError` headers 字段扩展 / 前端 Retrying 事件 / 测试矩阵)见 [llm-contract.md Scenario: LLM Retry / Backoff (A5+)](./llm-contract.md)。决策见 [IMPLEMENTATION §4 2026-07-05](../../../docs/IMPLEMENTATION.md#4-决策日志)。
+
+---
+
+## Pattern: E2 trace pipeline — emit + persist at 4 harness write points (E2, 2026-07-14)
+
+> **Source**: E2 trace viewer task `07-14-e2-harness-trace-viewer`
+> (child-1 `e2-backend-trace-pipeline`).
+
+The trace pipeline is a **double-write best-effort contract** that
+hooks into 4 existing harness write points (NOT a separate agent
+loop). Each hook emits a `ChatEvent` for the live panel AND upserts
+the corresponding `turn_trace` column for history. The schema lives
+in [database-guidelines.md Pattern: per-turn trace UPSERT
+accumulation](./database-guidelines.md); the event shapes live in
+[llm-contract.md Scenario: E2 trace ChatEvent variants](./llm-contract.md).
+
+**The 4 write points** (all inside the turn loop, after the
+existing signal is produced):
+
+| Signal | Hook location | Event variant | turn_trace column |
+|---|---|---|---|
+| C3 compaction | `compact_messages` return — both normal and `StillOver` branches | `ContextCompacted` | `compaction_json` |
+| C2 soft hint (1-2 hits) | right after `verdict_kind` is determined, gated `loop_hit_count < 3` (the `≥3` path keeps writing the existing `loop_intervention` audit) | `LoopHint` | `loop_hint_json` |
+| Workflow breadcrumb | right after `append_workflow_breadcrumb` returns `true` (S-B guard passed) | `WorkflowBreadcrumb` | `breadcrumb_json` |
+| Per-turn token | alongside `update_last_turn_usage` inside the `!skip_persist` gate (reuses `ChatEvent::Done { usage }`) | (reuses `Done`) | `token_usage_json` |
+
+**The trace helpers (`agent/trace.rs`)** are deliberately small:
+each takes the same `(sink, db, rid, session_id, seq, ...)` shape,
+emits the `ChatEvent` first, then upserts the column; DB failures
+are `warn!`-logged and swallowed (the agent loop must NEVER break
+on a trace write — same contract as `record_*_audit`).
+
+**Per-turn token worker gate (RULE-A-015 alignment).** The
+`upsert_turn_trace_token` call lives **inside** the `if !skip_persist
+{ ... }` block that also wraps `update_last_turn_usage`. Worker
+subagent turns reuse the parent's `session_id` + `seq`; without
+the gate, a worker's `Done{usage}` would overwrite the parent's
+trace row token. By reusing the same gate, the parent token and
+worker token stay in lockstep with the snapshot columns on the
+`sessions` table.
+
+**The other 3 hooks intentionally do NOT gate on `skip_persist`.**
+C3 compaction and C2 soft hint are rare in worker paths (worker
+turns typically have lower message volume and are less prone to
+loop detection); workflow breadcrumb is suppressed in workers by
+the `append_workflow_breadcrumb` S-B guard before the trace call.
+Mixing worker trace rows into the parent's `turn_trace` is the
+documented MVP behavior (see design §7 risk); an `is_worker` column
+is Phase 2 OOS.
+
+**`PermissionContext.turn_seq` is the audit-alignment hook.**
+Inside the turn loop, the agent loop updates `permission_ctx.turn_seq
+= Some(seq)` at the top of each turn. `record_audit` reads
+`ctx.turn_seq` and passes it to `record_audit_event`, so audit rows
+land in the same turn group as the trace row. Outside the turn
+loop (`commands/question.rs` resolve_* handlers,
+`db::sessions::edit_user_message`, etc.) the call site passes
+`None` and the audit row stays un-grouped. This is a single,
+explicit, grep-able seam — preferred over a thread-local turn
+context (would not match Rust idiom).

@@ -475,6 +475,43 @@ pub enum ChatEvent {
     /// worker's LLM via `inject_recall_into_turn`), but the
     /// main chat's `lastRecallHits` chip is unaffected — AC7.
     Recall { hits: Vec<RecallHit> },
+    /// E2 trace (2026-07-14): C3 context compaction observation.
+    /// Emitted always-on (live panel) + persisted to
+    /// `turn_trace.compaction_json` (回看). Write point:
+    /// `chat_loop.rs` after `compact_messages` returns (both the
+    /// normal compaction branch and the `StillOver` error branch).
+    /// `degradation` is the `DegradationKind::as_str()` string
+    /// (`"none"` / `"no_candidates"` / `"still_over"`).
+    ContextCompacted {
+        seq: i64,
+        tokens_before: u32,
+        tokens_after: u32,
+        dropped_count: u32,
+        degradation: String,
+    },
+    /// E2 trace (2026-07-14): C2 loop-detection soft hint (1-2
+    /// consecutive hits, below the ≥3 active-intervention threshold).
+    /// Emitted always-on + persisted to `turn_trace.loop_hint_json`.
+    /// `verdict_kind` is `"hard"` or `"soft"`. The ≥3 intervention
+    /// path already writes `loop_intervention` audit rows; this
+    /// variant covers the pre-intervention soft-hint turns only.
+    LoopHint {
+        seq: i64,
+        hit_count: u32,
+        verdict_kind: String,
+    },
+    /// E2 trace (2026-07-14): per-turn workflow breadcrumb snapshot.
+    /// Emitted always-on + persisted to `turn_trace.breadcrumb_json`.
+    /// Write point: `chat_loop.rs` after `append_workflow_breadcrumb`
+    /// (the trace call lives in chat_loop, not in inject.rs, so it
+    /// has access to `seq` + `db` + `sink`). `task_slug` / `status`
+    /// are `None` when there is no active workflow task.
+    WorkflowBreadcrumb {
+        seq: i64,
+        task_slug: Option<String>,
+        status: Option<String>,
+        breadcrumb_text: String,
+    },
 }
 
 /// One hit row in [`ChatEvent::Recall`]. Mirrors the

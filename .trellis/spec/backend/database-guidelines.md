@@ -845,6 +845,68 @@ original schema), so no migration is needed.
 
 ---
 
+## Pattern: per-turn trace UPSERT accumulation (E2, 2026-07-14)
+
+> **Source**: E2 trace viewer task `07-14-e2-harness-trace-viewer`
+> (child-1 `e2-backend-trace-pipeline`).
+
+The `turn_trace` table is a **wide-row accumulator**: one row per
+`(session_id, seq)` pair, with one JSON-text column per trace
+dimension (`token_usage_json` / `compaction_json` / `loop_hint_json`
+/ `breadcrumb_json`). Signals arrive at **different write points
+during a turn** (e.g. `Done{usage}` for token, `compact_messages`
+return for compaction, soft-hint detection for loop, breadcrumb
+injection for workflow) — they cannot share a single INSERT.
+
+**The pattern: column-scoped UPSERT, anchored on `UNIQUE(session_id, seq)`.**
+
+```sql
+CREATE TABLE IF NOT EXISTS turn_trace (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id        TEXT NOT NULL,
+    seq               INTEGER NOT NULL,
+    token_usage_json  TEXT,
+    compaction_json   TEXT,
+    loop_hint_json    TEXT,
+    breadcrumb_json   TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    UNIQUE(session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_trace_session_seq
+ON turn_trace(session_id, seq);
+```
+
+```rust
+// One helper per dimension, each touches only its column:
+INSERT INTO turn_trace (session_id, seq, compaction_json)
+VALUES (?, ?, ?)
+ON CONFLICT(session_id, seq)
+DO UPDATE SET compaction_json = excluded.compaction_json
+```
+
+**Why this shape (not a separate table per dimension).** A single
+row makes回看 (`list_turn_traces ORDER BY seq ASC`) a single SELECT
+returning a `TurnTrace` per turn; the live panel and the history
+view are then **structurally identical** (the trace pipeline emits
++ persists the same JSON shape per dimension).
+
+**Why a new table (not a column on `messages`).** `messages` is the
+conversation content log (`ContentBlock` JSON); `turn_trace` is
+**harness observability** — different lifecycle (trace may be
+cleared via `clear_session_trace` IPC without touching the chat log),
+different audience (debug UI, not the user-facing transcript). Mixing
+them would force every `messages` reader to ignore trace columns.
+
+**Tests (always pair with this pattern):**
+- multi-write accumulation: 4 upserts to same `(session_id, seq)` merge
+  into 1 row with all 4 columns populated;
+- repeat-write idempotency: a second upsert to the same column
+  overwrites (does not duplicate the row);
+- ON DELETE CASCADE: deleting the session cleans up the trace rows.
+
+---
+
 ## 参见
 
 - [subagent-runs-schema.md](subagent-runs-schema.md) (B6 PR2 2026-06-20)

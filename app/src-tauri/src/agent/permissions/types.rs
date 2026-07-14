@@ -200,6 +200,14 @@ pub struct PermissionContext {
     /// (= 项目根),避免 session cwd 是子目录时项目根文件被误判 outside.
     /// caller(`chat_loop`) 填入已 canonicalize 的 worktree_path.
     pub worktree_path: std::path::PathBuf,
+    /// E2 (harness trace pipeline, 2026-07-14): the per-session turn
+    /// counter value at the time of the permission check. Used by
+    /// `record_audit` to pass `turn_seq` to `record_audit_event` so
+    /// audit rows can be grouped by turn in the trace viewer.
+    /// `None` when the context is constructed outside the turn loop
+    /// (should not happen in production, but defensive). Updated
+    /// per-turn in `chat_loop.rs` before the tool-execution phase.
+    pub turn_seq: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

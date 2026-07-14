@@ -257,6 +257,14 @@ pub async fn list_tool_permissions(
 /// is a free-form JSON object the caller builds — typically
 /// `{ "tool_name": "...", "tool_input": {...}, "reason": "..." }`.
 ///
+/// `turn_seq` (E2, 2026-07-14): the per-session turn counter value
+/// at the time of the audit event, used by the trace viewer to
+/// group audit rows by turn. `None` for db helpers writing audit
+/// rows outside the turn loop (e.g. `db::sessions::edit_user_message`)
+/// and for IPC-handler audit writes (e.g. `commands/question.rs`
+/// resolve_* handlers), and for historical rows (pre-v7 migration
+/// backfills NULL).
+///
 /// MVP scope: write-only. Read-side UI (C4 audit log panel)
 /// is out of scope for A2; [`list_audit_events`] is here as a
 /// future hook.
@@ -265,17 +273,19 @@ pub async fn record_audit_event(
     session_id: &str,
     kind: &str,
     payload_json: Option<&str>,
+    turn_seq: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
  INSERT INTO session_audit_events
- (session_id, ts, kind, payload_json)
- VALUES (?, datetime('now'), ?, ?)
+ (session_id, ts, kind, payload_json, turn_seq)
+ VALUES (?, datetime('now'), ?, ?, ?)
  "#,
     )
     .bind(session_id)
     .bind(kind)
     .bind(payload_json)
+    .bind(turn_seq)
     .execute(pool)
     .await?;
     Ok(())
@@ -291,7 +301,7 @@ pub async fn list_audit_events(
 ) -> Result<Vec<AuditEventRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
-        SELECT id, session_id, ts, kind, payload_json
+        SELECT id, session_id, ts, kind, payload_json, turn_seq
         FROM session_audit_events
         WHERE session_id = ?
         ORDER BY ts DESC
@@ -308,6 +318,7 @@ pub async fn list_audit_events(
                 ts: r.try_get("ts")?,
                 kind: r.try_get("kind")?,
                 payload_json: r.try_get("payload_json")?,
+                turn_seq: r.try_get("turn_seq")?,
             })
         })
         .collect()
@@ -340,6 +351,12 @@ pub struct AuditEventRow {
     pub ts: String,
     pub kind: String,
     pub payload_json: Option<String>,
+    /// E2 (2026-07-14): the per-session turn counter value at the
+    /// time of the audit event. `None` for historical rows (pre-v7)
+    /// and for IPC-handler audit writes that have no turn-loop
+    /// context. The trace viewer uses this to group audit rows by
+    /// turn.
+    pub turn_seq: Option<i64>,
 }
 
 /// Row shape for [`list_tool_permissions`] and the

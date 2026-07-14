@@ -124,6 +124,9 @@ pub fn all_command_names() -> Vec<&'static str> {
         "grant_tool_permission",
         // C4 (Audit-log query UI, 2026-06-14)
         "list_session_audit_events",
+        // E2 (harness trace pipeline, 2026-07-14): trace viewer IPCs.
+        "list_turn_traces",
+        "clear_session_trace",
         // D3 PR1 (2026-06-17): edit a user message in place.
         "edit_user_message",
         // B6 PR3a (2026-06-20): subagent_runs list/get for the

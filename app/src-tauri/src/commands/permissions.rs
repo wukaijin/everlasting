@@ -327,3 +327,35 @@ pub async fn list_session_audit_events(
         .await
         .map_err(|e| anyhow::anyhow!("list_session_audit_events failed: {}", e).into())
 }
+
+// E2 (harness trace pipeline, 2026-07-14) — list_turn_traces +
+// clear_session_trace IPCs for the trace viewer (child-2 frontend).
+// ---------------------------------------------------------------------------
+
+/// Read all `turn_trace` rows for `session_id`, ordered by `seq ASC`
+/// (chronological). Wired to the trace viewer's 回看 mode. Empty /
+/// missing session returns an empty `Vec` (NOT an error). Any DB
+/// error is wrapped as `AppCommandError` for the frontend's toast.
+#[tauri::command]
+pub async fn list_turn_traces(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
+    db::trace::list_turn_traces(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("list_turn_traces failed: {}", e).into())
+}
+
+/// Delete all `turn_trace` rows for `session_id`. Wired to the trace
+/// viewer's "清理" button. The `ON DELETE CASCADE` on the `session_id`
+/// FK also fires this automatically when a session is deleted, so
+/// this command is for the manual cleanup button only.
+#[tauri::command]
+pub async fn clear_session_trace(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), AppCommandError> {
+    db::trace::clear_session_trace(&state.db, &session_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("clear_session_trace failed: {}", e).into())
+}

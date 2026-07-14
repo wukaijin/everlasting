@@ -250,7 +250,14 @@ pub(super) async fn record_audit(
         "critical": critical,
     });
     let payload_str = payload.to_string();
-    crate::db::record_audit_event(db, &ctx.session_id, kind.as_str(), Some(&payload_str)).await
+    crate::db::record_audit_event(
+        db,
+        &ctx.session_id,
+        kind.as_str(),
+        Some(&payload_str),
+        ctx.turn_seq,
+    )
+    .await
 }
 
 /// C4 PR1 (2026-06-14): record a `tool_executed` audit row. Unlike
@@ -282,6 +289,7 @@ pub async fn record_tool_executed_audit(
     tool_input: &serde_json::Value,
     duration_ms: u128,
     exit_code: Option<i32>,
+    turn_seq: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     let payload = serde_json::json!({
         "tool_name": tool_name,
@@ -295,6 +303,7 @@ pub async fn record_tool_executed_audit(
         session_id,
         AuditKind::ToolExecuted.as_str(),
         Some(&payload_str),
+        turn_seq,
     )
     .await
 }
@@ -333,6 +342,7 @@ pub async fn record_message_resend_audit(
     session_id: &str,
     message_seq: i64,
     content_text_preview: &str,
+    turn_seq: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     let payload = serde_json::json!({
         "message_seq": message_seq,
@@ -344,6 +354,7 @@ pub async fn record_message_resend_audit(
         session_id,
         AuditKind::ResendMessage.as_str(),
         Some(&payload_str),
+        turn_seq,
     )
     .await
 }
@@ -386,6 +397,7 @@ pub async fn record_loop_intervention_audit(
     hit_count: u32,
     verdict_kind: &str,
     action: &str,
+    turn_seq: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     let payload = serde_json::json!({
         "hit_count": hit_count,
@@ -399,6 +411,7 @@ pub async fn record_loop_intervention_audit(
         session_id,
         AuditKind::LoopIntervention.as_str(),
         Some(&payload_str),
+        turn_seq,
     )
     .await
 }
@@ -436,6 +449,7 @@ pub async fn record_ui_diff_applied_audit(
     db: &SqlitePool,
     session_id: &str,
     files: &[(String, usize, usize)],
+    turn_seq: Option<i64>,
 ) -> Result<(), sqlx::Error> {
     let files_summary: Vec<serde_json::Value> = files
         .iter()
@@ -458,6 +472,7 @@ pub async fn record_ui_diff_applied_audit(
         session_id,
         AuditKind::UiDiffApplied.as_str(),
         Some(&payload_str),
+        turn_seq,
     )
     .await
 }

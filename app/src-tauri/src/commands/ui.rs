@@ -235,7 +235,9 @@ pub async fn apply_ui_diff(
         .iter()
         .map(|(p, _, a, r)| (p.display().to_string(), *a, *r))
         .collect();
-    if let Err(e) = record_ui_diff_applied_audit(&state.db, &session_id, &files_for_audit).await {
+    if let Err(e) =
+        record_ui_diff_applied_audit(&state.db, &session_id, &files_for_audit, None).await
+    {
         tracing::warn!(
             session_id = %session_id,
             error = %e,

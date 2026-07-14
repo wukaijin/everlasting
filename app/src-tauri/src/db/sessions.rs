@@ -1211,8 +1211,8 @@ pub async fn edit_user_message(
     sqlx::query(
         r#"
  INSERT INTO session_audit_events
- (session_id, ts, kind, payload_json)
- VALUES (?, datetime('now'), 'edit_message', ?)
+ (session_id, ts, kind, payload_json, turn_seq)
+ VALUES (?, datetime('now'), 'edit_message', ?, NULL)
  "#,
     )
     .bind(session_id)

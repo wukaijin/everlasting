@@ -386,6 +386,7 @@ async fn resend_message_audit_round_trips_via_list_audit_events() {
         &s.id,
         3,
         "re-run: explain the cancellation token pattern",
+        None,
     )
     .await
     .unwrap();
@@ -404,7 +405,7 @@ async fn resend_message_audit_round_trips_via_list_audit_events() {
     // Case 2: long content is truncated to 80 chars (matches the
     // edit audit preview budget).
     let long = "a".repeat(200);
-    record_message_resend_audit(&pool, &s.id, 5, &long)
+    record_message_resend_audit(&pool, &s.id, 5, &long, None)
         .await
         .unwrap();
     let events = list_audit_events(&pool, &s.id).await.unwrap();
@@ -446,7 +447,7 @@ async fn resend_message_audit_on_deleted_session_returns_error() {
     .await
     .unwrap();
     delete_session(&pool, &s.id).await.unwrap();
-    let result = record_message_resend_audit(&pool, &s.id, 0, "after-delete").await;
+    let result = record_message_resend_audit(&pool, &s.id, 0, "after-delete", None).await;
     assert!(result.is_err(), "audit insert must fail on missing session");
 }
 
@@ -484,12 +485,12 @@ async fn loop_intervention_audit_round_trips_via_list_audit_events() {
     .unwrap();
 
     // Case 1: main-loop path, action="asked", verdict_kind="hard".
-    record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked")
+    record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked", None)
         .await
         .unwrap();
 
     // Case 2: main-loop path, action="terminated", verdict_kind="soft".
-    record_loop_intervention_audit(&pool, &s.id, None, 5, "soft", "terminated")
+    record_loop_intervention_audit(&pool, &s.id, None, 5, "soft", "terminated", None)
         .await
         .unwrap();
 
@@ -506,6 +507,7 @@ async fn loop_intervention_audit_round_trips_via_list_audit_events() {
         3,
         "hard",
         "continued",
+        None,
     )
     .await
     .unwrap();
@@ -566,6 +568,6 @@ async fn loop_intervention_audit_on_deleted_session_returns_error() {
     .await
     .unwrap();
     delete_session(&pool, &s.id).await.unwrap();
-    let result = record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked").await;
+    let result = record_loop_intervention_audit(&pool, &s.id, None, 3, "hard", "asked", None).await;
     assert!(result.is_err(), "audit insert must fail on missing session");
 }

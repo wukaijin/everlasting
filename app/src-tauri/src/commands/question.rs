@@ -240,6 +240,7 @@ pub(crate) async fn resolve_mode_change_internal(
             session_id,
             crate::agent::permissions::AuditKind::ModeChangeDenied.as_str(),
             Some(&payload),
+            None,
         )
         .await
         {
@@ -275,6 +276,7 @@ pub(crate) async fn resolve_mode_change_internal(
                 session_id,
                 crate::agent::permissions::AuditKind::ModeChangeAllowed.as_str(),
                 Some(&payload),
+                None,
             )
             .await
             {
@@ -314,6 +316,7 @@ pub(crate) async fn resolve_mode_change_internal(
                 session_id,
                 crate::agent::permissions::AuditKind::ModeChangeDenied.as_str(),
                 Some(&payload),
+                None,
             )
             .await
             {
@@ -401,7 +404,9 @@ pub(crate) async fn set_session_mode_internal(
         "new_mode": new_mode.as_str(),
     })
     .to_string();
-    if let Err(e) = db::record_audit_event(pool, session_id, "mode_changed", Some(&payload)).await {
+    if let Err(e) =
+        db::record_audit_event(pool, session_id, "mode_changed", Some(&payload), None).await
+    {
         tracing::warn!(error = %e, "set_session_mode_internal: record_audit_event(mode_changed) failed");
     }
 
@@ -414,7 +419,7 @@ pub(crate) async fn set_session_mode_internal(
         _ => None,
     };
     if let Some(kind) = transition_kind {
-        if let Err(e) = db::record_audit_event(pool, session_id, kind, Some(&payload)).await {
+        if let Err(e) = db::record_audit_event(pool, session_id, kind, Some(&payload), None).await {
             tracing::warn!(
                 error = %e,
                 kind = %kind,
@@ -745,6 +750,7 @@ pub(crate) async fn resolve_task_state_transition_internal(
                 session_id,
                 AuditKind::TaskStateTransitionAllowed.as_str(),
                 Some(&audit_payload),
+                None,
             )
             .await
             {
@@ -841,7 +847,8 @@ async fn record_state_transition_audit(
         "detail": detail,
     })
     .to_string();
-    if let Err(e) = db::record_audit_event(db_pool, session_id, kind.as_str(), Some(&payload)).await
+    if let Err(e) =
+        db::record_audit_event(db_pool, session_id, kind.as_str(), Some(&payload), None).await
     {
         tracing::warn!(
             error = %e,

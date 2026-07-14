@@ -663,7 +663,12 @@ pub async fn run_chat_loop(
         // read-side boundary decouple (2026-07-01): deny-list/allow-list
         // 的"项目外"判定锚点(项目根). 见 PermissionContext.worktree_path doc.
         worktree_path: worktree_path.clone(),
+        // E2 trace: per-turn seq, updated at the top of each turn
+        // before the tool-execution phase. None at construction
+        // (pre-turn-loop); the turn loop sets Some(seq) per turn.
+        turn_seq: None,
     };
+    let mut permission_ctx = permission_ctx;
     let mode_prefix = permissions::mode_system_prefix(session_mode);
 
     // B6+ B (task 07-06-b6plus-b-dispatch-model-arg): snapshot the
@@ -890,6 +895,7 @@ pub async fn run_chat_loop(
                     &session_id,
                     original_seq,
                     &preview,
+                    None,
                 )
                 .await
                 {
@@ -1088,6 +1094,7 @@ pub async fn run_chat_loop(
                 &input,
                 duration_ms,
                 exit_code,
+                Some(seq),
             )
             .await
             {
@@ -1206,6 +1213,10 @@ pub async fn run_chat_loop(
 
     let turn_limit = max_turns.unwrap_or(MAX_TURNS);
     for turn in 1..=turn_limit {
+        // E2 trace (2026-07-14): update the per-turn seq on the
+        // permission context so `record_audit` can pass it to
+        // `record_audit_event` for audit turn alignment.
+        permission_ctx.turn_seq = Some(seq);
         // P2 RULE-A-005 (2026-06-24, fix 1 of 3 P2 open rules):
         // refresh `head_sha` + rebuild `system_prompt` at the start of
         // EVERY turn. The LLM only consumes `system_prompt` once per
@@ -1268,6 +1279,25 @@ pub async fn run_chat_loop(
                     context_window,
                     "agent loop: context compressed (C3)"
                 );
+            }
+            // E2 trace (2026-07-14): record C3 compaction observation
+            // (both normal compaction + StillOver error). Always-on
+            // emit + persist; best-effort on the DB write.
+            if compacted.dropped_count > 0
+                || matches!(
+                    compacted.degradation,
+                    crate::agent::context::DegradationKind::StillOver { .. }
+                )
+            {
+                crate::agent::trace::record_compaction(
+                    &sink,
+                    &db,
+                    &rid,
+                    &session_id,
+                    seq,
+                    &compacted,
+                )
+                .await;
             }
             match compacted.degradation {
                 crate::agent::context::DegradationKind::None
@@ -1545,7 +1575,31 @@ pub async fn run_chat_loop(
                     .await;
                 }
                 if let Some(ref ctx) = workflow_ctx {
-                    crate::agent::workflow::inject::append_workflow_breadcrumb(&mut req, ctx);
+                    let appended =
+                        crate::agent::workflow::inject::append_workflow_breadcrumb(&mut req, ctx);
+                    // E2 trace (2026-07-14): record breadcrumb snapshot.
+                    // Lives in chat_loop (not inject.rs) so it has access
+                    // to seq + db + sink. Only fires when the breadcrumb
+                    // was actually appended (S-B guard passed).
+                    if appended {
+                        let slug = ctx.current_task.as_ref().map(|t| t.slug.clone());
+                        let status = ctx
+                            .current_task
+                            .as_ref()
+                            .map(|t| t.status.as_str().to_string());
+                        let text = crate::agent::workflow::inject::breadcrumb_body(ctx);
+                        crate::agent::trace::record_breadcrumb(
+                            &sink,
+                            &db,
+                            &rid,
+                            &session_id,
+                            seq,
+                            slug.as_deref(),
+                            status.as_deref(),
+                            &text,
+                        )
+                        .await;
+                    }
                 }
             }
             req
@@ -1800,6 +1854,13 @@ pub async fn run_chat_loop(
                                     if let Err(e) = crate::db::update_last_turn_usage(&db, &session_id, t).await {
                                         tracing::warn!(error = %e, "chat: failed to update last-turn token usage (non-fatal)");
                                     }
+                                    // E2 trace (2026-07-14): persist per-turn
+                                    // token usage to turn_trace (worker-gated
+                                    // by !skip_persist, same as
+                                    // update_last_turn_usage — RULE-A-015).
+                                    if let Err(e) = crate::db::trace::upsert_turn_trace_token(&db, &session_id, seq, t).await {
+                                        tracing::warn!(error = %e, "trace: upsert_turn_trace_token failed (non-fatal)");
+                                    }
                                 }
                             }
                         }
@@ -1854,6 +1915,20 @@ pub async fn run_chat_loop(
                             tracing::warn!(
                                 request_id = %rid,
                                 "chat: unexpected Recall in LLM stream (ignoring — emitted via emit_recall_event)"
+                            );
+                        }
+                        // E2 trace (2026-07-14): the 3 trace events are
+                        // emitted by `agent::trace::record_*` (NOT by the
+                        // LLM stream), so reaching this arm means a
+                        // provider somehow re-emitted a trace event we
+                        // already pushed. Drop it (same pattern as
+                        // `Recall` / `Retrying` / `FileInjections`).
+                        ChatEvent::ContextCompacted { .. }
+                        | ChatEvent::LoopHint { .. }
+                        | ChatEvent::WorkflowBreadcrumb { .. } => {
+                            tracing::warn!(
+                                request_id = %rid,
+                                "chat: unexpected trace event in LLM stream (ignoring)"
                             );
                         }
                     }
@@ -2197,6 +2272,25 @@ pub async fn run_chat_loop(
             loop_hit_count = 0;
         }
 
+        // E2 trace (2026-07-14): record C2 soft hint (1-2 consecutive
+        // hits, before the ≥3 active-intervention threshold). The ≥3
+        // path already writes `loop_intervention` audit rows; this
+        // trace covers the pre-intervention turns only.
+        if verdict_kind_str.is_some() && loop_hit_count < 3 {
+            if let Some(vk) = verdict_kind_str {
+                crate::agent::trace::record_loop_hint(
+                    &sink,
+                    &db,
+                    &rid,
+                    &session_id,
+                    seq,
+                    loop_hit_count,
+                    vk,
+                )
+                .await;
+            }
+        }
+
         if loop_hit_count >= 3 && verdict_kind_str.is_some() {
             // Reached the consecutive-hit threshold on a loop turn.
             // Worker path: direct break (R5) — no QuestionStore
@@ -2272,6 +2366,7 @@ pub async fn run_chat_loop(
                 loop_hit_count,
                 verdict_kind_str_expect,
                 "asked",
+                Some(seq),
             )
             .await;
 
@@ -2354,6 +2449,7 @@ pub async fn run_chat_loop(
                                             loop_hit_count,
                                             verdict_kind_str_expect,
                                             "continued",
+                                        Some(seq),
                                         ).await;
                                         // Reset the counter so the
                                         // model gets a fresh 3-strike
@@ -2390,6 +2486,7 @@ pub async fn run_chat_loop(
                                             loop_hit_count,
                                             verdict_kind_str_expect,
                                             "terminated",
+                                        Some(seq),
                                         ).await;
                                         if !skip_persist {
                                             persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
@@ -2421,6 +2518,7 @@ pub async fn run_chat_loop(
                                         loop_hit_count,
                                         verdict_kind_str_expect,
                                         "terminated",
+                                    Some(seq),
                                     ).await;
                                     if !skip_persist {
                                         persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
@@ -2781,6 +2879,7 @@ pub async fn run_chat_loop(
                                 &input,
                                 duration_ms,
                                 exit_code,
+                                Some(seq),
                             )
                             .await
                             {
@@ -3135,6 +3234,7 @@ pub async fn run_chat_loop(
                                         &input,
                                         duration_ms,
                                         exit_code,
+                                    Some(seq),
                                     )
                                     .await
                                     {
@@ -3274,6 +3374,7 @@ pub async fn run_chat_loop(
                                     input,
                                     duration_ms,
                                     exit_code,
+                                    Some(seq),
                                 )
                                 .await
                                 {
@@ -3354,6 +3455,7 @@ pub async fn run_chat_loop(
                                     &question_store,
                                     &sink,
                                     &token,
+                                    Some(seq),
                                 )
                                 .await;
                             let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -3367,6 +3469,7 @@ pub async fn run_chat_loop(
                                     input,
                                     duration_ms,
                                     exit_code,
+                                    Some(seq),
                                 )
                                 .await
                                 {
@@ -3474,6 +3577,7 @@ pub async fn run_chat_loop(
                                     &question_store,
                                     &sink,
                                     &token,
+                                    Some(seq),
                                 )
                                 .await;
                             let duration_ms = tool_exec_start.elapsed().as_millis();
@@ -3487,6 +3591,7 @@ pub async fn run_chat_loop(
                                     input,
                                     duration_ms,
                                     exit_code,
+                                    Some(seq),
                                 )
                                 .await
                                 {
@@ -3619,6 +3724,7 @@ pub async fn run_chat_loop(
                                     input,
                                     duration_ms,
                                     exit_code,
+                                    Some(seq),
                                 )
                                 .await
                                 {
@@ -3796,6 +3902,7 @@ pub async fn run_chat_loop(
                                 input,
                                 duration_ms,
                                 exit_code,
+                                Some(seq),
                             )
                             .await
                             {

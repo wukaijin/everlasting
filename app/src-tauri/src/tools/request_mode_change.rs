@@ -272,6 +272,11 @@ pub async fn execute_blocking(
     store: &QuestionStore,
     sink: &Arc<dyn ChatEventSink>,
     cancel: &CancellationToken,
+    // E2 (2026-07-14): per-turn seq for audit turn alignment. The
+    // caller (chat_loop interceptor) passes `Some(seq)` from inside
+    // the turn loop so the `mode_change_requested` audit row lands
+    // in the correct turn group.
+    turn_seq: Option<i64>,
 ) -> BlockingToolResult {
     // ---- 1. Parse + validate ----------------------------------------
     let parsed: RequestModeChangeInput = match serde_json::from_value(input.clone()) {
@@ -321,6 +326,7 @@ pub async fn execute_blocking(
             session_id,
             crate::agent::permissions::AuditKind::ModeChangeRequested.as_str(),
             Some(&payload),
+            turn_seq,
         )
         .await
         {
@@ -366,6 +372,7 @@ pub async fn execute_blocking(
         session_id,
         crate::agent::permissions::AuditKind::ModeChangeRequested.as_str(),
         Some(&audit_payload),
+        turn_seq,
     )
     .await
     {
@@ -594,6 +601,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None,
         )
         .await;
         assert!(is_error, "empty target → is_error: true");
@@ -621,6 +629,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None,
         )
         .await;
         assert!(is_error);
@@ -647,6 +656,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None,
         )
         .await;
         assert!(is_error);
@@ -675,6 +685,7 @@ mod tests {
             &store,
             &sink_arc,
             &cancel,
+            None,
         )
         .await;
         assert!(!is_error, "noop returns is_error: false");
@@ -721,6 +732,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None,
             )
             .await
         });
@@ -784,6 +796,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None,
             )
             .await
         });
@@ -826,6 +839,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None,
             )
             .await
         });
@@ -901,6 +915,7 @@ mod tests {
             &store,
             &sink_arc,
             &cancel,
+            None,
         )
         .await;
         assert!(is_error);

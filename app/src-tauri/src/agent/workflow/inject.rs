@@ -585,6 +585,18 @@ pub fn append_delegation_template(
 /// `set_task_state` makes the breadcrumb vary even
 /// within a single loop, reinforcing the same invariant.
 fn build_breadcrumb_block(ctx: &WorkflowCtx) -> ContentBlock {
+    ContentBlock::Text {
+        text: breadcrumb_body(ctx),
+        cache_control: None,
+    }
+}
+
+/// Public accessor for the breadcrumb text body. Used by the E2 trace
+/// pipeline (`agent::trace::record_breadcrumb`) to snapshot the
+/// per-turn breadcrumb without re-implementing the body construction.
+/// Returns the same string that `build_breadcrumb_block` pushes as a
+/// `ContentBlock::Text`.
+pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
     let state_str = ctx
         .current_task
         .as_ref()
@@ -592,7 +604,7 @@ fn build_breadcrumb_block(ctx: &WorkflowCtx) -> ContentBlock {
         .unwrap_or("planning");
     let breadcrumb = breadcrumb_for(&ctx.workflow_def, state_str);
 
-    let body = match &ctx.current_task {
+    match &ctx.current_task {
         Some(task) => {
             // task-fragment branch: 3-line metadata +
             // breadcrumb text + pointer.
@@ -628,11 +640,6 @@ fn build_breadcrumb_block(ctx: &WorkflowCtx) -> ContentBlock {
                  {breadcrumb}\n",
             )
         }
-    };
-
-    ContentBlock::Text {
-        text: body,
-        cache_control: None,
     }
 }
 
