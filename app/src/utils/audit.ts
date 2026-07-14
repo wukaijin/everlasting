@@ -41,6 +41,15 @@ export interface AuditEventRow {
   kind: string;
   /** Raw JSON payload (or `null`). Parse via `parseAuditPayload`. */
   payloadJson: string | null;
+  /** E2 (harness trace pipeline, 2026-07-14): the per-session
+   *  turn counter at the time the audit row was written. Used by
+   *  the trace viewer to group audit events by turn (per-turn
+   *  tool-call sub-list on each TurnCard). `null` for historical
+   *  rows (pre-v7 migration) and for IPC-handler audit writes
+   *  that have no turn-loop context. The C4 AuditLogModal
+   *  ignores this field — only the trace viewer's renderer reads
+   *  it. */
+  turnSeq: number | null;
 }
 
 // ---------------------------------------------------------------------------

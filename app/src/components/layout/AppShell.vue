@@ -8,12 +8,25 @@
 // iff a project is active. The empty state (no project) is rendered
 // inside the slot (ChatWindow) so the user can hit "+ 添加项目"
 // from the same surface.
+//
+// E2 (harness trace pipeline, 2026-07-14): the right-side
+// `<TracePanel>` drawer mounts as a top-level sibling of the
+// main slot. The drawer is `v-if` gated on
+// `traceStore.panelOpen`; the slide-in / slide-out
+// transition lives inside the panel itself (mirrors
+// SubagentDrawer). Per design §5, mounting the panel at
+// the AppShell level (not inside ChatWindow) keeps the
+// trace viewer available even when the empty-project
+// state is showing — the user can review trace history
+// for any session regardless of the current chat
+// surface.
 
 import { computed } from "vue";
 import { useProjectsStore } from "../../stores/projects";
 import { useChatStore } from "../../stores/chat";
 import AppHeader from "./AppHeader.vue";
 import Sidebar from "./Sidebar.vue";
+import TracePanel from "../trace/TracePanel.vue";
 
 const projectsStore = useProjectsStore();
 const chatStore = useChatStore();
@@ -49,6 +62,13 @@ async function onToastClick(): Promise<void> {
         <slot />
       </main>
     </div>
+
+    <!-- E2 (harness trace pipeline, 2026-07-14): trace-viewer
+         drawer. Mounts at the AppShell level (sibling of the
+         main slot) so the timeline stays available even when
+         the chat surface is hidden. The slide-in / slide-out
+         transition lives inside the panel itself. -->
+    <TracePanel />
 
     <transition name="toast">
       <div

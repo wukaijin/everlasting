@@ -32,6 +32,12 @@ function buildRow(kind: string, payloadJson: string | null): AuditEventRow {
     ts: "2026-07-05 12:34:56",
     kind,
     payloadJson,
+    // E2 (2026-07-14): turn_seq column added by v7 migration.
+    // The C4 AuditLogItem renders rows without inspecting this
+    // field; the trace viewer reads it. The test fixture
+    // defaults to `null` (pre-v7 historical shape) — the
+    // AuditLogItem render path is unchanged.
+    turnSeq: null,
   };
 }
 

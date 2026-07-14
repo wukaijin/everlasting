@@ -41,6 +41,7 @@ import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import { useMemoryStore } from "../../stores/memory";
+import { useTraceStore } from "../../stores/traceStore";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
 import DeleteWorktreeConfirm from "./DeleteWorktreeConfirm.vue";
@@ -58,6 +59,7 @@ const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const checklistStore = useChecklistStore();
 const memoryStore = useMemoryStore();
+const traceStore = useTraceStore();
 
 const emit = defineEmits<{
   send: [text: string];
@@ -542,6 +544,31 @@ if (typeof window !== "undefined") {
           @click="auditModalOpen = true"
         >
           <Icon name="shield-check" :size="14" />
+        </button>
+        <!--
+                  E2 (harness trace pipeline, 2026-07-14): trace
+                  timeline toggle. Sits next to the audit button —
+                  same session scope (reads currentSessionId), same
+                  chip-family icon button. Opens the `<TracePanel>`
+                  right-side drawer for the current session; the
+                  drawer renders both the live in-flight trace
+                  events (per-turn compaction / loop hint / workflow
+                  breadcrumb) and the 回看 history from
+                  `turn_trace` + `session_audit_events.turn_seq`.
+                  The drawer itself is mounted at the AppShell
+                  level (sibling of the main slot) so it survives
+                  session-switch and the empty-state mount. This
+                  button is just the toggle.
+                -->
+        <button
+          v-if="chatStore.currentSessionId"
+          class="chat-panel__trace-btn"
+          type="button"
+          :title="traceStore.panelOpen ? '关闭 trace 时间线' : '打开 trace 时间线'"
+          :aria-label="traceStore.panelOpen ? 'Close trace' : 'Open trace'"
+          @click="traceStore.togglePanel()"
+        >
+          <Icon name="chart" :size="14" />
         </button>
         <!--
                   Permission-grant management entry (task
@@ -1048,6 +1075,37 @@ if (typeof window !== "undefined") {
 }
 
 .chat-panel__grants-btn:active {
+  background: var(--color-bg-border);
+}
+
+/* E2 (harness trace pipeline, 2026-07-14): trace timeline
+   toggle button. Sits in the same chip-family as the
+   audit / grants buttons (24x22, 1px border, --color-bg-elevated).
+   Same hover behavior — accent-muted + accent border. */
+.chat-panel__trace-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  font-family: inherit;
+}
+
+.chat-panel__trace-btn:hover {
+  background: var(--color-accent-muted);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.chat-panel__trace-btn:active {
   background: var(--color-bg-border);
 }
 

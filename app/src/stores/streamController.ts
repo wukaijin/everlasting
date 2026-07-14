@@ -56,6 +56,7 @@ import {
 } from "./checklist";
 import { useMemoryStore } from "./memory";
 import { useProjectsStore } from "./projects";
+import { useTraceStore } from "./traceStore";
 import {
   useQuestionCardsStore,
 } from "./questionCards";
@@ -181,7 +182,19 @@ interface ChatEventPayload {
     // so the ChatPanel recall chip renders "本次召回 N 条".
     // Worker sinks never emit on `chat-event` (AC7), so a hit
     // arriving here is always from the main chat loop.
-    | "recall";
+    | "recall"
+    // E2 (harness trace pipeline, 2026-07-14): the 3 new
+    // always-on trace variants from `ChatEvent::ContextCompacted`
+    // / `ChatEvent::LoopHint` / `ChatEvent::WorkflowBreadcrumb`
+    // (Rust `llm/types.rs:485-514`). These ride the `chat-event`
+    // channel; the controller's `handleChatEvent` cases route
+    // them into `useTraceStore().applyEvent`. Field names are
+    // snake_case on the wire (per the `ChatEvent` enum's
+    // `rename_all = "snake_case"`); the trace store normalizes
+    // to camelCase typed sub-objects on the live path.
+    | "context_compacted"
+    | "loop_hint"
+    | "workflow_breadcrumb";
   text?: string;
   signature?: string;
   data?: string;
@@ -233,6 +246,25 @@ interface ChatEventPayload {
   // fields match the Rust `RecallHit` (no `rename_all`) — consistent
   // with `Retrying` / `FileInjections` nested payloads.
   hits?: RecallHitWire[];
+  // E2 (harness trace pipeline, 2026-07-14): only present when
+  // `kind === "context_compacted"`. Mirrors Rust
+  // `ChatEvent::ContextCompacted`. The handler routes into
+  // `useTraceStore().applyEvent` (live path).
+  tokens_before?: number;
+  tokens_after?: number;
+  dropped_count?: number;
+  degradation?: string;
+  // E2: only present when `kind === "loop_hint"`. Mirrors
+  // Rust `ChatEvent::LoopHint`.
+  hit_count?: number;
+  verdict_kind?: string;
+  // E2: only present when `kind === "workflow_breadcrumb"`.
+  // Mirrors Rust `ChatEvent::WorkflowBreadcrumb`. The
+  // `task_slug` / `status` are `null` on the wire when
+  // there's no active workflow task.
+  task_slug?: string | null;
+  status?: string | null;
+  breadcrumb_text?: string;
 }
 
 /** 07-06 (am-observability-panel A7): the wire shape of a single
@@ -1278,6 +1310,55 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         useMemoryStore().pushRecallHits(req.sessionId, event.hits);
         break;
       }
+      case "context_compacted": {
+        // E2 (harness trace pipeline, 2026-07-14): the C3
+        // context-compaction trace event. Routes into the
+        // trace store so the live panel can render the
+        // "compaction" sub-card on the matching TurnCard. The
+        // controller's outer `activeRequests.get(request_id)`
+        // filter ensures the event belongs to an in-flight
+        // main-loop request; the trace store's `applyEvent`
+        // is session-agnostic (the `seq` is the per-session
+        // turn counter, which is unique within a session).
+        useTraceStore().applyEvent({
+          kind: "context_compacted",
+          request_id: event.request_id,
+          seq: event.seq ?? 0,
+          tokens_before: event.tokens_before ?? 0,
+          tokens_after: event.tokens_after ?? 0,
+          dropped_count: event.dropped_count ?? 0,
+          degradation: event.degradation ?? "none",
+        });
+        break;
+      }
+      case "loop_hint": {
+        // E2: C2 loop-detection soft hint (1-2 consecutive
+        // hits). Same flow as `context_compacted`.
+        useTraceStore().applyEvent({
+          kind: "loop_hint",
+          request_id: event.request_id,
+          seq: event.seq ?? 0,
+          hit_count: event.hit_count ?? 0,
+          verdict_kind: event.verdict_kind ?? "soft",
+        });
+        break;
+      }
+      case "workflow_breadcrumb": {
+        // E2: per-turn workflow breadcrumb snapshot. The
+        // `task_slug` / `status` are `null` when there's no
+        // active workflow task (the bootstrap breadcrumb
+        // branch); the renderer shows the breadcrumb_text
+        // verbatim and hides the slug/status fields.
+        useTraceStore().applyEvent({
+          kind: "workflow_breadcrumb",
+          request_id: event.request_id,
+          seq: event.seq ?? 0,
+          task_slug: event.task_slug ?? null,
+          status: event.status ?? null,
+          breadcrumb_text: event.breadcrumb_text ?? "",
+        });
+        break;
+      }
     }
   }
 
@@ -2063,6 +2144,21 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // ownership point — every user-message send funnels through
     // startRequest).
     useMemoryStore().clearRecallHits(args.sessionId);
+    // E2 (harness trace pipeline, 2026-07-14): a new user message
+    // starts a fresh request — the trace timeline must reset to
+    // the new session's history. We clear the in-memory
+    // `currentSessionTraces` and reload from DB; subsequent
+    // live events (context_compacted / loop_hint /
+    // workflow_breadcrumb) will upsert into the freshly-loaded
+    // Map. The same `startRequest` is the single funnel for every
+    // user-message send, so this is the single ownership point
+    // for the "fresh turn → fresh trace view" invariant.
+    //
+    // Fire-and-forget — a slow `loadHistory` shouldn't block the
+    // stream start. The user's perception of latency is the
+    // LLM's first-delta, not the trace reload. The trace store
+    // has its own `loading` flag for the panel's loading skeleton.
+    void useTraceStore().resetForNewSession(args.sessionId);
     // Touch the session's messages (in case it was just loaded)
     // so it sits at MRU.
     const msgs = messagesBySession.get(args.sessionId);

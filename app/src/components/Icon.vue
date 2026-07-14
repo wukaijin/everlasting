@@ -56,7 +56,7 @@ import {
   ClockIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/vue/24/outline";
-import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck } from "@lucide/vue";
+import { Brain, ShieldX, ShieldCheck, Terminal, Copy, Info, CircleDot, Check, ClipboardList, Circle, LoaderCircle, GitMerge, FileCheck, ChartLine, Repeat, ListTree, Shrink } from "@lucide/vue";
 
 const props = withDefaults(
   defineProps<{
@@ -144,6 +144,19 @@ const map = {
   // directly; reuses the same lucide family as `shield-x` /
   // `git-merge` above.
   "file-check": FileCheck,
+  // E2 (harness trace pipeline, 2026-07-14): trace timeline
+  // icon family. lucide ships these directly; reuses the same
+  // line weight as the existing `shield-x` / `git-merge` /
+  // `file-check` group so the chip-family reads consistently.
+  // `chart-line` is the drawer toggle (TracePanel icon in
+  // ChatPanel header); `repeat` is the loop-detection
+  // sub-card icon; `list-tree` is the workflow breadcrumb
+  // sub-card icon; `shrink` is the C3 compaction sub-card
+  // icon (mirrors the "shrinking context" semantics).
+  "chart": ChartLine,
+  "repeat": Repeat,
+  "list-tree": ListTree,
+  "shrink": Shrink,
 } as const;
 
 const Component = computed(() => {
