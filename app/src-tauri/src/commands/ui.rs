@@ -56,7 +56,7 @@ use crate::db;
 use crate::projects::boundary::assert_within_root;
 use crate::state::AppState;
 
-use super::super::diff_apply::{apply_to_file, parse_unified_diff, ParseError};
+use super::super::diff_apply::{apply_to_file, parse_unified_diff};
 
 /// Result of an apply attempt. `ok: true` carries `files`; `ok: false`
 /// carries `kind` + `error`. The IPC wire shape is JSON; the frontend
@@ -266,6 +266,11 @@ pub async fn apply_ui_diff(
 mod tests {
     use super::*;
     use crate::db::Mode;
+    // `ParseError` is only referenced inside these tests (the handler
+    // maps it to a string `kind` without naming the type), so the
+    // import lives here under `#[cfg(test)]` rather than at the top of
+    // the file (where it'd be an unused import in non-test builds).
+    use crate::diff_apply::ParseError;
 
     /// smoke test: confirms the ParseError → IPC `kind` mapping string
     /// (frontend text in `frontend/chat.md` mirrors this).

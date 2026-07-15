@@ -190,7 +190,9 @@ watch(
         </div>
       </header>
 
-      <TurnTimeline />
+      <div class="trace-panel__body">
+        <TurnTimeline />
+      </div>
 
       <ConfirmDialog
         :open="showClearConfirm"
@@ -223,6 +225,18 @@ watch(
   display: flex;
   flex-direction: column;
   z-index: 100;
+}
+
+/* Scroll region. `.trace-panel` is a fixed-height (viewport-tall)
+   flex column: header is `flex-shrink: 0`, this body absorbs the
+   rest. Without `min-height: 0` + `overflow-y: auto` here, a long
+   timeline overflows the viewport and can't be scrolled (the
+   TurnTimeline root has no overflow of its own). Mirrors
+   `.audit-modal__body` in AuditLogModal.vue. */
+.trace-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .trace-panel__header {
