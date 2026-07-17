@@ -2,65 +2,115 @@
 
 [![CI](https://github.com/wukaijin/everlasting/actions/workflows/ci.yml/badge.svg)](https://github.com/wukaijin/everlasting/actions/workflows/ci.yml)
 
-> 个人使用的 vibe coding workbench。基于 Tauri + 自研 agent core,WSL 优先。
+> 个人 vibe coding 桌面工作台。Tauri + 自研 agent core,WSL 优先。
 
 ## 这是什么
 
 一个桌面应用,给"在 WSL 里写代码的 Windows 用户"用的 vibe coding 工作台。
 
-不是另一个 Claude Code 替代品,而是同样的能力(聊、改代码、跑命令)加上:
-- **自研 agent core** — 为了学习 harness engineering,不用 SDK 包装
-- **深度 WSL 集成** — 项目放 WSL 内部,不走 `/mnt/c`
-- **多项目 / 多 session / 工作流** — 不是一次性对话,是持久工作环境
+不是另一个 Claude Code 替代品 —— 是同样的能力(聊、改代码、跑命令)加上三件事:
 
-## 当前状态 (2026-06-18)
+- **自研 agent core** — 自己实现 Agent Loop / Tool Calling / 流式 SSE / 16 关卡请求生命周期,不用 SDK 包装。学习 harness engineering,完全可控,不被厂商牵着走。
+- **深度 WSL 集成** — 项目放 WSL 内部(`~/projects`),不走 `/mnt/c`;GUI 进程通过 WSLg / Wayland 渲染到 Windows 桌面。
+- **多项目 / 多 session / 工作流** — 不是一次性对话,是一个持久的工作环境。每个 session 一个 git worktree,可并行、可互不污染、可瞬时切换。
 
-权威看 `git log --oneline -20`,**路线图与下一步选项归 [docs/ROADMAP.md](./docs/ROADMAP.md)**(V2 4 档分类 + 已实施粗粒度归类,本文档不重复)。position bug 已于 2026-06-14 解决(根因 Wayland 协议禁止客户端设窗口位置,WSLg 下 `setPosition()` 被合成器忽略,改用原生 `toggleMaximize()`;RDP 双屏已验证;详见 [IMPLEMENTATION §4](./docs/IMPLEMENTATION.md#4-决策日志))。
+> 这三件事哪天不再重要,这个项目就失去了存在理由。详见 [docs/DESIGN.md §2.3](./docs/DESIGN.md#23-核心差异点)。
 
-## 代码结构
+## 状态
 
-完整结构见 [STRUCTURE.md](./STRUCTURE.md)(8-PR5 创建)。简化版:
+当前:2026-07-17。MVP 主体 + V2 第一/二/三档 25 项已全部落地,详见 [docs/ROADMAP.md §1](./docs/ROADMAP.md#1-已实施mvp-主体--路线图外完成)。
 
+完整提交历史:`git log --oneline -20`。最近里程碑(E2 trace viewer / B9+ 生成式 UI 收尾 / V2-2+ 自主记忆面板 / C2+ 循环检测主动干预 / A2+ shell 分类 / A5+ 网络健壮性 / B6+ subagent 多模型 / B8 workflow 编排)见 git log,本文档不重复。
+
+## 5 分钟上手
+
+**前提**:
+- WSL 2 + Ubuntu 22.04(Windows 11);macOS / 纯 Linux 可跑但非主目标
+- Node 22 + pnpm 10
+- Rust stable + 系统 webkit2gtk-4.1 依赖(WSL 装法见 [docs/HACKING-wsl.md](./docs/HACKING-wsl.md))
+- 一个 LLM API key(Anthropic / OpenAI / GLM 等任意 Anthropic 兼容协议)
+
+**5 步**:
+
+```bash
+# 1. clone
+git clone https://github.com/wukaijin/everlasting.git && cd everlasting
+
+# 2. 配置 API key(任选其一)
+export ANTHROPIC_API_KEY=sk-ant-...        # 或 OPENAI_API_KEY / OPENAI_BASE_URL 等
+export LLM_MODEL=claude-sonnet-5
+
+# 3. 安装前端依赖
+cd app && pnpm install
+
+# 4. 启动(同时启动 Vite dev server + Tauri 窗口)
+pnpm tauri dev
+
+# 5. 窗口里:新建项目 / 新建 session / 聊
 ```
-app/
-├── src/             # Vue 3 前端 (8-PR3 拆 sub-components)
-├── src-tauri/src/   # Rust 后端 (8-PR1/2 拆 state/commands/agent/db/)
-└── docs/            # 设计文档 (全中文,spikes/ 在此目录下)
-```
 
-## 文档
+WSL 环境踩坑(中文输入法、linuxbrew pkg-config、Rust 工具链、字体等)走 [docs/HACKING-wsl.md](./docs/HACKING-wsl.md),**不要在 README 复述**。
 
-设计文档在 [`docs/`](./docs/),按"需求/路线图/架构/技术/决策档案/候选"6 维拆分。
+## 能力矩阵
 
-| 文档 | 看什么 |
-|------|--------|
-| [docs/README.md](./docs/README.md) | 索引 + 必读参考学习清单(参考但不抄) |
-| [docs/ROADMAP.md](./docs/ROADMAP.md) | **技术路线图(单一 source of truth)** — V2 4 档分类 + 已实施归类 + 维护承诺 |
-| [docs/DESIGN.md](./docs/DESIGN.md) | 项目能力边界 + 硬约束(明确不做) |
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 系统怎么搭、16 关卡请求生命周期 |
-| [docs/TECH.md](./docs/TECH.md) | 锁定了哪些库(自研 Provider trait / git2-rs / sqlx / htmd 等) |
-| [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) | 决策档案 — §1 自研 agent core 决策 + §4 ADR 决策日志(只追加) |
-| [docs/BACKLOG.md](./docs/BACKLOG.md) | 7 个候选功能的技术评估(排期归 ROADMAP) |
+### 读写 & 文件
+`read_file` / `write_file` / `edit_file`(ReadGuard 三道 check 前置) / `grep` / `glob` / `list_dir`
 
-**第一次接触推荐顺序**:DESIGN §3 → ROADMAP §1-2 → ARCHITECTURE §1-2。
+### Shell
+`shell`(Bash 落盘 + cat -n) / `run_background_shell` / `shell_status` / `shell_kill`(L1a,24h 后台,APPEND user message 保 memory cache breakpoint)
 
-## 路线图
+### 联网
+`web_fetch`(SSRF 拦截 + 5 MiB body cap + attribution prefix)
 
-完整 V2 4 档分类 + 已实施项 + 移除项 + 维护承诺统一归 [docs/ROADMAP.md](./docs/ROADMAP.md),本文档不重复。
+### 技能 / 记忆 / UI
+`use_skill`(B4 三层渐进披露,workflow-aware) / `use_ui`(B9 生成式 UI,non-blocking) / `update_checklist`(B12 loop-local + workflow 分支同步 task.json.items) / `remember`(V2 2 期自主记忆写入)
 
-## 关键决策(为什么)
+### 跨 turn 交互
+`ask_user_question`(QuestionStore + selector 复用 B9) / `request_mode_change`(LLM 申请切 mode,用户 inline card 授权,Yolo 走二次 modal 守门)
 
-- **不用 SDK 包装 Claude Code / Codex** — 学不到 harness 核心
-- **WSL 优先,Windows 不主动适配** — 个人使用场景就是 WSL
-- **每个 session 一个 git worktree** — 多 session 并行 / 互不污染 / 切换瞬时
-- **MCP 只外暴露,内部通信不绕** — 内部直接调 Rust 函数最快
-- **SQLite 是唯一存储** — 单文件、零运维、FTS5 搜索
-- **不做 workflow 编排 / 不做团队协作 / 不做云端部署** — 个人工具,这些是另一个产品的事
+### 工作流编排(B8,07-08~10 完整落地)
+`create_task` / `request_task_state_transition`(task.json 四态状态机 Planning → Implement → Check → Done;workflow_enabled session 可见;set_task_state → Done 触发 spec distillation 沉淀到 `.everlasting/spec/`)
 
-完整决策日志见 [IMPLEMENTATION §4](./docs/IMPLEMENTATION.md#4-决策日志)。
+### Subagent(B6 + L3a-d)
+`dispatch_subagent` / `merge_worker` / `discard_worker`(L3b worker worktree 隔离 + branch 前缀 + libgit2 merge + 启动 sweep)
 
-## 约束
+### Git 集成
+worktree 解耦 + opt-in attach / detach / delete;每个 session 一个 worktree
+
+### LLM Provider(自研 trait)
+Anthropic / OpenAI 双 Provider(rig-core 2026-06-09 弃用,改自研 `Provider` trait 走双 Provider + retry 包装)
+
+### 横切
+- **A2+B7 权限系统**:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit` / `plan` / `yolo`) + ⑯ 审计日志 25 类 AuditKind + `ToolKind::GitMutation`(L3b PR3+,避免 Shell 串扰)
+- **C3 Context 压缩**:`context_window * 0.80` → `0.50` 触发,B5 memory 永远保护,MAX_TURNS=200 兜底
+- **C2/C2+ 循环检测**:L1 精确签名硬触发 N=3 + L2 Jaccard 软提示 N=5/0.85;连续 3 次触发走主动干预(QuestionStore 复用 + 用户决策)
+- **A5+ 网络健壮性**:`retry_open` wrapper + Full Jitter + retry-after advisory + 首字节前重试 + 双向熔断
+- **V2 2 期 自主记忆**:agent 自主产生 + 跨 session 召回 + 状态机 candidate→active→verified + 异步卫生 job
+
+## 文档索引
+
+设计文档在 [`docs/`](./docs/),按"是什么 → 怎么搭 → 用什么 → 怎么做 → 未来"5 维拆分,**详细看 [docs/README.md](./docs/README.md)**。本文档不重复设计细节。
+
+| 场景 | 文档 |
+|---|---|
+| 第一次接触 / 看项目边界 | [docs/DESIGN.md](./docs/DESIGN.md) §2-3 |
+| 看当前在哪步 / 下一步选项 | [docs/ROADMAP.md](./docs/ROADMAP.md) |
+| 写代码前看模块怎么分 / 调用怎么走 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) §2 16 关卡 |
+| 选库 / 做依赖决策 | [docs/TECH.md](./docs/TECH.md) |
+| 看"为什么这么做"的历史 ADR | [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志) |
+| 评估新功能技术细节 | [docs/BACKLOG.md](./docs/BACKLOG.md) |
+| 撞 WSL / LLM API / markdown 渲染怪事 | [docs/HACKING-wsl.md](./docs/HACKING-wsl.md) / [docs/HACKING-llm.md](./docs/HACKING-llm.md) / [docs/HACKING-markdown.md](./docs/HACKING-markdown.md) |
+| SQLite 直连调试 | [docs/DEBUG_DB.md](./docs/DEBUG_DB.md) |
+| 术语(glossary) | [docs/CONTEXT.md](./docs/CONTEXT.md) |
+
+## 约束(明确不做)
 
 - 仅个人使用,非商业项目
 - WSL Ubuntu 22.04 优先,Windows / macOS 不主动适配
-- 不做移动端 / Web 版
+- 不做移动端 / Web 版 / 云端部署
+- 不包装 Claude Code / Codex SDK(自研是学习目标)
+- 不做通用 agent 框架(Cline / OpenHands 已在做)
+- 不做 in-app 自动升级(走包管理器或手动)
+- 不做云端触发器 / 云端触发回写本机(主动权必须在本地用户)
+
+完整约束见 [docs/DESIGN.md §3.2](./docs/DESIGN.md#32-明确不做硬约束)。
