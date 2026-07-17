@@ -1471,3 +1471,36 @@ task.json: status in_progress → completed, completedAt: 2026-07-14
 - 1 新表 turn_trace + 1 审计列 turn_seq + 3 ChatEvent 变体 + 2 IPC
 - 19 个新测试(13 store + 8 components,8 重叠 = 21 unique 增量)
 - ROADMAP §2 E2 收口
+
+
+## Session 25: A6 README 5 段结构重写
+
+**Date**: 2026-07-17
+**Task**: A6 README 5 段结构重写
+**Branch**: `main`
+
+### Summary
+
+A6 README 打磨任务(07-17-07-17-a6-readme)落地:删原 67 行过期快照(2026-06-18),重写为 115 行 5 段结构(这是什么 / 状态 / 5 分钟上手 Quick Start / 能力矩阵 / 文档索引 / 约束)。Quick Start 只 happy path,WSL 坑指向 HACKING-wsl.md。能力矩阵 10 类,浓缩自 DESIGN §3.1,不加近期里程碑时间线。状态行只更新日期 + 指向 git log,不在 README 列里程碑清单。所有事实可追溯到 DESIGN/ARCHITECTURE/CLAUDE.md,不引入新内容。pnpm build 通过(vue-tsc 0 err + vite build OK)。Scope 决策由 user 在 brainstorm 中确认(中等重写 5 段结构、demo 留 backlog)。另起 A5 错误处理完善任务(07-17-a5-error-handling-polish,planning 中),已收集 8 维度现状调研证据(394k token)固化到 prd.md,scope 待 user 确认。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5b04036` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
