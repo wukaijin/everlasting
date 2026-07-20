@@ -27,6 +27,7 @@ import { useChatStore } from "../../stores/chat";
 import AppHeader from "./AppHeader.vue";
 import Sidebar from "./Sidebar.vue";
 import TracePanel from "../trace/TracePanel.vue";
+import ToastProvider from "../common/ToastProvider.vue";
 
 const projectsStore = useProjectsStore();
 const chatStore = useChatStore();
@@ -69,6 +70,16 @@ async function onToastClick(): Promise<void> {
          the chat surface is hidden. The slide-in / slide-out
          transition lives inside the panel itself. -->
     <TracePanel />
+
+    <!-- A5 R1 (2026-07-17): reka-ui Toast viewport for global
+         error routing. Mounts at AppShell level so all 5 stub
+         categories (Auth/RateLimit/Server/Network) render the
+         same toast viewport (InvalidRequest stays console.warn).
+         The `useToast` composable owns the queue + dedupe;
+         `useErrorBus.routeByCategory` is the only consumer in
+         main.ts. Single instance per app lifetime (Pinia-style
+         singleton, mirrored on `useErrorBus`). -->
+    <ToastProvider />
 
     <transition name="toast">
       <div

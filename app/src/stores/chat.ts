@@ -1341,6 +1341,169 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // -----------------------------------------------------------------------
+  // A5 R2 (2026-07-17): chat-stream retry — re-fire the same
+  // history after a `ChatEvent::Error` terminal event, "in place"
+  // at the errored assistant message's row. Mirrors the structure
+  // of `resendMessage` but with key differences:
+  //
+  //   - **NO new placeholders**: the errored assistant row is
+  //     mutated (error → cleared, streaming → true). No new
+  //     user/assistant pair is pushed.
+  //   - **NO `resendSeq` flag**: this is a USER-LEVEL retry, not a
+  //     user-message edit. The backend has no audit row for it
+  //     (the original user message's persist already produced its
+  //     audit). The agent loop runs on the same history up to and
+  //     including the original user prompt.
+  //   - **`ERROR_MARKER` strip**: the assistant's persisted text
+  //     is the partial turn the Rust side flushed before the
+  //     Error terminal ("[生成出错中断]" appended per RULE-A-007).
+  //     We strip the marker (and any preceding blank line) so
+  //     the new stream's first delta reads cleanly against the
+  //     partial-turn text. The DB row stays unchanged; the
+  //     in-memory placeholder is what the user sees during the
+  //     live stream. After `finalizeRequest`, `reloadAfterFinalize`
+  //     re-hydrates from the DB and overwrites the in-memory
+  //     message — the partial-turn text + new content becomes the
+  //     canonical row.
+  //
+  // Diff vs `resendMessage`:
+  //
+  //   | Dimension       | resendMessage           | retryChat                |
+  //   |-----------------|-------------------------|--------------------------|
+  //   | placeholder     | push new                | mutate existing errored  |
+  //   | seq             | use next seq (max+1)    | same errored row seq     |
+  //   | resendSeq flag  | yes (audit)             | no (no audit)            |
+  //   | ERROR_MARKER    | n/a (new content)       | stripped                 |
+  //
+  // The error-cancel guard at the top mirrors `resendMessage` —
+  // if the user double-tapped "↻ 重试" while a retry was already
+  // in flight, the second call cancels the first request and
+  // starts fresh (the second request's `done` wins the race).
+  // -----------------------------------------------------------------------
+  const ERROR_MARKER_LOCAL = "[生成出错中断]";
+
+  async function retryChat(
+    sessionId: string,
+    messageSeq: number,
+  ): Promise<void> {
+    if (!sessionId) {
+      throw new Error("retryChat: sessionId is required");
+    }
+    if (typeof messageSeq !== "number") {
+      throw new Error("retryChat: messageSeq is required");
+    }
+    // 1. Stream race — cancel any in-flight stream on this
+    //    session. Defensive: a mid-stream retry would race the
+    //    in-flight stream's `done` event against the new request.
+    if (sessionId === currentSessionId.value && isCurrentSessionStreaming.value) {
+      await cancel();
+    } else {
+      const rid = controller.currentRequestId(sessionId);
+      if (rid) {
+        await controller.cancel(rid);
+      }
+    }
+    // 2. ensureLoaded + clearForNewRun, mirror send/resend.
+    const projectId = projectsStore.currentProjectId;
+    if (!projectId) {
+      throw new Error("retryChat: no current project");
+    }
+    const msgs = await controller.ensureLoaded(sessionId);
+    useChecklistStore().clearForNewRun(sessionId);
+    // 3. Locate the errored assistant message + the preceding
+    //    user message (the prompt that triggered the failed
+    //    turn). If we can't find both, surface a clear error —
+    //    a retry button clicked against a missing row means a
+    //    stale UI (e.g. cleared session) and we want to refuse
+    //    silently rather than fire a stranded stream.
+    const errored = msgs.find(
+      (m) => m.role === "assistant" && m.seq === messageSeq && m.error,
+    );
+    if (!errored) {
+      throw new Error(
+        `retryChat: errored assistant message at seq ${messageSeq} not found`,
+      );
+    }
+    const userIdx = msgs.findIndex(
+      (m) => m.role === "user" && typeof m.seq === "number" && m.seq === messageSeq - 1,
+    );
+    if (userIdx < 0) {
+      throw new Error(
+        `retryChat: user message at seq ${messageSeq - 1} not found (cannot re-fire without the prompt)`,
+      );
+    }
+    // 4. Mutate the errored assistant in place:
+    //    - clear the error
+    //    - strip the trailing ERROR_MARKER (and any blank-line
+    //      separator) so the first delta reads cleanly
+    //    - mark streaming so the UI re-renders with cursor
+    //    - clear toolCalls / toolResults / thinkingBlocks so
+    //      the bubble + cards re-render empty
+    errored.error = undefined;
+    errored.streaming = true;
+    errored.toolCalls = [];
+    errored.toolResults = [];
+    errored.thinkingBlocks = [];
+    errored.redactedThinkingData = [];
+    errored.latency = undefined;
+    // Strip trailing ERROR_MARKER (`<text>\n\n[生成出错中断]`)
+    // and any blank-line separator preceding it. The marker is
+    // on its own line per the backend's `flush_pending_*`
+    // pattern (helpers.rs:307); strip the marker + any
+    // preceding `\n` repetition to recover the partial text.
+    let cleaned = errored.content;
+    if (cleaned.endsWith(ERROR_MARKER_LOCAL)) {
+      cleaned = cleaned.slice(0, -ERROR_MARKER_LOCAL.length).replace(
+        /(\r?\n)+$/,
+        "",
+      );
+    } else if (cleaned.includes(ERROR_MARKER_LOCAL)) {
+      // marker mid-text (rare, defensive) — strip from marker-onward
+      cleaned = cleaned.slice(
+        0,
+        cleaned.lastIndexOf(ERROR_MARKER_LOCAL),
+      );
+    }
+    errored.content = cleaned;
+    // 5. The history we send to the backend is the in-memory
+    //    buffer trimmed to the errored row (inclusive). The
+    //    backend will reuse the persisted rows up to that point
+    //    (no DB write from us). The `assistantMsg.id` /
+    //    `userMsg.id` ids we pass to `startRequest` are existing
+    //    rows — `startRequest` stamps them on the active request
+    //    so the delta handler routes events to the in-place
+    //    message (NOT a brand-new placeholder).
+    const assistantMsg = errored;
+    const userMsg = msgs[userIdx];
+    // F2: activate force-follow mode so the chat stays scrolled
+    // to bottom for the duration of the new stream (mirrors send
+    // + resend).
+    forceFollowActive.value = true;
+    // 6. `clear-content` semantics for the wire: build history
+    //    up to and INCLUDING the user prompt. The errored assistant
+    //    itself is NOT included in the payload — the backend
+    //    rebuilds its own assistant message from the streaming
+    //    events and persists at the next turn boundary (RULE-A-007
+    //    flush path).
+    const historyMsgs = msgs.slice(0, userIdx + 1);
+    const history: ChatMessagePayload[] = historyMsgs.map((m) => ({
+      role: m.role,
+      content: toPayloadContent(m),
+    }));
+    await controller.startRequest({
+      sessionId,
+      projectId,
+      userMsg,
+      assistantMsg,
+      history,
+      // NO resendSeq: this is a user-level retry, not a message
+      // edit. The backend does not write a `resend_message`
+      // audit row.
+      resendSeq: undefined,
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // A2 + B7 (PR2 front-end): per-session Mode changes via the
   // `set_session_mode` Tauri command. Both the popover entry
   // (`ModeSelect.vue`) and the keyboard entry (`Shift+Tab` in
@@ -1842,5 +2005,14 @@ export const useChatStore = defineStore("chat", () => {
     // `contentText` from `message.content` and the chat
     // store fires the new stream with the `resendSeq` flag.
     resendMessage,
+    // A5 R2 (2026-07-17): re-fire the chat stream in place at
+    // an errored assistant row. Mirrors `resendMessage`'s
+    // structure (cancel + ensureLoaded + startRequest) but
+    // mutates the errored row instead of pushing new
+    // placeholders, strips the `ERROR_MARKER` tail, and
+    // does NOT carry a `resendSeq` flag (no audit). Called by
+    // `MessageItemFooter`'s `↻ 重试` button when
+    // `categoryRetryable(category)` resolves true.
+    retryChat,
   };
 });

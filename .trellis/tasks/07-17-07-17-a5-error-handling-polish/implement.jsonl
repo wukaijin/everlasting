@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCommandError wire shape + ErrorCategory 5 类映射 + AppError::retryable() 派生规则 + RULE-A-* 列表(本 task 加 RULE-A-018)"}
+{"file": ".trellis/spec/frontend/reka-ui-usage.md", "reason": "reka-ui 2.9.9 Toast primitive API + 已用 primitive 列表(新增 Toast 是第 8 类) + TextFieldRoot 不存在等 gotcha 警示"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "composable / store 模式参考(useToast() module-level 单例 vs composable 注入决策依据)"}
+{"file": ".trellis/spec/frontend/popover-pattern.md", "reason": "自研 UI 模式参考(F2 ToastProvider 若自研部分可借鉴此模式)"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层思考:wire field 透传决策(retryable 是否在 ChatEvent::Error 携带 → 最终决策不携带,从 category 派生)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "代码复用思考:retryChat 复制 resendMessage 结构(避免硬塞 if 分支,符合 '避免改任何常量和既有 helper' 原则)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/prd.md", "reason": "task 自身 Requirements + AC(本 task 实施 + 验证的唯一契约)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/design.md", "reason": "task 自身架构 + 数据流 + 兼容性(实施时按 design §2 合约对齐 API)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/01-toast-mechanism.md", "reason": "reka-ui Toast 现状 + useToast 方案 A 决策依据 + 现有 projectsStore.toast 单 slot 自研调查"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/02-retryable-wire-flow.md", "reason": "AppCommandError.retryable wire 链路完整性确认 + 消费端 0 处读 + 改前端足够结论"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/03-message-error-ui.md", "reason": "4 个错误渲染点语义分析 + MessageItemFooter 单点动决策"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/04-chat-resend-flow.md", "reason": "chatStore.resendMessage 模板 + retryChat 关键差异表 + AbortController 不引入决策"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/05-useErrorBus-stub-callsites.md", "reason": "5 stub 调用频次分析 + 仅接全局兜底决策(main.ts:17-27 唯一调用点)"}

@@ -1294,3 +1294,70 @@ E2 turn-level harness trace viewer 的前端 store。**核心模式 = live + 回
 - `resetForNewSession(sessionId)` — session 切换 / `startRequest` 清空 + `loadHistory`(复用 `useMemoryStore().clearRecallHits` 模式)。
 
 **Pattern — live + 回看同构**:不维护独立 live buffer;live event 直接 upsert 同一个 Map,回看从 IPC 重建同一个 Map。面板只读 Map。`reactive(Map)` 的 `.get`/`.has` 触发 UI 更新;per-field 更新用 `.set(key, {...existing, ...patch})` 替换对象(不 wrap `TurnTrace` 在 `reactive()`,同 `recallHitsBySession` 模式)。
+
+---
+
+## useToast composable (A5 R1, 2026-07-17)
+
+`useToast()` 是 A5 错误处理体系 R1 的全局 toast composable,接 reka-ui 2.9.9 `Toast` primitive,把 `useErrorBus.routeByCategory` 5 个 stub(原本全 `console.warn`)升级为 4 类(category 派生)可见 toast。**它是模块级单例 ref,不是 Pinia store** —— 与 `useErrorBus` / `useKeyboard` 同构;`main.ts:17-27` 全局兜底(`window.onerror` + `unhandledrejection`)不需 Vue setup,non-Vue 上下文也能调用。
+
+### 关键参数(经验值,无需为新场景重选)
+
+| 常量 | 值 | 含义 |
+|---|---|---|
+| `MAX_CONCURRENT` | 3 | 同时可弹 toast 数。超出 FIFO 删最早的(老的先出;新错误比老错误更重要) |
+| `DEDUPE_WINDOW` | 5000 ms | 同 `(category, title, description)` 在窗内只弹 1 次;挡「同一抖动重复戳」 |
+| `DEFAULT_TTL` | 5000 ms | 每条 toast 自动消失时长;reka-ui `ToastClose` × 让用户可手关 |
+
+### 接入范围(scope B)
+
+| 范围 | 改动 |
+|---|---|
+| **全局兜底** | `main.ts:17-27` `window.onerror` + `unhandledrejection` → `useErrorBus().handle(...)` → `routeByCategory` → 4 类 toast,1 类 console.warn |
+| **不动** | 主链路 36 处 IPC `try/catch + projectsStore.showToast(...)`(各 IPC 失败自带中文文案,scope B 不收口) |
+| **不动** | `extractErrorMessage` 兜底"(未知错误)"(留 §3 polish) |
+
+### 使用示例
+
+```ts
+import { useToast } from "@/composables/useToast";
+
+// 单次调用
+useToast().show({
+  category: "Network",
+  title: "网络问题",
+  description: "请求超时,请检查网络",
+});
+
+// 主链路(IPC 失败)不变,继续 projectsStore.showToast
+projectsStore.showToast(`attach worktree 失败: ${extractErrorMessage(e)}`, "error");
+```
+
+### 锚定文件
+
+| 文件 | 职责 |
+|---|---|
+| `app/src/composables/useToast.ts` | module-level 单例 `toasts: Ref<Toast[]>` + 3 常量 + `show / dismiss / clear` + `_useToastInternal_clearAllTimers`(vitest 内部 helper) |
+| `app/src/components/common/ToastProvider.vue` | reka-ui 2.9.9 `ToastProvider / ToastViewport / ToastRoot / ToastTitle / ToastDescription / ToastClose` 6 件套。模板遍历 `useToast().toasts`,逐个渲染。`:deep()` 必加(portal 出去的 DOM 需要) |
+| `app/src/components/layout/AppShell.vue` | 在顶层挂 1 个 `<ToastProvider />`,1 次 mount 全局可见 |
+| `app/src/utils/useErrorBus.ts` | `routeByCategory` 把 4 类(category 派生)推到 `useToast().show(...)`,1 类(InvalidRequest)保留 `console.warn` |
+
+### 设计原则
+
+1. **module-level 单例,不是 composable 注入**:与 `useErrorBus` 一致;`main.ts` 全局兜底零摩擦接入;非 Vue 上下文(如 Pinia store 之外)也能直接调。
+2. **4 类 category,不增不减**:Auth / RateLimit / Server / Network。InvalidRequest 是「本地错误不打扰用户」(spec 设计如此,后续 form inline 留给调用点 watch `useErrorBus.errors`)。
+3. **FIFO overflow + dedupe**:3 个并发上限 + 5s dedupe 防 Server/Network 抖动风暴;老错误先走,新错误更重要。
+4. **不引新依赖**:reka-ui 2.9.9 已锁,Toast primitive 完整可用;样式 token 复用项目 CSS variable(`--color-accent / --color-status-warn / --color-tool-error / --color-tool-shell`)。
+
+### 测试覆盖
+
+- `app/src/composables/useToast.test.ts`:`show / dismiss / clear` + `MAX_CONCURRENT=3 FIFO` + 5s dedupe + ttl 自动到期 + readonly 类型提示
+- `app/src/utils/useErrorBus.test.ts`:5 类分发(4 类 toast + InvalidRequest console.warn)
+- `app/src/utils/error.test.ts`:`categoryRetryable` 5 类映射 + `categoryToastKey` 双 case 兼容
+
+### Common Mistakes
+
+- **不要在 component 内实例化独立 toast queue** —— 全局单例是契约。`useToast()` 多次调用返回的 `toasts` ref 都是同一个 module-level ref 的引用。
+- **`max` 不是手动配的** —— 5s 内同 `(category, title, description)` 三元组 dedupe 是自动的;调用方不需要先 `has()` 再 `show()`。
+- **`extractErrorMessage` 不是 toast 助手** —— 它只负责「string 提取」,toast 决策由 `useErrorBus.routeByCategory` + `categoryToastKey` 决定。
+- **TTL 定时器是 `setTimeout`,`onUnmounted` 不需要清理** —— module-level 单例活到 app lifetime,定时器泄漏相对无成本(最多几个孤儿 timer)。如果将来要做 SSR 或多 instance 隔离,再扩展。

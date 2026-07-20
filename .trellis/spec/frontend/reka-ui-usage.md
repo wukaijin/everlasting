@@ -38,6 +38,12 @@ The project uses reka-ui for:
 - `RadioGroupRoot` / `RadioGroupItem` / `RadioGroupIndicator`
   (DefaultTab — default model)
 - `Label` (wrapping form fields for accessibility)
+- `ToastRoot` / `ToastProvider` / `ToastViewport` /
+  `ToastPortal` / `ToastTitle` / `ToastDescription` /
+  `ToastClose` (全局错误 toast 路由 — AppShell 挂载
+  `ToastProvider`,`useToast` composable 驱动;2026-07-17
+  A5 scope B 落地,见 `state-management.md` §useToast composable
+  + `backend/error-handling.md` RULE-A-018)
 
 Reka-ui is **not** used for the project popovers (ModelSelect,
 worktree dropdown). Those are hand-rolled per

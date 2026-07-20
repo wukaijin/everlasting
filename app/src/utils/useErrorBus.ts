@@ -1,4 +1,5 @@
-// useErrorBus — 全局错误总线(A5 错误处理完善,2026-07-02)。
+// useErrorBus — 全局错误总线(A5 错误处理完善,2026-07-02;R1 接入
+// reka-ui Toast,2026-07-17)。
 //
 // 统一收口 invoke() 的 IPC 错误:parseAppCommandError 把 Tauri rejection
 // (可能是 AppCommandError 对象 / JSON 字符串 / 老链路原始 String)容错
@@ -8,15 +9,19 @@
 // 跨组件共享用模块单例足够(与 useKeyboard 的 window-listener 单例模式
 // 同构)。errors 上限 50 FIFO,防长会话 Server/Network 风暴无限增长。
 //
-// 路由分发(routeByCategory)本期是 stub(showXToast 只 console.warn),
-// 具体 toast UI(reka-ui)在 follow-up 任务接 —— 组件可 watch errors 自行
-// 渲染,总线只保证错误被收纳 + 分类。
+// R1 (2026-07-17) 路由分发:`routeByCategory` 现把 4 类
+// (Auth/RateLimit/Server/Network) 推给 `useToast()` composable,InvalidRequest
+// 保留 `console.warn`(本地错误不打扰用户,见 prd.md R1 决策表)。主链路
+// 36 处 IPC 错误展示不动 — `routeByCategory` 实际只服务 `main.ts:17-27`
+// 全局兜底 1 个调用点(research/05)。
 //
 // 与后端契约对齐:AppCommandError 的字段名(camelCase)与 Rust
 // `app/src-tauri/src/error.rs` 的 `#[serde(rename_all = "camelCase")]` 一致。
 // category 用 PascalCase(与 Rust ErrorCategory variant 名一致)。
 
 import { ref, readonly } from "vue";
+import { useToast } from "../composables/useToast";
+import { categoryToastKey } from "./error";
 
 export type ErrorCategory =
   | "Auth"
@@ -133,49 +138,36 @@ export function extractErrorMessage(e: unknown): string {
   return "(未知错误)";
 }
 
-// 5 类路由分发。本期 stub(showXToast 只 console.warn);toast UI(reka-ui)
-// 在 follow-up 任务接,届时组件 watch errors 决定渲染。
+// 5 类路由分发。
+//
+// R1 (2026-07-17) 升级:4 类 (Auth/RateLimit/Server/Network) 走
+// `useToast().show(...)`(reka-ui Toast 弹窗,在 AppShell.vue 顶层挂载)。
+// InvalidRequest 保留 `console.warn`(原状) —— 它是「本地错误不打扰」,
+// 调用点若有表单字段下内联渲染需求由调用点自己 watch errors 决定,
+// scope B 不接全局 toast。
+//
+// `kind` / `retryable` 不送 toast(用户看不到的诊断字段);后续如果想要
+// "Server with retry 按钮在 toast 上"是从 useToast 加 retry 字段,不在这里。
+//
+// `title` 字段对 route 分发的 toast 是冗余(`category` 已经决定 4 类
+// prefix 的中文短标题),所以这里传 `description: err.message`,
+// `ToastProvider.vue` 内部按 category 取 title(避免 route 写两份)。
 function routeByCategory(err: AppCommandError): void {
-  switch (err.category) {
-    case "Auth":
-      showAuthToast(err);
-      break;
-    case "RateLimit":
-      showRateLimitToast(err);
-      break;
-    case "InvalidRequest":
-      showInlineError(err);
-      break;
-    case "Server":
-      showServerToast(err);
-      break;
-    case "Network":
-      showNetworkToast(err);
-      break;
+  const key = categoryToastKey(err.category);
+  if (key === null) {
+    // InvalidRequest or unknown: console.warn 原状(spec 设计如此)。
+    showInlineError(err);
+    return;
   }
-}
-
-// TODO(A5 follow-up):接 reka-ui toast。当前 stub 只 console.warn,保证错误
-// 不静默(开发可见)+ errors 数组收纳(组件可 watch 渲染)。
-function showAuthToast(err: AppCommandError): void {
-  // Auth 路由:引导去 Settings 检查 ANTHROPIC_API_KEY。
-  console.warn(`[errorBus:Auth] ${err.message}`, err);
-}
-
-function showRateLimitToast(err: AppCommandError): void {
-  console.warn(`[errorBus:RateLimit] ${err.message}`, err);
+  const { show } = useToast();
+  show({
+    category: key,
+    title: key, // ToastProvider 按此取中文 prefix;同值冗余但保留契约
+    description: err.message,
+  });
 }
 
 function showInlineError(err: AppCommandError): void {
   // InvalidRequest 由调用点 watch errors 决定内联渲染(表单字段下),不全局 toast。
   console.warn(`[errorBus:InvalidRequest] ${err.message}`, err);
-}
-
-function showServerToast(err: AppCommandError): void {
-  // retryable=true 时附"重试"按钮(follow-up)。
-  console.warn(`[errorBus:Server] ${err.message}`, err);
-}
-
-function showNetworkToast(err: AppCommandError): void {
-  console.warn(`[errorBus:Network] ${err.message}`, err);
 }

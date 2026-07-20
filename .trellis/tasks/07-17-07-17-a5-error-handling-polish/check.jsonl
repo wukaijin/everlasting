@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "check 验证:新增 RULE-A-018 全局错误 toast 路由条目与代码 1:1 对齐(无虚构事实)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "check 验证:useToast composable 模式条目与 F1 实际实现一致(MAX_CONCURRENT=3 / DEDUPE_WINDOW=5000 / module-level 单例)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/prd.md", "reason": "check 验证:8 条 AC 全部覆盖(R1=AC1-3 / R2=AC4-5 / R3=AC6-8)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/design.md", "reason": "check 验证:实施产出与 design §2 合约一致(useToast API / categoryRetryable / retryChat 签名 / MessageItemFooter 集成)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/01-toast-mechanism.md", "reason": "check 验证:F1-F2 实际产出与 research 推荐方案 A(基于 reka-ui 2.9.9 + 自研 composable + queue 化)1:1 对齐"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/02-retryable-wire-flow.md", "reason": "check 验证:F4 categoryRetryable 派生规则与后端 AppError::retryable() 默认映射 1:1(RateLimit/Server/Network → true, Auth/InvalidRequest → false)"}
+{"file": ".trellis/tasks/07-17-07-17-a5-error-handling-polish/research/05-useErrorBus-stub-callsites.md", "reason": "check 验证:F5 useErrorBus.routeByCategory 5 stub 接 toast 仅全局兜底(不动主链路 36 处 IPC 错误展示,符合 research 调用频次分析)"}

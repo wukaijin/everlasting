@@ -37,6 +37,7 @@
 import { computed, ref, watch, onUnmounted } from "vue";
 import type { ChatMessage } from "../../stores/chat.types";
 import { extractErrorMessage } from "../../utils/useErrorBus";
+import { categoryRetryable } from "../../utils/error";
 import { useChatStore } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";
@@ -809,6 +810,70 @@ async function onResend(messageSeq: number) {
   }
 }
 
+/** A5 R2 (2026-07-17): `MessageItemFooter`'s `retry` emit
+ *  handler. Re-fires the chat stream against the errored
+ *  assistant row by calling `chatStore.retryChat` (which
+ *  cancels any in-flight stream, mutates the errored row,
+ *  strips the `ERROR_MARKER` tail, and starts a new stream
+ *  without a `resendSeq` flag — no audit, no content
+ *  mutation). Returns gracefully (no throw) so the loading
+ *  state in the footer resets regardless of the IPC outcome.
+ *
+ *  During the retry we set `retryLoading = true` so the
+ *  footer button flips to its disabled "重试中..." state;
+ *  the watcher on `streamingSessionIds` below clears it when
+ *  the new stream ends (`done` / `error` / cancel).
+ *
+ *  Why guard `categoryRetryable`: defensively prevent a click
+ *  that shouldn't be possible (footer only renders the button
+ *  when retryable is true) from firing the IPC — keeps the
+ *  log quiet on stale UI snapshots. */
+const retryLoading = ref(false);
+
+async function onRetry(messageSeq: number) {
+  if (typeof messageSeq !== "number") return;
+  if (!categoryRetryable(props.message.error?.category)) return;
+  if (isStreaming.value) return;
+  const sid = chatStore.currentSessionId;
+  if (!sid) {
+    projectsStore.showToast("重试失败: 无当前 session", "error");
+    return;
+  }
+  retryLoading.value = true;
+  try {
+    await chatStore.retryChat(sid, messageSeq);
+  } catch (e) {
+    projectsStore.showToast(
+      `重试失败: ${extractErrorMessage(e)}`,
+      "error",
+    );
+    retryLoading.value = false;
+  }
+  // Success path leaves `retryLoading=true`; the watcher
+  // below clears it on the next stream-id transition.
+}
+
+/** A5 R2: when this message's session leaves the streaming
+ *  set (the retry's `done` / `error` event landed), reset
+ *  the footer's `retryLoading` flag so the button goes back
+ *  to its non-loading label. Watching `streamingSessionIds`
+ *  is cheaper than watching `message.streaming` because
+ *  the latter is set true during the retry's placeholder
+ *  mutation, which would never go back to false unless we
+ *  watched something else too. The streaming set is the
+ *  single source of truth for "the session has an in-flight
+ *  request" — when it loses this message's session, the
+ *  retry chain is over. */
+watch(
+  () => controller.streamingSessionIds,
+  (ids) => {
+    const sid = chatStore.currentSessionId;
+    if (sid && !ids.has(sid) && retryLoading.value) {
+      retryLoading.value = false;
+    }
+  },
+);
+
 /** `<MessageItemEdit>`'s `save` emit handler. Called with
  *  the trimmed textarea content. Cancels any in-flight
  *  stream, fires the backend `edit_user_message` IPC, then
@@ -1148,6 +1213,9 @@ const showEditedLabel = computed<boolean>(
         :streaming="!!message.streaming"
         :latency="message.latency"
         :error="message.error"
+        :message-seq="message.seq"
+        :retry-loading="retryLoading"
+        @retry="onRetry"
       />
     </div>
 
@@ -1265,6 +1333,9 @@ const showEditedLabel = computed<boolean>(
       :streaming="!!message.streaming"
       :latency="message.latency"
       :error="message.error"
+      :message-seq="message.seq"
+      :retry-loading="retryLoading"
+      @retry="onRetry"
     />
   </li>
 </template>

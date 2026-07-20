@@ -1,5 +1,6 @@
 // Tests for `MessageItemFooter.vue` — the error row + F5
-// latency chip extracted from `MessageItem.vue` on 2026-06-23.
+// latency chip + A5 R2 retry button extracted from
+// `MessageItem.vue` on 2026-06-23 (+ 2026-07-17 retry extension).
 // The component is a pure presentation layer; the parent
 // (`MessageItem.vue`) owns the store interactions. These tests
 // drive the component with hand-built props + assert on the
@@ -25,6 +26,11 @@
 //  10. Error + latency both present → error appears above
 //      the chip (load-bearing order — the user sees the
 //      failure first).
+//  11. A5 R2 retry button — visibility derived from
+//      `categoryRetryable(category)` (RateLimit/Server/Network
+//      show; Auth/InvalidRequest/未设不显示).
+//  12. Retry button text/disabled state when `retryLoading`.
+//  13. Retry click emits `retry(seq)` to parent.
 //
 // Test gotcha: reka-ui `TooltipContent` portal to body —
 // reka-ui's tooltips don't get auto-cleaned on `unmount()`
@@ -42,6 +48,8 @@ const baseProps = () => ({
   streaming: false,
   latency: undefined as undefined | { ttfbMs?: number; genMs?: number; totalMs?: number },
   error: undefined as undefined | { message: string; category?: string },
+  messageSeq: undefined as number | undefined,
+  retryLoading: false,
 });
 
 function mountFooter(propsOverride: Partial<ReturnType<typeof baseProps>> = {}) {
@@ -241,3 +249,99 @@ describe("MessageItemFooter — reka-ui tooltip integration", () => {
     expect(chip.text()).toBe("1.5s");
   });
 });
+
+describe("MessageItemFooter — A5 R2 retry button (visibility)", () => {
+  it("does NOT render retry button when error has no category", () => {
+    const w = mountFooter({ error: { message: "失败" } });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(false);
+  });
+
+  it("does NOT render retry button when category is auth", () => {
+    const w = mountFooter({
+      error: { message: "key 无效", category: "auth" },
+    });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(false);
+  });
+
+  it("does NOT render retry button when category is invalid_request", () => {
+    const w = mountFooter({
+      error: { message: "请求结构错", category: "invalid_request" },
+    });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(false);
+  });
+
+  it("renders retry button when category is rate_limit", () => {
+    const w = mountFooter({
+      error: { message: "请求过于频繁", category: "rate_limit" },
+    });
+    const btn = w.find("[data-testid='msg-retry-button']");
+    expect(btn.exists()).toBe(true);
+    expect(btn.text()).toBe("↻ 重试");
+    expect(btn.attributes("disabled")).toBeUndefined();
+  });
+
+  it("renders retry button when category is server", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+    });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(true);
+  });
+
+  it("renders retry button when category is network", () => {
+    const w = mountFooter({
+      error: { message: "断线", category: "network" },
+    });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(true);
+  });
+
+  it("does NOT render retry button while streaming=true(防御中间态)", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      streaming: true,
+    });
+    expect(w.find("[data-testid='msg-retry-button']").exists()).toBe(false);
+  });
+});
+
+describe("MessageItemFooter — A5 R2 retry button (loading + click)", () => {
+  it("retryLoading=true 时按钮 disabled + 文本切到 '重试中...'", () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      retryLoading: true,
+    });
+    const btn = w.get<HTMLElement>("[data-testid='msg-retry-button']");
+    expect(btn.attributes("disabled")).toBeDefined();
+    expect(btn.text()).toBe("重试中...");
+  });
+
+  it("点击按钮 emit retry(messageSeq)", async () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      messageSeq: 42,
+    });
+    await w.find("[data-testid='msg-retry-button']").trigger("click");
+    const events = w.emitted("retry");
+    expect(events).toBeTruthy();
+    expect(events![0]).toEqual([42]);
+  });
+
+  it("loading=true 时点击不 emit retry(defense in depth)", async () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      messageSeq: 42,
+      retryLoading: true,
+    });
+    await w.find("[data-testid='msg-retry-button']").trigger("click");
+    expect(w.emitted("retry")).toBeFalsy();
+  });
+
+  it("click without messageSeq 不 emit retry(defensive)", async () => {
+    const w = mountFooter({
+      error: { message: "boom", category: "server" },
+      // messageSeq 不传 → onRetryClick return early
+    });
+    await w.find("[data-testid='msg-retry-button']").trigger("click");
+    expect(w.emitted("retry")).toBeFalsy();
+  });
+});
+

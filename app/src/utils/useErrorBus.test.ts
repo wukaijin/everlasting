@@ -5,7 +5,8 @@
 // 2. category 值域校验:含 4 字段但 category 非法 → 不误判(返回 null)。
 // 3. handle() 把可识别错误 push 进 errors,不可识别静默丢弃。
 // 4. FIFO 上限 MAX_ERRORS(50):超出丢最旧。
-// 5. routeByCategory 5 类 category 均触发分发(stub 通过 console.warn spy)。
+// 5. routeByCategory 5 类 category 均触发分发(R1 升级后 4 类走
+//    `useToast().show(...)` + InvalidRequest 走 `console.warn`)。
 // 6. clear() 清空。
 //
 // errors 是模块级全局单例,每个测试前 clear() 隔离。
@@ -13,11 +14,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useErrorBus, parseAppCommandError } from "./useErrorBus";
 import type { AppCommandError } from "./useErrorBus";
+import { useToast } from "../composables/useToast";
 
 beforeEach(() => {
   // 全局单例,测试间清空。
   useErrorBus().clear();
-  // 路由 stub 会 console.warn,默认静音(个别用例显式 spy)。
+  useToast().clear();
+  // 路由 stub 会 console.warn(InvalidRequest 一类),默认静音(个别用例显式 spy)。
   vi.restoreAllMocks();
 });
 
@@ -184,11 +187,20 @@ describe("useErrorBus — FIFO 上限 MAX_ERRORS=50", () => {
   });
 });
 
-describe("useErrorBus — routeByCategory 5 类分发", () => {
-  it("5 类 category 均触发 console.warn stub", () => {
+describe("useErrorBus — routeByCategory 5 类分发 (R1 升级)", () => {
+  it("4 类 (Auth/RateLimit/Server/Network) 推 toast,InvalidRequest 走 console.warn", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {
-      /* 静音 */
+      /* 静音 InvalidRequest 的 console.warn */
     });
+    const toastBus = useToast();
+    // 通过 useErrorBus.push() 走 routeByCategory 路径,验证分发正确:
+    //   - 4 类(Auth/RateLimit/Server/Network)被推到 toast 队列
+    //   - InvalidRequest 走 console.warn(无效 path,不进 toast)
+    // 注:toast 队列有 MAX_CONCURRENT=3 FIFO 上限,所以 [1]=Auth,
+    // [2]=RateLimit, [3]=Server, [4]=Network 把 Auth 顶出 → 剩
+    // RateLimit/Server/Network。我们分开断言:
+    //   - console.warn:InvalidRequest 一次(category 前缀)
+    //   - toast 队列:剩余 3 类齐全,Auth 在 FIFO 历史上走过
     const { push } = useErrorBus();
     const cats = [
       "Auth",
@@ -205,13 +217,22 @@ describe("useErrorBus — routeByCategory 5 类分发", () => {
         retryable: true,
       });
     }
-    expect(spy).toHaveBeenCalledTimes(cats.length);
-    // 每类 warn 前缀(`[errorBus:<category>]`)出现一次。
-    for (const c of cats) {
-      expect(
-        spy.mock.calls.some((call) => String(call[0]).includes(c)),
-      ).toBe(true);
-    }
+    // InvalidRequest 走 console.warn
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]?.[0] ?? "")).toContain("InvalidRequest");
+    // toast 队列包含 4 类中的 3 个(FIFO 上限 + InvalidRequest 不入)
+    const toastCats = toastBus.toasts.value.map((t) => t.category);
+    expect(toastCats.length).toBe(3);
+    expect(toastCats).not.toContain("InvalidRequest");
+    // 用 spy + 为每类加 spy 验证 routeByCategory 把 4 类都走过(toast 推过
+    // 就能进入 show 路径,但 show 是 console-only 不可观测)。改用 spy
+    // on console.warn 仅能验证 InvalidRequest 走原状路径 — 用 spy
+    // on useToast 的 show 不可行(show 是闭包),退而求其次:验证
+    // MAX_CONCURRENT 上限生效(toast 队列 hit 3 上限)+ 老 Auth 被踢出,
+    // 4 类都进过队列就成立。如果未来要测"4 类进过队列",可以重构
+    // useToast 让 show 返回 ref counter,留 follow-up。
+    // FIFO:第一条 Auth 被后面的 3 条 toast 踢出(MAX=3,4 条入 → 1 踢出)
+    expect(toastCats).toEqual(["RateLimit", "Server", "Network"]);
   });
 
   it("errors readonly — 外部无法直接改数组", () => {
