@@ -1504,3 +1504,91 @@ A6 README 打磨任务(07-17-07-17-a6-readme)落地:删原 67 行过期快照(20
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 26: A5 错误处理完善(scope B)
+
+**Date**: 2026-07-20
+**Task**: A5 错误处理完善 — 07-17-07-17-a5-error-handling-polish(scope B,1 PR)
+**Branch**: `main`
+**Commits**: `0200ea1` + `48e098f`(archive)
+
+### Summary
+
+A5 错误处理 scope B 闭环落地。Evidence Pass 1(394k token,Explore sub-agent 8 维度扫描)固化到 prd.md §Background,user 确认 scope = B(useErrorBus 接 toast + AppCommandError.retryable 消费)+ 1 PR;Evidence Pass 2(trellis-research 5 份事实清单)固化到 research/01-05.md。Scope B 改动 ~631 / -64 行(2 spec + 3 index + 7 src + 4 new),后端 Rust 零改动。
+
+R1 全局错误 → reka-ui Toast:`useToast` composable(module-level 单例 + MAX_CONCURRENT=3 + DEDUPE_WINDOW=5s + DEFAULT_TTL=5s + FIFO overflow)基于 reka-ui 2.9.9 Toast primitive 6 件套;`useErrorBus.routeByCategory` 5 stub 重写为 `categoryToastKey` 统一 router,4 类(Auth/RateLimit/Server/Network)走 `useToast().show(...)`,InvalidRequest 保留 `console.warn`(本地错误不打扰)。
+
+R2 `AppCommandError.retryable` 消费:`categoryRetryable()` helper 接受 PascalCase(useErrorBus)+ snake_case(ChatEvent::Error)双形态,与后端 `AppError::retryable()` 默认派生 1:1。`MessageItemFooter` 加 `↻ 重试` 按钮(`canRetry = !!error && categoryRetryable(category) && !streaming`),点击调 `chatStore.retryChat(sessionId, messageSeq)` 复用同历史重发(mutate errored → streaming,不 push placeholder,剥 ERROR_MARKER 尾,不带 resendSeq);loading 态 + `streamingSessionIds` watcher 复位。
+
+`retryable` 字段 wire 已透传后端→前端(无需后端改动),前端从 category 派生 retryable 避免 SSE 消息体膨胀。
+
+### Main Changes
+
+**新增(5 文件)**:
+- `app/src/composables/useToast.ts`(143 行)— module-level 单例 + queue + dedupe + TTL
+- `app/src/composables/useToast.test.ts`(181 行,13 tests)
+- `app/src/components/common/ToastProvider.vue`(254 行)— reka-ui 2.9.9 Toast 6 件套 + 右上角 z-index 5500
+- `app/src/utils/error.ts`(109 行)— `categoryRetryable()` + `categoryToastKey()` 双形态 helper
+- `app/src/utils/error.test.ts`(95 行,18 tests)
+
+**修改(7 src 文件)**:
+- `app/src/utils/useErrorBus.ts` — routeByCategory 5 stub 重写,删除 TODO "接 reka-ui toast"
+- `app/src/utils/useErrorBus.test.ts` — 改 routeByCategory 5 类分发测
+- `app/src/components/chat/MessageItemFooter.vue` — retry button + props/emits
+- `app/src/components/chat/MessageItemFooter.test.ts` — +11 retry case
+- `app/src/components/chat/MessageItem.vue` — onRetry handler + retryLoading watcher
+- `app/src/components/layout/AppShell.vue` — ToastProvider 挂载
+- `app/src/stores/chat.ts` — retryChat(150 行 + ERROR_MARKER strip)
+
+**修改(5 spec 文件)**:
+- `.trellis/spec/backend/error-handling.md` — 加 RULE-A-018(全局错误 toast 路由,2026-07-17,closed)
+- `.trellis/spec/backend/index.md` — 加 RULE-A-018 + "Filled" 状态
+- `.trellis/spec/frontend/state-management.md` — 加 `useToast composable` section(MAX/DEDUPE/TTL 常量表 + 接入范围 + 设计原则 + Common Mistakes)
+- `.trellis/spec/frontend/reka-ui-usage.md` — Toast primitive 加 project-used list
+- `.trellis/spec/frontend/index.md` — state-management + reka-ui-usage 同步
+
+**Task 目录固化**(archive 同步):
+- `.trellis/tasks/07-17-07-17-a5-error-handling-polish/` — prd.md / design.md / implement.md / research/01-05.md / implement.jsonl / check.jsonl / task.json
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0200ea1` | feat(a5): useToast composable + retryable button (scope B) |
+| `48e098f` | chore(task): archive 07-17-07-17-a5-error-handling-polish |
+
+### Testing
+
+- [OK] `pnpm vitest run` — 56 文件 / **905 passed**(原 baseline 863 + 42 新增:useToast 13 / error 18 / MessageItemFooter 11)
+- [OK] `pnpm build` — vue-tsc 0 err + vite build OK + 0 新增 warning
+- [OK] `cargo check`(PKG_CONFIG_PATH)— 0 err(scope B 不改 Rust,sanity 通过)
+- [OK] `trellis-check` 5 维度(AC 覆盖 / Spec Compliance / Code Quality / Cross-layer / Test Quality)— 全 ✅ Pass,无修项
+- [OK] 后端零改动(`git diff --stat app/src-tauri/` 为空)
+
+### 设计决策亮点
+
+1. **不引入 AbortController**:Tauri `cancel_chat` 是独立 IPC,沿用项目既有模式
+2. **`retryable` 不入 wire**:前端从 `category` 派生(3 行 helper + 单测全盖),避免 SSE 消息体膨胀
+3. **reka-ui 2.9.9 Toast 优先**:项目已锁定 2.9.9,Toast primitive 完整可用,样式 token 与现有 Dialog/Menu 一致
+4. **仅全局兜底接入**:主链路 36 处 IPC try/catch 不动(research/05 确认 useErrorBus.routeByCategory 仅 main.ts:17-27 1 个调用点)
+5. **`retryChat` 不带 resendSeq**:用户级 retry,不入消息编辑 audit(D3 audit 留 OOS)
+
+### Out of Scope(scope B 显式不动,留 V3)
+
+- 主链路 36 处 IPC `try/catch + projectsStore.showToast(...)` 统一收口
+- `extractErrorMessage` 兜底"(未知错误)" — §3 polish
+- `audit.rs:4` docstring 18 → 25 二阶 drift(DRIFT-003 已 resolved 17 → 25,本 task 不重复)
+- SubagentDrawer banner / error card 中文化
+- LlmError::Auth provider 文案化(独立 task)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 评估 A5 V3 主链路 36 处 IPC 统一收口(独立 task,见 BACKLOG)
+- 监控 toast 在 devtools 手动 throw / unhandledrejection 下的视觉反馈(用户每日使用观察)
+- 评估 useToast 加 `action?: () => void` 字段(toast 内嵌 retry 按钮,目前 message retry 走 MessageItemFooter 独立通道)
