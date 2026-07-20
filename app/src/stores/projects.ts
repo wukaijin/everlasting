@@ -13,9 +13,8 @@
 
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport, type UnlistenFn } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Project as returned over Tauri IPC. Mirrors `projects::ProjectRow`
  *  in Rust. Field names are snake_case to match the Rust serialization
@@ -112,7 +111,7 @@ export const useProjectsStore = defineStore("projects", () => {
     // extra IPC traffic. See
     // `.trellis/tasks/06-06-pr2-backfill-fix/prd.md`.
     await ensureRefreshListener();
-    projects.value = await invoke<ProjectInfo[]>("list_projects", {
+    projects.value = await transport.invoke<ProjectInfo[]>("list_projects", {
       filter: { hidden: false },
     });
   }
@@ -128,7 +127,7 @@ export const useProjectsStore = defineStore("projects", () => {
   async function ensureRefreshListener(): Promise<void> {
     if (unlistenRefresh !== null) return;
     try {
-      unlistenRefresh = await listen<number>("projects:refreshed", () => {
+      unlistenRefresh = await transport.listen<number>("projects:refreshed", () => {
         // The payload is the number of updated rows, which the UI
         // does not need to display; the only useful side effect is
         // a fresh load so the chip renders the new branch.
@@ -144,7 +143,7 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function loadHiddenProjects(): Promise<void> {
-    hiddenProjects.value = await invoke<ProjectInfo[]>(
+    hiddenProjects.value = await transport.invoke<ProjectInfo[]>(
       "list_hidden_projects",
     );
   }
@@ -164,7 +163,7 @@ export const useProjectsStore = defineStore("projects", () => {
     let picked: string | null = null;
     let pickError: string | null = null;
     try {
-      picked = await invoke<string | null>("pick_project_dir", {
+      picked = await transport.invoke<string | null>("pick_project_dir", {
         fallback: false,
       });
     } catch (e) {
@@ -220,7 +219,7 @@ export const useProjectsStore = defineStore("projects", () => {
     }
 
     try {
-      const created = await invoke<ProjectInfo>("create_project", {
+      const created = await transport.invoke<ProjectInfo>("create_project", {
         path: picked,
       });
       await loadProjects();
@@ -242,7 +241,7 @@ export const useProjectsStore = defineStore("projects", () => {
 
   async function hideProject(id: string): Promise<void> {
     try {
-      await invoke("hide_project", { id });
+      await transport.invoke("hide_project", { id });
     } catch (e) {
       showToast(`关闭项目失败: ${extractErrorMessage(e)}`, "error");
       return;
@@ -268,7 +267,7 @@ export const useProjectsStore = defineStore("projects", () => {
    *  RULE-FrontProj-001 fix. */
   async function unhideProject(id: string): Promise<boolean> {
     try {
-      await invoke("unhide_project", { id });
+      await transport.invoke("unhide_project", { id });
     } catch (e) {
       showToast(`重新打开项目失败: ${extractErrorMessage(e)}`, "error");
       return false;
@@ -288,7 +287,7 @@ export const useProjectsStore = defineStore("projects", () => {
       return;
     }
     try {
-      await invoke<ProjectInfo>("update_project_name", {
+      await transport.invoke<ProjectInfo>("update_project_name", {
         id,
         newName: trimmed,
       });

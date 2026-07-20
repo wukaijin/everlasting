@@ -34,11 +34,11 @@ const invokeMock = vi.fn(async (cmd: string): Promise<unknown> => {
   return null;
 });
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...(args as Parameters<typeof invokeMock>)),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: async () => () => {},
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...(args as Parameters<typeof invokeMock>)),
+    listen: async () => () => {},
+  },
 }));
 
 import RuntimeMemoryModal from "./RuntimeMemoryModal.vue";

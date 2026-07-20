@@ -62,9 +62,8 @@
 
 import { defineStore } from "pinia";
 import { reactive, computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport, type UnlistenFn } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   SUBAGENT_EVENT_DEBOUNCE_MS,
   type SubagentEventPayload,
@@ -217,7 +216,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  toast if it cares; the store doesn't own toasts). */
   async function fetchForSession(sessionId: string): Promise<void> {
     try {
-      const rows = await invoke<SubagentRunSummary[]>(
+      const rows = await transport.invoke<SubagentRunSummary[]>(
         "list_subagent_runs_by_session",
         { sessionId },
       );
@@ -246,7 +245,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
    *  the now-terminal state and rebuilds). */
   async function fetchRun(runId: string): Promise<void> {
     try {
-      const row = await invoke<SubagentRunRow | null>("get_subagent_run", {
+      const row = await transport.invoke<SubagentRunRow | null>("get_subagent_run", {
         runId,
       });
       if (!row) return;
@@ -439,8 +438,8 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       unlisten();
       unlisten = null;
     }
-    unlisten = await listen<SubagentEventPayload>("subagent:event", (event) => {
-      const e = event.payload;
+    unlisten = await transport.listen<SubagentEventPayload>("subagent:event", (payload) => {
+      const e = payload;
       routeEvent(e);
       // Eager-fetch: warm the run-detail cache + session-summary
       // cache the first time we see a runId. Dedup'd by the
@@ -470,10 +469,10 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
       unlistenFinished();
       unlistenFinished = null;
     }
-    unlistenFinished = await listen<SubagentFinishedPayload>(
+    unlistenFinished = await transport.listen<SubagentFinishedPayload>(
       "subagent:finished",
-      (event) => {
-        const f = event.payload;
+      (payload) => {
+        const f = payload;
         flushBuffer(f.runId);
         void fetchRun(f.runId);
         void fetchForSession(f.sessionId);
@@ -576,7 +575,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     }
     mergeStateByRunId.set(runId, { kind: "merge", loading: true });
     try {
-      const result = await invoke<MergeWorkerIpcResult>("merge_worker_run", {
+      const result = await transport.invoke<MergeWorkerIpcResult>("merge_worker_run", {
         runId,
       });
       // Success: the merge destroyed the worker worktree as a side
@@ -636,7 +635,7 @@ export const useSubagentRunsStore = defineStore("subagentRuns", () => {
     }
     mergeStateByRunId.set(runId, { kind: "discard", loading: true });
     try {
-      await invoke<string>("discard_worker_run", {
+      await transport.invoke<string>("discard_worker_run", {
         runId,
       });
       const row = getRunCache.get(runId);

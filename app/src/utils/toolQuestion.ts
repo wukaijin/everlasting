@@ -2,13 +2,13 @@
 // blocking reverse-question tool (Phase C4 of
 // `06-30-ask-user-question-tool`, 2026-06-30).
 //
-// Thin layer over `@tauri-apps/api/core`'s `invoke` for the two
+// Thin layer over the transport's `invoke` for the two
 // frontend-initiated IPC commands (`resolve_tool_question`,
 // `get_pending_question`). The third wire — `tool:question` — is
 // server-pushed via `listen<>` in streamController, not a Tauri
 // command, so it doesn't live here.
 //
-// Why a thin wrapper (rather than inline `invoke(...)` calls in
+// Why a thin wrapper (rather than inline `transport.invoke(...)` calls in
 // the consuming components)? Two reasons:
 //   1. Single source of truth for the command names — if the Rust
 //      command ever gets renamed (e.g. `resolve_tool_question` →
@@ -26,7 +26,7 @@
 // add no value (single call site, no field-name translation
 // needed beyond what `invoke` already does).
 
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 import {
   RESOLVE_TOOL_QUESTION_CMD,
@@ -61,7 +61,7 @@ import {
 export async function resolveToolQuestion(
   payload: ToolQuestionResolvePayload,
 ): Promise<void> {
-  await invoke<void>(RESOLVE_TOOL_QUESTION_CMD, {
+  await transport.invoke<void>(RESOLVE_TOOL_QUESTION_CMD, {
     sessionId: payload.session_id,
     toolUseId: payload.tool_use_id,
     // Tauri auto-converts `null`/`undefined` to `Option::None`

@@ -44,11 +44,11 @@ const invokeMock = vi.fn(async (cmd: string): Promise<unknown> => {
   return null;
 });
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...(args as Parameters<typeof invokeMock>)),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...(args as Parameters<typeof invokeMock>)),
+    listen: vi.fn(async () => () => {}),
+  },
 }));
 
 import MemoryPreview from "./MemoryPreview.vue";

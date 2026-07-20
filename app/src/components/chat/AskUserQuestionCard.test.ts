@@ -40,8 +40,11 @@ import { nextTick } from "vue";
 // doesn't reach `window.__TAURI_INTERNALS__`. The mock records
 // every call so we can assert the wire payload.
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";

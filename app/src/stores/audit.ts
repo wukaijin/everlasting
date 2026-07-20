@@ -32,7 +32,7 @@
 
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import type { AuditEventRow } from "../utils/audit";
 
@@ -74,7 +74,7 @@ export const useAuditStore = defineStore("audit", () => {
     loading.value = true;
     error.value = null;
     try {
-      const rows = await invoke<AuditEventRow[]>("list_session_audit_events", {
+      const rows = await transport.invoke<AuditEventRow[]>("list_session_audit_events", {
         sessionId,
       });
       events.value = sortEvents(rows);

@@ -19,7 +19,7 @@
 // — the dropdown UX is the worktree-style popover.
 
 import { computed, onUnmounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../../transport";
 
 import { useConfigStore } from "../../stores/config";
 import { useModelsStore } from "../../stores/models";
@@ -122,7 +122,7 @@ async function onModelPick(modelId: string) {
   if (!sid) return;
   closeMenu();
   try {
-    await invoke("update_session_model_id", {
+    await transport.invoke("update_session_model_id", {
       sessionId: sid,
       modelId,
     });

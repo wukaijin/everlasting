@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 import { useProvidersStore } from "./providers";
 import { useModelsStore } from "./models";
@@ -128,7 +128,7 @@ export const useConfigStore = defineStore("config", () => {
     // `try` as the catalog: a missing provider/api_key would
     // otherwise mask the home-dir load.
     try {
-      homeDir.value = await invoke<string | null>("get_home_dir");
+      homeDir.value = await transport.invoke<string | null>("get_home_dir");
     } catch (e) {
       console.error("failed to load home dir:", e);
       homeDir.value = null;

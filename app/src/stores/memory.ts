@@ -39,7 +39,7 @@
 
 import { defineStore } from "pinia";
 import { ref, reactive } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 
 // --- Types — mirror `MemoryLayerInfo` from the Rust side. -----------
@@ -267,7 +267,7 @@ export const useMemoryStore = defineStore("memory", () => {
     runtimeMemories.value = [];
     runtimeMemoriesError.value = null;
     try {
-      const next = await invoke<MemoryLayerInfo[]>("read_memory_layers", {
+      const next = await transport.invoke<MemoryLayerInfo[]>("read_memory_layers", {
         projectId,
       });
       layers.value = next;
@@ -326,7 +326,7 @@ export const useMemoryStore = defineStore("memory", () => {
     if (!lastProjectId.value) {
       throw new Error("memory: fetchContent called before loadForProject");
     }
-    const text = await invoke<string>("read_memory_content", {
+    const text = await transport.invoke<string>("read_memory_content", {
       projectId: lastProjectId.value,
       path,
     });
@@ -351,7 +351,7 @@ export const useMemoryStore = defineStore("memory", () => {
     if (!lastProjectId.value) {
       throw new Error("memory: openInEditor called before loadForProject");
     }
-    await invoke("open_memory_in_editor", {
+    await transport.invoke("open_memory_in_editor", {
       projectId: lastProjectId.value,
       path,
     });
@@ -394,7 +394,7 @@ export const useMemoryStore = defineStore("memory", () => {
     }
     runtimeMemoriesLoading.value = true;
     try {
-      const next = await invoke<AutonomousMemory[]>(
+      const next = await transport.invoke<AutonomousMemory[]>(
         "list_autonomous_memories",
         { projectId: lastProjectId.value },
       );
@@ -437,7 +437,7 @@ export const useMemoryStore = defineStore("memory", () => {
       return;
     }
     try {
-      await invoke<number>("delete_autonomous_memory", {
+      await transport.invoke<number>("delete_autonomous_memory", {
         memoryId: target.memoryId,
       });
       // Optimistic remove: filter the row out of the in-memory
@@ -494,7 +494,7 @@ export const useMemoryStore = defineStore("memory", () => {
       demotedReason: newStatus === "demoted" ? demotedReason : null,
     };
     try {
-      await invoke("update_autonomous_memory_status", {
+      await transport.invoke("update_autonomous_memory_status", {
         memoryId: prev.memoryId,
         newStatus,
         demotedReason: newStatus === "demoted" ? demotedReason : null,
@@ -553,7 +553,7 @@ export const useMemoryStore = defineStore("memory", () => {
       updatedAt: new Date().toISOString(),
     };
     try {
-      const updated = await invoke<AutonomousMemory>(
+      const updated = await transport.invoke<AutonomousMemory>(
         "update_autonomous_memory",
         { memoryId: prev.memoryId, title, content },
       );

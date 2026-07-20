@@ -28,12 +28,12 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
-use crate::error::{AppCommandError, ErrorCategory};
+use crate::error::AppCommandError;
 use crate::llm::{ChatEvent, ChatMessage};
 use crate::state::{AppState, ChatEventPayload};
 
@@ -151,10 +151,16 @@ pub async fn chat(
     // must not borrow from it).
     let app_data_dir = state.app_data_dir.clone();
     let rid = request_id;
-    // The `app` clone lives on through `AppHandleSink` (built
-    // below); the pre-flight error path also uses `app.emit`
-    // directly so we keep the receiver alive across both
-    // pre-flight + spawn.
+    // Build the `ChatEventSink` adapter BEFORE pre-flight so the
+    // pre-flight error path also emits through the trait (no direct
+    // `app.emit` — closes the bypass flagged in
+    // REVIEW-remote-access-research-2026-07-20 §P0-D). The sink
+    // carries the only `app.clone()` it needs; the pre-flight error
+    // arm uses it, the spawn closure below reuses the same trait
+    // object.
+    let sink: Arc<dyn crate::state::ChatEventSink> =
+        Arc::new(crate::state::AppHandleSink { app: app.clone() });
+    let sink_for_spawn = sink.clone();
 
     // PR1 pre-flight: look up the catalog for the default model.
     // The failure modes map 1:1 to PRD §Q2's locked-in user-facing
@@ -174,23 +180,21 @@ pub async fn chat(
                 error = %msg,
                 "chat: pre-flight failed (catalog)"
             );
-            let payload = ChatEventPayload {
+            // transport-abstraction 2026-07-20 (P1.3): route the
+            // pre-flight error through the same `ChatEventSink`
+            // trait the rest of the loop uses, instead of calling
+            // `app.emit` directly. The sink logs emit failures
+            // (`AppHandleSink::emit_chat_event`) — the IPC
+            // double-fault `AppCommandError` shape from the
+            // previous `app.emit(...).map_err(...)?` would not
+            // translate to the Phase 2 HTTP transport anyway.
+            sink.emit_chat_event(&ChatEventPayload {
                 request_id: rid.clone(),
                 event: ChatEvent::Error {
                     message: msg,
                     category,
                 },
-            };
-            // A5(R3.4):emit 失败是 IPC 边界双重故障(pre-flight 错误
-            // 本要走 stream,emit 又失败)。归 Server,透传 rid 让
-            // 前端/log 关联。罕见路径,但契约要求 command 错误结构化。
-            app.emit("chat-event", payload).map_err(|e| {
-                AppCommandError::new(
-                    ErrorCategory::Server,
-                    format!("chat: 发送前置错误失败: {}", e),
-                )
-                .with_request_id(Some(rid))
-            })?;
+            });
             return Ok(());
         }
     };
@@ -245,18 +249,12 @@ pub async fn chat(
         map.insert(rid.clone(), done_rx);
     }
 
-    // P1 RULE-A-006 (2026-06-14): wrap the AppHandle in a
-    // ChatEventSink so the agent loop body can dispatch through
-    // the trait. The `permissions::check` Tier 3 `permission:ask`
-    // emit is the one place inside the agent loop body that
-    // needs this trait (the rest of the body still uses
-    // `app_handle.emit` directly — see the original closure for
-    // the chat-event / tool:call / tool:result emits). The
-    // testable variant in `chat_loop.rs` uses the same trait
-    // for ALL emits, so tests get a single MockEmitter sink.
-    let sink: Arc<dyn crate::state::ChatEventSink> =
-        Arc::new(crate::state::AppHandleSink { app: app.clone() });
-    let sink_for_spawn = sink.clone();
+    // P1 RULE-A-006 (2026-06-14): the sink was constructed
+    // above (before pre-flight). The `permissions::check` Tier 3
+    // `permission:ask` emit is the one place inside the agent
+    // loop body that needs this trait. The testable variant in
+    // `chat_loop.rs` uses the same trait for ALL emits, so tests
+    // get a single MockEmitter sink.
 
     tauri::async_runtime::spawn(async move {
         // Agent loop body is now unified with `chat_loop::run_chat_loop`

@@ -77,7 +77,7 @@ export {};
 //   emits:  { send: [text: string]; stop: [] }
 
 import { computed, nextTick, ref, watch, watchEffect } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../../transport";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import Icon from "../Icon.vue";
 import ModeSelect from "./ModeSelect.vue";
@@ -220,7 +220,7 @@ const cm = useChatInputCodeMirror({
   commandItemsSource: async (): Promise<TriggerMenuItem[]> => {
     const projectId = projectsStore.currentProjectId;
     try {
-      const list = await invoke<PanelItem[]>("list_panel_items", {
+      const list = await transport.invoke<PanelItem[]>("list_panel_items", {
         projectId: projectId ?? null,
       });
       return list.map((c) => ({
@@ -252,7 +252,7 @@ const cm = useChatInputCodeMirror({
   agentItemsSource: async (): Promise<TriggerMenuItem[]> => {
     const projectId = projectsStore.currentProjectId;
     try {
-      const list = await invoke<{ name: string; description: string; source: string }[]>(
+      const list = await transport.invoke<{ name: string; description: string; source: string }[]>(
         "list_subagents",
         { projectId: projectId ?? null },
       );
@@ -298,7 +298,7 @@ async function getOrLoadShallow(
   const entry = fileCache.get(projectId);
   if (entry?.shallow) return entry.shallow;
 
-  const paths = await invoke<string[]>("list_files", {
+  const paths = await transport.invoke<string[]>("list_files", {
     projectId,
     maxDepth: FILE_SHALLOW_DEPTH,
   });
@@ -309,7 +309,7 @@ async function getOrLoadShallow(
 
 async function getOrLoadSystemRoot(): Promise<TriggerMenuItem[]> {
   if (systemRootCache) return systemRootCache;
-  const paths = await invoke<string[]>("list_files_at", {
+  const paths = await transport.invoke<string[]>("list_files_at", {
     root: "/",
     maxDepth: FILE_SYSTEM_ROOT_DEPTH,
   });
@@ -509,7 +509,7 @@ async function onCommandSelect(item: TriggerMenuItem): Promise<void> {
   const projectId = projectsStore.currentProjectId ?? null;
   let body: string | null = null;
   try {
-    body = await invoke<string | null>("get_command_body", {
+    body = await transport.invoke<string | null>("get_command_body", {
       name: item.name,
       projectId,
     });

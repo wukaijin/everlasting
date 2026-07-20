@@ -18,7 +18,7 @@
 // `resolve_worker_provider` returns).
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 
 /** One row in the `list_subagents_with_model` response. Mirrors
@@ -93,7 +93,7 @@ export const useSubagentsStore = defineStore("subagents", () => {
   /** Fetch the list of subagents (with resolved models) for a
    *  given project. Replaces the entire in-memory map. */
   async function fetchForProject(projectPath: string) {
-    const list = await invoke<SubagentWithModelRow[]>(
+    const list = await transport.invoke<SubagentWithModelRow[]>(
       "list_subagents_with_model",
       { projectPath },
     );
@@ -127,7 +127,7 @@ export const useSubagentsStore = defineStore("subagents", () => {
     }
     spinnerByName.set(name, { loading: true });
     try {
-      const updated = await invoke<SubagentWithModelRow>(
+      const updated = await transport.invoke<SubagentWithModelRow>(
         "set_subagent_model",
         {
           name,

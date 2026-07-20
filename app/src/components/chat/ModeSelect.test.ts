@@ -16,8 +16,11 @@ import { nextTick } from "vue";
 // Mock Tauri so `chatStore.requestSetMode` doesn't try to
 // hit `window.__TAURI_INTERNALS__`.
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 import ModeSelect from "./ModeSelect.vue";

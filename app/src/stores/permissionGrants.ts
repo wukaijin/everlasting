@@ -29,7 +29,7 @@
 
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 
 /** Wire shape of a `session_tool_permissions` row. camelCase to
@@ -71,7 +71,7 @@ export const usePermissionGrantsStore = defineStore("permissionGrants", () => {
     loading.value = true;
     error.value = null;
     try {
-      const rows = await invoke<PermissionGrantRow[]>(
+      const rows = await transport.invoke<PermissionGrantRow[]>(
         "list_session_tool_permissions",
         { sessionId },
       );
@@ -89,7 +89,7 @@ export const usePermissionGrantsStore = defineStore("permissionGrants", () => {
    *  failure, sets `error` and leaves `grants` unchanged. */
   async function revoke(row: PermissionGrantRow): Promise<void> {
     try {
-      await invoke("revoke_tool_permission", {
+      await transport.invoke("revoke_tool_permission", {
         sessionId: row.sessionId,
         toolName: row.toolName,
         matchKind: row.matchKind,

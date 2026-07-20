@@ -30,8 +30,11 @@ import type {
 // Mock @tauri-apps/api/core so we can spy on the invoke call without
 // touching the real backend.
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 const showToastMock = vi.fn();

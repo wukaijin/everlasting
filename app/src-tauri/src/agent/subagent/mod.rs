@@ -73,10 +73,25 @@ use crate::llm::{ChatMessage, Role, ToolDef};
 use crate::memory::MemoryCache;
 
 pub(crate) mod dispatch;
+mod event_sink;
 mod loader;
 mod sink;
 mod transcript;
 mod truncate_summary;
+
+// transport-abstraction 2026-07-20 (P1.3): re-export the new
+// subagent event sink trait + its two impls so callers reach it
+// via `crate::agent::subagent::{SubagentEventSink,
+// AppHandleSubagentSink, ThreadLocalSubagentSink}`. Test-only
+// helpers `arm_test_collector` / `clear_test_collector` are
+// re-exported at `pub(crate)` so the `#[cfg(test)]` blocks in
+// `sink.rs` can reach them via `super::super::arm_test_collector` /
+// `super::super::clear_test_collector` without exposing the
+// `event_sink` module itself.
+pub(crate) use event_sink::{arm_test_collector, clear_test_collector};
+pub use event_sink::{
+    AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubagentSink,
+};
 
 // L3d PR2 (2026-06-25): re-export the loader's public surface so
 // callers reach it via `crate::agent::subagent::{SubagentCache,
@@ -95,7 +110,13 @@ pub use transcript::TranscriptEntry;
 // `TranscriptKind` is referenced only from `cfg(test)` code
 // (`db/tests.rs`, `agent/tests.rs`); production callers reach it via
 // the module-internal `super::transcript::TranscriptKind` path.
-pub(crate) use transcript::build_subagent_finished_payload;
+// transport-abstraction 2026-07-20 (P1.3): `build_subagent_finished_payload`
+// is no longer used in production — the dispatch path now goes
+// through `SubagentEventSink::emit_subagent_finished` (defined in
+// `event_sink.rs`). The helper itself is still called from
+// `event_sink.rs` itself (and from any future integration test
+// that needs the raw wire shape) — it's just not re-exported
+// from this module anymore.
 #[cfg(test)]
 pub use transcript::TranscriptKind;
 pub use truncate_summary::{

@@ -27,8 +27,11 @@ import type { UiPrimitive } from "../uiCard.types";
 // Mock @tauri-apps/api/core so we can spy on the invoke call without
 // touching the real backend. Mirrors the chat store test pattern.
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 // Mock the chat + projects stores. We need:

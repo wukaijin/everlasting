@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 /** TypeScript type mirroring the backend `ModelWithProvider` IPC payload.
  *  The backend uses `#[serde(flatten)]` so model fields and denormalized
@@ -72,8 +72,8 @@ export const useModelsStore = defineStore("models", () => {
    *  in-memory list on success. */
   async function load() {
     const [modelList, def] = await Promise.all([
-      invoke<ModelWithProvider[]>("list_models"),
-      invoke<ModelWithProvider | null>("get_default_model"),
+      transport.invoke<ModelWithProvider[]>("list_models"),
+      transport.invoke<ModelWithProvider | null>("get_default_model"),
     ]);
     models.value = modelList;
     defaultModelId.value = def?.id ?? null;
@@ -98,7 +98,7 @@ export const useModelsStore = defineStore("models", () => {
     // `null`) — Tauri 2 IPC treats `null` as a missing required
     // field and the error message hides the field name.
     // See HACKING-wsl FU-1.
-    await invoke("add_model", {
+    await transport.invoke("add_model", {
       providerId,
       modelName,
       displayName,
@@ -121,7 +121,7 @@ export const useModelsStore = defineStore("models", () => {
       contextWindow: number;
     },
   ) {
-    await invoke("update_model", { id, providerId, modelName, displayName, ...opts });
+    await transport.invoke("update_model", { id, providerId, modelName, displayName, ...opts });
     await load();
   }
 
@@ -129,7 +129,7 @@ export const useModelsStore = defineStore("models", () => {
    *  Note: this leaves dangling `sessions.model_id` references — the
    *  backend resolve-default fallback handles them transparently. */
   async function remove(id: string) {
-    const ok = await invoke<boolean>("delete_model", { id });
+    const ok = await transport.invoke<boolean>("delete_model", { id });
     if (ok) models.value = models.value.filter((m) => m.id !== id);
     return ok;
   }
@@ -137,7 +137,7 @@ export const useModelsStore = defineStore("models", () => {
   /** Set the default model. Persists to `app_config.default_model_id`
    *  and updates the local ref immediately (optimistic). */
   async function setDefault(modelId: string) {
-    await invoke("set_default_model", { modelId });
+    await transport.invoke("set_default_model", { modelId });
     defaultModelId.value = modelId;
   }
 

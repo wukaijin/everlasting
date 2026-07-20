@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -26,7 +26,7 @@ use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
 use super::{
-    assemble_subagent_prompt, build_subagent_finished_payload, build_worker_messages,
+    assemble_subagent_prompt, build_worker_messages,
     filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result_with_model,
     format_final_text, summarize_worker_tool_actions, truncate_transcript_for_persistence,
     SubagentBufferSink, SubagentCache, SubagentStatus, TRANSCRIPT_MAX_BYTES,
@@ -1182,21 +1182,18 @@ pub(crate) async fn run_subagent(
                 // stale `running` row as terminal. Best-effort: a
                 // Tauri emit failure is non-fatal (the dispatch
                 // tool_result is the user-visible terminal signal).
-                if let Some(handle) = app_handle.as_ref() {
-                    let payload = build_subagent_finished_payload(
-                        worker_run_id,
-                        parent_session_id,
-                        status_db.as_str(),
-                        &finished_at,
-                    );
-                    if let Err(e) = handle.emit("subagent:finished", payload) {
-                        tracing::warn!(
-                            worker_run_id = %worker_run_id,
-                            error = %e,
-                            "subagent:finished emit failed (non-fatal; DB row already terminal)"
-                        );
-                    }
-                }
+                // transport-abstraction 2026-07-20 (P1.3):
+                // route the `subagent:finished` IPC emit through
+                // the `SubagentEventSink` trait. The trait
+                // handles the `app.emit` (production) /
+                // no-op (test) split internally — no
+                // `Option<AppHandle>` branching here.
+                worker_sink.emit_subagent_finished(
+                    worker_run_id,
+                    parent_session_id,
+                    status_db.as_str(),
+                    &finished_at,
+                );
             }
             Err(e) => {
                 tracing::warn!(

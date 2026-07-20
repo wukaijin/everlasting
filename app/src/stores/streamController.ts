@@ -40,9 +40,8 @@
 
 import { defineStore } from "pinia";
 import { computed, markRaw, reactive, ref, type ComputedRef } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport, type UnlistenFn } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { useChatStore } from "./chat";
 import type {
@@ -1437,7 +1436,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // logs but doesn't surface to the user. The in-memory
     // value is what the UI shows.
     if (durationMs !== undefined) {
-      void invoke("record_tool_duration", {
+      void transport.invoke("record_tool_duration", {
         sessionId: req.sessionId,
         toolUseId: payload.tool_use_id,
         durationMs,
@@ -1489,7 +1488,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     sessionId: string,
   ): Promise<void> {
     try {
-      const entry = await invoke<PendingInteraction | null>(
+      const entry = await transport.invoke<PendingInteraction | null>(
         GET_PENDING_INTERACTION_CMD,
         { sessionId },
       );
@@ -1689,7 +1688,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  Moving it here (vs. in `finalizeRequest`) means the
    *  request state is alive for the entire IPC path. */
   async function reloadAfterFinalize(sessionId: string, requestId?: string): Promise<void> {
-    const loaded = await invoke<LoadedSession | null>("load_session", {
+    const loaded = await transport.invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
     const messages = loaded ? rehydrateMessages(loaded.messages) : [];
@@ -1792,7 +1791,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
               }
             }
           }
-          void invoke("update_message_latency", {
+          void transport.invoke("update_message_latency", {
             sessionId,
             seq: turnLatency.seq,
             ttfbMs: turnLatency.ttfbMs,
@@ -1823,15 +1822,24 @@ export const useStreamControllerStore = defineStore("streamController", () => {
   /** Idempotent: registering a second time is a no-op. */
   async function start(): Promise<void> {
     if (listenerWired) return;
-    unlistenChat = await listen<ChatEventPayload>("chat-event", (e) => {
-      handleChatEvent(e.payload);
-    });
-    unlistenTC = await listen<ToolCallPayload>("tool:call", (e) => {
-      handleToolCall(e.payload);
-    });
-    unlistenTR = await listen<ToolResultPayload>("tool:result", (e) => {
-      handleToolResult(e.payload);
-    });
+    unlistenChat = await transport.listen<ChatEventPayload>(
+      "chat-event",
+      (payload) => {
+        handleChatEvent(payload);
+      },
+    );
+    unlistenTC = await transport.listen<ToolCallPayload>(
+      "tool:call",
+      (payload) => {
+        handleToolCall(payload);
+      },
+    );
+    unlistenTR = await transport.listen<ToolResultPayload>(
+      "tool:result",
+      (payload) => {
+        handleToolResult(payload);
+      },
+    );
     // Phase C3 (2026-06-30): the `ask_user_question` blocking
     // reverse-question tool emits a `tool:question` event when
     // the backend registers a pending question. The listener
@@ -1845,9 +1853,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // global listener, routes by payload fields (session_id)
     // rather than by current session (the whole point of the
     // controller pattern).
-    unlistenTQ = await listen<ToolQuestionPayload>(TOOL_QUESTION_EVENT, (e) => {
-      handleToolQuestion(e.payload);
-    });
+    unlistenTQ = await transport.listen<ToolQuestionPayload>(
+      TOOL_QUESTION_EVENT,
+      (payload) => {
+        handleToolQuestion(payload);
+      },
+    );
     // Phase B4 (2026-07-07, `request_mode_change` task): the
     // `request_mode_change` blocking tool emits a
     // `mode:change:request` event when the backend registers a
@@ -1858,9 +1869,12 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // the questionCards store as a tagged-union
     // `{ kind: "mode_change", payload }` so the store's
     // `pendingBySession` carries both variants under one map.
-    unlistenMC = await listen<ModeChangePayload>(MODE_CHANGE_EVENT, (e) => {
-      handleModeChangeRequest(e.payload);
-    });
+    unlistenMC = await transport.listen<ModeChangePayload>(
+      MODE_CHANGE_EVENT,
+      (payload) => {
+        handleModeChangeRequest(payload);
+      },
+    );
     // 2026-07-09 (`07-09-workflow-transition-card`): the
     // `request_task_state_transition` blocking tool emits a
     // `task:state:transition:request` event when the backend
@@ -1868,10 +1882,10 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     // on the same single-pending gate — distinct channel so the
     // listener wires independently. Handler pushes the payload as
     // `{ kind: "task_state_transition", payload }` into the store.
-    unlistenTST = await listen<TaskStateTransitionPayload>(
+    unlistenTST = await transport.listen<TaskStateTransitionPayload>(
       TASK_STATE_TRANSITION_EVENT,
-      (e) => {
-        handleTaskStateTransition(e.payload);
+      (payload) => {
+        handleTaskStateTransition(payload);
       },
     );
     listenerWired = true;
@@ -1946,7 +1960,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       await reconcilePendingInteractionFromBackend(sessionId);
       return existing;
     }
-    const loaded = await invoke<LoadedSession | null>("load_session", {
+    const loaded = await transport.invoke<LoadedSession | null>("load_session", {
       sessionId,
     });
     const messages = loaded ? rehydrateMessages(loaded.messages) : [];
@@ -2167,7 +2181,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       messagesBySession.set(args.sessionId, msgs);
     }
     try {
-      await invoke("chat", {
+      await transport.invoke("chat", {
         requestId,
         sessionId: args.sessionId,
         messages: args.history,
@@ -2205,7 +2219,7 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  the `done` event. */
   async function cancel(requestId: string): Promise<void> {
     try {
-      await invoke("cancel_chat", { requestId });
+      await transport.invoke("cancel_chat", { requestId });
     } catch (e) {
       // A failed cancel is logged but not user-facing — the
       // user already saw the Stop button and clicked it. The

@@ -24,21 +24,20 @@ import { setActivePinia, createPinia } from "pinia";
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
-}));
-
 let capturedHandler: ((event: { payload: unknown }) => void) | null = null;
 let capturedUnlisten: (() => void) | null = null;
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: async (
-    _event: string,
-    handler: (event: { payload: unknown }) => void,
-  ) => {
-    capturedHandler = handler;
-    capturedUnlisten = vi.fn();
-    return capturedUnlisten;
+vi.mock("../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async (_event: string, handler: (payload: unknown) => void) => {
+      // transport.listen delivers the unwrapped payload; keep the captured
+      // handler accepting Tauri-style `{ payload }` envelopes so the test
+      // call sites (`capturedHandler({ payload: X })`) stay unchanged.
+      capturedHandler = (event: { payload: unknown }) => handler(event.payload);
+      capturedUnlisten = vi.fn();
+      return capturedUnlisten;
+    },
   },
 }));
 

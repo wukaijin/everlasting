@@ -33,7 +33,7 @@
 // which uses `#[serde(rename_all = "camelCase")]`):
 //
 //   Server → Client: emit("permission:ask", payload)
-//   Client → Server: invoke("permission_response", { rid, decision, reason? })
+//   Client → Server: transport.invoke("permission_response", { rid, decision, reason? })
 //
 // `decision` is one of `"allow_once"`, `"allow_always"`, `"deny"`.
 // `reason` is the user's optional "拒绝并说明" feedback (only
@@ -42,8 +42,7 @@
 
 import { defineStore } from "pinia";
 import { reactive, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { transport, type UnlistenFn } from "../transport";
 
 /** Per-tool risk level. Serialized to/from the IPC payload —
  *  backend `permissions::Risk` uses `#[serde(rename_all =
@@ -249,8 +248,8 @@ export const usePermissionsStore = defineStore("permissions", () => {
       unlisten = null;
     }
     showToast = toast ?? null;
-    unlisten = await listen<PermissionAsk>("permission:ask", (event) => {
-      setPending(event.payload);
+    unlisten = await transport.listen<PermissionAsk>("permission:ask", (payload) => {
+      setPending(payload);
     });
   }
 
@@ -334,7 +333,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
     reason?: string,
   ): Promise<void> {
     try {
-      await invoke("permission_response", {
+      await transport.invoke("permission_response", {
         rid,
         decision,
         // Only deny carries a reason (the user's feedback text).

@@ -14,11 +14,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => null),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: vi.fn(async () => null),
+    listen: vi.fn(async () => () => {}),
+  },
 }));
 
 import WorkerAskBanner from "./WorkerAskBanner.vue";

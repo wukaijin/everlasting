@@ -35,7 +35,7 @@
 
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 
 import { useProjectsStore } from "./projects";
@@ -536,7 +536,7 @@ export const useChatStore = defineStore("chat", () => {
       sessions.value = [];
       return;
     }
-    sessions.value = await invoke<SessionSummary[]>("list_sessions", {
+    sessions.value = await transport.invoke<SessionSummary[]>("list_sessions", {
       projectId: projectId,
     });
   }
@@ -553,7 +553,7 @@ export const useChatStore = defineStore("chat", () => {
     }
     const project = projectsStore.projectById(projectId);
     const initialCwd = project?.path ?? "";
-    const session = await invoke<{
+    const session = await transport.invoke<{
       id: string;
       title: string;
       created_at: string;
@@ -611,7 +611,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function deleteSession(sessionId: string) {
-    await invoke("delete_session", { sessionId });
+    await transport.invoke("delete_session", { sessionId });
     // Evict from the controller's cache (and unpin, just in case)
     // so the in-memory buffer doesn't keep a stale entry alive
     // past the DB row's deletion.
@@ -667,7 +667,7 @@ export const useChatStore = defineStore("chat", () => {
     if (sessionId === currentSessionId.value && isCurrentSessionStreaming.value) {
       await cancel();
     }
-    await invoke("clear_session_messages", { sessionId });
+    await transport.invoke("clear_session_messages", { sessionId });
     controller.evict(sessionId);
     diffCache.value.delete(sessionId);
     // B12 Checklist: the cleared session has no history → no
@@ -683,13 +683,13 @@ export const useChatStore = defineStore("chat", () => {
 
   // D1: rename + color tag
   async function renameSession(sessionId: string, newTitle: string) {
-    await invoke("rename_session", { sessionId, newTitle });
+    await transport.invoke("rename_session", { sessionId, newTitle });
     const s = sessions.value.find((x) => x.id === sessionId);
     if (s) s.title = newTitle.slice(0, 80);
   }
 
   async function setSessionColor(sessionId: string, colorTag: number | null) {
-    await invoke("set_session_color", { sessionId, colorTag: colorTag });
+    await transport.invoke("set_session_color", { sessionId, colorTag: colorTag });
     const s = sessions.value.find((x) => x.id === sessionId);
     if (s) s.color_tag = colorTag;
   }
@@ -707,7 +707,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function attachWorktree(sessionId: string): Promise<void> {
     try {
-      await invoke("attach_worktree", { sessionId });
+      await transport.invoke("attach_worktree", { sessionId });
     } catch (e) {
       projectsStore.showToast(`attach worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
@@ -734,7 +734,7 @@ export const useChatStore = defineStore("chat", () => {
   // worktree stays bound so the user can keep working.
   async function publishSessionToMain(sessionId: string): Promise<void> {
     try {
-      const result = await invoke<string>("publish_session_to_main", { sessionId });
+      const result = await transport.invoke<string>("publish_session_to_main", { sessionId });
       projectsStore.showToast(result, "info");
     } catch (e) {
       projectsStore.showToast(`publish 到 main 失败: ${extractErrorMessage(e)}`, "error");
@@ -744,7 +744,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function detachWorktree(sessionId: string): Promise<void> {
     try {
-      await invoke("detach_worktree", { sessionId });
+      await transport.invoke("detach_worktree", { sessionId });
     } catch (e) {
       projectsStore.showToast(`detach worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
@@ -765,7 +765,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function deleteWorktree(sessionId: string): Promise<void> {
     try {
-      await invoke("delete_worktree", { sessionId });
+      await transport.invoke("delete_worktree", { sessionId });
     } catch (e) {
       projectsStore.showToast(`delete worktree 失败: ${extractErrorMessage(e)}`, "error");
       throw e;
@@ -806,7 +806,7 @@ export const useChatStore = defineStore("chat", () => {
     if (cached) {
       return cached;
     }
-    const result = await invoke<DiffResult>("diff_worktree", { sessionId });
+    const result = await transport.invoke<DiffResult>("diff_worktree", { sessionId });
     diffCache.value.set(sessionId, result);
     // Force reactivity for the new Map reference (Pinia tracks
     // Map.set on the proxy but consumers reading `.get` want a
@@ -1206,7 +1206,7 @@ export const useChatStore = defineStore("chat", () => {
     // surfaces here as a rejected promise — we let it propagate
     // so the caller (`MessageItem.vue`'s Save handler) can
     // toast and keep the edit mode active.
-    await invoke<void>("edit_user_message", {
+    await transport.invoke<void>("edit_user_message", {
       sessionId,
       messageSeq,
       newContent,
@@ -1586,7 +1586,7 @@ export const useChatStore = defineStore("chat", () => {
 
     // Non-Yolo mode: apply directly.
     try {
-      await invoke("set_session_mode", { sessionId, mode });
+      await transport.invoke("set_session_mode", { sessionId, mode });
       if (summary) {
         (summary as { mode: string }).mode = mode;
       }
@@ -1639,7 +1639,7 @@ export const useChatStore = defineStore("chat", () => {
       pendingResolveRequest.value = null;
     }
     try {
-      await invoke("set_session_mode", { sessionId: sid, mode: "yolo" });
+      await transport.invoke("set_session_mode", { sessionId: sid, mode: "yolo" });
       const summary = sessions.value.find((s) => s.id === sid);
       if (summary) {
         (summary as { mode: string }).mode = "yolo";
@@ -1794,7 +1794,7 @@ export const useChatStore = defineStore("chat", () => {
     const prior = summary.workflow_enabled;
     (summary as { workflow_enabled: boolean }).workflow_enabled = enabled;
     try {
-      await invoke("set_session_workflow_enabled", {
+      await transport.invoke("set_session_workflow_enabled", {
         sessionId,
         enabled,
       });
@@ -1856,7 +1856,7 @@ export const useChatStore = defineStore("chat", () => {
     const prior = summary.plugin_name;
     summary.plugin_name = trimmed;
     try {
-      await invoke("set_session_plugin_name", {
+      await transport.invoke("set_session_plugin_name", {
         sessionId,
         name: trimmed,
       });
@@ -1885,7 +1885,7 @@ export const useChatStore = defineStore("chat", () => {
    *  component does the caching. */
   async function listWorkflowPlugins(projectPath: string): Promise<string[]> {
     try {
-      const names = await invoke<string[]>("list_workflow_plugins", {
+      const names = await transport.invoke<string[]>("list_workflow_plugins", {
         projectPath,
       });
       return Array.isArray(names) ? names : [];

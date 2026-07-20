@@ -17,7 +17,7 @@
 // it stays out of the controller's domain.
 
 import { ref, reactive, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../../transport";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import { useModelsStore, type ModelWithProvider } from "../../stores/models";
 import { useProvidersStore } from "../../stores/providers";
@@ -173,7 +173,7 @@ async function confirmDelete() {
 async function runTest(modelId: string) {
   tests[modelId] = { kind: "running" };
   try {
-    const result = await invoke<{
+    const result = await transport.invoke<{
       success: boolean;
       latencyMs: number;
       error: string | null;

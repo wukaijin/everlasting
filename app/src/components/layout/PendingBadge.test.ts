@@ -17,8 +17,11 @@ import { setActivePinia, createPinia } from "pinia";
 import { mount, VueWrapper } from "@vue/test-utils";
 
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 import PendingBadge from "./PendingBadge.vue";

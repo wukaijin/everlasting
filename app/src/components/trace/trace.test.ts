@@ -11,13 +11,13 @@ import { mount } from "@vue/test-utils";
 
 const invokeMock = vi.fn();
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: async () => () => {},
-}));
 
 import TurnCard from "./TurnCard.vue";
 import { parseAuditPayload } from "../../utils/audit";

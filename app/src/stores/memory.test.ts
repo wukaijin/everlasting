@@ -29,13 +29,13 @@ import { setActivePinia, createPinia } from "pinia";
 
 const invokeMock = vi.fn();
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: async () => () => {},
-}));
 
 import { useMemoryStore, type AutonomousMemory, type RecallHit } from "./memory";
 

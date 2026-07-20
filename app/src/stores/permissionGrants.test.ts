@@ -21,8 +21,11 @@ import { setActivePinia, createPinia } from "pinia";
 
 const invokeMock = vi.fn();
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 import { usePermissionGrantsStore, type PermissionGrantRow } from "./permissionGrants";

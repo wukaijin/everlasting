@@ -31,8 +31,11 @@ import { setActivePinia, createPinia } from "pinia";
 // Mock the Tauri invoke channel. The factory returns the
 // default `vi.fn`; each test resets and re-stubs as needed.
 const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async () => () => {},
+  },
 }));
 
 // Import AFTER the mock so the chat store picks up the mocked

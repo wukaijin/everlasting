@@ -2,7 +2,7 @@
 // `request_task_state_transition` blocking tool
 // (`07-09-workflow-transition-card`, 2026-07-09).
 //
-// Thin layer over `@tauri-apps/api/core`'s `invoke` for the
+// Thin layer over the transport's `invoke` for the
 // frontend-initiated `resolve_task_state_transition` IPC command.
 // The server-pushed wire — `task:state:transition:request` — is a
 // `listen<>` event handled in streamController, not a Tauri command,
@@ -19,7 +19,7 @@
 // current `from` state off disk. There is no `fromState` arg — the
 // backend reads it fresh; the card only echoes target + slug + allow.
 
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 import {
   RESOLVE_TASK_STATE_TRANSITION_CMD,
@@ -53,7 +53,7 @@ import type { SessionRowUpdate } from "./toolModeChange";
 export async function resolveTaskStateTransition(
   payload: TaskStateTransitionResolvePayload,
 ): Promise<SessionRowUpdate> {
-  return await invoke<SessionRowUpdate>(RESOLVE_TASK_STATE_TRANSITION_CMD, {
+  return await transport.invoke<SessionRowUpdate>(RESOLVE_TASK_STATE_TRANSITION_CMD, {
     sessionId: payload.sessionId,
     toolUseId: payload.toolUseId,
     targetState: payload.targetState,

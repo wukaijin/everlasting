@@ -45,7 +45,7 @@
 
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 import { extractErrorMessage } from "../utils/useErrorBus";
 import type { AuditEventRow } from "../utils/audit";
 import {
@@ -244,8 +244,8 @@ export const useTraceStore = defineStore("trace", () => {
     currentSessionId.value = sessionId;
     try {
       const [turnRows, auditRows] = await Promise.all([
-        invoke<TurnTraceRow[]>("list_turn_traces", { sessionId }),
-        invoke<AuditEventRow[]>("list_session_audit_events", {
+        transport.invoke<TurnTraceRow[]>("list_turn_traces", { sessionId }),
+        transport.invoke<AuditEventRow[]>("list_session_audit_events", {
           sessionId,
         }),
       ]);
@@ -336,7 +336,7 @@ export const useTraceStore = defineStore("trace", () => {
    *  the audit log itself remains intact. */
   async function clearSessionTrace(sessionId: string): Promise<void> {
     try {
-      await invoke<void>("clear_session_trace", { sessionId });
+      await transport.invoke<void>("clear_session_trace", { sessionId });
     } catch (e) {
       const msg =
         e instanceof Error ? e.message : extractErrorMessage(e);

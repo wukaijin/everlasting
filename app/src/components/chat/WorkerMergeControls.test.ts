@@ -46,11 +46,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => null),
-}));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
+vi.mock("../../transport", () => ({
+  transport: {
+    invoke: vi.fn(async () => null),
+    listen: vi.fn(async () => () => {}),
+  },
 }));
 
 import WorkerBranchBadge from "./WorkerBranchBadge.vue";
@@ -61,8 +61,8 @@ import type { SubagentRunRow } from "../../stores/subagentRuns.types";
 import { parseConflictFiles } from "../../stores/subagentRuns.types";
 import { formatWorkerBranchLabel } from "../../utils/workerBranch";
 
-import * as tauriCore from "@tauri-apps/api/core";
-const invokeMock = tauriCore.invoke as unknown as ReturnType<typeof vi.fn>;
+import { transport } from "../../transport";
+const invokeMock = transport.invoke as unknown as ReturnType<typeof vi.fn>;
 
 // -----------------------------------------------------------------------
 // Fixtures

@@ -10,8 +10,8 @@
 //!   history self-consistent.
 //! - [`persist_turn_cwd`] — write the agent's final cwd at turn
 //!   end (not per shell call).
-//! - [`emit_chat_event`] — thin wrapper around `AppHandle::emit`
-//!   for the `chat-event` channel.
+//! - [`emit_chat_event_via_sink`] — dispatch a `ChatEvent` on the
+//!   `chat-event` channel through the `ChatEventSink` trait.
 //! - [`cancel_inflight_for_session`] — destructive-op helper used
 //!   by `delete_session`, `detach_worktree`, `delete_worktree`.
 
@@ -19,13 +19,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::db;
 use crate::llm::{ChatEvent, ChatMessage, ContentBlock, MessageContent, Role};
-use crate::state::{ChatEventPayload, ChatEventSink, ToolResultPayload};
+use crate::state::{ChatEventPayload, ChatEventSink};
 
 // ---------------------------------------------------------------------------
 // Tool result envelope (REQ-16)
@@ -138,39 +137,13 @@ pub async fn persist_turn_cwd(
 // Event emission
 // ---------------------------------------------------------------------------
 
-/// Emit a `ChatEvent` on the `chat-event` channel. The frontend's
-/// Pinia store listens for this channel and updates its
-/// `messages[]` + `sending` state. Failures are logged but not
-/// surfaced to the caller — the agent loop is best-effort about
-/// streaming; if the AppHandle is gone we can't do anything useful.
-///
-/// Dead code as of 2026-06-15 (RULE-A-006 closure): the agent loop
-/// body now lives in `chat_loop::run_chat_loop` and dispatches
-/// every chat-event through the `ChatEventSink` trait
-/// (`emit_chat_event_via_sink`). Kept here for future
-/// helper-callers that may need to emit from a non-`run_chat_loop`
-/// context (e.g. a future IPC command that synthesizes a Done
-/// event without running the full loop).
-#[allow(dead_code)]
-pub fn emit_chat_event(app: &AppHandle, rid: &str, event: &ChatEvent) {
-    let payload = ChatEventPayload {
-        request_id: rid.to_string(),
-        event: event.clone(),
-    };
-    if let Err(e) = app.emit("chat-event", payload) {
-        tracing::warn!(error = %e, "failed to emit chat-event");
-    }
-}
-
-/// Emit a `ToolResultPayload` on the `tool:result` channel. The
-/// frontend renders this as the result card under the tool call.
-/// Failures are logged but not surfaced (mirrors [`emit_chat_event`]).
-#[allow(dead_code)] // kept for future helper-callers
-pub fn emit_tool_result(app: &AppHandle, payload: &ToolResultPayload) {
-    if let Err(e) = app.emit("tool:result", payload.clone()) {
-        tracing::warn!(error = %e, "failed to emit tool:result");
-    }
-}
+// NOTE (transport-abstraction 2026-07-20, P1.3): the legacy
+// `AppHandle`-based `emit_chat_event` / `emit_tool_result` helpers were
+// deleted here. They had been dead code since RULE-A-006 (2026-06-15) —
+// every live emit routes through the `ChatEventSink` trait via
+// `emit_chat_event_via_sink` (defined below) so the transport can be
+// swapped in Phase 2. Removing them closes 2 of the 6 `app.emit` bypass
+// points flagged in REVIEW-remote-access-research-2026-07-20 §P0-D.
 
 // ---------------------------------------------------------------------------
 // Destructive-op cancel hook
@@ -331,17 +304,15 @@ pub const INCOMPLETE_MARKER: &str = "[未完成]";
 // `permission:ask` channels are dispatched through the
 // `sink.emit_*` methods directly.
 //
-// The legacy `AppHandle` variants ([`emit_chat_event`] and
-// [`emit_tool_result`]) survive as dead code for future
-// helper-callers — paths that pre-date the sink abstraction or
-// future IPC commands that synthesize events without running
-// the full loop.
+// (transport-abstraction 2026-07-20, P1.3): the legacy `AppHandle`
+// variants `emit_chat_event` / `emit_tool_result` were deleted —
+// they had been dead code since RULE-A-006 and were 2 of the 6
+// `app.emit` bypass points flagged in the remote-access review.
 // ---------------------------------------------------------------------------
 
 /// Emit a `ChatEvent` on the `chat-event` channel via the
-/// supplied `ChatEventSink`. Mirrors [`emit_chat_event`] but
-/// dispatches through the trait so the agent loop body is
-/// testable without a Tauri `AppHandle`.
+/// supplied `ChatEventSink`. Dispatches through the trait so the
+/// agent loop body is testable without a Tauri `AppHandle`.
 ///
 /// Used by the production agent loop body in
 /// [`crate::agent::chat_loop::run_chat_loop`] (P1 RULE-A-006

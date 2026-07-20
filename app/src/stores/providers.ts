@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 /** TypeScript type mirroring the backend `ProviderRow` IPC payload.
  *  Field names are camelCase (Tauri 2 auto-converts from Rust snake_case
@@ -24,7 +24,7 @@ export const useProvidersStore = defineStore("providers", () => {
   /** Fetch all providers from the backend. Replaces the entire in-memory
    *  list on success. */
   async function load() {
-    providers.value = await invoke<ProviderRow[]>("list_providers");
+    providers.value = await transport.invoke<ProviderRow[]>("list_providers");
     loaded.value = true;
   }
 
@@ -35,7 +35,7 @@ export const useProvidersStore = defineStore("providers", () => {
     baseUrl: string,
     apiKey: string,
   ) {
-    const row = await invoke<ProviderRow>("add_provider", {
+    const row = await transport.invoke<ProviderRow>("add_provider", {
       protocol,
       displayName,
       baseUrl,
@@ -57,7 +57,7 @@ export const useProvidersStore = defineStore("providers", () => {
   ) {
     const payload: Record<string, string> = { id, protocol, displayName, baseUrl };
     if (apiKey && apiKey.trim()) payload.apiKey = apiKey.trim();
-    const row = await invoke<ProviderRow | null>("update_provider", payload);
+    const row = await transport.invoke<ProviderRow | null>("update_provider", payload);
     if (row) {
       const idx = providers.value.findIndex((p) => p.id === id);
       if (idx >= 0) providers.value[idx] = row;
@@ -68,7 +68,7 @@ export const useProvidersStore = defineStore("providers", () => {
   /** Delete a provider by id. Removes from the in-memory list on success.
    *  Backend cascades to associated models (ON DELETE CASCADE). */
   async function remove(id: string) {
-    const ok = await invoke<boolean>("delete_provider", { id });
+    const ok = await transport.invoke<boolean>("delete_provider", { id });
     if (ok) providers.value = providers.value.filter((p) => p.id !== id);
     return ok;
   }

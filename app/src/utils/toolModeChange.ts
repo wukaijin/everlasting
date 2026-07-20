@@ -2,14 +2,14 @@
 // `request_mode_change` blocking tool (07-07-07-07,
 // 2026-07-07).
 //
-// Thin layer over `@tauri-apps/api/core`'s `invoke` for the two
+// Thin layer over the transport's `invoke` for the two
 // frontend-initiated IPC commands (`resolve_mode_change`,
 // `get_pending_interaction`). The third wire —
 // `mode:change:request` — is server-pushed via `listen<>`
 // in streamController, not a Tauri command, so it doesn't live
 // here.
 //
-// Why a thin wrapper (rather than inline `invoke(...)` calls in
+// Why a thin wrapper (rather than inline `transport.invoke(...)` calls in
 // the consuming components)? Same two reasons as
 // `toolQuestion.ts`:
 //   1. Single source of truth for the command names.
@@ -24,7 +24,7 @@
 // session-list mutation (mirroring `requestSetMode`'s optimistic
 // `(summary as { mode: string }).mode = mode;` pattern).
 
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 import {
   GET_PENDING_INTERACTION_CMD,
@@ -74,7 +74,7 @@ export interface SessionRowUpdate {
 export async function resolveModeChange(
   payload: ModeChangeResolvePayload,
 ): Promise<SessionRowUpdate> {
-  return await invoke<SessionRowUpdate>(RESOLVE_MODE_CHANGE_CMD, {
+  return await transport.invoke<SessionRowUpdate>(RESOLVE_MODE_CHANGE_CMD, {
     sessionId: payload.sessionId,
     toolUseId: payload.toolUseId,
     targetMode: payload.targetMode,
@@ -104,7 +104,7 @@ export async function resolveModeChange(
 export async function getPendingInteraction(
   sessionId: string,
 ): Promise<PendingInteraction | null> {
-  return await invoke<PendingInteraction | null>(
+  return await transport.invoke<PendingInteraction | null>(
     GET_PENDING_INTERACTION_CMD,
     { sessionId },
   );

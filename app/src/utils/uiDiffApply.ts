@@ -20,7 +20,7 @@
 //      lives in one place; the frontend components import this type
 //      rather than redeclaring it.
 
-import { invoke } from "@tauri-apps/api/core";
+import { transport } from "../transport";
 
 /** The Tauri command name on the Rust side. Matches
  *  `commands::ui::apply_ui_diff`'s `#[tauri::command]` attribute. */
@@ -86,7 +86,7 @@ export async function applyUiDiff(
   sessionId: string,
   diffText: string,
 ): Promise<ApplyUiDiffFile[]> {
-  const result = await invoke<ApplyUiDiffResult>(APPLY_UI_DIFF_CMD, {
+  const result = await transport.invoke<ApplyUiDiffResult>(APPLY_UI_DIFF_CMD, {
     sessionId,
     diffText,
   });

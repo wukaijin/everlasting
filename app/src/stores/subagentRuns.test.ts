@@ -40,10 +40,6 @@ vi.mock("./projects", () => ({
   }),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
-}));
-
 let capturedHandler:
   | ((event: { payload: unknown }) => void)
   | null = null;
@@ -57,19 +53,23 @@ let capturedFinishedHandler:
   | null = null;
 let capturedFinishedUnlisten: (() => void) | null = null;
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: async (
-    event: string,
-    handler: (event: { payload: unknown }) => void,
-  ) => {
-    if (event === "subagent:finished") {
-      capturedFinishedHandler = handler;
-      capturedFinishedUnlisten = vi.fn();
-      return capturedFinishedUnlisten;
-    }
-    capturedHandler = handler;
-    capturedUnlisten = vi.fn();
-    return capturedUnlisten;
+vi.mock("../transport", () => ({
+  transport: {
+    invoke: (...args: unknown[]) => invokeMock(...args),
+    listen: async (event: string, handler: (payload: unknown) => void) => {
+      // transport.listen delivers the unwrapped payload; keep the captured
+      // handlers accepting Tauri-style `{ payload }` envelopes so the test
+      // call sites (`capturedHandler({ payload: X })`) stay unchanged.
+      const wrapped = (e: { payload: unknown }) => handler(e.payload);
+      if (event === "subagent:finished") {
+        capturedFinishedHandler = wrapped;
+        capturedFinishedUnlisten = vi.fn();
+        return capturedFinishedUnlisten;
+      }
+      capturedHandler = wrapped;
+      capturedUnlisten = vi.fn();
+      return capturedUnlisten;
+    },
   },
 }));
 
