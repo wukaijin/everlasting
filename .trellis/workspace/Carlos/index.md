@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
-- **Last Active**: 2026-07-17
+- **Total Sessions**: 26
+- **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1506 | Active |
+| `journal-1.md` | ~1627 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-20 | Session 26: A5 错误处理完善 (scope B) | `0200ea1` | `main` |
 | 25 | 2026-07-17 | A6 README 5 段结构重写 | `5b04036` | `main` |
 | 24 | 2026-07-14 | B9+ 生成式 UI 收尾(button+action / diff 应用) | `9ac7bac`, `9e03d3c` | `main` |
 | 23 | 2026-07-07 | B6+ B subagent dispatch 动态选模型 | `996aa2e`, `dc3e422` | `main` |

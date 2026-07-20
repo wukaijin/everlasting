@@ -1592,3 +1592,36 @@ R2 `AppCommandError.retryable` 消费:`categoryRetryable()` helper 接受 Pascal
 - 评估 A5 V3 主链路 36 处 IPC 统一收口(独立 task,见 BACKLOG)
 - 监控 toast 在 devtools 手动 throw / unhandledrejection 下的视觉反馈(用户每日使用观察)
 - 评估 useToast 加 `action?: () => void` 字段(toast 内嵌 retry 按钮,目前 message retry 走 MessageItemFooter 独立通道)
+
+
+## Session 26: Session 26: A5 错误处理完善 (scope B)
+
+**Date**: 2026-07-20
+**Task**: Session 26: A5 错误处理完善 (scope B)
+**Branch**: `main`
+
+### Summary
+
+useToast composable + retryable button(scope B 最小闭环,R1 全局错误→reka-ui Toast / R2 categoryRetryable 派生+MessageItemFooter ↻ 重试按钮),905 tests pass(+42),后端 Rust 零改动,文档同步 RULE-A-018 + state-management useToast section + 3 spec index
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0200ea1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
