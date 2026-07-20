@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "校验 SubagentEventSink trait 抽象后 subagent collector 双通道语义未破坏 + run_chat_loop 入口不变"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "校验 13 个 store 的 invoke/listen 迁移后 streamController requestId 分发逻辑零改动"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "vitest run / cargo test / cargo clippy 验证标准 + 测试 mock 改造的惯例对照"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验 transport.invoke 抛出的 AppCommandError wire shape 与现有 36 处 IPC 错误展示链路兼容(RULE-A-018)"}

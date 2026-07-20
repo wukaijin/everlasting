@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "streamController split + LRU 20 + SSE listener routing — P1.2 迁移 13 个 store(尤其 streamController 6 invoke + 6 listen)的规范依据"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop + sink 接入点 — P1.3 收敛 chat.rs:187 pre-flight error 散点 + helpers.rs 死代码判定的参考"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppCommandError wire shape + 17 RULE-A 不变量 — transport.invoke 抛错的契约依据,R4 listen 错位处理不能破坏 RULE-A-018 toast 路由"}
+{"file": ".trellis/spec/backend/test-model-contract.md", "reason": "vitest run / cargo test / cargo clippy 标准执行模式 — P1.1/P1.2/P1.3 每个 review gate 的验证命令依据"}
+{"file": "docs/_reviews/REVIEW-remote-access-research-2026-07-20.md", "reason": "MiniMax P0-D(emit 散点 6 处)+ P1-A(apply_ui_diff 误读)的原始 findings — P1.3 处理方案的权威来源"}
