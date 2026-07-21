@@ -21,9 +21,8 @@ use crate::git;
 use crate::llm::types::MessageContent;
 use crate::state::AppState;
 
-#[tauri::command]
-pub async fn list_sessions(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_sessions_inner(
+    state: &Arc<AppState>,
     project_id: String,
 ) -> Result<Vec<db::SessionSummary>, AppCommandError> {
     db::list_sessions(&state.db, &project_id)
@@ -32,8 +31,16 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
-pub async fn create_session(
+pub async fn list_sessions(
+
     state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<db::SessionSummary>, AppCommandError> {
+    list_sessions_inner(&state, project_id).await
+}
+
+pub async fn create_session_inner(
+    state: &Arc<AppState>,
     project_id: String,
     initial_cwd: String,
     model: Option<String>,
@@ -91,8 +98,18 @@ pub async fn create_session(
 }
 
 #[tauri::command]
-pub async fn load_session(
+pub async fn create_session(
+
     state: State<'_, Arc<AppState>>,
+    project_id: String,
+    initial_cwd: String,
+    model: Option<String>,
+) -> Result<db::SessionRow, AppCommandError> {
+    create_session_inner(&state, project_id, initial_cwd, model).await
+}
+
+pub async fn load_session_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Option<db::LoadedSession>, AppCommandError> {
     db::load_session(&state.db, &session_id)
@@ -101,8 +118,16 @@ pub async fn load_session(
 }
 
 #[tauri::command]
-pub async fn diff_worktree(
+pub async fn load_session(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Option<db::LoadedSession>, AppCommandError> {
+    load_session_inner(&state, session_id).await
+}
+
+pub async fn diff_worktree_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<git::diff::DiffResult, AppCommandError> {
     // Look up the session to find its worktree. Pre-step-4
@@ -136,8 +161,16 @@ pub async fn diff_worktree(
 }
 
 #[tauri::command]
-pub async fn delete_session(
+pub async fn diff_worktree(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<git::diff::DiffResult, AppCommandError> {
+    diff_worktree_inner(&state, session_id).await
+}
+
+pub async fn delete_session_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<(), AppCommandError> {
     // Step 4 follow-up: in-flight cancel hook. If a chat stream
@@ -247,6 +280,15 @@ pub async fn delete_session(
         .map_err(|e| anyhow::anyhow!("delete_session failed: {}", e).into())
 }
 
+#[tauri::command]
+pub async fn delete_session(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), AppCommandError> {
+    delete_session_inner(&state, session_id).await
+}
+
 /// B3 `/clear`: clear the current session's messages but keep the
 /// session row (title/color/mode/model/project/timestamps).
 ///
@@ -255,9 +297,8 @@ pub async fn delete_session(
 /// so a cleared session starts from a clean runtime slate — but does
 /// NOT tear down the worktree or delete the session row. Audit events
 /// are kept (they record agent actions, not the live buffer).
-#[tauri::command]
-pub async fn clear_session_messages(
-    state: State<'_, Arc<AppState>>,
+pub async fn clear_session_messages_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<(), AppCommandError> {
     // Cancel any in-flight chat first (the backend is the last line
@@ -285,8 +326,16 @@ pub async fn clear_session_messages(
 }
 
 #[tauri::command]
-pub async fn rename_session(
+pub async fn clear_session_messages(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), AppCommandError> {
+    clear_session_messages_inner(&state, session_id).await
+}
+
+pub async fn rename_session_inner(
+    state: &Arc<AppState>,
     session_id: String,
     new_title: String,
 ) -> Result<(), AppCommandError> {
@@ -302,14 +351,33 @@ pub async fn rename_session(
 }
 
 #[tauri::command]
-pub async fn set_session_color(
+pub async fn rename_session(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+    new_title: String,
+) -> Result<(), AppCommandError> {
+    rename_session_inner(&state, session_id, new_title).await
+}
+
+pub async fn set_session_color_inner(
+    state: &Arc<AppState>,
     session_id: String,
     color_tag: Option<i32>,
 ) -> Result<(), AppCommandError> {
     db::set_session_color(&state.db, &session_id, color_tag)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_color failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn set_session_color(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    color_tag: Option<i32>,
+) -> Result<(), AppCommandError> {
+    set_session_color_inner(&state, session_id, color_tag).await
 }
 
 /// W1 (Workflow integration, Step 0.2 — 2026-07-08):
@@ -339,15 +407,24 @@ pub async fn set_session_color(
 /// its local `SessionSummary` before awaiting the IPC so
 /// the user sees the chip flip instantly even when the
 /// backend round-trip is slow.
-#[tauri::command]
-pub async fn set_session_workflow_enabled(
-    state: State<'_, Arc<AppState>>,
+pub async fn set_session_workflow_enabled_inner(
+    state: &Arc<AppState>,
     session_id: String,
     enabled: bool,
 ) -> Result<(), AppCommandError> {
     db::set_session_workflow_enabled(&state.db, &session_id, enabled)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_workflow_enabled failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn set_session_workflow_enabled(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    enabled: bool,
+) -> Result<(), AppCommandError> {
+    set_session_workflow_enabled_inner(&state, session_id, enabled).await
 }
 
 /// W1 (Workflow integration, Step 2.2 — 2026-07-08):
@@ -369,9 +446,8 @@ pub async fn set_session_workflow_enabled(
 /// We don't pre-validate the directory here — the
 /// `list_workflow_plugins` IPC is the canonical source of
 /// available names; the chip's popover only offers those.
-#[tauri::command]
-pub async fn set_session_plugin_name(
-    state: State<'_, Arc<AppState>>,
+pub async fn set_session_plugin_name_inner(
+    state: &Arc<AppState>,
     session_id: String,
     name: String,
 ) -> Result<(), AppCommandError> {
@@ -384,6 +460,16 @@ pub async fn set_session_plugin_name(
     db::set_session_plugin_name(&state.db, &session_id, &trimmed)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_plugin_name failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn set_session_plugin_name(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    name: String,
+) -> Result<(), AppCommandError> {
+    set_session_plugin_name_inner(&state, session_id, name).await
 }
 
 /// W1 (Workflow integration, Step 2.2 — 2026-07-08):
@@ -439,9 +525,8 @@ pub async fn list_workflow_plugins(project_path: String) -> Result<Vec<String>, 
 /// time-to-cancel. `thinkingMs` is `None` for messages
 /// that never entered the thinking phase — the frontend
 /// just doesn't include it in the payload in that case.
-#[tauri::command]
-pub async fn update_message_latency(
-    state: State<'_, Arc<AppState>>,
+pub async fn update_message_latency_inner(
+    state: &Arc<AppState>,
     session_id: String,
     seq: i64,
     ttfb_ms: Option<i64>,
@@ -480,6 +565,20 @@ pub async fn update_message_latency(
     Ok(true)
 }
 
+#[tauri::command]
+pub async fn update_message_latency(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    seq: i64,
+    ttfb_ms: Option<i64>,
+    gen_ms: Option<i64>,
+    total_ms: Option<i64>,
+    thinking_ms: Option<i64>,
+) -> Result<bool, AppCommandError> {
+    update_message_latency_inner(&state, session_id, seq, ttfb_ms, gen_ms, total_ms, thinking_ms).await
+}
+
 /// Patch a `duration_ms` field onto the `tool_result` block
 /// inside `messages.content` JSON for the given `tool_use_id`.
 /// Per PRD ADR-lite decision 1, the per-tool duration lives in
@@ -492,9 +591,8 @@ pub async fn update_message_latency(
 /// records a value; a missing block in the DB returns `Ok(false)`
 /// from the backend (no error), and the frontend treats that as
 /// a benign no-op.
-#[tauri::command]
-pub async fn record_tool_duration(
-    state: State<'_, Arc<AppState>>,
+pub async fn record_tool_duration_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_use_id: String,
     duration_ms: i64,
@@ -502,6 +600,17 @@ pub async fn record_tool_duration(
     crate::db::record_tool_duration(&state.db, &session_id, &tool_use_id, duration_ms)
         .await
         .map_err(|e| anyhow::anyhow!("record_tool_duration failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn record_tool_duration(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    duration_ms: i64,
+) -> Result<bool, AppCommandError> {
+    record_tool_duration_inner(&state, session_id, tool_use_id, duration_ms).await
 }
 
 // ---------------------------------------------------------------------------
@@ -554,9 +663,8 @@ pub async fn record_tool_duration(
 /// for the Tauri IPC rejection (the frontend surfaces them as a
 /// toast — same contract as `delete_session` /
 /// `clear_session_messages`).
-#[tauri::command]
-pub async fn edit_user_message(
-    state: State<'_, Arc<AppState>>,
+pub async fn edit_user_message_inner(
+    state: &Arc<AppState>,
     session_id: String,
     message_seq: i64,
     new_content: MessageContent,
@@ -641,4 +749,15 @@ pub async fn edit_user_message(
     db::edit_user_message(&state.db, &session_id, message_seq, &new_content)
         .await
         .map_err(|e| anyhow::anyhow!("edit_user_message: db failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn edit_user_message(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    message_seq: i64,
+    new_content: MessageContent,
+) -> Result<(), AppCommandError> {
+    edit_user_message_inner(&state, session_id, message_seq, new_content).await
 }

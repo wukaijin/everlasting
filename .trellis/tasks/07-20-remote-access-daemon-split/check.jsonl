@@ -1,0 +1,10 @@
+{"file": "app/src-tauri/src/state.rs", "reason": "AppState::load 签名重构(P2.1)+ projects:refreshed emit 路径 + 状态一致性"}
+{"file": "app/src-tauri/src/commands/", "reason": "84 个 #[tauri::command] _inner 拆解模式(Q0 决议);daemon routes 直接复用"}
+{"file": "app/src-tauri/src/agent/subagent/event_sink.rs", "reason": "Phase 1 SubagentEventSink trait 已存在,Phase 2 必须新增 HttpSseSubagentSink 独立实现(禁止合并到 HttpSseSink,见 §3.3 承诺)"}
+{"file": "app/src-tauri/src/agent/subagent/sink.rs", "reason": "subagent sink 注入 HttpSseSubagentSink;worker sink 是 Phase 1 ThreadLocalSubagentSink 的 SSE 平行实现"}
+{"file": "app/src-tauri/src/llm/provider/mock.rs", "reason": "E2E harness 复用 mock provider(Q7 决议);跑 1 轮 agent loop 断言 10 类事件序列"}
+{"file": "app/src/transport/http.ts", "reason": "httpTransport 填充(R8):fetch + 单全局 EventSource + 事件分发表 + resync sentinel 处理"}
+{"file": "app/src/transport/tauri.ts", "reason": "Phase 1 已交付,Phase 2 不改;tauriTransport 仍为 GUI dev fallback"}
+{"file": "app/src/transport/index.ts", "reason": "transport 切换逻辑(R9):isTauri + ?transport=http query + 健康检查后切换 httpTransport"}
+{"file": "app/src/transport/transport.test.ts", "reason": "Phase 1 测试基线;Phase 2 扩展 httpTransport 单测覆盖 + 79 command 对拍"}
+{"file": "docs/HACKING-wsl.md", "reason": "P2.5 WSL 远程访问部署文档新增;localhost forwarding + 虚拟 IP + netsh portproxy 降级方案"}

@@ -95,9 +95,8 @@ use crate::state::AppState;
 /// cleared the entry, or the user clicked 跳过 on a card
 /// already resolved by another path). The frontend treats this
 /// as a no-op (the card is either gone or never was visible).
-#[tauri::command]
-pub async fn resolve_tool_question(
-    state: State<'_, Arc<AppState>>,
+pub async fn resolve_tool_question_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_use_id: String,
     answer: Option<Vec<QuestionAnswer>>,
@@ -109,6 +108,18 @@ pub async fn resolve_tool_question(
     let response = resolve_response_from_args(cancelled, answer)?;
     state.question_store.resolve(&session_id, response).await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn resolve_tool_question(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    answer: Option<Vec<QuestionAnswer>>,
+    cancelled: Option<bool>,
+) -> Result<(), AppCommandError> {
+    resolve_tool_question_inner(&state, session_id, tool_use_id, answer, cancelled).await
 }
 
 /// Map the scalar IPC args to an `InteractionResponse` for the
@@ -169,9 +180,8 @@ pub(crate) fn resolve_response_from_args(
 /// which is the SAME session by construction; the
 /// `ModeChangePayload.session_id` field is the source of
 /// truth).
-#[tauri::command]
-pub async fn resolve_mode_change(
-    state: State<'_, Arc<AppState>>,
+pub async fn resolve_mode_change_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_use_id: String,
     target_mode: String,
@@ -188,6 +198,18 @@ pub async fn resolve_mode_change(
         allow,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn resolve_mode_change(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    target_mode: String,
+    allow: bool,
+) -> Result<db::SessionRow, AppCommandError> {
+    resolve_mode_change_inner(&state, session_id, tool_use_id, target_mode, allow).await
 }
 
 /// Pure-Rust core of [`resolve_mode_change`] — extracted into a
@@ -475,12 +497,20 @@ pub(crate) struct SetSessionModeResult {
 /// The `pendingBySession` Pinia cache is a memoization layer
 /// that gets corrected (via this command) on every session
 /// switch.
-#[tauri::command]
-pub async fn get_pending_interaction(
-    state: State<'_, Arc<AppState>>,
+pub async fn get_pending_interaction_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Option<PendingInteractionEntry>, AppCommandError> {
     Ok(state.question_store.get_payload(&session_id).await)
+}
+
+#[tauri::command]
+pub async fn get_pending_interaction(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Option<PendingInteractionEntry>, AppCommandError> {
+    get_pending_interaction_inner(&state, session_id).await
 }
 
 /// Legacy IPC shim (back-compat). Returns just the
@@ -491,13 +521,21 @@ pub async fn get_pending_interaction(
 /// `get_pending_interaction`). New code should use
 /// `get_pending_interaction`; this shim is kept so pre-unified
 /// callers don't break.
-#[tauri::command]
-#[deprecated(note = "use get_pending_interaction instead")]
-pub async fn get_pending_question(
-    state: State<'_, Arc<AppState>>,
+pub async fn get_pending_question_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
     Ok(state.question_store.get_question_payload(&session_id).await)
+}
+
+#[tauri::command]
+#[deprecated(note = "use get_pending_interaction instead")]
+pub async fn get_pending_question(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
+    get_pending_question_inner(&state, session_id).await
 }
 
 /// Reload a session row by id; the thin wrapper around
@@ -569,9 +607,8 @@ async fn load_session_row(
 /// The `session_id` arg targets the audit + DB writes (the
 /// `set_task_state` call's project is resolved off the session
 /// row, which we read with `db::load_session`).
-#[tauri::command]
-pub async fn resolve_task_state_transition(
-    state: State<'_, Arc<AppState>>,
+pub async fn resolve_task_state_transition_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_use_id: String,
     target_state: String,
@@ -592,6 +629,19 @@ pub async fn resolve_task_state_transition(
         project_path.as_deref(),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn resolve_task_state_transition(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_use_id: String,
+    target_state: String,
+    slug: String,
+    allow: bool,
+) -> Result<db::SessionRow, AppCommandError> {
+    resolve_task_state_transition_inner(&state, session_id, tool_use_id, target_state, slug, allow).await
 }
 
 /// Pure-Rust core of [`resolve_task_state_transition`].
@@ -864,7 +914,7 @@ async fn record_state_transition_audit(
 /// `Err(InvalidRequest)` if the session has no project loaded
 /// (e.g. orphan session).
 async fn state_to_project_path(
-    state: &State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
     session_id: &str,
 ) -> Result<Option<std::path::PathBuf>, AppCommandError> {
     let loaded = db::load_session(&state.db, session_id)

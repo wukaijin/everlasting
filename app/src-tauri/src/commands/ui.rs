@@ -53,6 +53,7 @@ use tauri::State;
 
 use crate::agent::permissions::record_ui_diff_applied_audit;
 use crate::db;
+use crate::error::AppCommandError;
 use crate::projects::boundary::assert_within_root;
 use crate::state::AppState;
 
@@ -97,12 +98,18 @@ pub struct ApplyUiDiffFile {
 /// Only standard unified diffs with `---`/`+++` headers are accepted;
 /// the DiffPrimitive apply button is already disabled for headerless
 /// raw-fallback fragments, so this is defense-in-depth.
-#[tauri::command]
-pub async fn apply_ui_diff(
-    state: State<'_, Arc<AppState>>,
+/// Phase 2.2 `_inner` (Q0): shared business logic, callable from
+/// the Tauri command wrapper below + the axum route handler in
+/// `daemon::routes::ui`. Returns `ApplyUiDiffResult` (NOT the raw
+/// `Result<_, String>` of the Tauri command) so the axum side can
+/// surface structured errors via `AppCommandError` → `IntoResponse`.
+/// The Tauri wrapper preserves the `Result<_, String>` shape for
+/// backward compatibility with the existing frontend IPC contract.
+pub async fn apply_ui_diff_inner(
+    state: &Arc<AppState>,
     session_id: String,
     diff_text: String,
-) -> Result<ApplyUiDiffResult, String> {
+) -> Result<ApplyUiDiffResult, AppCommandError> {
     // 1. Empty / whitespace-only → kind=empty, fast-fail.
     if diff_text.trim().is_empty() {
         return Ok(ApplyUiDiffResult {
@@ -260,6 +267,25 @@ pub async fn apply_ui_diff(
         kind: None,
         error: None,
     })
+}
+
+#[tauri::command]
+pub async fn apply_ui_diff(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    diff_text: String,
+) -> Result<ApplyUiDiffResult, String> {
+    // Phase 2.2: delegate to `apply_ui_diff_inner`. The Tauri
+    // command keeps the legacy `Result<_, String>` signature
+    // (frontend contract); the inner returns the structured
+    // `ApplyUiDiffResult` so the daemon route handler can surface
+    // structured errors. `apply_ui_diff_inner` never returns
+    // `Err(AppCommandError)` today (every failure path is encoded
+    // as `Ok(ApplyUiDiffResult { ok: false, kind, error })`), so
+    // the `map_err` here is defense-in-depth.
+    apply_ui_diff_inner(&state, session_id, diff_text)
+        .await
+        .map_err(|e| e.message)
 }
 
 #[cfg(test)]

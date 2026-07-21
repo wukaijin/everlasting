@@ -7,7 +7,8 @@
 //!   [`update_project_name`] / [`hide_project`] / [`unhide_project`]
 //!   — Settings panel CRUD.
 //! - [`pick_project_dir`] — native directory picker for the
-//!   "Add Project" flow.
+//!   "Add Project" flow (Tauri-only; browser-side UX degradation
+//!   lands in P2.4 per PRD R10).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,15 +26,17 @@ use crate::state::AppState;
 /// "recently hidden" list used by the empty-state panel. The
 /// default (`hidden: false` or `filter = null`) is the main Tab
 /// bar.
-#[derive(Serialize, Clone, Deserialize)]
+#[derive(Serialize, Clone, Deserialize, Debug)]
 pub struct ListProjectsFilter {
     #[serde(default)]
     pub hidden: Option<bool>,
 }
 
-#[tauri::command]
-pub async fn list_projects(
-    state: State<'_, Arc<AppState>>,
+/// Phase 2.2 `_inner` (Q0): shared business logic. Callable from
+/// the Tauri command wrapper below + the axum route handler in
+/// `daemon::routes::projects`.
+pub async fn list_projects_inner(
+    state: &Arc<AppState>,
     filter: Option<ListProjectsFilter>,
 ) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
     let include_hidden = filter.as_ref().and_then(|f| f.hidden).unwrap_or(false);
@@ -43,8 +46,15 @@ pub async fn list_projects(
 }
 
 #[tauri::command]
-pub async fn list_hidden_projects(
+pub async fn list_projects(
     state: State<'_, Arc<AppState>>,
+    filter: Option<ListProjectsFilter>,
+) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
+    list_projects_inner(&state, filter).await
+}
+
+pub async fn list_hidden_projects_inner(
+    state: &Arc<AppState>,
 ) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
     db::list_hidden_projects(&state.db)
         .await
@@ -52,11 +62,35 @@ pub async fn list_hidden_projects(
 }
 
 #[tauri::command]
+pub async fn list_hidden_projects(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<projects::ProjectRow>, AppCommandError> {
+    list_hidden_projects_inner(&state).await
+}
+
+pub async fn create_project_inner(
+    state: &Arc<AppState>,
+    path: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::create_project(&state.db, &path)
+        .await
+        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
+}
+
+#[tauri::command]
 pub async fn create_project(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<projects::ProjectRow, AppCommandError> {
-    projects::store::create_project(&state.db, &path)
+    create_project_inner(&state, path).await
+}
+
+pub async fn update_project_path_inner(
+    state: &Arc<AppState>,
+    id: String,
+    new_path: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::update_project_path(&state.db, &id, &new_path)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
@@ -67,7 +101,15 @@ pub async fn update_project_path(
     id: String,
     new_path: String,
 ) -> Result<projects::ProjectRow, AppCommandError> {
-    projects::store::update_project_path(&state.db, &id, &new_path)
+    update_project_path_inner(&state, id, new_path).await
+}
+
+pub async fn update_project_name_inner(
+    state: &Arc<AppState>,
+    id: String,
+    new_name: String,
+) -> Result<projects::ProjectRow, AppCommandError> {
+    projects::store::update_project_name(&state.db, &id, &new_name)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
@@ -78,7 +120,14 @@ pub async fn update_project_name(
     id: String,
     new_name: String,
 ) -> Result<projects::ProjectRow, AppCommandError> {
-    projects::store::update_project_name(&state.db, &id, &new_name)
+    update_project_name_inner(&state, id, new_name).await
+}
+
+pub async fn hide_project_inner(
+    state: &Arc<AppState>,
+    id: String,
+) -> Result<(), AppCommandError> {
+    projects::store::hide_project(&state.db, &id)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
@@ -88,7 +137,14 @@ pub async fn hide_project(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), AppCommandError> {
-    projects::store::hide_project(&state.db, &id)
+    hide_project_inner(&state, id).await
+}
+
+pub async fn unhide_project_inner(
+    state: &Arc<AppState>,
+    id: String,
+) -> Result<(), AppCommandError> {
+    projects::store::unhide_project(&state.db, &id)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
 }
@@ -98,9 +154,7 @@ pub async fn unhide_project(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), AppCommandError> {
-    projects::store::unhide_project(&state.db, &id)
-        .await
-        .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))
+    unhide_project_inner(&state, id).await
 }
 
 /// Show a native directory picker. Returns `Some(path)` if the
@@ -112,6 +166,13 @@ pub async fn unhide_project(
 /// whether to surface the fallback input. We do not short-circuit
 /// on it here, because the dialog itself either succeeds or the
 /// frontend reads `None` and shows the manual input.
+///
+/// **Phase 2.2 note**: this command is Tauri-only — there is no
+/// `_inner` extraction because the entire body is the Tauri dialog
+/// API call. The daemon route handler (`daemon::routes::projects`)
+/// surfaces a "use manual path input" error per PRD R10 (browser
+/// UX degradation); P2.4 lands the unified `<ProjectDirPicker
+/// mode="auto">` abstraction.
 #[tauri::command]
 pub async fn pick_project_dir(
     app: AppHandle,

@@ -51,14 +51,22 @@ use crate::state::AppState;
 /// `#[allow(dead_code)]` for `_state: &State<'_, Arc<AppState>>`
 /// is NOT applied because the parameter is consumed by the
 /// Tauri framework even though we only touch `state.db`.
-#[tauri::command]
-pub async fn list_subagent_runs_by_session(
+pub async fn list_subagent_runs_by_session_inner(
     session_id: String,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, AppCommandError> {
     db::subagent_runs::list_runs_summary_by_session(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_subagent_runs_by_session failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_subagent_runs_by_session(
+
+    session_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, AppCommandError> {
+    list_subagent_runs_by_session_inner(session_id, &state).await
 }
 
 // ---------------------------------------------------------------------------
@@ -74,14 +82,22 @@ pub async fn list_subagent_runs_by_session(
 /// `transcript_truncated` — can be up to 4 MiB. The frontend's
 /// `subagentRuns.fetchRun` caches the result keyed by `runId`
 /// so opening the same drawer twice doesn't re-fetch.
-#[tauri::command]
-pub async fn get_subagent_run(
+pub async fn get_subagent_run_inner(
     run_id: String,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<Option<db::subagent_runs::SubagentRunRow>, AppCommandError> {
     db::subagent_runs::get_run(&state.db, &run_id)
         .await
         .map_err(|e| anyhow::anyhow!("get_subagent_run failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn get_subagent_run(
+
+    run_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<db::subagent_runs::SubagentRunRow>, AppCommandError> {
+    get_subagent_run_inner(run_id, &state).await
 }
 
 // ---------------------------------------------------------------------------
@@ -138,10 +154,9 @@ pub struct MergeWorkerResult {
     pub auto_attached_parent: bool,
 }
 
-#[tauri::command]
-pub async fn merge_worker_run(
+pub async fn merge_worker_run_inner(
     run_id: String,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<MergeWorkerResult, AppCommandError> {
     // Look up the run row → find parent session id + worktree
     // path. We need the parent session id to look up the
@@ -279,15 +294,32 @@ pub async fn merge_worker_run(
     }
 }
 
+#[tauri::command]
+pub async fn merge_worker_run(
+
+    run_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<MergeWorkerResult, AppCommandError> {
+    merge_worker_run_inner(run_id, &state).await
+}
+
 /// Discard a worker's preserved branch + worktree. See
 /// `tools::discard_worker` for the full contract (fail-fast on
 /// already-destroyed; no idempotency in MVP).
-#[tauri::command]
-pub async fn discard_worker_run(
+pub async fn discard_worker_run_inner(
     run_id: String,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<String, AppCommandError> {
     crate::tools::discard_worker::do_discard(&state.db, &run_id)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e).into())
+}
+
+#[tauri::command]
+pub async fn discard_worker_run(
+
+    run_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AppCommandError> {
+    discard_worker_run_inner(run_id, &state).await
 }

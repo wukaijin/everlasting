@@ -35,6 +35,15 @@ mod db;
 // `apply_ui_diff` IPC, not a standalone tool — the IPC handler does
 // the I/O, this module owns only the textual transformation.
 mod diff_apply;
+// Phase 2.2 (2026-07-21, task `07-20-remote-access-daemon-split`):
+// HTTP daemon stack — `pub` so the `everlasting-daemon` bin target
+// (a separate crate that depends on this library) can reach
+// `everlasting_lib::daemon::serve_daemon`. Inside the daemon module,
+// references to other top-level modules use `crate::xxx` paths, which
+// work because the daemon module is itself part of the lib crate
+// (the private `mod commands` etc. are visible to sibling modules
+// inside the same crate, just not to external consumers).
+pub mod daemon;
 mod error;
 mod files;
 mod git;

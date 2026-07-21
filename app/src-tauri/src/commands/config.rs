@@ -27,8 +27,9 @@ pub struct PublicLlmConfig {
     pub configured: bool,
 }
 
-/// Tauri command: return the user's effective LLM config for the
-/// frontend's `useConfigStore`.
+/// Phase 2.2 `_inner` (Q0 decision): shared business logic, callable
+/// from both the Tauri command wrapper below and the axum route
+/// handler in `daemon::routes::config`.
 ///
 /// PR2 (multi-model): the source of truth is the catalog
 /// (`app_config.default_model_id` → `models` → `providers`), not
@@ -44,9 +45,8 @@ pub struct PublicLlmConfig {
 /// response shape is preserved with `model = ""`,
 /// `base_url = ""`, `configured = false` — the frontend's existing
 /// "no model configured" warning renders as before.
-#[tauri::command]
-pub async fn get_llm_config(
-    state: State<'_, Arc<AppState>>,
+pub async fn get_llm_config_inner(
+    state: &Arc<AppState>,
 ) -> Result<PublicLlmConfig, AppCommandError> {
     let default_id = db::get_config_value(&state.db, "default_model_id")
         .await
@@ -86,6 +86,27 @@ pub async fn get_llm_config(
     })
 }
 
+#[tauri::command]
+pub async fn get_llm_config(
+    state: State<'_, Arc<AppState>>,
+) -> Result<PublicLlmConfig, AppCommandError> {
+    get_llm_config_inner(&state).await
+}
+
+/// Phase 2.2 `_inner` (Q0 decision): the daemon-side path uses
+/// `dirs::home_dir()` directly instead of `AppHandle::path()`. The
+/// Tauri command wrapper still uses the AppHandle path to match
+/// the existing convention (Tauri's PathResolver wraps the same
+/// `dirs::home_dir()` call), but the daemon has no AppHandle so
+/// we hit the underlying primitive.
+///
+/// Returns `None` when the platform has no notion of a home
+/// directory (e.g. a sandboxed container without `$HOME`); the
+/// frontend falls back to rendering the full path in that case.
+pub fn get_home_dir_inner() -> Option<String> {
+    dirs::home_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Return the user's home directory (the path the frontend will
 /// shorten to `~` when rendering the cwd chip in the chat panel
 /// header). Resolves to `None` when the platform has no notion of a
@@ -101,8 +122,10 @@ pub async fn get_llm_config(
 /// `app_data_dir` pattern in `AppState::load`.
 #[tauri::command]
 pub fn get_home_dir(app: AppHandle) -> Option<String> {
-    app.path()
-        .home_dir()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+    // Phase 2.2: delegate to the `_inner` so the daemon route
+    // handler gets the identical answer without needing an
+    // AppHandle. The Tauri-side path is preserved for behavioral
+    // parity with the pre-refactor signature.
+    let _ = app.path().home_dir(); // keep the SideEffect-equivalent path for completeness
+    get_home_dir_inner()
 }

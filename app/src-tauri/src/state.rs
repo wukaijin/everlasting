@@ -200,10 +200,19 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Bootstrap app state. Called from `lib.rs::run`'s setup
-    /// closure via `tauri::async_runtime::block_on`.
+    /// Bootstrap app state from a Tauri `AppHandle`. Called from
+    /// `lib.rs::run`'s setup closure via `tauri::async_runtime::block_on`.
     ///
-    /// Responsibilities:
+    /// Phase 2.1 (2026-07-21, task `07-20-remote-access-daemon-split`):
+    /// this is now a thin Tauri-side wrapper that resolves
+    /// `app_data_dir` from the `AppHandle`'s `PathResolver` and
+    /// delegates to [`AppState::load_inner`]. The wrapper preserves
+    /// the existing `projects:refreshed` emit path (P1 §3.3 closure)
+    /// by passing `Some(app.clone())` so the fire-and-forget backfill
+    /// spawn can call `app.emit(...)` when stale project rows are
+    /// re-probed.
+    ///
+    /// Responsibilities (delegated to `load_inner`):
     /// 1. Load the env-derived LLM config (cold-start fallback).
     /// 2. Open the SQLite pool + run migrations.
     /// 3. Spawn the git-metadata backfill task for pre-PR2 projects.
@@ -213,6 +222,47 @@ impl AppState {
     ///    (possibly empty) so `AppState::load` doesn't unwind on
     ///    a single bad row.
     pub async fn load(app: &AppHandle) -> Self {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .expect("failed to resolve app_data_dir");
+        Self::load_inner(app_data_dir, Some(app.clone())).await
+    }
+
+    /// Daemon-entry bootstrap (Phase 2.1, 2026-07-21). Used by the
+    /// `bin/everlasting-daemon.rs` (P2.2) where no Tauri
+    /// `AppHandle` exists. Equivalent to [`AppState::load`] minus the
+    /// `projects:refreshed` Tauri emit — the daemon path will get
+    /// its own SSE-based system-event sink in P2.3 per design.md §2.2
+    /// / Q3 decision (single global `/api/v1/stream` + event
+    /// dispatch table). For now the backfill spawn still runs (so
+    /// the DB row updates land), but the frontend notification is
+    /// skipped because there's no AppHandle to carry the emit.
+    ///
+    /// `#[allow(dead_code)]`: the first production caller lands in
+    /// P2.2 (`src/bin/everlasting-daemon.rs`). Exercised today only
+    /// by `tests::state_load_path_consistency`.
+    #[allow(dead_code)]
+    pub async fn load_from_dir(app_data_dir: std::path::PathBuf) -> Self {
+        Self::load_inner(app_data_dir, None).await
+    }
+
+    /// Shared bootstrap. `app: Option<AppHandle>` carries the Tauri
+    /// handle for the `projects:refreshed` emit (P1 §3.3 closure).
+    /// `None` is the daemon entry — backfill spawn still runs (DB
+    /// row updates land) but the Tauri emit is skipped (Phase 2.3
+    /// will replace it with an SSE-based system-event sink; see
+    /// design.md §2.2 / Q3 / R6).
+    ///
+    /// Path-consistency invariant (Phase 2.1 A5): both entry points
+    /// share this single DB-path derivation, so
+    /// `load(AppHandle).app_data_dir == load_from_dir(p).app_data_dir`
+    /// whenever `p == app.path().app_data_dir().unwrap()`. Enforced
+    /// by construction + verified by `tests::state_load_path_consistency`.
+    async fn load_inner(
+        app_data_dir: std::path::PathBuf,
+        app: Option<AppHandle>,
+    ) -> Self {
         // Cold-start env-derived config is only consulted by the
         // `get_llm_config` IPC fallback and the (currently unused)
         // "no-catalog" code path. The chat command reads from the
@@ -236,11 +286,7 @@ impl AppState {
             "LLM config loaded"
         );
 
-        // Resolve app_data_dir, then open SQLite there.
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .expect("failed to resolve app_data_dir");
+// Open SQLite at `<app_data_dir>/everlasting.db`.
         // 2026-07-01 follow-up: 让受信 allow-list 包含动态段
         // `<app_data_dir>/worktrees/**`(session + worker worktree root),
         // 见 `permissions::sensitive::init_trusted_external`。在 SQL /
@@ -305,20 +351,37 @@ impl AppState {
         // Startup batch backfill of pre-PR2 project rows. The fix:
         // spawn a fire-and-forget task that re-probes the git
         // status of every stale project, writes the result, and
-        // emits a Tauri event so the frontend can refresh its
-        // in-memory list. The spawn happens AFTER migrations run
-        // and is `tauri::async_runtime::spawn`-based.
+        // (when an AppHandle is available) emits a Tauri event so
+        // the frontend can refresh its in-memory list. The spawn
+        // happens AFTER migrations run and is
+        // `tauri::async_runtime::spawn`-based.
+        //
+        // Phase 2.1 (2026-07-21): the `app: Option<AppHandle>`
+        // shape carries the P1 §3.3 emit closure. Tauri path
+        // (`Some`) preserves the existing `projects:refreshed`
+        // emit; daemon path (`None`) skips the emit — Phase 2.3
+        // will re-wire it through the SSE single-global stream
+        // (design.md §2.2 / Q3 / R6).
         let backfill_pool = db.clone();
-        let backfill_app = app.clone();
         tauri::async_runtime::spawn(async move {
             match crate::projects::store::batch_reprobe_git_metadata(&backfill_pool).await {
                 Ok(updated) => {
                     if updated > 0 {
-                        if let Err(e) = backfill_app.emit("projects:refreshed", updated) {
-                            tracing::warn!(
-                                error = %e,
+                        if let Some(app) = app.as_ref() {
+                            if let Err(e) = app.emit("projects:refreshed", updated) {
+                                tracing::warn!(
+                                    error = %e,
+                                    updated,
+                                    "emit projects:refreshed failed"
+                                );
+                            }
+                        } else {
+                            // Daemon path: DB rows updated, no
+                            // AppHandle-carried emit available.
+                            // SSE re-wire lands in P2.3.
+                            tracing::debug!(
                                 updated,
-                                "emit projects:refreshed failed"
+                                "projects:refreshed emit skipped (no AppHandle; daemon path)"
                             );
                         }
                     }
@@ -442,6 +505,11 @@ async fn build_provider_catalog(db: &SqlitePool) -> ProviderCatalog {
     tracing::info!(catalog_size = catalog.len(), "provider catalog built");
     catalog
 }
+
+// ---------------------------------------------------------------------------
+// Tests (Phase 2.1 A5 — 2026-07-21, task `07-20-remote-access-daemon-split`)
+// See the single `mod tests` block at the bottom of this file.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // CancellationGuard
@@ -707,5 +775,98 @@ impl ChatEventSink for AppHandleSink {
         {
             tracing::warn!(error = %e, "AppHandleSink: task:state:transition:request emit failed");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests (Phase 2.1 A5 — 2026-07-21, task `07-20-remote-access-daemon-split`)
+//
+// Path-consistency invariant: `AppState::load(AppHandle)` and
+// `AppState::load_from_dir(PathBuf)` must produce identical
+// `app_data_dir` + `db_path` derivations whenever the input PathBuf
+// equals `app.path().app_data_dir().unwrap()`. The invariant is
+// enforced structurally — the `AppHandle` wrapper is a 3-line
+// delegation that resolves `app_data_dir` and forwards to the shared
+// private `load_inner`. The tests below exercise the `PathBuf` entry
+// end-to-end (real tempdir + real SqlitePool + real migrations) so
+// any drift in the inner DB-path derivation would surface here. The
+// `AppHandle` half cannot be exercised without `tauri::test::mock_app`
+// (which this project doesn't use, per the convention documented in
+// `commands/question.rs`), so its correctness is verified by code
+// review + the path round-trip assertion on `state.app_data_dir`.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P2.1 A5: `load_from_dir(PathBuf)` produces a state whose
+    /// `app_data_dir` equals the input, whose SQLite file lives at
+    /// `<input>/everlasting.db`, and whose migrations have been
+    /// applied (the `sessions` table is queryable).
+    ///
+    /// This is the `PathBuf`-half of the path-consistency
+    /// invariant. The `AppHandle`-half is verified structurally:
+    /// `AppState::load(app)` resolves `app_data_dir` via
+    /// `app.path().app_data_dir().unwrap()` and forwards to the
+    /// same private `load_inner`, so both entry points share a
+    /// single DB-path derivation.
+    ///
+    /// `multi_thread` flavor matches `tests_cancellation.rs` — the
+    /// fire-and-forget backfill spawn inside `load_inner` calls
+    /// `tauri::async_runtime::spawn`, which borrows the current
+    /// Tokio runtime via the Tauri shim.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn state_load_path_consistency() {
+        let tmp = tempfile::tempdir().expect("failed to create tempdir");
+        let data_dir = tmp.path().to_path_buf();
+        let expected_db_path = data_dir.join("everlasting.db");
+
+        let state = AppState::load_from_dir(data_dir.clone()).await;
+
+        // 1. `app_data_dir` round-trips — same value the daemon
+        //    entry was invoked with. (The Tauri wrapper forwards
+        //    `app.path().app_data_dir().unwrap()` into the same
+        //    `load_inner`, so this assertion holds for both
+        //    entry points whenever they share the same source path.)
+        assert_eq!(
+            state.app_data_dir, data_dir,
+            "AppState.app_data_dir must equal the input PathBuf"
+        );
+
+        // 2. SQLite file materialized at the expected path. The
+        //    `init_pool` call inside `load_inner` opens (or
+        //    creates) `<data_dir>/everlasting.db`, so this file
+        //    must exist once `load_from_dir` returns.
+        assert!(
+            expected_db_path.try_exists().unwrap_or(false),
+            "expected sqlite file at {}, not found",
+            expected_db_path.display()
+        );
+
+        // 3. Migrations have been applied — the `sessions` table
+        //    exists (it's created by `run_migrations` inside
+        //    `load_inner`). A failure here would mean `load_inner`
+        //    returned before migrations landed, which would break
+        //    every downstream consumer of `AppState.db`.
+        let table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .expect("sqlite_master query should succeed");
+        assert!(
+            table_count >= 1,
+            "sessions table missing — migrations did not run"
+        );
+
+        // 4. `home_dir` consistency note: `home_dir` is NOT stored
+        //    on `AppState` (it's resolved per-IPC via
+        //    `app.path().home_dir()` — see `commands::config::get_home_dir`).
+        //    The "home_dir" half of the path-consistency invariant
+        //    is therefore trivially satisfied for the `PathBuf`
+        //    entry (no resolution happens at all inside
+        //    `load_inner`), and the `AppHandle` half remains the
+        //    Tauri wrapper's responsibility at IPC time.
     }
 }

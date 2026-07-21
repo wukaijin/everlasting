@@ -88,6 +88,13 @@ mod truncate_summary;
 // `sink.rs` can reach them via `super::super::arm_test_collector` /
 // `super::super::clear_test_collector` without exposing the
 // `event_sink` module itself.
+//
+// 2026-07-21 (P2.2 follow-up): the `pub(crate) use` is gated under
+// `cfg(test)` because the only consumers are the `#[cfg(test)]`
+// blocks in `sink.rs` (`subagent_buffer_sink_emits_ipc_event_per_emit`
+// and friends). In production builds the import triggered an
+// `unused_imports` warning.
+#[cfg(test)]
 pub(crate) use event_sink::{arm_test_collector, clear_test_collector};
 pub use event_sink::{
     AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubagentSink,

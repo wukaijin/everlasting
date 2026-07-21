@@ -94,10 +94,9 @@ pub struct SubagentWithModelRow {
 /// should pass `useChatStore.currentCwd` (canonicalized by the
 /// backend via the existing `resolve_project_path` helper in
 /// `panel.rs`).
-#[tauri::command]
-pub async fn list_subagents_with_model(
+pub async fn list_subagents_with_model_inner(
     project_path: String,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<Vec<SubagentWithModelRow>, AppCommandError> {
     // Step 1: scan the cache for builtin + user + project.
     let loaded = state.subagent_cache.list(&project_path).await;
@@ -155,6 +154,15 @@ pub async fn list_subagents_with_model(
     Ok(out)
 }
 
+#[tauri::command]
+pub async fn list_subagents_with_model(
+
+    project_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<SubagentWithModelRow>, AppCommandError> {
+    list_subagents_with_model_inner(project_path, &state).await
+}
+
 // ---------------------------------------------------------------------------
 // set_subagent_model — write-side, dispatched by `source`
 // ---------------------------------------------------------------------------
@@ -175,13 +183,12 @@ pub async fn list_subagents_with_model(
 /// agent, so partial failures are bounded to the agent + the
 /// current call — the rest of the table / filesystem is
 /// untouched).
-#[tauri::command]
-pub async fn set_subagent_model(
+pub async fn set_subagent_model_inner(
     name: String,
     source: String,
     project_path: String,
     model_id: Option<String>,
-    state: State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
 ) -> Result<SubagentWithModelRow, AppCommandError> {
     // Validate the agent name first (cheap; avoids DB / IO
     // round-trips on obvious garbage).
@@ -322,4 +329,16 @@ pub async fn set_subagent_model(
         has_db_override: db_override.is_some(),
         writable: !matches!(after.source, SubagentSource::Builtin),
     })
+}
+
+#[tauri::command]
+pub async fn set_subagent_model(
+
+    name: String,
+    source: String,
+    project_path: String,
+    model_id: Option<String>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<SubagentWithModelRow, AppCommandError> {
+    set_subagent_model_inner(name, source, project_path, model_id, &state).await
 }

@@ -33,9 +33,8 @@ use crate::state::AppState;
 /// layers). The frontend calls this on memory-preview panel
 /// mount. Freshness is handled by the mtime fence in
 /// `load_for_session` — every call re-checks each file's `mtime`.
-#[tauri::command]
-pub async fn read_memory_layers(
-    state: State<'_, Arc<AppState>>,
+pub async fn read_memory_layers_inner(
+    state: &Arc<AppState>,
     project_id: String,
 ) -> Result<Vec<MemoryLayerInfo>, AppCommandError> {
     let project = match db::get_project(&state.db, &project_id).await {
@@ -55,6 +54,15 @@ pub async fn read_memory_layers(
     Ok(layers.iter().map(MemoryLayerInfo::from).collect())
 }
 
+#[tauri::command]
+pub async fn read_memory_layers(
+
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<MemoryLayerInfo>, AppCommandError> {
+    read_memory_layers_inner(&state, project_id).await
+}
+
 /// Read the body of a single memory file. `path` must be one of
 /// the 4 fixed file paths the loader knows about (i.e. it was
 /// returned by `read_memory_layers`). Arbitrary paths are
@@ -65,9 +73,8 @@ pub async fn read_memory_layers(
 /// project layer, the resolved path must match the project's
 /// `CLAUDE.md` / `AGENTS.md`. We resolve via `resolve_one`
 /// which uses the project path as the source of truth.
-#[tauri::command]
-pub async fn read_memory_content(
-    state: State<'_, Arc<AppState>>,
+pub async fn read_memory_content_inner(
+    state: &Arc<AppState>,
     project_id: String,
     path: String,
 ) -> Result<String, AppCommandError> {
@@ -126,6 +133,16 @@ pub async fn read_memory_content(
     })
 }
 
+#[tauri::command]
+pub async fn read_memory_content(
+
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+    path: String,
+) -> Result<String, AppCommandError> {
+    read_memory_content_inner(&state, project_id, path).await
+}
+
 /// Spawn the user's editor to edit a memory file. The
 /// resolution chain is:
 /// 1. `$VISUAL` (preferred — vim, emacs, vscode, etc.)
@@ -139,9 +156,8 @@ pub async fn read_memory_content(
 /// As with `read_memory_content`, the path must match one of
 /// the 4 known memory files. We refuse to open arbitrary
 /// paths.
-#[tauri::command]
-pub async fn open_memory_in_editor(
-    state: State<'_, Arc<AppState>>,
+pub async fn open_memory_in_editor_inner(
+    state: &Arc<AppState>,
     project_id: String,
     path: String,
 ) -> Result<(), AppCommandError> {
@@ -241,6 +257,16 @@ pub async fn open_memory_in_editor(
     }
 }
 
+#[tauri::command]
+pub async fn open_memory_in_editor(
+
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+    path: String,
+) -> Result<(), AppCommandError> {
+    open_memory_in_editor_inner(&state, project_id, path).await
+}
+
 /// Best-effort OS-level "open with default app" command. We
 /// never block on this — the spawn is fire-and-forget.
 #[cfg(target_os = "linux")]
@@ -288,9 +314,8 @@ pub(crate) fn _ensure_used_for_test(_c: &MemoryCache) {}
 /// Project isolation: a project-scope memory in another project
 /// is NEVER returned. The user-scope memories are global by
 /// design (cross-project experience).
-#[tauri::command]
-pub async fn list_autonomous_memories(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_autonomous_memories_inner(
+    state: &Arc<AppState>,
     project_id: String,
 ) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
     // Verify the project exists (defensive — the IPC is
@@ -322,6 +347,15 @@ pub async fn list_autonomous_memories(
         .map_err(|e| anyhow::anyhow!("list_autonomous_memories: query failed: {}", e).into())
 }
 
+#[tauri::command]
+pub async fn list_autonomous_memories(
+
+    state: State<'_, Arc<AppState>>,
+    project_id: String,
+) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
+    list_autonomous_memories_inner(&state, project_id).await
+}
+
 /// Delete a runtime memory by its `memory_id` UUID. Best-effort
 /// idempotent: deleting an already-deleted memory returns Ok(0).
 ///
@@ -332,14 +366,22 @@ pub async fn list_autonomous_memories(
 /// to the current project (via `list_autonomous_memories`), so
 /// the user can only see + click delete on memories they're
 /// allowed to manage.
-#[tauri::command]
-pub async fn delete_autonomous_memory(
-    state: State<'_, Arc<AppState>>,
+pub async fn delete_autonomous_memory_inner(
+    state: &Arc<AppState>,
     memory_id: String,
 ) -> Result<u64, AppCommandError> {
     crate::db::memories::delete_memory(&state.db, &memory_id)
         .await
         .map_err(|e| anyhow::anyhow!("delete_autonomous_memory: delete failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn delete_autonomous_memory(
+
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+) -> Result<u64, AppCommandError> {
+    delete_autonomous_memory_inner(&state, memory_id).await
 }
 
 // ---------------------------------------------------------------------------
@@ -376,9 +418,8 @@ pub async fn delete_autonomous_memory(
 /// - `StatusTransitionError::NotFound` — the `memory_id` doesn't
 ///   exist (likely a race with `delete_autonomous_memory`).
 /// - DB error → `ErrorCategory::Server`.
-#[tauri::command]
-pub async fn update_autonomous_memory_status(
-    state: State<'_, Arc<AppState>>,
+pub async fn update_autonomous_memory_status_inner(
+    state: &Arc<AppState>,
     memory_id: String,
     new_status: String,
     demoted_reason: Option<String>,
@@ -399,6 +440,17 @@ pub async fn update_autonomous_memory_status(
         })
 }
 
+#[tauri::command]
+pub async fn update_autonomous_memory_status(
+
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+    new_status: String,
+    demoted_reason: Option<String>,
+) -> Result<(), AppCommandError> {
+    update_autonomous_memory_status_inner(&state, memory_id, new_status, demoted_reason).await
+}
+
 /// User-initiated edit of a memory's `title` + `content` (R4 /
 /// AC5). Wraps [`crate::db::memories::update_memory`] which
 /// re-applies the same write safety net as `insert_memory`
@@ -414,9 +466,8 @@ pub async fn update_autonomous_memory_status(
 /// - `MemoryUpdateError::NotFound` — the `memory_id` doesn't
 ///   exist.
 /// - `MemoryUpdateError::Db` — generic DB error.
-#[tauri::command]
-pub async fn update_autonomous_memory(
-    state: State<'_, Arc<AppState>>,
+pub async fn update_autonomous_memory_inner(
+    state: &Arc<AppState>,
     memory_id: String,
     title: String,
     content: String,
@@ -424,4 +475,15 @@ pub async fn update_autonomous_memory(
     crate::db::memories::update_memory(&state.db, &memory_id, &title, &content)
         .await
         .map_err(|e| anyhow::anyhow!("update_autonomous_memory: update failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn update_autonomous_memory(
+
+    state: State<'_, Arc<AppState>>,
+    memory_id: String,
+    title: String,
+    content: String,
+) -> Result<crate::db::memories::MemoryRow, AppCommandError> {
+    update_autonomous_memory_inner(&state, memory_id, title, content).await
 }

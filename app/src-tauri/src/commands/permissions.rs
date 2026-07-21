@@ -89,9 +89,8 @@ pub fn is_running_as_root() -> bool {
 ///    - `mode_changed` (every call)
 ///    - `yolo_entered` (only when entering Yolo)
 ///    - `yolo_exited` (only when leaving Yolo)
-#[tauri::command]
-pub async fn set_session_mode(
-    state: State<'_, Arc<AppState>>,
+pub async fn set_session_mode_inner(
+    state: &Arc<AppState>,
     session_id: String,
     mode: String,
 ) -> Result<db::SessionRow, AppCommandError> {
@@ -115,6 +114,16 @@ pub async fn set_session_mode(
     Ok(result.session)
 }
 
+#[tauri::command]
+pub async fn set_session_mode(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    mode: String,
+) -> Result<db::SessionRow, AppCommandError> {
+    set_session_mode_inner(&state, session_id, mode).await
+}
+
 // ---------------------------------------------------------------------------
 // permission_response — IPC bridge for the Tier 3 await
 // ---------------------------------------------------------------------------
@@ -131,10 +140,15 @@ pub async fn set_session_mode(
 /// `rid`s return `Ok(false)` (the IPC is best-effort — a
 /// duplicate or late response is a benign no-op, NOT an error,
 /// per audit §3.2).
-#[tauri::command]
-pub async fn permission_response(
-    _app: AppHandle,
-    state: State<'_, Arc<AppState>>,
+///
+/// Phase 2.2 (2026-07-21, task `07-20-remote-access-daemon-split`):
+/// the body lives in `permission_response_inner` so the daemon
+/// axum handler (`daemon::routes::permissions::permission_response`)
+/// can call the same logic without going through the Tauri
+/// `#[tauri::command]` wrapper. The Q0 decision (design.md §5
+/// "handler vs service") keeps the business logic single-sourced.
+pub async fn permission_response_inner(
+    state: &Arc<AppState>,
     rid: String,
     decision: String,
     reason: Option<String>,
@@ -167,6 +181,17 @@ pub async fn permission_response(
     Ok(resolved)
 }
 
+#[tauri::command]
+pub async fn permission_response(
+    _app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    rid: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<bool, AppCommandError> {
+    permission_response_inner(&state, rid, decision, reason).await
+}
+
 // ---------------------------------------------------------------------------
 // grant_tool_permission — direct "remember this tool" write
 // ---------------------------------------------------------------------------
@@ -190,10 +215,8 @@ pub async fn permission_response(
 /// Passing a value that doesn't match the constraint is
 /// reported as a `db::grant_tool_permission` error (the IPC
 /// wraps it as `Err`).
-#[tauri::command]
-#[allow(dead_code)]
-pub async fn grant_tool_permission(
-    state: State<'_, Arc<AppState>>,
+pub async fn grant_tool_permission_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_name: String,
     match_kind: Option<String>,
@@ -242,6 +265,19 @@ pub async fn grant_tool_permission(
     }
 }
 
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn grant_tool_permission(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_name: String,
+    match_kind: Option<String>,
+    match_value: Option<String>,
+) -> Result<(), AppCommandError> {
+    grant_tool_permission_inner(&state, session_id, tool_name, match_kind, match_value).await
+}
+
 // ---------------------------------------------------------------------------
 // Permission-grant management UI (task 07-01-permission-grant-list-ui)
 // ---------------------------------------------------------------------------
@@ -253,14 +289,22 @@ pub async fn grant_tool_permission(
 /// PK row without touching sibling grants. Empty / missing session
 /// returns an empty `Vec` (NOT an error) — the modal renders its
 /// empty-state placeholder.
-#[tauri::command]
-pub async fn list_session_tool_permissions(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_session_tool_permissions_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Vec<db::PermissionGrantRow>, AppCommandError> {
     db::list_tool_permissions(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_session_tool_permissions failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_session_tool_permissions(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::PermissionGrantRow>, AppCommandError> {
+    list_session_tool_permissions_inner(&state, session_id).await
 }
 
 /// Revoke ONE "always allow" row by its full PK. `match_value` is
@@ -270,9 +314,8 @@ pub async fn list_session_tool_permissions(
 /// reach the DB as `IS NULL`, not as a bound NULL parameter (which
 /// would silently match nothing). `match_kind` is validated to keep
 /// parity with `grant_tool_permission`.
-#[tauri::command]
-pub async fn revoke_tool_permission(
-    state: State<'_, Arc<AppState>>,
+pub async fn revoke_tool_permission_inner(
+    state: &Arc<AppState>,
     session_id: String,
     tool_name: String,
     match_kind: String,
@@ -301,6 +344,18 @@ pub async fn revoke_tool_permission(
     .map_err(|e| anyhow::anyhow!("revoke_tool_permission failed: {}", e).into())
 }
 
+#[tauri::command]
+pub async fn revoke_tool_permission(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    tool_name: String,
+    match_kind: String,
+    match_value: Option<String>,
+) -> Result<(), AppCommandError> {
+    revoke_tool_permission_inner(&state, session_id, tool_name, match_kind, match_value).await
+}
+
 // ---------------------------------------------------------------------------
 // C4 (Audit-log query UI, 2026-06-14) — list_session_audit_events
 // ---------------------------------------------------------------------------
@@ -318,14 +373,22 @@ pub async fn revoke_tool_permission(
 /// `idx_session_audit_events_session_ts` index keeps the
 /// `ORDER BY ts DESC` cheap; >500-event sessions are a follow-up
 /// optimization (PRD "Edge Cases" TODO).
-#[tauri::command]
-pub async fn list_session_audit_events(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_session_audit_events_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Vec<db::AuditEventRow>, AppCommandError> {
     db::list_audit_events(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("list_session_audit_events failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn list_session_audit_events(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::AuditEventRow>, AppCommandError> {
+    list_session_audit_events_inner(&state, session_id).await
 }
 
 // E2 (harness trace pipeline, 2026-07-14) — list_turn_traces +
@@ -336,9 +399,8 @@ pub async fn list_session_audit_events(
 /// (chronological). Wired to the trace viewer's 回看 mode. Empty /
 /// missing session returns an empty `Vec` (NOT an error). Any DB
 /// error is wrapped as `AppCommandError` for the frontend's toast.
-#[tauri::command]
-pub async fn list_turn_traces(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_turn_traces_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
     db::trace::list_turn_traces(&state.db, &session_id)
@@ -346,16 +408,33 @@ pub async fn list_turn_traces(
         .map_err(|e| anyhow::anyhow!("list_turn_traces failed: {}", e).into())
 }
 
+#[tauri::command]
+pub async fn list_turn_traces(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
+    list_turn_traces_inner(&state, session_id).await
+}
+
 /// Delete all `turn_trace` rows for `session_id`. Wired to the trace
 /// viewer's "清理" button. The `ON DELETE CASCADE` on the `session_id`
 /// FK also fires this automatically when a session is deleted, so
 /// this command is for the manual cleanup button only.
-#[tauri::command]
-pub async fn clear_session_trace(
-    state: State<'_, Arc<AppState>>,
+pub async fn clear_session_trace_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<(), AppCommandError> {
     db::trace::clear_session_trace(&state.db, &session_id)
         .await
         .map_err(|e| anyhow::anyhow!("clear_session_trace failed: {}", e).into())
+}
+
+#[tauri::command]
+pub async fn clear_session_trace(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), AppCommandError> {
+    clear_session_trace_inner(&state, session_id).await
 }

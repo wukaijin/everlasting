@@ -150,6 +150,19 @@ pub async fn create_task(
     slug: String,
     parent: Option<String>,
 ) -> Result<TaskJson, AppCommandError> {
+    create_task_inner(&state, project_id, title, slug, parent).await
+}
+
+/// Phase 2.2 `_inner` (Q0): shared business logic, callable from
+/// the Tauri command wrapper above + the axum route handler in
+/// `daemon::routes::task`.
+pub async fn create_task_inner(
+    state: &Arc<AppState>,
+    project_id: String,
+    title: String,
+    slug: String,
+    parent: Option<String>,
+) -> Result<TaskJson, AppCommandError> {
     // Project lookup mirrors `create_session` (commands/
     // sessions.rs:59) — defensive gate against stray
     // frontend IPC calls with stale project ids. Stray
@@ -218,6 +231,18 @@ pub async fn create_task(
 #[tauri::command]
 pub async fn archive_task(
     state: State<'_, Arc<AppState>>,
+    project_id: String,
+    slug: String,
+    no_commit: bool,
+) -> Result<TaskJson, AppCommandError> {
+    archive_task_inner(&state, project_id, slug, no_commit).await
+}
+
+/// Phase 2.2 `_inner` (Q0): shared business logic, callable from
+/// the Tauri command wrapper above + the axum route handler in
+/// `daemon::routes::task`.
+pub async fn archive_task_inner(
+    state: &Arc<AppState>,
     project_id: String,
     slug: String,
     no_commit: bool,

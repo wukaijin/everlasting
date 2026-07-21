@@ -92,9 +92,8 @@ pub struct SubagentInfo {
 /// `SubagentCache` (project > user > builtin precedence, mtime-fenced
 /// — a freshly-written `.md` is picked up on the next chat turn).
 /// Output order matches `definition_with_cache`'s enum (loader-sorted).
-#[tauri::command]
-pub async fn list_subagents(
-    state: State<'_, Arc<AppState>>,
+pub async fn list_subagents_inner(
+    state: &Arc<AppState>,
     project_id: Option<String>,
 ) -> Result<Vec<SubagentInfo>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
@@ -112,8 +111,16 @@ pub async fn list_subagents(
 }
 
 #[tauri::command]
-pub async fn list_panel_items(
+pub async fn list_subagents(
+
     state: State<'_, Arc<AppState>>,
+    project_id: Option<String>,
+) -> Result<Vec<SubagentInfo>, AppCommandError> {
+    list_subagents_inner(&state, project_id).await
+}
+
+pub async fn list_panel_items_inner(
+    state: &Arc<AppState>,
     project_id: Option<String>,
 ) -> Result<Vec<PanelItem>, AppCommandError> {
     let project_path = resolve_project_path(&state, project_id.as_deref()).await?;
@@ -188,13 +195,21 @@ pub async fn list_panel_items(
     Ok(dedup_panel(&builtins, &commands, &skills))
 }
 
+#[tauri::command]
+pub async fn list_panel_items(
+
+    state: State<'_, Arc<AppState>>,
+    project_id: Option<String>,
+) -> Result<Vec<PanelItem>, AppCommandError> {
+    list_panel_items_inner(&state, project_id).await
+}
+
 /// Fetch a skill's body for the user-message path. Mirrors
 /// `get_command_body`: returns `Some(body)` when the skill exists,
 /// `None` otherwise. The frontend treats `None` as a "skill
 /// vanished" toast + no-send (same contract as the command path).
-#[tauri::command]
-pub async fn get_skill_body(
-    state: State<'_, Arc<AppState>>,
+pub async fn get_skill_body_inner(
+    state: &Arc<AppState>,
     name: String,
     project_id: Option<String>,
 ) -> Result<Option<String>, AppCommandError> {
@@ -213,11 +228,21 @@ pub async fn get_skill_body(
     }
 }
 
+#[tauri::command]
+pub async fn get_skill_body(
+
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    project_id: Option<String>,
+) -> Result<Option<String>, AppCommandError> {
+    get_skill_body_inner(&state, name, project_id).await
+}
+
 /// Resolve a project id to its path, mirroring `command_palette`'s
 /// `list_commands` / `get_command_body` body so a missing project
 /// surfaces the same error string the B3 IPCs do.
 async fn resolve_project_path(
-    state: &State<'_, Arc<AppState>>,
+    state: &Arc<AppState>,
     project_id: Option<&str>,
 ) -> Result<Option<String>, AppCommandError> {
     match project_id {

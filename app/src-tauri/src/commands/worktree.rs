@@ -22,9 +22,8 @@ use crate::state::AppState;
 /// chat-header "Publish → main" button. Requires the session to have
 /// an Active worktree (else there's no `session/<id>` branch to
 /// merge). On conflict, returns the conflict file list verbatim.
-#[tauri::command]
-pub async fn publish_session_to_main(
-    state: State<'_, Arc<AppState>>,
+pub async fn publish_session_to_main_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<String, AppCommandError> {
     let loaded = db::load_session(&state.db, &session_id)
@@ -77,8 +76,16 @@ pub async fn publish_session_to_main(
 }
 
 #[tauri::command]
-pub async fn attach_worktree(
+pub async fn publish_session_to_main(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<String, AppCommandError> {
+    publish_session_to_main_inner(&state, session_id).await
+}
+
+pub async fn attach_worktree_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {
     let loaded = db::load_session(&state.db, &session_id)
@@ -167,8 +174,16 @@ pub async fn attach_worktree(
 }
 
 #[tauri::command]
-pub async fn detach_worktree(
+pub async fn attach_worktree(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, AppCommandError> {
+    attach_worktree_inner(&state, session_id).await
+}
+
+pub async fn detach_worktree_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {
     let exit_rx = cancel_inflight_for_session(
@@ -264,8 +279,16 @@ pub async fn detach_worktree(
 }
 
 #[tauri::command]
-pub async fn delete_worktree(
+pub async fn detach_worktree(
+
     state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, AppCommandError> {
+    detach_worktree_inner(&state, session_id).await
+}
+
+pub async fn delete_worktree_inner(
+    state: &Arc<AppState>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {
     let exit_rx = cancel_inflight_for_session(
@@ -386,4 +409,13 @@ pub async fn delete_worktree(
             )
         })?;
     Ok(updated.session)
+}
+
+#[tauri::command]
+pub async fn delete_worktree(
+
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<db::SessionRow, AppCommandError> {
+    delete_worktree_inner(&state, session_id).await
 }

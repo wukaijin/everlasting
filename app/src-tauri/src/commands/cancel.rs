@@ -18,10 +18,14 @@ use tauri::State;
 use crate::error::AppCommandError;
 use crate::state::AppState;
 
-#[tauri::command]
-pub async fn cancel_chat(
+/// Phase 2.2 `_inner` (Q0 decision): business logic, callable from
+/// both the Tauri command wrapper below and the axum route handler
+/// in `daemon::routes::cancel`. Takes `&Arc<AppState>` (vs Tauri's
+/// `State<'_, Arc<AppState>>`) so the daemon path doesn't need the
+/// Tauri-specific `State` wrapper.
+pub async fn cancel_chat_inner(
+    state: &Arc<AppState>,
     request_id: String,
-    state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppCommandError> {
     let token = {
         let map = state.cancellations.lock().await;
@@ -37,4 +41,12 @@ pub async fn cancel_chat(
         );
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_chat(
+    request_id: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppCommandError> {
+    cancel_chat_inner(&state, request_id).await
 }

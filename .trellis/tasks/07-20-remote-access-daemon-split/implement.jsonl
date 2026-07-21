@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/07-20-remote-access-daemon-split/prd.md", "reason": "Phase 2 全局需求 + 84 handler 映射 + R6 单全局流 + Q0-Q7 设计决议 + 验收标准"}
+{"file": ".trellis/tasks/07-20-remote-access-daemon-split/design.md", "reason": "架构总览(进程拓扑 / 模块边界 / 关键不变量)+ 数据流(命令调用 / SSE 推送 / round-trip / resync)+ 接口契约 + 兼容性迁移 + 权衡 + 回滚 + Phase 1 对齐"}
+{"file": ".trellis/tasks/07-20-remote-access-daemon-split/implement.md", "reason": "P2.1-P2.5 子阶段实施清单 + 验证命令 + 回滚点 + 风险登记表 + 复盘检查点"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端架构 + 模块边界总览,daemon 路由拆分对齐此规范"}
+{"file": "docs/REMOTE-ACCESS-ROADMAP.md", "reason": "Phase 1/2/3/4 实施路线图,Phase 2 子阶段 P2.1-P2.5 详细分解"}
+{"file": "docs/REMOTE-ACCESS-RESEARCH.md", "reason": "远程访问调研评估(传输协议 / 认证 / 网络拓扑 / 方案 B 单 EventSource),Phase 2 SSE 设计引用 §3.1 §4.2"}
+{"file": "docs/ARCHITECTURE.md", "reason": "§4 决策 agent daemon 化(Phase 2 目标态)+ §5 多 channel 接入路线"}
