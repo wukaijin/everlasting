@@ -88,7 +88,7 @@ pub enum TranscriptKind {
 /// blank + stuck-on-running. `run_subagent` threads
 /// `worker_run_id_opt` (fallback `worker_rid` only when the insert
 /// failed — no DB row exists, so the drawer can't open anyway).
-pub(super) fn build_subagent_event_payload(
+pub(crate) fn build_subagent_event_payload(
     run_id: &str,
     session_id: &str,
     kind: TranscriptKind,

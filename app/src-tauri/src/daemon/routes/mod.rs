@@ -39,6 +39,7 @@
 //! - `ui` (1): `apply_ui_diff`
 //! - `worktree` (4): `attach_worktree`, `detach_worktree`, ...
 
+pub mod agent;
 pub mod cancel;
 pub mod command_palette;
 pub mod config;
@@ -56,6 +57,7 @@ pub mod subagents;
 pub mod task;
 pub mod ui;
 pub mod worktree;
+pub mod stream;
 
 use std::sync::Arc;
 
@@ -73,6 +75,7 @@ use crate::state::AppState;
 /// endpoint that doesn't require `Arc<AppState>`).
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .nest("/api/v1/agent", agent::router(state.clone()))
         .nest("/api/v1/cancel", cancel::router(state.clone()))
         .nest(
             "/api/v1/command_palette",
@@ -94,5 +97,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/subagents", subagents::router(state.clone()))
         .nest("/api/v1/task", task::router(state.clone()))
         .nest("/api/v1/ui", ui::router(state.clone()))
+        .merge(stream::router(state.clone()))
         .nest("/api/v1/worktree", worktree::router(state))
 }

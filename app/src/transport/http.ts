@@ -1,29 +1,293 @@
-// httpTransport — Phase 2 stub.
+// httpTransport — Phase 2.3 C6 实现(2026-07-21, task
+// `07-20-remote-access-daemon-split`).
 //
-// The daemon-split (Phase 2) will implement this over HTTP POST/GET (for
-// `invoke`) + a single global EventSource (for `listen`, with an internal
-// event-name → handler dispatch table so the public `listen(event, handler)`
-// signature is preserved — see design.md §3 / RESEARCH §4.2 方案 B).
+// daemon 版的 Transport:`invoke` 走 HTTP POST,`listen` 走单全局
+// `EventSource` + event-name 分发表。与 `tauriTransport` 实现同一
+// `Transport` 接口(types.ts),P1 的 20+ 调用点零改动。
 //
-// Until then every method throws so a mis-selected transport fails loud
-// instead of silently no-op'ing.
+// # args 字段命名(关键设计决策)
+//
+// Tauri 2 的 `#[tauri::command]` 自动把 Rust snake_case 参数名暴露
+// 为 JS camelCase(前端 `invoke("chat", { requestId, sessionId })`
+// ↔ Rust `request_id, session_id`)。daemon handler 的 serde 默认
+// snake_case,**不做这个转换**。所以本 transport 在 `invoke` 时把
+// args 的**顶层 key** camelCase → snake_case,嵌套值(messages /
+// struct)原样透传 —— 因为返回值方向 Tauri 与 daemon 序列化同一
+// Rust struct(同 serde),前端读到的嵌套对象在两 transport 下一致,
+// 只有顶层 command 参数名需要扳正。详见
+// `.trellis/tasks/07-20-remote-access-daemon-split/research/p2.3-c6-http-transport.md`。
+//
+// # 单全局 EventSource
+//
+// design §1.3:所有事件(chatevent / tool:call / ... / subagent:event)
+// 经 `GET /api/v1/stream` 单流下发,前端按 event name 分发到各
+// `listen` handler。本 transport 维护一个 lazy 创建的 `EventSource`
+// + `Map<event, Set<handler>>` 分发表;断网时浏览器自动重连并回带
+// `Last-Event-ID`(SSE `id:` 字段),daemon 侧 `SseRegistry` 据此回放
+// 或发 `stream-resync` sentinel —— sentinel 作为普通 event 透传给
+// 注册了 `listen("stream-resync", ...)` 的 store,由 store 自己 GET
+// `/api/v1/sessions/{current}/snapshot`(transport 不持有 session 状态)。
+//
+// # 未完成(C6 后续,见 research note)
+//
+// - **CORS**:dev 模式前端(vite 1420)与 daemon(7456)跨域,
+//   daemon 需加 `tower-http::services::CorsLayer`(permit localhost:1420)。
+//   P2.4 sidecar 同源后无需 CORS。当前 httpTransport 代码就绪,但
+//   dev 跨域运行需先补 daemon CORS。
+// - **base URL**:默认 `http://localhost:7456`,dev 可用 `?daemonUrl=`
+//   query 覆盖。P2.4 sidecar 同源时改用 `location.origin`。
+// - **api-types.ts(C8)**:84 handler 入参/返参 + SSE payload 的手写
+//   TS 类型(渐进,先 SSE + chat 精确,其余 `unknown`)。
 
 import type { Transport, UnlistenFn } from "./types";
 
-const NOT_IMPLEMENTED = "httpTransport not implemented (Phase 2)";
+// ---------------------------------------------------------------------------
+// cmd → domain 映射(76 endpoint,从 `app/src-tauri/src/daemon/routes/*.rs`
+// 的 `.route("/<cmd>", ...)` 提取)。invoke("cmd", args) →
+// POST `{daemonBase}/api/v1/{domain}/cmd`。新增 command 时同步加这里
+// (Rust 侧 routes 注册 + 此映射是两处需手工对齐的点)。
+// ---------------------------------------------------------------------------
+const CMD_TO_DOMAIN: Record<string, string> = {
+  // agent
+  chat: "agent",
+  // cancel
+  cancel_chat: "cancel",
+  // command_palette
+  get_command_body: "command_palette",
+  list_commands: "command_palette",
+  // config
+  get_llm_config: "config",
+  get_home_dir: "config",
+  // files
+  list_files: "files",
+  list_files_at: "files",
+  // memory
+  delete_autonomous_memory: "memory",
+  list_autonomous_memories: "memory",
+  open_memory_in_editor: "memory",
+  read_memory_content: "memory",
+  read_memory_layers: "memory",
+  update_autonomous_memory: "memory",
+  update_autonomous_memory_status: "memory",
+  // panel
+  get_skill_body: "panel",
+  list_panel_items: "panel",
+  list_subagents: "panel",
+  // permissions
+  clear_session_trace: "permissions",
+  grant_tool_permission: "permissions",
+  list_session_audit_events: "permissions",
+  list_session_tool_permissions: "permissions",
+  list_turn_traces: "permissions",
+  permission_response: "permissions",
+  revoke_tool_permission: "permissions",
+  set_session_mode: "permissions",
+  // projects
+  create_project: "projects",
+  hide_project: "projects",
+  list_hidden_projects: "projects",
+  list_projects: "projects",
+  unhide_project: "projects",
+  update_project_name: "projects",
+  update_project_path: "projects",
+  // providers
+  add_model: "providers",
+  add_provider: "providers",
+  delete_model: "providers",
+  delete_provider: "providers",
+  get_default_model: "providers",
+  list_models: "providers",
+  list_providers: "providers",
+  set_default_model: "providers",
+  test_model: "providers",
+  update_model: "providers",
+  update_provider: "providers",
+  update_session_model_id: "providers",
+  // question
+  get_pending_interaction: "question",
+  get_pending_question: "question",
+  resolve_mode_change: "question",
+  resolve_task_state_transition: "question",
+  resolve_tool_question: "question",
+  // sessions
+  clear_session_messages: "sessions",
+  create_session: "sessions",
+  delete_session: "sessions",
+  diff_worktree: "sessions",
+  edit_user_message: "sessions",
+  list_sessions: "sessions",
+  list_workflow_plugins: "sessions",
+  load_session: "sessions",
+  record_tool_duration: "sessions",
+  rename_session: "sessions",
+  set_session_color: "sessions",
+  set_session_plugin_name: "sessions",
+  set_session_workflow_enabled: "sessions",
+  update_message_latency: "sessions",
+  // subagent_runs
+  discard_worker_run: "subagent_runs",
+  get_subagent_run: "subagent_runs",
+  list_subagent_runs_by_session: "subagent_runs",
+  merge_worker_run: "subagent_runs",
+  // subagents
+  list_subagents_with_model: "subagents",
+  set_subagent_model: "subagents",
+  // task
+  archive_task: "task",
+  create_task: "task",
+  // ui
+  apply_ui_diff: "ui",
+  // worktree
+  attach_worktree: "worktree",
+  delete_worktree: "worktree",
+  detach_worktree: "worktree",
+  publish_session_to_main: "worktree",
+};
+
+/// daemon error body(`AppCommandError` wire shape,见
+/// `daemon::error::AppCommandError` 的 Serialize)。transport 不强类型
+/// 化错误体(C8 渐进),只透传 status + body。
+export interface TransportErrorBody {
+  kind?: string;
+  message?: string;
+  request_id?: string;
+  [key: string]: unknown;
+}
+
+export class TransportError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: TransportErrorBody | string,
+  ) {
+    const msg =
+      typeof body === "string"
+        ? body
+        : body?.message ?? `HTTP ${status}`;
+    super(`[httpTransport] ${status}: ${msg}`);
+    this.name = "TransportError";
+  }
+}
+
+/// daemon base URL。P2.4 sidecar 同源(前端由 daemon 静态服务);
+/// P2.3 dev 跨域 —— 默认 `http://localhost:7456`,可用 `?daemonUrl=`
+/// query 覆盖(无尾斜杠)。
+function daemonBase(): string {
+  if (typeof window !== "undefined") {
+    const q = new URLSearchParams(window.location.search);
+    const fromQuery = q.get("daemonUrl");
+    if (fromQuery) return fromQuery.replace(/\/+$/, "");
+  }
+  return "http://localhost:7456";
+}
+
+/// 顶层 key camelCase → snake_case(`requestId` → `request_id`)。
+/// 嵌套值原样保留 —— Tauri/daemon 对 struct 用同一 serde,前端读
+/// 到的嵌套对象在两 transport 下一致,只有顶层 command 参数名需扳正。
+function camelToSnakeKey(key: string): string {
+  // 仅处理 ASCII A-Z → _a-z;已含下划线或全小写的 key 无变化。
+  return key.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
+}
+
+function transformArgsTopLevel(
+  args?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!args) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    out[camelToSnakeKey(k)] = v;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 单全局 EventSource + event-name 分发表。lazy 创建:首个 `listen`
+// 触发 `new EventSource`。EventSource 浏览器原生自动重连 + 回带
+// `Last-Event-ID`(SSE `id:` 字段),daemon `SseRegistry` 据此回放。
+// ---------------------------------------------------------------------------
+const handlersByEvent = new Map<string, Set<(payload: unknown) => void>>();
+let eventSource: EventSource | null = null;
+
+function ensureEventSource(): void {
+  if (eventSource) return;
+  const url = `${daemonBase()}/api/v1/stream`;
+  eventSource = new EventSource(url);
+  // 具名 event 的 listener 在首个 listen(event) 时按需 addEventListener
+  // (见 listen 实现)。这里只持有 EventSource 实例 + 错误日志。
+  eventSource.onerror = (e) => {
+    // EventSource 会自动重连;这里只记录。浏览器重连成功后 daemon
+    // 按 Last-Event-ID 回放,store 自然恢复。
+    console.warn("[httpTransport] EventSource error (will auto-reconnect)", e);
+  };
+}
+
+function parsePayload(data: string): unknown {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return data;
+  }
+}
 
 export const httpTransport: Transport = {
-  invoke: <T = unknown>(
-    _cmd: string,
-    _args?: Record<string, unknown>,
+  invoke: async <T = unknown>(
+    cmd: string,
+    args?: Record<string, unknown>,
   ): Promise<T> => {
-    throw new Error(NOT_IMPLEMENTED);
+    const domain = CMD_TO_DOMAIN[cmd];
+    if (!domain) {
+      throw new TransportError(
+        0,
+        `unknown cmd "${cmd}" — no domain mapping in httpTransport (sync CMD_TO_DOMAIN with daemon routes)`,
+      );
+    }
+    const url = `${daemonBase()}/api/v1/${domain}/${cmd}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(transformArgsTopLevel(args)),
+    });
+    if (!resp.ok) {
+      let body: TransportErrorBody | string;
+      try {
+        body = (await resp.json()) as TransportErrorBody;
+      } catch {
+        body = await resp.text().catch(() => "");
+      }
+      throw new TransportError(resp.status, body);
+    }
+    // daemon handler 返回 `Json<T>`;chat / cancel_chat 返回 `Json(())`
+    // (body = `null`)。空 body 解析为 null,其余 JSON 透传。
+    const text = await resp.text();
+    if (text.length === 0) return null as T;
+    return JSON.parse(text) as T;
   },
 
   listen: <T = unknown>(
-    _event: string,
-    _handler: (payload: T) => void,
+    event: string,
+    handler: (payload: T) => void,
   ): Promise<UnlistenFn> => {
-    throw new Error(NOT_IMPLEMENTED);
+    let set = handlersByEvent.get(event);
+    if (!set) {
+      set = new Set<(payload: unknown) => void>();
+      handlersByEvent.set(event, set);
+      ensureEventSource();
+      // 按需为该 event 名注册具名 SSE listener。SSE frame 的 `event:`
+      // 字段 → EventSource 触发具名 event(addEventListener(event))。
+      const onEvent = (e: MessageEvent) => {
+        const payload = parsePayload(e.data);
+        // 复制一份遍历,允许 handler 内 unlisten 自己不死循环。
+        for (const h of [...(handlersByEvent.get(event) ?? [])]) {
+          h(payload);
+        }
+      };
+      eventSource!.addEventListener(event, onEvent as EventListener);
+    }
+    set.add(handler as (payload: unknown) => void);
+    // UnlistenFn:从分发表移除 handler。不 close EventSource(其他
+    // event 的 handler 可能在用;P2.3 单页生命周期内 EventSource 常驻)。
+    const unlisten: UnlistenFn = () => {
+      handlersByEvent.get(event)?.delete(handler as (payload: unknown) => void);
+    };
+    return Promise.resolve(unlisten);
   },
 };

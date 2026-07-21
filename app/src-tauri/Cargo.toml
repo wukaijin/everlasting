@@ -113,7 +113,9 @@ base64 = "0.22"
 #   unlocks `#[debug_handler]` (unused in production but handy for
 #   type-erased handler debug in dev).
 # - `tower 0.5` + `tower-http 0.6` provide Service middleware
-#   (P2.4 ServeDir; P2.3 SSE helpers reuse `tower-http::services`).
+#   (P2.4 ServeDir; P2.3 SSE helpers reuse `tower-http::services`)
+#   + `cors` feature → `CorsLayer`(P2.3 C6 收尾,dev 跨域 vite 1420 ↔
+#   daemon 7456;P2.4 sidecar 同源后移除)。
 # - `tokio-stream 0.1` with `sync` feature → `tokio_stream::wrappers::BroadcastStream`
 #   + `wrappers::UnboundedReceiverStream` for SSE channel adapters (P2.3).
 # - `clap 4` for the daemon bin's `--port` flag. Default features
@@ -122,7 +124,7 @@ base64 = "0.22"
 #   the only consumer; the lib doesn't depend on clap.
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 clap = { version = "4", features = ["derive"] }
 

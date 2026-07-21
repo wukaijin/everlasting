@@ -114,18 +114,17 @@ pub use event_sink::{
 pub use loader::{LoadedSubagent, SubagentCache, SubagentSource};
 pub use sink::SubagentBufferSink;
 pub use transcript::TranscriptEntry;
-// `TranscriptKind` is referenced only from `cfg(test)` code
-// (`db/tests.rs`, `agent/tests.rs`); production callers reach it via
-// the module-internal `super::transcript::TranscriptKind` path.
-// transport-abstraction 2026-07-20 (P1.3): `build_subagent_finished_payload`
-// is no longer used in production — the dispatch path now goes
-// through `SubagentEventSink::emit_subagent_finished` (defined in
-// `event_sink.rs`). The helper itself is still called from
-// `event_sink.rs` itself (and from any future integration test
-// that needs the raw wire shape) — it's just not re-exported
-// from this module anymore.
-#[cfg(test)]
+// `TranscriptKind` + the two wire-shape builders are consumed by
+// `cfg(test)` code (`db/tests.rs`, `agent/tests.rs`) AND, since P2.3
+// (2026-07-21, task `07-20-remote-access-daemon-split`), by
+// `daemon::sse::HttpSseSubagentSink` — the HTTP/SSE counterpart of
+// `AppHandleSubagentSink`. Both sinks must emit the *same*
+// `subagent:event` / `subagent:finished` JSON, so the builders stay
+// the single source of truth and are re-exported crate-wide. The
+// earlier `cfg(test)`-only re-export reflected a time when no non-test
+// module implemented `SubagentEventSink`; P2.3 lifts that.
 pub use transcript::TranscriptKind;
+pub(crate) use transcript::{build_subagent_event_payload, build_subagent_finished_payload};
 pub use truncate_summary::{
     format_dispatch_result_with_model, format_final_text, summarize_worker_tool_actions,
     truncate_transcript_for_persistence, TRANSCRIPT_MAX_BYTES,

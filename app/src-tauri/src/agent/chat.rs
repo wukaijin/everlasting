@@ -1,16 +1,19 @@
 //! The `chat` Tauri command — thin pre-flight wrapper.
 //!
-//! The Tauri command itself is a thin wrapper that:
-//! 1. Clones `AppState` handles into a `tauri::async_runtime::spawn`
-//!    task.
+//! The Tauri command itself is a thin wrapper that constructs the
+//! `AppHandleSink` (the `ChatEventSink` impl that forwards to Tauri
+//! events) and delegates to [`chat_inner`] — the shared orchestration
+//! shared by the Tauri command path and the daemon HTTP handler
+//! (P2.3 C5, 2026-07-21, task `07-20-remote-access-daemon-split`).
+//!
+//! [`chat_inner`] owns:
+//! 1. Clones `AppState` handles into a spawn task.
 //! 2. Performs pre-flight catalog resolution (so a missing /
 //!    misconfigured model surfaces a clean user-facing error
 //!    instead of a stream-time 401).
 //! 3. Registers the cancellation token + session→request mapping
 //!    (the in-flight cancel hook used by destructive commands).
-//! 4. Builds the `AppHandleSink` (the `ChatEventSink` impl that
-//!    forwards to Tauri events).
-//! 5. Spawns the task and hands control to
+//! 4. Spawns the task and hands control to
 //!    [`crate::agent::chat_loop::run_chat_loop`] — the single
 //!    agent-loop body shared by production and the integration
 //!    tests (P1 RULE-A-006 closure, 2026-06-15).
@@ -35,7 +38,7 @@ use crate::agent::chat_loop::run_chat_loop;
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
 use crate::error::AppCommandError;
 use crate::llm::{ChatEvent, ChatMessage};
-use crate::state::{AppState, ChatEventPayload};
+use crate::state::{AppState, ChatEventPayload, ChatEventSink};
 
 // ---------------------------------------------------------------------------
 // The per-turn latency helpers (`instant_delta_ms` / `build_turn_latency`)
@@ -49,15 +52,15 @@ use crate::state::{AppState, ChatEventPayload};
 /// communicates with the frontend via `chat-event` / `tool:call` /
 /// `tool:result` Tauri events.
 ///
-/// The agent loop body itself (load session + project, build
-/// system prompt, inject B5 memory, per-turn `provider.send` →
-/// `select!` over the stream and the cancel token, tool execution
-/// under the ⑨ 关 permission layer, persist_turn + TurnComplete
-/// emit, synthetic tool_result on cancel, MAX_TURNS fallback)
-/// lives in [`crate::agent::chat_loop::run_chat_loop`] (P1
-/// RULE-A-006 closure, 2026-06-15). The duplication between
-/// production and test paths has been removed; the 9
-/// `agent_loop_*` integration tests now cover production.
+/// P2.3 C5 (2026-07-21): this is now a thin wrapper that builds the
+/// Tauri `AppHandleSink` and forwards to [`chat_inner`] — the
+/// transport-agnostic orchestration shared with the daemon's HTTP
+/// `chat` handler (`daemon::routes::agent`). The Tauri path passes
+/// `Some(app)` so `run_chat_loop` can wire the worker's
+/// `SubagentBufferSink` with a live IPC emit; the daemon path passes
+/// `None` (渐进方案 — worker events stay buffer-only on the HTTP path
+/// until the full `SubagentEventSink` injection lands; parent chat is
+/// fully wired via `HttpSseSink`).
 #[tauri::command]
 pub async fn chat(
     request_id: String,
@@ -83,6 +86,64 @@ pub async fn chat(
     // (a resend never carries a forced dispatch).
     #[allow(non_snake_case)] forcedDispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) -> Result<(), AppCommandError> {
+    // Build the `ChatEventSink` adapter BEFORE delegating so the
+    // pre-flight error path inside `chat_inner` also emits through
+    // the trait (no direct `app.emit` — closes the bypass flagged in
+    // REVIEW-remote-access-research-2026-07-20 §P0-D). The sink
+    // carries the only `app.clone()` it needs; `chat_inner` reuses
+    // the same trait object for both pre-flight + the spawn closure.
+    let sink: Arc<dyn ChatEventSink> =
+        Arc::new(crate::state::AppHandleSink { app: app.clone() });
+    chat_inner(
+        state.inner(),
+        request_id,
+        session_id,
+        messages,
+        sink,
+        Some(app),
+        resendSeq,
+        forcedDispatch,
+    )
+    .await
+}
+
+/// Transport-agnostic chat orchestration (P2.3 C5, 2026-07-21).
+///
+/// Shared by the Tauri `chat` command (sink = `AppHandleSink`,
+/// `app_opt = Some(app)`) and the daemon HTTP `chat` handler
+/// (`daemon::routes::agent`: sink = `HttpSseSink`, `app_opt = None`).
+/// Both construct their own sink + decide `app_opt`, then hand off
+/// here for the identical pre-flight + cancellation-registration +
+/// `run_chat_loop` spawn.
+///
+/// **spawn runtime**: `tokio::spawn` (was `tauri::async_runtime::spawn`
+/// pre-P2.3). In the Tauri process, Tauri 2's `async_runtime` is a
+/// tokio multi-thread runtime, so a Tauri command executes inside a
+/// tokio runtime context — `tokio::spawn` resolves to the same handle
+/// `tauri::async_runtime::spawn` used, i.e. zero behavior change for
+/// the Tauri path. In the daemon process (`#[tokio::main]`), this is
+/// the native spawn. Unifying on `tokio::spawn` is what lets one
+/// function serve both transports.
+///
+/// **`app_opt` (渐进方案)**: the 22nd `run_chat_loop` param. Tauri
+/// passes `Some(app)` so worker dispatch can wire
+/// `SubagentBufferSink` with a live IPC emit. The daemon path passes
+/// `None` — workers still run (dispatch_subagent executes, DB records
+/// the run), but worker events stay buffer-only (no `subagent:event`
+/// SSE emit). Full `SubagentEventSink` injection (so the daemon path
+/// gets live worker events via `HttpSseSubagentSink`) is deferred to
+/// a follow-up — see task `07-20-remote-access-daemon-split` implement.md
+/// C5 "完整 subagent sink 注入" 复盘点.
+pub(crate) async fn chat_inner(
+    state: &Arc<AppState>,
+    request_id: String,
+    session_id: String,
+    messages: Vec<ChatMessage>,
+    sink: Arc<dyn ChatEventSink>,
+    app_opt: Option<AppHandle>,
+    resend_seq: Option<i64>,
+    forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
+) -> Result<(), AppCommandError> {
     let tool_defs = state.tools.clone();
     let db = state.db.clone();
     let catalog = state.catalog.clone();
@@ -100,7 +161,7 @@ pub async fn chat(
     // Must be cloned BEFORE the spawn closure so the captured
     // value doesn't outlive the borrowed `state`'s lifetime
     // (the borrow checker rejects `state.foo` references inside
-    // an `async move` block on `tauri::async_runtime::spawn`).
+    // an `async move` block on `tokio::spawn`).
     let question_store = state.question_store.clone();
     // W1 (Workflow integration, Phase 0 Step 0.5 — 2026-07-08):
     // build the per-session workflow context BEFORE the spawn.
@@ -111,11 +172,11 @@ pub async fn chat(
     // session byte-identity vs. pre-Step-0.5 is preserved.
     //
     // We deliberately resolve BEFORE the spawn closure (vs.
-    // doing it inside `tauri::async_runtime::spawn`) so the
-    // resolved value can be moved into the closure by value
-    // without re-entering async land per IPC entry. The cost
-    // is bounded (~10 ms warm) — same shape as other
-    // pre-spawn clones (background_shells / subagent_cache).
+    // doing it inside `tokio::spawn`) so the resolved value can
+    // be moved into the closure by value without re-entering
+    // async land per entry. The cost is bounded (~10 ms warm)
+    // — same shape as other pre-spawn clones (background_shells
+    // / subagent_cache).
     let workflow_ctx = match crate::agent::workflow::build_workflow_ctx(&db, &session_id).await {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -147,19 +208,10 @@ pub async fn chat(
     // `Arc<...>` handles above.
     let subagent_cache = state.subagent_cache.clone();
     // L3b (2026-06-27): clone the app data dir so the spawn closure
-    // can capture it by value (State<'_> is borrowed — the closure
+    // can capture it by value (state is borrowed — the closure
     // must not borrow from it).
     let app_data_dir = state.app_data_dir.clone();
     let rid = request_id;
-    // Build the `ChatEventSink` adapter BEFORE pre-flight so the
-    // pre-flight error path also emits through the trait (no direct
-    // `app.emit` — closes the bypass flagged in
-    // REVIEW-remote-access-research-2026-07-20 §P0-D). The sink
-    // carries the only `app.clone()` it needs; the pre-flight error
-    // arm uses it, the spawn closure below reuses the same trait
-    // object.
-    let sink: Arc<dyn crate::state::ChatEventSink> =
-        Arc::new(crate::state::AppHandleSink { app: app.clone() });
     let sink_for_spawn = sink.clone();
 
     // PR1 pre-flight: look up the catalog for the default model.
@@ -249,14 +301,14 @@ pub async fn chat(
         map.insert(rid.clone(), done_rx);
     }
 
-    // P1 RULE-A-006 (2026-06-14): the sink was constructed
-    // above (before pre-flight). The `permissions::check` Tier 3
-    // `permission:ask` emit is the one place inside the agent
+    // P1 RULE-A-006 (2026-06-14): the sink was passed in by the
+    // caller (constructed before pre-flight). The `permissions::check`
+    // Tier 3 `permission:ask` emit is the one place inside the agent
     // loop body that needs this trait. The testable variant in
     // `chat_loop.rs` uses the same trait for ALL emits, so tests
     // get a single MockEmitter sink.
 
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         // Agent loop body is now unified with `chat_loop::run_chat_loop`
         // (P1 RULE-A-006 closure, 2026-06-15). The original inline
         // ~1000-line closure was a faithful copy of `run_chat_loop`;
@@ -266,7 +318,7 @@ pub async fn chat(
         // place.
         //
         // Pre-flight + cancellation-token registration + sink build
-        // stay in this command (they're the Tauri-specific bits);
+        // stay in `chat_inner` (they're the transport-agnostic bits);
         // `run_chat_loop` owns the per-turn loop + DB persistence +
         // all four emit channels (chat-event / tool:call /
         // tool:result / permission:ask) and the `CancellationGuard`
@@ -291,7 +343,7 @@ pub async fn chat(
             // through so the user-message persist site can
             // fire the `resend_message` audit row when set.
             // `None` for normal sends (the common case).
-            resendSeq,
+            resend_seq,
             // L1a (2026-06-19): cross-request registry. Threaded
             // through so the 3 L1a tools can start / query / kill
             // background processes and the agent loop can drain
@@ -326,7 +378,11 @@ pub async fn chat(
             // worker's `SubagentBufferSink` with a live IPC emit
             // path (the `subagent:event` channel). The 22nd
             // `run_chat_loop` parameter; tests pass `None`.
-            Some(app.clone()),
+            // P2.3 C5 (2026-07-21): `app_opt` parameterized —
+            // Tauri passes `Some(app)`, daemon passes `None`
+            // (渐进方案: daemon-path worker events stay buffer-only
+            // until full SubagentEventSink injection lands).
+            app_opt,
             // 2026-06-21 fix (B6 review defect A): production
             // chat is never a worker, so the parent's
             // `assemble_system_prompt(mode_prefix, base_prompt)`
@@ -380,7 +436,7 @@ pub async fn chat(
             // explicit-agent-dispatch: thread the user-forced
             // dispatch into the loop's turn-1 short-circuit
             // (trailing `forced_dispatch` parameter).
-            forcedDispatch,
+            forced_dispatch,
             // 2026-06-30 (`ask_user_question` task): pass the
             // `QuestionStore` cloned above (captured-by-value in
             // the spawn closure). The `ask_user_question`

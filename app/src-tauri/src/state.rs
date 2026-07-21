@@ -197,6 +197,14 @@ pub struct AppState {
     /// the daemon-ization swap is a future PR that touches only
     /// `AppState::load` (per L1 PRD Q1 decision C).
     pub background_shells: crate::background_shell::DefaultRegistry,
+
+    /// P2.3 C4 (2026-07-21, task `07-20-remote-access-daemon-split`):
+    /// 进程级 SSE 分发中心(`daemon::sse::SseRegistry`)。daemon 路径
+    /// 的 chat handler(C5)从这里构造 `HttpSseSink`,`GET /api/v1/stream`
+    /// 从这里 subscribe。Tauri 路径**不读**它(Tauri 用 `AppHandleSink`
+    /// 直发 IPC),所以给 Tauri 进程也初始化一个空 registry 是无害的
+    /// ——它只是没人 emit、没人 subscribe 的空壳。
+    pub sse: Arc<crate::daemon::sse::SseRegistry>,
 }
 
 impl AppState {
@@ -423,6 +431,9 @@ impl AppState {
             // from the `RunEvent::Exit` hook so app shutdown
             // doesn't leak process groups.
             background_shells: crate::background_shell::default_registry(),
+            // P2.3 C4: 进程级 SSE 分发中心。daemon 路径用它构造
+            // HttpSseSink + /api/v1/stream subscribe;Tauri 路径留空。
+            sse: Arc::new(crate::daemon::sse::SseRegistry::new()),
         }
     }
 

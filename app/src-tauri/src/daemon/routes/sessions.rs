@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, routing::post, Json, Router};
-use serde::Deserialize;
+use axum::{extract::{Path, State}, routing::{get, post}, Json, Router};
+use serde::{Deserialize, Serialize};
 
 use crate::error::AppCommandError;
 use crate::state::AppState;
@@ -17,6 +17,8 @@ use crate::db;
 use crate::git;
 use crate::llm::types::MessageContent;
 use crate::commands::sessions::{list_sessions_inner, create_session_inner, load_session_inner, diff_worktree_inner, delete_session_inner, clear_session_messages_inner, rename_session_inner, set_session_color_inner, set_session_workflow_enabled_inner, set_session_plugin_name_inner, update_message_latency_inner, record_tool_duration_inner, edit_user_message_inner};
+use crate::commands::question::get_pending_interaction_inner;
+use crate::agent::question_store::PendingInteractionEntry;
 
 #[derive(Debug, Deserialize)]
 pub struct ListSessionsRequest {
@@ -57,6 +59,33 @@ pub async fn load_session(
 ) -> Result<Json<Option<db::LoadedSession>>, AppCommandError> {
     let result = load_session_inner(&state, req.session_id).await?;
     Ok(Json(result))
+}
+
+/// `GET /api/v1/sessions/{id}/snapshot` — resync 快照(P2.3 C3)。
+///
+/// 前端 `httpTransport` 收到 `stream-resync` sentinel 后调此端点:
+/// 一次拿回完整 session(`load_session_inner` = session 元数据 +
+/// 全部 messages)+ 当前 pending interaction(permission /
+/// question / mode_change / task_state_transition 卡片),用快照
+/// 替换 store 后重画 UI(design §2.4)。复用既有 `_inner`,无新
+/// 业务逻辑——snapshot 是 `load_session` + `get_pending_interaction`
+/// 的合并 GET。
+#[derive(Debug, Serialize)]
+pub struct SessionSnapshot {
+    pub session: Option<db::LoadedSession>,
+    pub pending_interaction: Option<PendingInteractionEntry>,
+}
+
+pub async fn snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SessionSnapshot>, AppCommandError> {
+    let session = load_session_inner(&state, id.clone()).await?;
+    let pending_interaction = get_pending_interaction_inner(&state, id).await?;
+    Ok(Json(SessionSnapshot {
+        session,
+        pending_interaction,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +253,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/list_sessions", post(list_sessions))
         .route("/create_session", post(create_session))
         .route("/load_session", post(load_session))
+        .route("/:id/snapshot", get(snapshot))
         .route("/diff_worktree", post(diff_worktree))
         .route("/delete_session", post(delete_session))
         .route("/clear_session_messages", post(clear_session_messages))

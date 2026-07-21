@@ -27,6 +27,7 @@ use std::sync::Arc;
 use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 use tokio::signal;
+use tower_http::cors::CorsLayer;
 
 use crate::daemon::routes;
 use crate::state::AppState;
@@ -57,6 +58,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health", get(routes::health::health))
         .route("/api/v1/health", get(routes::health::health))
         .merge(routes::router(state))
+        // P2.3 dev-only CORS (C6 收尾):vite dev server (1420) 与 daemon
+        // (7456) 跨域,`fetch` + `EventSource` 需 daemon 放行 preflight。
+        // `very_permissive` 允许任意 origin / method / header(不带
+        // credentials —— 此处 SSE/fetch 均无 cookie)。P2.4 sidecar 同源后
+        // 此层移除(同源不触发 preflight)。
+        .layer(CorsLayer::very_permissive())
 }
 
 /// Resolve the daemon port per Q1 decision:
