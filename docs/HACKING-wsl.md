@@ -593,7 +593,119 @@ echo $DBUS_SESSION_BUS_ADDRESS  # 应 unix:path=/run/user/UID/bus
 
 ---
 
+## 远程访问 daemon 部署(Phase 2,2026-07-23)
+
+> 这是本项目的**核心使用场景**:WSL 跑 daemon,Windows 宿主浏览器访问。Phase 2 把 agent core 拆成独立 `everlasting-daemon` 进程(P2.2),前端默认走 httpTransport(P2.4 D3),daemon `ServeDir` 兜底提供前端(P2.4 D4)—— 单二进制即可在浏览器里跑完整功能。详见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md)。
+
+### 生产模式(单二进制部署)
+
+daemon 自己 serve 前端 + API,同源无 CORS,Windows 宿主浏览器 `http://localhost:7456` 直达。
+
+```bash
+# 1. 构建前端 dist/
+cd app && pnpm build
+
+# 2. 构建 daemon release 二进制(含 sidecar staging)
+cd src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo build --release --bin everlasting-daemon
+
+# 3. 启 daemon(监听 0.0.0.0:7456,Windows 宿主经 WSL 2 localhost forwarding 可达)
+./target/release/everlasting-daemon --port 7456
+```
+
+Windows 宿主(PowerShell 或浏览器):
+```powershell
+# 健康检查(期望 200 + camelCase JSON)
+curl http://localhost:7456/api/v1/health
+
+# 浏览器打开 —— 完整功能(发消息 / 流式 / permission / subagent)
+start http://localhost:7456
+```
+
+### dev 模式(前后端分离)
+
+vite dev server(1420)热更新前端,daemon(7456)跑 API;浏览器经 `?daemonUrl=` 跨域指向 daemon。
+
+```bash
+# 终端 1:daemon
+cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo run --bin everlasting-daemon -- --port 7456
+
+# 终端 2:vite dev server
+cd app && pnpm dev
+```
+
+浏览器:`http://localhost:1420?daemonUrl=http://localhost:7456`
+- vite 1420 serve 前端(热更新);`?daemonUrl=` 把 httpTransport 指向 daemon 7456(跨域,daemon 的 `CorsLayer::very_permissive` 放行)。
+- 也可 `pnpm dev:all`(`concurrently` 同时起两者,见 `app/package.json`)。
+
+### 降级排查:Windows 宿主访问不通 daemon
+
+WSL 2 默认有 localhost forwarding(Windows 宿主 `localhost:7456` → WSL 内 `0.0.0.0:7456`),但某些 Windows 版本 / 网络配置下会失效。按顺序排查:
+
+**1. daemon 是否在监听 + 监听地址**
+```bash
+# WSL 内
+ss -tlnp | grep 7456          # 期望 LISTEN 0.0.0.0:7456(daemon 绑 0.0.0.0,非 127.0.0.1)
+curl http://localhost:7456/api/v1/health   # WSL 内自测,期望 200
+```
+若只监听 `127.0.0.1`,检查 daemon bin 是否传了正确 `--port`(server.rs `serve_daemon` 固定绑 `0.0.0.0`,无需改)。
+
+**2. WSL 2 localhost forwarding**
+```powershell
+# Windows 宿主 PowerShell
+curl http://localhost:7456/api/v1/health
+```
+不通 → forwarding 失效,走降级(3 或 4)。
+
+**3. WSL 虚拟 IP(直连)**
+```bash
+# WSL 内取虚拟 IP
+ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
+# 例:172.x.x.x
+```
+Windows 浏览器直接访问 `http://172.x.x.x:7456`(需 daemon 已绑 `0.0.0.0`,见 1)。
+
+**4. netsh portproxy(Windows 侧端口转发,管理员 PowerShell)**
+```powershell
+# 把 Windows localhost:7456 转发到 WSL 虚拟 IP
+netsh interface portproxy add v4tov4 listenport=7456 listenaddress=0.0.0.0 `
+  connectport=7456 connectaddress=<上一步的 WSL IP>
+
+# 验证
+netsh interface portproxy show v4tov4
+curl http://localhost:7456/api/v1/health
+
+# 清理(不需要时)
+netsh interface portproxy delete v4tov4 listenport=7456 listenaddress=0.0.0.0
+```
+> WSL 重启后虚拟 IP 可能变,需重新 `connectaddress`。生产用建议固定 WSL IP(`wsl.conf` 静态 IP)或 systemd 服务化。
+
+### Tauri GUI 的 sidecar 模式(P2.4)
+
+`pnpm tauri dev` / `pnpm tauri build` 时,GUI 进程自动 spawn `everlasting-daemon` sidecar(tauri-plugin-shell),前端默认走 httpTransport(同源 sidecar),无需手动起 daemon。关 Tauri 窗口自动 SIGTERM sidecar(`RunEvent::Exit` 钩子)。
+
+- **逃生通道**:GUI 启动时带 `?transport=tauri` 走原 in-process AppState(Full 模式,daemon 不稳时回退)。
+- **瘦客户端**(默认):GUI 不开 SqlitePool(`AppState::load` 不调),`lsof -p <gui-pid> | grep sqlite` 应空。
+
+### 验证命令速查
+
+```bash
+# daemon 健康(WSL 或 Windows 宿主均可,经 forwarding)
+curl http://localhost:7456/api/v1/health
+# 期望:{"daemonId":"...","daemonVersion":"0.1.0","apiVersions":["v1"],"uptimeSeconds":N,"sessionCount":...}
+
+# daemon 是否监听 0.0.0.0(WSL 内)
+ss -tlnp | grep 7456
+
+# WSL 虚拟 IP
+ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
+```
+
+---
+
 ## 关联文档
 
 - [spike-001](./spikes/001-wsl-tauri-window.md) — 这些坑的来源 spike
 - [HACKING-llm.md](./HACKING-llm.md) — LLM API 兼容层差异(配对文档)
+- [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) — daemon 拆分 / 远程访问实施路线图(Phase 1/2/3)

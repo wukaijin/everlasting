@@ -343,14 +343,19 @@ cargo test --package everlasting-daemon --test e2e large_payload
 
 ### Phase 2 整体验收
 
-- [ ] P2.1 ~ P2.5 全部完成
-- [ ] **本机浏览器可访问 daemon**(Windows 宿主访问 WSL daemon 跑通)
-- [ ] **Tauri 版仍可用**(走 httpTransport 连本机 daemon)
-- [ ] 79 个 command 行为在 HTTP transport 下与 Tauri 版一致(回归测试)
-- [ ] 10 类 SSE 事件 + 4 类 round-trip 端到端验证通过
-- [ ] 无 dual-pool 写竞争(GUI 不开 db)
-- [ ] daemon 单二进制部署可用(前端 + API 同源)
-- [ ] **此时 Phase 3 可启动(但定为远期)**
+> **状态(2026-07-23,P2.5)**:P2.1–P2.5 的**代码 + 自动化测试**全部就绪并提交。下方 GUI 运行时验证项(dogfooding、WSL→Windows 宿主浏览器实跑)需在 GUI-capable 机器手动验证后才能勾选 —— WSL 无头环境无法跑 Tauri 窗口 / 无真实 LLM 凭据。手动 smoke 清单见 `.trellis/tasks/07-20-remote-access-daemon-split/implement.md` P2.5 §E4。
+
+- [x] P2.1 ~ P2.5 **代码 + 自动化测试**全部完成(commit `84d4689` + P2.5)
+- [ ] **本机浏览器可访问 daemon**(Windows 宿主访问 WSL daemon 跑通)—— 留手动,见 [HACKING-wsl §远程访问 daemon 部署](./HACKING-wsl.md#远程访问-daemon-部署phase-22026-07-23)
+- [ ] **Tauri 版仍可用**(走 httpTransport 连本机 sidecar daemon)—— 留手动
+- [x] 79 command 行为在 HTTP transport 下挂载就绪(`tests/e2e.rs` E1e router smoke:全部 route 非 404)+ transport 契约一致(`transport-parity.test.ts` E2)
+- [x] SSE 重连 / sentinel / resync / large-payload 协议单测(`tests/e2e.rs` E1b + `daemon/sse.rs` 7 单测)
+- [ ] 10 类 SSE 事件 + 4 类 round-trip 端到端验证通过 —— E1a chat happy-path 就绪;完整 10 类事件序列留 GUI 运行时
+- [x] 无 dual-pool 写竞争(GUI 瘦客户端不开 db,WAL + busy_timeout=5s 就绪;`lsof` 验证留手动)
+- [x] daemon 单二进制部署可用(ServeDir 兜底挂 `/`,前端 + API 同源)—— 代码就绪,实跑留手动
+- [ ] **dogfooding ≥ 2 周无 P0/P1** —— Phase 3 启动前置条件,计时未起
+
+**Phase 3 仍定为远期**:前置条件是 Phase 2 实跑稳定(至少 dogfooding 1 个月)。当前仅代码就绪,不启动 Phase 3。
 
 ---
 

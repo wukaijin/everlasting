@@ -1884,3 +1884,117 @@ SIGTERM / `pnpm tauri build` 留手动验证清单。代码 + 配置全做,cargo
 - C8 手写 `api-types.ts` 全量类型(低风险,随用随补)
 - dogfooding ≥ 2 周后标记 Phase 2 完成
 - task `07-20-remote-access-daemon-split` 保持 in_progress(P2.5)
+
+---
+
+## Session 30: P2.5 E1-E3 E2E harness + transport parity + WSL 部署文档(Phase 2 代码收官)
+
+**Date**: 2026-07-23
+**Task**: 07-20-remote-access-daemon-split(P2.5,Phase 2 最终里程碑)
+**Branch**: `main`
+
+### Summary
+
+P2.5 务实落地版:E1 Rust E2E harness(10 tests)+ E2 前端 transport
+契约一致性(8 tests)+ E3 WSL 部署文档 + ROADMAP Phase 2 收尾标记。
+**架构可行性探明**后对原 E1/E2 scope 做了关键收敛 —— 集成测试只能
+访问 `everlasting_lib::daemon::*`(`db`/`agent`/`llm`/`state` 全私有,
+`MockProvider` 是 `#[cfg(test)]` lib-only),故 E1 走 `build_router` +
+`load_daemon_state` 经真实 HTTP,DB seed 走 HTTP 自身端点,provider
+mock 用 `httpmock`(整段 SSE 当单 body,SseParser 字节导向能解析)。
+E2 放弃"双 transport 双跑套件"(24 文件已全 mock transport,无意义),
+改为契约层一致性测试。
+
+**全量验证全绿**:cargo test --lib 1561 / cargo test --test e2e 10 /
+pnpm vitest 942(原 934 + transport-parity 8)/ vue-tsc 0 err /
+cargo check --tests 0 err。
+
+### Main Changes
+
+**Rust(1 文件,新)**:
+- `app/src-tauri/tests/e2e.rs`(新,~560 行)— daemon E2E integration
+  harness。经 `daemon::server::{build_router, load_daemon_state}` pub
+  API 发真实 HTTP(`tower::ServiceExt::oneshot`)。
+  - harness:`rig()`(tempdir + AppState + router)+ `post_json`/`get`/
+    `body_json` + `poll_mock_hits`(异步轮询 httpmock `hits_async`,
+    避免阻塞 tokio runtime 死锁)+ `seed_catalog_and_session`
+    (create_project→add_provider→add_model→set_default_model→
+    create_session)+ `anthropic_text_sse`(整段 Anthropic SSE fixture)
+  - **E1a** `chat_happy_path_httpmock`:seed catalog → httpmock
+    Anthropic → POST /chat → 异步轮询 mock 收到 1 次 POST /v1/messages
+  - **E1a** `chat_with_no_model_returns_structured_error`:无 model
+    时 chat 不 500 panic(pre-flight 失败走 SSE error)
+  - **E1b** SSE 重连协议 4 tests(纯 `SseRegistry` pub API):replay
+    after Last-Event-ID / resync sentinel on buffer overrun /
+    large-payload 跳过 buffer / first-connection no-replay
+  - **E1c** `snapshot_returns_session_state`:GET
+    /api/v1/sessions/{id}/snapshot 200 + JSON
+  - **E1d** `health_wire_shape_via_router` + `health_bare_alias_works`:
+    经完整 router 验证 health wire shape + `/health` 别名
+  - **E1e** `all_api_routes_are_mounted`:全部 /api/v1/* route 发空 body
+    断言非 404(route 漏挂载回归保护;从 routes/*.rs 的 .route(...) 提取)
+
+**前端(1 文件,新)**:
+- `app/src/transport/transport-parity.test.ts`(新,~310 行)— transport
+  契约层一致性测试。mock Tauri API + fetch/EventSource,断言
+  tauriTransport / httpTransport 对同一组 invoke/listen 行为对齐
+  (成功 resolve 同值 / 失败都 reject / listen 投递**已解包** payload
+  非 Event 信封 / unlisten 取消 / listen 返 Promise<UnlistenFn>)+
+  httpTransport camelCase→snake_case 顶层 key 转换锁定。
+
+**文档(3 文件)**:
+- `docs/HACKING-wsl.md`(+112 行)— 新增 §远程访问 daemon 部署
+  (Phase 2):生产模式(单二进制)/ dev 模式(vite+daemon 跨域)/
+  降级排查(daemon 0.0.0.0 / WSL localhost forwarding / 虚拟 IP /
+  netsh portproxy)/ Tauri sidecar 模式 / 验证命令速查
+- `docs/REMOTE-ACCESS-ROADMAP.md` — Phase 2 整体验收段更新
+  (P2.1-P2.5 代码+测试就绪标 [x],GUI 实跑/dogfooding 留 [ ] 手动)
+- `.trellis/tasks/07-20-remote-access-daemon-split/implement.md` —
+  P2.5 E1-E3 勾选 + scope 决议注释 + 验证命令更新
+
+### Git Commits
+
+(本 session 结尾提交)
+
+### Testing
+
+- [OK] `cargo test --test e2e -- --test-threads=1` — **10 passed** / 0 failed
+- [OK] `cargo test --lib` — **1561 passed** / 0 failed(无回退)
+- [OK] `cargo check --tests` — 0 err(4 pre-existing warnings,均非新文件)
+- [OK] `pnpm vitest run` — **942 passed** / 60 files(原 934 + transport-parity 8)
+- [OK] `pnpm vue-tsc --noEmit` — 0 err
+
+### 设计决策亮点
+
+1. **务实 scope(架构约束)**:集成测试不可达私有模块 + MockProvider
+   `#[cfg(test)]` lib-only → E1 走 build_router + httpmock 整段 SSE,
+   E2 弃双跑改契约层。避免为了"完整 E2E"暴露 lib 测试入口 / 提升
+   MockProvider 为 always-compile(工作量大,P3 再议)。
+2. **httpmock 异步轮询防死锁**:`chat_inner` 在 `tokio::spawn` 内
+   异步跑,httpmock `assert_hits` 是同步阻塞会死锁 current-thread
+   runtime(spawned task 跑不动)→ 改用 `hits_async()` + `tokio::sleep`
+   轮询循环 + 10s deadline。
+3. **E1e route 列表权威提取**:从 routes/*.rs 的 `.route(...)` 静态
+   提取真实路径(原计划的 79 路径表与实际偏差,P2.2/P2.3 重命名过);
+   test 即 lock —— 加 route 不加测试 / 加测试 route 不存在 都会失败。
+4. **E2 契约锁定而非双跑**:transport 一致性从"假设"变"显式测试"
+   (已解包 payload / Promise<UnlistenFn> / TransportError 形状),
+   不重构 24 个已 mock transport 的测试文件。
+
+### WSL 限制(留手动)
+
+- E4 手动 smoke(WSL→Windows 宿主浏览器实跑 / 断网重连 / 5MB /
+  关窗 SIGTERM / daemon 重启重连 / 双进程无 BUSY)— 需 GUI-capable 机器
+- E5 dogfooding ≥ 2 周 — Phase 3 启动前置,计时未起
+
+### Status
+
+[OK] **P2.5 E1-E3 代码 + 测试全落地,全量回归全绿;Phase 2 代码收官**
+
+### Next Steps
+
+- **E4 手动 smoke** 在 GUI-capable 机器跑通 → 标记 P2.5 完成
+- **E5 dogfooding** 启动计时(≥ 2 周无 P0/P1 → Phase 2 整体完成)
+- **Phase 3**(认证 + 跨设备远程)— 远期,dogfooding 1 个月+ 后启动
+- C8 手写 `api-types.ts` 全量类型(低风险,随用随补)
+- task `07-20-remote-access-daemon-split` 保持 in_progress(E4/E5 手动)

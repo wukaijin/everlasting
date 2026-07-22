@@ -273,48 +273,48 @@ D1-D9 全 ✓,`pnpm tauri dev` 正常,`pnpm tauri build` 产出可用 daemon,双
 
 ### 实现清单
 
-- [ ] **E1** `app/src-tauri/tests/e2e.rs`(Rust integration test):
-  - `e2e_basic_chat`:daemon + mock provider + SSE client,跑 1 轮 chat,断言 10 类事件序列
-  - `e2e_84_handlers`:84 handler 逐一调用 happy path
-  - `e2e_error_codes`:84 handler 逐一注入错误码,断言 HTTP 状态码 + 错误体
-  - `e2e_sse_reconnect`:断开 EventSource + 重连带 Last-Event-ID,断言 resend 正确
-  - `e2e_sse_resync_sentinel`:Last-Event-ID < buffer_oldest 场景,断言 sentinel 触发 + snapshot 路径
-  - `e2e_large_payload_5mb`:tool_result 5MB shell 输出通过 SSE 推送,断言不截断
-  - `e2e_dual_process`:同时启两个 client(Tauri mock + HTTP),断言无 SQLITE_BUSY
-- [ ] **E2** 回归测试套件扩展:`pnpm vitest run --transport=http` + `pnpm vitest run --transport=tauri`,结果应一致
-- [ ] **E3** WSL 部署文档:`docs/HACKING-wsl.md` 新增 §WSL 远程访问部署
-  - daemon 跑 WSL 监听 0.0.0.0:7456
-  - Windows 宿主浏览器 http://localhost:7456(WSL 2 localhost forwarding)
-  - 降级:WSL 虚拟 IP 172.x.x.x:7456 / netsh portproxy
-- [ ] **E4** 手动 smoke test checklist(P2.5 验收):
+> **Scope 决议(2026-07-23,务实落地版)**:原 E1 设想的"直接注入 MockProvider 跑 agent loop"在架构上不可达 —— 集成测试 `tests/e2e.rs` 只能访问 `everlasting_lib::daemon::*`(lib.rs 唯一 `pub mod`),`db`/`agent`/`llm`/`state` 全私有,`MockProvider` 是 `#[cfg(test)]` lib-crate-only。可行路径:经 `build_router` + `load_daemon_state` 发真实 HTTP,DB seed 走 HTTP 自身端点,provider mock 用 `httpmock`(整段 SSE 当单 body,SseParser 字节导向能解析)。原 E2 设想的"双 transport 双跑套件"也无现有机制(24 个测试文件已全 mock transport,双跑无意义)。故 E1/E2 改为**契约层 + happy-path** 务实版;E4/E5 留手动。
+
+- [x] **E1** `app/src-tauri/tests/e2e.rs`(Rust integration test,10 tests 全绿):
+  - `e1a_chat_happy_path_httpmock`:HTTP seed catalog(create_project/add_provider/add_model/set_default_model/create_session)+ httpmock Anthropic 整段 SSE → POST /chat → 断言 mock 收到 1 次 `POST /v1/messages`(异步 spawn + `hits_async` 轮询,避免阻塞 runtime)
+  - `e1a_chat_with_no_model_returns_structured_error`:无 model 时 chat 不 500 panic(pre-flight 失败走 SSE error 路径)
+  - `e1b` SSE 重连协议(4 tests,纯 `SseRegistry` pub API):replay after Last-Event-ID / resync sentinel on buffer overrun / large-payload 跳过 buffer / first-connection no-replay
+  - `e1c_snapshot_returns_session_state`:`GET /api/v1/sessions/{id}/snapshot` 200 + JSON
+  - `e1d_health_wire_shape_via_router` + `health_bare_alias_works`:经完整 router 验证 health wire shape(camelCase 字段 + api_versions 含 v1)+ `/health` 别名
+  - `e1e_all_api_routes_are_mounted`:全部 `/api/v1/*` route 发空 body 断言非 404(route 漏挂载回归保护;从 `routes/*.rs` 的 `.route(...)` 提取的真实列表)
+- [x] **E2** `app/src/transport/transport-parity.test.ts`(8 tests 全绿):**契约层一致性**而非双跑重构。mock Tauri API + fetch/EventSource,断言 tauriTransport / httpTransport 对同一组 `invoke`/`listen` 调用行为对齐 —— 成功路径 resolve 同值 / 失败路径都 reject / listen 投递**已解包** payload(非 Tauri `Event<T>` 信封)/ unlisten 取消生效 / listen 返回 `Promise<UnlistenFn>`。+ httpTransport camelCase→snake_case 顶层 key 转换锁定。
+- [x] **E3** WSL 部署文档:`docs/HACKING-wsl.md` 新增 §远程访问 daemon 部署
+  - 生产模式(单二进制:build dist + daemon release + 浏览器 localhost:7456)
+  - dev 模式(vite 1420 + daemon 7456 + `?daemonUrl=` 跨域)
+  - 降级排查(daemon 监听 0.0.0.0 / WSL 2 localhost forwarding / 虚拟 IP 172.x.x.x / netsh portproxy)
+  - Tauri GUI sidecar 模式(`?transport=tauri` 逃生)+ 验证命令速查
+  - `docs/REMOTE-ACCESS-ROADMAP.md` Phase 2 整体验收段更新(P2.1–P2.5 代码+测试就绪,GUI 实跑留手动)
+- [ ] **E4** 手动 smoke test checklist(P2.5 验收,**留 GUI-capable 机器手动**):
   - WSL→Windows 宿主浏览器跑通(发消息 / 流式 / permission / question / subagent)
-  - 断网重连后 UI 完整恢复
-  - 5MB shell 输出不丢
-  - 关 Tauri 窗口后 daemon 进程清理
-  - daemon 重启后 GUI 自动重连(httpTransport 健康检查)
-- [ ] **E5** Dogfooding 周期文档:Phase 3 启动条件(2 周 dogfooding)
+  - 断网重连后 UI 完整恢复(EventSource 自动重连 + Last-Event-ID 回放 / sentinel → snapshot)
+  - 5MB shell 输出不丢(LARGE_PAYLOAD_THRESHOLD 旁路 live channel,buffer 不爆)
+  - 关 Tauri 窗口后 daemon 进程清理(`RunEvent::Exit` → sidecar SIGTERM)
+  - daemon 重启后 GUI 自动重连(`awaitDaemonHealthy` 健康检查)
+  - 双进程(Tauri Thin + 浏览器)无 SQLITE_BUSY(WAL + busy_timeout=5s)
+- [ ] **E5** Dogfooding 周期文档:Phase 3 启动条件(主分支 ≥ 2 周 dogfooding 无 P0/P1)—— 计时未起
 
 ### 验证命令
 
 ```bash
-# 1. E2E harness 跑通
-cd app/src-tauri && cargo test --test e2e -- --test-threads=1
-#    期望:所有 e2e_* 测试全过
+# 1. E2E harness 跑通(本环境已验证,10 tests 全绿)
+cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+  cargo test --test e2e -- --test-threads=1
 
-# 2. WSL 端到端(在 WSL 内)
+# 2. E2 transport parity(本环境已验证,8 tests 全绿)
+cd app && pnpm vitest run src/transport/transport-parity.test.ts
+
+# 3. 全量回归(本环境已验证)
+cd app/src-tauri && PKG_CONFIG_PATH="..." cargo test --lib   # 1561+ 不回退
+cd app && pnpm vitest run && pnpm vue-tsc --noEmit
+
+# 4. WSL 端到端(GUI-capable 机器手动)
 cd app/src-tauri && cargo run --release --bin everlasting-daemon -- --port 7456
-# Windows PowerShell:
-curl http://localhost:7456/api/v1/health
-# Windows 浏览器:http://localhost:7456 —— 完整功能验证
-
-# 3. 回归测试套件
-cd app && pnpm vitest run --transport=http
-pnpm vitest run --transport=tauri
-#    期望:两套结果一致(除 transport-specific 测试)
-
-# 4. 大 message 边界
-cargo test --test e2e -- --test-threads=1 large_payload
-cargo test --test e2e -- --test-threads=1 sse_resync
+# Windows PowerShell / 浏览器:见 docs/HACKING-wsl.md §远程访问 daemon 部署
 ```
 
 ### 回滚点
