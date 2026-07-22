@@ -1625,3 +1625,79 @@ useToast composable + retryable button(scope B 最小闭环,R1 全局错误→re
 ### Next Steps
 
 - None - task complete
+
+---
+
+## Session 27: 远程访问 P2.3 收尾(C6 CORS + C7 切换 + C9 集成测试)+ 提交归档
+
+**Date**: 2026-07-22
+**Task**: 07-20-remote-access-daemon-split(P2.3,Phase 2 in_progress)
+**Branch**: `main`
+
+### Summary
+
+remote-access P2.3 收尾切片 + 提交归档。上个 session(07-21)已落地后端
+C1-C5 + 前端 C6 主体(编译 + 717 测试 + 运行时 health/stream 验证),本
+session 在其上完成 P2.3 剩余可验证切片,并把积累的全部未提交改动归档为
+3 个 commit。
+
+P2.3 功能闭环:C1-C7 / C9 / C10 / C11 全部完成 —— daemon SSE 全链路
+(HttpSseSink + SseRegistry + 单全局 `/api/v1/stream` + replay/sentinel)+
+httpTransport(76 cmd→domain 映射 + 顶层 camel→snake + 单全局 EventSource
+分发)+ dev CORS + transport 切换 + 集成测试。cargo 1555 / vitest 18 全绿。
+
+留后续:C8 手写 TS 类型(低风险渐进)、C5 完整 SubagentEventSink 注入
+(现 daemon 路径 worker 事件 buffer-only;完整注入需改 run_chat_loop 签名
+去 app_opt,满足 Phase 1 §3.3 承诺,是 P2.4 前置)。
+
+### Main Changes
+
+**P2.3 切片1(dev 链路可跑可验证)**:
+- C6 收尾 CORS:`Cargo.toml` tower-http 加 `"cors"` feature + `server.rs
+  build_router` 加 `CorsLayer::very_permissive()`(dev 跨域 vite 1420 ↔
+  daemon 7456;P2.4 sidecar 同源后移除)
+- C7 transport 切换:`transport/index.ts` 加 `?transport=http/tauri` query
+  override,默认走 `isTauri()`
+- C10 httpTransport 单测:`transport/http.test.ts`(15 tests),`vi.resetModules`
+  隔离 module-level 状态,覆盖 camel→snake / 嵌套透传 / 未知 cmd / HTTP
+  错误透传 / 空 body→null / `?daemonUrl=` / EventSource lazy / 具名分发 /
+  handler 自删不死循环
+
+**C9 SSE 集成测试**:
+- `agent/tests_sse.rs`(3 tests):text-only 事件序列 / tool_use 多事件名
+  (chat-event + tool:call + tool:result)/ Last-Event-ID replay 重连。不
+  起 HTTP socket(真 axum serve + EventSource 留 P2.5 `e2e.rs`),直接
+  消费 `SseRegistry::subscribe`(与 C2 stream handler 同构 `replay.chain
+  (live)`)。复用 `tests_common` harness + MockProvider,sink 换 HttpSseSink。
+
+**提交归档**(3 commit)+ `.gitignore` 加 `.claude/worktrees/`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f2a675b` | feat(daemon): P2.3 SSE event stream + httpTransport (Phase 2.3) |
+| `6301bf9` | docs(reviews): remote-access 调研 & task 体系评审快照 (2026-07-20) |
+| `2392f41` | test(daemon): P2.3 C9 SSE 集成测试 (chat_loop -> HttpSseSink -> 客户端) |
+
+### Testing
+
+- [OK] `cargo check`(PKG_CONFIG_PATH)— 0 err,tower-http cors 编译通过
+- [OK] `cargo test --lib` — 1555 passed / 0 failed(含 tests_sse 3 新增)
+- [OK] `vue-tsc --noEmit` — 0 err
+- [OK] `vitest src/transport/` — 18 passed(transport 3 + http 15)
+
+### Status
+
+[OK] **P2.3 功能闭环,暂告段落**
+
+### Next Steps
+
+- **P2.4**(sidecar spawn + GUI 切 httpTransport + 静态文件 + GUI 去 db)
+  — 下一里程碑,2-3 天,D3 不可逆切换高风险;前置 Phase 1 dogfooding
+  ≥3 天 + Phase 1 §3.3 承诺(= C5 完整 subagent sink 注入)。建议专门
+  session 开。
+- C8 手写 `api-types.ts` 类型(低风险,可随 P2.4 顺手收)
+- C5 完整 SubagentEventSink 注入(P2.4 前置,改 run_chat_loop 签名)
+- task `07-20-remote-access-daemon-split` 保持 in_progress(P2.4 在同
+  task `implement.md` D1-D9)
