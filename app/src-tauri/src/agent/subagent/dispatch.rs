@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Manager};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -29,7 +28,7 @@ use super::{
     assemble_subagent_prompt, build_worker_messages,
     filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result_with_model,
     format_final_text, summarize_worker_tool_actions, truncate_transcript_for_persistence,
-    SubagentBufferSink, SubagentCache, SubagentStatus, TRANSCRIPT_MAX_BYTES,
+    SubagentBufferSink, SubagentCache, SubagentEventSink, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -258,13 +257,17 @@ pub(crate) async fn run_subagent(
     input: &serde_json::Value,
     parent_token: &CancellationToken,
     _parent_sink: &Arc<dyn ChatEventSink>,
-    // B6 PR3 (2026-06-20, PR2 hotfix): the parent's Tauri
-    // `AppHandle`, threaded through `run_chat_loop`'s 22nd
-    // parameter. Used to construct the worker's `SubagentBufferSink`
-    // so the worker can emit the `subagent:event` IPC channel
-    // live. `None` in unit tests (no Tauri runtime); the sink's
-    // `new_without_app_handle` constructor is used in that case.
-    app_handle: Option<AppHandle>,
+    // P2.4 C5 (2026-07-22): the worker's `SubagentEventSink`,
+    // replacing the `app_handle: Option<AppHandle>` 渐进方案.
+    // Injected into the worker's `SubagentBufferSink` (via
+    // `new_with_event_sink`) so worker `subagent:event` /
+    // `subagent:finished` reach the transport live. Tauri passes
+    // `AppHandleSubagentSink` (IPC); daemon passes
+    // `HttpSseSubagentSink` (SSE — was buffer-only pre-C5, the
+    // gap this closes); tests pass `ThreadLocalSubagentSink`. The
+    // sibling `catalog` param (line ~244) covers the model-
+    // resolution use the old `app_handle` also served.
+    worker_event_sink: Arc<dyn SubagentEventSink>,
     // L3a (2026-06-24) / L3b PR2 (2026-06-27): when `true`, the
     // worker's toolset is additionally forced down to read-only
     // tools (`filter_tools_readonly`) on top of
@@ -829,25 +832,18 @@ pub(crate) async fn run_subagent(
 
     // SubagentBufferSink: records the worker's emits into an in-
     // memory transcript AND (PR2 hotfix) emits each event on the
-    // `subagent:event` Tauri IPC channel so the frontend
-    // `<SubagentDrawer>` (PR3b) can stream the transcript live.
-    // Does NOT forward to the parent sink — the parent's frontend
-    // only sees the dispatch_subagent tool_call / tool_result
-    // pair; the worker's stream stays isolated (Claude Code
-    // convention). The `app_handle` is `Some` in production (the
-    // `chat` Tauri command threads it through) and `None` in
-    // unit tests (no Tauri runtime) — the IPC emit becomes a
-    // silent no-op in the latter case, but the transcript
-    // accumulation path is unaffected.
+    // `subagent:event` channel so the frontend `<SubagentDrawer>`
+    // (PR3b) can stream the transcript live. Does NOT forward to
+    // the parent sink — the parent's frontend only sees the
+    // dispatch_subagent tool_call / tool_result pair; the worker's
+    // stream stays isolated (Claude Code convention).
     //
-    // We need TWO clones of `app_handle`: one for the sink (which
-    // emits on the IPC channel) and one for the nested
-    // `run_chat_loop` call (which the worker threads forward to
-    // ITS OWN nested run_subagent call, if the worker itself
-    // dispatches a sub-subagent — out of scope in MVP, but the
-    // signature carries the parameter through anyway). The
-    // double-clone is cheap (AppHandle is `Arc<Mutex<...>>` under
-    // the hood).
+    // P2.4 C5 (2026-07-22): the sink's event channel is the
+    // injected `worker_event_sink` (Tauri `AppHandleSubagentSink` /
+    // daemon `HttpSseSubagentSink` / test `ThreadLocalSubagentSink`)
+    // — the old `app_handle: Option<AppHandle>` Some/None branching
+    // (and its double-clone) is gone. See `run_chat_loop`'s
+    // `worker_event_sink` param doc.
     // Bug1 fix (2026-06-21): the sink's `run_id` becomes the
     // `subagent:event` payload's `runId`, which the frontend store
     // uses as the key for `liveTranscript` / `getRunCache`. It MUST
@@ -862,17 +858,17 @@ pub(crate) async fn run_subagent(
     let event_run_id = worker_run_id_opt
         .clone()
         .unwrap_or_else(|| worker_rid.clone());
-    let worker_sink: Arc<SubagentBufferSink> = match app_handle.as_ref() {
-        Some(handle) => Arc::new(SubagentBufferSink::new(
-            handle.clone(),
-            event_run_id.clone(),
-            parent_session_id.to_string(),
-        )),
-        None => Arc::new(SubagentBufferSink::new_without_app_handle(
-            event_run_id.clone(),
-            parent_session_id.to_string(),
-        )),
-    };
+    // P2.4 C5 (2026-07-22): the worker's `SubagentBufferSink` is
+    // now wired via the injected `SubagentEventSink`. The old
+    // `app_handle` match (`new` / `new_without_app_handle` split)
+    // is gone — one `new_with_event_sink` path now serves the
+    // Tauri IPC sink, the daemon SSE sink, and the test ThreadLocal
+    // collector uniformly.
+    let worker_sink: Arc<SubagentBufferSink> = Arc::new(SubagentBufferSink::new_with_event_sink(
+        event_run_id.clone(),
+        parent_session_id.to_string(),
+        worker_event_sink.clone(),
+    ));
     let worker_sink_dyn: Arc<dyn ChatEventSink> = worker_sink.clone();
 
     // Nested run_chat_loop. The worker reuses the parent's
@@ -957,13 +953,18 @@ pub(crate) async fn run_subagent(
         // the nested call, so the override was unreachable on the
         // worker's actual permission checks.
         Some(true),
-        // B6 PR3 (2026-06-20, PR2 hotfix): forward the parent's
-        // AppHandle so the worker's SubagentBufferSink can emit the
-        // `subagent:event` IPC channel live. None in tests. Cloned
-        // (not moved) so the post-loop `subagent:finished` emit
-        // below can still borrow `app_handle` — AppHandle is an
-        // `Arc` under the hood so the clone is cheap.
-        app_handle.clone(),
+        // P2.4 C5 (2026-07-22): the worker's nested `run_chat_loop`
+        // receives the injected `worker_event_sink` + `catalog`
+        // (replacing the forwarded `app_handle`). The worker itself
+        // never dispatches a subagent (`dispatch_subagent` is
+        // stripped from its toolset), so `catalog = None` is honest
+        // here — the param is a dead carry-through on the worker
+        // path (model resolution happened above via the sibling
+        // `catalog` arg + `resolve_worker_provider`). The sink is
+        // cloned (not moved) so the post-loop `subagent:finished`
+        // emit below can still use it.
+        None,
+        worker_event_sink.clone(),
         // 2026-06-21 fix (B6 review defect A): thread the
         // worker's `SubagentDef.system_prompt` (built via
         // `assemble_subagent_prompt` above) as the 23rd
@@ -1459,23 +1460,6 @@ pub(crate) async fn resolve_final_model(
     }
     // ② Frontmatter declaration (lowest priority declaration).
     Ok(frontmatter_model.map(str::to_string))
-}
-
-/// task 07-03-subagent-frontmatter-model: snapshot `AppState.catalog`
-/// for a `run_subagent` call site. Returns `None` when there is no
-/// `AppHandle` (unit tests, no Tauri runtime) or the state isn't
-/// managed yet (defensive — never in a real chat). `run_subagent`
-/// falls back to the parent provider on `None` or catalog miss, so
-/// `None` here is always safe. Used inline as the `catalog` argument
-/// at the three `run_subagent` call sites in `chat_loop.rs` (forced
-/// dispatch / concurrent batch / serial interceptor).
-pub(crate) fn app_subagent_catalog(
-    app_handle: &Option<tauri::AppHandle>,
-) -> Option<Arc<RwLock<ProviderCatalog>>> {
-    app_handle
-        .as_ref()
-        .and_then(|h| h.try_state::<std::sync::Arc<crate::state::AppState>>())
-        .map(|s| s.catalog.clone())
 }
 
 /// task 07-03-subagent-frontmatter-model: resolve the worker's

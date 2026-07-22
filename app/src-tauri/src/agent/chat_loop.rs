@@ -46,8 +46,7 @@ use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use sqlx::SqlitePool;
 use std::pin::Pin;
-use tauri::AppHandle;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 // A5+ (2026-07-04): LLM first-byte-safe retry open.
 use crate::llm::retry::{retry_open, OpenOutcome, RetryPolicy, RetrySink, RetryingEvent};
@@ -57,6 +56,7 @@ use crate::agent::helpers::{
     CANCELLED_MARKER, ERROR_MARKER,
 };
 use crate::agent::loop_detection;
+use crate::agent::subagent::SubagentEventSink;
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
@@ -67,7 +67,7 @@ use crate::llm::{
 use crate::memory::MemoryCache;
 use crate::projects::boundary::is_within_root;
 use crate::skill::loader::SkillCache;
-use crate::state::{ChatEventSink, ToolCallPayload};
+use crate::state::{ChatEventSink, ProviderCatalog, ToolCallPayload};
 use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 use std::collections::VecDeque;
@@ -246,17 +246,22 @@ pub async fn run_chat_loop(
     // integration tests pass `Some(false)` to make the
     // production-style default explicit at the call site.
     is_worker: Option<bool>,
-    // B6 PR3 (2026-06-20, PR2 hotfix + PR3a): optional Tauri
-    // `AppHandle` used by `run_subagent` to wire the worker's
-    // `SubagentBufferSink` IPC emit. Production passes
-    // `Some(app.clone())` from the `chat` Tauri command; tests
-    // pass `None` (no Tauri runtime, the worker's IPC emit path
-    // is bypassed — see `SubagentBufferSink::new_without_app_handle`).
-    // Adding this as the 22nd parameter mirrors the existing
-    // 21-parameter growth pattern (PR1a/1b/2b); the agent loop
-    // body itself does NOT use `app_handle` — only `run_subagent`
-    // does, when constructing the worker sink.
-    app_handle: Option<AppHandle>,
+    // P2.4 C5 (2026-07-22): the worker dispatch context, replacing
+    // the `app_handle: Option<AppHandle>` 22nd parameter. The old
+    // param served two uses — (1) wiring the worker's
+    // `SubagentBufferSink` IPC emit, (2) snapshotting
+    // `AppState.catalog` for worker model resolution. Both are now
+    // explicit + transport-agnostic so the daemon path (no
+    // `AppHandle`) gets them too:
+    //   - `worker_catalog`: `Some(state.catalog.clone())` in
+    //     production (Tauri + daemon); `None` in tests.
+    //   - `worker_event_sink`: `AppHandleSubagentSink` (Tauri IPC),
+    //     `HttpSseSubagentSink` (daemon SSE — was buffer-only
+    //     pre-C5), `ThreadLocalSubagentSink` (tests).
+    // The agent loop body itself does NOT use either — only
+    // `run_subagent` does, when constructing the worker sink.
+    worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
+    worker_event_sink: Arc<dyn SubagentEventSink>,
     // 2026-06-21 fix (B6 review defect A): the worker's
     // `assemble_subagent_prompt(def, task)` output was previously
     // dead code (`_worker_system_prompt` discarded at
@@ -1044,7 +1049,7 @@ pub async fn run_chat_loop(
         let (content, is_error, cancel_parent, exit_code) =
             crate::agent::subagent::dispatch::run_subagent(
                 &provider,
-                crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
+                worker_catalog.clone(),
                 context_window,
                 &rid,
                 &session_id,
@@ -1061,7 +1066,7 @@ pub async fn run_chat_loop(
                 &input,
                 &token,
                 &sink,
-                app_handle.clone(),
+                worker_event_sink.clone(),
                 false,
                 &subagent_cache,
                 &app_data_dir,
@@ -3077,7 +3082,8 @@ pub async fn run_chat_loop(
                             let session_active_request = session_active_request.clone();
                             let background_shells = background_shells.clone();
                             let current_ctx = current_ctx.clone();
-                            let app_handle = app_handle.clone();
+                            let worker_event_sink = worker_event_sink.clone();
+                            let worker_catalog = worker_catalog.clone();
                             let skip_persist = skip_persist;
                             let cancelled_flag = cancelled_flag.clone();
                             // W1 Step 2.4: workflow role-gate
@@ -3161,7 +3167,7 @@ pub async fn run_chat_loop(
                                 let (content, is_error, cancel_parent, exit_code) =
                                     crate::agent::subagent::dispatch::run_subagent(
                                         &provider,
-                                        crate::agent::subagent::dispatch::app_subagent_catalog(&app_handle),
+                                        worker_catalog.clone(),
                                         context_window,
                                         &rid,
                                         &session_id,
@@ -3178,7 +3184,7 @@ pub async fn run_chat_loop(
                                         &input,
                                         &token,
                                         &sink,
-                                        app_handle.clone(),
+                                        worker_event_sink.clone(),
                                         // L3b PR2 (2026-06-27): the
                                         // concurrent branch no longer
                                         // forces read-only. Per-worker
@@ -3642,9 +3648,7 @@ pub async fn run_chat_loop(
                             let (content, is_error, cancel_parent, exit_code) =
                                 crate::agent::subagent::dispatch::run_subagent(
                                     &provider,
-                                    crate::agent::subagent::dispatch::app_subagent_catalog(
-                                        &app_handle,
-                                    ),
+                                    worker_catalog.clone(),
                                     context_window,
                                     &rid,
                                     &session_id,
@@ -3661,13 +3665,11 @@ pub async fn run_chat_loop(
                                     input,
                                     &token,
                                     &sink,
-                                    // B6 PR3 (2026-06-20, PR2 hotfix): thread the
-                                    // parent's AppHandle so the worker's
-                                    // SubagentBufferSink can emit the `subagent:event`
-                                    // IPC channel live. From the chat command's spawn
-                                    // closure this is `Some(app.clone())`; from the
-                                    // unit tests it's `None` (no Tauri runtime).
-                                    app_handle.clone(),
+                                    // P2.4 C5 (2026-07-22): inject the worker's
+                                    // `SubagentEventSink` (replaces the forwarded
+                                    // `app_handle`). See the `worker_event_sink`
+                                    // param doc on `run_chat_loop`.
+                                    worker_event_sink.clone(),
                                     // L3a (2026-06-24): serial path keeps the
                                     // worker's full toolset (write/shell/web for
                                     // general-purpose), gated by `is_worker: true`

@@ -185,28 +185,6 @@ pub struct SubagentBufferSink {
 }
 
 impl SubagentBufferSink {
-    /// Construct a sink with Tauri IPC. Used by production
-    /// (`run_subagent` threads the parent's `AppHandle` into the
-    /// worker via `run_chat_loop`'s 22nd parameter).
-    pub fn new(app_handle: tauri::AppHandle, run_id: String, session_id: String) -> Self {
-        let app = app_handle.clone();
-        Self {
-            transcript: StdMutex::new(Vec::new()),
-            text_parts: StdMutex::new(Vec::new()),
-            per_turn_usage: StdMutex::new(Vec::new()),
-            had_error: std::sync::atomic::AtomicBool::new(false),
-            was_cancelled: std::sync::atomic::AtomicBool::new(false),
-            was_incomplete: std::sync::atomic::AtomicBool::new(false),
-            was_loop_terminated: std::sync::atomic::AtomicBool::new(false),
-            turns_completed: std::sync::atomic::AtomicU64::new(0),
-            event_sink: Arc::new(super::AppHandleSubagentSink { app: app_handle }),
-            app_handle: Some(app),
-            run_id,
-            session_id,
-            tool_call_received_at: StdMutex::new(HashMap::new()),
-        }
-    }
-
     /// Construct a sink without Tauri IPC (test path). The emit
     /// side becomes a silent no-op; transcript accumulation works
     /// identically.
@@ -230,12 +208,12 @@ impl SubagentBufferSink {
     }
 
     /// Construct a sink with an explicitly-injected
-    /// `SubagentEventSink`. Used by tests that want a custom impl
-    /// (e.g. a recording sink that asserts on the exact IPC
-    /// sequence). Production code should use `new` /
-    /// `new_without_app_handle` (the standard AppHandle / no-app
-    /// split).
-    #[allow(dead_code)]
+    /// `SubagentEventSink`. P2.4 C5 (2026-07-22): this is now the
+    /// SINGLE production constructor — `dispatch.rs` injects the
+    /// transport's sink (Tauri `AppHandleSubagentSink` / daemon
+    /// `HttpSseSubagentSink` / test `ThreadLocalSubagentSink`)
+    /// here, replacing the old `new` / `new_without_app_handle`
+    /// AppHandle split.
     pub fn new_with_event_sink(
         run_id: String,
         session_id: String,

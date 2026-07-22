@@ -2,15 +2,13 @@
 //!
 //! daemon 版的 `chat` 入口,和 Tauri `chat` 命令(`agent::chat::chat`)
 //! 共用 [`chat_inner`] 编排逻辑(Q0 决议 — 业务逻辑单份)。唯一差异:
-//! - sink = `HttpSseSink`(从 `state.sse` registry 构造)替代
-//!   `AppHandleSink` —— agent loop 的事件经 SSE 推到浏览器,而非
-//!   Tauri IPC。
-//! - `app_opt = None` —— **渐进方案**(task implement.md C5):daemon
-//!   路径没有 `AppHandle`,`run_chat_loop` 的 worker sink 注入走
-//!   `SubagentBufferSink::new_without_app_handle`(buffer-only,无
-//!   `subagent:event` SSE emit)。parent chat 完整可用;worker 仍运行
-//!   + DB 记录,但前端 drawer 看不到实时 worker 事件(完整
-//!   `HttpSseSubagentSink` 注入留 P2.3 收尾)。
+//! - sink 注入 = `HttpSseSink`(parent chat)+ `HttpSseSubagentSink`
+//!   (worker)—— P2.4 C5 (2026-07-22) 完成完整 `SubagentEventSink`
+//!   注入:daemon 路径 worker `subagent:event` 现经 SSE live 推送
+//!   (P2.3 时 buffer-only,本提交闭合)。两个 sink 各自独立注入
+//!   (Phase 1 §3.3 承诺),在 dispatch.rs 经 `new_with_event_sink`
+//!   汇合 —— 替代 Tauri 路径的 `AppHandleSink` /
+//!   `AppHandleSubagentSink`。
 //!
 //! handler 立即返回空 body(`chat_inner` 内部 `tokio::spawn` agent
 //! loop,fire-and-forget);前端 `httpTransport` 进入 LRU 缓存等
@@ -22,8 +20,8 @@ use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
 use crate::agent::chat::chat_inner;
-use crate::agent::subagent::ForcedDispatch;
-use crate::daemon::sse::HttpSseSink;
+use crate::agent::subagent::{ForcedDispatch, SubagentEventSink};
+use crate::daemon::sse::{HttpSseSink, HttpSseSubagentSink};
 use crate::error::AppCommandError;
 use crate::llm::ChatMessage;
 use crate::state::{AppState, ChatEventSink};
@@ -50,13 +48,22 @@ pub async fn chat(
     let sink: Arc<dyn ChatEventSink> = Arc::new(HttpSseSink {
         registry: state.sse.clone(),
     });
+    // P2.4 C5 (2026-07-22): inject the worker's `SubagentEventSink` —
+    // daemon-path worker `subagent:event` now streams over SSE live
+    // (was buffer-only pre-C5, the gap this closes). Mirrors the
+    // Tauri path's `AppHandleSubagentSink` through the same
+    // `new_with_event_sink` seam in dispatch.rs.
+    let worker_event_sink: Arc<dyn SubagentEventSink> = Arc::new(HttpSseSubagentSink {
+        registry: state.sse.clone(),
+    });
     chat_inner(
         &state,
         req.request_id,
         req.session_id,
         req.messages,
         sink,
-        None,
+        Some(state.catalog.clone()),
+        worker_event_sink,
         req.resend_seq,
         req.forced_dispatch,
     )

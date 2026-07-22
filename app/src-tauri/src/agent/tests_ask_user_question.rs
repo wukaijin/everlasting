@@ -200,6 +200,7 @@ async fn run_loop(
         false,
         Some(false),
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         None,
         None,
         h.subagent_cache.clone(),

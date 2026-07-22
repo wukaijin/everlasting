@@ -83,7 +83,8 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         false,       // skip_session_active
         false,       // skip_persist
         Some(false), // is_worker
-        None,        // app_handle
+        None,        // worker_catalog
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         None,        // system_prompt_override
         None,        // worker_run_id
         h.subagent_cache.clone(),
@@ -245,6 +246,7 @@ async fn agent_loop_dispatch_subagent_completes_and_returns_summary() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -468,6 +470,7 @@ async fn agent_loop_dispatch_subagent_cancel_propagates_to_worker() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -623,6 +626,7 @@ async fn agent_loop_dispatch_subagent_error_returns_status_error() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -793,6 +797,7 @@ async fn agent_loop_dispatch_subagent_error_includes_partial_transcript_summary(
         false,
         Some(false),
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         None,
         None,
         h.subagent_cache.clone(),
@@ -1048,6 +1053,7 @@ async fn agent_loop_dispatch_subagent_guard_does_not_evict_parent_session_active
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -1184,6 +1190,7 @@ async fn agent_loop_dispatch_subagent_persists_subagent_run() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -1338,6 +1345,7 @@ async fn agent_loop_dispatch_subagent_cancelled_persists_status_cancelled() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -1474,6 +1482,7 @@ async fn agent_loop_dispatch_subagent_audit_not_polluted_by_worker() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -1618,6 +1627,7 @@ async fn agent_loop_dispatch_subagent_token_usage_does_not_fold_into_parent() {
         Some(false),
         // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None (no Tauri runtime).
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // 2026-06-21 fix (B6 review defect A): tests pass
         // `None` (production-style caller — not a worker,
         // so the parent's `assemble_system_prompt(mode_prefix,
@@ -1856,6 +1866,7 @@ async fn agent_loop_dispatch_subagent_general_purpose_plan_mode_write_denied() {
                 // B6 PR3 (2026-06-20, PR2 hotfix): tests pass None
                 // (no Tauri runtime).
                 None,
+                std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
                 // 2026-06-21 fix (B6 review defect A): tests pass
                 // `None` (production-style caller — not a worker,
                 // so the parent's `assemble_system_prompt(mode_prefix,
@@ -2092,6 +2103,7 @@ async fn system_prompt_override_worker_path_sends_override() {
         // collapse; the override is a separate concern.
         Some(false),
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // The actual fix being tested.
         Some(worker_prompt.clone()),
         // 2026-06-22 (RULE-FrontSubagent-003 fix): this test
@@ -2187,6 +2199,7 @@ async fn system_prompt_override_none_path_uses_parent_assembly() {
         false,
         Some(false),
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         // Production path: `None` override.
         None,
         // 2026-06-22 (RULE-FrontSubagent-003 fix): production-style
@@ -2286,6 +2299,7 @@ async fn run_loop(
         false,
         Some(false),
         None,
+        std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
         None,
         None,
         h.subagent_cache.clone(),

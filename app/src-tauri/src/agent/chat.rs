@@ -32,13 +32,15 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
+use crate::agent::subagent::{AppHandleSubagentSink, SubagentEventSink};
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
 use crate::error::AppCommandError;
 use crate::llm::{ChatEvent, ChatMessage};
-use crate::state::{AppState, ChatEventPayload, ChatEventSink};
+use crate::state::{AppState, ChatEventPayload, ChatEventSink, ProviderCatalog};
 
 // ---------------------------------------------------------------------------
 // The per-turn latency helpers (`instant_delta_ms` / `build_turn_latency`)
@@ -94,13 +96,20 @@ pub async fn chat(
     // the same trait object for both pre-flight + the spawn closure.
     let sink: Arc<dyn ChatEventSink> =
         Arc::new(crate::state::AppHandleSink { app: app.clone() });
+    // P2.4 C5 (2026-07-22): the worker's `SubagentEventSink` — Tauri
+    // path forwards worker `subagent:event` over IPC. The daemon path
+    // injects `HttpSseSubagentSink` instead (daemon/routes/agent.rs);
+    // both flow through `new_with_event_sink` in dispatch.rs.
+    let worker_event_sink: Arc<dyn SubagentEventSink> =
+        Arc::new(AppHandleSubagentSink { app: app.clone() });
     chat_inner(
         state.inner(),
         request_id,
         session_id,
         messages,
         sink,
-        Some(app),
+        Some(state.inner().catalog.clone()),
+        worker_event_sink,
         resendSeq,
         forcedDispatch,
     )
@@ -140,7 +149,14 @@ pub(crate) async fn chat_inner(
     session_id: String,
     messages: Vec<ChatMessage>,
     sink: Arc<dyn ChatEventSink>,
-    app_opt: Option<AppHandle>,
+    // P2.4 C5 (2026-07-22): worker dispatch context (replaces
+    // `app_opt: Option<AppHandle>`). Forwarded to `run_chat_loop`'s
+    // `worker_catalog` + `worker_event_sink`. Tauri passes
+    // (state.catalog, AppHandleSubagentSink); daemon passes
+    // (state.catalog, HttpSseSubagentSink) — the daemon path now
+    // gets live worker `subagent:event` (was buffer-only pre-C5).
+    worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>,
+    worker_event_sink: Arc<dyn SubagentEventSink>,
     resend_seq: Option<i64>,
     forced_dispatch: Option<crate::agent::subagent::ForcedDispatch>,
 ) -> Result<(), AppCommandError> {
@@ -373,16 +389,13 @@ pub(crate) async fn chat_inner(
             // `PermissionContext.is_worker = false` — Tier 4 ask
             // is reachable (permission:ask modal works normally).
             Some(false),
-            // B6 PR3 (2026-06-20, PR2 hotfix): forward the
-            // `app: AppHandle` so `run_subagent` can wire the
-            // worker's `SubagentBufferSink` with a live IPC emit
-            // path (the `subagent:event` channel). The 22nd
-            // `run_chat_loop` parameter; tests pass `None`.
-            // P2.3 C5 (2026-07-21): `app_opt` parameterized —
-            // Tauri passes `Some(app)`, daemon passes `None`
-            // (渐进方案: daemon-path worker events stay buffer-only
-            // until full SubagentEventSink injection lands).
-            app_opt,
+            // P2.4 C5 (2026-07-22): forward the worker dispatch
+            // context (catalog + event sink) to `run_chat_loop`'s
+            // 22nd/23rd params. Closes the daemon-path gap — worker
+            // `subagent:event` now reaches the transport live (was
+            // buffer-only pre-C5).
+            worker_catalog.clone(),
+            worker_event_sink.clone(),
             // 2026-06-21 fix (B6 review defect A): production
             // chat is never a worker, so the parent's
             // `assemble_system_prompt(mode_prefix, base_prompt)`
