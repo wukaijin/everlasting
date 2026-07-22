@@ -9,10 +9,14 @@
 //! ## CLI
 //!
 //! ```sh
-//! everlasting-daemon [--port <N>]
+//! everlasting-daemon [--port <N>] [--data-dir <PATH>]
 //! # or
 //! EVERLASTING_DAEMON_PORT=<N> everlasting-daemon
 //! ```
+//!
+//! `--data-dir` (P2.4 D2.3): the GUI sidecar passes the Tauri-resolved
+//! `app_data_dir` so the daemon opens the SAME SQLite file the GUI
+//! would have (P2.1 path consistency). Absent → platform default.
 //!
 //! Port resolution (Q1 decision, daemon/server.rs::resolve_port):
 //! `--port` flag > `EVERLASTING_DAEMON_PORT` env > default 7456.
@@ -53,7 +57,12 @@ async fn main() -> ExitCode {
         .init();
 
     let port = parse_port_from_args();
-    let data_dir = resolve_data_dir();
+    // P2.4 D2.3: `--data-dir` lets the GUI sidecar pass the exact
+    // `app_data_dir` the Tauri app would have resolved (P2.1 path
+    // consistency invariant — daemon + GUI must read/write the same
+    // SQLite file). Falls back to the platform default when absent
+    // (standalone daemon runs, CI, dev `cargo run --bin`).
+    let data_dir = parse_data_dir_from_args().unwrap_or_else(resolve_data_dir);
 
     tracing::info!(
         port,
@@ -97,7 +106,31 @@ async fn main() -> ExitCode {
 /// Parse `--port <N>` from CLI args. Falls back to
 /// `EVERLASTING_DAEMON_PORT` env, then the default 7456.
 fn parse_port_from_args() -> u16 {
-    let matches = Command::new("everlasting-daemon")
+    let matches = build_cli().get_matches();
+    let cli_port = matches
+        .get_one::<String>("port")
+        .and_then(|s| s.parse::<u16>().ok());
+    let env_port = std::env::var("EVERLASTING_DAEMON_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok());
+    server::resolve_port(cli_port, env_port)
+}
+
+/// P2.4 D2.3: parse `--data-dir <PATH>` from CLI args. Returns `None`
+/// when absent (caller falls back to `resolve_data_dir`). The GUI
+/// sidecar passes the Tauri-resolved `app_data_dir` so the daemon opens
+/// the same SQLite file the GUI would have (P2.1 path consistency).
+fn parse_data_dir_from_args() -> Option<std::path::PathBuf> {
+    let matches = build_cli().get_matches();
+    matches
+        .get_one::<String>("data-dir")
+        .map(std::path::PathBuf::from)
+}
+
+/// Build the shared clap `Command` (so `--port` and `--data-dir`
+/// parsing stay in lockstep — both read the same `get_matches` pass).
+fn build_cli() -> Command {
+    Command::new("everlasting-daemon")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Everlasting agent daemon (Phase 2.2). Hosts the agent core over HTTP/SSE.")
         .arg(
@@ -106,15 +139,17 @@ fn parse_port_from_args() -> u16 {
                 .help("Port to listen on (default: 7456, or $EVERLASTING_DAEMON_PORT)")
                 .action(ArgAction::Set),
         )
-        .get_matches();
-
-    let cli_port = matches
-        .get_one::<String>("port")
-        .and_then(|s| s.parse::<u16>().ok());
-    let env_port = std::env::var("EVERLASTING_DAEMON_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok());
-    server::resolve_port(cli_port, env_port)
+        .arg(
+            Arg::new("data-dir")
+                .long("data-dir")
+                .help(
+                    "Data directory for the SQLite store + worktrees. \
+                     Defaults to the platform app-data dir. The GUI \
+                     sidecar passes the Tauri-resolved app_data_dir so \
+                     daemon + GUI share one SQLite file.",
+                )
+                .action(ArgAction::Set),
+        )
 }
 
 /// Resolve the daemon's data directory. Phase 2.2 uses the same

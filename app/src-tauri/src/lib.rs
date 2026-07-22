@@ -51,6 +51,12 @@ mod llm;
 mod memory;
 mod projects;
 mod resource_loader;
+// P2.4 D2/D5 (2026-07-22, task `07-20-remote-access-daemon-split`):
+// GUI-side daemon sidecar lifecycle. The Thin-client mode spawns the
+// `everlasting-daemon` binary via `tauri-plugin-shell` and kills it on
+// `RunEvent::Exit`. See the module docs for the Thin vs Full mode
+// decision + `?transport=tauri` escape hatch.
+mod sidecar;
 mod skill;
 mod state;
 mod tools;
@@ -116,8 +122,45 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        // P2.4 D2: shell plugin for spawning the everlasting-daemon
+        // sidecar (`app.shell().sidecar(...)` in `sidecar.rs`). The
+        // scoped `shell:allow-execute` capability gates which binary +
+        // args the spawn may use.
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            // P2.4 D5: pick the GUI mode BEFORE touching AppState.
+            // Thin (default) skips AppState::load entirely — no
+            // SqlitePool is opened in the GUI process (the AC
+            // "lsof -p <gui-pid> | grep sqlite" stays empty). Full
+            // (`?transport=tauri` / `EVERLASTING_GUI_FULL_STATE=1`)
+            // keeps the legacy in-process behavior as the escape hatch.
+            let mode = sidecar::GuiMode::resolve(&app_handle);
+
+            if mode == sidecar::GuiMode::Thin {
+                // Thin client: resolve the same data dir the daemon
+                // should use (matching P2.1 path-consistency invariant)
+                // WITHOUT opening a pool. `app_data_dir` here is just
+                // a PathBuf; the daemon opens the SQLite file, not us.
+                let data_dir = app_handle
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|e| {
+                        panic!("failed to resolve app_data_dir for sidecar: {e}")
+                    });
+                sidecar::spawn_and_manage(&app_handle, &data_dir);
+                // NOTE: AppState is intentionally NOT loaded and NOT
+                // managed. The 79 invoke_handler commands below are
+                // still registered (so the Tauri capability schema
+                // compiles + the escape `?transport=tauri` Full mode
+                // works), but in Thin mode the frontend uses
+                // httpTransport and never invokes them — so the
+                // absent `Arc<AppState>` Tauri state never panics.
+                return Ok(());
+            }
+
+            // ── Full mode (legacy pre-P2.4 path) ──────────────────
             let state = tauri::async_runtime::block_on(async move {
                 std::sync::Arc::new(state::AppState::load(&app_handle).await)
             });
@@ -359,17 +402,32 @@ pub fn run() {
         // unconditional.
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // P2.4 D2/D5: in Thin mode there is no managed
+                // `Arc<AppState>` (the GUI never opened a DB pool),
+                // so `app_handle.state::<Arc<AppState>>()` would
+                // panic. We branch on the presence of the sidecar
+                // handle instead — Thin mode kills the daemon
+                // sidecar; Full mode kills the background shells.
+                // Both are idempotent + best-effort.
+                if app_handle
+                    .try_state::<sidecar::SidecarHandle>()
+                    .is_some()
+                {
+                    sidecar::kill_managed(app_handle);
+                    return;
+                }
+
+                // Full mode (legacy): AppState + background_shells
+                // are managed. The shell's process-group SIGKILL is
+                // async (RULE-E-002), but the kill signals
+                // themselves fire synchronously inside `kill_all` —
+                // by the time `Exit` resolves, every spawned
+                // `sh -c <command>` has already received its SIGKILL.
+                // Any descendants (`&` / `nohup` / pipelines) are in
+                // the same process group and are reaped along with
+                // the direct child. No leak.
                 let state = app_handle.state::<std::sync::Arc<state::AppState>>();
                 let registry = state.background_shells.clone();
-                // `block_on` is appropriate here: the app is
-                // exiting and we need the kill signals to land
-                // BEFORE the OS starts reaping our process. The
-                // registry's `kill_all` takes the lock once,
-                // snapshots the senders, and sends — typically
-                // sub-millisecond. Any teardown race with the
-                // spawned background tasks is irrelevant: they're
-                // being killed anyway, and the OS will reap the
-                // descendants.
                 tauri::async_runtime::block_on(async move {
                     if let Err(e) = registry.kill_all().await {
                         tracing::warn!(

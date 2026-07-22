@@ -168,14 +168,28 @@ export class TransportError extends Error {
   }
 }
 
-/// daemon base URL。P2.4 sidecar 同源(前端由 daemon 静态服务);
-/// P2.3 dev 跨域 —— 默认 `http://localhost:7456`,可用 `?daemonUrl=`
-/// query 覆盖(无尾斜杠)。
-function daemonBase(): string {
+/// daemon base URL(P2.4 D3.2 + D7.2)。
+///
+/// 解析优先级:
+/// 1. `?daemonUrl=` query(无尾斜杠)—— dev 跨域 / 自定义 daemon 地址。
+/// 2. **DEV**(`import.meta.env.DEV`,vite 1420 serve 前端):`http://localhost:7456`
+///    —— dev 模式前端与 daemon 跨域(1420 ↔ 7456),需显式指向 daemon。
+/// 3. **PROD**:`window.location.origin` —— sidecar 同源,daemon ServeDir
+///    服务前端,fetch/EventSource 同源免 CORS。
+///
+/// P2.3 时硬编码 `http://localhost:7456`;P2.4 sidecar 同源后 PROD 走
+/// `location.origin`(同源单二进制部署),DEV 仍走 7456(vite 跨域)。
+export function daemonBase(): string {
   if (typeof window !== "undefined") {
     const q = new URLSearchParams(window.location.search);
     const fromQuery = q.get("daemonUrl");
     if (fromQuery) return fromQuery.replace(/\/+$/, "");
+    // DEV 探测:vite 注入 `import.meta.env.DEV`(build 时静态替换为
+    // false,tree-shake 掉 prod 分支)。
+    if (import.meta.env.DEV) {
+      return "http://localhost:7456";
+    }
+    return window.location.origin;
   }
   return "http://localhost:7456";
 }

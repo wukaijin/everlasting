@@ -33,6 +33,20 @@ function viteOnwarn(warning: unknown, defaultHandler: (w: unknown) => void) {
 export default defineConfig(async () => ({
   plugins: [vue(), tailwindcss()],
 
+  // P2.4 D3.3: inject the app build version so `health.ts` can
+  // warn on daemon/frontend build drift (Q5 warn-only check). Read
+  // from package.json — vite replaces this statically at build time,
+  // so the prod bundle carries a string literal (no runtime cost).
+  // Dev server gets the same value (no separate dev build version).
+  define: {
+    __APP_VERSION__: JSON.stringify(
+      // @ts-expect-error injected by the vite define at build; the
+      // fallback is defensive for non-build contexts.
+      (await import("./package.json", { with: { type: "json" } })).default
+        .version,
+    ),
+  },
+
   clearScreen: false,
   server: {
     port: 1420,

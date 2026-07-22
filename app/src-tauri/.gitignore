@@ -1,2 +1,5 @@
 target/
 gen/
+# P2.4 D1.5: staged sidecar binaries (copied from target/ by build.rs).
+# Never check in — they're platform-specific build artifacts.
+binaries/

@@ -1764,3 +1764,123 @@ D1-D9(sidecar + 静态文件 + GUI 去 db)留下次专门 session。
   C5 前置已清,可直接开 D1。
 - C8 手写 `api-types.ts` 类型(低风险,可随 P2.4 顺手收)
 - task `07-20-remote-access-daemon-split` 保持 in_progress(P2.4 D1-D9)
+
+---
+
+## Session 29: P2.4 D1–D9 GUI sidecar + httpTransport 默认切换 + 静态文件 + 瘦客户端
+
+**Date**: 2026-07-22
+**Task**: 07-20-remote-access-daemon-split(P2.4,Phase 2 in_progress)
+**Branch**: `main`
+
+### Summary
+
+P2.4 全切片落地(D1–D9)。GUI 现在以 sidecar 模式启动——spawn
+`everlasting-daemon` 子进程,前端默认走 httpTransport(同源 sidecar),
+启动前 health 握手 fail-loud。Thin/Full 双模式:`?transport=tauri` 走
+原 in-process AppState(逃生);默认 Thin 不开 SqlitePool(满足 AC
+"lsof 无 SQLite 句柄")。daemon ServeDir 兜底挂 `/` 提供前端静态文件
+(单二进制部署)。`init_pool` 加 WAL + busy_timeout=5s 消除双进程
+SQLITE_BUSY。pick_project_dir 浏览器降级(store 级 manualPathOpen +
+ProjectTabs 内联输入)。
+
+**WSL 限制**:本环境无 GUI 运行时,sidecar spawn / health 握手 / 关窗
+SIGTERM / `pnpm tauri build` 留手动验证清单。代码 + 配置全做,cargo
+1561 / vitest 934 / vue-tsc 0 err 全绿。
+
+### Main Changes
+
+**Rust 后端(8 文件)**:
+- `src/sidecar.rs`(新,230 行)— `GuiMode::resolve`(Thin/Full 读
+  webview url query / env)+ `spawn_and_manage`(tauri-plugin-shell
+  sidecar spawn + 日志 drain)+ `kill_managed`(RunEvent::Exit SIGTERM)
+- `src/lib.rs` — `run()` 双模式分支:Thin 不调 AppState::load / 不
+  manage / 不 spawn sweep+hygiene,只 spawn sidecar;Full 原行为。
+  Exit 钩子按 SidecarHandle 存在性分支(Thin kill sidecar / Full
+  kill background_shells)。+ tauri_plugin_shell 注册
+- `src/bin/everlasting-daemon.rs` — `--data-dir <PATH>` flag(GUI
+  sidecar 传 data_dir 保 P2.1 路径一致)
+- `src/daemon/server.rs` — `build_router` 加 `.fallback_service(
+  ServeDir + not_found_service index.html)` SPA 兜底;`resolve_dist_dir()`
+  (EVERLASTING_DIST_DIR env > exe-relative ../dist);CORS 保留注释更新
+- `src/db/migrations.rs` — `init_pool` 改 SqliteConnectOptions +
+  SqlitePoolOptions,WAL + busy_timeout=5000 + foreign_keys per-connection
+  pragma;+ 4 单测(WAL mode / busy_timeout / foreign_keys / 并发读不 BUSY)
+- `build.rs` — sidecar 二进制 staging:`target/<profile>/everlasting-daemon`
+  → `binaries/everlasting-daemon-<target-triple>`(mtime 增量拷贝,在
+  tauri_build::build 之前跑避免 externalBin 校验失败)
+- `tauri.conf.json` — `bundle.externalBin = ["binaries/everlasting-daemon"]`
+- `Cargo.toml` — `tauri-plugin-shell = "2"`
+- `capabilities/default.json` — `shell:default` + scoped
+  `shell:allow-execute`(sidecar name + `--port 7456 --data-dir .+`)
+- `.gitignore` — `binaries/`
+
+**前端(9 文件)**:
+- `src/transport/index.ts` — 默认切 httpTransport(D3 不可逆 gate);
+  `?transport=tauri` 逃生
+- `src/transport/http.ts` — `daemonBase()` export + DEV 探测
+  (`?daemonUrl` > DEV ? 7456 : `location.origin`)
+- `src/transport/health.ts`(新,175 行)— `awaitDaemonHealthy` 轮询 +
+  Q5 分层校验(api_versions 硬 fail / daemon_version warn-only / 超时 fail)
+- `src/transport/health.test.ts`(新,7 tests)
+- `src/main.ts` — mount 前 `await awaitDaemonHealthy()`(fail-loud
+  全屏错误覆盖层,不 mount 半渲染 UI);`?transport=tauri` 跳过握手
+- `src/stores/projects.ts` — `manualPathOpen` ref + `addProjectByPath`
+  + `cancelManualPath` + `registerPickedPath` 抽取(browser 降级);
+  `isPickUnavailable` 检测 TransportError(status=0)
+- `src/stores/projects.test.ts` — +4 browser-degrade tests(12 total)
+- `src/components/ProjectTabs.vue` — 内联 manual-path 输入 UI
+- `vite.config.ts` + `vite-env.d.ts` + `vitest.config.ts` —
+  `__APP_VERSION__` define(build drift warn)
+
+### Git Commits
+
+(本 session 结尾提交)
+
+### Testing
+
+- [OK] `cargo test --lib` — **1561 passed** / 0 failed(原 1557 + 4 新 D8)
+- [OK] `cargo check --tests` — 0 err
+- [OK] `pnpm vitest run` — **934 passed** / 59 files(原 baseline +
+  7 health + 4 projects browser-degrade)
+- [OK] `pnpm vue-tsc --noEmit` — 0 err
+
+### 设计决策亮点
+
+1. **D5 全瘦客户端(非 Option<SqlitePool>)**:Thin 模式不调
+   `AppState::load`(101 处 `state.db` 零改动),79 handler 仍注册但
+   httpTransport 不 invoke 故无 State 解析 panic。`?transport=tauri`
+   Full 模式逃生(原行为)。
+2. **build.rs sidecar staging 在 tauri_build 之前**:`externalBin` 校验
+   要求 `binaries/<name>-<triple>` 存在,故 staging 必须先跑。
+3. **CORS 保留**:sidecar 同源不触发 preflight,CORS 层零成本;dev
+   vite 跨域仍需。移除留 P2.5 复盘。
+4. **WAL + busy_timeout**:SqliteConnectOptions per-connection pragma
+   (非 one-shot execute),pool 增长连接时 pragma 持续生效。
+5. **health fail-loud 不静默降级**:daemon 不稳 GUI 全屏错误覆盖层 +
+ 逃生提示,不 mount 半功能 UI(R-1 缓解)。
+
+### WSL 验证清单(留手动,GUI 运行时)
+
+- [ ] `pnpm tauri dev` → sidecar 自动 spawn(curl 7456/health 200)
+- [ ] webview 加载 httpTransport(发消息/流式/permission/subagent 全通)
+- [ ] 关 Tauri 窗口 → `ps` daemon 已退出(SIGTERM)
+- [ ] `lsof -p <gui-pid> | grep -i sqlite` 空(Thin 模式)
+- [ ] `pnpm tauri build` 产出含 sidecar 的 bundle
+- [ ] production:`./everlasting-daemon` + 浏览器 `http://localhost:7456`
+      同源拿前端+API
+- [ ] `?transport=tauri` 逃生:GUI 走 full 模式 + tauriTransport 可用
+- [ ] 双进程(Tauri Thin + 浏览器)无 SQLITE_BUSY
+- [ ] `pnpm install`(concurrently 网络抖动,lockfile 已更新需重装)
+
+### Status
+
+[OK] **P2.4 D1–D9 代码 + 配置全落地,测试全绿;GUI 运行时验证留手动**
+
+### Next Steps
+
+- **手动验证清单**(上方)在 GUI-capable 机器跑通后标记 P2.4 完成
+- **P2.5**(WSL E2E + e2e.rs harness + HACKING-wsl 文档)— 下一里程碑
+- C8 手写 `api-types.ts` 全量类型(低风险,随用随补)
+- dogfooding ≥ 2 周后标记 Phase 2 完成
+- task `07-20-remote-access-daemon-split` 保持 in_progress(P2.5)

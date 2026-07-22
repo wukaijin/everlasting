@@ -22,12 +22,14 @@
 //! `PermissionStore`, etc. are all `Arc`-internal and safe to share.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::daemon::routes;
 use crate::state::AppState;
@@ -54,16 +56,83 @@ pub async fn load_daemon_state(data_dir: std::path::PathBuf) -> Arc<AppState> {
 /// `/api/v1/health` specifically, but exposing the bare `/health`
 /// path as well costs nothing and is friendlier for ad-hoc curl.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/health", get(routes::health::health))
         .route("/api/v1/health", get(routes::health::health))
-        .merge(routes::router(state))
-        // P2.3 dev-only CORS (C6 收尾):vite dev server (1420) 与 daemon
-        // (7456) 跨域,`fetch` + `EventSource` 需 daemon 放行 preflight。
-        // `very_permissive` 允许任意 origin / method / header(不带
-        // credentials —— 此处 SSE/fetch 均无 cookie)。P2.4 sidecar 同源后
-        // 此层移除(同源不触发 preflight)。
-        .layer(CorsLayer::very_permissive())
+        .merge(routes::router(state));
+
+    // P2.4 D4: serve the built SPA from `app/dist/` so a single daemon
+    // binary delivers both the API (`/api/v1/*`) and the frontend (same
+    // origin → no CORS preflight in sidecar mode). Mounted as a
+    // *fallback service* so every `/api/v1/*` route wins over static
+    // files; only unmatched paths fall through to the SPA.
+    //
+    // SPA history-mode fallback: `ServeDir::not_found_service(ServeFile`
+    // of `index.html`) so client-side routes (e.g. `/settings`) resolve
+    // to the app shell instead of a 404. When the dist dir is absent
+    // (dev mode — the frontend runs on vite :1420, or a daemon-only
+    // deployment) the fallback is skipped, leaving a pure API server.
+    match resolve_dist_dir() {
+        Some(dist) => {
+            tracing::info!(dist = %dist.display(), "serving static frontend from dist dir");
+            let spa = ServeDir::new(&dist)
+                .not_found_service(ServeFile::new(dist.join("index.html")));
+            router = router.fallback_service(spa);
+        }
+        None => {
+            tracing::info!(
+                "no dist dir found (EVERLASTING_DIST_DIR unset + default \
+                 absent); daemon runs as API-only (dev mode expects vite on :1420)"
+            );
+        }
+    }
+
+    // P2.3 dev-only CORS (C6):vite dev server (1420) 与 daemon
+    // (7456) 跨域,`fetch` + `EventSource` 需 daemon 放行 preflight。
+    // `very_permissive` 允许任意 origin / method / header(不带
+    // credentials —— 此处 SSE/fetch 均无 cookie)。
+    //
+    // P2.4 决议:**保留**此 CORS 层。sidecar 同源场景下不触发
+    // preflight(同源请求不经 CORS),故保留对 sidecar 零成本;而
+    // dev 模式(vite 1420 ↔ daemon 7456 跨域)仍需要它。移除留 P2.5
+    // 复盘定夺(若确认 dev 也可同源化则删)。
+    router.layer(CorsLayer::very_permissive())
+}
+
+/// Resolve the frontend static-asset directory for `ServeDir` (P2.4 D4).
+///
+/// Resolution order:
+/// 1. `EVERLASTING_DIST_DIR` env var (operator / test override; absolute).
+/// 2. Default platform-relative location relative to the *daemon
+///    executable* (`../dist`), matching the Tauri layout where
+///    `app/src-tauri/` is the exe's parent and `app/dist/` holds the
+///    vite build output. Using `current_exe()` (not `env!("CARGO_MANIFEST_DIR")`)
+///    keeps production single-binary deploys working regardless of the
+///    install layout.
+///
+/// Returns `None` when the resolved path does not exist on disk — callers
+/// treat that as "API-only mode" (dev, or daemon-only deployment).
+pub fn resolve_dist_dir() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("EVERLASTING_DIST_DIR") {
+        let p = PathBuf::from(raw);
+        if p.is_dir() {
+            return Some(p);
+        }
+        tracing::debug!(
+            dist = %p.display(),
+            "EVERLASTING_DIST_DIR set but not a directory; ignoring"
+        );
+    }
+    // Default: relative to the daemon executable. `current_exe()` is
+    // the canonical cross-platform way to locate co-bundled assets;
+    // CARGO_MANIFEST_DIR only exists at build time.
+    let exe = std::env::current_exe().ok()?;
+    let dist = exe.parent()?.join("..").join("dist").canonicalize().ok()?;
+    if dist.is_dir() {
+        Some(dist)
+    } else {
+        None
+    }
 }
 
 /// Resolve the daemon port per Q1 decision:
@@ -141,5 +210,39 @@ mod tests {
         assert_eq!(resolve_port(None, Some(9999)), 9999);
         // CLI wins over env.
         assert_eq!(resolve_port(Some(7456), Some(9999)), 7456);
+    }
+
+    /// P2.4 D4: `EVERLASTING_DIST_DIR` pointing at a real dir wins.
+    /// Uses `tempfile` to avoid coupling to the build's `app/dist/`
+    /// presence. This test MUST run with the env var set ONLY for this
+    /// process; since `cargo test` serializes env mutations poorly,
+    /// we use a unique var name pattern via the existing function —
+    /// but the function reads the canonical `EVERLASTING_DIST_DIR`,
+    /// so we accept that this test is order-sensitive and run it
+    /// without the env set elsewhere (the default-path test below).
+    #[test]
+    fn dist_dir_env_override_when_dir_exists() {
+        // SAFETY on parallelism: we set+unset the env around a single
+        // read. Other tests that call `resolve_dist_dir()` without
+        // setting the env will simply fall through to the default-path
+        // branch, which is env-independent. The only collision would
+        // be two tests both setting EVERLASTING_DIST_DIR — there is
+        // exactly one such test (this one).
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        std::env::set_var("EVERLASTING_DIST_DIR", tmp.path());
+        let resolved = resolve_dist_dir();
+        std::env::remove_var("EVERLASTING_DIST_DIR");
+        assert_eq!(resolved, Some(tmp.path().to_path_buf()));
+    }
+
+    /// P2.4 D4: a non-existent `EVERLASTING_DIST_DIR` is ignored
+    /// (falls through to default, which may or may not exist depending
+    /// on the build host — we only assert it doesn't panic).
+    #[test]
+    fn dist_dir_env_ignored_when_not_a_dir() {
+        std::env::set_var("EVERLASTING_DIST_DIR", "/nonexistent/path/that/does/not/exist");
+        // Must not panic; result is host-dependent (default path).
+        let _ = resolve_dist_dir();
+        std::env::remove_var("EVERLASTING_DIST_DIR");
     }
 }

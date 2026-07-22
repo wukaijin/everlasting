@@ -29,6 +29,23 @@ vi.mock("../transport", () => ({
   },
 }));
 
+// P2.4 D6: the store imports `TransportError` from `../transport/http`
+// to detect the browser-mode "unknown cmd" path. Provide the real class
+// (the mock above only covers the barrel `../transport`).
+vi.mock("../transport/http", () => ({
+  TransportError: class TransportError extends Error {
+    constructor(
+      public readonly status: number,
+      public readonly body: unknown,
+    ) {
+      const msg =
+        typeof body === "string" ? body : (body as { message?: string })?.message ?? `HTTP ${status}`;
+      super(`[httpTransport] ${status}: ${msg}`);
+      this.name = "TransportError";
+    }
+  },
+}));
+
 
 import { useProjectsStore, type ProjectInfo } from "./projects";
 
@@ -267,5 +284,82 @@ describe("useProjectsStore — unhideProject return value", () => {
     const ok = await store.unhideProject(HIDDEN_PROJECT.id);
     expect(ok).toBe(false);
     expect(store.currentProjectId).toBeNull();
+  });
+});
+
+// P2.4 D6: browser-mode manual-path degrade.
+describe("useProjectsStore — addProject browser degrade (P2.4 D6)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return [];
+      if (cmd === "list_hidden_projects") return [];
+      return null;
+    });
+  });
+
+  it("pick_project_dir 抛 TransportError(status=0):开 manualPathOpen,return null", async () => {
+    const store = useProjectsStore();
+    await store.loadProjects();
+    // Import the mocked TransportError to construct the expected throw.
+    const { TransportError } = await import("../transport/http");
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "pick_project_dir") {
+        throw new TransportError(
+          0,
+          'unknown cmd "pick_project_dir" — no domain mapping',
+        );
+      }
+      return null;
+    });
+
+    const result = await store.addProject();
+
+    expect(result).toBeNull();
+    expect(store.manualPathOpen).toBe(true);
+    // Must NOT have called create_project (the dialog never returned a path).
+    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCmds).not.toContain("create_project");
+  });
+
+  it("addProjectByPath:全新路径 → create_project + 关 manualPathOpen", async () => {
+    const store = useProjectsStore();
+    await store.loadProjects();
+    await store.loadHiddenProjects();
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return [];
+      if (cmd === "list_hidden_projects") return [];
+      if (cmd === "create_project") return FRESH_PROJECT;
+      return null;
+    });
+
+    const result = await store.addProjectByPath("/path/fresh");
+
+    expect(result?.id).toBe(FRESH_PROJECT.id);
+    expect(store.currentProjectId).toBe(FRESH_PROJECT.id);
+    expect(store.manualPathOpen).toBe(false);
+  });
+
+  it("addProjectByPath:空路径 → toast warn,不调 create_project", async () => {
+    const store = useProjectsStore();
+    await store.loadProjects();
+    store.manualPathOpen = true;
+
+    const result = await store.addProjectByPath("   ");
+
+    expect(result).toBeNull();
+    expect(store.toast?.kind).toBe("warn");
+    const calledCmds = invokeMock.mock.calls.map((c) => c[0]);
+    expect(calledCmds).not.toContain("create_project");
+  });
+
+  it("cancelManualPath:关 manualPathOpen", async () => {
+    const store = useProjectsStore();
+    store.manualPathOpen = true;
+
+    store.cancelManualPath();
+
+    expect(store.manualPathOpen).toBe(false);
   });
 });

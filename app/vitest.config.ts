@@ -13,6 +13,14 @@ import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
+  // P2.4 D3.3: mirror the vite build-time `define` of `__APP_VERSION__`
+  // so `transport/health.ts`'s build-drift check has a real value in
+  // tests (matches package.json version "0.1.0"). Without this, the
+  // constant is `undefined` in vitest and the drift branch silently
+  // no-ops, defeating the "build drift warns" test.
+  define: {
+    __APP_VERSION__: JSON.stringify("0.1.0"),
+  },
   test: {
     environment: "jsdom",
     globals: true,

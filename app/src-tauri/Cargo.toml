@@ -24,6 +24,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# P2.4 D1/D2 (2026-07-22, task `07-20-remote-access-daemon-split`): the
+# GUI spawns the `everlasting-daemon` sidecar via the shell plugin's
+# `Command::new_sidecar` API and `.kill()`s it on `RunEvent::Exit`. The
+# matching frontend `@tauri-apps/plugin-shell` is NOT a runtime dep —
+# the sidecar is launched from Rust (`app.shell().sidecar(...)`), not
+# from JS `invoke`. Capability `shell:allow-execute` is scoped in
+# `capabilities/default.json`.
+tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

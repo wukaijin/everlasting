@@ -14,7 +14,23 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { transport, type UnlistenFn } from "../transport";
+import { TransportError } from "../transport/http";
 import { extractErrorMessage } from "../utils/useErrorBus";
+
+/** P2.4 D6: detect that `pick_project_dir` is unavailable on the
+ *  current transport (httpTransport throws `TransportError` with
+ *  status 0 + an "unknown cmd" body because `pick_project_dir` has
+ *  no daemon route). Used to flip the manual-path entry on instead
+ *  of dead-ending on an error toast. */
+function isPickUnavailable(e: unknown): boolean {
+  if (e instanceof TransportError) {
+    // status 0 = the httpTransport's synthetic "no domain mapping"
+    // error (never a real HTTP status). Body carries the unknown-cmd
+    // message.
+    return e.status === 0;
+  }
+  return false;
+}
 
 /** Project as returned over Tauri IPC. Mirrors `projects::ProjectRow`
  *  in Rust. Field names are snake_case to match the Rust serialization
@@ -69,6 +85,14 @@ export const useProjectsStore = defineStore("projects", () => {
   const hiddenProjects = ref<ProjectInfo[]>([]);
   const currentProjectId = ref<string | null>(null);
   const toast = ref<ToastMessage | null>(null);
+
+  // P2.4 D6: browser-mode manual-path entry. When the native folder
+  // picker is unavailable (httpTransport — `pick_project_dir` has no
+  // daemon route), `addProject()` flips this to `true` and the UI
+  // renders a path text-input. The user submits a path →
+  // `addProjectByPath(path)` (the same register-picked-path tail
+  // `addProject` uses for the native-picker success path).
+  const manualPathOpen = ref(false);
 
   // -----------------------------------------------------------------------
   // Toast (lightweight, no UI library)
@@ -158,7 +182,17 @@ export const useProjectsStore = defineStore("projects", () => {
    *  instead of erroring. The previous behaviour would hit the
    *  backend `create_project` SQLite UNIQUE constraint and surface a
    *  misleading "already exists" toast — see fix for the "关闭项目后
-   *  无法重新打开" bug (RULE-FrontProj-001). */
+   *  无法重新打开" bug (RULE-FrontProj-001).
+   *
+   *  **P2.4 D6 (browser degrade)**: under `httpTransport`,
+   *  `pick_project_dir` has no daemon route (the Tauri dialog API
+   *  can't run outside the GUI process), so `invoke` throws an
+   *  "unknown cmd" `TransportError`. We detect that and flip
+   *  `manualPathOpen = true` so the UI offers a manual path text
+   *  input instead of erroring out (Q8v2 manual-input fallback is
+   *  now permitted in browser mode — it was previously rejected
+   *  because Tauri's `pick_folder` WAS the tree-walk, but browsers
+   *  have no equivalent). */
   async function addProject(): Promise<ProjectInfo | null> {
     let picked: string | null = null;
     let pickError: string | null = null;
@@ -168,6 +202,14 @@ export const useProjectsStore = defineStore("projects", () => {
       });
     } catch (e) {
       pickError = extractErrorMessage(e);
+      // P2.4 D6: browser-mode degrade. The httpTransport throws a
+      // TransportError(status=0, "unknown cmd ...") because
+      // `pick_project_dir` is not in CMD_TO_DOMAIN. Surface the
+      // manual-path entry instead of a dead-end error toast.
+      if (isPickUnavailable(e)) {
+        manualPathOpen.value = true;
+        return null;
+      }
     }
 
     if (pickError) {
@@ -182,6 +224,34 @@ export const useProjectsStore = defineStore("projects", () => {
       return null;
     }
 
+    return registerPickedPath(picked);
+  }
+
+  /** P2.4 D6: register a manually-entered path (browser-mode entry).
+   *  Same tail as the native-picker success path. Closes the manual
+   *  path input on completion (success or error). Returns the project
+   *  or `null`. */
+  async function addProjectByPath(path: string): Promise<ProjectInfo | null> {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      showToast("项目路径不能为空", "warn");
+      return null;
+    }
+    const result = await registerPickedPath(trimmed);
+    manualPathOpen.value = false;
+    return result;
+  }
+
+  /** P2.4 D6: dismiss the manual-path input without registering. */
+  function cancelManualPath(): void {
+    manualPathOpen.value = false;
+  }
+
+  /** Shared register-picked-path tail: dedup against visible + hidden,
+   *  create if new, focus. Used by both the native picker
+   *  (`addProject`) and the manual browser-mode entry
+   *  (`addProjectByPath`). */
+  async function registerPickedPath(picked: string): Promise<ProjectInfo | null> {
     // Picked a path — check the visible projects first. If the
     // project is already open, just focus it. The lazy `loadHidden`
     // call below is needed because the user may be reopening a
@@ -314,11 +384,14 @@ export const useProjectsStore = defineStore("projects", () => {
     hiddenProjects,
     currentProjectId,
     toast,
+    manualPathOpen,
     showToast,
     dismissToast,
     loadProjects,
     loadHiddenProjects,
     addProject,
+    addProjectByPath,
+    cancelManualPath,
     switchProject,
     hideProject,
     unhideProject,

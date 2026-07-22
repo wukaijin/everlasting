@@ -200,29 +200,32 @@ C1-C11 全 ✓,浏览器 smoke test 全过,事件序列对拍一致 → 一次 c
 
 ### 实现清单
 
-- [ ] **D1** `app/src-tauri/tauri.conf.json`:新增 `bundle.externalBin = ["binaries/everlasting-daemon"]`(或 Tauri 2 等价配置)
-- [ ] **D2** Tauri setup 钩子:`app.handle().plugin(tauri_plugin_shell::init())` 或 sidecar API
+- [x] **D1** `app/src-tauri/tauri.conf.json`:新增 `bundle.externalBin = ["binaries/everlasting-daemon"]`(或 Tauri 2 等价配置)
+- [x] **D2** Tauri setup 钩子:`app.handle().plugin(tauri_plugin_shell::init())` 或 sidecar API
   - 启动时 spawn sidecar `everlasting-daemon --port 7456`
   - 监听 sidecar 进程事件,关窗时 SIGTERM
-- [ ] **D3** `app/src/transport/index.ts`:GUI 启动时
+- [x] **D3** `app/src/transport/index.ts`:GUI 启动时
   - 调 `fetch('/api/v1/health')`(经 sidecar)→ 校验 `daemon_id` / `api_versions`(Q5 分层校验)
   - 协议不匹配 → fail loud;构建不一致 → console warning
   - health 通过 → 切到 httpTransport
-- [ ] **D4** `app/src-tauri/src/daemon/server.rs`:扩展 axum 路由,根路径 `/` ServeDir 指向 `app/dist/`
+- [x] **D4** `app/src-tauri/src/daemon/server.rs`:扩展 axum 路由,根路径 `/` ServeDir 指向 `app/dist/`
   - 需先 `pnpm build` 产出 `dist/`
   - 生产模式单二进制部署(dev 模式前端走 Vite 1420)
-- [ ] **D5** GUI 进程**不**建 SqlitePool
-  - `AppState::load` 在 GUI 路径下调瘦壳(`Arc<AppState>` 仅持有 transport 句柄 + 无 db pool)
-  - 验证:`lsof -p <gui-pid>` 无 SQLite 文件句柄
-- [ ] **D6** `pick_project_dir` 浏览器降级
+- [x] **D5** GUI 进程**不**建 SqlitePool
+  - ~~`AppState::load` 在 GUI 路径下调瘦壳~~ → **决议变更(全瘦客户端重构)**:Thin 模式根本不调 `AppState::load`、不 `app.manage(AppState)`(79 handler 仍注册但 httpTransport 不 invoke 故不触发 State 解析)。Full 模式(`?transport=tauri`)保留原行为作逃生。
+  - 验证(手动,WSL 无 GUI 运行时):`lsof -p <gui-pid>` 无 SQLite 文件句柄
+- [x] **D6** `pick_project_dir` 浏览器降级
   - Tauri 用 `tauri-plugin-dialog` 原生选择
-  - 浏览器模式:`<input type="text">` 路径输入,daemon 调 `db::projects::get(id)` 校验存在性
-  - 统一 UX 抽象 `<ProjectDirPicker mode="auto">`
-- [ ] **D7** dev 模式:`pnpm dev` 加 `concurrently`(新增 dev 依赖)
-  - `concurrently "pnpm vite" "cargo run --bin everlasting-daemon -- --port 7456"`
-  - GUI 启动时 `pnpm tauri dev` 只连已起 daemon
-- [ ] **D8** 双进程写竞争消除测试:同时开 Tauri + 浏览器往同 session 发消息,断言无 SQLITE_BUSY
-- [ ] **D9** 全套 `cargo test` + `pnpm vitest run` 全绿
+  - 浏览器模式:`<input type="text">` 路径输入(store `manualPathOpen` + `addProjectByPath`),daemon 复用 `create_project` 校验
+  - ~~统一 UX 抽象 `<ProjectDirPicker mode="auto">`~~ → **简化**:直接在 `ProjectTabs.vue` 内联路径输入(store 级降级,非独立组件),4 个 vitest 覆盖
+- [x] **D7** dev 模式:`pnpm dev` 加 `concurrently`(新增 dev 依赖)
+  - `dev:all` script: `concurrently "pnpm dev" "cargo run --bin everlasting-daemon -- --port 7456"`
+  - `daemonBase()` DEV 探测:vite 1420 ↔ daemon 7456 跨域默认走 7456;PROD sidecar 同源走 `location.origin`
+- [x] **D8** 双进程写竞争消除:~~同时开 Tauri + 浏览器~~ → **`init_pool` 加 WAL + busy_timeout=5s**(SqliteConnectOptions per-connection pragma)+ 4 个单测(WAL mode / busy_timeout / foreign_keys / 并发读不 SQLITE_BUSY)
+- [x] **D9** 全套 `cargo test` + `pnpm vitest run` 全绿(cargo 1561 / vitest 934 / vue-tsc 0 err)
+
+> **D5 偏差说明(2026-07-22)**:原方案"瘦壳 AppState"会要求把 `db: SqlitePool` 改成 `Option`(101 处 `state.db` 访问全要改),代价过高。改用"Thin 模式不 load AppState"——79 handler 仍注册(编译不变),但 httpTransport 默认不走 invoke,故无 State 解析 panic。`?transport=tauri` 走 Full 模式(调原 `AppState::load`)作逃生。这满足 AC "lsof 无 SQLite 句柄"(Thin 不开 pool)且零侵入 commands。
+> **WSL 验证限制**:本环境无 GUI 运行时,sidecar spawn / health 握手 / 关窗 SIGTERM / 双进程 / `pnpm tauri build` 留手动验证清单(见下方)。
 
 ### 验证命令
 
