@@ -1701,3 +1701,66 @@ httpTransport(76 cmd→domain 映射 + 顶层 camel→snake + 单全局 EventSou
 - C5 完整 SubagentEventSink 注入(P2.4 前置,改 run_chat_loop 签名)
 - task `07-20-remote-access-daemon-split` 保持 in_progress(P2.4 在同
   task `implement.md` D1-D9)
+
+---
+
+## Session 28: P2.4 前置 C5 完整 SubagentEventSink 注入(daemon worker 事件 SSE live)
+
+**Date**: 2026-07-22
+**Task**: 07-20-remote-access-daemon-split(P2.4 前置切片,Phase 2 in_progress)
+**Branch**: `main`
+
+### Summary
+
+P2.4 硬前置 C5 闭环。P2.3 时 daemon chat handler 走 `app_opt = None`
+渐进方案,worker 事件 buffer-only(无 `subagent:event` SSE)。本次把
+`run_chat_loop` / `chat_inner` / `run_subagent` 的 `app_handle:
+Option<AppHandle>` 拆成两个 transport-agnostic 参数(`worker_catalog` +
+`worker_event_sink`),让 daemon 路径注入 `HttpSseSubagentSink` 拿到 live
+worker 事件。`app_handle` 原承载双用途(worker sink 构造 +
+`AppState.catalog` 快照给 worker model 解析),拆分后两者都显式参数化,
+Tauri / daemon 各自注入对应 sink + catalog。Phase 1 §3.3 承诺
+(`HttpSseSink` ≠ `HttpSseSubagentSink` 各自独立注入)兑现。
+
+D1-D9(sidecar + 静态文件 + GUI 去 db)留下次专门 session。
+
+### Main Changes
+
+- **签名拆分**:`app_handle: Option<AppHandle>`(run_chat_loop 第 22 参)
+  → `worker_catalog: Option<Arc<RwLock<ProviderCatalog>>>` +
+  `worker_event_sink: Arc<dyn SubagentEventSink>`(chat_inner /
+  run_chat_loop / run_subagent 三处)
+- **dispatch.rs**:worker_sink 统一走 `new_with_event_sink`(删
+  `new`/`new_without_app_handle` AppHandle 分支);删 `app_subagent_catalog`
+  helper;过时注释清理
+- **sink.rs**:删 dead `new` 构造(P2.4 C5 后生产只用
+  `new_with_event_sink`)
+- **生产注入**:Tauri `AppHandleSubagentSink`(chat.rs)+ daemon
+  `HttpSseSubagentSink`(routes/agent.rs);两者经
+  `build_subagent_*_payload` 同 wire shape
+- **测试**:54 处 run_chat_loop 调用点(35 agent_loop + 14 subagent +
+  5 其他)用 Python 参数序号追踪批量重接(trellis-implement subagent)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e4bb80b` | refactor(agent+daemon): complete SubagentEventSink injection (P2.4 C5) |
+
+### Testing
+
+- [OK] `cargo check --lib` — 0 error(生产路径)
+- [OK] `cargo check --tests` — 0 error(54 处 E0061 全消)
+- [OK] `cargo test --lib` — 1555 passed / 0 failed
+
+### Status
+
+[OK] **C5 前置闭环,提交归档**
+
+### Next Steps
+
+- **P2.4 D1-D9**(sidecar spawn + GUI 切 httpTransport + 静态文件 + GUI
+  去 db)— 下一里程碑,2-3 天,D3 不可逆切换高风险;建议专门 session。
+  C5 前置已清,可直接开 D1。
+- C8 手写 `api-types.ts` 类型(低风险,可随 P2.4 顺手收)
+- task `07-20-remote-access-daemon-split` 保持 in_progress(P2.4 D1-D9)

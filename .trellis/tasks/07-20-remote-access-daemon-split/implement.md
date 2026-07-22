@@ -5,10 +5,11 @@
 
 ## 0. 前置条件
 
-- [ ] Phase 1 已归档(✓ 2026-07-20 commit `0dbc747`)
-- [ ] Tauri 版在主分支 dogfooding ≥ 3 天(确认 Phase 1 抽象无 regression)
-- [ ] 本文档 + PRD + design.md 三件套齐备
-- [ ] `implement.jsonl` / `check.jsonl` 已 seed(由 `task.py` 起步时自动建)
+- [x] Phase 1 已归档(✓ 2026-07-20 commit `0dbc747`)
+- [~] Tauri 版在主分支 dogfooding ≥ 3 天(07-20→07-22 仅 2 天,软约束;P2.3 transport 抽象 + SSE 链路已 dogfooding,不阻塞)
+- [x] **完整 SubagentEventSink 注入**(P2.4 硬前置,2026-07-22 commit `e4bb80b`,Session 28)— daemon 路径 worker 事件从 buffer-only → SSE live(`app_handle: Option<AppHandle>` 参数拆成 `worker_catalog` + `worker_event_sink`)
+- [x] 本文档 + PRD + design.md 三件套齐备
+- [x] `implement.jsonl` / `check.jsonl` 已 seed(由 `task.py` 起步时自动建)
 
 ---
 
