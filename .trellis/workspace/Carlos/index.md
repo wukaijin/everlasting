@@ -7,9 +7,9 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-1.md`
-- **Total Sessions**: 26
-- **Last Active**: 2026-07-20
+- **Active File**: `journal-2.md`
+- **Total Sessions**: 27
+- **Last Active**: 2026-07-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1627 | Active |
+| `journal-2.md` | ~103 | Active |
+| `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-07-23 | daemon 浏览器模式手动测试 — 修复 7 个路径/渲染类 bug + scripts/daemon.sh | `ba41c1d`, `6581257`, `2a1a07d`, `16548fd`, `df991a5`, `128e01f`, `a2bd611`, `b42edb7` | `main` |
 | 26 | 2026-07-20 | Session 26: A5 错误处理完善 (scope B) | `0200ea1` | `main` |
 | 25 | 2026-07-17 | A6 README 5 段结构重写 | `5b04036` | `main` |
 | 24 | 2026-07-14 | B9+ 生成式 UI 收尾(button+action / diff 应用) | `9ac7bac`, `9e03d3c` | `main` |
