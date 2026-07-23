@@ -1,19 +1,25 @@
 <script setup lang="ts">
-// AppHeader — top of the application, single-row fusion of TitleBar
-// (drag region + window controls) and ProjectTabs (per PRD decision #4
-// & research/tauri-titlebar-patterns.md).
+// AppHeader — top of the application. Picks the top-bar shell based on
+// the runtime context, then fills it with the SHARED top-bar content
+// (project tabs + hidden-projects menu + pending badge).
 //
-// Layout (left → right, all on one 40px-tall row):
-//   - macOS: 80px traffic-light spacer (drag) | ProjectTabs (interactive)
-//     | flexible drag-region spacer | (no self-drawn controls — macOS
-//     uses the native red lights)
-//   - Windows / Linux / WSLg: 0 left pad | ProjectTabs (interactive)
-//     | flexible drag-region spacer | 3 self-drawn min/max/close buttons
+// Two shells, same slot contract:
+//   - Tauri webview  → TitleBar (drag region + window controls + OS
+//     platform detection). Calls `getCurrentWindow()` / `platform()`
+//     which only exist under the Tauri runtime.
+//   - Plain browser   → BrowserHeader (logo + slot + spacer only).
+//     Strips all Tauri-only chrome; the browser owns window controls.
 //
-// The drag region is owned by TitleBar. ProjectTabs' root is wrapped
-// in a div with `data-tauri-drag-region="false"` (TitleBar's slot
-// wrapper does this) so the tabs stay clickable and the horizontal
-// scroll inside `.tabs__scroll` continues to work.
+// Why the split (P2 browser-degrade fix, 2026-07-23): TitleBar's
+// `<script setup>` calls `getCurrentWindow()` synchronously at the top
+// level (not inside a try/catch). In a plain browser that throws →
+// component setup crashes → the whole AppHeader subtree (including
+// ProjectTabs, the project switcher) disappears. Routing browsers to
+// BrowserHeader (which has zero `@tauri-apps/api` imports) avoids the
+// crash entirely. `isTauriWebview()` gates the choice.
+//
+// The shared slot content is declared once here (not duplicated in
+// either shell) so adding a top-bar element only touches this file.
 //
 // PR3 of `06-07-6-ui-bug-markdown-sse`: the red-dot "this project has
 // a streaming session" set moved out of the chat store into the
@@ -26,17 +32,24 @@
 // UI.
 
 import { useStreamControllerStore } from "../../stores/streamController";
+import { isTauriWebview } from "../../transport/env";
 import TitleBar from "./TitleBar.vue";
+import BrowserHeader from "./BrowserHeader.vue";
 import ProjectTabs from "../ProjectTabs.vue";
 import HiddenProjectsMenu from "../HiddenProjectsMenu.vue";
 import PendingBadge from "./PendingBadge.vue";
 
 const streamController = useStreamControllerStore();
+
+// Resolve the shell component once at setup. `<component :is>` below
+// picks TitleBar or BrowserHeader; both expose the same default slot
+// and the shared content is injected either way.
+const shell = isTauriWebview() ? TitleBar : BrowserHeader;
 </script>
 
 <template>
   <header class="app-header">
-    <TitleBar>
+    <component :is="shell">
       <ProjectTabs :streaming-project-ids="streamController.streamingProjectIds" />
       <!-- RULE-FrontProj-001 fix: surfaces a "已隐藏项目" entry
            in the main UI (not just the empty state). Mounts only
@@ -47,7 +60,7 @@ const streamController = useStreamControllerStore();
            pending-interaction count across all sessions/projects.
            Hidden when count === 0 (self-managed inside the badge). -->
       <PendingBadge />
-    </TitleBar>
+    </component>
   </header>
 </template>
 
@@ -58,7 +71,8 @@ const streamController = useStreamControllerStore();
    rendered at the same pixel band). Hoisting the border here gives
    ProjectTabs a stable "anchor" to draw its accent above (z-axis) the
    divider cleanly, and stops the divider from disappearing if a
-   future child component ever changes height. */
+   future child component ever changes height. BrowserHeader relies on
+   the same anchor (it deliberately carries no border of its own). */
 .app-header {
   flex-shrink: 0;
   background: var(--color-bg-surface);
