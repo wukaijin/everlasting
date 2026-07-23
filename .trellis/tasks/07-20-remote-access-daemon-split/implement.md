@@ -379,3 +379,22 @@ E1-E5 全 ✓,E2E harness 全过,WSL 端到端走通 → 一次 commit `test(dae
 ### 下一步
 - (进入下一子阶段 / 回头修复 / 暂停)
 ```
+
+---
+
+## 已知后续项(2026-07-23 手动测试 Session 暴露)
+
+> 这些不阻塞 Phase 2 代码收尾(已 commit),记录于此避免丢失。
+
+### 已修(本 Session commit)
+
+- **`default-run` 缺失** → `pnpm tauri dev` 报 "could not determine which binary to run"(commit `ba41c1d`)。P2.2 引入 daemon `[[bin]]` 后回归。
+- **`resolve_dist_dir()` 路径推算错** → `target/release/` 跑时 GET / 返回 404(commit `6581257`)。原固定 `..`/`dist` 只对 sidecar 布局成立,改向上搜索 `src-tauri/`。
+- **`resolve_data_dir()` 路径不一致** → daemon 裸跑用 `everlasting/` 空 db,丢失 GUI 的 `dev.everlasting.app/` 历史(commit `16548fd`)。build.rs 注入 `EVERLASTING_APP_IDENTIFIER` 对齐 Tauri `app_data_dir`。
+- **TitleBar `getCurrentWindow()` 崩溃** → 浏览器环境 `<script setup>` 顶层同步调用抛异常,整个 AppHeader(含 ProjectTabs)不渲染(commit `df991a5`)。新增 BrowserHeader + isTauriWebview() 分流。
+
+### 未修(后续项)
+
+- **daemon graceful shutdown 不及时退出**:有浏览器 SSE 长连接挂起时,收到 SIGTERM 后 `axum::serve(...).with_graceful_shutdown(...)` 等连接完成而挂起,实际靠 `scripts/daemon.sh` 的 SIGKILL 兜底(SIGTERM → 8s → SIGKILL)清理。不影响使用,但 daemon 侧可改进:给 graceful shutdown 加超时或显式 drop 连接。
+  - **复现**:daemon 跑 + 浏览器连上(SSE `/api/v1/stream` 活跃)→ `./scripts/daemon.sh stop` → 日志有 `received SIGTERM, shutting down` 但进程 8s 内不退出。
+  - **修法方向**:`server.rs::serve_daemon` 的 `with_graceful_shutdown` 加一个 `tokio::time::timeout` 包裹,或监听 shutdown 信号后主动 close 所有 SSE 连接。
