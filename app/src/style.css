@@ -209,6 +209,60 @@ body,
     background: var(--color-bg-app);
 }
 
+/* ------------------------------------------------------------------------- *
+ * Global scrollbar styling (2026-07-23)                                      *
+ * ------------------------------------------------------------------------- *
+ * Without this, scrollable regions (message list, sidebar, code blocks,     *
+ * trace drawer, ...) fall back to the browser default — a chunky light-grey *
+ * bar that clashes with the Prussian-blue dark theme. The two components    *
+ * that already styled their own scrollbars (ProjectTabs, ThinkingBlock)     *
+ * established the convention this codifies app-wide:                         *
+ *   - thumb: --color-bg-border (#1e2530, subtle against surface)            *
+ *   - track: transparent                                                     *
+ *   - radius: half the thickness                                            *
+ *   - width:  a thin ladder (6px vertical / 8px horizontal default; the     *
+ *             hover-only :hover bump is intentionally omitted to avoid      *
+ *             layout shift while scrolling).                                 *
+ * Firefox has no ::-webkit-scrollbar support; it uses scrollbar-width +     *
+ * scrollbar-color (already used by ThinkingBlock). The `*` selector below   *
+ * sets the Firefox pair globally; WebKit/Blink read ::-webkit-scrollbar.    *
+ *                                                                           *
+ * The per-component overrides in ProjectTabs (4px) / ThinkingBlock (6px)    *
+ * remain authoritative for their regions — global rules have lower          *
+ * specificity than their scoped `.__scroll::-webkit-scrollbar`, so those    *
+ * tighter bars are preserved.                                               *
+ * ------------------------------------------------------------------------- */
+* {
+    /* Firefox: thin bar, themed thumb, transparent track. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-bg-border) transparent;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-bg-border);
+    border-radius: 4px;
+    /* Transparent border lets the thumb read as "floating" on the track
+       without a hard edge, matching the existing component bars. */
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    /* Hover lifts the thumb to the stronger border token so the grab
+       target is easier to find, then settles back on leave. */
+    background: var(--color-bg-border-strong);
+    background-clip: padding-box;
+}
+
 button {
     font: inherit;
     color: inherit;
