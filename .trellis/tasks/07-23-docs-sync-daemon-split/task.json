@@ -1,0 +1,31 @@
+{
+  "id": "docs-sync-daemon-split",
+  "name": "docs-sync-daemon-split",
+  "title": "docs sync: daemon 化文档过时同步",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos",
+  "assignee": "Carlos",
+  "createdAt": "2026-07-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-23-docs-daemon-arch-core",
+    "07-23-docs-daemon-roadmap-status",
+    "07-23-docs-daemon-hacking-debug",
+    "07-23-docs-daemon-implementation-adr"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
