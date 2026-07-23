@@ -17,12 +17,12 @@
 
 ### 实现清单
 
-- [ ] **A1** `app/src-tauri/src/state.rs::AppState::load` 改为接受 `PathBuf`(data_dir)
-- [ ] **A2** 内部逻辑不变:LLM config from_env + db::init_pool + run_migrations + provider catalog + backfill spawn
-- [ ] **A3** 保留旧 `load(app: &AppHandle)` 签名作为 wrapper:`fn load(app: &AppHandle) -> impl Future<...>` → `Self::load(app.path().app_data_dir().unwrap())`
-- [ ] **A4** `state.rs:317` `projects:refreshed` 改走新接口(传 `Arc<dyn SystemEventSink>` 或保留 AppHandle 用于 Tauri 路径,daemon 路径传 stub noop sink)
-- [ ] **A5** 新增测试 `state_load_path_consistency`:对比 `AppState::load(AppHandle)` 与 `AppState::load(PathBuf)` 产出同一 `db_path` 与 `home_dir`(mock AppHandle 与 mock PathBuf 同源)
-- [ ] **A6** `cargo test --lib` 全绿(vitest 不变)
+- [x] **A1** `app/src-tauri/src/state.rs::AppState::load` 改为接受 `PathBuf`(data_dir)— commit `5a212f0`
+- [x] **A2** 内部逻辑不变:LLM config from_env + db::init_pool + run_migrations + provider catalog + backfill spawn
+- [x] **A3** 保留旧 `load(app: &AppHandle)` 签名作为 wrapper:`fn load(app: &AppHandle) -> impl Future<...>` → `Self::load(app.path().app_data_dir().unwrap())`
+- [x] **A4** `state.rs:317` `projects:refreshed` 改走新接口(传 `Arc<dyn SystemEventSink>` 或保留 AppHandle 用于 Tauri 路径,daemon 路径传 stub noop sink)
+- [x] **A5** 新增测试 `state_load_path_consistency`:对比 `AppState::load(AppHandle)` 与 `AppState::load(PathBuf)` 产出同一 `db_path` 与 `home_dir`(mock AppHandle 与 mock PathBuf 同源)
+- [x] **A6** `cargo test --lib` 全绿(vitest 不变)
 
 ### 验证命令
 
@@ -66,24 +66,24 @@ serde_json = "1"
 
 ### 实现清单
 
-- [ ] **B1** `app/src-tauri/src/bin/everlasting-daemon.rs`:daemon main 入口
+- [x] **B1** `app/src-tauri/src/bin/everlasting-daemon.rs`:daemon main 入口 — commit `5a212f0`
   - `#[tokio::main]`
   - 解析 `--port` / `EVERLASTING_DAEMON_PORT` / 默认 7456
   - 启动前调 `GET http://localhost:{port}/api/v1/health` 端口冲突检查(Q1 fail loud)
   - `AppState::load(data_dir)` → `Arc<AppState>`
   - `axum::serve(...).with_graceful_shutdown(shutdown_signal())`
-- [ ] **B2** `app/src-tauri/src/daemon/server.rs`:axum router 装配
+- [x] **B2** `app/src-tauri/src/daemon/server.rs`:axum router 装配 — commit `5a212f0`
   - `Router::new().route("/api/v1/health", get(health))`
   - `.nest("/api/v1", routes::router(state.clone()))`
-- [ ] **B3** `daemon/routes/health.rs`:`GET /api/v1/health` 返回 `{daemon_id, daemon_version, api_versions: ["v1"], uptime_seconds, session_count}`
-- [ ] **B4** **84 命令 _inner 拆解**(commands/*.rs + agent/chat.rs + git/error.rs)
+- [x] **B3** `daemon/routes/health.rs`:`GET /api/v1/health` 返回 `{daemon_id, daemon_version, api_versions: ["v1"], uptime_seconds, session_count}` — commit `5a212f0`
+- [x] **B4** **84 命令 _inner 拆解**(commands/*.rs + agent/chat.rs + git/error.rs) — commit `5a212f0`
   - 每个 `pub async fn xxx(state, ...) -> Result<...>` 拆为 `pub async fn xxx_inner(state: &Arc<AppState>, ...) -> Result<...>` 保留业务逻辑
   - 原 `#[tauri::command]` 入口退化为 `xxx_inner(&state, ...).await` 薄包装
-- [ ] **B5** `daemon/routes/{domain}.rs`:84 axum handler,每个文件对应一个 domain,handler 调对应 `_inner`
+- [x] **B5** `daemon/routes/{domain}.rs`:84 axum handler,每个文件对应一个 domain,handler 调对应 `_inner` — commit `5a212f0`(实际 79 handler / 19 domain 模块)
   - 例:`routes/sessions.rs::list_sessions(Extension(state): Extension<Arc<AppState>>, Json(req): Json<ListSessionsReq>) -> Result<Json<ListSessionsResp>, AppCommandError>`
-- [ ] **B6** 错误转换:handler 返回 `AppCommandError` → axum `IntoResponse` 转换为 HTTP 状态码 + JSON body
-- [ ] **B7** handler 单测:`daemon/routes/tests_*.rs`(按 domain),happy path + 错误码
-- [ ] **B8** 全套 `cargo test` 全绿,包括新 handler 测试
+- [x] **B6** 错误转换:handler 返回 `AppCommandError` → axum `IntoResponse` 转换为 HTTP 状态码 + JSON body — commit `5a212f0`(`daemon/error.rs`)
+- [x] **B7** handler 单测:`daemon/routes/tests_*.rs`(按 domain),happy path + 错误码 — commit `5a212f0`
+- [x] **B8** 全套 `cargo test` 全绿,包括新 handler 测试
 
 ### 验证命令
 
@@ -124,39 +124,37 @@ B1-B8 全 ✓,`cargo build` 成功,`/api/v1/health` 200,84 handler curl 全过 �
 
 ### 实现清单
 
-- [ ] **C1** `app/src-tauri/src/daemon/sse.rs`:
+- [x] **C1** `app/src-tauri/src/daemon/sse.rs` — commit `f2a675b`(实现简化:全局单流 + request_id 路由,非按 session_id 分 buffer;详见 sse.rs 模块文档"两处简化")
   - `HttpSseSink` 实现 `ChatEventSink` trait(注入 `chat_loop`)
-  - `HttpSseSubagentSink` 实现 `SubagentEventSink` trait(注入 `subagent/sink.rs`)**Phase 1 §3.3 承诺**
-  - `SseRegistry`:全局 `Arc<RwLock<HashMap<event_name, Vec<SseSender>>>>`
-  - `SseBuffer`:按 `session_id` 维护 `VecDeque<{id, event}>`(每 session 独立 `AtomicU64`)
-  - 单条 > 256KB 不入 buffer,直推(走 R6.3 大 message 旁路)
-  - `event_name = "stream-resync-{session_id}"` sentinel(Last-Event-ID < buffer_oldest 时发)
-- [ ] **C2** `daemon/routes/health.rs` 同文件扩展:`GET /api/v1/stream`
+  - `HttpSseSubagentSink` 实现 `SubagentEventSink` trait(注入 `subagent/sink.rs`)**Phase 1 §3.3 承诺**(C5 commit `e4bb80b` 完整闭合)
+  - `SseRegistry`:全局单流 `Mutex<RegistryInner>`(senders + VecDeque buffer + 全局递增 u64 id)
+  - 单条 > 256KB(`LARGE_PAYLOAD_THRESHOLD`)不入 buffer,直推 live channel(走 R6.3 大 message 旁路)
+  - `event_name = "stream-resync"` 全局 sentinel(Last-Event-ID < buffer_oldest 时发,前端按当前 session GET snapshot)
+- [x] **C2** `daemon/routes/stream.rs`(从 health.rs 独立成 stream.rs):`GET /api/v1/stream` — commit `f2a675b`
   - SSE handler:接收 `Last-Event-ID` 头
-  - 客户端连入时注册 `SseSender` 到 `SseRegistry`
-  - 30s 间隔 `: ping` 心跳;60s 无响应主动断开
-- [ ] **C3** `daemon/routes/sessions.rs`:新增 `GET /api/v1/sessions/{id}/snapshot`
+  - 客户端连入时 `state.sse.subscribe(last)` 注册到 `SseRegistry`
+  - 30s 间隔 `: ping` 心跳(`KeepAlive`)
+- [x] **C3** `daemon/routes/sessions.rs`:新增 `GET /api/v1/sessions/{id}/snapshot` — commit `f2a675b`
   - 复用 `load_session_inner` + `get_pending_interaction_inner`
   - 返回完整 session 状态 + pending interaction
-- [ ] **C4** `daemon/state.rs`(`AppState` 扩展或新结构):注入 `HttpSseSink` 实例 + `SseRegistry` 句柄
-- [ ] **C5** `agent/chat.rs`:接受 sink 注入,Q0 决议下 `chat_inner` 不变(sink 通过参数传)
-- [ ] **C6** `app/src/transport/http.ts`:填充 stub
+- [x] **C4** `state.rs`:`AppState.sse: Arc<SseRegistry>` 字段 — commit `f2a675b`
+- [x] **C5** `agent/chat.rs`:接受 sink 注入,Q0 决议下 `chat_inner` 接 `worker_event_sink` 参数 — commit `e4bb80b`(P2.4 C5 完整闭合 SubagentEventSink)
+- [x] **C6** `app/src/transport/http.ts`:填充 stub — commit `f2a675b`
   - `invoke(cmd, args)` → `fetch('/api/v1/' + path, {method: 'POST', body: JSON.stringify(args), headers: {'Content-Type': 'application/json'}})`,错误 → `throw new TransportError(status, body)`
-  - `listen(event_name, handler)`:单全局 `EventSource('/api/v1/stream')`,按 `event.data.session_id` 与 `event.type` 双重过滤分发到 handler
-  - 收到 `stream-resync-{session_id}` → 自动 GET snapshot,store 替换
-- [ ] **C7** `app/src/transport/index.ts`:切换逻辑
-  - 默认 `isTauri()` 判定
-  - 新增 `?transport=http` query 强制切流(测试用)
-  - 新增 `?transport=tauri` 强制走 Tauri(debug)
-- [ ] **C8** `app/src/transport/api-types.ts`:hand-written TS 类型
+  - `listen(event_name, handler)`:单全局 `EventSource('/api/v1/stream')`,按 `event` name 分发(handler 收已解包 payload)
+  - `stream-resync` sentinel 作为普通 event 透传给注册的 store,store 自己 GET snapshot(transport 不持有 session 状态)
+- [x] **C7** `app/src/transport/index.ts`:切换逻辑 — commit `f2a675b`(P2.4 D3 改默认 httpTransport)
+  - 默认 httpTransport(P2.4 后)
+  - `?transport=tauri` query 强制走 Tauri(Full 模式逃生)
+- [ ] **C8** `app/src/transport/api-types.ts`:hand-written TS 类型 — **P2.5 遗留,低风险随用随补**(留后)
   - 84 handler 入参 + 返参
   - SSE event payload 类型(含 `session_id` 字段)
-- [ ] **C9** SSE 单测 + 集成测试
-  - 单测:`SseBuffer` 行为(增/淘汰/上限)
-  - 集成:mock provider 跑 1 轮 agent loop,断言 10 类事件序列到 SSE 客户端
-  - 集成:Last-Event-ID 重连 + resync sentinel 路径
-- [ ] **C10** httpTransport 单测:vitest `app/src/transport/http.test.ts`(mock fetch + EventSource)
-- [ ] **C11** 全套 `cargo test` + `pnpm vitest run` 全绿
+- [x] **C9** SSE 单测 + 集成测试 — commit `f2a675b` + `2392f41`(单测)+ `e6b7a2f`(E2E harness E1b)
+  - 单测:`SseRegistry` 行为(broadcast / replay / 淘汰 / 上限 / large-payload 旁路),sse.rs 7 单测
+  - 集成:`tests/e2e.rs` E1b SSE 重连协议 4 tests(replay / sentinel / large-payload / first-connection)
+  - 集成:`tests/e2e.rs` E1a chat happy-path(httpmock Anthropic SSE)
+- [x] **C10** httpTransport 单测:vitest `app/src/transport/http.test.ts`(mock fetch + EventSource) — commit `f2a675b`;+ `transport-parity.test.ts`(E2 契约层)commit `e6b7a2f`
+- [x] **C11** 全套 `cargo test` + `pnpm vitest run` 全绿
 
 ### 验证命令
 
