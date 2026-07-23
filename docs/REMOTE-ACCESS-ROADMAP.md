@@ -177,7 +177,9 @@ cargo test
 
 # 3. Tauri 版零行为变化
 pnpm tauri dev
-#    验证:DB 还是同一个文件(检查 ~/.local/share/everlasting/everlasting.db 或 WSL 对应路径)
+#    验证:DB 还是同一个文件(检查 ~/.local/share/dev.everlasting.app/everlasting.db 或 WSL 对应路径)
+#    注:data dir 子目录是 tauri.conf.json 的 identifier(dev.everlasting.app),
+#    非 crate 名 everlasting —— daemon bin 经 build.rs 注入 EVERLASTING_APP_IDENTIFIER 对齐。
 #    验证:get_home_dir 返回值与重构前一致(用 StatusBar 路径短化验证)
 ```
 

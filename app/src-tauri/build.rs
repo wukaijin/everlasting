@@ -22,6 +22,17 @@
 //!    mtime check + the fact that this script runs on every build is
 //!    sufficient. A stale daemon binary simply won't be copied until
 //!    the daemon is rebuilt.
+//!
+//! 3. `EVERLASTING_APP_IDENTIFIER` env injection (P2.2 path-consistency
+//!    fix): reads `identifier` from `tauri.conf.json` and emits it as a
+//!    compile-time env so the `everlasting-daemon` bin can resolve its
+//!    data dir to the SAME path Tauri's `app_data_dir()` would (which
+//!    is `dirs::data_dir().join(config.identifier)`). Without this the
+//!    daemon fell back to `join("everlasting")` and opened a different
+//!    SQLite file than the GUI — see `bin/everlasting-daemon.rs`
+//!    `resolve_data_dir()`. tauri-build does NOT expose the identifier
+//!    as a generic compile-time env (only as an Android package-name
+//!    derivative), so we read it ourselves here.
 
 use std::path::PathBuf;
 
@@ -38,7 +49,71 @@ fn main() {
         println!("cargo:warning=P2.4 sidecar stage skipped: {e}");
     }
 
+    // Inject the bundle identifier so the daemon bin's `resolve_data_dir()`
+    // joins the SAME subdirectory Tauri's `app_data_dir()` uses. Placed
+    // before `tauri_build::build()` so a config read failure surfaces
+    // before any heavier codegen runs.
+    emit_app_identifier();
+
     tauri_build::build();
+}
+
+/// Read `identifier` from `tauri.conf.json` (in `CARGO_MANIFEST_DIR`)
+/// and emit it as `EVERLASTING_APP_IDENTIFIER` compile-time env.
+///
+/// This lets the daemon bin compute `<platform data dir>/<identifier>`
+/// identically to Tauri's `app.path().app_data_dir()` (which is
+/// `dirs::data_dir().join(config.identifier)` per tauri-2 path module),
+/// so a standalone `everlasting-daemon` run opens the SAME SQLite file
+/// the GUI would — the P2.1 path-consistency invariant.
+///
+/// `TAURI_CONFIG` env override (white-label builds) is intentionally
+/// NOT handled: production builds don't override the identifier, and
+/// the rare white-label case would require JSON merge logic mirroring
+/// tauri-build internals — out of scope. The base file is authoritative.
+fn emit_app_identifier() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let conf_path = manifest_dir.join("tauri.conf.json");
+    let conf_str = match std::fs::read_to_string(&conf_path) {
+        Ok(s) => s,
+        Err(e) => {
+            println!(
+                "cargo:warning=EVERLASTING_APP_IDENTIFIER: failed to read {}: {} — \
+                 daemon bin will fail to compile env!(EVERLASTING_APP_IDENTIFIER)",
+                conf_path.display(),
+                e
+            );
+            return;
+        }
+    };
+    let conf: serde_json::Value = match serde_json::from_str(&conf_str) {
+        Ok(v) => v,
+        Err(e) => {
+            println!(
+                "cargo:warning=EVERLASTING_APP_IDENTIFIER: failed to parse {}: {} — \
+                 daemon bin will fail to compile env!(EVERLASTING_APP_IDENTIFIER)",
+                conf_path.display(),
+                e
+            );
+            return;
+        }
+    };
+    let identifier = match conf.get("identifier").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => {
+            println!(
+                "cargo:warning=EVERLASTING_APP_IDENTIFIER: no `identifier` field in {} — \
+                 daemon bin will fail to compile env!(EVERLASTING_APP_IDENTIFIER)",
+                conf_path.display()
+            );
+            return;
+        }
+    };
+    // Tell cargo to re-run build.rs when the config changes (defensive —
+    // tauri_build::build() also emits this, but being explicit keeps
+    // this function self-contained if called independently).
+    println!("cargo:rerun-if-changed={}", conf_path.display());
+    println!("cargo:rustc-env=EVERLASTING_APP_IDENTIFIER={}", identifier);
 }
 
 /// Copy `target/<profile>/everlasting-daemon` →

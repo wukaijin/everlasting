@@ -25,6 +25,11 @@ path = "src/bin/everlasting-daemon.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# `serde_json` for build.rs to read `identifier` out of `tauri.conf.json`
+# and emit it as `EVERLASTING_APP_IDENTIFIER` (P2.2 path-consistency fix —
+# see build.rs::emit_app_identifier). Runtime dep `serde_json` (below)
+# does NOT cover build scripts; build-deps are a separate dependency tree.
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }

@@ -152,25 +152,38 @@ fn build_cli() -> Command {
         )
 }
 
-/// Resolve the daemon's data directory. Phase 2.2 uses the same
-/// platform convention as the Tauri app:
-/// - `$XDG_DATA_HOME/everlasting` on Linux (or `~/.local/share/everlasting`)
-/// - `~/Library/Application Support/everlasting` on macOS
-/// - `%APPDATA%\everlasting` on Windows
+/// Resolve the daemon's data directory. Uses the same platform base
+/// + identifier convention as Tauri's `app.path().app_data_dir()`
+/// (which is `dirs::data_dir().join(config.identifier)`):
+/// - `$XDG_DATA_HOME/<identifier>` on Linux (or `~/.local/share/<identifier>`)
+/// - `~/Library/Application Support/<identifier>` on macOS
+/// - `%APPDATA%\<identifier>` on Windows
 ///
-/// Matches the Tauri app's `app.path().app_data_dir()` resolution
-/// so the daemon + GUI read/write the same SQLite file (P2.1
-/// path-consistency invariant). P2.4 will pass the data dir via
-/// `--data-dir` flag for the GUI sidecar (so the GUI can validate
-/// the path matches before flipping to httpTransport).
+/// `<identifier>` is injected at compile time by `build.rs`
+/// (`EVERLASTING_APP_IDENTIFIER`, read from `tauri.conf.json`) so it
+/// stays in lockstep with the GUI's `app_data_dir()` — the P2.1
+/// path-consistency invariant (daemon + GUI read/write the same
+/// SQLite file). Previously this joined a hardcoded `"everlasting"`,
+/// which diverged from the GUI's identifier-based path
+/// (`dev.everlasting.app`) and caused a standalone daemon run to
+/// open an empty db separate from the GUI's.
+///
+/// P2.4 sidecar mode is unaffected (the GUI passes the exact
+/// `app_data_dir` via `--data-dir`, overriding this fallback).
 fn resolve_data_dir() -> std::path::PathBuf {
+    // Compile-time constant injected by build.rs from tauri.conf.json.
+    // `env!` (not `std::env::var`) so it's baked into the binary and
+    // can't drift from the GUI's config.identifier at runtime.
+    let identifier = env!("EVERLASTING_APP_IDENTIFIER");
     if let Some(dir) = dirs::data_dir() {
-        dir.join("everlasting")
+        dir.join(identifier)
     } else {
         // Fallback: cwd (defensive — should never happen on a
-        // well-formed platform).
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join("everlasting-data")
+        // well-formed platform). Suffix with the identifier so even
+        // this degenerate path stays GUI-consistent.
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(identifier)
     }
 }
 
@@ -208,5 +221,47 @@ async fn probe_port_conflict(port: u16) -> Result<(), String> {
             tracing::debug!(error = %e, "port-conflict probe: connection refused (port is free)");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_data_dir;
+    use std::ffi::OsStr;
+
+    /// P2.1 path-consistency invariant: the daemon's data dir MUST end
+    /// with the same identifier the GUI's `app_data_dir()` uses
+    /// (`config.identifier` from tauri.conf.json, baked in here via
+    /// `EVERLASTING_APP_IDENTIFIER`). A standalone daemon run opening a
+    /// different subdirectory than the GUI would silently split the
+    /// SQLite store — this test catches that regression at the
+    /// identifier-join level (platform data_dir base is host-dependent,
+    /// so only the trailing component is asserted).
+    #[test]
+    fn resolve_data_dir_ends_with_app_identifier() {
+        let dir = resolve_data_dir();
+        let expected = OsStr::new(env!("EVERLASTING_APP_IDENTIFIER"));
+        assert_eq!(
+            dir.file_name(),
+            Some(expected),
+            "resolve_data_dir() should end with the bundle identifier \
+             ({}), got {} — GUI/daemon db will split",
+            env!("EVERLASTING_APP_IDENTIFIER"),
+            dir.display()
+        );
+    }
+
+    /// The identifier must not be the old hardcoded `"everlasting"`
+    /// (the bug). Guards against a build.rs regression that fails to
+    /// read tauri.conf.json and falls back to a wrong default.
+    #[test]
+    fn resolve_data_dir_not_legacy_hardcoded() {
+        let dir = resolve_data_dir();
+        assert_ne!(
+            dir.file_name(),
+            Some(OsStr::new("everlasting")),
+            "resolve_data_dir() still resolves to legacy 'everlasting' \
+             subdir — EVERLASTING_APP_IDENTIFIER injection broken"
+        );
     }
 }
