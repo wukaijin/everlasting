@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "Everlasting - Vibe Coding Workbench"
 authors = ["Carlos"]
 edition = "2021"
+# Phase 2.2 引入 `everlasting-daemon` 后 crate 有两个 binary(GUI
+# `everlasting` + daemon `everlasting-daemon`)。Tauri `dev`/`build`
+# 底层跑 `cargo run`(不带 `--bin`),无 default-run 时会报
+# "could not determine which binary to run"。这里固定默认跑 GUI。
+default-run = "everlasting"
 
 [lib]
 name = "everlasting_lib"
