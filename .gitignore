@@ -72,3 +72,7 @@ reasonix.toml
 
 # ZCode 工具产物(plan/临时文件,不入库)
 .zcode/
+
+
+# daemon.sh 运行时 PID 文件(不入库)
+.everlasting-daemon.pid
