@@ -7,119 +7,86 @@
 
 ## 1. 系统架构
 
-> ⚠️ **当前状态 vs 目标态**:
-> - **当前 MVP(2026-06-07)**:agent core 跑在 Tauri 进程**内**(`app/src-tauri/src/lib.rs` 的 `chat` 命令 spawn tokio 任务,直接 `reqwest` + 手写 SSE)。**未做**进程拆分,无独立 daemon。
-> - **目标态**(本节图示,见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化-为多-channel-接入铺路)):agent core 拆出独立 daemon 进程,Tauri 降级为 GUI client,跟飞书 client 并列。触发条件:BACKLOG §6 飞书 channel 决定实施时(详见 §2.8 占位)。
-> - 后续小节(§2 16 关卡 / 通道抽象)用"目标态"语言描述;当前 MVP 实际是 in-process,channel = Tauri event emit 走单进程。
+> ✅ **当前状态(2026-07-23,daemon 化已落地)**:agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server,见 `app/src-tauri/src/daemon/` + `bin/everlasting-daemon.rs`)。Tauri GUI 进程作为瘦客户端,经 `sidecar.rs::spawn_and_manage` spawn daemon 为子进程,前端默认走 `httpTransport`(同源 HTTP + SSE)与 daemon 通信;daemon 用 `tower-http::ServeDir` 同源服务前端 SPA,故也支持纯浏览器访问(浏览器模式)。`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)是 daemon 故障时的逃生舱,回退到一体化 Tauri IPC(legacy in-process)。编排放 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md),决策见 [§4](#4-决策agent-daemon-化) + [IMPLEMENTATION.md §4](./IMPLEMENTATION.md)。
+>
+> 📜 **历史脉络**:2026-06-07 初版本文档时,daemon 化还是"目标态",且当时设想用 `Channel Router` + `TauriGuiChannel`/`FeishuChannel`/`CliChannel` 抽象(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))承载多入口。**实际落地(2026-07)走的是更简单的 axum HTTP 单端点路线**,没有引入 Channel trait —— 该抽象降级为「早期设想,未实施」,保留在 §5 供历史参考。§2 16 关卡中残留的 "Channel Router" 字样是当时叙事载体,实际对应 daemon 的 axum 路由 + `HttpSseSink`。
 
-### 1.1 进程拓扑(daemon 化后,目标态)
+### 1.1 进程拓扑(daemon 化后,2026-07 落地)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│              Tauri GUI Process (Client)                   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │
-│  │ 项目列表  │ │ Session  │ │ Chat UI  │ │ Diff /   │    │
-│  │          │ │ 列表     │ │ (流式)   │ │ 终端     │    │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘    │
-│         ↕ Tauri Events (emit/listen) ↕ Tauri Commands   │
-└──────────┬──────────────────────────────────────────────┘
-           │ IPC: Unix socket / Named pipe / WebSocket
-┌──────────▼──────────────────────────────────────────────┐
-│              Agent Daemon Process (tokio)                 │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Channel Router                                  │    │
-│  │  ├ TauriGuiChannel (Tauri event)                 │    │
-│  │  ├ FeishuChannel  (飞书 WebSocket,可选)          │    │
-│  │  └ CliChannel     (stdin/stdout,可选用作调试)   │    │
-│  └─────────────────────────────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Session Manager                                  │    │
-│  │  - session 生命周期 (create / resume / archive)  │    │
-│  │  - 消息历史持久化                                  │    │
-│  │  - worktree 隔离 (git2-rs)                       │    │
-│  └─────────────────────────────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Project Manager                                 │    │
-│  │  - 多项目注册表 (SQLite)                          │    │
-│  │  - 每个 project: path / git remote / config      │    │
-│  └─────────────────────────────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  agent core  ← 核心,自研                      │    │
-│  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  LLM Client (自研 Provider trait)        │    │    │
-│  │  │  - Anthropic / OpenAI 自研 adapter        │    │    │
-│  │  │  - 手写 SSE 状态机                         │    │    │
-│  │  └─────────────────────────────────────────┘    │    │
-│  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  Tool Registry (21 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
-│  │  │  - 读 / 写:read_file / write_file / edit_file (ReadGuard 三道 check)
-│  │  │  - 只读:grep / glob / list_dir
-│  │  │  - Shell:shell / run_background_shell / shell_status / shell_kill (L1a)
-│  │  │  - 联网:web_fetch (06-12 落地,SSRF 拦截 + 5 MiB body cap)
-│  │  │  - Skill / Memory / UI:use_skill (B4,workflow-aware) / remember (V2 2 期) / use_ui (B9)
-│  │  │  - 自跟踪:update_checklist (B12,workflow 分支同步 task.json.items)
-│  │  │  - 交互:ask_user_question (selector 复用,query_store 配对) / request_mode_change (B6+ A,07-07)
-│  │  │  - Workflow (07-08~10,workflow_enabled session 可见,filter_tools_for_workflow 白名单):
-│  │  │    create_task / request_task_state_transition
-│  │  │  - Subagent:dispatch_subagent (B6) / merge_worker / discard_worker (L3b,ToolKind::GitMutation)
-│  │  └─────────────────────────────────────────┘    │    │
-│  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │  Workflow Engine (07-08~10)              │    │    │
-│  │  │  - workflow.json 外置(load + validate + fallback)
-│  │  │  - builtin dev workflow plugin(开箱即用)
-│  │  │  - 任务状态机:Planning → Implement → Check → Done
-│  │  │  - breadcrumb 注入(per-turn,synthetic user message + cache_control)
-│  │  │  - delegation 模板(run_subagent 时注入 worker)
-│  │  │  - TaskStatus → Done 触发 trigger_spec_distillation
-│  │  └─────────────────────────────────────────┘    │    │
-│  │  │  Agent Loop                              │    │    │
-│  │  │  - 上下文管理 / 压缩 / 优先级裁剪         │    │    │
-│  │  │  - 权限检查 (per-tool, per-mode)         │    │    │
-│  │  │  - 失败重试 / 循环检测                    │    │    │
-│  │  │  - 事件流 → Channel Router                │    │    │
-│  │  └─────────────────────────────────────────┘    │    │
-│  └─────────────────────────────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Resource Loaders (共用 frontmatter 手写 parser)
-│  │  - Memory loader (4 文件 User/Project × CLAUDE.md/AGENTS.md,每次 LLM 调用前自动加载 + cache_control 注入)
-│  │  - Skill loader (LLM 调 use_skill 时按需加载,三层渐进披露 L0/L1/L2)
-│  │  - Command registry (/ 触发,B3 + 内置 /help /clear /new)
-│  │  - Subagent loader (L3d,frontmatter 从 ~/.config/everlasting/agents/ + <project>/.everlasting/agents/)
-│  │  - Autonomous memory loader (V2 2 期,autonomous_memories 表 recall)
-│  └─────────────────────────────────────────────────┘    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Infrastructure                                   │    │
-│  │  - SQLite (sqlx) — 元数据 + 消息历史            │    │
-│  │  - git2-rs — worktree / diff / commit            │
-│  │  - tiktoken-rs — memory token 估算                      │
-│  │  - (无 WSL Bridge:Tauri 全跑 WSL 内,无 wslapi)  │
-│  └─────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
+两种运行形态,共享同一份 agent core 代码(AppState + agent loop)。
+
+╔══ 形态 A:Tauri GUI + sidecar daemon(默认,Thin 模式)══════════════╗
+║                                                                        ║
+║  ┌─ Tauri GUI Process(瘦客户端)──────────────┐                       ║
+║  │  Vue UI (SPA)   TitleBar (window 控)        │  sidecar.rs::        ║
+║  │                                              │  spawn_and_manage    ║
+║  │  transport.invoke()  ── httpTransport(默认)  │  (tauri-plugin-shell)║
+║  │    fetch POST + SSE                         │                       ║
+║  │  (逃生:?transport=tauri → Tauri IPC,Full)   │── spawn args:        ║
+║  │                                              │   --port 7456        ║
+║  └──────────────────────────────────────────────┘   --data-dir <dir>   ║
+║                           │                                            ║
+║                           │ 同源 HTTP/SSE(0.0.0.0:7456)              ║
+║                           ▼                                            ║
+║  ┌─ everlasting-daemon Process (tokio + axum)──────────────┐          ║
+║  │  axum router (daemon/server.rs::build_router)            │          ║
+║  │   · 79 个 #[tauri::command] 镜像为 REST 路由             │          ║
+║  │     (同 handler 双暴露 IPC + HTTP,Q0 决策)              │          ║
+║  │   · /api/v1/stream (SSE) — HttpSseSink 广播事件          │          ║
+║  │   · ServeDir fallback(同源服务 dist/ SPA)              │          ║
+║  │  ──────────────────────────────────────────────────────  │          ║
+║  │  AppState (Arc,axum 每个 handler clone 一份)             │          ║
+║  │   · SQLite pool(持有 WAL writer;Thin 模式 GUI 不开)   │          ║
+║  │   · agent core(Agent Loop / Tool Registry 21 builtin    │          ║
+║  │     / Workflow Engine / Resource Loaders /              │          ║
+║  │     PermissionStore / SessionManager)                   │          ║
+║  │   · 自研 LLM Provider trait(Anthropic/OpenAI)          │          ║
+║  └──────────────────────────────────────────────────────────┘          ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+╔══ 形态 B:纯浏览器模式(同一 daemon,无 Tauri)════════════════════╗
+║                                                                        ║
+║  ┌─ Browser(任意浏览器)──────────────┐                                ║
+║  │  isTauriWebview() = false           │  http://localhost:7456/       ║
+║  │  → BrowserHeader(替代 TitleBar)    │ ◄── ServeDir 返回 dist/ SPA   ║
+║  │  transport 仍走 httpTransport       │    (transport 载体不变)       ║
+║  └─────────────────────────────────────┘                                ║
+║                           │                                            ║
+║                           │ 同源 HTTP/SSE                              ║
+║                           ▼                                            ║
+║              (连同一份 everlasting-daemon,见形态 A)                   ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+   daemon 进程外部依赖(两种形态共用):
          ↓ LLM API                  ↓ Local FS / Git
     (Anthropic / OpenAI)         (WSL 内 $HOME/projects)
 ```
-
 **进程边界说明**:
-- **Tauri GUI Process**:只负责渲染 + IPC 转接,无业务逻辑
-- **Agent Daemon Process**:跑所有 agent 逻辑,长跑任务不被打断
-- **本地 IPC**:Unix socket(Linux/macOS) / Named pipe(Windows)
-- **远程接口**:WebSocket(为 [BACKLOG.md §7 云端同步](./BACKLOG.md#7-云端状态同步) 预留)
-- **daemon 化动机**:多 client 共用(桌面 + 飞书 + CLI),GUI 重启不打断长跑任务。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化为多-channel-接入铺路)
+- **Tauri GUI Process(Thin 模式)**:只渲染 SPA + 经 `httpTransport` 转发请求,**不**加载 `AppState`、**不**开 DB pool、**不**跑 sweep/hygiene 后台任务。spawn daemon 子进程,`RunEvent::Exit` 钩子回收 sidecar(无孤儿进程)。
+- **everlasting-daemon Process**:跑所有 agent 逻辑 + 持有 SQLite pool(WAL writer)。axum router 把 79 个原 `#[tauri::command]` handler 镜像为 REST 路由,前端同一份 handler 代码服务 IPC 与 HTTP。
+- **通信**:同源 HTTP(POST `/api/v1/...`)+ SSE(`/api/v1/stream`)。sidecar 模式下 daemon 监听 `0.0.0.0:7456`(WSL-first:Windows 宿主浏览器经 WSL2 localhost 转发可达),GUI 同源访问无 CORS。**不是** Unix socket / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代(见 [§5](#5-决策channel-adapter-抽象早期设想未实施))。
+- **逃生舱**:`?transport=tauri` + Full 模式(`EVERLASTING_GUI_FULL_STATE=1`)回退到 legacy in-process —— GUI 加载 `AppState` + 走 Tauri IPC,不 spawn sidecar。daemon 故障时用。
+- **daemon 化动机**:远程/浏览器访问;agent core 与 GUI 解耦;多 client 共用同一 agent core。详见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。
 
-### 1.2 关键数据流:用户发一条消息(目标态;当前 MVP 走 in-process 简化版)
+### 1.2 关键数据流:用户发一条消息(daemon 化后,默认 httpTransport)
 
-> 📌 **当前 MVP 实测路径**:Frontend → `invoke('chat', ...)` → Tauri Rust `chat` 命令(同进程 tokio task)→ `chat_stream_with_tools()` (reqwest + 手写 SSE)→ emit `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(在 `streamController.ts`,按 `request_id` 路由)→ Pinia store 增量更新。**没** Channel Router / **没** 独立 daemon,功能等价于目标态的 TauriGuiChannel 单通道路径。
+> 📌 **当前默认路径(Thin 模式)**:Frontend → `transport.invoke('chat', ...)`(`httpTransport`:fetch POST 到 daemon `/api/v1/chat`)→ daemon 进程的 axum 路由调同一份 `chat` handler → `chat_stream_with_tools()`(reqwest + 手写 SSE)→ `HttpSseSink`(`daemon/sse.rs`)经 `/api/v1/stream` 同源 SSE 广播 `chat-event` / `tool:call` / `tool:result` → Frontend 单 SSE listener(`streamController.ts`,按 `request_id` 路由)→ Pinia store 增量更新。
+> 逃生路径(Full 模式 `?transport=tauri`):`tauriTransport` 走 Tauri IPC,handler 在 GUI 进程内,事件经 Tauri event emit。两条路径共享同一 `#[tauri::command]`/REST 双暴露 handler。
 
 ```
 [1] Frontend (Vue 3)
-    用户输入消息 → tauri.invoke('chat', { requestId, messages })
+    用户输入消息 → transport.invoke('chat', { requestId, messages })
+      └ 默认 httpTransport:fetch POST /api/v1/chat(同源 daemon)
+      └ 逃生 tauriTransport:tauri.invoke('chat', ...)(Full 模式,GUI 进程内)
 
-[2] Tauri GUI Process
-    收到 invoke → Rust 端 spawn 异步任务处理
-    invoke resolve 立即返回("已受理",非"已完成")
+[2] everlasting-daemon Process(axum)  /  Full 模式下的 Tauri GUI Process
+    axum 路由 / Tauri command 收到请求 → spawn 异步任务处理
+    invoke/fetch resolve 立即返回("已受理",非"已完成")
 
-[3] Agent Daemon
-    Channel Router → TauriGuiChannel 收到消息
+[3] agent core(同一份 handler 代码,两种入口)
     SessionManager::handle_message(session_id, content)
       → 写入 SQLite (user message)
       → 触发 agent core
@@ -130,30 +97,30 @@
         stream = llm.stream(messages, tools)
         for chunk in stream {
           match chunk {
-            TextDelta(t)  => TauriGuiChannel.send(ChatToken(t)),
+            TextDelta(t)  => sink.send(ChatToken(t)),       // HttpSseSink(daemon)/Tauri emit(Full)
             ToolUse(...)  => 权限检查(per-mode) → 执行 → 构造 tool_result 回填,
-            UiRender(...) => TauriGuiChannel.send(UiCard(...)),
+            UiRender(...) => sink.send(UiCard(...)),
           }
         }
       }
-      TauriGuiChannel.send(ChatDone)
+      sink.send(ChatDone)
 
 [4] Frontend
-    listen("chat-event") → payload.type 分发:
+    transport.listen("chat-event") → payload.type 分发:
       "delta"  → 追加 token 到 UI
       "done"   → 解禁输入框
       "error"  → 显示错误提示
-    (后续步骤 2+ 会加 "tool:call" / "tool:result" / "permission:ask")
+    (另有 "tool:call" / "tool:result" / "permission:ask" 独立事件)
 ```
 
-### 1.3 关键数据流:session 切换(当前 MVP)
+### 1.3 关键数据流:session 切换(daemon 化后)
 
-> 📌 **当前 MVP 实测路径**:`switchSession(id)` → `chatStore` 委托 `streamController.ensureLoaded(id)` → LRU 命中则从 `messagesBySession` Map 拿;未命中则 `invoke('load_session', { sessionId })` 从 SQLite 读 → 写入 Map → `currentSessionId.value = id` → `currentCwd` 更新 → UI 重新渲染。**前 session 的 in-flight SSE 流不受影响**(流指示器在 SessionList 蓝点继续 pulse 直到 `done` 到达)。详细架构见 `.trellis/spec/frontend/state-management.md` §"Stream Controller Pattern"。
+> 📌 **当前默认路径(daemon 化后)**:`switchSession(id)` → `chatStore` 委托 `streamController.ensureLoaded(id)` → LRU 命中则从 `messagesBySession` Map 拿;未命中则 `transport.invoke('load_session', { sessionId })`(默认 httpTransport → daemon,Full 模式 → Tauri IPC)从 SQLite 读 → 写入 Map → `currentSessionId.value = id` → `currentCwd` 更新 → UI 重新渲染。**前 session 的 in-flight SSE 流不受影响**(流指示器在 SessionList 蓝点继续 pulse 直到 `done` 到达)。详细架构见 `.trellis/spec/frontend/state-management.md` §"Stream Controller Pattern"。
 
 ```
 [1] User clicks project A → session B
-[2] Frontend: tauri.invoke('load_session', { sessionId: B })
-[3] Tauri backend: 从 SQLite 读 messages → 返回 SessionSnapshot
+[2] Frontend: transport.invoke('load_session', { sessionId: B })
+[3] daemon / Tauri backend: 从 SQLite 读 messages → 返回 SessionSnapshot
 ```
 
 ---
@@ -171,11 +138,11 @@
            ↓
    ① 前端校验 ──────── 拒
            ↓
-   ② Tauri IPC ─────── 拒
+   ② transport 边界(httpTransport/tauriTransport) ──── 拒
            ↓
-   ③ Channel 入口(daemon)
-       │  ├ 消息去重(client_msg_id)
-       │  └ Channel Router 路由
+   ③ daemon 路由入口(axum / Tauri command)
+       │  ├ 请求去重(request_id)
+       │  └ session 路由
            ↓
    ④ Session Manager
        │  ├ session 状态检查
@@ -229,6 +196,8 @@
 
 ### 2.2 16 关详解
 
+> 📜 **叙事载体说明(daemon 化后)**:以下 16 关最初用"目标态 + Channel Router"语言写就。2026-07 daemon 化落地后,实际没有 `Channel` trait / `Channel Router` —— 关卡③的"Channel 入口"实际是 daemon 的 axum HTTP 路由(`daemon/routes/`),关卡⑮的"Channel 输出"实际是 `HttpSseSink`(`daemon/sse.rs`)经同源 SSE 广播。Full 模式逃生时则对应 Tauri command / Tauri event emit。关卡本身的**逻辑顺序与职责划分不变**,只是载体从"多 channel 抽象"收敛为"HTTP/SSE 单端点(+ Tauri IPC 逃生)"。
+
 #### ① 前端校验(Vue 3)
 
 ```
@@ -241,38 +210,40 @@
 - **关卡点**:空消息、过长输入、并发请求、session 锁定
 - **失败后果**:UI 拦截,不发请求
 
-#### ② Tauri IPC 边界
+#### ② transport 边界(httpTransport 默认 / tauriTransport 逃生)
 
 ```ts
-await invoke("chat", { requestId, messages })
+await transport.invoke("chat", { requestId, messages })
+// 默认 httpTransport:fetch POST /api/v1/chat(同源 → daemon axum 路由)
+// 逃生 tauriTransport:tauri.invoke('chat', ...)(Full 模式,GUI 进程内)
 ```
 
 ```
-  ├─ 参数反序列化(JSON → Rust struct)
-  ├─ 命令是否在白名单?(Tauri capability 限制)
+  ├─ 参数反序列化(JSON → Rust struct;axum extractor / Tauri command 两路共享同一 handler)
+  ├─ 命令是否在白名单?(Tauri capability 限制 — Full 模式;daemon 模式无 capability 层)
   ├─ rate limit?(每 session 每分钟 N 条)
   └─ spawn 异步任务处理 LLM stream
-       └─ invoke resolve 立即返回("已受理")
+       └─ invoke/fetch resolve 立即返回("已受理")
 ```
 
-- **关卡点**:参数类型校验、Tauri 2 capability 权限(默认拒绝)、简单限流、IPC 转发
+- **关卡点**:参数类型校验、Tauri 2 capability 权限(默认拒绝,仅 Full 模式)、简单限流、transport 转发
 - **失败后果**:返回错误,前端 toast 提示
-- **重要**:invoke resolve **不代表** "已处理",只代表"已转发到 daemon"。结果走 ⑮ 通道回来
+- **重要**:invoke resolve **不代表** "已处理",只代表"已转发到 agent core"。结果走 ⑮ 通道(SSE / Tauri event)回来
 
-#### ③ Channel 入口(daemon 接收)
+#### ③ daemon 路由入口(axum / Tauri command 接收)
 
 ```
-Channel Router:
-  ├─ 收到 IncomingMessage { channel, user_id, content, client_msg_id, attachments... }
-  ├─ 去重:同一个 client_msg_id 短时间内重复 → 丢弃(防网络重发)
-  ├─ 权限:这个 channel 的用户有权限触发 agent 吗?
-  │    └─ 否 → 拒绝,回 channel.send("无权访问")
-  └─ 路由:按 channel 选对应的 Session(飞书的 session 跟 GUI 的 session 可能是不同的)
+daemon axum 路由 / Tauri command handler(同一份代码):
+  ├─ 收到请求 { session_id, request_id, messages, mode, ... }
+  ├─ 去重:同一个 request_id 短时间内重复 → 丢弃(防网络重发)
+  ├─ 权限/鉴权:本地单用户场景目前无多用户鉴权(远程访问加固是后续项)
+  └─ 路由:按 session_id 选对应的 Session
+       └─ 多 client 连同一 daemon 时共享同一 session 池(从 SQLite 读)
 ```
 
-- **关卡点**:消息去重、用户鉴权、session 路由
-- **失败后果**:静默丢弃重复 / 显式拒绝无权
-- **设计动机**:见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化为多-channel-接入铺路)
+- **关卡点**:请求去重、session 路由
+- **失败后果**:静默丢弃重复请求
+- **设计动机**:见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。早期设想的"多 channel(飞书/CLI)路由"未实施,实际只跑 HTTP(+ Tauri IPC 逃生);多入口抽象降级为 [§5](#5-决策channel-adapter-抽象早期设想未实施) 的历史设想。
 
 #### ④ Session Manager
 
@@ -575,45 +546,43 @@ match tool_call.name {
 - **为什么混合模式**:高频 token 需要单 listener 低开销;低频 tool/permission 需要精确 filter。两种模式各取所长
 - **Phase 1 范围**:4 种 primitive(button / selector / diff / code_block),详见 [BACKLOG §5](./BACKLOG.md#5-生成式-ui-开关)
 
-#### ⑮ Channel 输出(daemon → client)
+#### ⑮ daemon 输出(HttpSseSink / Tauri event → client)
 
 ```
 对每个 OutgoingMessage:
-  ├─ 找到对应的 IncomingMessage 的 channel
-  ├─ 按 channel 能力做适配:
-  │    ├─ TauriGuiChannel: emit 事件,前端 listen
-  │    ├─ FeishuChannel: 发消息 / patch 卡片
-  │    └─ CliChannel: stdout
-  ├─ 限速:防止 QPS 过高(飞书 5/秒,GUI 不限)
+  ├─ 默认(daemon 模式):HttpSseSink(daemon/sse.rs)广播到 /api/v1/stream SSE
+  │    └─ 前端 transport.listen 按 request_id 路由到对应 session 的 streamController
+  ├─ 逃生(Full 模式):Tauri app.emit 事件,前端 listen
+  ├─ 限速:防止 QPS 过高(GUI 不限;远程/未来多 client 场景预留)
   └─ 消息合并:相邻 token 合并(50ms 内多条合并成一条)
 ```
 
-- **关卡点**:channel 能力适配、限速、消息合并
-- **新增** (对比原 14 关):老版本 token 是直接 `app.emit`,daemon 化后必须经 channel 路由
-- **设计动机**:见 [§5 决策:Channel Adapter 抽象](#5-决策channel-adapter-抽象为多入口铺路)
+- **关卡点**:输出载体适配(SSE / Tauri event)、限速、消息合并
+- **新增**(对比原 14 关):老版本 token 是直接 `app.emit`,daemon 化后默认经 `HttpSseSink` → SSE
+- **设计动机**:见 [§4 决策:Agent Daemon 化](#4-决策agent-daemon-化)。早期设想的"多 channel 输出适配(飞书/CLI)"未实施,见 [§5](#5-决策channel-adapter-抽象早期设想未实施)。
 
 #### ⑯ 结束 / 解禁 / 统计
 
 ```
 agent loop 结束(text-only response or max_turns reached):
-  ├─ channel.send(ChatDone { usage, duration })
+  ├─ sink.send(ChatDone { usage, duration })    // HttpSseSink(daemon)/ Tauri emit(Full)
   ├─ 更新 session.last_active
-  ├─ 解禁前端输入框(对 TauriGuiChannel 走 emit;对 FeishuChannel 不需要)
+  ├─ 解禁前端输入框(经 SSE / Tauri event 通知;纯浏览器模式同样走 SSE)
   ├─ 更新 token 用量统计(进 SQLite,给用量分析用)
   └─ 触发云端同步(若开启,详见 [BACKLOG §7](./BACKLOG.md#7-云端状态同步))
 ```
 
-- **关卡点**:解禁只对 GUI 有意义(飞书/CLI 没有"解禁"概念)、云端同步是可选副作用
+- **关卡点**:解禁通知走 SSE/event、云端同步是可选副作用
 - **新增**(对比原 14 关):云端同步钩子,不动 LLM 流程
 
 ### 2.3 关键洞察(为什么 harness 难)
 
 1. **关卡之间没有清晰边界** —— ⑨ 权限检查可能在 ⑩ 内部做,也可能在外层。架构选择决定了可测试性
 2. **错误传播方向** —— 大部分错误要**回传给 LLM 让它自纠**,不是直接终止。这就是为什么"agent"和"普通脚本"是两种东西
-3. **状态分散** —— session 状态在 DB、context 在内存、worktree 在磁盘、文件锁在 OS、Channel 在另一个进程。要随时能重建
+3. **状态分散** —— session 状态在 DB、context 在内存、worktree 在磁盘、文件锁在 OS、daemon 在独立进程。要随时能重建
 4. **token 预算是命门** —— ⑤ 步的 context 构造决定了你的 agent 能不能干长活,所有其他关卡都是"配套"
 5. **用户信任链** —— ⑨ 是唯一用户能"中途喊停"的地方。这一步做错,用户就跑光了
-6. **(daemon 化后新增)Channel 是状态边界** —— ⑬ 循环检测或 ⑯ 统计在哪做,影响能不能跨 client 共享。daemon 进程是天然的中心化点
+6. **(daemon 化后)daemon 进程是状态边界** —— ⑬ 循环检测或 ⑯ 统计集中在 daemon 进程做,多 client(GUI + 浏览器)连同一 daemon 时天然共享同一 session 状态。早期设想用"Channel 抽象"表达这个边界,实际落地收敛为 HTTP/SSE 单端点
 7. **(资源加载后新增)5a/5b/5c 的顺序** —— 错一个就 bug:Memory 在 Role 之前 vs 之后?Skill 描述在 Memory 之前还是之后?每改一次顺序,行为微妙变化
 
 ### 2.4 实施映射
@@ -737,30 +706,33 @@ agent loop 结束(text-only response or max_turns reached):
 
 ---
 
-## 4. 决策:Agent Daemon 化(为多 channel 接入铺路)
+## 4. 决策:Agent Daemon 化(已实施,2026-07)
 
-**核心变更**:agent core 从 Tauri 进程内拆出,变成独立 daemon 进程。Tauri 降级为 GUI client,跟飞书 client 并列。
+**核心变更**:agent core 从 Tauri 进程内拆出,变成独立 `everlasting-daemon` 进程。Tauri GUI 降级为瘦客户端(Thin 模式),与浏览器 client 并列,都经同源 HTTP/SSE 连同一 daemon。
 
-> 这条决策的"全部动机"在 [BACKLOG.md §6 IM 通道(飞书)](./BACKLOG.md#6-im-通道飞书)。本节只讲架构本身。
+> 这条决策的完整动机与编排见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md);决策档案(为什么 axum / 为什么 sidecar / 为什么默认 httpTransport)见 [IMPLEMENTATION.md §4](./IMPLEMENTATION.md)。本节只讲架构本身。
 
 **为什么必须**:
-- 飞书 channel 不能依赖 GUI(用户关 GUI 还想收飞书消息)
-- 多个 client 同时连(桌面 GUI + 飞书,可能未来还有 CLI / Web)
-- 长跑任务不被打断(GUI 重启不影响 daemon 里的 session)
+- 远程/浏览器访问 —— agent core 要能脱离 Tauri webview 被浏览器触达(daemon 用 ServeDir 同源服务 SPA)
+- 多 client 共用同一 agent core —— 桌面 GUI + 纯浏览器连同一 daemon,共享 session 状态(早期设想的飞书/CLI 多 channel 是后续项,见 [§5](#5-决策channel-adapter-抽象早期设想未实施))
+- agent core 与 GUI 解耦 —— GUI 重启不影响 daemon 里的长跑 session(Thin 模式 GUI 不持有任何状态)
 
-**架构影响**:
-- 新增 `src-tauri/src/daemon.rs`
-- 通信:本地用 Unix socket / Named pipe,远程接口预留 WebSocket(为 [BACKLOG.md §7](./BACKLOG.md#7-云端状态同步) 留接口)
-- 进程管理:写个简单 supervisor(或后期用 systemd / launchd)
-- 与第 5 章 Channel 抽象配合
+**架构影响(实际落地)**:
+- 新增 `src-tauri/src/daemon/` 目录(`server.rs` axum router + `sse.rs` HttpSseSink + `error.rs` + `routes/` 19 个路由域文件)+ `src-tauri/src/bin/everlasting-daemon.rs`(daemon bin 入口)+ `src-tauri/src/sidecar.rs`(GUI 侧 spawn + 生命周期管理)
+- 前端新增 `app/src/transport/` 抽象层(httpTransport 默认 / tauriTransport `?transport=tauri` 逃生)
+- 通信:**同源 HTTP + SSE**(axum POST `/api/v1/*` + `/api/v1/stream` SSE),daemon 用 `tower-http::ServeDir` 同源服务 `dist/` SPA。**不是** Unix socket / Named pipe / WebSocket —— 早期设想的本地 IPC 已被同源 HTTP 取代
+- 进程管理:GUI 经 `tauri-plugin-shell` spawn daemon 为 sidecar(`sidecar.rs::spawn_and_manage`),`RunEvent::Exit` 钩子 kill sidecar(无孤儿进程);裸跑/浏览器模式用 `scripts/daemon.sh`(start/bg/stop/restart/status/logs,PID 文件 + graceful shutdown)。**不用** systemd/pm2 —— sidecar 模式由 GUI 托管,裸跑模式由脚本托管
+- 79 个原 `#[tauri::command]` handler 镜像为 REST 路由(Q0 决策:同 handler 双暴露 IPC + HTTP,代码复用)
 
-**自研 daemon,不用 pm2 / supervisord**:进程就一个,行为可预测,systemd unit 几十行就够
+**自研 daemon**:进程就一个,行为可预测;sidecar 由 GUI 进程托管生命周期,裸跑由 `scripts/daemon.sh` 托管。
 
 ---
 
-## 5. 决策:Channel Adapter 抽象(为多入口铺路)
+## 5. 决策:Channel Adapter 抽象(早期设想,未实施)
 
-**核心抽象**:
+> ⚠️ **本节是 2026-06 早期设计设想,实际未实施。** 2026-07 daemon 化落地时走了更简单的 axum HTTP 单端点路线(见 [§4](#4-决策agent-daemon-化)),没有引入 `Channel` trait。下方内容保留作为历史设计脉络参考 —— 当初设想用 trait 抽象承载多入口(飞书/CLI),后来判断"抽象过早"(本节自己的风险项之一应验),收敛为 HTTP/SSE。未来若真要做飞书/CLI 多入口,可重新评估是否抽 trait。
+
+**当初设想的抽象**:
 ```rust
 #[async_trait]
 trait Channel: Send + Sync {
@@ -770,21 +742,21 @@ trait Channel: Send + Sync {
 }
 ```
 
-**当前实现**:
-- `TauriGuiChannel` — 走 Tauri event(✅ 已实现,步骤 1)
+**当初设想的实现**:
+- `TauriGuiChannel` — 走 Tauri event(✅ 当时已实现,步骤 1)
 - `FeishuChannel` — 走飞书 WebSocket(待 [BACKLOG.md §6](./BACKLOG.md#6-im-通道飞书) 实施)
 - `CliChannel` — 走 stdin/stdout(待后期实施)
 
-**好处**:
+**实际落地的替代**:axum HTTP `/api/v1/*` 路由 + `HttpSseSink` SSE 广播(`daemon/server.rs` + `daemon/sse.rs`)。前端经 `httpTransport`(fetch + EventSource)统一接入;Full 模式逃生经 `tauriTransport`(Tauri event)。"多入口"的诉求目前由"多 client 连同一 HTTP daemon"(GUI + 浏览器)满足,不需要 trait。
+
+**当初设想的好处(供未来重新评估参考)**:
 - 新增 channel 不用改 agent core,只实现 trait
 - 跨 channel 行为可统一(限速、消息合并、状态同步)
 - 测试友好(mock 一个 channel 就能跑 agent)
 
-**协议约束**(远期 v2 跨设备前置条件):
+**当初的协议约束**(仍适用于未来任何多入口方案):
 - 所有 message 必须可序列化到 JSON(明文),不依赖 Rust 特定类型
-- Channel 传输层无关:Unix socket / HTTPS / WSS 都能承载同一份 JSON
-- 这条不要求 MVP 实现 network channel,只要求 trait 设计不锁传输
+- 传输层无关:HTTP / WSS 都能承载同一份 JSON
 
-**风险**:
-- 抽象过早:现在只有 1-2 个 channel,trait 可能 overdesign
-- 缓解:trait 只放最小接口,先跑起来,后期按需扩展
+**应验的风险**:
+- 抽象过早:落地时只有 1 个真实入口(GUI/浏览器都走 HTTP),trait 被判 overdesign,直接用 axum 路由 + SSE。这条保留为"下次想做飞书/CLI 时再决定要不要抽 trait"的备忘。

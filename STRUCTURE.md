@@ -1,10 +1,10 @@
 # STRUCTURE — 项目代码结构全景图
 
-> **基线**:2026-07-10 commit `f08d61e`(包含 8-PR1/2/3/4 + 06-23/24 split + 06-08/09 多 Provider + 06-19 L1a 后台 shell + 06-29 V2 2 期 自主记忆 + 07-02 B9 + 07-05 E1 CI + 07-08~10 workflow 大集成)
-> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成
+> **基线**:2026-07-23 commit `3307d93`(在 2026-07-10 `f08d61e` 基础上 + 07-14 E2 trace + 07-20~23 daemon 化 remote-access Phase 2:transport 抽象层 + axum daemon + sidecar spawn + httpTransport 默认 + ServeDir 浏览器模式 + E2E)
+> **来源**:融合本地 audit `.trellis/workspace/Carlos/audit-2026-06-09/04-codebase-map.md` + Opus评审 `docs/_reviews/REVIEW-claude-opus-2026-06-09.md` + 8-PR 系列实际落地状态 + 06-23/24 10 个 split + 07-08~10 workflow 集成 + 07-20~23 daemon 化
 > **状态**: 由 CLAUDE.md §Architecture 段引用
 >
-> **2026-07-10 同步**:workflow 大集成收官(workflow.json 外置 + builtin dev plugin + Step 0.1~3.3 + 07-09 chip merge + transition-card + 07-10 task.json hardening R1-R5),目录树 / §2/§3 / §5/§6 / §9 已重校反映新模块。下次重大重构后再次校准。
+> **2026-07-23 同步**:daemon 化(remote-access Phase 2)收官。§1/§2/§3 目录树补 `daemon/` + `bin/` + `sidecar.rs` + `transport/` + `BrowserHeader.vue` + `scripts/`;§4 依赖图/数据流改为 transport + 双进程;§5 IPC 表更新为 79 + 双暴露;§8 加 transport/sidecar 设计模式;§10.2/§12 补 daemon 命令与依赖;§13.3 全景图重画。下次重大重构后再次校准。
 >
 > **历史快照标注约定**:本任务对 split 前路径保留 + 加 (拆分自 X, 2026-06-23/24) 标注,git blame 可追溯。
 
@@ -38,9 +38,10 @@ everlasting/
 ├── STRUCTURE.md # ← 本文件(8-PR5 创建,根目录显眼位置)
 ├── THIRD_PARTY_LICENSES.md #第三方许可清单
 ├── docs/ # 设计文档(全中文)
+├── scripts/ # ★ NEW (07-23) — daemon.sh(daemon 浏览器模式管理脚本)
 ├── app/ #唯一应用包(单仓模式)
-│ ├── src/ # Vue3 前端
-│ └── src-tauri/ # Rust 后端(Tauri2)
+│ ├── src/ # Vue3 前端(含 ★ transport/ 抽象层,07-20)
+│ └── src-tauri/ # Rust 后端(Tauri2;daemon 化后含 ★ daemon/ + bin/ + sidecar.rs)
 └── .trellis/ # Trellis 工作流 + spec + tasks + workspace
 ```
 
@@ -87,6 +88,7 @@ app/src/
 │ └── layout/ # (Opus §4.1漏看,8-PR4阶段补)
 │ ├── AppShell.vue / AppHeader.vue / AppLogo.vue
 │ ├── Sidebar.vue / TitleBar.vue
+│ ├── BrowserHeader.vue # ★ NEW (07-23) — 浏览器模式顶栏(isTauriWebview()=false 时替代 TitleBar)
 ├── stores/ # Pinia状态
 │ ├── chat.ts # (06-23 拆)facade: sessions + currentSessionId + currentCwd + CRUD委托
 │ ├── chat.types.ts # ★ NEW (06-23 拆,~310 行纯类型 + 强绑定 const)
@@ -104,6 +106,14 @@ app/src/
  ├── messageFormat.ts + .test.ts / path.ts + .test.ts
  ├── chatInputCodeMirror.ts # ★ NEW (06-23 拆,~564 行 CM 6 composable,0 store import)
  └── duration.ts / tokenUsage.ts / audit.ts / colorTag.ts / useKeyboard.ts
+transport/ # ★ NEW (07-20 remote-access) — 前端 transport 抽象层(invoke/listen 与载体解耦)
+├── index.ts # resolveTransport():默认 httpTransport;?transport=tauri 逃生 → tauriTransport
+├── http.ts # httpTransport(fetch POST + SSE EventSource → everlasting-daemon 同源)
+├── tauri.ts # tauriTransport(@tauri-apps/api 透传,Full 模式逃生舱)
+├── health.ts # daemon health 轮询 + 自动降级
+├── env.ts # isTauriWebview():Tauri webview vs 纯浏览器检测
+├── types.ts # Transport trait 签名 + UnlistenFn
+└── *.test.ts # http / health / transport / transport-parity 4 个测试
 ```
 
 **关键组件依赖**:
@@ -132,7 +142,8 @@ App.vue
 app/src-tauri/src/
 ├── main.rs # Windows子系统入口 + init_tracing (8-PR1提取)
 ├── lib.rs # ★入口(94 行,3195→94,纯 mod声明 + invoke_handler)
-├── state.rs # ★ NEW (8-PR1) — AppState + CancellationGuard + ProviderCatalog
+├── state.rs # ★ NEW (8-PR1) — AppState + CancellationGuard + ProviderCatalog(load_inner / load_from_dir;daemon 侧也用)
+├── sidecar.rs # ★ NEW (07-22 P2.4) — GuiMode{Thin,Full} + spawn_and_manage(everlasting-daemon sidecar via tauri-plugin-shell)
 ├── db/ # ★ NEW (8-PR2;06-23 拆 tests.rs → 6 文件)
 │ ├── mod.rs / types.rs / migrations.rs
 │ ├── projects.rs / sessions.rs / providers.rs / models.rs / config.rs
@@ -221,22 +232,36 @@ app/src-tauri/src/
 ├── background_shell/ # ★ NEW (06-19 L1a) — BackgroundShellRegistry trait + InMemory impl
 │ ├── mod.rs (trait 定义 + 公共类型)
 │ └── in_memory.rs (tokio 后台 task + 进程内 registry + drain_notifications)
+├── daemon/ # ★ NEW (07-20~23 remote-access) — axum HTTP daemon(everlasting-daemon bin 的核心)
+│ ├── mod.rs (re-exports + daemon_version)
+│ ├── server.rs (build_router + serve_daemon:TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
+│ ├── sse.rs (HttpSseSink — agent loop 的 SSE 事件流广播)
+│ ├── error.rs (DaemonError → axum IntoResponse)
+│ └── routes/ # 79 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│ ├── mod.rs / health.rs / stream.rs(SSE)
+│ ├── sessions.rs / projects.rs / config.rs / providers.rs / subagents.rs / subagent_runs.rs
+│ ├── memory.rs / permissions.rs / files.rs / worktree.rs / task.rs / question.rs
+│ ├── command_palette.rs / panel.rs / agent.rs / cancel.rs / ui.rs
+├── bin/ # ★ NEW (07-20) — cargo bin targets
+│ └── everlasting-daemon.rs (daemon 进程入口:resolve_data_dir + clap --port/--data-dir + serve_daemon)
 ├── git/
 │ ├── mod.rs / worktree.rs (745L) / diff.rs (git --numstat) / error.rs
 └── projects/
  ├── mod.rs / types.rs / store.rs / detector.rs / boundary.rs
 ```
 
-**模块依赖图**(单向,06-24 反映 10 个 split 后):
+**模块依赖图**(单向,07-23 反映 daemon 化后):
 ```
-lib.rs (mod声明 + invoke_handler)
+lib.rs (mod声明 + invoke_handler + sidecar spawn + RunEvent::Exit 回收)
  ├── main.rs (entry + init_tracing)
- ├── state (共享状态 + Cancellation)
+ ├── state (共享状态 + Cancellation;daemon 侧 load_from_dir 复用)
+ ├── sidecar (GuiMode{Thin,Full} + spawn_and_manage daemon 子进程)
+ ├── daemon/* (axum router + HttpSseSink + routes/;bin/everlasting-daemon 入口调 serve_daemon)
  ├── db/* (CRUD by域 + 6 tests_*.rs)
  ├── llm/provider::* → llm::client (BlockState) → types/sse/error
  ├── agent::* (chat + chat_loop + subagent/* + provider + system_prompt + thinking + helpers + permissions/* + 6 tests_*.rs)
  │ →引用 llm::provider + tools + db
- ├── commands::* (IPC分发,10 个域) → agent + db + git + projects
+ ├── commands::* (IPC分发,10 个域;同一 handler 经 daemon/routes/ 双暴露为 REST) → agent + db + git + projects
  ├── tools/* → read_guard
  ├── skill/* → loader
  ├── memory/* → loader
@@ -257,28 +282,35 @@ lib.rs (mod声明 + invoke_handler)
 │ │ → MessageList/ChatInput/WorktreeChip/DiffModal │
 │ └─ SettingsModal → ProvidersTab + ModelsTab(拆 ModelRow/Form)│
 │ │
+│ transport/ (★ 07-20): httpTransport(默认) / tauriTransport(逃生)│
 │ Pinia: streamController (单源) → chat → config/projects/... │
 └────────────────────────────────────────────────────────────┘
- │ Tauri IPC (invoke + listen)
+ │ transport.invoke() / transport.listen()
+ │ 默认 httpTransport: 同源 HTTP POST + SSE(→ daemon)
+ │ 逃生 tauriTransport: Tauri IPC(Full 模式,GUI 进程内)
  ▼
 ┌─────────────────────────── 后端 ────────────────────────────┐
-│ lib.rs (33 个 command) │
-│ ├─ commands/* (IPC分发) │
+│ everlasting-daemon(axum,独立进程) / 或 Full 模式 GUI 进程 │
+│ daemon/server.rs::build_router (79 个 command 镜像 REST 路由)│
+│ ├─ commands/* + daemon/routes/* (同一 handler 双暴露 IPC+HTTP)│
 │ ├─ agent/* → llm::provider::* → wire.rs + client.rs │
-│ ├─ tools/* (8个 + read_guard) │
+│ ├─ tools/* (21 个 + read_guard) │
 │ ├─ db/* (CRUD by域 + migrations) │
 │ ├─ git/* (worktree + diff) │
 │ └─ projects/* (boundary + detector + store) │
+│ sidecar.rs: GUI Thin 模式 spawn 此进程;HttpSseSink 广播事件 │
 └────────────────────────────────────────────────────────────┘
 ```
 
 ###4.2跨层数据流
 
 ```
-用户输入 → ChatInput → chat.send() → invoke('chat')
+用户输入 → ChatInput → chat.send() → transport.invoke('chat')
+ 默认 httpTransport: fetch POST /api/v1/chat → daemon axum 路由
+ 逃生 tauriTransport: tauri.invoke('chat') → GUI 进程内 handler
  → agent::chat → resolve_chat_provider → Provider::chat_stream
- → BlockState(SSE) → emit('chat-event')
- → streamController (单源 listener) → chat mutation
+ → BlockState(SSE) → HttpSseSink 广播 /api/v1/stream(Full 模式则 Tauri emit)
+ → streamController (单源 transport.listen) → chat mutation
  → ChatPanel.vue渲染
 ```
 
@@ -286,7 +318,9 @@ lib.rs (mod声明 + invoke_handler)
 
 ##5. Tauri IPC表面
 
-**总命令数**:~60 个(2026-06-24 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 续增 subagent_runs + checklist + memory 等)
+**总命令数**:79 个(2026-07 实测 `#[tauri::command]`;06-10 快照 33 → 06-18 快照 54 → 06-24 ~60 → 07 续增 task/subagents/question/audit/checklist/trace 等)。
+
+> **daemon 化后双暴露(07-20 Q0 决策)**:这 79 个 `#[tauri::command]` handler 同时被 `daemon/routes/` 镜像为 REST 路由(`/api/v1/*`),前端默认经 `httpTransport` 走 HTTP,Full 模式逃生经 Tauri IPC。下表"文件位置"指 `#[tauri::command]` 定义处,REST 路由在 `daemon/routes/<同名>.rs`。
 
 |域 | IPC 数 |文件位置 |
 |----|-------|---------|
@@ -383,7 +417,15 @@ listen('tool:result', (e) => { /* ToolResultPayload */ });
 
 ###8.1 流式处理单源(前端)
 
-`streamController.ts` 是 IPC ↔ Pinia 的唯一入口。`chat.ts` 不直接监听 Tauri事件。多 session 并发按 `request_id`路由,LRU20限制活跃请求。详见 `.trellis/spec/frontend/state-management.md`。
+`streamController.ts` 是 **transport ↔ Pinia 的唯一入口**(daemon 化后默认 httpTransport,Full 模式 tauriTransport)。`chat.ts` 不直接监听 Tauri/SSE 事件。多 session 并发按 `request_id`路由,LRU20限制活跃请求。详见 `.trellis/spec/frontend/state-management.md`。
+
+###8.1a Transport 抽象(★ 07-20 前端)
+
+`app/src/transport/` 把 `invoke`/`listen` 与载体解耦:`httpTransport`(fetch POST + SSE EventSource,默认,连 daemon)/ `tauriTransport`(`@tauri-apps/api` 透传,Full 模式逃生)。`resolveTransport()` 读 URL `?transport=` 决定;`health.ts` 轮询 daemon health 必要时降级。所有 store 经 `transport.invoke` 而非裸 `@tauri-apps/api`,故同一前端既能跑 Tauri webview 也能跑纯浏览器。
+
+###8.1b Sidecar + GuiMode(★ 07-22 后端)
+
+`sidecar.rs` 定义 `GuiMode::{Thin,Full}`:`Thin`(默认)GUI 不加载 AppState/不开 DB pool,只 spawn `everlasting-daemon` 子进程(tauri-plugin-shell)并经 httpTransport 通信,`RunEvent::Exit` 钩子 kill sidecar;`Full`(`?transport=tauri` 或 `EVERLASTING_GUI_FULL_STATE=1`)是 legacy in-process 逃生。daemon 侧 `server.rs::serve_daemon` 绑 `0.0.0.0:7456`,`HttpSseSink`(sse.rs)广播事件,ServeDir 同源服务 SPA。
 
 ###8.2 Provider抽象(后端)
 
@@ -471,7 +513,7 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic base URL |
 | `OPENAI_API_KEY` | (可选) | OpenAI API key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI base URL |
-| `LLM_MODEL` | `GLM-4.7` | 默认模型 |
+| `LLM_MODEL` | `MiniMax-M2.7` | 默认模型(env 仅冷启动兜底;生产走 DB provider catalog,见 HACKING-llm.md) |
 | `LLM_MAX_TOKENS` | `1024` | 默认 max tokens |
 | `RUST_LOG` | (无) | tracing级别(如 `debug`) |
 
@@ -479,12 +521,14 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
 
 | 命令 |用途 |
 |------|------|
-| `cd app && pnpm tauri dev` |启动 dev server(Tauri窗口) |
+| `cd app && pnpm tauri dev` |启动 dev server(Tauri窗口;Thin 模式自动 spawn daemon sidecar) |
 | `cd app && pnpm tauri build` |前端 type-check + build + Rust编译 +打包 |
 | `cd app && pnpm dev` | 仅 Vite dev server |
 | `cd app && pnpm build` | 仅前端 build |
 | `cd app/src-tauri && cargo check` |快速 Rust编译检查 |
 | `cd app/src-tauri && cargo test --lib` | Rust单元测试 |
+| `cd app/src-tauri && cargo build --bin everlasting-daemon` | ★ 只编译 daemon bin(GUI sidecar 模式由 build.rs 自动 staging) |
+| `./scripts/daemon.sh start\|bg\|stop\|restart\|status\|logs` | ★ daemon 浏览器模式管理(详见 HACKING-wsl.md) |
 
 ###10.3 WSL特殊性
 
@@ -518,6 +562,11 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 | UI组件 | reka-ui |2.9.9(锁精确) | `app/package.json` |
 | 后端 | Rust1.75+ |1.96.0 | `app/src-tauri/Cargo.toml` |
 | HTTP | reqwest |0.12 | `app/src-tauri/Cargo.toml` |
+| Agent daemon | axum |0.7 | `app/src-tauri/Cargo.toml`(★ 07-20,HTTP framework + macros) |
+| daemon 中间件 | tower + tower-http |0.5 / 0.6 | `app/src-tauri/Cargo.toml`(★ 07-20,ServeDir 同源 SPA + CORS + trace) |
+| daemon 流 | tokio-stream |0.1(sync) | `app/src-tauri/Cargo.toml`(★ 07-20,BroadcastStream for SSE) |
+| daemon CLI | clap |(derive) | `app/src-tauri/Cargo.toml`(★ 07-20,--port/--data-dir) |
+| daemon spawn | tauri-plugin-shell |2 | `app/src-tauri/Cargo.toml`(★ 07-22,GUI spawn sidecar) |
 |异步 | tokio |1.x | Tauri自带 |
 | 数据库 | sqlx + SQLite | sqlx0.7 | `app/src-tauri/Cargo.toml` |
 | Git | git2-rs |0.19 | `app/src-tauri/Cargo.toml` |
@@ -579,28 +628,31 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Everlasting — Vibe Coding Workbench │
-│ Tauri2 + Vue3 + Rust + 自研 agent core + WSL-first │
+│ Tauri2(瘦客户端) + Vue3 + Rust + 自研 agent core + WSL-first │
+│ daemon 化(07-20):agent core 在独立 everlasting-daemon 进程 │
 │ │
-│ ┌────────────────────┐ ┌──────────────────────────┐ │
-│ │ Vue3 Frontend │ IPC │ Rust Agent Core │ │
-│ │ (app/src/) │◄────► │ (app/src-tauri/src/) │ │
-│ │ · Pinia(7 stores) │ │ ·33 tauri commands │ │
+│ ┌────────────────────┐ transport ┌──────────────────────────┐ │
+│ │ Vue3 Frontend │ http(默认) │ everlasting-daemon │ │
+│ │ (app/src/) │ /tauri(逃生)│ (axum,app/src-tauri/ │ │
+│ │ · Pinia(7 stores) │◄─────────►│ src/daemon/ + bin/) │ │
+│ │ · transport/ 抽象 │ │ ·79 commands→REST 路由 │ │
 │ │ · stream1 source │ │ · Provider trait │ │
 │ │ · reka-ui2.9.9 │ │ (Anthropic/OpenAI) │ │
-│ │ · marked+DOMPurify │ │ · Tool registry (8) │ │
+│ │ · marked+DOMPurify │ │ · Tool registry (21) │ │
 │ │ · Vue3.4+ │ │ · git2-rs worktree │ │
-│ │ │ │ · sqlx + SQLite (7表) │ │
-│ │ │ │ · Hand-written SSE │ │
+│ │ · BrowserHeader │ │ · sqlx + SQLite │ │
+│ │ (浏览器模式) │ │ · HttpSseSink + ServeDir │ │
 │ └────────────────────┘ └──────────────────────────┘ │
-│ │ │ │
-│ ▼ ▼ │
-│ ┌──────────────────┐ ┌──────────────────────────┐ │
-│ │ 设计令牌/字体 │ │ LLM APIs │ │
-│ │主题 │ │ (Anthropic/OpenAI/GLM) │ │
-│ └──────────────────┘ └──────────────────────────┘ │
+│ sidecar.rs: GUI Thin 模式 spawn daemon;RunEvent::Exit 回收 │
+│ │ │
+│ ▼ │
+│ ┌──────────────────────────┐ │
+│ │ LLM APIs │ │
+│ │ (Anthropic/OpenAI/...) │ │
+│ └──────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
 
-代码: app/ 单包(src前端 + src-tauri后端)
+代码: app/ 单包(src前端 + src-tauri后端含 daemon/) + scripts/daemon.sh
 文档: docs/ 设计文档 + .trellis/spec/ AI规约
 任务: .trellis/tasks/任务 + archive
 ```
@@ -646,4 +698,4 @@ linuxbrew pkg-config覆盖系统路径、webkit2gtk-4.1 / gdk-pixbuf-2.0 系统�
 
 ---
 
-*本文件由 Step8-PR5 创建,基线 commit `0f9a167`。下次重大重构后再次校准。*
+*本文件由 Step8-PR5 创建,基线 commit `0f9a167`;2026-07-23 同步至 `3307d93`(daemon 化)。下次重大重构后再次校准。*
