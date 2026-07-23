@@ -69,3 +69,6 @@ reasonix.toml
 
 # Claude Code 工具产物(EnterWorktree 临时 worktree 目录,不入库)
 .claude/worktrees/
+
+# ZCode 工具产物(plan/临时文件,不入库)
+.zcode/
