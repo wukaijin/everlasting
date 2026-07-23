@@ -103,15 +103,23 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 ///
 /// Resolution order:
 /// 1. `EVERLASTING_DIST_DIR` env var (operator / test override; absolute).
-/// 2. Default platform-relative location relative to the *daemon
-///    executable* (`../dist`), matching the Tauri layout where
-///    `app/src-tauri/` is the exe's parent and `app/dist/` holds the
-///    vite build output. Using `current_exe()` (not `env!("CARGO_MANIFEST_DIR")`)
-///    keeps production single-binary deploys working regardless of the
-///    install layout.
+/// 2. Default: walk up from the *daemon executable* until we find a
+///    directory whose name is `src-tauri`, then take its sibling `../dist`.
+///    This matches the Tauri layout where `app/src-tauri/` holds the
+///    Rust crate and `app/dist/` holds the vite build output. Walking up
+///    (rather than hard-coding `../../dist`) is required because the
+///    daemon binary lives at different depths across build modes:
+///    - sidecar (P2.4 staging): `app/src-tauri/binaries/everlasting-daemon-<triple>`
+///      → one `..` to `src-tauri`, then `../dist`
+///    - `cargo build --release` (manual test / dogfood):
+///      `app/src-tauri/target/release/everlasting-daemon`
+///      → three `..` to `src-tauri`, then `../dist`
+///    - `cargo build` (debug): `app/src-tauri/target/debug/...`
+///    Using `current_exe()` (not `env!("CARGO_MANIFEST_DIR")`) keeps
+///    production single-binary deploys working regardless of install layout.
 ///
-/// Returns `None` when the resolved path does not exist on disk — callers
-/// treat that as "API-only mode" (dev, or daemon-only deployment).
+/// Returns `None` when nothing resolves — callers treat that as
+/// "API-only mode" (no frontend built, or daemon-only deployment).
 pub fn resolve_dist_dir() -> Option<PathBuf> {
     if let Ok(raw) = std::env::var("EVERLASTING_DIST_DIR") {
         let p = PathBuf::from(raw);
@@ -123,16 +131,26 @@ pub fn resolve_dist_dir() -> Option<PathBuf> {
             "EVERLASTING_DIST_DIR set but not a directory; ignoring"
         );
     }
-    // Default: relative to the daemon executable. `current_exe()` is
-    // the canonical cross-platform way to locate co-bundled assets;
-    // CARGO_MANIFEST_DIR only exists at build time.
+    // Default: walk up from the daemon executable looking for a `src-tauri`
+    // directory (the crate root). `current_exe()` is the canonical
+    // cross-platform way to locate co-bundled assets; CARGO_MANIFEST_DIR
+    // only exists at build time. Walk at most 10 levels to bound the scan.
     let exe = std::env::current_exe().ok()?;
-    let dist = exe.parent()?.join("..").join("dist").canonicalize().ok()?;
-    if dist.is_dir() {
-        Some(dist)
-    } else {
-        None
+    let mut dir = exe.parent()?;
+    for _ in 0..10 {
+        if dir.file_name().and_then(|n| n.to_str()) == Some("src-tauri") {
+            // Found crate root; `dist` is a sibling of `src-tauri`.
+            let dist = dir.parent()?.join("dist");
+            if let Some(c) = dist.canonicalize().ok().filter(|p| p.is_dir()) {
+                return Some(c);
+            }
+            // `src-tauri` found but no sibling `dist` — stop searching so
+            // we don't accidentally pick up an unrelated `dist` higher up.
+            return None;
+        }
+        dir = dir.parent()?;
     }
+    None
 }
 
 /// Resolve the daemon port per Q1 decision:
