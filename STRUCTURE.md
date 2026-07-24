@@ -506,15 +506,10 @@ LLM 返回 tool_use → emit('tool:call') → 前端 ToolCallCard显示
 
 ###10.1 环境变量
 
+项目**不读任何 LLM 相关 env 变量**。provider / model / api_key / base_url 全部通过 UI Settings 配置,落盘到 DB catalog(`providers` / `models` / `app_config` 表)。历史上曾有 `ANTHROPIC_API_KEY` / `LLM_MODEL` 等 env 兜底路径,已在多 Provider catalog 架构落地后移除。
+
 |变量 | 默认 |用途 |
 |------|------|------|
-| `ANTHROPIC_API_KEY` | (必需) | Anthropic API key |
-| `ANTHROPIC_AUTH_TOKEN` | (可选) | Anthropic auth token替代 |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic base URL |
-| `OPENAI_API_KEY` | (可选) | OpenAI API key |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI base URL |
-| `LLM_MODEL` | `MiniMax-M2.7` | 默认模型(env 仅冷启动兜底;生产走 DB provider catalog,见 HACKING-llm.md) |
-| `LLM_MAX_TOKENS` | `1024` | 默认 max tokens |
 | `RUST_LOG` | (无) | tracing级别(如 `debug`) |
 
 ###10.2 构建命令

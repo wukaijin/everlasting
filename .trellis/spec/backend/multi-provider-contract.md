@@ -185,16 +185,11 @@ For `add_model` / `update_model` `Option<u32>` and `Option<String>` args
 `list_models` and finds the matching row — returns `None` if the key
 is unset or the model was deleted.
 
-#### Env-keys (PR1 does NOT add new env keys)
+#### Env-keys (已移除 env 兜底路径)
 
-- `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`,
- `LLM_MODEL`, `LLM_MAX_TOKENS`, `LLM_THINKING_EFFORT` — still read
- by `LlmConfig::from_env()` in `llm/client.rs`. PR1 keeps the env
- path; the new catalog co-exists as a parallel source.
-- The IPC `get_llm_config` command still returns the env-derived
- config (for backward compat); `get_default_model` returns the
- catalog-derived default. PR2 will replace `get_llm_config` with a
- catalog read.
+项目**不读任何 LLM 相关 env 变量**。`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `LLM_MODEL` / `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT` 这些历史上的 env 变量已随 `LlmConfig::from_env` 的删除而移除(2026-07)。provider/model/api_key/base_url/max_tokens/thinking_effort 的唯一来源是 DB catalog。
+
+早期 PR1/PR2 阶段曾保留 env 作为冷启动兜底(`state.config`),catalog 优先;在 catalog 架构稳定、chat 与 `get_llm_config` 都走 catalog 后,env 路径成为死代码,遂整体删除(`AppState.config` 字段、`LlmConfig::from_env` / `unconfigured` / `is_unconfigured`、相关测试与日志)。
 
 ###4. Validation & Error Matrix
 
@@ -462,10 +457,10 @@ model row, no provider row), returns:
 ```
 
 — the frontend's existing "no model configured" warning renders
-as before. The env path is no longer read for this IPC (it
-remains as `state.config` for any future fallback, but the
-`chat` command and `get_llm_config` both go through the
-catalog).
+as before. This IPC and the `chat` command both go through the
+catalog exclusively; there is no env fallback path (the legacy
+`state.config` / `LlmConfig::from_env` cold-start fallback was
+removed once the catalog became the sole source of truth).
 
 ###4. Validation & Error Matrix
 
@@ -630,30 +625,34 @@ invocation. The agent loop's `tokio::select!` already
 listens for the cancellation token between turns, so a
 destructive `set_default_model` cannot race the agent loop.
 
-#### Wrong: `state.config` reused for chat dispatch
+#### Wrong: chat dispatch bypasses the catalog
 
 ```rust
-// BAD — bypasses the catalog; PR1's `default_model_id` is
-// ignored; the user's model choice in Settings is decorative
+// BAD — bypasses the catalog; `default_model_id` is ignored;
+// the user's model choice in Settings is decorative. (Pre-PR2
+// this was the env path; post-cleanup there is no `state.config`
+// to clone either, so this no longer type-checks — which is the
+// point: the type system now enforces catalog-only dispatch.)
 let config = state.config.clone();
 let mut stream = chat_stream_with_tools(config, ...);
 ```
 
 This was the pre-PR2 behavior (env path) — exactly what PR2
-removes. The catalog is now the source of truth.
+removes. The catalog is the source of truth, and after the env
+fallback cleanup `AppState` no longer carries a `config` field,
+so this bypass is no longer expressible.
 
-#### Correct: `state.config` is env-fallback only
+#### Correct: resolve the provider from the catalog per chat
 
 ```rust
-// GOOD — env is read once at startup, kept on AppState for
-// `LlmConfig::from_env` symmetry / future fallback, but the
-// `chat` command reads the catalog via `resolve_chat_provider`.
+// GOOD — the `chat` command resolves provider + model from the
+// DB catalog via `resolve_chat_provider` on every invocation.
 let resolved = resolve_chat_provider(&db).await?;
 let mut stream = resolved.provider.send(...);
 ```
 
-`state.config` is preserved on `AppState` (the env-fallback
-path is intact), but the chat command does not touch it.
+There is no `state.config` and no env fallback; the catalog is
+the single source of truth for provider/model/api_key/base_url.
 
 #### Wrong: pre-flight messages not in the locked-in PRD §Q2 copy
 
@@ -737,6 +736,16 @@ path.
 - ⚠️ PR3 (OpenAI) may want a separate `OpenAIConfig` struct;
  the re-export is `provider::anthropic::LlmConfig`-specific
  and the OpenAI provider will have its own.
+
+> **Update (2026-07, env fallback removal):** the env path
+> described above is now gone. `LlmConfig::from_env` /
+> `unconfigured` / `is_unconfigured` were deleted, `AppState`
+> no longer has a `config` field, and `llm::LlmConfig` is no
+> longer re-exported (no external consumers remain). The
+> factory in `build_provider` is the sole constructor. The
+> core invariant — "every `AnthropicProvider` has its config
+> sourced from a catalog row" — is now enforced unconditionally
+> rather than just on the chat path.
 
 #### Decision:7 new tests, not5
 

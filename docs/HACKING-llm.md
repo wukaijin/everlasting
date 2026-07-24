@@ -12,36 +12,33 @@
 
 ## 现状一句话
 
-> ⚠️ **改 env 不一定切 provider** —— 见下方「env vs DB catalog 优先级」。生产路径是 DB catalog(`providers` 表 + 加密 `api_key_enc`),env 只是冷启动兜底。早先写「当前 model = GLM-4.7」「改 `ANTHROPIC_*` env 切 provider」的表述,在 multi-model + DB catalog 落地(2026-06-08/09)后已不再是主路径。
+> 配置 LLM 一律走 **UI Settings → DB catalog**,代码**不读任何 LLM 相关 env 变量**。历史上曾有 `ANTHROPIC_API_KEY` / `LLM_MODEL` 等 env 兜底路径,在 multi-model + DB catalog 架构稳定后已移除(2026-07)。
 
-- **生产配置路径(主)**:DB catalog —— `providers` 表(`kind` / `base_url` / 加密 `api_key_enc`,见 RULE-D-001)+ `models` 表,UI Settings 里增删改。`seed_default_providers_and_models()`(`db/config.rs`)首启种入 Anthropic/OpenAI 官方 provider + 默认模型 `claude-sonnet-4-5`。
-- **env 兜底路径(冷启动 only)**:`LlmConfig::from_env()`(`llm/provider/anthropic.rs:from_env`)。`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 任一 + `ANTHROPIC_BASE_URL`(缺省 `https://api.anthropic.com`)+ `LLM_MODEL`(缺省 **`MiniMax-M2.7`**,`anthropic.rs:79`)+ `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT`(缺省 `high`)。**仅当 DB 也没配 provider 时**才以这套兜底真正生效(state.rs 注释 "DB provider catalog takes precedence")。
+- **配置路径(唯一)**:DB catalog —— `providers` 表(`kind` / `base_url` / 加密 `api_key_enc`,见 RULE-D-001)+ `models` 表,UI Settings 里增删改。`seed_default_providers_and_models()`(`db/config.rs`)首启种入 Anthropic/OpenAI 官方 provider + 默认模型 `claude-sonnet-4-5`。
 - **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`。
 
-**多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议(默认 base URL `https://api.openai.com/v1`,用 `OPENAI_API_KEY` / `OPENAI_BASE_URL`)。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction"。
+**多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction"。
 
-### env vs DB catalog 优先级
+### provider/model 配置
 
-| 路径 | 触发 | 配什么 | 生效条件 |
-|---|---|---|---|
-| **DB catalog(主)** | UI Settings 增删 provider/model,选默认 model | `providers` / `models` 行 + `app_config.default_model_id` | 永远优先。chat 命令读 `ProviderCatalog`(`state.rs` load 时 build),DB 有 provider 即以此为准 |
-| **`from_env()`(兜底)** | 冷启动 `AppState::load` / `load_daemon_state` 之初读 env | `ANTHROPIC_*` / `LLM_MODEL` / `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT` | **仅当 DB 也没 provider 时**才真正决定 chat 行为;否则只写进 `LlmConfig` 结构体供 `get_llm_config` IPC fallback,不影响实际 chat |
-
-**常见误解**:以为「改 `ANTHROPIC_BASE_URL` / `LLM_MODEL` env 就切了 provider」—— 如果 DB catalog 已有 provider 行,改 env **不会**改变实际请求。要么在 UI 改 provider/model,要么把 DB 清空让 env 兜底生效。源码证据:`state.rs:281-288`(`from_env()` 失败只 `info!` 不 fatal,注释明写 "DB provider catalog takes precedence")。
-
-### daemon 进程的 env 传递
-
-daemon 化后 LLM 配置分两个进程,env 来源不同:
-
-| 形态 | daemon 怎么来 | env 来源 |
+| 路径 | 触发 | 配什么 |
 |---|---|---|
-| **Thin(默认)** | GUI 用 tauri-plugin-shell spawn `everlasting-daemon` sidecar | 继承 **GUI 进程** 的 env(GUI 自己从 shell/桌面环境拿) |
-| **裸跑**(`./scripts/daemon.sh start` / `everlasting-daemon --port`) | 用户在 shell 直接起 | 继承**那个 shell** 的 env |
-| sidecar + `--data-dir` | GUI 把 Tauri-resolved `app_data_dir` 显式传给 daemon | DB 路径显式对齐;env 仍继承 GUI |
+| **DB catalog(唯一)** | UI Settings 增删 provider/model,选默认 model | `providers` / `models` 行 + `app_config.default_model_id` |
 
-**坑**:sidecar 模式下 GUI 是从桌面环境(Wayland/XDG)起的,env 跟你登录 shell 的 `ANTHROPIC_*` 不一定一致 —— 你在 terminal 里 `export ANTHROPIC_API_KEY=...` 测试 OK,但 GUI sidecar 看不到。排查:看 GUI/daemon 启动日志里 `base_url` / `model` 字段(`state.rs` load 时打的 `info!`),或 daemon 日志(`./scripts/daemon.sh logs`)。**但因为 DB catalog 优先**,多数情况下你该去 UI Settings 看 provider 配置,而不是查 env。孤儿 DB 坑见 [DEBUG_DB §1](./DEBUG_DB.md#1-db-文件路径) + RULE-D-001 加密见 DEBUG_DB §4。
+chat 命令读 `ProviderCatalog`(`state.rs` load 时 build),provider/model/api_key/base_url 全部来自 DB。没有 env 兜底,没有第二来源。切 provider/model 只能在 UI Settings 操作。
 
-未来切真 Claude / 切 GLM:在 UI Settings 加 Anthropic provider(`base_url` 留默认 `https://api.anthropic.com`、key 换 `sk-ant-...`、model 选 `claude-*`)即可;裸跑 + 无 DB 时才轮到改 `ANTHROPIC_*` env。重测下面差异章节。
+### daemon 进程的配置传递
+
+daemon 化后 agent core 是独立进程,但 LLM 配置**不走 env**,走 DB:
+
+| 形态 | daemon 怎么来 | 配置来源 |
+|---|---|---|
+| **Thin(默认)** | GUI 用 tauri-plugin-shell spawn `everlasting-daemon` sidecar | DB(`--data-dir` 指向同一个 `everlasting.db`) |
+| **裸跑**(`./scripts/daemon.sh start` / `everlasting-daemon --port`) | 用户在 shell 直接起 | DB(默认 `app_data_dir`,或 `--data-dir` 指定) |
+
+**关键**:sidecar 与 GUI 共享同一个 `everlasting.db`,所以 UI 里改的 provider 配置 daemon 立即可见,不存在「env 不一致」问题。孤儿 DB 坑见 [DEBUG_DB §1](./DEBUG_DB.md#1-db-文件路径) + RULE-D-001 加密见 DEBUG_DB §4。
+
+未来切真 Claude / 切 GLM:在 UI Settings 加 Anthropic provider(`base_url` 留默认 `https://api.anthropic.com`、key 换 `sk-ant-...`、model 选 `claude-*`)即可。重测下面差异章节。
 
 ---
 
@@ -165,9 +162,9 @@ message_stop
 
 来源:spike-002 撞到的所有坑。
 
-- [ ] **BASE_URL 从 env 读**(`ANTHROPIC_BASE_URL`),空时 fallback 到 `https://api.anthropic.com`。**注意 base_url 约定 per-protocol 不对称**(见陷阱 5 / 差异 5):Anthropic 用**裸 host**(`https://api.anthropic.com`,`endpoint()` 拼 `/v1/messages`);OpenAI 用 **`host/v1`**(`https://api.openai.com/v1`,`endpoint()` 拼 `/chat/completions`,**不**重复加 `/v1/`)。生产路径是 DB catalog 的 `providers.base_url`,env 仅兜底
-- [ ] **Model 从 env 读**(`LLM_MODEL`),`from_env()` 缺省 `MiniMax-M2.7`(`anthropic.rs:79`)。**但生产默认走 DB catalog**:UI 选中的 provider/model 优先(见「env vs DB catalog 优先级」),env 只在 DB 无 provider 时兜底
-- [ ] **API key 从 env 读**(`ANTHROPIC_API_KEY`),env 注入不落盘
+- [ ] **BASE_URL 从 DB catalog 读**(`providers.base_url`)。**注意 base_url 约定 per-protocol 不对称**(见陷阱 5 / 差异 5):Anthropic 用**裸 host**(`https://api.anthropic.com`,`endpoint()` 拼 `/v1/messages`);OpenAI 用 **`host/v1`**(`https://api.openai.com/v1`,`endpoint()` 拼 `/chat/completions`,**不**重复加 `/v1/`)
+- [ ] **Model 从 DB catalog 读**(`models.model_name`),由 UI 选中的 default model 决定(见「provider/model 配置」)
+- [ ] **API key 从 DB catalog 读**(`providers.api_key_enc`,解密后用,见 RULE-D-001),不读 env
 - [ ] **SSE 解析**:`event:` / `data:` / 空行 三段式,buffer 累积跨 chunk
 - [ ] **未知事件不崩**:unknown event type 记日志 + continue
 - [ ] **错误归一化**:把 HTTP 4xx/5xx 都 parse 成内部 `enum LlmError`,基于 status + body 的 `error.type` 关键词分类(`Auth / RateLimit / InvalidRequest / Server / Network`)
@@ -213,13 +210,13 @@ message_stop
   1. (a) 响应里有 `type: "thinking"` block + `signature` → 完美,继续走 Anthropic schema
   2. (b) 静默忽略 `thinking` 字段,响应里没 thinking 块 → 项目照常工作(只是 UI 上看不到 thinking);client 端要防御性处理"没收到 thinking_delta 不算错"
   3. (c) 4xx/5xx 拒绝 → 改用 GLM 原生 OpenAI-compat 端点 + 读 `reasoning_content`
-- **fallback 路径**:如果 Claude-compat 端点不通,改 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/paas/v4`,然后在 `llm/client.rs` 加一个 `reasoning_content` delta 的分支(类似 thinking_delta,只是不存 signature)。**这一步当前未实施,留作真机测试出问题时的备选方案**。
+- **fallback 路径**:如果 Claude-compat 端点不通,在 UI Settings 把该 provider 的 `base_url` 改成 `https://open.bigmodel.cn/api/paas/v4`,然后在 `llm/client.rs` 加一个 `reasoning_content` delta 的分支(类似 thinking_delta,只是不存 signature)。**这一步当前未实施,留作真机测试出问题时的备选方案**。
 - **redacted_thinking 大概率不支持**——GLM 没动机在转译层做安全过滤,只有原 Anthropic 会触发这个 block type。client 端照样发 `redacted_thinking_delta` 事件(空数据流),UI 端接到空数据就当没收到,不影响 LLM 协议(LLM 不发 redacted,自然就没 redacted)。
 
 **客户端对策**(已实施于步骤 6):
-- `LlmConfig::from_env` 读 `LLM_THINKING_EFFORT`,默认 `"high"`,可覆盖为 `low` / `medium` / `high` / `xhigh` / `max`
-- `max_tokens` 默认 16384(原 1024 撞上限),`LLM_MAX_TOKENS` env 可覆盖
-- `ChatRequest` 总是带 `thinking: { type: "adaptive", display: "summarized", effort: <env> }`(无 per-session 开关,见 PRD D1)
+- `thinking_effort` 从 DB catalog 读(`models.thinking_effort`),缺省 `"high"`,可配为 `low` / `medium` / `high` / `xhigh` / `max`
+- `max_tokens` 默认 16384(原 1024 撞上限),从 `models.max_tokens` 读,缺省 16384
+- `ChatRequest` 总是带 `thinking: { type: "adaptive", display: "summarized", effort: <catalog> }`(无 per-session 开关,见 PRD D1)
 - `display: "summarized"` 显式设,保证 `thinking_delta` SSE 流到 UI(Opus 4.7+ 默认 `omitted` 会吞掉摘要文字)
 - SSE parser 处理 `content_block_start` block type = `"thinking"` / `"redacted_thinking"`,`content_block_delta` delta type = `"thinking_delta"` / `"signature_delta"`,`content_block_stop` 关闭 thinking 时已经 delta 流式发完 + signature 累积
 - `signature` 必须原样回传,agent loop 在 turn 边界把 thinking text + signature 装进 `ContentBlock::Thinking` 写 DB,下次 LLM 调用通过 `toPayloadContent` 带回
@@ -311,8 +308,8 @@ invoke("create_session", { ..., model: null })
 invoke("create_session", { projectId, initialCwd, model: null })
 // 正确
 invoke("create_session", { projectId, initialCwd })  // 省略 model
-// Rust 端兜底:
-let model = model.unwrap_or_else(|| state.config.model.clone());
+// Rust 端兜底(model 列不绑定具体模型,真实 provider/model 由 chat 时从 catalog 解析):
+let model = model.unwrap_or_default();
 ```
 
 **影响范围**:本项目所有 `Option<T>` 参数 + 任何未来 Rust 命令显式接 `Option<T>` 的字段。**避免在 JS 端用 `null` 显式置空 `Option` 字段**。

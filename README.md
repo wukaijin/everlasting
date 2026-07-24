@@ -36,18 +36,19 @@
 # 1. clone
 git clone https://github.com/wukaijin/everlasting.git && cd everlasting
 
-# 2. 配置 API key(任选其一)
-export ANTHROPIC_API_KEY=sk-ant-...        # 或 OPENAI_API_KEY / OPENAI_BASE_URL 等
-export LLM_MODEL=claude-sonnet-5
-
-# 3. 安装前端依赖
+# 2. 安装前端依赖
 cd app && pnpm install
 
-# 4. 启动(同时启动 Vite dev server + Tauri 窗口)
+# 3. 启动(同时启动 Vite dev server + Tauri 窗口)
 pnpm tauri dev
 
-# 5. 窗口里:新建项目 / 新建 session / 聊
+# 4. 窗口里:Settings → 添加 provider(Anthropic / OpenAI / 任意兼容协议)
+#    填 api_key,选 default model
+
+# 5. 新建项目 / 新建 session / 聊
 ```
+
+> API key 在 UI Settings 里配置(落盘 DB catalog),**不**走 env 变量。
 
 WSL 环境踩坑(中文输入法、linuxbrew pkg-config、Rust 工具链、字体等)走 [docs/HACKING-wsl.md](./docs/HACKING-wsl.md),**不要在 README 复述**。
 

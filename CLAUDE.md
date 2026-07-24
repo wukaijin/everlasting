@@ -192,16 +192,9 @@ docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非
 
 ## Environment Variables
 
-```bash
-ANTHROPIC_API_KEY=xxx        # 或 ANTHROPIC_AUTH_TOKEN(必需,用于真实 LLM)
-ANTHROPIC_BASE_URL=xxx       # 默认 https://api.anthropic.com
-OPENAI_API_KEY=xxx           # 多 Provider 模式下使用(可选)
-OPENAI_BASE_URL=xxx          # 默认 https://api.openai.com/v1
-LLM_MODEL=xxx                # 默认 MiniMax-M2.7 (anthropic.rs:79 from_env;用户实测可改 env,HACKING-llm.md 用 GLM-4.7 走 <your-anthropic-compat-host> 转发)
-LLM_MAX_TOKENS=1024          # 默认 1024
-```
+项目**不读任何 LLM 相关 env 变量**。provider / model / api_key / base_url 全部通过 UI Settings 配置，落盘到 DB catalog（`providers` / `models` / `app_config` 表）。历史上曾有 `ANTHROPIC_API_KEY` / `LLM_MODEL` 等 env 兜底路径，已在多 Provider catalog 架构落地后移除。
 
-**多 Provider 提示**:Anthropic / OpenAI 双 Provider 已落地(2026-06-08/09,4 PR + 1 follow-up),完整设计、wire shape、catalog schema 详见 `.trellis/tasks/archive/2026-06/06-08-multi-model-llm-provider-planning/prd.md` + `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction" section。
+`ANTHROPIC_API_KEY` 仍作为**敏感变量名**出现在 `tools/shell.rs` 的 shell 命令环境变量脱敏清单里（执行 shell 命令前擦除），与 LLM 配置无关。
 
 ## WSL 环境注意
 

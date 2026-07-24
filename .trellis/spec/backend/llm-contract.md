@@ -126,7 +126,7 @@ type ThinkingBlockInfo = { thinking: string; signature: string };
 
 ```json
 {
- "model": "<from env LLM_MODEL>",
+ "model": "<from DB catalog models.model_name>",
  "max_tokens":16384,
  "system": "<system prompt or omitted>",
  "messages": [ ... ],
@@ -141,11 +141,12 @@ type ThinkingBlockInfo = { thinking: string; signature: string };
 - `thinking.display` is **always `"summarized"`** — explicit, not omitted.
  - On Opus4.7+ the default `display` is `"omitted"`, which suppresses `thinking_delta`
  SSE events and breaks the UI.
-- `thinking.effort` is sourced from `LLM_THINKING_EFFORT` (default `"high"`).
+- `thinking.effort` is sourced from the DB catalog (`models.thinking_effort`, default `"high"`).
  - Valid values: `low` / `medium` / `high` / `xhigh` / `max` (Anthropic schema).
  - Invalid values pass through unchanged; the upstream API will reject them.
 - `max_tokens` default is `16384` (was `1024` in step2; bumped in step6 because
- thinking tokens count against the same budget as the actual answer).
+ thinking tokens count against the same budget as the actual answer). Sourced from
+ `models.max_tokens` when set.
 
 #### Response (SSE event sequence)
 
@@ -166,13 +167,9 @@ Delta types observed: `text_delta`, `input_json_delta`, `thinking_delta`, `signa
 
 #### Environment keys
 
-| Key | Required | Default | Notes |
-|-----|----------|---------|-------|
-| `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) | yes | — | The dev setup uses `<your-anthropic-compat-host>` proxy tokens; `ANTHROPIC_AUTH_TOKEN` is the legacy alias. |
-| `ANTHROPIC_BASE_URL` | no | `https://api.anthropic.com` | Trailing `/v1/messages` is appended by `LlmConfig::endpoint()`. |
-| `LLM_MODEL` | no | `GLM-4.7` | |
-| `LLM_MAX_TOKENS` | no | `16384` | Was `1024` before step6. |
-| `LLM_THINKING_EFFORT` | no | `high` | Adaptive thinking effort. |
+**项目不读任何 LLM 相关 env 变量。** provider / model / api_key / base_url / max_tokens / thinking_effort 全部来自 DB catalog(`providers` / `models` / `app_config` 表),由 UI Settings 配置。历史上曾有 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `LLM_MODEL` / `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT` 等 env 兜底路径(`LlmConfig::from_env`),在 multi-model catalog 架构稳定后已移除。
+
+`ANTHROPIC_API_KEY` 仍作为**敏感变量名**出现在 `tools/shell.rs` 的 shell 命令环境变量脱敏清单里(执行 shell 命令前擦除),与 LLM 配置无关。
 
 #### Via-Relay (wukaijin.com / DeepSeek) thinking contract
 
@@ -250,8 +247,7 @@ thinking blocks (joined by `\n`), guarded so a thinking-less assistant message
 
 | Condition | Result |
 |-----------|--------|
-| `ANTHROPIC_API_KEY` missing at startup | `LlmConfig::unconfigured()` — `api_key: ""`, app still launches so UI shows a helpful error. |
-| `LLM_MAX_TOKENS` is not a number | Falls back to default `16384`. |
+| `default_model_id` unset or model row missing at chat time | `PreFlightError::NoModel` → chat emits `ChatEvent::Error` with "没有可用 model,请到 Settings选 default model". App still launches (no env to check at startup). |
 | `LLM_THINKING_EFFORT` is unrecognized | Sent verbatim; upstream may400. |
 | Upstream rejects `thinking: { type: "adaptive" }` | Anthropic returns400. Switch base_url or downgrade to manual mode (out of MVP scope). |
 | `signature` is lost on round-trip (e.g. dropped during rehydrate) | Anthropic returns400 on the next turn. **Hard rule: `signature` must round-trip verbatim.** |
@@ -321,8 +317,8 @@ change to this area.
 | `chat_request_thinking_omitted_when_none` | `Option<ThinkingConfig>` uses `skip_serializing_if` (or equivalent) when `None`. |
 | `chat_request_thinking_adaptive_serializes_correctly` | Output: `{"type":"adaptive","display":"summarized","effort":"high"}`. |
 | `default_max_tokens_is_16384_not_1024` | Env-less default is `16384`. |
-| `thinking_config_is_adaptive_summarized_with_configured_effort` | `LlmConfig::from_env()` honors `LLM_THINKING_EFFORT` and always sets `display: "summarized"`. |
-| `unconfigured_has_empty_thinking_effort` | `LlmConfig::unconfigured()` has `thinking_effort: ""` (does not panic). |
+| `thinking_config_is_adaptive_summarized_with_configured_effort` | `LlmConfig` (constructed directly) always sets `display: "summarized"` and threads the configured `effort`. |
+| ~~`unconfigured_has_empty_thinking_effort`~~ | **Removed** — `LlmConfig::unconfigured()` was deleted along with the env fallback path. |
 
 Total backend suite:57 tests pass as of step6.
 
@@ -464,7 +460,7 @@ response for guaranteed streaming.)
 **Decision**: `DEFAULT_MAX_TOKENS =16384`.
 
 **Consequences**: Cheap requests waste ~8k of budget, but no truncation on
-real workloads. Env override available.
+real workloads. Per-model override available via `models.max_tokens`.
 
 ## Gotcha: tool_use ↔ tool_result Pair Atomicity (C3, 2026-06-12)
 
