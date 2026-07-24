@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daemon-server.md", "reason": "本任务核心契约:shutdown 协议(§3 顺序)+ 行 136-159 待覆盖段(实施后改写)。shutdown 路径改动必须遵守此契约的 drain 语义 + 不变量(§5 必须用 with_graceful_shutdown、shutdown() 在 signal 返回前调)"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "run_chat_loop 的 cancel 语义、CancellationGuard、23-param 签名。新增 helpers::cancel_and_drain_all_agent_loops 必须与此处的 cancel 单源语义一致(CancellationGuard equivalence proof)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "persist_turn 失败的处理(RULE-A-003)+ LlmError tracing(RULE-A-011)。shutdown drain 的 timeout warn 日志风格、panic path receiver 收 Err 的处理参照此处的错误策略"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务核心是「复用 cancel_inflight_for_session/await_inflight_exit 而非新引 spawn handle」。此 guide 的复用决策框架直接适用,需遵循其判定标准"}
