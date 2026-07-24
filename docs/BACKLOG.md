@@ -54,7 +54,7 @@
 - 超限按优先级裁剪
 
 ### 3.2 状态管理复杂度
-- 多 channel 共享 session 状态 → 集中到 agent daemon
+- 多 channel 共享 session 状态 → 集中到 agent daemon(daemon 化 2026-07 已落地,GUI + 浏览器共享同一 `everlasting-daemon` 进程的 session 池)
 - 多 role/mode 切换 → 状态机
 - 跨 session memory → SQLite 集中
 
@@ -98,14 +98,17 @@
 - 跟 §6 飞书的关系:飞书 = 消息通道;跟 §7 云端的关系:云端 = 状态镜像
 - 本节 = "在另一台机器接着干"
 
-**形态(暂定方向,留接口)**:
-- VPS 自托管 daemon(用户已有国内 VPS,直连,不走 Cloudflare Tunnel)
-- 集中式:VPS daemon 是唯一权威,本机 GUI 是 client
-- 跨机器接续:worktree 走 git push/pull(不依赖 VPS 中转)
+**形态**:
+- **本地 daemon 化(✅ 已落地,2026-07,见 [ROADMAP §1.2 "daemon 化"](./ROADMAP.md#12-路线图外完成))**:agent core 已拆为独立 `everlasting-daemon` 进程(axum HTTP),Tauri GUI 作为瘦客户端 + 纯浏览器模式共享同一 agent core。这是跨设备的**基础**,但不等于跨设备 —— 本节未完成部分指**跨机器**接续。
+- **VPS 跨设备(❌ 未做,本节主范围)**:VPS 自托管 daemon(用户已有国内 VPS,直连,不走 Cloudflare Tunnel)+ 集中式(VPS daemon 是唯一权威,本机 GUI 是 client)+ 跨机器接续(worktree 走 git push/pull,不依赖 VPS 中转)
 
-**前期已留的接口**(本决策已落地):
-- Channel Adapter 协议走明文 JSON,载体无关(详见 [ARCHITECTURE §5](./ARCHITECTURE.md#5-决策channel-adapter-抽象为多入口铺路))
+**daemon 化已提供的基础(本地)**:
+- transport 抽象层(httpTransport 默认 / tauriTransport 逃生,`app/src/transport/`)—— 载体无关,跨设备时 VPS 远程也是 HTTP
+- daemon 同源服务前端 SPA(ServeDir),浏览器已可访问本机 daemon
+- `everlasting-daemon` bin 可独立部署(裸跑经 `scripts/daemon.sh`)
 - worktree 路径用 XDG 标准 `~/.local/share/everlasting/worktrees/<project_hash>/<session_id>`(详见 [ARCHITECTURE §3](./ARCHITECTURE.md#3-决策每个-session-一个-git-worktree))
+
+**跨设备待补(本节未做)**:
 - 接续前置条件(早期原则):
   - 源机器必须 push 过(否则目标机器看不到最新)
   - 目标机器不能在跑 LLM(否则状态会变)

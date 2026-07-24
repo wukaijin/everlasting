@@ -15,8 +15,11 @@
 | [ROADMAP.md](./ROADMAP.md) | 技术路线图(单一 source of truth) | V2 4 档分类 + 已实施粗粒度归类 + 维护承诺 | 看当前在哪一步、下一步选项、什么不做 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 架构设计 | 系统怎么搭、请求怎么流 | 写代码前,看"模块怎么分、调用怎么走" |
 | [TECH.md](./TECH.md) | 技术栈 | 用什么库、为什么 | 选库/做依赖决策时 |
-| [CONTEXT.md](./CONTEXT.md) | 术语表 | A4 Token 用量统计核心术语定义(glossary) | 写/改 token 统计或 cache 逻辑前对齐术语时 |
+| [CONTEXT.md](./CONTEXT.md) | 术语表 | 项目 glossary(Token 用量 / Checklist / Subagent / AuditKind / daemon 化进程模型 等) | 写/改跨模块共享概念前对齐术语时 |
 | [IMPLEMENTATION.md](./IMPLEMENTATION.md) | 决策档案 | §1 自研 agent core 决策 + §4 决策日志(ADR 性质,只追加) | 想看"为什么这么做"的历史 ADR |
+| [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) | daemon 化编排 | remote-access epic(transport 抽象 / axum daemon / sidecar / httpTransport / ServeDir)的 Phase 编排 + 状态 | 看 daemon 化怎么分阶段落地 / 当前到哪个 Phase |
+| [REMOTE-ACCESS-RESEARCH.md](./REMOTE-ACCESS-RESEARCH.md) | daemon 化调研 | 远程访问方案调研(Tauri sidecar vs 独立 daemon / HTTP vs IPC / 浏览器模式) | 评估 daemon 化技术选型时 |
+| [MANUAL-TEST-P2.md](./MANUAL-TEST-P2.md) | daemon 手动测试 | daemon 化 Phase 2 手动测试指南(sidecar spawn / 浏览器模式 / SSE / 健康检查) | 手动验证 daemon 行为时 |
 | [BACKLOG.md](./BACKLOG.md) | 候选功能 | 7 个新功能的技术评估(排期归 ROADMAP) | 评估新功能技术细节时 |
 | [HACKING-wsl.md](./HACKING-wsl.md) | WSL 环境坑笔记 | 10 个已知坑 + 一次性环境脚本 | 撞 WSL / 字体 / Rust 工具链 / fcitx5 输入法问题时 |
 | [HACKING-llm.md](./HACKING-llm.md) | LLM API 兼容层笔记 | GLM 兼容层 3 处差异 + 实施 checklist | 写 / 改 / 调试 LLM 客户端时 |

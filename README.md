@@ -18,9 +18,9 @@
 
 ## 状态
 
-当前:2026-07-17。MVP 主体 + V2 第一/二/三档 25 项已全部落地,详见 [docs/ROADMAP.md §1](./docs/ROADMAP.md#1-已实施mvp-主体--路线图外完成)。
+当前:2026-07-24。MVP 主体 + V2 第一/二/三档 25 项已全部落地 + **daemon 化(remote-access epic,07-20~23)**;详见 [docs/ROADMAP.md §1](./docs/ROADMAP.md#1-已实施mvp-主体--路线图外完成)。
 
-完整提交历史:`git log --oneline -20`。最近里程碑(E2 trace viewer / B9+ 生成式 UI 收尾 / V2-2+ 自主记忆面板 / C2+ 循环检测主动干预 / A2+ shell 分类 / A5+ 网络健壮性 / B6+ subagent 多模型 / B8 workflow 编排)见 git log,本文档不重复。
+完整提交历史:`git log --oneline -20`。最近里程碑(daemon 化 remote-access / E2 trace viewer / B9+ 生成式 UI 收尾 / V2-2+ 自主记忆面板 / C2+ 循环检测主动干预 / A2+ shell 分类 / A5+ 网络健壮性 / B6+ subagent 多模型 / B8 workflow 编排)见 git log,本文档不重复。
 
 ## 5 分钟上手
 
@@ -80,6 +80,12 @@ worktree 解耦 + opt-in attach / detach / delete;每个 session 一个 worktree
 ### LLM Provider(自研 trait)
 Anthropic / OpenAI 双 Provider(rig-core 2026-06-09 弃用,改自研 `Provider` trait 走双 Provider + retry 包装)
 
+### 运行形态(daemon 化后,07-20~23)
+agent core 跑在独立 `everlasting-daemon` 进程(axum HTTP server),两种形态共享同一份 agent core:
+- **Tauri GUI + sidecar daemon**(默认):GUI 作为瘦客户端,自动 spawn daemon 子进程,前端经 `httpTransport`(同源 HTTP/SSE)通信。`?transport=tauri` + Full 模式是 daemon 故障逃生舱(回退 legacy in-process IPC)。
+- **纯浏览器模式**:daemon 用 ServeDir 同源服务前端 SPA,任意浏览器开 `http://localhost:7456/` 即可用(WSL 内 daemon 经 localhost 转发可达 Windows 宿主浏览器);前端 `isTauriWebview()`=false 时用 `BrowserHeader` 替代 `TitleBar`。管理脚本 `scripts/daemon.sh`。
+- 详见 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) + [docs/ARCHITECTURE.md §1](./docs/ARCHITECTURE.md#1-系统架构)。
+
 ### 横切
 - **A2+B7 权限系统**:⑨ 关 5-tier path-based 决策层 + 3 档 Mode(`edit` / `plan` / `yolo`) + ⑯ 审计日志 25 类 AuditKind + `ToolKind::GitMutation`(L3b PR3+,避免 Shell 串扰)
 - **C3 Context 压缩**:`context_window * 0.80` → `0.50` 触发,B5 memory 永远保护,MAX_TURNS=200 兜底
@@ -107,7 +113,7 @@ Anthropic / OpenAI 双 Provider(rig-core 2026-06-09 弃用,改自研 `Provider` 
 
 - 仅个人使用,非商业项目
 - WSL Ubuntu 22.04 优先,Windows / macOS 不主动适配
-- 不做移动端 / Web 版 / 云端部署
+- 不做移动端 / 云端部署 / 托管型 Web 版(注:本地浏览器模式 —— localhost 访问本机 daemon —— 是 daemon 化的副产物,不算"Web 版";跨设备云端访问见 [BACKLOG §4](./docs/BACKLOG.md#4-跨设备),未做)
 - 不包装 Claude Code / Codex SDK(自研是学习目标)
 - 不做通用 agent 框架(Cline / OpenHands 已在做)
 - 不做 in-app 自动升级(走包管理器或手动)
