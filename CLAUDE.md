@@ -8,7 +8,7 @@ Everlasting — 个人 vibe coding 工作台。Tauri 2 + Vue 3 + Rust，自研 a
 
 **进程模型（2026-07-20 daemon 化后）**：agent core 跑在独立 `everlasting-daemon` 进程（axum HTTP server），Tauri GUI 进程作为瘦客户端，spawn daemon 为 sidecar 并经同源 HTTP/SSE 通信（默认 `httpTransport`，daemon 同时用 ServeDir 服务前端 SPA）。前端也可脱离 Tauri 用纯浏览器访问 daemon（浏览器模式）。`?transport=tauri` + Full 模式是 daemon 故障时的逃生舱（回退到一体化 Tauri IPC）。详见 [docs/REMOTE-ACCESS-ROADMAP.md](./docs/REMOTE-ACCESS-ROADMAP.md) + [docs/ARCHITECTURE.md §1](./docs/ARCHITECTURE.md)。
 
-**当前状态(2026-07-23)**:MVP 主体 + 多 Provider + Step 8 代码重构已全部完成;memory/指令文件系统(4 文件加载 + cache_control 注入)+ per-session token usage + C3 context 压缩(token 硬卡 + MAX_TURNS 200)+ A2+B7 权限系统(⑨ 关 5-tier path-based 决策层 + 3 档 Mode `edit`/`plan`/`yolo` + ⑯ 审计日志 17 类 AuditKind)已全部落地;V2 路线图第一档 + 第二档 7/7 全部完成,第三档已落地 B4 Skill / B6 Subagent(06-21 收尾)/ B12 Checklist / C2 循环检测 / L1 后台 shell / L2 并行只读 / L3a-d subagent 全套 / RULE-D-001 api_key 加密 / V2 2 期自主记忆(06-29)/ B9 生成式 UI(07-02 部分)/ B9+ 收尾(07-13)/ E2 harness trace viewer(07-14);**daemon 化(remote-access Phase 2,07-20~07-23)**:transport 抽象层 + axum daemon(`everlasting-daemon` bin)+ sidecar spawn + httpTransport 默认 + ServeDir 浏览器模式 + E2E 测试已落地,详见 [docs/ROADMAP.md §1.2](./docs/ROADMAP.md#12-路线图外完成)。position bug(2026-06-14 ✅ 已解决,A7 收尾):根因是 Wayland 协议禁止客户端设置窗口位置(WSLg/Weston 下 `setPosition()` 被合成器忽略,Tauri issue #14913,非 Tauri bug),故 `TitleBar.vue` 放弃手动 setSize+setPosition 铺满整屏,全平台改原生 `toggleMaximize()`;RDP 双屏已验证通过,详见 [IMPLEMENTATION §4 2026-06-14](./docs/IMPLEMENTATION.md#4-决策日志)。
+**当前状态**:MVP 主体 + V2 路线图主体已落地（多 Provider、memory/指令文件系统、context 压缩、权限系统、subagent、workflow、自主记忆、生成式 UI、harness trace viewer 等）；近期重点是 **daemon 化**（agent core 拆出独立 `everlasting-daemon` 进程，GUI 作为瘦客户端）。完整路线 / 排期见 [docs/ROADMAP.md](./docs/ROADMAP.md)（单一 source of truth），决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
 **路线图 / 排期 / 维护承诺**:**[docs/ROADMAP.md](./docs/ROADMAP.md)** 是单一 source of truth(V2 4 档分类 + 已实施粗粒度归类)。本文档不重复路线图细节;决策历史见 [docs/IMPLEMENTATION.md §4](./docs/IMPLEMENTATION.md#4-决策日志)。
 
@@ -41,16 +41,14 @@ cd app/src-tauri && PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/sh
 # 日志控制
 RUST_LOG=debug pnpm tauri dev   # tracing 输出级别
 
-# Daemon / 浏览器模式（daemon 化后，2026-07-20 起）
-# 详见 docs/HACKING-wsl.md §远程访问 daemon 部署。
-cd app/src-tauri && cargo build --bin everlasting-daemon   # 只编译 daemon bin（GUI sidecar 模式由 build.rs 自动 staging）
-./scripts/daemon.sh start      # 前台启 daemon（release 二进制，同源服务前端 dist/）
-./scripts/daemon.sh bg         # 后台启 daemon（PID 文件 + 日志 /tmp/everlasting-daemon.log）
-./scripts/daemon.sh stop       # 停 daemon（SIGTERM graceful 8s → SIGKILL 兜底）
-./scripts/daemon.sh restart    # 重启（改前端后重新 serve 新 dist 的最常用工作流）
-./scripts/daemon.sh status     # health 检查（GET /api/v1/health）
-./scripts/daemon.sh logs       # tail -f daemon 日志
-# 浏览器模式：daemon 起来后用浏览器开 http://localhost:7456/（daemon ServeDir 同源服务 SPA）。
+# Daemon / 浏览器模式（纯浏览器模式：daemon 同源服务前端 SPA，浏览器开 http://localhost:7456/）
+# 子命令：start / bg / stop / restart / rebuild / status / logs；选项 --port N（默认 7456）/ --no-build
+./scripts/daemon.sh start      # 编译 release + 前台启动（日志打终端）
+./scripts/daemon.sh bg         # 同 start 但后台（日志写 /tmp/everlasting-daemon.log）
+./scripts/daemon.sh restart    # stop + bg（改前端后重新 serve dist 的最常用工作流）
+./scripts/daemon.sh rebuild    # 只重新编译 release 二进制（不重启）
+./scripts/daemon.sh status     # 进程状态 + GET /api/v1/health
+./scripts/daemon.sh logs       # tail -f 后台日志
 # GUI sidecar 模式：正常 `pnpm tauri dev/build` 即可，GUI 进程自动 spawn daemon 子进程并经 httpTransport 通信。
 # 逃生舱：URL 加 ?transport=tauri + GUI 在 Full 模式（EVERLASTING_GUI_FULL_STATE=1）回退到一体化 Tauri IPC。
 # ⚠️ 不要同时跑两个 daemon（会撞端口 + 数据分裂；sidecar 模式由 RunEvent::Exit 钩子自动回收）。
@@ -60,126 +58,121 @@ cd app/src-tauri && cargo build --bin everlasting-daemon   # 只编译 daemon bi
 
 ## Architecture
 
-> 完整结构见 [STRUCTURE.md](./STRUCTURE.md)(8-PR5 创建)。
+> 完整结构见 [STRUCTURE.md](./STRUCTURE.md)。
 
 ```
 app/
-├── src/                    # Vue 3 前端 (8-PR3 拆分后;06-23 续拆 3 组件 + 1 composable + 3 store 模块)
+├── src/                    # Vue 3 前端
 │   ├── components/
-│   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo / BrowserHeader(★ 浏览器模式顶栏,07-23)
-│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(B9)/ WorkerBranchBadge + WorkerMergeControls(L3b PR4) 等
-│   │   │                   # (06-23 拆:MessageItemEdit/Footer + SubagentDrawerHeader/ErrorCard + ChatInputLatencyPopover/HintRow;B9:UiCard + primitive registry;L3b PR4:WorkerBranchBadge/WorkerMergeControls)
+│   │   ├── layout/         # AppShell / AppHeader / Sidebar / TitleBar / AppLogo / BrowserHeader(浏览器模式顶栏)
+│   │   ├── chat/           # ChatPanel / MessageList / ChatInput / MessageItem / ToolCallCard / DiffView / SubagentDrawer / UiCard(生成式 UI)/ WorkerBranchBadge + WorkerMergeControls 等
 │   │   ├── memory/         # MemoryPreview / MemoryModal / MemoryLayerItem
 │   │   ├── settings/       # SettingsModal / ModelRow / ProvidersTab / MemoryTab 等
-│   │   ├── audit/          # C4 审计日志查询 UI (AuditLogModal / AuditLogItem)
-│   │   ├── trace/          # E2 harness trace viewer (TracePanel / TurnTimeline / TurnCard / TraceEventItem)
+│   │   ├── audit/          # 审计日志查询 UI (AuditLogModal / AuditLogItem)
+│   │   ├── trace/          # harness trace viewer (TracePanel / TurnTimeline / TurnCard / TraceEventItem)
 │   │   ├── common/         # 通用组件 (TriggerMenu 等 @文件/命令触发器)
 │   │   ├── ChatWindow.vue  # 顶层容器(纯组合)
 │   │   ├── SessionList.vue / ProjectTabs.vue / Icon.vue
 │   ├── stores/             # Pinia stores
 │   │   ├── chat.ts         # facade: sessions 列表 + currentSessionId + currentCwd + CRUD 委托
-│   │   ├── chat.types.ts   # (06-23 拆)~310 行纯类型 + 强绑定 const(MODE_CYCLE 等)
-│   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests (8-PR3 拆分)
-│   │   ├── subagentRuns.ts # (06-23 拆)store 主体 + coerceStatus(~547 行)
-│   │   ├── subagentRuns.types.ts # (06-23 拆)~354 行
-│   │   ├── runAccumulator.ts # (06-23 拆)~537 行 RunAccumulator + parseTranscriptJson
+│   │   ├── chat.types.ts   # ~310 行纯类型 + 强绑定 const(MODE_CYCLE 等)
+│   │   ├── streamController.ts # SSE 单源 + LRU 20 + activeRequests
+│   │   ├── subagentRuns.ts # store 主体 + coerceStatus
+│   │   ├── subagentRuns.types.ts # ~354 行类型
+│   │   ├── runAccumulator.ts # RunAccumulator + parseTranscriptJson
 │   │   ├── config.ts / models.ts / providers.ts / projects.ts
 │   │   ├── memory.ts       # memory/指令文件 UI 状态
-│   │   ├── permissions.ts   # A2+B7 权限 / Mode (edit/plan/yolo) 状态
-│   │   ├── audit.ts         # C4 审计日志查询 store
-│   │   ├── trace.ts         # E2 harness trace store (live+回看同构 TurnTrace)
-│   │   └── checklist.ts     # B12 agent 自跟踪 checklist store
-│   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror (06-23 拆 composable)
-├── transport/             # ★ NEW (07-20 remote-access) — 前端 transport 抽象层(invoke/listen 与载体解耦)
+│   │   ├── permissions.ts  # 权限 / Mode (edit/plan/yolo) 状态
+│   │   ├── audit.ts        # 审计日志查询 store
+│   │   ├── trace.ts        # harness trace store (live+回看同构 TurnTrace)
+│   │   └── checklist.ts    # agent 自跟踪 checklist store
+│   └── utils/              # path / markdown / messageFormat / tokenUsage / lru / audit / colorTag / duration / useKeyboard / chatInputCodeMirror
+├── transport/              # 前端 transport 抽象层(invoke/listen 与载体解耦)
 │   ├── index.ts           # resolveTransport():默认 httpTransport;?transport=tauri 逃生 → tauriTransport
 │   ├── http.ts            # httpTransport(fetch POST + SSE EventSource,连 everlasting-daemon 同源)
 │   ├── tauri.ts           # tauriTransport(@tauri-apps/api invoke/listen 透传,Full 模式逃生舱)
 │   ├── health.ts          # daemon health 轮询 + 自动降级(httpTransport ↔ tauriTransport)
 │   ├── env.ts             # isTauriWebview():Tauri webview vs 纯浏览器检测(浏览器无 Tauri runtime)
 │   └── types.ts           # Transport trait(invoke/listen 签名)+ UnlistenFn
-├── src-tauri/              # Rust 后端 (8-PR1/2 拆分后;06-23 续拆 subagent/ + chat_loop + tests)
+├── src-tauri/              # Rust 后端
 │   └── src/
 │       ├── lib.rs          # Tauri 入口(纯 init + 命令注册 + sidecar spawn + RunEvent::Exit 回收)
 │       ├── state.rs        # AppState 共享状态(load_inner / load_from_dir;daemon 侧也用)
-│       ├── sidecar.rs      # ★ NEW (07-22 P2.4) — GuiMode{Thin,Full} + spawn_and_manage(everlasting-daemon sidecar via tauri-plugin-shell)
+│       ├── sidecar.rs      # GuiMode{Thin,Full} + spawn_and_manage(everlasting-daemon sidecar via tauri-plugin-shell)
 │       ├── main.rs         # Windows 子系统入口
-│       ├── resource_loader.rs  # Markdown + frontmatter 通用加载 (Skill/Role/B3 /command 资源,parse_frontmatter 手写)
+│       ├── resource_loader.rs  # Markdown + frontmatter 通用加载 (Skill/Role /command 资源,parse_frontmatter 手写)
 │       ├── files.rs        # 文件操作辅助
-│       ├── db/             # SQLite 持久化(8-PR2 拆分, CRUD 函数分散到子模块)
+│       ├── db/             # SQLite 持久化(CRUD 函数分散到子模块)
 │       │   ├── mod.rs / migrations.rs / types.rs / models.rs / config.rs
-│       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs / trace.rs  # E2 turn_trace CRUD
-│       │   ├── tests.rs    # (06-23 拆)6 个 `*_tests.rs` 按 SQL 域(无 common,test_pool 6 份复制)
-│       ├── llm/            # LLM 客户端模块 + 自研 Provider trait + A5+ 网络健壮性
+│       │   ├── providers.rs / projects.rs / sessions.rs / subagent_runs.rs / permissions.rs / trace.rs  # turn_trace CRUD
+│       │   ├── tests.rs    # 6 个 `*_tests.rs` 按 SQL 域(无 common,test_pool 6 份复制)
+│       ├── llm/            # LLM 客户端模块 + 自研 Provider trait + 网络健壮性
 │       │   ├── provider/   # Provider trait + AnthropicProvider + OpenAIProvider + wire.rs + mock.rs
-│       │   ├── retry.rs    # A5+ retry_open wrapper(Full Jitter + 首字节前重试 + retry-after 解析;07-05)
+│       │   ├── retry.rs    # retry_open wrapper(Full Jitter + 首字节前重试 + retry-after 解析)
 │       │   ├── sse.rs      # SseParser — 状态机式 SSE 行解析
 │       │   ├── error.rs    # LlmError 5 类错误分类、中文用户消息
 │       │   └── types.rs    # ContentBlock、MessageContent、ChatMessage、ToolDef、ChatEvent
 │       ├── memory/         # Memory/指令文件系统(4 文件加载 + cache_control 注入)
 │       │   ├── loader.rs / file.rs / watcher.rs / tokens.rs / types.rs
-│       ├── agent/          # Agent Loop(8-PR1;06-23 subagent/ + chat_loop + tests;06-24 loop_detection / memory_*;07-07 question_store;07-08~10 workflow/)
+│       ├── agent/          # Agent Loop 主循环 + 周边
 │       │   ├── chat.rs / chat_loop.rs    # 主循环 + run_subagent 串联
-│       │   ├── trace.rs                 # E2 trace pipeline(3 record_* 双写:emit + upsert turn_trace)
-│       │   ├── context.rs               # C3 context 压缩(token 阈值 + 降级 + B5 保护)
-│       │   ├── loop_detection.rs        # C2/C2+ 循环检测分级触发 + 主动干预(per-run-local count + QuestionStore)
+│       │   ├── trace.rs                 # trace pipeline(3 record_* 双写:emit + upsert turn_trace)
+│       │   ├── context.rs               # context 压缩(token 阈值 + 降级 + memory 保护)
+│       │   ├── loop_detection.rs        # 循环检测分级触发 + 主动干预(per-run-local count + QuestionStore)
 │       │   ├── system_prompt.rs / behavior_prompt.rs / thinking.rs # prompt 与 thinking 块处理
-│       │   ├── auto_reflect.rs / memory_recall.rs / memory_hygiene.rs # V2 2 期自主记忆:反思 / 召回 / 卫生 job
+│       │   ├── auto_reflect.rs / memory_recall.rs / memory_hygiene.rs # 自主记忆:反思 / 召回 / 卫生 job
 │       │   ├── question_store.rs        # ask_user_question / request_mode_change 跨 turn 状态(PendingInteraction tagged enum)
 │       │   ├── helpers.rs / provider.rs / at_file.rs # 工具级辅助
-│       │   ├── subagent/   # (06-23 拆 4 文件 + dispatch.rs)
+│       │   ├── subagent/   # subagent 主体 + dispatch
 │       │   │   ├── mod.rs / sink.rs / transcript.rs / truncate_summary.rs
-│       │   │   └── dispatch.rs  # (06-23 抽自 chat_loop.rs)run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
-│       │   ├── workflow/   # ★ NEW (07-08~10) — workflow 系统核心(workflow.json 外置 + task 状态机 + breadcrumb 注入)
+│       │   │   └── dispatch.rs  # run_subagent + resolve_project_id + SUBAGENT_MAX_TURNS
+│       │   ├── workflow/   # workflow 系统核心(workflow.json 外置 + task 状态机 + breadcrumb 注入)
 │       │   │   ├── mod.rs (re-exports) / def.rs (WorkflowDef + 4 访问函数 + default_workflow)
 │       │   │   ├── builtin.rs (builtin dev workflow plugin loader)
 │       │   │   ├── inject.rs (per-turn breadcrumb + bootstrap hint + resolve_current_task 即时读盘)
 │       │   │   ├── state.rs (TaskStatus state machine helpers)
 │       │   │   └── task.rs (TaskJson schema + read_task lenient + create_task_init + archive_task_init)
-│       │   ├── permissions/  # (06-23 拆 mod.rs → 8 模块 + 6 tests_*.rs)
+│       │   ├── permissions/  # 权限子系统(mod.rs → 8 模块 + 6 tests_*.rs)
 │       │   │   ├── mod.rs (纯 re-exports) / types.rs / store.rs / payload.rs
 │       │   │   ├── mode.rs / audit.rs / check.rs / ask.rs
-│       │   │   ├── dangerous.rs / shell_trust.rs (sibling 不动)
+│       │   │   ├── dangerous.rs / shell_trust.rs
 │       │   │   └── tests_*.rs (6 个 + tests_common.rs)
-│       │   ├── tests_*.rs  # (06-23 拆 tests.rs → 5 域文件 + tests_common.rs;后续追加 tests_agent_loop / tests_ask_user_question / tests_c2plus / tests_cancellation / tests_envelope / tests_prompts / tests_request_mode_change / tests_subagent)
-│       ├── background_shell/  # ★ NEW (06-19 L1a) — BackgroundShellRegistry trait + InMemory impl(tokio 后台 task + drain_notifications)
-│       ├── daemon/         # ★ NEW (07-20~23 remote-access) — axum HTTP daemon(everlasting-daemon bin 的核心)
+│       │   ├── tests_*.rs  # 按域拆分的测试文件(tests_agent_loop / tests_ask_user_question / tests_c2plus / tests_cancellation / tests_envelope / tests_prompts / tests_request_mode_change / tests_subagent)
+│       ├── background_shell/  # BackgroundShellRegistry trait + InMemory impl(tokio 后台 task + drain_notifications)
+│       ├── daemon/         # axum HTTP daemon(everlasting-daemon bin 的核心)
 │       │   ├── mod.rs      # re-exports + daemon_version
 │       │   ├── server.rs   # build_router + serve_daemon(TcpListener 0.0.0.0:7456 + ServeDir 同源 SPA fallback + graceful shutdown)
 │       │   ├── sse.rs      # HttpSseSink — agent loop 的 SSE 事件流广播(chat-event/tool:call/tool:result)
 │       │   ├── error.rs    # DaemonError(axum IntoResponse)
-│       │   └── routes/     # 79 个 #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
+│       │   └── routes/     # #[tauri::command] 镜像为 REST 路由(同 handler 双暴露 IPC+HTTP)
 │       │       └── sessions/projects/config/providers/memory/permissions/.../stream(SSE)/health 等 20 文件
-│       ├── bin/            # ★ NEW (07-20) — cargo bin targets
+│       ├── bin/            # cargo bin targets
 │       │   └── everlasting-daemon.rs  # daemon 进程入口(resolve_data_dir + clap --port/--data-dir + serve_daemon)
 │       ├── skill/          # Skill 系统(资源加载 + 注册,/skill + use_skill tool)
-│       ├── commands/       # Tauri commands(8-PR1 拆分;07-03 subagents / 07-07 question / 07-08~10 task)
-│       │   ├── task.rs # ★ NEW (07-08~10) — task.json CRUD IPC(create_task / read_task / set_task_state / archive_task)
-│       │   ├── subagents.rs # ★ NEW (07-03) — subagent model override IPC(list_subagents_with_model + set_subagent_model)
-│       │   ├── question.rs # ★ NEW (07-07) — get_pending_interaction + resolve_mode_change
-│       │   └── 其他: sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist
+│       ├── commands/       # Tauri commands(sessions/projects/config/cancel/providers/worktree/memory/permissions/command_palette/panel/files/subagent_runs/audit/checklist/task/subagents/question)
 │       ├── projects/       # Project 数据模型 + boundary 校验
 │       ├── git/            # git2-rs worktree + diff
 │       └── tools/          # Tool 定义与执行(21 个 builtin,mod.rs::builtin_tools() 注册;filter_tools_for_mode/subagent/workflow 三层过滤)
-│           ├── mod.rs       # builtin_tools()、execute_tool() 分发、ToolKind/GitMutation(WebFetch式 tool-level grant)
-│           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs  # L2 并发只读集
-│           ├── shell.rs / run_background_shell.rs / shell_status.rs / shell_kill.rs  # L1a 后台 shell(tokio Child,无 PTY)
-│           ├── web_fetch.rs   # P1 web 抓取(SSRF 拦截 + 5 MiB body cap)
-│           ├── use_skill.rs   # B4 Skill 调用 tool(三层渐进披露 L0/L1/L2,workflow-aware)
-│           ├── use_ui.rs      # B9 生成式 UI(non-blocking execute + UiPrimitive registry)
-│           ├── update_checklist.rs # B12 agent 自跟踪 checklist tool(loop-local + workflow 分支同步 task.json.items)
-│           ├── remember.rs    # V2 2 期自主记忆写入 tool
+│           ├── mod.rs       # builtin_tools()、execute_tool() 分发、ToolKind/GitMutation(tool-level grant)
+│           ├── read_file.rs / write_file.rs / edit_file.rs / grep.rs / glob.rs / list_dir.rs  # 并发只读集
+│           ├── shell.rs / run_background_shell.rs / shell_status.rs / shell_kill.rs  # 前台/后台 shell(tokio Child,无 PTY)
+│           ├── web_fetch.rs   # web 抓取(SSRF 拦截 + 5 MiB body cap)
+│           ├── use_skill.rs   # Skill 调用 tool(三层渐进披露,workflow-aware)
+│           ├── use_ui.rs      # 生成式 UI(non-blocking execute + UiPrimitive registry)
+│           ├── update_checklist.rs # agent 自跟踪 checklist tool(loop-local + workflow 分支同步 task.json.items)
+│           ├── remember.rs    # 自主记忆写入 tool
 │           ├── ask_user_question.rs  # 跨 turn 问题(selector 复用,query_store 配对)
-│           ├── dispatch_subagent.rs # B6 派 worker agent
-│           ├── merge_worker.rs / discard_worker.rs  # L3b worker worktree 收口(ToolKind::GitMutation)
-│           ├── create_task.rs / request_task_state_transition.rs  # ★ NEW (07-08/10) workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
-│           ├── request_mode_change.rs  # ★ NEW (07-07 B6+ A) LLM 申请切 mode(用户 inline card 授权)
+│           ├── dispatch_subagent.rs # 派 worker agent
+│           ├── merge_worker.rs / discard_worker.rs  # worker worktree 收口(ToolKind::GitMutation)
+│           ├── create_task.rs / request_task_state_transition.rs  # workflow tools(workflow_enabled session 可见,filter_tools_for_workflow 白名单)
+│           ├── request_mode_change.rs  # LLM 申请切 mode(用户 inline card 授权)
 │           └── read_guard.rs  # session 隔离的已读文件校验(edit_file 前置 3 道 check)
 docs/                       # 设计文档(全中文,spikes/ 在 docs/ 下而非项目根)
 ```
 
 ### 核心数据流
 
-前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → `transport.invoke("chat", { requestId, sessionId, messages })`（**默认 `httpTransport`**：fetch POST 到 daemon `/api/v1/...`；`?transport=tauri` 逃生时走 Tauri IPC 同进程）→ Rust `chat` handler（daemon 进程的 axum 路由，或 Full 模式下的 Tauri command；两者共享同一 `#[tauri::command]`/REST 双暴露 handler）→ **Agent Loop**（max 200 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）+ 工具前 V2 2 期 `memory_recall` 召回 + C3 context 压缩降级 → `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 经 daemon 的 `HttpSseSink`（`daemon/sse.rs`）同源 SSE 广播给前端（Full 模式则经 Tauri event）→ L2 并发只读集 `FuturesUnordered` 批量执行 + 写类 / shell 串行 → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite（daemon 进程持有 DB pool），session 列表从 DB 读。前端 Pinia store 多 listener 监听（`transport.listen`），增量更新消息 + 工具卡片。
+前端 `ChatWindow.vue`（侧边栏 + chat 区）→ Pinia `chat.ts send()` → `transport.invoke("chat", { requestId, sessionId, messages })`（**默认 `httpTransport`**：fetch POST 到 daemon `/api/v1/...`；`?transport=tauri` 逃生时走 Tauri IPC 同进程）→ Rust `chat` handler（daemon 进程的 axum 路由，或 Full 模式下的 Tauri command；两者共享同一 `#[tauri::command]`/REST 双暴露 handler）→ **Agent Loop**（max 200 turns）→ 每轮开头通过 `build_instructions_blocks()` 构造带 `cache_control` 的 synthetic user message（4 个指令文件: User CLAUDE.md / User AGENTS.md / Project CLAUDE.md / Project AGENTS.md）+ 工具前 `memory_recall` 召回 + context 压缩降级 → `chat_stream_with_tools()` 请求 LLM API → SSE 流式解析（BlockState 状态机处理 text/tool_use）→ 高频事件 `chat-event`（delta/start/done/error）+ 低频独立事件 `tool:call` / `tool:result` → 经 daemon 的 `HttpSseSink`（`daemon/sse.rs`）同源 SSE 广播给前端（Full 模式则经 Tauri event）→ 只读工具集 `FuturesUnordered` 批量执行 + 写类 / shell 串行 → 构造 tool_result 回填 → 再发 LLM → 直到 text-only 响应或 max turns。**Turn 边界**调 `db::persist_turn` 落 SQLite（daemon 进程持有 DB pool），session 列表从 DB 读。前端 Pinia store 多 listener 监听（`transport.listen`），增量更新消息 + 工具卡片。
 
 ### 关键架构决策
 
