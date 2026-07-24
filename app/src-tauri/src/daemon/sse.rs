@@ -197,6 +197,31 @@ impl SseRegistry {
             Err(p) => p.into_inner().senders.len(),
         }
     }
+
+    /// 主动结束所有 live SSE 流(graceful shutdown 用)。
+    ///
+    /// 清空 `senders` → 每个订阅者的 `mpsc::Sender` 被 drop → 对应
+    /// `ReceiverStream` 返回 `None` → `stream.rs` 的 SSE body 自然
+    /// `end()` → axum 感知连接完成 → `serve_daemon` 的
+    /// `with_graceful_shutdown` 不再被永不完成的 SSE 连接卡住。
+    ///
+    /// 这是对 daemon 退出时"SSE 长连接挂起致 graceful shutdown 超时"
+    /// 的根治(原本靠 `daemon.sh` SIGKILL 兜底)。语义上等价于把所有
+    /// 订阅者一次性 fan-out 剔除(`broadcast` 的 `retain` 是逐个 drop,
+    /// `clear` 是批量 drop,对 channel 而言效果一致)。shutdown 后再
+    /// `broadcast` 的事件静默丢弃(daemon 已在退出,无消费者)。
+    ///
+    /// 锁逻辑跟 `broadcast` / `subscribe` 一致(`Mutex::lock` + poison
+    /// 容错,不 panic)。
+    pub fn shutdown(&self) {
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dropped = inner.senders.len();
+        inner.senders.clear();
+        tracing::info!(dropped, "SSE registry shutdown: dropped live subscribers");
+    }
 }
 
 impl Default for SseRegistry {
@@ -433,6 +458,69 @@ mod tests {
         for _ in 0..(LIVE_CHANNEL_CAPACITY + BUFFER_CAPACITY + 10) {
             reg.broadcast("chat-event", &payload("flood"));
         }
+        assert_eq!(reg.subscriber_count(), 0);
+    }
+
+    /// `shutdown()` 清空所有订阅者,subscriber_count 归零。
+    #[tokio::test]
+    async fn shutdown_clears_all_subscribers() {
+        let reg = SseRegistry::new();
+        let _a = reg.subscribe(None);
+        let _b = reg.subscribe(None);
+        let _c = reg.subscribe(None);
+        assert_eq!(reg.subscriber_count(), 3);
+        reg.shutdown();
+        assert_eq!(reg.subscriber_count(), 0);
+    }
+
+    /// `shutdown()` drop 了 senders 后,订阅者的 live channel 收到
+    /// `None`(`ReceiverStream` 自然 end)—— 这是让 axum SSE body
+    /// 结束、graceful shutdown 不卡住的关键不变量。
+    #[tokio::test]
+    async fn shutdown_ends_live_channel() {
+        let reg = SseRegistry::new();
+        let mut sub = reg.subscribe(None);
+        reg.shutdown();
+        // sender drop → receiver 返回 None(而非挂起)。
+        let recv =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.live.recv()).await;
+        assert!(
+            recv.is_ok(),
+            "live channel must resolve after shutdown, not hang"
+        );
+        assert!(recv.unwrap().is_none(), "live channel must return None");
+    }
+
+    /// `shutdown()` 后再 broadcast 的事件静默丢弃(daemon 已退出,无消费者),
+    /// 不 panic、不影响 buffer 状态。
+    #[tokio::test]
+    async fn shutdown_silently_drops_post_shutdown_broadcast() {
+        let reg = SseRegistry::new();
+        let _sub = reg.subscribe(None);
+        reg.shutdown();
+        // 不 panic。
+        reg.broadcast("chat-event", &payload("post-shutdown"));
+        // 无订阅者,subscriber_count 仍为 0(buffer 虽有这条,
+        // 但 daemon 已退出,replay 永不会被消费)。
+        assert_eq!(reg.subscriber_count(), 0);
+    }
+
+    /// `shutdown()` 对空 registry 是 no-op(不 panic)。
+    #[tokio::test]
+    async fn shutdown_on_empty_registry_is_noop() {
+        let reg = SseRegistry::new();
+        assert_eq!(reg.subscriber_count(), 0);
+        reg.shutdown();
+        assert_eq!(reg.subscriber_count(), 0);
+    }
+
+    /// `shutdown()` 可重复调用(idempotent)—— 第二次对空 senders 是 no-op。
+    #[tokio::test]
+    async fn shutdown_is_idempotent() {
+        let reg = SseRegistry::new();
+        let _sub = reg.subscribe(None);
+        reg.shutdown();
+        reg.shutdown(); // 不 panic。
         assert_eq!(reg.subscriber_count(), 0);
     }
 }

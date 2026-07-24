@@ -14,7 +14,11 @@
 //!    host browsers reach the daemon via WSL 2 localhost forwarding;
 //!    see `docs/HACKING-wsl.md`).
 //! 4. `axum::serve(...).with_graceful_shutdown(...)` — Ctrl+C /
-//!    SIGTERM drains in-flight requests.
+//!    SIGTERM first calls [`sse::SseRegistry::shutdown`] to end all
+//!    live SSE streams (so the drain isn't blocked by never-finishing
+//!    `GET /api/v1/stream` connections), then drains remaining
+//!    in-flight requests. A [`SHUTDOWN_GRACE_SECS`] timeout backs it
+//!    up against unknown long-lived connections.
 //!
 //! The `Arc<AppState>` is shared across every handler (axum clones
 //! the `Arc` per request). This matches the Tauri `State<'_,
@@ -24,6 +28,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{routing::get, Router};
 use tokio::net::TcpListener;
@@ -163,35 +168,70 @@ pub fn resolve_port(cli_port: Option<u16>, env_port: Option<u16>) -> u16 {
     cli_port.or(env_port).unwrap_or(DEFAULT_DAEMON_PORT)
 }
 
+/// Graceful shutdown 给 in-flight 连接的硬上限(秒)。正常路径下
+/// [`SseRegistry::shutdown`] 主动结束后 SSE 流会亚秒完成,这个 timeout
+/// 只是 defense-in-depth —— 防止未来加的非 SSE streaming endpoint
+/// 或其他未知长连接把 shutdown 卡住。比 `scripts/daemon.sh` 的 8s
+/// SIGKILL 短,留 SIGKILL 作最后一道防线。
+const SHUTDOWN_GRACE_SECS: u64 = 3;
+
 /// Bind + serve the daemon on `0.0.0.0:PORT`. The `everlasting-daemon`
 /// bin target is a thin shell that resolves the port, loads
 /// `AppState`, and calls this.
 ///
-/// Graceful shutdown is wired to SIGINT (Ctrl+C) and SIGTERM
-/// (POSIX). P2.4 will add sidecar-aware shutdown (Tauri window
-/// close → SIGTERM the daemon); for now we use the platform's
-/// canonical terminate signals.
+/// # Graceful shutdown
+///
+/// 收到 Ctrl+C (SIGINT) 或 SIGTERM (POSIX) 后:
+/// 1. [`shutdown_signal`] 先调 [`SseRegistry::shutdown`] 主动 drop 所有
+///    SSE 订阅者 → `stream.rs` 的 SSE body 自然 `end()` → axum 感知
+///    这些连接「完成」。这一步根治了"SSE 长连接永不自然完成 →
+///    graceful shutdown 无限挂起"的问题(原本靠 `daemon.sh` SIGKILL 兜底)。
+/// 2. `shutdown_signal` 返回后,axum 的 `with_graceful_shutdown` 开始
+///    drain 所有 in-flight 连接 —— 此时 SSE 流已结束,只剩可快速 drain
+///    的短请求,整体亚秒完成。
+/// 3. [`SHUTDOWN_GRACE_SECS`] timeout 兜底:若仍有未知长连接卡住,
+///    超时后直接返回(进程随后退出),不阻塞 `daemon.sh` 的 SIGKILL。
+///
+/// 关键:必须用 `with_graceful_shutdown`(而非 `select!` + drop serve
+/// future)。drop `axum::serve` 的 future 会 abort 所有连接 task(粗暴
+/// 断开),而非 drain —— 那会丢失正在处理中的请求。
 pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     tracing::info!(addr = %addr, "everlasting-daemon listening");
 
-    let router = build_router(state);
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    tracing::info!("everlasting-daemon shutdown complete");
+    let router = build_router(Arc::clone(&state));
+    let serve = axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal(Arc::clone(&state.sse)));
+
+    // timeout 兜底:正常 sse.shutdown() 后亚秒 drain 完成;超时则放弃
+    // 等待,让 daemon.sh 的 SIGKILL 作最后一道防线。
+    match tokio::time::timeout(Duration::from_secs(SHUTDOWN_GRACE_SECS), serve).await {
+        Ok(res) => {
+            tracing::info!("everlasting-daemon shutdown complete");
+            res?;
+        }
+        Err(_) => {
+            tracing::warn!(
+                grace_secs = SHUTDOWN_GRACE_SECS,
+                "graceful shutdown exceeded grace window; forcing exit (daemon.sh SIGKILL is the last resort)"
+            );
+        }
+    }
     Ok(())
 }
 
 /// Graceful shutdown signal handler. Fires on Ctrl+C (portable) or
 /// SIGTERM (Unix only). Windows builds fall back to Ctrl+C only,
 /// which matches the Tauri GUI's signal handling convention.
-async fn shutdown_signal() {
+///
+/// 信号触发后,**返回前先调 [`SseRegistry::shutdown`]** 主动结束所有
+/// SSE 长连接。这是让 axum `with_graceful_shutdown` 不被永不完成的
+/// SSE 连接卡住的关键 —— 不主动关 SSE 的话,graceful drain 会无限
+/// 等待每个活跃的 `GET /api/v1/stream`。
+async fn shutdown_signal(registry: Arc<crate::daemon::sse::SseRegistry>) {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("install Ctrl+C handler");
+        signal::ctrl_c().await.expect("install Ctrl+C handler");
     };
 
     #[cfg(unix)]
@@ -209,6 +249,10 @@ async fn shutdown_signal() {
         _ = ctrl_c => tracing::info!("received SIGINT, shutting down"),
         _ = terminate => tracing::info!("received SIGTERM, shutting down"),
     }
+
+    // 主动结束所有 SSE 长连接 —— 在返回给 axum 的 graceful_shutdown
+    // 之前,让 drain 不被永不完成的 SSE 连接卡住。
+    registry.shutdown();
 }
 
 #[cfg(test)]
@@ -262,5 +306,108 @@ mod tests {
         // Must not panic; result is host-dependent (default path).
         let _ = resolve_dist_dir();
         std::env::remove_var("EVERLASTING_DIST_DIR");
+    }
+
+    /// Graceful shutdown 端到端:有活跃 SSE 长连接时,daemon 收到
+    /// SIGTERM 后必须在 grace window 内退出,而不是无限挂起(原本
+    /// 靠 daemon.sh SIGKILL 兜底)。
+    ///
+    /// 这是本任务的核心回归测试:若 `serve_daemon` 回归到「等所有
+    /// in-flight 连接完成」的旧行为(没有 `sse.shutdown()` 主动关
+    /// SSE),本测试会因为 `serve_daemon` 超过 grace window 超时
+    /// 而失败。
+    ///
+    /// 测试通过的标准:`serve_daemon` 在 `SHUTDOWN_GRACE_SECS` 内
+    /// 返回(而非挂起/超时),证明 `sse.shutdown()` 主动结束后 axum
+    /// 的 graceful drain 能快速完成。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_daemon_shutdown_completes_with_active_sse() {
+        use std::sync::Arc;
+        use tempfile::TempDir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        // 预占一个 ephemeral port,取出端口号后立即 drop,交给
+        // serve_daemon 重绑(有微小竞态,测试可接受)。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
+        let dir = TempDir::new().expect("tempdir");
+        let state = load_daemon_state(dir.path().to_path_buf()).await;
+
+        // spawn serve_daemon。
+        let serve_handle = tokio::spawn(serve_daemon(Arc::clone(&state), port));
+
+        // 等 daemon 起来(轮询 health)。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!("daemon did not become healthy in 5s");
+            }
+            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await {
+                let req =
+                    b"GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+                let _ = s.write_all(req).await;
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf).await;
+                if buf.starts_with(b"HTTP/1.1 200") {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 建立一个 SSE 长连接 —— 这是触发旧 bug「graceful shutdown
+        // 挂起」的必要条件。连接保持打开,不发任何会让它结束的内容。
+        let mut sse = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect for SSE");
+        let sse_req =
+            b"GET /api/v1/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n";
+        sse.write_all(sse_req).await.expect("send SSE GET");
+        // 读一点响应头确认连接建立(200 + headers),但不读完 body
+        // (SSE body 无限流)。
+        let mut hdr = [0u8; 64];
+        let _ = sse.read(&mut hdr).await;
+        assert!(
+            hdr.starts_with(b"HTTP/1.1 200"),
+            "SSE endpoint must respond 200, got: {}",
+            String::from_utf8_lossy(&hdr)
+        );
+
+        // 发真实 SIGTERM 给当前进程 —— 触发 serve_daemon 的
+        // shutdown_signal。libc 已是项目依赖(process group kill 等)。
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+
+        // 核心断言:serve_daemon 必须在 grace window 内完成。
+        // SHUTDOWN_GRACE_SECS 是 serve_daemon 内部的 timeout 上限;
+        // 正常路径下 sse.shutdown() 后 drain 亚秒完成。留 2x 余量
+        // 防 CI 慢机器。
+        let completion = tokio::time::timeout(
+            std::time::Duration::from_secs(SHUTDOWN_GRACE_SECS * 2 + 2),
+            serve_handle,
+        )
+        .await;
+
+        match completion {
+            Ok(Ok(_)) => {
+                // serve_daemon 正常返回 —— 通过。
+            }
+            Ok(Err(e)) => panic!("serve_daemon returned error: {e}"),
+            Err(_) => {
+                panic!(
+                    "serve_daemon did NOT complete within {}s of SIGTERM — \
+                     graceful shutdown is still hanging on the active SSE \
+                     connection (the bug this test guards against)",
+                    SHUTDOWN_GRACE_SECS * 2 + 2
+                );
+            }
+        }
     }
 }
