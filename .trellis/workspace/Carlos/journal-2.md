@@ -101,3 +101,36 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: docs-sync-daemon-split 收尾: subtask C (HACKING/DEBUG_DB) + D (IMPLEMENTATION ADR) — 父任务 4/4 全 archived
+
+**Date**: 2026-07-24
+**Task**: docs-sync-daemon-split 收尾: subtask C (HACKING/DEBUG_DB) + D (IMPLEMENTATION ADR) — 父任务 4/4 全 archived
+**Branch**: `main`
+
+### Summary
+
+续父任务 docs-sync-daemon-split。子任务 C (HACKING-llm/wsl/DEBUG_DB): 默认模型 GLM-4.7→MiniMax-M2.7 + env/DB catalog 优先级章节 + daemon env 传递; DEBUG_DB 行号修正 + daemon 视角 DB 路径 + WAL writer 归属 daemon; HACKING-wsl 补 scripts/daemon.sh 用法 + 多实例警告 + daemon 健康检查。子任务 D (IMPLEMENTATION): §1 自研边界演进注记 (Tauri IPC→+HTTP/SSE; rig/rmcp 弃用, R2 保留历史); §4 新增 2026-07-20 daemon 拆分 ADR 7 决策点 (拆 daemon/axum/sidecar/httpTransport/ServeDir/双暴露/DB 路径), 决策依据取自 daemon-split design.md 非臆造; §4 飞书触发 + L3a daemon 提及补演进注记。所有代码事实改动前核对源码。父任务 4/4 子任务全 archived, 跨文档飞书/Unix-socket 叙事清零, 集成检查通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c3b0bd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
