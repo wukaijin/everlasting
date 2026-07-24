@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~136 | Active |
+| `journal-2.md` | ~169 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-24 | 归档 remote-access-multi-channel 全树(daemon-split 跳过 E4/E5 dogfooding) | `31373f4` | `main` |
 | 28 | 2026-07-24 | docs-sync-daemon-split 收尾: subtask C (HACKING/DEBUG_DB) + D (IMPLEMENTATION ADR) — 父任务 4/4 全 archived | `8c3b0bd` | `main` |
 | 27 | 2026-07-23 | daemon 浏览器模式手动测试 — 修复 7 个路径/渲染类 bug + scripts/daemon.sh | `ba41c1d`, `6581257`, `2a1a07d`, `16548fd`, `df991a5`, `128e01f`, `a2bd611`, `b42edb7` | `main` |
 | 26 | 2026-07-20 | Session 26: A5 错误处理完善 (scope B) | `0200ea1` | `main` |

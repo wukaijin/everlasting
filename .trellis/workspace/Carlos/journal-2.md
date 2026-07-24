@@ -134,3 +134,36 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 归档 remote-access-multi-channel 全树(daemon-split 跳过 E4/E5 dogfooding)
+
+**Date**: 2026-07-24
+**Task**: 归档 remote-access-multi-channel 全树(daemon-split 跳过 E4/E5 dogfooding)
+**Branch**: `main`
+
+### Summary
+
+用户决定全归档。daemon-split 子任务原 in_progress(等 E4/E5 dogfooding 验证,见 Session 27),现按用户决定跳过 E4/E5 标 completed 归档 —— 代码已全落地(commits 0dbc747→84d4689→e6b7a2f + 手测修复 ba41c1d/6581257/16548fd/df991a5/a2bd611),运行期验证作 nice-to-have 不再计入验收。父任务 remote-access-multi-channel 同步归档。active task 清空(0 tasks)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `31373f4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
