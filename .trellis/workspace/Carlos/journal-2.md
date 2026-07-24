@@ -167,3 +167,36 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: daemon graceful shutdown 超时修复（SSE 长连接挂起）
+
+**Date**: 2026-07-24
+**Task**: daemon graceful shutdown 超时修复（SSE 长连接挂起）
+**Branch**: `main`
+
+### Summary
+
+修复 daemon 收到 SIGTERM 后因 SSE 长连接永不自然完成导致 graceful shutdown 无限挂起（原本靠 daemon.sh SIGKILL 兜底）。signal 触发后先 SseRegistry::shutdown() 主动 drop 所有订阅者 → ReceiverStream 返回 None → SSE body 自然 end() → axum drain 亚秒完成；外层 SHUTDOWN_GRACE_SECS=3s timeout 作 defense-in-depth。1566 lib + 10 e2e passed。新建 backend/daemon-server.md spec（daemon 层 spec 种子，含 wrong/correct 对照 + streaming endpoint pattern）。用户审查时点名暴露一个 PRD 未覆盖的真问题：正在跑的 agent loop 在进程退出时被硬终止（shutdown 路径未遍历 state.cancellations cancel 活跃 request），已如实记入 PRD + spec 作独立 follow-up，修法方向已写明。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a6bd1c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
