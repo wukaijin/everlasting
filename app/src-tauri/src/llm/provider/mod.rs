@@ -144,12 +144,10 @@ pub fn build_provider(
 ) -> Result<Box<dyn Provider>, ProviderBuildError> {
     match provider_row.protocol.as_str() {
         "anthropic" => {
-            // Defaults: 16384 for max_tokens (matches the legacy
-            // `client.rs` `DEFAULT_MAX_TOKENS`); "high" for
-            // thinking_effort (matches the LLM_THINKING_EFFORT env
-            // default). The chat command's pre-flight check verifies
-            // `provider.api_key` is set, so we don't re-check here.
-            let max_tokens = model_row.max_tokens.unwrap_or(16384);
+            // Defaults: `DEFAULT_MAX_TOKENS` for max_tokens; "high" for
+            // thinking_effort. The chat command's pre-flight check
+            // verifies `provider.api_key` is set, so we don't re-check here.
+            let max_tokens = model_row.max_tokens.unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
             let thinking_effort = model_row
                 .thinking_effort
                 .clone()
@@ -318,9 +316,9 @@ mod tests {
 
     /// When the model row has no row-level overrides, the factory
     /// falls back to the Anthropic defaults: `max_tokens = 16384`
-    /// and `thinking_effort = "high"`. This matches the legacy
-    /// `LlmConfig::from_env` defaults so PR2 keeps the same wire
-    /// shape.
+    /// and `thinking_effort = "high"`. These are the catalog-era
+    /// defaults (previously the `from_env` defaults; the env path
+    /// has since been removed).
     #[test]
     fn factory_falls_back_to_default_max_tokens_and_effort() {
         let p = anthropic_provider_row("sk-test");
