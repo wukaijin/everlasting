@@ -1,6 +1,8 @@
 # HACKING-llm: LLM API 兼容层差异笔记
 
-> 当前实测环境:用 `<your-anthropic-compat-host>` 转发的 **GLM-4.7** 走 Anthropic 兼容协议,**不是真的 Anthropic Claude API**。SSE 协议理论上等价,但错误响应 / HTTP 状态码 / 边界行为有 3 处差异。
+> 本文件的「GLM 差异」章节(差异 1/2/3/4)是早期对着一个 **GLM-4.7 Anthropic-兼容转发端点**(`<your-anthropic-compat-host>`)实测沉淀的,**不是真的 Anthropic Claude API**。SSE 协议理论上等价,但错误响应 / HTTP 状态码 / 边界行为有数处差异。
+>
+> **注意(2026-07 daemon 化后同步)**:GLM-4.7 **不再是当前默认模型** —— 见下文「现状一句话」。把 GLM 差异章节理解为「当你把 base_url 指向某个 GLM-4.7 兼容端点时」的踩坑笔记;切到真 Anthropic / MiniMax-M2.7 / 其他 provider 时这些差异未必复现,需按「切换到真 Anthropic Claude 时,重测清单」复测。
 >
 > 写给未来的自己(或者下个 session),实施 LLM 客户端时别再踩这些坑。
 >
@@ -10,14 +12,36 @@
 
 ## 现状一句话
 
-- **当前 base URL**:`https://<your-anthropic-compat-host>/v1/messages`(从 `ANTHROPIC_BASE_URL` env 读)
-- **当前 model**:`GLM-4.7`
-- **当前 API key**:环境变量 `ANTHROPIC_API_KEY`(智谱风格 `sk-g4HcGHnrqbc...`,不是 Anthropic 风格)
-- **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`
+> ⚠️ **改 env 不一定切 provider** —— 见下方「env vs DB catalog 优先级」。生产路径是 DB catalog(`providers` 表 + 加密 `api_key_enc`),env 只是冷启动兜底。早先写「当前 model = GLM-4.7」「改 `ANTHROPIC_*` env 切 provider」的表述,在 multi-model + DB catalog 落地(2026-06-08/09)后已不再是主路径。
+
+- **生产配置路径(主)**:DB catalog —— `providers` 表(`kind` / `base_url` / 加密 `api_key_enc`,见 RULE-D-001)+ `models` 表,UI Settings 里增删改。`seed_default_providers_and_models()`(`db/config.rs`)首启种入 Anthropic/OpenAI 官方 provider + 默认模型 `claude-sonnet-4-5`。
+- **env 兜底路径(冷启动 only)**:`LlmConfig::from_env()`(`llm/provider/anthropic.rs:from_env`)。`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 任一 + `ANTHROPIC_BASE_URL`(缺省 `https://api.anthropic.com`)+ `LLM_MODEL`(缺省 **`MiniMax-M2.7`**,`anthropic.rs:79`)+ `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT`(缺省 `high`)。**仅当 DB 也没配 provider 时**才以这套兜底真正生效(state.rs 注释 "DB provider catalog takes precedence")。
+- **协议**:Anthropic Messages API 兼容,header 用 `x-api-key` + `anthropic-version: 2023-06-01`。
 
 **多 Provider**(2026-06-08/09 落地):除 Anthropic 外,`OpenAIProvider` 走 OpenAI Chat Completions / 兼容协议(默认 base URL `https://api.openai.com/v1`,用 `OPENAI_API_KEY` / `OPENAI_BASE_URL`)。两个 provider 共用自研 `Provider` trait + `provider::wire` `WireMessage` 跨协议中间层,`strip_unsupported` 静默降级(`cache_creation_input_tokens` 等 Anthropic 专属字段归零 / `tool_choice` 类型映射)。完整设计见 `.trellis/spec/backend/llm-contract.md` "Scenario: Multi-Provider Abstraction"。
 
-未来切真 Claude:改 `ANTHROPIC_BASE_URL` 空、model 改 `claude-haiku-4-5`、key 换 Anthropic 的 `sk-ant-...`。重测下面 3 处差异。
+### env vs DB catalog 优先级
+
+| 路径 | 触发 | 配什么 | 生效条件 |
+|---|---|---|---|
+| **DB catalog(主)** | UI Settings 增删 provider/model,选默认 model | `providers` / `models` 行 + `app_config.default_model_id` | 永远优先。chat 命令读 `ProviderCatalog`(`state.rs` load 时 build),DB 有 provider 即以此为准 |
+| **`from_env()`(兜底)** | 冷启动 `AppState::load` / `load_daemon_state` 之初读 env | `ANTHROPIC_*` / `LLM_MODEL` / `LLM_MAX_TOKENS` / `LLM_THINKING_EFFORT` | **仅当 DB 也没 provider 时**才真正决定 chat 行为;否则只写进 `LlmConfig` 结构体供 `get_llm_config` IPC fallback,不影响实际 chat |
+
+**常见误解**:以为「改 `ANTHROPIC_BASE_URL` / `LLM_MODEL` env 就切了 provider」—— 如果 DB catalog 已有 provider 行,改 env **不会**改变实际请求。要么在 UI 改 provider/model,要么把 DB 清空让 env 兜底生效。源码证据:`state.rs:281-288`(`from_env()` 失败只 `info!` 不 fatal,注释明写 "DB provider catalog takes precedence")。
+
+### daemon 进程的 env 传递
+
+daemon 化后 LLM 配置分两个进程,env 来源不同:
+
+| 形态 | daemon 怎么来 | env 来源 |
+|---|---|---|
+| **Thin(默认)** | GUI 用 tauri-plugin-shell spawn `everlasting-daemon` sidecar | 继承 **GUI 进程** 的 env(GUI 自己从 shell/桌面环境拿) |
+| **裸跑**(`./scripts/daemon.sh start` / `everlasting-daemon --port`) | 用户在 shell 直接起 | 继承**那个 shell** 的 env |
+| sidecar + `--data-dir` | GUI 把 Tauri-resolved `app_data_dir` 显式传给 daemon | DB 路径显式对齐;env 仍继承 GUI |
+
+**坑**:sidecar 模式下 GUI 是从桌面环境(Wayland/XDG)起的,env 跟你登录 shell 的 `ANTHROPIC_*` 不一定一致 —— 你在 terminal 里 `export ANTHROPIC_API_KEY=...` 测试 OK,但 GUI sidecar 看不到。排查:看 GUI/daemon 启动日志里 `base_url` / `model` 字段(`state.rs` load 时打的 `info!`),或 daemon 日志(`./scripts/daemon.sh logs`)。**但因为 DB catalog 优先**,多数情况下你该去 UI Settings 看 provider 配置,而不是查 env。孤儿 DB 坑见 [DEBUG_DB §1](./DEBUG_DB.md#1-db-文件路径) + RULE-D-001 加密见 DEBUG_DB §4。
+
+未来切真 Claude / 切 GLM:在 UI Settings 加 Anthropic provider(`base_url` 留默认 `https://api.anthropic.com`、key 换 `sk-ant-...`、model 选 `claude-*`)即可;裸跑 + 无 DB 时才轮到改 `ANTHROPIC_*` env。重测下面差异章节。
 
 ---
 
@@ -141,8 +165,8 @@ message_stop
 
 来源:spike-002 撞到的所有坑。
 
-- [ ] **BASE_URL 从 env 读**(`ANTHROPIC_BASE_URL`),空时 fallback 到 `https://api.anthropic.com`
-- [ ] **Model 从 env 读**(`LLM_MODEL` 或类似),默认 `GLM-4.7` 兼容 `<your-proxy>`
+- [ ] **BASE_URL 从 env 读**(`ANTHROPIC_BASE_URL`),空时 fallback 到 `https://api.anthropic.com`。**注意 base_url 约定 per-protocol 不对称**(见陷阱 5 / 差异 5):Anthropic 用**裸 host**(`https://api.anthropic.com`,`endpoint()` 拼 `/v1/messages`);OpenAI 用 **`host/v1`**(`https://api.openai.com/v1`,`endpoint()` 拼 `/chat/completions`,**不**重复加 `/v1/`)。生产路径是 DB catalog 的 `providers.base_url`,env 仅兜底
+- [ ] **Model 从 env 读**(`LLM_MODEL`),`from_env()` 缺省 `MiniMax-M2.7`(`anthropic.rs:79`)。**但生产默认走 DB catalog**:UI 选中的 provider/model 优先(见「env vs DB catalog 优先级」),env 只在 DB 无 provider 时兜底
 - [ ] **API key 从 env 读**(`ANTHROPIC_API_KEY`),env 注入不落盘
 - [ ] **SSE 解析**:`event:` / `data:` / 空行 三段式,buffer 累积跨 chunk
 - [ ] **未知事件不崩**:unknown event type 记日志 + continue

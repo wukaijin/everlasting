@@ -16,7 +16,23 @@ DB 文件位置由 Tauri `app_data_dir()` 解析,各平台:
 | macOS | `~/Library/Application Support/dev.everlasting.app/everlasting.db` |
 | Windows | `%APPDATA%\dev.everlasting.app\everlasting.db` |
 
-> 路径常量定义在 [`app/src-tauri/src/state.rs:212-214`](../../app/src-tauri/src/state.rs):`app_data_dir().join("everlasting.db")`。WAL 模式下还有 `everlasting.db-wal` / `-shm` 两个伴生文件。
+> 路径常量定义在 [`app/src-tauri/src/state.rs:304`](../../app/src-tauri/src/state.rs)(`db_path = app_data_dir.join("everlasting.db")`,在 `load_inner` 内)。WAL 模式下还有 `everlasting.db-wal` / `-shm` 两个伴生文件。
+
+### 1.0 daemon 化后的三条解析路径(2026-07 同步)
+
+`app_data_dir/` 这个子目录是 `dev.everlasting.app/`(= `tauri.conf.json` 的 `identifier`),三套进程各自按下面解析,**必须对齐到同一个文件**,否则会打开空 DB / 孤儿 DB:
+
+| 进程 / 形态 | 怎么算出 data dir | 代码 |
+|---|---|---|
+| **GUI(Full 模式)** | Tauri `app.path().app_data_dir()` = `dirs::data_dir().join(identifier)` | `state.rs:233`(`app_data_dir()` 读取)+ `state.rs:304`(`db_path`) |
+| **daemon 裸跑** | `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期注入 | `bin/everlasting-daemon.rs:173-200`(`resolve_data_dir` + `env!("EVERLASTING_APP_IDENTIFIER")`) |
+| **daemon sidecar(GUI spawn)** | GUI 把 Tauri-resolved `app_data_dir` 经 `--data-dir <PATH>` 显式传给 daemon,daemon 优先用 arg | `bin/everlasting-daemon.rs:60-65, 119-128`(`parse_data_dir_from_args`)|
+
+**孤儿 DB 坑(2026-07-23 commit `16548fd` 修复前)**:`resolve_data_dir()` 曾用 `dirs::data_dir().join("everlasting")`(无 `dev.` 前缀),与 Tauri 的 `app_data_dir()`(`.../dev.everlasting.app/`)对不上 → daemon 裸跑打开一个空 DB,看不到 GUI 写入的 151 条历史消息。修复方式:build.rs 注入 `EVERLASTING_APP_IDENTIFIER` 使两者走同一个 identifier。**如果升级/迁移后 GUI 看不到历史、daemon 看得到(或反之)**,先 `ls` 两个候选目录确认是不是又分叉了:
+```bash
+ls -la ~/.local/share/dev.everlasting.app/   # 应有 everlasting.db(GUI + 修后 daemon 都在这)
+ls -la ~/.local/share/everlasting/           # 旧孤儿(修前 daemon 误建),有就是分叉,需手动 merge / 删
+```
 
 ### 1.1 速查
 
@@ -158,7 +174,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 - **直连只读时也别用生产 DB**:复制到 `/tmp/everlasting-debug.db` 再操作(`sqlite3 ~/.local/.../everlasting.db ".backup /tmp/everlasting-debug.db"`)
 - **RULE-D-001(api_key 加密)**:不要 SELECT `providers` 表查 api_key — 已经不存明文(列从 `api_key` 改为 `api_key_enc` + `key_migrated_at` 哨兵,详见 [IMPLEMENTATION §4 2026-06-24](../IMPLEMENTATION.md#4-决策日志))
 - **DB 文件泄露威胁模型**:见 `app/src-tauri/src/crypto.rs:5` 注释,无 machine-id 解不开 `api_key_enc`;但 session 标题 / message 历史仍是明文,**DB 文件跟 OS 账号权限走**
-- **调试时停 app**:Tauri 进程持有 WAL writer,直连查询安全(`-readonly` 模式无写竞争),但**不要**在 app 运行时用写模式(`-cmd "UPDATE..."`)连接,会撞 `SQLITE_BUSY`
+- **调试时停 daemon(daemon 化后 2026-07 同步)**:**持有 WAL writer 的是 daemon 进程**,不是 GUI。Thin 模式(默认)下 GUI 根本不开 `SqlitePool`(`sidecar.rs` 注释:Thin 模式 GUI does NOT load `AppState` / does NOT open a `SqlitePool`)。直连查询安全(`-readonly` 无写竞争),但**不要**在 daemon 运行时用写模式(`-cmd "UPDATE..."`)连接,会撞 `SQLITE_BUSY`。要安全地直连写:先 `./scripts/daemon.sh stop` 停 daemon(Thin 模式下 GUI 还开着也不影响,GUI 没开 pool)。Full 模式(`?transport=tauri`)例外 —— 那是 GUI 进程持有 writer,要停 GUI
 
 ---
 
@@ -170,7 +186,7 @@ WHERE session_id = 'YOUR_SESSION_ID'
 | Session 标题乱码 | `sessions.title` | 应是 UTF-8;若 ? 替换查前端 encoding |
 | Token 计数对不上 | `sessions.{input,output,cache_creation,cache_read}_total` | 单条 LLM 响应的 token 在 `chat-event` 实时更新,DB 累计是 turn 边界 commit 的 |
 | 权限决策错了 | `session_audit_events` 同 session_id + kind = 'tool_denied' / 'tool_allowed' | payload_json 里有 reason / critical / mode |
-| Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。app 启动时 `reap_orphaned_runs` 会把残留 `running`(上一进程崩溃 / 被杀留下的孤儿)标记为 `error`,所以重启后看到的假 running 已被清理 |
+| Subagent 卡死 | `subagent_runs.status` NOT IN 终态 | 配合 `started_at` 算 wall-clock。**daemon 启动时** `reap_orphaned_runs`(daemon 化后 2026-07:reap 发生在 daemon 的 `load_inner` 即 `state.rs:318`,Thin 模式 GUI 不调 `load_inner`,所以是 daemon 进程在 reap)会把残留 `running`(上一进程崩溃 / 被杀留下的孤儿)标记为 `error`,所以重启后看到的假 running 已被清理 |
 | FTS5 搜索不返回 | `messages_fts`(如已建) | FTS5 虚拟表是单独表,messages 主表 INSERT 时需同步;查 [IMPLEMENTATION §4 2026-06-17 "D2 降档"](../IMPLEMENTATION.md#4-决策日志) 状态 |
 | Memory 召回不命中 | `autonomous_memories.status NOT IN ('verified', 'active')` | status='candidate' 不进 recall;查 `tool_name` / `command_pattern` 是否精确匹配,`hit_count` 是否 < 阈值(quality 层 P5 软拦截) |
 

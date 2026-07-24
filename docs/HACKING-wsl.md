@@ -591,13 +591,44 @@ echo $XMODIFIERS      # 应 @im=fcitx
 echo $DBUS_SESSION_BUS_ADDRESS  # 应 unix:path=/run/user/UID/bus
 ```
 
+**daemon 健康检查(怀疑 daemon / 远程访问有问题时加跑)**:
+```bash
+# daemon 进程在不在 + health endpoint(期望 200 + camelCase JSON)
+./scripts/daemon.sh status
+curl -s http://localhost:7456/api/v1/health
+
+# daemon 是否监听 0.0.0.0:7456(WSL 2 forwarding 需要它绑非 127.0.0.1)
+ss -tlnp | grep 7456
+
+# 看 daemon 日志(bg 模式写 /tmp/everlasting-daemon.log)
+./scripts/daemon.sh logs
+```
+
 ---
 
 ## 远程访问 daemon 部署(Phase 2,2026-07-23)
 
 > 这是本项目的**核心使用场景**:WSL 跑 daemon,Windows 宿主浏览器访问。Phase 2 把 agent core 拆成独立 `everlasting-daemon` 进程(P2.2),前端默认走 httpTransport(P2.4 D3),daemon `ServeDir` 兜底提供前端(P2.4 D4)—— 单二进制即可在浏览器里跑完整功能。详见 [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md)。
 
-### 生产模式(单二进制部署)
+### 推荐方式:`scripts/daemon.sh`(commit `a2bd611` 之后)
+
+日常用项目自带的 `scripts/daemon.sh` 管理浏览器模式 daemon,它包好了「编译 + 启动 + PID 文件 + 日志 + health 检查」,不用手敲 `cargo build` 和 `--port`:
+
+```bash
+./scripts/daemon.sh start   [--port N]   # 编译 release + 前台启动(日志直接输出)
+./scripts/daemon.sh bg      [--port N]   # 同上,但后台跑 + 日志写 /tmp/everlasting-daemon.log
+./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→8s→SIGKILL 兜底)
+./scripts/daemon.sh restart [--port N]   # stop + start(改完前端重新 serve dist)
+./scripts/daemon.sh rebuild              # 只重新编译 release 二进制(不重启)
+./scripts/daemon.sh status               # 显示 PID + health 检查
+./scripts/daemon.sh logs                 # 跟踪日志(bg 模式的日志文件)
+```
+
+脚本细节:用 **PID 文件**(`.everlasting-daemon.pid`)管理进程,避免 `pkill -f everlasting-daemon` 自匹配(脚本命令行含 daemon 名会被自己误杀);自动注入 `PKG_CONFIG_PATH`(WSL 编译 Rust 前置,见坑 1);`--no-build` 跳过编译用现有二进制。设计文档与本节对应;脚本头注释是权威。
+
+> ⚠️ **多实例反模式(Q1)**:**不要同时跑两个 daemon**(比如一个 `scripts/daemon.sh bg` + 一个裸 `everlasting-daemon --port 7457`)。两个 daemon 各自打开(或试图打开)同一个 SQLite,会出现:① 写竞争 / `SQLITE_BUSY`;② 各自 `reap_orphaned_runs` 互踩;③ 如果落到不同 `data_dir`(见 [DEBUG_DB §1.0 孤儿 DB 坑](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步)),数据分裂成两份历史。要换端口做 A/B,先 `stop` 旧的。`scripts/daemon.sh` 用单 PID 文件做了防多实例,裸跑没有这层保护。
+
+### 生产模式(裸二进制,手动部署)
 
 daemon 自己 serve 前端 + API,同源无 CORS,Windows 宿主浏览器 `http://localhost:7456` 直达。
 
@@ -709,3 +740,5 @@ ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
 - [spike-001](./spikes/001-wsl-tauri-window.md) — 这些坑的来源 spike
 - [HACKING-llm.md](./HACKING-llm.md) — LLM API 兼容层差异(配对文档)
 - [REMOTE-ACCESS-ROADMAP.md](./REMOTE-ACCESS-ROADMAP.md) — daemon 拆分 / 远程访问实施路线图(Phase 1/2/3)
+- [`scripts/daemon.sh`](../scripts/daemon.sh) — 浏览器模式 daemon 管理脚本(start/bg/stop/restart/rebuild/status/logs),本节「推荐方式」的底层实现
+- [DEBUG_DB.md](./DEBUG_DB.md) — SQLite 直连调试;§1.0 有 daemon 视角的三条 DB 路径解析 + 孤儿 DB 坑
