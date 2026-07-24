@@ -18,13 +18,9 @@
 //!   Opus 4.7+, orphan tool_use handling).
 //!
 //! Implementation notes:
-//! - `LlmConfig` is now PRIVATE to this module (it's the
-//!   Anthropic-adapter's config). The chat command no longer
-//!   constructs it directly; the factory in `mod.rs` builds it from
-//!   catalog rows. The `from_env` constructor is preserved as a
-//!   cold-start fallback and re-exported via the parent module
-//!   re-export for any code that needs to read env values
-//!   (`AppState::load` still calls it for the env-fallback path).
+//! - `LlmConfig` is PRIVATE to this module (it's the
+//!   Anthropic-adapter's config). The chat command never constructs
+//!   it directly; the factory in `mod.rs` builds it from catalog rows.
 //! - `chat_stream_with_tools` is a private free function reused by
 //!   `AnthropicProvider::send`. The public surface of the
 //!   `chat` command is now `provider.send(system, messages, tools)`.
@@ -46,12 +42,15 @@ use crate::llm::types::{ChatEvent, ChatMessage, ChatRequest, ThinkingConfig, Tok
 /// step 6 because extended thinking tokens count against the same budget
 /// as the actual answer — 1024 was too low and would have caused
 /// `stop_reason: "max_tokens"` on most non-trivial turns.
-const DEFAULT_MAX_TOKENS: u32 = 16384;
+///
+/// `pub(crate)` so the `build_provider` factory (`provider::mod`) reuses
+/// this single source of truth for the catalog default instead of
+/// duplicating the literal `16384`.
+pub(crate) const DEFAULT_MAX_TOKENS: u32 = 16384;
 
 /// Configuration for the Anthropic adapter. Constructed by
-/// `build_provider` from a `ProviderRow` + `ModelRow`; cold-start
-/// fallback path (`LlmConfig::from_env`) is preserved so
-/// `AppState::load` can still read env values for `state.config`.
+/// `build_provider` from a `ProviderRow` + `ModelRow` (catalog rows);
+/// there is no env-derived fallback anymore.
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub base_url: String,
@@ -64,34 +63,6 @@ pub struct LlmConfig {
 }
 
 impl LlmConfig {
-    /// Read config from environment. Used by `AppState::load` for
-    /// the env-fallback path. PR2's `chat` command no longer
-    /// constructs an `LlmConfig` from this — it builds one from
-    /// catalog rows.
-    pub fn from_env() -> Result<Self, LlmError> {
-        // Accept either ANTHROPIC_API_KEY (Anthropic SDK convention) or
-        // ANTHROPIC_AUTH_TOKEN (older Claude Code env convention).
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_AUTH_TOKEN"))
-            .map_err(|_| LlmError::Auth("ANTHROPIC_API_KEY not set".into()))?;
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-        let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| "MiniMax-M2.7".to_string());
-        let max_tokens = std::env::var("LLM_MAX_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(DEFAULT_MAX_TOKENS);
-        let thinking_effort =
-            std::env::var("LLM_THINKING_EFFORT").unwrap_or_else(|_| "high".to_string());
-        Ok(Self {
-            base_url,
-            model,
-            api_key,
-            max_tokens,
-            thinking_effort,
-        })
-    }
-
     pub fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
     }
@@ -106,32 +77,6 @@ impl LlmConfig {
             display: "summarized".to_string(),
             effort: self.thinking_effort.clone(),
         }
-    }
-
-    /// Sentinel for "ANTHROPIC_API_KEY wasn't set at startup". We construct
-    /// the app even in this case so the UI loads and the user sees a
-    /// helpful error rather than a crash on launch.
-    pub fn unconfigured() -> Self {
-        Self {
-            base_url: String::new(),
-            model: String::new(),
-            api_key: String::new(),
-            max_tokens: 0,
-            thinking_effort: String::new(),
-        }
-    }
-
-    /// `is_unconfigured` is used by tests + (pre-PR2) the chat
-    /// command's pre-flight check. The post-PR2 chat command goes
-    /// through `resolve_chat_provider` instead, so this method
-    /// is only exercised by tests today. `#[allow(dead_code)]`
-    /// is the lightest signal that the method is intentional
-    /// (still on `LlmConfig` because the env-fallback path in
-    /// `AppState::load` may want to query it via the `LlmConfig`
-    /// struct's public surface in a future PR).
-    #[allow(dead_code)]
-    pub fn is_unconfigured(&self) -> bool {
-        self.api_key.is_empty()
     }
 }
 
@@ -960,13 +905,6 @@ mod tests {
                 assert_eq!(effort, "xhigh");
             }
         }
-    }
-
-    #[test]
-    fn unconfigured_has_empty_thinking_effort() {
-        let config = LlmConfig::unconfigured();
-        assert!(config.thinking_effort.is_empty());
-        assert!(config.is_unconfigured());
     }
 
     /// Step 4 follow-up Bug 3: when the agent loop builds a system

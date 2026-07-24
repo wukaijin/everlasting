@@ -10,11 +10,10 @@
 //! - [`types`] — request / response / event types (Anthropic-shaped,
 //!   unchanged; cross-protocol types will land in PR3).
 //!
-//! Backward-compat re-exports: `LlmConfig` is now defined inside
-//! `provider::anthropic` (the Anthropic adapter is the only consumer
-//! of these fields after PR2). We re-export it at the LLM-module level
-//! so `AppState::load` (which still reads env for the cold-start
-//! fallback) can keep its `llm::LlmConfig` import path.
+//! `LlmConfig` lives inside `provider::anthropic` and is constructed
+//! only by the `build_provider` factory from catalog rows. It is not
+//! re-exported here — there are no external consumers after the env
+//! fallback path was removed.
 
 pub mod error;
 pub mod provider;
@@ -24,8 +23,6 @@ pub mod types;
 
 #[allow(unused_imports)]
 pub use error::LlmError;
-#[allow(unused_imports)]
-pub use provider::anthropic::LlmConfig;
 pub use provider::{build_provider, Provider, ProviderBuildError};
 // `AnthropicProvider` and `ProviderCapabilities` are re-exported for
 // `use llm::AnthropicProvider;` callers; the chat command reaches

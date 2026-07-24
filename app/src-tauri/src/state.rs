@@ -32,7 +32,7 @@ use crate::agent::question_store::ModeChangePayload;
 use crate::agent::question_store::QuestionStore;
 use crate::agent::question_store::TaskStateTransitionPayload;
 use crate::agent::subagent::SubagentCache;
-use crate::llm::{ChatEvent, LlmConfig, Provider, ToolDef};
+use crate::llm::{ChatEvent, Provider, ToolDef};
 use crate::memory::MemoryCache;
 use crate::resource_loader::CommandCache;
 use crate::skill::loader::SkillCache;
@@ -72,11 +72,6 @@ pub type ProviderCatalog = HashMap<String, Arc<dyn Provider>>;
 /// grouped together. All other fields keep their pre-PR1 order to
 /// keep the diff small.
 pub struct AppState {
-    /// Legacy cold-start LLM config (env-derived). Kept for the
-    /// `get_llm_config` IPC fallback path and any future
-    /// "no-catalog" mode; the chat command itself reads from the
-    /// `catalog` instead.
-    pub config: LlmConfig,
     /// Static list of tool definitions registered with the agent.
     pub tools: Vec<ToolDef>,
     /// SQLite connection pool (single process, but sqlx pools the
@@ -271,28 +266,8 @@ impl AppState {
         app_data_dir: std::path::PathBuf,
         app: Option<AppHandle>,
     ) -> Self {
-        // Cold-start env-derived config is only consulted by the
-        // `get_llm_config` IPC fallback and the (currently unused)
-        // "no-catalog" code path. The chat command reads from the
-        // DB-backed `ProviderCatalog` built below — a missing env
-        // var here only matters if the DB also has no configured
-        // provider, in which case the first chat surfaces an
-        // `LlmError::Auth`. Log at `info` so cold start isn't noisy.
-        let config = LlmConfig::from_env().unwrap_or_else(|e| {
-            tracing::info!(
-                error = %e,
-                "cold-start LlmConfig::from_env failed; using unconfigured (DB provider catalog takes precedence)"
-            );
-            LlmConfig::unconfigured()
-        });
         let tools = crate::tools::builtin_tools();
-        tracing::info!(
-            base_url = %config.base_url,
-            model = %config.model,
-            tools_count = tools.len(),
-            thinking_effort = %config.thinking_effort,
-            "LLM config loaded"
-        );
+        tracing::info!(tools_count = tools.len(), "AppState loading");
 
 // Open SQLite at `<app_data_dir>/everlasting.db`.
         // 2026-07-01 follow-up: 让受信 allow-list 包含动态段
@@ -401,7 +376,6 @@ impl AppState {
         });
 
         Self {
-            config,
             tools,
             db,
             catalog: Arc::new(RwLock::new(catalog)),

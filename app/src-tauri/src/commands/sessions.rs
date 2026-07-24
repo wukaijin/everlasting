@@ -45,7 +45,13 @@ pub async fn create_session_inner(
     initial_cwd: String,
     model: Option<String>,
 ) -> Result<db::SessionRow, AppCommandError> {
-    let model = model.unwrap_or_else(|| state.config.model.clone());
+    // `model` defaults to an empty string when the caller doesn't
+    // pass one. The frontend's `create_session` call never sends a
+    // model, and the actual provider/model used for chat is resolved
+    // per-turn from the DB catalog (`app_config.default_model_id`),
+    // not from this column. An empty string just means "no legacy
+    // model label recorded for this session".
+    let model = model.unwrap_or_default();
     // Defensive: every session is bound to a project. The frontend
     // is expected to gate this with a "no project = no chat" check,
     // but a stray IPC call should not silently create a

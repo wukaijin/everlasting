@@ -32,9 +32,7 @@ pub struct PublicLlmConfig {
 /// handler in `daemon::routes::config`.
 ///
 /// PR2 (multi-model): the source of truth is the catalog
-/// (`app_config.default_model_id` → `models` → `providers`), not
-/// the env path. Env (`LlmConfig::from_env`) is now only the
-/// cold-start fallback (kept around in `AppState::config`); this
+/// (`app_config.default_model_id` → `models` → `providers`). This
 /// IPC reads the catalog so the frontend's `model` field always
 /// reflects the user's actively-selected model. The `model` field
 /// is the catalog `display_name` (see D1 in the PR2 PRD) so the

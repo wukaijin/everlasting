@@ -34,8 +34,8 @@
 //! Implementation notes:
 //!
 //! - `OpenAIConfig` is module-private (the factory in
-//!   `mod.rs` builds it from catalog rows). `LlmConfig::from_env`
-//!   is **Anthropic-only**; OpenAI has no env fallback in PR3.
+//!   `mod.rs` builds it from catalog rows). Both providers are
+//!   catalog-only; there is no env fallback.
 //! - SSE parser reuse: we use the existing [`SseParser`] in
 //!   `data-only` mode (no `event:` lines — Chat Completions only
 //!   emits `data: {...}\n\n`). The parser's `event_type` stays
