@@ -24,11 +24,39 @@
 - ❌ 不自己写:LLM HTTP 协议(用 rig)、SSE 解析(用 rig)、MCP 协议(用 rmcp)
 - ❌ 不自己写:GUI 框架(Tauri 已有)、Diff 算法(用前端库)
 
+> **演进注记(2026-07 daemon 化后,见 §4 2026-07-20 ADR)**:上面是 2026-06 项目启动期的快照,两点已演进 ——
+> 1. **「Tauri IPC 事件协议」已非唯一入口**:2026-07-20~23 daemon 化后,同一批 handler 双暴露为 axum HTTP(`/api/v1/*`)+ 同源 SSE(`/api/v1/stream`),前端经 transport 抽象层默认走 `httpTransport`(浏览器模式 + Thin 模式 GUI),`tauriTransport`(`?transport=tauri`)退为 Full 模式逃生舱。核心自研的「事件协议」语义不变,只是物理通道从「单 Tauri 进程内 invoke/emit」扩到「GUI ↔ daemon 跨进程 HTTP/SSE」。详见 §4 [2026-07-20 — Agent daemon 化 + HTTP/SSE transport](#4-决策日志)。
+> 2. **rig / rmcp 早已废弃**:rig-core 于 2026-06-09 弃用(TECH §2)、rmcp 于 2026-06-10 移除(TECH §3)。上面「用 rig 做 LLM HTTP / SSE」「用 rmcp 做 MCP」是**当时**的真实决策,但现状是 LLM HTTP/SSE 自研(`llm/provider/{anthropic,openai}.rs` + 自写 SSE parser)、MCP 工具走自有 `tools/` 注册(非 rmcp)。保留原文是 ADR 性质的历史档案,不代表当前做法。
+
 ---
 
 ## 4. 决策日志
 
 > 按时间倒序记录。每次重大决策都加一条,包含"为什么"。**本节只追加不删除**(ADR 性质的不可再生历史档案)。
+
+### 2026-07-20 — Agent daemon 化 + HTTP/SSE transport(项目迄今最大架构变更)
+
+**Context**: 截至 2026-07-17,agent core(Tauri command handler + `AppState` + agent loop + SQLite pool)全跑在 Tauri GUI 进程内,前端唯一经 `invoke`/`listen` 直连。两件事把它顶到必须拆:(1) **远程访问 / 浏览器模式需求** —— WSL 跑 agent core、Windows 宿主浏览器访问,是本项目的核心使用场景,而 Tauri webview 绑死单进程,浏览器无法直连;(2) **agent core 与 GUI 解耦** —— GUI 崩溃/重启会带走在途 agent loop,且 GUI 二进制随 Tauri/WebKitGTK 体积庞大、启动慢。daemon 化把 agent core 拆成独立 `everlasting-daemon` 进程(axum HTTP + 同源 SSE + `ServeDir` 服务 SPA),前端引入 transport 抽象层(`httpTransport` 默认 / `tauriTransport` 逃生舱),新增 sidecar spawn + 浏览器模式。**这不是 B10 飞书触发的**(本节下方 2026-06-10 路线图快照把 B10 标「触发 daemon 化」是当时预期,实际触发源是远程访问需求,且已于 2026-07 落地)。commits `0dbc747`(transport 抽象,Phase 1)→ `5a212f0`(P2.1+P2.2 axum server)→ `f2a675b`(P2.3 SSE)→ `84d4689`(P2.4 sidecar+ServeDir+默认 httpTransport)→ `e6b7a2f`(P2.5 E2E)→ 手动测试修复 `ba41c1d`/`6581257`/`16548fd`/`df991a5`/`a2bd611`,~15K 行。任务档案 `.trellis/tasks/07-20-remote-access-daemon-split/`(design.md/implement.md/prd.md)+ `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`。
+
+**关键决策(7 个,按"为什么")**:
+
+1. **为什么拆 daemon · agent core 与 GUI 解耦(Q0)**:`AppState`(SQLite pool + agent loop + LLM provider)从 Tauri GUI 进程抽出为独立 `everlasting-daemon` bin。GUI 进程在 Thin 模式(默认)**不开 `SqlitePool`**(`sidecar.rs`:Thin 模式 GUI does NOT load `AppState`/does NOT open pool),agent core 全在 daemon。**否决**「继续 in-process」—— 远程访问 / 浏览器模式无解;**否决**「只做 transport 抽象不拆进程」(Phase 1 `0dbc747` 只抽象前端 emit/invoke 散点,未动进程模型)—— 不拆进程浏览器仍无法连。
+2. **为什么 axum(而非 actix / 裸 hyper / tide)**:选 `axum 0.7`(Tower-on-Hyper,`macros` feature)。理由:① Tower 生态(`tower 0.5` + `tower-http 0.6` 的 ServeDir / CorsLayer / TraceLayer)即插即用,P2.4 ServeDir 服务 SPA、P2.3 SSE 复用 `tower-http::services` 几乎零成本;② `#[axum::macros]` 的 handler 宏让 79 个 handler 镜像 `#[tauri::command]` 写法,迁移机械;③ 与 tokio runtime 天然集成(daemon `#[tokio::main]`)。**否决** actix(actor 模型心智负担与本项目无业务 actor 不匹配)+ 裸 hyper(要手写路由/提取器/中间件,79 handler 成本过高)。
+3. **为什么 sidecar spawn(GUI spawn daemon,Q0 决议)而非 systemd / 用户手动起**:GUI 用 `tauri-plugin-shell` spawn `everlasting-daemon` sidecar(prod),`concurrently` 同起两者(dev)。理由:① 单二进制部署 —— 用户装一个 Tauri app 即得 GUI+daemon,无需配 systemd unit;② 生命周期绑定 —— 关 Tauri 窗口 `RunEvent::Exit` 钩子自动 SIGTERM sidecar,不留孤儿进程;③ `--data-dir` 让 GUI 把 Tauri-resolved `app_data_dir` 显式传给 daemon,DB 路径精确对齐。**否决** systemd(WSL 主环境无 systemd 开箱即用,跨平台部署摩擦大)+ 用户手动起 daemon(认知负担 + PID 管理无人做)。`scripts/daemon.sh`(commit `a2bd611`)给裸跑场景补了 PID 文件管理 + 多实例保护。
+4. **为什么默认 httpTransport(而非保留 Tauri IPC 默认)**:前端 transport 抽象层 `isTauriWebview() ? tauriTransport : httpTransport`,GUI 默认 Thin 模式走 httpTransport(同源 sidecar)。逃生舱 `?transport=tauri` 强制 Full 模式 —— GUI 自己 `AppState::load` 开 pool,daemon 不 spawn,走原 in-process。理由:浏览器模式是核心场景,默认必须通;但 daemon 化初期不稳时需一键回退到验证过的 in-process 路径(dogfooding 2 周期,见 design §6.2)。**否决**「保留 Tauri IPC 默认」—— 那浏览器模式永远默认不通,违背拆 daemon 初衷。
+5. **为什么 ServeDir 同源(而非独立 nginx / 双端口)**:daemon `tower-http::services::ServeDir` 直接 serve `dist/`,API + SPA 同源(`http://localhost:7456`),浏览器零 CORS 配置。dev 模式才前后端分离(vite 1420 + `?daemonUrl=` 跨域,daemon `CorsLayer::very_permissive` 放行)。**否决**独立 nginx 反代(多一个进程 + 配置)+ 双端口(浏览器跨域 + cookie/SSE 复杂度)。`resolve_dist_dir()` 从 `current_exe()` 向上搜 `src-tauri/` 取兄弟 `dist/`(适配 sidecar binaries/、target/release、target/debug 三种二进制位置,commit `6581257`)。
+6. **为什么 handler 双暴露(IPC + HTTP,Q0 决议)**:79 个 `#[tauri::command]` 的业务逻辑抽成 `xxx_inner(state: &Arc<AppState>, ...)` 单份实现,Tauri 入口和 axum handler 都调 `_inner`,无 duplication。**否决**「Tauri 入口立即废弃」—— 双入口并行期(P2.1→P2.4)让每阶段可独立回滚,Full 模式逃生舱也依赖 Tauri 入口存活;待 dogfooding 稳定后再 archive。**否决**「强制抽 `crate::service::*` 层」—— 拿到复用又不付跨模块搬迁 + 多一层抽象成本,`_inner` 函数留在原 command 文件足够。
+7. **DB 路径对齐(Q0 + commit `16548fd`)**:daemon `resolve_data_dir()` = `dirs::data_dir().join(EVERLASTING_APP_IDENTIFIER)`,`EVERLASTING_APP_IDENTIFIER` 由 `build.rs` 从 `tauri.conf.json` 读出编译期 `env!()` 注入,与 Tauri `app.path().app_data_dir()`(= `dirs::data_dir().join(config.identifier)`)对齐到同一个 `dev.everlasting.app/everlasting.db`。**坑**:修前 daemon 用 `dirs::data_dir().join("everlasting")`(无 `dev.` 前缀),裸跑打开空 DB 丢失 GUI 的历史消息(孤儿 DB,详见 [DEBUG_DB §1.0](./DEBUG_DB.md#10-daemon-化后的三条解析路径2026-07-同步))。2 个单测锁住 identifier 拼接(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。(`resolve_data_dir_ends_with_app_identifier` / `resolve_data_dir_not_legacy_hardcoded`)。
+
+**Consequences**:
+- 远程访问 / 浏览器模式打通:WSL 跑 daemon + Windows 宿主浏览器 `http://localhost:7456` 经 WSL 2 localhost forwarding 直达,完整功能(发消息 / 流式 / permission / subagent)。
+- GUI/daemon 解耦:GUI 崩溃不再带走 agent loop(daemon 独占 SQLite WAL writer);Thin 模式 GUI 是瘦客户端。
+- 双入口并行期:Tauri 入口保留,`?transport=tauri` Full 模式作逃生舱,dogfooding 2 周期内 daemon 不稳可一键回退。
+- 新增依赖:axum 0.7 + tower 0.5 + tower-http 0.6 + tokio-stream 0.1 + clap 4(`Cargo.toml`,daemon bin 是唯一 clap 消费者,lib 不依赖)。
+- 已知后续项:daemon graceful shutdown 在有浏览器 SSE 长连接时收到 SIGTERM 后挂起(等连接完成),靠 `scripts/daemon.sh` SIGTERM→8s→SIGKILL 兜底,不影响使用。
+- E4 手动 smoke + E5 dogfooding(≥2 周计时)留运行期验证。
+
+**关联**: PRD + design + implement `.trellis/tasks/07-20-remote-access-daemon-split/`;transport 抽象前置任务 `.trellis/tasks/archive/2026-07/07-20-remote-access-transport-abstraction/`;Phase 编排 `docs/REMOTE-ACCESS-ROADMAP.md`;调研 `docs/REMOTE-ACCESS-RESEARCH.md`;手动测试 `docs/MANUAL-TEST-P2.md`;WSL 部署 `docs/HACKING-wsl.md` §远程访问 daemon 部署;DB 路径 `docs/DEBUG_DB.md` §1.0。commits 见上 Context。
 
 ### 2026-07-10 — workflow task.json hardening(R1-R5):read_task lenient + `create_task` tool + 即时 resolve + 软推荐 hint
 
@@ -396,7 +424,7 @@
 
 **决策**:
 1. **范围:只读 worker 并发**(researcher/探索类),worktree 留 L3b —— 带写 worker 并发需隔离,不在 L3a。
-2. **并发模型:父 turn 阻塞 + 内部 fan-out**(`FuturesUnordered` 复用 L2 只读 batch 模板),非"父 agent 不阻塞"(那是 daemon 化,L3b+)。
+2. **并发模型:父 turn 阻塞 + 内部 fan-out**(`FuturesUnordered` 复用 L2 只读 batch 模板),非"父 agent 不阻塞"(那是 daemon 化,L3b+)。<!-- 演进注记(2026-07):此处「daemon 化」指 agent core 进程拆分,已于 2026-07-20 落地(见 §4 2026-07-20 ADR),但此处语境是 subagent 并发模型,parent-turn 阻塞语义不变。 -->
 3. **只读保证 = 运行时强制剥写**(`force_readonly` 保留 read/grep/glob/list_dir),不靠语义层限类型 —— 与 `STRUCTURALLY_DISABLED` "不信任定义"哲学一致,且为 L3b(去剥写+worktree)留扩展;安全底线仍由 is_worker Deny 兜底。
 4. **竞态三处只读范围消解**(auto-context 查源码裁定,核心洞察):permission:ask(worker is_worker=true → Tier4 ask 塌缩 Deny,只读工具低 Tier)/ token(`add_token_usage` `col=COALESCE(col,0)+?` 原子增量,SQLite 单写锁)/ cancellations(`parent_token.child_token()` × N + 各 worker_rid 注册,父 cancel 一次 fan-out 全部)—— **零并发控制代码**,并发安全"免费"。
 5. **上限 3 硬拒**(env `DELEGATION_MAX_CONCURRENT_CHILDREN`,对齐 Hermes),不截断不排队。
@@ -977,7 +1005,7 @@ re-grill 锁定 10 个核心决策,完整 PRD 参见 [`.trellis/tasks/archive/20
   - A2 + B7 权限系统 + 多模式(合并工作组)从分散候选归到 🟡 第二档
   - B6 = subagent(**不是**用户切角色)从"多角色"候选重命名为"Subagent",归 🟠 第三档(依赖 B5 Memory)
   - B7 = mode 是 A2 权限系统的 UX 层,从独立"多模式"候选归到第二档的 A2 + B7 工作组
-  - B10 飞书 IM 推迟到 🔴 第四档(触发 daemon 化,重大架构变更)
+  - B10 飞书 IM 推迟到 🔴 第四档(触发 daemon 化,重大架构变更) <!-- 演进注记(2026-07):此处「触发 daemon 化」是 2026-06-10 重排时的预期,实际 daemon 化由远程访问/浏览器模式需求触发,已于 2026-07-20~23 落地,见 §4 2026-07-20 ADR。B10 飞书本身仍未做。 -->
   - B11 云端同步推迟到 🔴 第四档
 
   **4 档简表**:

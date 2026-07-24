@@ -3,7 +3,7 @@
   "name": "docs-daemon-implementation-adr",
   "title": "docs sync D: 决策档案 (IMPLEMENTATION §1 边界 + §4 daemon ADR)",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
