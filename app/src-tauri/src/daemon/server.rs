@@ -80,8 +80,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     match resolve_dist_dir() {
         Some(dist) => {
             tracing::info!(dist = %dist.display(), "serving static frontend from dist dir");
-            let spa = ServeDir::new(&dist)
-                .not_found_service(ServeFile::new(dist.join("index.html")));
+            let spa =
+                ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));
             router = router.fallback_service(spa);
         }
         None => {
@@ -171,9 +171,24 @@ pub fn resolve_port(cli_port: Option<u16>, env_port: Option<u16>) -> u16 {
 /// Graceful shutdown 给 in-flight 连接的硬上限(秒)。正常路径下
 /// [`SseRegistry::shutdown`] 主动结束后 SSE 流会亚秒完成,这个 timeout
 /// 只是 defense-in-depth —— 防止未来加的非 SSE streaming endpoint
-/// 或其他未知长连接把 shutdown 卡住。比 `scripts/daemon.sh` 的 8s
+/// 或其他未知长连接把 shutdown 卡住。比 `scripts/daemon.sh` 的 15s
 /// SIGKILL 短,留 SIGKILL 作最后一道防线。
 const SHUTDOWN_GRACE_SECS: u64 = 3;
+
+/// Agent loop drain 的总 timeout 上限(秒)。收到信号、关完 SSE 后,
+/// 遍历 `state.cancellations` cancel 所有活跃 agent loop,再并发 await
+/// 它们的退出信号(`state.inflight_exits`),最多等这么久。实测路径下
+/// loop 多在亚秒退出(用户点 Stop 走的是同一条 cancel 路径),8s 是纯
+/// 兜底 —— 对照 [`crate::agent::helpers::await_inflight_exit`] 单 loop
+/// 的 10s,并发 drain 理论上比串行快。
+///
+/// 与 [`SHUTDOWN_GRACE_SECS`](3s,axum drain)正交:先 drain loop(让
+/// in-flight tool 跑完 `persist_turn` 落库),再让 axum drain 短请求。
+/// 两者串行最坏 11s,故 `scripts/daemon.sh` 的 SIGKILL 窗口拉到 15s
+/// 留 4s 余量,保证 SIGKILL 永远是「等不过来」的最后手段而非抢先于
+/// drain。详见 `agent::helpers::cancel_and_drain_all_agent_loops` 与
+/// `.trellis/spec/backend/daemon-server.md`。
+const DAEMON_SHUTDOWN_LOOP_DRAIN_SECS: u64 = 8;
 
 /// Bind + serve the daemon on `0.0.0.0:PORT`. The `everlasting-daemon`
 /// bin target is a thin shell that resolves the port, loads
@@ -186,10 +201,17 @@ const SHUTDOWN_GRACE_SECS: u64 = 3;
 ///    SSE 订阅者 → `stream.rs` 的 SSE body 自然 `end()` → axum 感知
 ///    这些连接「完成」。这一步根治了"SSE 长连接永不自然完成 →
 ///    graceful shutdown 无限挂起"的问题(原本靠 `daemon.sh` SIGKILL 兜底)。
-/// 2. `shutdown_signal` 返回后,axum 的 `with_graceful_shutdown` 开始
+/// 2. **接着 drain 活跃 agent loop**:[`agent::helpers::cancel_and_drain_all_agent_loops`]
+///    遍历 `state.cancellations` cancel 所有正在跑的 loop(agent loop 的
+///    `select!` cancel 臂 `biased;` 优先命中,走用户点 Stop 的同一条路径),
+///    再并发 await `state.inflight_exits` 的退出信号(总 timeout
+///    [`DAEMON_SHUTDOWN_LOOP_DRAIN_SECS`])。让 in-flight tool 跑完
+///    `persist_turn` 落库后进程才退出 —— 否则 runtime 销毁会硬斩 spawn
+///    task,丢「tool 已执行、DB 未落」那一轮(原 spec 的 follow-up 缺口)。
+/// 3. `shutdown_signal` 返回后,axum 的 `with_graceful_shutdown` 开始
 ///    drain 所有 in-flight 连接 —— 此时 SSE 流已结束,只剩可快速 drain
 ///    的短请求,整体亚秒完成。
-/// 3. [`SHUTDOWN_GRACE_SECS`] timeout 兜底:若仍有未知长连接卡住,
+/// 4. [`SHUTDOWN_GRACE_SECS`] timeout 兜底:若仍有未知长连接卡住,
 ///    超时后直接返回(进程随后退出),不阻塞 `daemon.sh` 的 SIGKILL。
 ///
 /// 关键:必须用 `with_graceful_shutdown`(而非 `select!` + drop serve
@@ -201,8 +223,8 @@ pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()
     tracing::info!(addr = %addr, "everlasting-daemon listening");
 
     let router = build_router(Arc::clone(&state));
-    let serve = axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal(Arc::clone(&state.sse)));
+    let serve =
+        axum::serve(listener, router).with_graceful_shutdown(shutdown_signal(Arc::clone(&state)));
 
     // timeout 兜底:正常 sse.shutdown() 后亚秒 drain 完成;超时则放弃
     // 等待,让 daemon.sh 的 SIGKILL 作最后一道防线。
@@ -225,11 +247,23 @@ pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()
 /// SIGTERM (Unix only). Windows builds fall back to Ctrl+C only,
 /// which matches the Tauri GUI's signal handling convention.
 ///
-/// 信号触发后,**返回前先调 [`SseRegistry::shutdown`]** 主动结束所有
-/// SSE 长连接。这是让 axum `with_graceful_shutdown` 不被永不完成的
-/// SSE 连接卡住的关键 —— 不主动关 SSE 的话,graceful drain 会无限
-/// 等待每个活跃的 `GET /api/v1/stream`。
-async fn shutdown_signal(registry: Arc<crate::daemon::sse::SseRegistry>) {
+/// 信号触发后,**返回前**按顺序做两件事(都在 axum 的 graceful drain
+/// 开始之前):
+///
+/// 1. **[`SseRegistry::shutdown`]** —— 主动结束所有 SSE 长连接。这是
+///    让 axum `with_graceful_shutdown` 不被永不完成的 SSE 连接卡住的
+///    关键(不主动关 SSE 的话,graceful drain 会无限等待每个活跃的
+///    `GET /api/v1/stream`)。
+/// 2. **[`crate::agent::helpers::cancel_and_drain_all_agent_loops`]** ——
+///    cancel 所有活跃 agent loop 并并发 await 它们的退出信号(总 timeout
+///    [`DAEMON_SHUTDOWN_LOOP_DRAIN_SECS`])。让正在跑的 loop 走 cancel
+///    路径(同用户点 Stop),把 in-flight tool 的 `persist_turn` 跑完落库,
+///    避免进程退出时 runtime 销毁硬斩 spawn task 丢一轮结果。
+///
+/// 接收完整 `Arc<AppState>` 而非只接 `SseRegistry`,是因为第 2 步要访问
+/// `state.cancellations` + `state.inflight_exits`(参见
+/// `agent::helpers::cancel_and_drain_all_agent_loops` 的三件套)。
+async fn shutdown_signal(state: Arc<AppState>) {
     let ctrl_c = async {
         signal::ctrl_c().await.expect("install Ctrl+C handler");
     };
@@ -250,14 +284,34 @@ async fn shutdown_signal(registry: Arc<crate::daemon::sse::SseRegistry>) {
         _ = terminate => tracing::info!("received SIGTERM, shutting down"),
     }
 
-    // 主动结束所有 SSE 长连接 —— 在返回给 axum 的 graceful_shutdown
-    // 之前,让 drain 不被永不完成的 SSE 连接卡住。
-    registry.shutdown();
+    // 步骤 1:主动结束所有 SSE 长连接 —— 在返回给 axum 的
+    // graceful_shutdown 之前,让 drain 不被永不完成的 SSE 连接卡住。
+    state.sse.shutdown();
+
+    // 步骤 2:cancel + drain 所有活跃 agent loop。必须排在 sse.shutdown
+    // 之后(先断流、再停处理,语义更干净;且 SSE 关后前端不再收到新事件,
+    // 也不会有新 chat request 到达)。这一步让 in-flight tool 跑完
+    // persist_turn 落库,闭合原 spec 的 follow-up 缺口(agent loop 硬终止)。
+    crate::agent::helpers::cancel_and_drain_all_agent_loops(
+        &state.cancellations,
+        &state.inflight_exits,
+        Duration::from_secs(DAEMON_SHUTDOWN_LOOP_DRAIN_SECS),
+    )
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 进程级互斥锁:两个发真实 SIGTERM 给 `getpid()` 的集成测试
+    /// (`serve_daemon_shutdown_completes_with_active_sse` 与
+    /// `serve_daemon_shutdown_drains_active_agent_loop`)**必须串行**。
+    /// 否则 cargo test 默认多线程下,A 的 SIGTERM 会被 B 的
+    /// `shutdown_signal` select 臂捕获(同一进程,同一信号),造成
+    /// 「daemon 起不来 / shutdown 被对端抢先触发」的假失败。二者
+    /// 共享本锁,确保任一时刻只有一个 SIGTERM 测试在跑。
+    static SIGNAL_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Q1 port resolution precedence: CLI > env > default. The bin
     /// target's `--port` flag wins, then the env var, then the
@@ -302,7 +356,10 @@ mod tests {
     /// on the build host — we only assert it doesn't panic).
     #[test]
     fn dist_dir_env_ignored_when_not_a_dir() {
-        std::env::set_var("EVERLASTING_DIST_DIR", "/nonexistent/path/that/does/not/exist");
+        std::env::set_var(
+            "EVERLASTING_DIST_DIR",
+            "/nonexistent/path/that/does/not/exist",
+        );
         // Must not panic; result is host-dependent (default path).
         let _ = resolve_dist_dir();
         std::env::remove_var("EVERLASTING_DIST_DIR");
@@ -327,6 +384,10 @@ mod tests {
         use tempfile::TempDir;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpStream;
+
+        // 本测试向 getpid() 发真实 SIGTERM,与 drain 测试共享进程信号,
+        // 必须串行(见 SIGNAL_TEST_MUTEX)。
+        let _guard = SIGNAL_TEST_MUTEX.lock().await;
 
         // 预占一个 ephemeral port,取出端口号后立即 drop,交给
         // serve_daemon 重绑(有微小竞态,测试可接受)。
@@ -409,5 +470,130 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Graceful shutdown 在「有活跃 agent loop」时也必须在窗口内完成 ——
+    /// 这是 task `07-24-daemon-agent-loop-shutdown` 的核心回归守卫。
+    ///
+    /// 本测试验证的是 **shutdown drain 机制本身**(cancel 遍历 + 并发 await
+    /// + 总 timeout 兜底),而非「persist_turn 真的落库」(后者由
+    /// `tests_agent_loop.rs::agent_loop_cancel_in_turn_2_kills_loop` 在
+    /// agent loop 层单测覆盖,daemon 路径注入 provider 成本过高,见
+    /// design.md §6.2 方案选型 (b))。
+    ///
+    /// 构造方式:起 `serve_daemon`,直接往 `state.cancellations` 塞一个
+    /// CancellationToken + 对应 `state.inflight_exits` 塞一个**永不 resolve**
+    /// 的 oneshot receiver(把 sender 移进一个永不完成的 task 持有)。这
+    /// 模拟「一个真正卡死的 agent loop」—— 是 drain timeout 兜底的
+    /// 最坏情况。发 SIGTERM 后,`shutdown_signal` 应:
+    ///   1. `sse.shutdown()`(无 SSE 连接,亚秒)
+    ///   2. cancel 那个 token(断言 `is_cancelled()`)
+    ///   3. 并发 await receiver —— 卡住,但总 timeout
+    ///      `DAEMON_SHUTDOWN_LOOP_DRAIN_SECS` 到后 return(不挂起)
+    ///   4. axum drain + serve 返回
+    ///
+    /// 通过标准:`serve_daemon` 在 `DAEMON_SHUTDOWN_LOOP_DRAIN_SECS +
+    /// SHUTDOWN_GRACE_SECS + 余量` 内返回(回归守卫:若 drain 机制被破坏
+    /// 成「无限等 receiver」,本测试超时失败)。同时断言 token 已被 cancel
+    /// (证明 cancel 步骤真的跑了,不是没跑直接退)。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_daemon_shutdown_drains_active_agent_loop() {
+        use std::sync::Arc;
+        use tempfile::TempDir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+        use tokio_util::sync::CancellationToken;
+
+        // 本测试向 getpid() 发真实 SIGTERM,与 SSE 测试共享进程信号,
+        // 必须串行(见 SIGNAL_TEST_MUTEX)。
+        let _guard = SIGNAL_TEST_MUTEX.lock().await;
+
+        // 预占 ephemeral port。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
+        let dir = TempDir::new().expect("tempdir");
+        let state = load_daemon_state(dir.path().to_path_buf()).await;
+
+        // 植入一个「活跃但卡死」的 agent loop:token + 永不 resolve 的
+        // exit receiver(sender 被一个永不完成的 task 持有,receiver 永远
+        // pending)。这正是 drain timeout 兜底要应对的最坏情况 —— 若 drain
+        // 机制正确,会在 DAEMON_SHUTDOWN_LOOP_DRAIN_SECS 后 return;若被
+        // 破坏成无限等,本测试超时失败。
+        let token = CancellationToken::new();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let mut map = state.cancellations.lock().await;
+            map.insert("rid-hung".to_string(), token.clone());
+        }
+        {
+            let mut map = state.inflight_exits.lock().await;
+            map.insert("rid-hung".to_string(), done_rx);
+        }
+        // 把 sender 移进永不完成的 task 持有(模拟卡死的 loop 不会 send)。
+        // `done_tx` 一旦 drop 会令 receiver 立刻 resolve(Err),这就测不出
+        // timeout 了;所以必须让它在 task 里活着。
+        let _keeper = tokio::spawn(async move {
+            let _keep_alive = done_tx;
+            std::future::pending::<()>().await;
+        });
+
+        let serve_handle = tokio::spawn(serve_daemon(Arc::clone(&state), port));
+
+        // 等 daemon 起来(轮询 health)。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!("daemon did not become healthy in 5s");
+            }
+            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await {
+                let req =
+                    b"GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+                let _ = s.write_all(req).await;
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf).await;
+                if buf.starts_with(b"HTTP/1.1 200") {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 发真实 SIGTERM。
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+
+        // 核心断言 1:serve_daemon 必须在 drain timeout + grace + 余量内
+        // 返回。DAEMON_SHUTDOWN_LOOP_DRAIN_SECS 是 drain 的硬上限,加上
+        // SHUTDOWN_GRACE_SECS(axum drain)和 3s 余量防 CI 慢机器。若 drain
+        // 机制退化成「无限等 receiver」,这里会超时失败。
+        let worst = DAEMON_SHUTDOWN_LOOP_DRAIN_SECS + SHUTDOWN_GRACE_SECS + 3;
+        let completion =
+            tokio::time::timeout(std::time::Duration::from_secs(worst), serve_handle).await;
+
+        match completion {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => panic!("serve_daemon returned error: {e}"),
+            Err(_) => {
+                panic!(
+                    "serve_daemon did NOT complete within {}s of SIGTERM — \
+                     the agent-loop drain is hanging on the never-resolving \
+                     receiver instead of hitting DAEMON_SHUTDOWN_LOOP_DRAIN_SECS",
+                    worst
+                );
+            }
+        }
+
+        // 核心断言 2:token 已被 cancel。证明 shutdown 路径确实跑了 cancel
+        // 步骤(不是没 cancel 就直接退)。
+        assert!(
+            token.is_cancelled(),
+            "the hung agent loop's token must be cancelled by the shutdown drain"
+        );
     }
 }

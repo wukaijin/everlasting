@@ -257,6 +257,121 @@ pub async fn await_inflight_exit(exit_rx: Option<oneshot::Receiver<()>>, label: 
     }
 }
 
+/// Daemon graceful-shutdown drain: cancel **all** active agent
+/// loops and concurrently await their exit signals, bounded by a
+/// single total `timeout`. This is the batch counterpart to
+/// [`cancel_inflight_for_session`] + [`await_inflight_exit`]
+/// (which operate per-session for destructive commands like
+/// `delete_session`); it reuses the same three source-of-truth
+/// maps (`cancellations` / `inflight_exits` / the `done_tx` sent
+/// from the chat spawn closure) so the drain semantics stay
+/// single-sourced with the destructive-op path rather than
+/// drifting into a second implementation.
+///
+/// Used by `daemon::server::shutdown_signal` after
+/// `SseRegistry::shutdown`: closing SSE first stops new events
+/// from reaching the client, then this drains the still-running
+/// agent loops so a turn whose tool already executed can finish
+/// `persist_turn` before the process exits (otherwise the tokio
+/// runtime drop would hard-cut the spawn task mid-persist and
+/// lose that turn's tool result — the gap recorded in
+/// `.trellis/spec/backend/daemon-server.md` § "agent loop 硬终止").
+///
+/// # Steps
+///
+/// 1. Lock `cancellations`, clone every `CancellationToken` out
+///    (lock held only for the clone — no await inside), release.
+/// 2. Lock `inflight_exits`, `drain` every `oneshot::Receiver`
+///    out (single-consumer: taking them empties the map — same
+///    `remove` pattern as `cancel_inflight_for_session:217`,
+///    applied to every entry), release.
+/// 3. Cancel every token. The agent loop's `select!` cancel arm
+///    is `biased;` first (`chat_loop.rs:1716` / `2401`), so it
+///    wins over any pending LLM stream and the loop exits via
+///    the same cancel path the Stop button uses.
+/// 4. Concurrently await all receivers under one total `timeout`
+///    (`futures::future::join_all`). `done_tx.send(())` fires
+///    from the chat spawn closure (`chat.rs:478`) once
+///    `run_chat_loop` returns — i.e. the loop has fully exited,
+///    including any in-flight tool that completed after cancel.
+///    A loop that panics drops `done_tx` without sending, so its
+///    receiver yields `Err`; we treat that as "exited" (the task
+///    is gone), not an error.
+/// 5. On total-timeout, log a warn and return anyway — the
+///    process is shutting down, daemon.sh's SIGKILL is the last
+///    resort. We never block shutdown indefinitely on a hung loop.
+///
+/// # Idempotency / empty-input
+///
+/// Empty `cancellations` / `inflight_exits` → no-op, returns
+/// immediately. Re-cancelling an already-cancelled token is a
+/// no-op (tokio_util semantics); receivers can't be taken twice
+/// (single-consumer), so repeated calls across the shutdown
+/// window are safe.
+///
+/// # Lock discipline
+///
+/// Both `tokio::Mutex` locks are held only for the synchronous
+/// clone/remove + Vec collect — no `.await` while holding, so
+/// other consumers of these maps aren't blocked during the
+/// (potentially seconds-long) drain await.
+pub async fn cancel_and_drain_all_agent_loops(
+    cancellations: &Arc<Mutex<std::collections::HashMap<String, CancellationToken>>>,
+    inflight_exits: &Arc<Mutex<std::collections::HashMap<String, oneshot::Receiver<()>>>>,
+    timeout: Duration,
+) {
+    // Step 1+2: drain both maps under short-held locks. We clone
+    // tokens (cheap `Arc`-internal handles) and *move* receivers
+    // out entirely (single-consumer — same pattern as
+    // `cancel_inflight_for_session`'s `map.remove(&rid)` at line
+    // 217, just applied to every entry). The chat spawn closure
+    // also does `inflight_exits.lock().await.remove(&rid)` after
+    // `.send` (`chat.rs:483`); our drain makes that a no-op for
+    // these keys, which is the documented "no-op if already taken"
+    // semantics — safe.
+    let tokens: Vec<CancellationToken> = {
+        let map = cancellations.lock().await;
+        map.values().cloned().collect()
+    };
+    let receivers: Vec<oneshot::Receiver<()>> = {
+        let mut map = inflight_exits.lock().await;
+        map.drain().map(|(_, rx)| rx).collect()
+    };
+
+    let active = tokens.len();
+    if active == 0 {
+        return;
+    }
+    tracing::info!(
+        active_loops = active,
+        timeout_secs = timeout.as_secs(),
+        "daemon shutdown: cancelling active agent loops and draining exit signals"
+    );
+
+    // Step 3: cancel every token. Done outside the lock.
+    for t in &tokens {
+        t.cancel();
+    }
+
+    // Step 4: concurrently await all exit signals under one total
+    // timeout. `join_all` waits for every future; a single slow loop
+    // can't starve others (they all run concurrently), and the outer
+    // `timeout` bounds the worst case.
+    let drain = futures_util::future::join_all(receivers);
+    match tokio::time::timeout(timeout, drain).await {
+        Ok(_) => {
+            tracing::info!("daemon shutdown: all agent loops drained");
+        }
+        Err(_) => {
+            tracing::warn!(
+                timeout_secs = timeout.as_secs(),
+                "daemon shutdown: agent loop drain exceeded timeout — \
+                 forcing exit (daemon.sh SIGKILL is the last resort)"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

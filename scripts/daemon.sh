@@ -110,15 +110,20 @@ do_stop() {
     if pid="$(running_pid)"; then
         log "停止 daemon (PID $pid)"
         kill "$pid" 2>/dev/null || true
-        # 优雅等 8s;SIGTERM 让 daemon 走 axum graceful_shutdown(等 in-flight
-        # 请求完成,通常 2-3s,留余量)。超时再 SIGKILL 兜底防卡死。
-        for _ in 1 2 3 4 5 6 7 8; do
+        # 优雅等 15s。SIGTERM 让 daemon 走 axum graceful_shutdown:
+        # 先 sse.shutdown() 关 SSE 长连接(亚秒),再 cancel+drain 活跃
+        # agent loop(最多 DAEMON_SHUTDOWN_LOOP_DRAIN_SECS=8s,让 in-flight
+        # tool 跑完 persist_turn 落库),再 axum drain 短请求(SHUTDOWN_GRACE_SECS=3s)。
+        # 最坏 8s + 3s = 11s,15s 窗口留 4s 余量。超时再 SIGKILL 兜底防卡死。
+        # (2026-07-24,task 07-24-daemon-agent-loop-shutdown:从 8s 拉到 15s,
+        # 否则 SIGKILL 会抢先于 agent loop drain 斩断落库。)
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
             kill -0 "$pid" 2>/dev/null || break
             sleep 1
         done
         # 仍未退出 → SIGKILL 兜底(防卡死)。
         if kill -0 "$pid" 2>/dev/null; then
-            warn "8s 后仍未退出,SIGKILL"
+            warn "15s 后仍未退出,SIGKILL"
             kill -9 "$pid" 2>/dev/null || true
         fi
         rm -f "$PID_FILE"

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::helpers::cancel_inflight_for_session;
+use crate::agent::helpers::{cancel_and_drain_all_agent_loops, cancel_inflight_for_session};
 use crate::state::CancellationGuard;
 
 /// Race a slow fake stream against a cancellation token. Mirrors
@@ -347,5 +347,184 @@ async fn cancel_inflight_returns_exit_signal_resolving_on_completion() {
     assert!(
         resolved.load(std::sync::atomic::Ordering::SeqCst),
         "exit signal should resolve once the producer signals completion"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// cancel_and_drain_all_agent_loops — daemon shutdown batch drain
+// (task 07-24-daemon-agent-loop-shutdown). These tests exercise the
+// batch counterpart to `cancel_inflight_for_session` +
+// `await_inflight_exit`: it cancels every active token and
+// concurrently awaits every exit signal under one total timeout.
+// ---------------------------------------------------------------------------
+
+/// Helper: build a `(cancellations, inflight_exits)` pair pre-seeded
+/// with N fake in-flight requests, each with its own token + done
+/// channel. Returns the maps plus the senders (so the test can fire
+/// `done_tx.send(())` to simulate `run_chat_loop` returning) and the
+/// cloned tokens (so the test can assert `is_cancelled()`).
+struct SeededLoops {
+    cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
+    tokens: Vec<CancellationToken>,
+    done_txs: Vec<oneshot::Sender<()>>,
+}
+
+async fn seed_loops(n: usize) -> SeededLoops {
+    let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let mut tokens = Vec::with_capacity(n);
+    let mut done_txs = Vec::with_capacity(n);
+    for i in 0..n {
+        let token = CancellationToken::new();
+        let (tx, rx) = oneshot::channel::<()>();
+        let rid = format!("rid-{i}");
+        cancellations
+            .lock()
+            .await
+            .insert(rid.clone(), token.clone());
+        inflight_exits.lock().await.insert(rid, rx);
+        tokens.push(token);
+        done_txs.push(tx);
+    }
+    SeededLoops {
+        cancellations,
+        inflight_exits,
+        tokens,
+        done_txs,
+    }
+}
+
+/// Cancels every active token. The core invariant: after the call,
+/// every previously-registered `CancellationToken` reports
+/// `is_cancelled()`.
+#[tokio::test]
+async fn cancel_and_drain_all_cancels_every_token() {
+    let s = seed_loops(3).await;
+    cancel_and_drain_all_agent_loops(&s.cancellations, &s.inflight_exits, Duration::from_secs(1))
+        .await;
+    for (i, t) in s.tokens.iter().enumerate() {
+        assert!(
+            t.is_cancelled(),
+            "token {i} should be cancelled after the batch drain"
+        );
+    }
+}
+
+/// Empty maps → no-op, returns promptly, no panic. Guards the
+/// "no active loops at shutdown" common case (must not block or
+/// error when there's nothing to drain).
+#[tokio::test]
+async fn cancel_and_drain_all_on_empty_maps_is_noop() {
+    let cancellations: Arc<Mutex<HashMap<String, CancellationToken>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let inflight_exits: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    // Should return near-instantly (the empty-token early return).
+    let () = tokio::time::timeout(
+        Duration::from_millis(200),
+        cancel_and_drain_all_agent_loops(&cancellations, &inflight_exits, Duration::from_secs(5)),
+    )
+    .await
+    .expect("drain on empty maps must not block");
+}
+
+/// When every producer fires `done_tx.send(())` (the agent loops have
+/// all exited), the concurrent drain resolves promptly — well before
+/// the total timeout. This is the normal shutdown path.
+#[tokio::test]
+async fn cancel_and_drain_all_drains_when_producers_signal() {
+    let s = seed_loops(3).await;
+    // Fire all done senders (simulate the 3 agent loops exiting).
+    // `.send` consumes the Sender; a `oneshot::Receiver` resolves
+    // immediately even if the send happened before the await.
+    let SeededLoops {
+        cancellations,
+        inflight_exits,
+        done_txs,
+        ..
+    } = s;
+    for tx in done_txs {
+        let _ = tx.send(());
+    }
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        cancel_and_drain_all_agent_loops(&cancellations, &inflight_exits, Duration::from_secs(2)),
+    )
+    .await
+    .expect("drain must complete promptly when all producers have signaled");
+    // Map should be drained of receivers.
+    assert!(
+        inflight_exits.lock().await.is_empty(),
+        "inflight_exits should be drained"
+    );
+}
+
+/// A producer that never sends (a hung / panicked agent loop whose
+/// `done_tx` was dropped without `.send`) makes its receiver resolve
+/// to `Err` immediately (sender dropped) — so the drain completes
+/// promptly, NOT via timeout. This covers the panic-drop path.
+#[tokio::test]
+async fn cancel_and_drain_all_completes_when_sender_dropped() {
+    let s = seed_loops(2).await;
+    // Drop senders WITHOUT sending → receivers get `Err` (sender
+    // dropped), resolving immediately. Drain must NOT hit timeout.
+    let SeededLoops {
+        cancellations,
+        inflight_exits,
+        done_txs,
+        ..
+    } = s;
+    drop(done_txs);
+    let start = std::time::Instant::now();
+    cancel_and_drain_all_agent_loops(&cancellations, &inflight_exits, Duration::from_secs(2)).await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(300),
+        "drain must return promptly when senders dropped (receivers resolve Err); took {:?}",
+        elapsed
+    );
+}
+
+/// The genuine timeout case: a producer that stays alive and never
+/// sends (a truly hung agent loop). The drain must hit the total
+/// timeout and return, not block. We keep the sender alive (leak it
+/// into a spawned task) so the receiver stays pending forever.
+#[tokio::test]
+async fn cancel_and_drain_all_times_out_on_silent_live_producer() {
+    let s = seed_loops(1).await;
+    // Keep the sender alive by moving it into a detached task that
+    // never sends. The receiver therefore stays pending forever,
+    // so only the total timeout can end the drain.
+    let SeededLoops {
+        cancellations,
+        inflight_exits,
+        done_txs,
+        ..
+    } = s;
+    let _keeper = tokio::spawn(async move {
+        // `done_txs` is captured into this task; the task never
+        // completes (pending forever), so the senders stay alive
+        // and the receiver stays pending. Holding the senders via
+        // capture (no explicit drop) keeps them alive for the
+        // task's lifetime — exactly the "hung producer" we want.
+        let _keep_alive = done_txs;
+        std::future::pending::<()>().await;
+    });
+    let start = std::time::Instant::now();
+    cancel_and_drain_all_agent_loops(&cancellations, &inflight_exits, Duration::from_millis(80))
+        .await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(70),
+        "drain must wait out the timeout when a producer stays silent; returned after {:?}",
+        elapsed
+    );
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "drain must not run far past the timeout; took {:?}",
+        elapsed
     );
 }

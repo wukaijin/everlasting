@@ -617,7 +617,7 @@ ss -tlnp | grep 7456
 ```bash
 ./scripts/daemon.sh start   [--port N]   # 编译 release + 前台启动(日志直接输出)
 ./scripts/daemon.sh bg      [--port N]   # 同上,但后台跑 + 日志写 /tmp/everlasting-daemon.log
-./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→8s→SIGKILL 兜底)
+./scripts/daemon.sh stop                 # 停 daemon(读 PID 文件,SIGTERM→15s→SIGKILL 兜底)
 ./scripts/daemon.sh restart [--port N]   # stop + start(改完前端重新 serve dist)
 ./scripts/daemon.sh rebuild              # 只重新编译 release 二进制(不重启)
 ./scripts/daemon.sh status               # 显示 PID + health 检查
