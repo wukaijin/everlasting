@@ -459,10 +459,18 @@ pub async fn update_run_finished(
     transcript: &[crate::agent::subagent::TranscriptEntry],
     transcript_truncated: bool,
     turn_count: Option<i64>,
+    // C1 (07-26-subagent-resume): the worker's accumulated messages,
+    // persisted so a later `dispatch_subagent` can resume the
+    // conversation. Pass an empty slice + `messages_truncated=true`
+    // when the payload exceeded `MESSAGES_MAX_BYTES` (resume then
+    // falls back to fresh dispatch — design §5).
+    messages: &[crate::llm::types::ChatMessage],
+    messages_truncated: bool,
 ) -> Result<(), sqlx::Error> {
     let token_usage_json =
         serde_json::to_string(token_usage).unwrap_or_else(|_| String::from("{}"));
     let transcript_json = serde_json::to_string(transcript).unwrap_or_else(|_| "[]".to_string());
+    let messages_json = serde_json::to_string(messages).unwrap_or_else(|_| "[]".to_string());
     sqlx::query(
         r#"
         UPDATE subagent_runs
@@ -473,7 +481,9 @@ pub async fn update_run_finished(
             token_usage_json = ?,
             transcript_json = ?,
             transcript_truncated = ?,
-            turn_count = ?
+            turn_count = ?,
+            messages_json = ?,
+            messages_truncated = ?
         WHERE id = ?
         "#,
     )
@@ -485,13 +495,97 @@ pub async fn update_run_finished(
     .bind(&transcript_json)
     .bind(transcript_truncated as i64)
     .bind(turn_count)
+    .bind(&messages_json)
+    .bind(messages_truncated as i64)
     .bind(id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// L3b (2026-06-27): set or clear the `worktree_path` column on a
+// ---------------------------------------------------------------------------
+// C1 (07-26-subagent-resume): read side — load messages for resume
+// ---------------------------------------------------------------------------
+
+/// The data `dispatch_subagent`'s resume path needs to decide whether
+/// a historical run is safe to resume from. Loaded in one query so
+/// the resume branch can run all five design §5 checks (exists /
+/// not-truncated / has-messages / same-session / not-running) without
+/// a second round-trip.
+pub struct LoadedResumeMessages {
+    /// `Vec<ChatMessage>` deserialized from `messages_json`. Empty
+    /// when the column is NULL (pre-C1 legacy run, or a cancel/error
+    /// exit that skipped the snapshot) — the caller treats empty as
+    /// "unavailable, fall back to fresh dispatch".
+    pub messages: Vec<crate::llm::types::ChatMessage>,
+    /// True when the persisted payload exceeded `MESSAGES_MAX_BYTES`
+    /// and was collapsed to an empty slice (partial history is unsafe
+    /// to resume from — design §5). Caller falls back to fresh
+    /// dispatch when true.
+    pub truncated: bool,
+    /// The run's `parent_session_id` — the resume caller compares
+    /// this against its own session to enforce the same-session rule
+    /// (design §4: cross-session resume is rejected).
+    pub parent_session_id: String,
+    /// The run's terminal status string ("running" / "completed" /
+    /// "cancelled" / "error" / "incomplete"). The resume caller
+    /// rejects runs still in "running" state (design §5
+    /// `resume_run_still_running`).
+    pub status: String,
+}
+
+/// Load the persisted messages + run metadata needed for the resume
+/// decision. Returns `None` when `run_id` does not exist (design §5
+/// `resume_run_not_found`). Returns `Some(..)` with an empty
+/// `messages` Vec when the run exists but `messages_json` is NULL
+/// (legacy pre-C1 run, or a cancel/error exit that skipped the
+/// snapshot) — caller treats this as "unavailable" and falls back.
+///
+/// A truncated payload (`truncated == true`) is read back as an
+/// empty Vec + the flag set; the caller falls back rather than
+/// resuming from a partial history.
+pub async fn load_messages_by_run_id(
+    pool: &SqlitePool,
+    run_id: &str,
+) -> Result<Option<LoadedResumeMessages>, sqlx::Error> {
+    use sqlx::Row;
+    let row = sqlx::query(
+        r#"
+        SELECT parent_session_id,
+               status,
+               messages_json,
+               messages_truncated
+        FROM subagent_runs
+        WHERE id = ?
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let parent_session_id: String = row.try_get("parent_session_id")?;
+    let status: String = row.try_get("status")?;
+    let messages_json: Option<String> = row.try_get("messages_json")?;
+    // messages_truncated is NOT NULL DEFAULT 0, but defensively fall
+    // back to 0 for any pre-migration row the helper missed.
+    let truncated_i: i64 = row.try_get::<i64, _>("messages_truncated").unwrap_or(0);
+    let truncated = truncated_i != 0;
+    let messages: Vec<crate::llm::types::ChatMessage> = match messages_json.as_deref() {
+        Some(json) if !json.is_empty() && !truncated => {
+            serde_json::from_str(json).unwrap_or_default()
+        }
+        // NULL / empty / truncated → empty Vec (caller falls back).
+        _ => Vec::new(),
+    };
+    Ok(Some(LoadedResumeMessages {
+        messages,
+        truncated,
+        parent_session_id,
+        status,
+    }))
+}
 /// `subagent_runs` row. Called by `run_subagent` in two paths:
 ///
 /// 1. **Worker started in isolation mode**: `Some(path)` is written

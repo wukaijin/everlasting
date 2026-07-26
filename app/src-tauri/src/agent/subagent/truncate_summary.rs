@@ -31,6 +31,65 @@ use super::SubagentStatus;
 /// context.
 pub const TRANSCRIPT_MAX_BYTES: usize = 4 * 1024 * 1024;
 
+// ---------------------------------------------------------------------------
+// Messages 8MB cap (C1, 07-26-subagent-resume)
+// ---------------------------------------------------------------------------
+
+/// Maximum size (in bytes) of a serialized `Vec<ChatMessage>` that
+/// will be persisted into `subagent_runs.messages_json` for resume.
+///
+/// **8 MiB** is 2x the transcript cap ([`TRANSCRIPT_MAX_BYTES`]):
+/// messages are the resume-critical payload (a truncated history is
+/// unsafe to resume from), so we afford more headroom than the
+/// display-only transcript. A 20-turn worker with moderate tool use
+/// produces ~50-200 KiB of messages — two orders of magnitude under
+/// the cap; only a pathological multi-MiB tool_result run hits it.
+///
+/// **Truncation semantics differ from transcript**: a truncated
+/// transcript is still useful for drawer display (head+tail slice);
+/// a truncated messages history is NOT safe to resume from (the
+/// middle is missing, so the resumed worker would reason on a gap).
+/// So on truncation we persist an empty slice + `messages_truncated=1`,
+/// and resume falls back to a fresh dispatch (design §5). This is
+/// simpler and safer than the transcript's head+tail reparse.
+pub const MESSAGES_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Serialize-then-cap helper for the resume payload. Returns
+/// `(messages, truncated)`:
+///
+/// - If the JSON-serialized messages fit in `max_bytes`, the original
+///   is returned and `truncated=false` (resume-safe).
+/// - If they don't, returns `(Vec::new(), true)`. The caller persists
+///   the empty slice + `messages_truncated=1`; resume sees the flag
+///   and falls back to fresh dispatch (design §5). Unlike transcript
+///   truncation, we do NOT keep a head+tail slice — a partial history
+///   is unsafe to resume from, so storing one would mislead.
+///
+/// Mirrors [`truncate_transcript_for_persistence`]'s shape (same
+/// `(Vec<_>, bool)` return) so the dispatch call site reads
+/// symmetrically.
+pub fn truncate_messages_for_persistence(
+    messages: Vec<crate::llm::types::ChatMessage>,
+    max_bytes: usize,
+) -> (Vec<crate::llm::types::ChatMessage>, bool) {
+    let json = match serde_json::to_string(&messages) {
+        Ok(s) => s,
+        Err(_) => {
+            // Serialization failure on ChatMessage is unreachable in
+            // practice (its content is serde-native), but if it ever
+            // happens, treat as truncated → resume falls back.
+            return (Vec::new(), true);
+        }
+    };
+    if json.len() <= max_bytes {
+        return (messages, false);
+    }
+    // Over cap: resume cannot safely use a partial history. Persist
+    // an empty slice + the truncated flag; resume sees the flag and
+    // falls back to a fresh dispatch (design §5).
+    (Vec::new(), true)
+}
+
 /// Serialize-then-cap helper. Returns `(transcript, truncated)`:
 ///
 /// - If the JSON-serialized transcript fits in `max_bytes`, the
@@ -1024,5 +1083,54 @@ mod tests {
     #[test]
     fn truncate_uses_default_4mb_when_called_via_run_subagent_path() {
         assert_eq!(TRANSCRIPT_MAX_BYTES, 4 * 1024 * 1024);
+    }
+
+    // ---- truncate_messages_for_persistence (C1, 07-26-subagent-resume) ----
+
+    fn chat_msg(text: &str) -> crate::llm::types::ChatMessage {
+        use crate::llm::types::{MessageContent, Role};
+        crate::llm::types::ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    #[test]
+    fn c1_truncate_messages_under_cap_returns_original() {
+        let msgs = vec![chat_msg("hello"), chat_msg("world")];
+        let (out, truncated) = truncate_messages_for_persistence(msgs.clone(), 4096);
+        assert!(!truncated);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn c1_truncate_messages_over_cap_returns_empty_and_marks_truncated() {
+        // C1 design decision: a truncated message history is NOT safe
+        // to resume from (the middle is missing), so we collapse to an
+        // empty slice + truncated=true rather than the transcript's
+        // head+tail slice. The caller (resume) sees the flag and falls
+        // back to a fresh dispatch.
+        let big = "x".repeat(100);
+        let msgs: Vec<_> = (0..200).map(|_| chat_msg(&big)).collect();
+        let json = serde_json::to_string(&msgs).unwrap();
+        assert!(json.len() > 1024, "test setup: should exceed 1KiB");
+        let (out, truncated) = truncate_messages_for_persistence(msgs, 1024);
+        assert!(truncated, "over cap must set truncated=true");
+        assert!(out.is_empty(), "truncated messages collapse to empty");
+    }
+
+    #[test]
+    fn c1_truncate_messages_empty_returns_empty_untruncated() {
+        let (out, truncated) = truncate_messages_for_persistence(Vec::new(), 1024);
+        assert!(out.is_empty());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn c1_messages_max_bytes_is_2x_transcript_cap() {
+        // design §1: messages afford 2x the transcript threshold
+        // (resume-critical payload).
+        assert_eq!(MESSAGES_MAX_BYTES, 2 * TRANSCRIPT_MAX_BYTES);
+        assert_eq!(MESSAGES_MAX_BYTES, 8 * 1024 * 1024);
     }
 }

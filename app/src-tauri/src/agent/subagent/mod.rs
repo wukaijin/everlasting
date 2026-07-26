@@ -127,7 +127,8 @@ pub use transcript::TranscriptKind;
 pub(crate) use transcript::{build_subagent_event_payload, build_subagent_finished_payload};
 pub use truncate_summary::{
     format_dispatch_result_with_model, format_final_text, summarize_worker_tool_actions,
-    truncate_transcript_for_persistence, TRANSCRIPT_MAX_BYTES,
+    truncate_messages_for_persistence, truncate_transcript_for_persistence, MESSAGES_MAX_BYTES,
+    TRANSCRIPT_MAX_BYTES,
 };
 // 2026-07-03 (task 07-03-subagent-per-agent-model-ui, 阶段 2/3):
 // the `commands::subagents` IPC needs to locate the on-disk file
@@ -416,6 +417,50 @@ pub async fn definition_with_cache(
                                     frontmatter `model:` > parent's model). Use this for \
                                     cross-model adversarial review (e.g. dispatch reviewer \
                                     with a stronger / different-family model)."
+                },
+                "resume_from": {
+                    "type": "string",
+                    "description": "Resume a prior worker run by replaying its conversation \
+                                    history as this worker's initial messages (saves the \
+                                    worker re-reading the same context). Value is the prior \
+                                    run's id (subagent_runs.id, returned in prior \
+                                    dispatch_subagent results). Omit for a fresh dispatch \
+                                    (default). Restrictions: the prior run must be in the \
+                                    SAME session, must be finished (not still running), and \
+                                    must have a non-truncated message history. On any \
+                                    violation the dispatch falls back to a fresh worker and \
+                                    appends `[resume: fallback, reason: <code>]` to the result."
+                },
+                "resume_clarification": {
+                    "type": "object",
+                    "description": "Context update injected at the resume point so the \
+                                    continued worker can reconcile stale references in the \
+                                    replayed history. Required when `resume_from` is set \
+                                    (a resumed worker needs to know what changed). Ignored \
+                                    when `resume_from` is omitted.",
+                    "properties": {
+                        "current_state": {
+                            "type": "string",
+                            "description": "Short summary of the current state (e.g. the \
+                                            revised PRD's key points) so the worker can \
+                                            orient without re-reading everything."
+                        },
+                        "changes_since_last": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Explicit list of what changed since the prior \
+                                            run's last turn (e.g. revised sections, new \
+                                            decisions). The worker treats prior-history \
+                                            references that contradict these as stale."
+                        },
+                        "this_round_purpose": {
+                            "type": "string",
+                            "description": "What this resumed round is for (e.g. 'verify the \
+                                            high-severity findings from last round are \
+                                            resolved in the revised PRD')."
+                        }
+                    },
+                    "required": ["this_round_purpose"]
                 }
             },
             "required": ["subagent", "task"]

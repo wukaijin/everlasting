@@ -693,6 +693,28 @@ pub trait ChatEventSink: Send + Sync + 'static {
     fn emit_task_state_transition(&self, _payload: &TaskStateTransitionPayload) {
         // Silent no-op — see the doc comment above.
     }
+
+    /// C1 (07-26-subagent-resume): capture the worker's final
+    /// `Vec<ChatMessage>` snapshot so it can be persisted to
+    /// `subagent_runs.messages_json` for a later resume to replay.
+    ///
+    /// `run_chat_loop` calls this ONCE on its normal completion path
+    /// (gated on `is_worker == Some(true)` — only worker runs are
+    /// resume candidates; the parent session is never resumed). The
+    /// snapshot is the complete accumulated message history at loop
+    /// exit; cancel / error / incomplete early exits do NOT call it
+    /// (their history is partial and unsafe to resume from — design
+    /// §5 fallback).
+    ///
+    /// Default no-op is correct for every sink EXCEPT
+    /// `SubagentBufferSink`, which overrides it to stash the snapshot
+    /// for `run_subagent` to read after the loop returns (mirrors
+    /// `emit_permission_ask_resolved`'s default-no-op shape).
+    /// `AppHandleSink` and the test `MockEmitter` use the default
+    /// no-op — they have no resume consumer.
+    fn record_worker_messages(&self, _messages: &[crate::llm::types::ChatMessage]) {
+        // Silent no-op — see the doc comment above.
+    }
 }
 
 /// Production `AppHandle` adapter. The Tauri trait `Emitter` is in

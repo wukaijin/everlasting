@@ -125,30 +125,22 @@ fn has_marker(summary: &str, prefix: &str) -> bool {
 // Parse `target_state` (string) → TaskStatus, lenient
 // ---------------------------------------------------------------------------
 
-/// Lenient parse — mirror the `TaskStatus::from_str_opt` posture:
-/// unknown strings become `Planning` (the dev default). For Step
-/// 3.1 specifically, we instead **reject** unknown values because
-/// the only legitimate callers are (a) the IPC layer (which got it
-/// from the LLM, validated against the schema enum) and (b) the
-/// `resolve_task_state_transition` IPC handler (which checks user
-/// intent before applying).
+/// Lenient parse — mirrors [`TaskStatus::from_str_opt`] posture.
 ///
-/// The signature is `Result` rather than `Option` so the IPC layer
-/// can distinguish "string was malformed" from "string was empty"
-/// in audits.
+/// **C0 (`07-26-taskstatus-custom-state`)**: unknown strings no
+/// longer return `Err(InvalidTargetState)`. They are captured as
+/// [`TaskStatus::Custom`] so plugin-defined workflow states
+/// (review's `intake`/`reviewing`/...) can flow through the
+/// transition pipeline. Transition *legality* is now decided one
+/// layer up by [`crate::agent::workflow::can_transition`] against
+/// the session's `WorkflowDef` (see
+/// `tools/request_task_state_transition::execute_blocking`), NOT
+/// by this parse step. The signature stays `Result` so the IPC
+/// layer's existing `InvalidTargetState` arm remains exhaustive
+/// (it's now a defensive unreachable branch — see
+/// `commands/question.rs`).
 pub fn parse_target_state(s: &str) -> StateResult<TaskStatus> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "planning" => Ok(TaskStatus::Planning),
-        "in_progress" => Ok(TaskStatus::InProgress),
-        // Legacy pre-merge values — accept + migrate (same
-        // posture as TaskStatus::from_str_opt). The IPC layer
-        // only gets here from the LLM's tool call or the
-        // resolve_task_state_transition handler; old persisted
-        // values should not be rejected post-merge.
-        "implement" | "check" => Ok(TaskStatus::InProgress),
-        "done" => Ok(TaskStatus::Done),
-        other => Err(StateTransitionError::InvalidTargetState(other.to_string())),
-    }
+    Ok(TaskStatus::from_str_opt(s))
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +175,8 @@ pub fn parse_target_state(s: &str) -> StateResult<TaskStatus> {
 pub fn set_task_state(
     project_path: &Path,
     slug: &str,
-    from: TaskStatus,
-    to: TaskStatus,
+    from: &TaskStatus,
+    to: &TaskStatus,
 ) -> StateResult<TaskJson> {
     // Read current task.json — we MUST rewrite with the same id +
     // title + items, only changing status + updated_at (and
@@ -209,7 +201,7 @@ pub fn set_task_state(
     // the IPC layer's snapshot was stale (concurrent session
     // moved it). We still apply the transition — the
     // `summary`-marker bookkeeping keeps things idempotent.
-    if task.status != from {
+    if &task.status != from {
         tracing::warn!(
             slug = %slug,
             expected_from = %from.as_str(),
@@ -220,7 +212,7 @@ pub fn set_task_state(
     }
 
     // Apply status + bump updated_at.
-    task.status = to;
+    task.status = to.clone();
     task.updated_at = Utc::now().to_rfc3339();
 
     // Dispatch the hook BEFORE the write, so the hook can
@@ -259,8 +251,8 @@ pub fn set_task_state(
 fn dispatch_hook(
     project_path: &Path,
     slug: &str,
-    from: TaskStatus,
-    to: TaskStatus,
+    from: &TaskStatus,
+    to: &TaskStatus,
     task: &mut TaskJson,
 ) {
     match (from, to) {
@@ -272,6 +264,11 @@ fn dispatch_hook(
         }
         _ => {
             // No hook for this transition — silent no-op.
+            // C0: Custom↔Custom and any non-dev transition lands
+            // here, which is exactly right (plugin transitions
+            // must not fire the dev spec-distillation / preflight
+            // hooks). Per-transition review hooks, when needed,
+            // get their own explicit arm (see design §5).
             tracing::debug!(
                 slug = %slug,
                 from = %from.as_str(),
@@ -533,16 +530,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_target_state_rejects_unknown() {
-        for bad in ["nope", "", "  ", "complete", "审核"] {
-            let err = parse_target_state(bad).expect_err("must reject");
+    fn parse_target_state_unknown_becomes_custom() {
+        // C0 (`07-26-taskstatus-custom-state`): unknown strings
+        // are no longer rejected — they flow through as
+        // TaskStatus::Custom so plugin workflow states (review's
+        // intake/reviewing/...) reach the transition pipeline.
+        // Legality is decided upstream by can_transition, not here.
+        for raw in ["nope", "reviewing", "  Revising  ", "complete", "审核"] {
+            let parsed = parse_target_state(raw).expect("unknown now Ok(Custom)");
             assert!(
-                matches!(err, StateTransitionError::InvalidTargetState(_)),
+                matches!(parsed, TaskStatus::Custom(_)),
                 "got {:?} for input {:?}",
-                err,
-                bad
+                parsed,
+                raw
             );
         }
+        // Empty / whitespace-only strings also become Custom("")
+        // (trim + lowercase of "" is ""). The dev default
+        // fallback to Planning is GONE — callers must validate
+        // non-emptiness upstream (the tool layer does).
+        assert!(matches!(
+            parse_target_state("").unwrap(),
+            TaskStatus::Custom(_)
+        ));
+        assert!(matches!(
+            parse_target_state("   ").unwrap(),
+            TaskStatus::Custom(_)
+        ));
     }
 
     // --- set_task_state: write + updated_at ----------------------------
@@ -562,8 +576,8 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::InProgress,
+            &TaskStatus::Planning,
+            &TaskStatus::InProgress,
         )
         .expect("ok");
 
@@ -610,7 +624,7 @@ mod tests {
         write_task(path, &t).expect("write");
 
         let updated =
-            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
         assert_eq!(updated.status, TaskStatus::Done);
         assert!(
             updated.summary.starts_with(SPEC_DISTILLED_MARKER_PREFIX),
@@ -633,8 +647,8 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::InProgress,
+            &TaskStatus::Planning,
+            &TaskStatus::InProgress,
         )
         .expect("ok");
         assert!(
@@ -660,8 +674,8 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::InProgress,
-            TaskStatus::InProgress,
+            &TaskStatus::InProgress,
+            &TaskStatus::InProgress,
         )
         .expect("ok");
         // Summary unchanged (no marker, no log line produced anything).
@@ -687,7 +701,7 @@ mod tests {
         // Apply InProgress → Done again; the hook should detect the
         // pre-existing marker and skip.
         let updated =
-            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
         let marker_count = updated
             .summary
             .lines()
@@ -712,8 +726,8 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::Planning,
-            TaskStatus::InProgress,
+            &TaskStatus::Planning,
+            &TaskStatus::InProgress,
         )
         .expect("ok");
         let marker_count = updated
@@ -753,7 +767,7 @@ mod tests {
         );
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
 
         assert!(
             spec_dir.exists(),
@@ -791,7 +805,7 @@ mod tests {
         );
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
 
         assert!(
             progress_path.exists(),
@@ -848,7 +862,7 @@ mod tests {
         std::fs::write(&progress_path, "preexisting body\n").unwrap();
 
         let _updated =
-            set_task_state(path, "my-feat", TaskStatus::InProgress, TaskStatus::Done).expect("ok");
+            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
 
         let content = std::fs::read_to_string(&progress_path).expect("read progress");
         // The idempotent short-circuit must NOT append the
@@ -867,8 +881,8 @@ mod tests {
         let err = set_task_state(
             d.path(),
             "ghost",
-            TaskStatus::Planning,
-            TaskStatus::InProgress,
+            &TaskStatus::Planning,
+            &TaskStatus::InProgress,
         )
         .expect_err("missing task must fail");
         assert!(
@@ -892,19 +906,10 @@ mod tests {
         let updated = set_task_state(
             path,
             "my-feat",
-            TaskStatus::InProgress, // stale: actual status = Planning
-            TaskStatus::InProgress,
+            &TaskStatus::InProgress, // stale: actual status = Planning
+            &TaskStatus::InProgress,
         )
         .expect("ok");
         assert_eq!(updated.status, TaskStatus::InProgress);
-    }
-
-    #[test]
-    fn parse_target_state_invalid_does_not_reach_io() {
-        // Verify parse_target_state is the early-rejection gate
-        // (no IO attempted). We point at a non-existent path to
-        // ensure no disk hit even if parsing regresses.
-        let err = parse_target_state("complete").expect_err("must reject");
-        assert!(matches!(err, StateTransitionError::InvalidTargetState(s) if s == "complete"));
     }
 }

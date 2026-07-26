@@ -89,7 +89,7 @@ use crate::agent::question_store::{
     InteractionResponse, PendingInteraction, QuestionStore, TaskStateTransitionPayload,
 };
 use crate::agent::workflow::task::validate_slug;
-use crate::agent::workflow::TaskStatus;
+use crate::agent::workflow::{can_transition, TaskStatus, WorkflowDef};
 use crate::db;
 use crate::llm::types::ToolDef;
 use crate::state::ChatEventSink;
@@ -98,21 +98,17 @@ use crate::state::ChatEventSink;
 // Constants — schema boundaries
 // ---------------------------------------------------------------------------
 
-/// The valid `target_state` strings. Mirrors the dev plugin's
-/// `WorkflowDef::states` (planning / in_progress / done).
-/// Mirroring the `request_mode_change`'s `VALID_MODES` posture —
-/// hard-coded set because (a) the LLM can't request transitions
-/// the workflow doesn't declare, and (b) the wire schema is the
-/// canonical enum for the IPC consumer.
-///
-/// A future plugin with custom states (e.g. the review plugin's
-/// `intake` / `synth` / `done`) would extend this list. Until
-/// then, hard-coding the 3 dev states matches the dev plugin's
-/// locked 3-state machine (matches `WorkflowDef::states`).
-///
-/// (2026-07-10 merge: was 4 states `planning/implement/check/done`;
-/// `implement` + `check` collapsed into `in_progress`.)
-const VALID_STATES: &[&str] = &["planning", "in_progress", "done"];
+// C0 (`07-26-taskstatus-custom-state`): the old hard-coded
+// `VALID_STATES = ["planning", "in_progress", "done"]` constant
+// is GONE. The dev-only enum rejected review's
+// `intake`/`reviewing`/... states outright at `validate` time,
+// which is exactly the failure C0 fixes. Legality is now decided
+// in `execute_blocking` via `can_transition` against the session's
+// `WorkflowDef` (workflow session), or by rejecting
+// `TaskStatus::Custom` outright (non-workflow session — see
+// design §3). `validate` only enforces non-emptiness + slug +
+// reason length now. Full rationale lives on `validate` and
+// `execute_blocking`'s doc comments.
 
 /// Max `reason` text length (same as `request_mode_change`'s
 /// `MAX_REASON_LEN`). Reasons longer than this are rejected with
@@ -167,17 +163,22 @@ pub fn definition() -> ToolDef {
     ToolDef {
         name: "request_task_state_transition".to_string(),
         description: Some(
-            "Ask the user to transition the current task to a new workflow state \
-             (planning → in_progress → done for the dev plugin). The user \
-             sees an inline card with the target state, the current state, and \
-             your reason; they choose Allow or Deny. On Allow, the on-disk \
-             task.json is updated and the per-transition Rust hook \
-             (spec-distillation on in_progress→done, preflight on \
-             planning→in_progress) fires automatically. On Deny, you get \
-             {\"cancelled_by_user\": true} and should adapt.\n\n\
+            "Ask the user to transition the current task to a new workflow state. \
+             The valid target states are those declared by the current \
+             workflow plugin's workflow.json (dev: planning → in_progress → \
+             done; review: intake → reviewing → revising → reported). The \
+             user sees an inline card with the target state, the current \
+             state, and your reason; they choose Allow or Deny. On Allow, \
+             the on-disk task.json is updated and the per-transition Rust \
+             hook (spec-distillation on in_progress→done, preflight on \
+             planning→in_progress for the dev plugin) fires automatically. \
+             On Deny, you get {\"cancelled_by_user\": true} and should \
+             adapt.\n\n\
              Only available in workflow sessions. If the target state is the \
              current state, the call returns {\"noop\": true} and no card is \
-             shown.\n\n\
+             shown. If the target state is not reachable from the current \
+             state per the plugin's declared transitions, the call returns \
+             {\"invalid_transition\": true} with is_error.\n\n\
              Use this when you've completed a workflow phase (research, \
              implementation, review) and need the user to confirm the \
              transition to the next phase. Do NOT self-advance the state — \
@@ -189,8 +190,8 @@ pub fn definition() -> ToolDef {
             "properties": {
                 "target_state": {
                     "type": "string",
-                    "enum": ["planning", "in_progress", "done"],
-                    "description": "The state to transition to. Must be one of: planning | in_progress | done."
+                    "minLength": 1,
+                    "description": "The state to transition to. Must be a state declared by the current workflow plugin's workflow.json and reachable from the current state via a declared transition (e.g. dev: planning | in_progress | done; review: intake | reviewing | revising | reported)."
                 },
                 "slug": {
                     "type": "string",
@@ -217,12 +218,17 @@ pub fn definition() -> ToolDef {
 /// rather than a typed struct so the `execute_blocking` call sites
 /// can early-return on the error path without pre-allocating pending
 /// state.
-#[allow(dead_code)] // `EmptySlug` reserved for future schema tightening
+#[allow(dead_code)] // `EmptySlug` + `UnknownTargetState` reserved — see notes per variant
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ValidationError {
     #[error("`target_state` must be non-empty")]
     EmptyTargetState,
-    #[error("`target_state` must be one of: planning | in_progress | done (got: {got:?})")]
+    /// C0: validate no longer rejects unknown target_state values
+    /// — they flow through as `TaskStatus::Custom` and legality is
+    /// decided in `execute_blocking` by `can_transition`. Kept for
+    /// exhaustiveness + a future schema-tightening if the wire
+    /// enum ever needs to come back.
+    #[error("`target_state` is not a valid workflow state (got: {got:?})")]
     UnknownTargetState { got: String },
     #[error("`slug` is empty — pass the current workflow task's slug explicitly, or set it via WorkflowCtx")]
     EmptySlug,
@@ -236,15 +242,19 @@ pub(crate) enum ValidationError {
 /// `Err(ValidationError)` for short-circuit failures (the agent
 /// loop pushes the error string as `tool_result` content with
 /// `is_error: true`).
+///
+/// **C0 (`07-26-taskstatus-custom-state`)**: this no longer
+/// rejects unknown `target_state` strings. Plugin-defined states
+/// (review's `intake`/`reviewing`/...) pass through; legality is
+/// decided in [`execute_blocking`] via
+/// [`crate::agent::workflow::can_transition`] against the
+/// session's `WorkflowDef` (workflow session), or by rejecting
+/// `TaskStatus::Custom` outright (non-workflow session). Only
+/// non-emptiness + slug shape + reason length are checked here.
 pub(crate) fn validate(input: &RequestTaskStateTransitionInput) -> Result<(), ValidationError> {
     let t = input.target_state.trim();
     if t.is_empty() {
         return Err(ValidationError::EmptyTargetState);
-    }
-    if !VALID_STATES.contains(&t) {
-        return Err(ValidationError::UnknownTargetState {
-            got: input.target_state.clone(),
-        });
     }
     // slug is empty → caller didn't supply one. The chat_loop
     // passes the workflow_ctx's current task slug via the
@@ -341,6 +351,13 @@ pub async fn execute_blocking(
     store: &QuestionStore,
     sink: &Arc<dyn ChatEventSink>,
     cancel: &CancellationToken,
+    // C0 (`07-26-taskstatus-custom-state`): the session's
+    // WorkflowDef. `Some` for workflow sessions — used to validate
+    // the `from → to` transition via `can_transition` (the plugin's
+    // `transitions` is the source of truth for legality). `None`
+    // for non-workflow sessions — then `TaskStatus::Custom` targets
+    // are rejected (no plugin = no basis for custom states).
+    workflow_def: Option<&WorkflowDef>,
     // E2 (2026-07-14): per-turn seq for audit turn alignment. The
     // caller (chat_loop interceptor) passes `Some(seq)` from inside
     // the turn loop so the `task_state_transition_requested` audit
@@ -457,13 +474,13 @@ pub async fn execute_blocking(
     // same state, return immediately with `noop: true` and
     // no card. Matches the `request_mode_change` noop
     // posture.
-    let noop = matches!(current_state, Some(s) if s == target_state);
+    let noop = matches!(current_state.as_ref(), Some(s) if s == &target_state);
     if noop {
         // Audit: requested with noop marker (every tool call
         // gets a `*_requested` audit row).
         let audit_payload = serde_json::json!({
             "target_state": target_state_str,
-            "current_state": current_state.map(|s| s.as_str()).unwrap_or(""),
+            "current_state": current_state.as_ref().map(|s| s.as_str()).unwrap_or(""),
             "slug": resolved_slug,
             "noop": true,
         })
@@ -495,12 +512,81 @@ pub async fn execute_blocking(
         );
     }
 
+    // ---- 2b. Transition legality check (C0, design §3) -------------
+    // `parse_target_state` no longer rejects unknown values (they
+    // become TaskStatus::Custom), so legality must be decided HERE.
+    // - Workflow session: the plugin's `WorkflowDef::transitions` is
+    //   the source of truth — `can_transition(def, from, to)` returns
+    //   true iff the edge is declared. This is what lets review's
+    //   intake→reviewing pass while planning→done (no such edge)
+    //   fails, all driven by the plugin's workflow.json.
+    // - Non-workflow session (no plugin): fall back to the legacy
+    //   posture — reject Custom target_state. Without a plugin there's
+    //   no basis for a custom state; the dev accept-list still applies.
+    //
+    // `from` resolves from current_state (string form via as_str); if
+    // the session has no current task yet we use the plugin's declared
+    // `initial` state — that's the only sensible "from" for a fresh
+    // task and matches how `set_task_state`'s caller-side snapshot
+    // would resolve it.
+    if let Some(def) = workflow_def {
+        let from_str = current_state
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or(def.initial.as_str());
+        if !can_transition(def, from_str, &target_state_str) {
+            tracing::warn!(
+                session_id = %session_id,
+                tool_use_id = %tool_use_id,
+                from = %from_str,
+                to = %target_state_str,
+                plugin = %def.name,
+                "request_task_state_transition: undeclared transition rejected \
+                 (allowed transitions are defined in the plugin's workflow.json)"
+            );
+            return (
+                serde_json::json!({
+                    "invalid_transition": true,
+                    "from": from_str,
+                    "target_state": target_state_str,
+                    "plugin": def.name,
+                })
+                .to_string(),
+                true,
+                crate::tools::ToolContextUpdate::default(),
+                None,
+            );
+        }
+    } else if matches!(target_state, TaskStatus::Custom(_)) {
+        // Non-workflow session + Custom target: no plugin to back the
+        // custom state. Reject — mirrors the legacy "must be a known
+        // TaskStatus" posture for non-workflow callers.
+        tracing::warn!(
+            session_id = %session_id,
+            tool_use_id = %tool_use_id,
+            target_state = %target_state_str,
+            "request_task_state_transition: Custom target rejected in non-workflow session \
+             (no workflow plugin loaded to define a custom state)"
+        );
+        return (
+            serde_json::json!({
+                "invalid_transition": true,
+                "target_state": target_state_str,
+                "reason": "no workflow plugin loaded",
+            })
+            .to_string(),
+            true,
+            crate::tools::ToolContextUpdate::default(),
+            None,
+        );
+    }
+
     // ---- 3. Build payload + requested audit ------------------------
     let payload = TaskStateTransitionPayload {
         session_id: session_id.to_string(),
         tool_use_id: tool_use_id.to_string(),
         target_state: target_state_str.clone(),
-        current_state: current_state.map(|s| s.as_str().to_string()),
+        current_state: current_state.as_ref().map(|s| s.as_str().to_string()),
         slug: Some(resolved_slug.clone()),
         reason: parsed.reason.clone(),
         ts: now,
@@ -510,7 +596,7 @@ pub async fn execute_blocking(
     // "user-visible record" of the LLM's ask.
     let audit_payload = serde_json::json!({
         "target_state": target_state_str,
-        "current_state": current_state.map(|s| s.as_str()).unwrap_or(""),
+        "current_state": current_state.as_ref().map(|s| s.as_str()).unwrap_or(""),
         "slug": resolved_slug,
         "reason": parsed.reason,
         "noop": false,
@@ -611,7 +697,7 @@ pub async fn execute_blocking(
                     // reflects the new state).
                     let content = serde_json::json!({
                         "allowed": true,
-                        "prev_state": current_state.map(|s| s.as_str().to_string()).unwrap_or_default(),
+                        "prev_state": current_state.as_ref().map(|s| s.as_str().to_string()).unwrap_or_default(),
                         "new_state": target_state_str,
                     })
                     .to_string();
@@ -749,6 +835,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -765,7 +852,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validation_target_state_out_of_enum_short_circuits() {
+    async fn custom_target_in_non_workflow_session_short_circuits() {
+        // C0 (`07-26-taskstatus-custom-state`): validate no longer
+        // rejects unknown target_state ("synth" passes validate now).
+        // The gate moved into execute_blocking — a non-workflow
+        // session (workflow_def = None) rejects Custom targets because
+        // there's no plugin to define them. This replaces the legacy
+        // "validate rejects unknown enum" test with the C0 semantics.
         let pool = fresh_db().await;
         let store = QuestionStore::new();
         let sink = make_sink();
@@ -781,11 +874,15 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
         assert!(is_error);
-        assert!(content.contains("schema validation failed"));
+        assert!(
+            content.contains("invalid_transition"),
+            "non-workflow Custom rejection surfaces invalid_transition (got: {content})"
+        );
         assert!(sink
             .emitted_task_state_transition
             .lock()
@@ -810,6 +907,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -838,6 +936,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -869,6 +968,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -905,6 +1005,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None, // workflow_def (non-workflow session in these legacy tests)
                 None,
             )
             .await
@@ -947,6 +1048,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -977,6 +1079,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -1021,6 +1124,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None, // workflow_def (non-workflow session in these legacy tests)
                 None,
             )
             .await
@@ -1084,6 +1188,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None, // workflow_def (non-workflow session in these legacy tests)
                 None,
             )
             .await
@@ -1130,6 +1235,7 @@ mod tests {
                 &store_clone,
                 &sink_arc,
                 &cancel_clone,
+                None, // workflow_def (non-workflow session in these legacy tests)
                 None,
             )
             .await
@@ -1190,6 +1296,7 @@ mod tests {
             &store,
             &(sink.clone() as Arc<dyn ChatEventSink>),
             &cancel,
+            None, // workflow_def (non-workflow session in these legacy tests)
             None,
         )
         .await;
@@ -1216,13 +1323,174 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unknown_target_state() {
+    fn validate_accepts_unknown_target_state() {
+        // C0 (`07-26-taskstatus-custom-state`): validate no longer
+        // rejects unknown target_state strings. They flow through as
+        // TaskStatus::Custom; legality is decided in execute_blocking
+        // via can_transition (workflow session) or Custom rejection
+        // (non-workflow session).
         let input = RequestTaskStateTransitionInput {
-            target_state: "synth".into(),
+            target_state: "reviewing".into(),
             slug: "my-feat".into(),
             reason: None,
         };
-        let err = validate(&input).expect_err("unknown state rejected");
-        assert!(matches!(err, ValidationError::UnknownTargetState { .. }));
+        validate(&input).expect("unknown target_state now passes validate");
+    }
+
+    /// C0: a workflow session with a review-shaped WorkflowDef accepts
+    /// a declared transition (intake → reviewing) and rejects an
+    /// undeclared one (planning → done has no such edge). This is the
+    /// core R3 acceptance criterion — legality is plugin-driven via
+    /// can_transition, NOT a global hard-coded enum.
+    #[tokio::test]
+    async fn can_transition_gate_accepts_declared_and_rejects_undeclared() {
+        let pool = fresh_db().await;
+        seed_session(&pool, "s1").await;
+        let store = QuestionStore::new();
+        let sink = make_sink();
+        let def = review_workflow_def();
+        let cancel = CancellationToken::new();
+
+        // Declared edge: intake → reviewing (review plugin declares it).
+        // The gate is the assertion — once past it, execute_blocking
+        // registers + emits + waits for resolve. We spawn it, observe
+        // the emit (proof the gate passed), then cancel to unwind
+        // deterministically (mirrors the cancel_arm test pattern).
+        let sink_arc: Arc<dyn ChatEventSink> = sink.clone();
+        let store_clone = store.clone();
+        let cancel_clone = cancel.clone();
+        let pool_clone = pool.clone();
+        let input_declared = serde_json::json!({"target_state": "reviewing", "slug": "my-feat"});
+        let exec = tokio::spawn(async move {
+            execute_blocking(
+                &input_declared,
+                "s1",
+                "tu_declared",
+                Some(TaskStatus::Custom("intake".to_string())),
+                Some("my-feat".into()),
+                &pool_clone,
+                &store_clone,
+                &sink_arc,
+                &cancel_clone,
+                Some(&def),
+                None,
+            )
+            .await
+        });
+
+        // Wait for register+emit — proof the declared transition
+        // passed the can_transition gate (it would have
+        // short-circuited with invalid_transition BEFORE register).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.get_payload("s1").await.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "declared transition never registered (gate may have rejected it)"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            sink.emitted_task_state_transition.lock().unwrap().len(),
+            1,
+            "declared transition emitted to frontend"
+        );
+        // Cancel to unwind the spawned executor.
+        cancel.cancel();
+        let (declared_content, _, _, _) = exec.await.expect("exec ok");
+        assert!(
+            !declared_content.contains("invalid_transition"),
+            "declared transition must not surface invalid_transition (got: {declared_content})"
+        );
+        let _ = store.remove("s1").await;
+
+        // Undeclared edge: planning → done (review plugin has no such edge).
+        // Short-circuits synchronously with invalid_transition — no
+        // register, no emit, no spawn needed.
+        let input = serde_json::json!({"target_state": "done", "slug": "my-feat"});
+        let def2 = review_workflow_def();
+        let (content, is_error, _, _) = execute_blocking(
+            &input,
+            "s1",
+            "tu_undeclared",
+            Some(TaskStatus::Custom("planning".to_string())),
+            Some("my-feat".into()),
+            &pool,
+            &store,
+            &(sink.clone() as Arc<dyn ChatEventSink>),
+            &cancel,
+            Some(&def2),
+            None,
+        )
+        .await;
+        assert!(
+            is_error,
+            "undeclared transition must short-circuit with is_error"
+        );
+        assert!(
+            content.contains("invalid_transition"),
+            "undeclared transition surfaces invalid_transition marker (got: {content})"
+        );
+        // Undeclared path never registers.
+        assert!(store.get_payload("s1").await.is_none());
+    }
+
+    /// C0 design §3: a non-workflow session (workflow_def = None) rejects
+    /// a Custom target_state — without a plugin there's no basis for a
+    /// custom state. Known dev states still pass (covered by happy_path).
+    #[tokio::test]
+    async fn non_workflow_session_rejects_custom_target() {
+        let pool = fresh_db().await;
+        let store = QuestionStore::new();
+        let sink = make_sink();
+        let cancel = CancellationToken::new();
+        let input = serde_json::json!({"target_state": "reviewing", "slug": "my-feat"});
+        let (content, is_error, _, _) = execute_blocking(
+            &input,
+            "s1",
+            "tu_custom",
+            Some(TaskStatus::Planning),
+            Some("my-feat".into()),
+            &pool,
+            &store,
+            &(sink.clone() as Arc<dyn ChatEventSink>),
+            &cancel,
+            None, // non-workflow session
+            None,
+        )
+        .await;
+        assert!(is_error, "Custom target in non-workflow session is_error");
+        assert!(
+            content.contains("invalid_transition"),
+            "non-workflow Custom rejection surfaces invalid_transition (got: {content})"
+        );
+        assert!(
+            sink.emitted_task_state_transition.lock().unwrap().is_empty(),
+            "no IPC emit on rejection"
+        );
+        assert!(store.get_payload("s1").await.is_none());
+    }
+
+    /// Minimal review-shaped WorkflowDef for the can_transition gate
+    /// tests. Mirrors the shape a real review workflow.json would have:
+    /// states intake/reviewing/reported, edge intake→reviewing. We only
+    /// need transitions + name + initial for the gate; the other fields
+    /// are empty defaults.
+    fn review_workflow_def() -> WorkflowDef {
+        WorkflowDef {
+            name: "review".to_string(),
+            description: "test review workflow".to_string(),
+            states: vec!["intake".to_string(), "reviewing".to_string(), "reported".to_string()],
+            initial: "intake".to_string(),
+            transitions: vec![crate::agent::workflow::Transition {
+                from: "intake".to_string(),
+                to: "reviewing".to_string(),
+                requires_user_confirm: true,
+            }],
+            roles_by_state: Default::default(),
+            breadcrumb: Default::default(),
+            delegation_templates: Default::default(),
+            coordination: crate::agent::workflow::Coordination::default(),
+            gather_strategy: Default::default(),
+        }
     }
 }

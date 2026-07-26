@@ -739,6 +739,32 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // additive.
     add_subagent_runs_column_if_missing(pool, "model_display", "TEXT").await?;
 
+    // --- C1 (07-26-subagent-resume): messages_json + messages_truncated.
+    //
+    // `messages_json` stores the worker's accumulated `Vec<ChatMessage>`
+    // serialized to JSON, so a later `dispatch_subagent` can resume the
+    // conversation by replaying this history (instead of rebuilding
+    // from scratch and re-reading the whole codebase). `messages_truncated`
+    // mirrors `transcript_truncated`: when the serialized messages exceed
+    // `MESSAGES_MAX_BYTES` (8 MiB — 2x the transcript threshold, see
+    // `agent/subagent/truncate_summary.rs`), head+tail truncation kicks
+    // in and the flag flips to 1; a truncated history is NOT safe to
+    // resume from (the middle is missing), so resume falls back to a
+    // fresh dispatch in that case (design §5).
+    //
+    // `messages_json` is NULLable (no DEFAULT): pre-C1 rows and any run
+    // whose persistence failed keep NULL → `load_messages_by_run_id`
+    // returns an empty Vec → resume falls back to fresh dispatch. This
+    // matches the existing `transcript_json` NULLability posture.
+    // `messages_truncated` is `INTEGER NOT NULL DEFAULT 0` so reads on
+    // legacy rows resolve to "not truncated" without a NULL check
+    // (mirrors `transcript_truncated`).
+    //
+    // Idempotent: re-running on a pre-C1 DB adds the columns; re-running
+    // on a post-C1 DB is a no-op.
+    add_subagent_runs_column_if_missing(pool, "messages_json", "TEXT").await?;
+    add_subagent_runs_column_if_missing(pool, "messages_truncated", "INTEGER NOT NULL DEFAULT 0").await?;
+
     // --- P1 (autonomous memory, 2026-06-29): storage layer for the
     // agent's self-produced, cross-session recalled experience memory.
     //

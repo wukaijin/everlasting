@@ -3566,7 +3566,7 @@ pub async fn run_chat_loop(
                                 )
                                 .await;
                                 match fresh {
-                                    Some(t) => (Some(t.status), Some(t.slug.clone())),
+                                    Some(t) => (Some(t.status.clone()), Some(t.slug.clone())),
                                     None => (None, None),
                                 }
                             } else {
@@ -3583,6 +3583,7 @@ pub async fn run_chat_loop(
                                     &question_store,
                                     &sink,
                                     &token,
+                                    workflow_ctx.as_ref().map(|c| &c.workflow_def),
                                     Some(seq),
                                 )
                                 .await;
@@ -4081,6 +4082,20 @@ pub async fn run_chat_loop(
                 usage: last_usage_terminal,
             },
         );
+    }
+
+    // C1 (07-26-subagent-resume): capture the worker's final messages
+    // snapshot for persistence. Only worker runs are resume candidates
+    // (`effective_is_worker` gate — the parent session is never resumed),
+    // and only the normal completion paths reach here (end_turn /
+    // max_turns / loop_terminated). Early `return;` exits (session not
+    // found, fatal setup errors) skip this — their messages are partial
+    // or empty and unsafe to resume from; resume falls back to fresh
+    // dispatch in that case (design §5). The sink's default no-op
+    // means non-`SubagentBufferSink` sinks (parent / test mocks) pay
+    // nothing.
+    if effective_is_worker {
+        sink.record_worker_messages(&messages);
     }
 }
 
