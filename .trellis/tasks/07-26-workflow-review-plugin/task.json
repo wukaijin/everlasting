@@ -1,0 +1,31 @@
+{
+  "id": "workflow-review-plugin",
+  "name": "workflow-review-plugin",
+  "title": "workflow review plugin",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-07-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-26-subagent-resume",
+    "07-26-review-viz",
+    "07-26-review-plugin-pack",
+    "07-26-taskstatus-custom-state"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
