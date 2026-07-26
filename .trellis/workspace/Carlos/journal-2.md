@@ -200,3 +200,36 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: daemon shutdown: agent loop drain(闭合硬终止缺口)
+
+**Date**: 2026-07-26
+**Task**: daemon shutdown: agent loop drain(闭合硬终止缺口)
+**Branch**: `main`
+
+### Summary
+
+实现 daemon-server spec 的 follow-up:serve_daemon graceful shutdown 原只关 SSE,不 cancel 正在跑的 agent loop,进程退出时 runtime 销毁硬斩 spawn task 会丢「tool 已执行、persist_turn 未落库」那一轮。复用 destructive-command 路径的 cancel+drain 基础设施(cancel_inflight_for_session/await_inflight_exit/done_tx),新增 helpers::cancel_and_drain_all_agent_loops 批量版本,把「单 session 的 cancel+drain」搬到 shutdown 路径(粒度改「所有 session」)。shutdown_signal 接 Arc<AppState>,在 sse.shutdown() 后 cancel 所有 token + 并发 await inflight_exits(总 timeout 8s)。run_chat_loop 本体零改动。daemon.sh SIGKILL 窗口 8s→15s(11s 最坏路径留 4s 余量)。5 个新单测 + 1 个真实 TCP+SIGTERM 集成测试;踩了第二个 SIGTERM 测试的信号污染,用 SIGNAL_TEST_MUTEX 串行修复。spec follow-up 段改写为已覆盖。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4284315` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 30
-- **Last Active**: 2026-07-24
+- **Total Sessions**: 31
+- **Last Active**: 2026-07-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~202 | Active |
+| `journal-2.md` | ~235 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 31 | 2026-07-26 | daemon shutdown: agent loop drain(闭合硬终止缺口) | `4284315` | `main` |
 | 30 | 2026-07-24 | daemon graceful shutdown 超时修复（SSE 长连接挂起） | `0a6bd1c` | `main` |
 | 29 | 2026-07-24 | 归档 remote-access-multi-channel 全树(daemon-split 跳过 E4/E5 dogfooding) | `31373f4` | `main` |
 | 28 | 2026-07-24 | docs-sync-daemon-split 收尾: subtask C (HACKING/DEBUG_DB) + D (IMPLEMENTATION ADR) — 父任务 4/4 全 archived | `8c3b0bd` | `main` |
