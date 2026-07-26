@@ -27,7 +27,8 @@ use crate::tools::ToolContext;
 use super::{
     assemble_subagent_prompt, build_worker_messages,
     filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result_with_model,
-    format_final_text, summarize_worker_tool_actions, truncate_transcript_for_persistence,
+    format_final_text, summarize_worker_tool_actions, truncate_messages_for_persistence,
+    truncate_transcript_for_persistence, MESSAGES_MAX_BYTES,
     SubagentBufferSink, SubagentCache, SubagentEventSink, SubagentStatus, TRANSCRIPT_MAX_BYTES,
 };
 
@@ -152,7 +153,151 @@ fn task_with_env_hint(task: &str, isolated: bool, run_id: &str) -> String {
     )
 }
 
-/// A summary of the worker's changes for the dispatch_subagent
+// ---------------------------------------------------------------------------
+// C1 (07-26-subagent-resume): resume message construction
+// ---------------------------------------------------------------------------
+
+/// Build the worker's initial `Vec<ChatMessage>` for a resume dispatch,
+/// or fall back to a fresh `build_worker_messages` dispatch when the
+/// resume is unsafe (design §5: every failure mode falls back rather
+/// than erroring — the parent LLM still gets a worker result, just not
+/// a continuation).
+///
+/// Returns `(messages, fallback_note)`:
+/// - resume success → `(history + clarification + task, None)`
+/// - resume fallback → `(fresh build_worker_messages output, Some("[resume: fallback, reason: <code>]"))`
+///
+/// Validation order (first failure wins, all → fallback):
+/// 1. run_id not found → `resume_run_not_found`
+/// 2. run still `running` → `resume_run_still_running`
+/// 3. cross-session (`parent_session_id` mismatch) → `resume_run_other_session`
+/// 4. messages empty (legacy run / cancel-or-error exit) → `resume_messages_unavailable`
+/// 5. messages truncated → `resume_messages_truncated`
+#[allow(clippy::too_many_arguments)] // 8 args mirror build_worker_messages' call-site ergonomics
+async fn build_resume_messages(
+    db: &SqlitePool,
+    current_session_id: &str,
+    run_id: &str,
+    final_task: &str,
+    input: &serde_json::Value,
+    memory_cache: &Arc<MemoryCache>,
+    project_id: &str,
+    project_path: &str,
+) -> (Vec<crate::llm::types::ChatMessage>, Option<String>) {
+    let fresh = || async {
+        build_worker_messages(memory_cache, project_id, project_path, final_task).await
+    };
+    let loaded = match crate::db::subagent_runs::load_messages_by_run_id(db, run_id).await {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::warn!(
+                run_id = %run_id,
+                error = %e,
+                "resume: load_messages_by_run_id failed, falling back to fresh dispatch"
+            );
+            return (
+                fresh().await,
+                Some("[resume: fallback, reason: load_failed]".to_string()),
+            );
+        }
+    };
+    let Some(loaded) = loaded else {
+        tracing::warn!(run_id = %run_id, "resume: run not found, falling back");
+        return (
+            fresh().await,
+            Some("[resume: fallback, reason: resume_run_not_found]".to_string()),
+        );
+    };
+    if loaded.status == "running" {
+        tracing::warn!(run_id = %run_id, "resume: run still running, falling back");
+        return (
+            fresh().await,
+            Some("[resume: fallback, reason: resume_run_still_running]".to_string()),
+        );
+    }
+    if loaded.parent_session_id != current_session_id {
+        tracing::warn!(
+            run_id = %run_id,
+            run_session = %loaded.parent_session_id,
+            current_session = %current_session_id,
+            "resume: cross-session run, falling back"
+        );
+        return (
+            fresh().await,
+            Some("[resume: fallback, reason: resume_run_other_session]".to_string()),
+        );
+    }
+    if loaded.messages.is_empty() {
+        tracing::warn!(run_id = %run_id, "resume: messages empty (legacy/cancel/error), falling back");
+        return (
+            fresh().await,
+            Some("[resume: fallback, reason: resume_messages_unavailable]".to_string()),
+        );
+    }
+    if loaded.truncated {
+        tracing::warn!(run_id = %run_id, "resume: messages truncated, falling back");
+        return (
+            fresh().await,
+            Some("[resume: fallback, reason: resume_messages_truncated]".to_string()),
+        );
+    }
+    // Resume success: replay history + clarification + this round's task.
+    let mut messages = loaded.messages;
+    if let Some(clar) = build_clarification_message(input) {
+        messages.push(clar);
+    }
+    messages.push(crate::llm::types::ChatMessage {
+        role: crate::llm::types::Role::User,
+        content: crate::llm::types::MessageContent::Text(final_task.to_string()),
+    });
+    tracing::info!(
+        run_id = %run_id,
+        replayed = messages.len(),
+        "resume: continuing prior worker run"
+    );
+    (messages, None)
+}
+
+/// Build the structured clarification user message injected at the
+/// resume point (design §6: stale-context handling). The message
+/// tells the resumed worker what changed since its prior turn and
+/// what this round is for, so it can reconcile any now-stale
+/// references in the replayed history. Returns `None` when the
+/// caller didn't supply `resume_clarification` (the resumed worker
+/// then just sees the replayed history + the new task).
+fn build_clarification_message(
+    input: &serde_json::Value,
+) -> Option<crate::llm::types::ChatMessage> {
+    let clar = input.get("resume_clarification")?;
+    let purpose = clar.get("this_round_purpose").and_then(|v| v.as_str())?;
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("[resume clarification — update your context before proceeding]".to_string());
+    if let Some(state) = clar.get("current_state").and_then(|v| v.as_str()) {
+        if !state.is_empty() {
+            lines.push(format!("**Current state:** {}", state));
+        }
+    }
+    if let Some(changes) = clar.get("changes_since_last").and_then(|v| v.as_array()) {
+        let non_empty: Vec<&str> = changes
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !non_empty.is_empty() {
+            lines.push("**Changes since your last turn:**".to_string());
+            for c in non_empty {
+                lines.push(format!("- {}", c));
+            }
+        }
+    }
+    lines.push(format!("**This round's purpose:** {}", purpose));
+    Some(crate::llm::types::ChatMessage {
+        role: crate::llm::types::Role::User,
+        content: crate::llm::types::MessageContent::Text(lines.join("\n")),
+    })
+}
+
+
 /// tool_result. Built by scanning the worker worktree's diff against
 /// its base commit (the `worker/<run_id>` branch tip vs its parent).
 /// When non-empty, the worker's branch + worktree are PRESERVED so a
@@ -642,8 +787,39 @@ pub(crate) async fn run_subagent(
     // C (2026-06-30): append an isolation environment hint to the
     // delegation task when the worker runs isolated (shared: raw task).
     let final_task = task_with_env_hint(task, isolated, &worker_run_id);
-    let mut worker_messages =
-        build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await;
+
+    // C1 (07-26-subagent-resume): branch on `resume_from`. When the
+    // caller asks to resume a prior run, the worker's initial
+    // messages = the prior run's persisted history + a clarification
+    // user message + this round's task. We BYPASS `build_worker_messages`
+    // on the resume path (the history already carries the prior
+    // memory snapshot — re-injecting would duplicate; design §2
+    // trade-off: mid-run memory edits don't apply to resumed runs).
+    // Any validation failure (run missing / truncated / cross-session
+    // / still-running) falls back to a fresh dispatch and surfaces a
+    // `[resume: fallback, reason: <code>]` line in the tool_result so
+    // the parent LLM knows the delegation was NOT a continuation.
+    // No `resume_from` → the original `build_worker_messages` path
+    // (zero regression — existing callers never set the field).
+    let resume_from = input.get("resume_from").and_then(|v| v.as_str());
+    let (mut worker_messages, resume_fallback_note) = if let Some(run_id) = resume_from {
+        build_resume_messages(
+            db,
+            parent_session_id,
+            run_id,
+            &final_task,
+            input,
+            memory_cache,
+            &project_id,
+            &project_path,
+        )
+        .await
+    } else {
+        (
+            build_worker_messages(memory_cache, &project_id, &project_path, &final_task).await,
+            None,
+        )
+    };
 
     // W1 (Workflow integration, Step 2.5 — 2026-07-08):
     // append the filled delegation template to
@@ -1125,6 +1301,16 @@ pub(crate) async fn run_subagent(
         let transcript_snapshot = worker_sink.transcript_snapshot();
         let (truncated_transcript, transcript_truncated) =
             truncate_transcript_for_persistence(transcript_snapshot, TRANSCRIPT_MAX_BYTES);
+        // C1 (07-26-subagent-resume): snapshot the worker's final
+        // messages (captured by `record_worker_messages` on the chat
+        // loop's normal completion path) and truncate for persistence.
+        // Empty for cancel/error/incomplete exits (those skip the
+        // snapshot call) → messages_json persists "[]" and resume
+        // falls back to fresh dispatch. Over-cap runs also collapse
+        // to empty + truncated=1 (partial history is unsafe to resume).
+        let worker_messages = worker_sink.worker_messages();
+        let (truncated_messages, messages_truncated) =
+            truncate_messages_for_persistence(worker_messages, MESSAGES_MAX_BYTES);
         let cumulative_usage = worker_sink.cumulative_usage();
         let finished_at = chrono::Utc::now().to_rfc3339();
         let status_db = match status {
@@ -1167,6 +1353,9 @@ pub(crate) async fn run_subagent(
             // (synthetic cancelled / max_turns terminals don't
             // increment — see `SubagentBufferSink::turns_completed`).
             Some(worker_sink.turns_completed() as i64),
+            // C1 (07-26-subagent-resume): messages payload for resume.
+            &truncated_messages,
+            messages_truncated,
         )
         .await
         {
@@ -1366,6 +1555,18 @@ pub(crate) async fn run_subagent(
     // unchanged; the changes summary is a new trailing section.
     let content = if let Some(summary) = worker_changes_summary {
         format!("{}\n\n{}", content, summary)
+    } else {
+        content
+    };
+    // C1 (07-26-subagent-resume): when the caller asked to resume a
+    // prior run but the resume path fell back to a fresh dispatch
+    // (run missing / truncated / cross-session / still-running),
+    // surface a trailing `[resume: fallback, reason: <code>]` line so
+    // the parent LLM knows the worker did NOT continue the prior
+    // conversation. Appended last so all other trailing sections
+    // (loop-terminated, changes summary) stay in their existing order.
+    let content = if let Some(note) = resume_fallback_note {
+        format!("{}\n\n{}", content, note)
     } else {
         content
     };
@@ -2597,5 +2798,70 @@ mod tests {
             loaded.def.system_prompt.contains("PLUGIN_BODY_STEP27"),
             "dispatch branch must load the plugin body, not the builtin body",
         );
+    }
+
+    // ----- C1 (07-26-subagent-resume): build_clarification_message -----
+
+    #[test]
+    fn c1_clarification_none_when_field_absent() {
+        let input = serde_json::json!({"task": "do thing"});
+        assert!(build_clarification_message(&input).is_none());
+    }
+
+    #[test]
+    fn c1_clarification_none_without_purpose() {
+        // this_round_purpose is required — without it the clarification
+        // is meaningless, so we drop it (resume proceeds with just the
+        // replayed history + task, no clarification stanza).
+        let input = serde_json::json!({
+            "resume_clarification": {"current_state": "x"}
+        });
+        assert!(build_clarification_message(&input).is_none());
+    }
+
+    #[test]
+    fn c1_clarification_full_stanza_with_all_fields() {
+        let input = serde_json::json!({
+            "resume_clarification": {
+                "current_state": "PRD revised: scope trimmed to MVP",
+                "changes_since_last": ["§2 scope reduced", "§4 added acceptance criteria"],
+                "this_round_purpose": "verify the high-severity findings are resolved"
+            }
+        });
+        let msg = build_clarification_message(&input).expect("present");
+        match &msg.content {
+            crate::llm::types::MessageContent::Text(t) => {
+                assert!(t.contains("[resume clarification"));
+                assert!(t.contains("**Current state:** PRD revised"));
+                assert!(t.contains("**Changes since your last turn:**"));
+                assert!(t.contains("- §2 scope reduced"));
+                assert!(t.contains("- §4 added acceptance criteria"));
+                assert!(t.contains("**This round's purpose:** verify the high-severity"));
+            }
+            other => panic!("expected Text, got {:?}", other),
+        }
+        assert_eq!(msg.role, crate::llm::types::Role::User);
+    }
+
+    #[test]
+    fn c1_clarification_omits_empty_optional_sections() {
+        // current_state empty + changes_since_last empty/missing →
+        // those sections are dropped; only the header + purpose remain.
+        let input = serde_json::json!({
+            "resume_clarification": {
+                "current_state": "",
+                "this_round_purpose": "just check again"
+            }
+        });
+        let msg = build_clarification_message(&input).expect("present");
+        match &msg.content {
+            crate::llm::types::MessageContent::Text(t) => {
+                assert!(t.contains("[resume clarification"));
+                assert!(!t.contains("**Current state:**"));
+                assert!(!t.contains("**Changes since your last turn:**"));
+                assert!(t.contains("**This round's purpose:** just check again"));
+            }
+            other => panic!("expected Text, got {:?}", other),
+        }
     }
 }

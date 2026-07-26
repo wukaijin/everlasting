@@ -182,6 +182,16 @@ pub struct SubagentBufferSink {
     /// to a lost tool_call event) are removed on result arrival;
     /// see `record_tool_result` for the orphan-fallback path.
     tool_call_received_at: StdMutex<HashMap<String, Instant>>,
+    /// C1 (07-26-subagent-resume): the worker's final `Vec<ChatMessage>`
+    /// snapshot, captured once by `record_worker_messages` on the chat
+    /// loop's normal completion path. Read by `run_subagent` after the
+    /// worker loop returns to persist into `subagent_runs.messages_json`
+    /// (via `update_run_finished`) so a later `dispatch_subagent` can
+    /// resume the conversation. Stays empty for cancel/error/incomplete
+    /// exits — those don't call `record_worker_messages`, so the
+    /// snapshot is the empty default and resume falls back to fresh
+    /// dispatch (design §5).
+    worker_messages: StdMutex<Vec<crate::llm::types::ChatMessage>>,
 }
 
 impl SubagentBufferSink {
@@ -204,6 +214,7 @@ impl SubagentBufferSink {
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),
+            worker_messages: StdMutex::new(Vec::new()),
         }
     }
 
@@ -233,6 +244,7 @@ impl SubagentBufferSink {
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),
+            worker_messages: StdMutex::new(Vec::new()),
         }
     }
 
@@ -268,6 +280,7 @@ impl SubagentBufferSink {
             run_id,
             session_id,
             tool_call_received_at: StdMutex::new(HashMap::new()),
+            worker_messages: StdMutex::new(Vec::new()),
         };
         crate::agent::subagent::arm_test_collector(collector);
         sink
@@ -300,6 +313,18 @@ impl SubagentBufferSink {
             .lock()
             .expect("SubagentBufferSink text_parts mutex poisoned");
         guard.join("")
+    }
+
+    /// C1 (07-26-subagent-resume): the worker's final `Vec<ChatMessage>`
+    /// snapshot, captured by `record_worker_messages` on the chat loop's
+    /// normal completion path. Called by `run_subagent` after the worker
+    /// loop returns to persist into `subagent_runs.messages_json`. Empty
+    /// for cancel/error/incomplete exits (those skip the snapshot call).
+    pub fn worker_messages(&self) -> Vec<crate::llm::types::ChatMessage> {
+        self.worker_messages
+            .lock()
+            .expect("SubagentBufferSink worker_messages mutex poisoned")
+            .clone()
     }
 
     pub fn had_error(&self) -> bool {
@@ -743,6 +768,19 @@ impl crate::state::ChatEventSink for SubagentBufferSink {
     /// to the appropriate outcome string before calling this.
     fn emit_permission_ask_resolved(&self, rid: &str, outcome: &str) {
         self.record_permission_ask_resolved(rid, outcome);
+    }
+
+    /// C1 (07-26-subagent-resume): stash the worker's final messages
+    /// snapshot. Called ONCE by `run_chat_loop` on its normal
+    /// completion path (gated on `is_worker == Some(true)`).
+    /// Overwrites any prior snapshot — the snapshot is the complete
+    /// history at loop exit, not an append log. `run_subagent` reads
+    /// it via `worker_messages()` after the loop returns.
+    fn record_worker_messages(&self, messages: &[crate::llm::types::ChatMessage]) {
+        *self
+            .worker_messages
+            .lock()
+            .expect("SubagentBufferSink worker_messages mutex poisoned") = messages.to_vec();
     }
 }
 

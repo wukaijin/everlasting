@@ -20,7 +20,8 @@ use super::{
     sessions::{create_session, delete_session},
     subagent_runs::{
         get_run, insert_run, insert_run_with_id, list_runs_by_session,
-        list_runs_summary_by_session, update_run_finished, SubagentStatusDb,
+        list_runs_summary_by_session, load_messages_by_run_id, update_run_finished,
+        SubagentStatusDb,
     },
 };
 
@@ -130,6 +131,8 @@ async fn subagent_runs_update_finished_sets_status_and_fields() {
         &transcript,
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -184,6 +187,8 @@ async fn subagent_runs_update_finished_records_truncated_flag() {
         &empty,
         true,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -300,6 +305,8 @@ async fn subagent_runs_list_runs_summary_by_session_projects_typed_enum() {
         &transcript,
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -444,6 +451,8 @@ async fn subagent_runs_update_finished_writes_final_text_column() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -495,6 +504,8 @@ async fn subagent_runs_update_finished_cancelled_status_and_marker() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -540,6 +551,8 @@ async fn subagent_runs_update_finished_error_status_and_text() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -578,6 +591,8 @@ async fn subagent_runs_list_returns_task_and_final_text() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -679,6 +694,8 @@ async fn subagent_runs_update_finished_round_trips_turn_count() {
         &[],
         false,
         Some(7),
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -699,6 +716,8 @@ async fn subagent_runs_update_finished_round_trips_turn_count() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .unwrap();
@@ -812,6 +831,8 @@ async fn subagent_runs_incomplete_status_round_trips() {
         &[],
         false,
         None,
+        &[] as &[crate::llm::types::ChatMessage],
+        false,
     )
     .await
     .expect("update_run_finished must accept the new Incomplete variant");
@@ -999,4 +1020,155 @@ async fn subagent_runs_list_summary_includes_model_display() {
         .find(|r| r.id == "run-summary-display-null")
         .unwrap();
     assert!(null_row.model_display.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// C1 (07-26-subagent-resume): messages_json persistence + load_messages_by_run_id
+// ---------------------------------------------------------------------------
+
+use crate::llm::types::{ChatMessage, MessageContent, Role};
+
+fn msg(role: Role, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        content: MessageContent::Text(text.to_string()),
+    }
+}
+
+/// `update_run_finished` writes `messages_json` and `messages_truncated`
+/// faithfully; a subsequent `load_messages_by_run_id` reads them back
+/// with `truncated=false` and the run's session/status metadata.
+/// This is the round-trip the resume path depends on.
+#[tokio::test]
+async fn c1_update_run_finished_persists_messages_and_load_reads_them_back() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-c1", "researcher", None)
+        .await
+        .unwrap();
+    let messages = vec![
+        msg(Role::User, "review the PRD"),
+        msg(Role::Assistant, "I see 3 issues..."),
+        msg(Role::User, "now check section 2"),
+    ];
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-07-27T00:00:00+00:00",
+        "found 3 issues",
+        "found 3 issues",
+        &TokenUsage::default(),
+        &[],
+        false,
+        None,
+        &messages,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let loaded = load_messages_by_run_id(&pool, &id).await.unwrap().unwrap();
+    assert!(!loaded.truncated, "non-truncated run");
+    assert_eq!(loaded.status, "completed");
+    assert_eq!(loaded.parent_session_id, s.id);
+    assert_eq!(loaded.messages.len(), 3, "round-trip preserves all 3");
+    assert_eq!(loaded.messages[0].role, Role::User);
+    match &loaded.messages[2].content {
+        MessageContent::Text(t) => assert_eq!(t, "now check section 2"),
+        other => panic!("expected Text, got {:?}", other),
+    }
+}
+
+/// A pre-C1 legacy run (messages_json NULL because it was written
+/// before the column existed, or a cancel/error exit that skipped the
+/// snapshot) loads as an empty Vec — the resume caller treats this as
+/// "unavailable" and falls back to fresh dispatch.
+#[tokio::test]
+async fn c1_load_messages_returns_empty_for_run_with_null_messages() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    let id = insert_run(&pool, &s.id, "rid-legacy", "researcher", None)
+        .await
+        .unwrap();
+    // Write a NULL messages_json directly (simulating a pre-C1 row,
+    // or a cancel/error exit that skipped the snapshot call).
+    sqlx::query("UPDATE subagent_runs SET messages_json = NULL WHERE id = ?")
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Finish the run so it's not "running" (else the still-running
+    // check would fire first).
+    update_run_finished(
+        &pool,
+        &id,
+        SubagentStatusDb::Completed,
+        "2026-07-27T00:00:00+00:00",
+        "legacy",
+        "legacy",
+        &TokenUsage::default(),
+        &[],
+        false,
+        None,
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
+
+    let loaded = load_messages_by_run_id(&pool, &id).await.unwrap().unwrap();
+    assert!(loaded.messages.is_empty(), "NULL → empty Vec");
+    assert!(!loaded.truncated);
+}
+
+/// `load_messages_by_run_id` returns `None` when the run_id does not
+/// exist (resume caller maps this to `resume_run_not_found`).
+#[tokio::test]
+async fn c1_load_messages_returns_none_for_missing_run() {
+    let pool = make_pool().await;
+    let loaded = load_messages_by_run_id(&pool, "nonexistent-run-id").await.unwrap();
+    assert!(loaded.is_none());
+}
+
+/// A still-running run (status="running") is loaded with its status
+/// intact so the resume caller can reject it via `resume_run_still_running`
+/// (the messages are not yet final — resuming mid-flight is unsafe).
+#[tokio::test]
+async fn c1_load_messages_returns_running_status_for_in_flight_run() {
+    let pool = make_pool().await;
+    let s = create_session(
+        &pool,
+        &Uuid::new_v4().to_string(),
+        DEFAULT_PROJECT_ID,
+        "/tmp",
+        "GLM-4.7",
+        None,
+    )
+    .await
+    .unwrap();
+    // insert_run leaves the row in "running" state (no update_run_finished).
+    let id = insert_run(&pool, &s.id, "rid-running", "researcher", None)
+        .await
+        .unwrap();
+    let loaded = load_messages_by_run_id(&pool, &id).await.unwrap().unwrap();
+    assert_eq!(loaded.status, "running");
 }
