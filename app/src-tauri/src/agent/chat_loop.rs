@@ -3566,7 +3566,7 @@ pub async fn run_chat_loop(
                                 )
                                 .await;
                                 match fresh {
-                                    Some(t) => (Some(t.status), Some(t.slug.clone())),
+                                    Some(t) => (Some(t.status.clone()), Some(t.slug.clone())),
                                     None => (None, None),
                                 }
                             } else {
@@ -3583,6 +3583,7 @@ pub async fn run_chat_loop(
                                     &question_store,
                                     &sink,
                                     &token,
+                                    workflow_ctx.as_ref().map(|c| &c.workflow_def),
                                     Some(seq),
                                 )
                                 .await;

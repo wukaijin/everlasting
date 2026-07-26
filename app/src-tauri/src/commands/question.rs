@@ -781,7 +781,7 @@ pub(crate) async fn resolve_task_state_transition_internal(
 
     // Apply the state transition (single source of truth for
     // the `from → to` hook dispatch).
-    let apply_result = workflow_set_task_state(project_path, slug, current_status, new_state);
+    let apply_result = workflow_set_task_state(project_path, slug, &current_status, &new_state);
     match apply_result {
         Ok(_updated_task) => {
             // Allowed audit (on top of any side-effect audits

@@ -111,24 +111,43 @@ use serde::{Deserialize, Serialize};
 ///               a manual git operation.
 ///
 /// The Step 0.5 chat_loop per-turn injection deserializes
-/// the field via [`TaskStatus::from_str_opt`] which falls
-/// back to `Planning` on unknown values (lenient parse
-/// matches the Mode-Select posture; see W1 prd.md §接缝定位).
-/// `Completed` is in the `from_str_opt` accept-list so an
-/// archive file accidentally re-read by the chat loop
-/// doesn't silently demote to `Planning`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// the field via [`TaskStatus::from_str_opt`].
+///
+/// **C0 (2026-07-26, `07-26-taskstatus-custom-state`)**:
+/// `from_str_opt` NO LONGER falls back to `Planning` on
+/// unknown values — instead it captures them in the new
+/// [`TaskStatus::Custom`] variant so plugin-defined states
+/// (review's `intake`/`reviewing`/`revising`/`reported`,
+/// etc.) round-trip through `task.json.status` instead of
+/// silently collapsing. `Completed` is in the
+/// `from_str_opt` accept-list so an archive file re-read by
+/// the chat loop still resolves to `Completed`.
+/// `Custom(String)` carries a `String` so the enum lost
+/// `Copy` — callers pass `&TaskStatus` (preferred) or
+/// `.clone()` (cheap: at most one short `String`).
+#[derive(Debug, Clone, PartialEq, Eq)] // no Copy (Custom holds String); no derive Serialize (manual impl below)
 pub enum TaskStatus {
     Planning,
     InProgress,
     Done,
     Completed,
+    /// Plugin-defined workflow state (e.g. review's
+    /// `intake` / `reviewing` / `revising` / `reported`).
+    /// Populated by [`TaskStatus::from_str_opt`] for any
+    /// value not in the dev accept-list, instead of
+    /// demoting to `Planning`. [`TaskStatus::as_str`]
+    /// returns the captured string verbatim, and the
+    /// manual [`serde::Serialize`] impl writes it as a bare
+    /// JSON string (NOT `{"Custom": ...}`) so the on-disk
+    /// shape matches the plugin's `workflow.json` state
+    /// names and `roles_by_state` lookups succeed.
+    Custom(String),
 }
 
 impl TaskStatus {
     pub fn from_str_opt(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
+            "planning" => Self::Planning,
             "in_progress" => Self::InProgress,
             // Legacy values from the pre-merge 4-state
             // workflow — migrated to InProgress (see the enum
@@ -136,17 +155,51 @@ impl TaskStatus {
             "implement" | "check" => Self::InProgress,
             "done" => Self::Done,
             "completed" => Self::Completed,
-            _ => Self::Planning,
+            // C0: unknown value → Custom (lowercased to match
+            // the dev accept-list's case handling). Plugin
+            // workflow.json states are lowercase by spec, so
+            // the round-trip is identity for well-formed
+            // plugins; a stray uppercase is normalized here.
+            other => Self::Custom(other.to_string()),
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    /// Canonical snake_case string for the dev variants;
+    /// the captured string for [`TaskStatus::Custom`].
+    ///
+    /// **C0**: the return lifetime is now `&str` (borrowed
+    /// from `self`, not `&'static str`) because `Custom`
+    /// borrows its inner `String`. All existing call sites
+    /// use the result transiently (format!, map lookups,
+    /// logging) — no `'static` dependency to migrate.
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Planning => "planning",
             Self::InProgress => "in_progress",
             Self::Done => "done",
             Self::Completed => "completed",
+            Self::Custom(s) => s,
         }
+    }
+}
+
+/// Manual `Serialize` so the wire / on-disk shape is the
+/// bare snake_case string `"reviewing"` (NOT the
+/// derived-enum shape `{"Custom": "reviewing"}`). Mirrors
+/// the existing manual [`Deserialize`] impl and keeps
+/// [`TaskStatus::as_str`] as the single source of truth for
+/// the canonical spelling. C0 (`07-26-taskstatus-custom-state`):
+/// the derive `Serialize` + `rename_all` could not express
+/// `Custom(String)` as a bare string, so we replaced it
+/// with this impl. The dev variants serialize identically
+/// to before (`"planning"` / `"in_progress"` / `"done"` /
+/// `"completed"`).
+impl serde::Serialize for TaskStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -840,7 +893,11 @@ mod tests {
     }
 
     #[test]
-    fn read_task_lenient_top_level_unknown_status_falls_back_to_planning() {
+    fn read_task_lenient_top_level_unknown_status_becomes_custom() {
+        // C0 (`07-26-taskstatus-custom-state`): unknown top-level
+        // status is captured as Custom, NOT demoted to Planning.
+        // This is the whole point of C0 — plugin-defined states
+        // must survive a read/write round-trip.
         let d = fresh_project();
         write_raw_task_json(
             &proj(&d),
@@ -850,8 +907,8 @@ mod tests {
         let task = read_task(&proj(&d), "my-feat").expect("lenient parse");
         assert_eq!(
             task.status,
-            TaskStatus::Planning,
-            "unknown top-level status → Planning (from_str_opt)"
+            TaskStatus::Custom("blocked".to_string()),
+            "unknown top-level status → Custom (from_str_opt C0)"
         );
     }
 
@@ -901,7 +958,11 @@ mod tests {
     }
 
     #[test]
-    fn read_task_lenient_item_status_pending_falls_back_to_planning() {
+    fn read_task_lenient_item_status_pending_becomes_custom() {
+        // C0 (`07-26-taskstatus-custom-state`): a checklist-style
+        // item status like "pending" is captured as Custom rather
+        // than demoted to Planning. Item-level status shares the
+        // same TaskStatus enum + from_str_opt posture.
         let d = fresh_project();
         write_raw_task_json(
             &proj(&d),
@@ -911,8 +972,8 @@ mod tests {
         let task = read_task(&proj(&d), "my-feat").expect("lenient");
         assert_eq!(
             task.items[0].status,
-            TaskStatus::Planning,
-            "pending → Planning"
+            TaskStatus::Custom("pending".to_string()),
+            "pending → Custom (C0)"
         );
     }
 
@@ -1051,10 +1112,80 @@ mod tests {
         // by the chat loop stays correctly classified.
         assert_eq!(TaskStatus::from_str_opt("completed"), TaskStatus::Completed);
         assert_eq!(TaskStatus::from_str_opt("COMPLETED"), TaskStatus::Completed);
-        // Lenient default: anything weird → Planning.
-        assert_eq!(TaskStatus::from_str_opt(""), TaskStatus::Planning);
-        assert_eq!(TaskStatus::from_str_opt("nope"), TaskStatus::Planning);
-        assert_eq!(TaskStatus::from_str_opt("  PLAN  "), TaskStatus::Planning);
+        // C0 (`07-26-taskstatus-custom-state`): unknown values are
+        // NO LONGER demoted to Planning — they flow through as
+        // Custom so plugin-defined workflow states (review's
+        // intake/reviewing/...) round-trip. Empty / whitespace
+        // also become Custom (callers must validate non-emptiness
+        // upstream; the tool layer does).
+        assert_eq!(
+            TaskStatus::from_str_opt(""),
+            TaskStatus::Custom("".to_string())
+        );
+        assert_eq!(
+            TaskStatus::from_str_opt("nope"),
+            TaskStatus::Custom("nope".to_string())
+        );
+        assert_eq!(
+            TaskStatus::from_str_opt("  PLAN  "),
+            TaskStatus::Custom("plan".to_string()),
+            "unknown value is trimmed + lowercased before capture"
+        );
+        assert_eq!(
+            TaskStatus::from_str_opt("reviewing"),
+            TaskStatus::Custom("reviewing".to_string()),
+            "review plugin state round-trips as Custom"
+        );
+    }
+
+    /// C0: `Custom(String)` round-trips through serde as a bare JSON
+    /// string (NOT the derived enum shape `{"Custom": "reviewing"}`),
+    /// so the on-disk `task.json.status` matches the plugin's
+    /// `workflow.json` state names and `roles_by_state` lookups
+    /// succeed. The manual `Serialize` impl + lenient `Deserialize`
+    /// (via `from_str_opt`) are symmetric.
+    #[test]
+    fn custom_status_round_trips_as_bare_string() {
+        let t = TaskStatus::Custom("reviewing".to_string());
+        let json = serde_json::to_string(&t).expect("serialize");
+        assert_eq!(json, r#""reviewing""#, "bare string, not {{Custom:...}}");
+        let parsed: TaskStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, t);
+
+        // Dev variants still serialize to their snake_case form
+        // (manual impl delegates to as_str — single source of truth).
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Planning).unwrap(),
+            r#""planning""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::InProgress).unwrap(),
+            r#""in_progress""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Done).unwrap(),
+            r#""done""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Completed).unwrap(),
+            r#""completed""#
+        );
+    }
+
+    /// C0: `Custom(s).as_str()` returns the captured string verbatim,
+    /// so `roles_by_state[status.as_str()]` lookups hit the plugin's
+    /// declared state key directly. The signature widened from
+    /// `&'static str` to `&str` (Custom borrows its inner String);
+    /// all call sites use the result transiently.
+    #[test]
+    fn custom_as_str_returns_captured_string() {
+        assert_eq!(TaskStatus::Custom("reviewing".to_string()).as_str(), "reviewing");
+        assert_eq!(TaskStatus::Custom("intake".to_string()).as_str(), "intake");
+        // Dev variants unchanged.
+        assert_eq!(TaskStatus::Planning.as_str(), "planning");
+        assert_eq!(TaskStatus::InProgress.as_str(), "in_progress");
+        assert_eq!(TaskStatus::Done.as_str(), "done");
+        assert_eq!(TaskStatus::Completed.as_str(), "completed");
     }
 
     // --- Step 3.3 — archive_task_init ------------------------------
@@ -1131,7 +1262,7 @@ mod tests {
             let d = tempfile::tempdir().expect("tempdir");
             let path = d.path();
             let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");
-            task.status = non_done;
+            task.status = non_done.clone();
             write_task(path, &task).expect("write");
 
             let err = archive_task_init(path, "my-feat", true).expect_err("must refuse");
