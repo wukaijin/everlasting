@@ -120,6 +120,9 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   load_session: "sessions",
   record_tool_duration: "sessions",
   rename_session: "sessions",
+  // review (C2)
+  get_review_state: "review",
+  get_current_task_slug: "review",
   set_session_color: "sessions",
   set_session_plugin_name: "sessions",
   set_session_workflow_enabled: "sessions",

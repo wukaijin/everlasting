@@ -41,6 +41,11 @@ import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
 import { useMemoryStore } from "../../stores/memory";
+import {
+  useReviewStateStore,
+} from "../../stores/reviewState";
+import { transport } from "../../transport";
+import type { CurrentTaskInfo } from "../../types/review-state";
 import { useTraceStore } from "../../stores/traceStore";
 import MessageList from "./MessageList.vue";
 import ChatInput from "./ChatInput.vue";
@@ -53,12 +58,14 @@ import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
 import WorkerAskBanner from "./WorkerAskBanner.vue";
+import ReviewMatrix from "./ReviewMatrix.vue";
 import Icon from "../Icon.vue";
 
 const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const checklistStore = useChecklistStore();
 const memoryStore = useMemoryStore();
+const reviewStateStore = useReviewStateStore();
 const traceStore = useTraceStore();
 
 const emit = defineEmits<{
@@ -449,7 +456,75 @@ watch(
     if (grantsModalOpen.value) {
       grantsModalOpen.value = false;
     }
+    // C2 (review visualization view, 2026-07-26): tear down the
+    // review-state subscription on session switch so a stale
+    // debounce can't land on the new session. The new session's
+    // review-state (if any) is started by the watcher below
+    // (`watchEffect` on the review-session gate).
+    reviewStateStore.stop();
   },
+  { immediate: true },
+);
+
+/** C2 (review visualization view, 2026-07-26): gate for whether
+ *  the `<ReviewMatrix>` panel should render at all. Three
+ *  conditions:
+ *    1. the session has `workflow_enabled` (a workflow session),
+ *    2. the session's `plugin_name === "review"` (the review
+ *       workflow — dev sessions don't render the panel),
+ *    3. `reviewStateStore.state` is loaded OR `error` is set
+ *       (missing file → both null → panel hidden silently, per
+ *       PRD R5 + design §5).
+ *
+ *  Non-review sessions: zero impact (the watcher below never
+ *  calls `start`, so the store stays empty). */
+const isReviewSession = computed<boolean>(
+  () =>
+    !!currentSession.value &&
+    !!currentSession.value.workflow_enabled &&
+    currentSession.value.plugin_name === "review",
+);
+
+const shouldShowReviewMatrix = computed<boolean>(
+  () => isReviewSession.value && (!!reviewStateStore.state || !!reviewStateStore.error),
+);
+
+/** Start the review-state subscription for the active session.
+ *  Called from the watcher below whenever `isReviewSession`
+ *  flips true (mount / switch into a review session). Reads the
+ *  current task slug via `get_current_task_slug` (frontend has no
+ *  task-slug state of its own — design §10.1). */
+async function startReviewState(): Promise<void> {
+  const cwd = currentSession.value?.current_cwd ?? "";
+  if (!cwd) return;
+  try {
+    const info = await transport.invoke<CurrentTaskInfo | null>(
+      "get_current_task_slug",
+      { projectPath: cwd },
+    );
+    if (!info) return; // no active task — panel stays hidden
+    await reviewStateStore.start(info.slug, cwd);
+  } catch (e) {
+    // IPC failure (daemon down / project lookup). Stay silent —
+    // the panel just doesn't render. The user can switch sessions
+    // to retry.
+    console.error("ChatPanel: get_current_task_slug failed:", e);
+  }
+}
+
+// Watch the review-session gate. On flip-to-true, start; on
+// flip-to-false, stop. `immediate: true` covers the first mount
+// (the watcher fires synchronously with the current value).
+watch(
+  isReviewSession,
+  (isReview) => {
+    if (isReview) {
+      void startReviewState();
+    } else {
+      reviewStateStore.stop();
+    }
+  },
+  { immediate: true },
 );
 
 /** Esc key handling — closes whichever popup is on top: delete
@@ -474,6 +549,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("keydown", onKeyDown);
   onUnmounted(() => window.removeEventListener("keydown", onKeyDown));
 }
+
+// C2: tear down the review-state subscription on unmount so a
+// pending debounce can't fire after the panel is gone.
+onUnmounted(() => reviewStateStore.stop());
 </script>
 
 <template>
@@ -654,6 +733,12 @@ if (typeof window !== "undefined") {
     </div>
 
     <main class="chat-panel__main">
+      <!-- C2 (review visualization view, 2026-07-26): the
+           `<ReviewMatrix>` panel renders above the message list
+           for review workflow sessions. Pure display — the
+           `shouldShowReviewMatrix` gate ensures dev / non-review
+           sessions see zero impact. -->
+      <ReviewMatrix v-if="shouldShowReviewMatrix" />
       <!-- F4: loading state while switching sessions.
            PR-3e (2026-06-27): replaced the 0.6s rotating 20px
            spinner (which left the entire message area blank

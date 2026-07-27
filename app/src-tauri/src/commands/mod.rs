@@ -34,6 +34,14 @@ pub mod question;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod subagents;
+// C2 (review visualization view, 2026-07-26): review-state.json
+// read IPCs for the frontend `<ReviewMatrix>` panel.
+// `get_review_state` returns a three-state payload
+// (State/Missing/Invalid); `get_current_task_slug` reuses the
+// engine's resolve_current_task. Both are read-only — refresh
+// is frontend-driven via streamController's tool:call route
+// (no backend event). See commands/review.rs.
+pub mod review;
 // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
 // task IPC surface. Phase 0 ships `create_task` only;
 // Phase 2 Step 2.6 adds `update_task` (B12 checklist

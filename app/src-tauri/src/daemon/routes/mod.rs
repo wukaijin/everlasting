@@ -32,6 +32,7 @@
 //! - `projects` (8): `list_projects`, `create_project`, `pick_project_dir`, ...
 //! - `providers` (13): `list_providers`, `add_provider`, ...
 //! - `question` (5): `resolve_tool_question`, `resolve_mode_change`, ...
+//! - `review` (2): `get_review_state`, `get_current_task_slug` (C2)
 //! - `sessions` (14): `list_sessions`, `create_session`, ...
 //! - `subagent_runs` (4): `list_subagent_runs_by_session`, ...
 //! - `subagents` (2): `list_subagents_with_model`, `set_subagent_model`
@@ -51,6 +52,9 @@ pub mod permissions;
 pub mod projects;
 pub mod providers;
 pub mod question;
+// C2 (review visualization view, 2026-07-26): review-state.json
+// read IPC routes (mirror commands::review).
+pub mod review;
 pub mod sessions;
 pub mod subagent_runs;
 pub mod subagents;
@@ -89,6 +93,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/projects", projects::router(state.clone()))
         .nest("/api/v1/providers", providers::router(state.clone()))
         .nest("/api/v1/question", question::router(state.clone()))
+        .nest("/api/v1/review", review::router())
         .nest("/api/v1/sessions", sessions::router(state.clone()))
         .nest(
             "/api/v1/subagent_runs",

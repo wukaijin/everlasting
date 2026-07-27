@@ -249,6 +249,15 @@ pub fn run() {
             // popover data source.
             commands::sessions::set_session_plugin_name,
             commands::sessions::list_workflow_plugins,
+            // C2 (review visualization view, 2026-07-26):
+            // review-state.json read IPCs for the frontend
+            // `<ReviewMatrix>` panel. `get_review_state`
+            // returns a three-state payload
+            // (State/Missing/Invalid); `get_current_task_slug`
+            // reuses resolve_current_task. Read-only — refresh
+            // is frontend-driven (streamController tool:call).
+            commands::review::get_review_state,
+            commands::review::get_current_task_slug,
             // W1 (Workflow integration, Phase 0 Step 0.4 — 2026-07-08):
             // `create_task` — seed `.everlasting/tasks/<slug>/`
             // with v1 `task.json` + `prd.md` skeleton. Phase 0

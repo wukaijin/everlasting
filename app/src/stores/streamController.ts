@@ -55,6 +55,10 @@ import {
 } from "./checklist";
 import { useMemoryStore } from "./memory";
 import { useProjectsStore } from "./projects";
+import {
+  useReviewStateStore,
+  matchesReviewStatePath,
+} from "./reviewState";
 import { useTraceStore } from "./traceStore";
 import {
   useQuestionCardsStore,
@@ -1384,6 +1388,26 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         payload.name,
         payload.input,
       );
+    }
+    // C2 (review visualization view, 2026-07-26): route
+    // `write_file` tool:call events whose `input.path` hits the
+    // current task's `review-state.json` to the review-state
+    // store. The store slug-gates + debounces (200ms) then
+    // re-reads via `get_review_state`. No backend event — C3
+    // cut `emit_review_state_updated`, so refresh is 100%
+    // frontend-driven off this global tool:call listener
+    // (design.md §2). Mirrors the B12 checklist route above.
+    if (payload.name === "write_file") {
+      const path = payload.input?.path;
+      const reviewStore = useReviewStateStore();
+      const slug = reviewStore.currentSlugForRouting;
+      if (
+        typeof path === "string" &&
+        slug &&
+        matchesReviewStatePath(path, slug)
+      ) {
+        reviewStore.handleReviewStateWritten(req.sessionId, slug);
+      }
     }
     // F5: capture the start timestamp for the per-tool
     // duration. The matching `tool:result` reads it, computes
