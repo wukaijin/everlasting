@@ -11,6 +11,7 @@ allowed-tools: []
 - 调研要覆盖:现有实现、备选方案、风险、相关 `.everlasting/spec/` 规范
 
 ## 写 prd.md
+> **注意**:prd 可能已被 review session 修订过(回环场景),写之前先 `read_file` 读最新 prd,不要假设你是在从零写。
 - 背景 / 目标 / 非目标 / 技术方案 / 验收标准 / 风险
 - prd 是给后续 in_progress(implement + check)看的,要可执行(明确"做完什么样算 done")
 

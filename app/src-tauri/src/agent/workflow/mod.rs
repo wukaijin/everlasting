@@ -133,10 +133,12 @@ pub use state::{
     StateResult, StateTransitionError,
 };
 
-// Re-export 内置源常量,供 skill/subagent loader 消费(07-09-workflow-builtin-plugin)。
+// Re-export 内置源常量,供 skill/subagent loader 消费(07-09-workflow-builtin-plugin;
+// 07-26-workflow-review-plugin C3 追加 review 组)。
 #[allow(unused_imports)]
 pub use builtin::{
     builtin_workflow_json, BUILTIN_DEV_AGENTS, BUILTIN_DEV_SKILLS, BUILTIN_PLUGIN_NAMES,
+    BUILTIN_REVIEW_AGENTS, BUILTIN_REVIEW_SKILLS, BUILTIN_REVIEW_WORKFLOW_JSON,
 };
 // ---------------------------------------------------------------------------
 // Tests — Phase 0 Step 0.3 acceptance: `cargo test --lib workflow`
@@ -563,22 +565,24 @@ mod tests {
     fn list_plugins_returns_empty_when_root_missing() {
         // 07-09-workflow-builtin-plugin:现在即使项目无 workflow 目录,
         // 也返回内置 plugin 名(至少 dev),不再为空。
+        // 07-26-workflow-review-plugin C3:内置清单现在含 dev + review。
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["dev".to_string()]);
+        assert_eq!(list_plugins(&path), vec!["dev".to_string(), "review".to_string()]);
     }
 
     #[test]
     fn list_plugins_discovers_alphabetical() {
         // Two plugins written out-of-order; `list_plugins`
         // must sort alphabetically (deterministic popover
-        // order in `PluginSelect.vue`). The builtin `dev`
-        // is always included (07-09-workflow-builtin-plugin).
+        // order in `PluginSelect.vue`). The builtin `dev` +
+        // `review` are always included (07-09-workflow-builtin-plugin /
+        // 07-26-workflow-review-plugin C3).
         let proj_tmp = tempfile::TempDir::new().unwrap();
         write_workflow(proj_tmp.path(), "zulu", "{}");
         write_workflow(proj_tmp.path(), "alpha", "{}");
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["alpha", "dev", "zulu"]);
+        assert_eq!(list_plugins(&path), vec!["alpha", "dev", "review", "zulu"]);
     }
 
     #[test]
@@ -586,26 +590,32 @@ mod tests {
         // A directory without `workflow.json` is not a
         // plugin — silently ignored (matches the scratch
         // state contract: empty dirs are typical).
-        // The builtin `dev` is always included
-        // (07-09-workflow-builtin-plugin).
+        // The builtin `dev` + `review` are always included
+        // (07-09-workflow-builtin-plugin /
+        // 07-26-workflow-review-plugin C3).
         let proj_tmp = tempfile::TempDir::new().unwrap();
         write_workflow(proj_tmp.path(), "real", "{}");
         // Empty sibling dir — no workflow.json
         std::fs::create_dir_all(proj_tmp.path().join(".everlasting/workflow/scratch")).unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["dev", "real"]);
+        assert_eq!(list_plugins(&path), vec!["dev", "real", "review"]);
     }
 
     #[test]
     fn list_plugins_always_includes_builtin_dev() {
-        // 空项目目录 → 只有内置 dev(项目可覆盖 + 内置 fallback 的核心行为)。
+        // 空项目目录 → 只有内置 dev + review(项目可覆盖 + 内置 fallback 的核心行为)。
         // 07-09-workflow-builtin-plugin: 这是新增断言,与上面的修改独立。
+        // 07-26-workflow-review-plugin C3: review 加入内置清单。
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
         let plugins = list_plugins(&path);
         assert!(
             plugins.contains(&"dev".to_string()),
             "builtin dev always present: {plugins:?}"
+        );
+        assert!(
+            plugins.contains(&"review".to_string()),
+            "builtin review always present (C3): {plugins:?}"
         );
     }
 

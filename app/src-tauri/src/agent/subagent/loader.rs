@@ -534,15 +534,18 @@ fn parse_agent_content(content: &str, source: SubagentSource) -> Option<LoadedAg
     })
 }
 
-/// 构造 app 内置 plugin 的 agents(07-09-workflow-builtin-plugin)。
-/// 仅 `workflow_name == "dev"` 时返回;其他返回空。
+/// 构造 app 内置 plugin 的 agents(07-09-workflow-builtin-plugin;
+/// 07-26-workflow-review-plugin C3 扩展 review)。
+/// 仅 `workflow_name == "dev" | "review"` 时返回;其他返回空。
 /// 不走磁盘扫描 —— 内置源是 `include_str!` 常量,
 /// 用 `parse_agent_content` 直接解析(与磁盘层同一 parser)。
 fn builtin_plugin_agents(workflow_name: &str) -> Vec<LoadedAgentFile> {
-    if workflow_name != "dev" {
-        return Vec::new();
-    }
-    crate::agent::workflow::BUILTIN_DEV_AGENTS
+    let agents: &[(&str, &str)] = match workflow_name {
+        "dev" => crate::agent::workflow::BUILTIN_DEV_AGENTS,
+        "review" => crate::agent::workflow::BUILTIN_REVIEW_AGENTS,
+        _ => return Vec::new(),
+    };
+    agents
         .iter()
         .filter_map(|(_role, body)| parse_agent_content(body, SubagentSource::BuiltinPlugin))
         .collect()

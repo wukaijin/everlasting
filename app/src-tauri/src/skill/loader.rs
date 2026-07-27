@@ -454,20 +454,23 @@ async fn load_skill_file(
     Ok(Some(res))
 }
 
-/// 构造 app 内置 plugin 的 skills(07-09-workflow-builtin-plugin)。
-/// 仅 `workflow_name == "dev"` 时返回;其他返回空。
+/// 构造 app 内置 plugin 的 skills(07-09-workflow-builtin-plugin;
+/// 07-26-workflow-review-plugin C3 扩展 review)。
+/// 仅 `workflow_name == "dev" | "review"` 时返回;其他返回空。
 /// 不走磁盘扫描(`tokio::fs::read_dir`)—— 内置源是 `include_str!` 内存常量,
 /// 用 `parse_skill_content` 直接解析(与磁盘层同一 frontmatter parser)。
-/// `path` 用虚拟标记 `<builtin>/dev/skills/<slug>/SKILL.md`。
+/// `path` 用虚拟标记 `<builtin>/<wf>/skills/<slug>/SKILL.md`。
 fn builtin_plugin_skills(workflow_name: &str) -> Vec<SkillResource> {
-    if workflow_name != "dev" {
-        return Vec::new();
-    }
-    crate::agent::workflow::BUILTIN_DEV_SKILLS
+    let skills: &[(&str, &str)] = match workflow_name {
+        "dev" => crate::agent::workflow::BUILTIN_DEV_SKILLS,
+        "review" => crate::agent::workflow::BUILTIN_REVIEW_SKILLS,
+        _ => return Vec::new(),
+    };
+    skills
         .iter()
         .filter_map(|(slug, body)| {
             let mut res = parse_skill_content(body, slug, SkillSource::BuiltinPlugin)?;
-            res.path = PathBuf::from(format!("<builtin>/dev/skills/{slug}/SKILL.md"));
+            res.path = PathBuf::from(format!("<builtin>/{workflow_name}/skills/{slug}/SKILL.md"));
             Some(res)
         })
         .collect()

@@ -22,6 +22,7 @@ planning → in_progress → done
 ## 各 state 该做什么
 
 ### planning(调研 + 写 prd + 拆 checklist)
+> **注意**:prd 可能已被 review session 修订过(回环场景),planning 时先 `read_file` 读最新 prd,不要假设你是在从零写。
 - 只能 dispatch **researcher** 角色(只读调研)
 - 产出 `.everlasting/tasks/<slug>/prd.md`(需求文档)+ 拆 task.json.items(实施阶段,见 §6.2)
 - **不要写实现代码**
