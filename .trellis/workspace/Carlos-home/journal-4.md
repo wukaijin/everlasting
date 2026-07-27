@@ -168,3 +168,26 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 92: C2 review visualization 实施（review epic 子任务收官）
+
+**Date**: 2026-07-27
+**Task**: C2 review visualization 实施（review epic 子任务收官）
+**Branch**: `feat/review-viz-c2`
+
+### Summary
+
+交付 review epic 最后一个子任务 C2（review-state 矩阵视图）：前端「轮次×模型」矩阵 + 维度对比 + triage + source_run_id 跳转。核心决策——C3 砍了 emit_review_state_updated 工具后，刷新机制改用 streamController.handleToolCall 路由（照 B12 checklist 模式：write_file 命中 review-state.json → reviewStateStore.refresh，slug 守门 + 200ms debounce），零后端事件改动。后端两个读取 IPC（get_review_state 三态 + get_current_task_slug）。ReviewState TS/Rust 类型严格对齐 C3 R7 schema（跨任务契约）。对抗 check PASS 零缺陷。沉淀 streamController→store 路由模式 spec。1599 cargo + 983 pnpm tests pass。至此 review epic 4 子任务（C0/C1/C2/C3）全部完成，父 epic 仅剩集成验收（端到端跑通 review 流）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6523aef` | (see git log) |
+| `14d2ae0` | (see git log) |
+| `b4e9fb9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
