@@ -45,21 +45,40 @@
 
 ## 2. review-state.json 读取机制（PRD OQ3 落定）
 
-### 决策：新建 IPC `get_review_state` + 事件推送 `review-state-updated`
+### 决策：新建 IPC `get_review_state` + `get_current_task_slug`，刷新靠 streamController 的 tool:call 路由
 
-**读取 IPC**（仿 `list_workflow_plugins`）：
-- Tauri command + daemon route 双路径（Q0 单源真理模式）。
-- 签名：`get_review_state(task_slug) → Result<ReviewState, AppCommandError>`。
-- 实现读 `<project>/.everlasting/tasks/<task_slug>/review-state.json`，解析失败返回 `invalid` 错误（前端进错误态），文件不存在返回 `missing`（前端不渲染面板）。
-- task_slug 从 `current_task`（workflow ctx）拿 —— 但前端可能没 current_task slug,design 阶段确认前端如何拿当前 task slug（可能需新 IPC `get_current_task` 或从 workflow state 暴露）。
+**背景变更（重要）**：原 design 假设 C3 会建 review-only `emit_review_state_updated` 工具发 `review-state-updated` 事件。**C3 已砍掉该工具**（C3 design §4 改用通用 write_file，贴 PRD R7 + Out of Scope 层次 3）。因此 C2 不能依赖后端领域事件，改为**复用 streamController 已有的 tool:call 全局监听**（零后端事件改动）。
 
-**更新通知**（仿 `subagent:finished`）：
-- 主 LLM 写完 review-state.json 后,后端发事件 `review-state-updated { task_slug, current_round, total_findings }`。
-- 前端 `transport.on("review-state-updated")` 收到 → 重新调 `get_review_state` 刷新。
-- **写入触发点（评审回流，方案 iii）**：新建 review-only `emit_review_state_updated` 工具（C3 design §4 定义），主 LLM 调它写 review-state.json + 发事件。工具内部 tmp+rename 原子写（解决 write_file 不原子）+ 写后发 `review-state-updated` 事件（解决事件发送点）+ 只在 review workflow 可见（`filter_tools_for_workflow` gate，零 dev 污染）。**否决** transition 钩子方案（自动钩子不存在）和 write_file 通用钩子方案（要改 ToolContext 跨 21 个工具）。
+**读取 IPC**（仿 `list_workflow_plugins`，Q0 单源真理双路径）：
+- Tauri command + daemon route 双路径。
+- 签名：`get_review_state(task_slug) → Result<ReviewStatePayload, AppCommandError>`。
+- `ReviewStatePayload` 三态：`State(ReviewState)`（解析成功）/ `Missing`（文件不存在，前端不渲染面板）/ `Invalid { detail }`（坏 JSON，前端进错误态）。
+- 读 `<project>/.everlasting/tasks/<task_slug>/review-state.json`。
 
-**不选轮询**：
-- 轮询有延迟 + 无谓 IPC 开销。事件推送实时且只在写入时触发。
+**task_slug 获取 IPC**（design §10.1 已定，前端无任何 task slug state）：
+- 新增 `get_current_task_slug(project_path) → Result<{slug, id, title, status} | null, AppCommandError>`，复用后端 `resolve_current_task`（`agent/workflow/inject.rs:229`）。
+- ChatPanel 在 review session 挂载时调一次拿到 slug，传给 ReviewMatrix + reviewStateStore。
+
+**刷新机制：streamController.handleToolCall 路由（照 B12 checklist 模式）**：
+- 现状：`streamController.ts:1364 handleToolCall` 已有按 `payload.name` 路由到子 store 的先例 —— B12 checklist 在 `:1381` 用 `if (payload.name === CHECKLIST_TOOL_NAME) useChecklistStore().handleToolCall(...)`。
+- C2 照抄：在 `handleToolCall` 加分支：
+  ```typescript
+  if (payload.name === "write_file") {
+    const path = payload.input?.path;
+    if (typeof path === "string" && matchesReviewStatePath(path, currentTaskSlug)) {
+      useReviewStateStore().handleReviewStateWritten(req.sessionId, currentTaskSlug);
+    }
+  }
+  ```
+- `matchesReviewStatePath(path, slug)`：write_file 的 path 可能是相对路径（相对 `ctx.cwd`，见 `write_file.rs:58-65`），匹配策略 = 规范化后 `endsWith("/tasks/<slug>/review-state.json")` 或 basename === `review-state.json` 且 path 含 `/tasks/<slug>/`。相对路径无 `/` 时（如 `review-state.json`）也匹配（保守触发 refresh，get_review_state 读不到只是返回 Missing，无害）。
+- `handleReviewStateWritten` → debounce 200ms（防一轮写多个 chunk）→ `refresh(slug)`（调 get_review_state 重读）。
+- **不轮询**（无先例 + 延迟感）、**不新建后端事件**（C3 已决定不建工具）、**不让 write_file 发通用事件**（之前否决，blast radius 大）。
+
+**为什么这是最契合现有架构的方案**：
+- 零后端事件改动（除 get_review_state + get_current_task_slug 两个读取 IPC）。
+- 复用 streamController 已有的 tool:call 全局监听（不重复 listen）。
+- 与 B12 checklist 的 tool:call→store 路由模式完全一致（架构先例）。
+- 代价（可接受）：相对路径匹配有边界（已在 matchesReviewStatePath 用保守策略兜底）；刷新耦合到 chat 流管道而非干净领域事件（但 review-state.json 本来就只在 review session 的 chat 流里被写，耦合合理）。
 
 ## 3. 指挥交互（PRD OQ4 落定）
 
@@ -102,16 +121,21 @@ app/src/components/chat/
 ### 数据流
 
 ```
-后端:review-only `emit_review_state_updated` 工具(C3)原子写 review-state.json → 发 review-state-updated 事件
-       ↓
-前端 store(useReviewStateStore):
-  - transport.on("review-state-updated") → invoke("get_review_state", task_slug)
-  - 解析 ReviewState,失败进 error 态
+主 LLM(write_file 工具)写 <task>/review-state.json
+       ↓ (write_file 不发领域事件,但 tool:call 事件携带 name + input.path)
+streamController.handleToolCall:
+  - payload.name === "write_file" && matchesReviewStatePath(input.path, slug)
+    → useReviewStateStore().handleReviewStateWritten(sessionId, slug)
+       ↓ (debounce 200ms)
+useReviewStateStore:
+  - refresh(slug) → invoke("get_review_state", slug)
+  - 解析 ReviewStatePayload: State → 渲染 / Missing → 不渲染 / Invalid → 错误态
   - 暴露 state / error / loading
        ↓
 ChatPanel.vue:
-  - computed shouldShowReviewMatrix = workflow_enabled && plugin_name=="review" && reviewState
-  - <ReviewMatrix v-if="shouldShowReviewMatrix" :state="reviewState" />
+  - onMounted(review session) → invoke("get_current_task_slug") 拿 slug → reviewStateStore.start(slug) 首次加载
+  - computed shouldShowReviewMatrix = workflow_enabled && plugin_name=="review" && reviewStateStore.state
+  - <ReviewMatrix v-if="shouldShowReviewMatrix" :state="reviewStateStore.state" />
        ↓
 ReviewMatrix.vue:
   - 标题栏(折叠 toggle) + tabs(矩阵/维度对比)
@@ -127,38 +151,41 @@ ReviewMatrix.vue:
 
 ## 6. store 设计（useReviewStateStore）
 
-参考 `useSubagentRunsStore` 模式（stores/subagentRuns.ts）：
+参考 `useChecklistStore` 的「被 streamController 路由调用」模式（checklist.ts，B12），**不自己 listen 事件**（刷新由 streamController.handleToolCall 路由触发）：
 ```typescript
 export const useReviewStateStore = defineStore("reviewState", () => {
   const state = ref<ReviewState | null>(null);
   const error = ref<{ kind: "missing" | "invalid" | "network"; detail?: string } | null>(null);
   const loading = ref(false);
-  let unlisten: UnlistenFn | null = null;
 
-  async function refresh(taskSlug: string) { /* invoke get_review_state */ }
-  function start(taskSlug: string) {
-    // transport.on("review-state-updated") → refresh
-    refresh(taskSlug);
+  // streamController.handleToolCall 路由调用（write_file 命中 review-state.json 时）
+  // debounce 200ms 防一轮写多 chunk；slug 守门防跨 session 误触发
+  let currentSlug: string | null = null;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  function handleReviewStateWritten(sessionId: string, slug: string): void {
+    if (slug !== currentSlug) return;  // 不是当前 task,忽略
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => { void refresh(slug); }, 200);
   }
-  function stop() { unlisten?.(); }
 
-  return { state, error, loading, start, stop, refresh };
+  async function refresh(taskSlug: string) { /* invoke get_review_state, 三态分流 */ }
+  async function start(taskSlug: string) {
+    currentSlug = taskSlug;  // ChatPanel 挂载时调,首次 refresh
+    await refresh(taskSlug);
+  }
+  function stop() {
+    currentSlug = null;
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+  }
+
+  return { state, error, loading, start, stop, refresh, handleReviewStateWritten };
 });
 ```
 
-- 生命周期：ChatPanel 挂载（review session）时 start,卸载时 stop。
-- task_slug 变化（切 task）时重新 start。
-- **幂等 + currentSlug 守门**（评审 MiniMax §2.4 回流）：`start()` 前先 `stop()` 清旧监听 + `if (currentSlug === taskSlug && unlisten) return` 幂等，防 slug 变化时孤儿监听（比现有 `subagentRuns.ts` 做得更好）：
-  ```typescript
-  let currentSlug: string | null = null;
-  async function start(taskSlug: string): Promise<void> {
-    if (currentSlug === taskSlug && unlisten) return; // idempotent
-    stop();  // 先清旧的
-    currentSlug = taskSlug;
-    unlisten = await transport.listen<ReviewStateUpdatedPayload>("review-state-updated", ...);
-    await refresh(taskSlug);
-  }
-  ```
+- 生命周期：ChatPanel 挂载（review session）时 start（首次加载），卸载/切 session 时 stop。
+- task_slug 变化（切 task）时重新 start（currentSlug 更新 + 重新 refresh）。
+- **不 listen 任何事件**：刷新完全由 streamController.handleToolCall 路由驱动（store 只暴露 handleReviewStateWritten 给 streamController 调）。
+- **slug 守门**：handleReviewStateWritten 检查 slug === currentSlug，防跨 task/session 误触发（streamController 是全局监听，会收到所有 session 的 tool:call）。
 
 ## 7. ReviewState TS 类型（对齐 C3 schema）
 
@@ -166,7 +193,7 @@ export const useReviewStateStore = defineStore("reviewState", () => {
 // app/src/types/review-state.ts
 export type Verdict = "pass" | "pass_with_minor" | "revise" | "reject";
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
-export type RunStatus = "completed" | "failed" | "timed_out" | "cancelled" | "truncated";
+export type RunStatus = "running" | "completed" | "cancelled" | "error" | "incomplete";
 export type TriageDecision = "adopt" | "reject" | "defer";
 
 export interface ReviewFinding {
@@ -212,13 +239,15 @@ export interface ReviewState {
 
 ### 改动文件
 - 新增前端:`components/chat/ReviewMatrix.vue` + 3 子组件 + `stores/reviewState.ts` + `types/review-state.ts`
-- 新增后端:`commands/review.rs`（get_review_state IPC + inner）+ `daemon/routes/review.rs`（route）。事件发送由 C3 的 review-only `emit_review_state_updated` 工具负责（不在 C2 后端单独加事件发送点）。
-- 改:`lib.rs`（注册 IPC）+ `ChatPanel.vue`（挂载 ReviewMatrix）+ `daemon/routes/mod.rs`（注册 route）
+- 新增后端:`commands/review.rs`（get_review_state + get_current_task_slug IPC + inner）+ `daemon/routes/review.rs`（route）
+- 改:`lib.rs`（注册 IPC）+ `daemon/routes/mod.rs`（注册 route）
+- 改:`ChatPanel.vue`（挂载 ReviewMatrix + 调 get_current_task_slug）
+- 改:`stores/streamController.ts`（handleToolCall 加 write_file→reviewStateStore 路由分支 + matchesReviewStatePath helper）
 
 ### 回归风险
-- **非 review session 零影响**:shouldShowReviewMatrix 门控,dev/无 workflow session 不渲染面板、不订阅事件。
-- **C3 schema 变动**:ReviewState TS 类型必须与 C3 schema 同步 —— 跨任务契约,任一方改 schema 要同步另一方。
-- **事件发送时机**:由 C3 的 review-only 工具发（写完即发，原子写保证文件已落盘），天然只在 review workflow 触发，不污染 dev。
+- **非 review session 零影响**:shouldShowReviewMatrix 门控,dev/无 workflow session 不渲染面板。streamController 的 write_file 路由分支虽然会对所有 session 的 write_file 触发匹配,但 matchesReviewStatePath 不命中就 no-op,且 reviewStateStore.handleReviewStateWritten 有 slug 守门 —— dev session 无 review-state.json,匹配不命中,零开销。
+- **C3 schema 变动**:ReviewState TS 类型必须与 C3 schema 同步 —— 跨任务契约,任一方改 schema 要同步另一方。C3 已定稿（commit 83207f4 + workflow-plugin-builtin.md spec）,C2 严格按定稿写 TS。
+- **write_file 相对路径匹配**:write_file 的 path 可能是相对路径（相对 ctx.cwd）,matchesReviewStatePath 用保守策略（basename + /tasks/<slug>/ 子串 + 纯 basename 兜底）,误触发只是多一次 get_review_state（读不到返 Missing,无害）,漏触发由用户手动折叠/展开面板或切 session 重 start 兜底。
 
 ### 单测/测试
 - ReviewMatrix 组件渲染（fixture: 3 轮×3 模型×含失败模型）
@@ -232,11 +261,11 @@ export interface ReviewState {
 
 1. ✅ **视图位置**（PRD OQ1）:ChatPanel 顶部内嵌可折叠面板（非抽屉/非 Tab）。
 2. ✅ **指挥交互**（PRD OQ2）:纯展示 + 指引回 chat 的 askUserQuestion（不加按钮）。
-3. ✅ **读取机制**（PRD OQ3）:get_review_state IPC + review-state-updated 事件推送（非轮询）。
+3. ✅ **读取机制**（PRD OQ3）:get_review_state IPC（读文件三态）+ get_current_task_slug IPC（前端无 task slug state）+ streamController.handleToolCall 路由刷新（write_file 命中 review-state.json → reviewStateStore.refresh）。**非轮询、非后端领域事件**（C3 砍了 emit_review_state_updated 工具，C2 复用现有 tool:call 全局监听）。
 4. ✅ **location 跳转**（PRD OQ4）:MVP 只展示不跳转（prd 无结构化锚点）；source_run_id 跳转做（复用 get_subagent_run）。
 
 ## 10. 待 design 阶段确认的细节（评审回流，已落定）
 
-1. ✅ **前端如何拿当前 task_slug**（评审两份都推荐）：新增 `get_current_task_slug` IPC，返回 `{slug, id, title, status}`（复用 `resolve_current_task`）。**否决**「从现有 workflow state IPC 暴露」（plugin ≠ task，不存在这样的 IPC）。
-2. ✅ **review-state-updated 事件发送点**：采用 review-only `emit_review_state_updated` 工具方案（C3 design §4）。**否决** transition 钩子（自动钩子不存在）和 write_file 通用钩子（要改 ToolContext 跨 21 工具）。详见 C3 design §4 + 父任务 review-triage-c2c3.md。
+1. ✅ **前端如何拿当前 task_slug**（评审两份都推荐）：新增 `get_current_task_slug` IPC，返回 `{slug, id, title, status} | null`（复用 `resolve_current_task`，`agent/workflow/inject.rs:229`）。**否决**「从现有 workflow state IPC 暴露」（plugin ≠ task，不存在这样的 IPC；前端无任何 task slug state，见 research）。
+2. ✅ **刷新触发点**（C3 砍 emit 工具后的修正）：采用 **streamController.handleToolCall 路由**（照 B12 checklist 模式，write_file 命中 review-state.json 路径 → reviewStateStore.handleReviewStateWritten → debounce → refresh）。详见 §2 + §6。**否决**：(a) 后端 notify 文件监听 + 领域事件（要加 notify watcher + 事件类型 + 生命周期，C2 从纯前端变前后端）；(b) 轮询（无先例 + 延迟感）；(c) write_file 通用钩子发事件（blast radius 大，之前否决）。研究依据：write_file 不发领域事件（`tools/write_file.rs:46-186` 纯 tokio::fs::write），但 tool:call payload 携带 name + input.path（`state.rs:569 ToolCallPayload`），streamController 已全局监听 tool:call（`streamController.ts:1831`）且已有 name 路由到子 store 的先例（`:1381` B12 checklist）。
 3. **get_subagent_run 跳转的 UI**：弹层 vs 复用 SubagentDrawer。倾向轻量弹层（只看 final_text），不强行整套 SubagentDrawer。
