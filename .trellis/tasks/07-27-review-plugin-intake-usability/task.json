@@ -1,0 +1,35 @@
+{
+  "id": "review-plugin-intake-usability",
+  "name": "review-plugin-intake-usability",
+  "title": "review plugin intake 可用性修复 (C4)",
+  "description": "E2E 暴露 review plugin 在 intake 阶段对主 LLM 不可用：breadcrumb state 硬编码 fallback 到 dev plugin 的 planning、workflow-task-meta 不暴露专属工具。修 P0 + 重审 intake 可用性。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "backend",
+  "priority": "P1",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-26-workflow-review-plugin",
+  "relatedFiles": [
+    "app/src-tauri/src/agent/workflow/inject.rs",
+    "app/src-tauri/src/agent/workflow/def.rs",
+    "app/src-tauri/src/tools/mod.rs",
+    "app/src-tauri/src/agent/subagent/dispatch.rs",
+    ".everlasting/workflow/review/workflow.json"
+  ],
+  "notes": "来源：session 99866757 (2026-07-27 09:15-09:36) 的 E2E dogfooding，主 LLM 在 review plugin session 里完全迷失 state、误判工具不可用、最终用户手动停止。",
+  "meta": {
+    "source_session": "99866757-d810-4c3e-8655-c2d700a8f773",
+    "epic_role": "C4"
+  }
+}
