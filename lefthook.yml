@@ -1,0 +1,55 @@
+# lefthook — 本地 git hook 防御工事
+#
+# 背景 (2026-07-27): 一次 push 同时触发两条 CI 失败 ——
+#   1. 前端 `pnpm install --frozen-lockfile`: app/package.json 加了
+#      `concurrently@^9.1.0` 但没同步进 pnpm-lock.yaml;
+#   2. 后端 `cargo fmt --check`: ~50 个 .rs 提交前没跑 fmt。
+# 两者都是机器能 100% 判定的检查,不该靠人记。这里在 pre-commit 拦截,
+# 让"忘了跑"在本地就 fail,而不是等 CI。
+#
+# 安装: `pnpm install` 后由 package.json 的 `prepare` 脚本自动
+# `lefthook install`。clone 即生效,跨机器/agent 无需手动 init。
+
+pre-commit:
+  parallel: true
+  jobs:
+    # ── Rust: 暂存了 .rs 就必须通过 cargo fmt --check ──────────────
+    # 不直接 `cargo fmt`(否则 hook 会偷偷改暂存内容、制造混乱);
+    # 失败时提示作者手动跑。
+    - name: cargo-fmt
+      glob: "*.rs"
+      glob_exclude:
+        - "app/src-tauri/target/**"
+      run: |
+        # lefthook 把 {staged_files} 展开成相对仓库根的、空格分隔的暂存文件列表。
+        # 只要有任意一个暂存的 .rs 不符合 fmt,就拦下提交。
+        STAGED=$(echo {staged_files} | grep -oE '[^ ]+\.rs' || true)
+        if [ -z "$STAGED" ]; then
+          exit 0
+        fi
+        cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+        if [ $? -ne 0 ]; then
+          echo ""
+          echo "✗ cargo fmt --check 失败。请运行:"
+          echo "    cargo fmt --manifest-path app/src-tauri/Cargo.toml"
+          echo "  然后 git add 重新格式化后的文件再提交。"
+          exit 1
+        fi
+
+    # ── Lockfile: 改了 package.json 就必须同步 pnpm-lock.yaml ───────
+    # 等价于 CI 的 `pnpm install --frozen-lockfile`。失败提示手动跑
+    # `pnpm install`(会更新 lockfile),再提交 lockfile。
+    - name: pnpm-lockfile-sync
+      glob: "app/package.json"
+      run: |
+        cd app
+        # --frozen-lockfile 任何 lockfile 与 package.json 不一致都非零退出,
+        # 正是 CI 用的命令;本地用同一把尺子,行为与 CI 完全一致。
+        pnpm install --frozen-lockfile >/dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo ""
+          echo "✗ app/pnpm-lock.yaml 与 app/package.json 不同步。请运行:"
+          echo "    cd app && pnpm install"
+          echo "  然后 git add app/pnpm-lock.yaml 再提交。"
+          exit 1
+        fi

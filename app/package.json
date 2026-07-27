@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:all": "concurrently -n vite,daemon -c blue,green \"pnpm dev\" \"cargo run --manifest-path src-tauri/Cargo.toml --bin everlasting-daemon -- --port 7456\"",
-    "dev:daemon": "cargo run --manifest-path src-tauri/Cargo.toml --bin everlasting-daemon -- --port 7456"
+    "dev:daemon": "cargo run --manifest-path src-tauri/Cargo.toml --bin everlasting-daemon -- --port 7456",
+    "prepare": "cd .. && lefthook install || true"
   },
   "dependencies": {
     "@codemirror/state": "^6.6.0",
@@ -37,6 +38,7 @@
     "@vue/test-utils": "^2.4.6",
     "concurrently": "^9.1.0",
     "jsdom": "^25.0.1",
+    "lefthook": "^2.1.10",
     "subset-font": "^2.0.0",
     "tailwindcss": "^4.3.0",
     "typescript": "~5.6.2",
