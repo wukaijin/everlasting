@@ -597,11 +597,21 @@ fn build_breadcrumb_block(ctx: &WorkflowCtx) -> ContentBlock {
 /// Returns the same string that `build_breadcrumb_block` pushes as a
 /// `ContentBlock::Text`.
 pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
+    // C4 (2026-07-27): the `None` branch fallback MUST come from the
+    // active plugin's declared `initial` state, NOT a hard-coded
+    // "planning". The previous `unwrap_or("planning")` was copied from
+    // the dev plugin and silently broke every other plugin's bootstrap:
+    // for review (states: intake/reviewing/revising/reported) the key
+    // "planning" is absent, so `breadcrumb_for` returned "" and the LLM
+    // got an empty state breadcrumb for the entire intake phase — the
+    // root cause of session 99866757's "LLM lost in review plugin" E2E.
+    // `initial` is validated non-empty at plugin-load time (see
+    // `load_workflow`), so this is never an empty key.
     let state_str = ctx
         .current_task
         .as_ref()
         .map(|t| t.status.as_str())
-        .unwrap_or("planning");
+        .unwrap_or_else(|| ctx.workflow_def.initial.as_str());
     let breadcrumb = breadcrumb_for(&ctx.workflow_def, state_str);
 
     match &ctx.current_task {
@@ -625,19 +635,35 @@ pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
             )
         }
         None => {
-            // Bootstrap branch: hint the LLM to call
-            // the create_task tool (NOT a hand-written
-            // write_file — resilience is on the read side
-            // via lenient read_task, but create_task is the
-            // lower-effort, lower-drift path). NOT empty —
-            // the user enabled workflow, so the LLM needs
-            // to know it should bootstrap the machinery.
+            // Bootstrap branch (C4 2026-07-27): expose plugin +
+            // initial state + the workflow-only tools the LLM
+            // has, so it can orient itself BEFORE creating a
+            // task. Previously this block only said "call
+            // create_task" with no plugin/state context — the
+            // LLM treated a review-plugin session as a plain
+            // chat and never used its workflow tools.
+            //
+            // The tool list mirrors the workflow-only whitelist
+            // in `filter_tools_for_workflow` (`tools/mod.rs`):
+            // `create_task` + `request_task_state_transition`,
+            // plus `dispatch_subagent` (per-turn append, gated
+            // on non-worker) and `update_checklist` (always in
+            // builtin_tools). Hard-coded here with a pointer —
+            // `None`-branch means current_task is absent but the
+            // plugin IS known, so the set is statically
+            // derivable; keeping it literal avoids pulling the
+            // whole tool registry into this hot path.
             format!(
                 "<workflow-task-meta>\n\
+                 plugin: {plugin}\n\
+                 state: {state} (initial — no active task yet)\n\
+                 workflow-only tools you have: create_task, dispatch_subagent, request_task_state_transition, update_checklist\n\
                  no active task — call the create_task tool to start one (省事、字段全、自带 prd skeleton)。\\n\
                  (write_file 也行,但 task.json schema 有约束;read_task 会 lenient 兜底,优先用 create_task tool 更稳。)\n\
                  </workflow-task-meta>\n\n\
                  {breadcrumb}\n",
+                plugin = ctx.workflow_def.name,
+                state = ctx.workflow_def.initial,
             )
         }
     }
@@ -840,6 +866,100 @@ mod tests {
             text.contains("<workflow-task-meta>") && text.contains("</workflow-task-meta>"),
             "missing <workflow-task-meta> wrapper, got: {}",
             text
+        );
+    }
+
+    // --- C4 (2026-07-27): review plugin bootstrap ---------------------
+    //
+    // Regression for session 99866757 — review plugin's `None`
+    // (no-active-task) branch rendered an EMPTY state breadcrumb
+    // because the fallback key was hard-coded to dev plugin's
+    // "planning", which doesn't exist in review's state table
+    // (intake/reviewing/revising/reported). The fix routes the
+    // fallback through `workflow_def.initial`.
+
+    /// Build a WorkflowCtx backed by the real builtin review
+    /// plugin definition (parsed from the same JSON users get),
+    /// with no active task — the exact shape of a fresh review
+    /// session before `create_task` is called.
+    fn review_ctx_no_task() -> WorkflowCtx {
+        let json = crate::agent::workflow::builtin_workflow_json("review")
+            .expect("builtin review workflow JSON must be registered");
+        let workflow_def: WorkflowDef =
+            serde_json::from_str(json).expect("builtin review workflow JSON must parse");
+        WorkflowCtx {
+            workflow_def,
+            current_task: None,
+        }
+    }
+
+    /// R1: review plugin's `None` branch must resolve the state
+    /// key from `workflow_def.initial` (= "intake"), NOT the
+    /// legacy hard-coded "planning". Before the fix this rendered
+    /// an empty breadcrumb for the entire intake phase.
+    #[test]
+    fn breadcrumb_review_plugin_none_branch_uses_initial_state_not_planning() {
+        let body = breadcrumb_body(&review_ctx_no_task());
+        // review's intake breadcrumb must be present — proving
+        // the state key resolved to "intake" (not "planning",
+        // which would have produced "").
+        assert!(
+            body.contains("[Wf · intake · review]"),
+            "review plugin None-branch must surface the intake breadcrumb; \
+             got empty or wrong state (likely the planning-key regression):\n{}",
+            body
+        );
+        // Sanity: the dev-specific "planning" breadcrumb text
+        // (which mentions wf-brainstorm) must NOT leak in.
+        assert!(
+            !body.contains("wf-brainstorm"),
+            "dev plugin's planning breadcrumb leaked into review session:\n{}",
+            body
+        );
+    }
+
+    /// R2: the bootstrap meta block must tell the LLM which
+    /// plugin it's in, the current state, and the workflow-only
+    /// tools it has — so it stops treating a review session as
+    /// a plain chat.
+    #[test]
+    fn breadcrumb_review_plugin_none_branch_exposes_plugin_state_and_tools() {
+        let body = breadcrumb_body(&review_ctx_no_task());
+        assert!(
+            body.contains("plugin: review"),
+            "bootstrap meta must name the active plugin (got: {body})"
+        );
+        assert!(
+            body.contains("state: intake"),
+            "bootstrap meta must name the initial state (got: {body})"
+        );
+        // Workflow-only tools — mirrors the whitelist in
+        // `tools::filter_tools_for_workflow` + dispatch_subagent
+        // + update_checklist.
+        for tool in [
+            "create_task",
+            "dispatch_subagent",
+            "request_task_state_transition",
+            "update_checklist",
+        ] {
+            assert!(
+                body.contains(tool),
+                "bootstrap meta must list workflow-only tool `{tool}` (got: {body})"
+            );
+        }
+    }
+
+    /// R3: review's intake breadcrumb must steer the LLM to read
+    /// the model catalog from the `dispatch_subagent` tool's enum
+    /// (NOT shell/SQLite), regressing the session-99866757
+    /// behavior where the model spent 7 turns curling the daemon.
+    #[test]
+    fn breadcrumb_review_intake_discourages_shell_model_lookup() {
+        let body = breadcrumb_body(&review_ctx_no_task());
+        assert!(
+            body.contains("dispatch_subagent") && body.contains("不要用 shell"),
+            "review intake breadcrumb must point to dispatch_subagent enum \
+             and forbid shell model lookup (got: {body})"
         );
     }
 

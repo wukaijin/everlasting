@@ -16,7 +16,7 @@
     "reported": []
   },
   "breadcrumb": {
-    "intake": "[Wf · intake · review] 读 current_task(prd/design/progress)理解评审对象;从 dispatch_subagent 的 model enum 看可用模型;askUserQuestion 让用户多选评审模型;按任务种类推荐维度并确认。完成后请用户确认转 reviewing",
+    "intake": "[Wf · intake · review] 读 current_task(prd/design/progress)理解评审对象;可用评审模型见 dispatch_subagent 的 model 参数 enum(就是完整 catalog,不要用 shell/SQLite 去查 models);askUserQuestion 让用户多选评审模型;按任务种类推荐维度并确认。完成后请用户确认转 reviewing",
     "reviewing": "[Wf · reviewing · review] 按 wf-review-method 选定的维度,并发派多个 reviewer(各不同模型,用 dispatch_subagent 的 model 参数 + resume_from 续接上轮)。等全部返回后请用户确认转 revising。若某模型失败,标注缺失(写 review-state.json 的 status=error)",
     "revising": "[Wf · revising · review] 综合 N 份评审(按维度横向对比、triage adopt/reject);修订 prd/design;写 <task>/review-state.json(含 change_log + convergence_note);askUserQuestion 问用户「再评一轮还是定稿」。再评→回 reviewing;定稿→reported",
     "reported": "[Wf · reported · review] prd 已修订就绪。用户可切 dev session 实施(dev 读同一 prd,task 共享)"
