@@ -17,8 +17,9 @@
 //!    SIGTERM first calls [`sse::SseRegistry::shutdown`] to end all
 //!    live SSE streams (so the drain isn't blocked by never-finishing
 //!    `GET /api/v1/stream` connections), then drains remaining
-//!    in-flight requests. A [`SHUTDOWN_GRACE_SECS`] timeout backs it
-//!    up against unknown long-lived connections.
+//!    in-flight requests. (历史:`SHUTDOWN_GRACE_SECS` timeout 曾兜底未知
+//!    长连接,2026-07-27 起该 timeout 已移除 —— 它误套在整个 serve future
+//!    外,导致 daemon 无信号时 3s 自杀。见 [`serve_daemon`] 注释。)
 //!
 //! The `Arc<AppState>` is shared across every handler (axum clones
 //! the `Arc` per request). This matches the Tauri `State<'_,
@@ -168,11 +169,15 @@ pub fn resolve_port(cli_port: Option<u16>, env_port: Option<u16>) -> u16 {
     cli_port.or(env_port).unwrap_or(DEFAULT_DAEMON_PORT)
 }
 
-/// Graceful shutdown 给 in-flight 连接的硬上限(秒)。正常路径下
-/// [`SseRegistry::shutdown`] 主动结束后 SSE 流会亚秒完成,这个 timeout
-/// 只是 defense-in-depth —— 防止未来加的非 SSE streaming endpoint
-/// 或其他未知长连接把 shutdown 卡住。比 `scripts/daemon.sh` 的 15s
-/// SIGKILL 短,留 SIGKILL 作最后一道防线。
+/// 设计参考:graceful shutdown drain 阶段的预期硬上限(秒)。正常路径下
+/// [`SseRegistry::shutdown`] 主动结束后 SSE 流会亚秒完成;agent loop drain
+/// 由 [`DAEMON_SHUTDOWN_LOOP_DRAIN_SECS`] 独立兜底。这个常量现已**不再**
+/// 用于 `serve_daemon`(历史 bug:`tokio::time::timeout(3s, serve)` 会给
+/// 整个服务 future 套超时 → 3s 后无信号自杀),仅保留供 shutdown 回归测试
+/// (`serve_daemon_*` 系列)计算「daemon 应在多久内响应/不应在多久内退出」
+/// 的预算基准,以及作为 `scripts/daemon.sh`(15s SIGKILL)与文档的参考锚点。
+/// 故加 `#[cfg(test)]` —— prod 构建里它是 dead code,不该出现在二进制里。
+#[cfg(test)]
 const SHUTDOWN_GRACE_SECS: u64 = 3;
 
 /// Agent loop drain 的总 timeout 上限(秒)。收到信号、关完 SSE 后,
@@ -182,8 +187,9 @@ const SHUTDOWN_GRACE_SECS: u64 = 3;
 /// 兜底 —— 对照 [`crate::agent::helpers::await_inflight_exit`] 单 loop
 /// 的 10s,并发 drain 理论上比串行快。
 ///
-/// 与 [`SHUTDOWN_GRACE_SECS`](3s,axum drain)正交:先 drain loop(让
-/// in-flight tool 跑完 `persist_turn` 落库),再让 axum drain 短请求。
+/// 与历史的 axum-drain grace(3s,仅作回归测试预算基准 `SHUTDOWN_GRACE_SECS`)
+/// 正交:先 drain loop(让 in-flight tool 跑完 `persist_turn` 落库),再让
+/// axum drain 短请求。
 /// 两者串行最坏 11s,故 `scripts/daemon.sh` 的 SIGKILL 窗口拉到 15s
 /// 留 4s 余量,保证 SIGKILL 永远是「等不过来」的最后手段而非抢先于
 /// drain。详见 `agent::helpers::cancel_and_drain_all_agent_loops` 与
@@ -211,8 +217,9 @@ const DAEMON_SHUTDOWN_LOOP_DRAIN_SECS: u64 = 8;
 /// 3. `shutdown_signal` 返回后,axum 的 `with_graceful_shutdown` 开始
 ///    drain 所有 in-flight 连接 —— 此时 SSE 流已结束,只剩可快速 drain
 ///    的短请求,整体亚秒完成。
-/// 4. [`SHUTDOWN_GRACE_SECS`] timeout 兜底:若仍有未知长连接卡住,
-///    超时后直接返回(进程随后退出),不阻塞 `daemon.sh` 的 SIGKILL。
+/// 4. (历史)曾有 `SHUTDOWN_GRACE_SECS` timeout 兜底未知长连接;2026-07-27
+///    移除 —— 它误套整个 serve future 致 daemon 无信号 3s 自杀。现由
+///    `daemon.sh`(standalone)/ GUI sidecar 的 SIGKILL 作最后防线。
 ///
 /// 关键:必须用 `with_graceful_shutdown`(而非 `select!` + drop serve
 /// future)。drop `axum::serve` 的 future 会 abort 所有连接 task(粗暴
@@ -226,20 +233,32 @@ pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()
     let serve =
         axum::serve(listener, router).with_graceful_shutdown(shutdown_signal(Arc::clone(&state)));
 
-    // timeout 兜底:正常 sse.shutdown() 后亚秒 drain 完成;超时则放弃
-    // 等待,让 daemon.sh 的 SIGKILL 作最后一道防线。
-    match tokio::time::timeout(Duration::from_secs(SHUTDOWN_GRACE_SECS), serve).await {
-        Ok(res) => {
-            tracing::info!("everlasting-daemon shutdown complete");
-            res?;
-        }
-        Err(_) => {
-            tracing::warn!(
-                grace_secs = SHUTDOWN_GRACE_SECS,
-                "graceful shutdown exceeded grace window; forcing exit (daemon.sh SIGKILL is the last resort)"
-            );
-        }
-    }
+    // 正常服务直到收到 SIGINT/SIGTERM 并完成 drain。**不能**在这里给整个
+    // `serve` future 套 `tokio::time::timeout` —— 历史 bug 就出在这:
+    //
+    //   tokio::time::timeout(SHUTDOWN_GRACE_SECS, serve)
+    //
+    // `serve`(= `axum::serve(...).with_graceful_shutdown(sig)`)在没有
+    // shutdown 信号时会**永久**跑下去(正常服务请求),于是 3s 超时必然
+    // 触发 `Err` 臂 → `serve_daemon` 返回 `Ok(())` → bin 打印
+    // "exited cleanly" → 进程 exit 0。表现:daemon 每次 listen 后 ~3s
+    // 自杀(sidecar terminated `code:Some(0), signal:None`),前端 15s
+    // health probe 永远连不上 → "daemon 不可用"。原本意图(注释里写的
+    // "timeout 兜底")只想兜住 drain 阶段,但 `with_graceful_shutdown`
+    // 把「等信号」和「drain」捆在同一个 future 里,无法只对 drain 加超时。
+    //
+    // drain 的硬上限由 `shutdown_signal` 内部保证:
+    //   1. `sse.shutdown()` 主动断所有 SSE 长连接(根治挂起的源头);
+    //   2. `cancel_and_drain_all_agent_loops` 在
+    //      `DAEMON_SHUTDOWN_LOOP_DRAIN_SECS`(8s)内 cancel + drain 所有
+    //      活跃 agent loop。
+    // 之后 axum 只剩短请求,drain 亚秒完成。万一仍有未知长连接卡住:
+    //   - standalone 脚本路径:`scripts/daemon.sh` 的 SIGKILL(15s)兜底;
+    //   - sidecar 路径:GUI `RunEvent::Exit` → `child.kill()` 经
+    //     tauri-plugin-shell 升级到 SIGKILL。
+    // 故此处不再额外加 timeout —— 既修掉自杀 bug,又不丢兜底语义。
+    serve.await?;
+    tracing::info!("everlasting-daemon shutdown complete");
     Ok(())
 }
 
@@ -595,5 +614,93 @@ mod tests {
             token.is_cancelled(),
             "the hung agent loop's token must be cancelled by the shutdown drain"
         );
+    }
+
+    /// `serve_daemon` 在**不发任何信号**时必须持续服务 —— 这是
+    /// 2026-07-27 修复的回归的**直接**守卫。
+    ///
+    /// 历史 bug:`tokio::time::timeout(SHUTDOWN_GRACE_SECS, serve)` 套在
+    /// 整个 `serve` future 外。`serve`(`axum::serve(...).with_graceful_shutdown(sig)`)
+    /// 无信号时永久运行(正常),于是 3s 后 timeout 必然 `Err` → 进程 exit 0
+    /// → daemon 每次 listen 后 ~3s 自杀,前端 15s health probe 永远连不上。
+    ///
+    /// 本测试不发 SIGTERM/SIGINT,只起 `serve_daemon` 然后跨过
+    /// `SHUTDOWN_GRACE_SECS`(3s)后再探一次 `/api/v1/health`。旧代码下 daemon
+    /// 会在 3s 时退出,第二次探活连不上(或 `serve_handle` 已 resolve)→
+    /// 断言失败。修复后 daemon 仍在,health 仍 200,`serve_handle` 仍 pending。
+    ///
+    /// 与上面两个 SIGTERM 测试互补:它们只验证「信号来了能 drain」,无法
+    /// 捕获「没信号也自杀」。本测试填这个空。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn serve_daemon_keeps_serving_without_signal_past_grace_window() {
+        use std::sync::Arc;
+        use tempfile::TempDir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        // 不发信号,无需与 SIGTERM 测试共享 SIGNAL_TEST_MUTEX。
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+
+        let dir = TempDir::new().expect("tempdir");
+        let state = load_daemon_state(dir.path().to_path_buf()).await;
+
+        let mut serve_handle = tokio::spawn(serve_daemon(Arc::clone(&state), port));
+
+        // 辅助:裸 TCP GET /api/v1/health,返回是否 200。
+        async fn health_ok(port: u16) -> bool {
+            let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)).await else {
+                return false;
+            };
+            let req =
+                b"GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+            let _ = s.write_all(req).await;
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf).await;
+            buf.starts_with(b"HTTP/1.1 200")
+        }
+
+        // 等 daemon 起来。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                panic!("daemon did not become healthy in 5s");
+            }
+            if health_ok(port).await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 睡过 SHUTDOWN_GRACE_SECS + 余量。旧代码(timeout 包整个 serve)
+        // 在此刻 daemon 已自杀。
+        tokio::time::sleep(std::time::Duration::from_secs(SHUTDOWN_GRACE_SECS + 2)).await;
+
+        // 核心断言 1:daemon 仍在服务(health 仍 200)。
+        assert!(
+            health_ok(port).await,
+            "daemon stopped serving within {}s without any signal — it is \
+             auto-terminating (regression: tokio::time::timeout wrapping the \
+             whole serve future)",
+            SHUTDOWN_GRACE_SECS + 2,
+        );
+
+        // 核心断言 2:serve_handle 仍未 resolve(进程没有自发退出)。
+        // 用极短超时轮询:立即返回 Ready 说明 serve 已退出(回归)。
+        match tokio::time::timeout(std::time::Duration::from_millis(100), &mut serve_handle).await {
+            Ok(res) => panic!(
+                "serve_daemon returned on its own without a signal: {res:?} — \
+                 it must serve indefinitely until SIGINT/SIGTERM"
+            ),
+            Err(_) => { /* still pending — 正确 */ }
+        }
+
+        // 清理:cancel 整个测试的 serve(避免 leak 到其他测试)。
+        serve_handle.abort();
     }
 }

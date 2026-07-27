@@ -45,16 +45,65 @@ use everlasting_lib::daemon::server;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Initialize tracing with the same env-filter defaults the Tauri
-    // app uses (`main.rs::init_tracing`). `RUST_LOG=info` is the
-    // operator-friendly default; `RUST_LOG=debug` adds the agent
-    // loop's per-turn detail.
+    // Initialize tracing FIRST so the orphan-guard below can log.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,everlasting=debug")),
         )
         .init();
+
+    // Orphan-guard (2026-07-27): 让 daemon 在父进程(GUI sidecar 持有者)
+    // 死亡时自动退出。Linux 用 `prctl(PR_SET_PDEATHSIG, SIGTERM)` 让内核在
+    // 父进程终止时给本进程发 SIGTERM —— daemon 已有的 `shutdown_signal`
+    // handler 会走优雅退出。
+    //
+    // 为什么需要:`tauri dev` 的 Rust live reload 是**强制 kill GUI 进程**
+    // (不走 `RunEvent::Exit`),所以 `SidecarHandle::kill()` 永远跑不到,
+    // daemon 会成孤儿继续占端口 → 下次 sidecar 探测端口冲突 exit 1 →
+    // 前端 "daemon 不可用"。GUI 正常退出 / crash / 被强杀同理。
+    // prctl 把"daemon 生命周期绑死 GUI"沉到内核层,无论 GUI 怎么死都生效。
+    //
+    // 两个 race 防护(POSIX prctl 的已知坑):
+    //   1. 若父进程在 prctl 调用前已死,本进程会被 init(PID 1)收养 →
+    //      prctl 此时绑的是 init,不会触发。所以先判 `getppid() == 1` 直接退。
+    //   2. `PR_SET_PDEATHSIG` 只在调用那一刻设置;父进程之后的变更不再
+    //      监听。daemon 不会 reparent(整个生命周期父进程不变),故无需重设。
+    //
+    // 非 sidecar 启动(standalone `cargo run --bin everlasting-daemon` /
+    // `daemon.sh`)也安全:它们的父进程是 shell,shell 退出 daemon 跟着退,
+    // 符合"前台跑、关终端即停"的预期。CI 测试中 daemon 的父进程是 test
+    // runner,runner 退出 daemon 也退,无泄漏。
+    #[cfg(target_os = "linux")]
+    {
+        // 防护 1:父进程已死(被 init 收养)→ 立即退,不 bind 端口。
+        // 排除自身 PID==1 的极端情况(容器里 daemon 可能就是 init)。
+        if std::process::id() != 1 && unsafe { libc::getppid() } == 1 {
+            tracing::error!(
+                "everlasting-daemon: parent already exited (reparented to init); refusing to start as orphan"
+            );
+            return ExitCode::from(1);
+        }
+        // 防护 2:设 PDEATHSIG = SIGTERM。失败仅 warn,不阻塞启动
+        // (降级到"GUI 必须显式 kill"的旧行为,孤儿仍可能 —— 至少不崩)。
+        // SAFETY: PR_SET_PDEATHSIG + 合法 signum 是定义良好的;main 早期单线程,
+        // 无并发。参数按 libc 绑定(5 个 c_ulong)传入。
+        let rc = unsafe {
+            libc::prctl(
+                libc::PR_SET_PDEATHSIG,
+                libc::SIGTERM as libc::c_ulong,
+                0,
+                0,
+                0,
+            )
+        };
+        if rc != 0 {
+            tracing::warn!(
+                error = %std::io::Error::last_os_error(),
+                "PR_SET_PDEATHSIG failed (non-fatal); daemon will NOT auto-die with parent — orphan possible on GUI crash/reload"
+            );
+        }
+    }
 
     let port = parse_port_from_args();
     // P2.4 D2.3: `--data-dir` lets the GUI sidecar pass the exact

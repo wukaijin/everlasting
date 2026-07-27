@@ -11,6 +11,37 @@
 
 ---
 
+## Invariant: daemon 生命周期绑定 GUI 进程(orphan-guard, 2026-07-27)
+
+**问题**:`tauri dev` 的 Rust live reload 是**强制 kill GUI 进程**(不走
+`RunEvent::Exit`),所以 `SidecarHandle::kill()` 永远跑不到。daemon(因
+`serve_daemon` 修复后能稳定存活)会成孤儿继续占 7456 → 下次 sidecar 探测
+端口冲突 exit 1 → 前端 "daemon 不可用"。GUI crash / 被强杀同理。
+
+**契约**:daemon 进程的生死**必须**绑死其父进程(GUI sidecar 持有者)。
+无论 GUI 怎么死(正常 `RunEvent::Exit` / live reload 强杀 / crash / kill -9),
+daemon 都必须自动退出,绝不留孤儿占端口。
+
+**实现**(`bin/everlasting-daemon.rs::main`,Linux):
+`prctl(PR_SET_PDEATHSIG, SIGTERM)` —— 内核在父进程终止时自动给 daemon 发
+SIGTERM,走 [`shutdown_signal`](#) 的优雅退出路径。两个 race 防护:
+1. `getppid() == 1`(父进程已死被 init 收养)→ 立即 exit 1,不 bind 端口。
+2. prctl 只在调用一刻设置;daemon 不会 reparent,故无需重设。
+
+**不变量**:
+- **禁止**移除 prctl 调用(或改成 no-op)除非有等价的孤儿清理机制
+  (如 PID 文件 + 启动时清理)。移除后,任何 GUI 异常退出都会留孤儿。
+- standalone 启动(`cargo run --bin everlasting-daemon` / `daemon.sh`)也安全:
+  父进程是 shell,shell 退出 daemon 跟着退,符合"前台跑、关终端即停"。
+- 非 Linux 平台(macOS/Windows)无 prctl —— 需另外实现(`proc_exit` /
+  Job Object),当前 sidecar 模式仅 Linux 有此问题。
+
+**验证**:手动 `kill -9` daemon 父进程后,daemon 应在 ~1s 内收到 SIGTERM 并
+走完整 graceful shutdown(日志:`received SIGTERM` → `shutdown complete`
+→ `exited cleanly`),端口自动释放。
+
+---
+
 ## Scenario: Graceful Shutdown 与 SSE 长连接
 
 ### 1. Scope / Trigger
@@ -38,12 +69,13 @@ impl SseRegistry {
 }
 
 // daemon/server.rs
-const SHUTDOWN_GRACE_SECS: u64 = 3;
+const SHUTDOWN_GRACE_SECS: u64 = 3;   // 设计参考锚点,不再用于 serve_daemon
 
-/// signal 收到后,先调 sse.shutdown() 再让 axum drain。
-async fn shutdown_signal(registry: Arc<SseRegistry>);
+/// signal 收到后,先调 sse.shutdown() 再 drain 活跃 agent loop,最后返回。
+async fn shutdown_signal(state: Arc<AppState>);
 
-/// serve + with_graceful_shutdown + 外层 timeout 兜底。
+/// serve + with_graceful_shutdown。**不能**给整个 serve future 套
+/// `tokio::time::timeout` —— 会变成「无信号也 3s 自杀」(2026-07-27 修过)。
 pub async fn serve_daemon(state: Arc<AppState>, port: u16) -> std::io::Result<()>;
 ```
 
@@ -55,17 +87,19 @@ shutdown 顺序(收到 SIGINT/SIGTERM 后):
 2. **`registry.shutdown()`** —— drop 所有 SSE sender,结束所有 live stream
 3. `shutdown_signal` 返回 → axum `with_graceful_shutdown` 开始 drain
    此时 SSE 流已结束,只剩可快速 drain 的短请求
-4. `tokio::time::timeout(SHUTDOWN_GRACE_SECS, serve)` 兜底 ——
-   正常亚秒完成;超时则 log warn 后 return(进程退出),`daemon.sh`
-   SIGKILL 是最后一道防线
+4. `serve.await` 自然完成(进程随后退出)。**没有外层 timeout** ——
+   drain 的硬上限由 `shutdown_signal` 内部的两步保证(见 §关键不变量);
+   万一仍有未知长连接卡住,由 `daemon.sh`(standalone)/ GUI `RunEvent::Exit`
+   的 SIGKILL 兜底
 
 ### 4. Validation & Error Matrix
 
 | 条件 | 行为 |
 |------|------|
-| 无 SSE 连接时 SIGTERM | drain 亚秒完成(SHUTDOWN_GRACE 内) |
+| 无 SSE 连接时 SIGTERM | drain 亚秒完成 |
 | 有活跃 SSE 连接时 SIGTERM | `sse.shutdown()` 结束 stream 后 drain 亚秒完成 |
-| 未来加了未知长连接卡住 | SHUTDOWN_GRACE_SECS(3s) 超时后强制 return;daemon.sh 8s SIGKILL 兜底 |
+| 未来加了未知长连接卡住 | `daemon.sh`(standalone)或 GUI sidecar 的 SIGKILL 兜底;**进程内不再用 timeout 提前 return**(历史教训:给整个 `serve` 套 timeout 会让 daemon 在无信号时也 N 秒自杀,见 §7) |
+| **没有 SIGTERM/SIGINT** | `serve` 永久服务请求(进程不退出)—— **必须如此**,任何给 `serve` 套 deadline 的写法都是 bug |
 | `shutdown()` 后再 `broadcast` | 静默丢弃(daemon 已退出,无消费者),不 panic |
 | `shutdown()` 对空 registry | no-op,不 panic |
 | `shutdown()` 重复调用 | idempotent |
@@ -77,6 +111,12 @@ shutdown 顺序(收到 SIGINT/SIGTERM 后):
   丢失正在处理中的请求;`with_graceful_shutdown` 才是 drain 语义。
   (2026-07-24 实现中途踩过这个坑:`select!` 未命中分支 drop serve future
   导致连接被 abort 而非 drain。)
+- **`serve_daemon` 里禁止给 `serve` 套 `tokio::time::timeout` 或
+  `tokio::select!`**。`serve` 在无信号时永久运行是**正确的**(正常服务);
+  任何 deadline 都会让 daemon 在 N 秒后无信号自杀(2026-07-27 的回归就是
+  `tokio::time::timeout(SHUTDOWN_GRACE_SECS, serve)`,详见 §7「错(二)」)。
+  drain 的硬上限交给 `shutdown_signal` 内部(`sse.shutdown()` +
+  `cancel_and_drain_all_agent_loops`),进程级 SIGKILL 兜底。
 - **`shutdown()` 必须在 `shutdown_signal` 返回前调**,在 axum 开始 drain
   之前结束 SSE,否则 drain 仍会被卡。
 
@@ -106,15 +146,34 @@ tokio::select! {
 // serve future 已被 drop,无法继续 drain。
 ```
 
-#### Correct — `with_graceful_shutdown` + signal 内调 shutdown
+#### Correct — `with_graceful_shutdown` + signal 内调 shutdown,**不**套外层 timeout
 
 ```rust
 // ✅ axum 的 drain 机制正常工作;signal 内先 sse.shutdown() 让 SSE
 //    流自然结束,drain 才不会被永不完成的连接卡住。
 let serve = axum::serve(listener, router)
-    .with_graceful_shutdown(shutdown_signal(Arc::clone(&state.sse)));
-tokio::time::timeout(Duration::from_secs(SHUTDOWN_GRACE_SECS), serve).await
+    .with_graceful_shutdown(shutdown_signal(Arc::clone(&state)));
+serve.await?;   // 没有 tokio::time::timeout —— 见下方「错(二)」
 ```
+
+> **❌ 错(二)——给整个 `serve` 套 deadline(2026-07-27 修复的回归)**:
+> 历史版本的 §7「Correct」写的是
+> `tokio::time::timeout(SHUTDOWN_GRACE_SECS, serve).await`,意图是给
+> drain 阶段加兜底。但 `serve = axum::serve(...).with_graceful_shutdown(sig)`
+> 在**没有 shutdown 信号时会永久跑下去**(正常服务请求),而 timeout 套的是
+> **整个 serve future** —— 于是无论有没有信号,3s 后必然走 `Err` 臂 →
+> `serve_daemon` 返回 `Ok(())` → bin 打印 "exited cleanly" → 进程 exit 0。
+>
+> 表现:daemon 每次 listen 后 ~3s 自杀(sidecar `TerminatedPayload
+> {code:Some(0), signal:None}`,日志里**没有** `received SIGTERM`),
+> 前端 15s health probe 永远连不上 → "daemon 不可用"。逃生 `?transport=tauri`
+> 可绕过(它跳过 health probe)。
+>
+> 根因:`with_graceful_shutdown` 把「等信号」和「drain」捆在同一个 future,
+> 无法只对 drain 加超时。drain 的硬上限改由 `shutdown_signal` 内部两步
+> 保证(`sse.shutdown()` + `cancel_and_drain_all_agent_loops` 的 8s),进程
+> 级 SIGKILL(`daemon.sh` / GUI sidecar)兜底。**结论:`serve_daemon` 里
+> 禁止给 `serve` 套任何 `tokio::time::timeout` / `tokio::select!`。**
 
 ---
 
