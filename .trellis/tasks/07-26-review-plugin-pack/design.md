@@ -147,16 +147,13 @@ PRD R7 已给 schema（含 schema_version/finding_id/source_run_id/triage/change
 
 ### 写入时机
 
-wf-synthesize 在 revising state,主 LLM 完成综合+修订后,**用 review-only `emit_review_state_updated` 工具写 `<task>/review-state.json`**(不用通用 write_file,见下)。每轮 revising 重写整个文件,rounds 数组累积。
+wf-synthesize 在 revising state,主 LLM 完成综合+修订后,**用通用 `write_file` 工具写 `<task>/review-state.json`**(workflow_enabled 时主 LLM 有写工具,见 PRD Background)。每轮 revising 重写整个文件,rounds 数组累积。
 
-### 写入约束（评审回流：write_file 不原子 + 事件发送点）
+### 写入约束
 
-- **原子化 + 事件发送（MiniMax 方案 iii）**：`write_file` 工具实际是 `tokio::fs::write`(`write_file.rs:163`),**非 tmp+rename**,中途读会拿到半截 JSON。采用新建 review-only `emit_review_state_updated` 工具(仿 `ask_user_question` 模式,拿 `ChatEventSink`),内部:
-  1. tmp + rename 原子写 review-state.json(仿 `task.rs:373 write_task`)
-  2. 写成功后发 `review-state-updated` 事件(解决 C2 事件发送点,零 dev 污染 —— 工具只在 review workflow 可见,用 `filter_tools_for_workflow` gate)
-  - 一举解决原子性 + 事件发送点 + 零 dev 污染。wf-synthesize 指引主 LLM 调此工具而非 write_file。
-- **纯 JSON**:工具内部校验主 LLM 提供的 JSON 字符串合法性(serde_json::from_str 校验),非法则工具返回错误让主 LLM 重写。
-- **schema 合法**:wf-synthesize skill 强调按 schema 写字段名/枚举值。
+- **写入方式 = 通用 write_file**(贴 PRD R7 字面要求,零引擎改动)。曾考虑新建 review-only `emit_review_state_updated` 工具(仿 `ask_user_question`,内部 tmp+rename 原子写 + 发 `review-state-updated` 事件),但该方案扩张到引擎层(新工具 + 事件 + `filter_tools_for_workflow` gate + 单测),超出 PRD AC 与 Out of Scope(层次 3「引擎层 schema 强制」已被排除),故**砍掉**,留作未来 hardening。
+- **原子性是软约束**:write_file 实际是 `tokio::fs::write`(`write_file.rs:163`),非 tmp+rename,中途读理论上会拿到半截 JSON。但 revising 单轮写一次、频率极低,且 C2 前端可加「读到的 JSON 解析失败则忽略本轮」兜底,风险可接受。**不在本任务改 write_file 全局行为**(那是另立 task 的全局改动)。
+- **schema 合法**:wf-synthesize skill 强调按 schema 写字段名/枚举值。schema 不合法的后果(C2 渲染异常)由主 LLM prompt 约束兜底,引擎不强校验(同 Out of Scope 层次 3 决策)。
 
 ### 字段值语言
 

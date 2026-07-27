@@ -1,1 +1,3 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/archive/2026-07/07-09-workflow-builtin-plugin/design.md", "reason": "内置化机制的 source of truth：include_str! 布局 + BUILTIN_*_常量组 + loader 扩展模式，C3 照此加 review 组"}
+{"file": ".trellis/tasks/07-26-workflow-review-plugin/prd.md", "reason": "父 epic prd：跨子任务决策（SynthesisRound prompt 引导/状态机/reviewer 角色/产物=prd/review-state.json 层次2），C3 各项的依据"}

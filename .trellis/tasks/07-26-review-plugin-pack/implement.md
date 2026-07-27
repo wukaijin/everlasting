@@ -176,8 +176,8 @@ cargo clippy --lib --tests -- -D warnings 2>&1 | tail -10
 
 ## Follow-up（C3 范围外）
 
-- resume 接入：reviewer.md 提到 resume 续接,实际行为依赖 C1 落地。C1 未完成时 reviewer 全新派（功能不阻断,只是费 token）。
-- review-state.json 写入原子化：若 write_file 工具不保证原子,C3 需指引主 LLM 用临时文件 + rename（implement 时确认 write_file 实现）。
+- resume 接入：reviewer.md 提到 resume 续接,实际行为依赖 C1 落地。**C1 已合并(703ab7d)**,reviewer 可用 `resume_from` 续接。
+- review-state.json 写入原子化:本任务用通用 write_file(非原子,tokio::fs::write)。若未来 C2 前端读到半截 JSON 成实际问题,再考虑:(a) 新建 review-only `emit_review_state_updated` 工具(tmp+rename 原子写 + 发事件),或 (b) 把 write_file 全局改为 tmp+rename。两者都是另立 task,不在 C3。design §4 已记录此决策。
 
 ---
 
