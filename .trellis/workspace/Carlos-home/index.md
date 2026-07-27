@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-4.md`
-- **Total Sessions**: 90
-- **Last Active**: 2026-07-06
+- **Total Sessions**: 91
+- **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-4.md` | ~105 | Active |
+| `journal-4.md` | ~170 | Active |
 | `journal-3.md` | ~1996 | Archived |
 | `journal-2.md` | ~2009 | Archived |
 | `journal-1.md` | ~1977 | Archived |
@@ -32,6 +32,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 91 | 2026-07-27 | C3 review plugin resource pack 实施 | `83207f4`, `79711d1`, `83c4b49` | `feat/review-plugin-pack-c3` |
 | 90 | 2026-07-06 | C2+ 循环检测主动干预(loop_hit_count + QuestionStore 复用 + 三分支) | `943d951`, `212aa1b` | `main` |
 | 89 | 2026-07-05 | E1 CI 测试自动化管线(双 job + drain race / mtime fence 2 flaky 修复) | `314702f`, `c64df6c`, `84d607e`, `7eb5e81`, `c2ba7ce`, `20b71b9`, `e1764d3` | `main` |
 | 88 | 2026-07-01 | read 族 tool 层硬卡解耦 + 敏感路径 deny/allow-list | `87c91f0` | `main` |

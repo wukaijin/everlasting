@@ -145,3 +145,26 @@ C2+ 循环检测主动干预落地。C2(06-24)软提示只注入 hint 不终止 
 ### Next Steps
 
 - None - task complete(手测眼验可随时补)
+
+
+## Session 91: C3 review plugin resource pack 实施
+
+**Date**: 2026-07-27
+**Task**: C3 review plugin resource pack 实施
+**Branch**: `feat/review-plugin-pack-c3`
+
+### Summary
+
+交付 review epic 的 C3（review plugin 内容层）：4-state 状态机 + reviewer 只读角色 + 4 skill + builtin.rs 内置化（含修 07-09 留下的两处 loader 硬编码 dev 隐藏依赖）+ dev skill 衔接指引 + review-state.json schema 定稿（C2 跨任务契约）。design §4 砍掉 emit_review_state_updated 工具方案改 write_file（贴 PRD）。对抗 check 修 1 个 schema 缺陷（status=failed→error）。1590 tests pass，clippy 零新增。沉淀 workflow-plugin-builtin.md spec。本轮连归档遗留的 C0/C1。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `83207f4` | (see git log) |
+| `79711d1` | (see git log) |
+| `83c4b49` | (see git log) |
+
+### Status
+
+[OK] **Completed**
