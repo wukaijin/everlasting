@@ -29,7 +29,6 @@ pub async fn list_providers_inner(
 
 #[tauri::command]
 pub async fn list_providers(
-
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<db::ProviderRow>, AppCommandError> {
     list_providers_inner(&state).await
@@ -51,7 +50,6 @@ pub async fn add_provider_inner(
 
 #[tauri::command]
 pub async fn add_provider(
-
     state: State<'_, Arc<AppState>>,
     protocol: String,
     display_name: String,
@@ -118,7 +116,6 @@ pub async fn delete_provider_inner(
 
 #[tauri::command]
 pub async fn delete_provider(
-
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, AppCommandError> {
@@ -135,7 +132,6 @@ pub async fn list_models_inner(
 
 #[tauri::command]
 pub async fn list_models(
-
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<db::ModelWithProvider>, AppCommandError> {
     list_models_inner(&state).await
@@ -174,7 +170,6 @@ pub async fn add_model_inner(
 
 #[tauri::command]
 pub async fn add_model(
-
     state: State<'_, Arc<AppState>>,
     provider_id: String,
     model_name: String,
@@ -184,7 +179,17 @@ pub async fn add_model(
     supports_thinking: bool,
     context_window: u32,
 ) -> Result<db::ModelRow, AppCommandError> {
-    add_model_inner(&state, provider_id, model_name, display_name, max_tokens, thinking_effort, supports_thinking, context_window).await
+    add_model_inner(
+        &state,
+        provider_id,
+        model_name,
+        display_name,
+        max_tokens,
+        thinking_effort,
+        supports_thinking,
+        context_window,
+    )
+    .await
 }
 
 pub async fn update_model_inner(
@@ -222,7 +227,6 @@ pub async fn update_model_inner(
 
 #[tauri::command]
 pub async fn update_model(
-
     state: State<'_, Arc<AppState>>,
     id: String,
     provider_id: String,
@@ -233,7 +237,18 @@ pub async fn update_model(
     supports_thinking: bool,
     context_window: u32,
 ) -> Result<Option<db::ModelRow>, AppCommandError> {
-    update_model_inner(&state, id, provider_id, model_name, display_name, max_tokens, thinking_effort, supports_thinking, context_window).await
+    update_model_inner(
+        &state,
+        id,
+        provider_id,
+        model_name,
+        display_name,
+        max_tokens,
+        thinking_effort,
+        supports_thinking,
+        context_window,
+    )
+    .await
 }
 
 pub async fn delete_model_inner(
@@ -249,7 +264,6 @@ pub async fn delete_model_inner(
 
 #[tauri::command]
 pub async fn delete_model(
-
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<bool, AppCommandError> {
@@ -274,7 +288,6 @@ pub async fn get_default_model_inner(
 
 #[tauri::command]
 pub async fn get_default_model(
-
     state: State<'_, Arc<AppState>>,
 ) -> Result<Option<db::ModelWithProvider>, AppCommandError> {
     get_default_model_inner(&state).await
@@ -291,7 +304,6 @@ pub async fn set_default_model_inner(
 
 #[tauri::command]
 pub async fn set_default_model(
-
     state: State<'_, Arc<AppState>>,
     model_id: String,
 ) -> Result<(), AppCommandError> {
@@ -319,7 +331,6 @@ pub async fn update_session_model_id_inner(
 
 #[tauri::command]
 pub async fn update_session_model_id(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     model_id: String,
@@ -587,7 +598,6 @@ pub async fn test_model_inner(
 
 #[tauri::command]
 pub async fn test_model(
-
     state: State<'_, Arc<AppState>>,
     model_id: String,
 ) -> Result<serde_json::Value, AppCommandError> {

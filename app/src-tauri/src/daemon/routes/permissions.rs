@@ -11,10 +11,14 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::permissions::{
+    clear_session_trace_inner, grant_tool_permission_inner, list_session_audit_events_inner,
+    list_session_tool_permissions_inner, list_turn_traces_inner, permission_response_inner,
+    revoke_tool_permission_inner, set_session_mode_inner,
+};
+use crate::db;
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::db;
-use crate::commands::permissions::{set_session_mode_inner, grant_tool_permission_inner, list_session_tool_permissions_inner, revoke_tool_permission_inner, list_session_audit_events_inner, list_turn_traces_inner, clear_session_trace_inner, permission_response_inner};
 
 #[derive(Debug, Deserialize)]
 pub struct SetSessionModeRequest {
@@ -42,7 +46,14 @@ pub async fn grant_tool_permission(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GrantToolPermissionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = grant_tool_permission_inner(&state, req.session_id, req.tool_name, req.match_kind, req.match_value).await?;
+    let result = grant_tool_permission_inner(
+        &state,
+        req.session_id,
+        req.tool_name,
+        req.match_kind,
+        req.match_value,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -71,7 +82,14 @@ pub async fn revoke_tool_permission(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RevokeToolPermissionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = revoke_tool_permission_inner(&state, req.session_id, req.tool_name, req.match_kind, req.match_value).await?;
+    let result = revoke_tool_permission_inner(
+        &state,
+        req.session_id,
+        req.tool_name,
+        req.match_kind,
+        req.match_value,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -144,9 +162,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/set_session_mode", post(set_session_mode))
         .route("/permission_response", post(permission_response))
         .route("/grant_tool_permission", post(grant_tool_permission))
-        .route("/list_session_tool_permissions", post(list_session_tool_permissions))
+        .route(
+            "/list_session_tool_permissions",
+            post(list_session_tool_permissions),
+        )
         .route("/revoke_tool_permission", post(revoke_tool_permission))
-        .route("/list_session_audit_events", post(list_session_audit_events))
+        .route(
+            "/list_session_audit_events",
+            post(list_session_audit_events),
+        )
         .route("/list_turn_traces", post(list_turn_traces))
         .route("/clear_session_trace", post(clear_session_trace))
         .with_state(state)

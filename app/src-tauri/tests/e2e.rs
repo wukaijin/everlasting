@@ -48,9 +48,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use everlasting_lib::daemon::server::{build_router, load_daemon_state};
-use everlasting_lib::daemon::sse::{
-    SseRegistry, BUFFER_CAPACITY, LARGE_PAYLOAD_THRESHOLD,
-};
+use everlasting_lib::daemon::sse::{SseRegistry, BUFFER_CAPACITY, LARGE_PAYLOAD_THRESHOLD};
 
 // ---------------------------------------------------------------------------
 // Shared harness helpers
@@ -74,10 +72,7 @@ async fn rig() -> Rig {
     let dir = tempfile::tempdir().expect("create tempdir for rig");
     let state = load_daemon_state(dir.path().to_path_buf()).await;
     let router = build_router(state);
-    Rig {
-        router,
-        _dir: dir,
-    }
+    Rig { router, _dir: dir }
 }
 
 /// POST a JSON body to `uri` against the rig's router, returning the
@@ -218,10 +213,7 @@ async fn seed_catalog_and_session(
     assert_eq!(resp.status(), StatusCode::OK, "add_model should succeed");
     let model = body_json(resp).await;
     // ModelRow is #[serde(rename_all = "camelCase")] → JSON has "id".
-    let model_id = model["id"]
-        .as_str()
-        .expect("model row has id")
-        .to_string();
+    let model_id = model["id"].as_str().expect("model row has id").to_string();
 
     // Set as default so lookup_provider_for_session finds it.
     let resp = post_json(
@@ -247,7 +239,11 @@ async fn seed_catalog_and_session(
         }),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::OK, "create_session should succeed");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "create_session should succeed"
+    );
     let session = body_json(resp).await;
     session["id"]
         .as_str()
@@ -315,12 +311,7 @@ mod e1a_chat {
                 .body(anthropic_text_sse());
         });
 
-        let session_id = seed_catalog_and_session(
-            &router,
-            _dir.path(),
-            &mock.base_url(),
-        )
-        .await;
+        let session_id = seed_catalog_and_session(&router, _dir.path(), &mock.base_url()).await;
 
         // Fire the chat request. The handler returns immediately
         // (chat_inner spawns the agent loop), so the spawned task
@@ -583,22 +574,16 @@ mod e1d_health {
         let body = body_json(resp).await;
 
         assert!(body.get("daemonId").is_some(), "daemonId present");
-        assert!(
-            body.get("daemonVersion").is_some(),
-            "daemonVersion present"
-        );
-        let api_versions: Vec<String> = serde_json::from_value(
-            body.get("apiVersions").cloned().unwrap_or_default(),
-        )
-        .expect("apiVersions deserializes");
+        assert!(body.get("daemonVersion").is_some(), "daemonVersion present");
+        let api_versions: Vec<String> =
+            serde_json::from_value(body.get("apiVersions").cloned().unwrap_or_default())
+                .expect("apiVersions deserializes");
         assert!(
             api_versions.iter().any(|v| v == "v1"),
             "api_versions contains v1 (Q5 protocol gate)"
         );
         assert!(
-            body.get("uptimeSeconds")
-                .and_then(|v| v.as_u64())
-                .is_some(),
+            body.get("uptimeSeconds").and_then(|v| v.as_u64()).is_some(),
             "uptimeSeconds is a non-negative integer"
         );
         assert!(

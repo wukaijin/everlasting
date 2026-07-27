@@ -36,8 +36,8 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::chat_loop::run_chat_loop;
-use crate::agent::subagent::{AppHandleSubagentSink, SubagentEventSink};
 use crate::agent::provider::{resolve_chat_provider, PreFlightError};
+use crate::agent::subagent::{AppHandleSubagentSink, SubagentEventSink};
 use crate::error::AppCommandError;
 use crate::llm::{ChatEvent, ChatMessage};
 use crate::state::{AppState, ChatEventPayload, ChatEventSink, ProviderCatalog};
@@ -94,8 +94,7 @@ pub async fn chat(
     // REVIEW-remote-access-research-2026-07-20 §P0-D). The sink
     // carries the only `app.clone()` it needs; `chat_inner` reuses
     // the same trait object for both pre-flight + the spawn closure.
-    let sink: Arc<dyn ChatEventSink> =
-        Arc::new(crate::state::AppHandleSink { app: app.clone() });
+    let sink: Arc<dyn ChatEventSink> = Arc::new(crate::state::AppHandleSink { app: app.clone() });
     // P2.4 C5 (2026-07-22): the worker's `SubagentEventSink` — Tauri
     // path forwards worker `subagent:event` over IPC. The daemon path
     // injects `HttpSseSubagentSink` instead (daemon/routes/agent.rs);

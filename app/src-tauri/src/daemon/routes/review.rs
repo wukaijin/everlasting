@@ -34,7 +34,10 @@ pub async fn get_review_state(
     // doesn't need AppState. Run it directly; the cost is one
     // file read + one serde_json parse, well under the axum
     // worker's blocking budget.
-    Ok(Json(get_review_state_inner(&req.project_path, &req.task_slug)))
+    Ok(Json(get_review_state_inner(
+        &req.project_path,
+        &req.task_slug,
+    )))
 }
 
 #[derive(Debug, Deserialize)]

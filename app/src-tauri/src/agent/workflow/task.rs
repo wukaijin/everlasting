@@ -1179,7 +1179,10 @@ mod tests {
     /// all call sites use the result transiently.
     #[test]
     fn custom_as_str_returns_captured_string() {
-        assert_eq!(TaskStatus::Custom("reviewing".to_string()).as_str(), "reviewing");
+        assert_eq!(
+            TaskStatus::Custom("reviewing".to_string()).as_str(),
+            "reviewing"
+        );
         assert_eq!(TaskStatus::Custom("intake".to_string()).as_str(), "intake");
         // Dev variants unchanged.
         assert_eq!(TaskStatus::Planning.as_str(), "planning");

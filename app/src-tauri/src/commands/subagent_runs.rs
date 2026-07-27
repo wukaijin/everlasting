@@ -62,7 +62,6 @@ pub async fn list_subagent_runs_by_session_inner(
 
 #[tauri::command]
 pub async fn list_subagent_runs_by_session(
-
     session_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<db::subagent_runs::SubagentRunSummary>, AppCommandError> {
@@ -93,7 +92,6 @@ pub async fn get_subagent_run_inner(
 
 #[tauri::command]
 pub async fn get_subagent_run(
-
     run_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Option<db::subagent_runs::SubagentRunRow>, AppCommandError> {
@@ -296,7 +294,6 @@ pub async fn merge_worker_run_inner(
 
 #[tauri::command]
 pub async fn merge_worker_run(
-
     run_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<MergeWorkerResult, AppCommandError> {
@@ -317,7 +314,6 @@ pub async fn discard_worker_run_inner(
 
 #[tauri::command]
 pub async fn discard_worker_run(
-
     run_id: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppCommandError> {

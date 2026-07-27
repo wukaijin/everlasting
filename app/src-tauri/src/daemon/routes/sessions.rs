@@ -8,17 +8,26 @@
 
 use std::sync::Arc;
 
-use axum::{extract::{Path, State}, routing::{get, post}, Json, Router};
+use axum::{
+    extract::{Path, State},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppCommandError;
-use crate::state::AppState;
+use crate::agent::question_store::PendingInteractionEntry;
+use crate::commands::question::get_pending_interaction_inner;
+use crate::commands::sessions::{
+    clear_session_messages_inner, create_session_inner, delete_session_inner, diff_worktree_inner,
+    edit_user_message_inner, list_sessions_inner, load_session_inner, record_tool_duration_inner,
+    rename_session_inner, set_session_color_inner, set_session_plugin_name_inner,
+    set_session_workflow_enabled_inner, update_message_latency_inner,
+};
 use crate::db;
+use crate::error::AppCommandError;
 use crate::git;
 use crate::llm::types::MessageContent;
-use crate::commands::sessions::{list_sessions_inner, create_session_inner, load_session_inner, diff_worktree_inner, delete_session_inner, clear_session_messages_inner, rename_session_inner, set_session_color_inner, set_session_workflow_enabled_inner, set_session_plugin_name_inner, update_message_latency_inner, record_tool_duration_inner, edit_user_message_inner};
-use crate::commands::question::get_pending_interaction_inner;
-use crate::agent::question_store::PendingInteractionEntry;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ListSessionsRequest {
@@ -197,7 +206,16 @@ pub async fn update_message_latency(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateMessageLatencyRequest>,
 ) -> Result<Json<bool>, AppCommandError> {
-    let result = update_message_latency_inner(&state, req.session_id, req.seq, req.ttfb_ms, req.gen_ms, req.total_ms, req.thinking_ms).await?;
+    let result = update_message_latency_inner(
+        &state,
+        req.session_id,
+        req.seq,
+        req.ttfb_ms,
+        req.gen_ms,
+        req.total_ms,
+        req.thinking_ms,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -212,7 +230,9 @@ pub async fn record_tool_duration(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RecordToolDurationRequest>,
 ) -> Result<Json<bool>, AppCommandError> {
-    let result = record_tool_duration_inner(&state, req.session_id, req.tool_use_id, req.duration_ms).await?;
+    let result =
+        record_tool_duration_inner(&state, req.session_id, req.tool_use_id, req.duration_ms)
+            .await?;
     Ok(Json(result))
 }
 
@@ -227,7 +247,8 @@ pub async fn edit_user_message(
     State(state): State<Arc<AppState>>,
     Json(req): Json<EditUserMessageRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
+    let result =
+        edit_user_message_inner(&state, req.session_id, req.message_seq, req.new_content).await?;
     Ok(Json(result))
 }
 
@@ -245,7 +266,9 @@ pub struct ListWorkflowPluginsRequest {
 pub async fn list_workflow_plugins(
     Json(req): Json<ListWorkflowPluginsRequest>,
 ) -> Result<Json<Vec<String>>, AppCommandError> {
-    Ok(Json(crate::agent::workflow::list_plugins(&req.project_path)))
+    Ok(Json(crate::agent::workflow::list_plugins(
+        &req.project_path,
+    )))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -259,7 +282,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/clear_session_messages", post(clear_session_messages))
         .route("/rename_session", post(rename_session))
         .route("/set_session_color", post(set_session_color))
-        .route("/set_session_workflow_enabled", post(set_session_workflow_enabled))
+        .route(
+            "/set_session_workflow_enabled",
+            post(set_session_workflow_enabled),
+        )
         .route("/set_session_plugin_name", post(set_session_plugin_name))
         .route("/list_workflow_plugins", post(list_workflow_plugins))
         .route("/update_message_latency", post(update_message_latency))

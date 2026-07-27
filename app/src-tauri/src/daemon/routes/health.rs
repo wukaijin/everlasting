@@ -104,9 +104,7 @@ pub struct HealthResponse {
 /// the GUI needs the count pre-sidecar-handshake).
 pub async fn health() -> impl IntoResponse {
     let start = *START_TIME.get_or_init(Instant::now);
-    let daemon_id = DAEMON_ID
-        .get_or_init(|| Uuid::new_v4().to_string())
-        .clone();
+    let daemon_id = DAEMON_ID.get_or_init(|| Uuid::new_v4().to_string()).clone();
     let uptime_seconds = start.elapsed().as_secs();
 
     // session_count would require AppState; for P2.2 we surface
@@ -141,7 +139,12 @@ mod tests {
         let app = axum::Router::new().route("/health", axum::routing::get(health));
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .expect("router succeeded");
 
@@ -149,18 +152,13 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body collected");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("body is valid JSON");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("body is valid JSON");
         // Canonical fields (camelCase per HealthResponse's serde attr).
         assert!(json.get("daemonId").is_some(), "daemonId present");
-        assert!(
-            json.get("daemonVersion").is_some(),
-            "daemonVersion present"
-        );
-        let api_versions: Vec<String> = serde_json::from_value(
-            json.get("apiVersions").cloned().unwrap_or_default(),
-        )
-        .expect("apiVersions deserializes");
+        assert!(json.get("daemonVersion").is_some(), "daemonVersion present");
+        let api_versions: Vec<String> =
+            serde_json::from_value(json.get("apiVersions").cloned().unwrap_or_default())
+                .expect("apiVersions deserializes");
         assert!(
             api_versions.iter().any(|v| v == "v1"),
             "api_versions contains v1 (Q5 protocol-version gate)"

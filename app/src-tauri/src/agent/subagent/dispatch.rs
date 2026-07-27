@@ -25,11 +25,11 @@ use crate::tools::read_guard::ReadGuard;
 use crate::tools::ToolContext;
 
 use super::{
-    assemble_subagent_prompt, build_worker_messages,
-    filter_tools_for_subagent, filter_tools_readonly, format_dispatch_result_with_model,
-    format_final_text, summarize_worker_tool_actions, truncate_messages_for_persistence,
-    truncate_transcript_for_persistence, MESSAGES_MAX_BYTES,
-    SubagentBufferSink, SubagentCache, SubagentEventSink, SubagentStatus, TRANSCRIPT_MAX_BYTES,
+    assemble_subagent_prompt, build_worker_messages, filter_tools_for_subagent,
+    filter_tools_readonly, format_dispatch_result_with_model, format_final_text,
+    summarize_worker_tool_actions, truncate_messages_for_persistence,
+    truncate_transcript_for_persistence, SubagentBufferSink, SubagentCache, SubagentEventSink,
+    SubagentStatus, MESSAGES_MAX_BYTES, TRANSCRIPT_MAX_BYTES,
 };
 
 // ---------------------------------------------------------------------------
@@ -296,7 +296,6 @@ fn build_clarification_message(
         content: crate::llm::types::MessageContent::Text(lines.join("\n")),
     })
 }
-
 
 /// tool_result. Built by scanning the worker worktree's diff against
 /// its base commit (the `worker/<run_id>` branch tip vs its parent).

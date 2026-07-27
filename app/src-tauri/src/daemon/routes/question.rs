@@ -11,13 +11,16 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
-use crate::error::AppCommandError;
-use crate::state::AppState;
-use crate::db;
 use crate::agent::question_store::PendingInteractionEntry;
 use crate::agent::question_store::QuestionAnswer;
 use crate::agent::question_store::ToolQuestionPayload;
-use crate::commands::question::{resolve_tool_question_inner, resolve_mode_change_inner, get_pending_interaction_inner, get_pending_question_inner, resolve_task_state_transition_inner};
+use crate::commands::question::{
+    get_pending_interaction_inner, get_pending_question_inner, resolve_mode_change_inner,
+    resolve_task_state_transition_inner, resolve_tool_question_inner,
+};
+use crate::db;
+use crate::error::AppCommandError;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ResolveToolQuestionRequest {
@@ -31,7 +34,14 @@ pub async fn resolve_tool_question(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ResolveToolQuestionRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = resolve_tool_question_inner(&state, req.session_id, req.tool_use_id, req.answer, req.cancelled).await?;
+    let result = resolve_tool_question_inner(
+        &state,
+        req.session_id,
+        req.tool_use_id,
+        req.answer,
+        req.cancelled,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -47,7 +57,14 @@ pub async fn resolve_mode_change(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ResolveModeChangeRequest>,
 ) -> Result<Json<db::SessionRow>, AppCommandError> {
-    let result = resolve_mode_change_inner(&state, req.session_id, req.tool_use_id, req.target_mode, req.allow).await?;
+    let result = resolve_mode_change_inner(
+        &state,
+        req.session_id,
+        req.tool_use_id,
+        req.target_mode,
+        req.allow,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -90,7 +107,15 @@ pub async fn resolve_task_state_transition(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ResolveTaskStateTransitionRequest>,
 ) -> Result<Json<db::SessionRow>, AppCommandError> {
-    let result = resolve_task_state_transition_inner(&state, req.session_id, req.tool_use_id, req.target_state, req.slug, req.allow).await?;
+    let result = resolve_task_state_transition_inner(
+        &state,
+        req.session_id,
+        req.tool_use_id,
+        req.target_state,
+        req.slug,
+        req.allow,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -100,6 +125,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/resolve_mode_change", post(resolve_mode_change))
         .route("/get_pending_interaction", post(get_pending_interaction))
         .route("/get_pending_question", post(get_pending_question))
-        .route("/resolve_task_state_transition", post(resolve_task_state_transition))
+        .route(
+            "/resolve_task_state_transition",
+            post(resolve_task_state_transition),
+        )
         .with_state(state)
 }

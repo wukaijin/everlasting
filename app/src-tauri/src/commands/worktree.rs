@@ -77,7 +77,6 @@ pub async fn publish_session_to_main_inner(
 
 #[tauri::command]
 pub async fn publish_session_to_main(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<String, AppCommandError> {
@@ -175,7 +174,6 @@ pub async fn attach_worktree_inner(
 
 #[tauri::command]
 pub async fn attach_worktree(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {
@@ -280,7 +278,6 @@ pub async fn detach_worktree_inner(
 
 #[tauri::command]
 pub async fn detach_worktree(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {
@@ -413,7 +410,6 @@ pub async fn delete_worktree_inner(
 
 #[tauri::command]
 pub async fn delete_worktree(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<db::SessionRow, AppCommandError> {

@@ -568,7 +568,10 @@ mod tests {
         // 07-26-workflow-review-plugin C3:内置清单现在含 dev + review。
         let proj_tmp = tempfile::TempDir::new().unwrap();
         let path = proj_tmp.path().to_string_lossy().to_string();
-        assert_eq!(list_plugins(&path), vec!["dev".to_string(), "review".to_string()]);
+        assert_eq!(
+            list_plugins(&path),
+            vec!["dev".to_string(), "review".to_string()]
+        );
     }
 
     #[test]

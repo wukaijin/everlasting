@@ -116,8 +116,7 @@ async fn sse_text_only_round_emits_chat_event_sequence() {
             usage: Some(TokenUsage::default()),
         }),
     ])]));
-    run_loop_with_sink(vec![], mock, sink, "rid-sse-1", h, CancellationToken::new())
-        .await;
+    run_loop_with_sink(vec![], mock, sink, "rid-sse-1", h, CancellationToken::new()).await;
 
     let frames = drain_live(&mut sub.live).await;
     // 至少 Start + Delta + Done(F5 latency / TurnComplete 等后续变体
@@ -170,7 +169,9 @@ async fn sse_tool_round_emits_distinct_event_names() {
         ]),
         MockResponse::Events(vec![
             Ok(ChatEvent::Start),
-            Ok(ChatEvent::Delta { text: "done".into() }),
+            Ok(ChatEvent::Delta {
+                text: "done".into(),
+            }),
             Ok(ChatEvent::Done {
                 stop_reason: Some("end_turn".into()),
                 usage: Some(TokenUsage::default()),
@@ -178,8 +179,15 @@ async fn sse_tool_round_emits_distinct_event_names() {
         ]),
     ]));
     let tool_defs = vec![crate::tools::read_file::definition()];
-    run_loop_with_sink(tool_defs, mock, sink, "rid-sse-2", h, CancellationToken::new())
-        .await;
+    run_loop_with_sink(
+        tool_defs,
+        mock,
+        sink,
+        "rid-sse-2",
+        h,
+        CancellationToken::new(),
+    )
+    .await;
 
     let frames = drain_live(&mut sub.live).await;
     let names: Vec<&str> = frames.iter().map(|f| f.event.as_str()).collect();
@@ -226,8 +234,7 @@ async fn sse_replay_returns_frames_after_last_event_id() {
             usage: Some(TokenUsage::default()),
         }),
     ])]));
-    run_loop_with_sink(vec![], mock, sink, "rid-sse-3", h, CancellationToken::new())
-        .await;
+    run_loop_with_sink(vec![], mock, sink, "rid-sse-3", h, CancellationToken::new()).await;
 
     // buffer 现有 N 条 chat-event(id 1..=N)。带 last=2 订阅 →
     // 回放 id > 2 的帧(2 与 oldest=1 之间无 gap → 连续,非 sentinel)。

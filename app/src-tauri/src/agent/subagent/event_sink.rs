@@ -29,7 +29,9 @@ use std::sync::Mutex as StdMutex;
 use tauri::AppHandle;
 use tauri::Emitter;
 
-use super::transcript::{build_subagent_event_payload, build_subagent_finished_payload, TranscriptKind};
+use super::transcript::{
+    build_subagent_event_payload, build_subagent_finished_payload, TranscriptKind,
+};
 use crate::agent::permissions::PermissionAskPayload;
 
 thread_local! {
@@ -126,8 +128,7 @@ impl SubagentEventSink for AppHandleSubagentSink {
         kind: TranscriptKind,
         payload_json: serde_json::Value,
     ) {
-        let ipc_payload =
-            build_subagent_event_payload(run_id, session_id, kind, payload_json);
+        let ipc_payload = build_subagent_event_payload(run_id, session_id, kind, payload_json);
         if let Err(e) = self.app.emit("subagent:event", ipc_payload) {
             tracing::warn!(
                 error = %e,
@@ -144,8 +145,7 @@ impl SubagentEventSink for AppHandleSubagentSink {
         status_db: &str,
         finished_at: &str,
     ) {
-        let payload =
-            build_subagent_finished_payload(run_id, session_id, status_db, finished_at);
+        let payload = build_subagent_finished_payload(run_id, session_id, status_db, finished_at);
         if let Err(e) = self.app.emit("subagent:finished", payload) {
             tracing::warn!(
                 run_id,
@@ -187,8 +187,7 @@ impl SubagentEventSink for ThreadLocalSubagentSink {
         kind: TranscriptKind,
         payload_json: serde_json::Value,
     ) {
-        let ipc_payload =
-            build_subagent_event_payload(run_id, session_id, kind, payload_json);
+        let ipc_payload = build_subagent_event_payload(run_id, session_id, kind, payload_json);
         push_test_collector(ipc_payload);
     }
 

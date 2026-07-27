@@ -1464,7 +1464,10 @@ mod tests {
             "non-workflow Custom rejection surfaces invalid_transition (got: {content})"
         );
         assert!(
-            sink.emitted_task_state_transition.lock().unwrap().is_empty(),
+            sink.emitted_task_state_transition
+                .lock()
+                .unwrap()
+                .is_empty(),
             "no IPC emit on rejection"
         );
         assert!(store.get_payload("s1").await.is_none());
@@ -1479,7 +1482,11 @@ mod tests {
         WorkflowDef {
             name: "review".to_string(),
             description: "test review workflow".to_string(),
-            states: vec!["intake".to_string(), "reviewing".to_string(), "reported".to_string()],
+            states: vec![
+                "intake".to_string(),
+                "reviewing".to_string(),
+                "reported".to_string(),
+            ],
             initial: "intake".to_string(),
             transitions: vec![crate::agent::workflow::Transition {
                 from: "intake".to_string(),

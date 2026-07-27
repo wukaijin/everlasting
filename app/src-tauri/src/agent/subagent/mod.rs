@@ -96,9 +96,7 @@ mod truncate_summary;
 // `unused_imports` warning.
 #[cfg(test)]
 pub(crate) use event_sink::{arm_test_collector, clear_test_collector};
-pub use event_sink::{
-    AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubagentSink,
-};
+pub use event_sink::{AppHandleSubagentSink, SubagentEventSink, ThreadLocalSubagentSink};
 
 // L3d PR2 (2026-06-25): re-export the loader's public surface so
 // callers reach it via `crate::agent::subagent::{SubagentCache,

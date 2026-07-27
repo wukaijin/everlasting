@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use axum::{extract::State, routing::post, Json, Router};
 
+use crate::commands::config::{get_llm_config_inner, PublicLlmConfig};
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::commands::config::{get_llm_config_inner, PublicLlmConfig};
 
 pub async fn get_llm_config(
     State(state): State<Arc<AppState>>,

@@ -12,8 +12,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use chrono::Utc;
-use sqlx::{Row, SqlitePool};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
 
 use crate::projects::DEFAULT_PROJECT_ID;
 
@@ -763,7 +763,8 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Idempotent: re-running on a pre-C1 DB adds the columns; re-running
     // on a post-C1 DB is a no-op.
     add_subagent_runs_column_if_missing(pool, "messages_json", "TEXT").await?;
-    add_subagent_runs_column_if_missing(pool, "messages_truncated", "INTEGER NOT NULL DEFAULT 0").await?;
+    add_subagent_runs_column_if_missing(pool, "messages_truncated", "INTEGER NOT NULL DEFAULT 0")
+        .await?;
 
     // --- P1 (autonomous memory, 2026-06-29): storage layer for the
     // agent's self-produced, cross-session recalled experience memory.

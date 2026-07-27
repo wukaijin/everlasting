@@ -86,12 +86,10 @@ pub const BUILTIN_REVIEW_SKILLS: &[(&str, &str)] = &[
 /// (role_name, agent.md body) —— 内置 review 的 1 个角色 agent(reviewer)。
 /// reviewer.md 的 `model:` 留空 —— 由 dispatch_subagent 的 model 参数(per-dispatch
 /// override)主导,这是多模型评审的核心机制。role_name 等于 frontmatter `name:` 字段。
-pub const BUILTIN_REVIEW_AGENTS: &[(&str, &str)] = &[
-    (
-        "reviewer",
-        include_str!("../../../resources/builtin-workflow/review/agents/reviewer.md"),
-    ),
-];
+pub const BUILTIN_REVIEW_AGENTS: &[(&str, &str)] = &[(
+    "reviewer",
+    include_str!("../../../resources/builtin-workflow/review/agents/reviewer.md"),
+)];
 
 /// 内置 plugin 名清单。`list_plugins` 用它做并集发现。
 /// 07-26-workflow-review-plugin C3:追加 review。
@@ -152,8 +150,8 @@ mod tests {
 
     #[test]
     fn builtin_review_workflow_json_validates() {
-        let def: WorkflowDef = serde_json::from_str(BUILTIN_REVIEW_WORKFLOW_JSON)
-            .expect("builtin review JSON parses");
+        let def: WorkflowDef =
+            serde_json::from_str(BUILTIN_REVIEW_WORKFLOW_JSON).expect("builtin review JSON parses");
         assert!(
             validate(&def).is_ok(),
             "builtin review JSON must self-validate"

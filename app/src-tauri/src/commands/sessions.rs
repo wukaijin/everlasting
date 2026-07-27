@@ -32,7 +32,6 @@ pub async fn list_sessions_inner(
 
 #[tauri::command]
 pub async fn list_sessions(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
 ) -> Result<Vec<db::SessionSummary>, AppCommandError> {
@@ -105,7 +104,6 @@ pub async fn create_session_inner(
 
 #[tauri::command]
 pub async fn create_session(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
     initial_cwd: String,
@@ -125,7 +123,6 @@ pub async fn load_session_inner(
 
 #[tauri::command]
 pub async fn load_session(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Option<db::LoadedSession>, AppCommandError> {
@@ -168,7 +165,6 @@ pub async fn diff_worktree_inner(
 
 #[tauri::command]
 pub async fn diff_worktree(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<git::diff::DiffResult, AppCommandError> {
@@ -288,7 +284,6 @@ pub async fn delete_session_inner(
 
 #[tauri::command]
 pub async fn delete_session(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), AppCommandError> {
@@ -333,7 +328,6 @@ pub async fn clear_session_messages_inner(
 
 #[tauri::command]
 pub async fn clear_session_messages(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), AppCommandError> {
@@ -358,7 +352,6 @@ pub async fn rename_session_inner(
 
 #[tauri::command]
 pub async fn rename_session(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     new_title: String,
@@ -378,7 +371,6 @@ pub async fn set_session_color_inner(
 
 #[tauri::command]
 pub async fn set_session_color(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     color_tag: Option<i32>,
@@ -425,7 +417,6 @@ pub async fn set_session_workflow_enabled_inner(
 
 #[tauri::command]
 pub async fn set_session_workflow_enabled(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     enabled: bool,
@@ -470,7 +461,6 @@ pub async fn set_session_plugin_name_inner(
 
 #[tauri::command]
 pub async fn set_session_plugin_name(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     name: String,
@@ -573,7 +563,6 @@ pub async fn update_message_latency_inner(
 
 #[tauri::command]
 pub async fn update_message_latency(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     seq: i64,
@@ -582,7 +571,16 @@ pub async fn update_message_latency(
     total_ms: Option<i64>,
     thinking_ms: Option<i64>,
 ) -> Result<bool, AppCommandError> {
-    update_message_latency_inner(&state, session_id, seq, ttfb_ms, gen_ms, total_ms, thinking_ms).await
+    update_message_latency_inner(
+        &state,
+        session_id,
+        seq,
+        ttfb_ms,
+        gen_ms,
+        total_ms,
+        thinking_ms,
+    )
+    .await
 }
 
 /// Patch a `duration_ms` field onto the `tool_result` block
@@ -610,7 +608,6 @@ pub async fn record_tool_duration_inner(
 
 #[tauri::command]
 pub async fn record_tool_duration(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_use_id: String,
@@ -759,7 +756,6 @@ pub async fn edit_user_message_inner(
 
 #[tauri::command]
 pub async fn edit_user_message(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     message_seq: i64,

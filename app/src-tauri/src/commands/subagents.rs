@@ -156,7 +156,6 @@ pub async fn list_subagents_with_model_inner(
 
 #[tauri::command]
 pub async fn list_subagents_with_model(
-
     project_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<SubagentWithModelRow>, AppCommandError> {
@@ -333,7 +332,6 @@ pub async fn set_subagent_model_inner(
 
 #[tauri::command]
 pub async fn set_subagent_model(
-
     name: String,
     source: String,
     project_path: String,

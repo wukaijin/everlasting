@@ -151,7 +151,11 @@ fn stage_daemon_sidecar() -> std::io::Result<()> {
     // `externalBin` lookup adds it automatically, but we must add it
     // to the source artifact path when reading.
     let is_windows = target_triple.contains("windows");
-    let exe_name = if is_windows { "everlasting-daemon.exe" } else { "everlasting-daemon" };
+    let exe_name = if is_windows {
+        "everlasting-daemon.exe"
+    } else {
+        "everlasting-daemon"
+    };
     let src = target_dir.join(&profile).join(exe_name);
 
     if !src.exists() {
@@ -168,9 +172,7 @@ fn stage_daemon_sidecar() -> std::io::Result<()> {
     // Incremental: skip the copy when dst exists and is at least as
     // new as src (100MB+ copy avoidance on every GUI rebuild).
     if let (Ok(src_meta), Ok(dst_meta)) = (std::fs::metadata(&src), std::fs::metadata(&dst)) {
-        if let (Ok(src_mtime), Ok(dst_mtime)) =
-            (src_meta.modified(), dst_meta.modified())
-        {
+        if let (Ok(src_mtime), Ok(dst_mtime)) = (src_meta.modified(), dst_meta.modified()) {
             if dst_mtime >= src_mtime {
                 return Ok(());
             }

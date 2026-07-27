@@ -1145,7 +1145,9 @@ async fn c1_load_messages_returns_empty_for_run_with_null_messages() {
 #[tokio::test]
 async fn c1_load_messages_returns_none_for_missing_run() {
     let pool = make_pool().await;
-    let loaded = load_messages_by_run_id(&pool, "nonexistent-run-id").await.unwrap();
+    let loaded = load_messages_by_run_id(&pool, "nonexistent-run-id")
+        .await
+        .unwrap();
     assert!(loaded.is_none());
 }
 

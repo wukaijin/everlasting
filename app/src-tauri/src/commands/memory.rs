@@ -56,7 +56,6 @@ pub async fn read_memory_layers_inner(
 
 #[tauri::command]
 pub async fn read_memory_layers(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
 ) -> Result<Vec<MemoryLayerInfo>, AppCommandError> {
@@ -135,7 +134,6 @@ pub async fn read_memory_content_inner(
 
 #[tauri::command]
 pub async fn read_memory_content(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
     path: String,
@@ -259,7 +257,6 @@ pub async fn open_memory_in_editor_inner(
 
 #[tauri::command]
 pub async fn open_memory_in_editor(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
     path: String,
@@ -349,7 +346,6 @@ pub async fn list_autonomous_memories_inner(
 
 #[tauri::command]
 pub async fn list_autonomous_memories(
-
     state: State<'_, Arc<AppState>>,
     project_id: String,
 ) -> Result<Vec<crate::db::memories::MemoryRow>, AppCommandError> {
@@ -377,7 +373,6 @@ pub async fn delete_autonomous_memory_inner(
 
 #[tauri::command]
 pub async fn delete_autonomous_memory(
-
     state: State<'_, Arc<AppState>>,
     memory_id: String,
 ) -> Result<u64, AppCommandError> {
@@ -442,7 +437,6 @@ pub async fn update_autonomous_memory_status_inner(
 
 #[tauri::command]
 pub async fn update_autonomous_memory_status(
-
     state: State<'_, Arc<AppState>>,
     memory_id: String,
     new_status: String,
@@ -479,7 +473,6 @@ pub async fn update_autonomous_memory_inner(
 
 #[tauri::command]
 pub async fn update_autonomous_memory(
-
     state: State<'_, Arc<AppState>>,
     memory_id: String,
     title: String,

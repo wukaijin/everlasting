@@ -11,10 +11,10 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::command_palette::{get_command_body_inner, list_commands_inner};
 use crate::error::AppCommandError;
-use crate::state::AppState;
 use crate::resource_loader::CommandInfo;
-use crate::commands::command_palette::{list_commands_inner, get_command_body_inner};
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ListCommandsRequest {

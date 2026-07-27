@@ -262,14 +262,11 @@ impl AppState {
     /// `load(AppHandle).app_data_dir == load_from_dir(p).app_data_dir`
     /// whenever `p == app.path().app_data_dir().unwrap()`. Enforced
     /// by construction + verified by `tests::state_load_path_consistency`.
-    async fn load_inner(
-        app_data_dir: std::path::PathBuf,
-        app: Option<AppHandle>,
-    ) -> Self {
+    async fn load_inner(app_data_dir: std::path::PathBuf, app: Option<AppHandle>) -> Self {
         let tools = crate::tools::builtin_tools();
         tracing::info!(tools_count = tools.len(), "AppState loading");
 
-// Open SQLite at `<app_data_dir>/everlasting.db`.
+        // Open SQLite at `<app_data_dir>/everlasting.db`.
         // 2026-07-01 follow-up: 让受信 allow-list 包含动态段
         // `<app_data_dir>/worktrees/**`(session + worker worktree root),
         // 见 `permissions::sensitive::init_trusted_external`。在 SQL /

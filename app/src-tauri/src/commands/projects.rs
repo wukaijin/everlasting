@@ -123,10 +123,7 @@ pub async fn update_project_name(
     update_project_name_inner(&state, id, new_name).await
 }
 
-pub async fn hide_project_inner(
-    state: &Arc<AppState>,
-    id: String,
-) -> Result<(), AppCommandError> {
+pub async fn hide_project_inner(state: &Arc<AppState>, id: String) -> Result<(), AppCommandError> {
     projects::store::hide_project(&state.db, &id)
         .await
         .map_err(|e| AppCommandError::new(ErrorCategory::InvalidRequest, e))

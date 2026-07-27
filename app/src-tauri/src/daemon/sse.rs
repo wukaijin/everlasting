@@ -49,7 +49,8 @@ use crate::agent::question_store::{
     ModeChangePayload, TaskStateTransitionPayload, ToolQuestionPayload,
 };
 use crate::agent::subagent::{
-    build_subagent_event_payload, build_subagent_finished_payload, SubagentEventSink, TranscriptKind,
+    build_subagent_event_payload, build_subagent_finished_payload, SubagentEventSink,
+    TranscriptKind,
 };
 use crate::state::{ChatEventPayload, ChatEventSink, ToolCallPayload, ToolResultPayload};
 
@@ -372,7 +373,11 @@ mod tests {
         reg.broadcast("chat-event", &payload("hi"));
         let frame = sub.live.recv().await.expect("got frame");
         assert_eq!(frame.event, "chat-event");
-        assert!(frame.data.contains("hi"), "data carries payload: {}", frame.data);
+        assert!(
+            frame.data.contains("hi"),
+            "data carries payload: {}",
+            frame.data
+        );
         assert!(frame.id >= 1);
     }
 

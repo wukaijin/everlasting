@@ -79,14 +79,14 @@ async fn agent_loop_forced_dispatch_runs_worker_without_llm() {
         CancellationToken::new(),
         None, // resend_seq
         h.background_shells.clone(),
-        None,        // max_turns
-        false,       // skip_session_active
-        false,       // skip_persist
-        Some(false), // is_worker
-        None,        // worker_catalog
+        None,                                                                 // max_turns
+        false,                                                                // skip_session_active
+        false,                                                                // skip_persist
+        Some(false),                                                          // is_worker
+        None,                                                                 // worker_catalog
         std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,        // system_prompt_override
-        None,        // worker_run_id
+        None, // system_prompt_override
+        None, // worker_run_id
         h.subagent_cache.clone(),
         None,
         None, // worktree_override

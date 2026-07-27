@@ -178,13 +178,9 @@ pub struct ReviewState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ReviewStatePayload {
-    State {
-        state: ReviewState,
-    },
+    State { state: ReviewState },
     Missing,
-    Invalid {
-        detail: String,
-    },
+    Invalid { detail: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +232,7 @@ fn review_state_path(project_path: &std::path::Path, task_slug: &str) -> PathBuf
 /// `project_path` is the frontend-supplied project root (the
 /// frontend reads `currentSession.current_cwd`). Empty path →
 /// `Missing` (defensive; should not happen in practice).
-pub fn get_review_state_inner(
-    project_path: &str,
-    task_slug: &str,
-) -> ReviewStatePayload {
+pub fn get_review_state_inner(project_path: &str, task_slug: &str) -> ReviewStatePayload {
     if project_path.trim().is_empty() || task_slug.trim().is_empty() {
         return ReviewStatePayload::Missing;
     }
@@ -392,16 +385,10 @@ mod tests {
     fn get_review_state_state_path() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
-        let task_dir = project
-            .join(".everlasting")
-            .join("tasks")
-            .join("demo-task");
+        let task_dir = project.join(".everlasting").join("tasks").join("demo-task");
         write_state(&task_dir, &sample_state_json());
 
-        let payload = get_review_state_inner(
-            &project.to_string_lossy(),
-            "demo-task",
-        );
+        let payload = get_review_state_inner(&project.to_string_lossy(), "demo-task");
         match payload {
             ReviewStatePayload::State { state } => {
                 assert_eq!(state.schema_version, "1.0");
@@ -428,8 +415,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
         // No review-state.json written.
-        let payload =
-            get_review_state_inner(&project.to_string_lossy(), "no-such-task");
+        let payload = get_review_state_inner(&project.to_string_lossy(), "no-such-task");
         assert!(matches!(payload, ReviewStatePayload::Missing));
     }
 
@@ -445,10 +431,7 @@ mod tests {
     fn get_review_state_invalid_when_bad_json() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
-        let task_dir = project
-            .join(".everlasting")
-            .join("tasks")
-            .join("demo-task");
+        let task_dir = project.join(".everlasting").join("tasks").join("demo-task");
         write_state(&task_dir, "{not json");
 
         let payload = get_review_state_inner(&project.to_string_lossy(), "demo-task");
@@ -471,10 +454,7 @@ mod tests {
         }"#;
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
-        let task_dir = project
-            .join(".everlasting")
-            .join("tasks")
-            .join("demo-task");
+        let task_dir = project.join(".everlasting").join("tasks").join("demo-task");
         write_state(&task_dir, bad);
 
         let payload = get_review_state_inner(&project.to_string_lossy(), "demo-task");
@@ -510,10 +490,7 @@ mod tests {
         }"#;
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
-        let task_dir = project
-            .join(".everlasting")
-            .join("tasks")
-            .join("demo-task");
+        let task_dir = project.join(".everlasting").join("tasks").join("demo-task");
         write_state(&task_dir, minimal);
 
         let payload = get_review_state_inner(&project.to_string_lossy(), "demo-task");
@@ -541,9 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_current_task_slug_none_when_empty_path() {
-        let info = get_current_task_slug_inner(String::new())
-            .await
-            .unwrap();
+        let info = get_current_task_slug_inner(String::new()).await.unwrap();
         assert!(info.is_none());
     }
 
@@ -551,10 +526,7 @@ mod tests {
     async fn get_current_task_slug_some_when_active_task_exists() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path();
-        let task_dir = project
-            .join(".everlasting")
-            .join("tasks")
-            .join("demo-task");
+        let task_dir = project.join(".everlasting").join("tasks").join("demo-task");
         fs::create_dir_all(&task_dir).unwrap();
         let task_json = r#"{
             "id": "task-1",

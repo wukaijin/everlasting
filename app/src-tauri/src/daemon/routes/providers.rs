@@ -11,10 +11,14 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::providers::{
+    add_model_inner, add_provider_inner, delete_model_inner, delete_provider_inner,
+    get_default_model_inner, list_models_inner, list_providers_inner, set_default_model_inner,
+    test_model_inner, update_model_inner, update_provider_inner, update_session_model_id_inner,
+};
+use crate::db;
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::db;
-use crate::commands::providers::{list_providers_inner, add_provider_inner, update_provider_inner, delete_provider_inner, list_models_inner, add_model_inner, update_model_inner, delete_model_inner, get_default_model_inner, set_default_model_inner, update_session_model_id_inner, test_model_inner};
 
 pub async fn list_providers(
     State(state): State<Arc<AppState>>,
@@ -35,7 +39,14 @@ pub async fn add_provider(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddProviderRequest>,
 ) -> Result<Json<db::ProviderRow>, AppCommandError> {
-    let result = add_provider_inner(&state, req.protocol, req.display_name, req.base_url, req.api_key).await?;
+    let result = add_provider_inner(
+        &state,
+        req.protocol,
+        req.display_name,
+        req.base_url,
+        req.api_key,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -72,7 +83,15 @@ pub async fn update_provider(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> Result<Json<Option<db::ProviderRow>>, AppCommandError> {
-    let result = update_provider_inner(&state, req.id, req.protocol, req.display_name, req.base_url, req.api_key).await?;
+    let result = update_provider_inner(
+        &state,
+        req.id,
+        req.protocol,
+        req.display_name,
+        req.base_url,
+        req.api_key,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -98,7 +117,17 @@ pub async fn add_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AddModelRequest>,
 ) -> Result<Json<db::ModelRow>, AppCommandError> {
-    let result = add_model_inner(&state, req.provider_id, req.model_name, req.display_name, req.max_tokens, req.thinking_effort, req.supports_thinking, req.context_window).await?;
+    let result = add_model_inner(
+        &state,
+        req.provider_id,
+        req.model_name,
+        req.display_name,
+        req.max_tokens,
+        req.thinking_effort,
+        req.supports_thinking,
+        req.context_window,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -118,7 +147,18 @@ pub async fn update_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateModelRequest>,
 ) -> Result<Json<Option<db::ModelRow>>, AppCommandError> {
-    let result = update_model_inner(&state, req.id, req.provider_id, req.model_name, req.display_name, req.max_tokens, req.thinking_effort, req.supports_thinking, req.context_window).await?;
+    let result = update_model_inner(
+        &state,
+        req.id,
+        req.provider_id,
+        req.model_name,
+        req.display_name,
+        req.max_tokens,
+        req.thinking_effort,
+        req.supports_thinking,
+        req.context_window,
+    )
+    .await?;
     Ok(Json(result))
 }
 

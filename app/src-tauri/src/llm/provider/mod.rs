@@ -147,7 +147,9 @@ pub fn build_provider(
             // Defaults: `DEFAULT_MAX_TOKENS` for max_tokens; "high" for
             // thinking_effort. The chat command's pre-flight check
             // verifies `provider.api_key` is set, so we don't re-check here.
-            let max_tokens = model_row.max_tokens.unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
+            let max_tokens = model_row
+                .max_tokens
+                .unwrap_or(anthropic::DEFAULT_MAX_TOKENS);
             let thinking_effort = model_row
                 .thinking_effort
                 .clone()

@@ -11,10 +11,13 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::subagent_runs::{
+    discard_worker_run_inner, get_subagent_run_inner, list_subagent_runs_by_session_inner,
+    merge_worker_run_inner, MergeWorkerResult,
+};
+use crate::db;
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::db;
-use crate::commands::subagent_runs::{list_subagent_runs_by_session_inner, get_subagent_run_inner, merge_worker_run_inner, discard_worker_run_inner, MergeWorkerResult};
 
 #[derive(Debug, Deserialize)]
 pub struct ListSubagentRunsBySessionRequest {
@@ -74,7 +77,10 @@ pub async fn discard_worker_run(
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/list_subagent_runs_by_session", post(list_subagent_runs_by_session))
+        .route(
+            "/list_subagent_runs_by_session",
+            post(list_subagent_runs_by_session),
+        )
         .route("/get_subagent_run", post(get_subagent_run))
         .route("/merge_worker_run", post(merge_worker_run))
         .route("/discard_worker_run", post(discard_worker_run))

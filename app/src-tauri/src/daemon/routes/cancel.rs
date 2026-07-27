@@ -11,9 +11,9 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::cancel::cancel_chat_inner;
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::commands::cancel::{cancel_chat_inner};
 
 #[derive(Debug, Deserialize)]
 pub struct CancelChatRequest {

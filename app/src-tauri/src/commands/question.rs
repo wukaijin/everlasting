@@ -112,7 +112,6 @@ pub async fn resolve_tool_question_inner(
 
 #[tauri::command]
 pub async fn resolve_tool_question(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_use_id: String,
@@ -202,7 +201,6 @@ pub async fn resolve_mode_change_inner(
 
 #[tauri::command]
 pub async fn resolve_mode_change(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_use_id: String,
@@ -506,7 +504,6 @@ pub async fn get_pending_interaction_inner(
 
 #[tauri::command]
 pub async fn get_pending_interaction(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Option<PendingInteractionEntry>, AppCommandError> {
@@ -531,7 +528,6 @@ pub async fn get_pending_question_inner(
 #[tauri::command]
 #[deprecated(note = "use get_pending_interaction instead")]
 pub async fn get_pending_question(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Option<ToolQuestionPayload>, AppCommandError> {
@@ -633,7 +629,6 @@ pub async fn resolve_task_state_transition_inner(
 
 #[tauri::command]
 pub async fn resolve_task_state_transition(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_use_id: String,
@@ -641,7 +636,8 @@ pub async fn resolve_task_state_transition(
     slug: String,
     allow: bool,
 ) -> Result<db::SessionRow, AppCommandError> {
-    resolve_task_state_transition_inner(&state, session_id, tool_use_id, target_state, slug, allow).await
+    resolve_task_state_transition_inner(&state, session_id, tool_use_id, target_state, slug, allow)
+        .await
 }
 
 /// Pure-Rust core of [`resolve_task_state_transition`].

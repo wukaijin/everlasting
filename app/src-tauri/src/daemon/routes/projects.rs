@@ -11,10 +11,13 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::projects::{
+    create_project_inner, hide_project_inner, list_hidden_projects_inner, list_projects_inner,
+    unhide_project_inner, update_project_name_inner, update_project_path_inner, ListProjectsFilter,
+};
 use crate::error::AppCommandError;
-use crate::state::AppState;
 use crate::projects;
-use crate::commands::projects::{list_projects_inner, list_hidden_projects_inner, create_project_inner, update_project_path_inner, update_project_name_inner, hide_project_inner, unhide_project_inner, ListProjectsFilter};
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ListProjectsRequest {

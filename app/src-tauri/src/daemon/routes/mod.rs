@@ -56,12 +56,12 @@ pub mod question;
 // read IPC routes (mirror commands::review).
 pub mod review;
 pub mod sessions;
+pub mod stream;
 pub mod subagent_runs;
 pub mod subagents;
 pub mod task;
 pub mod ui;
 pub mod worktree;
-pub mod stream;
 
 use std::sync::Arc;
 

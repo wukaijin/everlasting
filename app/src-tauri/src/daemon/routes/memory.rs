@@ -11,10 +11,14 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::memory::{
+    delete_autonomous_memory_inner, list_autonomous_memories_inner, open_memory_in_editor_inner,
+    read_memory_content_inner, read_memory_layers_inner, update_autonomous_memory_inner,
+    update_autonomous_memory_status_inner,
+};
 use crate::error::AppCommandError;
-use crate::state::AppState;
 use crate::memory::types::MemoryLayerInfo;
-use crate::commands::memory::{read_memory_layers_inner, read_memory_content_inner, open_memory_in_editor_inner, list_autonomous_memories_inner, delete_autonomous_memory_inner, update_autonomous_memory_status_inner, update_autonomous_memory_inner};
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ReadMemoryLayersRequest {
@@ -94,7 +98,13 @@ pub async fn update_autonomous_memory_status(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateAutonomousMemoryStatusRequest>,
 ) -> Result<Json<()>, AppCommandError> {
-    let result = update_autonomous_memory_status_inner(&state, req.memory_id, req.new_status, req.demoted_reason).await?;
+    let result = update_autonomous_memory_status_inner(
+        &state,
+        req.memory_id,
+        req.new_status,
+        req.demoted_reason,
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -109,7 +119,8 @@ pub async fn update_autonomous_memory(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateAutonomousMemoryRequest>,
 ) -> Result<Json<crate::db::memories::MemoryRow>, AppCommandError> {
-    let result = update_autonomous_memory_inner(&state, req.memory_id, req.title, req.content).await?;
+    let result =
+        update_autonomous_memory_inner(&state, req.memory_id, req.title, req.content).await?;
     Ok(Json(result))
 }
 
@@ -120,7 +131,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/open_memory_in_editor", post(open_memory_in_editor))
         .route("/list_autonomous_memories", post(list_autonomous_memories))
         .route("/delete_autonomous_memory", post(delete_autonomous_memory))
-        .route("/update_autonomous_memory_status", post(update_autonomous_memory_status))
+        .route(
+            "/update_autonomous_memory_status",
+            post(update_autonomous_memory_status),
+        )
         .route("/update_autonomous_memory", post(update_autonomous_memory))
         .with_state(state)
 }

@@ -56,8 +56,8 @@ use crate::agent::helpers::{
     CANCELLED_MARKER, ERROR_MARKER,
 };
 use crate::agent::loop_detection;
-use crate::agent::subagent::SubagentEventSink;
 use crate::agent::permissions::{self, Decision, PermissionContext};
+use crate::agent::subagent::SubagentEventSink;
 use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
 use crate::agent::MAX_TURNS;
 use crate::background_shell::BackgroundShellRegistry;

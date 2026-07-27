@@ -11,9 +11,11 @@ use std::sync::Arc;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 
+use crate::commands::subagents::{
+    list_subagents_with_model_inner, set_subagent_model_inner, SubagentWithModelRow,
+};
 use crate::error::AppCommandError;
 use crate::state::AppState;
-use crate::commands::subagents::{list_subagents_with_model_inner, set_subagent_model_inner, SubagentWithModelRow};
 
 #[derive(Debug, Deserialize)]
 pub struct ListSubagentsWithModelRequest {
@@ -40,13 +42,18 @@ pub async fn set_subagent_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SetSubagentModelRequest>,
 ) -> Result<Json<SubagentWithModelRow>, AppCommandError> {
-    let result = set_subagent_model_inner(req.name, req.source, req.project_path, req.model_id, &state).await?;
+    let result =
+        set_subagent_model_inner(req.name, req.source, req.project_path, req.model_id, &state)
+            .await?;
     Ok(Json(result))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/list_subagents_with_model", post(list_subagents_with_model))
+        .route(
+            "/list_subagents_with_model",
+            post(list_subagents_with_model),
+        )
         .route("/set_subagent_model", post(set_subagent_model))
         .with_state(state)
 }

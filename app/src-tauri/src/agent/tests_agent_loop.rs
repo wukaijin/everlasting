@@ -4378,14 +4378,14 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         CancellationToken::new(),
         None,
         h.background_shells.clone(),
-        None,                     // max_turns (default MAX_TURNS)
-        false,                    // skip_session_active
-        false,                    // skip_persist
-        Some(false),              // is_worker (production-style)
-        None,                     // worker_catalog
+        None,        // max_turns (default MAX_TURNS)
+        false,       // skip_session_active
+        false,       // skip_persist
+        Some(false), // is_worker (production-style)
+        None,        // worker_catalog
         std::sync::Arc::new(crate::agent::subagent::ThreadLocalSubagentSink), // worker_event_sink
-        None,                     // system_prompt_override
-        None,                     // worker_run_id
+        None,        // system_prompt_override
+        None,        // worker_run_id
         h.subagent_cache.clone(), // L3d subagent cache
         None,
         // L3b (2026-06-27): production-style caller → worktree_override = None.

@@ -116,7 +116,6 @@ pub async fn set_session_mode_inner(
 
 #[tauri::command]
 pub async fn set_session_mode(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     mode: String,
@@ -268,7 +267,6 @@ pub async fn grant_tool_permission_inner(
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn grant_tool_permission(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_name: String,
@@ -300,7 +298,6 @@ pub async fn list_session_tool_permissions_inner(
 
 #[tauri::command]
 pub async fn list_session_tool_permissions(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Vec<db::PermissionGrantRow>, AppCommandError> {
@@ -346,7 +343,6 @@ pub async fn revoke_tool_permission_inner(
 
 #[tauri::command]
 pub async fn revoke_tool_permission(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
     tool_name: String,
@@ -384,7 +380,6 @@ pub async fn list_session_audit_events_inner(
 
 #[tauri::command]
 pub async fn list_session_audit_events(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Vec<db::AuditEventRow>, AppCommandError> {
@@ -410,7 +405,6 @@ pub async fn list_turn_traces_inner(
 
 #[tauri::command]
 pub async fn list_turn_traces(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<Vec<db::trace::TurnTraceRow>, AppCommandError> {
@@ -432,7 +426,6 @@ pub async fn clear_session_trace_inner(
 
 #[tauri::command]
 pub async fn clear_session_trace(
-
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), AppCommandError> {

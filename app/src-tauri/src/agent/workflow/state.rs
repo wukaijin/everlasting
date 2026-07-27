@@ -623,8 +623,8 @@ mod tests {
         t.status = TaskStatus::InProgress;
         write_task(path, &t).expect("write");
 
-        let updated =
-            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
+        let updated = set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done)
+            .expect("ok");
         assert_eq!(updated.status, TaskStatus::Done);
         assert!(
             updated.summary.starts_with(SPEC_DISTILLED_MARKER_PREFIX),
@@ -700,8 +700,8 @@ mod tests {
 
         // Apply InProgress → Done again; the hook should detect the
         // pre-existing marker and skip.
-        let updated =
-            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
+        let updated = set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done)
+            .expect("ok");
         let marker_count = updated
             .summary
             .lines()
@@ -766,8 +766,8 @@ mod tests {
             "precondition: spec dir must not exist yet"
         );
 
-        let _updated =
-            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
+        let _updated = set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done)
+            .expect("ok");
 
         assert!(
             spec_dir.exists(),
@@ -804,8 +804,8 @@ mod tests {
             "precondition: progress.md must not exist before trigger"
         );
 
-        let _updated =
-            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
+        let _updated = set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done)
+            .expect("ok");
 
         assert!(
             progress_path.exists(),
@@ -861,8 +861,8 @@ mod tests {
         std::fs::create_dir_all(progress_path.parent().unwrap()).unwrap();
         std::fs::write(&progress_path, "preexisting body\n").unwrap();
 
-        let _updated =
-            set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done).expect("ok");
+        let _updated = set_task_state(path, "my-feat", &TaskStatus::InProgress, &TaskStatus::Done)
+            .expect("ok");
 
         let content = std::fs::read_to_string(&progress_path).expect("read progress");
         // The idempotent short-circuit must NOT append the

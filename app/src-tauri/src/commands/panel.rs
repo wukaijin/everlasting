@@ -112,7 +112,6 @@ pub async fn list_subagents_inner(
 
 #[tauri::command]
 pub async fn list_subagents(
-
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
 ) -> Result<Vec<SubagentInfo>, AppCommandError> {
@@ -197,7 +196,6 @@ pub async fn list_panel_items_inner(
 
 #[tauri::command]
 pub async fn list_panel_items(
-
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,
 ) -> Result<Vec<PanelItem>, AppCommandError> {
@@ -230,7 +228,6 @@ pub async fn get_skill_body_inner(
 
 #[tauri::command]
 pub async fn get_skill_body(
-
     state: State<'_, Arc<AppState>>,
     name: String,
     project_id: Option<String>,
