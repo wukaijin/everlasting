@@ -281,6 +281,37 @@ pub(crate) async fn chat_inner(
         "chat: provider resolved"
     );
 
+    // 3a (2026-07-28, defensive depth): cancel any prior in-flight
+    // chat on this session BEFORE registering the new one. Mirrors
+    // the invariant already enforced by every destructive command
+    // (delete_session / clear_session_messages / edit_user_message /
+    // detach_worktree / delete_worktree) — see `commands/sessions.rs`
+    // and `commands/worktree.rs` for the same pattern.
+    //
+    // The frontend's `chatStore.send` early-returns on
+    // `isCurrentSessionStreaming` (chat.ts:952), and
+    // `editMessage` / `resendMessage` / `retryChat` each explicitly
+    // cancel before re-invoking. So in the current code base this
+    // cancel-then-await is a no-op for the normal paths. It is,
+    // however, load-bearing defense in depth: any future caller
+    // (or a race where the frontend guard mis-fires) that leaks a
+    // second chat request into the same session would otherwise
+    // strand the old agent loop holding stale
+    // `session_active_request` + `cancellations` state, and the
+    // old loop's tool execution would continue writing into a
+    // session that's already moved on.
+    //
+    // `await_inflight_exit` returns immediately on `None` (no
+    // prior in-flight), so the common cold-start path is a no-op.
+    let exit_rx = crate::agent::helpers::cancel_inflight_for_session(
+        &cancellations,
+        &session_active_request,
+        &inflight_exits,
+        &session_id,
+    )
+    .await;
+    crate::agent::helpers::await_inflight_exit(exit_rx, "chat").await;
+
     // Register a cancellation token for this request. The frontend's
     // Stop button calls `cancel_chat(rid)` which fetches this token
     // and triggers it; the agent loop's `tokio::select!` notices and

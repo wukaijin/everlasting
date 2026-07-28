@@ -2420,6 +2420,22 @@ pub async fn run_chat_loop(
                             // initiated this exit, not the C2+
                             // intervention).
                             question_store.remove(&session_id).await;
+                            // 3b: synthesize the tool_result for the
+                            // assistant's already-persisted tool_use
+                            // blocks (this is the cancel-during-
+                            // intervention arm — the per-stream
+                            // `cancelled` flag is NOT set here, so
+                            // the existing tail-pair repair at line
+                            // 2101 doesn't fire; only this helper
+                            // does).
+                            finalize_pending_tool_results(
+                                &db,
+                                &session_id,
+                                &tool_calls,
+                                seq,
+                                skip_persist,
+                            )
+                            .await;
                             if !skip_persist {
                                 persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                                 let _ = crate::db::touch_session(&db, &session_id).await;
@@ -2506,6 +2522,18 @@ pub async fn run_chat_loop(
                                             "terminated",
                                         Some(seq),
                                         ).await;
+                                        // 3b: synthesize the
+                                        // tool_result for the
+                                        // assistant's already-
+                                        // persisted tool_use blocks.
+                                        finalize_pending_tool_results(
+                                            &db,
+                                            &session_id,
+                                            &tool_calls,
+                                            seq,
+                                            skip_persist,
+                                        )
+                                        .await;
                                         if !skip_persist {
                                             persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                                             let _ = crate::db::touch_session(&db, &session_id).await;
@@ -2538,6 +2566,17 @@ pub async fn run_chat_loop(
                                         "terminated",
                                     Some(seq),
                                     ).await;
+                                    // 3b: synthesize the tool_result
+                                    // for the assistant's already-
+                                    // persisted tool_use blocks.
+                                    finalize_pending_tool_results(
+                                        &db,
+                                        &session_id,
+                                        &tool_calls,
+                                        seq,
+                                        skip_persist,
+                                    )
+                                    .await;
                                     if !skip_persist {
                                         persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                                         let _ = crate::db::touch_session(&db, &session_id).await;
@@ -2563,6 +2602,20 @@ pub async fn run_chat_loop(
                                     tracing::warn!(
                                         "C2+ oneshot dropped without response — treating as cancelled"
                                     );
+                                    // 3b: synthesize the tool_result
+                                    // the assistant turn already
+                                    // emitted (line 2097) so the DB
+                                    // does not end with an orphan
+                                    // tool_use that crashes the next
+                                    // LLM call.
+                                    finalize_pending_tool_results(
+                                        &db,
+                                        &session_id,
+                                        &tool_calls,
+                                        seq,
+                                        skip_persist,
+                                    )
+                                    .await;
                                     if !skip_persist {
                                         persist_turn_cwd(&db, &session_id, last_cwd.as_deref()).await;
                                         let _ = crate::db::touch_session(&db, &session_id).await;
@@ -4192,6 +4245,57 @@ async fn load_for_session(
     project_path: &str,
 ) -> Vec<crate::memory::MemoryLayer> {
     crate::memory::loader::load_for_session(cache, project_id, project_path).await
+}
+
+/// 3b (2026-07-28): C2+ loop-intervention's 4 exit arms all `return`
+/// without synthesizing the tool_result for the assistant's
+/// `tool_use` blocks, which were already persisted at line 2097 just
+/// before the intervention fired. Without this repair, the DB ends
+/// with an orphan `assistant(tool_use)` and the next LLM call
+/// crashes upstream (Anthropic 2013 / OpenAI 400 "tool result must
+/// follow tool call"). Mirrors the existing `cancelled` / `had_error`
+/// tail-pair repair at lines 2101 / 2157 — those branches fire on
+/// the per-stream cancel/error path; this helper fires on the
+/// C2+ intervention path, which sets neither flag.
+///
+/// `seq` is the seq of the assistant turn already persisted (the
+/// turn has not yet `seq += 1`'d, so the synthetic tool_result
+/// takes the next slot the next normal turn would skip). When
+/// `skip_persist` is true (worker subagent path), the worker does
+/// not own the session's lifetime; the parent's own run is
+/// unaffected and the helper becomes a no-op for the DB.
+async fn finalize_pending_tool_results(
+    db: &SqlitePool,
+    session_id: &str,
+    tool_calls: &[(String, String, serde_json::Value)],
+    seq: i64,
+    skip_persist: bool,
+) {
+    if tool_calls.is_empty() {
+        return;
+    }
+    let tool_result_msg = build_synthetic_tool_result_message(tool_calls);
+    if skip_persist {
+        return;
+    }
+    if let Err(e) = crate::db::persist_turn(
+        db,
+        session_id,
+        tool_result_msg.role,
+        &tool_result_msg.content,
+        seq,
+        None,
+    )
+    .await
+    {
+        tracing::error!(
+            error = %e,
+            session_id = %session_id,
+            seq = seq,
+            tool_calls_len = tool_calls.len(),
+            "3b: failed to persist synthetic tool_result after C2+ exit (orphan leak — provider will 2013)"
+        );
+    }
 }
 
 /// L2 (2026-06-19): decide whether a single turn's `tool_use`
