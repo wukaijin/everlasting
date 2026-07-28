@@ -13,7 +13,6 @@ allowed-tools: []
 
 ## 沉淀到哪
 - `.everlasting/spec/<package>/<layer>/index.md` + 具体 guideline 文件
-- 借鉴 `.trellis/spec/` 结构,但物理独立(见 Q7)
 
 ## 格式
 - 自由 markdown,不强制结构

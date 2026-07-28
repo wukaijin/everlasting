@@ -23,7 +23,7 @@ State: check
    - `cargo clippy --lib --tests -- -D warnings`(lint)
    - `pnpm test`(前端测试,如果改过 app/)
 3. **Spec 合规**:
-   - 改的代码路径是否在 `.trellis/spec/` 里有 guideline?有的话对照检查
+   - 改的代码路径是否在 `.everlasting/spec/` 里有 guideline?有的话对照检查
    - 新引入的 pattern / 决策是否需要 `remember` 写进 `.everlasting/spec/`?
 4. **Code review spot-check**:从 task.items 里随机抽 1-2 个改动做行级 review
 5. **返回 verdict**(给主 LLM 决定是否进 done):

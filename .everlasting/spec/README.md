@@ -1,7 +1,6 @@
 # `.everlasting/spec/` — 项目代码规范沉淀目录
 
 > **职责**:本目录沉淀 **本项目怎么写代码** 的规范 — pattern、convention、踩坑 + 修复、技术决策。
-> 与 `.trellis/spec/`(管 "怎么用 Trellis 开发")职责独立,见 `docs/WORKFLOW-INTEGRATION.md` §6.7 Q7 决定。
 
 ## 为什么这个目录存在
 
@@ -11,7 +10,7 @@ dev workflow(`07-08-workflow-integration`)的闭环价值:task done 时把决策
 
 ## 结构约定
 
-借鉴 `.trellis/spec/` 的 `<package>/<layer>/index.md` + guideline 文件结构,但物理独立(Q7):
+目录结构(`<package>/<layer>/index.md` + guideline 文件):
 
 ```
 .everlasting/spec/
@@ -22,7 +21,7 @@ dev workflow(`07-08-workflow-integration`)的闭环价值:task done 时把决策
         └── <topic>.md           # 单条规范文件(标题 + 场景 + 规范 + 反例)
 ```
 
-**`index.md` 模板**(借鉴 `.trellis/spec/backend/index.md`):
+**`index.md` 模板**:
 
 ```markdown
 # <package> 开发规范
@@ -77,14 +76,3 @@ dev workflow(`07-08-workflow-integration`)的闭环价值:task done 时把决策
 - 不强求每次都沉淀(没东西可沉淀就不写)
 - 无效沉淀(空 / 重复)接受为代价——长跑后有用的会被引用,无用的沉底
 - 沉淀不强制结构(自由 markdown),便于 agent 表达
-
-## 与 `.trellis/spec/` 的关系
-
-| 维度 | `.trellis/spec/` | `.everlasting/spec/` |
-|------|-------------------|-----------------------|
-| 职责 | "怎么用 Trellis 开发" | "这个项目本身怎么写代码" |
-| 写入方 | Trellis 维护者 | agent 跑 workflow 沉淀 |
-| 内容 | Trellis 工具用法 | 本项目 pattern / 踩坑 / 决策 |
-| 物理位置 | `.trellis/spec/` | `.everlasting/spec/` |
-
-过渡期两份共存(Q7 决定):各自管各自职责,不互相迁移。

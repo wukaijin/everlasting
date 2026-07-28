@@ -25,4 +25,4 @@
 
 ## 模板参考
 
-参见 `.trellis/spec/backend/index.md` 的样式(状态表 + how to fill)。本目录的沉淀自由 markdown,不强制结构;但建议保持 `标题 + 场景 + 规范 + 反例` 四段式,便于后续 agent 检索引用。
+本目录的沉淀自由 markdown,不强制结构;但建议保持 `标题 + 场景 + 规范 + 反例` 四段式,便于后续 agent 检索引用。
