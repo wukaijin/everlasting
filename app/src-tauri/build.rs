@@ -17,6 +17,15 @@
 //!    avoids re-copying 100+MB on every GUI rebuild when the daemon
 //!    hasn't changed).
 //!
+//!    When the daemon artifact doesn't exist yet (fresh checkout), we
+//!    write a 0-byte placeholder instead of no-op-ing. This is mandatory:
+//!    `tauri_build::build()` validates `bundle.externalBin` entries exist
+//!    on disk *during build.rs*, before any binary is compiled — so a
+//!    missing `binaries/everlasting-daemon-<triple>` deadlocks the very
+//!    first `cargo build --bin everlasting-daemon` that would produce it.
+//!    The placeholder breaks the deadlock; the next build.rs run copies
+//!    the real artifact over it (a 0-byte dst is always overwritten).
+//!
 //!    `cargo:rerun-if-changed` is NOT emitted for the daemon binary
 //!    (we can't point it at `target/` reliably across profiles); the
 //!    mtime check + the fact that this script runs on every build is
@@ -41,10 +50,10 @@ fn main() {
     // validates that every `bundle.externalBin` entry exists on disk
     // under `binaries/<name>-<target-triple>`, and fails the build if
     // it's missing. So we must populate the staged copy before that
-    // check runs. A missing daemon artifact (first GUI-only build) is
-    // handled as a no-op here; if tauri_build then fails, the error is
-    // accurate ("build the daemon first: cargo build --bin
-    // everlasting-daemon").
+    // check runs. When the daemon artifact isn't built yet, we write a
+    // 0-byte placeholder so this validation passes (see
+    // `stage_daemon_sidecar` for why a no-op would deadlock the first
+    // build).
     if let Err(e) = stage_daemon_sidecar() {
         println!("cargo:warning=P2.4 sidecar stage skipped: {e}");
     }
@@ -119,9 +128,11 @@ fn emit_app_identifier() {
 /// Copy `target/<profile>/everlasting-daemon` →
 /// `src-tauri/binaries/everlasting-daemon-<target-triple>`.
 ///
-/// Returns `Ok(())` on success or if the daemon artifact doesn't exist
-/// yet (treated as a no-op, not an error, so a GUI-only first build
-/// works). Returns `Err` only on unexpected I/O failures during copy.
+/// Returns `Ok(())` on success, when the daemon artifact doesn't exist
+/// yet (a 0-byte placeholder is written so `externalBin` validation can
+/// pass — see the deadlock note above), or when the staged copy is
+/// already a fresh real binary. Returns `Err` only on unexpected I/O
+/// failures during copy.
 fn stage_daemon_sidecar() -> std::io::Result<()> {
     let target_triple = std::env::var("TARGET").unwrap_or_default();
     if target_triple.is_empty() {
@@ -158,25 +169,57 @@ fn stage_daemon_sidecar() -> std::io::Result<()> {
     };
     let src = target_dir.join(&profile).join(exe_name);
 
-    if !src.exists() {
-        // Daemon not built yet — common on a fresh GUI-only checkout.
-        // No-op (warned by caller).
-        return Ok(());
-    }
-
     let staged_name = format!("everlasting-daemon-{}", target_triple);
     let binaries_dir = manifest_dir.join("binaries");
     std::fs::create_dir_all(&binaries_dir)?;
     let dst = binaries_dir.join(&staged_name);
 
-    // Incremental: skip the copy when dst exists and is at least as
-    // new as src (100MB+ copy avoidance on every GUI rebuild).
-    if let (Ok(src_meta), Ok(dst_meta)) = (std::fs::metadata(&src), std::fs::metadata(&dst)) {
-        if let (Ok(src_mtime), Ok(dst_mtime)) = (src_meta.modified(), dst_meta.modified()) {
-            if dst_mtime >= src_mtime {
-                return Ok(());
+    // Daemon source artifact not built yet. Two sub-cases:
+    //
+    //   a) dst already holds a real binary (built earlier, e.g. a
+    //      warm rust-cache) → leave it, nothing to do.
+    //   b) dst is missing or is a 0-byte placeholder → write a 0-byte
+    //      placeholder so tauri_build's externalBin existence check
+    //      passes and the build can proceed. WITHOUT this, a fresh
+    //      checkout is a hard deadlock: `externalBin` is validated in
+    //      build.rs *before* any binary is compiled, so even
+    //      `cargo build --bin everlasting-daemon` (which produces the
+    //      very artifact we'd copy) can't start. The placeholder breaks
+    //      the deadlock; the next build.rs run after the daemon is
+    //      compiled copies the real binary over it (see below — the
+    //      0-byte size is what lets the real artifact win despite the
+    //      placeholder's fresh mtime).
+    if !src.exists() {
+        let needs_placeholder = match std::fs::metadata(&dst) {
+            Ok(m) => m.len() == 0, // existing placeholder, keep it idempotent
+            Err(_) => true,        // nothing staged yet
+        };
+        if needs_placeholder {
+            std::fs::write(&dst, [])?;
+        }
+        return Ok(());
+    }
+
+    // src exists. Decide whether to (over)write dst with the real binary.
+    // Skip only when dst already holds a real (non-placeholder) binary that
+    // is at least as new as src — the 100MB+ copy avoidance that matters for
+    // fast incremental GUI rebuilds. A 0-byte dst is always a placeholder
+    // (see above) and must be overwritten unconditionally; relying on mtime
+    // alone would let a freshly-touched placeholder shadow a real artifact.
+    let dst_is_real_and_fresh = match std::fs::metadata(&dst) {
+        Ok(dst_meta) if dst_meta.len() > 0 => {
+            match (
+                std::fs::metadata(&src).and_then(|m| m.modified()),
+                dst_meta.modified(),
+            ) {
+                (Ok(src_mtime), Ok(dst_mtime)) => dst_mtime >= src_mtime,
+                _ => false,
             }
         }
+        _ => false, // missing or 0-byte placeholder → must copy
+    };
+    if dst_is_real_and_fresh {
+        return Ok(());
     }
 
     std::fs::copy(&src, &dst)?;

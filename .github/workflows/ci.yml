@@ -59,6 +59,24 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --check
 
+      # 必须先 build daemon sidecar,再跑 cargo test --lib。
+      #
+      # tauri.conf.json 的 bundle.externalBin = ["binaries/everlasting-daemon"]
+      # 让 Tauri 在 build.rs 阶段(而非仅 bundle 阶段)就校验
+      # binaries/everlasting-daemon-<triple> 存在 —— 校验不过连编译都起不来,
+      # 也就跑不了测试。而该文件是构建产物,被 app/src-tauri/.gitignore 忽略,
+      # CI checkout 出来 binaries/ 是空的。
+      #
+      # build.rs::stage_daemon_sidecar() 只在 target/<profile>/everlasting-daemon
+      # 已存在时才把它拷到 binaries/。所以必须先 build 一次 daemon bin,
+      # build.rs 会顺带把它 stage 进去;之后 cargo test --lib 触发 everlasting
+      # crate 的 build.rs 时就能通过 externalBin 校验。(本地之所以不挂,是
+      # 因为工作树里那个被 gitignore 的 388MB 产物一直存在。)
+      #
+      # 代价:CI 首次多 ~2min 编译 daemon;rust-cache 命中后增量很快。
+      - name: cargo build daemon sidecar (stages binaries/ for externalBin)
+        run: cargo build --bin everlasting-daemon
+
       - name: cargo test --lib
         run: cargo test --lib
 
