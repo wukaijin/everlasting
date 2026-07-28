@@ -1,0 +1,39 @@
+{
+  "id": "review-reviewer-dispatch-deadlock",
+  "name": "review-reviewer-dispatch-deadlock",
+  "title": "review plugin reviewer 派发死锁 + 指引断裂 (C5)",
+  "description": "E2E (session 04c62fab) 暴露 review workflow 核心能力跑不通:create_task 写死 dev 的 planning 状态、dispatch_subagent enum 不加载 plugin 层 agent(看不到 reviewer)、skill 指引写的 role 和工具 enum 不一致。三层叠加导致死锁,模型被迫 edit_file 改 task.json/workflow.json。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "backend",
+  "priority": "P0",
+  "creator": "Carlos-home",
+  "assignee": "Carlos-home",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-26-workflow-review-plugin",
+  "relatedFiles": [
+    "app/src-tauri/src/agent/chat_loop.rs",
+    "app/src-tauri/src/agent/subagent/mod.rs",
+    "app/src-tauri/src/agent/subagent/loader.rs",
+    "app/src-tauri/src/agent/subagent/dispatch.rs",
+    "app/src-tauri/src/tools/create_task.rs",
+    "app/src-tauri/resources/builtin-workflow/review/skills/wf-review-method/SKILL.md",
+    "app/src-tauri/resources/builtin-workflow/review/skills/wf-overview/SKILL.md",
+    ".everlasting/workflow/review/skills/wf-review-method/SKILL.md",
+    ".everlasting/workflow/review/skills/wf-overview/SKILL.md"
+  ],
+  "notes": "来源:session 04c62fab (2026-07-27 17:33-17:52) 的 E2E。C4 (breadcrumb) 修好后模型能进 reviewing,但立刻撞死锁 —— create_task 状态对不上 review 状态机 + dispatch enum 漏 reviewer + skill 指引不一致。这是比 C4 更严重的 P0:review workflow 的核心能力(派多模型 reviewer)从设计上跑不通。",
+  "meta": {
+    "source_session": "04c62fab-d79f-48f7-911b-b7ed02d92e4a",
+    "epic_role": "C5"
+  }
+}
