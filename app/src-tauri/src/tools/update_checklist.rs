@@ -791,6 +791,7 @@ mod tests {
             items: initial_items,
             // Step 3.3: pre-archive fixture.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
 
@@ -878,6 +879,7 @@ mod tests {
             // archive_task_init; always None on the
             // legacy-fixture seed.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         crate::agent::workflow::write_task(proj_tmp.path(), &task).unwrap();
 

@@ -1829,7 +1829,15 @@ pub(crate) fn check_workflow_role_gate(
     // state at task bootstrap).
     let state = ctx.current_task.as_ref()?.status.as_str();
 
-    let allowed = crate::agent::workflow::allowed_roles(&ctx.workflow_def, state)
+    // C5 (2026-07-28): resolve the state machine via the TASK's
+    // owning plugin (`task_workflow_def`), not the session plugin.
+    // A dev-created task keeps dev's role rules even when the
+    // session switches to review mid-task — preventing the cross-
+    // plugin dead-lock where review's `roles_by_state` has no entry
+    // for dev's `planning` status (and vice versa).
+    let task_def = &ctx.task_workflow_def;
+
+    let allowed = crate::agent::workflow::allowed_roles(task_def, state)
         .iter()
         .any(|r| r == subagent_name);
     let forced = input
@@ -1850,7 +1858,7 @@ pub(crate) fn check_workflow_role_gate(
     }
 
     let allowed_in_state: Vec<String> =
-        crate::agent::workflow::allowed_roles(&ctx.workflow_def, state).to_vec();
+        crate::agent::workflow::allowed_roles(task_def, state).to_vec();
     let allowed_str = if allowed_in_state.is_empty() {
         "(none)".to_string()
     } else {
@@ -2616,8 +2624,10 @@ mod tests {
     }
 
     fn ctx_with_status(status: TaskStatus) -> WorkflowCtx {
+        let workflow_def = dev_workflow_def();
         WorkflowCtx {
-            workflow_def: dev_workflow_def(),
+            task_workflow_def: workflow_def.clone(),
+            workflow_def,
             current_task: Some(TaskJson {
                 id: "t1".into(),
                 title: "x".into(),
@@ -2630,6 +2640,7 @@ mod tests {
                 items: vec![],
                 // Step 3.3: pre-archive fixture.
                 completed_at: None,
+                workflow_plugin: "dev".into(),
             }),
         }
     }
@@ -2712,8 +2723,10 @@ mod tests {
     /// enforcement, no error.
     #[test]
     fn gate_short_circuits_when_no_current_task() {
+        let workflow_def = dev_workflow_def();
         let ctx = WorkflowCtx {
-            workflow_def: dev_workflow_def(),
+            task_workflow_def: workflow_def.clone(),
+            workflow_def,
             current_task: None,
         };
         let input = serde_json::json!({"subagent": "general-purpose"});
@@ -2737,6 +2750,65 @@ mod tests {
         assert!(
             msg.contains("(none)"),
             "done's allowed list is empty: {msg}"
+        );
+    }
+
+    /// C5 (2026-07-28): the role gate MUST use the task's owning
+    /// plugin (`task_workflow_def`), not the session plugin. This
+    /// test constructs the exact dead-lock scenario from session
+    /// 04c62fab: a dev-created task (status=planning) opened in a
+    /// review session. Before the fix, the gate queried review's
+    /// `roles_by_state` with key "planning" → empty → denied all.
+    /// After the fix, the gate uses dev's state machine and correctly
+    /// allows `researcher` in `planning`.
+    #[test]
+    fn gate_uses_task_owning_plugin_not_session_plugin() {
+        let dev_def = dev_workflow_def();
+        // Minimal review workflow def: states don't include "planning",
+        // so review's roles_by_state["planning"] is absent (empty).
+        let review_def = crate::agent::workflow::WorkflowDef {
+            name: "review".into(),
+            description: String::new(),
+            states: vec!["intake".into(), "reviewing".into()],
+            initial: "intake".into(),
+            transitions: vec![],
+            roles_by_state: {
+                let mut m = std::collections::HashMap::new();
+                m.insert("reviewing".into(), vec!["reviewer".into()]);
+                m
+            },
+            breadcrumb: std::collections::HashMap::new(),
+            delegation_templates: std::collections::HashMap::new(),
+            coordination: crate::agent::workflow::Coordination::Pipeline,
+            gather_strategy: std::collections::HashMap::new(),
+        };
+        // Session is review, but task belongs to dev (status=planning).
+        let ctx = WorkflowCtx {
+            workflow_def: review_def,   // session plugin (review)
+            task_workflow_def: dev_def, // task's owning plugin (dev)
+            current_task: Some(TaskJson {
+                id: "t1".into(),
+                title: "x".into(),
+                slug: "x".into(),
+                status: TaskStatus::Planning,
+                created_at: "2026-07-08T00:00:00Z".into(),
+                updated_at: "2026-07-08T00:00:00Z".into(),
+                parent: None,
+                summary: String::new(),
+                items: vec![],
+                completed_at: None,
+                workflow_plugin: "dev".into(),
+            }),
+        };
+        let input = serde_json::json!({"subagent": "researcher"});
+        // dev's planning allows researcher — gate must pass even
+        // though the session plugin (review) has no "planning" entry.
+        let denial = check_workflow_role_gate(Some(&ctx), "researcher", &input);
+        assert!(
+            denial.is_none(),
+            "role gate must use task's dev plugin (planning allows researcher), \
+             not session's review plugin; got denial: {:?}",
+            denial
         );
     }
 

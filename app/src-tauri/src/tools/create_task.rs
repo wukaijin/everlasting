@@ -31,7 +31,7 @@
 //! `.everlasting/tasks/<slug>/` inside the project root — same
 //! boundary `update_checklist`'s persistence path uses. No Tier 4 ask.
 
-use crate::agent::workflow::{create_task_init, TaskError};
+use crate::agent::workflow::{create_task_init, load_workflow, TaskError, TaskStatus};
 use crate::llm::types::ToolDef;
 use crate::tools::ToolContext;
 
@@ -96,17 +96,49 @@ pub async fn execute(input: &serde_json::Value, ctx: &ToolContext) -> (String, b
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    match create_task_init(&ctx.worktree_path, &title, &slug, parent.as_deref()) {
+    // C5 (2026-07-27): resolve the active plugin's initial state so
+    // the seeded task is aligned with that plugin's state machine from
+    // creation. A review-plugin session seeds `intake` (not dev's
+    // `planning`), so the role gate / breadcrumb / transitions all
+    // resolve against the right plugin immediately — no manual
+    // task.json status rewrite (the session-04c62fab workaround).
+    //
+    // C5 (2026-07-28): the same plugin name is also recorded as the
+    // task's `workflow_plugin` so role gate / transition keep using
+    // the owning plugin's state machine even after the session
+    // switches plugins mid-task.
+    let project_path_str = ctx.worktree_path.to_string_lossy();
+    let plugin_name = ctx
+        .workflow_name
+        .as_deref()
+        .filter(|n| !n.is_empty())
+        .unwrap_or("dev");
+    let initial_status = {
+        let initial = load_workflow(plugin_name, &project_path_str).initial;
+        TaskStatus::from_str_opt(&initial)
+    };
+
+    match create_task_init(
+        &ctx.worktree_path,
+        &title,
+        &slug,
+        parent.as_deref(),
+        initial_status.clone(),
+        plugin_name,
+    ) {
         Ok(task) => {
             tracing::info!(slug = %task.slug, "create_task: seeded workflow task");
             (
                 format!(
-                    "Task created (status: planning):\n\
+                    "Task created (status: {}):\n\
                      slug: {}\n\
                      title: {}\n\
                      task_dir: .everlasting/tasks/{}/\n\
-                     Next: fill prd.md, then call request_task_state_transition to move to implement when ready.",
-                    task.slug, task.title, task.slug
+                     Next: fill prd.md, then call request_task_state_transition when ready.",
+                    task.status.as_str(),
+                    task.slug,
+                    task.title,
+                    task.slug
                 ),
                 false,
             )
@@ -162,6 +194,15 @@ mod tests {
         }
     }
 
+    /// C5: a review-plugin ToolContext — mirrors `ctx_at` but with
+    /// `workflow_name = "review"` so `execute` resolves the plugin's
+    /// initial state (`intake`) instead of dev's `planning`.
+    fn ctx_at_review(tmp: &tempfile::TempDir) -> ToolContext {
+        let mut ctx = ctx_at(tmp);
+        ctx.workflow_name = Some("review".to_string());
+        ctx
+    }
+
     #[test]
     fn definition_has_correct_name() {
         assert_eq!(definition().name, "create_task");
@@ -190,6 +231,33 @@ mod tests {
             .path()
             .join(".everlasting/tasks/my-feature/prd.md")
             .exists());
+    }
+
+    /// C5 (2026-07-27): a review-plugin session must seed the task
+    /// in `intake` (review's initial state), NOT dev's `planning`.
+    /// Otherwise the role gate reads `planning`, finds no matching
+    /// entry in review's `roles_by_state`, and denies every dispatch
+    /// — the session-04c62fab dead-lock.
+    #[tokio::test]
+    async fn execute_review_plugin_seeds_intake_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = ctx_at_review(&tmp);
+        let input = serde_json::json!({"title": "Review Me", "slug": "review-me"});
+        let (out, is_err) = execute(&input, &ctx).await;
+        assert!(!is_err, "{}", out);
+        // The success message reports the resolved status.
+        assert!(
+            out.contains("status: intake"),
+            "review-plugin create_task must report intake status; got: {}",
+            out
+        );
+        let task = read_task(tmp.path(), "review-me").expect("read_task parses the seeded file");
+        assert_eq!(
+            task.status,
+            crate::agent::workflow::TaskStatus::Custom("intake".to_string()),
+            "review-plugin task must be in intake (Custom(\"intake\")), got {:?}",
+            task.status
+        );
     }
 
     #[tokio::test]

@@ -89,7 +89,25 @@ pub struct WorkflowCtx {
     /// `default_workflow()`; Phase 2 swaps in
     /// `load_workflow(name, project_path)` (with fallback
     /// to `default_workflow()` on serde / validate failure).
+    ///
+    /// Reflects the **session's** plugin — drives skill/tool
+    /// surfacing (e.g. review session shows the `reviewer`
+    /// dispatch enum). For task-state invariants (role gate,
+    /// transition validation) use [`task_workflow_def`], which
+    /// tracks the **task's** owning plugin and stays stable
+    /// across mid-session plugin switches.
     pub workflow_def: WorkflowDef,
+
+    /// C5 (2026-07-28): the **task's** owning plugin's state
+    /// machine. When `current_task` is `Some`, this is
+    /// `load_workflow(task.workflow_plugin, ...)`; when
+    /// `None`, it falls back to `workflow_def` (session
+    /// plugin). Role gate / transition / breadcrumb read
+    /// THIS field (not `workflow_def`) so a task created
+    /// under the dev plugin keeps dev's state-machine
+    /// invariants even after the session switches to review
+    /// — and vice versa.
+    pub task_workflow_def: WorkflowDef,
 
     /// The "current" workflow task. Eagerly resolved on
     /// IPC entry (NOT per-turn) by listing the project's
@@ -183,8 +201,11 @@ pub async fn build_workflow_ctx(
             // not a plugin-resolution failure.
             let plugin_name = &loaded.session.plugin_name;
             let project_path = std::path::PathBuf::new();
+            let workflow_def = load_workflow(plugin_name, &project_path.to_string_lossy());
             return Ok(Some(WorkflowCtx {
-                workflow_def: load_workflow(plugin_name, &project_path.to_string_lossy()),
+                // No task → task_workflow_def falls back to session plugin.
+                task_workflow_def: workflow_def.clone(),
+                workflow_def,
                 current_task: None,
             }));
         }
@@ -204,8 +225,20 @@ pub async fn build_workflow_ctx(
     let plugin_name = &loaded.session.plugin_name;
     let workflow_def = load_workflow(plugin_name, &project.path);
 
+    // C5 (2026-07-28): the task's owning plugin drives role gate /
+    // transition / breadcrumb, NOT the session plugin. When a task
+    // exists, load its owning plugin's state machine; otherwise fall
+    // back to the session plugin (no task yet → session plugin is
+    // the only signal). This keeps a dev-created task's invariants
+    // stable when the session switches to review mid-task.
+    let task_workflow_def = match &current_task {
+        Some(task) => load_workflow(&task.workflow_plugin, &project.path),
+        None => workflow_def.clone(),
+    };
+
     Ok(Some(WorkflowCtx {
         workflow_def,
+        task_workflow_def,
         current_task,
     }))
 }
@@ -611,8 +644,10 @@ pub fn breadcrumb_body(ctx: &WorkflowCtx) -> String {
         .current_task
         .as_ref()
         .map(|t| t.status.as_str())
-        .unwrap_or_else(|| ctx.workflow_def.initial.as_str());
-    let breadcrumb = breadcrumb_for(&ctx.workflow_def, state_str);
+        .unwrap_or_else(|| ctx.task_workflow_def.initial.as_str());
+    // C5: breadcrumb resolves against the TASK's owning plugin so a
+    // dev task shows dev's state guidance even in a review session.
+    let breadcrumb = breadcrumb_for(&ctx.task_workflow_def, state_str);
 
     match &ctx.current_task {
         Some(task) => {
@@ -693,8 +728,10 @@ mod tests {
     }
 
     fn sample_ctx_with_task() -> WorkflowCtx {
+        let workflow_def = default_workflow();
         WorkflowCtx {
-            workflow_def: default_workflow(),
+            task_workflow_def: workflow_def.clone(),
+            workflow_def,
             current_task: Some(TaskJson {
                 id: "t1".into(),
                 title: "Sample task".into(),
@@ -707,13 +744,16 @@ mod tests {
                 items: vec![],
                 // Step 3.3: pre-archive fixture.
                 completed_at: None,
+                workflow_plugin: "dev".into(),
             }),
         }
     }
 
     fn sample_ctx_no_task() -> WorkflowCtx {
+        let workflow_def = default_workflow();
         WorkflowCtx {
-            workflow_def: default_workflow(),
+            task_workflow_def: workflow_def.clone(),
+            workflow_def,
             current_task: None,
         }
     }
@@ -888,6 +928,7 @@ mod tests {
         let workflow_def: WorkflowDef =
             serde_json::from_str(json).expect("builtin review workflow JSON must parse");
         WorkflowCtx {
+            task_workflow_def: workflow_def.clone(),
             workflow_def,
             current_task: None,
         }
@@ -1104,6 +1145,7 @@ mod tests {
                 items: vec![],
                 // Step 3.3: pre-archive fixture.
                 completed_at: None,
+                workflow_plugin: "dev".into(),
             };
             crate::agent::workflow::write_task(project.path(), &task).unwrap();
         }
@@ -1133,6 +1175,7 @@ mod tests {
                 items: vec![],
                 // Step 3.3: pre-archive fixture.
                 completed_at: None,
+                workflow_plugin: "dev".into(),
             };
             crate::agent::workflow::write_task(project.path(), &task).unwrap();
         }
@@ -1167,6 +1210,7 @@ mod tests {
             items: vec![],
             // Step 3.3: pre-archive fixture.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         crate::agent::workflow::write_task(project.path(), &task).unwrap();
 

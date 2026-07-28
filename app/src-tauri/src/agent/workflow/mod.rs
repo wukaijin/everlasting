@@ -108,6 +108,9 @@ pub use task::{
     validate_slug, write_task, TaskError, TaskItem, TaskJson, TaskResult, TaskStatus,
     PROJ_NS_TASKS_ARCHIVE_DIR,
 };
+// C5: resolve_current_task is needed by set_session_plugin_name's
+// task-remap path; re-export alongside the other task helpers.
+pub use inject::resolve_current_task;
 
 // Re-export the injection surface at the workflow root.
 // `agent::chat::chat` (the IPC entry) imports
@@ -641,8 +644,10 @@ mod tests {
     /// checker). Tests can mutate `current_task` to drive
     /// the placeholder substitution.
     fn dev_ctx_with_task(title: &str, summary: &str, status: TaskStatus) -> WorkflowCtx {
+        let workflow_def = default_workflow();
         WorkflowCtx {
-            workflow_def: default_workflow(),
+            task_workflow_def: workflow_def.clone(),
+            workflow_def,
             current_task: Some(TaskJson {
                 id: "t1".into(),
                 title: title.into(),
@@ -655,6 +660,8 @@ mod tests {
                 items: vec![],
                 // Step 3.3: pre-archive fixture.
                 completed_at: None,
+                // C5: dev fixture → dev plugin.
+                workflow_plugin: "dev".into(),
             }),
         }
     }

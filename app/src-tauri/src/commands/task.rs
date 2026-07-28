@@ -191,7 +191,18 @@ pub async fn create_task_inner(
     };
 
     let project_path = PathBuf::from(&project.path);
-    create_task_init(&project_path, &title, &slug, parent.as_deref()).map_err(map_task_error)
+    // Frontend IPC defaults to the dev plugin's initial state.
+    // (The LLM-facing create_task tool resolves the session plugin's
+    // initial via ToolContext — see tools/create_task.rs.)
+    create_task_init(
+        &project_path,
+        &title,
+        &slug,
+        parent.as_deref(),
+        crate::agent::workflow::TaskStatus::Planning,
+        "dev",
+    )
+    .map_err(map_task_error)
 }
 
 /// W1 (Workflow integration, Phase 3 Step 3.3 — 2026-07-09):

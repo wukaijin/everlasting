@@ -484,7 +484,8 @@ mod tests {
     }
 
     fn create_seed(path: &Path, slug: &str) -> TaskJson {
-        let task = create_task_init(path, "My Feature", slug, None).expect("create");
+        let task = create_task_init(path, "My Feature", slug, None, TaskStatus::Planning, "dev")
+            .expect("create");
         // Mutate so we have a known starting state.
         let mut t = task;
         t.summary = "initial line\n".to_string();

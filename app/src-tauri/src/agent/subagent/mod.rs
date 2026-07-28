@@ -318,9 +318,20 @@ pub const DISPATCH_TOOL_NAME: &str = "dispatch_subagent";
 pub async fn definition_with_cache(
     cache: &SubagentCache,
     project_path: &str,
+    workflow_name: Option<&str>,
     models: &[ModelBrief],
 ) -> ToolDef {
-    let loaded = cache.list(project_path).await;
+    // C5 (2026-07-27): MUST consult the workflow-aware list so the
+    // plugin-layer agents (e.g. review plugin's `reviewer`) appear in
+    // the subagent enum. The previous `cache.list` only merged 3
+    // layers (builtin + user + project) and silently dropped plugin
+    // agents — so the LLM could never pick `reviewer`, while the
+    // role gate (which reads `roles_by_state` from the same plugin)
+    // demanded it. That mismatch dead-locked the entire review
+    // workflow (session 04c62fab). `list_with_workflow` adds the two
+    // plugin layers (builtin-plugin + project-plugin) and degrades to
+    // the same 3-layer merge when `workflow_name` is None/empty.
+    let loaded = cache.list_with_workflow(project_path, workflow_name).await;
     let names: Vec<String> = loaded.iter().map(|l| l.def.name.clone()).collect();
     // B6+ B: the `model` enum values are display_names (human-readable;
     // the system prompt does not list models, so this enum is the
@@ -946,7 +957,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let cache = SubagentCache::arc();
         let project_path = tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         assert_eq!(def.name, DISPATCH_TOOL_NAME);
         let enum_vals: Vec<String> = def
             .input_schema
@@ -962,6 +973,66 @@ mod tests {
         );
     }
 
+    /// C5 (2026-07-27): the dispatch enum MUST surface the review
+    /// plugin's `reviewer` agent when `workflow_name = Some("review")`.
+    /// Before the fix, `definition_with_cache` called `cache.list`
+    /// (3 layers, no plugin layer), so `reviewer` never reached the
+    /// enum while the role gate demanded it — dead-locking the whole
+    /// review workflow (session 04c62fab).
+    #[tokio::test]
+    async fn definition_with_cache_review_plugin_exposes_reviewer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = SubagentCache::arc();
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path, Some("review"), &[]).await;
+        let enum_vals: Vec<String> = def
+            .input_schema
+            .pointer("/properties/subagent/enum")
+            .and_then(|v| v.as_array())
+            .expect("enum present")
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        // builtins (general-purpose, researcher) + review's reviewer.
+        assert!(
+            enum_vals.iter().any(|v| v == "reviewer"),
+            "review plugin dispatch enum must include `reviewer`; got {:?}",
+            enum_vals
+        );
+        // Sanity: dev's builtins are still there.
+        assert!(enum_vals.iter().any(|v| v == "general-purpose"));
+    }
+
+    /// C5: dev plugin must still expose its roles (researcher/
+    /// implementer/checker) — no regression from the workflow_name
+    /// threading.
+    #[tokio::test]
+    async fn definition_with_cache_dev_plugin_keeps_dev_roles() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = SubagentCache::arc();
+        let project_path = tmp.path().to_string_lossy().to_string();
+        let def = definition_with_cache(&cache, &project_path, Some("dev"), &[]).await;
+        let enum_vals: Vec<String> = def
+            .input_schema
+            .pointer("/properties/subagent/enum")
+            .and_then(|v| v.as_array())
+            .expect("enum present")
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        assert!(
+            enum_vals.iter().any(|v| v == "researcher"),
+            "dev plugin dispatch enum must keep `researcher`; got {:?}",
+            enum_vals
+        );
+        // review's reviewer must NOT leak into a dev session.
+        assert!(
+            !enum_vals.iter().any(|v| v == "reviewer"),
+            "reviewer leaked into dev session enum: {:?}",
+            enum_vals
+        );
+    }
+
     #[tokio::test]
     async fn definition_with_cache_description_has_source_tags() {
         // The description must carry `Available subagents:` + per-agent
@@ -970,7 +1041,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let cache = SubagentCache::arc();
         let project_path = tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         let desc = def.description.expect("description present");
         assert!(
             desc.contains("Available subagents:"),
@@ -1005,7 +1076,7 @@ mod tests {
         let cache = SubagentCache::arc();
 
         // Initially only builtins.
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         let enum_vals: Vec<String> = def
             .input_schema
             .pointer("/properties/subagent/enum")
@@ -1024,7 +1095,7 @@ mod tests {
         )
         .unwrap();
 
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         let enum_vals: Vec<String> = def
             .input_schema
             .pointer("/properties/subagent/enum")
@@ -1062,7 +1133,7 @@ mod tests {
 
         let cache = SubagentCache::arc();
         let project_path = proj_tmp.path().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         let desc = def.description.expect("description");
         // project researcher wins, source tag is project.
         assert!(
@@ -1098,7 +1169,7 @@ mod tests {
                 display_name: "Claude Sonnet 4.5".into(),
             },
         ];
-        let def = definition_with_cache(&cache, &project_path, &briefs).await;
+        let def = definition_with_cache(&cache, &project_path, None, &briefs).await;
         let model_enum: Vec<String> = def
             .input_schema
             .pointer("/properties/model/enum")
@@ -1133,7 +1204,7 @@ mod tests {
         // not a missing property (defensive — keeps the schema shape).
         let cache = SubagentCache::arc();
         let project_path = std::env::temp_dir().to_string_lossy().to_string();
-        let def = definition_with_cache(&cache, &project_path, &[]).await;
+        let def = definition_with_cache(&cache, &project_path, None, &[]).await;
         let model_enum = def
             .input_schema
             .pointer("/properties/model/enum")

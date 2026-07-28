@@ -1644,9 +1644,13 @@ pub async fn run_chat_loop(
         // with the project's other namespace dirs.
         if !effective_is_worker {
             let project_path = worktree_path.to_string_lossy().to_string();
+            // C5: thread the active plugin name so plugin-layer agents
+            // (e.g. review's `reviewer`) reach the dispatch enum.
+            let workflow_name = workflow_ctx.as_ref().map(|c| c.workflow_def.name.as_str());
             let dispatch_def = crate::agent::subagent::definition_with_cache(
                 &subagent_cache,
                 &project_path,
+                workflow_name,
                 &model_briefs,
             )
             .await;
@@ -3583,7 +3587,11 @@ pub async fn run_chat_loop(
                                     &question_store,
                                     &sink,
                                     &token,
-                                    workflow_ctx.as_ref().map(|c| &c.workflow_def),
+                                    // C5: validate transitions against the TASK's
+                                    // owning plugin, not the session plugin — a dev
+                                    // task keeps dev's transition rules even when
+                                    // the session is switched to review.
+                                    workflow_ctx.as_ref().map(|c| &c.task_workflow_def),
                                     Some(seq),
                                 )
                                 .await;

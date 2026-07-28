@@ -454,9 +454,95 @@ pub async fn set_session_plugin_name_inner(
             anyhow::anyhow!("set_session_plugin_name: plugin name must be non-empty").into(),
         );
     }
+
+    // C5 (2026-07-28): when the session switches plugins mid-task,
+    // re-point the active task's `workflow_plugin` to the new plugin
+    // and remap its `status` to the new plugin's `initial`. Without
+    // this, the role gate / transition (which read task.workflow_plugin)
+    // would keep using the old plugin's state machine, but the LLM's
+    // tools/breadcrumb would reflect the new plugin — a mismatch that
+    // dead-locks cross-plugin flows (dev→review→dev in one session).
+    //
+    // The remap is lossy at the status level (review's `reviewing`
+    // → dev's `planning`), but the prd.md is the single source of
+    // truth and survives the switch, so the dev→review→dev round-trip
+    // preserves all review findings.
+    remap_task_plugin_on_switch(&state.db, &session_id, &trimmed).await;
+
     db::set_session_plugin_name(&state.db, &session_id, &trimmed)
         .await
         .map_err(|e| anyhow::anyhow!("set_session_plugin_name failed: {}", e).into())
+}
+
+/// C5: if the session has an active task whose `workflow_plugin`
+/// differs from the new session plugin, rewrite the task's
+/// `workflow_plugin` + `status` (to the new plugin's `initial`).
+/// Best-effort — failures log a warning but do not block the plugin
+/// switch (the session plugin_name DB write is the source of truth
+/// for the session; the task remap is a consistency optimization).
+async fn remap_task_plugin_on_switch(db: &sqlx::SqlitePool, session_id: &str, new_plugin: &str) {
+    use crate::agent::workflow::{load_workflow, resolve_current_task, write_task, TaskStatus};
+
+    let loaded = match crate::db::load_session(db, session_id).await {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            tracing::warn!(
+                session_id = session_id,
+                "set_session_plugin_name: session not found; skipping task remap",
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                session_id = session_id,
+                error = %e,
+                "set_session_plugin_name: load_session failed; skipping task remap",
+            );
+            return;
+        }
+    };
+
+    let project = match crate::db::get_project(db, &loaded.session.project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return, // no project → no task to remap
+        Err(e) => {
+            tracing::warn!(error = %e, "set_session_plugin_name: get_project failed; skipping");
+            return;
+        }
+    };
+
+    let project_path = std::path::PathBuf::from(&project.path);
+    let mut task = match resolve_current_task(&project_path).await {
+        Some(t) => t,
+        None => return, // no active task → nothing to remap
+    };
+
+    if task.workflow_plugin == new_plugin {
+        return; // same plugin → no remap needed
+    }
+
+    let new_initial = load_workflow(new_plugin, &project.path).initial;
+    let old_plugin = task.workflow_plugin.clone();
+    let old_status = task.status.as_str().to_string();
+    task.workflow_plugin = new_plugin.to_string();
+    task.status = TaskStatus::from_str_opt(&new_initial);
+
+    if let Err(e) = write_task(&project_path, &task) {
+        tracing::warn!(
+            slug = %task.slug,
+            error = %e,
+            "set_session_plugin_name: failed to remap task; session switched but task keeps old plugin",
+        );
+        return;
+    }
+    tracing::info!(
+        slug = %task.slug,
+        old_plugin = %old_plugin,
+        new_plugin = %new_plugin,
+        old_status = %old_status,
+        new_status = %new_initial,
+        "set_session_plugin_name: remapped active task to new plugin",
+    );
 }
 
 #[tauri::command]

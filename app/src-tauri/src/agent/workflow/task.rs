@@ -251,12 +251,34 @@ pub struct TaskItem {
 /// archive move). The field is optional and `None` for
 /// pre-archive tasks; serde defaults + skip-serializing keep
 /// the v1 schema forward-compatible.
+///
+/// **C5 (2026-07-28)**: added `workflow_plugin: String` — records
+/// which plugin's state machine this task's `status` belongs to.
+/// Without it, switching the session plugin made role gate /
+/// transition look up the *new* plugin's state table with the *old*
+/// plugin's status string, dead-locking cross-plugin flows
+/// (dev→review→dev in one session). `#[serde(default = "dev_plugin")]`
+/// back-fills `"dev"` for pre-C5 task.json files (they were all
+/// created by the dev plugin, so `"dev"` is the correct retroactive
+/// attribution).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskJson {
     pub id: String,
     pub title: String,
     pub slug: String,
     pub status: TaskStatus,
+    /// C5: the plugin whose state machine `status` belongs to. Role
+    /// gate / transition / breadcrumb resolve the workflow_def via
+    /// this field, NOT the session's plugin_name — so switching the
+    /// session plugin (to surface different skills/tools) does not
+    /// corrupt the task's state-machine invariants. `set_session_
+    /// plugin_name` re-points this field + remaps `status` to the
+    /// new plugin's `initial` when the user switches mid-task.
+    #[serde(
+        default = "default_workflow_plugin",
+        skip_serializing_if = "is_default_plugin"
+    )]
+    pub workflow_plugin: String,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -279,6 +301,22 @@ pub struct TaskJson {
     /// [`TaskStatus::Completed`] AND this field is filled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
+}
+
+/// C5: serde default for `TaskJson::workflow_plugin`. Pre-C5
+/// task.json files lack the field; they were all created by the dev
+/// plugin, so `"dev"` is the correct retroactive attribution.
+fn default_workflow_plugin() -> String {
+    "dev".to_string()
+}
+
+/// C5: skip-serializing helper — omit `workflow_plugin` when it's
+/// `"dev"` so task.json written by C5 stays byte-identical to the
+/// pre-C5 schema for the common (dev-only) case. Review tasks always
+/// serialize the field (non-default value). Keeps git diffs on
+/// existing dev task.json noise-free after the upgrade.
+fn is_default_plugin(s: &String) -> bool {
+    s == "dev"
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +492,8 @@ pub fn create_task_init(
     title: &str,
     slug: &str,
     parent: Option<&str>,
+    initial_status: TaskStatus,
+    workflow_plugin: &str,
 ) -> TaskResult<TaskJson> {
     validate_slug(slug)?;
     if title.trim().is_empty() {
@@ -477,7 +517,15 @@ pub fn create_task_init(
         id,
         title: title.trim().to_string(),
         slug: slug.to_string(),
-        status: TaskStatus::Planning,
+        // C5 (2026-07-27): caller picks the initial status so a
+        // review-plugin session seeds `intake` (not dev's
+        // `planning`), keeping the task aligned with the active
+        // plugin's state machine from creation.
+        status: initial_status,
+        // C5 (2026-07-28): record the owning plugin so role gate /
+        // transition / breadcrumb resolve the state machine via
+        // the task, not the (switchable) session plugin.
+        workflow_plugin: workflow_plugin.to_string(),
         created_at: now.clone(),
         updated_at: now,
         parent: parent.map(str::to_string),
@@ -798,7 +846,15 @@ mod tests {
     #[test]
     fn create_task_init_writes_json_and_prd_skeleton() {
         let d = fresh_project();
-        let task = create_task_init(&proj(&d), "My Feature", "my-feature", None).expect("create");
+        let task = create_task_init(
+            &proj(&d),
+            "My Feature",
+            "my-feature",
+            None,
+            TaskStatus::Planning,
+            "dev",
+        )
+        .expect("create");
         assert_eq!(task.title, "My Feature");
         assert_eq!(task.slug, "my-feature");
         assert_eq!(task.status, TaskStatus::Planning);
@@ -824,17 +880,32 @@ mod tests {
     #[test]
     fn create_task_init_refuses_to_overwrite_existing() {
         let d = fresh_project();
-        create_task_init(&proj(&d), "First", "dup", None).expect("first ok");
-        let err =
-            create_task_init(&proj(&d), "Second", "dup", None).expect_err("must reject duplicate");
+        create_task_init(&proj(&d), "First", "dup", None, TaskStatus::Planning, "dev")
+            .expect("first ok");
+        let err = create_task_init(
+            &proj(&d),
+            "Second",
+            "dup",
+            None,
+            TaskStatus::Planning,
+            "dev",
+        )
+        .expect_err("must reject duplicate");
         assert!(matches!(err, TaskError::AlreadyExists(_)), "got {:?}", err);
     }
 
     #[test]
     fn create_task_init_with_parent_records_parent_slug() {
         let d = fresh_project();
-        let task = create_task_init(&proj(&d), "Sub", "sub-task", Some("parent-task"))
-            .expect("create child");
+        let task = create_task_init(
+            &proj(&d),
+            "Sub",
+            "sub-task",
+            Some("parent-task"),
+            TaskStatus::Planning,
+            "dev",
+        )
+        .expect("create child");
         assert_eq!(task.parent.as_deref(), Some("parent-task"));
         let again = read_task(&proj(&d), "sub-task").expect("read child");
         assert_eq!(again.parent.as_deref(), Some("parent-task"));
@@ -1011,7 +1082,8 @@ mod tests {
         // validate_slug preflight at the top of write_task short-circuits
         // before any IO.
         let d = fresh_project();
-        create_task_init(&proj(&d), "Good", "good", None).expect("first");
+        create_task_init(&proj(&d), "Good", "good", None, TaskStatus::Planning, "dev")
+            .expect("first");
         let bad = TaskJson {
             id: "id".into(),
             title: "bad".into(),
@@ -1024,6 +1096,7 @@ mod tests {
             items: Vec::new(),
             // Step 3.3: pre-archive fixture.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         let err = write_task(&proj(&d), &bad).expect_err("bad slug");
         assert!(matches!(err, TaskError::InvalidSlug(_)));
@@ -1058,10 +1131,71 @@ mod tests {
             ],
             // Step 3.3: pre-archive serde-round-trip fixture.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         let bytes = serde_json::to_vec_pretty(&original).unwrap();
         let parsed: TaskJson = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed, original);
+    }
+
+    /// C5 (2026-07-28): a pre-C5 task.json (no `workflow_plugin`
+    /// field) must deserialize with `workflow_plugin = "dev"` (the
+    /// serde default). Without this, upgrading would break every
+    /// existing task.json on disk — role gate / transition would
+    /// read an empty plugin and deny everything.
+    #[test]
+    fn task_json_pre_c5_missing_workflow_plugin_defaults_to_dev() {
+        // A minimal pre-C5 task.json — no workflow_plugin key.
+        let pre_c5 = r#"{
+            "id": "old",
+            "title": "Legacy",
+            "slug": "legacy",
+            "status": "in_progress",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let parsed: TaskJson = serde_json::from_str(pre_c5).expect("pre-C5 task.json must parse");
+        assert_eq!(
+            parsed.workflow_plugin, "dev",
+            "missing workflow_plugin must default to dev; got {:?}",
+            parsed.workflow_plugin
+        );
+    }
+
+    /// C5: a review-plugin task serializes `workflow_plugin: "review"`
+    /// (non-default → not skipped), while a dev task OMITS the field
+    /// (skip_serializing_if keeps dev task.json byte-identical to
+    /// pre-C5 for the common case).
+    #[test]
+    fn task_json_serializes_workflow_plugin_only_for_non_dev() {
+        let review_task = TaskJson {
+            id: "r".into(),
+            title: "R".into(),
+            slug: "r".into(),
+            status: TaskStatus::Custom("intake".into()),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            parent: None,
+            summary: String::new(),
+            items: Vec::new(),
+            completed_at: None,
+            workflow_plugin: "review".into(),
+        };
+        let json = serde_json::to_string(&review_task).unwrap();
+        assert!(
+            json.contains("\"workflow_plugin\":\"review\""),
+            "review task must serialize workflow_plugin; got: {json}"
+        );
+
+        let dev_task = TaskJson {
+            workflow_plugin: "dev".into(),
+            ..review_task
+        };
+        let dev_json = serde_json::to_string(&dev_task).unwrap();
+        assert!(
+            !dev_json.contains("workflow_plugin"),
+            "dev task must OMIT workflow_plugin (skip_serializing_if); got: {dev_json}"
+        );
     }
 
     #[test]
@@ -1079,6 +1213,7 @@ mod tests {
             // Step 3.3: must also be skipped via
             // `skip_serializing_if`.
             completed_at: None,
+            workflow_plugin: "dev".into(),
         };
         let s = serde_json::to_string(&t).unwrap();
         assert!(!s.contains("parent"), "parent=None must be skipped: {}", s);
@@ -1201,7 +1336,15 @@ mod tests {
     fn archive_task_init_moves_done_task_into_archive_tree() {
         let d = tempfile::tempdir().expect("tempdir");
         let path = d.path();
-        let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");
+        let mut task = create_task_init(
+            path,
+            "My Feature",
+            "my-feat",
+            None,
+            TaskStatus::Planning,
+            "dev",
+        )
+        .expect("create");
         task.status = TaskStatus::Done;
         write_task(path, &task).expect("write done");
 
@@ -1264,7 +1407,15 @@ mod tests {
         for non_done in [TaskStatus::Planning, TaskStatus::InProgress] {
             let d = tempfile::tempdir().expect("tempdir");
             let path = d.path();
-            let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");
+            let mut task = create_task_init(
+                path,
+                "My Feature",
+                "my-feat",
+                None,
+                TaskStatus::Planning,
+                "dev",
+            )
+            .expect("create");
             task.status = non_done.clone();
             write_task(path, &task).expect("write");
 
@@ -1285,7 +1436,15 @@ mod tests {
     fn archive_task_init_refuses_when_target_already_exists() {
         let d = tempfile::tempdir().expect("tempdir");
         let path = d.path();
-        let mut task = create_task_init(path, "My Feature", "my-feat", None).expect("create");
+        let mut task = create_task_init(
+            path,
+            "My Feature",
+            "my-feat",
+            None,
+            TaskStatus::Planning,
+            "dev",
+        )
+        .expect("create");
         task.status = TaskStatus::Done;
         write_task(path, &task).expect("write done");
 
