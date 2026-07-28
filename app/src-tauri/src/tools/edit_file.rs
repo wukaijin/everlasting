@@ -215,8 +215,25 @@ pub async fn execute(
         );
     }
 
-    // 8. Invalidate the fingerprint so the LLM re-reads on the next edit.
-    guard.invalidate(session_id, &validated).await;
+    // 8. Re-record the fingerprint so the LLM can chain further
+    //    edits on the same file WITHOUT a redundant read_file. We
+    //    just wrote the file, so the LLM is the authoritative
+    //    reader of the new content — capturing the post-edit
+    //    mtime/size/head_hash here lets the next edit's verify_fresh
+    //    pass for our own writes. External modifications between
+    //    two edits (Git pull, IDE save, a shell tool) will still
+    //    fail verify_fresh on the NEXT edit because their fingerprint
+    //    won't match the one we record here.
+    //
+    //    Historical note: this used to call `invalidate()` (drops
+    //    the fingerprint) which forced a re-read on every edit.
+    //    That was over-defensive — the LLM is the writer, so the
+    //    "stale content" risk is zero for chained edits of the same
+    //    file. The read-then-edit chain is still required for the
+    //    first edit (verify_read checks), and external stale is
+    //    still caught by verify_fresh on the next edit after any
+    //    out-of-band modification.
+    guard.record_read(session_id, &validated).await;
 
     let summary = if replace_all {
         format!(
@@ -570,9 +587,14 @@ mod tests {
         assert!(msg.contains("rejected") || msg.contains("outside"));
     }
 
-    /// Edit invalidates the fingerprint so the next edit must re-read.
+    /// Successful edit re-records the fingerprint (does NOT invalidate
+    /// it), so the LLM can chain further edits on the same file
+    /// without re-reading. Regression test for the change that
+    /// swapped `invalidate` → `record_read` (2026-07-28): the prior
+    /// behavior forced a redundant `read_file` between every pair
+    /// of edits, which is wasteful when the LLM is the writer.
     #[tokio::test]
-    async fn successful_edit_invalidates_fingerprint() {
+    async fn successful_edit_records_fresh_fingerprint() {
         let tmp = tempdir().unwrap();
         let p = tmp.path().join("a.txt");
         std::fs::write(&p, "hello\n").unwrap();
@@ -593,7 +615,10 @@ mod tests {
         )
         .await;
         assert!(!is_err);
-        // Second edit on the same file fails: fingerprint was invalidated.
+
+        // Second edit on the same file succeeds WITHOUT a re-read:
+        // the post-edit fingerprint was captured, so verify_read +
+        // verify_fresh both pass.
         let (msg, is_err) = execute(
             &serde_json::json!({
                 "path": p.to_string_lossy(),
@@ -605,8 +630,59 @@ mod tests {
             "s1",
         )
         .await;
-        assert!(is_err);
-        assert!(msg.contains("read_file"));
+        assert!(!is_err, "chained edit should succeed, got: {msg}");
+    }
+
+    /// Even with the new "chained edits" capability, an external
+    /// modification between two edits still fails `verify_fresh` on
+    /// the next edit. This guards the "stale content" rationale
+    /// that justifies the fingerprint in the first place.
+    #[tokio::test]
+    async fn chained_edit_fails_when_file_changed_externally() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("a.txt");
+        std::fs::write(&p, "hello\n").unwrap();
+        let ctx = test_ctx(&tmp);
+        let guard = ReadGuard::new();
+        mark_read(&guard, "s1", &p).await;
+
+        // First edit succeeds, captures new fingerprint.
+        let (_, is_err) = execute(
+            &serde_json::json!({
+                "path": p.to_string_lossy(),
+                "old_string": "hello",
+                "new_string": "bye",
+            }),
+            &ctx,
+            &guard,
+            "s1",
+        )
+        .await;
+        assert!(!is_err);
+
+        // Out-of-band modification: simulate Git pull / IDE save
+        // happening between the two edits.
+        std::fs::write(&p, "external-write\n").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Second edit must fail — the on-disk fingerprint no longer
+        // matches what we captured after the first edit.
+        let (msg, is_err) = execute(
+            &serde_json::json!({
+                "path": p.to_string_lossy(),
+                "old_string": "bye",
+                "new_string": "later",
+            }),
+            &ctx,
+            &guard,
+            "s1",
+        )
+        .await;
+        assert!(is_err, "external modification should fail verify_fresh");
+        assert!(
+            msg.contains("changed on disk") || msg.contains("size was"),
+            "unexpected error: {msg}"
+        );
     }
 
     /// Empty old_string → rejected at argument level.

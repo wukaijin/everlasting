@@ -7,8 +7,13 @@
 //! - `edit_file` calls `verify_read` (was the file read in this session?)
 //!   and `verify_fresh` (did the file change on disk since the read?)
 //!   before applying the edit.
-//! - `edit_file` calls `invalidate` on the path after a successful write,
-//!   forcing the LLM to re-read on the next edit.
+//! - `edit_file` calls `record_read` AGAIN after a successful write
+//!   so the LLM can chain further edits on the same file WITHOUT a
+//!   redundant `read_file`. The new fingerprint captures the post-edit
+//!   mtime/size/head_hash, so a subsequent external modification (Git
+//!   pull, IDE save, a shell tool) will still fail `verify_fresh` on
+//!   the next edit. The first edit still requires `read_file` because
+//!   `verify_read` checks the initial fingerprint exists.
 //!
 //! The guard is session-isolated: switching back to a previous session
 //! restores the fingerprints recorded in that session, so the LLM does
@@ -18,6 +23,12 @@
 //! The lifetime is the process; on restart the guard forgets everything,
 //! which is safe (the first edit attempt will fail with "must read first",
 //! and the LLM will re-read).
+//!
+//! `invalidate()` is retained as a clean API for future "stale-cache
+//! bust" needs (e.g. an explicit "I know this file changed, force a
+//! re-read" tool). It is not currently called by any shipped tool —
+//! `edit_file` re-records instead, which keeps the LLM's chained-edit
+//! workflow smooth without giving up the external-stale detection.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -192,9 +203,12 @@ impl ReadGuard {
         Ok(())
     }
 
-    /// Invalidate a path's fingerprint. Called by `edit_file` after a
-    /// successful write, so the LLM is forced to re-read on the next
-    /// edit attempt.
+    /// Invalidate a path's fingerprint. Currently NOT called by any
+    /// shipped tool — `edit_file` re-records on success instead, so
+    /// the LLM can chain further edits without re-reading. Kept as a
+    /// clean API for future "stale-cache bust" needs (e.g. an explicit
+    /// "I know this file changed, force a re-read" tool). The unit
+    /// tests still exercise it to guard the contract.
     pub async fn invalidate(&self, session_id: &str, path: &Path) {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let mut map = self.inner.lock().await;
