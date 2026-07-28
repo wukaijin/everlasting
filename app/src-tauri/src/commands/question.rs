@@ -992,6 +992,10 @@ mod tests {
             InteractionKind::TaskStateTransition.as_str(),
             "task_state_transition"
         );
+        assert_eq!(
+            InteractionKind::LoopIntervention.as_str(),
+            "loop_intervention"
+        );
     }
 
     #[test]
@@ -1023,9 +1027,16 @@ mod tests {
             reason: None,
             ts: 0,
         });
+        let l = PendingInteraction::LoopIntervention(ToolQuestionPayload {
+            session_id: "s1".into(),
+            tool_use_id: "loop_intervention_1".into(),
+            questions: vec![],
+            ts: 0,
+        });
         assert_eq!(q.kind(), InteractionKind::Question);
         assert_eq!(m.kind(), InteractionKind::ModeChange);
         assert_eq!(t.kind(), InteractionKind::TaskStateTransition);
+        assert_eq!(l.kind(), InteractionKind::LoopIntervention);
     }
 }
 

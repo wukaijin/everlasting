@@ -25,6 +25,7 @@ import { effectScope, nextTick, watch } from "vue";
 import { rehydrateMessages, useStreamControllerStore } from "./streamController";
 import { useMemoryStore } from "./memory";
 import { useChatStore } from "./chat";
+import { useQuestionCardsStore } from "./questionCards";
 
 // RULE-FrontTest-001 (2026-06-25; transport-abstraction 2026-07-20):
 // `reloadAfterFinalize` fires `transport.invoke("load_session")` +
@@ -1407,6 +1408,50 @@ describe("getMessages — pure read (regression: computed mutate-own-deps recurs
     stream.putMessages("session-a", [], false);
     const stored = stream.messagesBySession.get("session-a");
     expect(stream.getMessages("session-a")).toBe(stored);
+  });
+});
+
+// C2+ loop-intervention kind routing (2026-07-28 fix, session
+// e8a1ad96… incident). `handleToolQuestion` inspects the
+// `tool_use_id` prefix: a synthetic `loop_intervention_{turn}` id
+// (no real ask_user_question tool_use block) must be tagged
+// `kind: "loop_intervention"` so ChatPanel renders it as a floating
+// card, NOT `kind: "question"` (which would anchor under a
+// non-existent tool_use and silently disappear). This test locks
+// the store-level contract the routing relies on.
+describe("streamController — C2+ loop-intervention kind routing", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("accepts a loop_intervention pending and distinguishes it from question", () => {
+    const store = useQuestionCardsStore();
+    const sid = "sess-loop";
+    store.addPending(sid, {
+      kind: "loop_intervention",
+      payload: {
+        session_id: sid,
+        tool_use_id: "loop_intervention_3",
+        questions: [
+          {
+            question: "检测到 agent 似乎在循环…是否终止？",
+            header: "循环检测干预",
+            options: [
+              { label: "终止 loop" },
+              { label: "继续" },
+            ],
+            multi_select: false,
+          },
+        ],
+        ts: 0,
+      },
+    });
+    const pending = store.getPending(sid);
+    expect(pending?.kind).toBe("loop_intervention");
+    // The discriminated union narrows payload to ToolQuestionPayload.
+    if (pending && pending.kind === "loop_intervention") {
+      expect(pending.payload.tool_use_id).toBe("loop_intervention_3");
+    }
   });
 });
 

@@ -2388,7 +2388,16 @@ pub async fn run_chat_loop(
                 .register(
                     &session_id,
                     &format!("loop_intervention_{}", turn),
-                    crate::agent::question_store::PendingInteraction::Question(payload.clone()),
+                    // C2+ registers as `LoopIntervention` (NOT
+                    // `Question`) so the frontend can render it as a
+                    // floating card. `Question` would require an
+                    // `ask_user_question` tool_use block anchor that
+                    // doesn't exist for a synthetic intervention →
+                    // the card would never render (2026-07-28
+                    // incident, session e8a1ad96…).
+                    crate::agent::question_store::PendingInteraction::LoopIntervention(
+                        payload.clone(),
+                    ),
                 )
                 .await
             {

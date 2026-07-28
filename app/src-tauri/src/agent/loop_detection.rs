@@ -213,8 +213,36 @@ fn signature_of(call: &ToolCall) -> String {
             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             format!("{}:{}", name, command)
         }
+        // dispatch_subagent: signature on STRUCTURAL fields only
+        // (subagent + isolation + model), NOT the `task` body. The
+        // `task` is a long free-text brief; including it makes
+        // legitimate concurrent fan-out (e.g. the review workflow
+        // dispatching N reviewers with the same brief but different
+        // `model`) collapse to a near-identical signature and false-
+        // trigger SoftLoop. Structural identity still catches the
+        // true death-loop (same subagent + same model + same
+        // isolation re-dispatched repeatedly) because those three
+        // fields are then byte-identical. See the 2026-07-28
+        // incident (session e8a1ad96…) where 3 isolation:false
+        // reviewer retries were misclassified as a loop.
+        "dispatch_subagent" => dispatch_subagent_signature(input),
         _ => format!("{}:{}", name, canonical_json(input)),
     }
+}
+
+/// Extract the structural-only signature for a `dispatch_subagent`
+/// call: `subagent` + `isolation` + `model`. The `task` body is
+/// deliberately excluded (see `signature_of`'s dispatch_subagent
+/// arm). Shared by [`signature_of`] and [`serialize_for_similarity`]
+/// so the two paths agree on what "structural" means.
+fn dispatch_subagent_signature(input: &serde_json::Value) -> String {
+    let sub = input.get("subagent").and_then(|v| v.as_str()).unwrap_or("");
+    let iso = input
+        .get("isolation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let model = input.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    format!("dispatch_subagent:{}:{}:{}", sub, iso, model)
 }
 
 /// Canonical, key-sorted JSON serialization so that two semantically
@@ -242,7 +270,18 @@ fn canonical_json(value: &serde_json::Value) -> String {
 
 /// Serialize a call for Jaccard tokenization: `name` + canonical
 /// input. Key order is normalized so tokenization is stable.
+///
+/// `dispatch_subagent` is special-cased to drop the `task` body
+/// (see [`signature_of`]'s dispatch_subagent arm): otherwise the
+/// long shared brief inflates Jaccard similarity across legitimate
+/// concurrent fan-out (e.g. N reviewers with the same brief) and
+/// false-triggers SoftLoop.
 fn serialize_for_similarity(call: &ToolCall) -> String {
+    if call.name == "dispatch_subagent" {
+        // Reuse the structural signature as the tokenization source
+        // so Jaccard and the exact-signature path agree on identity.
+        return dispatch_subagent_signature(&call.input);
+    }
     format!("{} {}", call.name, canonical_json(&call.input))
 }
 
@@ -597,6 +636,74 @@ mod tests {
         let a = call("use_skill", json!({"b": 2, "a": 1}));
         let b = call("use_skill", json!({"a": 1, "b": 2}));
         assert_eq!(signature_of(&a), signature_of(&b));
+    }
+
+    // --- dispatch_subagent structural signature (2026-07-28 incident) ---
+    //
+    // Regression coverage for the session e8a1ad96… incident: 3
+    // reviewer dispatches sharing a long `task` brief but differing
+    // only in `model` were misclassified as a SoftLoop because the
+    // fallback signature included the full `task` body. The fix
+    // restricts the dispatch_subagent signature to structural fields
+    // (subagent + isolation + model).
+
+    #[test]
+    fn signature_dispatch_subagent_ignores_task() {
+        // Same subagent/isolation/model, different task body → the
+        // structural signature is identical (the task is intentionally
+        // excluded so legitimate re-dispatch isn't false-flagged).
+        let a = call(
+            "dispatch_subagent",
+            json!({"subagent": "reviewer", "isolation": false, "model": "glm-5.2", "task": "AAA"}),
+        );
+        let b = call(
+            "dispatch_subagent",
+            json!({"subagent": "reviewer", "isolation": false, "model": "glm-5.2", "task": "BBB different brief"}),
+        );
+        assert_eq!(signature_of(&a), signature_of(&b));
+    }
+
+    #[test]
+    fn signature_dispatch_subagent_different_model_distinct() {
+        // Different model → distinct structural signature (true
+        // death-loop of the SAME subagent+model+isolation still
+        // collapses to identical signatures).
+        let a = call(
+            "dispatch_subagent",
+            json!({"subagent": "reviewer", "isolation": false, "model": "glm-5.2", "task": "x"}),
+        );
+        let b = call(
+            "dispatch_subagent",
+            json!({"subagent": "reviewer", "isolation": false, "model": "deepseek-v4-flash", "task": "x"}),
+        );
+        assert_ne!(signature_of(&a), signature_of(&b));
+    }
+
+    #[test]
+    fn jaccard_dispatch_subagent_concurrent_reviewers_not_loop() {
+        // The core incident reproduction: 3 reviewers fan out with the
+        // SAME long brief, differing only in `model`. Pre-fix this
+        // returned SoftLoop (Jaccard > 0.85 on the shared task body);
+        // post-fix the similarity source drops `task` so the three
+        // structural signatures (one per model) are too few near-dup
+        // pairs → detect returns None.
+        let brief = "你是一名只读评审员(reviewer)，负责评审一份调研报告，产出按维度分节的问题清单。\
+                     评审对象 docs/payment-research.md (378 行)。背景：中国公司主体 → 西班牙马德里 B2C 个人订阅。";
+        let window = vec![
+            call(
+                "dispatch_subagent",
+                json!({"subagent": "reviewer", "isolation": false, "model": "MiniMax-M3", "task": brief}),
+            ),
+            call(
+                "dispatch_subagent",
+                json!({"subagent": "reviewer", "isolation": false, "model": "deepseek-v4-flash", "task": brief}),
+            ),
+            call(
+                "dispatch_subagent",
+                json!({"subagent": "reviewer", "isolation": false, "model": "glm-5.2", "task": brief}),
+            ),
+        ];
+        assert_eq!(detect(&window), LoopVerdict::None);
     }
 
     // --- canonical_json --------------------------------------------------

@@ -250,10 +250,10 @@ pub struct TaskStateTransitionPayload {
     pub ts: i64,
 }
 
-/// The three interaction kinds the store gates. The `kind` tag
-/// drives both the IPC dispatch (the frontend's
-/// `<AskUserQuestionCard>` / `<RequestModeChangeCard>` /
-/// `<RequestTaskStateTransitionCard>`) AND the audit kind written
+/// The interaction kinds the store gates. The `kind` tag drives
+/// both the IPC dispatch (the frontend's `<AskUserQuestionCard>` /
+/// `<RequestModeChangeCard>` / `<RequestTaskStateTransitionCard>`
+/// / floating loop-intervention card) AND the audit kind written
 /// by the resolve path. New kinds require adding a new
 /// `PendingInteraction` variant + a new `as_str()` arm + updating
 /// the frontend's `PendingInteraction` discriminated union.
@@ -263,6 +263,11 @@ pub enum InteractionKind {
     Question,
     ModeChange,
     TaskStateTransition,
+    /// C2+ active loop-intervention (chat_loop's ≥3 consecutive
+    /// loop-detection hits). Distinct from `Question` because it is
+    /// NOT driven by an `ask_user_question` tool_use block — the
+    /// frontend renders it as a floating card (no tool_use anchor).
+    LoopIntervention,
 }
 
 impl InteractionKind {
@@ -278,6 +283,7 @@ impl InteractionKind {
             Self::Question => "question",
             Self::ModeChange => "mode_change",
             Self::TaskStateTransition => "task_state_transition",
+            Self::LoopIntervention => "loop_intervention",
         }
     }
 }
@@ -293,6 +299,15 @@ pub enum PendingInteraction {
     Question(ToolQuestionPayload),
     ModeChange(ModeChangePayload),
     TaskStateTransition(TaskStateTransitionPayload),
+    /// C2+ loop-intervention. Reuses `ToolQuestionPayload` (the
+    /// question/options shape is exactly what the intervention card
+    /// needs: "终止 loop" vs "继续"); distinguished from `Question`
+    /// so the frontend can render it as a floating card instead of
+    /// anchoring it under a (non-existent) `ask_user_question`
+    /// tool_use block. See the 2026-07-28 incident (session
+    /// e8a1ad96…) where the prior `Question` tagging made the card
+    /// unrenderable.
+    LoopIntervention(ToolQuestionPayload),
 }
 
 impl PendingInteraction {
@@ -301,6 +316,7 @@ impl PendingInteraction {
             Self::Question(_) => InteractionKind::Question,
             Self::ModeChange(_) => InteractionKind::ModeChange,
             Self::TaskStateTransition(_) => InteractionKind::TaskStateTransition,
+            Self::LoopIntervention(_) => InteractionKind::LoopIntervention,
         }
     }
 }
@@ -420,6 +436,7 @@ impl QuestionStore {
             PendingInteraction::Question(p) => p.ts,
             PendingInteraction::ModeChange(p) => p.ts,
             PendingInteraction::TaskStateTransition(p) => p.ts,
+            PendingInteraction::LoopIntervention(p) => p.ts,
         };
         map.insert(
             session_id.to_string(),

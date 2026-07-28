@@ -40,6 +40,7 @@ import { useChatStore } from "../../stores/chat";
 import type { SessionSummary } from "../../stores/chat.types";
 import { useProjectsStore } from "../../stores/projects";
 import { useChecklistStore } from "../../stores/checklist";
+import { useQuestionCardsStore } from "../../stores/questionCards";
 import { useMemoryStore } from "../../stores/memory";
 import {
   useReviewStateStore,
@@ -57,6 +58,7 @@ import RuntimeMemoryModal from "../memory/RuntimeMemoryModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
+import AskUserQuestionCard from "./AskUserQuestionCard.vue";
 import WorkerAskBanner from "./WorkerAskBanner.vue";
 import ReviewMatrix from "./ReviewMatrix.vue";
 import Icon from "../Icon.vue";
@@ -64,6 +66,7 @@ import Icon from "../Icon.vue";
 const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const checklistStore = useChecklistStore();
+const questionCardsStore = useQuestionCardsStore();
 const memoryStore = useMemoryStore();
 const reviewStateStore = useReviewStateStore();
 const traceStore = useTraceStore();
@@ -73,6 +76,27 @@ const emit = defineEmits<{
 }>();
 
 const hasMessages = computed(() => chatStore.messages.length > 0);
+
+/** C2+ loop-intervention pending for the current session, if any.
+ *  The backend registers a `LoopIntervention` PendingInteraction
+ *  (via `tool:question` event with `tool_use_id=loop_intervention_N`)
+ *  when the agent loop hits ≥3 consecutive loop-detection hits. We
+ *  render it as a FLOATING card here (not under a tool_use block)
+ *  because the synthetic `tool_use_id` has no matching
+ *  `ask_user_question` tool_use in the message stream — anchoring
+ *  under a tool_use (as MessageItem does for real asks) would never
+ *  match and silently drop the intervention (2026-07-28 incident,
+ *  session e8a1ad96…). */
+const loopIntervention = computed(
+  () => {
+    const sid = chatStore.currentSessionId;
+    if (!sid) return null;
+    const pending = questionCardsStore.getPending(sid);
+    return pending && pending.kind === "loop_intervention"
+      ? pending.payload
+      : null;
+  },
+);
 
 /** PR5: forwarded to `chatStore.cancel()` so the parent can keep
  *  the ChatInput → ChatPanel → store flow symmetric with `send`. */
@@ -864,6 +888,29 @@ onUnmounted(() => reviewStateStore.stop());
           1000+).
         -->
     <ChecklistCard :items="currentChecklist" />
+
+    <!--
+          C2+ loop-intervention floating card (2026-07-28 fix). When
+          the agent loop hits ≥3 consecutive loop-detection hits, the
+          backend registers a `LoopIntervention` pending interaction
+          and emits it on `tool:question`. This card surfaces the
+          "终止 loop / 继续" choice as a TOP-anchored overlay (above
+          the message list) so the user always sees it. It reuses
+          `<AskUserQuestionCard>` verbatim — the resolve flow
+          (`resolveToolQuestion`) is identical and the backend's C2+
+          `select!{rx}` arm already interprets the answer. Pre-fix
+          this intervention was invisible: the synthetic
+          `tool_use_id=loop_intervention_N` matched no real tool_use
+          block, so MessageItem's inline card never rendered.
+    -->
+    <div v-if="loopIntervention" class="chat-panel__loop-intervention">
+      <AskUserQuestionCard
+        :session-id="chatStore.currentSessionId ?? ''"
+        :tool-use-id="loopIntervention.tool_use_id"
+        :questions="loopIntervention.questions"
+        state="pending"
+      />
+    </div>
   </section>
 </template>
 
@@ -1340,5 +1387,23 @@ onUnmounted(() => reviewStateStore.stop());
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* C2+ loop-intervention floating card: top-anchored overlay so the
+   user always notices the agent is stuck. Warning-tinted border
+   distinguishes it from a normal ask_user_question card. z-index
+   above the checklist overlay (50) but below modals (1000+). */
+.chat-panel__loop-intervention {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(560px, calc(100% - var(--space-4) * 2));
+  padding: var(--space-3);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-status-warn, #f59e0b);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
 }
 </style>

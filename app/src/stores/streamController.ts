@@ -1555,8 +1555,20 @@ export const useStreamControllerStore = defineStore("streamController", () => {
    *  production), `addPending`'s overwrite semantics replace
    *  the prior entry — the new event wins. */
   function handleToolQuestion(payload: ToolQuestionPayload): void {
+    // C2+ loop-intervention (chat_loop's ≥3 consecutive loop-detection
+    // hits) reuses the `tool:question` channel + `ToolQuestionPayload`
+    // shape but carries a synthetic `tool_use_id` of
+    // `loop_intervention_{turn}` (no real ask_user_question tool_use
+    // block exists). Tag it as `loop_intervention` so the frontend
+    // renders it as a FLOATING card (ChatPanel top overlay) instead
+    // of trying to anchor it under a non-existent tool_use block —
+    // which never matched and silently dropped the intervention
+    // (2026-07-28 incident, session e8a1ad96…).
+    const isLoopIntervention = payload.tool_use_id.startsWith(
+      "loop_intervention_",
+    );
     useQuestionCardsStore().addPending(payload.session_id, {
-      kind: "question",
+      kind: isLoopIntervention ? "loop_intervention" : "question",
       payload,
     });
     maybeNotifyPending(payload.session_id, "question");
