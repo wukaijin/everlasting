@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 31
-- **Last Active**: 2026-07-26
+- **Total Sessions**: 32
+- **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~235 | Active |
+| `journal-2.md` | ~260 | Active |
 | `journal-1.md` | ~2000 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-07-28 | review plugin 可用性修复 C4+C5（breadcrumb + reviewer 派发死锁 + 跨 plugin task 归属） | `072f8c6`, `81fed8d`, `1f4b506`, `ac5597c`, `b27ba14` | `main` |
 | 31 | 2026-07-26 | daemon shutdown: agent loop drain(闭合硬终止缺口) | `4284315` | `main` |
 | 30 | 2026-07-24 | daemon graceful shutdown 超时修复（SSE 长连接挂起） | `0a6bd1c` | `main` |
 | 29 | 2026-07-24 | 归档 remote-access-multi-channel 全树(daemon-split 跳过 E4/E5 dogfooding) | `31373f4` | `main` |

@@ -233,3 +233,28 @@ daemon 浏览器模式手动测试 Session。按 `docs/MANUAL-TEST-P2.md` 验收
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: review plugin 可用性修复 C4+C5（breadcrumb + reviewer 派发死锁 + 跨 plugin task 归属）
+
+**Date**: 2026-07-28
+**Task**: review plugin 可用性修复 C4+C5（breadcrumb + reviewer 派发死锁 + 跨 plugin task 归属）
+**Branch**: `main`
+
+### Summary
+
+从两次 E2E dogfooding session（99866757 + 04c62fab）诊断并修复 review plugin 多层缺陷。C4：breadcrumb state fallback 硬编码 planning 导致 review plugin intake 阶段 LLM 迷失（修 inject.rs 用 workflow_def.initial + 暴露 plugin/state/tools）。C5：dispatch_subagent enum 漏 plugin 层 agent 导致 reviewer 派发死锁（修 definition_with_cache 用 list_with_workflow）；create_task 写死 planning 对不上 review 状态机（按 plugin initial 建）；skill 指引与工具 enum 不一致 + .trellis/workflow.md 误导（改 skill 文本）。R5：同 session dev↔review 切换死锁，task.json 加 workflow_plugin 字段 + role gate/transition/breadcrumb 按 task 归属 plugin 查表 + set_session_plugin_name 切换时重映射 status。共 +1122 行，8 个新单测全过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `072f8c6` | (see git log) |
+| `81fed8d` | (see git log) |
+| `1f4b506` | (see git log) |
+| `ac5597c` | (see git log) |
+| `b27ba14` | (see git log) |
+
+### Status
+
+[OK] **Completed**
