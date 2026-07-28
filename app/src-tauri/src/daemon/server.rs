@@ -639,7 +639,16 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpStream;
 
-        // 不发信号,无需与 SIGTERM 测试共享 SIGNAL_TEST_MUTEX。
+        // 本测试自身不发信号,但 **必须** 与两个 SIGTERM 测试
+        // (`serve_daemon_shutdown_completes_with_active_sse` /
+        // `serve_daemon_shutdown_drains_active_agent_loop`)串行。原因:
+        // `shutdown_signal` 安装的是**进程级** SIGTERM handler,cargo test
+        // 默认多线程下,若本测试与某个 `libc::kill(getpid(), SIGTERM)`
+        // 测试并发,那个信号会命中本 daemon 的 handler → 本 daemon 被错误
+        // 触发 graceful shutdown → 睡过 grace window 后 health 探活失败
+        // → 假性回归失败。共享同一把 `SIGNAL_TEST_MUTEX` 即可规避。
+        // (早先注释判断「不发信号所以无需共享」是错的,正是此处漏隔离。)
+        let _guard = SIGNAL_TEST_MUTEX.lock().await;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
