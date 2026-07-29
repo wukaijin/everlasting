@@ -210,6 +210,11 @@ session_id)` into every `execute_tool` call.
 | `timeout` expires during execution | `shell` | Child killed, partial output + `[timeout after Nms, partial output]` (is_error: true) |
 | `timeout <= 0` | `shell` | Uses default 120000ms |
 | `timeout > 600000` | `shell` | Clamped to 600000ms |
+| User clicks 跳过 (skip) | `ask_user_question` | `{"cancelled": true, "reason": "user_skipped", "hint": "..."}` (**is_error: false** — a deliberate user skip is not an error; the agent should continue / pick another approach). Mirrors the "ripgrep exit1 = not really an error" philosophy: is_error reflects whether the tool *failed*, not whether the user declined. |
+| Session-level cancel (Stop / app shutdown) | `ask_user_question` | `{"cancelled_by_session": true}` (**is_error: true**) — distinct from user-skip. The `cancel.cancelled()` arm and the `RecvError` arm both emit this marker and keep is_error true. |
+| Already a pending question for this session | `ask_user_question` | `"已有 pending question,等当前回答完成"` (**is_error: true**, short-circuit before the blocking wait) |
+| Schema validation (empty/too-many questions, options out of 2..=4, header >12 chars) | `ask_user_question` | Structured error string (**is_error: true**, short-circuit; the LLM self-corrects next turn) |
+
 
 #### P0 enhancement (2026-06-14): shell env_clear + safe allowlist (RULE-E-001)
 

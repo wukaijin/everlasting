@@ -343,6 +343,57 @@ describe("MessageItem — AskUserQuestionCard state resolution", () => {
     ).toBe(false);
   });
 
+  it("rehydrates a custom answer envelope (R6) — parses + summary includes custom", async () => {
+    // Historical answer that carries a `custom` field (D1 互斥 wire:
+    // options:[] + custom). The replay path must parse it and
+    // synthesize the custom text into the answered summary.
+    const message = makeAssistantMessage(
+      [
+        {
+          id: "tu-custom",
+          name: "ask_user_question",
+          input: { questions: QUESTIONS },
+        },
+      ],
+      [
+        {
+          toolUseId: "tu-custom",
+          isError: false,
+          content: JSON.stringify({
+            answer: [
+              {
+                question: "Pick a library",
+                header: "Library",
+                options: [],
+                multi_select: false,
+                custom: "Svelte",
+              },
+            ],
+          }),
+        },
+      ],
+    );
+
+    const wrapper = mountItem(message, pinia);
+    await flushPromises();
+
+    // Card mounts in the answered state.
+    expect(wrapper.find("[data-testid='ask-card']").exists()).toBe(true);
+    expect(
+      wrapper.find("[data-testid='ask-card-state-answered']").exists(),
+    ).toBe(true);
+    expect(wrapper.find("[data-testid='ask-card-summary']").exists()).toBe(
+      true,
+    );
+    // The summary renders the custom pill (selectedAnswer carries
+    // `custom`, and synthQuestions synthesizes it as a label too).
+    const summaryLabels = wrapper
+      .find("[data-testid='ask-card-summary']")
+      .findAll(".ask-card__summary-label")
+      .map((l) => l.text());
+    expect(summaryLabels).toContain("自定义: Svelte");
+  });
+
   it("mounts with state='cancelled' when tool_result is { cancelled: true }", async () => {
     const message = makeAssistantMessage(
       [

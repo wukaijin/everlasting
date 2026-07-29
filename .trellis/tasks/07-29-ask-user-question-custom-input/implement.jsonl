@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "is_error 语义权威约定（grep exit1=false / ripgrep exit2=true）。skip-semantics 改 Cancelled→is_error=false 必须与此一致；custom 字段走 tool_result envelope 也遵守此文件的 tool_use_id/content/is_error 形状。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨 Rust 类型/前端 TS 类型/wire 三层契约（Question.allow_custom + QuestionAnswer.custom），snake_case 对齐规则 + 前后端类型镜像的跨层思考方法论。"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "AskUserQuestionCard 是 chat 内联卡片（非 modal，session-switch 保留）。custom input 须遵守同款 inline 红线 + 复用 ToolCallCard chrome token + R7a 答完保留展开语义。"}
+{"file": ".trellis/spec/backend/agent-loop-architecture.md", "reason": "ask_user_question 是 agent loop 拦截的 blocking 工具（tokio::select! cancel/oneshot 两 arm）。skip-semantics 改 Cancelled arm 的 is_error 不影响 select 结构，但需确认与 loop 架构的 cancel 传播一致。"}
+{"file": ".trellis/spec/frontend/design-tokens.md", "reason": "custom input 行 + summary pill 须复用现有 border/radius/color token（design §2.5/§2.6），禁止引入新色 token。"}

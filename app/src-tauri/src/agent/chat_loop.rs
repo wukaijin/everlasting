@@ -2358,6 +2358,7 @@ pub async fn run_chat_loop(
                         },
                     ],
                     multi_select: false,
+                    allow_custom: false,
                 }],
                 ts: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

@@ -504,6 +504,7 @@ async fn agent_loop_request_mode_change_already_pending_returns_structured_error
                         },
                     ],
                     multi_select: false,
+                    allow_custom: false,
                 }],
                 ts: 0,
             }),

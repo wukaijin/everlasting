@@ -86,6 +86,7 @@ fn matching_answer() -> Vec<QuestionAnswer> {
         header: Some("DB".into()),
         options: vec!["SQLite".into()],
         multi_select: false,
+        custom: None,
     }]
 }
 
@@ -376,8 +377,9 @@ async fn agent_loop_ask_user_question_happy_path() {
 // F1 Test 2 — User 跳过 (PRD AC6, R5)
 //
 // LLM emits `ask_user_question`, test resolves with `Cancelled`
-// (mimics the user clicking 跳过 in the card). tool_result must
-// be `{"cancelled": true}` + `is_error: true`.
+// (mimics the user clicking 跳过 in the card). tool_result carries
+// `{"cancelled": true, "reason": "user_skipped", "hint": "..."}` and
+// `is_error: false` — a skip is not a fatal error (PRD D2 / R7).
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn agent_loop_ask_user_question_user_skip() {
@@ -430,18 +432,32 @@ async fn agent_loop_ask_user_question_user_skip() {
         .iter()
         .find(|r| r.tool_use_id == "toolu_skip")
         .expect("ask_user_question produced a tool_result");
+    // skip-semantics (PRD D2 / R7): a user skip is NOT a fatal
+    // error. `is_error=false` (with a reason + hint in content) so
+    // models that over-trust is_error don't treat a skip as a tool
+    // failure and stop (E2E: MiniMax-M3 emitted `[已停止]`).
     assert!(
-        ask_result.is_error,
-        "skip returns is_error=true (LLM treats as tool failure)"
+        !ask_result.is_error,
+        "user skip returns is_error=false (not a tool failure)"
     );
-    // wire shape: {"cancelled": true} (PRD R5 — singular field).
-    // Unwrap the REQ-16 envelope first so we assert on the raw
-    // `execute_blocking` output, not the envelope's `result`
-    // wrapper.
+    // wire shape: {"cancelled": true, "reason": "user_skipped",
+    // "hint": "..."} (PRD D2). Unwrap the REQ-16 envelope first so
+    // we assert on the raw `execute_blocking` output, not the
+    // envelope's `result` wrapper.
     let raw = unwrap_envelope(&ask_result.content);
     assert!(
         raw.contains("\"cancelled\":true") || raw.contains("\"cancelled\": true"),
         "wire shape carries {{cancelled: true}}; got: {}",
+        raw
+    );
+    assert!(
+        raw.contains("\"reason\":\"user_skipped\""),
+        "wire shape carries user_skipped reason; got: {}",
+        raw
+    );
+    assert!(
+        raw.contains("\"hint\""),
+        "wire shape carries hint for the model; got: {}",
         raw
     );
 }
@@ -643,6 +659,7 @@ async fn agent_loop_ask_user_question_already_pending() {
                         },
                     ],
                     multi_select: false,
+                    allow_custom: false,
                 }],
                 ts: 0,
             }),
@@ -960,6 +977,7 @@ async fn get_pending_question_command_register_resolve_round_trip() {
                 },
             ],
             multi_select: false,
+            allow_custom: false,
         }],
         ts: 1_700_000_000_000,
     };
@@ -999,6 +1017,7 @@ async fn get_pending_question_command_register_resolve_round_trip() {
                     header: None,
                     options: vec!["A".into()],
                     multi_select: false,
+                    custom: None,
                 }])
                 .unwrap(),
             ),
@@ -1063,6 +1082,7 @@ async fn resolve_response_from_args_maps_scalar_inputs() {
         header: None,
         options: vec!["a".into()],
         multi_select: false,
+        custom: None,
     }];
     match resolve_response_from_args(Some(false), Some(ans.clone())).expect("ok") {
         InteractionResponse::Answered(v) => {

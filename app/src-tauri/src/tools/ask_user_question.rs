@@ -115,8 +115,10 @@ pub fn definition() -> ToolDef {
              requirement, preference) — NOT for routine exploration tasks (use \
              read_file / grep / shell instead). Plan / Edit / Yolo modes all support \
              this — it is not a permission gate, just an information request.\n\n\
-             When the user clicks 跳过, the tool returns is_error: true with \
-             {\"cancelled\": true} — continue without that input."
+             When the user clicks 跳过, the tool returns a NON-error result \
+             {\"cancelled\": true, \"reason\": \"user_skipped\"} (is_error: false) — \
+             the user chose to skip, so continue without that input or pick \
+             another approach; it is not a failure."
                 .to_string(),
         ),
         input_schema: serde_json::json!({
@@ -153,6 +155,11 @@ pub fn definition() -> ToolDef {
                                 "type": "boolean",
                                 "default": false,
                                 "description": "If true, the user can select multiple options (checkbox); otherwise single-select (radio)"
+                            },
+                            "allow_custom": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "If true, render a free-text input so the user can type their own answer instead of picking an option. Selecting an option and typing are mutually exclusive; when the user types, the returned options array is empty and a custom field carries the text. Use when the likely answer is open-ended (e.g. naming, free-form preference) and a fixed option list would constrain the user."
                             }
                         },
                         "required": ["question", "options"]
@@ -273,8 +280,11 @@ pub type BlockingToolResult = (
 ///    - oneshot arm — `InteractionResponse` matched:
 ///      - `Answered(answers)` → return `(json answers, false,
 ///        _, None)`.
-///      - `Cancelled` → return `({"cancelled": true}, true, _,
-///        None)`.
+///      - `Cancelled` → return `({"cancelled": true, "reason":
+///        "user_skipped", "hint": ...}, false, _, None)` — a
+///        user *skip* is not an error (the agent should
+///        continue / pick another approach); only the
+///        session-level cancel paths below use is_error=true.
 ///      - `Err(RecvError)` (sender dropped by the cancel arm's
 ///        `store.remove`) → return `({"cancelled_by_session":
 ///        true}, true, _, None)`.
@@ -414,10 +424,22 @@ pub async fn execute_blocking(
                     (content, false, crate::tools::ToolContextUpdate::default(), None)
                 }
                 Ok(InteractionResponse::Cancelled) => {
-                    // User clicked 跳过 (PRD §R5).
-                    let content =
-                        serde_json::json!({"cancelled": true}).to_string();
-                    (content, true, crate::tools::ToolContextUpdate::default(), None)
+                    // User clicked 跳过 (PRD §R5). This is NOT an
+                    // error: the user actively chose to skip and
+                    // wants the agent to continue / pick another
+                    // approach. Returning is_error=false (with a
+                    // reason + hint) avoids models that
+                    // over-trust is_error treating a skip as a
+                    // fatal failure (E2E: MiniMax-M3 emitted
+                    // `[已停止]` and stopped). The session-level
+                    // cancel arms below keep is_error=true.
+                    let content = serde_json::json!({
+                        "cancelled": true,
+                        "reason": "user_skipped",
+                        "hint": "用户主动跳过此问题，请用其他方式继续或直接做决定"
+                    })
+                    .to_string();
+                    (content, false, crate::tools::ToolContextUpdate::default(), None)
                 }
                 Err(_recv_err) => {
                     // Sender dropped (e.g. resolve ran on a stale
@@ -655,6 +677,7 @@ mod tests {
             header: Some("DB".into()),
             options: vec!["Postgres".into()],
             multi_select: false,
+            custom: None,
         }];
         store
             .resolve(
@@ -749,10 +772,20 @@ mod tests {
             .await
             .expect("resolve ok");
         let (content, is_error, _, _) = exec.await.expect("exec ok");
-        assert!(is_error, "cancelled = is_error: true");
+        assert!(!is_error, "user skip = is_error: false (not fatal)");
         assert!(
             content.contains("\"cancelled\":true") || content.contains("\"cancelled\": true"),
             "content carries cancelled marker: {}",
+            content
+        );
+        assert!(
+            content.contains("\"reason\":\"user_skipped\""),
+            "content carries user_skipped reason: {}",
+            content
+        );
+        assert!(
+            content.contains("\"hint\""),
+            "content carries hint for the model: {}",
             content
         );
     }
@@ -787,6 +820,7 @@ mod tests {
                             },
                         ],
                         multi_select: false,
+                        allow_custom: false,
                     }],
                     ts: 0,
                 }),
@@ -843,6 +877,7 @@ mod tests {
                     },
                 ],
                 multi_select: true,
+                allow_custom: false,
             }],
         };
         validate(&input).expect("valid input passes");
@@ -867,6 +902,7 @@ mod tests {
                     },
                 ],
                 multi_select: false,
+                allow_custom: false,
             }],
         };
         let err = validate(&input).expect_err("empty question rejected");
@@ -892,6 +928,7 @@ mod tests {
                     },
                 ],
                 multi_select: false,
+                allow_custom: false,
             }],
         };
         let err = validate(&input).expect_err("empty option label rejected");
@@ -904,5 +941,76 @@ mod tests {
     fn store_error_already_pending_variant_compiles() {
         // compiles = type-stable variant referenced by execute_blocking.
         let _: QuestionStoreError = QuestionStoreError::AlreadyPending;
+    }
+
+    // ----- allow_custom field on Question (Phase C2) -----
+
+    /// A `Question` with `allow_custom: true` and otherwise-valid
+    /// fields passes `validate()`. `allow_custom` adds no new
+    /// validation boundary (design §5.1) — it only flips the
+    /// frontend's free-text input on — so a well-formed question
+    /// with the flag set must be accepted.
+    #[test]
+    fn validate_accepts_allow_custom_question() {
+        let input = AskUserQuestionInput {
+            questions: vec![Question {
+                question: "free input ok".into(),
+                header: None,
+                options: vec![
+                    QuestionOption {
+                        label: "a".into(),
+                        description: None,
+                        preview: None,
+                    },
+                    QuestionOption {
+                        label: "b".into(),
+                        description: None,
+                        preview: None,
+                    },
+                ],
+                multi_select: false,
+                allow_custom: true,
+            }],
+        };
+        validate(&input).expect("allow_custom=true with valid fields passes");
+    }
+
+    // ----- QuestionAnswer custom field serde (Phase C3) -----
+
+    /// A `QuestionAnswer` carrying `custom: Some("free text")`
+    /// round-trips through serde: the serialized form preserves the
+    /// field, and deserialization reconstructs it (the LLM ↔
+    /// frontend wire must not drop user-typed text).
+    #[test]
+    fn question_answer_custom_round_trips_serde() {
+        let original = QuestionAnswer {
+            question: "type your own".into(),
+            header: None,
+            options: vec![],
+            multi_select: false,
+            custom: Some("free text".into()),
+        };
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(
+            json.contains("\"custom\":\"free text\""),
+            "serialized JSON carries custom field: {}",
+            json
+        );
+        let back: QuestionAnswer = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, original, "round-trip preserves custom");
+    }
+
+    /// A legacy `QuestionAnswer` JSON without a `custom` field (i.e.
+    /// a task.json / tool_result produced before the custom-input
+    /// feature) deserializes with `custom == None`. This is the
+    /// `#[serde(default)]` backward-compat guarantee (PRD §wire 向后兼容).
+    #[test]
+    fn question_answer_legacy_json_deserializes_custom_none() {
+        let legacy = r#"{"question":"legacy","options":["a"],"multi_select":false}"#;
+        let parsed: QuestionAnswer = serde_json::from_str(legacy).expect("deserialize legacy");
+        assert_eq!(parsed.question, "legacy");
+        assert_eq!(parsed.options, vec!["a".to_string()]);
+        assert!(!parsed.multi_select);
+        assert!(parsed.custom.is_none(), "legacy answer → custom None");
     }
 }

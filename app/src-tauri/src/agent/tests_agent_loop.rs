@@ -759,6 +759,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
                                     header: None,
                                     options: vec!["继续".into()],
                                     multi_select: false,
+                                    custom: None,
                                 },
                             ])
                             .unwrap(),

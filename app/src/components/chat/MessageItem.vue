@@ -280,7 +280,15 @@ function resolveAskCardState(toolUseId: string): {
           // Render labels as the only options so the card's
           // "selected" highlight class matches — see AskUserQuestionCard
           // test 6 "renders selected labels in the summary".
-          options: a.options.map((label) => ({ label })),
+          // R6: when the user typed a custom answer, `a.options` is
+          // `[]`; synthesize the custom text as an extra label so the
+          // summary isn't empty (the card ALSO renders the custom via
+          // `answer.custom` directly — both paths keep the replayed
+          // summary consistent with the submit-time summary).
+          options: [
+            ...a.options.map((label) => ({ label })),
+            ...(a.custom ? [{ label: `自定义: ${a.custom}` }] : []),
+          ],
           multi_select: a.multi_select,
         }));
       return {

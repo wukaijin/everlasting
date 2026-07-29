@@ -116,18 +116,37 @@ const selectedByQuestion = ref<Set<string>[]>(
   props.questions.map(() => new Set<string>()),
 );
 
-/** Reactive view of "did the user answer every question?".
- *  Single-select → 1 label required; multi-select → ≥1 label
- *  required. A missing `options` array on a question (defensive
- *  — backend should always send it) fails the gate (the question
- *  has no selectable options, so it can't be answered). */
+/** Per-question custom free-text input. Outer array aligns with
+ *  `props.questions[i]`; each slot is the typed text (empty string
+ *  when unused). Mutually exclusive with `selectedByQuestion`
+ *  (D1 互斥): typing clears the option selection; selecting an
+ *  option clears the text. Only relevant when `q.allow_custom`
+ *  is truthy. */
+const customByQuestion = ref<string[]>(
+  props.questions.map(() => ""),
+);
+
+/** Reactive view of "did the user answer every question?". A
+ *  question is answered when EITHER an option is selected
+ *  (single-select → 1 label; multi-select → ≥1 label) OR a custom
+ *  free-text answer is present (only when `allow_custom` is true).
+ *  The two paths are mutually exclusive (D1 互斥 — typing clears
+ *  options, selecting clears text), so they can never both hold.
+ *  A missing `options` array on a question (defensive — backend
+ *  should always send it) fails the option path; if the question
+ *  also has `allow_custom`, a non-empty custom text still satisfies
+ *  the gate. */
 const allAnswered = computed<boolean>(() =>
   props.questions.every((q, i) => {
-    if (!Array.isArray(q.options) || q.options.length === 0) return false;
     const sel = selectedByQuestion.value[i];
-    if (!sel) return false;
-    if (q.multi_select) return sel.size >= 1;
-    return sel.size === 1;
+    const hasOption =
+      !!sel &&
+      Array.isArray(q.options) &&
+      q.options.length > 0 &&
+      (q.multi_select ? sel.size >= 1 : sel.size === 1);
+    const custom = customByQuestion.value[i]?.trim() ?? "";
+    const hasCustom = !!q.allow_custom && custom.length > 0;
+    return hasOption || hasCustom;
   }),
 );
 
@@ -166,12 +185,30 @@ function toggleSelection(qIndex: number, label: string): void {
     // replacing the slot does. Cheap (one Set per render at most
     // — no ObservableMap needed for a 1..=4 entry list).
     selectedByQuestion.value = [...selectedByQuestion.value];
-    return;
+  } else {
+    // Single-select: replace the slot with a singleton Set.
+    selectedByQuestion.value[qIndex] = new Set([label]);
+    // Force reactivity (re-place to notify dependents).
+    selectedByQuestion.value = [...selectedByQuestion.value];
   }
-  // Single-select: replace the slot with a singleton Set.
-  selectedByQuestion.value[qIndex] = new Set([label]);
-  // Force reactivity (re-place to notify dependents).
+  // D1 互斥: selecting an option clears any typed custom text for
+  // this question (options and custom are mutually exclusive).
+  customByQuestion.value[qIndex] = "";
+  customByQuestion.value = [...customByQuestion.value];
+}
+
+/** Custom free-text input handler. Mutually exclusive with option
+ *  selection (D1 互斥): typing clears the option selection for
+ *  this question and stores the text. The slot replace pattern
+ *  mirrors `toggleSelection`'s reactivity trick. */
+function onCustomInput(qIndex: number, value: string): void {
+  if (!props.questions[qIndex]) return;
+  // D1 互斥: typing clears the option selection (single + multi
+  // alike — one rule).
+  selectedByQuestion.value[qIndex] = new Set<string>();
   selectedByQuestion.value = [...selectedByQuestion.value];
+  customByQuestion.value[qIndex] = value;
+  customByQuestion.value = [...customByQuestion.value];
 }
 
 /** Click handler on the `<li>` row — catches clicks anywhere in
@@ -211,18 +248,32 @@ function isSelected(qIndex: number, label: string): boolean {
 function buildAnswer(): ToolQuestionAnswer[] {
   return props.questions.map((q, i) => {
     const set = selectedByQuestion.value[i] ?? new Set<string>();
+    const custom = customByQuestion.value[i]?.trim() ?? "";
+    // D1 互斥: if a custom answer is present (and allowed), emit
+    // empty options + the custom text; otherwise emit the selected
+    // option labels in payload order. The two paths are mutually
+    // exclusive by construction (the toggle/input handlers enforce
+    // it), so `useCustom` and a non-empty selection can't co-exist.
+    const useCustom = !!q.allow_custom && custom.length > 0;
     // Stable order: iterate `q.options` in payload order (the LLM
     // authored this list, so the user's selection order matches
     // the option list order — keeps the answer deterministic).
-    const ordered = q.options
-      .map((o) => o.label)
-      .filter((label) => set.has(label));
+    const ordered = useCustom
+      ? []
+      : q.options
+          .map((o) => o.label)
+          .filter((label) => set.has(label));
     const answer: ToolQuestionAnswer = {
       question: q.question,
       options: ordered,
       multi_select: !!q.multi_select,
     };
     if (q.header !== undefined) answer.header = q.header;
+    // Conditional attach — mirrors `header`. When the user typed a
+    // custom answer, attach it; otherwise omit (keeps the wire
+    // shape identical to the pre-custom behavior for option-only
+    // answers, so the existing submit-IPC test's toEqual holds).
+    if (useCustom) answer.custom = custom;
     return answer;
   });
 }
@@ -390,6 +441,31 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
             </label>
           </li>
         </ul>
+
+        <!--
+          Custom free-text input (R4). Rendered only when
+          `q.allow_custom` is truthy. Mutually exclusive with the
+          option selection above (D1 互斥): typing clears the
+          selection, selecting an option clears this text. Disabled
+          alongside the options when the card leaves the pending
+          state (answered / cancelled). Mirrors `.ask-card__option`
+          styling — no new color tokens.
+        -->
+        <div
+          v-if="q.allow_custom"
+          class="ask-card__custom"
+          :data-testid="`ask-card-custom-${qIndex}`"
+        >
+          <input
+            type="text"
+            class="ask-card__custom-input"
+            :value="customByQuestion[qIndex]"
+            :disabled="localState !== 'pending'"
+            placeholder="或自行输入…"
+            :data-testid="`ask-card-custom-input-${qIndex}`"
+            @input="onCustomInput(qIndex, ($event.target as HTMLInputElement).value)"
+          />
+        </div>
       </section>
     </div>
 
@@ -450,6 +526,18 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
             :key="label"
             class="ask-card__summary-label"
           >{{ label }}</span>
+          <!--
+            R5: when the user typed a custom answer, render an extra
+            pill with the typed text. The option-label loop above is
+            empty in the custom case (`options: []`), so this pill is
+            the sole summary marker. Mutually exclusive with the
+            option labels by construction (buildAnswer guarantees
+            `custom` ⇔ empty `options`).
+          -->
+          <span
+            v-if="answer.custom"
+            class="ask-card__summary-label ask-card__summary-label--custom"
+          >自定义: {{ answer.custom }}</span>
         </span>
       </p>
     </div>
@@ -684,6 +772,48 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
   overflow: auto;
 }
 
+/* Custom free-text input (R4). Mirrors the `.ask-card__option`
+   border / radius / surface treatment so the input reads as a
+   sibling affordance to the option list. No new color tokens —
+   reuses the project's border + surface + accent tokens. */
+.ask-card__custom {
+  display: flex;
+  align-items: stretch;
+}
+
+.ask-card__custom-input {
+  flex: 1;
+  min-width: 0;
+  /* Match the option label's vertical + horizontal padding so the
+     text input's content box aligns with the option rows above it. */
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-bg-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.ask-card__custom-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.ask-card__custom-input:hover:not(:disabled) {
+  border-color: var(--color-bg-border-strong);
+}
+
+.ask-card__custom-input:focus:not(:disabled) {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.ask-card__custom-input:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* Bottom action row (R7 / R7a / AC6). */
 .ask-card__actions {
   display: flex;
@@ -788,6 +918,14 @@ function labelsForAnswer(answer: ToolQuestionAnswer): string[] {
   color: var(--color-accent);
   border-radius: var(--radius-pill);
   background: var(--color-accent-muted);
+}
+
+/* R5: custom-answer summary pill. Distinct border treatment (dashed
+   instead of solid) so the user can visually tell a typed custom
+   answer apart from a picked option in the answered summary. Reuses
+   the existing accent tokens — no new colors. */
+.ask-card__summary-label--custom {
+  border-style: dashed;
 }
 
 .ask-card__cancelled-note {

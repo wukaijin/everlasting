@@ -203,6 +203,7 @@ async fn c2plus_terminates_after_3_consecutive_hard_loops() {
                 header: None,
                 options: vec!["终止 loop".into()],
                 multi_select: false,
+                custom: None,
             }])
             .unwrap(),
         ),
@@ -311,6 +312,7 @@ async fn c2plus_continue_resets_count_and_injects_enhanced_hint() {
                 header: None,
                 options: vec!["继续".into()],
                 multi_select: false,
+                custom: None,
             }])
             .unwrap(),
         ),
@@ -436,6 +438,7 @@ async fn c2plus_none_resets_count() {
                 header: None,
                 options: vec!["终止 loop".into()],
                 multi_select: false,
+                custom: None,
             }])
             .unwrap(),
         ),
@@ -604,6 +607,7 @@ async fn c2plus_already_pending_skips() {
                         },
                     ],
                     multi_select: false,
+                    allow_custom: false,
                 }],
                 ts: 0,
             }),

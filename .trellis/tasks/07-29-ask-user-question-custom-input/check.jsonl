@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/tool-contract.md", "reason": "check 阶段核验 is_error 语义一致性（grep/ripgrep 范式）：skip-semantics 改后用户跳过=false、session-cancel=true 是否符合本 spec 的 is_error 判定原则。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "check 阶段核验跨层契约对齐：Rust Question/QuestionAnswer 与前端 Question/ToolQuestionAnswer 字段镜像 + snake_case + 向后兼容（旧 task 无字段 default）。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 阶段后端质量门：cargo test/clippy 全绿 + 无新 warning 的验收基线。"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "check 阶段前端质量门：vitest/vue-tsc/build 全绿 + 组件 CSS 引用 token 不硬编码 hex 的验收基线。"}
+{"file": ".trellis/spec/frontend/chat.md", "reason": "check 阶段核验卡片红线：custom input 保持 inline（非 modal/非 portal）、disabled 随 localState、answered summary 保留展开（R7a）。"}

@@ -118,7 +118,7 @@ export interface QuestionOption {
  *  `Question` struct: `question: String` (required), `header:
  *  Option<String>` (≤12 chars on the wire — backend validates),
  *  `options: Vec<Option>` (2..=4), `multi_select: bool` (default
- *  false). Wire is snake_case. */
+ *  false), `allow_custom: bool` (default false). Wire is snake_case. */
 export interface Question {
   question: string;
   /** ≤12 chars — backend schema check rejects longer. Optional. */
@@ -129,6 +129,13 @@ export interface Question {
    *  is `false` when omitted (Rust `Option<bool>` defaults to None
    *  → false on the JSON wire). */
   multi_select: boolean;
+  /** If true, render a free-text input so the user can type their
+   *  own answer instead of picking an option. Selecting an option
+   *  and typing are mutually exclusive; when the user types,
+   *  `options` becomes empty and `custom` carries the text
+   *  (mirrors Rust `#[serde(default)] allow_custom: bool`). Optional
+   *  — omitted on old payloads, defaults to false. */
+  allow_custom?: boolean;
 }
 
 /** `tool:question` event payload (backend → frontend). Mirrors the
@@ -166,19 +173,33 @@ export interface ToolQuestionPayload {
  *  `options` is the array of selected labels (string-array, NOT
  *  indices) — single-select → 1 element; multi-select → N elements.
  *  Backend accepts the labels verbatim (no ID lookup needed; the
- *  card renders labels, the LLM context sees labels). */
+ *  card renders labels, the LLM context sees labels).
+ *
+ *  `custom` (optional) is the free-text answer the user typed when
+ *  the question had `allow_custom: true`. Mutually exclusive with
+ *  `options`: present iff the user typed, and in that case
+ *  `options` is `[]` (mirrors Rust `#[serde(default,
+ *  skip_serializing_if = "Option::is_none")] custom: Option<String>`). */
 export interface ToolQuestionAnswer {
   question: string;
   /** Echo of the question's `header` (≤12 chars). Optional —
- *    present iff the question had a header in the original payload. */
+   *    present iff the question had a header in the original payload. */
   header?: string;
   /** Selected option labels (1 element for single-select, N for
- *    multi-select). Backend schema requires `length >= 1`. */
+   *    multi-select). Backend schema requires `length >= 1`. When
+   *    the user typed a custom answer, this is `[]` (mutually
+   *    exclusive with `custom`). */
   options: string[];
   /** Echo of the question's `multi_select` flag. Backend uses
- *    this to validate the answer shape (single-select → 1 label;
- *    multi-select → N labels). */
+   *    this to validate the answer shape (single-select → 1 label;
+   *    multi-select → N labels). */
   multi_select: boolean;
+  /** Free-text custom answer the user typed (present iff the
+   *    question had `allow_custom: true` and the user chose to type
+   *    instead of picking an option). Mutually exclusive with
+   *    `options` — when present, `options` is `[]`. Optional on
+   *    old answers (serde default None). */
+  custom?: string;
 }
 
 /** `tool:question_resolved` IPC payload (frontend → backend).

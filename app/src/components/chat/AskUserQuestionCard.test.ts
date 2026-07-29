@@ -82,6 +82,34 @@ function makeQuestions(): Question[] {
   ];
 }
 
+/** Fixture with `allow_custom: true` on the first question (single-
+ *  select). Used by the custom-input tests (design §5.2). The second
+ *  question is the standard multi-select so the card still has a
+ *  normal option-only question (exercises the mixed case). */
+function makeQuestionsWithCustom(): Question[] {
+  return [
+    {
+      question: "Which library should we use?",
+      header: "Library",
+      options: [
+        { label: "Vue", description: "Reactive component framework" },
+        { label: "React", description: "Component-based UI library" },
+      ],
+      multi_select: false,
+      allow_custom: true,
+    },
+    {
+      question: "Which features do you need?",
+      header: "Features",
+      options: [
+        { label: "Routing", description: "Client-side navigation" },
+        { label: "State", description: "Centralized store" },
+      ],
+      multi_select: true,
+    },
+  ];
+}
+
 const baseProps = () => ({
   sessionId: "sess-1",
   toolUseId: "tool-use-1",
@@ -689,6 +717,184 @@ describe("AskUserQuestionCard — inline red line (AC10)", () => {
       document.querySelectorAll(".ask-card-portal, .ask-card__overlay")
         .length,
     ).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 10. Custom free-text input (R3-R6, D1 互斥)
+// ---------------------------------------------------------------------
+
+describe("AskUserQuestionCard — custom free-text input", () => {
+  beforeEach(() => { wrapper = null; });
+
+  it("does NOT render the custom input when allow_custom is absent", () => {
+    wrapper = mountCard();
+    // makeQuestions() has no allow_custom — no custom input on any
+    // question.
+    expect(
+      wrapper.find("[data-testid='ask-card-custom-input-0']").exists(),
+    ).toBe(false);
+    expect(
+      wrapper.find("[data-testid='ask-card-custom-input-1']").exists(),
+    ).toBe(false);
+  });
+
+  it("does NOT render the custom input when allow_custom is false", () => {
+    wrapper = mountCard({
+      questions: [
+        {
+          question: "Q?",
+          options: [{ label: "A" }, { label: "B" }],
+          multi_select: false,
+          allow_custom: false,
+        },
+      ],
+    });
+    expect(
+      wrapper.find("[data-testid='ask-card-custom-input-0']").exists(),
+    ).toBe(false);
+  });
+
+  it("renders the custom input when allow_custom is true", () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // Q0 has allow_custom → input renders.
+    expect(
+      wrapper.find("[data-testid='ask-card-custom-input-0']").exists(),
+    ).toBe(true);
+    // Q1 has no allow_custom → no input.
+    expect(
+      wrapper.find("[data-testid='ask-card-custom-input-1']").exists(),
+    ).toBe(false);
+  });
+
+  it("typing into the custom input clears option selection (互斥)", async () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // First pick an option on Q0.
+    await clickOption("ask-card-option-0-Vue");
+    expect(
+      wrapper!.find("[data-testid='ask-card-option-0-Vue']").classes(),
+    ).toContain("ask-card__option--selected");
+    // Type into the custom input.
+    const input = wrapper.find<HTMLInputElement>(
+      "[data-testid='ask-card-custom-input-0']",
+    );
+    await input.setValue("Svelte");
+    await nextTick();
+    // The option is no longer selected (互斥 — typing clears options).
+    expect(
+      wrapper!.find("[data-testid='ask-card-option-0-Vue']").classes(),
+    ).not.toContain("ask-card__option--selected");
+    // The custom input reflects the typed value.
+    expect(input.element.value).toBe("Svelte");
+  });
+
+  it("clicking an option clears the custom text (互斥)", async () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // Type into the custom input first.
+    const input = wrapper.find<HTMLInputElement>(
+      "[data-testid='ask-card-custom-input-0']",
+    );
+    await input.setValue("Svelte");
+    await nextTick();
+    expect(input.element.value).toBe("Svelte");
+    // Now pick an option.
+    await clickOption("ask-card-option-0-Vue");
+    await nextTick();
+    // The custom input is cleared (互斥 — selecting clears text).
+    expect(input.element.value).toBe("");
+    // And the option is selected.
+    expect(
+      wrapper!.find("[data-testid='ask-card-option-0-Vue']").classes(),
+    ).toContain("ask-card__option--selected");
+  });
+
+  it("enables 提交 when only custom text is present (no option selected)", async () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // Q1 (multi-select, no custom) still needs an option — type
+    // custom on Q0 and pick an option on Q1.
+    const input = wrapper.find<HTMLInputElement>(
+      "[data-testid='ask-card-custom-input-0']",
+    );
+    await input.setValue("Svelte");
+    await clickOption("ask-card-option-1-Routing");
+    await nextTick();
+    const submit = wrapper.find<HTMLButtonElement>(
+      "[data-testid='ask-card-submit']",
+    );
+    expect(submit.element.disabled).toBe(false);
+  });
+
+  it("disables 提交 when custom is whitespace-only on an allow_custom question", async () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // Whitespace-only custom on Q0 + valid option on Q1 → still
+    // disabled (custom must be non-blank after trim).
+    const input = wrapper.find<HTMLInputElement>(
+      "[data-testid='ask-card-custom-input-0']",
+    );
+    await input.setValue("   ");
+    await clickOption("ask-card-option-1-Routing");
+    await nextTick();
+    const submit = wrapper.find<HTMLButtonElement>(
+      "[data-testid='ask-card-submit']",
+    );
+    expect(submit.element.disabled).toBe(true);
+  });
+
+  it("submit wire: custom-only answer produces options:[] + custom:<text>", async () => {
+    wrapper = mountCard({ questions: makeQuestionsWithCustom() });
+    // Type a custom answer on Q0; pick an option on Q1.
+    const input = wrapper.find<HTMLInputElement>(
+      "[data-testid='ask-card-custom-input-0']",
+    );
+    await input.setValue("Svelte");
+    await clickOption("ask-card-option-1-Routing");
+    await nextTick();
+    await wrapper.find("[data-testid='ask-card-submit']").trigger("click");
+    await flushPromises();
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    const args = invokeMock.mock.calls[0][1] as { answer: ToolQuestionAnswer[] };
+    // Q0 — custom path: options empty + custom attached.
+    expect(args.answer[0].options).toEqual([]);
+    expect(args.answer[0].custom).toBe("Svelte");
+    // Q1 — option path: options populated, NO custom field (conditional attach).
+    expect(args.answer[1].options).toEqual(["Routing"]);
+    expect(args.answer[1].custom).toBeUndefined();
+  });
+
+  it("answered summary renders the custom pill when answer.custom is set", async () => {
+    // Rehydrate directly into the answered state with a custom
+    // answer (mirrors the historical replay path).
+    wrapper = mountCard({
+      questions: makeQuestionsWithCustom(),
+      state: "answered",
+      selectedAnswer: [
+        {
+          question: "Which library should we use?",
+          header: "Library",
+          options: [],
+          multi_select: false,
+          custom: "Svelte",
+        },
+        {
+          question: "Which features do you need?",
+          header: "Features",
+          options: ["Routing"],
+          multi_select: true,
+        },
+      ],
+    });
+    const summaryLabels = wrapper
+      .find("[data-testid='ask-card-summary']")
+      .findAll(".ask-card__summary-label")
+      .map((l) => l.text());
+    // The custom pill renders as "自定义: Svelte"; the option label
+    // "Routing" renders for Q1.
+    expect(summaryLabels).toEqual(["自定义: Svelte", "Routing"]);
+    // The custom pill carries the dedicated modifier class.
+    expect(
+      wrapper.find(".ask-card__summary-label--custom").exists(),
+    ).toBe(true);
   });
 });
 

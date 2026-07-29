@@ -896,6 +896,7 @@ mod tests {
                             },
                         ],
                         multi_select: false,
+                        allow_custom: false,
                     }],
                     ts: 0,
                 }),

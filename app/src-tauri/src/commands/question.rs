@@ -959,6 +959,7 @@ mod tests {
             header: None,
             options: vec!["a".into()],
             multi_select: false,
+            custom: None,
         }];
         let r = resolve_response_from_args(None, Some(answers.clone())).expect("ok");
         match r {

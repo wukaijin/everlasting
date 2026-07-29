@@ -52,6 +52,7 @@ fn make_question_payload(session_id: &str, tool_use_id: &str) -> ToolQuestionPay
                 },
             ],
             multi_select: false,
+            allow_custom: false,
         }],
         ts: 1_700_000_000_000,
     }

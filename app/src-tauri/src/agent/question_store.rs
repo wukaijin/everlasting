@@ -127,6 +127,17 @@ pub struct Question {
     /// to default to `false`; we serialize `None` as `false`).
     #[serde(default)]
     pub multi_select: bool,
+    /// If true, the frontend renders a free-text input so the
+    /// user can type their own answer instead of picking an
+    /// option. Selecting an option and typing are mutually
+    /// exclusive: when the user types, the answer's `options`
+    /// is empty and `custom` carries the text (see
+    /// `QuestionAnswer::custom`). Defaults to `false` so pre-
+    /// custom-field task.json / payloads round-trip unchanged.
+    /// Mirrors `multi_select`'s serde shape (`#[serde(default)]`,
+    /// always emitted) for symmetry.
+    #[serde(default)]
+    pub allow_custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +163,14 @@ pub struct QuestionAnswer {
     pub header: Option<String>,
     pub options: Vec<String>,
     pub multi_select: bool,
+    /// Free-text answer the user typed via the `allow_custom`
+    /// input. Mutually exclusive with `options`: when present,
+    /// `options` is empty (`[]`) and vice versa. `Option` +
+    /// `skip_serializing_if` so a non-custom answer omits the
+    /// field (matches `header`'s round-trip shape) and legacy
+    /// answers without it deserialize as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<String>,
 }
 
 /// IPC wire shape — the `request_mode_change` payload the frontend
@@ -639,6 +658,7 @@ mod tests {
                     },
                 ],
                 multi_select: false,
+                allow_custom: false,
             }],
             ts: 1_700_000_000_000,
         }
@@ -688,6 +708,7 @@ mod tests {
             header: None,
             options: vec!["A".into()],
             multi_select: false,
+            custom: None,
         }];
         let entry = store
             .resolve(
