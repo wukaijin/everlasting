@@ -89,8 +89,10 @@ pub async fn check(
     //      decouple, 2026-07-01) -----
     // read 族(read_file/grep/glob/list_dir)的项目外敏感路径硬墙。
     // 早于 Tier 3(Mode)+ yolo bypass → 含 yolo 都挡。仅项目外生效
-    // (Q1.2:项目内 .env/credentials 信任不挡);"项目外"用 worktree_path
-    // (项目根),非 cwd。write/edit 不进(其 tool 层 assert_within_root 保留)。
+    // (Q1.2:项目内 .env/credentials 信任不挡);"项目外"用 project_main_path
+    // (项目根),非 worktree_path/cwd(隔离 worker 的 worktree_path 指向其
+    // checkout 子树,见 PermissionContext.project_main_path 说明)。write/edit
+    // 不进(其 tool 层 assert_within_root 保留)。
     // 命中走 Tier 2 模式 record_audit 写父(与 dangerous kill-list 一致,
     // 不触发 RULE-A-016 — 该规则仅约束 Tier 4 ask_path worker collapse)。
     if matches!(tool_name, "read_file" | "grep" | "glob" | "list_dir") {
@@ -103,9 +105,9 @@ pub async fn check(
             // 项目内真文件(含项目内 .env)→ 不挡(Q1.2 信任);canonicalize
             // 失败(不存在)→ 不挡(read 走 IO error)。
             let sensitive_hit =
-                if crate::projects::boundary::is_within_root(&ctx.worktree_path, &abs_path) {
+                if crate::projects::boundary::is_within_root(&ctx.project_main_path, &abs_path) {
                     abs_path.canonicalize().map_or(false, |canon| {
-                        !crate::projects::boundary::is_within_root(&ctx.worktree_path, &canon)
+                        !crate::projects::boundary::is_within_root(&ctx.project_main_path, &canon)
                             && super::sensitive::is_sensitive_path(&canon)
                     })
                 } else {
@@ -207,19 +209,21 @@ pub async fn check(
                     // For the permission layer, we treat the path as
                     // relative to ctx.cwd unless it's already absolute.
                     let abs_path = crate::projects::boundary::resolve_path(&p, &ctx.cwd);
-                    // read-side boundary decouple (2026-07-09, bug fix):
-                    // inside 判定锚点用 `ctx.worktree_path`(项目根),与
-                    // Tier 2.5 一致 —— 不用 `ctx.cwd`。隔离 worker 的 cwd
-                    // 是其 worktree 路径(`<app_data_dir>/worktrees/...
-                    // /worker/<run_id>`),但 worker 读文件用的是原始项目根
-                    // 的绝对路径;cwd 与原始项目根不在同一棵子树 →
-                    // is_within_root 误判 outside → 每个只读工具都进 ask_path
-                    // → 弹审批。改锚点为项目根后,隔离 worker 读项目根文件
-                    // 正确判 inside → 静默 Allow(隔离 worker 读源码是正常行为)。
-                    // 非隔离 worker / 父 session 的 cwd == worktree_path == 项目根
-                    // → 行为不变。
-                    let inside =
-                        crate::projects::boundary::is_within_root(&ctx.worktree_path, &abs_path);
+                    // inside 判定锚点用 `ctx.project_main_path`(项目根),
+                    // 不是 `worktree_path` / `cwd`。隔离 worker 的 worktree_path
+                    // 与 cwd 都指向其 worktree 子树
+                    // (`<app_data_dir>/worktrees/.../worker/<run_id>`),但 worker
+                    // 读项目源码用的是原始项目根的绝对路径 —— 锚到 worktree 会让
+                    // is_within_root 误判 outside → 每个只读工具进 ask_path → 弹审批
+                    // (2026-07-29: 一个 session 实测 40+ 条审批,根因即此)。
+                    // 2026-07-09 的 commit 71976ea 试图修但把锚点从 cwd 换成
+                    // worktree_path,隔离 worker 两者都是 worktree → 是 no-op;
+                    // 回归测试又手填 worktree_path=项目根 掩盖了 bug。
+                    // 见 PermissionContext.project_main_path 的完整说明。
+                    let inside = crate::projects::boundary::is_within_root(
+                        &ctx.project_main_path,
+                        &abs_path,
+                    );
                     // Tier 4.1: check session_tool_permissions
                     // match_kind='path' for a grant. If hit, Allow.
                     if let Ok(true) =

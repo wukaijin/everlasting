@@ -470,6 +470,11 @@ pub(crate) async fn chat_inner(
             // `Some(worker_worktree_path)` to redirect the worker's
             // tools into an isolated checkout.
             None,
+            // project_main_override (2026-07-29): production chat is
+            // the parent path → `None` (the loop falls back to
+            // worktree_path, which IS the project root here). Only the
+            // isolated worker nested call passes Some(project_main).
+            None,
             // L3b (2026-06-27): thread the app data dir so the
             // dispatch_subagent interceptor (`run_subagent`) can
             // compute the worker worktree path when isolation is

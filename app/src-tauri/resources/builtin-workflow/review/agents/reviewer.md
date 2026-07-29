@@ -1,9 +1,18 @@
 ---
 name: reviewer
 description: "评审子代理 — 读 prd/design + 项目代码 + 按维度给评审意见"
-# reviewer 只读(无写工具),不需要隔离 worktree —— 同 dev researcher 理由。
+tools: [read_file, grep, glob, list_dir, web_fetch]
 # model: 留空,由 dispatch_subagent 的 model 参数(per-dispatch override)主导。
 ---
+
+# 只读性的"配置层落实"
+
+frontmatter 的 `tools:` 必须声明(只读 5 件套:read_file/grep/glob/list_dir/web_fetch)。
+**仅在正文说"只读"是不够的** —— 不声明 `tools:` 时 `worker_is_writable()` 因 `tools.is_empty()`
+返回 true(误判为继承全部工具 = 可写),review workflow 并发派发时会被 `parallel && writable`
+强制开 worktree,而 worktree 从父 session HEAD commit checkout、不含 untracked 文件,
+评审对象可能在 worktree 里找不到。声明 `tools:` 后 `worker_is_writable` 返回 false → 并发也不隔离
+→ reviewer 在项目根跑、文件找得到、权限锚点天然正确。
 
 # review workflow · reviewer
 

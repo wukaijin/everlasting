@@ -23,7 +23,7 @@ intake 已确认维度集(见 wf-review-prep)。进入 reviewing 时快速复核
 对用户多选的每个模型,用 `dispatch_subagent` 派一个 reviewer:
 
 - `subagent` 参数 = `reviewer`(review plugin 的唯一角色;它会在 dispatch_subagent 的 subagent enum 里出现 —— 若 enum 里没有 `reviewer`,说明 plugin 层 agent 未加载,这是引擎 bug,请报告用户而非手动 edit 配置)
-- `model` 参数 = 该模型的 display_name(per-dispatch override,reviewer.md 的 `model:` 留空就是为此)
+- **`model` 参数 = 该模型的 display_name —— 强制必传**(per-dispatch override,reviewer.md 的 `model:` 留空就是为此)。**漏传 → reviewer 静默继承父 session 的默认模型 → 多个 reviewer 跑成同一个模型 → "多模型分歧"的整个价值落空。这属于执行错误。**
 - `resume_from` = 上一轮该模型的 run_id(**回环续接**,省 token;首轮无 resume_from)
 
 **并发**:多个 dispatch_subagent 调用尽量并发(在同一 turn 内连续发起),不要串行等。

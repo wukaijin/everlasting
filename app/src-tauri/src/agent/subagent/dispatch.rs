@@ -732,6 +732,32 @@ pub(crate) async fn run_subagent(
         None
     };
 
+    // project_main_override (2026-07-29): for an isolated worker,
+    // resolve the ORIGINAL project main repo path so the nested
+    // `run_chat_loop` can anchor the permission layer's inside-check on
+    // the project root (not the worker's checkout subtree — see
+    // PermissionContext.project_main_path). Non-isolated workers / paths
+    // pass `None` and let `run_chat_loop` fall back to `worktree_path`
+    // (which is the project root for them). Reuse the same
+    // session→project→project.path resolution as `create_worker_worktree`.
+    let project_main_override: Option<PathBuf> = if isolated {
+        let main = resolve_project_main_path(db, parent_session_id).await;
+        if main.is_empty() {
+            tracing::warn!(
+                parent_session_id = %parent_session_id,
+                worker_run_id = %worker_run_id,
+                "run_subagent: failed to resolve project main path for worker; \
+                 permission inside-check will anchor on the worktree (may cause \
+                 spurious permission prompts on project-root reads)"
+            );
+            None
+        } else {
+            Some(PathBuf::from(main))
+        }
+    } else {
+        None
+    };
+
     // L3b (2026-06-27): when isolated, RESET the ReadGuard for the
     // worker. The worker starts in a fresh checkout with no
     // inherited "already-read" file set — if we passed the parent's
@@ -884,15 +910,68 @@ pub(crate) async fn run_subagent(
         Some(c) => Some(c.read().await),
         None => None,
     };
-    let (worker_provider, worker_ctx, worker_display): (Arc<dyn Provider>, u32, Option<String>) =
-        resolve_worker_provider(
-            final_model.as_deref(),
-            provider,
-            context_window,
-            cat_guard.as_deref(),
-            db,
-        )
-        .await;
+    let (worker_provider, worker_ctx, mut worker_display): (
+        Arc<dyn Provider>,
+        u32,
+        Option<String>,
+    ) = resolve_worker_provider(
+        final_model.as_deref(),
+        provider,
+        context_window,
+        cat_guard.as_deref(),
+        db,
+    )
+    .await;
+    // 2026-07-29 (reviewer model-assignment gap): when `worker_display`
+    // is `None` the worker is silently inheriting the PARENT session's
+    // model. That's correct behavior, but recording NULL in
+    // `subagent_runs.model_display` makes post-hoc DB inspection blind
+    // to "which model actually ran" — e.g. a multi-model review where the
+    // LLM forgot the `model` arg looks identical to a correct one in the
+    // DB (both NULL), so "multi-model disagreement never materialized"
+    // is undetectable after the fact (the exact failure in session
+    // 6b313ce4: two reviewers, both NULL, both actually ran the parent
+    // default model).
+    //
+    // Backfill the EFFECTIVE model: read the parent session's `model_id`,
+    // resolve it to a display_name, and use it. `worker_display` stays
+    // `None` only if the parent session itself has no model (degenerate);
+    // the wire `[model: ...]` line + DB row then both reflect the actual
+    // model the worker ran, instead of hiding it. Best-effort: a DB miss
+    // logs at `warn!` and `worker_display` stays `None` (unchanged behavior).
+    if worker_display.is_none() {
+        match crate::db::sessions::load_session(db, parent_session_id).await {
+            Ok(Some(s)) => {
+                if let Some(mid) = s.session.model_id.as_deref().filter(|m| !m.is_empty()) {
+                    match crate::db::models::get_model(db, mid).await {
+                        Ok(Some(m)) => {
+                            worker_display = Some(m.display_name);
+                        }
+                        Ok(None) => tracing::warn!(
+                            parent_session_id = %parent_session_id,
+                            model_id = %mid,
+                            "run_subagent: parent session model_id not in models table; \
+                             worker model_display stays None"
+                        ),
+                        Err(e) => tracing::warn!(
+                            parent_session_id = %parent_session_id,
+                            error = %e,
+                            "run_subagent: get_model failed; worker model_display stays None"
+                        ),
+                    }
+                }
+            }
+            Ok(None) => tracing::warn!(
+                parent_session_id = %parent_session_id,
+                "run_subagent: parent session not found; worker model_display stays None"
+            ),
+            Err(e) => tracing::warn!(
+                parent_session_id = %parent_session_id,
+                error = %e,
+                "run_subagent: load_session failed; worker model_display stays None"
+            ),
+        }
+    }
 
     // Assemble the worker's system prompt — fully replaces the
     // parent's behavior_prompt + mode_prefix + base_prompt layers.
@@ -1189,6 +1268,11 @@ pub(crate) async fn run_subagent(
         // worktree_path from the session row (legacy shared-cwd
         // behavior).
         worker_worktree_opt.clone(),
+        // project_main_override (2026-07-29): the worker's original
+        // project main repo path when isolated, threaded into the nested
+        // loop's `PermissionContext.project_main_path`. See the
+        // `project_main_override` local above.
+        project_main_override.clone(),
         // L3b (2026-06-27): thread the app_data_dir so the worker's
         // own (structurally-disabled) dispatch_subagent interceptor
         // would have it — in practice the worker never dispatches
@@ -1730,7 +1814,7 @@ async fn resolve_project_id(db: &SqlitePool, session_id: &str) -> String {
 /// This is distinct from `current_ctx.worktree_path` (which is the
 /// PARENT SESSION's worktree — a linked worktree, NOT the main
 /// repo). The project row's `path` field is the main repo path.
-async fn resolve_project_main_path(db: &SqlitePool, session_id: &str) -> String {
+pub(crate) async fn resolve_project_main_path(db: &SqlitePool, session_id: &str) -> String {
     let project_id = resolve_project_id(db, session_id).await;
     if project_id.is_empty() {
         return String::new();

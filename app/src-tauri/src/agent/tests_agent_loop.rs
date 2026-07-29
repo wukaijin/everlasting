@@ -98,6 +98,7 @@ async fn agent_loop_basic_text_only_completes() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -233,6 +234,7 @@ async fn agent_loop_tool_use_triggers_tool_result_turn() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -372,6 +374,7 @@ async fn agent_loop_use_skill_loads_body_into_tool_result() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -496,6 +499,7 @@ async fn agent_loop_use_skill_unknown_returns_error() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -660,6 +664,7 @@ async fn agent_loop_cancel_in_turn_2_kills_loop() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -834,6 +839,7 @@ async fn agent_loop_max_turns_emits_done_marker() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -943,6 +949,7 @@ async fn agent_loop_mock_provider_exhaustion_surfaces_error() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -1029,6 +1036,7 @@ async fn agent_loop_error_after_tool_use_appends_synthetic_result() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
@@ -1220,6 +1228,7 @@ async fn agent_loop_c3_compaction_does_not_panic() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -1413,6 +1422,7 @@ async fn agent_loop_error_path_emits_chat_event_error() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -1587,6 +1597,7 @@ async fn agent_loop_c3_still_over_emits_error_and_skips_provider() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -1761,6 +1772,7 @@ async fn agent_loop_persist_failure_emits_error() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -1937,6 +1949,7 @@ async fn agent_loop_cancel_skips_audit_for_cancelled_tool() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2074,6 +2087,7 @@ async fn agent_loop_error_persists_partial_text() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2192,6 +2206,7 @@ async fn agent_loop_error_empty_text_uses_error_marker() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2304,6 +2319,7 @@ async fn agent_loop_error_persists_thinking_and_tool_calls() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2450,6 +2466,7 @@ async fn agent_loop_error_persist_failure_is_log_only() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2564,6 +2581,7 @@ async fn agent_loop_error_emits_turn_complete() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2720,6 +2738,7 @@ async fn agent_loop_update_checklist_replaces_vec_and_injects_next_turn() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -2908,6 +2927,7 @@ async fn agent_loop_update_checklist_coerces_two_in_progress_to_one() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -3076,6 +3096,7 @@ async fn agent_loop_cancelled_update_checklist_skips_audit_row() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -3483,6 +3504,7 @@ async fn agent_loop_parallel_readonly_batch_preserves_order() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -3681,6 +3703,7 @@ async fn agent_loop_mixed_batch_with_edit_falls_back_to_serial() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -3899,6 +3922,7 @@ async fn agent_loop_parallel_batch_cancel_marks_turn_cancelled() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -4069,6 +4093,7 @@ async fn agent_loop_drains_background_shell_notification_into_turn_2() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -4252,6 +4277,7 @@ async fn agent_loop_no_pending_notifications_skips_injection() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -4391,6 +4417,7 @@ async fn agent_loop_loop_detection_injects_hard_hint() {
         None,
         // L3b (2026-06-27): production-style caller → worktree_override = None.
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
@@ -4511,6 +4538,7 @@ async fn agent_loop_loop_detection_silent_when_not_repetitive() {
         // row's worktree_path). Only the isolated worker path passes
         // Some(worker_worktree_path).
         None,
+        None, // project_main_override (2026-07-29)
         // L3b (2026-06-27): thread the test harness's app_data_dir
         // (a fresh tempdir per test). Tests that don't exercise
         // worker isolation never read it.
@@ -4649,6 +4677,7 @@ async fn agent_loop_p5_soft_block_short_circuits_execute() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
@@ -4782,6 +4811,7 @@ async fn agent_loop_p5_soft_block_second_hit_degrades_to_execute() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         // 2026-06-30 (ask_user_question task): per-test QuestionStore
@@ -4915,6 +4945,7 @@ async fn a5plus_retry_does_not_double_count_token_usage() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
@@ -5017,6 +5048,7 @@ async fn a5plus_retry_emits_retrying_chat_events() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
@@ -5124,6 +5156,7 @@ async fn a5plus_retry_terminal_state_matches_no_retry_path() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
@@ -5258,6 +5291,7 @@ async fn agent_loop_emits_recall_on_fts_hit() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),
@@ -5408,6 +5442,7 @@ async fn agent_loop_emits_recall_on_pitfall_hit() {
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),

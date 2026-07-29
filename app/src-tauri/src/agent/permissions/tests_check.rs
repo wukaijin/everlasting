@@ -650,7 +650,8 @@ async fn tier25_denies_sensitive_outside_even_in_yolo() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let ssh_key = dirs::home_dir().unwrap().join(".ssh/id_rsa");
@@ -692,7 +693,8 @@ async fn tier4_allow_trusted_external_skips_ask() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let trusted = dirs::home_dir()
@@ -751,7 +753,8 @@ async fn tier25_denies_symlink_escape_to_sensitive_outside() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let decision = crate::agent::permissions::check::check(
@@ -791,7 +794,8 @@ async fn tier4_allow_trusted_external_with_tilde_form() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let decision = tokio::time::timeout(
@@ -865,7 +869,8 @@ async fn tier4_shell_prefix_grant_short_circuits_for_single_segment() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let decision = tokio::time::timeout(
@@ -918,7 +923,8 @@ async fn tier4_shell_prefix_grant_does_not_short_circuit_for_compound() {
         is_worker: false,
         worker_run_id: None,
         run_grants: None,
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     // Fire the check; expect it to reach `ask_path` (which waits on
@@ -973,7 +979,8 @@ async fn tier4_worker_run_grant_does_not_short_circuit_for_compound() {
         is_worker: true,
         worker_run_id: Some("worker-run-grant-test".to_string()),
         run_grants: Some(cache),
-        worktree_path: root,
+        worktree_path: root.clone(),
+        project_main_path: root.clone(),
         turn_seq: None,
     };
     let compound_input = serde_json::json!({
@@ -1048,8 +1055,22 @@ async fn isolated_worker_read_project_root_skips_ask() {
         is_worker: true,
         worker_run_id: Some("worker-iso-regression".to_string()),
         run_grants: None,
-        // worktree_path = project root (the inside-anchor, per fix)
-        worktree_path: project_root.clone(),
+        // PRODUCTION WIRING for an isolated worker: `worktree_path` is
+        // the worker's own checkout subtree (the sibling `worker_cwd`
+        // tempdir above, standing in for `<app_data_dir>/worktrees/...
+        // /worker/<run_id>`), NOT the project root. The original test
+        // (commit 71976ea, 2026-07-09) hand-filled `worktree_path` with
+        // `project_root` — that does NOT match production and masked the
+        // anchor bug: check.rs anchored the inside-check on `worktree_path`,
+        // so a fake project-root worktree_path made every read pass
+        // regardless of the real bug. We now model the real shape and
+        // rely on `project_main_path` (below) as the project-root anchor.
+        worktree_path: worker_cwd.clone(),
+        // project_main_path = the ORIGINAL project repo path. This is the
+        // anchor check.rs uses for `is_within_root`; the worker reads the
+        // project's source files by their original absolute paths, so this
+        // must be the project root, not the worker's checkout subtree.
+        project_main_path: project_root.clone(),
         turn_seq: None,
     };
 

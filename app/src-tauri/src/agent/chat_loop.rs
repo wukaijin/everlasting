@@ -355,6 +355,14 @@ pub async fn run_chat_loop(
     // worker path passes `Some(worker_worktree_path)` when
     // isolation is active, `None` otherwise.
     worktree_override: Option<PathBuf>,
+    // project_main_override (2026-07-29): the worker's ORIGINAL project
+    // main repo path when `worktree_override` is `Some` (i.e. the worker is
+    // isolated). Threads into `PermissionContext.project_main_path` so the
+    // permission layer's inside-check anchors on the project root, NOT the
+    // worker's own checkout subtree. `None` for production chat, non-isolated
+    // workers, and tests — in those cases `project_main_path` falls back to
+    // `worktree_path` (which IS the project root for them).
+    project_main_override: Option<PathBuf>,
     // L3b (2026-06-27): the app's data directory, threaded so the
     // dispatch_subagent interceptor can compute the worker
     // worktree path (`<app_data_dir>/worktrees/<project_uuid>/
@@ -536,6 +544,21 @@ pub async fn run_chat_loop(
         Ok(p) => p,
         Err(_) => worktree_path.clone(),
     };
+    // project_main_path (2026-07-29): the inside-check anchor for the
+    // permission layer. For a non-isolated worker / parent session,
+    // `worktree_path` IS the project root → fall back to it. For an
+    // isolated worker, `worktree_path` is its checkout subtree and the
+    // real project root comes via `project_main_override` (set by
+    // `run_subagent` to the project's main repo path). Canonicalize the
+    // override to match `is_within_root`'s lexical expectation; if it's
+    // missing/invalid (tests, degenerate cases) fall back to worktree_path
+    // so behavior matches the old code rather than panicking.
+    let project_main_path = match &project_main_override {
+        Some(p) if !p.as_os_str().is_empty() => {
+            crate::projects::boundary::resolve_path(&p.to_string_lossy(), &worktree_path)
+        }
+        _ => worktree_path.clone(),
+    };
     let turn_ctx = ToolContext {
         worktree_path: worktree_path.clone(),
         cwd: session_cwd.clone(),
@@ -668,6 +691,9 @@ pub async fn run_chat_loop(
         // read-side boundary decouple (2026-07-01): deny-list/allow-list
         // 的"项目外"判定锚点(项目根). 见 PermissionContext.worktree_path doc.
         worktree_path: worktree_path.clone(),
+        // 2026-07-29: inside-check anchor (项目根). 隔离 worker 的
+        // worktree_path 指向 checkout 子树,不能作锚点 —— 用真实项目根.
+        project_main_path: project_main_path.clone(),
         // E2 trace: per-turn seq, updated at the top of each turn
         // before the tool-execution phase. None at construction
         // (pre-turn-loop); the turn loop sets Some(seq) per turn.
@@ -2658,20 +2684,29 @@ pub async fn run_chat_loop(
         }
 
         let mut result_blocks: Vec<ContentBlock> = Vec::new();
-        if is_parallel_eligible(&tool_calls, &permission_ctx.cwd) {
+        if is_parallel_eligible(&tool_calls, &permission_ctx.project_main_path) {
             // ---- L2 parallel path (read-only batch) ----
             //
             // All tool_use blocks in this turn are in the
             // {read_file, grep, glob, list_dir, use_skill}
             // whitelist AND every path tool's `path` resolves
-            // inside `permission_ctx.cwd` (= session cwd) →
-            // run them concurrently via `FuturesUnordered`.
+            // inside the project root (`permission_ctx.project_main_path`)
+            // → run them concurrently via `FuturesUnordered`.
             // `web_fetch` is excluded (Q2) because its Tier 4
             // default is `ask`, which would fire multiple
             // concurrent `permission:ask` modals. Path tools
             // with an out-of-root `path` are also excluded by
             // the same rule (RULE-A-013 follow-up, 2026-06-19)
             // — see `is_parallel_eligible` doc.
+            //
+            // Anchor note (2026-07-29): the root MUST be
+            // `project_main_path`, not `cwd`/`worktree_path`. For an
+            // isolated worker the latter both point at the worker's
+            // checkout subtree, so reads of the project's source
+            // files (by their original absolute path) would fail
+            // `is_within_root` → the whole batch is demoted to serial
+            // → each read tool hits `check()` separately → magnified
+            // permission prompts. See `PermissionContext.project_main_path`.
             //
             // Permission-silence invariant (Q2 design +
             // RULE-A-013 closure): the concurrent set is
@@ -4361,6 +4396,11 @@ pub(crate) fn is_parallel_eligible(
     tool_calls: &[(String, String, serde_json::Value)],
     root: &Path,
 ) -> bool {
+    // `root` is the PROJECT MAIN PATH (not the worker's cwd/worktree_path):
+    // for an isolated worker the latter both point at its checkout subtree,
+    // so reads of project source files would fail `is_within_root` here and
+    // demote the whole read-only batch to serial (magnifying permission
+    // prompts). See `PermissionContext.project_main_path`.
     /// Tool names that **always** qualify (name-only check).
     /// `use_skill` has no `path` arg and is exempt from the
     /// path check below.

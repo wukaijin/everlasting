@@ -70,6 +70,7 @@ async fn run_loop_with_sink(
         h.subagent_cache.clone(),
         None,
         None,
+        None, // project_main_override (2026-07-29)
         h.app_data_dir.clone(),
         None,
         h.question_store.clone(),

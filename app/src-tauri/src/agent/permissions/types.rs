@@ -194,12 +194,46 @@ pub struct PermissionContext {
     /// (tool / prefix / path — mirrors the DB table's three
     /// variants).
     pub run_grants: Option<Arc<RunGrantCache>>,
-    /// read-side boundary decouple (2026-07-01): project-root anchor for
-    /// deny-list / allow-list's "项目外"判定. 权限层现有 ask-vs-Allow 的
-    /// anchor 仍是 `cwd`(历史不变); deny/allow 的"项目外"触发用本字段
-    /// (= 项目根),避免 session cwd 是子目录时项目根文件被误判 outside.
-    /// caller(`chat_loop`) 填入已 canonicalize 的 worktree_path.
+    /// The working-tree root for THIS context: for a parent session or a
+    /// **non-isolated** worker this equals the project main path; for an
+    /// **isolated** worker it is the worker's own checkout
+    /// (`<app_data_dir>/worktrees/<project>/worker/<run_id>`). Tools run /
+    /// files are written relative to this root. Do NOT use this as the
+    /// "is this inside the project?" anchor — for an isolated worker it
+    /// is a sibling subtree, NOT the project root (see [`Self::project_main_path`]).
+    ///
+    /// NOTE (2026-07-29): after the inside-check anchor moved to
+    /// `project_main_path`, this field is no longer READ by the permission
+    /// layer in production. It is retained because (a) tests construct it
+    /// to model the real isolated-worker wiring (`worktree_path` = checkout
+    /// subtree, distinct from `project_main_path` = project root) — that
+    /// distinction is what makes the `isolated_worker_read_project_root_skips_ask`
+    /// regression test meaningful — and (b) a future permission rule may need
+    /// to distinguish "inside the worker's own checkout" from "inside the
+    /// project root". `#[allow(dead_code)]` suppresses the read-miss warning
+    /// until such a reader exists.
+    #[allow(dead_code)]
     pub worktree_path: std::path::PathBuf,
+    /// project-root anchor for "项目内/项目外"判定 (2026-07-29, supersedes the
+    /// 2026-07-09 read-side decouple that mis-anchored on `worktree_path`).
+    ///
+    /// For a parent session or non-isolated worker this equals `worktree_path`
+    /// (the project root). For an **isolated** worker this is the ORIGINAL
+    /// project main repo path (NOT the worker checkout) — the worker reads
+    /// the project's source files by their original absolute paths, so the
+    /// inside-check must compare against the project root, not the worker's
+    /// own checkout tree. `check.rs`'s `is_within_root` for path tools and
+    /// `is_parallel_eligible` for the L2 batch both anchor here.
+    ///
+    /// Prior to this field, `check.rs` anchored on `worktree_path`, which for
+    /// an isolated worker is the checkout path → `is_within_root(checkout,
+    /// project_root_file)` returned false → every read tool fell through to
+    /// `ask_path` → a permission modal per read (40+ in one session). The
+    /// 2026-07-09 fix (commit 71976ea) tried to fix it by switching the anchor
+    /// from `cwd` to `worktree_path`, but for an isolated worker BOTH are the
+    /// checkout path — the change was a no-op in production; the regression
+    /// test masked it by hand-filling `worktree_path` with the project root.
+    pub project_main_path: std::path::PathBuf,
     /// E2 (harness trace pipeline, 2026-07-14): the per-session turn
     /// counter value at the time of the permission check. Used by
     /// `record_audit` to pass `turn_seq` to `record_audit_event` so
