@@ -46,6 +46,7 @@ import { extractErrorMessage } from "../utils/useErrorBus";
 import { useChatStore } from "./chat";
 import type {
   ChatMessage,
+  ContentBlockView,
   ErrorCategory,
   InjectionEntry,
 } from "./chat.types";
@@ -125,6 +126,24 @@ interface RequestState {
   // responses.
   currentTurnIndex: number;
   latencyByTurn: Map<number, TurnLatency>;
+  // 交错思考(实时态): 正在累积、尚未 flush 进 contentBlocks 的文本。
+  // 思考与文本交错时,文本按段累积到 `pendingTimelineText`,遇到
+  // thinking/tool/redacted 边界时 flush 成一个 text 块进 contentBlocks
+  // (镜像后端 chat_loop.rs 的 pending_text / flush_pending_text)。
+  // 这样实时流式态也能让 MessageItem 的 renderTimeline 按真实流序
+  // 交错渲染 thinking + text(而非 reload 后才有交错)。
+  pendingTimelineText: string | null;
+  // 交错思考(实时态): contentBlocks 里"当前正在累积的 thinking 块"的
+  // 索引。thinking_delta/signature_delta 就地 mutate 这个块(而非 buffer 在
+  // pending 里),这样 contentBlocks 从第一个思考 token 就非空(useTimeline
+  // 立刻为 true,不闪回顶部 ThinkingBlock)。遇非思考边界(delta/tool/redacted/
+  // done)时置 null(seal),下次 thinking_delta 开新块。
+  // 块边界 = "thinking ↔ 非 thinking 切换",**不依赖 signature** —— 完全
+  // 镜像后端 chat_loop.rs 的 flush_pending_thinking(在 Delta/ToolCall 边界
+  // flush,signature 只附属累积)。这样实时态与 reload 后拆分一致:相邻
+  // thinking(think1→sig1→think2→sig2,无中间文本)合并成一个块,和后端
+  // 落库/rehydrate 一致。OpenAI(无 signature)同理单块。
+  activeThinkingIdx: number | null;
   // F5: per-request error flag. The cancel / network-drop
   // path also persists a partial turn (with `usage: None`),
   // so the seq-lookup is still meaningful — the errored
@@ -900,6 +919,44 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     return m.thinkingBlocks[m.thinkingBlocks.length - 1];
   }
 
+  // --- 交错思考(实时态 contentBlocks 维护) -----------------------------
+  // 实时流式时同步构建 `last.contentBlocks`,让 MessageItem 的
+  // renderTimeline 按真实流序交错渲染 thinking + text(而非 reload 后
+  // 才有),且与 reload 后 rehydrate 的形态**逐块一致**。
+  //
+  // 设计(镜像后端 chat_loop.rs 的 ordered_blocks):
+  //   - thinking: 就地 mutate —— 第一个 thinking_delta 在 contentBlocks push
+  //     一个空 thinking 块并记其索引为 `activeThinkingIdx`;后续 thinking_delta
+  //     /signature_delta 直接 append 到该块。这样 contentBlocks 从第一个
+  //     思考 token 就非空(useTimeline 立刻 true,不闪回顶部 ThinkingBlock)。
+  //   - 块边界 = "thinking ↔ 非 thinking(text/tool/redacted)切换",**不依赖
+  //     signature** —— 与后端 flush_pending_thinking 一致(Delta/ToolCall 时
+  //     flush,signature 只附属)。相邻 thinking(think1→sig1→think2,无中间
+  //     文本)合并成一块,和后端落库/rehydrate 一致。
+  //   - text: 按段累积到 pendingTimelineText,遇边界 flush(避免碎片)。
+  //   - tool_use/tool_result/redacted 作为独立块按到达顺序 push。
+  function ensureContentBlocks(m: ChatMessage): ContentBlockView[] {
+    if (!m.contentBlocks) m.contentBlocks = [];
+    return m.contentBlocks;
+  }
+
+  /** Seal 当前正在累积的 thinking 块(若有): 清空 activeThinkingIdx,使下次
+   *  thinking_delta 开新块。在非思考边界(delta/tool/redacted/done/error)
+   *  调用。不删除块 —— 块已在 contentBlocks 里就地累积完毕。 */
+  function sealActiveThinking(req: RequestState): void {
+    req.activeThinkingIdx = null;
+  }
+
+  /** 把累积中的 pending text flush 成一个 text 块进 contentBlocks。
+   *  在遇到 thinking/tool/redacted 边界时调用,保持"文本与思考交错"的
+   *  真实流序。空文本不 push(避免空块)。 */
+  function flushPendingTimelineText(req: RequestState, m: ChatMessage): void {
+    if (req.pendingTimelineText !== null && req.pendingTimelineText !== "") {
+      ensureContentBlocks(m).push({ kind: "text", text: req.pendingTimelineText });
+    }
+    req.pendingTimelineText = null;
+  }
+
   // ---------------------------------------------------------------------
   // Event handlers (one global listener; routes by request_id)
   // ---------------------------------------------------------------------
@@ -928,6 +985,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         req.currentTurnIndex++;
         last.streaming = true;
         last.error = undefined;
+        // 交错思考(实时态): 新 turn 边界 —— seal 上一 turn 可能仍活动的
+        // thinking 块 + flush 残留 text(若上一 turn 以纯思考结束,无后续
+        // delta/tool 触发 seal)。防止下一 turn 的 thinking_delta 复用
+        // 已失效的 activeThinkingIdx(数组可能已被 reloadAfterFinalize
+        // 替换,索引越界)。
+        sealActiveThinking(req);
+        flushPendingTimelineText(req, last);
         // A5+ (2026-07-04): a fresh turn started — the prior
         // retry notice (if any) is stale. Clear it so the
         // MessageItem row disappears the moment the stream
@@ -935,12 +999,22 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         last.retrying = undefined;
         break;
       case "delta":
+        // 交错思考(实时态): 文本到达 = 思考块边界,seal 活动 thinking 块
+        // (思考在文本之前;块边界 = thinking↔非thinking 切换,镜像后端
+        // flush_pending_thinking 在 Delta 时 flush)。
+        sealActiveThinking(req);
         // F5: capture the first-delta timestamp exactly once,
         // on the very first `delta` event. Subsequent deltas
         // see `firstDeltaAt` already set and skip the write.
         // The TTFB is computed in the `done` handler as
         // `firstDeltaAt - sendAt`.
         if (event.text) last.content += event.text;
+        // 交错思考(实时态): 文本按段累积到 pendingTimelineText,
+        // 等 thinking/tool/redacted 边界再 flush 成 text 块进
+        // contentBlocks(避免每段 delta 一个碎片块)。
+        if (event.text) {
+          req.pendingTimelineText = (req.pendingTimelineText ?? "") + event.text;
+        }
         // A5+ (2026-07-04): real content arrived — the retry
         // succeeded. Clear the transient notice so the
         // MessageItem row disappears (the bubble takes over).
@@ -961,7 +1035,24 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // there.
         break;
       case "thinking_delta":
-        if (event.text) currentThinkingBlock(last).text += event.text;
+        // 交错思考(实时态): 一个 thinking 块开始前,先把之前累积的
+        // 文本 flush 成 text 块(思考夹在文本之间时,前段文本应排在思考前)。
+        flushPendingTimelineText(req, last);
+        // 就地 mutate contentBlocks 里的活动 thinking 块(若有),否则
+        // 开新块。contentBlocks 从第一个思考 token 就非空 → useTimeline
+        // 立刻 true,不闪回顶部 ThinkingBlock(消除 "· N blocks" 计数闪现)。
+        // 块边界 = 非思考事件 seal(activeThinkingIdx=null),不依赖 signature
+        // —— 与后端 flush_pending_thinking 一致,实时态/reload 拆分相同。
+        if (event.text) {
+          const blocks = ensureContentBlocks(last);
+          if (req.activeThinkingIdx === null) {
+            blocks.push({ kind: "thinking", text: "", signature: "" });
+            req.activeThinkingIdx = blocks.length - 1;
+          }
+          const tb = blocks[req.activeThinkingIdx];
+          if (tb.kind === "thinking") tb.text += event.text;
+          currentThinkingBlock(last).text += event.text;
+        }
         // F5 follow-up per-turn: the `req.thinkingStartedAt =
         // Date.now()` start-of-thinking stamp is gone. The
         // backend `ChatEvent::ThinkingDelta` arm opens its
@@ -975,12 +1066,29 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // thinking (it has the agent loop for that now).
         break;
       case "signature_delta":
-        if (event.signature) currentThinkingBlock(last).signature += event.signature;
+        // signature 附加到活动 thinking 块(若有)。不作为 push/seal 时机
+        // —— signature 是 Anthropic 专有,OpenAI 不发;块边界由非思考事件
+        // 决定(见 thinking_delta 的 sealActiveThinking 调用点)。
+        if (event.signature) {
+          const blocks = ensureContentBlocks(last);
+          if (req.activeThinkingIdx === null) {
+            blocks.push({ kind: "thinking", text: "", signature: "" });
+            req.activeThinkingIdx = blocks.length - 1;
+          }
+          const tb = blocks[req.activeThinkingIdx];
+          if (tb.kind === "thinking") tb.signature += event.signature;
+          currentThinkingBlock(last).signature += event.signature;
+        }
         break;
       case "redacted_thinking_delta":
         if (event.data) {
           if (!last.redactedThinkingData) last.redactedThinkingData = [];
           last.redactedThinkingData.push(event.data);
+          // 交错思考(实时态): redacted 按到达顺序进 contentBlocks。
+          // 先 seal 活动 thinking + flush pending text,保持流序。
+          sealActiveThinking(req);
+          flushPendingTimelineText(req, last);
+          ensureContentBlocks(last).push({ kind: "redacted_thinking", data: event.data });
         }
         break;
       case "turn_complete": {
@@ -1138,6 +1246,11 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         // no `delta` ever arrived — a pure tool_use turn) MUST
         // clear so the chip doesn't linger post-stream.
         last.retrying = undefined;
+        // 交错思考(实时态): stream 结束兜底 —— seal 活动 thinking + flush
+        // 残留的 pending text。thinking 块已就地累积在 contentBlocks,无需
+        // 再 push;text 段(text 之后直接 done)靠这里 flush。
+        sealActiveThinking(req);
+        flushPendingTimelineText(req, last);
         // Stream is over — the four deep-payload arrays stop
         // mutating. markRaw them now so future reads (and the
         // rehydrate path on session reload) skip the reactive
@@ -1148,6 +1261,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         if (last.toolResults) markRaw(last.toolResults);
         if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
         if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
+        // 交错思考: contentBlocks 也已构造完毕,markRaw 同理。
+        if (last.contentBlocks) markRaw(last.contentBlocks);
         // 2026-06-26 snapshot fix: per-turn usage report arrives
         // on the `done` event. Hand the payload off to the chat
         // store which owns the per-session LAST-TURN snapshot
@@ -1243,10 +1358,13 @@ export const useStreamControllerStore = defineStore("streamController", () => {
         }
         // Same post-stream markRaw — the error case is terminal
         // just like `done`, the arrays won't grow further.
+        sealActiveThinking(req);
+        flushPendingTimelineText(req, last);
         if (last.toolCalls) markRaw(last.toolCalls);
         if (last.toolResults) markRaw(last.toolResults);
         if (last.thinkingBlocks) markRaw(last.thinkingBlocks);
         if (last.redactedThinkingData) markRaw(last.redactedThinkingData);
+        if (last.contentBlocks) markRaw(last.contentBlocks);
         // F2: reset force-follow on error too.
         useChatStore().forceFollowActive = false;
         finalizeRequest(req.requestId, req.sessionId, true);
@@ -1404,6 +1522,16 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     if (!last || last.role !== "assistant") return;
     if (!last.toolCalls) last.toolCalls = [];
     last.toolCalls.push({ id: payload.id, name: payload.name, input: payload.input });
+    // 交错思考(实时态): tool_use 按到达顺序进 contentBlocks。先 seal 活动
+    // thinking + flush pending text(它们应排在工具调用之前),保持流序。
+    sealActiveThinking(req);
+    flushPendingTimelineText(req, last);
+    ensureContentBlocks(last).push({
+      kind: "tool_use",
+      id: payload.id,
+      name: payload.name,
+      input: payload.input,
+    });
     // B12 Checklist (PR2 frontend, 2026-06-19): route the
     // `update_checklist` tool_use to the checklist store so the
     // floating `<ChecklistCard>` overlay updates live. The store
@@ -1485,6 +1613,14 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       isError: payload.is_error,
       ...(durationMs !== undefined ? { durationMs } : {}),
     });
+    // 交错思考(实时态): tool_result **不进** assistant contentBlocks ——
+    // 对齐 reload 后(rehydrate 的 assistant contentBlocks 只有 tool_use,
+    // tool_result 在 user-role 行;后端红线:ToolResult 永不进 assistant)。
+    // seal 活动 thinking + flush pending text(若有),保持 thinking/text 流序。
+    sealActiveThinking(req);
+    flushPendingTimelineText(req, last);
+    // 注:tool_result 不 push 进 contentBlocks(否则实时态多出来,reload 后
+    // 消失,造成前后不一致)。toolResults 分桶数组仍正常累积(工具卡片用它)。
     // F5: persist the duration into `messages.content` JSON
     // (the `tool_result` block). Fire-and-forget; a failure
     // logs but doesn't surface to the user. The in-memory
@@ -2212,6 +2348,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
       // by always writing to the same slot).
       currentTurnIndex: -1,
       latencyByTurn: new Map(),
+      pendingTimelineText: null,
+      activeThinkingIdx: null,
     });
     // Pin the session while streaming — it cannot be evicted
     // even if the user visits 20+ other sessions.
