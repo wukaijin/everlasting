@@ -58,7 +58,9 @@ use crate::agent::helpers::{
 use crate::agent::loop_detection;
 use crate::agent::permissions::{self, Decision, PermissionContext};
 use crate::agent::subagent::SubagentEventSink;
-use crate::agent::thinking::{flush_pending_thinking, PendingThinking};
+use crate::agent::thinking::{
+    flush_ordered_thinking, flush_pending_text, flush_pending_thinking, PendingThinking,
+};
 use crate::agent::MAX_TURNS;
 use crate::background_shell::BackgroundShellRegistry;
 use crate::llm::{
@@ -1686,8 +1688,25 @@ pub async fn run_chat_loop(
         let mut text_parts: Vec<String> = Vec::new();
         let mut tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut finalized_thinking: Vec<(String, String)> = Vec::new();
-        let mut redacted_thinking_data: Vec<String> = Vec::new();
         let mut pending_thinking: Option<PendingThinking> = None;
+        // 交错思考(interleaved thinking): `ordered_blocks` 按 LLM 真实
+        // 流式到达顺序累积 ContentBlock,落库时用它替代旧的"按类型分桶
+        // 硬编码排序"(thinking→text→tool_use→redacted)。这样 DB 里
+        // 保留 [think→text→tool] 的真实流序,reload 后前端可据此渲染
+        // 出 Claude.ai/Cursor 式的连续流动形态。
+        //
+        // 配套的 `pending_text` 是"当前正在累积的文本块"——`Delta` 事件
+        // 是逐段来的,不能每段都 push 一个 Text 块(会产生碎片)。遇到
+        // 非文本边界(thinking flush / tool call / redacted / turn end)
+        // 时把 pending_text flush 成一个 Text 块,实现"文本与思考/工具
+        // 按真实顺序交错"。多个相邻 Text 块在语义上等价(Anthropic 接受
+        // 多 Text 块),但保留了"思考夹在两段文本之间"这种流序信息。
+        //
+        // 红线:`ToolResult` 永远不进 `ordered_blocks`(它只进 user-role
+        // message,见 §1.1 ToolResult 边界)。本累加器只装 assistant
+        // 允许的 Thinking/Text/ToolUse/RedactedThinking。
+        let mut ordered_blocks: Vec<ContentBlock> = Vec::new();
+        let mut pending_text: Option<String> = None;
         let mut stop_reason: Option<String> = None;
         let mut last_usage: Option<crate::llm::types::TokenUsage> = None;
         let mut had_error = false;
@@ -1789,7 +1808,13 @@ pub async fn run_chat_loop(
                             emit_chat_event_via_sink(&sink, &rid, &event);
                         }
                         ChatEvent::Delta { text } => {
+                            // 流序: 文本到达前先把可能 pending 的 thinking
+                            // finalize,并按真实顺序(thinking 在前)填入
+                            // ordered_blocks。文本累积到 pending_text,
+                            // 等下一个非文本边界再 flush 成 Text 块。
                             flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                            flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
+                            pending_text.get_or_insert_with(String::new).push_str(text);
                             text_parts.push(text.clone());
                             if turn_first_delta_at.is_none() {
                                 turn_first_delta_at = Some(Instant::now());
@@ -1800,6 +1825,10 @@ pub async fn run_chat_loop(
                             emit_chat_event_via_sink(&sink, &rid, &event);
                         }
                         ChatEvent::ThinkingDelta { text } => {
+                            // 流序: 一个 thinking 块开始前,先把之前累积的
+                            // 文本 flush 成 Text 块(思考夹在文本之间时,
+                            // 前段文本应排在思考之前)。
+                            flush_pending_text(&mut pending_text, &mut ordered_blocks);
                             let p = pending_thinking.get_or_insert_with(PendingThinking::default);
                             p.text.push_str(text);
                             if turn_thinking_start.is_none() {
@@ -1813,15 +1842,28 @@ pub async fn run_chat_loop(
                             emit_chat_event_via_sink(&sink, &rid, &event);
                         }
                         ChatEvent::RedactedThinkingDelta { data } => {
-                            redacted_thinking_data.push(data.clone());
+                            // 流序: redacted 到达前先 flush 可能 pending 的
+                            // thinking + text,保持顺序。
+                            flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                            flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
+                            flush_pending_text(&mut pending_text, &mut ordered_blocks);
+                            ordered_blocks.push(ContentBlock::RedactedThinking { data: data.clone() });
                             emit_chat_event_via_sink(&sink, &rid, &event);
                         }
                         ChatEvent::ToolCall { id, name, input } => {
+                            // 流序: 工具调用前先 flush pending thinking + text。
                             flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
+                            flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
+                            flush_pending_text(&mut pending_text, &mut ordered_blocks);
                             if turn_thinking_start.is_some() && turn_thinking_done.is_none() {
                                 turn_thinking_done = Some(Instant::now());
                             }
                             tool_calls.push((id.clone(), name.clone(), input.clone()));
+                            ordered_blocks.push(ContentBlock::ToolUse {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                            });
                             sink.emit_tool_call(&ToolCallPayload {
                                 request_id: rid.clone(),
                                 id: id.clone(),
@@ -1999,50 +2041,54 @@ pub async fn run_chat_loop(
 
         flush_pending_thinking(&mut pending_thinking, &mut finalized_thinking);
 
-        let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
-        for (thinking, signature) in &finalized_thinking {
-            assistant_blocks.push(ContentBlock::Thinking {
-                thinking: thinking.clone(),
-                signature: signature.clone(),
-            });
-        }
-        let mut full_text = text_parts.join("");
+        // 交错思考: 落库用 `ordered_blocks`(按真实流序累积),替代旧的
+        // "按类型分桶硬编码排序"。这里做 turn-end 兜底 flush:
+        // 1. 把所有已 finalize 的 thinking 按序填入
+        // 2. 把最后一段 pending_text flush 成一个 Text 块
+        // 之后再追加 cancel/error marker(独立 Text 块,见下)。
+        // `finalized_thinking` / `pending_text` 在循环内的每个
+        // 非文本边界已被增量 flush 过,这里只兜底"turn 结束时仍
+        // pending 的尾部"(正常 turn 的最后一段文本/思考)。
+        flush_ordered_thinking(&mut finalized_thinking, &mut ordered_blocks);
+        flush_pending_text(&mut pending_text, &mut ordered_blocks);
+
+        // RULE-A-007 (2026-06-17) + 交错思考调整: cancel/error marker
+        // 追加为一个**独立 Text 块**到 ordered_blocks 末尾(而非旧
+        // 逻辑里追加到 `full_text` 字符串内)。语义保持等价:
+        //   - 空 turn(无文本) → 只有 marker 一个 Text 块
+        //   - 非空 turn → 前段文本块 + marker 块
+        // marker 文本带 `\n\n` 前缀(非空时),使 `to_text()` 把多个
+        // Text 块 join 后的字符串与旧逻辑(`full_text + "\n\n" + marker`)
+        // 完全一致 —— 前端用 `includes`/`endsWith` 识别 marker
+        // (chat.ts ERROR_MARKER_LOCAL)的逻辑不受影响。
+        // marker 作为独立块,渲染层未来可选择单独样式(对齐 §6.2)。
+        let had_text = !text_parts.is_empty();
         if cancelled {
-            if full_text.is_empty() {
-                full_text = CANCELLED_MARKER.to_string();
+            let marker = if had_text {
+                format!("\n\n{}", CANCELLED_MARKER)
             } else {
-                full_text.push_str("\n\n");
-                full_text.push_str(CANCELLED_MARKER);
-            }
+                CANCELLED_MARKER.to_string()
+            };
+            ordered_blocks.push(ContentBlock::Text {
+                text: marker,
+                cache_control: None,
+            });
         } else if had_error {
-            // RULE-A-007 (2026-06-17): symmetric to the
-            // CANCELLED_MARKER branch above. Empty-text error →
-            // marker alone; non-empty → marker appended after the
-            // partial text. The UI renders the marker inline; a
-            // reload reads both back from the DB.
-            if full_text.is_empty() {
-                full_text = ERROR_MARKER.to_string();
+            let marker = if had_text {
+                format!("\n\n{}", ERROR_MARKER)
             } else {
-                full_text.push_str("\n\n");
-                full_text.push_str(ERROR_MARKER);
-            }
-        }
-        if !full_text.is_empty() {
-            assistant_blocks.push(ContentBlock::Text {
-                text: full_text,
+                ERROR_MARKER.to_string()
+            };
+            ordered_blocks.push(ContentBlock::Text {
+                text: marker,
                 cache_control: None,
             });
         }
-        for (id, name, input) in &tool_calls {
-            assistant_blocks.push(ContentBlock::ToolUse {
-                id: id.clone(),
-                name: name.clone(),
-                input: input.clone(),
-            });
-        }
-        for data in &redacted_thinking_data {
-            assistant_blocks.push(ContentBlock::RedactedThinking { data: data.clone() });
-        }
+
+        // `assistant_blocks` 直接复用流序累积的 `ordered_blocks`。
+        // 旧的分桶循环(thinking→text→tool_use→redacted 硬编码)已删除
+        // —— 所有块在循环内已按真实到达顺序填入。
+        let assistant_blocks = ordered_blocks;
 
         if !assistant_blocks.is_empty() {
             let msg = ChatMessage {

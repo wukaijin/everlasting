@@ -37,3 +37,55 @@ pub fn flush_pending_thinking(
         finalized.push((p.text, p.signature));
     }
 }
+
+/// Flush every finalized thinking pair (text, signature) into the
+/// ordered block list as `ContentBlock::Thinking`, **in finalize
+/// order**. Used by the interleaved-thinking path: each time a
+/// thinking block is finalized (at a thinking→text or thinking→tool
+/// boundary), it is appended to `ordered_blocks` so the persisted
+/// `content` array keeps the real stream order
+/// (`[think → text → tool]` instead of the old hard-coded
+/// `[all-think → text → all-tool]`).
+///
+/// `finalized` is drained in place — a thinking pair enters
+/// `ordered_blocks` exactly once, at the first boundary after it was
+/// finalized. If multiple thinking blocks were finalized before a
+/// single boundary (rare — the model rarely emits thinking without an
+/// intervening text/tool event), they land in finalize order, which
+/// equals stream order.
+pub fn flush_ordered_thinking(
+    finalized: &mut Vec<(String, String)>,
+    ordered_blocks: &mut Vec<crate::llm::types::ContentBlock>,
+) {
+    for (thinking, signature) in finalized.drain(..) {
+        ordered_blocks.push(crate::llm::types::ContentBlock::Thinking {
+            thinking,
+            signature,
+        });
+    }
+}
+
+/// Flush the currently-accumulating text (`pending_text`) into
+/// `ordered_blocks` as one `ContentBlock::Text`, if non-empty.
+/// `Delta` events arrive in fragments; rather than pushing one
+/// `Text` block per fragment (which would shatter the content into
+/// many tiny blocks), we accumulate into `pending_text` and flush it
+/// as a single `Text` block at the next non-text boundary
+/// (thinking / tool / redacted / turn end). This preserves the
+/// stream order — when thinking appears between two text runs, the
+/// two runs become two distinct `Text` blocks straddling the
+/// `Thinking` block — while avoiding block fragmentation within a
+/// contiguous text run.
+pub fn flush_pending_text(
+    pending_text: &mut Option<String>,
+    ordered_blocks: &mut Vec<crate::llm::types::ContentBlock>,
+) {
+    if let Some(text) = pending_text.take() {
+        if !text.is_empty() {
+            ordered_blocks.push(crate::llm::types::ContentBlock::Text {
+                text,
+                cache_control: None,
+            });
+        }
+    }
+}
