@@ -117,27 +117,28 @@ const visibleToolCalls = computed(
 
 // ---------------------------------------------------------------------------
 // 交错思考(interleaved thinking): 按 LLM 真实流式到达顺序排列
-// thinking + text 块的渲染时间轴。核心诉求 —— 让思考穿插在文本之间
-// (Claude.ai/Cursor 形态),而非旧的"所有思考扎堆在气泡顶部"。
+// thinking + text + tool_use 块的渲染时间轴。核心诉求 —— 让思考/文本/工具
+// 按真实流序穿插(Claude.ai/Cursor 形态),而非旧的"思考扎堆顶 + 工具扎堆中"。
 //
 // 数据源优先级:
 //   1. `message.contentBlocks`(reload 后由 rehydrate 从 DB content 数组按
-//      原序透传 —— 后端已按流序落库,见 chat_loop.rs ordered_blocks)。
-//   2. 回退到分桶数组(thinkingBlocks + content)的固定顺序 —— 兼容旧消息
-//      (无 contentBlocks)和实时流式态(placeholder 还没有 contentBlocks;
-//      流式时 content 在累积,走单一 `rendered` 路径)。
+//      原序透传;实时态由 streamController 就地 mutate —— 见 chat_loop.rs
+//      ordered_blocks)。
+//   2. 回退到分桶数组(thinkingBlocks + toolCalls + content)的固定顺序 ——
+//      兼容旧消息(无 contentBlocks)。
 //
-// 范围: 时间轴交错 **thinking + text**。tool_use 仍作为整体工具区(msg__tools)
-// 渲染在原位(工具卡片含 4 个 resolver + footer 归属,打散进 v-for 风险过高)。
-// 每个 thinking 块独立成渲染点(不合并相邻),text 块各自 markdown 渲染。
+// tool_use 在 timeline 内渲染 ToolCallCard(配对 getToolResult + 4 个 resolver
+// 卡片),实现"工具穿插在思考/文本之间"。每个 thinking 块独立成渲染点,
+// text 块各自 markdown 渲染。
 //
-// 与 msg__bubble 的关系: 走 contentBlocks 时间轴时(`useTimeline` 为真),
-// 文本由时间轴渲染,`msg__bubble` 只保留流式 cursor + edited 标签(避免文本
-// 重复)。回退路径下 `msg__bubble` 仍渲染完整文本(旧行为)。
+// 与 msg__bubble / msg__tools 的关系: 走 contentBlocks 时间轴时(useTimeline
+// 为真),文本 + 工具都由时间轴渲染,旧的 msg__bubble(文本)和 msg__tools
+// (工具区)在 useTimeline 时隐藏(避免重复)。回退路径下两者仍旧行为。
 // ---------------------------------------------------------------------------
 type TimelineItem =
   | { kind: "thinking"; blocks: ThinkingBlockInfo[] }
-  | { kind: "text"; text: string; html: string };
+  | { kind: "text"; text: string; html: string }
+  | { kind: "tool_use"; id: string; name: string; input: Record<string, unknown> };
 
 const renderTimeline = computed<TimelineItem[]>(() => {
   const m = props.message;
@@ -152,7 +153,11 @@ const renderTimeline = computed<TimelineItem[]>(() => {
         });
       } else if (b.kind === "text" && b.text) {
         out.push({ kind: "text", text: b.text, html: renderMarkdown(b.text) });
+      } else if (b.kind === "tool_use") {
+        out.push({ kind: "tool_use", id: b.id, name: b.name, input: b.input });
       }
+      // redacted_thinking / tool_result 不进 timeline(redacted 走顶部计数行;
+      // tool_result 在 wire 上属 user-role,assistant contentBlocks 不含)。
     }
     return out;
   }
@@ -1171,6 +1176,29 @@ const showEditedLabel = computed<boolean>(
           :show-streaming-hint="showStreamingHint"
           :thinking-duration-ms="message.thinkingDurationMs"
         />
+        <!--
+          交错思考: tool_use 在 timeline 内按真实流序渲染(穿插在 thinking/
+          text 之间)。复用 ToolCallCard + 4 个 inline 卡片(resolver 在本
+          组件 setup 内,timeline 与原 msg__tools 共享同一套渲染逻辑)。
+          每个 tool_use 后面紧跟其 inline 卡片(ask_user_question 等),
+          与原 msg__tools 的 `<template v-for tc>` 结构一致。
+        -->
+        <template v-else-if="item.kind === 'tool_use'">
+          <ToolCallCard :call="item" :result="getToolResult(message, item.id)" />
+          <AskUserQuestionCard
+            v-if="askCardPropsFor(item) !== undefined"
+            v-bind="askCardPropsFor(item)!"
+          />
+          <RequestModeChangeCard
+            v-if="modeChangeCardPropsFor(item) !== undefined"
+            v-bind="modeChangeCardPropsFor(item)!"
+          />
+          <RequestTaskStateTransitionCard
+            v-if="taskStateTransitionCardPropsFor(item) !== undefined"
+            v-bind="taskStateTransitionCardPropsFor(item)!"
+          />
+          <UiCard v-if="item.name === USE_UI_TOOL_NAME" :call="item" />
+        </template>
         <div v-else class="msg__bubble msg__bubble--timeline">
           <span
             class="msg__markdown"
@@ -1249,7 +1277,7 @@ const showEditedLabel = computed<boolean>(
     </div>
 
     <div
-      v-if="visibleToolCalls.length"
+      v-if="visibleToolCalls.length && !useTimeline"
       class="msg__tools"
     >
       <!--
@@ -1647,7 +1675,6 @@ const showEditedLabel = computed<boolean>(
   background: transparent;
   margin-top: 2px;
   margin-bottom: 2px;
-  padding: 2px 0;
 }
 
 .msg__cursor {

@@ -901,24 +901,6 @@ export const useStreamControllerStore = defineStore("streamController", () => {
     }
   }
 
-  /** Get the in-flight thinking block of an assistant message,
-   *  opening a new one if the previous is already sealed with a
-   *  signature (interleaved thinking). Mirrors the helper in
-   *  chat.ts so the controller can handle `thinking_delta` /
-   *  `signature_delta` events for streams that didn't originate
-   *  from the current session. */
-  function currentThinkingBlock(m: ChatMessage) {
-    if (!m.thinkingBlocks || m.thinkingBlocks.length === 0) {
-      m.thinkingBlocks = [{ text: "", signature: "" }];
-    } else {
-      const last = m.thinkingBlocks[m.thinkingBlocks.length - 1];
-      if (last.signature) {
-        m.thinkingBlocks.push({ text: "", signature: "" });
-      }
-    }
-    return m.thinkingBlocks[m.thinkingBlocks.length - 1];
-  }
-
   // --- 交错思考(实时态 contentBlocks 维护) -----------------------------
   // 实时流式时同步构建 `last.contentBlocks`,让 MessageItem 的
   // renderTimeline 按真实流序交错渲染 thinking + text(而非 reload 后
@@ -1051,7 +1033,8 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           }
           const tb = blocks[req.activeThinkingIdx];
           if (tb.kind === "thinking") tb.text += event.text;
-          currentThinkingBlock(last).text += event.text;
+          // 注: 不再双写 thinkingBlocks —— timeline 路径(useTimeline=true)
+          // 只读 contentBlocks,thinkingBlocks 双写会导致两个 store 漂移。
         }
         // F5 follow-up per-turn: the `req.thinkingStartedAt =
         // Date.now()` start-of-thinking stamp is gone. The
@@ -1077,7 +1060,6 @@ export const useStreamControllerStore = defineStore("streamController", () => {
           }
           const tb = blocks[req.activeThinkingIdx];
           if (tb.kind === "thinking") tb.signature += event.signature;
-          currentThinkingBlock(last).signature += event.signature;
         }
         break;
       case "redacted_thinking_delta":
