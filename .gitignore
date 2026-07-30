@@ -62,6 +62,7 @@ app/src/assets/fonts/source/
 # Project-level config under `.everlasting/agents/` (L3d subagents), `commands/` (B3),
 # and `skills/` (B4) is **committed and shared** — see loader.rs docs.
 .everlasting/outputs/
+.everlasting/tasks/
 
 
 reasonix.toml
