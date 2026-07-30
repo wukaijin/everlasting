@@ -35,14 +35,14 @@
 //   against mid-stream edits racing the LLM).
 
 import { computed, ref, watch, onUnmounted } from "vue";
-import type { ChatMessage } from "../../stores/chat.types";
+import type { ChatMessage, ThinkingBlockInfo } from "../../stores/chat.types";
 import { extractErrorMessage } from "../../utils/useErrorBus";
 import { categoryRetryable } from "../../utils/error";
 import { useChatStore } from "../../stores/chat";
 import { useProjectsStore } from "../../stores/projects";
 import { useStreamControllerStore } from "../../stores/streamController";
 import { getToolResult } from "../../utils/messageFormat";
-import { createDebouncedRenderer } from "../../utils/markdown";
+import { createDebouncedRenderer, renderMarkdown } from "../../utils/markdown";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import AskUserQuestionCard from "./AskUserQuestionCard.vue";
@@ -113,6 +113,68 @@ const VIRTUAL_TOOLS = new Set<string>(["update_checklist"]);
 const visibleToolCalls = computed(
   () =>
     props.message.toolCalls?.filter((tc) => !VIRTUAL_TOOLS.has(tc.name)) ?? [],
+);
+
+// ---------------------------------------------------------------------------
+// 交错思考(interleaved thinking): 按 LLM 真实流式到达顺序排列
+// thinking + text 块的渲染时间轴。核心诉求 —— 让思考穿插在文本之间
+// (Claude.ai/Cursor 形态),而非旧的"所有思考扎堆在气泡顶部"。
+//
+// 数据源优先级:
+//   1. `message.contentBlocks`(reload 后由 rehydrate 从 DB content 数组按
+//      原序透传 —— 后端已按流序落库,见 chat_loop.rs ordered_blocks)。
+//   2. 回退到分桶数组(thinkingBlocks + content)的固定顺序 —— 兼容旧消息
+//      (无 contentBlocks)和实时流式态(placeholder 还没有 contentBlocks;
+//      流式时 content 在累积,走单一 `rendered` 路径)。
+//
+// 范围: 时间轴交错 **thinking + text**。tool_use 仍作为整体工具区(msg__tools)
+// 渲染在原位(工具卡片含 4 个 resolver + footer 归属,打散进 v-for 风险过高)。
+// 每个 thinking 块独立成渲染点(不合并相邻),text 块各自 markdown 渲染。
+//
+// 与 msg__bubble 的关系: 走 contentBlocks 时间轴时(`useTimeline` 为真),
+// 文本由时间轴渲染,`msg__bubble` 只保留流式 cursor + edited 标签(避免文本
+// 重复)。回退路径下 `msg__bubble` 仍渲染完整文本(旧行为)。
+// ---------------------------------------------------------------------------
+type TimelineItem =
+  | { kind: "thinking"; blocks: ThinkingBlockInfo[] }
+  | { kind: "text"; text: string; html: string };
+
+const renderTimeline = computed<TimelineItem[]>(() => {
+  const m = props.message;
+  if (m.contentBlocks && m.contentBlocks.length > 0) {
+    const out: TimelineItem[] = [];
+    for (const b of m.contentBlocks) {
+      if (b.kind === "thinking") {
+        // ContentBlockView(thinking) → ThinkingBlockInfo(去 kind)。
+        out.push({
+          kind: "thinking",
+          blocks: [{ text: b.text, signature: b.signature }],
+        });
+      } else if (b.kind === "text" && b.text) {
+        out.push({ kind: "text", text: b.text, html: renderMarkdown(b.text) });
+      }
+    }
+    return out;
+  }
+  // 回退: 分桶固定顺序(thinking 在前, text 在后)。与改造前观感一致。
+  const out: TimelineItem[] = [];
+  if (m.thinkingBlocks && m.thinkingBlocks.length) {
+    out.push({ kind: "thinking", blocks: m.thinkingBlocks });
+  }
+  if (m.content) {
+    out.push({ kind: "text", text: m.content, html: rendered.value });
+  }
+  return out;
+});
+
+/** 是否走 contentBlocks 时间轴(true → 文本由时间轴渲染,
+ *  msg__bubble 只留 cursor/edited)。仅在 reload 后且有 contentBlocks
+ *  时为真;实时流式态/旧消息为 false(走回退 + msg__bubble)。 */
+const useTimeline = computed(
+  () =>
+    !!props.message.contentBlocks &&
+    props.message.contentBlocks.length > 0 &&
+    props.message.role === "assistant",
 );
 
 // -----------------------------------------------------------------
@@ -1083,6 +1145,7 @@ const showEditedLabel = computed<boolean>(
     <ThinkingBlock
       v-if="
         message.role === 'assistant' &&
+        !useTimeline &&
         message.thinkingBlocks &&
         message.thinkingBlocks.length
       "
@@ -1091,6 +1154,49 @@ const showEditedLabel = computed<boolean>(
       :show-streaming-hint="showStreamingHint"
       :thinking-duration-ms="message.thinkingDurationMs"
     />
+
+    <!--
+      交错思考: contentBlocks 时间轴(reload 后有 contentBlocks 时启用)。
+      按 LLM 真实流序渲染 thinking + text 块,思考穿插在文本之间。
+      每个 thinking 块独立折叠(ThinkingBlock 接收单块 blocks 数组);
+      text 块各自 markdown 渲染。回退路径(useTimeline=false)不进这里,
+      走顶部 ThinkingBlock + msg__bubble 的旧行为。
+    -->
+    <template v-if="useTimeline">
+      <template v-for="(item, idx) in renderTimeline" :key="idx">
+        <ThinkingBlock
+          v-if="item.kind === 'thinking'"
+          :blocks="item.blocks"
+          :streaming="message.streaming"
+          :show-streaming-hint="showStreamingHint"
+          :thinking-duration-ms="message.thinkingDurationMs"
+        />
+        <div v-else class="msg__bubble msg__bubble--timeline">
+          <span
+            class="msg__markdown"
+            v-html="item.html"
+          />
+        </div>
+      </template>
+      <!-- 流式 cursor(实时态不进时间轴,这里仅 reload 后的静止态,
+           但保留以兼容 useTimeline 为真且仍在 streaming 的边界)。 -->
+      <span
+        v-if="message.streaming"
+        class="msg__cursor"
+        aria-hidden="true"
+        >▍</span
+      >
+      <!-- (edited) 标签:useTimeline 时文本已进时间轴,msg__bubble 不渲染,
+           所以 edited 标签在这里单独补上(assistant 行)。 -->
+      <span
+        v-if="showEditedLabel"
+        class="msg__edited"
+        :title="`最后编辑于 ${editedAt}`"
+        data-testid="msg-edited-label"
+      >
+        (edited)
+      </span>
+    </template>
 
     <!--
       A5+ (2026-07-04, R8): transient retry notice. While the
@@ -1259,7 +1365,7 @@ const showEditedLabel = computed<boolean>(
       @resend="handleResend"
     />
 
-    <div v-else-if="showBubble" class="msg__bubble">
+    <div v-else-if="showBubble && !useTimeline" class="msg__bubble">
       <span
         v-if="hasVisibleBubble || message.content"
         class="msg__markdown"
@@ -1530,6 +1636,18 @@ const showEditedLabel = computed<boolean>(
 .msg--err .msg__bubble {
   border-color: var(--color-tool-error);
   background: var(--color-bg-elevated);
+}
+
+/* 交错思考: 时间轴内的 text 块气泡。去掉独立 border + 收紧 margin ——
+   一个 turn 里可能有多个 text 块(被 thinking 穿插),每个都套独立气泡
+   边框会割裂"连续流动"的观感。改为无边框的连续文本流,与上下 ThinkingBlock
+   自然衔接。assistant 主题色继承自 `.msg--assistant .msg__bubble`。 */
+.msg__bubble--timeline {
+  border: none;
+  background: transparent;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding: 2px 0;
 }
 
 .msg__cursor {

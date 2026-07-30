@@ -10,7 +10,7 @@
 // A dedicated test file keeps the fixture readable.
 
 import { describe, it, expect } from "vitest";
-import { extractToolResultDisplay } from "./messageFormat";
+import { extractToolResultDisplay, isRealUserTurnStart } from "./messageFormat";
 
 describe("extractToolResultDisplay", () => {
   it("unwraps the cwd envelope to the result string", () => {
@@ -68,5 +68,50 @@ describe("extractToolResultDisplay", () => {
     expect(extractToolResultDisplay("Wrote /tmp/foo.txt")).toBe(
       "Wrote /tmp/foo.txt",
     );
+  });
+});
+
+// 交错思考: renderGroups 分组判据。决定一条消息是否开启新的 agent run
+// (MessageList 把同 run 的多条消息视觉连成一条流)。关键判据:
+// 真·用户输入才开新 run;ghost user(tool_result) + orphan-repair synthetic
+// 归入当前 run。详见 isRealUserTurnStart 头注释 + 设计文档 §3.4。
+describe("isRealUserTurnStart (interleaved-thinking run grouping)", () => {
+  it("a real user-typed message starts a new run", () => {
+    expect(isRealUserTurnStart({ id: "s-0", role: "user" })).toBe(true);
+    expect(
+      isRealUserTurnStart({ id: "s-0", role: "user", toolResults: [] }),
+    ).toBe(true);
+  });
+
+  it("an assistant message never starts a run", () => {
+    expect(isRealUserTurnStart({ id: "s-1", role: "assistant" })).toBe(false);
+  });
+
+  it("a ghost user(tool_result) message does NOT start a run", () => {
+    // rehydrate merge step copies (not moves) toolResults onto the
+    // preceding assistant, so the ghost user row still carries
+    // toolResults — that's the discriminator.
+    expect(
+      isRealUserTurnStart({
+        id: "s-2",
+        role: "user",
+        toolResults: [{ toolUseId: "tu_1", content: "x", isError: false }],
+      }),
+    ).toBe(false);
+  });
+
+  it("an orphan-repair synthetic message does NOT start a run", () => {
+    // id suffix `-orphan-repair`, spliced in by rehydrate's orphan repair.
+    expect(
+      isRealUserTurnStart({ id: "s-1-orphan-repair", role: "user" }),
+    ).toBe(false);
+    // Even if it somehow carried toolResults, the suffix still wins.
+    expect(
+      isRealUserTurnStart({
+        id: "s-1-orphan-repair",
+        role: "user",
+        toolResults: [{ toolUseId: "tu_1", content: "x", isError: true }],
+      }),
+    ).toBe(false);
   });
 });

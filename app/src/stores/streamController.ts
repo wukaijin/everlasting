@@ -428,6 +428,11 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     const toolResults: ChatMessage["toolResults"] = [];
     const thinkingBlocks: ChatMessage["thinkingBlocks"] = [];
     const redactedThinkingData: string[] = [];
+    // 交错思考: 按 DB content 数组原序构建 `contentBlocks`,供
+    // `MessageRunGroup` 做流式渲染。与上面的分桶数组共享同一个遍历
+    // 循环(避免二次遍历),每个有效分支同时 push 到分桶 + contentBlocks。
+    // 注意 `continue`(坏块跳过)也会跳过 contentBlocks,保持一致。
+    const contentBlocks: ChatMessage["contentBlocks"] = [];
     for (const b of blocks) {
       if (!b || typeof b.type !== "string") continue;
       if (b.type === "thinking") {
@@ -435,14 +440,26 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
           text: (b.thinking as string) ?? "",
           signature: (b.signature as string) ?? "",
         });
+        contentBlocks.push({
+          kind: "thinking",
+          text: (b.thinking as string) ?? "",
+          signature: (b.signature as string) ?? "",
+        });
       } else if (b.type === "redacted_thinking" && typeof b.data === "string") {
         redactedThinkingData.push(b.data);
+        contentBlocks.push({ kind: "redacted_thinking", data: b.data });
       } else if (
         b.type === "tool_use" &&
         typeof b.id === "string" &&
         typeof b.name === "string"
       ) {
         toolCalls.push({ id: b.id, name: b.name, input: (b.input as Record<string, unknown>) ?? {} });
+        contentBlocks.push({
+          kind: "tool_use",
+          id: b.id,
+          name: b.name,
+          input: (b.input as Record<string, unknown>) ?? {},
+        });
       } else if (b.type === "tool_result" && typeof b.tool_use_id === "string") {
         // F5: per-tool duration is embedded in the tool_result
         // block as `duration_ms` (per R2 / ADR-lite decision 1).
@@ -460,6 +477,17 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
           isError: !!b.is_error,
           ...(durationMs !== undefined ? { durationMs } : {}),
         });
+        contentBlocks.push({
+          kind: "tool_result",
+          toolUseId: b.tool_use_id,
+          content: (b.content as string) ?? "",
+          isError: !!b.is_error,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+        });
+      } else if (b.type === "text" && typeof b.text === "string") {
+        // 交错思考: text 块也透传(后端流序落库后,一个 turn 可能有
+        // 多个 text 块——思考夹在两段文本之间时)。
+        contentBlocks.push({ kind: "text", text: b.text });
       }
     }
     const msg: ChatMessage = {
@@ -471,6 +499,8 @@ export function rehydrateMessages(loaded: LoadedMessage[]): ChatMessage[] {
     if (toolResults.length) msg.toolResults = toolResults;
     if (thinkingBlocks.length) msg.thinkingBlocks = thinkingBlocks;
     if (redactedThinkingData.length) msg.redactedThinkingData = redactedThinkingData;
+    // 交错思考: 仅当有透传块时挂上(避免给纯文本 user 消息挂空数组)。
+    if (contentBlocks.length) msg.contentBlocks = contentBlocks;
     // F5: per-message latency. All three fields are nullable
     // in the DB; only the assistant rows that ran an LLM turn
     // will have non-null values. We attach `latency` only when

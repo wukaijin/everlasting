@@ -17,6 +17,8 @@
 
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
+import type { ChatMessage } from "../../stores/chat.types";
+import { isRealUserTurnStart } from "../../utils/messageFormat";
 import MessageItem from "./MessageItem.vue";
 import Icon from "../Icon.vue";
 
@@ -48,6 +50,45 @@ const visibleMessages = computed(() =>
       (m.redactedThinkingData && m.redactedThinkingData.length > 0),
   ),
 );
+
+// ---------------------------------------------------------------------------
+// 交错思考(interleaved thinking): 按 agent run 分组消息,把一次完整
+// run(用户提问 → assistant 多轮 think+tool + tool_result → 最终文本)
+// 在视觉上连成一条流,而非每 turn 一个独立气泡(Claude.ai/Cursor 形态)。
+//
+// 分组判据(设计文档 §3.4):
+//   - 真·用户输入 → 开启新 run。判据:role=user 且**不是** ghost user
+//     (即 m.toolResults 为空,因为 ghost user 带 tool_result;
+//      rehydrate 的 merge step 是复制非移动,ghost user 的 toolResults 仍在)
+//     且不是 orphan-repair synthetic(id 形如 `${m.id}-orphan-repair`)。
+//   - 其余消息(assistant turn / ghost user tool_result / orphan-repair) →
+//     归入当前 run。
+//
+// 边界:若 visibleMessages 第一条不是真·用户输入(理论上不会,但防御),
+// 开一个独立 run 兜底,避免消息丢失。
+//
+// 这是**纯渲染层分组**:底层 store.messages 数组完全不变,rehydrate 的
+// orphan-repair / merge step 都不受影响 → 2013 wire-history 不变量保住。
+// 误判最坏后果只是"多分几个 run 气泡",回退到现状观感,不丢数据。
+// ---------------------------------------------------------------------------
+interface RunGroup {
+  key: string;
+  items: ChatMessage[];
+}
+
+const renderGroups = computed<RunGroup[]>(() => {
+  const groups: RunGroup[] = [];
+  let current: RunGroup | null = null;
+  for (const m of visibleMessages.value) {
+    if (isRealUserTurnStart(m) || current === null) {
+      current = { key: m.id, items: [m] };
+      groups.push(current);
+    } else {
+      current.items.push(m);
+    }
+  }
+  return groups;
+});
 
 function isNearBottom(el: HTMLElement, threshold = 80): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
@@ -205,11 +246,24 @@ onUnmounted(() => {
 <template>
   <div class="messages-wrap">
     <TransitionGroup name="msg" tag="ul" :ref="setListEl" class="messages" appear>
-      <MessageItem
-        v-for="m in visibleMessages"
-        :key="m.id"
-        :message="m"
-      />
+      <!--
+        交错思考: 按 agent run 分组(见 renderGroups)。每个 run 用
+        `<li class="run-group">` 容器包裹同 run 的多条 MessageItem,
+        视觉上连成一条流。TransitionGroup 的直接子节点仍是 MessageItem
+        (内层 v-for 展开),enter 动画的 key/name 不变 —— run-group 容器
+        只提供视觉连续性(CSS 连接边框 + 紧凑间距),不接管动画。
+      -->
+      <li
+        v-for="g in renderGroups"
+        :key="g.key"
+        class="run-group"
+      >
+        <MessageItem
+          v-for="m in g.items"
+          :key="m.id"
+          :message="m"
+        />
+      </li>
     </TransitionGroup>
     <button
       v-if="!isAtBottom"
@@ -257,6 +311,21 @@ onUnmounted(() => {
      .chat-panel__main can use symmetric L/R padding instead of a 4px
      right-side gutter hack. */
   scrollbar-gutter: stable;
+}
+
+/* 交错思考: run-group 是同一个 agent run 的多条 MessageItem 的视觉
+   容器。`list-style: none` 抵消 `<li>` 默认 marker;内部紧凑排列
+   (gap 小于 run 之间的 12px),让同一 run 的 think/tool/result/文本
+   在视觉上"连成一条流",而不同 run 之间有清晰间隔。
+
+   不接管 enter 动画 —— TransitionGroup 的动画仍挂在内层的 MessageItem
+   上(key + name 不变),run-group 只是布局容器。内部 MessageItem 的
+   align-self(msg--user 靠右 / msg--assistant 靠左)保持各自对齐。 */
+.run-group {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* PR3 (2026-06-27): new-message enter animation. Only fires when an

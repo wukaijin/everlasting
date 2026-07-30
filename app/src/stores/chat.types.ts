@@ -67,6 +67,38 @@ export interface ThinkingBlockInfo {
   signature: string;
 }
 
+/** 交错思考(interleaved thinking): 按真实流式到达顺序排列的内容块视图。
+ *
+ *  reload 后 `rehydrateMessages` 从 DB 的 `content` JSON 数组**按原序**
+ * 透传成 `ContentBlockView[]`,挂到 `ChatMessage.contentBlocks`。这样
+ *  `MessageRunGroup` 就能渲染出 Claude.ai/Cursor 式的连续流动形态
+ *  (`[想 → 工具 → 结果 → 想 → 工具 → 结果 → 文本]`),而非旧的"气泡内
+ *  分桶固定排序"(思考顶→工具中→文本下)。
+ *
+ *  字段复用已有的 ToolCallInfo / ToolResultInfo / ThinkingBlockInfo —— 不
+ *  重新定义,避免分叉(见 code-reuse guide)。`kind` 是判别字段,值对齐
+ *  后端 `ContentBlock` 枚举的 snake_case wire tag(`llm/types.rs`)。
+ *
+ *  注意:`tool_result` 块出现在 **user-role** 消息上(Anthropic wire 规范,
+ *  见设计文档 §1.1 ToolResult 边界),assistant 消息不会有 tool_result
+ *  ContentBlockView。渲染分组时,user 行的 tool_result 归入前一个
+ *  assistant 的 run(见 `MessageList.renderGroups` 的 ghost 判据)。
+ *
+ *  缺省兼容:旧消息没有 `contentBlocks` 字段时,渲染层回退到分桶数组
+ *  (`thinkingBlocks`/`toolCalls`/`content`)的固定排序,视觉与现状一致。 */
+export type ContentBlockView =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string; signature: string }
+  | { kind: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | {
+      kind: "tool_result";
+      toolUseId: string;
+      content: string;
+      isError: boolean;
+      durationMs?: number;
+    }
+  | { kind: "redacted_thinking"; data: string };
+
 /** 2026-06-26 (token-usage snapshot fix): per-session LAST-TURN
  *  token usage snapshot (NOT cumulative). Mirrors Rust
  *  `llm::types::TokenUsage` (snake_case) and the five `last_*`
@@ -177,6 +209,16 @@ export interface ChatMessage {
   content: string; // accumulated text content
   streaming?: boolean;
   error?: { message: string; category: ErrorCategory };
+  /** 交错思考: 按真实流序排列的内容块,reload 后由
+   *  `rehydrateMessages` 从 DB `content` 数组透传(见
+   *  `ContentBlockView` 头注释)。`MessageRunGroup` 优先用它做流式
+   *  渲染;缺省(undefined)时回退到分桶数组的固定排序。
+   *
+   *  ⚠ 注意:`toPayloadContent`(wire 重建)**不读这个字段** —— wire 层
+   *  仍用分桶数组(`thinkingBlocks`/`toolCalls`/`content`)按固定顺序
+   *  重建 Anthropic 历史。这与落库按流序互不影响:落库顺序对 wire 不
+   *  变量无害(2013 配对由 role 决定,不依赖 assistant 内部块顺序)。 */
+  contentBlocks?: ContentBlockView[];
   /**
    * A5+ (2026-07-04, R8): transient retry notice attached to the
    * in-flight assistant placeholder while `LlmRetrySink` is in a

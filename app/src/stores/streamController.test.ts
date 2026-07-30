@@ -1784,3 +1784,91 @@ describe("streamController — 07-06 recall event routing", () => {
   // in `startRequest`, right after `pinnedSessions.add`) is trivial
   // and the action itself is unit-tested.
 });
+
+// ---------------------------------------------------------------------------
+// 交错思考(interleaved thinking): rehydrate 的 contentBlocks 透传测试。
+// 后端已按真实流序落库(chat_loop.rs ordered_blocks),rehydrate 必须把 DB
+// content 数组**按原序**透传成 `msg.contentBlocks`,供 MessageItem 的
+// renderTimeline 渲染出"思考穿插文本"的连续流动形态。这里锁住:
+//   1. 流序保留(thinking→text→tool_use 不被重排成 thinking→tool→text)
+//   2. 每种块类型字段正确透传
+//   3. 多 text 块各自独立(后端可能落库多个 text 块)
+//   4. 无 content 的纯文本 user 消息不挂空 contentBlocks
+// ---------------------------------------------------------------------------
+describe("rehydrateMessages — interleaved thinking contentBlocks passthrough", () => {
+  it("preserves stream order across thinking / text / tool_use blocks", () => {
+    // 后端按真实流序落库: thinking → text → tool_use(而非旧的
+    // thinking→tool→text 硬编码)。rehydrate 必须原序透传。
+    const m = rehydrateMessages([
+      asst(1, "hello world", [
+        { type: "thinking", thinking: "let me think", signature: "sig_a" },
+        { type: "text", text: "hello world" },
+        {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "read_file",
+          input: { path: "/x" },
+        },
+      ]),
+    ])[0];
+    expect(m.contentBlocks).toEqual([
+      { kind: "thinking", text: "let me think", signature: "sig_a" },
+      { kind: "text", text: "hello world" },
+      { kind: "tool_use", id: "toolu_1", name: "read_file", input: { path: "/x" } },
+    ]);
+  });
+
+  it("keeps multiple text blocks separate (thinking interleaved between text runs)", () => {
+    // 流序 [text_a, thinking, text_b] —— 后端可能落库多个 text 块。
+    // 每个 text 块在 contentBlocks 里独立,不被合并。
+    const m = rehydrateMessages([
+      asst(1, "part1part2", [
+        { type: "text", text: "part1" },
+        { type: "thinking", thinking: "mid-thought", signature: "s" },
+        { type: "text", text: "part2" },
+      ]),
+    ])[0];
+    expect(m.contentBlocks).toEqual([
+      { kind: "text", text: "part1" },
+      { kind: "thinking", text: "mid-thought", signature: "s" },
+      { kind: "text", text: "part2" },
+    ]);
+  });
+
+  it("passes through redacted_thinking + tool_result blocks", () => {
+    const m = rehydrateMessages([
+      asst(1, "", [
+        { type: "redacted_thinking", data: "opaque_blob" },
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_1",
+          content: "result text",
+          is_error: false,
+          duration_ms: 350,
+        },
+      ]),
+    ])[0];
+    expect(m.contentBlocks).toEqual([
+      { kind: "redacted_thinking", data: "opaque_blob" },
+      {
+        kind: "tool_result",
+        toolUseId: "toolu_1",
+        content: "result text",
+        isError: false,
+        durationMs: 350,
+      },
+    ]);
+  });
+
+  it("omits contentBlocks for a plain-text message with no blocks", () => {
+    // 纯文本 user 消息(content 是字符串而非数组)→ 不挂空 contentBlocks,
+    // 让 MessageItem 走回退路径(msg__bubble 旧行为)。
+    const m = rehydrateMessages([
+      {
+        ...asst(1, "hi", []),
+        role: "user" as const,
+      },
+    ])[0];
+    expect(m.contentBlocks).toBeUndefined();
+  });
+});

@@ -87,6 +87,34 @@ export function getToolResult(
   return m.toolResults?.find((r) => r.toolUseId === callId);
 }
 
+/** 交错思考(interleaved thinking): 判定一条消息是否是"真·用户输入"
+ *  (开启一个新 agent run 的起点),用于 MessageList 的 `renderGroups`
+ *  分组。判据(设计文档 §3.4):
+ *    - role 必须是 user。
+ *    - **不是** ghost user(tool_result 行):rehydrate 的 merge step 把
+ *      user 行的 toolResults 复制到前一个 assistant 后,user 行自身的
+ *      toolResults 仍在,所以 ghost user 带 toolResults。
+ *    - **不是** orphan-repair synthetic:id 后缀 `-orphan-repair`
+ *      (rehydrate 的 orphan-repair 步骤 splice 进来的合成消息)。
+ *
+ *  其余消息(assistant turn / ghost user / orphan-repair)归入当前 run。
+ *  误判最坏后果只是"多分几个 run 气泡"(渲染层回退,不丢数据)。
+ *
+ *  只需 `id` / `role` / `toolResults` 字段,便于对任意 ChatMessage-like
+ *  对象判定(分组、测试均可复用)。 */
+export function isRealUserTurnStart(m: {
+  id: string;
+  role: "user" | "assistant";
+  toolResults?: unknown[];
+}): boolean {
+  if (m.role !== "user") return false;
+  // ghost user(tool_result):merge step 复制非移动,user 行仍带 toolResults。
+  if (m.toolResults && m.toolResults.length > 0) return false;
+  // orphan-repair synthetic:id 后缀。
+  if (m.id.endsWith("-orphan-repair")) return false;
+  return true;
+}
+
 /** Map a tool name to the CSS custom property that holds its
  *  accent color (the 3px left bar on a ToolCallCard). The tool list
  *  is closed for MVP (read_file / write_file / shell) so a plain
