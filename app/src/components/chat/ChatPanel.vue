@@ -55,6 +55,7 @@ import WorktreeChip, { type WorktreeState } from "./WorktreeChip.vue";
 import DiffModal from "./DiffModal.vue";
 import MemoryModal from "../memory/MemoryModal.vue";
 import RuntimeMemoryModal from "../memory/RuntimeMemoryModal.vue";
+import GroupChatConfigModal from "./GroupChatConfigModal.vue";
 import AuditLogModal from "../audit/AuditLogModal.vue";
 import PermissionGrantsModal from "../permissions/PermissionGrantsModal.vue";
 import ChecklistCard from "./ChecklistCard.vue";
@@ -118,6 +119,25 @@ const currentSession = computed<SessionSummary | null>(() => {
 const currentSessionTitle = computed<string>(
   () => currentSession.value?.title || "新对话",
 );
+
+// Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8):
+// reactive indicators for the chat header. `isGroupChat` gates
+// the group-chat indicator + "编辑参与者" button (and the
+// edit-mode modal mounted below). `groupChatParticipants`
+// is the per-session parsed roster that feeds the modal's
+// `initialParticipants` prop for the edit flow.
+const isGroupChat = computed(
+  () => currentSession.value?.session_type === "group_chat",
+);
+const groupChatParticipants = computed(
+  () => chatStore.currentSessionParticipants,
+);
+
+const groupChatEditOpen = ref<boolean>(false);
+function openGroupChatEdit() {
+  if (!isGroupChat.value) return;
+  groupChatEditOpen.value = true;
+}
 
 const currentProject = computed(() =>
   projectsStore.projectById(projectsStore.currentProjectId),
@@ -584,6 +604,29 @@ onUnmounted(() => reviewStateStore.stop());
     <header class="chat-panel__header">
       <div class="chat-panel__title-row">
         <h1 class="chat-panel__title">{{ currentSessionTitle }}</h1>
+        <!--
+          Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8/F5):
+          show a "群聊 (N participants)" indicator chip on the
+          session title row when the active session is a
+          group_chat session. Tells the user at a glance which
+          session type is active (the title alone is identical
+          to a classic chat title). Clicking the chip opens
+          the edit modal — same affordance as the dedicated
+          "编辑参与者" button (below), so the user has 2
+          discoverable paths to the same action.
+        -->
+        <button
+          v-if="isGroupChat"
+          class="chat-panel__chip chat-panel__chip--group-chat"
+          type="button"
+          title="编辑参与者"
+          aria-label="编辑群聊参与者"
+          data-testid="chat-panel-group-chat-edit"
+          @click="openGroupChatEdit"
+        >
+          <Icon name="users" :size="12" />
+          群聊 ({{ groupChatParticipants?.length ?? 0 }} 参与者)
+        </button>
         <span
           v-if="showGitChip"
           class="chat-panel__chip chat-panel__chip--git"
@@ -840,6 +883,25 @@ onUnmounted(() => reviewStateStore.stop());
       :file-count="diffFileCount ?? 0"
       @cancel="onDeleteCancel"
       @confirm="onDeleteConfirm"
+    />
+
+    <!--
+      Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8):
+      edit-mode modal. Mounted unconditionally (the `v-model:open`
+      + the `v-if` gating on the chip above keep it from stealing
+      focus from the classic-chat path). When the user opens it,
+      we pass the current sessionId + the parsed participants
+      roster; the modal handles validation + IPC + reload.
+      The `updated` event fires after a successful overwrite —
+      the controller's messages themselves don't change, so no
+      explicit refresh is needed from the modal side.
+    -->
+    <GroupChatConfigModal
+      v-if="isGroupChat"
+      v-model:open="groupChatEditOpen"
+      mode="edit"
+      :session-id="chatStore.currentSessionId ?? undefined"
+      :initial-participants="groupChatParticipants ?? undefined"
     />
 
     <!--
@@ -1116,6 +1178,30 @@ onUnmounted(() => reviewStateStore.stop());
      intrinsic content width (~ 280px for a full /usr/local/code/.../foo
      path) overrides the 50% cap and crowds the buttons. */
   min-width: 0;
+}
+
+/* Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8): the
+   group-chat indicator chip doubles as the edit button. Uses
+   the same chip shell as the git/cwd chips but with a button
+   affordance (cursor + hover state) so the user knows it's
+   clickable. The "群聊 (N participants)" text gives the user
+   the participant count at a glance — clicking opens the
+   edit-mode modal. */
+.chat-panel__chip--group-chat {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text);
+  border-color: var(--color-accent-muted);
+  flex-shrink: 0;
+  /* Override the default chip "span" cursor in the title-row's
+     flex layout — buttons in flex rows sometimes inherit
+     `text` cursor on certain browsers. */
+  cursor: pointer;
+}
+.chat-panel__chip--group-chat:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-accent);
 }
 
 /* Memory entry button (2026-06-11). Sits to the right of the

@@ -127,6 +127,14 @@ const CMD_TO_DOMAIN: Record<string, string> = {
   set_session_plugin_name: "sessions",
   set_session_workflow_enabled: "sessions",
   update_message_latency: "sessions",
+  // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E3): the
+  // edit-mode IPC `GroupChatConfigModal` uses to overwrite the
+  // group-chat session's `metadata` JSON blob (participants
+  // roster). Without this entry, the default httpTransport (the
+  // browser/daemon mode) throws `unknown cmd "..."` — the
+  // Tauri-IPC fallback path (the Sidecar spawn) still works
+  // because it doesn't consult this table.
+  update_session_metadata: "sessions",
   // subagent_runs
   discard_worker_run: "subagent_runs",
   get_subagent_run: "subagent_runs",

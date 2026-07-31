@@ -243,6 +243,53 @@ export const useChatStore = defineStore("chat", () => {
     },
   );
 
+  // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8):
+  // the active session's full SessionSummary (or null if no
+  // session is selected). The header UI uses this to decide
+  // whether to render the group-chat indicator + "编辑参与者"
+  // button (`session_type === "group_chat"`).
+  const currentSession = computed<SessionSummary | null>(() => {
+    const sid = currentSessionId.value;
+    if (!sid) return null;
+    return sessions.value.find((s) => s.id === sid) ?? null;
+  });
+
+  // Group chat (Phase 4 TODO-E8): the current session's
+  // participant roster, parsed from `sessions.metadata.participants[]`.
+  // `null` for non-group-chat sessions OR when the host hasn't
+  // refreshed the session list yet (no metadata yet). The
+  // GroupChatConfigModal re-edit path feeds this as
+  // `initialParticipants`.
+  const currentSessionParticipants = computed<ParticipantConfig[] | null>(() => {
+    const cs = currentSession.value;
+    if (!cs || cs.session_type !== "group_chat") return null;
+    const meta = cs.metadata;
+    if (!meta || typeof meta !== "object") return null;
+    const raw = (meta as Record<string, unknown>).participants;
+    if (!Array.isArray(raw)) return null;
+    // Defensive: skip malformed entries. The session panel's
+    // `updateGroupChatConfig` overwrites the array wholesale,
+    // so a stale shape is self-healing on the next edit.
+    const out: ParticipantConfig[] = [];
+    for (const r of raw) {
+      if (
+        r &&
+        typeof r === "object" &&
+        typeof (r as { name?: unknown }).name === "string" &&
+        typeof (r as { model?: unknown }).model === "string"
+      ) {
+        const e = r as ParticipantConfig;
+        out.push({
+          name: e.name,
+          model: e.model,
+          persona_md: e.persona_md,
+          order: e.order,
+        });
+      }
+    }
+    return out;
+  });
+
   /** 2026-06-26 (token-usage snapshot fix): OVERWRITE the
    *  per-session last-turn usage snapshot with this turn's
    *  `usage`. Called by `streamController.handleChatEvent` on
@@ -1967,6 +2014,12 @@ export const useChatStore = defineStore("chat", () => {
     // exposed for tests / future per-session UIs.
     currentSessionTokenUsage,
     tokenUsageBySession,
+    // Group chat (07-29-group-chat, Phase 4 Step 3 TODO-E8):
+    // the active session's full summary + the parsed
+    // participants roster. The chat header uses these to
+    // render the group-chat indicator + "编辑参与者" button.
+    currentSession,
+    currentSessionParticipants,
     // F5: per-session running latency total. The ChatPanel
     // footer reads `currentSessionLatencyTotal`; the Map is
     // exposed for tests.
